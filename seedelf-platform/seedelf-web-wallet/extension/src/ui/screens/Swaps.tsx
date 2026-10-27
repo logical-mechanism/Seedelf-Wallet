@@ -52,6 +52,8 @@ import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
 import {
   chainText,
+  COLLATERAL_MIX_COST,
+  CollateralMixLine,
   CollateralReserveRow,
   CollateralTailNote,
   CollateralTailRow,
@@ -88,6 +90,7 @@ import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
+import { SendButton } from "../components/SendButton";
 import { refusalOf, SessionRefusedFoot, unsentWhyText, type Refusal } from "../components/SessionRefused";
 import { RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
 import { TxDetailButton, entryLabel } from "../components/TxDetail";
@@ -112,6 +115,7 @@ import { withStop } from "../sentence";
 import {
   aboutAda,
   adaShort,
+  followMax,
   fundParts,
   halfOf,
   impactLevel,
@@ -671,6 +675,8 @@ export function NewSwap({
   const [amount, setAmount] = useState("");
   // What the last edit of the amount changed or refused.
   const [note, setNote] = useState<string>();
+  // Max set the amount: it follows Max down (followMax; 1.6.0's release review, R3-12).
+  const [maxed, setMaxed] = useState(false);
   const [slippage, setSlippage] = useState(1);
   const [picking, setPicking] = useState<"pay" | "get">();
   const [settings, setSettings] = useState(false);
@@ -690,6 +696,8 @@ export function NewSwap({
   // The switch turned off on this review: built without the token's boxes, it stays to be turned back on (34f).
   const [turnedOff, setTurnedOff] = useState(false);
   const [busy, setBusy] = useState(false);
+  // What's busy is the switch or Change building the review again, not Start swap (1.6.0's release review, 320-screens#3).
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string>();
   // Send was refused: the review gives way to building it again, or to watching one that may have gone out (DX-1).
   const [refusal, setRefusal] = useState<Refusal>();
@@ -754,8 +762,17 @@ export function NewSwap({
   const setTyped = (value: string) => {
     setAmount(value);
     setNote(undefined);
+    setMaxed(false);
   };
   const fill = (quantity: string) => setTyped(quantity === "0" ? "" : formatQuantity(quantity, pay.side.decimals));
+
+  // Pressed before any quote, Max kept nothing aside for the collateral's mix the quote then names: the amount it set
+  // follows it down, so what's reviewed is Max's, funded with that mix (followMax; 1.6.0's release review, R3-12). Never
+  // to nothing: there it stays, funded without that mix (its review of the fixes, LM-2).
+  const followed = followMax(maxed, pay.id, raw, max);
+  useEffect(() => {
+    if (followed !== undefined) setAmount(formatQuantity(followed, pay.side.decimals));
+  }, [followed, pay.side.decimals]);
 
   /** What's received becomes what's paid, and the other way round. */
   function flip() {
@@ -814,6 +831,7 @@ export function NewSwap({
   async function rebuild(way: { through?: boolean; pools?: Record<string, string | null> }) {
     if (busy) return;
     setBusy(true);
+    setRebuilding(true);
     setError(undefined);
     try {
       if (!(await buildOut(true, way))) setOut(undefined);
@@ -821,6 +839,7 @@ export function NewSwap({
       setError((err as Error).message);
     } finally {
       setBusy(false);
+      setRebuilding(false);
     }
   }
 
@@ -896,9 +915,7 @@ export function NewSwap({
               onWatch={onWatch && (() => onWatch(out.summary.index))}
             />
           ) : (
-            <button type="button" className="primary" onClick={send} disabled={busy}>
-              {busy ? tr("common.sending") : tr("swaps.review.start")}
-            </button>
+            <SendButton label={tr("swaps.review.start")} busy={busy} rebuilding={rebuilding} onClick={() => void send()} />
           )
         }
       >
@@ -989,7 +1006,10 @@ export function NewSwap({
               <button
                 type="button"
                 className="link"
-                onClick={() => fill(max)}
+                onClick={() => {
+                  fill(max);
+                  setMaxed(true);
+                }}
                 disabled={max === "0"}
                 aria-label={tr("swaps.maxOf", { token: nameOf(pay) })}
                 title={
@@ -1014,6 +1034,7 @@ export function NewSwap({
               onChange={(value, why) => {
                 setAmount(value);
                 setNote(why);
+                setMaxed(false);
               }}
               aria-invalid={tooMuch || undefined}
               autoFocus
@@ -1076,10 +1097,20 @@ export function NewSwap({
           {tr("swaps.tooMuch", { held: amountOf(held, pay, amounts.quantity) })}
         </p>
       )}
-      {/* Max is less than the balance: it says why, on the page, not only in its label (DX-4). */}
+      {/* Max is less than the balance: it says why, on the page, not only in its label (DX-4). With what its funding adds
+          for its collateral's mix, kept aside where a 5 ₳ pool takes the collateral, and said as what that mix may take
+          where it may not go: nothing the wallet read lately says the pool takes it, or the fill may not keep it, as the
+          approval would say (1.6.0's release review, 323-worker#0, R3-11; its review of the fixes, fx-promise). */}
       {pay.id === "lovelace" && max !== "0" && raw === max && (
         <p className="note" data-testid="swap-max-note">
-          {tr("swaps.maxNote", { max: amounts.ada(max), aside: amounts.ada((BigInt(held) - BigInt(max)).toString()) })}
+          {tr(
+            !quoted?.quote.collateralReserve
+              ? "swaps.maxNote"
+              : quoted.quote.collateralMix === "mixed"
+                ? "swaps.maxNoteMixed"
+                : "swaps.maxNoteMaybe",
+            { max: amounts.ada(max), aside: amounts.ada((BigInt(held) - BigInt(max)).toString()) },
+          )}
         </p>
       )}
       {unverified && get && <Unverified pick={get} />}
@@ -1271,7 +1302,15 @@ export function SwapApproval({
   // token's boxes' mixes and their way back are Lovejoin's costs too; their ADA comes back with each box (34f).
   const paid = summary.payments.reduce((sum, p) => sum + BigInt(p.lovelace), 0n);
   const lovejoinCosts = mixes || tokenBoxes > 0 ? lovejoinOf(mixes ? l : undefined, tokenBoxes > 0 ? way : undefined) : undefined;
-  const costs = swapCosts(quote, { paid, fee: BigInt(summary.fee.total) }, lovejoinCosts);
+  // Its return mixes its collateral: its 5 ₳ comes back later, in a box of its own, giveme.my backing that mix
+  // (1.6.0's release review, 323-worker#6, x-privacy#1). Said so only where the worker found its funding paid that mix's
+  // reserve and its fill keeps it for that mix; where a 5 ₳ pool may take it otherwise, the Plan's words are the plain
+  // ones and a line says it's mixed only if enough is left (the worker's `collateralMix`; its review of the fixes,
+  // fx-promise).
+  const collateralMixed = summary.collateralMix === "mixed";
+  // A cost only where its funding paid for it, which the totals counted as coming back (323-worker#1).
+  const mixCost = summary.collateralReserve ? COLLATERAL_MIX_COST : 0n;
+  const costs = swapCosts(quote, { paid, fee: BigInt(summary.fee.total) }, lovejoinCosts, mixCost);
   // What the funding pays for the swap itself, apart from the token's boxes (34e's fixes' review, 2).
   // Less what it pays for its collateral's mix, which a row of its own shows.
   const forSwap = (BigInt(swapPart!.lovelace) - tokenFund - BigInt(summary.collateralReserve ?? "0")).toString();
@@ -1347,7 +1386,7 @@ export function SwapApproval({
       )}
       <SwapCosts quote={quote} get={get} costs={costs} />
       <h2>{tr("lovejoin.review.thenItself")}</h2>
-      <Plan lovejoin={mixes} adaOut={adaOut} pools={!!quote.againstPools} tokenBoxes={tokenBoxes > 0} />
+      <Plan lovejoin={mixes} adaOut={adaOut} pools={!!quote.againstPools} tokenBoxes={tokenBoxes > 0} collateral={collateralMixed} />
       <p className="note" data-testid="swap-approves">
         {tr(quote.againstPools ? "swaps.review.approvesPools" : "swaps.review.approves")}
       </p>
@@ -1365,7 +1404,7 @@ export function SwapApproval({
       )}
       {l && !any && (
         <p className="note" data-testid="swap-lovejoin">
-          {tr("swaps.review.noBox")}
+          {tr(collateralMixed ? "swaps.review.noBoxMixed" : "swaps.review.noBox")}
         </p>
       )}
       {/* What it gets makes no box of its pool: said, with no Change to make (34f). */}
@@ -1373,6 +1412,10 @@ export function SwapApproval({
       <Callout tone="privacy">{tr("swaps.review.privacy.links")}</Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="swap-histories" />
       <GivemeNote funding />
+      {/* Its return runs by itself, its collateral's mix under giveme.my's collateral: said where it's approved, as a
+          return reviewed by hand says it (CollateralTailNote; 1.6.0's release review, x-privacy#1), by the one rule
+          (fx-promise). */}
+      <CollateralMixLine mix={summary.collateralMix} mixed="swaps.review.privacy.collateralMix" testId="swap-collateral-mix" />
     </>
   );
 }
@@ -1407,6 +1450,8 @@ export function SwapCosts({
         {quote.aggregatorFee !== "0" && <Row label={tr("swaps.detail.minswapFee")} value={adaText(quote.aggregatorFee)} part />}
         <Row label={tr("swaps.costs.network")} value={about(costs.networkFees)} part />
         {costs.lovejoin > 0n && <Row label={tr("swaps.costs.lovejoin")} value={about(costs.lovejoin)} part />}
+        {/* Its collateral's mix, where the funding pays for it: its own part, so the parts still add up to the total. */}
+        {costs.collateral > 0n && <Row label={tr("lovejoin.collateralMix.label")} value={about(costs.collateral)} part />}
         <Row
           label={tr("swaps.costs.back")}
           value={
@@ -1432,25 +1477,38 @@ export function SwapCosts({
   );
 }
 
+/** Each way back the Plan says, with the collateral's 5 ₳ in a Lovejoin box of its own, later (Plan `collateral`). */
+const COLLATERAL_LATER = {
+  "swaps.plan.backAdaOut": "swaps.plan.backAdaOutMixed",
+  "swaps.plan.backDirect": "swaps.plan.backDirectMixed",
+  "swaps.plan.backTokenOut": "swaps.plan.backTokenOutMixed",
+  "swaps.plan.backTokenPool": "swaps.plan.backTokenPoolMixed",
+} as const satisfies Record<string, I18nKey>;
+
 /**
  * What happens after Send, as the swap's own page then shows it: the
  * timeline's four steps, none taken yet. `lovejoin`: the return goes through
  * Lovejoin first; `adaOut`: the proceeds are ADA, so they go through it too.
  * The least the order asks for is said above it, once. `pools`: the route
  * swaps against a DEX's pools (Danogo's), with no order, and is filled in
- * the swap itself (chunk 24).
+ * the swap itself (chunk 24). `collateral`: its collateral is mixed (the
+ * worker's `collateralMix`), so its 5 ₳ comes back later, in a box of its
+ * own, never with the rest (1.6.0's release review, 323-worker#6; its review
+ * of the fixes, fx-promise).
  */
 export function Plan({
   lovejoin,
   adaOut,
   pools = false,
   tokenBoxes = false,
+  collateral = false,
 }: {
   lovejoin: boolean;
   adaOut: boolean;
   pools?: boolean;
   /** The token it gets goes through a pool of its own, in boxes funded now (chunk 34's 34e). */
   tokenBoxes?: boolean;
+  collateral?: boolean;
 }) {
   const tr = useT();
   // The proceeds in boxes, the spare ADA too where it pays for a box; or the spare ADA alone; or nothing.
@@ -1467,7 +1525,7 @@ export function Plan({
     [tr("swaps.plan.funded"), tr("swaps.plan.fundedSub")],
     [tr(pools ? "swaps.plan.swapped" : "swaps.plan.ordered"), tr("swaps.plan.orderedSub")],
     [tr("swaps.plan.filled"), tr(pools ? "swaps.step.filledInSwap" : "swaps.plan.filledSub")],
-    [tr("swaps.plan.back"), tr(back)],
+    [tr("swaps.plan.back"), tr(collateral ? COLLATERAL_LATER[back] : back)],
   ];
   return (
     <div className="timeline" data-testid="swap-steps">
@@ -1563,8 +1621,10 @@ export function LovejoinChoice({
         </p>
       )}
       {cost && <LovejoinCost lovejoin={l} ada={ada} />}
-      {/* Four boxes a mix asked, and it goes three: why (chunk 34's D3). */}
-      {through && <WidthNote fellBack={l.fellBack} testId="swap-width-fell-back" />}
+      {/* Four boxes a mix asked, and it goes three: why (chunk 34's D3). Only where something goes through Lovejoin:
+          where its pool takes nothing, the one true line is that it comes back directly (1.6.0's release review,
+          319-worker#0). */}
+      {cost && <WidthNote fellBack={l.fellBack} testId="swap-width-fell-back" />}
       {stopped && (
         <p className="note" data-testid="swap-lovejoin-stopped">
           {tr("swaps.lovejoin.ifStopped", {
@@ -2063,6 +2123,9 @@ export function Session({
   const [collateralBack, setCollateralBack] = useState(false);
   const stale = useStale();
   const [busy, setBusy] = useState(false);
+  // What's busy is its return being built, Bring it back or its review's switch or Change, not Send (1.6.0's release
+  // review, 320-screens#3).
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string>();
 
   // The list read it again: take its reading.
@@ -2096,7 +2159,7 @@ export function Session({
     return () => clearInterval(timer);
   }, [runs, advance]);
   // A return brought back by hand, through Lovejoin: its Send button counts the chain's transactions.
-  const backSending = useSendingLabel(s.index, busy && !!back?.lovejoin);
+  const backSending = useSendingLabel(s.index, busy && !rebuilding && !!back?.lovejoin);
   // Once it's coming back, a chain through Lovejoin moves on with every transaction: read its progress from the record.
   const returning = runs && (s.auto!.step === "returning" || s.auto!.filled || !!s.auto!.refunded || s.auto!.stopping);
   useSessionsWhile(returning, (all) => {
@@ -2133,9 +2196,14 @@ export function Session({
   /** Its return, built through Lovejoin or not; `pools`: Change's choices for its tokens, kept until it's built directly. */
   const buildBack = (through: boolean, pools: Record<string, string | null> = through ? backPools : {}) =>
     void act(async () => {
-      setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }), ...(through && Object.keys(pools).length ? { pools } : {}) }));
-      setBackThrough(through);
-      setBackPools(pools);
+      setRebuilding(true);
+      try {
+        setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }), ...(through && Object.keys(pools).length ? { pools } : {}) }));
+        setBackThrough(through);
+        setBackPools(pools);
+      } finally {
+        setRebuilding(false);
+      }
     });
   /** Builds the 5 ₳ for the cancel's collateral, or the return's (`back`), for its review, or again after a refusal. */
   const buildCollateral = (back: boolean) =>
@@ -2200,19 +2268,18 @@ export function Session({
         aside={tr("review.nothingSent")}
         error={error}
         foot={
-          <button
-            type="button"
-            className="primary"
-            disabled={busy}
+          <SendButton
+            label={tr("common.send")}
+            busy={busy}
+            rebuilding={rebuilding}
+            sending={backSending}
             onClick={() =>
               void act(async () => {
                 await call("session-back-submit", { txHash: back.txHash });
                 await sent();
               })
             }
-          >
-            {busy ? backSending : tr("common.send")}
-          </button>
+          />
         }
       >
         {/* The way back first, a switch, where it can't be missed (blind test §9.8; Stop's, 5289dcf). */}
@@ -2764,6 +2831,15 @@ export function StopDialog({
   // A swap against the pools has no order to cancel: before it goes out, Stop keeps it from going.
   const ordered = placed && !pools;
   const ifGoing = pools ? IF_SWAPPING : IF_ORDERED;
+  // What it says of its collateral's mix, by the worker's one rule (`collateralMix`), wherever Stop doesn't bring it back
+  // directly: with no box there's no switch, and it isn't (1.6.0's release review, L1; its review of the fixes,
+  // fx-promise).
+  const mix = through || !mixes ? cost?.collateralMix : undefined;
+  // No box: where its return mixes the collateral first, all but that 5 ₳ comes back, which comes back later, as the
+  // approval says it, never everything for the return's fee alone (the last look, LW-1). Where it may, everything comes
+  // back, no fee named as the only one, and the line under says when that 5 ₳ is mixed.
+  const mixedBack = mix === "mixed" && !mixes;
+  const mayMixBack = mix === "ifLeft" && !mixes;
   return (
     <Modal
       title={tr("swaps.stop.title")}
@@ -2815,8 +2891,25 @@ export function StopDialog({
               ordered && tr("swaps.stop.cancelFeeToo"),
             ])
           : ordered
-            ? tr("swaps.stop.cancelledDirect")
-            : joinSentences([tr(pools ? "swaps.stop.notSwappedDirect" : "swaps.stop.notPlacedDirect"), ifGoing()])}
+            ? mayMixBack
+              ? joinSentences([tr("swaps.stop.cancelled"), tr("swaps.stop.cancelFeeToo")])
+              : tr(mixedBack ? "swaps.stop.cancelledMixed" : "swaps.stop.cancelledDirect")
+            : joinSentences([
+                tr(
+                  pools
+                    ? mixedBack
+                      ? "swaps.stop.notSwappedMixed"
+                      : mayMixBack
+                        ? "swaps.stop.notSwapped"
+                        : "swaps.stop.notSwappedDirect"
+                    : mixedBack
+                      ? "swaps.stop.notPlacedMixed"
+                      : mayMixBack
+                        ? "swaps.stop.notPlaced"
+                        : "swaps.stop.notPlacedDirect",
+                ),
+                ifGoing(),
+              ])}
       </p>
       {cost?.skipped && (
         <p className="note" data-testid="session-stop-pool">
@@ -2825,6 +2918,10 @@ export function StopDialog({
       )}
       {/* Four boxes a mix asked, and it would go three: why (chunk 34's D3). */}
       {lovejoin && <WidthNote fellBack={cost.fellBack} testId="session-stop-width" />}
+      {/* Its collateral mixed first, under giveme.my's collateral, or mixed only if enough is left, as the approval says
+          it (1.6.0's release review, L1; fx-promise). Mixed, in its own words: the approval's "too" points at GivemeNote,
+          which this dialog doesn't have (the last look, LW-1). */}
+      <CollateralMixLine mix={mix} mixed="swaps.stop.privacy.collateralMix" testId="session-stop-collateral-mix" />
       {cost === undefined && <p className="note">{tr("swaps.stop.working")}</p>}
     </Modal>
   );
@@ -3092,18 +3189,22 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
         })}
       </ol>
       {auto.retry && !auto.paused ? (
-        <div className="timeline__now timeline__now--retry" data-testid="session-retry" aria-live="polite">
-          <p>
-            {/* Why, then when. An error with no code is shown as it came, often with no stop of its own (the node's
-                raw refusal): it takes one, and Japanese, which sets nothing between sentences, still sets a space
-                after a Latin one, so the time never runs into it. */}
-            {joinSentences([withStop(retryReason(auto.retry)), retryText(auto.retry.at)])}
-            {sentenceGap()}
-            <button type="button" className="link" disabled={busy} onClick={onRetry}>
-              {tr("lovejoin.mixes.tryNow")}
-            </button>
-          </p>
-          {retryReason(auto.retry) !== auto.retry.error && <p className="timeline__error">{auto.retry.error}</p>}
+        <div className="timeline__now timeline__now--retry" data-testid="session-retry">
+          {/* Read aloud as it changes: why, and when. Not the transaction under Details, whose hex each new failure
+              replaces, thousands of characters a screen reader read out in full (1.6.0's release review, 322#1). */}
+          <div className="timeline__said" aria-live="polite">
+            <p>
+              {/* Why, then when. An error with no code is shown as it came, often with no stop of its own (the node's
+                  raw refusal): it takes one, and Japanese, which sets nothing between sentences, still sets a space
+                  after a Latin one, so the time never runs into it. */}
+              {joinSentences([withStop(retryReason(auto.retry)), retryText(auto.retry.at)])}
+              {sentenceGap()}
+              <button type="button" className="link" disabled={busy} onClick={onRetry}>
+                {tr("lovejoin.mixes.tryNow")}
+              </button>
+            </p>
+            {retryReason(auto.retry) !== auto.retry.error && <p className="timeline__error">{auto.retry.error}</p>}
+          </div>
           {/* What Minswap built and couldn't run: a few KB of hex, out of the way and ready to copy for a report. */}
           {auto.retry.cbor && (
             <details className="disclosure">
@@ -3112,6 +3213,11 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
                 <span className="note">{tr("swaps.retry.cbor", { bytes: auto.retry.cbor.length / 2 })}</span>
                 <CopyButton value={auto.retry.cbor} label={tr("tx.copyCbor")} />
               </div>
+              {/* What sending it on ties, as the explorer's links say what opening them does (1.6.0's release review,
+                  322#0): it names the session's one-time account, whose funding anyone can follow. */}
+              <p className="note" data-testid="session-retry-cbor-privacy">
+                {tr("swaps.retry.privacy.cbor")}
+              </p>
               <pre className="dapp-message" data-testid="session-retry-cbor">
                 {auto.retry.cbor}
               </pre>

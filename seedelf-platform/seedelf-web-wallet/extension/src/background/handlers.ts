@@ -179,6 +179,14 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       const sending = await Promise.all(ctx.networks.map((n) => ctx.lovejoin.chainsSending(n).catch(() => false)));
       return sending.some(Boolean);
     }
+    // And whether a payment's parts wait to go, which a lock wipes with session storage (parts.ts), a session's
+    // funding's too: said in words of their own, not as a Lovejoin chain (1.6.0's release review). Locked, none.
+    case "parts-waiting": {
+      const waiting = await Promise.all(
+        ctx.networks.map((n) => ctx.parts?.waiting(n).then((w) => w.length > 0, () => false)),
+      );
+      return waiting.some(Boolean);
+    }
     case "account":
       return wallet.account(ctx.network);
     case "balances":
@@ -221,7 +229,12 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       if (!pending) return (await ctx.parts?.shown(ctx.network).catch(() => undefined)) ?? null;
       const first = pending.chain?.first;
       const parts = first ? await ctx.parts?.of(ctx.network, first) : undefined;
-      return parts ? { ...pending, parts } : pending;
+      if (parts) return { ...pending, parts };
+      // No record of its parts, though some were still to go after the part the watch holds as it went: a lock or a
+      // closed browser took them with session storage, and they never go. Said as parts that stopped, never as a
+      // payment confirmed or a session funded (1.6.0's release review).
+      const cut = !!first && !!pending.parts && !pending.parts.stopped && pending.parts.sent < pending.parts.total;
+      return cut ? { ...pending, parts: { ...pending.parts!, stopped: "locked" } } : pending;
     }
     case "reset-check":
       return atStake(ctx);
@@ -344,11 +357,14 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.accounts.list();
     case "account-use": {
       // What's in flight belongs to the account that sent it: a payment Koios
-      // didn't answer, or a mix still being sent. The same check Remove
-      // wallet makes, and for the same reason — a watch must not lose its
-      // account halfway through (accounts.ts `use`).
-      const open = (await atStake(ctx)).filter((a) => a.maybeSent || a.mixMaybeSent || a.chainSending);
-      if (open.length) throw new Error(SWITCH_AT_STAKE());
+      // didn't answer, or a mix from it still being sent. Much the check
+      // Remove wallet makes, and for the same reason — a watch must not lose
+      // its account halfway through (accounts.ts `use`). Not a private
+      // session's chain, which is no account's and goes on across a switch
+      // (1.6.0's release review, gap-1#0).
+      const open = (await atStake(ctx)).filter((a) => a.maybeSent || a.mixMaybeSent);
+      const mixing = await Promise.all(ctx.networks.map((n) => ctx.lovejoin.publicChainsSending(n).catch(() => false)));
+      if (open.length || mixing.some(Boolean)) throw new Error(SWITCH_AT_STAKE());
       await ctx.accounts.use(message.index, ctx.networks);
       // Sites keep talking to the account they connected to (dapp.ts), so
       // nothing is declined here, unlike a network switch.
@@ -582,8 +598,10 @@ export const SWITCH_AT_STAKE = () => t("worker.account.onItsWay");
  * sessions still open or with something no return takes left at their
  * accounts (a restore's scan finds what those hold, not what each was for),
  * a chain through Lovejoin being sent, a mix from the public account that
- * may have gone through (final review F1). A network whose records won't
- * read says so. Throws if locked.
+ * may have gone through (final review F1), a payment whose parts still wait
+ * to go (1.6.0's release review: Koios answered its first, so nothing else
+ * listed it, and the wallet went at the first yes, the rest with it). A
+ * network whose records won't read says so. Throws if locked.
  */
 async function atStake(ctx: Context): Promise<AtStake[]> {
   if ((await ctx.wallet.state()) !== "unlocked") throw new WalletLocked(t("worker.locked"));
@@ -594,8 +612,19 @@ async function atStake(ctx: Context): Promise<AtStake[]> {
       const sessions = await ctx.sessions.atStake(network);
       const chainSending = await ctx.lovejoin.chainsSending(network);
       const mixMaybeSent = await ctx.lovejoin.publicMaybe(network);
-      if (maybeSent || sessions.length || chainSending || mixMaybeSent) {
-        found.push({ network, ...(maybeSent ? { maybeSent } : {}), sessions, chainSending, ...(mixMaybeSent ? { mixMaybeSent } : {}) });
+      // A session's funding in parts is its session's, listed above with what to do about it.
+      const partsWaiting = ((await ctx.parts?.waiting(network)) ?? [])
+        .filter((p) => p.session === undefined)
+        .map(({ sent, total }) => ({ sent, total }));
+      if (maybeSent || sessions.length || chainSending || mixMaybeSent || partsWaiting.length) {
+        found.push({
+          network,
+          ...(maybeSent ? { maybeSent } : {}),
+          sessions,
+          chainSending,
+          ...(mixMaybeSent ? { mixMaybeSent } : {}),
+          ...(partsWaiting.length ? { partsWaiting } : {}),
+        });
       }
     } catch {
       found.push({ network, sessions: [], chainSending: false, unreadable: true });

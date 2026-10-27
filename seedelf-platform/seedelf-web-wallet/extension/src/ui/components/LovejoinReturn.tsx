@@ -7,16 +7,16 @@
 // user chooses Lovejoin, it says Lovejoin has had no third-party audit:
 // Lovejoin's own docs say so, and no copy here may say otherwise.
 import { useEffect, useRef, useState } from "react";
-import { joinSentences, t, useT } from "../../i18n";
+import { type I18nKey, joinSentences, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
-import type { LovejoinBoxValue, LovejoinTokenWay, SessionBackSummary, SessionView } from "../../shared/rpc";
+import type { CollateralMix, LovejoinBoxValue, LovejoinTokenWay, SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { adaText, formatAda } from "../format";
 import { boxText, CLASSIC_BOX } from "../lovejoin-pools";
 import { useNetwork } from "../network";
 import { withoutStop } from "../sentence";
-import { BOX_BACK_ESTIMATE } from "../swap";
+import { BOX_BACK_ESTIMATE, SESSION_FEE_ESTIMATE } from "../swap";
 import { tokenText } from "../tokens";
 import { Callout } from "./Callout";
 import { ArrowDownIcon } from "./Icons";
@@ -478,6 +478,23 @@ export function CollateralTailNote({ back }: { back: SessionBackSummary }) {
 }
 
 /**
+ * What a review or Stop's dialog says of giveme.my and the session's collateral's mix that runs by itself as the session
+ * comes back, by the one rule the worker decides it by (`mix`, CollateralMix; 1.6.0's review of the fixes, fx-promise):
+ * mixed, in the screen's own words (`mixed`: the approval's, which follow GivemeNote, or Stop's); mixed only if enough
+ * is left, where it may not be, its giveme.my part said so it holds either way; nothing where no mix can go. A return
+ * reviewed by hand says it as it's built (CollateralTailNote).
+ */
+export function CollateralMixLine({ mix, mixed, testId }: { mix?: CollateralMix; mixed: I18nKey; testId: string }) {
+  const tr = useT();
+  if (!mix) return null;
+  return (
+    <p className="note" data-testid={testId}>
+      {tr(mix === "mixed" ? mixed : "lovejoin.collateralMix.privacy.ifLeft")}
+    </p>
+  );
+}
+
+/**
  * What a session's funding pays beside its 5 ₳ collateral for that collateral to be mixed as the session comes back
  * (SessionOutSummary `collateralReserve`): what that mix doesn't spend comes back. Nothing where it won't be.
  */
@@ -486,6 +503,15 @@ export function CollateralReserveRow({ reserve }: { reserve?: string }) {
   if (!reserve) return null;
   return <Row label={tr("lovejoin.collateralReserve.label")} value={tr("lovejoin.collateralReserve.value", { ada: formatAda(reserve) })} />;
 }
+
+/**
+ * About what a session's collateral's mix costs where its funding pays for it (CollateralReserveRow), in lovelace: its
+ * deposit (SESSION_FEE_ESTIMATE) and the mix under giveme.my's collateral, three boxes wide, from what was paid for it,
+ * then its box's way back (BOX_BACK_ESTIMATE), from the box. Measured on preprod: 0.17, 0.83 and 0.29 ₳. A swap's
+ * costs and a site's way back count it, which counted what pays for that mix as coming back (1.6.0's release review,
+ * 323-worker#1).
+ */
+export const COLLATERAL_MIX_COST = SESSION_FEE_ESTIMATE + BigInt(MIX_FEE_ESTIMATE) + BOX_BACK_ESTIMATE;
 
 /** Where what comes back lands: the private UTxO the session's funding made, or new ones. */
 export function IntoRow({ back }: { back: SessionBackSummary }) {

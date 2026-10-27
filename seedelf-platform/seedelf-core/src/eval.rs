@@ -24,10 +24,17 @@ use seedelf_koios::koios::UtxoResponse;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// The most a single script may use while measured. The ledger's
-/// per-transaction limit (10 billion steps, 17.5 million memory units on
-/// preprod and mainnet in 2026) caps the whole transaction; the builders check
-/// the total.
+/// The most a transaction's scripts may use together while measured, not each
+/// of them: `uplc` runs each redeemer on what the ones before it left (1.6.0's
+/// release review, 312#0). It's above the ledger's own limit for a
+/// transaction (10 billion steps; 16.5 million memory units on mainnet, 17.5
+/// million on preprod, in 2026), so a transaction over that is still measured
+/// whole. A Seedelf spend ([`crate::build::ScriptSpend`]), a mix and a DEX
+/// cancel refuse it by checking the total against
+/// [`crate::build::MAX_TX_BUDGET`]. A Lovejoin withdraw doesn't: the wallet
+/// withdraws one box at a time, and it takes 25 to pass the limit (1.6.0's
+/// review of the fixes, R3-31). Past this, the measure fails first: a script
+/// "went over budget".
 const MEASURE_LIMIT: (u64, u64) = (14_000_000_000, 20_000_000);
 
 /// A UTxO the evaluator can see: where it is, and its output's CBOR.
@@ -49,10 +56,9 @@ impl Resolved {
 /// Why the evaluator can't take `row`, in words, or `None` when it can. A
 /// reference script on the row isn't carried over, so such a row is refused
 /// rather than evaluated wrongly; anyone can send one, to a Seedelf too. So is
-/// a row whose datum is nested past [`cbor::MAX_DEPTH`]: the evaluator's
-/// decoder would overflow the stack on it. Nothing measured in the wallet
-/// (a Seedelf spend, a session's merged return, Lovejoin) can spend such a
-/// UTxO.
+/// a row whose datum the wallet can't read ([`unreadable_datum`]). Nothing
+/// measured in the wallet (a Seedelf spend, a session's merged return,
+/// Lovejoin) can spend such a UTxO.
 pub fn refusal(row: &UtxoResponse) -> Option<String> {
     if row.reference_script.is_some() {
         return Some(format!(
@@ -60,6 +66,15 @@ pub fn refusal(row: &UtxoResponse) -> Option<String> {
             row.tx_hash, row.tx_index
         ));
     }
+    unreadable_datum(row)
+}
+
+/// Why the wallet can't read `row`'s inline datum, in words, or `None` when it
+/// can or there's none: nested past [`cbor::MAX_DEPTH`], or not one CBOR item.
+/// The evaluator's decoder, and Pallas's, would overflow the stack on a datum
+/// a few thousand levels deep, which traps WebAssembly. Anyone can put one on
+/// a UTxO they make, beside a reference script too.
+pub fn unreadable_datum(row: &UtxoResponse) -> Option<String> {
     let too_deep = row
         .inline_datum
         .as_ref()
@@ -84,11 +99,16 @@ pub fn resolve_row(row: &UtxoResponse) -> Result<Resolved> {
 
 /// A reference UTxO holding `script`, a Plutus script of `version` (1 to 3)
 /// as its witness carries it, for a script read by reference: a DEX order's,
-/// whose bytes the caller has checked against its hash ([`crate::orders`]).
-/// The row's datum, if any, is carried too.
+/// whose bytes the caller has checked against its hash ([`crate::orders`]),
+/// or a Lovejoin pool's at the holder. The row's datum, if any, is carried
+/// too, so a row whose datum the wallet can't read ([`unreadable_datum`]) is
+/// refused, as by [`resolve_row`]: whoever made it chose the datum.
 pub fn resolve_reference(row: &UtxoResponse, version: u8, script: &[u8]) -> Result<Resolved> {
     if !(1..=3).contains(&version) {
         bail!("A reference script must be a Plutus script");
+    }
+    if let Some(why) = unreadable_datum(row) {
+        bail!(why);
     }
     resolve(row, Some((version, script)))
 }

@@ -344,6 +344,23 @@ impl Staking {
         self.certificates.is_empty() && self.withdrawal.is_none() && self.votes.is_none()
     }
 
+    /// Whether it does nothing but register scripts' credentials with
+    /// Shelley's certificate (0): no withdrawal, no vote, no other
+    /// certificate. Of a script's certificates, that's the one the ledger asks
+    /// no witness for. Any other needs the script run under a certifying
+    /// redeemer, Conway's registration with a deposit (7) too, and a key's
+    /// needs its signature.
+    pub(crate) fn registers_scripts_alone(&self) -> bool {
+        self.withdrawal.is_none()
+            && self.votes.is_none()
+            && self.certificates.iter().all(|c| {
+                matches!(
+                    c,
+                    Certificate::StakeRegistration(StakeCredential::ScriptHash(_))
+                )
+            })
+    }
+
     /// Whether the stake key signs: for a stake certificate or a withdrawal.
     /// A script's credential has no key: registering one (a Lovejoin pool's
     /// `mix_logic`, at its launch) needs no signature.
@@ -493,7 +510,8 @@ fn is_drep_certificate(certificate: &Certificate) -> bool {
 }
 
 /// Whether a stake certificate is for a script's credential, which no key
-/// signs for.
+/// signs for. Its script may have to run instead: all but Shelley's
+/// registration need it ([`Staking::registers_scripts_alone`]).
 fn is_scripts(certificate: &Certificate) -> bool {
     matches!(
         certificate,

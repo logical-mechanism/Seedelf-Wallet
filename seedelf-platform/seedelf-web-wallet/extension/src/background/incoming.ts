@@ -353,6 +353,11 @@ export function pendingEntries(wasm: typeof Wasm, network: NetworkName, sent: Se
     const own = d.outputs.filter(ours);
     const others = d.outputs.filter((o) => !ours(o));
     const mine = from.own.get(s.txHash);
+    // A box's way back that pays this account anything is one the account paid to bring back (Lovejoin's escape hatch):
+    // that's its change. What it cost the account isn't in the outputs, and the box beside its coins isn't its own, so
+    // it's left to Koios's listing, which names it from the transaction. As the box's way back it read as money in, at
+    // the account's whole change (1.6.0's release review, 318-worker#2).
+    if (mine?.kind === "lovejoin-withdraw" && own.length) return [];
     // The active account pays for one that carries a slot (account.ts) when Send sent it from this account, or,
     // with no such record, when every coin it spends is one the device knows is this account's.
     const paid = d.validUntil !== null && (s.account !== undefined ? s.account === from.active : inputs.every((o) => coins.has(o)));

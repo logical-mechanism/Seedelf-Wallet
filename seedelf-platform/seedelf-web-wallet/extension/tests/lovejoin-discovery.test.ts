@@ -289,12 +289,36 @@ describe("the data layer's list", () => {
     expect(k.calls).toEqual([]);
   });
 
-  it("leaves out a pool that doesn't verify: the server can leave a pool out, never make one look real", async () => {
+  it("leaves out a pool that doesn't verify: the server can leave a pool out, never pass off other scripts as a pool's", async () => {
     const on = onIndex();
     on.index.poolList = listed(`${FOUND.seed.txHash}#0`);
     const { found } = discovery(koiosOf([], []), { index: on });
     await found.refresh("preprod");
     expect(await found.known("preprod")).toEqual([]);
+  });
+
+  it("leaves out a pool whose launch, or a script of it, isn't its reference UTxO's own transaction (1.6.0's release review, 317-wallet#0)", async () => {
+    // A launch puts its reference UTxO and both scripts at the holder in one transaction, the one listed as its
+    // launch: a list that says otherwise contradicts itself. That the pool is on chain at all, the ledger checks (each
+    // deposit reads its reference UTxO), so this catches only a server that contradicts itself.
+    const other = "ab".repeat(32);
+    const launchedElsewhere = listed();
+    launchedElsewhere.pools[0]!.launch.tx = other;
+    const scriptElsewhere = listed();
+    scriptElsewhere.pools[0]!.scripts[1]!.ref = `${other}#2`;
+    for (const list of [launchedElsewhere, scriptElsewhere]) {
+      const on = onIndex();
+      on.index.poolList = list;
+      const { found } = discovery(koiosOf([], []), { index: on });
+      await found.refresh("preprod");
+      expect(await found.known("preprod")).toEqual([]);
+    }
+    // As a launch lists it, it's kept.
+    const on = onIndex();
+    on.index.poolList = listed();
+    const { found } = discovery(koiosOf([], []), { index: on });
+    await found.refresh("preprod");
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual([ID]);
   });
 
   it("keeps nothing while the token routes refuse or can't be read, and the private index stays up", async () => {

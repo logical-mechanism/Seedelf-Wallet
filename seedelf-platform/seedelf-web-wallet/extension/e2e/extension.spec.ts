@@ -1980,6 +1980,38 @@ test("collateral: the Public tab offers it while it isn't set, opens it in place
   await expect(row).toHaveCount(0, { timeout: 30_000 });
 });
 
+test("collateral: opened again from the Public tab while its payment waits, the page leaves it to Home's watch (1.6.0's release review, 309#0)", async ({
+  context,
+  koios,
+}) => {
+  // It waits on Home's 15 s watch, a new reading, and the page's 15 s look.
+  test.slow();
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await cardanoTab(page);
+  const row = page.getByTestId("home-collateral");
+  await row.click();
+  await page.getByRole("button", { name: "Set collateral" }).click();
+  await expect(page.getByTestId("collateral-review")).toContainText("Set aside5 ₳");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Collateral payment sent. Waiting for the network…");
+  await expect(page.getByTestId("home-collateral-state")).toHaveText("Waiting for the network to confirm it");
+  // It lands as the row is pressed to follow it. The worker tells only the first to ask of a landing, and the page's
+  // look at once came first: Home's banner stayed on "sent", and every payment waited 10 minutes.
+  const [txHash] = koios.submitted;
+  koios.addedToAccounts.push(collateralMadeBy(txHash!));
+  koios.confirmations = 1;
+  await row.click();
+  await expect(page.getByTestId("collateral-status")).toHaveText("Set: 5 ₳ kept aside for running contracts.", {
+    timeout: 40_000,
+  });
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Collateral set");
+  await expect(row).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Send publicly" })).toBeEnabled();
+});
+
 test("collateral: the wallet takes a 5 ₳ UTxO the account holds; reclaimed, it's set again with no transaction", async ({ context, koios }) => {
   // The 24-word phrase's account holds six UTxOs of exactly 5 ₳.
   const page = await openApp(context);
@@ -2827,6 +2859,13 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await retry.getByText("Details", { exact: true }).click();
   await expect(cbor).toHaveText(swaps.swapCbor);
   await expect(retry.getByRole("button", { name: "Copy the transaction's CBOR" })).toBeVisible();
+  // Beside Copy, what sending it on ties; and its hex is never in what's read aloud as the line changes (1.6.0's
+  // release review, 322#0, 322#1).
+  await expect(retry.getByTestId("session-retry-cbor-privacy")).toHaveText(
+    "Whoever you send it to can tie this swap's one-time account, and the private UTxOs that funded it, to you.",
+  );
+  expect(await cbor.evaluate((el) => el.closest("[aria-live]")?.getAttribute("aria-live") ?? "off")).toBe("off");
+  await expect(retry.locator('[aria-live="polite"]')).toContainText("The swap Minswap built failed when Minswap ran it");
   // Open, it's no wider than the line it's on.
   expect(await retry.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await snap(page, "swap-build-failed");
@@ -3058,7 +3097,8 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await expect(page.getByTestId("lovejoin-chain-tx-0-output-list")).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
   await expect(page.getByTestId("lovejoin-chains")).toHaveCount(0);
-  await expect(page.getByTestId("pending-tx")).toContainText("In Lovejoin, on their way to your private balance", { timeout: 20_000 });
+  // One box, named as one (1.6.0's review of the fixes).
+  await expect(page.getByTestId("pending-tx")).toContainText("In Lovejoin, on its way to your private balance", { timeout: 20_000 });
 
   // Home shows the box on its way back, from the device's own schedule; its row opens Lovejoin's page. Sent, the
   // page went back to the hub.
@@ -3258,8 +3298,14 @@ test("Lovejoin: a mix from the public account without its collateral says so bef
 }) => {
   // It waits on Home's 15 s watch, a new reading, and the page's 15 s look at it.
   test.slow();
-  // The pool, and no 5 ₳ UTxO at the account to be the collateral.
-  koios.addedToAccounts.push(...lovejoinPool);
+  // The pool, and no 5 ₳ UTxO at the account to be the collateral. A mix spends the account's ADA alone, and its
+  // largest UTxO holds tokens, so two of ADA alone: the collateral's payment spends the larger, and the other still
+  // pays for a box and its mixes (1.6.0's release review, 321-lj-screens#1).
+  const [rich] = (Object.values(koiosPreprod.accounts)[0] as { account_utxos: Array<Record<string, any>> }).account_utxos.filter(
+    (u) => BigInt(u.value) > 1_000_000_000n,
+  );
+  const at = (tx: string, value: string) => ({ ...rich!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: [] }) as never;
+  koios.addedToAccounts.push(...lovejoinPool, at("e6", "30000000"), at("e7", "20000000"));
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
@@ -4180,9 +4226,17 @@ test("staking: a pool's return on stake, read with its page, and on Staking only
   await page.getByRole("button", { name: "Stake with TPREP" }).click();
   await expect(page.getByTestId("staking-review")).toContainText("Stake withTPREP");
   await page.getByRole("button", { name: "Back" }).click();
-  await expect(page.getByTestId("pool-details-return")).toContainText("Return on stake");
+  // Its figures, not the label alone: read again, the row says "Return on stake Reading…" until the answer, which the
+  // route above counts first (1.6.0's release review, 311#0).
+  await expect(page.getByTestId("pool-details-return")).toContainText(/Return on stake\d+(\.\d+)?% a year/);
   expect(asked).toHaveLength(2);
   expect(koios.calls.slice(reads).filter((c) => c === "pool_info")).toEqual([]);
+  // Nor read again behind the figures it shows: opened again from the list, the pool is read afresh, asked after
+  // anything Back set off, and its figures show only once the route has counted that read.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByTestId("pool-results").getByRole("button", { name: /^TPREP,/ }).click();
+  await expect(page.getByTestId("pool-details-return")).toContainText(/Return on stake\d+(\.\d+)?% a year/);
+  expect(asked.map((q) => q.get("_pool_bech32"))).toEqual([LOGIC, TPREP, TPREP]);
 });
 
 test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async ({ context, koios }) => {

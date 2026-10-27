@@ -14,7 +14,10 @@
 //   pool's 10 ₳, whose copy no wallet shows (session 1, 17);
 // - no shown pool has these values already (11), once discovery has looked
 //   for pools launched since it last did: a copy is never shown, so it's
-//   refused, and the form lists the pools there are to join (14);
+//   refused, and the form lists the pools there are to join (14); one of
+//   these values the wallet started that no look has found yet is said on the
+//   review, never refused, as the chain takes both (1.6.0's release review,
+//   318-worker#1);
 // - every box's ADA is at least what one needs to come back and pay part of
 //   itself on its own under the live parameters (S0d's rule, worked out in
 //   WebAssembly: lovejoinBoxValue), and at most 9 ₳ in a token pool (27).
@@ -47,8 +50,8 @@ import type { HistoryClass } from "../shared/histories";
 import type { LovejoinLaunchSummary, LovejoinLaunchTerms, PendingTx, TokenQuantity } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import type { KoiosUtxo } from "./koios";
-import type { LovejoinService } from "./lovejoin";
-import { isListed, type PoolDiscovery } from "./lovejoin-pools";
+import { STARTED_SAID_MS, type LovejoinService } from "./lovejoin";
+import { isListed, type FoundPool, type PoolDiscovery } from "./lovejoin-pools";
 import { settleMaybeSent } from "./pending";
 import { adaWords, privateShort } from "./short";
 import {
@@ -137,7 +140,11 @@ type KeptLaunch = Omit<LovejoinLaunchSummary, "locked" | "fee" | "change" | "poo
   };
 
 export interface LaunchDeps extends ScriptSpendDeps {
-  lovejoin: Pick<LovejoinService, "recordLaunch">;
+  /**
+   * Where the wallet keeps the pools it started, and reads them again (launches): a start of the same values says so,
+   * and Send asked again for a start that went says it went already.
+   */
+  lovejoin: Pick<LovejoinService, "recordLaunch" | "launches">;
   /**
    * The pools shown on a network (lovejoin-pools.ts): a launch of their values would be a copy, never shown. Looked
    * for again before the check, as the Lovejoin page does as it opens.
@@ -234,10 +241,12 @@ export class LovejoinLaunchService {
     // Read once discovery has looked for pools launched since (34d's review 5): the request every wallet makes. A copy
     // handed over has a shown pool's values too, so either refuses it (MERGED-1).
     await this.deps.discovery.look(network);
-    const copy = (await this.deps.discovery.known(network)).find(
+    const known = await this.deps.discovery.known(network);
+    const copy = known.find(
       (p) => BigInt(p.boxLovelace) === box && sameToken(p.token, token) && (!p.token || p.token.quantity === tokenQuantity?.quantity),
     );
     if (copy) throw new Error(t("lj.launch.copy"));
+    const before = await this.startedBefore(network, known, box, tokenQuantity);
     const koios = this.deps.koios(network);
     const params = await koios.epochParams();
     const value = await this.boxValue(network, params, token, tokenQuantity ? BigInt(tokenQuantity.quantity) : undefined);
@@ -246,7 +255,9 @@ export class LovejoinLaunchService {
     const maxFee = (box - 1n < MAX_FEE ? box - 1n : MAX_FEE).toString();
     const terms = { ...(tokenQuantity ? { token: tokenQuantity } : {}), boxLovelace: box.toString(), maxFee };
 
-    const launch = from === "private" ? await this.fromPrivate(network, terms) : await this.fromPublic(network, terms);
+    // Built under the parameters its box's least and most were checked under: one read, never two that could straddle
+    // an epoch's end (1.6.0's release review, 318-worker#3).
+    const launch = from === "private" ? await this.fromPrivate(network, terms, params) : await this.fromPublic(network, terms, params);
     const { built, bare, origins, histories, invalidHereafter } = launch;
     const summary: LovejoinLaunchSummary = {
       network,
@@ -258,6 +269,7 @@ export class LovejoinLaunchService {
       change: built.changeLovelace,
       inputs: built.inputs.length,
       ...(histories ? { histories } : {}),
+      ...(before ? { startedBefore: { txHash: before.txHash, at: before.at } } : {}),
     };
     const kept: Omit<KeptLaunch, "builtAt"> = {
       ...summary,
@@ -268,6 +280,23 @@ export class LovejoinLaunchService {
     };
     await keep(this.deps, SESSION_LOVEJOIN_LAUNCH, kept);
     return summary;
+  }
+
+  /**
+   * The wallet's own start of a pool of these values (`box` of ADA, and `token`'s quantity) that no look has found yet,
+   * if it sent one within STARTED_SAID_MS: a look takes a launch only once it's settled, ten minutes or so after its
+   * block, and on mainnet the data layer's list is asked every few minutes, so the copy check above can't see it yet.
+   * Sent again, one of the two lands after the other, a copy no wallet shows, what it locks gone for good. The chain
+   * takes both, so nothing is refused (the owner's rule): its review says so (1.6.0's release review, 318-worker#1).
+   * From the device alone, asking no one.
+   */
+  private async startedBefore(network: NetworkName, known: FoundPool[], box: bigint, token?: TokenQuantity) {
+    const now = this.deps.now();
+    const same = (b: { lovelace: string; token?: TokenQuantity }) =>
+      b.lovelace === box.toString() && sameToken(b.token, token) && (!token || b.token?.quantity === token.quantity);
+    return (await this.deps.lovejoin.launches(network))
+      .filter((l) => !!l.box && same(l.box) && now - l.at < STARTED_SAID_MS && !known.some((p) => p.id === l.id))
+      .at(-1);
   }
 
   /**
@@ -282,6 +311,7 @@ export class LovejoinLaunchService {
   private async fromPrivate(
     network: NetworkName,
     terms: { token?: TokenQuantity; boxLovelace: string; maxFee: string },
+    known: Record<string, unknown>,
   ): Promise<{
     built: Built;
     bare: Built;
@@ -290,7 +320,7 @@ export class LovejoinLaunchService {
     invalidHereafter?: number;
   }> {
     const { wasm } = this.deps;
-    const { view, utxos, params, returning, waiting, classes } = await readContract(this.deps, network);
+    const { view, utxos, params, returning, waiting, classes } = await readContract(this.deps, network, known);
     if (!utxos.length) throw nothingToSpend(this.deps, view, t("lj.launch.privateEmpty"), returning, waiting);
     // Without the certificate, from what the review showed it spends alone: coin selection keeps histories apart
     // (launch_apart), and needing 2 ₳ less it could pick UTxOs, and ties, the review never showed.
@@ -315,10 +345,11 @@ export class LovejoinLaunchService {
   private async fromPublic(
     network: NetworkName,
     terms: { token?: TokenQuantity; boxLovelace: string; maxFee: string },
+    known: Record<string, unknown>,
   ): Promise<{ built: Built; bare: Built; origins?: undefined; histories?: undefined; invalidHereafter: number }> {
     const { wasm, wallet } = this.deps;
     const [{ params, utxos, collateral, held }, invalidHereafter] = await Promise.all([
-      readAccount(this.deps, network),
+      readAccount(this.deps, network, { params: known }),
       validUntil(this.deps.koios(network)),
     ]);
     if (!utxos.length) throw nothingInAccount(held, t("lj.launch.accountEmpty"));
@@ -344,6 +375,12 @@ export class LovejoinLaunchService {
     const ours = kept?.network === network && (kept.txHash === txHash || kept.reviewed === txHash);
     // Not for a review too old to send, which Send refuses as it is (send).
     const fresh = !!kept && this.deps.now() - kept.builtAt <= BUILT_TTL_MS;
+    // Send asked again for a review whose start went as the build without the certificate (choose): its kept copy went
+    // once Koios took it, and no record of what's sent has the review's hash. Said as sent, never as a review to build
+    // again, which would make a copy of the pool sent (1.6.0's release review, 318-worker#1).
+    if (!(kept && ours) && (await this.deps.lovejoin.launches(network)).some((l) => l.reviewed === txHash)) {
+      throw new Error(t("worker.spend.sentAlready"));
+    }
     if (kept && ours && fresh && kept.sentCbor === undefined && kept.bare) kept = await this.choose(network, kept);
     const sending = kept && ours ? kept.txHash : txHash;
     const pending = await send(this.deps, network, sending, SESSION_LOVEJOIN_LAUNCH, "lovejoin-launch", "launch");
@@ -354,6 +391,9 @@ export class LovejoinLaunchService {
           txHash: kept.txHash,
           from: kept.from,
           ...(kept.from === "public" && kept.account !== undefined ? { account: kept.account } : {}),
+          // Its values, so a start of the same ones before a look finds this one says so (startedBefore).
+          box: { lovelace: kept.pool.boxLovelace, ...(kept.pool.token ? { token: kept.pool.token } : {}) },
+          ...(kept.reviewed !== kept.txHash ? { reviewed: kept.reviewed } : {}),
         })
         .catch(() => undefined);
     }

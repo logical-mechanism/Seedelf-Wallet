@@ -38,7 +38,7 @@ import { MAYBE_SENT_WAIT, pendingKey } from "../src/background/pending";
 import { nothingToSpend, readContract } from "../src/background/script-spend";
 import { outpoint, SESSION_SPENT } from "../src/background/spent";
 import { SESSION_WITHDRAW } from "../src/background/withdraw";
-import { Minswap } from "../src/background/minswap";
+import { builtOutputs, Minswap } from "../src/background/minswap";
 import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
@@ -1349,9 +1349,10 @@ describe("a chain's boxes", CHAINS, () => {
     expect((await lovejoin.status("preprod")).notMixed).toEqual([{ txHash: D, txIndex: 3 }]);
     const kept = async () => (await t.store.get<{ chains: Array<{ id: string }> }>("lovejoin.preprod"))!.chains.map((c) => c.id);
 
-    // Mix my boxes again's first mix spends it, and the Lovejoin page reads the pool meanwhile: the record stays.
-    await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${D}#3`]: Date.now() }));
-    await lovejoin.status("preprod");
+    // Mix my boxes again's first mix spends it, and the Lovejoin page reads the pool meanwhile: the box is hidden, and the
+    // record stays. Spent on the wallet's own clock, as every send writes its marks (1.6.0's release review, L4).
+    await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${D}#3`]: t.clock.now }));
+    expect((await lovejoin.status("preprod")).notMixed).toEqual([]);
     expect(await kept()).toEqual([S.id]);
 
     // That mix never lands, and a lock forgets the spend: the box shows again, not mixed yet, and hours of runs never bring it back.
@@ -1854,8 +1855,13 @@ describe("mixing from the tile", CHAINS, () => {
       expect(out.mix).toMatchObject({ bootstrap: true, depth: 0, boxes: 1, mixes: 0 });
       await sessions.mixOutSubmit("preprod", out.txHash);
 
-      // The funding lands: the runner must build the deposit, not skip Lovejoin.
-      t.koios.addedToAccounts.push(atSession(out.txHash, 0, "11500000"), atSession(out.txHash, 1, "5000000"));
+      // The funding lands, as it paid the account: its one payment, no 5 ₳ (1.6.0's release review, x-compat#0). The
+      // runner must build the deposit, not skip Lovejoin.
+      const funded = t.koios.submitted.find((b) => txIdOf(b) === out.txHash)!;
+      t.koios.addedToAccounts.push(
+        ...builtOutputs(funded).flatMap((o, i) => (o.address.slice(2, 58) === sessionSwap.keyHash ? [atSession(out.txHash, i, o.lovelace.toString())] : [])),
+      );
+      expect(t.koios.addedToAccounts.map((u) => u.value)).toEqual(["13000000"]);
       t.koios.confirmations = 1;
       await sessions.advance("preprod", 0, true);
       const book = (await t.store.get<{ sessions: Array<{ txs: Array<{ kind: string }>; mix?: { skipped?: string } }> }>("sessions.preprod"))!;
@@ -1904,7 +1910,11 @@ describe("mixing from the tile", CHAINS, () => {
     // One box of 10 ₳ and the deposit's reserve, and no mix fees at all: a
     // mix of one box at depth 2 asks 15.3 ₳ for the same box.
     expect(BigInt(seeded.mix.lovelace)).toBe(11_500_000n);
-    expect(seeded.payments.map((p) => p.lovelace)).toEqual(["11500000", "5000000"]);
+    // One payment, with its way back's 1.5 ₳ beside them, and no collateral: a deposit alone runs no script (the owner,
+    // 2026-10-23), so its return sweeps the deposit's change (1.6.0's release review, 318-rust#0).
+    expect(seeded.payments.map((p) => p.lovelace)).toEqual(["13000000"]);
+    expect(seeded.bootstrapReserve).toBe(wasm.lovejoinBootstrapReserve());
+    expect(seeded.collateralReserve).toBeUndefined();
     expect(t.koios.calls.length).toBeGreaterThan(asked);
     // More than the private balance holds: said in the screens' words, not core's "Seedelf balance" (chunk 23's
     // second review, LJ-6).

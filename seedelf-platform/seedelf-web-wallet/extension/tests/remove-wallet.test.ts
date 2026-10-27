@@ -233,6 +233,22 @@ describe("Remove wallet's screen", () => {
     ]);
   });
 
+  it("says a payment still being sent in parts, which removing the wallet stops partway (1.6.0's release review, gap-1#1)", async () => {
+    const { atStakeLines } = await import("../src/ui/screens/Settings");
+    const waiting = (n: number): AtStake => ({
+      network: "preprod",
+      sessions: [],
+      chainSending: false,
+      partsWaiting: Array.from({ length: n }, () => ({ sent: 1, total: 3 })),
+    });
+    expect(atStakeLines([waiting(1)])).toEqual([
+      "Preprod: a payment is still being sent in parts. Removing the wallet stops it partway: what's still to go stays in your private balance.",
+    ]);
+    expect(atStakeLines([waiting(2)])).toEqual([
+      "Preprod: 2 payments are still being sent in parts. Removing the wallet stops them partway: what's still to go stays in your private balance.",
+    ]);
+  });
+
   it("Forgot password says what the phrase brings back, and what a site's session left at the site it doesn't", async () => {
     const { Reset } = await import("../src/ui/screens/Unlock");
     const html = renderToStaticMarkup(createElement(Reset, { onCancel: () => undefined, onReset: () => undefined }))

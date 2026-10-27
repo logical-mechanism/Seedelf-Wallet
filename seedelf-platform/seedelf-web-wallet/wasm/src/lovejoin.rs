@@ -6,13 +6,20 @@
 //! A session's chain, built here in one call and sent by the worker in
 //! order, each transaction on the one before's change:
 //!
-//! 1. the deposit: as many 10 ₳ boxes as its ADA-only UTxOs pay for, each
-//!    owned by the Seedelf key;
-//! 2. the mixes: each box fanned out `depth` waves deep, three wide, with
-//!    fresh boxes from the pool;
-//! 3. the return: the last change, the collateral (spent here, last) and any
-//!    token UTxOs, merged into the Seedelf UTxO the session's funding made
-//!    (`api::merged_return`), or into fresh registers when that's spent.
+//! 1. the deposit: as many boxes as its ADA-only UTxOs pay for, each owned
+//!    by the Seedelf key, in the classic pool (10 ₳ a box) or the pool a
+//!    request names, a token pool's boxes taking its token from the session's
+//!    UTxOs that hold it; a return across pools puts each pool's in at once;
+//! 2. the mixes: each box fanned out `depth` waves deep in its own pool,
+//!    three or four boxes a mix (`width`), with fresh boxes from that pool;
+//! 3. the return: the last change, the collateral the mixes put up (spent
+//!    here, last) and any token UTxOs, merged into the Seedelf UTxO the
+//!    session's funding made (`api::merged_return`, under that collateral);
+//!    or swept into fresh registers (`build::external_sweep`, which runs no
+//!    script) when that UTxO is spent, a UTxO there can't be measured, or
+//!    there's no collateral to put up: a Bootstrap's session has none.
+//!    Where a 5 ₳ pool takes the collateral, it's put into a box of its own
+//!    and mixed once first (`CollateralTail`), and the return sweeps the rest.
 //!
 //! Mixing the wallet's boxes again (`again`) is the same chain with no
 //! deposit: the session's ADA pays for the mixes of boxes that are in the
@@ -97,8 +104,9 @@ pub struct PoolRef {
 /// The classic pool, or the token pool `pool` names, which is trusted only
 /// once its scripts are derived from its seed and match its datum
 /// (`lovejoin::verify_pool`). A script row is taken only when its bytes are
-/// a Plutus V3 script; `verify_pool` reads a script by reference only from
-/// the holder, and only the one it derived.
+/// a Plutus V3 script and its datum, if any, one the wallet reads;
+/// `verify_pool` reads a script by reference only from the holder, and only
+/// the one it derived.
 pub fn protocol_of(network_flag: bool, pool: Option<&PoolRef>) -> Result<Protocol> {
     let Some(pool) = pool else {
         return Protocol::of(network_flag);
@@ -113,6 +121,15 @@ pub fn protocol_of(network_flag: bool, pool: Option<&PoolRef>) -> Result<Protoco
         let Some(script) = &row.reference_script else {
             continue;
         };
+        // A launch can put any datum beside its scripts (one_shot_mint checks
+        // only the reference output), and decoding one a few thousand levels
+        // deep overflowed this module's stack, which locked the wallet. Such a
+        // row is no reference: its script is carried, and the pool isn't
+        // shown, as the data layer doesn't list it (1.6.0's release review,
+        // 314-wasm#0). A request naming it is still read.
+        if seedelf_core::eval::unreadable_datum(row).is_some() {
+            continue;
+        }
         let bytes = match (
             script.kind.as_deref(),
             script.bytes.as_deref(),
@@ -1377,9 +1394,11 @@ pub struct ChainResult {
     pub boxes: usize,
     pub depth: u32,
     pub fees: String,
-    /// What the return brings back at once: the last change, the collateral
-    /// and the token UTxOs' ADA, less its fee. A public account's chain has no
-    /// return: this is the change that stays in the account.
+    /// What the return brings back at once: the last change, the token UTxOs'
+    /// ADA and the collateral, less its fee. The collateral isn't in it after
+    /// a `collateral_tail`, which mixed it, nor for a Bootstrap's session,
+    /// which has none. A public account's chain has no return: this is the
+    /// change that stays in the account.
     pub returned: String,
     /// The tokens it brings back with them.
     pub tokens: Vec<api::TokenAmount>,
@@ -1956,7 +1975,7 @@ pub fn funding_at(
     let lovelace = if request.again {
         lovejoin::again_funding_in(request.boxes, &protocol, request.depth, width)
     } else {
-        lovejoin::funding_for_in(request.boxes, &protocol, request.depth, width)
+        lovejoin::funding_for_in(request.boxes, &protocol, request.depth, width)?
     };
     let token = if request.again {
         None
@@ -1988,9 +2007,10 @@ pub struct BootstrapMostRequest {
 }
 
 /// The most boxes, of `request.most`, a Bootstrap paid from the private
-/// balance puts into the pool under `request.params`: what its funding's
-/// reserve pays the deposit's fee and change for
-/// ([`lovejoin::bootstrap_most`], chunk 34's 34d review, 3).
+/// balance puts into the pool under `request.params`: what its funding's two
+/// reserves, the deposit's and the way back's, pay the deposit and its sweep
+/// back for, each count built ([`lovejoin::bootstrap_most`], chunk 34's 34d
+/// review, 3; 1.6.0's release review, 318-rust#0).
 pub fn bootstrap_most_in(request: BootstrapMostRequest, pool: Option<&PoolRef>) -> Result<usize> {
     let network_flag = network_flag(&request.network)?;
     let protocol = protocol_of(network_flag, pool)?;
@@ -2076,7 +2096,7 @@ pub fn chain_from_account_at(
         collateral_ref.as_ref() != Some(&(p.utxo.tx_hash.clone(), p.utxo.tx_index))
     };
 
-    let mut needed = lovejoin::funding_for_in(request.boxes, &protocol, request.depth, width);
+    let mut needed = lovejoin::funding_for_in(request.boxes, &protocol, request.depth, width)?;
     let lovelace = |p: &api::PathedUtxo| p.utxo.value.parse::<u64>().unwrap_or(0);
     let mut picked: Vec<&UtxoResponse> = Vec::new();
     let mut total = 0u64;
@@ -2133,7 +2153,11 @@ pub fn chain_from_account_at(
             )?,
         )?)?;
         if !kept.is_empty() {
-            needed += build::minimum_address_payment(&params, &address, &kept)?;
+            // Checked, as the planner's sums on the pool's box ADA are: this
+            // build doesn't check overflow (1.6.0's release review, 314-core#1).
+            needed = needed
+                .checked_add(build::minimum_address_payment(&params, &address, &kept)?)
+                .context(lovejoin::MORE_THAN_THERE_IS)?;
         }
     }
     // Then as few ADA-only UTxOs as pay for the rest, the largest first.

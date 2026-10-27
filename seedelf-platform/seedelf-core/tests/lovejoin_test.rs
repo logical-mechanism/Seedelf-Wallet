@@ -733,7 +733,7 @@ fn boxes_are_planned_on_what_the_session_can_pay() {
     // Funding for k boxes is the plan run backwards: it pays for exactly k.
     for depth in 1..=3 {
         for boxes in 1..=5 {
-            let funded = lovejoin::funding_for(boxes, depth, 10_000_000);
+            let funded = lovejoin::funding_for(boxes, depth, 10_000_000).unwrap();
             assert_eq!(lovejoin::boxes_affordable(funded, depth, 10_000_000), boxes);
             assert_eq!(
                 lovejoin::boxes_affordable(funded - 1, depth, 10_000_000),
@@ -741,7 +741,7 @@ fn boxes_are_planned_on_what_the_session_can_pay() {
             );
         }
     }
-    assert_eq!(lovejoin::funding_for(1, 2, 10_000_000), 15_300_000);
+    assert_eq!(lovejoin::funding_for(1, 2, 10_000_000).unwrap(), 15_300_000);
 }
 
 #[test]
@@ -753,7 +753,7 @@ fn a_chain_funded_for_its_boxes_goes_through_and_keeps_its_change() {
         owner.clone().rerandomize().unwrap(),
         owner.rerandomize().unwrap(),
     ];
-    let funded = lovejoin::funding_for(2, 1, protocol.denom);
+    let funded = lovejoin::funding_for(2, 1, protocol.denom).unwrap();
     let built = lovejoin::chain(
         &params(),
         &protocol,

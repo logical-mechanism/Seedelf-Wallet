@@ -25,7 +25,7 @@ import { Session } from "../src/ui/screens/Swaps";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, ORDER_ADDRESS, ORDER_SCRIPT, SESSION_ADDRESS } from "./fixtures/swap-tx";
-import { loadTestWasm, ownedUtxos, sessionSwap, vectors } from "./fakes";
+import { koiosPreprod, loadTestWasm, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
 import { atSession, busy, MIN, orderRow, PASSWORD, signing, started, SWAP_TX, unlocked, type T } from "./swap-session";
 
 const FUNDING_TX = sessionSwap.utxo.tx_hash;
@@ -424,6 +424,189 @@ describe("the restore scan", () => {
       expect(await sessions.scan("preprod")).toEqual({ used: 1, found: [0] });
       expect((await bookOf(t))!.sessions[0]!.txs.map((x: { kind: string }) => x.kind)).toEqual(["out", "swap"]);
     }
+  });
+});
+
+describe("a session funded in parts, found by the restore scan (1.6.0's release review, x-scenarios-sessions#0)", () => {
+  const PART1 = "a7".repeat(32);
+  const PART2 = "a8".repeat(32);
+  const OTHER_PAYER = "a9".repeat(32);
+  const account = { bech32: sessionSwap.address, cred: sessionSwap.keyHash };
+  /** An input at the wallet contract: outpoint `u`, one of this phrase's private UTxOs or a stranger's. */
+  const fromContract = (u: KoiosUtxo) => ({
+    payment_addr: { bech32: u.address!, cred: koiosPreprod.wallet_contract },
+    tx_hash: u.tx_hash,
+    tx_index: u.tx_index,
+  });
+  /** 25 NFTs, each of its own policy: more kinds than one output of the return holds (20). */
+  const nfts = Array.from({ length: 25 }, (_, i): [string, string] => [`${(i + 0x10).toString(16).repeat(28)}4e4654`, "1"]);
+  const policies = new Set(nfts.map(([id]) => id.slice(0, 56)));
+  /** The NFTs a return brings back. */
+  const nftsBack = (tokens: Array<{ policyId: string }>) => tokens.filter((x) => policies.has(x.policyId)).length;
+
+  /**
+   * Account 0 funded in two parts, each a Seedelf spend of this phrase's own private UTxOs that its key didn't sign:
+   * the first paid 20 NFTs on 4.09 ₳ and the 5 ₳ collateral, the second 5 NFTs on the least those need at a key
+   * address, too little for a deposit of their own. `order`: the parts as `account_txs` lists them, newest first.
+   */
+  async function fundedInParts(order: Array<[string, number]>) {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await usedWith(t, 0, order);
+    t.koios.txSpends.set(PART1, [fromContract(ownedUtxos[0]!)]);
+    t.koios.txSpends.set(PART2, [fromContract(ownedUtxos[1]!)]);
+    t.koios.txOutputs.set(PART1, [
+      { payment_addr: account, tx_index: 0 },
+      { payment_addr: account, tx_index: 1 },
+    ]);
+    t.koios.txOutputs.set(PART2, [{ payment_addr: account, tx_index: 0 }]);
+    t.koios.spent.add(`${ownedUtxos[0]!.tx_hash}#${ownedUtxos[0]!.tx_index}`);
+    t.koios.spent.add(`${ownedUtxos[1]!.tx_hash}#${ownedUtxos[1]!.tx_index}`);
+    t.koios.addedToAccounts.push(
+      atSession(PART1, 0, "4090190", nfts.slice(0, 20)),
+      atSession(PART1, 1, "5000000"),
+      atSession(PART2, 0, "1762790", nfts.slice(20)),
+    );
+    return { t, sessions };
+  }
+
+  it("brings back every part's tokens as the session's own, whichever part the scan takes for its funding", async () => {
+    // The parts a block apart, or in one block, the second sorting last: the scan takes it for the funding then.
+    for (const [order, funding] of [
+      [
+        [
+          [PART2, 5_000_100],
+          [PART1, 5_000_000],
+        ],
+        PART1,
+      ],
+      [
+        [
+          [PART1, 5_000_000],
+          [PART2, 5_000_000],
+        ],
+        PART2,
+      ],
+    ] as Array<[Array<[string, number]>, string]>) {
+      const { t, sessions } = await fundedInParts(order);
+      t.koios.calls.length = 0;
+      expect(await sessions.scan("preprod")).toEqual({ used: 1, found: [0] });
+      const asked = t.koios.calls.filter((c) => c.path === "utxo_info").map((c) => c.body._utxo_refs);
+
+      const review = await sessions.backBuild("preprod", 0, true);
+      expect(review.leftOut ?? []).toEqual([]);
+      expect(nftsBack(review.tokens)).toBe(25);
+      expect(review.inputs).toBe(3);
+
+      const [found] = (await bookOf(t))!.sessions;
+      expect(found!.txs.map((x: { txHash: string }) => x.txHash)).toEqual([funding]);
+      // The other part is the session's own, as what its key signed is: what it spent was this phrase's.
+      expect(found!.recovered.own).toEqual([funding === PART1 ? PART2 : PART1]);
+      // Only the other part's inputs at the wallet contract were asked about, never the funding's.
+      const other = funding === PART1 ? ownedUtxos[1]! : ownedUtxos[0]!;
+      expect(asked).toEqual([[`${other.tx_hash}#${other.tx_index}`]]);
+    }
+  });
+
+  it("keeps a payment from someone else's Seedelf UTxOs a stranger's: its tokens come back only when they pay their own way", async () => {
+    const { t, sessions } = await fundedInParts([
+      [OTHER_PAYER, 5_000_100],
+      [PART1, 5_000_000],
+    ]);
+    // Not the second part: a stranger paid the account the same 5 NFTs from a register this phrase doesn't own.
+    const stranger = koiosPreprod.contract_utxos[0]!;
+    t.koios.txSpends.set(OTHER_PAYER, [fromContract(stranger)]);
+    t.koios.txOutputs.set(OTHER_PAYER, [{ payment_addr: account, tx_index: 0 }]);
+    const at = t.koios.addedToAccounts.findIndex((u) => u.tx_hash === PART2);
+    t.koios.addedToAccounts.splice(at, 1, atSession(OTHER_PAYER, 0, "1762790", nfts.slice(20)));
+    expect(await sessions.scan("preprod")).toEqual({ used: 1, found: [0] });
+    expect((await bookOf(t))!.sessions[0]!.recovered.own).toEqual([]);
+
+    // The session's ADA never pays for a stranger's tokens (final review F4).
+    const review = await sessions.backBuild("preprod", 0, true);
+    expect(review.leftOut).toEqual([{ txHash: OTHER_PAYER, txIndex: 0, reason: "cost" }]);
+    expect(nftsBack(review.tokens)).toBe(20);
+  });
+
+  it("fails, writing nothing, while the server lists what a part spent but has no row of it", async () => {
+    const { t, sessions } = await fundedInParts([
+      [PART2, 5_000_100],
+      [PART1, 5_000_000],
+    ]);
+    // A backend behind: utxo_info knows nothing of the second part's input yet.
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      const answer = await real(url, init);
+      if (!url.includes("/utxo_info")) return answer;
+      return Response.json(((await answer.json()) as Array<{ tx_hash: string }>).filter((r) => r.tx_hash !== ownedUtxos[1]!.tx_hash));
+    };
+    await expect(sessions.scan("preprod")).rejects.toThrow("The server hasn't caught up");
+    expect(await bookOf(t)).toBeUndefined();
+    // Caught up: found with the second part as its own.
+    t.koios.fetch = real;
+    expect(await sessions.scan("preprod")).toEqual({ used: 1, found: [0] });
+    expect((await bookOf(t))!.sessions[0]!.recovered.own).toEqual([PART2]);
+  });
+
+  it("brings back every NFT a site's session was funded with in two real parts, after a restore on another device", { timeout: 180_000 }, async () => {
+    const wasm = loadTestWasm();
+    /** The private balance: 25 UTxOs of one NFT on 2 ₳ each, and 60 ₳ of ADA alone, all under this phrase's register. */
+    const balance = (t: T) => {
+      const base = ownedUtxos[0]!;
+      t.koios.added.push(
+        ...nfts.map(([id], i) => ({
+          ...base,
+          tx_hash: (i + 1).toString(16).padStart(64, "0"),
+          value: "2000000",
+          asset_list: [{ policy_id: id.slice(0, 56), asset_name: id.slice(56), quantity: "1", decimals: 0, fingerprint: "" }],
+        })),
+        { ...base, tx_hash: "ff".repeat(32), value: "60000000", asset_list: [] },
+      );
+    };
+    // The device that funded it: a site's session for 10 ₳ and every NFT, which goes as two parts.
+    const funder = testBalances({ owned: false });
+    await funder.wallet.create(PHRASE, PASSWORD);
+    balance(funder);
+    const funding = signing(funder);
+    const tokens = nfts.map(([id]) => ({ policyId: id.slice(0, 56), assetName: id.slice(56), quantity: "1" }));
+    const out = await funding.siteOutBuild("preprod", "https://app.example.com", "10000000", tokens);
+    expect(out.parts).toHaveLength(2);
+    await funding.siteOutSubmit("preprod", out.txHash, "https://app.example.com");
+    const parts = funder.koios.submitted.map((b) => ({ id: txIdOf(b), b }));
+    expect(parts.map((p) => p.id)).toEqual(out.parts!.map((p) => p.txHash));
+
+    // The same phrase restored on another device, the parts on chain: its scan finds the session.
+    const t = testBalances({ owned: false });
+    await t.wallet.create(PHRASE, PASSWORD);
+    balance(t);
+    const sessions = signing(t);
+    await usedWith(
+      t,
+      0,
+      parts.map((p, i) => [p.id, 5_000_000 + i] as [string, number]).reverse(),
+    );
+    const contract = { bech32: ownedUtxos[0]!.address!, cred: koiosPreprod.wallet_contract };
+    for (const { id, b } of parts) {
+      const spent = txInputs(b);
+      for (const o of spent) t.koios.spent.add(o);
+      t.koios.txSpends.set(
+        id,
+        spent.map((o) => ({ payment_addr: contract, tx_hash: o.split("#")[0]!, tx_index: Number(o.split("#")[1]) })),
+      );
+      const detail = JSON.parse(wasm.decodeTx(wasm.Network.Preprod, Buffer.from(b).toString("hex"))) as {
+        outputs: Array<{ index: number; address: { hex: string }; lovelace: string; assets: Array<{ policyId: string; assetName: string; quantity: string }> }>;
+      };
+      for (const o of detail.outputs) {
+        if (o.address.hex.slice(2, 58) !== sessionSwap.keyHash) continue;
+        t.koios.addedToAccounts.push(atSession(id, o.index, o.lovelace, o.assets.map((a) => [`${a.policyId}${a.assetName}`, a.quantity])));
+      }
+    }
+    expect(await sessions.scan("preprod")).toEqual({ used: 1, found: [0] });
+
+    // Bring it back: every NFT, whichever part the scan took for the funding.
+    const review = await sessions.backBuild("preprod", 0, true);
+    expect(review.leftOut ?? []).toEqual([]);
+    expect(nftsBack(review.tokens)).toBe(25);
   });
 });
 

@@ -49,16 +49,12 @@ import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { withoutStop } from "../sentence";
 import { tokenQuantity } from "../tokens";
+import { MaxLeftNote } from "./Withdraw";
 
 type Found = { state: "idle" } | { state: "looking" } | { state: "found"; seedelf: SeedelfLookup } | { state: "error"; message: string };
 
 /** Where an ordinary address pasted into Send is paid from instead: Make public, or the public account's Send. */
 export type AddressRoute = "private" | "public";
-
-/** The most UTxOs Max takes in one transaction (the WebAssembly's `MAX_WITHDRAW_UTXOS`). */
-const MAX_UTXOS = 20;
-/** The most transactions one payment goes out as, 20 UTxOs each (script-spend.ts `MAX_PARTS`). */
-const MAX_PARTS = 25;
 
 /**
  * The amount an address's route hands on: what's typed, or nothing with Max on. The box keeps the figure typed
@@ -254,17 +250,7 @@ export function Transfer({
             {t("transfer.maxKept", { amount: formatAda(summary.changeLovelace), count: summary.changeTokens })}
           </p>
         )}
-        {summary.left > 0 && (
-          <p className="note" data-testid="transfer-left">
-            {/* Set as the language sets its sentences: a literal space ran into Japanese (cross-area review). */}
-            {joinSentences([
-              t("withdraw.left", { count: summary.left }),
-              summary.inputs < MAX_UTXOS * (summary.parts ? MAX_PARTS : 1)
-                ? t("withdraw.leftTokens", { count: summary.left })
-                : t("withdraw.leftLimit", { max: MAX_UTXOS * (summary.parts ? MAX_PARTS : 1) }),
-            ])}
-          </p>
-        )}
+        <MaxLeftNote of={summary} testId="transfer-left" />
         <LeftOutNote leftOut={summary.leftOut} testId="transfer-left-out" />
         {summary.payments.map((p, i) => (
           <MinimumNote

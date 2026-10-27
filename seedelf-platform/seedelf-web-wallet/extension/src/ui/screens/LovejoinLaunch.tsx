@@ -16,11 +16,13 @@
 // the launcher's own record never puts it there sooner (§3). Bootstrapping
 // is offered next, from the pool's page, never forced (23).
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { joinSentences, useT } from "../../i18n";
+import { joinSentences, t, useT } from "../../i18n";
 
 import { NETWORKS } from "../../networks";
 import type { Balances, LovejoinLaunchSummary, LovejoinLaunchTerms, PendingTx, TokenAmount } from "../../shared/rpc";
 import { call } from "../background";
+import { AdaInput } from "../components/AdaInput";
+import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
 import { GivemeNote } from "../components/GivemeNote";
 import { HistoriesNote } from "../components/HistoriesNote";
@@ -31,7 +33,7 @@ import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { Tabs } from "../components/Tabs";
 import { TxDetailButton } from "../components/TxDetail";
-import { adaText, formatAda, formatQuantity, parseAda, parseQuantity, tokenKey } from "../format";
+import { adaText, formatAda, formatQuantity, parseAda, parseQuantity, sanitizeAmount, tokenKey, type AmountRules } from "../format";
 import { boxText, crowdText, isCopy, type ShownPool } from "../lovejoin-pools";
 import { useNetwork } from "../network";
 import { listedTokens, tokenDecimals, tokenText } from "../tokens";
@@ -46,6 +48,25 @@ const TERMS_PAUSE_MS = 400;
 
 /** What the form's token picker names: ADA, or a token on the wallet's list, by `tokenKey`. */
 const ADA = "ada";
+
+/** The most of the token a box may hold: the ledger's ceiling on one asset in an output (lovejoin-launch.ts MAX_QUANTITY). */
+const MAX_QUANTITY = 2n ** 64n - 1n;
+
+/**
+ * What the token's amount field takes (sanitizeAmount), as every amount field's does: the token's decimals, and no
+ * more than a box can hold. A plain field read the keys "1,125" as 1,125 where every other field reads them as 1.125,
+ * and took a Spanish paste of it as 1,125 where every other field says both readings, while the review wrote it back
+ * as the same "1,125" (1.6.0's release review, 320-screens#1). Exported for its test.
+ */
+export function launchQuantityRules(label: string, decimals: number): AmountRules {
+  return {
+    decimals,
+    max: MAX_QUANTITY,
+    notANumber: t(decimals ? "token.amount.notANumber" : "token.amount.notAWholeNumber"),
+    tooPrecise: decimals ? t("token.amount.tooPrecise", { label, decimals }) : t("token.amount.wholeUnits", { label }),
+    tooMuch: t("swaps.rules.tooMuch", { token: label }),
+  };
+}
 
 export function LovejoinLaunch({
   seedelf,
@@ -74,6 +95,8 @@ export function LovejoinLaunch({
   const network = useNetwork();
   const [unit, setUnit] = useState(ADA);
   const [quantity, setQuantity] = useState("");
+  // What the quantity's field changed or refused of what was typed (launchQuantityRules), said under it.
+  const [quantityNote, setQuantityNote] = useState<string>();
   const [boxAda, setBoxAda] = useState<string>();
   const [from, setFrom] = useState<From>("private");
   const [terms, setTerms] = useState<LovejoinLaunchTerms>();
@@ -218,6 +241,7 @@ export function LovejoinLaunch({
         <p className="note" data-testid="lovejoin-launch-at-most">
           {tr("lovejoin.launch.warn.atMost", { deposit: formatAda(review.locked.deposit) })}
         </p>
+        <LaunchStartedBefore review={review} />
         <Callout tone="privacy" testId="lovejoin-launch-privacy">
           {tr(review.from === "private" ? "lovejoin.launch.privacy.private" : "lovejoin.launch.privacy.public")}
         </Callout>
@@ -253,6 +277,7 @@ export function LovejoinLaunch({
           onChange={(e) => {
             setUnit(e.target.value);
             setQuantity("");
+            setQuantityNote(undefined);
             // A new token's least may differ: the suggestion is asked again.
             setBoxAda(undefined);
             setTerms(undefined);
@@ -282,30 +307,33 @@ export function LovejoinLaunch({
       {token && (
         <div className="field">
           <label htmlFor="lovejoin-launch-quantity">{tr("lovejoin.launch.quantity", { token: ticker })}</label>
-          <input
+          {/* Through the wallet's amount guard, as every amount field: a pool's values are for good (320-screens#1). */}
+          <AmountField
             id="lovejoin-launch-quantity"
-            inputMode="decimal"
-            autoComplete="off"
             value={quantity}
             disabled={busy}
             placeholder={formatQuantity("0", decimals)}
-            onChange={(e) => setQuantity(e.target.value)}
+            aria-invalid={quantity.trim() !== "" && parseQuantity(quantity, decimals) === undefined ? true : undefined}
+            aria-describedby={quantityNote ? "lovejoin-launch-quantity-note" : undefined}
+            clean={(previous, typed) => sanitizeAmount(previous, typed, launchQuantityRules(ticker, decimals))}
+            onChange={(value, note) => {
+              setQuantity(value);
+              setQuantityNote(note);
+            }}
             data-testid="lovejoin-launch-quantity"
           />
+          {quantityNote && (
+            <p className="field-note" id="lovejoin-launch-quantity-note" data-testid="lovejoin-launch-quantity-note">
+              {quantityNote}
+            </p>
+          )}
           <p className="note">{tr("lovejoin.launch.quantityNote")}</p>
         </div>
       )}
       <div className="field">
         <label htmlFor="lovejoin-launch-ada">{tr(token ? "lovejoin.launch.boxAda" : "lovejoin.launch.boxAdaAlone")}</label>
-        <input
-          id="lovejoin-launch-ada"
-          inputMode="decimal"
-          autoComplete="off"
-          value={boxAda ?? ""}
-          disabled={busy || !terms}
-          onChange={(e) => setBoxAda(e.target.value)}
-          data-testid="lovejoin-launch-ada"
-        />
+        {/* The wallet's ADA field, as every ADA amount's (320-screens#1). */}
+        <AdaInput id="lovejoin-launch-ada" value={boxAda ?? ""} onChange={setBoxAda} disabled={busy || !terms} autoFocus={false} />
         {terms && (
           <p className="note" data-testid="lovejoin-launch-bounds">
             {joinSentences([
@@ -387,6 +415,22 @@ export function LaunchBootstrapNote() {
     <p className="note" data-testid="lovejoin-launch-bootstrap">
       {floor > 0 ? tr("lovejoin.launch.bootstrapNote", { floor }) : tr("lovejoin.launch.bootstrapNext")}
     </p>
+  );
+}
+
+/**
+ * What the start's review says where the wallet started a pool of these values that no look has found yet
+ * (`startedBefore`, lovejoin-launch.ts): if both go through, the later one is a copy no wallet shows, what it locks
+ * gone for good. The chain takes both, so it's said, never refused (1.6.0's release review, 318-worker#1). Exported for
+ * its test.
+ */
+export function LaunchStartedBefore({ review }: { review: Pick<LovejoinLaunchSummary, "startedBefore"> }) {
+  const tr = useT();
+  if (!review.startedBefore) return null;
+  return (
+    <Callout tone="warn" testId="lovejoin-launch-started-before">
+      {tr("lovejoin.launch.warn.startedBefore")}
+    </Callout>
   );
 }
 

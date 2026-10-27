@@ -25,6 +25,7 @@ use axum::extract::{Path, State};
 use axum::response::Response;
 use axum::routing::get;
 use serde::Serialize;
+use tracing::warn;
 
 use super::crowd::Crowd;
 use super::standard::{Pool, hex};
@@ -33,7 +34,7 @@ use crate::cursor::{Cursor, CursorError};
 use crate::private::{READ_TIMEOUT, TipView, stable};
 use crate::row::{Point, Row, Spent};
 use crate::source::{Source, Upstream};
-use crate::state::{ApiError, AppState, json, to_json};
+use crate::state::{ApiError, AppState, Throttle, failure, json, to_json};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -206,38 +207,99 @@ async fn pools(State(state): State<Arc<AppState>>) -> Result<Response, ApiError>
     else {
         return Err(ApiError::Behind);
     };
-    let (cursor, block) =
-        tokio::time::timeout(READ_TIMEOUT, stable(&Source::DbSync(chain.clone()), &tip))
-            .await
-            .unwrap_or_else(|_| Err(ApiError::Unavailable(anyhow::anyhow!("timed out"))))?;
-    let key = format!("lovejoin/pools/{cursor}");
-    if let Some(answer) = state.kept(&key) {
-        return Ok(json(answer));
-    }
-    // Worked out once per cursor, in a task of its own, and kept: a request waits for it up to its 5 s, and one
-    // that waits no longer gets the last list meanwhile.
-    if let Some(working) = state.start(&key) {
-        let task = {
-            let (state, key) = (state.clone(), key.clone());
-            tokio::spawn(async move {
-                let _working = working;
-                let answer = tokio::time::timeout(
-                    WORK_BUDGET,
-                    pools_at(&state, &chain, &cursor, block.slot),
-                )
-                .await
-                .unwrap_or_else(|_| Err(ApiError::Unavailable(anyhow::anyhow!("timed out"))))?;
-                state.keep(&key, KEEP_POOLS, answer.clone());
-                state.keep(LATEST, KEEP_POOLS, answer.clone());
-                Ok::<_, ApiError>(answer)
-            })
-        };
-        if let Ok(done) = tokio::time::timeout(READ_TIMEOUT, task).await {
-            let answer = done.map_err(|error| ApiError::Unavailable(error.into()))??;
-            return Ok(json(answer));
+    let source = Source::DbSync(chain.clone());
+    let work = {
+        let state = state.clone();
+        move |cursor: Cursor, block: Block| async move {
+            pools_at(&state, &chain, &cursor, block.slot).await
         }
+    };
+    let answer = pools_with(&state, &tip, || stable(&source, &tip), work).await?;
+    Ok(json(answer))
+}
+
+/// [`pools`]' answer at db-sync's tip `tip`, with `stable` reading its stable
+/// cursor and `work` working out a cursor's list: db-sync, or a test's.
+async fn pools_with<S, SF, W, WF>(
+    state: &Arc<AppState>,
+    tip: &Block,
+    stable: S,
+    work: W,
+) -> Result<Bytes, ApiError>
+where
+    S: FnOnce() -> SF,
+    SF: Future<Output = Result<(Cursor, Block), ApiError>>,
+    W: FnOnce(Cursor, Block) -> WF,
+    WF: Future<Output = Result<Bytes, ApiError>> + Send + 'static,
+{
+    static FAILED: Throttle = Throttle::new();
+    // One deadline for the whole request, its cursor's read included: two waits of 5 s each took the wallet's
+    // 10 s, and a wallet that gets no answer takes its private part to Koios for 5 minutes (1.6.0's release review,
+    // 317-data#0).
+    let deadline = tokio::time::Instant::now() + READ_TIMEOUT;
+    // Read once a tip, as every other private route's is, not at each request before what's kept is looked at
+    // (317-data#2).
+    let read = tokio::time::timeout_at(deadline, state.stable_cursor(tip, stable))
+        .await
+        .unwrap_or_else(|_| Err(ApiError::Unavailable(anyhow::anyhow!("timed out"))));
+    let failed = match read {
+        // A read that fails or runs late fails as the list would: the cursor moves every 200 slots, so the last
+        // list is most often this very cursor's (1.6.0's review of the fixes, R3-15).
+        Err(error) => Some(error),
+        Ok((cursor, block)) => {
+            let key = format!("lovejoin/pools/{cursor}");
+            if let Some(answer) = state.kept(&key) {
+                return Ok(answer);
+            }
+            // Worked out once per cursor, in a task of its own, and kept: a request waits for it until its
+            // deadline.
+            match state.start(&key) {
+                Some(working) => {
+                    let list = work(cursor, block);
+                    let task = {
+                        let (state, key) = (state.clone(), key.clone());
+                        tokio::spawn(async move {
+                            let _working = working;
+                            let answer = tokio::time::timeout(WORK_BUDGET, list)
+                                .await
+                                .unwrap_or_else(|_| {
+                                    Err(ApiError::Unavailable(anyhow::anyhow!("timed out")))
+                                })?;
+                            state.keep(&key, KEEP_POOLS, answer.clone());
+                            state.keep(LATEST, KEEP_POOLS, answer.clone());
+                            Ok::<_, ApiError>(answer)
+                        })
+                    };
+                    match tokio::time::timeout_at(deadline, task).await {
+                        Ok(Ok(Ok(answer))) => return Ok(answer),
+                        Ok(Ok(Err(error))) => Some(error),
+                        Ok(Err(error)) => Some(ApiError::Unavailable(error.into())),
+                        Err(_) => None,
+                    }
+                }
+                // Another request's task is working it out.
+                None => None,
+            }
+        }
+    };
+    // Meanwhile the last list, and as much when the list or its cursor's read fails: kept for an hour, it's a better
+    // answer than a 503 that sends the wallet to Koios (317-data#0). 503 before the first.
+    match (state.kept(LATEST), failed) {
+        (Some(latest), failed) => {
+            if let Some(ApiError::Unavailable(error)) = &failed
+                && FAILED.due()
+            {
+                let error = failure(error);
+                warn!(
+                    error,
+                    "a pool list couldn't be worked out, so the last one answers"
+                );
+            }
+            Ok(latest)
+        }
+        (None, Some(error)) => Err(error),
+        (None, None) => Err(ApiError::Behind),
     }
-    state.kept(LATEST).map(json).ok_or(ApiError::Behind)
 }
 
 async fn tokens(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
@@ -321,4 +383,141 @@ async fn tokens_since(
     })
     .await?;
     Ok(json(answer))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio::time::{Instant, sleep};
+
+    use super::*;
+
+    fn state() -> Arc<AppState> {
+        Arc::new(AppState::new(
+            Chain::connect("postgresql://nobody@127.0.0.1:1/nothing").unwrap(),
+        ))
+    }
+
+    /// db-sync's tip at slot 1,400, its hash `byte` over.
+    fn tip(byte: &str) -> Block {
+        Block {
+            slot: 1_400,
+            hash: byte.repeat(32),
+        }
+    }
+
+    /// The stable cursor for a tip at slot 1,400, and the block there.
+    fn stable_at() -> (Cursor, Block) {
+        let hash = "ab".repeat(32);
+        (
+            Cursor {
+                slot: 1_200,
+                hash: hash.clone(),
+            },
+            Block { slot: 1_180, hash },
+        )
+    }
+
+    const LAST: &[u8] = b"the last list";
+
+    /// 1.6.0's release review, 317-data#0: a cursor read that took most of
+    /// its 5 s, then a list still being worked out, kept a request 10 s, when
+    /// the wallet gives up, and takes its private part to Koios for 5 minutes.
+    #[tokio::test(start_paused = true)]
+    async fn a_pool_list_answers_by_one_deadline() {
+        let state = state();
+        state.keep(LATEST, KEEP_POOLS, Bytes::from_static(LAST));
+        let slow = || async {
+            sleep(Duration::from_millis(4_900)).await;
+            Ok(stable_at())
+        };
+        let working = |_, _| async {
+            sleep(WORK_BUDGET).await;
+            to_json(&"the next list")
+        };
+        let started = Instant::now();
+        let answer = pools_with(&state, &tip("aa"), slow, working).await;
+        assert_eq!(answer.unwrap(), LAST);
+        assert!(started.elapsed() <= READ_TIMEOUT, "{:?}", started.elapsed());
+    }
+
+    /// 317-data#0: a list that failed at once answered 503, though the last
+    /// one was kept for an hour: the wallet then dropped the crowds and read
+    /// the holder from Koios.
+    #[tokio::test]
+    async fn a_list_that_fails_answers_the_last_one() {
+        let failing = |_, _| async { Err(ApiError::Unavailable(anyhow::anyhow!("no"))) };
+        let state = state();
+        state.keep(LATEST, KEEP_POOLS, Bytes::from_static(LAST));
+        let answer = pools_with(&state, &tip("aa"), || async { Ok(stable_at()) }, failing).await;
+        assert_eq!(answer.unwrap(), LAST);
+        // Before the first, why.
+        let answer = pools_with(
+            &self::state(),
+            &tip("aa"),
+            || async { Ok(stable_at()) },
+            failing,
+        )
+        .await;
+        assert!(matches!(answer, Err(ApiError::Unavailable(_))));
+    }
+
+    /// 1.6.0's review of the fixes, R3-15: the first requests at a new tip
+    /// read the stable cursor, and one that found both private connections
+    /// busy past the pool's 2 s wait answered 503, though the list for that
+    /// very cursor, and the last one, were kept for an hour.
+    #[tokio::test]
+    async fn a_failed_cursor_read_answers_the_last_list() {
+        let state = state();
+        let list = |_, _| async { to_json(&"the list") };
+        let first = pools_with(&state, &tip("aa"), || async { Ok(stable_at()) }, list).await;
+        let busy = || async {
+            Err(ApiError::Unavailable(anyhow::anyhow!(
+                "no connection within 2 s"
+            )))
+        };
+        let answer = pools_with(&state, &tip("bb"), busy, list).await;
+        assert_eq!(answer.unwrap(), first.unwrap());
+        // Before the first list, why.
+        let answer = pools_with(&self::state(), &tip("bb"), busy, list).await;
+        assert!(matches!(answer, Err(ApiError::Unavailable(_))));
+    }
+
+    /// R3-15: a cursor read that ran past the request's 5 s answered 503
+    /// with the last list kept.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_cursor_read_answers_the_last_list() {
+        let state = state();
+        state.keep(LATEST, KEEP_POOLS, Bytes::from_static(LAST));
+        let slow = || async {
+            sleep(Duration::from_secs(6)).await;
+            Ok(stable_at())
+        };
+        let list = |_, _| async { to_json(&"the next list") };
+        let started = Instant::now();
+        let answer = pools_with(&state, &tip("bb"), slow, list).await;
+        assert_eq!(answer.unwrap(), LAST);
+        assert!(started.elapsed() <= READ_TIMEOUT, "{:?}", started.elapsed());
+    }
+
+    /// 317-data#2: the stable cursor was read of db-sync at every request,
+    /// before what's kept for it was looked at.
+    #[tokio::test]
+    async fn the_stable_cursor_is_read_once_a_tip() {
+        let state = state();
+        let reads = AtomicUsize::new(0);
+        let stable = || async {
+            reads.fetch_add(1, Ordering::SeqCst);
+            Ok(stable_at())
+        };
+        let list = |_, _| async { to_json(&"a list") };
+        for _ in 0..2 {
+            pools_with(&state, &tip("aa"), stable, list).await.unwrap();
+        }
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        // A new tip: read again.
+        pools_with(&state, &tip("bb"), stable, list).await.unwrap();
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+    }
 }

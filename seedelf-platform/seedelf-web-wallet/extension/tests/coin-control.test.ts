@@ -4,14 +4,17 @@
 // Koios anything, and the choices are sealed on the device.
 import { describe, expect, it } from "vitest";
 
+import { VALID_FOR_MS } from "../src/background/account";
 import { bodyOutpoints } from "../src/background/cbor";
-import { COLLATERAL_PAID_KEPT, collateralPayments } from "../src/background/coin-control";
+import { choicesOf, COLLATERAL_PAID_KEPT, collateralPayments } from "../src/background/coin-control";
 import { forgetContractView } from "../src/background/contract-scan";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { SESSION_MINT } from "../src/background/mint";
 import { SESSION_COLLATERAL } from "../src/background/send";
+import { SESSION_SENT_PREFIX, type SentTx } from "../src/background/sent-txs";
 import { SESSION_SPENT } from "../src/background/spent";
 import type { KoiosUtxo } from "../src/background/koios";
+import { LOCAL_ACCOUNT } from "../src/shared/preferences";
 import { accountMintPreprod, koiosPreprod, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -128,13 +131,79 @@ describe("the collateral", () => {
     expect([...(await collateralPayments(t.store, "preprod", 0))]).toEqual([hash(99)]);
   });
 
-  it("stops being waited for after 10 minutes", async () => {
+  it("stops being waited for 10 minutes after it was sent, once nothing on the device holds it as on its way: after a lock", async () => {
+    const t = await unlocked(12);
+    await t.balances.get("preprod");
+    const summary = await t.send.buildCollateral("preprod");
+    await t.send.submitCollateral("preprod", summary.txHash);
+    // A lock forgets what was sent, and the watch of a payment Koios took (pending.ts): only when it was sent is sealed.
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    await t.balances.get("preprod");
+    t.clock.now += 9 * 60_000;
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "waiting", txHash: summary.txHash });
+    t.clock.now += 2 * 60_000;
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "none", reclaimed: false });
+  });
+});
+
+describe("a collateral payment on its way (1.6.0's release review, 309#1, 309#2)", () => {
+  it("stays on its way past 10 minutes while it can still land, as Home's banner says, and is not set once it can't", async () => {
+    const t = await unlocked(12);
+    await t.balances.get("preprod");
+    const summary = await t.send.buildCollateral("preprod");
+    await t.send.submitCollateral("preprod", summary.txHash);
+    // A congested mempool: not in a block 11 minutes on, and the watch still has it, as it can land for two hours.
+    t.clock.now += 11 * 60_000;
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: null });
+    // Late, so the page offers to pay it again anyway (1.6.0's review of the fixes, 309#1's leftover).
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "waiting", txHash: summary.txHash, late: true });
+    // Past its slot, by the chain's clock too: let go, nothing was sent, and setting it is offered again.
+    for (let left = VALID_FOR_MS; left > 0; left -= 10 * 60_000) {
+      // The user busy all along, so the wallet doesn't lock itself.
+      await t.wallet.touch();
+      t.clock.now += 10 * 60_000;
+    }
+    t.koios.tip = 10 ** 12;
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "expired" });
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "none", reclaimed: false });
+  });
+
+  it("stays on its way while another payment from the account takes Home's watch, until it can't land", async () => {
     const t = await unlocked(12);
     await t.balances.get("preprod");
     const summary = await t.send.buildCollateral("preprod");
     await t.send.submitCollateral("preprod", summary.txHash);
     t.clock.now += 11 * 60_000;
+    // Home's hold is over: the user sends something else from the account, and the watch follows that one.
+    const other = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    await t.send.submit("preprod", other.txHash);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: other.txHash });
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "waiting", txHash: summary.txHash, late: true });
+    // Two hours after it was sent it can't land (account.ts VALID_FOR_MS), and the balance stops counting it.
+    const key = `${SESSION_SENT_PREFIX}preprod`;
+    const sent = (await t.session.get<SentTx[]>(key))!;
+    await t.session.set(
+      key,
+      sent.map((s) => (s.txHash === summary.txHash ? { ...s, sentAt: s.sentAt - VALID_FOR_MS } : s)),
+    );
     expect(await t.coins.collateral("preprod")).toEqual({ state: "none", reclaimed: false });
+  });
+
+  it("is recorded on the account it was built on, and pays, whichever is active when Send returns", async () => {
+    const t = await unlocked(12);
+    await t.balances.get("preprod");
+    const summary = await t.send.buildCollateral("preprod");
+    // Another window switched to the second account meanwhile.
+    await t.local.set(LOCAL_ACCOUNT, 1);
+    await t.send.submitCollateral("preprod", summary.txHash);
+    const stored = await t.store.get<Parameters<typeof choicesOf>[0]>("coins.preprod");
+    expect(choicesOf(stored, 0)).toMatchObject({
+      collateral: `${summary.txHash}#0`,
+      collateralSentAt: t.clock.now,
+      collateralPaid: [summary.txHash],
+    });
+    expect(choicesOf(stored, 1)).toEqual({ seedelf: [], cardano: [] });
   });
 });
 

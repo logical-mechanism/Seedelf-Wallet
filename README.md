@@ -252,7 +252,7 @@ Spendability is always in the hands of the original owner. It is safe to assume 
 
 ## Defeating The Collateral Problem
 
-The `seedelf-cli` uses the [Cardano Collateral Provider](https://giveme.my/). Every user will share the same collateral UTxO, thus defeating the collateral problem. The Seedelf Wallet does the same for Seedelf spends. Where a key account of its own pays — the public account creating a Seedelf, mixing through Lovejoin or signing for a connected site, or a private session's one-time account bringing money back — that account's own collateral is used instead, since the transaction names the account anyway.
+The `seedelf-cli` uses the [Cardano Collateral Provider](https://giveme.my/). Every user will share the same collateral UTxO, thus defeating the collateral problem. The Seedelf Wallet does the same for Seedelf spends, for a Lovejoin box coming back, and for the one mix of a private session's 5 ₳ collateral, which can't back its own mix. Where a key account of its own pays — the public account creating a Seedelf, mixing through Lovejoin, starting a Lovejoin pool, paying for a box to come back or signing for a connected site, or a private session's one-time account bringing money back — that account's own collateral is used instead, since the transaction names the account anyway.
 
 ## The **seedelf-platform**
 

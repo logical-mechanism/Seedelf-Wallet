@@ -11,8 +11,9 @@
 //! - its NFT's policy made by one of the launch's inputs, the seed, and the
 //!   datum naming exactly the scripts that seed makes;
 //! - the launch transaction itself putting `mix_box` and `mix_logic` at the
-//!   holder as reference scripts, and registering L, unless L was registered
-//!   in an earlier block.
+//!   holder as reference scripts, each under no datum or one the wallet reads
+//!   (nested within `datum::MAX_DEPTH`), and registering L, unless L was
+//!   registered in an earlier block.
 //!
 //! Of the standard pools with the same values (the box's ADA and its token),
 //! the **earliest launched is shown**, and only it: by block, then by place
@@ -225,17 +226,26 @@ fn pool_of(
     {
         return Err("its datum names scripts its seed doesn't make");
     }
+    // A row whose datum the wallet can't read is no reference to its script:
+    // the wallet passes it over, carries the script, and so never shows the
+    // pool (seedelf-core's `eval::unreadable_datum`). A launch can put any
+    // datum beside its scripts, as one_shot_mint checks only the reference
+    // output (1.6.0's release review, 314-wasm#0).
+    let readable = |row: &Row| {
+        row.datum
+            .as_deref()
+            .is_none_or(|d| datum::within_depth(&bytes(d), datum::MAX_DEPTH))
+    };
     let script = |hash: [u8; 28]| {
-        launch
-            .scripts
-            .iter()
-            .find(|(_, h)| *h == hash)
+        let mut rows = launch.scripts.iter().filter(|(_, h)| *h == hash).peekable();
+        if rows.peek().is_none() {
+            return Err("its launch didn't put its scripts at the holder");
+        }
+        rows.find(|(row, _)| readable(row))
             .map(|(row, _)| row.clone())
+            .ok_or("its launch put a script at the holder under a datum the wallet can't read")
     };
-    let (Some(mix_box), Some(mix_logic)) = (script(derived.mix_box), script(derived.mix_logic))
-    else {
-        return Err("its launch didn't put its scripts at the holder");
-    };
+    let (mix_box, mix_logic) = (script(derived.mix_box)?, script(derived.mix_logic)?);
     let registered = launch.registers.contains(&derived.mix_logic);
     Ok((
         Pool {
@@ -504,6 +514,40 @@ pub(crate) mod tests {
         let other = templates::derive(&[1; 32], 0).unwrap();
         c.reference.datum = Some(datum_cbor(4_500_000, djed(), &other));
         assert_eq!(refused(c), "its datum names scripts its seed doesn't make");
+    }
+
+    #[test]
+    fn a_script_under_a_datum_too_deep_for_the_wallet_isnt_one_it_reads() {
+        // 1.6.0's release review, 314-wasm#0: one_shot_mint checks only the
+        // reference output, so a launch can put any datum beside its
+        // scripts. The wallet decoding one a few thousand levels deep
+        // overflowed its WebAssembly's stack, and it locked itself.
+        let lists = |levels: usize| hex(&[vec![0x81; levels], vec![0x00]].concat());
+        let with = |datum: Option<String>| {
+            let mut c = launch(4_500_000, djed());
+            c.launch.scripts[0].0.datum = datum;
+            verdict(&c)
+        };
+        // Within the depth the wallet reads anywhere, a datum changes nothing.
+        assert_eq!(with(Some(lists(128))), Ok(true));
+        for levels in [129, 3_000, 100_000] {
+            assert_eq!(
+                with(Some(lists(levels))),
+                Err("its launch put a script at the holder under a datum the wallet can't read")
+            );
+        }
+        // Beside a copy the wallet can read, which is the one shown.
+        let mut c = launch(4_500_000, djed());
+        let mut deep = c.launch.scripts[0].clone();
+        deep.0.reference = format!("{}#3", "ab".repeat(32));
+        deep.0.datum = Some(lists(100_000));
+        c.launch.scripts.insert(0, deep);
+        match check(&c, &Listed::of(&[DJED]), &holder_address()) {
+            Verdict::Standard(pool) => {
+                assert_eq!(pool.scripts[0].reference, format!("{}#1", "ab".repeat(32)))
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// The scenarios the wallet's own copy of the rule is held to too

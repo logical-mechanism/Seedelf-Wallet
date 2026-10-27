@@ -28,15 +28,44 @@ pub struct Found {
     pub slot: i64,
 }
 
-/// `found`'s query: `$1` the holder, `$2` the slot, `$3` the name, `$4` the
-/// id read on from.
+/// How far a read gathered the holder's outputs by its block: the highest
+/// output id and transaction id of any output there, a candidate or not. A
+/// later block's outputs and transactions have higher ids than an earlier
+/// one's, so a read on gathers only what's above both (1.6.0's release
+/// review, 321-lj-rust-data#0).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Gathered {
+    pub id: i64,
+    pub tx: i64,
+}
+
+impl Gathered {
+    /// As far as `found`'s output.
+    pub fn of(found: &Found) -> Gathered {
+        Gathered {
+            id: found.id,
+            tx: found.tx_id,
+        }
+    }
+
+    /// The further of the two, field by field.
+    pub fn max(self, other: Gathered) -> Gathered {
+        Gathered {
+            id: self.id.max(other.id),
+            tx: self.tx.max(other.tx),
+        }
+    }
+}
+
+/// `found`'s query: `$1` the holder, `$2` the slot, `$3` the name, `$4` and
+/// `$5` the output id and transaction id read on from.
 fn found_sql() -> String {
     format!(
         "with outs as materialized ( \
            select o.id, o.tx_id, o.index, o.address_id, o.value, o.inline_datum_id, \
                   o.reference_script_id, o.consumed_by_tx_id \
            from address a join tx_out o on o.address_id = a.id \
-           where a.payment_cred = $1::bytea and o.id > $4) \
+           where a.payment_cred = $1::bytea and o.id > $4 and o.tx_id > $5) \
          select {}, o.id::bigint as out_id, t.id::bigint as tx_id, encode(t.hash, 'hex') as tx, \
                 b.block_no::bigint as block, t.block_index::bigint as block_index \
          from outs o \
@@ -52,21 +81,43 @@ fn found_sql() -> String {
     )
 }
 
+/// How far `found`'s query gathered, before it looks at what an output holds:
+/// `$1` the holder, `$2` the slot, `$3` and `$4` the output id and
+/// transaction id read on from.
+const GATHERED: &str = "with outs as materialized ( \
+       select o.id, o.tx_id \
+       from address a join tx_out o on o.address_id = a.id \
+       where a.payment_cred = $1::bytea and o.id > $3 and o.tx_id > $4) \
+     select max(o.id)::bigint as id, max(o.tx_id)::bigint as tx \
+     from outs o \
+     join tx t on t.id = o.tx_id \
+     join block b on b.id = t.block_id \
+     where b.slot_no <= $2";
+
 /// Every output at `holder` holding a token named `name`, made by the block at
-/// slot `at`, of those whose id is above `after`. Only those are gathered: a
-/// read on, at each new cursor, no longer gathers every output ever at the
-/// holder first, whatever anyone sends there (1.6.0's release review, DATA-4).
+/// slot `at`, of those above `after`, and how far the read gathered, never
+/// short of `after`. Only those are gathered: a read on, at each new cursor,
+/// no longer gathers every output ever at the holder first, whatever anyone
+/// sends there (1.6.0's release review, DATA-4), nor every one since the last
+/// candidate (321-lj-rust-data#0).
 pub async fn found(
     chain: &Chain,
     holder: &[u8],
     name: &[u8],
     at: i64,
-    after: i64,
-) -> Result<Vec<Found>> {
+    after: Gathered,
+) -> Result<(Vec<Found>, Gathered)> {
     let sql = found_sql();
     let client = chain.private().await?;
-    let rows = client.query(&sql, &[&holder, &at, &name, &after]).await?;
-    rows.iter()
+    // On one connection, pipelined: one round trip to home.
+    let candidates: &[&(dyn ToSql + Sync)] = &[&holder, &at, &name, &after.id, &after.tx];
+    let all: &[&(dyn ToSql + Sync)] = &[&holder, &at, &after.id, &after.tx];
+    let (rows, gathered) = tokio::try_join!(
+        client.query(&sql, candidates),
+        client.query_one(GATHERED, all),
+    )?;
+    let found = rows
+        .iter()
         .map(|row| {
             let row_view = read_row(row, false)?;
             Ok(Found {
@@ -79,7 +130,13 @@ pub async fn found(
                 index: row.try_get("block_index")?,
             })
         })
-        .collect()
+        .collect::<Result<_>>()?;
+    // Nothing new gathered is as far as `after`.
+    let gathered = after.max(Gathered {
+        id: gathered.try_get::<_, Option<i64>>("id")?.unwrap_or(0),
+        tx: gathered.try_get::<_, Option<i64>>("tx")?.unwrap_or(0),
+    });
+    Ok((found, gathered))
 }
 
 const INPUTS: &str = "select o.consumed_by_tx_id::bigint as launch, encode(t.hash, 'hex') as tx, \
@@ -275,5 +332,32 @@ mod tests {
         let (gather, rest) = sql.split_at(sql.find(") select").expect("a gather"));
         assert!(gather.contains("o.id > $4"), "{gather}");
         assert!(!rest.contains("$4"), "{rest}");
+        // And above its transaction id, which the holder's index on (address_id, tx_id) can range over: no read on
+        // goes through every output ever at the holder (1.6.0's release review, 321-lj-rust-data#0).
+        assert!(gather.contains("o.tx_id > $5"), "{gather}");
+        assert!(!rest.contains("$5"), "{rest}");
+    }
+
+    /// 1.6.0's review of the fixes, R3-16: how far a read gathered stops at
+    /// its block. Past it, a read on would start above the pools launched
+    /// in the 200 to 400 slots between its stable block and db-sync's tip,
+    /// and list them only at the hourly read from the start. Its gather is
+    /// bounded as `found`'s is, so the two read on from the same place.
+    #[test]
+    fn what_a_read_gathered_is_bounded_by_its_block() {
+        let (gather, rest) = GATHERED.split_at(GATHERED.find(") select").expect("a gather"));
+        assert!(
+            gather.contains("a.payment_cred = $1::bytea and o.id > $3 and o.tx_id > $4"),
+            "{gather}"
+        );
+        assert!(!rest.contains("$3") && !rest.contains("$4"), "{rest}");
+        assert!(rest.trim_end().ends_with("where b.slot_no <= $2"), "{rest}");
+        let sql = found_sql();
+        let (gather, rest) = sql.split_at(sql.find(") select").expect("a gather"));
+        assert!(
+            gather.contains("a.payment_cred = $1::bytea and o.id > $4 and o.tx_id > $5"),
+            "{gather}"
+        );
+        assert!(rest.contains("where b.slot_no <= $2 and exists"), "{rest}");
     }
 }

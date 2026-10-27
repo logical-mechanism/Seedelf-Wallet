@@ -27,7 +27,7 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import { merged, UNKNOWN, type HistoryClass } from "../shared/histories";
-import type { PendingTx, TokenQuantity } from "../shared/rpc";
+import type { LeftWhy, PendingTx, TokenQuantity } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { txInputs } from "./cbor";
 import { seedelfTokenOf } from "./chain";
@@ -37,7 +37,7 @@ import { CollateralRefusedError, StaleReviewError, type Collateral } from "./col
 import { forgetContractView, readContractView, type ContractView } from "./contract-scan";
 import type { Koios, KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
-import { refuseSent, settleMaybeSent, submitWatched } from "./pending";
+import { refuseSent, type Sending, settleMaybeSent, submitWatched } from "./pending";
 import type { PrivateIndex } from "./private-index";
 import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
@@ -368,7 +368,11 @@ export function keep(deps: ScriptSpendDeps, key: string, built: Omit<Kept, "buil
  * never that its review is stale. `waited`: a part of a payment that waited
  * for the part before it to be in a block (parts.ts), sent after Send was
  * pressed for the whole however long ago it was built, and spending what its
- * own reservation, so named, holds.
+ * own reservation, so named, holds. `parts`: a part with more of its payment
+ * still to go after it, how many had gone with it (pending.ts
+ * `Sending.parts`). A payment's first part is checked with every part kept
+ * after it (`laterParts`), so a review one of whose parts can't go is refused
+ * whole, nothing sent, as one transaction is.
  */
 export async function send(
   deps: ScriptSpendDeps,
@@ -377,7 +381,7 @@ export async function send(
   key: string,
   kind: PendingTx["kind"],
   what: SpendWhat,
-  { chain, waited }: { chain?: PendingTx["chain"]; waited?: string } = {},
+  { chain, waited, parts }: { chain?: PendingTx["chain"]; waited?: string; parts?: Sending["parts"] } = {},
 ): Promise<PendingTx> {
   const { wasm, wallet, session, now } = deps;
   const built = await wallet.withKeys(() => session.get<Kept>(key));
@@ -394,11 +398,16 @@ export async function send(
   }
 
   let txCbor = built.sentCbor ?? built.txCbor;
+  // A payment in parts, its first sent: the parts after it are checked with it, before any goes. Checked only as
+  // each went, a later part that couldn't go was refused once the parts before it had gone, and the payment went in
+  // part, where one transaction would have been refused whole (1.6.0's release review). Each is checked again as it
+  // goes.
+  const later = built.seed !== undefined && !again ? await laterParts(deps, network, key, built, what) : [];
   if (built.seed !== undefined && !again) {
     // Something it spends went out since the review, in another of this wallet's transactions (another page's
     // Send, say): said as that, before giveme.my is asked, so a refusal from giveme.my is never put down to the
     // user's own money when the device knows of nothing spent (blind test §9.5, T09).
-    await refuseSpentSince(deps, network, txHash, built.txCbor);
+    await refuseSpentSince(deps, network, txHash, built.txCbor, ...later.map((k) => k.txCbor));
     let collateral: unknown;
     try {
       collateral = await deps.collateral(network).witness(built.txCbor);
@@ -423,7 +432,11 @@ export async function send(
   // Reviewed before a return through Lovejoin started being sent, it may take what that chain spends: the
   // funding change its last transaction merges into. Only one of the two could land, so this one waits for a
   // review that leaves it out (independent review L18). Checked last, just before it goes.
-  if (!again) await refuseReserved(deps, network, built.txCbor, what, waited);
+  if (!again) {
+    await refuseReserved(deps, network, [built.txCbor], what, waited);
+    // The parts after it spend what their own reservation holds by design (parts.ts `splitParts`).
+    if (later.length) await refuseReserved(deps, network, later.map((k) => k.txCbor), what, PARTS_RESERVED + txHash);
+  }
   const { txCbor: _txCbor, seed: _seed, sentCbor: _sentCbor, builtAt: _builtAt, account: _account, ...summary } = built;
   return submitWatched(deps, {
     network,
@@ -439,6 +452,7 @@ export async function send(
     again,
     ...(built.account !== undefined ? { account: built.account } : {}),
     ...(chain ? { chain } : {}),
+    ...(parts ? { parts } : {}),
   });
 }
 
@@ -460,6 +474,8 @@ export interface PartBuilt {
   changeMinimum: string;
   inputs: OutRef[];
   left: number;
+  /** Why Max left them: on the last part, with its `left` (lib.rs `max_in_parts`). */
+  leftWhy?: LeftWhy;
   classesMixed: string[];
 }
 
@@ -467,7 +483,7 @@ export interface PartBuilt {
  * A payment's parts as one, for its review (the owner's test of 1.6.0: "spending more than the max amount of utxos
  * does not create two healthy tx"): one recipient, paid what they all pay, with the tokens of each; the least they
  * carry, their fees and change added up; every UTxO they spend; Max only where every part is (an amount's parts but
- * its last may pay all their UTxOs hold); what Max left, the last's. One part is itself.
+ * its last may pay all their UTxOs hold); what Max left, and why, the last's. One part is itself.
  *
  * `read`: readContract's `classes`, each carry's with them (`carried`), and `utxos`. The parts tie everything they
  * spend as one transaction would (privacy.md), so the histories merged are those of every UTxO any part spends, two
@@ -503,6 +519,7 @@ export function whole<P extends PartBuilt>(parts: P[], read?: { classes: Classes
     changeMinimum: last.changeMinimum,
     inputs: parts.flatMap((p) => p.inputs),
     left: last.left,
+    leftWhy: last.leftWhy,
     classesMixed: read ? spentTogether(read.classes, parts) : [...new Set(parts.flatMap((p) => p.classesMixed))],
   };
 }
@@ -553,6 +570,21 @@ export async function keepParts(deps: ScriptSpendDeps, key: string, parts: Array
 }
 
 /**
+ * The parts kept after `built`, a payment's first (keepParts), for the checks its Send makes of every part before any
+ * goes; none for one transaction. One missing, or another review's, as a build under the same keys leaves them, is a
+ * stale review, refused before anything goes, as a funding missing a part is (sessions.ts `fundingRecords`).
+ */
+async function laterParts(deps: ScriptSpendDeps, network: NetworkName, key: string, built: Kept, what: SpendWhat): Promise<Kept[]> {
+  const hashes = built.partHashes ?? [];
+  if (hashes.length < 2) return [];
+  const kept = await deps.wallet.withKeys(() => Promise.all(hashes.slice(1).map((_, i) => deps.session.get<Kept>(partKey(key, i + 1)))));
+  if (!kept.every((k, i) => k !== undefined && k.txHash === hashes[i + 1] && k.network === network)) {
+    throw new StaleReviewError(t(NOT_READY[what]));
+  }
+  return kept as Kept[];
+}
+
+/**
  * Refuses, as a stale review, a kept transaction that spends what this wallet
  * has spent since it was built (spent.ts: what it submitted lately, kept
  * until a refusal takes it back). The build leaves out what was spent then,
@@ -564,14 +596,18 @@ export async function keepParts(deps: ScriptSpendDeps, key: string, parts: Array
  * review's "Refresh and review again" would build a second payment beside it.
  * That one is refused as sent already (pending.ts `refuseSent`, cross-area
  * review of the blind test's fix round), as a missing review is.
+ *
+ * `txCbors`: the transaction's, and with a payment's first part those of the
+ * parts after it (`laterParts`): one any of them spends refuses the whole
+ * payment.
  */
 async function refuseSpentSince(
   deps: ScriptSpendDeps,
   network: NetworkName,
   txHash: string,
-  txCbor: string,
+  ...txCbors: string[]
 ): Promise<void> {
-  const inputs = txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16)));
+  const inputs = txCbors.flatMap((txCbor) => txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16))));
   const spent = await deps.wallet.withKeys(() => spentSet(deps.session, deps.now()));
   if (!inputs.some((o) => spent.has(o))) return;
   await refuseSent(deps, network, txHash);
@@ -583,16 +619,19 @@ async function refuseSpentSince(
  * (spent.ts reservations: a session's return through Lovejoin, whose last
  * transaction merges into its funding's change, a mix from the public
  * account, or a payment's parts still to go): readContract leaves those out,
- * but only of what's built after the chain started.
+ * but only of what's built after the chain started. `txCbors`: it, or the
+ * parts after a payment's first, each refusing the whole payment.
  */
 async function refuseReserved(
   deps: ScriptSpendDeps,
   network: NetworkName,
-  txCbor: string,
+  txCbors: string[],
   what: SpendWhat,
   except?: string,
 ): Promise<void> {
-  const inputs = new Set(txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16))));
+  const inputs = new Set(
+    txCbors.flatMap((txCbor) => txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16)))),
+  );
   const holding = (await sendingChains(deps, network, except)).filter(([, r]) => r.inputs.some((o) => inputs.has(o)));
   if (!holding.length) return;
   // Held by a payment's parts still to go alone, it's said as that, not as a chain through Lovejoin.

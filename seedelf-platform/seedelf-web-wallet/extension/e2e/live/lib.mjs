@@ -26,6 +26,10 @@ export async function openWallet() {
   });
   const hosts = new Set();
   context.on("request", (r) => hosts.add(new URL(r.url()).host));
+  // The test wallet is preprod's, and a build with both networks starts on mainnet: put it on preprod before a page
+  // opens, as e2e's chooseNetwork does (the worker reads the network at every request), so `npm run build` serves.
+  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+  await worker.evaluate(() => chrome.storage.local.set({ "seedelf.network": "preprod" }));
 
   const page = await context.newPage();
   await page.goto(`chrome-extension://${EXTENSION_ID}/index.html?view=tab`);
@@ -76,12 +80,20 @@ export async function yourSeedelfs(page, read) {
   }
 }
 
-/** A seedelf's full name, from its row in Receive, by its exact tag. */
+/**
+ * The card in Receive's list (`list`) of the Seedelf tagged `tag`. Its Copy names the tag ("Copy the name of
+ * live-1"), where its own line says it inside a sentence ("Tag “live-1”: public, …", chunk 23).
+ */
+export function seedelfCard(page, list, tag) {
+  return list.getByRole("listitem").filter({ has: page.getByRole("button", { name: `Copy the name of ${tag}`, exact: true }) });
+}
+
+/** A seedelf's full name, from its card in Receive, by its exact tag. */
 export async function seedelfName(page, tag) {
   return yourSeedelfs(page, async (list) => {
-    const row = list.getByRole("listitem").filter({ has: page.getByText(tag, { exact: true }) });
-    if ((await row.count()) !== 1) throw new Error(`expected one Seedelf tagged "${tag}", found ${await row.count()}`);
-    return row.getAttribute("title");
+    const card = seedelfCard(page, list, tag);
+    if ((await card.count()) !== 1) throw new Error(`expected one Seedelf tagged "${tag}", found ${await card.count()}`);
+    return card.getByTestId(/^seedelf-name-/).getAttribute("data-value");
   });
 }
 
@@ -106,15 +118,15 @@ export async function reviewAndSend(page, testId, name) {
   await (await sendButton(page)).click();
 }
 
-/** Logs the staking review that's open and screenshots it, then presses Send. */
-export async function sendReviewed(page, name) {
+/** Logs the staking review that's open and screenshots it, then presses `act`: the review's button, which says what it does (ST-2), not Send. */
+export async function sendReviewed(page, name, act) {
   const review = page.getByTestId("staking-review");
   await review.waitFor({ timeout: 90_000 }).catch(async () => {
     throw new Error(`no review: ${await page.getByRole("alert").allTextContents()}`);
   });
   log("review:", (await review.innerText()).replace(/\n/g, " | "));
   await page.screenshot({ path: `test-results/live-${name}-review.png`, fullPage: true });
-  await page.getByRole("button", { name: "Send" }).click();
+  await act.click();
 }
 
 /** Waits for the sent banner, then for the network to confirm (`text`) and the balances to be read again. */

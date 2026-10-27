@@ -14,10 +14,12 @@
 //         the Seedelf UTxOs that pay (keeping different histories apart
 //         where it can, script-spend.ts `Classes`), and drafts under a new
 //         one-time key. Paying one of your own seedelfs is allowed, and
-//         flagged. Max (`lovelace` null, one Seedelf) pays everything of up
-//         to 20 UTxOs but the fee and what the tokens that stay need (blind
-//         test §9.6); a payment that's too much says the most that can go,
-//         and what has to stay (short.ts `privateShortOf`).
+//         flagged. Max (`lovelace` null, one Seedelf) pays everything but the
+//         fees and what the tokens that stay need (blind test §9.6), every
+//         UTxO, in parts of 20 at most (the owner's test of 1.6.0), and says
+//         how many it left and why (`leftWhy`, 1.6.0's release review); a
+//         payment that's too much says the most that can go, and what has to
+//         stay (short.ts `privateShortOf`).
 // submit  giveme.my witnesses the collateral, then Koios submits exactly the
 //         reviewed transaction.
 

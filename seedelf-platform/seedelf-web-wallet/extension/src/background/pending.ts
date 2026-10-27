@@ -229,6 +229,12 @@ export interface Sending {
   account?: number;
   /** The last part of a payment sent as several transactions: its first, and how many (script-spend.ts `sendParts`). */
   chain?: PendingTx["chain"];
+  /**
+   * A part with more of its payment still to go after it (parts.ts): how many had gone with it, of how many. Written
+   * ahead and sealed with it, so a lock that wipes what waits never leaves Home calling the payment confirmed once this
+   * part lands (handlers.ts `pending-tx`, 1.6.0's release review).
+   */
+  parts?: { sent: number; total: number };
 }
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
@@ -502,6 +508,7 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
     confirmations,
     ...slot(s),
     ...(s.chain ? { chain: s.chain } : {}),
+    ...(s.parts ? { parts: s.parts } : {}),
   };
   // The inputs of one that can expire, to free them if it does; a private one to the account says so; one that
   // pays a Seedelf or a box, the feed it's watched on.
@@ -583,6 +590,7 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
     summary: s.summary,
     kept: s.key,
     ...(s.chain ? { chain: s.chain } : {}),
+    ...(s.parts ? { parts: s.parts } : {}),
   };
   return inTurn(deps, s.network, async () => {
     await restoreNow(deps, s.network);
@@ -971,23 +979,33 @@ export async function settleMaybeSent(deps: PendingDeps, network: NetworkName): 
 /**
  * Names watched `txHash` a part of the payment in parts `chain` names, when it went without (a part before the
  * last that went at Send, parts.ts `unsplit`): Home's banner then asks how many of it went, and says the rest didn't.
- * Nothing else of the watch changes. Returns whether the watch holds it as one that may still go through.
+ * `parts`: how many had gone with it, the rest still to go once it went (`Sending.parts`). Nothing else of the watch
+ * changes. One that may still go through is sealed again as it now stands, so a lock that wipes what waits doesn't
+ * take its name with it, nor have Home call the payment confirmed once it lands (1.6.0's release review). Returns
+ * whether the watch holds it as one that may still go through.
  */
 export async function nameParts(
   deps: PendingDeps,
   network: NetworkName,
   txHash: string,
   chain: NonNullable<PendingTx["chain"]>,
+  parts?: NonNullable<Sending["parts"]>,
 ): Promise<boolean> {
   const key = pendingKey(network);
-  return inTurn(deps, network, () =>
-    deps.wallet.withKeys(async () => {
+  return inTurn(deps, network, async () => {
+    const named = await deps.wallet.withKeys(async () => {
       const w = await deps.session.get<Watched>(key);
-      if (w?.txHash !== txHash) return false;
-      if (!w.chain) await deps.session.set(key, { ...w, chain });
-      return unsettled(w);
-    }),
-  );
+      if (w?.txHash !== txHash) return undefined;
+      const was = w.parts;
+      if (w.chain && (!parts || (was?.sent === parts.sent && was.total === parts.total))) return { w, changed: false };
+      const next: Watched = { ...w, chain: w.chain ?? chain, ...(parts ? { parts } : {}) };
+      await deps.session.set(key, next);
+      return { w: next, changed: true };
+    });
+    // Its sealed copy is written outside the wallet's lock, which PrivateStore takes too (`turns`).
+    if (named?.changed && unsettled(named.w)) await seal(deps, named.w);
+    return unsettled(named?.w);
+  });
 }
 
 export class PendingService {

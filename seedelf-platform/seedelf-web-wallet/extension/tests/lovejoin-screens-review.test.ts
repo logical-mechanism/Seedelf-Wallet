@@ -18,7 +18,7 @@ import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { ClaimReview } from "../src/ui/screens/ClaimAll";
 import * as LovejoinScreen from "../src/ui/screens/Lovejoin";
-import { LaunchBootstrapNote } from "../src/ui/screens/LovejoinLaunch";
+import { LaunchBootstrapNote, LaunchStartedBefore } from "../src/ui/screens/LovejoinLaunch";
 import { SwapApproval } from "../src/ui/screens/Swaps";
 import { fakeIndex } from "./fake-index";
 import { memoryArea } from "./fakes";
@@ -60,13 +60,14 @@ describe("the pending banner names a pool's start as a noun, as every other kind
 
 describe("a private Bootstrap's review (R3, R4)", () => {
   // 40 boxes of 100 MIN + 4.5 ₳ from the private balance, as the rehearsal reviewed it, and no collateral: a deposit
-  // alone runs no script (the owner, 2026-10-23).
+  // alone runs no script (the owner, 2026-10-23). Its one payment carries its way back's 1.5 ₳ too (1.6.0's release
+  // review, 318-rust#0).
   const summary = {
     network: "preprod",
     txHash: "ab".repeat(32),
     index: 1,
     address: "addr_test1" + "q".repeat(50),
-    payments: [{ address: "a", own: false, lovelace: "181500000", minimum: null, tokens: [{ ...MIN, quantity: "4000000000" }] }],
+    payments: [{ address: "a", own: false, lovelace: "183000000", minimum: null, tokens: [{ ...MIN, quantity: "4000000000" }] }],
     max: false,
     fee: { size: "0", compute: "0", scriptReference: "0", total: "236778" },
     changeLovelace: "0",
@@ -75,13 +76,24 @@ describe("a private Bootstrap's review (R3, R4)", () => {
     changeMinimum: "0",
     inputs: 1,
     left: 0,
+    bootstrapReserve: "1500000",
     mix: { boxes: 40, lovelace: "181500000", mixes: 0, mixFees: "0", depth: 0, delay: "1-6", bootstrap: true, pool: A, token: { ...MIN, quantity: "4000000000" } },
   } as unknown as SessionOutSummary & { mix: never };
 
   it("names the token in its total, as the row above does (R3)", () => {
     const review = text(shown(createElement(PrivateReview, { summary, box: MIN_100 })));
-    expect(review).toContain("Total leaving your private balance 181.736778 ₳ and 4,000 MIN");
+    expect(review).toContain("Total leaving your private balance 183.236778 ₳ and 4,000 MIN");
     expect(review).not.toContain("and 1 token");
+  });
+
+  it("says what returning the rest takes beside the boxes, and that what it doesn't use comes back (1.6.0's release review, 318-rust#0)", () => {
+    const review = text(shown(createElement(PrivateReview, { summary, box: MIN_100 })));
+    expect(review).toContain(`${t("lovejoin.review.returnRest")} 1.5 ₳, and what it doesn't use comes back`);
+    // Never counted twice: the boxes' row is the boxes and the deposit's reserve alone.
+    expect(review).toContain("For the boxes and network fees 181.5 ₳ and 4,000 MIN");
+    // A mix's funding carries no way back of its own: no such row.
+    const mix = { ...summary, bootstrapReserve: undefined, mix: { ...(summary.mix as object), bootstrap: undefined, depth: 2, mixes: 160 } } as typeof summary;
+    expect(text(shown(createElement(PrivateReview, { summary: mix, box: MIN_100 })))).not.toContain(t("lovejoin.review.returnRest"));
   });
 
   it("has no row for a collateral, which a Bootstrap's funding doesn't pay", () => {
@@ -128,6 +140,15 @@ describe("a pool's start's review says Bootstrap comes next, on every network (R
   it("offers Bootstrap where the network has no floor, and says the floor where it has one", () => {
     expect(text(createElement(LaunchBootstrapNote), "preprod")).toContain("Bootstrap it from its page");
     expect(text(createElement(LaunchBootstrapNote), "mainnet")).toContain("once it holds 30 boxes not yours");
+  });
+});
+
+describe("a pool's start's review says the wallet started one of these values no look has found yet (1.6.0's release review, 318-worker#1)", () => {
+  it("warns that if both go through the later is a copy, and says nothing where none was", () => {
+    const warned = text(createElement(LaunchStartedBefore, { review: { startedBefore: { txHash: "ab".repeat(32), at: Date.now() - 5 * 60_000 } } }));
+    expect(warned).toBe(t("lovejoin.launch.warn.startedBefore"));
+    expect(warned).toContain("copy");
+    expect(text(createElement(LaunchStartedBefore, { review: {} }))).toBe("");
   });
 });
 

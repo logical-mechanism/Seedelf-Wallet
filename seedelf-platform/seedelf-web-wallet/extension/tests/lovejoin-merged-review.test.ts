@@ -17,7 +17,7 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, type CopyRef, type PoolRef } from "../src/background/lovejoin";
 import { LovejoinLaunchService } from "../src/background/lovejoin-launch";
 import { HOLDER, PoolDiscovery, serviceDeps, type FoundPool, type Kept } from "../src/background/lovejoin-pools";
-import { Minswap } from "../src/background/minswap";
+import { builtOutputs, Minswap } from "../src/background/minswap";
 import { PendingService } from "../src/background/pending";
 import { privateIndexClient } from "../src/background/private-index";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
@@ -152,6 +152,19 @@ function atSession(tx_hash: string, tx_index: number, value: string, assets: Arr
 }
 
 const ljtest = (quantity: bigint) => ({ policy_id: VIEW.token.policyId, asset_name: VIEW.token.assetName, quantity: quantity.toString() });
+
+/**
+ * What funding `id` (submitted) paid session 0's account, as Koios lists it there once it lands: read from the
+ * transaction, never what a test supposes it pays (1.6.0's release review, x-compat#0: a 5 ₳ the fixtures landed hid
+ * a Bootstrap's funding that paid none). `token`: what the output carrying a token pool's token holds of it.
+ */
+function landed(t: T, id: string, token?: ReturnType<typeof ljtest>): KoiosUtxo[] {
+  const bytes = t.koios.submitted.find((b) => txIdOf(b) === id);
+  if (!bytes) throw new Error(`not submitted: ${id}`);
+  return builtOutputs(bytes).flatMap((o, i) =>
+    o.address.slice(2, 58) === sessionSwap.keyHash ? [atSession(id, i, o.lovelace.toString(), o.tokens && token ? [token] : [])] : [],
+  );
+}
 
 /** A register datum: the wallet's, or a stranger's. */
 async function datum(t: T, ours: boolean): Promise<string> {
@@ -552,11 +565,14 @@ describe("a Bootstrap whose deposit a watch saw land (the merged fixes' review, 
     const sessions = runner(t, lj);
     const out = await sessions.mixOutBuild("preprod", 1, { bootstrap: true });
     const { index } = await sessions.mixOutSubmit("preprod", out.txHash);
-    t.koios.addedToAccounts.push(...POOL, atSession(out.txHash, 0, out.mix.lovelace), atSession(out.txHash, 1, "5000000"));
+    // Its funding lands as it paid the account, with no 5 ₳ (1.6.0's release review, x-compat#0).
+    const paid = landed(t, out.txHash);
+    t.koios.addedToAccounts.push(...POOL, ...paid);
     t.koios.confirmations = 1;
     const before = t.koios.submitted.length;
     await sessions.advance("preprod", index, true);
-    expect(t.koios.submitted.slice(before).some((tx) => txInputs(tx).includes(`${out.txHash}#0`))).toBe(true);
+    expect(t.koios.submitted.slice(before).some((tx) => txInputs(tx).includes(`${out.txHash}#${paid[0]!.tx_index}`))).toBe(true);
+    expect((await sealed(t)).chains.at(-1)).toMatchObject({ bootstrap: true, boxes: 1 });
     // The session's read sees its deposit and return on chain.
     await sessions.list("preprod", true);
     expect((await sealed(t)).mixes!.find((e) => e.bootstrap)).toMatchObject({ found: true });
@@ -1177,7 +1193,9 @@ describe("a mix session whose pool takes no new box by the time its chain is bui
     t.koios.addedToAccounts.push(...POOL, ...(await strangers(t)));
     const out = await sessions.mixOutBuild("preprod", boxes, { pool: TOKEN, ...(bootstrap ? { bootstrap: true } : {}) });
     await sessions.mixOutSubmit("preprod", out.txHash);
-    t.koios.addedToAccounts.push(atSession(out.txHash, 0, out.mix.lovelace, [ljtest(BigInt(boxes) * Q)]), atSession(out.txHash, 1, "5000000"));
+    // Its funding lands as it paid the account: a mix's 5 ₳ collateral too, never a Bootstrap's (1.6.0's release
+    // review, x-compat#0).
+    t.koios.addedToAccounts.push(...landed(t, out.txHash, ljtest(BigInt(boxes) * Q)));
     t.koios.confirmations = 1;
     return { t, sessions, pools };
   }

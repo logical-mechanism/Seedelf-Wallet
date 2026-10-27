@@ -2,9 +2,15 @@
 // ending when the network confirms it (see lib.mjs). Each takes the
 // wallet from openWallet() and the flow's arguments, and returns the
 // transaction hash.
-import { balances, confirmed, log, reviewAndSend, seedelfName, sendReviewed, yourSeedelfs } from "./lib.mjs";
+import { balances, confirmed, log, reviewAndSend, seedelfCard, seedelfName, sendReviewed, yourSeedelfs } from "./lib.mjs";
 
 const home = (page) => page.getByRole("tab", { name: "Private", exact: true }).click();
+
+/**
+ * The card naming the public account or the private balance, by the start of its name: who pays a mint, or where a
+ * removal's ADA goes. Part of a name matches, and a removal's card says what it ties ("… to your public account …").
+ */
+const side = (page, which) => page.getByRole("radio", { name: which === "account" ? /^Public account/ : /^Private balance/ });
 
 /** The Cardano tab's staking row, into Staking. */
 async function staking(page) {
@@ -18,14 +24,14 @@ const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export const FLOWS = {
   /** `mint [tag] [account|seedelf]`: create a seedelf, paid by the Cardano account (mint first) or the Seedelf balance (a stealth mint). */
   async mint({ page }, tag = "live-mint", from = "account") {
-    if (from !== "account" && from !== "seedelf") throw new Error("mint: pay with account or Seedelf");
+    if (from !== "account" && from !== "seedelf") throw new Error('mint: pay with "account" or "seedelf"');
     await home(page);
     await page.getByRole("button", { name: "Create a Seedelf" }).click();
-    await page.getByLabel("Personal tag (optional)").fill(tag);
-    await page.getByRole("button", { name: from === "account" ? "Public account" : "Private balance" }).click();
+    await page.getByLabel("Tag (optional, anyone can read it)").fill(tag);
+    await side(page, from).click();
     await reviewAndSend(page, "mint-review", `mint-${from}`);
     const txHash = await confirmed(page, "Seedelf created");
-    await yourSeedelfs(page, (list) => list.getByText(tag, { exact: true }).waitFor({ timeout: 60_000 }));
+    await yourSeedelfs(page, (list) => seedelfCard(page, list, tag).waitFor({ timeout: 60_000 }));
     return txHash;
   },
 
@@ -97,14 +103,14 @@ export const FLOWS = {
     await page.getByTestId("pool-details-facts").waitFor({ timeout: 60_000 });
     log("pool:", (await page.getByTestId("pool-details").innerText()).replace(/\n/g, " | "));
     await page.getByRole("button", { name: /^Stake with / }).click();
-    await sendReviewed(page, "stake");
+    await sendReviewed(page, "stake", page.getByRole("button", { name: /^Stake with / }));
     return confirmed(page, "Now staking");
   },
 
   /** `vote [abstain|no-confidence|drep1…|name]`: delegate the voting power; a DRep is found by its ID or name, then looked up. */
   async vote({ page }, to = "abstain") {
     await staking(page);
-    await page.getByRole("button", { name: /^(Change|Delegate)$/ }).click();
+    await page.getByRole("button", { name: /^(Change who votes for you|Delegate)$/ }).click();
     if (to === "abstain") await page.getByRole("radio", { name: /^Always abstain/ }).click();
     else if (to === "no-confidence") await page.getByRole("radio", { name: /^Always no confidence/ }).click();
     else {
@@ -117,7 +123,7 @@ export const FLOWS = {
       log("DRep:", (await page.getByTestId("drep-facts").innerText()).replace(/\n/g, " | "));
     }
     await page.getByRole("button", { name: "Review" }).click();
-    await sendReviewed(page, `vote-${to.startsWith("drep1") ? "drep" : to}`);
+    await sendReviewed(page, `vote-${to.startsWith("drep1") ? "drep" : to}`, page.getByRole("button", { name: "Delegate your vote" }));
     return confirmed(page, "Voting power delegated");
   },
 
@@ -125,7 +131,7 @@ export const FLOWS = {
   async "withdraw-rewards"({ page }) {
     await staking(page);
     await page.getByRole("button", { name: "Withdraw rewards" }).click();
-    await sendReviewed(page, "withdraw-rewards");
+    await sendReviewed(page, "withdraw-rewards", page.getByRole("button", { name: /^Withdraw / }));
     return confirmed(page, "Rewards withdrawn");
   },
 
@@ -133,17 +139,20 @@ export const FLOWS = {
   async unstake({ page }) {
     await staking(page);
     await page.getByRole("button", { name: "Stop staking" }).click();
-    await sendReviewed(page, "unstake");
+    await sendReviewed(page, "unstake", page.getByRole("button", { name: "Stop staking" }));
     return confirmed(page, "Staking stopped");
   },
 
   /** `remove [tag] [account|seedelf]`: burn a seedelf of the wallet's; its ADA goes to the Cardano account or the Seedelf balance. */
   async remove({ page }, tag = "live-mint", to = "account") {
-    if (to !== "account" && to !== "seedelf") throw new Error("remove: send the freed ADA to account or Seedelf");
+    if (to !== "account" && to !== "seedelf") throw new Error('remove: send the freed ADA to "account" or "seedelf"');
     await home(page);
     await page.getByRole("button", { name: "Receive privately" }).click();
-    await page.getByRole("button", { name: `Remove ${tag}`, exact: true }).click();
-    await page.getByRole("button", { name: to === "account" ? "Public account" : "Private balance" }).click();
+    // Remove waits behind its card's Manage (chunk 23).
+    const card = seedelfCard(page, page.getByTestId("seedelfs"), tag);
+    await card.getByText("Manage", { exact: true }).click();
+    await card.getByRole("button", { name: `Remove ${tag}`, exact: true }).click();
+    await side(page, to).click();
     await reviewAndSend(page, "remove-review", `remove-${to}`);
     return confirmed(page, "Seedelf removed");
   },

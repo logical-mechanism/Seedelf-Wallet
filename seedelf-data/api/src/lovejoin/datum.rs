@@ -95,6 +95,98 @@ impl Cbor<'_> {
             _ => Item::Other,
         })
     }
+
+    /// Skips a string after its head (`major` 2 for bytes, 3 for text): `len`
+    /// bytes, or for an indefinite length definite chunks of its own kind
+    /// until the break. Text is UTF-8, chunk by chunk, as minicbor reads it.
+    fn string(&mut self, major: u8, len: Option<u64>) -> Option<()> {
+        let Some(n) = len else {
+            loop {
+                if self.bytes.get(self.at) == Some(&0xff) {
+                    self.at += 1;
+                    return Some(());
+                }
+                match self.head()? {
+                    (m, Some(n)) if m == major => self.chunk(major, n)?,
+                    _ => return None,
+                }
+            }
+        };
+        self.chunk(major, n)
+    }
+
+    fn chunk(&mut self, major: u8, n: u64) -> Option<()> {
+        let bytes = self.take(usize::try_from(n).ok()?)?;
+        (major == 2 || std::str::from_utf8(bytes).is_ok()).then_some(())
+    }
+}
+
+/// The deepest datum the wallet reads on a pool's script row, each array,
+/// map and tag counting as a level: seedelf-core's `cbor::MAX_DEPTH`, which
+/// it holds every datum from outside the wallet to.
+pub const MAX_DEPTH: usize = 128;
+
+/// Whether `cbor` is one well-formed CBOR item, with nothing after it, nested
+/// no deeper than `max`, each array, map and tag a level: seedelf-core's
+/// `cbor::within_depth`, walked the same way, an item at a time with no
+/// recursion (the vectors' `scriptRowDatums` hold the two together). The
+/// wallet takes a pool's script row only when its datum, if any, passes.
+pub fn within_depth(cbor: &[u8], max: usize) -> bool {
+    walk(cbor, max).is_some()
+}
+
+fn walk(cbor: &[u8], max: usize) -> Option<()> {
+    let mut c = Cbor { bytes: cbor, at: 0 };
+    // What's left of each open array, map and tag: how many items are still to
+    // come, or `None` for an indefinite length, which a break ends.
+    let mut open: Vec<Option<u64>> = Vec::new();
+    loop {
+        // `Some(items)` when this item opens an array, map or tag.
+        let opens: Option<Option<u64>> = match c.head()? {
+            (4, items) => Some(items),
+            (5, Some(pairs)) => Some(Some(pairs.checked_mul(2)?)),
+            (5, None) => Some(None),
+            (6, Some(_)) => Some(Some(1)),
+            // A break: only an indefinite array or map ends with one.
+            (7, None) => {
+                if open.pop()?.is_some() {
+                    return None;
+                }
+                None
+            }
+            (major @ (2 | 3), len) => {
+                c.string(major, len)?;
+                None
+            }
+            // A number, a simple value or a float: nothing nests in it.
+            (0 | 1 | 7, Some(_)) => None,
+            // A number or a tag of indefinite length.
+            _ => return None,
+        };
+        if let Some(items) = opens {
+            if open.len() == max {
+                return None;
+            }
+            if items != Some(0) {
+                open.push(items);
+                continue;
+            }
+        }
+        // An item is done: it counts toward each open one it finishes.
+        loop {
+            match open.last_mut() {
+                None => return (c.at == cbor.len()).then_some(()),
+                Some(None) => break,
+                Some(Some(left)) => {
+                    *left -= 1;
+                    if *left > 0 {
+                        break;
+                    }
+                    open.pop();
+                }
+            }
+        }
+    }
 }
 
 /// Why a datum isn't a pool's.
@@ -272,5 +364,25 @@ mod tests {
                 .unwrap_or(json!("rejected"));
             assert_eq!(got, d["datum"], "{}", d["about"]);
         }
+    }
+
+    #[test]
+    fn every_script_rows_datum_is_held_to_seedelf_cores_depth() {
+        // 1.6.0's release review, 314-wasm#0: the wallet takes a pool's
+        // script row only when its datum is within this depth, so the pools
+        // listed here are the ones it shows.
+        let v = super::super::templates::tests::vectors();
+        let rule = &v["scriptRowDatums"];
+        assert_eq!(rule["maxDepth"], MAX_DEPTH);
+        let datums = rule["datums"].as_array().unwrap();
+        assert!(datums.len() >= 25);
+        for d in datums {
+            let got = within_depth(&bytes(d["cbor"].as_str().unwrap()), MAX_DEPTH);
+            assert_eq!(json!(got), d["readable"], "{}", d["about"]);
+        }
+        // The walk doesn't recurse: far deeper than any decoder could take.
+        let deep = [vec![0x81; 100_000], vec![0x00]].concat();
+        assert!(!within_depth(&deep, MAX_DEPTH));
+        assert!(within_depth(&deep, usize::MAX));
     }
 }

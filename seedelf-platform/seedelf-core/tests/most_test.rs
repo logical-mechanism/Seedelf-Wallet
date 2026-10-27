@@ -357,3 +357,71 @@ fn max_to_an_address_keeps_the_tokens_it_isnt_sending() {
     .unwrap();
     assert!(e.to_string().contains("normal preprod address"), "{e}");
 }
+
+/// Max of more kinds of token than an output holds pays what's left
+/// `MAXIMUM_TOKENS_PER_UTXO` to an output, to a Seedelf and to an address
+/// alike, every output but the last carrying its minimum (1.6.0's release
+/// review, gap-2#0: `RestTo`'s docs still said one output).
+#[test]
+fn max_pays_what_is_left_twenty_tokens_to_an_output() {
+    let w = world();
+    let names: Vec<String> = (0..25).map(|i| hex::encode(format!("t{i:02}"))).collect();
+    let mut row = owned(&w, 0x03, 60_000_000, 0);
+    row.asset_list = serde_json::from_value(Value::Array(
+        names
+            .iter()
+            .map(|n| {
+                json!({ "policy_id": TOKEN_POLICY, "asset_name": n, "quantity": "1",
+                         "decimals": 0, "fingerprint": "" })
+            })
+            .collect(),
+    ))
+    .unwrap();
+    let inputs = vec![row];
+    let kinds = |n: usize| {
+        names[..n].iter().fold(Assets::new(), |all, name| {
+            all.add(Asset::new(TOKEN_POLICY.into(), name.clone(), 1).unwrap())
+                .unwrap()
+        })
+    };
+    let every = kinds(25);
+    // Each output's lovelace and how many tokens it holds, fewest first.
+    let held = |outs: Vec<(u64, u64, Option<bool>)>| {
+        let mut held: Vec<(u64, u64)> = outs.iter().map(|o| (o.1, o.0)).collect();
+        held.sort();
+        held
+    };
+
+    let bob = random_scalar();
+    let to = Register::create(bob).unwrap().rerandomize().unwrap();
+    let spend = build::transfer_most(&w.chain, &inputs, &to, &every, &w.owner, w.signer).unwrap();
+    let built = measured(&w, spend).unwrap();
+    let paid = built.rest_lovelace.unwrap();
+    assert_eq!(paid, 60_000_000 - built.fee.total);
+    assert_eq!(built.change_lovelace, 0);
+    let outs = outputs(&built, bob);
+    assert!(
+        outs.iter().all(|o| o.2 == Some(true)),
+        "all Bob's: {outs:?}"
+    );
+    let first = build::minimum_deposit(&w.chain.params, &kinds(20)).unwrap();
+    assert_eq!(held(outs), vec![(5, paid - first), (20, first)]);
+
+    let address: Address = ShelleyAddress::new(
+        Network::Testnet,
+        ShelleyPaymentPart::Key(Hasher::<224>::hash(b"someone")),
+        ShelleyDelegationPart::Null,
+    )
+    .into();
+    let spend = build::sweep_most(&w.chain, &inputs, &address, &every, &w.owner, w.signer).unwrap();
+    let built = measured(&w, spend).unwrap();
+    let paid = built.rest_lovelace.unwrap();
+    assert_eq!(paid, 60_000_000 - built.fee.total);
+    let outs = outputs(&built, w.sk);
+    assert!(
+        outs.iter().all(|o| o.2.is_none()),
+        "all the address's: {outs:?}"
+    );
+    let first = build::minimum_address_payment(&w.chain.params, &address, &kinds(20)).unwrap();
+    assert_eq!(held(outs), vec![(5, paid - first), (20, first)]);
+}

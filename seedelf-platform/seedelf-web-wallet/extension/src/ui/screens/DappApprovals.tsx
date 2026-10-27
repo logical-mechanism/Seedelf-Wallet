@@ -40,7 +40,7 @@ import { RadioCards } from "../components/RadioCards";
 import { ExplorerLink } from "../components/ExplorerLink";
 import { GlobeIcon, ShieldIcon, SpinnerIcon, WalletIcon } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
-import { boxCost, CollateralReserveRow } from "../components/LovejoinReturn";
+import { boxCost, COLLATERAL_MIX_COST, CollateralReserveRow } from "../components/LovejoinReturn";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
@@ -439,11 +439,33 @@ export function fundingPrivacy(changeLovelace: string): string {
  * Through Lovejoin the way back is a chain (sessions.ts backBuild): a deposit,
  * the mixes, then the return, so two network fees besides the mixes', as a
  * swap's and a mix's costs count them (swapCosts, mixCosts); `perBox` is the
- * mixes and the box's own way back.
+ * mixes and the box's own way back. `summary`, the funding's, says what of its
+ * collateral's mix: where it pays for that mix (`collateralReserve`), its
+ * deposit, mix and box's way back are network fees too; where a 5 ₳ pool may
+ * take the collateral (`collateralMix`), its reserve paid or not, its 5 ₳ is
+ * mixed once, in a box of its own, only if enough is left when it comes back,
+ * since what the site's transactions leave decides, and the return's own review
+ * says which before anything is sent (1.6.0's release review, 323-worker#1,
+ * 323-worker#6, R3-9; its review of the fixes, fx-promise). Required, so no
+ * review can leave it out (R3-1).
  */
-export function FundingWayBack({ fee, lovejoin, perBox }: { fee: string; lovejoin: boolean; perBox: string }) {
+export function FundingWayBack({
+  fee,
+  lovejoin,
+  perBox,
+  summary,
+}: {
+  fee: string;
+  lovejoin: boolean;
+  perBox: string;
+  summary: Pick<SessionOutSummary, "collateralReserve" | "collateralMix">;
+}) {
   const tr = useT();
+  const paid = !!summary.collateralReserve;
+  // A site's return holds what the site leaves, so a worker's "mixed" says no more than "only if enough is left" here.
+  const collateral = !!summary.collateralMix;
   const back = (lovejoin ? 2n : 1n) * SESSION_FEE_ESTIMATE;
+  const mix = paid ? COLLATERAL_MIX_COST : 0n;
   return (
     <>
       <h2>{tr("dappUi.back.title")}</h2>
@@ -454,15 +476,16 @@ export function FundingWayBack({ fee, lovejoin, perBox }: { fee: string; lovejoi
           <Row label={tr("dappUi.back.fee")} value={adaText(toCents(back))} />
         )}
         {lovejoin && <Row label={tr("dappUi.back.lovejoin")} value={tr("dappUi.back.lovejoinValue", { ada: perBox })} />}
+        {paid && <Row label={tr("lovejoin.collateralMix.label")} value={adaText(toCents(mix))} />}
         <Row
           label={tr("dappUi.back.bothWays")}
-          value={adaText(toCents(BigInt(fee) + back))}
+          value={adaText(toCents(BigInt(fee) + back + mix))}
           strong
           testId="dapp-funding-both-ways"
         />
       </ReviewRows>
       <p className="note" data-testid="dapp-funding-way-back">
-        {tr(lovejoin ? "dappUi.back.privacy.noteLovejoin" : "dappUi.back.noteDirect")}
+        {tr(collateral ? "dappUi.back.privacy.noteLovejoinMixed" : lovejoin ? "dappUi.back.privacy.noteLovejoin" : "dappUi.back.noteDirect")}
       </p>
     </>
   );
@@ -745,7 +768,7 @@ export function ConnectRequest({
               tokens={forSite?.tokens.length ?? 0}
             />
           </ReviewRows>
-          <FundingWayBack fee={review.fee.total} lovejoin={lovejoinBack} perBox={perBox} />
+          <FundingWayBack fee={review.fee.total} lovejoin={lovejoinBack} perBox={perBox} summary={review} />
           <TxDetailButton txHash={review.txHash} testId="dapp-funding-tx" />
           <Callout tone="privacy" testId="dapp-funding-privacy">
             {fundingPrivacy(review.changeLovelace)}

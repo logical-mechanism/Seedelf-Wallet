@@ -53,6 +53,7 @@ import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
+import { SendButton } from "../components/SendButton";
 import { unsentWhyText } from "../components/SessionRefused";
 import { againOrForm, StaleFoot } from "../components/StaleReview";
 import { TxDetailButton } from "../components/TxDetail";
@@ -186,10 +187,13 @@ export function SiteSession({
   // Change on its review (chunk 34's 34e): the pool each token goes into, by its unit, null for back directly.
   const [backPools, setBackPools] = useState<Record<string, string | null>>({});
   const [busy, setBusy] = useState(false);
+  // What's busy is its return being built, Bring it back or its review's switch or Change, not Send (1.6.0's release
+  // review, 320-screens#3).
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string>();
   const [disconnecting, setDisconnecting] = useState(false);
   // A return through Lovejoin: its Send button counts the chain's transactions.
-  const backSending = useSendingLabel(s.index, busy && !!back?.lovejoin);
+  const backSending = useSendingLabel(s.index, busy && !rebuilding && !!back?.lovejoin);
 
   const act = async (task: () => Promise<void>) => {
     if (busy) return;
@@ -223,9 +227,14 @@ export function SiteSession({
   /** Its return, built through Lovejoin or not; `pools`: Change's choices for its tokens, kept until it's built directly. */
   const buildBack = (through: boolean, pools: Record<string, string | null> = through ? backPools : {}) =>
     void act(async () => {
-      setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }), ...(through && Object.keys(pools).length ? { pools } : {}) }));
-      setBackThrough(through);
-      setBackPools(pools);
+      setRebuilding(true);
+      try {
+        setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }), ...(through && Object.keys(pools).length ? { pools } : {}) }));
+        setBackThrough(through);
+        setBackPools(pools);
+      } finally {
+        setRebuilding(false);
+      }
     });
 
   if (back) {
@@ -243,10 +252,11 @@ export function SiteSession({
         aside={tr("review.nothingSent")}
         error={error}
         foot={
-          <button
-            type="button"
-            className="primary"
-            disabled={busy}
+          <SendButton
+            label={tr("common.send")}
+            busy={busy}
+            rebuilding={rebuilding}
+            sending={backSending}
             onClick={() =>
               void act(async () => {
                 await call("session-back-submit", { txHash: back.txHash });
@@ -254,9 +264,7 @@ export function SiteSession({
                 onRefresh();
               })
             }
-          >
-            {busy ? backSending : tr("common.send")}
-          </button>
+          />
         }
       >
         {/* The way back first, a switch, where it can't be missed (blind test §9.8; Stop's, 5289dcf). */}
@@ -502,6 +510,23 @@ export function DisconnectSession({
   );
 }
 
+/**
+ * Why a top-up puts a new 5 ₳ collateral back, and how it comes back: with the next return, or, where a 5 ₳ pool may
+ * take it (the top-up's `summary`: `collateralMix`, its reserve, `collateralReserve`, paid or not), mixed once at that
+ * return only if enough is left then, since what the site's transactions leave decides, and back by itself later
+ * (1.6.0's release review, 323-worker#6, R3-9; its review of the fixes, fx-promise). Required, so no review can leave
+ * it out (R3-1). Exported for its test.
+ */
+export function TopUpCollateralNote({ summary }: { summary: Pick<SessionOutSummary, "collateralReserve" | "collateralMix"> }) {
+  const tr = useT();
+  const mixed = !!summary.collateralMix;
+  return (
+    <p className="note" data-testid="top-up-collateral">
+      {tr(mixed ? "sites.topUp.collateralMixed" : "sites.topUp.collateral")}
+    </p>
+  );
+}
+
 /** Another payment into a site's private session: an amount and tokens, reviewed, then sent. */
 function TopUp({
   session: s,
@@ -608,11 +633,7 @@ function TopUp({
           />
         </ReviewRows>
         <TxDetailButton txHash={review.txHash} testId="top-up-tx" />
-        {collateral && (
-          <p className="note" data-testid="top-up-collateral">
-            {tr("sites.topUp.collateral")}
-          </p>
-        )}
+        {collateral && <TopUpCollateralNote summary={review} />}
         <Callout tone="privacy">{tr("sites.topUp.privacy.links")}</Callout>
         <HistoriesNote histories={review.histories} session={review.index} testId="top-up-histories" />
         <GivemeNote funding />

@@ -10,7 +10,8 @@
 //! change to the rules should ever need.
 
 use hex_literal::hex;
-use seedelf_core::lovejoin::{ReferenceDatum, templates};
+use seedelf_core::cbor;
+use seedelf_core::lovejoin::{self, ReferenceDatum, templates};
 use serde_json::{Value, json};
 
 const FILE: &str = concat!(
@@ -344,6 +345,74 @@ fn datums() -> Vec<(&'static str, Vec<u8>)> {
     d
 }
 
+/// Datums a pool's script row at the holder might carry, each with what it
+/// tries. A launch can put any datum beside its scripts, as `one_shot_mint`
+/// checks only the reference output, and the wallet takes such a row as a
+/// reference only when its datum is within [`cbor::MAX_DEPTH`]: decoding one
+/// a few thousand levels deep overflowed WebAssembly's stack (1.6.0's release
+/// review, 314-wasm#0). Every kind of CBOR item, as either walk must agree.
+fn script_row_datums() -> Vec<(&'static str, Vec<u8>)> {
+    let lists = |levels: usize| [vec![0x81; levels], vec![0x00]].concat();
+    let indefinite = |levels: usize| [vec![0x9f; levels], vec![0x00], vec![0xff; levels]].concat();
+    let maps = |levels: usize| [[0xa1, 0x00].repeat(levels), vec![0x00]].concat();
+    let tags = |levels: usize| [[0xd8, 0x79].repeat(levels), vec![0x00]].concat();
+    let max = cbor::MAX_DEPTH;
+    vec![
+        ("an integer", vec![0x00]),
+        (
+            "a box's datum",
+            lovejoin::mix_datum(&[0xaa; 48], &[0xbb; 48]),
+        ),
+        (
+            "Lovejoin's preprod pool's reference datum",
+            constr0(&lj(10_000_000_000_000_000), true),
+        ),
+        ("lists 128 deep", lists(max)),
+        ("lists 129 deep", lists(max + 1)),
+        ("lists 3,000 deep, as a hostile launch's", lists(3_000)),
+        ("indefinite lists 128 deep", indefinite(max)),
+        ("indefinite lists 129 deep", indefinite(max + 1)),
+        ("maps 128 deep", maps(max)),
+        ("maps 129 deep", maps(max + 1)),
+        ("constructors 128 deep", tags(max)),
+        ("constructors 129 deep", tags(max + 1)),
+        (
+            "an empty list at the 128th level",
+            [vec![0x81; max - 1], vec![0x80]].concat(),
+        ),
+        (
+            "an empty list at the 129th level",
+            [vec![0x81; max], vec![0x80]].concat(),
+        ),
+        ("bytes in chunks", hex!("5f 41 01 42 0203 ff").to_vec()),
+        (
+            "text, whole and in chunks",
+            hex!("82 63 616263 7f 61 61 ff").to_vec(),
+        ),
+        ("text that isn't UTF-8", hex!("62 c328").to_vec()),
+        ("a chunk of another kind", hex!("5f 61 61 ff").to_vec()),
+        (
+            "simple values and floats",
+            hex!("85 f5 f6 f8 20 f9 3c00 fb 3ff0000000000000").to_vec(),
+        ),
+        (
+            "an indefinite map of one item, which neither walk pairs",
+            hex!("bf 00 ff").to_vec(),
+        ),
+        ("nothing", Vec::new()),
+        ("cut short", hex!("82 00").to_vec()),
+        ("something after it", hex!("00 00").to_vec()),
+        ("a break with nothing to end", hex!("ff").to_vec()),
+        ("a break in a definite list", hex!("82 00 ff").to_vec()),
+        ("a reserved head", hex!("1c").to_vec()),
+        ("an integer of indefinite length", hex!("1f").to_vec()),
+        (
+            "a map longer than counting allows",
+            hex!("bb ffffffffffffffff").to_vec(),
+        ),
+    ]
+}
+
 fn decoded(cbor: &[u8]) -> Value {
     match ReferenceDatum::decode(cbor) {
         Ok(d) => json!({
@@ -365,7 +434,7 @@ fn decoded(cbor: &[u8]) -> Value {
 fn vectors() -> Value {
     let unapplied = templates::unapplied_hashes();
     json!({
-        "//": "Written by seedelf-core/tests/lovejoin_vectors_test.rs (RECORD_LOVEJOIN_VECTORS=1) from seedelf-core's own derive and ReferenceDatum::decode. seedelf-data's copy of the token-pool checks is held to it. Never edit by hand.",
+        "//": "Written by seedelf-core/tests/lovejoin_vectors_test.rs (RECORD_LOVEJOIN_VECTORS=1) from seedelf-core's own derive, ReferenceDatum::decode and cbor::within_depth. seedelf-data's copy of the token-pool checks is held to it. Never edit by hand.",
         "commit": templates::COMMIT,
         "holder": hex::encode(templates::REFERENCE_HOLDER_HASH),
         "templates": {
@@ -389,6 +458,14 @@ fn vectors() -> Value {
             "cbor": hex::encode(&cbor),
             "datum": decoded(&cbor),
         })).collect::<Vec<_>>(),
+        "scriptRowDatums": {
+            "maxDepth": cbor::MAX_DEPTH,
+            "datums": script_row_datums().into_iter().map(|(about, datum)| json!({
+                "about": about,
+                "cbor": hex::encode(&datum),
+                "readable": cbor::within_depth(&datum, cbor::MAX_DEPTH),
+            })).collect::<Vec<_>>(),
+        },
     })
 }
 
@@ -445,5 +522,31 @@ fn the_vectors_try_what_they_say() {
         "a field nested 200 deep",
     ] {
         assert_eq!(verdict(about), json!("rejected"), "{about}");
+    }
+}
+
+#[test]
+fn the_script_row_datums_try_what_they_say() {
+    let unreadable = [
+        "lists 129 deep",
+        "lists 3,000 deep, as a hostile launch's",
+        "indefinite lists 129 deep",
+        "maps 129 deep",
+        "constructors 129 deep",
+        "an empty list at the 129th level",
+        "text that isn't UTF-8",
+        "a chunk of another kind",
+        "nothing",
+        "cut short",
+        "something after it",
+        "a break with nothing to end",
+        "a break in a definite list",
+        "a reserved head",
+        "an integer of indefinite length",
+        "a map longer than counting allows",
+    ];
+    for (about, datum) in script_row_datums() {
+        let readable = cbor::within_depth(&datum, cbor::MAX_DEPTH);
+        assert_eq!(readable, !unreadable.contains(&about), "{about}");
     }
 }

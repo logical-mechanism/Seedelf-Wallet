@@ -38,26 +38,40 @@ const quote: SwapQuote = {
 
 describe("the swap form", () => {
   it("leaves the costs, the collateral and room for the fee out of ADA's Max", () => {
-    // 28 ₳, less the usual 6 ₳ of costs, 5 ₳ of collateral and 1 ₳ for the fee.
-    expect(maxAdaIn("28000000")).toBe("16000000");
+    // 28 ₳, less the usual 6 ₳ of costs, 5 ₳ of collateral and 2 ₳ for the fee and the change.
+    expect(maxAdaIn("28000000")).toBe("15000000");
     // A quote's own costs: 7.5 ₳ this time.
-    expect(maxAdaIn("28000000", { ...quote, fund: { lovelace: "17500000", tokens: [] } })).toBe("14500000");
+    expect(maxAdaIn("28000000", { ...quote, fund: { lovelace: "17500000", tokens: [] } })).toBe("13500000");
     // A token's quote says nothing about an ADA swap's costs.
     expect(maxAdaIn("28000000", { ...quote, ask: { ...quote.ask, tokenIn: quote.ask.tokenOut, tokenOut: "lovelace" } })).toBe(
-      "16000000",
+      "15000000",
     );
     expect(maxAdaIn("9000000")).toBe("0");
   });
 
+  it("keeps aside what the funding adds for its collateral's mix, and room for its fee and change (1.6.0's release review, 323-worker#0)", () => {
+    // Where a 5 ₳ pool is shown, the quote names the 1.5 ₳ its funding adds: 28 − 6 − 5 − 1.5 − 2.
+    expect(maxAdaIn("28000000", { ...quote, collateralReserve: "1500000" })).toBe("13500000");
+    // Whichever quote names it: any swap's funding adds it.
+    const token = { ...quote, ask: { ...quote.ask, tokenIn: quote.ask.tokenOut, tokenOut: "lovelace" }, collateralReserve: "1500000" };
+    expect(maxAdaIn("28000000", token)).toBe("13500000");
+    // The room: a fee about 0.23 ₳ from one UTxO and a change of a Seedelf output's least, 1.45678 ₳, fit; 1 ₳ didn't.
+    expect(BigInt("28000000") - BigInt(maxAdaIn("28000000", quote)) - (BigInt(quote.fund.lovelace) - 10_000_000n) - 5_000_000n).toBe(
+      2_000_000n,
+    );
+    // The shortfall is the funding's and the collateral's alone: a balance short of the reserve too is funded without it.
+    expect(adaShort("21000000", { ...quote, collateralReserve: "1500000" })).toBeUndefined();
+  });
+
   it("takes half, never past Max", () => {
     expect(halfOf("28000000", maxAdaIn("28000000"))).toBe("14000000");
-    expect(halfOf("20000000", maxAdaIn("20000000"))).toBe("8000000");
+    expect(halfOf("20000000", maxAdaIn("20000000"))).toBe("7000000");
     expect(halfOf("7")).toBe("3");
   });
 
   it("rounds Max and Half down to a whole unit, so the amount Minswap sees doesn't give the private balance away (privacy review §2.13)", () => {
-    // 123.456789 ₳ held: Max, less the usual 12 ₳, is 111 ₳, not 111.456789.
-    expect(wholeUnits(maxAdaIn("123456789"), 6)).toBe("111000000");
+    // 123.456789 ₳ held: Max, less the usual 13 ₳, is 110 ₳, not 110.456789.
+    expect(wholeUnits(maxAdaIn("123456789"), 6)).toBe("110000000");
     expect(wholeUnits(halfOf("123456789", maxAdaIn("123456789")), 6)).toBe("61000000");
     // A token's whole units; one that comes in whole units is left as it is.
     expect(wholeUnits("906594100", 6)).toBe("906000000");

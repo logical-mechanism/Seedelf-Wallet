@@ -64,7 +64,7 @@ cargo fmt --check
 
 **What the offline tests check,** beyond each module's own:
 - the private index against a scripted Kupo on loopback, with db-sync unreachable (`tests/scripted_kupo.rs`): a fork under a cursor answers `reset`, with no source fresh the index answers 503, and the token pools' routes answer 503 with a wait while the contract's answer from Kupo;
-- the token pools' checks against the wallet's own vectors and scenarios (above), and a launch as the wallet makes one standard, anything else refused with its reason;
+- the token pools' checks against the wallet's own vectors and scenarios (below), the depth walk of a script row's datum among them, and a launch as the wallet makes one standard, anything else refused with its reason;
 - the whole app behind its edge (`tests/edge.rs`): CORS for the wallet's origin alone, a 429 the wallet can read, a bucket per client Caddy names, the month's ceiling, and `no-store` on every answer but a preflight.
 
 **What the live tests check:**
@@ -155,7 +155,7 @@ All routes are under `/seedelf/v1/mainnet/`.
 
 **Caching:** each source's answers are kept until its tip moves. Both tips are read every 2 s, so one set of reads per block serves every request.
 - **Requests that miss together share one read.**
-- **Each source keeps at most 4,096 answers and 64 MB.** A `since` answer from an old cursor can be hundreds of KB, and anyone can ask for one. The answers every wallet reads (the snapshots, the names, `epoch_params`, `totals`) are kept whatever the budget holds.
+- **Each source keeps at most 4,096 answers and 64 MB.** A `since` answer from an old cursor can be hundreds of KB, and anyone can ask for one. The answers every wallet reads (the snapshots, the token pools' included, the names, `epoch_params`, `totals`) are kept whatever the budget holds (the token pools' since 1.6.0's release review, 317-data#1).
 - **A failure is logged at most once every 10 s:** a source that's down fails every request.
 
 ## Lovejoin's token pools
@@ -166,18 +166,18 @@ The code is `src/lovejoin/`. Its checks are a copy of the wallet's: this workspa
 - its reference UTxO is at the holder's enterprise address, with no reference script, holding one `lovejoin` NFT and ADA alone, and its datum decodes as `one_shot_mint` holds a launch to (`datum.rs`);
 - its token is in the wallet's mainnet token list (`tokens/list.json`, built in: a release that lists a token is deployed here first), or it's an ADA pool at any amount but the classic pool's 10 ₳;
 - one of its launch's inputs, the seed, makes its NFT's policy, and the datum names exactly the scripts that seed makes (`templates.rs`, `flat.rs`: the pinned templates applied by hand, with no Pallas, uplc or blst);
-- its launch transaction itself put `mix_box` and `mix_logic` at the holder, and registered L, unless an earlier block did (the owner, 2026-10-17).
+- its launch transaction itself put `mix_box` and `mix_logic` at the holder, each under no datum or one nested no deeper than the wallet reads (128 levels, `datum.rs` `MAX_DEPTH`, `seedelf-core`'s `cbor::MAX_DEPTH`), and registered L, unless an earlier block did (the owner, 2026-10-17). Past that depth the wallet passes the row over and never shows the pool, so this leaves it out too (1.6.0's release review, 314-wasm#0); a readable copy of the script beside a deep row is the one listed.
 
 None of it changes once it's on chain, so each candidate is checked once and its verdict kept in memory (`discovery.rs`, at most 200,000; past that, a candidate is checked again at each request, and still shown when it's standard), and a pool shown stays shown. Everything at the holder is locked for good, so spam there is burned, and costs this server one check.
-- **The holder is read on, not again:** each read gathers only the outputs above the highest id read so far (a later block's outputs have higher ids), and all of them again every hour, so a block rolled back under the stable cursor is forgotten within it. A read on joins only the read it went on from: one that finds it replaced meanwhile by an hourly read, perhaps of an older block, reads on again from that, so nothing between the two is missed (1.6.0's release review, DATA-3). What's refused is dropped from what's kept, and read again only by the hourly read.
+- **The holder is read on, not again:** each read gathers only the holder's outputs above the highest output id and transaction id it has gathered by its block, candidates or not (a later block's have higher ids of both; 1.6.0's release review, 321-lj-rust-data#0: it went on from the last candidate, so a launch's scripts and anything paid to the holder were gathered again at every cursor), and all of them again every hour, so a block rolled back under the stable cursor is forgotten within it. A read on joins only the read it went on from: one that finds it replaced meanwhile by an hourly read, perhaps of an older block, reads on again from that, so nothing between the two is missed (1.6.0's release review, DATA-3). What's refused is dropped from what's kept, and read again only by the hourly read.
 - **A launch's inputs are tried once each,** however many candidates it made.
 
 **A pool's crowd** (`crowd.rs`): its boxes, the deposits they could have come from, and how many a mix made. A transaction that pays a pool's `mix_box` without spending from it is a deposit; one that spends from it is a mix, and each box it makes could have come from any deposit behind any of its inputs. The deposits counted are those some box in the pool now could have come from, worked backwards from the boxes through each mix. A box is an output of exactly the box value with a box's datum (two 48-byte points, `a ≠ b`: whether they're on the curve is the wallet's to check).
 
-**Kept:** `lovejoin/pools` for its cursor (an hour), worked out once per cursor in a task of its own with a minute's budget, off any request: a request waits for it up to its 5 s, and one that waits no longer gets the last list meanwhile, or 503 before the first. The feed is kept for db-sync's tip.
+**Kept:** `lovejoin/pools` for its cursor (an hour), worked out once per cursor in a task of its own with a minute's budget, off any request. The stable cursor it's keyed by is read once a tip. A request has one 5 s deadline, that read included: one that waits no longer, or whose cursor read or list fails, gets the last list (kept an hour too), and 503 only before the first (1.6.0's release review, 317-data#0, 317-data#2, R3-15). The feed is kept for db-sync's tip.
 
 **Held together with the wallet:**
-- `seedelf-platform/seedelf-core/tests/fixtures/lovejoin-pool-vectors.json`, which `seedelf-core`'s `lovejoin_vectors_test.rs` writes from its own derive and datum decoder: ten seeds' four script hashes, and 32 datum encodings with what each reads as.
+- `seedelf-platform/seedelf-core/tests/fixtures/lovejoin-pool-vectors.json`, which `seedelf-core`'s `lovejoin_vectors_test.rs` writes from its own derive, datum decoder and `cbor::within_depth`: ten seeds' four script hashes, 32 datum encodings with what each reads as, and 28 script rows' datums with whether each is within the 128 levels (`scriptRowDatums`), which `datum.rs`' `within_depth` is held to.
 - `seedelf-platform/seedelf-web-wallet/extension/tests/fixtures/lovejoin-shown.json`: the earliest-of-each-value scenarios, which the wallet's `lovejoin-pools.ts` is tested against too.
 
 ## The public routes

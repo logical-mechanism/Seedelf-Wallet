@@ -492,9 +492,14 @@ export class ActivityService {
     const own = new Map((await this.seedelf(network)).filter((e) => e.kind !== "received").map((e) => [e.txHash, e]));
     // The account's DRep, from its key: its certificates and votes are named for what they did.
     const drep = await ownDrepId(this.deps).catch(() => undefined);
-    // Every pool's mix box the wallet reads, the classic pool's at least (chunk 34): from the device, no request.
+    // Every pool's mix box the wallet reads, the classic pool's at least (chunk 34): from the device, no request. A read
+    // that fails names the classic pool's alone; a trap in it is handed on, so the wallet locks (1.6.0's release review,
+    // L3).
     const classic = NETWORKS[network].lovejoin?.mixBox;
-    const read_ = await this.deps.mixBoxes?.(network).catch(() => undefined);
+    const read_ = await this.deps.mixBoxes?.(network).catch((e: unknown) => {
+      if (isTrap(e)) throw e;
+      return undefined;
+    });
     const mixBox = new Set([...(classic ? [classic] : []), ...(read_ ?? [])]);
     // This account's collateral payments, which only the device knows are: a name, never worth failing the list for.
     const collateral = await collateralPayments(this.deps.store, network, index).catch(() => new Set<string>());
@@ -788,7 +793,8 @@ const DREP_KIND = {
  * Every pool the wallet reads is named so (chunk 34): `mixBox` is the classic
  * pool's mix box, or every pool's. A box spent into a Seedelf with the
  * account's money beside it is a box it paid to bring back ("lovejoin-back-
- * paid", the escape hatch); and one that left the `lovejoin` NFT at
+ * paid", the escape hatch), on the device that paid too, whose private
+ * history has the box's way back; and one that left the `lovejoin` NFT at
  * Lovejoin's holder, paid by the account, started a pool ("lovejoin-launch").
  */
 export function describe(
@@ -850,8 +856,12 @@ export function describe(
                 ? "lovejoin-back-paid"
                 : undefined
             : undefined;
-    const kind: ActivityEntry["kind"] = mine
-      ? mine.kind
+    // What this device sent is named as its private history has it, but for a box the account paid to bring back: that
+    // entry is the box's way into the private balance ("Back from Lovejoin"), and this row is what the account did,
+    // as a device without it reads it from the transaction (1.6.0's release review, 318-worker#2).
+    const named = mine?.kind === "lovejoin-withdraw" && lovejoin === "lovejoin-back-paid" ? undefined : mine;
+    const kind: ActivityEntry["kind"] = named
+      ? named.kind
       : collateral.has(tx.tx_hash)
         ? "collateral"
       : lovejoin
@@ -876,14 +886,14 @@ export function describe(
     // already in hand, no request (chunk 23's review, A-1: "where did my 100 ₳ go?" had no answer). Never the mix
     // box: who's beside it is.
     const counterparts =
-      mine || (kind !== "sent" && kind !== "received")
+      named || (kind !== "sent" && kind !== "received")
         ? []
         : [
             ...new Set(
               (kind === "sent" ? tx.outputs : tx.inputs).filter((o) => !ours(o) && !atBox(o)).map((o) => o.payment_addr.bech32),
             ),
           ];
-    const who = mine?.detail ? { detail: mine.detail, ...(mine.more ? { more: mine.more } : {}) } : counterparts.length ? several(counterparts) : {};
+    const who = named?.detail ? { detail: named.detail, ...(named.more ? { more: named.more } : {}) } : counterparts.length ? several(counterparts) : {};
     const entry: ActivityEntry = {
       txHash: tx.tx_hash,
       at: tx.tx_timestamp * 1000,
@@ -893,7 +903,7 @@ export function describe(
       tokens: moved.length,
       ...(spent ? { fee: tx.fee } : {}),
       ...who,
-      ...(mine?.session !== undefined ? { session: mine.session } : {}),
+      ...(named?.session !== undefined ? { session: named.session } : {}),
       ...(moved.length
         ? {
             assets: moved.map(([key, q]) => {

@@ -17,6 +17,7 @@ import { useState } from "react";
 
 import type { PendingTx } from "../../shared/rpc";
 import { dateLocale, type I18nKey, t, useT } from "../../i18n";
+import { useAmounts } from "../preferences";
 import { TxBanner } from "./TxBanner";
 
 /**
@@ -230,7 +231,16 @@ export function PendingBanner({
   onCheck?: () => Promise<void> | void;
 }) {
   const tr = useT();
-  const what = tr(SENT[pending.kind]);
+  const amounts = useAmounts();
+  // A Bootstrap from the public account goes as a mix's kind, watched as one, but makes no mixes, and its boxes stay
+  // held in the pool until brought back by hand: it said "Mixes into Lovejoin", then that they were on their way to
+  // the private balance (1.6.0's release review, 318-worker#0). Every title below names it by `what`.
+  const bootstrap = pending.kind === "lovejoin-mix" && !!pending.bootstrap;
+  const what = tr(bootstrap ? "pending.sent.lovejoin_bootstrap" : SENT[pending.kind]);
+  // Its boxes, counted, so a mix's or a Bootstrap's one box isn't "them"; plural, as it was, for a watch from before
+  // the count (1.6.0's review of the fixes). Plural too while balances are hidden, as every count of boxes is then: one
+  // box says 10 ₳ in the classic pool (useAmounts' count; the last look, LW-2).
+  const boxes = pending.kind === "lovejoin-mix" ? { count: amounts.hidden ? 2 : (pending.boxes ?? 2) } : undefined;
   const shared = {
     network: pending.network,
     // A chain through Lovejoin: its first transaction, the one its review showed and the first to land, until the
@@ -274,7 +284,7 @@ export function PendingBanner({
         txHash={pending.txHash}
         firstOf={undefined}
         state="done"
-        title={tr(CONFIRMED[pending.kind])}
+        title={tr(bootstrap ? "pending.confirmed.lovejoin_bootstrap" : CONFIRMED[pending.kind], boxes)}
         detail={partsLine}
         onDismiss={watching ? undefined : onDismiss}
       />

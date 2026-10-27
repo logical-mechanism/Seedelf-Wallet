@@ -10,11 +10,14 @@
 //
 // Settings opens it, and so do Home's Public tab and Lovejoin's mix from the
 // public account while there's none (the owner, 2026-10-14). From those, the
-// payment goes to Home's banner, as every payment sent from Home does.
-// From Settings it waits here, asking about it as Home would: Settings
-// replaces Home, whose watch stops, and the last reading only gives way to a
-// new one once the worker sees the payment land (pending.ts), so the page
-// said "waiting" until Home was opened.
+// payment goes to Home's banner, as every payment sent from Home does, and
+// Home's watch follows it: the page, opened again there while it waits, reads
+// the status alone (lookAgain). From Settings it waits here, asking about it
+// as Home would: Settings replaces Home, whose watch stops, and the last
+// reading only gives way to a new one once the worker sees the payment land
+// (pending.ts), so the page said "waiting" until Home was opened. A payment
+// still waited for 10 minutes on may have been dropped: the page offers to pay
+// it again anyway (WaitingFoot).
 
 import { useCallback, useEffect, useState } from "react";
 import { useT } from "../../i18n";
@@ -32,13 +35,71 @@ import { useNetwork } from "../network";
 /** How often the page asks about its payment while it waits: Home's pace for a sent transaction. */
 const WATCH_EVERY_MS = 15_000;
 
+/**
+ * One look at the payment the page waits for, `txHash`: the status read again, or nothing while it's on its way.
+ * From Settings it asks about the payment first, as Home would. Opened in place (`inPlace`), Home stays under it and
+ * its watch asks, then reads the balances again once it lands, so the page reads the status alone: the worker tells
+ * only the first to ask of a landing, and when the page was first, Home held every payment for 10 minutes with its
+ * banner on "sent" (1.6.0's release review, 309#0).
+ */
+export async function lookAgain(ask: typeof call, txHash: string, inPlace: boolean): Promise<CollateralStatus | undefined> {
+  if (!inPlace) {
+    const p = await ask("pending-tx", {});
+    if (p?.txHash === txHash && p.confirmations === null && !p.dropped) return undefined;
+  }
+  return ask("collateral", {});
+}
+
+/**
+ * The page's foot while its payment waits: Done, and once it's `late`, a payment again, the user's choice. A payment a
+ * mempool dropped is still waited for while it can land, up to two hours, and Set collateral was gone all that while,
+ * with public mixes and anything else a collateral backs (1.6.0's review of the fixes, 309#1's leftover). It pays what
+ * Set collateral pays, and refuses nothing; `blocked` says why it can't now, as Set collateral's does. Exported for its
+ * test.
+ */
+export function WaitingFoot({
+  late,
+  busy,
+  blocked,
+  onDone,
+  onAgain,
+}: {
+  late?: boolean;
+  busy: boolean;
+  blocked?: string;
+  onDone: () => void;
+  onAgain: () => void;
+}) {
+  const t = useT();
+  return (
+    <>
+      <button type="button" className="primary" onClick={onDone}>
+        {t("common.done")}
+      </button>
+      {late && (
+        <>
+          <button type="button" className="secondary" onClick={onAgain} disabled={busy || !!blocked} data-testid="collateral-again">
+            {busy ? t("common.building") : t("collateral.payAgain")}
+          </button>
+          <p className="note foot-note" data-testid="collateral-again-note">
+            {blocked ?? t("collateral.warn.bothLand")}
+          </p>
+        </>
+      )}
+    </>
+  );
+}
+
 export function Collateral({
   onBack,
   onSent,
   blocked,
 }: {
   onBack: () => void;
-  /** Opened from Home or a dApp page: the payment, once sent, goes to Home's banner rather than waiting here. */
+  /**
+   * Opened from Home or a dApp page: the payment, once sent, goes to Home's banner rather than waiting here, and Home's
+   * watch, not the page, asks about one on its way.
+   */
   onSent?: (pending: PendingTx) => void;
   /** Why no payment can be made now: Home's one at a time. Taking a 5 ₳ UTxO the account holds sends nothing. */
   blocked?: string;
@@ -74,17 +135,16 @@ export function Collateral({
 
   // While its payment is on its way: asked about at once and every 15 s, the question Home asks, and the status read
   // again once it has landed or was let go, or once the worker watches another (the owner, 2026-10-14: it showed
-  // "waiting" long after the payment was on chain).
+  // "waiting" long after the payment was on chain). Opened in place, the status alone, as Home's watch asks.
   const waitingFor = status?.state === "waiting" ? status.txHash : undefined;
+  const inPlace = !!onSent;
   useEffect(() => {
     if (!waitingFor) return;
     let live = true;
     const look = async () => {
       try {
-        const p = await call("pending-tx", {});
-        if (p?.txHash === waitingFor && p.confirmations === null && !p.dropped) return;
-        const now = await call("collateral", {});
-        if (live) setStatus(now);
+        const now = await lookAgain(call, waitingFor, inPlace);
+        if (live && now) setStatus(now);
       } catch {
         // Koios hiccup: asked again on the next tick.
       }
@@ -95,7 +155,7 @@ export function Collateral({
       live = false;
       clearInterval(timer);
     };
-  }, [waitingFor]);
+  }, [waitingFor, inPlace]);
 
   const set = () =>
     run(async () => {
@@ -187,11 +247,7 @@ export function Collateral({
         testId="collateral-waiting"
       />
     );
-    foot = (
-      <button type="button" className="primary" onClick={onBack}>
-        {t("common.done")}
-      </button>
-    );
+    foot = <WaitingFoot late={status.late} busy={busy} blocked={blocked} onDone={onBack} onAgain={set} />;
   } else {
     body = (
       <>

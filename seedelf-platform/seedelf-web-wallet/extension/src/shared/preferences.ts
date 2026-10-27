@@ -137,13 +137,15 @@ export interface Preferences {
    */
   lovejoinReturns: boolean;
   /**
-   * With `lovejoinReturns`, the session's 5 ₳ collateral goes into a 5 ₳
-   * Lovejoin pool as a box of the wallet's, rather than back with the rest,
-   * where it would carry the session's history (the owner, 2026-10-22). Only
-   * where such a pool is shown; nobody mixes the box for the session.
+   * The session's 5 ₳ collateral is mixed once in a 5 ₳ Lovejoin pool as the
+   * session comes back, rather than back with the rest, where it would carry
+   * the session's history (the owner, 2026-10-22 and 2026-10-23): a deposit
+   * into a box, then one mix under giveme.my's collateral. Wherever the return
+   * goes through Lovejoin, whatever `lovejoinReturns` says (a mix from the
+   * Lovejoin tile's always does), and only where such a pool is shown.
    */
   lovejoinCollateral: boolean;
-  /** Lovejoin's fan-out for a session's return: 1, 2 or 3 waves deep, three wide. */
+  /** Lovejoin's fan-out for a session's return: 1, 2 or 3 waves deep, `lovejoinWidth` boxes a mix. */
   lovejoinDepth: LovejoinDepth;
   /** Lovejoin: the range each box's wait is drawn from. */
   lovejoinDelay: LovejoinDelay;

@@ -155,12 +155,14 @@ export interface SpendingAccount {
  * To spend from the account (a move-in, an account-paid mint, a send, a
  * staking transaction): the UTxOs that may be spent, fresh, the collateral,
  * and the protocol parameters. The stake key is read too for `stake`, or
- * when the user spends rewards.
+ * when the user spends rewards. `params`: the protocol parameters, when the
+ * caller read them already for the same review (a pool's start, 1.6.0's
+ * release review, 318-worker#3).
  */
 export async function readAccount(
   deps: AccountDeps & { coins: CoinControlService; preferences?: PreferencesService },
   network: NetworkName,
-  { stake: readStake = false } = {},
+  { stake: readStake = false, params: known }: { stake?: boolean; params?: Record<string, unknown> } = {},
 ): Promise<SpendingAccount> {
   const { wasm, wallet } = deps;
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
@@ -175,7 +177,7 @@ export async function readAccount(
   const koios = deps.koios(network);
   const [{ utxos }, params, stake] = await Promise.all([
     readAccountUtxos(deps, network, spent),
-    koios.epochParams(),
+    known ?? koios.epochParams(),
     readStake || spendRewards ? koios.accountInfo(stakeAddress) : undefined,
   ]);
   const { spendable, collateral } = await deps.coins.account(network, utxos);

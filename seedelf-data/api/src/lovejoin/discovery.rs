@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use super::crowd::{self, Crowd};
-use super::db::{self, Found};
+use super::db::{self, Found, Gathered};
 use super::standard::{self, Candidate, Listed, Pool, Verdict};
 use super::templates::{self, HOLDER_HASH, NFT_NAME};
 use crate::chain::Chain;
@@ -39,12 +39,12 @@ const READ_AGAIN: Duration = Duration::from_secs(3600);
 /// due for every request then.
 const READ_ON_TRIES: usize = 3;
 
-/// The holder's candidates read so far: by the block at slot `upto`, with
-/// output ids up to `high`.
+/// The holder's candidates read so far: by the block at slot `upto`, of
+/// every output there up to `high`, a candidate or not.
 struct Seen {
     found: Vec<Found>,
     upto: i64,
-    high: i64,
+    high: Gathered,
     read: Instant,
     /// Which read from the start this is: a read on joins only the one it
     /// read on from (1.6.0's release review, DATA-3).
@@ -141,8 +141,8 @@ impl Discovery {
     /// test's chain.
     async fn found_with<R, F>(&self, at: i64, read: R) -> Result<Vec<Found>>
     where
-        R: Fn(i64, i64) -> F,
-        F: Future<Output = Result<Vec<Found>>>,
+        R: Fn(i64, Gathered) -> F,
+        F: Future<Output = Result<(Vec<Found>, Gathered)>>,
     {
         let answer = |seen: &Option<Seen>| -> Vec<Found> {
             seen.as_ref()
@@ -163,19 +163,26 @@ impl Discovery {
                         }
                         (Some(s.generation), s.high)
                     }
-                    _ => (None, 0),
+                    _ => (None, Gathered::default()),
                 }
             };
-            let newer = read(at, high).await?;
+            let (newer, gathered) = read(at, high).await?;
             let mut seen = self.seen.lock().expect("seen lock");
             match (from, seen.as_mut()) {
                 // Read on: what's above the ids kept, whoever read on meanwhile. A later block's
                 // outputs have higher ids than an earlier one's, so nothing between is missed.
                 (Some(generation), Some(s)) if s.generation == generation => {
                     let known = s.high;
-                    s.found.extend(newer.into_iter().filter(|f| f.id > known));
+                    s.found
+                        .extend(newer.into_iter().filter(|f| f.id > known.id));
                     // Never below what was read: what's refused is dropped from `found`, and is above what's left.
-                    s.high = s.found.iter().map(|f| f.id).fold(known, i64::max);
+                    // And as far as the read gathered, candidates or not, so an output that holds no `lovejoin`
+                    // token isn't gathered again at the next cursor (1.6.0's release review, 321-lj-rust-data#0).
+                    s.high = s
+                        .found
+                        .iter()
+                        .map(Gathered::of)
+                        .fold(known.max(gathered), Gathered::max);
                     s.upto = s.upto.max(at);
                 }
                 // What it read on from was replaced meanwhile by a read from the start, perhaps by an
@@ -186,7 +193,7 @@ impl Discovery {
                 // The first read, or the hourly one: it stands alone.
                 (None, _) => {
                     *seen = Some(Seen {
-                        high: newer.iter().map(|f| f.id).max().unwrap_or(0),
+                        high: newer.iter().map(Gathered::of).fold(gathered, Gathered::max),
                         found: newer,
                         upto: at,
                         read: Instant::now(),
@@ -371,15 +378,32 @@ mod tests {
             .collect()
     }
 
-    /// db-sync over `chain`: by the block at slot `at`, the ids above `after`.
-    fn read_of(chain: &[Found]) -> impl Fn(i64, i64) -> std::future::Ready<Result<Vec<Found>>> {
+    /// db-sync over the holder's candidates `chain` and `others`, outputs there
+    /// that hold no `lovejoin` token, each id its block's too: by the block at
+    /// slot `at`, the candidates above `after`, and how far it gathered.
+    fn read_among(
+        chain: &[Found],
+        others: &[i64],
+    ) -> impl Fn(i64, Gathered) -> std::future::Ready<Result<(Vec<Found>, Gathered)>> {
         move |at, after| {
-            std::future::ready(Ok(chain
+            let above = |id: i64| id * 20 <= at && id > after.id && id > after.tx;
+            let found = chain.iter().filter(|f| above(f.id)).cloned().collect();
+            let gathered = chain
                 .iter()
-                .filter(|f| f.slot <= at && f.id > after)
-                .cloned()
-                .collect()))
+                .map(|f| f.id)
+                .chain(others.iter().copied())
+                .filter(|id| above(*id))
+                .map(|id| Gathered { id, tx: id })
+                .fold(after, Gathered::max);
+            std::future::ready(Ok((found, gathered)))
         }
+    }
+
+    /// db-sync over `chain`, where every output at the holder is a candidate.
+    fn read_of(
+        chain: &[Found],
+    ) -> impl Fn(i64, Gathered) -> std::future::Ready<Result<(Vec<Found>, Gathered)>> {
+        read_among(chain, &[])
     }
 
     fn ids(found: &[Found]) -> Vec<i64> {
@@ -457,12 +481,38 @@ mod tests {
         }
         let afters = std::cell::RefCell::new(Vec::new());
         for at in [1100, 1200, 1300] {
-            let read = |at, after| {
-                afters.borrow_mut().push(after);
+            let read = |at, after: Gathered| {
+                afters.borrow_mut().push(after.id);
                 read_of(&chain)(at, after)
             };
             discovery.found_with(at, read).await.unwrap();
         }
         assert_eq!(afters.into_inner(), [48, 48, 48]);
+    }
+
+    /// 1.6.0's release review, 321-lj-rust-data#0: a read on went on from the
+    /// highest candidate, so every output above it that holds no `lovejoin`
+    /// token (a launch's two scripts, anything anyone pays the holder) was
+    /// gathered and joined again at every cursor, until a later candidate.
+    #[tokio::test]
+    async fn a_read_on_goes_on_from_the_highest_output_gathered() {
+        // Candidates at 10 and 48; the launch's two scripts at 49 and 50, and a payment at 52.
+        let chain = chain_of(&[10, 48]);
+        let others = [49, 50, 52];
+        let discovery = Discovery::default();
+        discovery
+            .found_with(1000, read_among(&chain, &others))
+            .await
+            .unwrap();
+        let afters = std::cell::RefCell::new(Vec::new());
+        for at in [1100, 1200] {
+            let read = |at, after: Gathered| {
+                afters.borrow_mut().push((after.id, after.tx));
+                read_among(&chain, &others)(at, after)
+            };
+            let found = discovery.found_with(at, read).await.unwrap();
+            assert_eq!(ids(&found), [10, 48]);
+        }
+        assert_eq!(afters.into_inner(), [(50, 50), (52, 52)]);
     }
 }

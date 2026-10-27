@@ -10,7 +10,10 @@
 //! ([`verify_pool`]). One prover serves both: only the value's bytes differ.
 //!
 //! - **Deposit:** a key account locks boxes at `mix_box`, each with an
-//!   inline datum `{a, b}`. Nothing validates a deposit. The wallet's boxes are
+//!   inline datum `{a, b}`. Nothing validates a deposit, so a token pool's
+//!   reads the pool's reference UTxO: the ledger then takes it only into a
+//!   pool that's on chain (1.6.0's release review, 317-wallet#0). The
+//!   classic pool's reads nothing, as 1.5.0's did. The wallet's boxes are
 //!   a Seedelf register's shape (`b = [x]·a`), owned by the Seedelf key, in
 //!   every pool: one scalar across pools leaves boxes unlinkable under DDH,
 //!   as it does across one pool's boxes.
@@ -92,6 +95,24 @@ pub use value::{BoxToken, BoxValue};
 /// The unit datum, `Constr 0 []`: `mix_box`'s spend redeemer (it reads none).
 const UNIT: [u8; 3] = hex!("d87980");
 
+/// How often this thread has derived a pool's scripts ([`templates::derive`])
+/// and measured a box's way back ([`usable`], [`comes_back`]): what a test of
+/// a launch counts (1.6.0's release review, 314-core#0).
+#[cfg(test)]
+pub(crate) mod counted {
+    use std::cell::Cell;
+    use std::thread::LocalKey;
+
+    thread_local! {
+        pub(crate) static DERIVES: Cell<usize> = const { Cell::new(0) };
+        pub(crate) static MEASURES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn count(counter: &'static LocalKey<Cell<usize>>) {
+        counter.with(|c| c.set(c.get() + 1));
+    }
+}
+
 /// Which of Lovejoin's scripts a pool runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Version {
@@ -113,8 +134,8 @@ pub struct Protocol {
     pub denom: u64,
     pub mix_box_hash: [u8; 28],
     pub mix_logic_hash: [u8; 28],
-    /// The pool's reference UTxO, and its scripts' reference UTxOs where
-    /// they're read by reference.
+    /// The pool's reference UTxO first, then its scripts' reference UTxOs
+    /// where they're read by reference.
     pub references: Vec<Resolved>,
     /// The reference scripts' size, for the reference-script fee, read from
     /// `references`.
@@ -272,6 +293,35 @@ impl Protocol {
             .iter()
             .map(|r| Input::new(Hash::new(r.tx_hash), r.index))
             .collect()
+    }
+
+    /// What a deposit into the pool reads: a token pool's reference UTxO.
+    /// A pool is verified offline, from its seed, so one a list names may
+    /// never have been launched, or its launch rolled back; nothing validates
+    /// a deposit, and boxes paid into such a pool were locked for good, since
+    /// every mix and withdraw reads this UTxO. Read by the deposit too, as
+    /// Lovejoin's own deposits read it, it has the ledger refuse such a
+    /// deposit instead (1.6.0's release review, 317-wallet#0). It holds no
+    /// script ([`candidate`] refuses one), so it costs a deposit its bytes
+    /// alone, 41 of them: 1,804 lovelace at 44 a byte. None for the classic
+    /// pool, whose deposits stay 1.5.0's, byte for byte.
+    fn deposit_reference(&self) -> Result<Option<Input>> {
+        match self.version {
+            Version::Classic => Ok(None),
+            Version::TokenV1 => {
+                let reference = self
+                    .references
+                    .first()
+                    .context("A token pool has no reference UTxO")?;
+                if reference_script_size(&reference.output)? > 0 {
+                    bail!("A token pool's reference UTxO carries a script");
+                }
+                Ok(Some(Input::new(
+                    Hash::new(reference.tx_hash),
+                    reference.index,
+                )))
+            }
+        }
     }
 }
 
@@ -604,8 +654,9 @@ type BoxOut = (([u8; 48], [u8; 48]), BoxValue, Address);
 /// whose ADA and tokens go into their own pools): for each `(pool, owners)`,
 /// one box per register at that pool's `mix_box`, holding its box value. The
 /// outputs go each pool's boxes in turn, then the token change, then the ADA
-/// change, last; [`Deposit::boxes`] are in that order. With one pool, it's
-/// [`deposit_from`]'s transaction exactly.
+/// change, last; [`Deposit::boxes`] are in that order. It reads the reference
+/// UTxO of each token pool a box goes into, so the ledger refuses it if one
+/// isn't on chain. With one pool, it's [`deposit_from`]'s transaction exactly.
 pub fn deposit_across(
     params: &ProtocolParameters,
     legs: &[(&Protocol, &[Register])],
@@ -630,11 +681,19 @@ pub fn deposit_across(
     };
     // Each box: its datum, what it holds, and where.
     let mut boxed_outputs: Vec<BoxOut> = Vec::new();
+    // What the deposit reads: each token pool a box goes into, once.
+    let mut reads: Vec<Input> = Vec::new();
     for (protocol, owners) in legs {
         let value = protocol.box_value();
         let address = protocol.mix_box_address();
         for owner in *owners {
             boxed_outputs.push((datum_of(owner)?, value.clone(), address.clone()));
+        }
+        if !owners.is_empty()
+            && let Some(reference) = protocol.deposit_reference()?
+            && !reads.contains(&reference)
+        {
+            reads.push(reference);
         }
     }
     let total = inputs
@@ -646,6 +705,11 @@ pub fn deposit_across(
         .try_fold(Assets::new(), |sum, h| sum.merge(h.tokens.clone()))?;
     let mut boxed = 0u64;
     for (protocol, owners) in legs {
+        // A leg with no box takes none of its token, which the inputs may not
+        // hold at all (1.6.0's release review, 319-rust#0).
+        if owners.is_empty() {
+            continue;
+        }
         let box_value = protocol.box_value();
         boxed = box_value
             .lovelace
@@ -669,16 +733,30 @@ pub fn deposit_across(
     let token_outputs =
         crate::build::change_outputs(params, change_address, kept_lovelace, &kept, DEPOSIT_SHORT)?;
     let least = least_change(params, change_address)?;
-    let (fee, staged) = settle_fee(params, signers, |fee| {
-        // Core's typed shortfall (`build::is_short`), so a caller can pick
-        // another UTxO and build again (1.6.0's release review, MONEY-5).
-        let change = total
-            .checked_sub(boxed + kept_lovelace + fee)
+    // The ADA change after `fee`. Short of its least, it's core's typed
+    // shortfall (`build::is_short`), so a caller can pick another UTxO and
+    // build again (1.6.0's release review, MONEY-5). What's paid out can pass
+    // what a u64 holds, from a pool's box ADA, which no inputs hold: refused in
+    // words, where the WebAssembly build wrapped it and built a deposit that
+    // can't balance (1.6.0's release review, 314-core#1).
+    let change_at = |fee: u64| -> Result<u64> {
+        let paid = boxed
+            .checked_add(kept_lovelace)
+            .and_then(|p| p.checked_add(fee))
+            .context(MORE_THAN_THERE_IS)?;
+        Ok(total
+            .checked_sub(paid)
             .filter(|c| *c >= least)
-            .ok_or(DEPOSIT_SHORT)?;
+            .ok_or(DEPOSIT_SHORT)?)
+    };
+    let (fee, staged) = settle_fee(params, signers, |fee| {
+        let change = change_at(fee)?;
         let mut tx = StagingTransaction::new();
         for held in inputs {
             tx = tx.input(held.input());
+        }
+        for reference in &reads {
+            tx = tx.reference_input(reference.clone());
         }
         for ((a, b), value, address) in &boxed_outputs {
             tx = tx.output(
@@ -714,7 +792,7 @@ pub fn deposit_across(
         .collect();
     let change = Coin {
         utxo: outputs.last().context("The deposit has no change")?.clone(),
-        lovelace: total - boxed - kept_lovelace - fee,
+        lovelace: change_at(fee)?,
     };
     Ok(Deposit {
         tx,
@@ -988,7 +1066,7 @@ fn mix_with(
         Ok((budgets, used))
     };
 
-    let draft = stage(1_000_000, None)?;
+    let draft = stage(MIX_DRAFT_FEE, None)?;
     let (budgets, used) = measure(&draft)?;
     let total = used
         .iter()
@@ -1000,7 +1078,7 @@ fn mix_with(
         bail!("Mixing {n} boxes at once needs more computation than a transaction may use");
     }
     let script_fee = reference_script_fee(params, protocol.script_bytes)?;
-    let mut fee = 1_000_000;
+    let mut fee = MIX_DRAFT_FEE;
     for _ in 0..5 {
         let tx = stage(fee, Some(&budgets))?;
         let needed = price(params, signed_size(&tx, signers)?, &used, script_fee);
@@ -1591,17 +1669,97 @@ pub fn mix_fee_estimate(protocol: &Protocol, width: usize) -> u64 {
 const DEPOSIT_RESERVE: u64 = 1_500_000;
 
 /// What a session holds beside its boxes for its 5 ₳ collateral to be mixed
-/// on its way into a 5 ₳ pool (the owner, 2026-10-23, [`collateral_tail`]):
-/// the deposit that boxes it, about 0.18 ₳; its one mix under giveme.my's
-/// collateral, planned on [`MIX_FEE_ESTIMATE`]; and the return after it, a
-/// sweep rather than merged (the collateral a merge puts up is in the box by
-/// then), whose Seedelf output must hold its least. Set aside before the
-/// session's boxes are counted; what isn't spent comes back with the change.
+/// on its way into a 5 ₳ pool where its return goes through a chain (the
+/// owner, 2026-10-23, [`collateral_tail`]): the deposit that boxes it, 0.18 ₳,
+/// and its one mix under giveme.my's collateral, planned on
+/// [`MIX_FEE_ESTIMATE`] and drafted at [`MIX_DRAFT_FEE`] with its change's
+/// least kept. The return after them is a sweep rather than merged (the
+/// collateral a merge puts up is in the box by then), whose Seedelf output
+/// must hold its least, which this alone doesn't cover: on a chain, what
+/// [`DEPOSIT_RESERVE`] leaves makes it up, about 0.29 ₳ over measured for one
+/// box (1.6.0's release review, 323-rust#1). A return that comes back directly
+/// with nothing else left to pay takes [`direct_tail_reserve`]. Set aside
+/// before the session's boxes are counted; what isn't spent comes back with
+/// the change.
 pub const COLLATERAL_TAIL_RESERVE: u64 = 1_500_000;
 
-/// What a box costs at `depth`: the box, and every mix of its fan-out.
-fn per_box(depth: u32, denom: u64) -> u64 {
-    denom + mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE
+/// The fee a mix is drafted at, to be measured ([`mix_with`]): its payer must
+/// keep its change's least after it, so what pays a mix holds this and that.
+const MIX_DRAFT_FEE: u64 = 1_000_000;
+
+/// A collateral tail's deposit, signed: the collateral and one UTxO paying,
+/// the 5 ₳ pool's reference UTxO, the box and the change. 454 bytes measured
+/// (1.6.0's release review), and room for a second UTxO paying.
+const TAIL_DEPOSIT_BYTES: u64 = 500;
+
+/// The sweep after a direct return's collateral tail, signed: the mix's change
+/// into one Seedelf output. 345 bytes measured.
+const TAIL_SWEEP_BYTES: u64 = 400;
+
+/// What a session holds of ADA alone beside its 5 ₳ collateral for that
+/// collateral to be mixed on its way into a 5 ₳ pool ([`collateral_tail`])
+/// where its return comes back directly with nothing else left at its account
+/// to pay (1.6.0's release review, 323-rust#1): the deposit, the mix (planned
+/// on [`MIX_FEE_ESTIMATE`], drafted at [`MIX_DRAFT_FEE`] with its change's
+/// least kept), and the sweep after it, drafted at 0.2 ₳ first, whose Seedelf
+/// output must hold its least. Priced from `params`, rounded up to a tenth of
+/// an ADA: 2.8 ₳ at 4,310 lovelace a byte, where the least that builds is
+/// 2.663 ₳ measured, and 3.6 ₳ at 6,465, where it's 3.392 ₳. Beside a UTxO
+/// that carries the sweep's least, a token's, less does: 2.154 ₳ at 4,310.
+pub fn direct_tail_reserve(params: &ProtocolParameters) -> Result<u64> {
+    let deposit = linear_fee(params, TAIL_DEPOSIT_BYTES);
+    let sweep = linear_fee(params, TAIL_SWEEP_BYTES).max(crate::build::FIRST_DRAFT_FEE);
+    // The mix's change goes back to the session's own key address, whose least
+    // is a base address's, as this one's.
+    let change = least_change(params, &crate::address::dummy_base_address())?;
+    let seedelf = crate::build::minimum_seedelf_payment(params, &Assets::new())?;
+    let need = deposit + (MIX_DRAFT_FEE + change).max(MIX_FEE_ESTIMATE + sweep + seedelf);
+    Ok(need.div_ceil(100_000) * 100_000)
+}
+
+/// What a Bootstrap's session, paid from the private balance, holds beside
+/// [`DEPOSIT_RESERVE`] for its way back (1.6.0's release review, 318-rust#0).
+/// It puts up no collateral (the owner, 2026-10-23), so its return is a sweep
+/// of the deposit's change alone into the wallet contract, never merged: its
+/// Seedelf output must hold its least, 1.46 ₳ at today's 4,310 lovelace a
+/// byte, after the sweep's fee, about 0.17 ₳ though priced from a first draft
+/// of 0.2 ₳. [`DEPOSIT_RESERVE`] less the deposit's fee (0.17 ₳ for one box,
+/// 0.8 ₳ for one deposit's most of 96, about as much for a token pool's 64)
+/// leaves too little for that, so this pays the rest, with about 0.5 ₳ over
+/// at the largest deposit, in the classic pool or a token pool, for the
+/// parameters to move. [`bootstrap_most`] builds both with it. What the sweep
+/// doesn't spend comes back with it. Never in [`funding_for`], which plans
+/// every mix and 1.5.0's seeds.
+pub const BOOTSTRAP_BACK_RESERVE: u64 = 1_500_000;
+
+/// Why a sum on a pool's box ADA is refused: it's past what a u64 holds,
+/// 18.4 trillion ₳, so more than there is. A pool's box ADA is read from its
+/// datum, which allows any amount up to that, and the WebAssembly build
+/// doesn't check overflow: unchecked, such a sum wrapped there to a small,
+/// false figure, a Bootstrap of one box quoted 1.5 ₳ (1.6.0's release review,
+/// 314-core#1).
+pub const MORE_THAN_THERE_IS: &str = "These boxes cost more ADA than there is";
+
+/// How many boxes of `per` each `spare` lovelace pays for, the deposit's
+/// reserve kept back: none when a box costs more than a u64 holds.
+fn affordable(spare: u64, per: Option<u64>) -> usize {
+    per.filter(|per| *per > 0).map_or(0, |per| {
+        usize::try_from(spare.saturating_sub(DEPOSIT_RESERVE) / per).unwrap_or(usize::MAX)
+    })
+}
+
+/// What pays for `boxes` boxes of `per` each, and the deposit's reserve:
+/// refused when that's more than a u64 holds ([`MORE_THAN_THERE_IS`]).
+fn funding(boxes: usize, per: Option<u64>) -> Result<u64> {
+    per.and_then(|per| per.checked_mul(boxes as u64))
+        .and_then(|cost| cost.checked_add(DEPOSIT_RESERVE))
+        .context(MORE_THAN_THERE_IS)
+}
+
+/// What a box costs at `depth`: the box, and every mix of its fan-out. None
+/// past what a u64 holds.
+fn per_box(depth: u32, denom: u64) -> Option<u64> {
+    denom.checked_add(mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE)
 }
 
 /// What mixing one of the wallet's boxes again costs at `depth`: every mix of
@@ -1613,9 +1771,12 @@ fn per_box_again(depth: u32) -> u64 {
 /// [`per_box`] in `protocol`'s pool, `width` boxes a mix: its box's ADA, and
 /// every mix of its fan-out at that pool's estimate. The classic pool's at
 /// three is [`per_box`]'s. A token pool's token isn't counted: it's the
-/// token's, not ADA.
-pub fn per_box_in(protocol: &Protocol, depth: u32, width: usize) -> u64 {
-    protocol.denom + per_box_again_in(protocol, depth, width)
+/// token's, not ADA. Refused past what a u64 holds ([`MORE_THAN_THERE_IS`]).
+pub fn per_box_in(protocol: &Protocol, depth: u32, width: usize) -> Result<u64> {
+    protocol
+        .denom
+        .checked_add(per_box_again_in(protocol, depth, width))
+        .context(MORE_THAN_THERE_IS)
 }
 
 /// [`per_box_again`] in `protocol`'s pool, `width` boxes a mix.
@@ -1625,12 +1786,12 @@ pub fn per_box_again_in(protocol: &Protocol, depth: u32, width: usize) -> u64 {
 
 /// [`boxes_affordable`] in `protocol`'s pool, `width` boxes a mix.
 pub fn boxes_affordable_in(spare: u64, protocol: &Protocol, depth: u32, width: usize) -> usize {
-    (spare.saturating_sub(DEPOSIT_RESERVE) / per_box_in(protocol, depth, width)) as usize
+    affordable(spare, per_box_in(protocol, depth, width).ok())
 }
 
 /// [`funding_for`] in `protocol`'s pool, `width` boxes a mix.
-pub fn funding_for_in(boxes: usize, protocol: &Protocol, depth: u32, width: usize) -> u64 {
-    DEPOSIT_RESERVE + boxes as u64 * per_box_in(protocol, depth, width)
+pub fn funding_for_in(boxes: usize, protocol: &Protocol, depth: u32, width: usize) -> Result<u64> {
+    funding(boxes, per_box_in(protocol, depth, width).ok())
 }
 
 /// [`again_affordable`] in `protocol`'s pool, `width` boxes a mix.
@@ -1691,7 +1852,14 @@ pub fn plan_across(
                     Some(t) => usize::try_from(leg.held / u128::from(t.quantity.max(1)))
                         .unwrap_or(usize::MAX),
                 };
-                let per = per_box_in(leg.protocol, depth, width);
+                // A box that costs more than a u64 holds is one no ADA pays
+                // for (1.6.0's release review, 314-core#1).
+                let Some(per) = per_box_in(leg.protocol, depth, width)
+                    .ok()
+                    .filter(|per| *per > 0)
+                else {
+                    return 0;
+                };
                 let n = usize::try_from(left / per)
                     .unwrap_or(usize::MAX)
                     .min(by_token)
@@ -1701,10 +1869,16 @@ pub fn plan_across(
             })
             .collect()
     };
-    // What the boxes leave of `tokens` when each leg takes `boxes`.
+    // What the boxes leave of `tokens` when each leg takes `boxes`. A leg with
+    // no box takes none of its token, which the UTxOs may not hold at all:
+    // taken anyway, beside another leg's token, it failed the whole plan
+    // (1.6.0's release review, 319-rust#0).
     let kept = |boxes: &[usize]| -> Result<Assets> {
         let mut kept = tokens.clone();
         for (leg, n) in legs.iter().zip(boxes) {
+            if *n == 0 {
+                continue;
+            }
             if let Some((token, quantity)) = leg.protocol.box_value().token_total(*n)? {
                 kept = kept
                     .separate(Assets::new().add(Asset::new(
@@ -1741,24 +1915,28 @@ pub fn plan_across(
 /// How many boxes `spare` lovelace pays for, with every mix of a `depth`-deep
 /// fan-out and the deposit: none if it can't pay for one.
 pub fn boxes_affordable(spare: u64, depth: u32, denom: u64) -> usize {
-    (spare.saturating_sub(DEPOSIT_RESERVE) / per_box(depth, denom)) as usize
+    affordable(spare, per_box(depth, denom))
 }
 
 /// What pays for `boxes` boxes at `depth` ([`boxes_affordable`]'s plan run
 /// backwards): the boxes, every mix, and the deposit and its change. What
-/// the mixes don't use comes back with the change.
-pub fn funding_for(boxes: usize, depth: u32, denom: u64) -> u64 {
-    DEPOSIT_RESERVE + boxes as u64 * per_box(depth, denom)
+/// the mixes don't use comes back with the change. Refused past what a u64
+/// holds ([`MORE_THAN_THERE_IS`]).
+pub fn funding_for(boxes: usize, depth: u32, denom: u64) -> Result<u64> {
+    funding(boxes, per_box(depth, denom))
 }
 
 /// The most boxes, of `most`, a Bootstrap paid from the private balance
 /// puts into `protocol`'s pool under `params`, or none when not one fits.
 /// Its mix session holds one UTxO of [`funding_for`]'s ADA at depth 0 and
-/// the boxes' token, beside a collateral the deposit never spends, so
-/// [`DEPOSIT_RESERVE`] alone pays the deposit's fee and its change's least:
-/// a fee that grows with the boxes (chunk 34's 34d review, 3). Each count is
-/// built ([`deposit_from`]), never estimated, its change at a base address,
-/// as long as a session's is.
+/// [`BOOTSTRAP_BACK_RESERVE`], and the boxes' token, with no collateral (the
+/// owner, 2026-10-23). [`DEPOSIT_RESERVE`] pays the deposit's fee, which
+/// grows with the boxes (chunk 34's 34d review, 3), and what it leaves with
+/// the way back's reserve pays the return, a sweep of the deposit's change
+/// into the wallet contract (1.6.0's release review, 318-rust#0). Each count's
+/// deposit and sweep are built ([`deposit_from`],
+/// [`crate::build::external_sweep`]), never estimated, the change at a base
+/// address, as long as a session's is.
 pub fn bootstrap_most(
     params: &ProtocolParameters,
     protocol: &Protocol,
@@ -1768,6 +1946,9 @@ pub fn bootstrap_most(
     let mut address = vec![if network_flag { 0x00 } else { 0x01 }];
     address.extend([0x5e; 56]);
     let address = Address::from_bytes(&address).map_err(|e| anyhow!("{e}"))?;
+    let session = address.to_bech32().map_err(|e| anyhow!("{e}"))?;
+    let config = get_config(VARIANT, network_flag)?;
+    let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
     // One register for every box: each datum is as long as a fresh one's.
     let owner = Register::create(Scalar::from(4_242_424u64))?;
     let fits = |boxes: usize| -> Result<bool> {
@@ -1781,18 +1962,39 @@ pub fn bootstrap_most(
             // More of the token than one output holds: no deposit of this many.
             Err(_) => return Ok(false),
         };
+        // More ADA than a u64 holds: no funding pays it (1.6.0's release
+        // review, 314-core#1).
+        let Some(lovelace) = funding_for(boxes, 0, protocol.denom)
+            .ok()
+            .and_then(|f| f.checked_add(BOOTSTRAP_BACK_RESERVE))
+        else {
+            return Ok(false);
+        };
         let input = Holding {
             utxo: Resolved {
                 tx_hash: [0x5e; 32],
                 index: 0,
                 output: Vec::new(),
             },
-            lovelace: funding_for(boxes, 0, protocol.denom),
+            lovelace,
             tokens,
         };
         let owners = vec![owner.clone(); boxes];
         // Short of ADA, or over a transaction's size: both grow with the boxes.
-        Ok(deposit_from(params, protocol, &[input], &owners, &address, 1).is_ok())
+        let Ok(deposit) = deposit_from(params, protocol, &[input], &owners, &address, 1) else {
+            return Ok(false);
+        };
+        // Its return: the deposit's change alone (its boxes took every token), swept into the wallet contract
+        // and signed by the session's key, whose Seedelf output must hold its least after the sweep's fee.
+        let change = UtxoResponse {
+            tx_hash: hex::encode(deposit.change.utxo.tx_hash),
+            tx_index: deposit.change.utxo.index,
+            address: session.clone(),
+            value: deposit.change.lovelace.to_string(),
+            ..Default::default()
+        };
+        let key = Hash::new([0x5e; 28]);
+        Ok(crate::build::external_sweep(params, &[change], &owner, &wallet, key).is_ok())
     };
     if most == 0 || !fits(1)? {
         return Ok(0);

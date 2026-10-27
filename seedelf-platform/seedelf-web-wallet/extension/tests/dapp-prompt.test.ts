@@ -149,7 +149,7 @@ describe("who's asking", () => {
 
 describe("a private session's way back, on its funding's review (blind test §9.8, T16)", () => {
   const wayBack = (lovejoin: boolean) =>
-    text(renderToStaticMarkup(createElement(FundingWayBack, { fee: "233208", lovejoin, perBox: "4.1" })));
+    text(renderToStaticMarkup(createElement(FundingWayBack, { fee: "233208", lovejoin, perBox: "4.1", summary: {} })));
 
   it("gives the return's fee as an estimate, and both ways' together with this one's exact", () => {
     const direct = wayBack(false);

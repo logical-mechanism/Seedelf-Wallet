@@ -428,8 +428,11 @@ describe("a Bootstrap's funding (1.6.0's review: bootstrap-cap-vs-funding-parts)
   }
 
   it("stays one transaction, as its cap's deposit has it: never parts its deposit then can't pay", async () => {
-    // Before 1.6.0's review it went in parts here, and a deposit of every part's output near the cap couldn't pay.
-    const t = await spread();
+    // Before 1.6.0's review it went in parts here, and a deposit of every part's output near the cap couldn't pay. Its
+    // one payment, 13 ₳ for a box with its way back (1.6.0's release review, 318-rust#0), takes 33 of these 40 UTxOs of
+    // 0.5 ₳ (as parts would spend them), well past what one transaction spends (about 22), and 20 ₳ pays for it: the
+    // refusal is for its inputs, never for its ADA, whatever the reserve or the fees move by.
+    const t = await spread(40, "500000");
     const sessions = withLovejoin(t);
     const asked = t.collateral.asked.length;
     await expect(sessions.mixOutBuild("preprod", 1, { bootstrap: true })).rejects.toThrow(
@@ -700,7 +703,9 @@ describe("the guards no test exercised (1.6.0's review)", SLOW, () => {
       const answer = await real(url, init);
       return url.endsWith("/submittx") && ++submits === 2 ? new Response("upstream request timeout", { status: 504 }) : answer;
     };
-    await expect(sessions.outSubmit("preprod", out.txHash)).rejects.toThrow(/Koios didn't answer for the last one sent/);
+    // "The server", on preprod too: on mainnet the wallet's own server takes a send first (1.6.0's release review,
+    // x-i18n-ja#0).
+    await expect(sessions.outSubmit("preprod", out.txHash)).rejects.toThrow(/the server didn't answer for the last one sent, so the rest didn't go/);
     t.koios.fetch = real;
     expect(ids(t)).toEqual(parts.slice(0, 2));
     expect((await recordOf(t)).txs.map((x) => !!x.unsent)).toEqual(parts.map((_, i) => i > 1));
