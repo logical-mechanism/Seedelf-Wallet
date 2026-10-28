@@ -1735,9 +1735,11 @@ pub const BOOTSTRAP_BACK_RESERVE: u64 = 1_500_000;
 /// Why a sum on a pool's box ADA is refused: it's past what a u64 holds,
 /// 18.4 trillion ₳, so more than there is. A pool's box ADA is read from its
 /// datum, which allows any amount up to that, and the WebAssembly build
-/// doesn't check overflow: unchecked, such a sum wrapped there to a small,
+/// didn't check overflow: unchecked, such a sum wrapped there to a small,
 /// false figure, a Bootstrap of one box quoted 1.5 ₳ (1.6.0's release review,
-/// 314-core#1).
+/// 314-core#1). Since 1.7.0 the module checks core's (Cargo.toml's
+/// `wasm-release`), so one missed would trap and lock the wallet; checked
+/// here, it's refused in words.
 pub const MORE_THAN_THERE_IS: &str = "These boxes cost more ADA than there is";
 
 /// How many boxes of `per` each `spare` lovelace pays for, the deposit's

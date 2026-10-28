@@ -2153,8 +2153,9 @@ pub fn chain_from_account_at(
             )?,
         )?)?;
         if !kept.is_empty() {
-            // Checked, as the planner's sums on the pool's box ADA are: this
-            // build doesn't check overflow (1.6.0's release review, 314-core#1).
+            // Checked, as the planner's sums on the pool's box ADA are: the
+            // module doesn't check this crate's overflow (Cargo.toml's
+            // wasm-release; 1.6.0's release review, 314-core#1).
             needed = needed
                 .checked_add(build::minimum_address_payment(&params, &address, &kept)?)
                 .context(lovejoin::MORE_THAN_THERE_IS)?;
