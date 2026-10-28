@@ -33,6 +33,7 @@ import { HistoriesNote } from "../components/HistoriesNote";
 import { PaidRows } from "../components/PaidRows";
 import {
   chainText,
+  CollateralHeldWayOut,
   CollateralReserveRow,
   CollateralTailNote,
   CollateralTailRow,
@@ -406,6 +407,17 @@ export function SiteSession({
           <Row label={tr("sites.throughLovejoin")} value={chainText(s.chain, !s.auto)} />
         )}
       </ReviewRows>
+      {/* Its return held at its collateral's mix past the hour: the rest back without it, then the page reads again (1.7.0). */}
+      <CollateralHeldWayOut
+        held={s.collateralHeld}
+        busy={busy}
+        onSkip={() =>
+          void act(async () => {
+            await call("session-skip-collateral-mix", { index: s.index });
+            onRefresh();
+          })
+        }
+      />
       <div className="field-row">
         <span className="note">{tr("sites.addressNote")}</span>
         <CopyButton value={s.address} label={tr("sites.copyAddress")} />
