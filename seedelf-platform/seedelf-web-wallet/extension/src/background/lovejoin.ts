@@ -2930,12 +2930,12 @@ export class LovejoinService {
    * The most boxes a Bootstrap paid from the private balance puts into pool `pool` (none: the classic pool's) at
    * once: one deposit's (mostBootstrap), held to what its mix session's funding pays the deposit's fee and its way
    * back for, reserves that don't grow with the boxes (chunk 34's 34d review, 3): the deposit's, and the way back's
-   * that sessions.ts mixFunding adds (lovejoinBootstrapReserve), since with no collateral its return sweeps the
-   * deposit's change alone (1.6.0's release review, 318-rust#0). Measured in WebAssembly, by building the deposit
-   * and that sweep, once an epoch: under today's parameters one deposit's most, fewer at a dearer byte. None, and
-   * why, in a pool that takes no new box (takesNewBoxes): a private Bootstrap asks this before anything is built
-   * (sessions.ts mixOutBuild), and the form asks it for its bound. `known`: the parameters its review read, for its
-   * funding too (1.6.0's release review, 318-worker#3).
+   * that sessions.ts mixFunding adds (lovejoinBootstrapReserve, priced from the parameters since 1.7.0), since with
+   * no collateral its return sweeps the deposit's change alone (1.6.0's release review, 318-rust#0). Measured in
+   * WebAssembly, by building the deposit and that sweep, once an epoch: one deposit's most, at a dearer byte too.
+   * None, and why, in a pool that takes no new box (takesNewBoxes): a private Bootstrap asks this before anything is
+   * built (sessions.ts mixOutBuild), and the form asks it for its bound (privateBootstrapBounds). `known`: the
+   * parameters its review read, for its funding too (1.6.0's release review, 318-worker#3).
    */
   async privateBootstrapMost(network: NetworkName, pool?: string, known?: Record<string, unknown>): Promise<number> {
     const read = await this.poolNamed(network, pool);
@@ -2948,6 +2948,18 @@ export class LovejoinService {
     const most = JSON.parse(this.deps.wasm.lovejoinBootstrapMost(JSON.stringify(request))) as number;
     this.bootstrapMosts.set(key, most);
     return most;
+  }
+
+  /**
+   * The Bootstrap form's bounds from the private balance, from one read of the parameters: the most boxes
+   * (privateBootstrapMost), and the way back's reserve its funding carries beside the deposit's (`back`, lovelace:
+   * lovejoinBootstrapReserve, as sessions.ts mixFunding adds it), so what the form says the balance must hold is what
+   * the funding takes at any price of a byte (1.6.0's release review, bootstrap's call 1; 1.7.0).
+   */
+  async privateBootstrapBounds(network: NetworkName, pool?: string): Promise<{ most: number; back: string }> {
+    const params = await this.deps.koios(network).epochParams();
+    const most = await this.privateBootstrapMost(network, pool, params);
+    return { most, back: this.deps.wasm.lovejoinBootstrapReserve(JSON.stringify(params)) };
   }
 
   /**

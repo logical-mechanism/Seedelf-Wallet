@@ -584,11 +584,10 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return {};
     case "lovejoin-bring-all-back-stop":
       return ctx.lovejoin.stopBringingAllBack(ctx.network).then(() => ({}));
-    // The Bootstrap form's bound from the private balance: the worker's own (1.6.0's release review, MONEY-6).
+    // The Bootstrap form's bounds from the private balance: the worker's own (1.6.0's release review, MONEY-6), the way
+    // back's reserve priced as its funding prices it (1.7.0).
     case "lovejoin-bootstrap-most":
-      return ctx.lovejoin
-        .privateBootstrapMost(ctx.network, typeof message.pool === "string" ? message.pool : undefined)
-        .then((most) => ({ most }));
+      return ctx.lovejoin.privateBootstrapBounds(ctx.network, typeof message.pool === "string" ? message.pool : undefined);
     case "lovejoin-launch-terms":
       return ctx.launch.terms(ctx.network, message.token, message.quantity);
     case "lovejoin-launch-build":

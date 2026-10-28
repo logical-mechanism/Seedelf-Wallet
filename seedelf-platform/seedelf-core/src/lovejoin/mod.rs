@@ -1727,10 +1727,28 @@ pub fn direct_tail_reserve(params: &ProtocolParameters) -> Result<u64> {
 /// 0.8 ₳ for one deposit's most of 96, about as much for a token pool's 64)
 /// leaves too little for that, so this pays the rest, with about 0.5 ₳ over
 /// at the largest deposit, in the classic pool or a token pool, for the
-/// parameters to move. [`bootstrap_most`] builds both with it. What the sweep
-/// doesn't spend comes back with it. Never in [`funding_for`], which plans
-/// every mix and 1.5.0's seeds.
+/// parameters to move. The least [`bootstrap_back_reserve`] asks for, which
+/// follows the parameters past it. What the sweep doesn't spend comes back
+/// with it. Never in [`funding_for`], which plans every mix and 1.5.0's seeds.
 pub const BOOTSTRAP_BACK_RESERVE: u64 = 1_500_000;
+
+/// [`BOOTSTRAP_BACK_RESERVE`] priced from `params` (1.6.0's release review,
+/// bootstrap's call 1; 1.7.0), as [`direct_tail_reserve`] is: what the way
+/// back's sweep needs, its Seedelf output's least and its fee as it's drafted,
+/// past what [`DEPOSIT_RESERVE`] leaves after the largest deposit's fee (a
+/// transaction's most, [`crate::build::MAX_TX_SIZE`]), rounded up to a tenth
+/// of an ADA, and never less than [`BOOTSTRAP_BACK_RESERVE`]. 1.1 ₳ at today's
+/// 4,310 lovelace a byte, so 1.5 ₳ as before; 1.8 ₳ at 6,465, where a fixed
+/// 1.5 ₳ held a Bootstrap to 68 classic boxes, and 51 of LJTEST, rather than
+/// one deposit's most. [`bootstrap_most`] builds with it.
+pub fn bootstrap_back_reserve(params: &ProtocolParameters) -> Result<u64> {
+    // The sweep of the deposit's change into one Seedelf output: a direct tail's sweep's shape.
+    let sweep = linear_fee(params, TAIL_SWEEP_BYTES).max(crate::build::FIRST_DRAFT_FEE);
+    let seedelf = crate::build::minimum_seedelf_payment(params, &Assets::new())?;
+    let deposit = linear_fee(params, crate::build::MAX_TX_SIZE);
+    let need = (seedelf + sweep + deposit).saturating_sub(DEPOSIT_RESERVE);
+    Ok((need.div_ceil(100_000) * 100_000).max(BOOTSTRAP_BACK_RESERVE))
+}
 
 /// Why a sum on a pool's box ADA is refused: it's past what a u64 holds,
 /// 18.4 trillion ₳, so more than there is. A pool's box ADA is read from its
@@ -1931,7 +1949,7 @@ pub fn funding_for(boxes: usize, depth: u32, denom: u64) -> Result<u64> {
 /// The most boxes, of `most`, a Bootstrap paid from the private balance
 /// puts into `protocol`'s pool under `params`, or none when not one fits.
 /// Its mix session holds one UTxO of [`funding_for`]'s ADA at depth 0 and
-/// [`BOOTSTRAP_BACK_RESERVE`], and the boxes' token, with no collateral (the
+/// [`bootstrap_back_reserve`], and the boxes' token, with no collateral (the
 /// owner, 2026-10-23). [`DEPOSIT_RESERVE`] pays the deposit's fee, which
 /// grows with the boxes (chunk 34's 34d review, 3), and what it leaves with
 /// the way back's reserve pays the return, a sweep of the deposit's change
@@ -1953,6 +1971,7 @@ pub fn bootstrap_most(
     let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
     // One register for every box: each datum is as long as a fresh one's.
     let owner = Register::create(Scalar::from(4_242_424u64))?;
+    let back = bootstrap_back_reserve(params)?;
     let fits = |boxes: usize| -> Result<bool> {
         let tokens = match protocol.box_value().token_total(boxes) {
             Ok(None) => Assets::new(),
@@ -1968,7 +1987,7 @@ pub fn bootstrap_most(
         // review, 314-core#1).
         let Some(lovelace) = funding_for(boxes, 0, protocol.denom)
             .ok()
-            .and_then(|f| f.checked_add(BOOTSTRAP_BACK_RESERVE))
+            .and_then(|f| f.checked_add(back))
         else {
             return Ok(false);
         };

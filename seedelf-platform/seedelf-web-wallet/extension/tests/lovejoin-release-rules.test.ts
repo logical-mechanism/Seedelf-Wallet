@@ -27,7 +27,7 @@ import { InLovejoin, inLovejoinShown } from "../src/ui/screens/Home";
 import { bootstrapLimits, HeldQuestion } from "../src/ui/screens/Lovejoin";
 import { txIdOf } from "./fixtures/cbor";
 import { bech32 } from "./fixtures/bech32";
-import { koiosPreprod, loadTestWasm, madeByMix, testBalances, vectors } from "./fakes";
+import { epochParams, koiosPreprod, loadTestWasm, madeByMix, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -488,13 +488,22 @@ describe("the Bootstrap form's bounds are the worker's (1.6.0's release review, 
     // left a balance the form passed and the funding refused (1.6.0's release review, 323-worker#0).
     const wasm = loadTestWasm();
     const deposit = BigInt((JSON.parse(wasm.lovejoinFunding(JSON.stringify({ network: "preprod", boxes: 1, depth: 0 }))) as { lovelace: string }).lovelace);
-    const reserves = deposit - 10_000_000n + BigInt(wasm.lovejoinBootstrapReserve());
+    const reserves = deposit - 10_000_000n + BigInt(wasm.lovejoinBootstrapReserve(JSON.stringify(epochParams[0])));
     expect(reserves).toBe(3_000_000n);
     const needs = 30n * 10_000_000n + reserves + 2_000_000n;
     const box = { id: undefined, box: { lovelace: "10000000" } };
     expect(bootstrapLimits(box, "private", ada(needs - 1n), 96, 30).short).toBe(true);
     expect(bootstrapLimits(box, "private", ada(needs), 96, 30).short).toBe(false);
     expect(bootstrapLimits(box, "public", ada(0n), undefined, 30).short).toBe(false);
+    // The worker's figure for the way back once read, as its funding prices it: at today's parameters the same 1.5 ₳.
+    expect(bootstrapLimits(box, "private", ada(needs), 96, 30, "1500000").short).toBe(false);
+
+    // At half as dear again a byte the way back's reserve is 1.8 ₳ (1.6.0's release review, bootstrap's call 1; 1.7.0):
+    // a balance that held the fixed 3 ₳ is short of what the funding takes, and the form says so before Review.
+    const dear = wasm.lovejoinBootstrapReserve(JSON.stringify({ ...(epochParams[0] as object), coins_per_utxo_size: "6465" }));
+    expect(dear).toBe("1800000");
+    expect(bootstrapLimits(box, "private", ada(needs), 96, 30, dear).short).toBe(true);
+    expect(bootstrapLimits(box, "private", ada(needs + 300_000n), 96, 30, dear).short).toBe(false);
   });
 });
 

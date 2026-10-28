@@ -2972,9 +2972,11 @@ export interface Requests {
   /**
    * The most boxes a Bootstrap paid from the private balance puts into pool `pool` (none: the classic pool) at once:
    * what its funding's reserve pays the deposit for, as the worker holds it (privateBootstrapMost), for the form's
-   * bound (1.6.0's release review, MONEY-6). It reads the parameters, as any build does.
+   * bound (1.6.0's release review, MONEY-6); and `back`, the way back's reserve that funding carries, in lovelace,
+   * priced from the parameters (1.7.0), for what the form says the balance must hold. It reads the parameters once, as
+   * any build does.
    */
-  "lovejoin-bootstrap-most": { payload: { pool?: string }; result: { most: number } };
+  "lovejoin-bootstrap-most": { payload: { pool?: string }; result: { most: number; back: string } };
   /** What a pool of `token` (none: an ADA pool) may hold a box, and the pools of its kind already shown. */
   /** `quantity`: Q, raw, once chosen; without it the least holds for any. */
   "lovejoin-launch-terms": {

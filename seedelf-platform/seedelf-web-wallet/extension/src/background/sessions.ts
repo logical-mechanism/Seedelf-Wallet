@@ -2090,10 +2090,10 @@ export class SessionService {
     const asked = tail?.reserve ?? 0n;
     // A Bootstrap's way back in its place (1.6.0's release review, 318-rust#0): with no collateral its return is a
     // sweep of the deposit's change alone, whose Seedelf output must hold its least after the sweep's fee, and the
-    // deposit's reserve leaves too little for that. WebAssembly's figure, the one privateBootstrapMost builds its cap
-    // with; never added to `reserve`, which would count the boxes on 1.5 ₳ less (collateralReserve), nor left out with
-    // it (orWithoutReserve).
-    const back = mix.bootstrap ? BigInt(this.deps.wasm.lovejoinBootstrapReserve()) : 0n;
+    // deposit's reserve leaves too little for that. WebAssembly's figure, priced from the parameters this review read
+    // (1.7.0), the one privateBootstrapMost builds its cap with; never added to `reserve`, which would count the boxes
+    // on 1.5 ₳ less (collateralReserve), nor left out with it (orWithoutReserve).
+    const back = mix.bootstrap ? BigInt(this.deps.wasm.lovejoinBootstrapReserve(JSON.stringify(params))) : 0n;
     const {
       built: { summary, txCbor, seed, first, later },
       reserve,
@@ -4445,12 +4445,13 @@ export class SessionService {
           // A Bootstrap funded with neither a collateral nor its way back's reserve (62162483 until 1.6.0's release
           // review): what its funding paid leaves the deposit's change too little to sweep back, so one box fewer goes
           // in, that box's ADA paying for it, and a one-box Bootstrap comes back directly (318-rust#0). One funded with
-          // its 5 ₳ puts that up instead.
+          // its 5 ₳ puts that up instead. Only a build between #323 and the 1.6.0 gate made such a funding, never a
+          // release, so the reserve it's held to is today's, priced from these parameters (1.7.0).
           let boxes = record?.mix?.boxes;
           if (boxes && record?.mix?.bootstrap && !record.mix.noCollateral && !collateral) {
             const paid = rows.filter((u) => u.tx_hash === funding).reduce((sum, u) => sum + BigInt(u.value), 0n);
             const boxesOnly = await lovejoin.funding(network, boxes, false, 0, record.mix.pool);
-            if (paid < BigInt(boxesOnly.lovelace) + BigInt(wasm.lovejoinBootstrapReserve())) boxes -= 1;
+            if (paid < BigInt(boxesOnly.lovelace) + BigInt(wasm.lovejoinBootstrapReserve(JSON.stringify(params)))) boxes -= 1;
           }
           chain = await lovejoin.chain(
             network,

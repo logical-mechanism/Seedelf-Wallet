@@ -5758,13 +5758,19 @@ pub fn lovejoin_direct_collateral_reserve(params: &str) -> Result<String, JsErro
 }
 
 /// What a Bootstrap's session, paid from the private balance, is funded with
-/// beside `lovejoinFunding`'s lovelace for its way back, in lovelace, as a
-/// string (`seedelf_core::lovejoin::BOOTSTRAP_BACK_RESERVE`): with no
-/// collateral, its return is a sweep of the deposit's change, whose Seedelf
-/// output must hold its least (1.6.0's release review, 318-rust#0).
+/// beside `lovejoinFunding`'s lovelace for its way back, priced from `params`,
+/// one row of Koios's `epoch_params`: in lovelace, as a string
+/// (`seedelf_core::lovejoin::bootstrap_back_reserve`, the figure
+/// `lovejoinBootstrapMost` builds its cap with). With no collateral, its return
+/// is a sweep of the deposit's change, whose Seedelf output must hold its least
+/// (1.6.0's release review, 318-rust#0; priced since 1.7.0).
 #[wasm_bindgen(js_name = lovejoinBootstrapReserve)]
-pub fn lovejoin_bootstrap_reserve() -> String {
-    seedelf_core::lovejoin::BOOTSTRAP_BACK_RESERVE.to_string()
+pub fn lovejoin_bootstrap_reserve(params: &str) -> Result<String, JsError> {
+    let params = seedelf_koios::koios::ProtocolParameters::from_koios(&from_json(params)?)
+        .map_err(js_error)?;
+    Ok(seedelf_core::lovejoin::bootstrap_back_reserve(&params)
+        .map_err(js_error)?
+        .to_string())
 }
 
 /// A session's whole chain through Lovejoin, built, measured against the

@@ -26,7 +26,7 @@ import tokenList from "../src/tokens/list.json";
 import { NETWORKS } from "../src/networks";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
-import { koiosPreprod, loadTestWasm, madeByMix, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
+import { epochParams, koiosPreprod, loadTestWasm, madeByMix, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -352,7 +352,7 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
   // boxes left too little for that sweep's Seedelf output. Every one was funded, then came straight back with no box
   // in and a second fee. Its funding lands here exactly as it paid the account, never a 5 ₳ a fixture supposes.
   it("funds a private Bootstrap with its way back, deposits, then sweeps the change back with nothing put up (1.6.0's release review, 318-rust#0)", async () => {
-    const reserve = BigInt(loadTestWasm().lovejoinBootstrapReserve());
+    const reserve = BigInt(loadTestWasm().lovejoinBootstrapReserve(JSON.stringify(epochParams[0])));
     const cases: Array<{ boxes: number | "most"; pool?: string }> = [{ boxes: 1 }, { boxes: "most" }, { boxes: 2, pool: TOKEN }];
     for (const { boxes: asked, pool } of cases) {
       const t = await wallet();
@@ -489,30 +489,31 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     expect(txInputs(back)).toEqual([`${one.out.txHash}#0`]);
   });
 
-  it("caps a Bootstrap from the private balance at what its funding pays the deposit and its way back for (34d's review 3; 1.6.0's release review, 318-rust#0)", async () => {
+  it("caps a Bootstrap from the private balance at what its funding pays the deposit and its way back for, its way back priced from the parameters (34d's review 3; 1.6.0's release review, 318-rust#0, bootstrap's call 1)", async () => {
     const t = await wallet();
     const lj = pooled(t);
     const sessions = runner(t, lj);
     // Measured by building the deposit and its sweep back: under today's parameters the deposit's reserve and the way
-    // back's pay for one deposit's most, in the classic pool and in a token pool, whose boxes are longer.
+    // back's pay for one deposit's most, in the classic pool and in a token pool, whose boxes are longer. The form's
+    // bounds carry the way back's reserve as the funding prices it: 1.5 ₳ today.
     expect(await lj.privateBootstrapMost("preprod")).toBe(96);
     expect(await lj.privateBootstrapMost("preprod", TOKEN)).toBe(64);
-    // At half as dear again a byte, the way back's Seedelf output needs more than a large deposit's change leaves:
-    // fewer go, as many as the sweep back can be built for.
+    expect(await lj.privateBootstrapBounds("preprod")).toEqual({ most: 96, back: "1500000" });
+    // At half as dear again a byte, the way back's Seedelf output needs more than a large deposit's change leaves with
+    // 1.5 ₳ beside it, which held a Bootstrap to 68 classic boxes. Priced from the parameters, the reserve is 1.8 ₳, and
+    // one deposit's most still goes (1.7.0; core's test has a token pool's too: this fixture's token box is below the
+    // network's least at that price, so it takes no new box at all).
     t.koios.params = { coins_per_utxo_size: "6465", epoch_no: 291 };
-    const classic = await lj.privateBootstrapMost("preprod");
-    expect(classic).toBeGreaterThanOrEqual(1);
-    expect(classic).toBeLessThan(96);
-    // Refused before anything is built: never a session funded, then come back without a box, its fees spent.
+    expect(await lj.privateBootstrapBounds("preprod")).toEqual({ most: 96, back: "1800000" });
+    // Its funding carries that reserve, as its review says: one box of 10 ₳, the deposit's 1.5 ₳ and the way back's.
+    const funded = await sessions.mixOutBuild("preprod", 1, { bootstrap: true });
+    expect(funded.bootstrapReserve).toBe("1800000");
+    expect(funded.payments.map((p) => p.lovelace)).toEqual(["13300000"]);
+    // Past one deposit's most, refused before anything is built: never a session funded, then come back without a box.
     const asked = t.collateral.asked.length;
-    await expect(sessions.mixOutBuild("preprod", classic + 1, { bootstrap: true })).rejects.toThrow(`Bootstrap 1 to ${classic} boxes at a time.`);
+    await expect(sessions.mixOutBuild("preprod", 97, { bootstrap: true })).rejects.toThrow("Bootstrap 1 to 96 boxes at a time.");
     expect(t.collateral.asked.length).toBe(asked);
     expect(t.koios.submitted).toHaveLength(0);
-    // From the public account, whose deposit draws on whatever the account holds and has no sweep back, one deposit's
-    // room stays the cap.
-    t.koios.addedToAccounts.push(atAccount("e1", "990000000"), atAccount("e5", "5000000"), ...POOL);
-    const summary = await lj.publicBuild("preprod", classic + 1, { bootstrap: true });
-    expect(summary).toMatchObject({ bootstrap: true, boxes: classic + 1 });
   });
 
   it("still brings a 1.5.0 seed's box back by itself once someone else's mix moved it, as a Bootstrap's never does (34d's review 6)", async () => {
