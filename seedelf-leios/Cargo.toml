@@ -1,0 +1,36 @@
+[package]
+name = "seedelf-leios"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Seedelf and Lovejoin on Musashi, the Leios testnet: numbers only (1.7.0's item 8)"
+
+# A workspace of its own, so seedelf-platform's workspace, its lockfile and its
+# CI never see this folder. Once Leios is on mainnet, what holds moves into
+# core and the folder goes.
+[workspace]
+
+[dependencies]
+anyhow = "1.0.98"
+blstrs = "0.7.1"
+ff = "0.13.0"
+hex = "0.4.3"
+pallas-addresses = "0.35.0"
+pallas-codec = "0.35.0"
+pallas-crypto = "0.35.0"
+pallas-primitives = "0.35.0"
+pallas-traverse = "0.35.0"
+pallas-txbuilder = "0.35.0"
+rand_core = { version = "0.6.0", features = ["std"] }
+serde_json = "1.0.133"
+uplc = "=1.1.23"
+seedelf-core = { path = "../seedelf-platform/seedelf-core" }
+seedelf-crypto = { path = "../seedelf-platform/seedelf-crypto" }
+seedelf-koios = { path = "../seedelf-platform/seedelf-koios" }
+
+# Core asks for crypto and koios by version, as its workspace does; these send
+# it to the same local crates, as seedelf-platform's own patch table does.
+[patch.crates-io]
+seedelf-crypto = { path = "../seedelf-platform/seedelf-crypto" }
+seedelf-koios = { path = "../seedelf-platform/seedelf-koios" }

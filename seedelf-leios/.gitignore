@@ -1,0 +1,5 @@
+/target
+# Musashi keys and run records live outside the repo (~/leios-musashi), but
+# never commit one that lands here by mistake.
+*.skey
+/runs
