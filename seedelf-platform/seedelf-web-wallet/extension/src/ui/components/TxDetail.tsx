@@ -29,7 +29,7 @@ import { Callout } from "./Callout";
 import { CopyButton } from "./CopyButton";
 import { HintButton, HintText, useHint } from "./Hint";
 import { PlutusTree } from "./PlutusTree";
-import { ExpandIcon, SpinnerIcon } from "./Icons";
+import { ChevronLeftIcon, ChevronRightIcon, ExpandIcon, SpinnerIcon } from "./Icons";
 import { Modal } from "./Modal";
 import { Row, ReviewRows } from "./ReviewRows";
 import { Tabs } from "./Tabs";
@@ -42,19 +42,23 @@ import { tokenDecimals, tokenText } from "../tokens";
  * every review's, a site's waiting for a signature, and each of a chain's
  * through Lovejoin being sent. `label` names it where "Transaction details"
  * doesn't read right. `site`: the site built it and sends it, and the wallet
- * only adds its signature (the connector's sign window). `onOpen`: the page
+ * only adds its signature (the connector's sign window). `parts`: a payment
+ * too large for one transaction, as its review's summary lists them, `txHash`
+ * the first's; the view steps through every one (1.7.0). `onOpen`: the page
  * opens the view itself (TxDetailModal), where a list that can go while it's
  * open would take a view of its own with it (the Lovejoin page's chains, 1.3.0's
  * release review, C28).
  */
 export function TxDetailButton({
   txHash,
+  parts,
   label,
   testId = "tx-detail",
   site = false,
   onOpen,
 }: {
   txHash: string;
+  parts?: ReadonlyArray<{ txHash: string }>;
   label?: string;
   testId?: string;
   site?: boolean;
@@ -70,7 +74,9 @@ export function TxDetailButton({
           {label ?? tr("tx.detailsButton")}
         </button>
       </div>
-      {open && <TxDetailModal txHash={txHash} testId={testId} site={site} onClose={() => setOpen(false)} />}
+      {open && (
+        <TxDetailModal txHash={txHash} parts={parts?.map((p) => p.txHash)} testId={testId} site={site} onClose={() => setOpen(false)} />
+      )}
     </>
   );
 }
@@ -93,15 +99,20 @@ type Tab = "transaction" | "cbor";
 /**
  * The view itself, for transaction `txHash`: what TxDetailButton opens, or a
  * page that keeps which one is open (TxDetailButton `onOpen`). It asks the
- * worker for the bytes once, as it opens, and shows them until it's closed.
+ * worker for the bytes as it opens, and shows them until it's closed. With
+ * `parts` (more than one), a stepper above them goes from one transaction of
+ * the payment to the next, asking for each as it's shown: a review in parts
+ * opened only the first's (1.6.0's release review, 321-parts-worker#5).
  */
 export function TxDetailModal({
   txHash,
+  parts,
   testId,
   site = false,
   onClose,
 }: {
   txHash: string;
+  parts?: readonly string[];
   testId: string;
   site?: boolean;
   onClose: () => void;
@@ -111,21 +122,54 @@ export function TxDetailModal({
   const [view, setView] = useState<TxView>();
   const [error, setError] = useState<string>();
   const [tab, setTab] = useState<Tab>("transaction");
+  const many = parts && parts.length > 1 ? parts : undefined;
+  const [shown, setShown] = useState(0);
+  const hash = many?.[shown] ?? txHash;
 
   useEffect(() => {
     let gone = false;
-    call("tx-detail", { txHash }).then(
+    // Another transaction of the payment: nothing of the last one's stays on screen while it's asked for.
+    setView(undefined);
+    setError(undefined);
+    call("tx-detail", { txHash: hash }).then(
       (answer) => !gone && setView(answer),
       (e: Error) => !gone && setError(e.message),
     );
     return () => {
       gone = true;
     };
-  }, [txHash]);
+  }, [hash]);
 
   return (
     <Modal title={tr("tx.title")} titleId={`${testId}-title`} onClose={onClose}>
       <div className="stack" data-testid={testId}>
+        {many && (
+          <div className="stepper" data-testid={`${testId}-parts`}>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={tr("tx.partPrevious")}
+              disabled={shown === 0}
+              onClick={() => setShown((i) => i - 1)}
+              data-testid={`${testId}-part-previous`}
+            >
+              <ChevronLeftIcon size={16} />
+            </button>
+            <output className="stepper__value" data-testid={`${testId}-part`}>
+              {tr("tx.partOf", { n: shown + 1, total: many.length })}
+            </output>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={tr("tx.partNext")}
+              disabled={shown === many.length - 1}
+              onClick={() => setShown((i) => i + 1)}
+              data-testid={`${testId}-part-next`}
+            >
+              <ChevronRightIcon size={16} />
+            </button>
+          </div>
+        )}
         {/* The id of the bytes shown, worked out from them, once they're here:
             the hash the view was asked for until then. They are the same for
             anything the wallet holds, and this way the id can't be one thing
@@ -134,12 +178,12 @@ export function TxDetailModal({
           <code
             className="tx-detail__hash-value"
             data-testid={`${testId}-hash`}
-            data-value={view?.detail.txHash ?? txHash}
-            title={view?.detail.txHash ?? txHash}
+            data-value={view?.detail.txHash ?? hash}
+            title={view?.detail.txHash ?? hash}
           >
-            {shortHex(view?.detail.txHash ?? txHash, 16, 8)}
+            {shortHex(view?.detail.txHash ?? hash, 16, 8)}
           </code>
-          <CopyButton value={view?.detail.txHash ?? txHash} label={tr("tx.copyId")} />
+          <CopyButton value={view?.detail.txHash ?? hash} label={tr("tx.copyId")} />
         </div>
         {error && (
           <p className="error" role="alert" data-testid={`${testId}-error`}>

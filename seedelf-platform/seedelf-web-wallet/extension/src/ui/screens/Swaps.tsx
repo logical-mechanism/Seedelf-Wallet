@@ -931,7 +931,7 @@ export function NewSwap({
           busy={busy || !!refusal}
           before={homeBalance(seedelf)}
         />
-        <TxDetailButton txHash={out.summary.txHash} testId="swap-out-tx" />
+        <TxDetailButton txHash={out.summary.txHash} parts={out.summary.parts} testId="swap-out-tx" />
       </Screen>
     );
   }

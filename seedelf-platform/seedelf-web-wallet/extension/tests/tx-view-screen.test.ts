@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import type { TxDetail, TxPlutus } from "../src/shared/rpc";
 import { plutusJson } from "../src/ui/components/PlutusTree";
-import { TxDetailBody, addressWords, certificateWords, proposalWords, redeemerWords } from "../src/ui/components/TxDetail";
+import { TxDetailBody, TxDetailModal, addressWords, certificateWords, proposalWords, redeemerWords } from "../src/ui/components/TxDetail";
 import { AccountsContext } from "../src/ui/accounts";
 import { NetworkContext } from "../src/ui/network";
 import { loadTestWasm, transferPreprod } from "./fakes";
@@ -607,5 +607,36 @@ describe("whose datum it is", () => {
     const page = shown(cborOf("minswap-swap"));
     expect(page).toContain("A datum");
     expect(page).not.toContain("register");
+  });
+});
+
+describe("a payment's transactions, one after another in the view (1.6.0's release review, 321-parts-worker#5; 1.7.0)", () => {
+  const hashes = ["a1".repeat(32), "b2".repeat(32), "c3".repeat(32)];
+  const modal = (parts?: string[]) =>
+    renderToStaticMarkup(
+      createElement(
+        NetworkContext.Provider,
+        { value: "preprod" },
+        createElement(TxDetailModal, { txHash: hashes[0]!, parts, testId: "tx", onClose: () => undefined }),
+      ),
+    );
+
+  it("opens on the first of them, with a stepper to the rest", () => {
+    const page = modal(hashes);
+    expect(page).toContain('data-testid="tx-parts"');
+    expect(page).toContain("Transaction 1 of 3");
+    // The first's id, the one asked for; going back is off on the first, and on to the next is there.
+    expect(page).toContain(`data-value="${hashes[0]}"`);
+    expect(page).toMatch(/aria-label="Previous transaction" disabled=""/);
+    expect(page).not.toMatch(/aria-label="Next transaction" disabled=""/);
+  });
+
+  it("shows no stepper for a payment in one transaction", () => {
+    for (const parts of [undefined, [hashes[0]!]]) {
+      const page = modal(parts);
+      expect(page).not.toContain('data-testid="tx-parts"');
+      expect(page).not.toContain("Transaction 1 of");
+      expect(page).toContain(`data-value="${hashes[0]}"`);
+    }
   });
 });

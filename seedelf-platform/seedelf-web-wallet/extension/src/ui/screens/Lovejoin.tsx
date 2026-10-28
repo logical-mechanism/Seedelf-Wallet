@@ -3042,7 +3042,7 @@ export function PoolPage({
             its chain is built later, when the session runs, against the pool as
             it is then. */}
         {review.source === "private" ? (
-          <TxDetailButton txHash={review.summary.txHash} testId="lovejoin-tx" />
+          <TxDetailButton txHash={review.summary.txHash} parts={review.summary.parts} testId="lovejoin-tx" />
         ) : (
           <TxDetailButton txHash={review.summary.entry} label={entryLabel(review.summary)} testId="lovejoin-tx" />
         )}
