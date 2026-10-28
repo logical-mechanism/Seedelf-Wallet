@@ -1,7 +1,7 @@
 // The service-worker handlers with the real WebAssembly module and the
 // wallet over in-memory storage, checked against the same vectors as
 // seedelf-crypto (Lace-verified Cardano addresses, frozen Seedelf keys).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { DOWN_MS } from "../src/background/data-layer";
 import { handle, type Context } from "../src/background/handlers";
@@ -113,6 +113,60 @@ describe("handlers", () => {
     await handle({ type: "unlock", password: PASSWORD }, ctx);
     expect(await handle({ type: "status" }, ctx)).not.toHaveProperty("lockedBy");
     expect(((await handle({ type: "lock" }, ctx)) as Status).lockedBy).toBeUndefined();
+  });
+
+  describe("a run a request starts without waiting (1.6.0's release review, the docs check's finding 1)", () => {
+    const v = () => vectors("cardano_account.json").find((v) => v.account === 0)!;
+    const trap = () => new WebAssembly.RuntimeError("unreachable");
+    /** Every callback a run's failure queued has run. */
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Each request with its run failing as `fail` says: the restore's scan, the parts Home's poll pumps, and Bring every
+    // box back now's first run. The last two on a created wallet, which starts no scan of its own.
+    const runs: Array<[string, (ctx: Context, fail: () => Error) => Promise<unknown>]> = [
+      [
+        "a restore's scan",
+        (ctx, fail) => {
+          vi.spyOn(ctx.sessions, "scan").mockImplementation((_, after) => {
+            // The look for public accounts it waits for, taken as the real scan takes it.
+            void after?.catch(() => undefined);
+            return Promise.reject(fail());
+          });
+          return handle({ type: "restore-wallet", phrase: v().phrase, password: PASSWORD }, ctx);
+        },
+      ],
+      [
+        "the parts Home's poll pumps",
+        async (ctx, fail) => {
+          await handle({ type: "create-wallet", phrase: v().phrase, password: PASSWORD }, ctx);
+          const parts = { pump: () => Promise.reject(fail()), shown: async () => null } as unknown as Context["parts"];
+          return handle({ type: "pending-tx" }, { ...ctx, parts });
+        },
+      ],
+      [
+        "Bring every box back now's first run",
+        async (ctx, fail) => {
+          await handle({ type: "create-wallet", phrase: v().phrase, password: PASSWORD }, ctx);
+          vi.spyOn(ctx.lovejoin, "bringAllBack").mockResolvedValue(undefined);
+          vi.spyOn(ctx.lovejoin, "withdrawDue").mockImplementation(() => Promise.reject(fail()));
+          return handle({ type: "lovejoin-bring-all-back" }, ctx);
+        },
+      ],
+    ];
+
+    it.each(runs)("locks the wallet when WebAssembly traps under %s, as a page's request does", async (_, start) => {
+      const ctx = context();
+      // The request itself may hear the lock, as the poll's does when its run traps before it reads.
+      await start(ctx, trap).catch(() => undefined);
+      await vi.waitFor(async () => expect(await handle({ type: "status" }, ctx)).toMatchObject({ state: "locked", lockedBy: "trap" }));
+    });
+
+    it.each(runs)("leaves the wallet unlocked when %s fails otherwise: its failure is its own", async (_, start) => {
+      const ctx = context();
+      await start(ctx, () => new Error("Koios is down"));
+      await settled();
+      expect(await handle({ type: "status" }, ctx)).toMatchObject({ state: "unlocked" });
+    });
   });
 
   it("marks a restore for whichever page opens Home next, the fact alone, until it's seen (blind test T20a, T20b)", async () => {

@@ -30,6 +30,7 @@ import type { TransferService } from "./transfer";
 import { txView } from "./tx-view";
 import type { WithdrawService } from "./withdraw";
 import { SESSION_RESTORED, WalletLocked, type Wallet } from "./wallet";
+import { isTrap } from "./wasm";
 import { isLovejoinWidth, type LovejoinWidth } from "../shared/preferences";
 
 /**
@@ -37,6 +38,18 @@ import { isLovejoinWidth, type LovejoinWidth } from "../shared/preferences";
  * test of 1.6.0).
  */
 const widthOf = (width: unknown): LovejoinWidth | undefined => (isLovejoinWidth(width) ? width : undefined);
+
+/**
+ * A run a request starts and doesn't wait for: a restore's scan, the parts Home's poll pumps, Bring every box back
+ * now's first run. Its failures are its own, said on its own pages, but WebAssembly that trapped under it is broken
+ * for good: the wallet locks, as under a page's request (sw.ts answerUi) and the alarm's runs (runs.ts), rather than
+ * stay unlocked on that instance until something else traps (1.6.0's release review, the docs check's finding 1).
+ */
+function unawaited(ctx: Pick<Context, "wallet">, run: Promise<unknown>): void {
+  void run.catch(async (e: unknown) => {
+    if (isTrap(e)) await ctx.wallet.trapped().catch(() => undefined);
+  });
+}
 
 export interface Context {
   wasm: typeof Wasm;
@@ -150,7 +163,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
           // Every network marked first, sealed: a scan that doesn't finish (a read that fails, a lock, a worker stop),
           // and the network a restore doesn't look at, say so until one finishes there (1.5.0's release review, C19).
           for (const n of ctx.networks) await ctx.sessions.markUnscanned(n).catch(() => undefined);
-          void ctx.sessions.scan(network, ctx.accounts.discover(network)).catch(() => undefined);
+          unawaited(ctx, ctx.sessions.scan(network, ctx.accounts.discover(network)));
         }
         return status(ctx);
       } finally {
@@ -223,7 +236,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.send.submit(ctx.network, message.txHash);
     case "pending-tx": {
       // Parts waiting for the one before go as Home asks too, between the sessions alarm's runs; not waited for.
-      void ctx.parts?.pump(ctx.network).catch(() => undefined);
+      if (ctx.parts) unawaited(ctx, ctx.parts.pump(ctx.network));
       const pending = await ctx.pending.pending(ctx.network);
       // The watch lets a part go once it's seen: what's still to go is said by the parts' own record.
       if (!pending) return (await ctx.parts?.shown(ctx.network).catch(() => undefined)) ?? null;
@@ -567,7 +580,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     // Bring every box back now (Settings): asked, then its first run started now, not at the alarm's next minute.
     case "lovejoin-bring-all-back":
       await ctx.lovejoin.bringAllBack(ctx.network, typeof message.pool === "string" ? message.pool : undefined);
-      void ctx.lovejoin.withdrawDue(ctx.network).catch(() => undefined);
+      unawaited(ctx, ctx.lovejoin.withdrawDue(ctx.network));
       return {};
     case "lovejoin-bring-all-back-stop":
       return ctx.lovejoin.stopBringingAllBack(ctx.network).then(() => ({}));
