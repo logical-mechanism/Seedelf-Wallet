@@ -1,0 +1,162 @@
+{
+  "name": "seedelf-10-chained-in3",
+  "notes": {
+    "chained": true,
+    "inputs": 3
+  },
+  "refused": [],
+  "started": 1793221579.0009112,
+  "txs": [
+    {
+      "block": 41560,
+      "id": "ae52b17506f00d464407cfa21bf58c444b3a9f7bfaa3332bbf52426c27829cc1",
+      "kind": "Seedelf spend 1",
+      "kleio": {
+        "block": 41560,
+        "certified_eb": true,
+        "index": 175
+      },
+      "landed": 334.6053898334503,
+      "sent": 0.05340003967285156,
+      "size": 1226,
+      "slot": 940312,
+      "via": "certified EB"
+    },
+    {
+      "block": 41560,
+      "id": "29ddef4b89f97de319605d2e04daa30fb4b0a311afce9592ab7d3cc201716090",
+      "kind": "Seedelf spend 2",
+      "kleio": {
+        "block": 41560,
+        "certified_eb": true,
+        "index": 184
+      },
+      "landed": 333.7777078151703,
+      "sent": 0.10187435150146484,
+      "size": 888,
+      "slot": 940312,
+      "via": "certified EB"
+    },
+    {
+      "block": 41560,
+      "id": "c2eef8427db2e817115a629c68d78e5fa0d8a51415141bdda13e9771c78574a5",
+      "kind": "Seedelf spend 3",
+      "kleio": {
+        "block": 41560,
+        "certified_eb": true,
+        "index": 185
+      },
+      "landed": 333.7777078151703,
+      "sent": 0.1506824493408203,
+      "size": 888,
+      "slot": 940312,
+      "via": "certified EB"
+    },
+    {
+      "block": 41560,
+      "id": "62a1c93ade5c2625fa2449d9c1b1de435346f97cb381f29725e068f60ad40ff8",
+      "kind": "Seedelf spend 4",
+      "kleio": {
+        "block": 41560,
+        "certified_eb": true,
+        "index": 186
+      },
+      "landed": 333.7777078151703,
+      "sent": 0.19979500770568848,
+      "size": 888,
+      "slot": 940312,
+      "via": "certified EB"
+    },
+    {
+      "block": 41560,
+      "id": "86a90348916a5bd2bbec1515ddf0587b828b2a6226b11b162d79b66d900019dd",
+      "kind": "Seedelf spend 5",
+      "kleio": {
+        "block": 41560,
+        "certified_eb": true,
+        "index": 187
+      },
+      "landed": 333.7777078151703,
+      "sent": 0.24683880805969238,
+      "size": 888,
+      "slot": 940312,
+      "via": "certified EB"
+    },
+    {
+      "block": 41560,
+      "id": "224589b4498805d6ca8ea4f394bb9e99b29bd6aa4b42ba1f8ec3288dd0d354df",
+      "kind": "Seedelf spend 6",
+      "kleio": {
+        "block": 41560,
+        "certified_eb": true,
+        "index": 224
+      },
+      "landed": 333.7777078151703,
+      "sent": 0.29352641105651855,
+      "size": 888,
+      "slot": 940312,
+      "via": "certified EB"
+    },
+    {
+      "block": 41560,
+      "id": "5779100eca40d4bd0bd0dc02036ce4507d9d5cbf11baaac7fe7897bee85a4b4b",
+      "kind": "Seedelf spend 7",
+      "kleio": {
+        "block": 41560,
+        "certified_eb": true,
+        "index": 227
+      },
+      "landed": 333.7777078151703,
+      "sent": 0.3419637680053711,
+      "size": 888,
+      "slot": 940312,
+      "via": "certified EB"
+    },
+    {
+      "block": 41560,
+      "id": "0b2efe7c185675b7b4956def63dac9173a44d62207b5538d8ae9bbdb2c3eb766",
+      "kind": "Seedelf spend 8",
+      "kleio": {
+        "block": 41560,
+        "certified_eb": true,
+        "index": 228
+      },
+      "landed": 333.7777078151703,
+      "sent": 0.3991372585296631,
+      "size": 888,
+      "slot": 940312,
+      "via": "certified EB"
+    },
+    {
+      "block": 41560,
+      "id": "d1b7a4736d77015c1d4cc401790555d4dcf912837772d336afc640992b643488",
+      "kind": "Seedelf spend 9",
+      "kleio": {
+        "block": 41560,
+        "certified_eb": true,
+        "index": 231
+      },
+      "landed": 333.7777078151703,
+      "sent": 0.45348358154296875,
+      "size": 888,
+      "slot": 940312,
+      "via": "certified EB"
+    },
+    {
+      "block": 41560,
+      "id": "da58d3850b3ae1c8e8bb5ac66cd41a5e97af91d2abd4fd66829b0a022f0c81b8",
+      "kind": "Seedelf spend 10",
+      "kleio": {
+        "block": 41560,
+        "certified_eb": true,
+        "index": 233
+      },
+      "landed": 333.7777078151703,
+      "sent": 0.5023038387298584,
+      "size": 888,
+      "slot": 940312,
+      "via": "certified EB"
+    }
+  ],
+  "window": null
+}

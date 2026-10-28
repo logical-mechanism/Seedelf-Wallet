@@ -1,0 +1,27 @@
+{
+  "name": "seedelf-1-chained-in1",
+  "notes": {
+    "chained": true,
+    "inputs": 1
+  },
+  "refused": [],
+  "started": 1793221412.904742,
+  "txs": [
+    {
+      "block": 41546,
+      "id": "b2e6c312eefd6d5e9d28ed707431334b58ac8fbeaf68a6902d49c7a6d65d79b7",
+      "kind": "Seedelf spend 1",
+      "kleio": {
+        "block": 41546,
+        "certified_eb": true,
+        "index": 73
+      },
+      "landed": 140.15164351463318,
+      "sent": 0.05232572555541992,
+      "size": 888,
+      "slot": 939952,
+      "via": "certified EB"
+    }
+  ],
+  "window": null
+}

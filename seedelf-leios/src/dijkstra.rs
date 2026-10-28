@@ -30,7 +30,7 @@ use pallas_primitives::conway::{
     TransactionOutput, VKeyWitness, Value,
 };
 use pallas_traverse::MultiEraOutput;
-use seedelf_core::build::{Budgets, linear_fee, reference_script_fee, tx_id};
+use seedelf_core::build::{Budgets, linear_fee, reference_script_fee};
 use seedelf_core::eval::{self, Resolved};
 use seedelf_core::orders::integrity_hash;
 use seedelf_core::transaction::computation_fee;
@@ -314,9 +314,4 @@ fn set_lovelace(
 ) -> Result<()> {
     let output = outputs.get_mut(index).context("no such output")?;
     set_output_lovelace(output, f)
-}
-
-/// The id of a transaction kept as CBOR.
-pub fn id(tx: &[u8]) -> Result<[u8; 32]> {
-    Ok(*tx_id(tx)?)
 }

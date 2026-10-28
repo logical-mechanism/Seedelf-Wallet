@@ -1,0 +1,24 @@
+{
+  "name": "single",
+  "notes": {},
+  "refused": [],
+  "started": 1793217188.4137144,
+  "txs": [
+    {
+      "block": 41340,
+      "id": "85d84f765b266c805112f849ae4304c2dffaaba35c82638bfe4f24e81e91a55a",
+      "kind": "payment",
+      "kleio": {
+        "block": 41340,
+        "certified_eb": false,
+        "index": 5
+      },
+      "landed": 84.72718048095703,
+      "sent": 0.12030982971191406,
+      "size": 238,
+      "slot": 935672,
+      "via": "RB"
+    }
+  ],
+  "window": null
+}

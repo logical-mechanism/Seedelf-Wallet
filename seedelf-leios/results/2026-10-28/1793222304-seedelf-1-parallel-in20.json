@@ -1,0 +1,27 @@
+{
+  "name": "seedelf-1-parallel-in20",
+  "notes": {
+    "chained": false,
+    "inputs": 20
+  },
+  "refused": [],
+  "started": 1793222304.02307,
+  "txs": [
+    {
+      "block": 41582,
+      "id": "dc56dd456a3b7cbfddd72b5a9f2a957054dd4eabd43bcc3d3168e763ab166860",
+      "kind": "Seedelf spend 1",
+      "kleio": {
+        "block": 41582,
+        "certified_eb": true,
+        "index": 3537
+      },
+      "landed": 134.27393531799316,
+      "sent": 0.05919051170349121,
+      "size": 4115,
+      "slot": 940837,
+      "via": "certified EB"
+    }
+  ],
+  "window": null
+}

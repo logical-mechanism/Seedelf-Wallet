@@ -1,0 +1,102 @@
+{
+  "name": "chain-w4-k4",
+  "notes": {
+    "burst": 0,
+    "width": 4
+  },
+  "refused": [],
+  "started": 1793219148.8221512,
+  "txs": [
+    {
+      "block": 41429,
+      "id": "232f3c961b04a18aba3067e74a15d86332bd2c3a3b8e2e283538ecdaacb1312a",
+      "kind": "deposit",
+      "kleio": {
+        "block": 41429,
+        "certified_eb": true,
+        "index": 1404
+      },
+      "landed": 153.04523015022278,
+      "sent": 0.053197622299194336,
+      "size": 391,
+      "slot": 937701,
+      "via": "certified EB"
+    },
+    {
+      "block": 41429,
+      "id": "cadd3a7c6e763b525b85292f38e1f289c8cc8ab78c131459bdfab80e02c4a4bb",
+      "kind": "mix 1",
+      "kleio": {
+        "block": 41429,
+        "certified_eb": true,
+        "index": 1434
+      },
+      "landed": 153.04523015022278,
+      "sent": 0.11173701286315918,
+      "size": 4079,
+      "slot": 937701,
+      "via": "certified EB"
+    },
+    {
+      "block": 41429,
+      "id": "29fb02e78924efae98934154b687211dfec5bc781f743e8bcaeb41525f2029be",
+      "kind": "mix 2",
+      "kleio": {
+        "block": 41429,
+        "certified_eb": true,
+        "index": 1437
+      },
+      "landed": 153.04523015022278,
+      "sent": 0.17039966583251953,
+      "size": 4077,
+      "slot": 937701,
+      "via": "certified EB"
+    },
+    {
+      "block": 41429,
+      "id": "780c298994433fa39c439174ff1fe0596d814bc4709127a63871e0919b39adcd",
+      "kind": "mix 3",
+      "kleio": {
+        "block": 41429,
+        "certified_eb": true,
+        "index": 1467
+      },
+      "landed": 153.04523015022278,
+      "sent": 0.22959518432617188,
+      "size": 4078,
+      "slot": 937701,
+      "via": "certified EB"
+    },
+    {
+      "block": 41437,
+      "id": "c8ab2361ab5e15d225cbc7a8b419d98f964f5602832f3aca50562bc28884922f",
+      "kind": "mix 4",
+      "kleio": {
+        "block": 41437,
+        "certified_eb": true,
+        "index": 1271
+      },
+      "landed": 397.9154362678528,
+      "sent": 153.11455750465393,
+      "size": 4078,
+      "slot": 937946,
+      "via": "certified EB"
+    },
+    {
+      "block": 41437,
+      "id": "f9e2bbd7e1f1f85f600cd107ec321b71e7617df014b25c2ebc27ba81603df5e3",
+      "kind": "mix 5",
+      "kleio": {
+        "block": 41437,
+        "certified_eb": true,
+        "index": 1920
+      },
+      "landed": 398.8626163005829,
+      "sent": 153.17674708366394,
+      "size": 4079,
+      "slot": 937946,
+      "via": "certified EB"
+    }
+  ],
+  "window": 4
+}

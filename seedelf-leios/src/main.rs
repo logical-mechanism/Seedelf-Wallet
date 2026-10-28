@@ -38,14 +38,14 @@ fn ada(lovelace: u64) -> String {
 }
 
 fn networks() -> Result<Vec<Network>> {
-    Ok(vec![limits::mainnet(), limits::musashi()?, limits::cip164()])
+    Ok(vec![limits::mainnet(), limits::musashi_genesis()?, limits::musashi()?, limits::musashi_observed()?, limits::cip164()])
 }
 
 fn numbers() -> Result<()> {
     let p = params::musashi()?;
     let musashi = limits::musashi()?;
     let eb = musashi.eb.expect("Leios");
-    println!("# Musashi, from its genesis (respin of 2026-10-18)\n");
+    println!("# Musashi, as its node answers (epoch 43; genesis 2026-10-18)\n");
     println!(
         "- An RB every {:.0} s on average (f = {}); an RB may hold {} bytes, {} memory, {} steps.",
         musashi.rb_seconds(),
@@ -64,12 +64,18 @@ fn numbers() -> Result<()> {
         eb.txs.steps as f64 / musashi.rb.steps as f64
     );
     println!(
-        "- The RB after may certify it only {} slots on (3 x {} ms + {} ms + {} ms): {:.1}% of EBs are, the rest are dropped.",
+        "- The RB after may certify it only {} slots on (3 x {} ms + {} ms + {} ms): {:.1}% of EBs could be.",
         eb.certify_gap_slots(musashi.slot_ms),
         eb.l_hdr_ms,
         eb.l_vote_ms,
         eb.l_diff_ms,
         musashi.certified_share() * 100.0
+    );
+    let (eligible, certified) = limits::observed_votes()?;
+    println!(
+        "- Under IO's load (blocks 41261-41760), {certified} of the {eligible} EBs the timing allowed were certified ({:.1}%): {:.1}% of all EBs.",
+        certified as f64 * 100.0 / eligible as f64,
+        limits::musashi_observed()?.certified_share() * 100.0
     );
     println!(
         "- A transaction may use {} bytes, {} memory, {} steps: mainnet's limits, so a mix is still at most four boxes wide.\n",
@@ -99,11 +105,12 @@ fn numbers() -> Result<()> {
 
     println!("\n# How many fit a block, full of one kind\n");
     println!(
-        "Per second when every block is full of it: an RB's worth for each RB that doesn't certify, an EB's for each that does ({:.1}%).\n",
-        musashi.certified_share() * 100.0
+        "Per second when every block is full of it: an RB's worth for each RB that doesn't certify, an EB's for each that does ({:.1}% ideally, {:.1}% as observed).\n",
+        musashi.certified_share() * 100.0,
+        limits::musashi_observed()?.certified_share() * 100.0
     );
-    println!("| Transaction | Mainnet RB | Musashi EB | CIP-164 EB | Binds (Musashi EB) | Mainnet /s | Musashi /s | CIP-164 /s | Musashi vs mainnet |");
-    println!("|---|---:|---:|---:|---|---:|---:|---:|---:|");
+    println!("| Transaction | Mainnet RB | Musashi EB | CIP-164 EB | Binds (Musashi EB) | Mainnet /s | Musashi /s (genesis) | Musashi /s | Musashi /s (observed) | CIP-164 /s | Musashi vs mainnet (ideal, observed) |");
+    println!("|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|");
     let nets = networks()?;
     // Every mix of a width is the same shape: the first stands for them, and
     // one deposit for both chains.
@@ -116,16 +123,19 @@ fn numbers() -> Result<()> {
         let kind = m.kind.replace("mix 1, ", "mix, ");
         let per_s: Vec<f64> = nets.iter().map(|n| n.per_second(one)).collect();
         println!(
-            "| {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.1}x |",
+            "| {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.1}x, {:.1}x |",
             kind,
             fit(nets[0].rb, one),
             fit(eb.txs, one),
-            fit(nets[2].eb.expect("Leios").txs, one),
+            fit(nets[4].eb.expect("Leios").txs, one),
             binding(eb.txs, one),
             per_s[0],
             per_s[1],
             per_s[2],
-            per_s[1] / per_s[0]
+            per_s[3],
+            per_s[4],
+            per_s[2] / per_s[0],
+            per_s[3] / per_s[0]
         );
     }
 
@@ -199,23 +209,22 @@ fn chains() -> Result<Vec<(usize, Vec<Capacity>)>> {
         .collect()
 }
 
+/// What a node's mempool holds: two of each block. A Praos node's is two
+/// blocks; Musashi's node answers 4,178,176 bytes (`query tx-mempool info`),
+/// within 2 KB of two RBs and two EBs at its parameters now, so the same
+/// rule stands in for its steps, its genesis and CIP-164.
 fn mempool_of(n: &Network) -> Capacity {
-    match n.eb {
-        // Musashi's node holds 4,178,176 bytes: about 16 EBs. Steps in the
-        // same proportion.
-        Some(eb) => Capacity {
-            bytes: eb.txs.bytes * 4_178_176 / 260_000,
-            mem: eb.txs.mem * 4_178_176 / 260_000,
-            steps: eb.txs.steps * 4_178_176 / 260_000,
-            ref_script_bytes: u64::MAX,
-        },
-        // A Praos node's holds two blocks.
-        None => Capacity {
-            bytes: 2 * n.rb.bytes,
-            mem: 2 * n.rb.mem,
-            steps: 2 * n.rb.steps,
-            ref_script_bytes: u64::MAX,
-        },
+    let eb = n.eb.map(|eb| eb.txs).unwrap_or(Capacity {
+        bytes: 0,
+        mem: 0,
+        steps: 0,
+        ref_script_bytes: 0,
+    });
+    Capacity {
+        bytes: 2 * (n.rb.bytes + eb.bytes),
+        mem: 2 * (n.rb.mem + eb.mem),
+        steps: 2 * (n.rb.steps + eb.steps),
+        ref_script_bytes: u64::MAX,
     }
 }
 
@@ -229,7 +238,7 @@ fn scenario(n: &Network, chain: &[Capacity], window: usize, load: f64) -> model:
         chain: chain.to_vec(),
         window,
         look_s: 5,
-        quorum: 1.0,
+        quorum: n.vote_success,
     }
 }
 
@@ -237,12 +246,17 @@ fn model_report(runs: usize) -> Result<()> {
     let chains = chains()?;
     let nets = networks()?;
     println!("# Where a chain lands: {runs} runs a line\n");
-    println!("Load is everyone else's, as a multiple of what a Praos chain carries in bytes (4.5 kB/s), in 500-byte transactions that run no script: IO's own load runs at about 2x. The wallet sends at most 4 of a chain at once today; \"all\" sends the whole chain at once.\n");
+    println!("Load is everyone else's, as a multiple of what a Praos chain carries in bytes (4.5 kB/s), in 500-byte transactions that run no script. Musashi's EBs now carry about 12x (53.5 kB/s); IO's own load fills them. The wallet sends at most 4 of a chain at once today; \"all\" sends the whole chain at once.\n");
     println!("| Network | Chain | Window | Load | Done | Mean (s) | p50 (s) | p90 (s) | RBs | In an RB | In an EB | Sat in a dropped EB |");
     println!("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     for (width, chain) in &chains {
-        for load in [0.0, 1.0, 2.0] {
+        for load in [0.0, 1.0, 2.0, 6.0, 11.0] {
             for n in &nets {
+                // Past 2x Praos, a Praos chain refuses most of the load: only
+                // the Leios ones are worth a line.
+                if load > 2.0 && n.eb.is_none() {
+                    continue;
+                }
                 for window in [4, usize::MAX] {
                     let s = scenario(n, chain, window, load);
                     let o = model::many(&s, runs, 0x5eed_0e1f ^ (*width as u64) << 8 ^ (load as u64));

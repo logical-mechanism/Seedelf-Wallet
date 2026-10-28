@@ -1,0 +1,87 @@
+{
+  "name": "chain-w3-k4",
+  "notes": {
+    "burst": 0,
+    "width": 3
+  },
+  "refused": [],
+  "started": 1793218263.8597999,
+  "txs": [
+    {
+      "block": 41400,
+      "id": "a4b16fa33b3fbbb4f8d047d64888ab9809f0ef39dbfb09eb78c87930c0e591e8",
+      "kind": "deposit",
+      "kleio": {
+        "block": 41400,
+        "certified_eb": true,
+        "index": 1308
+      },
+      "landed": 314.04302644729614,
+      "sent": 0.05339860916137695,
+      "size": 390,
+      "slot": 936977,
+      "via": "certified EB"
+    },
+    {
+      "block": 41400,
+      "id": "241ff4bc9502ab00009c6594cef94327f2cccc31780401c85bd578cccd1d46db",
+      "kind": "mix 1",
+      "kleio": {
+        "block": 41400,
+        "certified_eb": true,
+        "index": 1351
+      },
+      "landed": 314.04302644729614,
+      "sent": 0.11270594596862793,
+      "size": 2661,
+      "slot": 936977,
+      "via": "certified EB"
+    },
+    {
+      "block": 41400,
+      "id": "67e73f1c24cdb2dc6a3cf174879eb1b9741cc81b5da1505abd6ee99f1428c25c",
+      "kind": "mix 2",
+      "kleio": {
+        "block": 41400,
+        "certified_eb": true,
+        "index": 1372
+      },
+      "landed": 314.04302644729614,
+      "sent": 0.17341041564941406,
+      "size": 2665,
+      "slot": 936977,
+      "via": "certified EB"
+    },
+    {
+      "block": 41400,
+      "id": "8cfcbd1650a0747fe7ab9c78bbaa5db256a1aba32ccf8f53f4d2e8975820339b",
+      "kind": "mix 3",
+      "kleio": {
+        "block": 41400,
+        "certified_eb": true,
+        "index": 1374
+      },
+      "landed": 314.04302644729614,
+      "sent": 0.23154425621032715,
+      "size": 2662,
+      "slot": 936977,
+      "via": "certified EB"
+    },
+    {
+      "block": 41405,
+      "id": "cb6c31b70dd5a4e8d248f0b0704257aaf05d8ead4316393675b1cbd7a632a870",
+      "kind": "mix 4",
+      "kleio": {
+        "block": 41405,
+        "certified_eb": true,
+        "index": 970
+      },
+      "landed": 434.1069664955139,
+      "sent": 314.10743165016174,
+      "size": 2662,
+      "slot": 937097,
+      "via": "certified EB"
+    }
+  ],
+  "window": 4
+}

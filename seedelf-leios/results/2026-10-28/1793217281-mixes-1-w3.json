@@ -1,0 +1,26 @@
+{
+  "name": "mixes-1-w3",
+  "notes": {
+    "width": 3
+  },
+  "refused": [],
+  "started": 1793217281.1814888,
+  "txs": [
+    {
+      "block": 41352,
+      "id": "45f44120bc4791be18374a634a30b202f311a1a69c217721d0691cdeaaf4d4de",
+      "kind": "mix 1",
+      "kleio": {
+        "block": 41352,
+        "certified_eb": true,
+        "index": 1533
+      },
+      "landed": 225.20592665672302,
+      "sent": 0.1170356273651123,
+      "size": 2666,
+      "slot": 935905,
+      "via": "certified EB"
+    }
+  ],
+  "window": null
+}

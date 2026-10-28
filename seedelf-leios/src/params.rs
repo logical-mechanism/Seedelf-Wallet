@@ -38,6 +38,7 @@ pub fn musashi() -> Result<ProtocolParameters> {
 }
 
 /// Mainnet's, as core's tests bundle them (epoch 658).
+#[cfg(test)]
 pub fn mainnet() -> Result<ProtocolParameters> {
     let rows: Value = serde_json::from_str(include_str!(
         "../../seedelf-platform/seedelf-core/tests/fixtures/epoch_params_mainnet.json"

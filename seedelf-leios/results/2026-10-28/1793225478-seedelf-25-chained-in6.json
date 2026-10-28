@@ -1,0 +1,387 @@
+{
+  "name": "seedelf-25-chained-in6",
+  "notes": {
+    "chained": true,
+    "inputs": 6
+  },
+  "refused": [],
+  "started": 1793225478.9571285,
+  "txs": [
+    {
+      "block": 41751,
+      "id": "73acb0a2181ccfb563cc2a332a38275397ef3d79ff1ab2884e0cbb653ab2da41",
+      "kind": "Seedelf spend 1",
+      "kleio": {
+        "block": 41751,
+        "certified_eb": true,
+        "index": 1376
+      },
+      "landed": 403.16125559806824,
+      "sent": 0.048926591873168945,
+      "size": 1733,
+      "slot": 944281,
+      "via": "certified EB"
+    },
+    {
+      "block": 41751,
+      "id": "c070c262abe0380df219d4d6d7072404895b397ef54c40ba51b8908f55ada99a",
+      "kind": "Seedelf spend 2",
+      "kleio": {
+        "block": 41751,
+        "certified_eb": true,
+        "index": 1412
+      },
+      "landed": 403.16125559806824,
+      "sent": 0.09900808334350586,
+      "size": 888,
+      "slot": 944281,
+      "via": "certified EB"
+    },
+    {
+      "block": 41751,
+      "id": "b39815c6d24dc4c09fcf5c2a5c1cdc5639d9eb750df50304906c68aef6d6d245",
+      "kind": "Seedelf spend 3",
+      "kleio": {
+        "block": 41751,
+        "certified_eb": true,
+        "index": 1415
+      },
+      "landed": 403.16125559806824,
+      "sent": 0.154541015625,
+      "size": 888,
+      "slot": 944281,
+      "via": "certified EB"
+    },
+    {
+      "block": 41751,
+      "id": "2caa9c875dbac2d535e7198395fc5b2d89751022efd767d75fdf16a4c46757c8",
+      "kind": "Seedelf spend 4",
+      "kleio": {
+        "block": 41751,
+        "certified_eb": true,
+        "index": 1425
+      },
+      "landed": 403.16125559806824,
+      "sent": 0.20486664772033691,
+      "size": 888,
+      "slot": 944281,
+      "via": "certified EB"
+    },
+    {
+      "block": 41751,
+      "id": "c572c2adbd587af243594a6e7eabd07283021720ffbe21971df4b8ce970771e9",
+      "kind": "Seedelf spend 5",
+      "kleio": {
+        "block": 41751,
+        "certified_eb": true,
+        "index": 1428
+      },
+      "landed": 403.16125559806824,
+      "sent": 0.25263261795043945,
+      "size": 888,
+      "slot": 944281,
+      "via": "certified EB"
+    },
+    {
+      "block": 41751,
+      "id": "dc68050f632ba70f3800ab9efc1525e8f9e1976e34944f9de00a4edcb6434d41",
+      "kind": "Seedelf spend 6",
+      "kleio": {
+        "block": 41751,
+        "certified_eb": true,
+        "index": 1437
+      },
+      "landed": 403.16125559806824,
+      "sent": 0.30161237716674805,
+      "size": 888,
+      "slot": 944281,
+      "via": "certified EB"
+    },
+    {
+      "block": 41751,
+      "id": "5d5ffba635ebe377004d65b19d07e4552029979baef67f8a356f8df0493f0dd2",
+      "kind": "Seedelf spend 7",
+      "kleio": {
+        "block": 41751,
+        "certified_eb": true,
+        "index": 1464
+      },
+      "landed": 403.16125559806824,
+      "sent": 0.34975647926330566,
+      "size": 888,
+      "slot": 944281,
+      "via": "certified EB"
+    },
+    {
+      "block": 41756,
+      "id": "674022e9ea25ae446141e8a49ad9f14cac0dd8e4b632f51f379ffff9c9b6840b",
+      "kind": "Seedelf spend 8",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 0
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.3988962173461914,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "d2cbccb945aff9a7d345b6f829fd7cf7e86b8ea203dbda139ed507baddbe8ade",
+      "kind": "Seedelf spend 9",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 1
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.4491558074951172,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "c414bdc1f01d843fdc49bac29dcbb539861c04fc0f2c04a28ac85fc011ea3633",
+      "kind": "Seedelf spend 10",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 2
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.5000438690185547,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "5f4adcd4a1cb14a114c524a7fabf795706d95e664ea26f8c42b77c13f3639499",
+      "kind": "Seedelf spend 11",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 3
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.5516476631164551,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "6fa8b5be41d20533aa642e57ed8051311d92899a2f1db40b33655a1245272dc0",
+      "kind": "Seedelf spend 12",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 4
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.6051223278045654,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "3708a4778d664067df1d5370f152e2e2710cba41bdd1347c220b803005f5a1a9",
+      "kind": "Seedelf spend 13",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 5
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.6526901721954346,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "ebde1e5ceaba1d9137ca7e958cd74843eb39a5d425e9e54396aab52db42ed4b5",
+      "kind": "Seedelf spend 14",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 6
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.7044093608856201,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "e53a890723a64b0866a7704a29ea115d433e4290449a2fae13743d5110e28f31",
+      "kind": "Seedelf spend 15",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 7
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.7558724880218506,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "0be10277663f5c9901fa1913c2adcbb619620db51c86d488a3a53ccfae69b87d",
+      "kind": "Seedelf spend 16",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 8
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.8049635887145996,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "32e2327adb81a649d4f41f11b5496f0fd7437aea1cec149022cfd085a8d34493",
+      "kind": "Seedelf spend 17",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 9
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.853642463684082,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "f3e492a713098100de80a1bc4e014dd5bd2b7aea52f23487980a53248995dc1f",
+      "kind": "Seedelf spend 18",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 10
+      },
+      "landed": 526.5844204425812,
+      "sent": 0.9027700424194336,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "020dc5f5a6aa8434d9c2d44ca2fbafb794040d2872cc006394d76c0a9a7c07b0",
+      "kind": "Seedelf spend 19",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 11
+      },
+      "landed": 525.6328389644623,
+      "sent": 0.9504387378692627,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "29dd0b97a5c57c3fe00b441bdff2d5e8a39e937a53e5cabc4d9345256e617cef",
+      "kind": "Seedelf spend 20",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 12
+      },
+      "landed": 525.6328389644623,
+      "sent": 0.9989891052246094,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "5839562c50be44e7e2b52dc686a182ab0b25fca64627a49a3946887600875a0c",
+      "kind": "Seedelf spend 21",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 13
+      },
+      "landed": 525.6328389644623,
+      "sent": 1.0479111671447754,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "6f6df786ce11b92e2834a64c999f4932dc2283e4215ce5f34fcf1e909f64340d",
+      "kind": "Seedelf spend 22",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 14
+      },
+      "landed": 525.6328389644623,
+      "sent": 1.0971462726593018,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "f9fd0e0456e66d15e1e32c1b0fc949444b689ba8771d72f279f51ec880e0cdb4",
+      "kind": "Seedelf spend 23",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 15
+      },
+      "landed": 525.6328389644623,
+      "sent": 1.1462376117706299,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "ebf3f2dbd257c638cb16a6d04f0fe18bffb6e1d7058cd1770e657c69fcf883d4",
+      "kind": "Seedelf spend 24",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 16
+      },
+      "landed": 525.6328389644623,
+      "sent": 1.1941373348236084,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    },
+    {
+      "block": 41756,
+      "id": "9a467031997ce625e96629384913492f119fb60b14a2d4635d7b5932983753dd",
+      "kind": "Seedelf spend 25",
+      "kleio": {
+        "block": 41756,
+        "certified_eb": false,
+        "index": 17
+      },
+      "landed": 525.6328389644623,
+      "sent": 1.2423644065856934,
+      "size": 888,
+      "slot": 944404,
+      "via": "RB"
+    }
+  ],
+  "window": null
+}

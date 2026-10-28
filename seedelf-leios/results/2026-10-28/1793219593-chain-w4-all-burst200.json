@@ -1,0 +1,2446 @@
+{
+  "name": "chain-w4-all-burst200",
+  "notes": {
+    "burst": 200,
+    "width": 4
+  },
+  "refused": [],
+  "started": 1793219593.2111802,
+  "txs": [
+    {
+      "block": 41461,
+      "id": "a4370967268fde7d3af85f8c444a8c0eabaef27ec9d1bf1d98478e9c97e311bf",
+      "kind": "payment 1",
+      "kleio": {
+        "block": 41461,
+        "certified_eb": false,
+        "index": 3
+      },
+      "landed": 389.9321553707123,
+      "sent": 0.05039787292480469,
+      "size": 243,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "8335d506bcf53c9932a485b7784803c646d62475e785ea7c310f5e40b5b161db",
+      "kind": "payment 2",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.09984278678894043,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "5dfb44a077efadd32deac2631ca6401c39e4ef5dcf06e3d2c7a5847e17845dd0",
+      "kind": "payment 3",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.18911480903625488,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "5aa955d7c08a42613e90fde2f0e58c06ca638769f8595f4dcae1b088ca045d18",
+      "kind": "payment 4",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.24167680740356445,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "0dd33823ed591255e74556787732404d0ecf867b704fa9eaeaa4e8cb33d23560",
+      "kind": "payment 5",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.29167842864990234,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "336fde975fbb514397f358010d529498f085de80b9e040915a55380662f1af24",
+      "kind": "payment 6",
+      "kleio": {
+        "block": 41461,
+        "certified_eb": false,
+        "index": 28
+      },
+      "landed": 389.9321553707123,
+      "sent": 0.3410639762878418,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "b4f81c853a7b32f3225a21a98bb6e6f09c20523471bf49fb34bc845da098cd46",
+      "kind": "payment 7",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.3902151584625244,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "cc626080f6e1c4e1c9656a3ce70517603426b2b3d584c4854b0311c8c543a5fe",
+      "kind": "payment 8",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.4395287036895752,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "4179fe4ccc085ae120de650d5ab7714d55f93a3cfaec1536442ce59a5efe4919",
+      "kind": "payment 9",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.4883911609649658,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "b5be9d24f7907b4fc73b2b3986be92276074cbd09ac1f6eb39e01caeb82b4952",
+      "kind": "payment 10",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.5381858348846436,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "958d34d5115de638982c28618e59c1f72d7baa7623ed004c8f6a8724cde887dc",
+      "kind": "payment 11",
+      "kleio": {
+        "block": 41461,
+        "certified_eb": false,
+        "index": 42
+      },
+      "landed": 389.9321553707123,
+      "sent": 0.5855979919433594,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "9b23b4da0329963c4958fe6509d29a5b0c6792ca65df4e0ebb9e9f71be67ccf4",
+      "kind": "payment 12",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.6335501670837402,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "5300d966e8412b8fb0c8c72b515eae33c36a73b8962eb43112364501e6cd7d2b",
+      "kind": "payment 13",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.6812193393707275,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "c77a20ce0f631e3dd52de4446841d011102282e9f59b5707dc269a7669563cd3",
+      "kind": "payment 14",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.7305631637573242,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "01bf570c78e86ce986e11d6458c699ef95b58d1081183cfb94846605b8fedfe8",
+      "kind": "payment 15",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.7834696769714355,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "a2ab7cb65c37dba72f6492df584d717ced5fb5c81e5b8e2790cce3a4e1eb04d8",
+      "kind": "payment 16",
+      "kleio": {
+        "block": 41461,
+        "certified_eb": false,
+        "index": 57
+      },
+      "landed": 389.9321553707123,
+      "sent": 0.8325405120849609,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "103b8e7e688bc3a682c4bda6de64e28c90ba0178eee204a8153a5bde18fcaa49",
+      "kind": "payment 17",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.8805036544799805,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "0077b5037405a7c7c834000d3f7450d5840cc7b80d22c9037cff7ad855187b47",
+      "kind": "payment 18",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.927680253982544,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "9fe43e0f774c5cfbbd7d87245992bf5ef8e9451e9d218206ef10756a5a274dc6",
+      "kind": "payment 19",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 0.977027177810669,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "bf1d4c11890b4ba2bc9e8d58b74d622141d5f1f46a6b985702937813e18432de",
+      "kind": "payment 20",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.0257062911987305,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "32c7a268b49b7b8667964d12eb5e0af756254a61a8300b364ffd2ce3a8bad745",
+      "kind": "payment 21",
+      "kleio": {
+        "block": 41461,
+        "certified_eb": false,
+        "index": 77
+      },
+      "landed": 389.9321553707123,
+      "sent": 1.0746335983276367,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "92b238e91ff34fb2ce07944107b082a7ed88d9ae167bf750ab59a85fc7966ea9",
+      "kind": "payment 22",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.1227545738220215,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "151b614e3c9a621b4e0ae1a1c710fc2db5ee99a9347bac6bf8ccb7f3f6d4bcf7",
+      "kind": "payment 23",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.1718764305114746,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "3d2d9db4207711f98f795a46cd1460d2920911f7498643d26897c6403c492688",
+      "kind": "payment 24",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.2189209461212158,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "51506d89d05772d4c35428e55d8c935a8e9fa98c9fc8635bf8b1096cd875b090",
+      "kind": "payment 25",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.2667741775512695,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "3636cf1c0602e55d986e8d09422e4f6672f34b158fe253d74f6e359b8c7c88a2",
+      "kind": "payment 26",
+      "kleio": {
+        "block": 41461,
+        "certified_eb": false,
+        "index": 89
+      },
+      "landed": 389.9321553707123,
+      "sent": 1.315917730331421,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "d9a7b52befbc7c19d0e2bec4f4f6db980d8734333edc9c52cf6b4ef6a33da71f",
+      "kind": "payment 27",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.3653161525726318,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "a4a5302fecebe833ddd11b5c65f002560a259302f063284d989da62053da1abd",
+      "kind": "payment 28",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.4132287502288818,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "3576885e78c2434426c00f291a794ff32518b214a607bfddac45348093dd807d",
+      "kind": "payment 29",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.467367172241211,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "05342dbe86c5a1c9bfa5ab1a9c24216357f2ae6b214dcd15020abadb1c958ffb",
+      "kind": "payment 30",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.5160653591156006,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "1c09a32a75f61bd19d4a28faf4b3e82e02a89ca2dabedd79aa5f5fb7a6c1df63",
+      "kind": "payment 31",
+      "kleio": {
+        "block": 41461,
+        "certified_eb": false,
+        "index": 108
+      },
+      "landed": 389.9321553707123,
+      "sent": 1.5665321350097656,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "3c74423bff98588a0be55dcdfaf543b9d4b3a60a618aeb33f950bf9efd6e5338",
+      "kind": "payment 32",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.613473892211914,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "678e92041c4272dab43a60fd357ae486385b0230a4bc718f3b292971bfc6c5d1",
+      "kind": "payment 33",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.660923957824707,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41461,
+      "id": "1f0e466d0e09b9f4c7905b194a6a2ca16fbc22f974121607d5f13fe697d89c09",
+      "kind": "payment 34",
+      "kleio": null,
+      "landed": 389.9321553707123,
+      "sent": 1.7099299430847168,
+      "size": 242,
+      "slot": 938382,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "91f939ba1a7a5a2f45305005d75adada161d22ae5ead5b1f1269aeab5921f279",
+      "kind": "payment 35",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 1.761664867401123,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "1e9328c758a92bd1b7e7781b76e340fdfac9935112783e25c733caad8e8295b4",
+      "kind": "payment 36",
+      "kleio": {
+        "block": 41462,
+        "certified_eb": false,
+        "index": 16
+      },
+      "landed": 398.6788215637207,
+      "sent": 1.8117072582244873,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "a833880d0f46cfc7e9c0e5f6e8315333c965b5b64947c8a49d88f9a0387a8638",
+      "kind": "payment 37",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 1.862684965133667,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "90035adb26e44eedf09ab79bd6e6986260748d40af7bce6da361236d4635cfd7",
+      "kind": "payment 38",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 1.9127280712127686,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "d8034324f87b5945ee18785cb374bb7a3c2fcb9b021d3811bc6575f60fc8d665",
+      "kind": "payment 39",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 1.962864637374878,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "501690418247c61b0740553f13ca34e0a39304e4895b208d485f079c3e617323",
+      "kind": "payment 40",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.0130319595336914,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "2b51e94d365ad1397014991431dcec11851837546e04dd86cd5db4dd60bd45cf",
+      "kind": "payment 41",
+      "kleio": {
+        "block": 41462,
+        "certified_eb": false,
+        "index": 31
+      },
+      "landed": 398.6788215637207,
+      "sent": 2.0626299381256104,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "4d4bd9c451f5d45f4199c5356a8641bcaaf3614f8b4548884d46d2cd562e8937",
+      "kind": "payment 42",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.1113202571868896,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "b7feb9571be8df4be23d43c88f547eac6a494df282fa7f2ffa95c6ea3d814b5f",
+      "kind": "payment 43",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.1639530658721924,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "78afc8944ea0709019fe14056d7acbb991f168f135eb2f27cdc05c7a3b3404d5",
+      "kind": "payment 44",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.214170217514038,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "d2402befd533df1e9cc0bbccab6e4ded7012065e05236ef0a5ebc8a669dc8e19",
+      "kind": "payment 45",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.266566753387451,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "13cf42b1586a1b831f39f2e9e65cc9c5535122ed41d359be4ba1e0c7367bccdf",
+      "kind": "payment 46",
+      "kleio": {
+        "block": 41462,
+        "certified_eb": false,
+        "index": 72
+      },
+      "landed": 398.6788215637207,
+      "sent": 2.3180718421936035,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "6ecdf746e43884e3d68bf9956b49a30e11f6aa8ef679c2fdc1815560e09d1a7d",
+      "kind": "payment 47",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.372662305831909,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "31591224fc6d972bbda5133379aab6d053e3b68b49484a1b7b45f06767a5e0b7",
+      "kind": "payment 48",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.4210095405578613,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "1b3fa45b123785da33bf358eaf464db78ed0f41d772367316a1450a8aa48167b",
+      "kind": "payment 49",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.473299026489258,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "ab071b454aedac63aa70616c0fd244cee6f4478d4d4236e1ae53746c76d92db2",
+      "kind": "payment 50",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.528695821762085,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "d1e233e51f40d8a2c75b74c3338ab8aeff4b4d45bea981a84d6b54b7a6bff587",
+      "kind": "payment 51",
+      "kleio": {
+        "block": 41462,
+        "certified_eb": false,
+        "index": 94
+      },
+      "landed": 398.6788215637207,
+      "sent": 2.5781641006469727,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "414e5bbd6bb717e8b25b836745dcca2dd2107a5092b836f4a2a0469d0177b447",
+      "kind": "payment 52",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.633206844329834,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41462,
+      "id": "a31bc37a18c16ba0bdf76ece71c7b0ba24362f8f152d612b13531897b2ecde35",
+      "kind": "payment 53",
+      "kleio": null,
+      "landed": 398.6788215637207,
+      "sent": 2.6844873428344727,
+      "size": 242,
+      "slot": 938390,
+      "via": "RB"
+    },
+    {
+      "block": 41465,
+      "id": "5b44717fb1b255bbe129209e19765bbc097051a5ca9f22cd9812807d4ff64274",
+      "kind": "payment 54",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 2.7384183406829834,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "9129f7366162c0a172495549794c415a654bd391ff3b85129a595ad0cfad8e6f",
+      "kind": "payment 55",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 2.7876877784729004,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b715e6aebc34519e86da5b2f024402dde2da2feadcb9dbd77ca557e88d1e2144",
+      "kind": "payment 56",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 716
+      },
+      "landed": 505.7542679309845,
+      "sent": 2.8352553844451904,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "2602a5e44e506b903d1a78c22146935cd10e3d4fc1f66a51ce6b76411f1e5a45",
+      "kind": "payment 57",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 2.8838698863983154,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e7be9caa1334a0a4694962c349ba11181af3a6d5076e38a8f04621e4d4081706",
+      "kind": "payment 58",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 2.931783676147461,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "d648d141b23c5541c154882ed7e9b544377cc8ce1aad95eb18c96d573ca40b38",
+      "kind": "payment 59",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 2.9816410541534424,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "45db264147c8f383fb504479e1269a78970b9ca9683c71f3fc38ad99eaa8757e",
+      "kind": "payment 60",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.0331859588623047,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "54b0a335f06a11f31d7427e2c36b0ad2f192923516afb1561f17b31e4b54bc9d",
+      "kind": "payment 61",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 725
+      },
+      "landed": 505.7542679309845,
+      "sent": 3.0807793140411377,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "1909cb351fc9b70d289d2987a7ff1b63af20fc2c67b0b59e368e0f9dbb3dba2b",
+      "kind": "payment 62",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.1368680000305176,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "9e1b50d9cfc871f3244ea8e3fa4812174f2133197f61cfd64cc2e0e3e204083d",
+      "kind": "payment 63",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.1869916915893555,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "4ffc59123232f5246a002d3f098e03022dfcf9b3a2e34b10226018fbaf39409b",
+      "kind": "payment 64",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.238072395324707,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "336ab7afdc0e2beee6f8fa90909c5c008210a546cbde13dda71b63d1ac9c28c1",
+      "kind": "payment 65",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.2880289554595947,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "4a502ce8602eae34bf892dd2cd9afaedd23415de54041750af2500b3bf0aa007",
+      "kind": "payment 66",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 795
+      },
+      "landed": 505.7542679309845,
+      "sent": 3.339938163757324,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "5282b09d05e8cbd219aa1d5a2c58d0bb6cd5dee0ed1b60ce034865ec8642d022",
+      "kind": "payment 67",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.389599561691284,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "4ffb35165a8781747766ef1673d15625a27d9011daef2f326fb754b2b0bc6f56",
+      "kind": "payment 68",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.4386727809906006,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "72135af8cc20caafe3baa2546c3ab42f19e8f6705685a7584f5dffffd76a5305",
+      "kind": "payment 69",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.491370677947998,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b832783c2e337b66c789c67ee26b14502990b9121ff26904763139e69986f4ff",
+      "kind": "payment 70",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.542113780975342,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "ebf0e44e5a31a2ac6729419af7e9f51653deb48c16b1e9959f2f91404f524a7f",
+      "kind": "payment 71",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 828
+      },
+      "landed": 505.7542679309845,
+      "sent": 3.5945303440093994,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "1a9bbd5b3ef95b7d5243f1878299447e3b6214ee82e638d60cd92aa709ba883f",
+      "kind": "payment 72",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.642247200012207,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "4e028ef967aa54ba992b93963b271631537078577f19993a0437ea7fc5fda73e",
+      "kind": "payment 73",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.691208839416504,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "ac28d062eb415599baa1f70c98cb0c0efb6d567712f1a687c5cf86cd9ddb3e65",
+      "kind": "payment 74",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.739854335784912,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "9e9d2eff525db45331b7c35de81882669624ab01e0aa938c522fc4f3e50df740",
+      "kind": "payment 75",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.7877449989318848,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "93ebbcfa5725d6d55890fe7663c057bc182386be38ab6f3ce850eb430ad6c07a",
+      "kind": "payment 76",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 853
+      },
+      "landed": 505.7542679309845,
+      "sent": 3.837244987487793,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b82ae3f7cc15505d6025007a631451243267789856baf3be28f6bbd687db60fb",
+      "kind": "payment 77",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.8871047496795654,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "138df1ca008de77bc2133ea20c51c6bccad2cc2b1eaeb57309e3168f6971f155",
+      "kind": "payment 78",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.9355688095092773,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "22418a879ed95b7c4b6a993d17ddadf31b6db3c602715eb65a5649d3c61157e9",
+      "kind": "payment 79",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 3.9841554164886475,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "a0efbc9e01573f36ad53be8bb11d32f9170ac73a71afc3f10e8dc63e591d032e",
+      "kind": "payment 80",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.035061597824097,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "32ba7715c69fcf83448ce6973647046d8a367f600709401215b34bcc12b68757",
+      "kind": "payment 81",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 875
+      },
+      "landed": 505.7542679309845,
+      "sent": 4.085007190704346,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "7f11633f0ccd194423f47738e2b124897249467f1426e02bd73fb67d85350fed",
+      "kind": "payment 82",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.134460687637329,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "d1acca848960ca433b0306665b5585ad67735e07a912a2c462dc03efc97c52bd",
+      "kind": "payment 83",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.185536861419678,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "77a39ca359efa6e2ec11b546b3fb6c4cc7bb0ac8036d892665e55279883f7f3b",
+      "kind": "payment 84",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.234224796295166,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "7e6e65e7b2038fcfda5446f6929c778cb21d0199bbd32c580cc876a28da2915a",
+      "kind": "payment 85",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.282909631729126,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "0bd8f370d77d4e15cddc89129a719caf65fc73c5f00e93aeac99da10785a5435",
+      "kind": "payment 86",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 908
+      },
+      "landed": 505.7542679309845,
+      "sent": 4.333266258239746,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "cfb2719ddac733d38b0d519c6077b28a72174330751e805306171ea60f60b8e3",
+      "kind": "payment 87",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.381999492645264,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "dca1d651f2fe1ab1ef99813b4ceb1022e870c7f9770a2a0d23833f6ad186fbc1",
+      "kind": "payment 88",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.4317121505737305,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "bbc65e9991fa3ef2a63c40b2698e878039cab88347fc809d7bdd982684e61dcf",
+      "kind": "payment 89",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.482866287231445,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "c0c8330aa8bfb9ef01c3172fe12519808da2661839dab8d65487b49175cb81d8",
+      "kind": "payment 90",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.531573057174683,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "3eba69cbe4c48530ca5e39bb74bfc2a1f88b4e0a5c59c21d65650f2a90fe508b",
+      "kind": "payment 91",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 945
+      },
+      "landed": 505.7542679309845,
+      "sent": 4.580829858779907,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "48c6e11feb4492a177868af02c71ab158a70ed687561ab27d2859d615ea31e2e",
+      "kind": "payment 92",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.628584146499634,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "5872d693d51b34f2106e1bbf48df11f5249cb8d4e67c19039afaeb2beb8bc22b",
+      "kind": "payment 93",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.679204702377319,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "c320d793a7bffaf5d5d3769d92c33efa66521fc3836051f7c0094a76ef9a0eb2",
+      "kind": "payment 94",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.728715181350708,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "7df53a119a1ca0dfcd31bd6a4b90f6d8520b55c0a3e5ca8be07792de8d999674",
+      "kind": "payment 95",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.77700662612915,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "093d086b1b4e87cfb072a65c22d81eb49642a7b14804726400cfc353164f5c8b",
+      "kind": "payment 96",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 969
+      },
+      "landed": 505.7542679309845,
+      "sent": 4.826618671417236,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "3f5b7e9a31c80beb9fad6110946672e5712c8a41c7b81bbbf1242d910417b374",
+      "kind": "payment 97",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.874969720840454,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "072971fe11d89c90e4e1370a3ca8dde818baaf651415fc286d743d051492b49b",
+      "kind": "payment 98",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.925711393356323,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "aaf8b2fd86964ba266a10948dad21b06e89e36350f2f445404bc9b97555ae6eb",
+      "kind": "payment 99",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 4.978864431381226,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "0cc99a4d34423fa7adbc681e627d4359187ef948aaa03e8747c7493f036bcc2d",
+      "kind": "payment 100",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.031887769699097,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e26da7d180f842262e12df47b336c17483caf53bbe7b0e0cc206441ffcdcaad8",
+      "kind": "payment 101",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1000
+      },
+      "landed": 505.7542679309845,
+      "sent": 5.080847978591919,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "2cec4d606e1104a054d49f842261d450c981dc6beb4f55d2f55d35ba6e2b9f1c",
+      "kind": "payment 102",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.129750490188599,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "c9e06b42f79f73458a8ff49cd5f562627e01676e4cd67d233c6f01a35fab4af6",
+      "kind": "payment 103",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.180088520050049,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "808f3a4af496bd05fc72ed48fcc0f1303e9a97fcebdfbab1438921557dfda97c",
+      "kind": "payment 104",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.229222059249878,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "79f5a03dfcb0a8d403e42de1a5831d1baefc5454e76137e758911f9b2f9fb4fb",
+      "kind": "payment 105",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.280273914337158,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b20170008f6cb7b5be2669acdc5ff9ec7442005f46a671a843b86529ac8612c8",
+      "kind": "payment 106",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1033
+      },
+      "landed": 505.7542679309845,
+      "sent": 5.328587293624878,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "ad516e353a655176ff8fca9a3573a870715ad9e74a25496a4708a8e49962b320",
+      "kind": "payment 107",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.381129741668701,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "d62c4e693b6851b520826ad330f58d2f9835976526f06effae86ead3b86ec922",
+      "kind": "payment 108",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.432984352111816,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "4020827d4bfe6518931d127fd8c6e0451ebc315752aad3fb68ba78d4c0b2096b",
+      "kind": "payment 109",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.4840922355651855,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "abaa5de9720173f0874a8709c2eea40c22d7575a822b62d911c69de89555dbf7",
+      "kind": "payment 110",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.534189939498901,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "2df991eddb0cf22889b31a0e76c1c4c00fa49868e5e53120d80c2d6befb90838",
+      "kind": "payment 111",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1071
+      },
+      "landed": 505.7542679309845,
+      "sent": 5.585055589675903,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "9875fc48320214b3ecc78bc6bbbe301c24991b7d6dac306d961f32d2afe610da",
+      "kind": "payment 112",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.635617017745972,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "0fa029ebb81e0db49625b4dd5bc69bf102a6ae8f0496c95f862b807f3a545e7f",
+      "kind": "payment 113",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.683459758758545,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "460637579f861c449d321d8c3793ce7abbf2c20aabe633a30a1b449bb82aa48e",
+      "kind": "payment 114",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.732291221618652,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "30db6a11262ceee4e9006f507cbd890e0bf4fa43698329d4ba44b40d5f157547",
+      "kind": "payment 115",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.7835705280303955,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "54d12e6624ec939172e97ac88d3268c1d7797079669574e06920133e5b252214",
+      "kind": "payment 116",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1084
+      },
+      "landed": 505.7542679309845,
+      "sent": 5.832376956939697,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e05136066e7bccefe7efe5cbd49424e60324b83187b79f946709836fa68c43dc",
+      "kind": "payment 117",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.883682489395142,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "9ef8c366af5cb33fb0fbf21e30f952badd8d845238cde430863dab90c4c6680d",
+      "kind": "payment 118",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.933621168136597,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "f2269bfeca1ce668dae9f003c898a559a0bbb0c196634639661659e42603cd30",
+      "kind": "payment 119",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 5.983035087585449,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "dd62439b9d2936f8092a2b1a4e6dbd541dca53f96534b85b908ede52a6f6241c",
+      "kind": "payment 120",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.034359931945801,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b2c06b68d1ae1f15fcbfb2ced88066b33a6d2bacccfd376a63d2b7cc53b8e182",
+      "kind": "payment 121",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1107
+      },
+      "landed": 505.7542679309845,
+      "sent": 6.08297324180603,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "f737044264ec08c305a95329b5eda755a8562ad24fc0fb8fcb56aaa0433c74f3",
+      "kind": "payment 122",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.131327867507935,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "2e913416706c9953d63eb2f54b53104cd74edb4e25749997529815c40374d3e6",
+      "kind": "payment 123",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.180177927017212,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b33f3c475a6dc46c58eda6f5056b1a8eaf838cbd0848cc71cf7d3503f865e457",
+      "kind": "payment 124",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.23136043548584,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "43a38333ce1d764fbc2aff7716298f7d739ca460a1ba3df477647f43949ff29c",
+      "kind": "payment 125",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.281491994857788,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "13132a8521dc1bbc7dde180bda0393ecafa100742f9bc045d470e9723de43580",
+      "kind": "payment 126",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1117
+      },
+      "landed": 505.7542679309845,
+      "sent": 6.331192255020142,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e82fc1c1bf929aec185e97e4b4a94afbd311b1a98865f2de5c358ef6c68f3bbd",
+      "kind": "payment 127",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.3799827098846436,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b227014a11f1e7d7f74446e28fe471352ede01b4bf0f02f07186f45181166f13",
+      "kind": "payment 128",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.432791233062744,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "aa994cd75af9ef2ca3806498578250685fd777020aaa5d8d0ac1b7d45715bcfe",
+      "kind": "payment 129",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.482512474060059,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "eb03703e13e1d2bb5f258211a5a3863ae49821de5f80560864d5a7b893251ffa",
+      "kind": "payment 130",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.529984712600708,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "36d330750f97637e3ee97b572a73035a99f4788f2a7e4a042e17e2ce2209622b",
+      "kind": "payment 131",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1153
+      },
+      "landed": 505.7542679309845,
+      "sent": 6.5780534744262695,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "ccfc3f6dcc9bc40a116ac340c2dd701866d3de6fd244d24e1b6d6b6177deaa76",
+      "kind": "payment 132",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.629408836364746,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "82294dc4045af7924d413b0edc2c215abc20ce93ab16e340ebf29dd4d94ad294",
+      "kind": "payment 133",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.677416086196899,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "049229728b2f040e7a24401bafe1384386c303fdc4df160624fe5be940273e2d",
+      "kind": "payment 134",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.726029396057129,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b0d3f207b824a34cb168839cf4acf557313d39fd342657b47f363d5a3ca4d767",
+      "kind": "payment 135",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.773586750030518,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e10aa1011fc0374e7a8165c0b5baad4125b9ed7bc38b8cd9dc6cd66537916627",
+      "kind": "payment 136",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1180
+      },
+      "landed": 505.7542679309845,
+      "sent": 6.822336912155151,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "6e66c3b56ce9d85adcecc996a30539033ae50536d95b75c5212c6af566f0af9b",
+      "kind": "payment 137",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.869340181350708,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b660693d5b5baad05ea06efe81b157868f9fe96788893b310f2e0cf1ab4540e3",
+      "kind": "payment 138",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.917786121368408,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b78efccff345cab6fbba20f7589e9ea9c9215dbb8bb99ffd74d9e12bae3abc6f",
+      "kind": "payment 139",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 6.96809458732605,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "d5a4f098deb603eb13ff5cf973463a158937b84ba3337111a24e6fc76b147380",
+      "kind": "payment 140",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.016739130020142,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "d873b8c7d877166e4fe491226d0d2d5e1855a72ff91335b912b9491ad164cd99",
+      "kind": "payment 141",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1226
+      },
+      "landed": 505.7542679309845,
+      "sent": 7.063984155654907,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "cff1d36edc889bd382884e46693e02f36080a6978cb665231228bc6f6915c518",
+      "kind": "payment 142",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.1125099658966064,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "95f76eedecc1a6a0377f8fa0e63d8251e97c3bc80b0ebca368d8d1425c974b41",
+      "kind": "payment 143",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.163224697113037,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "a4503390917c9f865a2f7614c2188e2c345fea893c45e1ac67f4de90e0fec36c",
+      "kind": "payment 144",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.212666034698486,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "5e3f36b8185e7384a499a905df9da9fca7b16325933aef3e67bb5d75e7dbbad9",
+      "kind": "payment 145",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.259039402008057,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "588a1372cbfb0e0fb5302c2e92904f0de06ae57c52cf00a287a241aa1d67190e",
+      "kind": "payment 146",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1264
+      },
+      "landed": 505.7542679309845,
+      "sent": 7.3075010776519775,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "722b9553b054feb734dd339e8111a3e523dc41c57df86b900cab6625834d8a9d",
+      "kind": "payment 147",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.355930328369141,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "a9092d302844f39125cf9f23ffba9a7bc1a54cd4ec27cc9cacdd6eb28df9b0b9",
+      "kind": "payment 148",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.4058942794799805,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e7be62618b60632b4e3f8ef8e0ac30db3f9ba721a997306c84fa5b4888aee88c",
+      "kind": "payment 149",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.454672336578369,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "02df06f2b71e97037074f828c7b97115306804c97c3e451c43f15edcd23f3f40",
+      "kind": "payment 150",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.5014262199401855,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "04503c814716fd0a704f7beb359b9b9fa0f3c907c27b11716c6283c2284c208e",
+      "kind": "payment 151",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1332
+      },
+      "landed": 505.7542679309845,
+      "sent": 7.5488176345825195,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "11fd4e3cfe7dff9fa2fa13aa1c1ac761d2555777694631e2ec8a91766354b89f",
+      "kind": "payment 152",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.595499753952026,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "24ee7181a6f55dcc157a794d930a7fa278fcfdf6c1843f03dc8ed77520f66bea",
+      "kind": "payment 153",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.642667531967163,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "5c981421bb0b6b8c9509fd607fecfdfaf62d7d7452ef9c4eef13049ce2313bf5",
+      "kind": "payment 154",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.6940858364105225,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "0e417828f898c0717bb5a2da10ac16b424b576b5e13a887aa4a10c9132fb334d",
+      "kind": "payment 155",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.74810266494751,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "2f85fbbd8b6920f65ed844c0837e169ed3b5ce03e53a3cd7621bfc4f8dfc747e",
+      "kind": "payment 156",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1414
+      },
+      "landed": 505.7542679309845,
+      "sent": 7.796885013580322,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "1fd85870f1b22c5eda530c308cae072c6e04a077414d7fb670c9103bee9507ba",
+      "kind": "payment 157",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.844979763031006,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e836bbf7503697db8e2ed1b2375cc18363a65b046bc687cf52133fcd2d549c4f",
+      "kind": "payment 158",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.89254903793335,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e186f32ac6619a9795953da27b070c016281865d05a80c119d45ccb7a6070e27",
+      "kind": "payment 159",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.942023277282715,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "327f841f4f4af355ac7d7b4de28289e32801841da59d966896fe8f6fd62bcdb5",
+      "kind": "payment 160",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 7.995155334472656,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "c51812a143159ce86d5982ab0e48c9cbcd70e9e7f8afefb8ff00737a34255616",
+      "kind": "payment 161",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1425
+      },
+      "landed": 505.7542679309845,
+      "sent": 8.04551386833191,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "f91f0534afcfed795ec8bd54a054464b86b0abe1d30b911e864196ac74925283",
+      "kind": "payment 162",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.093579292297363,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "dd77025f4ce7773715576b20b1552f4611ff64039c99f196309c5cb853e302a6",
+      "kind": "payment 163",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.141396522521973,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "a3385ce1fad977d0fbb50d34646d03141fc428625c586b8bb96a59dc9474ba8f",
+      "kind": "payment 164",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.190731287002563,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "22c77a3a683021c01ad67bd7e18e8daa84d705166704377abb131ca1ca8a36c2",
+      "kind": "payment 165",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.238486528396606,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "0603272ecd8ddeb3b3b85b9bb6c334f05fffe515f9a971016cd45d76c31a0fca",
+      "kind": "payment 166",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1507
+      },
+      "landed": 505.7542679309845,
+      "sent": 8.285942792892456,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "c37de5aed9a70388278045d92528adb0a94c754db7311e1fa8d982c0f9b3e398",
+      "kind": "payment 167",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.333103895187378,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "1c98a8c807ddc8377e9d76daafbce2303472a380fafda8e48fee1cf4b80b8b86",
+      "kind": "payment 168",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.383882761001587,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "7f2d2d4d664d94c586a712de88d3807865abdb0f5413723fc3bbd4bef1b6107f",
+      "kind": "payment 169",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.432504892349243,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "92855e3dd7873a2c9f84c588ca278a08047f3f99bcda296937395b25e4bcc6bb",
+      "kind": "payment 170",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.481560945510864,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "d8d02f35788ac7a9aed3e4a801f6cc51c373e65136c47ad51f192278de27a098",
+      "kind": "payment 171",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1514
+      },
+      "landed": 505.7542679309845,
+      "sent": 8.529873371124268,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "7b09c4f3dab658b170fdf0535d2980449e17dbccd2e7f5993c1188a902560d5e",
+      "kind": "payment 172",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.580301523208618,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "21542452a54ad93d511610e6bfb81df046ca81c10a6caac77d9afb2b5dd179cb",
+      "kind": "payment 173",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.628480911254883,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "8ba114e8104de3f1c63e4614fec668d861bb47dbbb4cf5e9687334741ec0bc46",
+      "kind": "payment 174",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.678069353103638,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "15237f0c83a952514cafc44291be6e0e80b00fc2bfb1e71ef463286f6e474173",
+      "kind": "payment 175",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.73002028465271,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "4bfae80ab98b372981108d12ec2994992d61a892bad8c1f8a3b00d7922c335ce",
+      "kind": "payment 176",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1533
+      },
+      "landed": 505.7542679309845,
+      "sent": 8.778864860534668,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "9f86347425000d1befcce747bf42b82203786049eaa71216ea292deb5b9c5130",
+      "kind": "payment 177",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.828880786895752,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "0a4e68f8e850c4a33774250ae1c8b54c37870ce7859f4ad1c66ad7b2ccd9a30c",
+      "kind": "payment 178",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.87619924545288,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e40341aa32c0f25ae807e85783de2dd8174086d0c62818f8dff56f4626ec6416",
+      "kind": "payment 179",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.924986362457275,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "4cf9c14249759fdf6ad93176b0deea7be6ff26a7f9fa000ef627ea16b60fac21",
+      "kind": "payment 180",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 8.973441123962402,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "528aa8317d71dd46a4aeaec313638f365b852b497421b963b0822f1440812688",
+      "kind": "payment 181",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1548
+      },
+      "landed": 505.7542679309845,
+      "sent": 9.02262568473816,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "9fb2ed3a38af3578ee95781a025c1c85d0f8b0307cd231b5c490191c82b4f136",
+      "kind": "payment 182",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.071346044540405,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "89c527d24bfe0e0fafa0d625f1dd81ae182a2244be151101b2257ed1ce811ada",
+      "kind": "payment 183",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.120126485824585,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "a3f19cd5893aff87eaaab2fa8f8dc8b82200ebcb64e3d5ca769c81ee0544b758",
+      "kind": "payment 184",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.167940855026245,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e5ce9a19b5069ae2f3866418a451d66ed48b4f5bcda1c5fedb495f89bcd29505",
+      "kind": "payment 185",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.214728355407715,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "e0e1e8cb0be2d0ceb0be41d02b8b871e00972f65cec2c3ddd7a4c054e01412ad",
+      "kind": "payment 186",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1580
+      },
+      "landed": 505.7542679309845,
+      "sent": 9.262203693389893,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "590bf184fc1faf466c0ee10e4fe0522e420702a6069bd9f605d8b83d4bd77a2f",
+      "kind": "payment 187",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.313920736312866,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "958189e0958343e243edc7967a7728ae1b2cd5534182f1dc833d369e3d45af5c",
+      "kind": "payment 188",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.365474224090576,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "d79d55a0ff6910303c6fb2fbef8a3603239e6ec69dca51a61de128fd275f7950",
+      "kind": "payment 189",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.413644075393677,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "a7748f22364f06f0370182e618b0f8e4f1487ee652cac4b898bb0ee213f1c495",
+      "kind": "payment 190",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.461252450942993,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "69ba45fe20484544c4d06b4dc4fc04f4e385c291aa2728ec0d9cdbd5522236f9",
+      "kind": "payment 191",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1585
+      },
+      "landed": 505.7542679309845,
+      "sent": 9.508861064910889,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "057faa6816b1eb5665da91706459b85f0a1b42ba0cc504283e451fd98dc61b31",
+      "kind": "payment 192",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.556137323379517,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b28cbf6da0cabe7e9e97ff731ec2d40e61dfd4aaca507bda40466cfaf758c229",
+      "kind": "payment 193",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.60348105430603,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "c6b5d14a1b4ac0c6768bc5e98ff24cd7aac5de3daf6cfaab788cfb51cee97f0f",
+      "kind": "payment 194",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.651458024978638,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "40b0310512c8700b577dcb83c71c44db87331fe7fcc64c8e9546155acd578bd5",
+      "kind": "payment 195",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.700860738754272,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "ba3115ab05e70292f3fa45c421be5b45d628acd5b82050181db686bf37decd1b",
+      "kind": "payment 196",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1591
+      },
+      "landed": 505.7542679309845,
+      "sent": 9.749649047851562,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "b7b8719419a644b68d015c01907280fa2cb21fae0ae142f8c198e24a4d5650ce",
+      "kind": "payment 197",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.797690868377686,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "1259b4f7b976c9edb7630902e221a4ac9e5a2a0f0040503b17037833fe915cfb",
+      "kind": "payment 198",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.848372459411621,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "306a0b1ffb3f86be5c3869505e318d6134d7c422ac554b3c55311d0aec8640e8",
+      "kind": "payment 199",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.897711277008057,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "72f3a346714614bc19d82843009e2af4b433a9498fc9a7008f389fd9f1e95e98",
+      "kind": "payment 200",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 9.946823835372925,
+      "size": 242,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "4b777d2c004881e3ffd459f71acf332589909d97df9ade5b7042d88e902e37d2",
+      "kind": "deposit",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1596
+      },
+      "landed": 505.7542679309845,
+      "sent": 9.994019269943237,
+      "size": 391,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "d55342685065f64032dd02b1e4d3797b5ae6f0590bbfd19cec57b1f86514b56c",
+      "kind": "mix 1",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 10.053006649017334,
+      "size": 4077,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "807d2df64b94f9fdb6f58b5c45ffadb3acabf6c43502690a7253b2fbcf59b0a6",
+      "kind": "mix 2",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 10.114226341247559,
+      "size": 4076,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "0ee3406fb04d2ce9ddf0bc4336cfbde52490845243a23f15250618d81785e420",
+      "kind": "mix 3",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 10.184566974639893,
+      "size": 4076,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "6072a1b7a5a0ff9c4b0b859afa68f8a03c2bd565e72164e8d061e681742867e9",
+      "kind": "mix 4",
+      "kleio": null,
+      "landed": 505.7542679309845,
+      "sent": 10.241884469985962,
+      "size": 4077,
+      "slot": 938498,
+      "via": "certified EB"
+    },
+    {
+      "block": 41465,
+      "id": "bc5162559ba18065b683573fa1dbc5be28a1df4c698fccdce9a104acea047e8f",
+      "kind": "mix 5",
+      "kleio": {
+        "block": 41465,
+        "certified_eb": true,
+        "index": 1612
+      },
+      "landed": 505.7542679309845,
+      "sent": 10.29866075515747,
+      "size": 4077,
+      "slot": 938498,
+      "via": "certified EB"
+    }
+  ],
+  "window": null
+}

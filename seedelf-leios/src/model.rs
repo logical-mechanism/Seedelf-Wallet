@@ -56,9 +56,8 @@ impl Rng {
 #[derive(Debug, Clone)]
 pub struct Scenario {
     pub network: Network,
-    /// What the node's mempool holds: Musashi's answers 4,178,176 bytes
-    /// (`query tx-mempool info`, 2026-10-28), about 16 EBs; a Praos node's
-    /// holds two blocks.
+    /// What the node's mempool holds: two blocks of each kind (Musashi's
+    /// answers 4,178,176 bytes, `query tx-mempool info`, 2026-10-28).
     pub mempool: Capacity,
     /// Everyone else's transactions, in bytes a second, each `load_tx_bytes`
     /// long and running no script.

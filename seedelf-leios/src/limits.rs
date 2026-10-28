@@ -2,10 +2,12 @@
 //! capacity figure in the harness is computed from these.
 //!
 //! - **Mainnet** is Praos: one kind of block, every 20 s on average.
-//! - **Musashi** is Linear Leios (CIP-164) as the testnet runs it, read from
-//!   the genesis files of its 2026-10-18 respin (`musashi/`): a ranking block
-//!   (RB) is mainnet's block, and each may announce an endorser block (EB)
-//!   that the next RB certifies, if it comes late enough.
+//! - **Musashi** is Linear Leios (CIP-164) as the testnet runs it: a ranking
+//!   block (RB) is mainnet's block, and each may announce an endorser block
+//!   (EB) that the next RB certifies, if it comes late enough. Its limits now
+//!   are what the node answered (`musashi/protocol-parameters.json`, written
+//!   by `live params`); its genesis (the 2026-10-18 respin) had EBs of
+//!   260,000 bytes, since raised to 2,000,000.
 //! - **CIP-164** is the same protocol at the parameters the CIP's own
 //!   simulations used (its Table 7): what a mainnet Leios might be set to.
 
@@ -53,17 +55,25 @@ pub struct Network {
     pub rb: Capacity,
     pub eb: Option<Endorser>,
     pub tx: Capacity,
+    /// The chance an EB the timing allows is certified: that its committee's
+    /// votes reach the quorum, and the EB itself got round, in time. 1 for an
+    /// ideal network; what Musashi did is [`observed_votes`].
+    pub vote_success: f64,
 }
 
 impl Network {
     /// The chance an announced EB is certified: that no RB comes in the
-    /// gap's first slots. A whole-network figure; it leaves out votes that
-    /// fail to reach the quorum, which [`crate::model`] can add.
+    /// gap's first slots, and that its vote succeeds.
     pub fn certified_share(&self) -> f64 {
         match self.eb {
             None => 0.0,
-            Some(eb) => (1.0 - self.active_slots).powi(eb.certify_gap_slots(self.slot_ms) as i32 - 1),
+            Some(eb) => self.timing_share(eb) * self.vote_success,
         }
+    }
+
+    /// The chance the next RB comes late enough to certify an EB.
+    fn timing_share(&self, eb: Endorser) -> f64 {
+        (1.0 - self.active_slots).powi(eb.certify_gap_slots(self.slot_ms) as i32 - 1)
     }
 
     /// Seconds between RBs, on average.
@@ -116,6 +126,8 @@ const SHELLEY: &str = include_str!("../musashi/shelley-genesis.json");
 const ALONZO: &str = include_str!("../musashi/alonzo-genesis.json");
 const CONWAY: &str = include_str!("../musashi/conway-genesis.json");
 const DIJKSTRA: &str = include_str!("../musashi/dijkstra-genesis.json");
+const NOW: &str = include_str!("../musashi/protocol-parameters.json");
+const BLOCKS: &str = include_str!("../musashi/blocks-41261-41760.json");
 
 /// The genesis files as bundled.
 pub struct Genesis {
@@ -142,14 +154,83 @@ fn u(v: &Value, path: &[&str]) -> Result<u64> {
     at.as_u64().with_context(|| format!("genesis has no {}", path.join(".")))
 }
 
-/// Musashi, from its genesis. Its parameters can move by governance after
-/// genesis: `live params` reads them from the node to check.
+/// Musashi's limits as the node answered them (`live params`), with its
+/// slots from the genesis.
 pub fn musashi() -> Result<Network> {
+    let g = genesis()?;
+    let now: Value = serde_json::from_str(NOW)?;
+    Ok(Network {
+        name: "Musashi (Leios, epoch 43)",
+        slot_ms: (g.shelley["slotLength"].as_f64().context("slotLength")? * 1000.0) as u64,
+        active_slots: g.shelley["activeSlotsCoeff"].as_f64().context("activeSlotsCoeff")?,
+        rb: Capacity {
+            bytes: u(&now, &["maxBlockBodySize"])?,
+            mem: u(&now, &["maxBlockExecutionUnits", "memory"])?,
+            steps: u(&now, &["maxBlockExecutionUnits", "steps"])?,
+            ref_script_bytes: u(&now, &["maxRefScriptSizePerBlock"])?,
+        },
+        eb: Some(Endorser {
+            txs: Capacity {
+                bytes: u(&now, &["maxEndorserBlockTxsSize"])?,
+                mem: u(&now, &["maxEndorserBlockExecutionUnits", "memory"])?,
+                steps: u(&now, &["maxEndorserBlockExecutionUnits", "steps"])?,
+                ref_script_bytes: u(&now, &["maxRefScriptSizePerEndorserBlock"])?,
+            },
+            references_bytes: u(&now, &["maxEndorserBlockReferencesSize"])?,
+            l_hdr_ms: u(&now, &["leiosAnnouncementPeriodLength"])?,
+            l_vote_ms: u(&now, &["leiosVotePeriodLength"])?,
+            l_diff_ms: u(&now, &["leiosDiffusionPeriodLength"])?,
+        }),
+        tx: Capacity {
+            bytes: u(&now, &["maxTxSize"])?,
+            mem: u(&now, &["maxTxExecutionUnits", "memory"])?,
+            steps: u(&now, &["maxTxExecutionUnits", "steps"])?,
+            ref_script_bytes: u(&now, &["maxRefScriptSizePerTx"])?,
+        },
+        vote_success: 1.0,
+    })
+}
+
+/// Musashi as it ran: its limits now, and the share of EBs the timing allowed
+/// that were certified over 500 blocks of IO's load ([`observed_votes`]).
+pub fn musashi_observed() -> Result<Network> {
+    let (eligible, certified) = observed_votes()?;
+    Ok(Network {
+        name: "Musashi as observed (blocks 41261-41760)",
+        vote_success: certified as f64 / eligible as f64,
+        ..musashi()?
+    })
+}
+
+/// Of the EBs announced in KleioScan's 500 blocks (41261 to 41760, read
+/// 2026-10-28 under IO's load): how many the next RB came late enough to
+/// certify, and how many it did.
+pub fn observed_votes() -> Result<(usize, usize)> {
+    let doc: Value = serde_json::from_str(BLOCKS)?;
+    let blocks = doc["blocks"].as_array().context("blocks")?;
+    let gap = musashi()?.eb.expect("Leios").certify_gap_slots(1000);
+    let (mut eligible, mut certified) = (0, 0);
+    for pair in blocks.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        if a["eb_announcement_size"].is_null() || b["block_no"].as_u64() != a["block_no"].as_u64().map(|n| n + 1) {
+            continue;
+        }
+        if b["slot_no"].as_u64().unwrap_or(0) - a["slot_no"].as_u64().unwrap_or(0) >= gap {
+            eligible += 1;
+            certified += usize::from(b["has_leios_cert"].as_bool() == Some(true));
+        }
+    }
+    Ok((eligible, certified))
+}
+
+/// Musashi at its genesis (the 2026-10-18 respin), before governance raised
+/// its EBs' bytes.
+pub fn musashi_genesis() -> Result<Network> {
     let g = genesis()?;
     let pp = &g.shelley["protocolParams"];
     let d = &g.dijkstra;
     Ok(Network {
-        name: "Musashi (Leios, genesis 2026-10-18)",
+        name: "Musashi at genesis (2026-10-18)",
         slot_ms: (g.shelley["slotLength"].as_f64().context("slotLength")? * 1000.0) as u64,
         active_slots: g.shelley["activeSlotsCoeff"].as_f64().context("activeSlotsCoeff")?,
         rb: Capacity {
@@ -176,6 +257,7 @@ pub fn musashi() -> Result<Network> {
             steps: u(&g.alonzo, &["maxTxExUnits", "exUnitsSteps"])?,
             ref_script_bytes: u(d, &["maxRefScriptSizePerTx"])?,
         },
+        vote_success: 1.0,
     })
 }
 
@@ -200,6 +282,7 @@ pub fn mainnet() -> Network {
             steps: 10_000_000_000,
             ref_script_bytes: 204_800,
         },
+        vote_success: 1.0,
     }
 }
 
@@ -234,7 +317,7 @@ mod tests {
 
     #[test]
     fn musashi_reads_its_genesis() {
-        let m = musashi().unwrap();
+        let m = musashi_genesis().unwrap();
         assert_eq!(m.rb.bytes, 90_112);
         assert_eq!(m.rb.steps, 20_000_000_000);
         let eb = m.eb.unwrap();
@@ -243,6 +326,12 @@ mod tests {
         assert_eq!(eb.certify_gap_slots(m.slot_ms), 14);
         // No RB in the 13 slots after the announcing one.
         assert!((m.certified_share() - 0.95f64.powi(13)).abs() < 1e-12);
+        // Votes: 96 of the 248 EBs the timing allowed.
+        assert_eq!(observed_votes().unwrap(), (248, 96));
+        // Since raised: the bytes, not the steps.
+        let now = musashi().unwrap();
+        assert_eq!(now.eb.unwrap().txs.bytes, 2_000_000);
+        assert_eq!(now.eb.unwrap().txs.steps, 200_000_000_000);
     }
 
     #[test]
