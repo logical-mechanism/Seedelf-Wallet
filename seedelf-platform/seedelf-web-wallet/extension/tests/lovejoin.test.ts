@@ -46,6 +46,7 @@ import { bytes, swapTx } from "./fixtures/swap-tx";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import {
   busyFor,
+  epochParams,
   koiosPreprod,
   loadTestWasm,
   minswapEstimate,
@@ -1913,7 +1914,8 @@ describe("mixing from the tile", CHAINS, () => {
     // One payment, with its way back's 1.5 ₳ beside them, and no collateral: a deposit alone runs no script (the owner,
     // 2026-10-23), so its return sweeps the deposit's change (1.6.0's release review, 318-rust#0).
     expect(seeded.payments.map((p) => p.lovelace)).toEqual(["13000000"]);
-    expect(seeded.bootstrapReserve).toBe(wasm.lovejoinBootstrapReserve());
+    expect(seeded.bootstrapReserve).toBe(wasm.lovejoinBootstrapReserve(JSON.stringify(epochParams[0])));
+    expect(seeded.bootstrapReserve).toBe("1500000");
     expect(seeded.collateralReserve).toBeUndefined();
     expect(t.koios.calls.length).toBeGreaterThan(asked);
     // More than the private balance holds: said in the screens' words, not core's "Seedelf balance" (chunk 23's

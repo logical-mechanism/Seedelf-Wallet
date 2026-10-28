@@ -1680,12 +1680,24 @@ fn bootstraps(
     flag: bool,
     boxes: usize,
 ) -> Option<(u64, u64)> {
+    let reserve = lovejoin::bootstrap_back_reserve(params).unwrap();
+    bootstraps_with(params, pool, flag, boxes, reserve)
+}
+
+/// [`bootstraps`] with the way back's reserve given, as a funding made before
+/// it followed the parameters held it.
+fn bootstraps_with(
+    params: &ProtocolParameters,
+    pool: &Protocol,
+    flag: bool,
+    boxes: usize,
+    reserve: u64,
+) -> Option<(u64, u64)> {
     let owner = Register::create(Scalar::from(7u64)).unwrap();
     let owners: Vec<Register> = (0..boxes)
         .map(|_| owner.clone().rerandomize().unwrap())
         .collect();
-    let lovelace =
-        lovejoin::funding_for(boxes, 0, pool.denom).unwrap() + lovejoin::BOOTSTRAP_BACK_RESERVE;
+    let lovelace = lovejoin::funding_for(boxes, 0, pool.denom).unwrap() + reserve;
     let input = match &pool.token {
         None => Holding::from(&coin(flag, 0x10, lovelace)),
         Some(_) => token_holding(pool, 0x10, lovelace, boxes as u64, None),
@@ -1713,9 +1725,9 @@ fn bootstraps(
 /// which grows with the boxes, from its 1.5 ₳ reserve, and its way back, a
 /// sweep with no collateral whose Seedelf output must hold its least, from
 /// what that leaves and the way back's reserve. `bootstrap_most` builds both:
-/// under today's parameters one deposit's most goes, in the classic pool and a
-/// token pool, on both networks, and at a dearer byte the sweep holds it to
-/// fewer, never the deposit alone.
+/// one deposit's most goes, in the classic pool and a token pool, on both
+/// networks, and at a dearer byte too, since the way back's reserve follows the
+/// parameters (1.7.0), where a fixed 1.5 ₳ let the sweep hold it to fewer.
 #[test]
 fn a_private_bootstrap_is_held_to_what_its_funding_pays_its_deposit_and_way_back_for() {
     let classic = Protocol::of(true).unwrap();
@@ -1767,34 +1779,37 @@ fn a_private_bootstrap_is_held_to_what_its_funding_pays_its_deposit_and_way_back
     println!("  {worst_most} boxes: deposit fee {fee}, {back} back");
     assert_eq!(worst_most, 64);
 
-    // At half as dear again a byte, the way back's Seedelf output needs more than a large deposit leaves: the sweep,
-    // not the deposit, holds it to fewer, and a count past it is never offered.
+    // Today's parameters ask for no more than the fixed reserve did: 1.5 ₳, so nothing changes there.
+    assert_eq!(
+        lovejoin::bootstrap_back_reserve(&params()).unwrap(),
+        lovejoin::BOOTSTRAP_BACK_RESERVE
+    );
+    assert_eq!(
+        lovejoin::bootstrap_back_reserve(&mainnet_params()).unwrap(),
+        lovejoin::BOOTSTRAP_BACK_RESERVE
+    );
+
+    // At half as dear again a byte, the way back's Seedelf output needs more than a large deposit leaves with 1.5 ₳
+    // beside it: a fixed reserve let the sweep hold a Bootstrap to fewer (68 classic boxes, 51 of LJTEST). Priced from
+    // the parameters, the reserve grows with them, and one deposit's most still goes, its way back paid (1.6.0's
+    // release review, bootstrap's call 1; 1.7.0).
     let dear = ProtocolParameters {
         coins_per_utxo_size: params().coins_per_utxo_size * 3 / 2,
         ..params()
     };
-    let dear_most = lovejoin::bootstrap_most(&dear, &classic, true, 96).unwrap();
-    println!("at a dearer byte: at most {dear_most}");
-    assert!((1..96).contains(&dear_most), "{dear_most}");
-    assert!(bootstraps(&dear, &classic, true, dear_most).is_some());
-    assert!(bootstraps(&dear, &classic, true, dear_most + 1).is_none());
-    let owner = Register::create(Scalar::from(7u64)).unwrap();
-    let past = dear_most + 1;
-    let input = Holding::from(&coin(
-        true,
-        0x10,
-        lovejoin::funding_for(past, 0, classic.denom).unwrap() + lovejoin::BOOTSTRAP_BACK_RESERVE,
-    ));
+    let reserve = lovejoin::bootstrap_back_reserve(&dear).unwrap();
+    println!("at a dearer byte: the way back's reserve is {reserve}");
+    assert!(reserve > lovejoin::BOOTSTRAP_BACK_RESERVE, "{reserve}");
+    assert_eq!(reserve % 100_000, 0, "a tenth of an ADA");
     assert!(
-        lovejoin::deposit_from(
-            &dear,
-            &classic,
-            &[input],
-            &vec![owner; past],
-            &session(true),
-            1
-        )
-        .is_ok(),
-        "the deposit alone builds there"
+        bootstraps_with(&dear, &classic, true, 96, lovejoin::BOOTSTRAP_BACK_RESERVE).is_none(),
+        "a fixed 1.5 ₳ can't pay the way back of one deposit's most there"
     );
+    assert_eq!(
+        lovejoin::bootstrap_most(&dear, &classic, true, 96).unwrap(),
+        96
+    );
+    assert!(bootstraps(&dear, &classic, true, 96).is_some());
+    assert_eq!(lovejoin::bootstrap_most(&dear, &lj, true, 64).unwrap(), 64);
+    assert!(bootstraps(&dear, &lj, true, 64).is_some());
 }
