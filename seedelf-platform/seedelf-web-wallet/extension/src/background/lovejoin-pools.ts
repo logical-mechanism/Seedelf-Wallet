@@ -451,7 +451,7 @@ export class PoolDiscovery {
       if (pool) found.push(pool);
     }
     this.crowds.set(network, new Map([["classic", answer.classic.crowd], ...answer.pools.map((p) => [p.id, p.crowd] as const)]));
-    await this.keep(network, found);
+    await this.keep(network, await this.confirmed(network, found));
   }
 
   /** `ref` verified here, if it's a pool of a listed token or ADA, its scripts at the holder. */
@@ -507,14 +507,30 @@ export class PoolDiscovery {
       return has(view.mixBoxHash) && has(view.mixLogicHash) ? [{ row: r, scripts }] : [];
     });
     if (!candidates.length) return this.keep(network, [], height);
+    const { standard, unknown } = await this.launched(network, koios, candidates);
+    // Koios doesn't know its transaction yet: the next look starts no later than its block.
+    const upTo = unknown.reduce((h, r) => Math.min(h, (r.block_height ?? 1) - 1), height);
+    await this.keep(network, standard, upTo);
+  }
+
+  /**
+   * Of `candidates`, each a reference UTxO at the holder with the scripts its launch put there, the standard pools as
+   * Koios's chain data finds them: its launch transaction known (so on chain), making this pool from a seed it spent,
+   * and L registered by it or by an earlier block. `unknown`: those whose transaction Koios doesn't know yet. One
+   * `tx_info` request for every launch, and one `account_update_history` for the L its launch didn't register.
+   */
+  private async launched(
+    network: NetworkName,
+    koios: Koios,
+    candidates: Array<{ row: KoiosUtxo; scripts: KoiosUtxo[] }>,
+  ): Promise<{ standard: FoundPool[]; unknown: KoiosUtxo[] }> {
     const launches = new Map((await koios.launches([...new Set(candidates.map((c) => c.row.tx_hash))])).map((l) => [l.tx_hash, l]));
     const found: Array<{ pool: FoundPool; stake: string; registers: boolean; time: number }> = [];
-    let upTo = height;
+    const unknown: KoiosUtxo[] = [];
     for (const { row, scripts } of candidates) {
       const launch = launches.get(row.tx_hash);
-      // Koios doesn't know its transaction yet: the next look starts no later than its block.
       if (!launch?.inputs) {
-        upTo = Math.min(upTo, (row.block_height ?? 1) - 1);
+        unknown.push(row);
         continue;
       }
       const inputs = launch.inputs.map((i) => ({ txHash: i.tx_hash, txIndex: i.tx_index }));
@@ -534,7 +550,37 @@ export class PoolDiscovery {
     const ask = found.filter((f) => !f.registers).map((f) => f.stake);
     const first = ask.length ? await koios.firstRegistrations(ask) : new Map<string, number>();
     const standard = found.filter((f) => f.registers || (first.get(f.stake) ?? Infinity) < f.time).map((f) => f.pool);
-    await this.keep(network, standard, upTo);
+    return { standard, unknown };
+  }
+
+  /**
+   * Of `found`, the data layer's list verified offline, those this device takes: every pool it holds already, and a
+   * pool new to it only once Koios's chain data finds it as the holder's look would (launched). Offline, a pool's
+   * scripts prove it a genuine Lovejoin pool, but not that its launch is on chain (a seed no launch spent verifies as
+   * well) nor that L is registered, and a pool handed over stays for good: a server that lied, or a deep rollback, could
+   * otherwise list one that isn't there, or one that never paid to be finished (1.6.0's release review, pool-exists and
+   * docs-small#1; 1.7.0). Koios rather than the data layer, which listed it: the check is one no single operator
+   * answers. A pool Koios can't confirm yet, or a Koios that can't answer, leaves it for the next list.
+   */
+  private async confirmed(network: NetworkName, found: FoundPool[]): Promise<FoundPool[]> {
+    const was = await this.kept(network);
+    const known = new Set(was.pools.map((p) => refOf(p.ref.reference)));
+    const fresh = found.filter((p) => !known.has(refOf(p.ref.reference)));
+    if (!fresh.length) return found;
+    const koios = this.deps.koios(network).koiosAlone();
+    let standard: FoundPool[];
+    try {
+      ({ standard } = await this.launched(
+        network,
+        koios,
+        fresh.map((p) => ({ row: p.ref.reference, scripts: p.ref.scripts ?? [] })),
+      ));
+    } catch (e) {
+      if (isTrap(e)) throw e;
+      standard = [];
+    }
+    const ok = new Set(standard.map((p) => `${p.id}:${refOf(p.ref.reference)}`));
+    return found.filter((p) => known.has(refOf(p.ref.reference)) || ok.has(`${p.id}:${refOf(p.ref.reference)}`));
   }
 }
 

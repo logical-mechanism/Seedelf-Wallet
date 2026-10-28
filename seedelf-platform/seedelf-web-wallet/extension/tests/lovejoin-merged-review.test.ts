@@ -507,7 +507,18 @@ describe("a look for pools says whether what the wallet reads changed (1.6.0's r
     const ctx = { lovejoin: lj, network: "preprod", wasm: loadTestWasm(), wallet: t.wallet } as unknown as Context;
     // Nothing listed yet: nothing found.
     expect(await handle({ type: "lovejoin-look-for-pools" } as Message, ctx)).toEqual({ grew: false });
-    // The token pool is listed since: the look hands it over, and the hub reads again.
+    // The token pool is listed since: the look hands it over, and the hub reads again. Koios confirms its launch first,
+    // the seed among its inputs and L registered (1.7.0).
+    const scripts = listed().pools[0]!.scripts.map((r) => ({ ...FOUND.reference, tx_index: Number(r.ref.split("#")[1]), reference_script: { hash: r.script_hash } }));
+    const l = (JSON.parse(loadTestWasm().lovejoinLaunchCheck(JSON.stringify({ network: "preprod", reference: FOUND.reference, inputs: [FOUND.seed], scripts }))) as { mixLogicStake: string }).mixLogicStake;
+    t.koios.txRows.set(FOUND.reference.tx_hash, {
+      tx_hash: FOUND.reference.tx_hash,
+      block_height: BLOCK,
+      tx_block_index: 3,
+      tx_timestamp: FOUND.reference.block_time ?? 0,
+      inputs: [{ tx_hash: FOUND.seed.txHash, tx_index: FOUND.seed.txIndex }],
+      certificates: [{ type: "stake_registration", info: { stake_address: l } }],
+    } as never);
     index.poolList = listed();
     t.clock.now += 10 * 60_000;
     expect(await handle({ type: "lovejoin-look-for-pools" } as Message, ctx)).toEqual({ grew: true });
