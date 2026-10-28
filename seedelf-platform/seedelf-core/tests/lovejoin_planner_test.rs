@@ -549,7 +549,7 @@ fn ada_pool_of(lovelace: u64) -> Protocol {
 #[test]
 fn a_pools_box_ada_past_what_a_sum_holds_is_refused_in_words_never_wrapped() {
     // 1.6.0's release review, 314-core#1: a pool's box ADA comes from its datum, which takes any amount up to
-    // 2^64 − 1, and the WebAssembly build doesn't check overflow. There the planner's sums on it wrapped, so a
+    // 2^64 − 1, and the WebAssembly build didn't check overflow. There the planner's sums on it wrapped, so a
     // Bootstrap of one box of such a pool was quoted 1.5 ₳, and its deposit built with an output of 2^64 − 1
     // lovelace from a 50 ₳ input, refused only at submit (a test build panicked instead). Each sum is checked.
     let huge = ada_pool_of(u64::MAX);

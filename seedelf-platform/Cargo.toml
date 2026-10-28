@@ -40,3 +40,19 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
+
+# Core, crypto and koios check integer overflow in the module, as every test
+# build does: a sum past what its type holds panics, a trap that locks the
+# wallet (background/wasm.ts), rather than wrapping to a small, false figure
+# (1.6.0's release review, x-release#7; 314-core#1 was such a sum). +7 KB raw,
+# +4 KB gzipped. Not seedelf-wasm, the module's own crate: there the checks
+# double the module (3.2 MB to 6.4 MB, 982 KB to 1,289 KB gzipped). The
+# dependencies keep release's arithmetic.
+[profile.wasm-release.package.seedelf-core]
+overflow-checks = true
+
+[profile.wasm-release.package.seedelf-crypto]
+overflow-checks = true
+
+[profile.wasm-release.package.seedelf-koios]
+overflow-checks = true
