@@ -271,7 +271,7 @@ describe("the data layer's list", () => {
   it("is verified here, kept, and asked for at most every REFRESH_MS, the same for every wallet", async () => {
     const on = onIndex();
     on.index.poolList = listed();
-    const k = koiosOf([], []);
+    const k = koiosOf([], [launch()]);
     const { found, clock } = discovery(k, { index: on });
     await found.refresh("preprod");
     await found.refresh("preprod");
@@ -285,8 +285,9 @@ describe("the data layer's list", () => {
     clock.now += REFRESH_MS;
     await found.refresh("preprod");
     expect(on.index.calls).toEqual(["lovejoin/pools", "lovejoin/pools"]);
-    // Koios wasn't asked anything.
-    expect(k.calls).toEqual([]);
+    // Koios was asked once, about the new pool's launch (1.7.0), and nothing of the holder; a pool kept isn't asked
+    // about again.
+    expect(k.calls.map((c) => c.path)).toEqual(["tx_info"]);
   });
 
   it("leaves out a pool that doesn't verify: the server can leave a pool out, never pass off other scripts as a pool's", async () => {
@@ -316,7 +317,7 @@ describe("the data layer's list", () => {
     // As a launch lists it, it's kept.
     const on = onIndex();
     on.index.poolList = listed();
-    const { found } = discovery(koiosOf([], []), { index: on });
+    const { found } = discovery(koiosOf([], [launch()]), { index: on });
     await found.refresh("preprod");
     expect((await found.known("preprod")).map((p) => p.id)).toEqual([ID]);
   });
@@ -352,13 +353,71 @@ describe("the data layer's list", () => {
     const k = koiosOf([FOUND.reference, ...SCRIPTS], [launch()]);
     const { found } = discovery(k, { index: on });
     await found.look("preprod");
-    expect(k.calls).toEqual([]);
+    // The new pool's launch confirmed (1.7.0), the holder not read.
+    expect(k.calls.map((c) => c.path)).toEqual(["tx_info"]);
     expect((await found.known("preprod")).map((p) => p.id)).toEqual([ID]);
     const alone = koiosOf([FOUND.reference, ...SCRIPTS], [launch()]);
     const koiosOnly = discovery(alone);
     await koiosOnly.found.look("preprod");
     expect(asked(alone, "credential_utxos")).toHaveLength(1);
     expect((await koiosOnly.found.known("preprod")).map((p) => p.id)).toEqual([ID]);
+  });
+});
+
+describe("a pool the data layer lists, confirmed from Koios before it's kept (1.6.0's release review, pool-exists, docs-small#1; 1.7.0)", () => {
+  it("leaves out a pool whose launch Koios doesn't know, and keeps it once Koios does", async () => {
+    // Offline it verifies as well as any: a seed no launch spent, a launch a deep rollback took back, or a server that
+    // lied. Kept, it would stay in the read set for good.
+    const on = onIndex();
+    on.index.poolList = listed();
+    const launches: KoiosLaunch[] = [];
+    const k = koiosOf([], launches);
+    const { found, clock } = discovery(k, { index: on });
+    await found.refresh("preprod");
+    expect(await found.known("preprod")).toEqual([]);
+    expect(asked(k, "tx_info")).toHaveLength(1);
+    // At the next list it's on chain: kept.
+    launches.push(launch());
+    clock.now += REFRESH_MS;
+    await found.refresh("preprod");
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual([ID]);
+  });
+
+  it("leaves out a pool whose L its launch didn't register, nor an earlier block: it never paid to be finished", async () => {
+    const on = onIndex();
+    on.index.poolList = listed();
+    // Registered after its launch: no more standard than never.
+    const k = koiosOf([], [launch([])], [{ stake_address: L_STAKE, block_time: FOUND.reference.block_time! + 60 }]);
+    const { found } = discovery(k, { index: on });
+    await found.refresh("preprod");
+    expect(await found.known("preprod")).toEqual([]);
+    expect(asked(k, "account_update_history")).toHaveLength(1);
+    // Registered by an earlier block, as the holder's look takes it: kept.
+    const earlier = koiosOf([], [launch([])], [{ stake_address: L_STAKE, block_time: FOUND.reference.block_time! - 60 }]);
+    const again = onIndex();
+    again.index.poolList = listed();
+    const ok = discovery(earlier, { index: again });
+    await ok.found.refresh("preprod");
+    expect((await ok.found.known("preprod")).map((p) => p.id)).toEqual([ID]);
+  });
+
+  it("keeps nothing new while Koios can't answer, and every pool it kept before", async () => {
+    const on = onIndex();
+    on.index.poolList = listed();
+    const k = koiosOf([], [launch()]);
+    k.fail = Response.json({ error: "down" }, { status: 503 });
+    const { found, clock } = discovery(k, { index: on, head: () => ({ height: 0, pools: [] }) });
+    await found.refresh("preprod");
+    expect(await found.known("preprod")).toEqual([]);
+    // Koios back: the next list's pool is confirmed and kept; one Koios down after it takes nothing away.
+    k.fail = undefined;
+    clock.now += REFRESH_MS;
+    await found.refresh("preprod");
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual([ID]);
+    k.fail = Response.json({ error: "down" }, { status: 503 });
+    clock.now += REFRESH_MS;
+    await found.refresh("preprod");
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual([ID]);
   });
 });
 
@@ -378,7 +437,7 @@ describe("what a device keeps of what it found (1.6.0's release review)", () => 
   it("never takes a pool it handed over out of the read set when an earlier launch of its values turns up (STATE-2)", async () => {
     const on = onIndex();
     on.index.poolList = listed();
-    const { found, local } = discovery(koiosOf([], []), { index: on });
+    const { found, local } = discovery(koiosOf([], [launch()]), { index: on });
     await found.refresh("preprod");
     const [read] = await found.known("preprod");
     expect(read!.id).toBe(ID);
@@ -419,7 +478,7 @@ describe("what a device keeps of what it found (1.6.0's release review)", () => 
     const on = onIndex();
     on.index.poolList = listed();
     // A head start's pool beside the data layer's: a quiet read hands it over, and keeps that.
-    const { found, local } = discovery(koiosOf([], []), { index: on, head: () => ({ height: 0, pools: [poolAt("bb", 20)] }) });
+    const { found, local } = discovery(koiosOf([], [launch()]), { index: on, head: () => ({ height: 0, pools: [poolAt("bb", 20)] }) });
     await found.refresh("preprod");
     // wallet.ts' reset deletes LOCAL_CACHES; the wallet is restored at once, and a quiet read (a swap's quote) may
     // come first.
@@ -450,7 +509,7 @@ describe("what a device keeps of what it found (1.6.0's release review)", () => 
         await area.set(key, value);
       },
     };
-    const { found } = discovery(koiosOf([LATER], []), { index: on, local: slow });
+    const { found } = discovery(koiosOf([LATER], [launch()]), { index: on, local: slow });
     await Promise.all([found.refresh("preprod"), found.scan("preprod")]);
     expect((await found.known("preprod")).map((p) => p.id)).toEqual([ID]);
     expect((await slow.get<Kept>(KEY))!.height).toBe(BLOCK + 100);
