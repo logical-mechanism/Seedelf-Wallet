@@ -1,6 +1,6 @@
 # 1.6.0's release review, its fix rounds and the gate (2026-10-24/26)
 
-**Status: ✅ done, the gate for 1.6.0.** It's on branch `web-wallet/review-1.6.0` (PR #324), and every step of the Web Wallet check is green. The working folder (`docs/plans/review-1.6.0/`: the findings, the briefs, every fixer's and reviewer's report) was compressed into this file when the PR was ready, at the owner's word (2026-10-26). The full text is in git at `7e2d89ed`; [The IDs](#the-ids) says where each family is. What still holds is in the design docs, the open items in [post-release-roadmap.md](../../post-release-roadmap.md)'s *Left by 1.6.0's release review*, and the release's record in [chunk-34-token-pools.md](../../plans/chunk-34-token-pools.md)'s Session 12.
+**Status: ✅ done, the gate for 1.6.0.** It's on branch `web-wallet/review-1.6.0` (PR #324), and every step of the Web Wallet check is green. The working folder (`docs/plans/review-1.6.0/`: the findings, the briefs, every fixer's and reviewer's report) was compressed into this file when the PR was ready, at the owner's word (2026-10-26). The full text is in git at `7e2d89ed`; [The IDs](#the-ids) says where each family is. What still holds is in the design docs, the open items in [post-release-roadmap.md](../../post-release-roadmap.md)'s *Left by 1.6.0's release review*, and the release's record in [chunk-34-token-pools.md](chunk-34-token-pools.md)'s Session 12.
 
 ## The review
 

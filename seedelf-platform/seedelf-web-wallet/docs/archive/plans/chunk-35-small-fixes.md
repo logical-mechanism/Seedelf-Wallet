@@ -1,6 +1,6 @@
 # Chunk 35 · The owner's collateral fix for 1.6.0
 
-What the owner noticed using the wallet (2026-10-14), lined up for 1.6.0 beside [chunk 34](../../plans/chunk-34-token-pools.md). The owner's other finding, how a Lovejoin mix is shown, went to chunk 34 (its *Screens*), since token pools change that page.
+What the owner noticed using the wallet (2026-10-14), lined up for 1.6.0 beside [chunk 34](chunk-34-token-pools.md). The owner's other finding, how a Lovejoin mix is shown, went to chunk 34 (its *Screens*), since token pools change that page.
 
 **Status: ✅ built 2026-10-14** on `web-wallet/small-fixes-1.6.0`, from `main` after #308, as PR #309. One PR: the plan, the build and the docs together, so this file went straight to the archive. What still holds is in [flows.md](../../flows.md) (*Collateral*, Settings' requests, and Lovejoin's Review reasons). The privacy policy is unchanged: nothing new is sent or kept.
 
