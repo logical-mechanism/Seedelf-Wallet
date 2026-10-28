@@ -36,6 +36,7 @@ import { SESSION_RESERVED_PREFIX, SESSION_SPENT, reservedSet } from "../src/back
 import type { Area } from "../src/background/storage";
 import { SESSION_BACK, SessionService } from "../src/background/sessions";
 import { SESSION_TRANSFER, TransferService } from "../src/background/transfer";
+import { NOT_HELD, txView } from "../src/background/tx-view";
 import { WithdrawService } from "../src/background/withdraw";
 import type { PendingTx } from "../src/shared/rpc";
 import { PendingBanner } from "../src/ui/components/PendingBanner";
@@ -1330,5 +1331,29 @@ describe("a return that comes back directly, checked against a payment's parts a
     expect(await sessions.claimSubmit("preprod", [returns[0]!.txHash])).toEqual({ sent: [], failed: [{ index: 0, error: CONFLICT }] });
     expect(submittedIds(t)).toEqual([all[0]!.txHash]);
     expect(await recorded(t)).toEqual(["out"]);
+  });
+});
+
+describe("Transaction details for every part of a payment (1.6.0's release review, 321-parts-worker#5; 1.7.0)", SLOW, () => {
+  it("opens each part by its hash, each kept under its own key, and nothing that isn't one", async () => {
+    const { t, tokens } = await walletA(12);
+    const { transfer } = services(t);
+    const summary = await transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
+    const hashes = summary.parts!.map((p) => p.txHash);
+    expect(hashes.length).toBeGreaterThan(1);
+    expect(hashes[0]).toBe(summary.txHash);
+    const view = { wasm: t.deps.wasm, wallet: t.wallet, session: t.session };
+    const asked = t.koios.calls.length;
+    for (const [i, hash] of hashes.entries()) {
+      // A later part is under its own key, never the first's, which only names it: the view looks there too.
+      if (i > 0) expect(await t.wallet.withKeys(() => t.session.get(partKey(SESSION_TRANSFER, i)))).toMatchObject({ txHash: hash });
+      expect((await txView(view, "preprod", hash)).detail.txHash).toBe(hash);
+      expect((await txView(view, "preprod", hash.toUpperCase())).detail.txHash).toBe(hash);
+    }
+    // Nothing asked of Koios to show them, and a hash no part has is still one the wallet isn't holding.
+    expect(t.koios.calls.length).toBe(asked);
+    await expect(txView(view, "preprod", "ee".repeat(32))).rejects.toThrow(NOT_HELD());
+    // Another network's view holds none of them.
+    await expect(txView(view, "mainnet", hashes[1]!)).rejects.toThrow(NOT_HELD());
   });
 });

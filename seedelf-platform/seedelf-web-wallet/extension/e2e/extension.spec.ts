@@ -2653,6 +2653,26 @@ test("withdraw: more UTxOs than one transaction spends go as several, said on th
   await expect(review).toContainText("Amount600 ₳", { timeout: 30_000 });
   await expect(review).toContainText("Transactions2");
   await expect(page.getByTestId("withdraw-parts")).toHaveText("Too much for one transaction, so it goes as 2, one after another.");
+
+  // Transaction details opens on the first and steps to the second, each read from the worker's own bytes (1.6.0's
+  // release review, 321-parts-worker#5: only the first's opened; 1.7.0).
+  const reads = koios.calls.length;
+  await page.getByTestId("withdraw-tx-open").click();
+  const view = page.getByTestId("withdraw-tx");
+  await expect(page.getByTestId("withdraw-tx-part")).toHaveText("Transaction 1 of 2");
+  await expect(view).toContainText("Pays");
+  const first = await page.getByTestId("withdraw-tx-hash").getAttribute("data-value");
+  await expect(page.getByRole("button", { name: "Previous transaction" })).toBeDisabled();
+  await snap(page, "tx-detail-parts");
+  await page.getByRole("button", { name: "Next transaction" }).click();
+  await expect(page.getByTestId("withdraw-tx-part")).toHaveText("Transaction 2 of 2");
+  await expect(view).toContainText("Pays");
+  await expect(page.getByTestId("withdraw-tx-hash")).not.toHaveAttribute("data-value", first!);
+  await expect(page.getByRole("button", { name: "Next transaction" })).toBeDisabled();
+  await expect(page.getByTestId("withdraw-tx-error")).toHaveCount(0);
+  await page.getByRole("button", { name: "Previous transaction" }).click();
+  await expect(page.getByTestId("withdraw-tx-hash")).toHaveAttribute("data-value", first!);
+  expect(koios.calls.length).toBe(reads);
   expect(koios.collateralAsked).toBe(0);
 });
 

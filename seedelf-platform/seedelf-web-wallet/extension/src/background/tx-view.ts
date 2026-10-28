@@ -48,6 +48,7 @@ import {
   SESSION_TOP_UP,
   SESSION_TX,
 } from "./sessions";
+import { partKey } from "./script-spend";
 import { SESSION_STAKE } from "./staking";
 import { SESSION_TRANSFER } from "./transfer";
 import { SESSION_REMOVE, SESSION_WITHDRAW } from "./withdraw";
@@ -149,8 +150,16 @@ export async function txView(
         [BUILT_KEYS, false],
       ] as const) {
         for (const key of keys) {
-          const cbor = cborOf(await session.get<unknown>(key), wanted, network);
+          const record = await session.get<unknown>(key);
+          const cbor = cborOf(record, wanted, network);
           if (cbor) return { cbor, chain };
+          // A payment in parts keeps each after the first under its own key, the first naming them all (script-spend.ts
+          // keepParts): a review in parts opens every one (1.6.0's release review, 321-parts-worker#5; 1.7.0).
+          const part = partOf(record, wanted);
+          if (part > 0) {
+            const later = cborOf(await session.get<unknown>(partKey(key, part)), wanted, network);
+            if (later) return { cbor: later, chain };
+          }
         }
       }
       return undefined;
@@ -176,6 +185,12 @@ export async function txView(
     if (isTrap(e)) throw e;
   });
   return { detail, cbor, ...(kept?.chain ? { chain: true as const } : {}) };
+}
+
+/** Where `txHash` is among the parts a payment's first names (`partHashes`, script-spend.ts keepParts): -1 if not. */
+function partOf(kept: unknown, txHash: string): number {
+  const hashes = kept && typeof kept === "object" ? (kept as { partHashes?: unknown }).partHashes : undefined;
+  return Array.isArray(hashes) ? hashes.findIndex((h) => typeof h === "string" && h.toLowerCase() === txHash) : -1;
 }
 
 /** An address's payment key hash (hex), when a key and not a script pays it: none for a reward or Byron address. */

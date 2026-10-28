@@ -233,7 +233,7 @@ export function Transfer({
           {summary.parts && <Row label={t("review.parts")} value={String(summary.parts.length)} />}
           <TotalRows side="private" leaving={leaving} before={total} tokens={tokenKinds} />
         </ReviewRecipients>
-        <TxDetailButton txHash={summary.txHash} testId="transfer-tx" />
+        <TxDetailButton txHash={summary.txHash} parts={summary.parts} testId="transfer-tx" />
         {summary.parts && (
           <p className="note" data-testid="transfer-parts">
             {joinSentences([

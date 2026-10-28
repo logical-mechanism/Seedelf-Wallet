@@ -769,7 +769,7 @@ export function ConnectRequest({
             />
           </ReviewRows>
           <FundingWayBack fee={review.fee.total} lovejoin={lovejoinBack} perBox={perBox} summary={review} />
-          <TxDetailButton txHash={review.txHash} testId="dapp-funding-tx" />
+          <TxDetailButton txHash={review.txHash} parts={review.parts} testId="dapp-funding-tx" />
           <Callout tone="privacy" testId="dapp-funding-privacy">
             {fundingPrivacy(review.changeLovelace)}
           </Callout>

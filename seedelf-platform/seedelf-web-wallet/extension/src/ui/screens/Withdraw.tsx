@@ -220,7 +220,7 @@ export function Withdraw({
           {summary.parts && <Row label={t("review.parts")} value={String(summary.parts.length)} />}
           <TotalRows side="private" leaving={leaving} before={total} tokens={tokenKinds} />
         </ReviewRecipients>
-        <TxDetailButton txHash={summary.txHash} testId="withdraw-tx" />
+        <TxDetailButton txHash={summary.txHash} parts={summary.parts} testId="withdraw-tx" />
         {summary.parts && (
           <p className="note" data-testid="withdraw-parts">
             {joinSentences([
