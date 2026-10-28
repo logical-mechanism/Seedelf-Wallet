@@ -1,13 +1,39 @@
 name: Web Wallet
 
+# Every pull request runs this workflow, so its last job, *Web Wallet
+# required*, always reports and main can require it (1.6.0's release review:
+# #323 merged while its check was still running, and the check failed 12
+# minutes later). A pull request that touches nothing the check covers skips
+# the check, not the workflow: a workflow a path filter skips never reports,
+# and a required check that never reports holds the pull request for good.
 on:
   pull_request:
-    paths:
-      - "seedelf-platform/**"
-      - ".github/workflows/web-wallet.yml"
 
 jobs:
+  # Whether the pull request touches what the check covers: seedelf-platform/
+  # and this file. Its files from the API, so nothing is checked out.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      platform: ${{ steps.files.outputs.platform }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILES: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
+        run: |
+          files=$(gh api --paginate "$FILES" --jq '.[].filename')
+          if grep -q -E '^(seedelf-platform/|\.github/workflows/web-wallet\.yml$)' <<<"$files"; then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "platform=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -105,3 +131,25 @@ jobs:
           VITE_ENABLE_MAINNET=true VITE_STORE_BUILD=true npm run build:ext
           node scripts/package.mjs mainnet
           npm run e2e
+
+  # The one check main requires (its branch protection names *Web Wallet
+  # required*; data-layer.yml's job is called `check` too, so not that name).
+  # Green when the check passed, or was skipped because the pull request
+  # touches nothing it covers; red otherwise: a failed look at the files, or a
+  # check that failed or was cancelled.
+  required:
+    name: Web Wallet required
+    needs: [changes, check]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          PLATFORM: ${{ needs.changes.outputs.platform }}
+          CHECK: ${{ needs.check.result }}
+        run: |
+          echo "changes: $CHANGES, touches seedelf-platform: $PLATFORM, check: $CHECK"
+          if [ "$CHANGES" != success ]; then exit 1; fi
+          if [ "$CHECK" = success ]; then exit 0; fi
+          if [ "$CHECK" = skipped ] && [ "$PLATFORM" = false ]; then exit 0; fi
+          exit 1
