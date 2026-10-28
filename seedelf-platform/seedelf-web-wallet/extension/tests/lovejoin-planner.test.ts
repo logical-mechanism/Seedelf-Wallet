@@ -24,6 +24,7 @@ import {
   pumpChain,
   SESSION_LOVEJOIN_SENDING,
   TAIL_KEEP_MS,
+  TAIL_OFFER_MS,
   wayOver,
   withinDepth,
   type ChainProgress,
@@ -1784,6 +1785,45 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
       // Its chain went in: nothing says Lovejoin was left out of it.
       expect(back.lovejoinSkipped).toBeUndefined();
       expect((await schedule(t)).chains.find((c) => c.id === stopped.id)!.tail?.over).toBe(true);
+      expect(t.collateral.asked).toHaveLength(1);
+    });
+
+    it("offers the rest back without its collateral's mix an hour after its deposit went in, and stops the chain there when asked (the owner, 2026-10-28; 1.7.0)", async () => {
+      const { t, five, sessions } = await setUp("16000000");
+      const review = await sessions.backBuild("preprod", 0);
+      const chain = await steps(t);
+      const deposit = chain.at(-3)!;
+      await sessions.backSubmit("preprod", review.txHash);
+      t.koios.confirmations = 1;
+      t.collateral.answer = { status: 503, body: { error: "busy" } };
+      await sessions.runAll("preprod");
+      expect(t.collateral.asked).toHaveLength(1);
+      const landed = (await schedule(t)).chains.at(-1)!.tail!.landed!;
+      // Held at its collateral's mix: the page knows from when it offers the way out, an hour after the deposit went in.
+      const view = async () => (await sessions.list("preprod")).find((v) => v.index === 0)!;
+      expect((await view()).collateralHeld).toEqual({ offerAt: landed + TAIL_OFFER_MS });
+      // Asked before the hour: nothing changes, and the chain still waits for giveme.my.
+      await sessions.skipCollateralMix("preprod", 0);
+      expect((await schedule(t)).chains.at(-1)!.tail?.over).toBeUndefined();
+      expect((await view()).collateralHeld).toBeDefined();
+      // The hour gone (moved back in its record: the wallet would lock first): the mix is over, the chain stops there at
+      // once, giveme.my not asked again, and nothing's held.
+      const s = await schedule(t);
+      s.chains.at(-1)!.tail!.landed! -= TAIL_OFFER_MS;
+      await t.store.set("lovejoin.preprod", s);
+      const after = await sessions.skipCollateralMix("preprod", 0);
+      expect(after.collateralHeld).toBeUndefined();
+      const stopped = (await schedule(t)).chains.at(-1)! as TailRecord & { stopped?: string };
+      expect(stopped.tail?.over).toBe(true);
+      expect(stopped.stopped).toBe(tr("lj.tail.skipped"));
+      expect(t.collateral.asked).toHaveLength(1);
+      // The rest comes back directly, its box left in the pool, and its mix is never built again.
+      const box = paid(deposit.txCbor).find((o) => o.index === review.collateralTail!.box.txIndex)!;
+      const change = paid(deposit.txCbor).find((o) => o.address === sessionSwap.address)!;
+      t.koios.addedToAccounts.push(listed(deposit, box, five.mixBox), atSession(deposit.txHash, change.index, String(change.value.ada.lovelace)));
+      for (const tx of chain.slice(0, -2)) for (const o of spent(tx)) t.koios.spent.add(o);
+      const back = await sessions.backBuild("preprod", 0);
+      expect(back.collateralTail).toBeUndefined();
       expect(t.collateral.asked).toHaveLength(1);
     });
 

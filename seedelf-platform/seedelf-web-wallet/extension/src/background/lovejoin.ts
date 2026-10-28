@@ -328,6 +328,13 @@ export const TAIL_KEEP_MS = 24 * 60 * 60_000;
 export const TAIL_TRIES = 2;
 
 /**
+ * How long a session's return waits on its collateral's mix before its page offers to bring the rest back without it
+ * (tailHeld): an hour from its deposit going in (the owner, 2026-10-28; 1.6.0's release review, 323-worker#3).
+ * giveme.my usually signs well within it; past it the mix may still go, but nobody need wait the day (TAIL_KEEP_MS).
+ */
+export const TAIL_OFFER_MS = 60 * 60_000;
+
+/**
  * How long a return waits on a collateral's deposit that isn't on chain yet, from when its chain stopped (the owner,
  * 2026-10-23): one that hasn't landed by then most likely never will (a node dropped it), and the return goes. Safe
  * even if it lands after all: it and the return spend the same UTxOs, and the network takes only one of them.
@@ -4109,6 +4116,25 @@ export class LovejoinService {
       landed = tail.landed;
     });
     return landed;
+  }
+
+  /**
+   * Whether session `index`'s return is held at its collateral's mix: the last of its chains with a tail not over, its
+   * deposit in, the mix waiting for giveme.my while the chain is sent (tailWaits) or to be built again (tailBuildable).
+   * `id`: that chain's; `offerAt`: from when its page offers to bring the rest back without it (TAIL_OFFER_MS). From
+   * the device alone.
+   */
+  async tailHeld(network: NetworkName, index: number): Promise<{ id: string; offerAt: number } | undefined> {
+    if (!this.available(network)) return undefined;
+    const c = (await this.read(network)).chains.filter((r) => r.session === index && r.tail && !r.tail.over).at(-1);
+    if (!c?.tail || c.tail.landed === undefined) return undefined;
+    if (!tailWaits(c) && !tailBuildable(c, this.deps.now())) return undefined;
+    return { id: c.id, offerAt: c.tail.landed + TAIL_OFFER_MS };
+  }
+
+  /** Whether chain `id`'s collateral's tail is over (tailOver): a chain still being sent stops at its mix. */
+  async tailIsOver(network: NetworkName, id: string): Promise<boolean> {
+    return !!(await this.read(network)).chains.find((c) => c.id === id)?.tail?.over;
   }
 
   /** Chain `id`'s collateral's tail won't go: its box waits, not mixed yet, and the session's rest comes back. */

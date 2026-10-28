@@ -5140,6 +5140,8 @@ export class SessionService {
   private async witnessTail(network: NetworkName, pending: PendingChain, i: number): Promise<boolean> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin) throw new Error(t("lj.notOnNetwork"));
+    // The rest brought back without it (skipCollateralMix): the chain stops there, as a day gone by stops it.
+    if (await lovejoin.tailIsOver(network, pending.txs.at(-1)!.txHash)) throw new Error(t("lj.tail.skipped"));
     if (pending.witnessAfter !== undefined && this.deps.now() < pending.witnessAfter) return false;
     const landed = await lovejoin.tailLanded(network, pending.txs.at(-1)!.txHash);
     const waited = this.deps.now() - landed;
@@ -5479,7 +5481,8 @@ export class SessionService {
     for (const s of [...book.sessions].reverse()) {
       const utxos = holdings?.get(s.index) ?? this.seen.get(`${network}:${s.index}`);
       const held = await this.stillWaiting(network, s);
-      views.push(this.view(network, s, keys.get(s.index)!.address, utxos, await this.backWantsCollateral(network, s, utxos), held));
+      const tail = await this.tailHeld(network, s);
+      views.push(this.view(network, s, keys.get(s.index)!.address, utxos, await this.backWantsCollateral(network, s, utxos), held, tail));
     }
     return views;
   }
@@ -5499,7 +5502,39 @@ export class SessionService {
     const s = (await this.book(network)).sessions.find((r) => r.index === index);
     if (!s) throw new Error(t("sess.noSuchSession"));
     const { address } = (await this.accounts(network, [s])).get(index)!;
-    return this.view(network, s, address, this.seen.get(`${network}:${index}`), false, await this.stillWaiting(network, s));
+    return this.view(network, s, address, this.seen.get(`${network}:${index}`), false, await this.stillWaiting(network, s), await this.tailHeld(network, s));
+  }
+
+  /** Session `s`'s return held at its collateral's mix (lovejoin.ts tailHeld), never in the way of a view. */
+  private async tailHeld(network: NetworkName, s: SessionRecord): Promise<{ offerAt: number } | undefined> {
+    if (s.closedAt || !this.deps.lovejoin) return undefined;
+    const held = await this.deps.lovejoin.tailHeld(network, s.index).catch((e: unknown) => {
+      if (isTrap(e)) throw e;
+      return undefined;
+    });
+    return held ? { offerAt: held.offerAt } : undefined;
+  }
+
+  /**
+   * Brings session `index`'s rest back without waiting any longer for its collateral's mix, once its page offers it
+   * (TAIL_OFFER_MS after its deposit went in; the owner, 2026-10-28; 1.6.0's release review, 323-worker#3): the mix is
+   * over, as a day gone by makes it, its 5 ₳ box waits in the pool not mixed yet, tied to the session, for Mix my
+   * boxes again, and a chain still being sent stops at it (witnessTail). Then its next step, as session-advance's: a
+   * swap's return goes by itself; one brought back by hand is offered on its page. Nothing held, or not yet: nothing
+   * changes.
+   */
+  async skipCollateralMix(network: NetworkName, index: number): Promise<SessionView> {
+    const held = await this.deps.lovejoin?.tailHeld(network, index);
+    if (held && this.deps.now() >= held.offerAt) {
+      await this.deps.lovejoin!.tailOver(network, held.id);
+      // A chain still being sent stops at the mix now, whatever the session, as the alarm's run (runAll) would at its next.
+      if (await this.pendingChain(network, index)) {
+        await this.serial(() => this.pump(network, index)).catch((e: unknown) => {
+          if (isTrap(e)) throw e;
+        });
+      }
+    }
+    return this.advance(network, index, true);
   }
 
   /**
@@ -5513,6 +5548,7 @@ export class SessionService {
     utxos?: KoiosUtxo[],
     backCollateral = false,
     waiting = NONE_WAITING,
+    tail?: { offerAt: number },
   ): SessionView {
     const now = this.deps.now();
     // A step's transaction Koios never took isn't shown, nor one that went unseen: it's built again.
@@ -5577,6 +5613,8 @@ export class SessionService {
       // What its return brought back, once it's over (DX-5).
       ...(stage === "closed" && s.received ? { received: s.received } : {}),
       ...(s.recovered ? { recovered: true as const } : {}),
+      // Its return held at its collateral's mix: from `offerAt` its page offers the rest back without it (1.7.0).
+      ...(stage !== "closed" && tail ? { collateralHeld: tail } : {}),
       // Found, with nothing sent for it from here, and waiting to end by itself (`quietAt`, cross-area review X01): its
       // page says so, rather than to bring back what a refresh didn't find (the last review, L4). A mark kept from
       // before this device sent something for it is no wait: only its own return ends it, and no refresh clears it.

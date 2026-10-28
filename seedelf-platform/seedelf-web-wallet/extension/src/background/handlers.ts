@@ -509,6 +509,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.sessions.scanDue(ctx.network);
     case "session-advance":
       return ctx.sessions.advance(ctx.network, message.index, message.now ?? false);
+    case "session-skip-collateral-mix":
+      return ctx.sessions.skipCollateralMix(ctx.network, message.index);
     case "session-stop":
       return ctx.sessions.stop(ctx.network, message.index, message.direct ?? false);
     case "session-stop-cost":

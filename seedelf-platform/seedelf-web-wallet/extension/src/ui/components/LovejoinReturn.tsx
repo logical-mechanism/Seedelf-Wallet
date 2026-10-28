@@ -526,3 +526,32 @@ export function ReturnLinks({ back, after }: { back: SessionBackSummary; after?:
     <Callout tone="privacy">{joinSentences([tr(back.merged ? "lovejoin.privacy.merged" : "lovejoin.privacy.newUtxos"), after])}</Callout>
   );
 }
+
+/**
+ * A session's return held at its collateral's mix (SessionView `collateralHeld`), once its page offers the way out (an
+ * hour after the mix's deposit went in, the worker's `offerAt`): what's still waiting, that bringing the rest back
+ * without it leaves the 5 ₳ box in the pool unmixed and tied to the session, and the button (session-skip-collateral-mix;
+ * the owner, 2026-10-28; 1.6.0's release review, 323-worker#3). Nothing before then, nor once it's over. `now`: for tests.
+ */
+export function CollateralHeldWayOut({
+  held,
+  busy,
+  onSkip,
+  now = Date.now(),
+}: {
+  held?: SessionView["collateralHeld"];
+  busy: boolean;
+  onSkip: () => void;
+  now?: number;
+}) {
+  const tr = useT();
+  if (!held || now < held.offerAt) return null;
+  return (
+    <div className="stack" data-testid="collateral-held">
+      <Callout tone="privacy">{tr("lj.tail.privacy.wayOut")}</Callout>
+      <button type="button" className="secondary" disabled={busy} onClick={onSkip} data-testid="collateral-held-skip">
+        {tr("lj.tail.wayOut")}
+      </button>
+    </div>
+  );
+}

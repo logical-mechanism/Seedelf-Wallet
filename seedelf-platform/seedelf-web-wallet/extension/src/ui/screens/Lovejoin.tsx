@@ -80,6 +80,7 @@ import { HistoriesNote } from "../components/HistoriesNote";
 import { SearchIcon, ShieldIcon, WalletIcon } from "../components/Icons";
 import {
   chainText,
+  CollateralHeldWayOut,
   COLLATERAL_MIX_COST,
   delayText,
   LOVEJOIN_SEEN,
@@ -1828,6 +1829,13 @@ export function Lovejoin({
     });
   };
 
+  /** A mix whose return is held at its collateral's mix past the hour: the rest back without it (1.7.0). */
+  const skipCollateralMix = (index: number) =>
+    act(async () => {
+      const moved = await call("session-skip-collateral-mix", { index });
+      setMixes((was) => was.map((m) => (m.index === index ? moved : m)));
+    });
+
   /** A mix waiting to try again: now. */
   const retry = (index: number) =>
     act(async () => {
@@ -1961,6 +1969,7 @@ export function Lovejoin({
         busy={busy}
         onRetry={(index) => void retry(index)}
         onStop={(index) => setAsking({ stop: index })}
+        onSkipCollateral={(index) => void skipCollateralMix(index)}
         onClear={(keys) => void clear(keys)}
       />
 
@@ -2309,6 +2318,7 @@ export function MixList({
   busy,
   onRetry,
   onStop,
+  onSkipCollateral,
   onClear,
 }: {
   entries: LovejoinMixView[];
@@ -2318,6 +2328,8 @@ export function MixList({
   busy: boolean;
   onRetry: (index: number) => void;
   onStop: (index: number) => void;
+  /** Brings a mix's rest back without waiting longer for its collateral's mix (CollateralHeldWayOut); none, not offered. */
+  onSkipCollateral?: (index: number) => void;
   /** Clears the mixes named from the list (Clear, Clear all); none given, no Clear is offered. */
   onClear?: (keys: ClearKeys) => void;
 }) {
@@ -2349,6 +2361,7 @@ export function MixList({
             busy={busy}
             onRetry={onRetry}
             onStop={onStop}
+            onSkipCollateral={onSkipCollateral}
             onClear={onClear && clearable(item) ? () => onClear(clearKeys([item])) : undefined}
           />
         ))}
@@ -2429,6 +2442,7 @@ function MixCard({
   busy,
   onRetry,
   onStop,
+  onSkipCollateral,
   onClear,
 }: {
   item: MixItem;
@@ -2437,6 +2451,7 @@ function MixCard({
   busy: boolean;
   onRetry: (index: number) => void;
   onStop: (index: number) => void;
+  onSkipCollateral?: (index: number) => void;
   /** Clears it from the list: only one not in flight (clearable). */
   onClear?: () => void;
 }) {
@@ -2566,6 +2581,12 @@ function MixCard({
             </>
           )}
         </p>
+      )}
+      {/* Its return held at its collateral's mix past the hour (1.7.0). */}
+      {s && s.collateralHeld && !isOver(s) && onSkipCollateral && (
+        <div className="token-row__detail">
+          <CollateralHeldWayOut held={s.collateralHeld} busy={busy} onSkip={() => onSkipCollateral(s.index)} />
+        </div>
       )}
     </li>
   );

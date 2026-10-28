@@ -52,6 +52,7 @@ import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
 import {
   chainText,
+  CollateralHeldWayOut,
   COLLATERAL_MIX_COST,
   CollateralMixLine,
   CollateralReserveRow,
@@ -2398,6 +2399,8 @@ export function Session({
     });
   const forget = () => (s.unsent || !s.auto ? forgetNow() : setForgetting(true));
   const lookAgain = () => void act(async () => setS(await call("session-resume", { index: s.index })));
+  // Its return held at its collateral's mix past the hour: the rest back without it (1.7.0).
+  const skipCollateralMix = () => void act(async () => setS(await call("session-skip-collateral-mix", { index: s.index })));
   const forgetModal = forgetting && <ForgetSwap busy={busy} onKeep={() => setForgetting(false)} onForget={forgetNow} />;
 
   if (s.auto) {
@@ -2507,6 +2510,7 @@ export function Session({
         />
         <LovejoinSkipped reason={s.lovejoinSkipped} />
         {rows}
+        <CollateralHeldWayOut held={s.collateralHeld} busy={busy} onSkip={skipCollateralMix} />
         <LeftBehindNote leftBehind={s.leftBehind} />
         {forgetModal}
         {/* Not once the page's own reading says there's nothing left to stop (a swap against a DEX's pools sent
@@ -2560,6 +2564,7 @@ export function Session({
     >
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={onRefresh} />
       {rows}
+      <CollateralHeldWayOut held={s.collateralHeld} busy={busy} onSkip={skipCollateralMix} />
       {/* Found by a restore's scan: the browser that started it may still be running it (chunk 27). */}
       {s.recovered && s.stage !== "closed" && (
         <Callout tone="warn" testId="session-found-warning">

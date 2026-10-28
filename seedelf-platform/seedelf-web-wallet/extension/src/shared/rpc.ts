@@ -1863,6 +1863,12 @@ export interface SessionView {
    */
   recovered?: true;
   /**
+   * Its return is held at its collateral's mix, which waits for giveme.my (a day at most): from `offerAt` its page offers
+   * to bring the rest back without it, its 5 ₳ box left in the pool unmixed (session-skip-collateral-mix; the owner,
+   * 2026-10-28, 1.7.0).
+   */
+  collateralHeld?: { offerAt: number };
+  /**
    * Found by the restore scan, with nothing sent for it from this device,
    * and waiting to end by itself: a refresh found its order over and nothing
    * at its account a return takes. It ends at a refresh once that has held
@@ -2995,6 +3001,8 @@ export interface Requests {
   "lovejoin-launch-submit": { payload: { txHash: string }; result: PendingTx };
   /** Takes the session's next step, if it's time (`now`: whatever the last reading), and returns it. */
   "session-advance": { payload: { index: number; now?: boolean }; result: SessionView };
+  /** Session `index`'s rest back without waiting longer for its collateral's mix (SessionView `collateralHeld`), then its next step. */
+  "session-skip-collateral-mix": { payload: { index: number }; result: SessionView };
   /**
    * Stops the swap: its order is cancelled, then everything comes back into
    * the private balance (`direct`: not through Lovejoin, whatever was approved).
@@ -3140,6 +3148,7 @@ const REQUEST_LIST = [
   "session-scan",
   "session-scan-due",
   "session-advance",
+  "session-skip-collateral-mix",
   "session-stop",
   "session-stop-cost",
   "session-resume",

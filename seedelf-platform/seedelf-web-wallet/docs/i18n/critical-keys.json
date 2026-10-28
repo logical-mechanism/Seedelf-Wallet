@@ -141,6 +141,7 @@
   "lj.skip.warn.needsMore",
   "lj.skip.warn.noneLeft",
   "lj.skip.warn.untoldAll",
+  "lj.tail.privacy.wayOut",
   "lj.tokens.skip.warn.balance",
   "lj.tokens.skip.warn.failed",
   "lj.tokens.skip.warn.noPool",
