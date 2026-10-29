@@ -20,8 +20,9 @@
 // classic pool's, the reference holder's) are left alone, and an entry already
 // there stays as it is, even once its pool is no longer listed (its token left
 // the list): it's named in a warning, never removed, as its label is still
-// true. A pool that doesn't verify, a token with no ticker, or a name over the
-// registry's limits stops it with nothing written.
+// true. With no new pool, the file isn't touched. A pool that doesn't verify,
+// a token with no ticker, or a name over the registry's limits stops it with
+// nothing written.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -121,7 +122,8 @@ if (!target) {
     registry.contracts.push(...added);
     writeFileSync(target, `${JSON.stringify(registry, null, 2)}\n`);
   }
-  console.log(`${listed}: ${added.length} entries added, ${wanted.length - added.length} already there -> ${target}`);
+  if (!added.length) console.log(`${listed}: no new pools, ${target} left as it was.`);
+  else console.log(`${listed}: ${added.length} entries added, ${wanted.length - added.length} already there -> ${target}`);
   for (const c of added) console.log(`  + ${c.name}  ${c.scriptHash}`);
   for (const c of unlisted) console.warn(`  kept, its pool no longer listed: ${c.name}  ${c.scriptHash}`);
   if (added.length) console.log("Next, in the fork: npm run validate, commit, open the PR, and message Cardanoscan the link.");
