@@ -151,3 +151,39 @@ async fn create_never_puts_up_a_collateral_holding_a_token() {
     let back = tx.collateral_return.as_ref().expect("a collateral return");
     assert_eq!(back.address, external_address());
 }
+
+/// With no ADA-only UTxO of exactly 5 ADA to put up as collateral, the mint is
+/// refused, rather than built with a collateral return and no collateral,
+/// which the node refuses.
+#[tokio::test]
+#[serial]
+async fn create_refuses_without_a_collateral() {
+    let mut scenario = Scenario::start().await;
+    let token = ("dd".repeat(28), hex::encode("COLLAT"), 1);
+    scenario
+        .mount_address_utxos(vec![
+            address_utxo(&external_address_bech32(), 2, 10_000_000, &[]),
+            // 5 ADA, but holding a token: never the collateral
+            address_utxo(&external_address_bech32(), 3, 5_000_000, &[token]),
+        ])
+        .await;
+    scenario.mount_evaluate(1).await;
+    // Armed so that, without the check, the run ends at the signing site
+    // rather than waiting there for a browser.
+    scenario.arm_web_capture();
+
+    let refused = run(
+        CreateArgs {
+            address: external_address_bech32(),
+            label: Some("hello".to_string()),
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect_err("a mint with no collateral must be refused");
+    assert!(
+        refused.to_string().contains("No Collateral Found"),
+        "{refused}"
+    );
+}

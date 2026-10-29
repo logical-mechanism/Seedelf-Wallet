@@ -29,7 +29,7 @@ pub struct ExtractArgs {
     #[arg(
         short = 'a',
         long,
-        help = "The address receiving the funds",
+        help = "The address receiving the funds. It pays the fee and needs a UTxO of exactly 5 ADA, holding no tokens, for collateral",
         display_order = 2
     )]
     pub address: String,
@@ -115,6 +115,12 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             }
         }
         Err(err) => anyhow::bail!("Failed to fetch UTxOs: {err}"),
+    }
+    // the contract spend needs collateral: without one, the node refuses the transaction
+    if !found_collateral {
+        bail!(
+            "No Collateral Found\nSend a UTxO of exactly 5 ADA, holding no tokens, to the address and try again."
+        );
     }
     // Spending a UTxO that holds a reference script costs Conway's
     // reference-script fee, and the script may be deployed there on purpose:
