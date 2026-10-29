@@ -20,7 +20,7 @@ A vulnerability report may result in a bounty **if and only if** the issue can r
 
 You must describe a **plausible scenario** in which a loss of funds can occur (or has occurred) that **isn't solely attributable to user error**.
 
-Only **the code** of the **latest tagged release** of **[this repository](https://github.com/logical-mechanism/Seedelf-Wallet/)** is in scope.
+Only **the code** of the **latest tagged release** of **[this repository](https://github.com/logical-mechanism/Seedelf-Wallet/)** is in scope. For the CLI and the contracts, that's the latest version tag (such as `0.6.0`); for the Seedelf Wallet, the latest `web-wallet/` tag (such as `web-wallet/1.6.0`).
 
 **The bounty can only be rewarded in ADA**. The maintainers determine the bounty amount for your report, which depends on the severity of the issue and other factors, and ranges from 1 USD to 10,000 USD (in terms of ADA).
 

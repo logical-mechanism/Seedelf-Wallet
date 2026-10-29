@@ -1,6 +1,6 @@
 # Release
 
-This is the CLI's release: the Rust workspace and the contracts, on the `0.x.y` line, tagged `x.y.z`, which [release.yml](.github/workflows/release.yml) builds, signs and publishes. The Seedelf Wallet for Chrome is a separate `1.x` line with its own procedure in [development.md](seedelf-platform/seedelf-web-wallet/docs/development.md); it isn't tagged, and a tag for it must carry a slash (`web-wallet/<version>`) or release.yml ships signed CLI binaries off it.
+This is the CLI's release: the Rust workspace and the contracts, on the `0.x.y` line, tagged `x.y.z`, which [release.yml](.github/workflows/release.yml) builds, signs and publishes. The Seedelf Wallet for Chrome is a separate `1.x` line with its own procedure in [development.md](seedelf-platform/seedelf-web-wallet/docs/development.md), tagged `web-wallet/<version>` on the commit its uploaded zip was built from. That tag must carry the slash, or release.yml ships signed CLI binaries off it.
 
 Change the version, then run the command below in the parent folder.
 
