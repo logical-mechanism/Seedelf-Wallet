@@ -6,22 +6,41 @@ name: Web Wallet
 # minutes later). A pull request that touches nothing the check covers skips
 # the check, not the workflow: a workflow a path filter skips never reports,
 # and a required check that never reports holds the pull request for good.
+#
+# main runs it too, after each merge. No one waits on that run, but its
+# caches (Rust's, npm's) are the ones a pull request's first run starts from:
+# a pull request's own caches are its alone, so without main's each first run
+# built every crate from nothing.
 on:
   pull_request:
+  push:
+    branches: [main]
+
+# A newer push to a pull request cancels the run it outdates; main's runs
+# never cancel one another.
+concurrency:
+  group: web-wallet-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # A read-only token for every job but changes, which names its own: the
 # repository's default is write, and the check runs every dependency's code.
 permissions:
   contents: read
 
+# The check is five jobs side by side, where it was one taking 40 minutes:
+# rust, and wasm, whose build the extension's unit, e2e and store jobs
+# download.
 jobs:
-  # Whether the pull request touches what the check covers: seedelf-platform/
-  # and this file. Its files from the API, so nothing is checked out. A
-  # renamed file's old path is read too, so a move out of the folder counts,
-  # and a list that can't be trusted counts as touching it (1.7.0's release
-  # review): one the API cut short (it lists 3,000 files at most), or one
-  # against a base other than main, since a change of base runs nothing and
-  # the skip would stand once the base is main.
+  # Whether the pull request touches what the check covers: this file, and
+  # seedelf-platform/ but its Markdown, which nothing builds or tests from
+  # except wasm/README.md (readme_test.rs reads its export table). A test that
+  # comes to read another .md file names it here too. Its files from the API,
+  # so nothing is checked out. A renamed file's old path is read too, so a
+  # move out of the folder counts, and a list that can't be trusted counts as
+  # touching it (1.7.0's release review): one the API cut short (it lists
+  # 3,000 files at most), or one against a base other than main, since a
+  # change of base runs nothing and the skip would stand once the base is
+  # main. main's own run checks everything.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -32,21 +51,27 @@ jobs:
       - id: files
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
           FILES: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100
           CHANGED: ${{ github.event.pull_request.changed_files }}
           BASE: ${{ github.event.pull_request.base.ref }}
         run: |
+          if [ "$EVENT" = push ]; then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # A line a file: its path, and a renamed file's old one after a tab.
           rows=$(gh api --paginate "$FILES" --jq '.[] | [.filename, (.previous_filename // empty)] | @tsv')
           paths=$(tr '\t' '\n' <<<"$rows")
-          if [ "$BASE" != main ] || [ "$(wc -l <<<"$rows")" -lt "$CHANGED" ] ||
-            grep -q -E '^(seedelf-platform/|\.github/workflows/web-wallet\.yml$)' <<<"$paths"; then
+          covered='/^\.github\/workflows\/web-wallet\.yml$/ || /^seedelf-platform\/seedelf-web-wallet\/wasm\/README\.md$/ || (/^seedelf-platform\// && !/\.md$/) { hit = 1 } END { exit !hit }'
+          if [ "$BASE" != main ] || [ "$(wc -l <<<"$rows")" -lt "$CHANGED" ] || awk "$covered" <<<"$paths"; then
             echo "platform=true" >> "$GITHUB_OUTPUT"
           else
             echo "platform=false" >> "$GITHUB_OUTPUT"
           fi
 
-  check:
+  # Format, lints and every crate's tests.
+  rust:
     needs: changes
     if: needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
@@ -71,12 +96,6 @@ jobs:
         with:
           workspaces: seedelf-platform
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: seedelf-platform/seedelf-web-wallet/extension/package-lock.json
-
       - name: Rust format
         run: cargo fmt --all -- --check
 
@@ -88,6 +107,32 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace --locked
 
+  # The WebAssembly the extension's jobs download, and its JS tests.
+  wasm:
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: seedelf-platform
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: seedelf-platform
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       # Cargo.lock is tracked: the CLI must be the wasm-bindgen it pins.
       - name: Install wasm-bindgen-cli
         run: |
@@ -97,78 +142,170 @@ jobs:
       - name: Build WebAssembly
         run: ./seedelf-web-wallet/wasm/build.sh
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-pkg
+          path: seedelf-platform/seedelf-web-wallet/wasm/pkg
+          if-no-files-found: error
+          retention-days: 1
+
       - name: WebAssembly tests
         run: node --test "seedelf-web-wallet/wasm/tests/*.test.mjs"
 
-      - name: Extension dependencies
+  # The extension's typecheck and unit tests, then the unit tests again as a
+  # preprod-only build: some of what's bundled depends on the build (mainnet's
+  # token list and DReps), and every build has both networks, so
+  # VITE_ENABLE_MAINNET=false sees it.
+  unit:
+    needs: [changes, wasm]
+    if: needs.changes.outputs.platform == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [default, preprod-only]
+    name: unit (${{ matrix.build }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
         working-directory: seedelf-platform/seedelf-web-wallet/extension
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: seedelf-platform/seedelf-web-wallet/wasm/pkg
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: seedelf-platform/seedelf-web-wallet/extension/package-lock.json
+
+      - name: Extension dependencies
         run: npm ci
 
       - name: Extension typecheck
-        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        if: matrix.build == 'default'
         run: npm run typecheck
 
       - name: Extension unit tests
-        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        if: matrix.build == 'default'
         run: npm test
 
-      # Some of what's bundled depends on the build (mainnet's token list and
-      # DReps): every build has both networks, so the tests again as a
-      # preprod-only build (VITE_ENABLE_MAINNET=false) sees it.
       - name: Extension unit tests (preprod-only build)
-        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        if: matrix.build == 'preprod-only'
         run: VITE_ENABLE_MAINNET=false npm test
 
-      - name: Extension build
+  # The built extension in Chromium: every end-to-end test, then mainnet
+  # through the wallet's own data layer (chunk 26b), a build made with
+  # VITE_DATA_ORIGIN, against e2e/data-layer.ts's fake of it, each part falling
+  # back to the Koios fake. Every other build carries the live server's origin
+  # (1.4.0); the harness answers only the hosts it fakes, so no test reaches it.
+  e2e:
+    needs: [changes, wasm]
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
         working-directory: seedelf-platform/seedelf-web-wallet/extension
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: seedelf-platform/seedelf-web-wallet/wasm/pkg
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: seedelf-platform/seedelf-web-wallet/extension/package-lock.json
+
+      - name: Extension dependencies
+        run: npm ci
+
+      - name: Extension build
         run: npm run build:ext
 
       - name: Extension end-to-end (Chromium)
-        working-directory: seedelf-platform/seedelf-web-wallet/extension
         run: |
           npx playwright install --with-deps chromium
           npm run e2e
 
-      # Mainnet through the wallet's own data layer (chunk 26b): a build made
-      # with VITE_DATA_ORIGIN, against e2e/data-layer.ts's fake of it, each
-      # part falling back to the Koios fake. Every other build carries the live
-      # server's origin (1.4.0); the harness answers only the hosts it fakes,
-      # so no test reaches it.
       - name: Data layer end-to-end
-        working-directory: seedelf-platform/seedelf-web-wallet/extension
         run: npm run e2e:data
 
-      # The Web Store package, as `npm run package` makes it: the mainnet
-      # build, with no dev key, the third-party notices (which fail on a crate
-      # with no licence) and the zip, refused without mainnet's hosts. Then the
-      # same tests on that build, with preprod chosen (e2e/support.ts sets the
-      # network before the wallet starts), and the network switch's own test.
-      - name: Store package and its end-to-end
+  # The Web Store package, as `npm run package` makes it: the mainnet build,
+  # with no dev key, the third-party notices (which fail on a crate with no
+  # licence) and the zip, refused without mainnet's hosts. Then the same tests
+  # on that build, with preprod chosen (e2e/support.ts sets the network before
+  # the wallet starts), and the network switch's own test.
+  store:
+    needs: [changes, wasm]
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
         working-directory: seedelf-platform/seedelf-web-wallet/extension
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: seedelf-platform/seedelf-web-wallet/wasm/pkg
+
+      # The notices ask cargo which crates the WebAssembly links, and read
+      # their licences from the sources cargo fetches.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: wasm32-unknown-unknown
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: seedelf-platform/seedelf-web-wallet/extension/package-lock.json
+
+      - name: Extension dependencies
+        run: npm ci
+
+      - name: Store package and its end-to-end
         run: |
+          npx playwright install --with-deps chromium
           VITE_ENABLE_MAINNET=true VITE_STORE_BUILD=true npm run build:ext
           node scripts/package.mjs mainnet
           npm run e2e
 
   # The one check for main's branch protection to require, *Web Wallet
-  # required* (data-layer.yml's job is called `check` too, so not that name).
-  # main's ruleset requires it, with no bypass (1.7.0's item 2).
-  # Green when the check passed, or was skipped because the pull request
-  # touches nothing it covers; red otherwise: a failed look at the files, or a
-  # check that failed or was cancelled.
+  # required* (data-layer.yml has a job called `check`, so not a name like
+  # that). main's ruleset requires it, with no bypass (1.7.0's item 2).
+  # Green when every job of the check passed, or all were skipped because the
+  # pull request touches nothing they cover; red otherwise: a failed look at
+  # the files, or a job that failed, was cancelled, or was skipped because one
+  # it needs failed.
   required:
     name: Web Wallet required
-    needs: [changes, check]
+    needs: [changes, rust, wasm, unit, e2e, store]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - env:
           CHANGES: ${{ needs.changes.result }}
           PLATFORM: ${{ needs.changes.outputs.platform }}
-          CHECK: ${{ needs.check.result }}
+          JOBS: ${{ needs.rust.result }} ${{ needs.wasm.result }} ${{ needs.unit.result }} ${{ needs.e2e.result }} ${{ needs.store.result }}
         run: |
-          echo "changes: $CHANGES, touches seedelf-platform: $PLATFORM, check: $CHECK"
+          echo "changes: $CHANGES, touches what the check covers: $PLATFORM, rust wasm unit e2e store: $JOBS"
           if [ "$CHANGES" != success ]; then exit 1; fi
-          if [ "$CHECK" = success ]; then exit 0; fi
-          if [ "$CHECK" = skipped ] && [ "$PLATFORM" = false ]; then exit 0; fi
+          if [ "$JOBS" = "success success success success success" ]; then exit 0; fi
+          if [ "$JOBS" = "skipped skipped skipped skipped skipped" ] && [ "$PLATFORM" = false ]; then exit 0; fi
           exit 1
