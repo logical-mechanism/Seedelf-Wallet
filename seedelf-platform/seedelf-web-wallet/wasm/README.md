@@ -112,7 +112,7 @@ The output is an ES module (`--target web`). Load it with `init()` or `initSync(
 
 The build is reproducible: it takes only the crates `Cargo.lock` records (`--locked`), and no path on the machine goes into the module, so the same commit and toolchain (the pinned Rust, wasm-bindgen, and clang) give the same bytes (launch review #61). Nothing pins clang, which compiles blst's C, so the script's last line names it (`C compiler: …`) for the release record.
 
-**It's built for size** with the workspace's `wasm-release` profile (`opt-level = "z"`, LTO, one codegen unit, stripped). The CLI keeps the plain release profile. `node bench.mjs [pkg-dir]` prints a build's size (raw, gzip, brotli), how long the module takes to compile, and the median time of a key derivation, the ownership check, a re-randomization, a proof, a transfer (`buildTransfer`) and a move-in.
+**It's built for size** with the workspace's `wasm-release` profile (`opt-level = "z"`, LTO, one codegen unit, stripped). It checks integer overflow where core, crypto and koios compile their code, not where this crate does (a small call-free or generic core function compiled here wraps): where the line falls, and why no crate leans on it, is in [the workspace's CLAUDE.md](../../CLAUDE.md). The CLI keeps the plain release profile. `node bench.mjs [pkg-dir]` prints a build's size (raw, gzip, brotli), how long the module takes to compile, and the median time of a key derivation, the ownership check, a re-randomization, a proof, a transfer (`buildTransfer`) and a move-in.
 
 | Build | Raw | gzip | Proof | Transfer |
 |---|---|---|---|---|
