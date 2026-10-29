@@ -18,7 +18,7 @@ use blstrs::Scalar;
 use pallas_addresses::Address;
 use pallas_primitives::alonzo::{MaybeIndefArray, PlutusData};
 use pallas_primitives::conway::DatumOption;
-use pallas_traverse::MultiEraTx;
+use pallas_traverse::{MultiEraOutput, MultiEraTx};
 use seedelf_core::assets::{Asset as CoreAsset, Assets};
 use seedelf_core::constants::{Config, get_config};
 use seedelf_core::transaction::{
@@ -516,6 +516,9 @@ pub struct DecodedTx {
     pub fee: u64,
     /// `(policy_id_hex, token_name_hex) -> signed mint quantity`.
     pub mint: BTreeMap<(String, String), i128>,
+    pub collateral: Vec<(String, u64)>,
+    /// Where what's left of the collateral goes if a script fails.
+    pub collateral_return: Option<DecodedOutput>,
 }
 
 fn register_from_datum(datum: DatumOption) -> Option<Register> {
@@ -544,6 +547,27 @@ fn register_from_datum(datum: DatumOption) -> Option<Register> {
     ))
 }
 
+fn decode_output(o: &MultiEraOutput) -> DecodedOutput {
+    let mut assets = BTreeMap::new();
+    for policy in o.value().assets() {
+        for asset in policy.assets() {
+            if let Some(qty) = asset.output_coin() {
+                *assets
+                    .entry((hex::encode(*policy.policy()), hex::encode(asset.name())))
+                    .or_insert(0) += qty;
+            }
+        }
+    }
+    let datum = o.datum();
+    DecodedOutput {
+        address: o.address().expect("output address"),
+        lovelace: o.value().coin(),
+        assets,
+        has_datum: datum.is_some(),
+        register: datum.and_then(|d| register_from_datum(d.into())),
+    }
+}
+
 /// Decode a transaction CBOR hex string into an owned, asserted-against view.
 pub fn decode_tx(cbor_hex: &str) -> DecodedTx {
     let bytes = hex::decode(cbor_hex).expect("tx cbor hex");
@@ -555,30 +579,7 @@ pub fn decode_tx(cbor_hex: &str) -> DecodedTx {
         .map(|i| (hex::encode(*i.hash()), i.index()))
         .collect();
 
-    let outputs = tx
-        .outputs()
-        .iter()
-        .map(|o| {
-            let mut assets = BTreeMap::new();
-            for policy in o.value().assets() {
-                for asset in policy.assets() {
-                    if let Some(qty) = asset.output_coin() {
-                        *assets
-                            .entry((hex::encode(*policy.policy()), hex::encode(asset.name())))
-                            .or_insert(0) += qty;
-                    }
-                }
-            }
-            let datum = o.datum();
-            DecodedOutput {
-                address: o.address().expect("output address"),
-                lovelace: o.value().coin(),
-                assets,
-                has_datum: datum.is_some(),
-                register: datum.and_then(|d| register_from_datum(d.into())),
-            }
-        })
-        .collect();
+    let outputs = tx.outputs().iter().map(decode_output).collect();
 
     let mut mint: BTreeMap<(String, String), i128> = BTreeMap::new();
     for policy in tx.mints() {
@@ -596,6 +597,12 @@ pub fn decode_tx(cbor_hex: &str) -> DecodedTx {
         outputs,
         fee: tx.fee().expect("transaction declares a fee"),
         mint,
+        collateral: tx
+            .collateral()
+            .iter()
+            .map(|i| (hex::encode(*i.hash()), i.index()))
+            .collect(),
+        collateral_return: tx.collateral_return().as_ref().map(decode_output),
     }
 }
 

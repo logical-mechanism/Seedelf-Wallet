@@ -42,7 +42,6 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     let config: Config = get_config(variant, network_flag)?;
     let params = epoch_params(network_flag).await?;
 
-    let collat_addr: Address = address::collateral_address(network_flag);
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str())
         .map_err(|e| anyhow::anyhow!("Supplied Address Is Incorrect: {e}"))?;
@@ -98,7 +97,9 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
                     .value
                     .parse::<u64>()
                     .map_err(|e| anyhow::anyhow!("UTxO has an invalid lovelace value: {e}"))?;
-                if lovelace == 5_000_000 && !found_collateral {
+                // the collateral return is ADA alone, so the collateral must be too
+                let holds_tokens = utxo.asset_list.as_ref().is_some_and(|a| !a.is_empty());
+                if lovelace == 5_000_000 && !holds_tokens && !found_collateral {
                     draft_tx = draft_tx.collateral_input(Input::new(
                         pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
                             &utxo.tx_hash,
@@ -257,7 +258,8 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
 
     raw_tx = raw_tx
         .output(extract_output)
-        .collateral_output(fee::collateral_output(collat_addr.clone(), total_fee)?)
+        // the collateral is the address's own 5 ADA, so it comes back there
+        .collateral_output(fee::collateral_output(addr.clone(), total_fee)?)
         .fee(total_fee);
 
     let (cpu, mem) = budgets
