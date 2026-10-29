@@ -132,3 +132,22 @@ async fn create_prices_the_policy_at_the_networks_reference_script_price() {
         config().contract.seedelf_contract_size * 100
     );
 }
+
+/// A 5 ADA UTxO that also holds a token is never the collateral: the return
+/// is ADA alone, so the ledger would refuse it (CollateralContainsNonADA).
+#[tokio::test]
+#[serial]
+async fn create_never_puts_up_a_collateral_holding_a_token() {
+    let token = ("dd".repeat(28), hex::encode("COLLAT"), 1);
+    let mut utxos = vec![address_utxo(
+        &external_address_bech32(),
+        3,
+        5_000_000,
+        &[token],
+    )];
+    utxos.extend(payer_utxos());
+    let tx = create_with(utxos, None).await;
+    assert_eq!(tx.collateral, vec![(tx_hash(1), 0)]);
+    let back = tx.collateral_return.as_ref().expect("a collateral return");
+    assert_eq!(back.address, external_address());
+}

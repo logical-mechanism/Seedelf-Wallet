@@ -147,3 +147,32 @@ async fn extract_prices_a_reference_script_on_the_utxo_it_extracts() {
     // The same transaction, with 520 more bytes at the recorded 15 a byte.
     assert_eq!(scripted - plain, 520 * 15);
 }
+
+/// The collateral is the address's own 5 ADA UTxO, not giveme.my's: if the
+/// script fails, what's left of it goes back to that address.
+#[tokio::test]
+#[serial]
+async fn extract_returns_the_collateral_to_the_address_it_came_from() {
+    let tx = extract_with(empty_datum_utxo(50, 2_000_000, &[]), funding_utxos(), None).await;
+    assert_eq!(tx.collateral, vec![(tx_hash(51), 0)]);
+    let back = tx.collateral_return.as_ref().expect("a collateral return");
+    assert_eq!(back.address, external_address());
+    assert_eq!(back.lovelace, 5_000_000 - tx.fee * 3 / 2);
+}
+
+/// A 5 ADA UTxO that also holds a token is never the collateral: the return
+/// is ADA alone, so the ledger would refuse it (CollateralContainsNonADA).
+#[tokio::test]
+#[serial]
+async fn extract_never_puts_up_a_collateral_holding_a_token() {
+    let token = ("dd".repeat(28), hex::encode("COLLAT"), 1);
+    let mut utxos = vec![address_utxo(
+        &external_address_bech32(),
+        53,
+        5_000_000,
+        &[token],
+    )];
+    utxos.extend(funding_utxos());
+    let tx = extract_with(empty_datum_utxo(50, 2_000_000, &[]), utxos, None).await;
+    assert_eq!(tx.collateral, vec![(tx_hash(51), 0)]);
+}

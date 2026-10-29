@@ -321,7 +321,9 @@ async fn assign_collateral_and_get_utxos(
             .value
             .parse::<u64>()
             .context("UTxO has an invalid lovelace value")?;
-        if lovelace == 5_000_000 && !found_collateral {
+        // the collateral return is ADA alone, so the collateral must be too
+        let holds_tokens = utxo.asset_list.as_ref().is_some_and(|a| !a.is_empty());
+        if lovelace == 5_000_000 && !holds_tokens && !found_collateral {
             draft_tx = draft_tx.collateral_input(Input::new(
                 pallas_crypto::hash::Hash::new(seedelf_core::transaction::decode_tx_hash(
                     &utxo.tx_hash,
