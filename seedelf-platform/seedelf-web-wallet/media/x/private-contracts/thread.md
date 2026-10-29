@@ -18,32 +18,32 @@ It's written to sell, for someone who wants privacy rather than the maths; the d
 
 ## 3 · [03-the-problem.png](03-the-problem.png)
 
-> Contracts are the hard part. dApps build their transactions for a wallet with keys, and some dApps' contracts refuse a transaction that spends another contract too, a guard against double satisfaction. Your private balance is a contract.
+> Contracts are the hard part. dApps build their transactions for a wallet with keys, and some dApps' contracts refuse a transaction that spends another contract. Within Seedelf, your private balance is a contract.
 
 **Alt text:** Titled "Why not pay the dApp directly?": two walls between a private balance and a dApp. Left, dApps build for keys: a transaction the dApp built, with a key's UTxO and its signatures, works; swap a Seedelf UTxO in and its signatures break, and it's refused. Right, dApps refuse other contracts: one transaction holding a dApp contract and a Seedelf UTxO is refused by the dApp's contract, because another contract is spent in it too. Some dApps do this to guard against double satisfaction, and your private balance is a contract.
 
 ## 4 · [04-one-time-account.png](04-one-time-account.png)
 
-> So the wallet opens a one-time account: a fresh key account, funded from your private balance with the amount and 5 ₳ of collateral of its own. To the dApp it's an ordinary wallet: no contract-to-contract limits, and its transactions can chain.
+> So the wallet opens a one-time account: a fresh key account, funded from your private balance with the correct amount and 5 ₳ of collateral of its own. To the dApp it's an ordinary wallet: no contract-to-contract limits, and its transactions can chain natively.
 
 **Alt text:** Titled "A one-time account", steps 1 and 2. The private balance funds a one-time account holding the amount and its own 5 ₳ collateral, with fresh keys never used before. It works back and forth with the dApp, which sees an ordinary wallet. Below, transactions 1, 2 and 3 in a chain, each built on the last before it lands. Ticks: an ordinary wallet to the dApp; no contract-to-contract limits; used once, never again.
 
 ## 5 · [05-through-lovejoin.png](05-through-lovejoin.png)
 
-> When you're done, it all comes back, through Lovejoin on the way: your UTxOs are mixed with other people's, and each comes back on its own, hours later. ADA and tokens alike, where a pool takes them.
+> When you're done, it all comes back through Lovejoin on the way: your UTxOs are mixed with other people's UTxOs, and each comes back on its own, hours later. ADA or tokens, Lovejoin can handle it all.
 
 **Alt text:** Titled "Back through Lovejoin", steps 3 and 4. The one-time account returns what the dApp paid back into Lovejoin, a pool of equal boxes. Two of your boxes go in among other people's, are mixed several times, and come out looking alike: which are yours? They come back to the private balance under fresh registers, each on its own, at its own random time, hours later. Ticks: ADA and tokens alike, where a pool takes them; on by default, and yours to turn off.
 
 ## 6 · [06-private-again.png](06-private-again.png)
 
-> It lands in your private balance under fresh registers, and the one-time account is never used again. Lovejoin breaks the line on chain from the dApp's account back into your balance.
+> It lands in your private balance under fresh registers, and the one-time account is never used again. Lovejoin breaks the on-chain link between the dApp's account and your balance.
 
 **Alt text:** Titled "Private again": what someone watching the chain can follow. Brought back directly, a switch away: a solid line from the one-time account to the private balance, and anyone can tie it to the session and its funding. Through Lovejoin, the default: the line from the one-time account reaches Lovejoin, then breaks at a question mark before the private balance; the trail breaks in the pool, and boxes come back mixed, hours apart. Ticks: back under fresh registers; the one-time account is never used again; no two sessions share a key.
 
 ## 7 · no image
 
-> Free, open source, no token, and it never asks for your recovery phrase.
+> It's free, open source, and it's a real privacy wallet for #cardano.
 >
-> https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp
-> Code and bug bounty: github.com/logical-mechanism/Seedelf-Wallet
+> Wallet: https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp
+> Issues: https://github.com/logical-mechanism/Seedelf-Wallet/issues
 > Discord: discord.gg/r8VwV2jGBy
