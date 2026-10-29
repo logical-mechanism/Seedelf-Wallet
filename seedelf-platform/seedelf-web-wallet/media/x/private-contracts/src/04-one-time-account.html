@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>A one-time account</title>
+<link rel="stylesheet" href="../../../shared.css" />
+<style>
+  .private { left: 72px; top: 340px; width: 386px; }
+  .dapp { left: 1168px; top: 340px; width: 360px; }
+
+  .session {
+    position: absolute; left: 584px; top: 305px; width: 480px; height: 230px;
+    padding: 24px 26px;
+    display: grid; align-content: center; gap: 14px;
+    background: var(--surface);
+    border: 2px solid var(--text);
+    border-radius: 24px;
+  }
+  .session .head { display: flex; align-items: center; gap: 18px; }
+  .session .head svg { width: 56px; height: 56px; flex: none; }
+  .session h2 { font-size: 31px; font-weight: 700; }
+  .session .chips { display: flex; gap: 10px; }
+  .session .chip { padding: 9px 14px; border-radius: 10px; background: rgb(255 255 255 / 0.08); font-size: 21px; font-weight: 600; white-space: nowrap; }
+  .session p { font-size: 22px; font-weight: 500; color: var(--muted); }
+
+  .chain { position: absolute; left: 584px; top: 612px; width: 928px; }
+  .chain .row { display: flex; align-items: center; gap: 10px; }
+  .chain .tx {
+    width: 124px; height: 62px; display: grid; place-items: center;
+    border: 2px solid var(--teal-line); border-radius: 14px; background: var(--teal-soft);
+    font-size: 21px; font-weight: 650;
+  }
+  .chain .tx.more { border-style: dashed; background: transparent; color: var(--muted); }
+  .chain .row svg { width: 34px; height: 20px; flex: none; }
+  .chain p { margin-top: 12px; font-size: 22px; font-weight: 500; color: var(--muted); }
+
+  .points { position: absolute; left: 72px; right: 72px; top: 782px; grid-template-columns: repeat(3, auto); justify-content: space-between; }
+</style>
+</head>
+<body>
+  <header>
+    <p class="kicker">Steps 1 and 2</p>
+    <h1>A one-time account</h1>
+    <p class="sub">Fresh keys, funded from your private balance</p>
+  </header>
+  <img class="wordmark" src="../../../../extension/public/brand/wordmark-on-dark.png" alt="" />
+
+  <svg class="flow" viewBox="0 0 1600 900" aria-hidden="true">
+    <defs>
+      <marker id="head" viewBox="0 0 10 10" refX="7" refY="5" markerUnits="userSpaceOnUse"
+              markerWidth="22" markerHeight="22" orient="auto-start-reverse">
+        <path d="M1,1 L9,5 L1,9" style="fill:none; stroke:#00c4bc; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round" />
+      </marker>
+    </defs>
+    <path class="line" d="M 470 420 L 572 420" marker-end="url(#head)" />
+    <g class="badge"><circle cx="521" cy="420" r="20" /><text x="521" y="421">1</text></g>
+    <text class="label" x="521" y="378" text-anchor="middle">Fund</text>
+
+    <path class="line" d="M 1076 420 L 1156 420" marker-start="url(#head)" marker-end="url(#head)" />
+    <g class="badge"><circle cx="1116" cy="420" r="20" /><text x="1116" y="421">2</text></g>
+    <text class="label" x="1116" y="378" text-anchor="middle">Use</text>
+  </svg>
+
+  <div class="card private">
+    <div class="icon"><img src="../../../../extension/public/brand/emblem.png" alt="" /></div>
+    <div><h2>Private balance</h2><p>Pays the funding</p></div>
+  </div>
+
+  <div class="session">
+    <div class="head">
+      <svg viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="16" cy="24" r="8" />
+        <path d="M24 24 H42 M36 24 V31 M42 24 V29" />
+      </svg>
+      <h2>One-time account</h2>
+    </div>
+    <div class="chips"><span class="chip">The amount</span><span class="chip">Its own 5&nbsp;₳ collateral</span></div>
+    <p>Fresh keys, never used before</p>
+  </div>
+
+  <div class="card dapp">
+    <div class="icon">
+      <svg viewBox="0 0 48 48" fill="none" stroke="#9ba3b1" stroke-width="3" stroke-linejoin="round">
+        <rect x="7" y="7" width="14" height="14" rx="3" />
+        <rect x="27" y="7" width="14" height="14" rx="3" />
+        <rect x="7" y="27" width="14" height="14" rx="3" />
+        <rect x="27" y="27" width="14" height="14" rx="3" />
+      </svg>
+    </div>
+    <div><h2>The dApp</h2><p>Sees an ordinary<br />wallet</p></div>
+  </div>
+
+  <div class="chain">
+    <div class="row">
+      <span class="tx">Tx 1</span>
+      <svg viewBox="0 0 34 20"><path d="M2 10 H28 M22 4 L29 10 L22 16" fill="none" stroke="#00c4bc" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span class="tx">Tx 2</span>
+      <svg viewBox="0 0 34 20"><path d="M2 10 H28 M22 4 L29 10 L22 16" fill="none" stroke="#00c4bc" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span class="tx">Tx 3</span>
+      <svg viewBox="0 0 34 20"><path d="M2 10 H28 M22 4 L29 10 L22 16" fill="none" stroke="#00c4bc" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span class="tx more">…</span>
+    </div>
+    <p>Its transactions chain: each built on the last, before it lands</p>
+  </div>
+
+  <ul class="points">
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>An ordinary wallet to the dApp</span>
+    </li>
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>No contract-to-contract limits</span>
+    </li>
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>Used once, never again</span>
+    </li>
+  </ul>
+</body>
+</html>

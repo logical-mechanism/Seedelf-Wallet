@@ -32,9 +32,10 @@ permissions:
 # download.
 jobs:
   # Whether the pull request touches what the check covers: this file, and
-  # seedelf-platform/ but its Markdown, which nothing builds or tests from
-  # except wasm/README.md (readme_test.rs reads its export table). A test that
-  # comes to read another .md file names it here too. Its files from the API,
+  # seedelf-platform/ but its Markdown and the web wallet's media/ (images for
+  # posts), which nothing builds or tests from, except wasm/README.md
+  # (readme_test.rs reads its export table). A test that comes to read another
+  # .md file names it here too. Its files from the API,
   # so nothing is checked out. A renamed file's old path is read too, so a
   # move out of the folder counts, and a list that can't be trusted counts as
   # touching it (1.7.0's release review): one the API cut short (it lists
@@ -63,7 +64,7 @@ jobs:
           # A line a file: its path, and a renamed file's old one after a tab.
           rows=$(gh api --paginate "$FILES" --jq '.[] | [.filename, (.previous_filename // empty)] | @tsv')
           paths=$(tr '\t' '\n' <<<"$rows")
-          covered='/^\.github\/workflows\/web-wallet\.yml$/ || /^seedelf-platform\/seedelf-web-wallet\/wasm\/README\.md$/ || (/^seedelf-platform\// && !/\.md$/) { hit = 1 } END { exit !hit }'
+          covered='/^\.github\/workflows\/web-wallet\.yml$/ || /^seedelf-platform\/seedelf-web-wallet\/wasm\/README\.md$/ || (/^seedelf-platform\// && !/\.md$/ && !/^seedelf-platform\/seedelf-web-wallet\/media\//) { hit = 1 } END { exit !hit }'
           if [ "$BASE" != main ] || [ "$(wc -l <<<"$rows")" -lt "$CHANGED" ] || awk "$covered" <<<"$paths"; then
             echo "platform=true" >> "$GITHUB_OUTPUT"
           else

@@ -107,7 +107,7 @@ Every Lace path in these docs is relative to that checkout. `e431933` is where L
 - **Networks:** mainnet and preprod in every build, mainnet by default; `VITE_ENABLE_MAINNET=false` makes a preprod-only build for tests. See [architecture.md](docs/architecture.md#networks).
 - **Seedelf key derivation:** domain-tagged HKDF over the BIP39 seed. It is permanent once shipped. See [keys-and-accounts.md](docs/keys-and-accounts.md#seedelf-key-derivation).
 - **UI:** the same app in a full tab (the default) or Chrome's side panel, the user's choice in Settings, as in Lace. No popup. See [architecture.md](docs/architecture.md#ui).
-- **Look:** the Seedelf logo set lives in [brand/](brand/). The UI's colours come from it.
+- **Look:** the Seedelf logo set lives in [brand/](brand/). The UI's colours come from it. Images for posts about the wallet, drawn in the same look, are in [media/](media/).
 - **Staying unlocked:** Chrome stops the extension's background worker after about 30 seconds idle, which clears its memory.
   - The unlocked key is kept in `chrome.storage.session` (memory-only, cleared when the browser closes).
   - So the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every restart.

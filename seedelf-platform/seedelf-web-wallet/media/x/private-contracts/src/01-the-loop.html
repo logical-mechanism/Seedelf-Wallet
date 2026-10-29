@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Smart contracts, privately</title>
+<link rel="stylesheet" href="../../../shared.css" />
+<style>
+  .private { left: 72px; top: 480px; width: 440px; }
+  .session { left: 610px; top: 300px; width: 440px; }
+  .dapp { left: 1188px; top: 300px; width: 340px; }
+  .lovejoin { left: 610px; top: 660px; width: 440px; }
+  .points { position: absolute; left: 1094px; top: 668px; width: 434px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Smart contracts, privately</h1>
+    <p class="sub">How Seedelf Wallet uses a dApp, in four steps</p>
+  </header>
+  <img class="wordmark" src="../../../../extension/public/brand/wordmark-on-dark.png" alt="" />
+
+  <svg class="flow" viewBox="0 0 1600 900" aria-hidden="true">
+    <defs>
+      <marker id="head" viewBox="0 0 10 10" refX="7" refY="5" markerUnits="userSpaceOnUse"
+              markerWidth="22" markerHeight="22" orient="auto-start-reverse">
+        <path d="M1,1 L9,5 L1,9" style="fill:none; stroke:#00c4bc; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round" />
+      </marker>
+    </defs>
+
+    <!-- 1 Fund: private balance → one-time account -->
+    <path class="line" d="M 292 472 C 292 400, 440 380, 598 380" marker-end="url(#head)" />
+    <!-- 2 Use: one-time account ⇄ dApp -->
+    <path class="line" d="M 1062 380 L 1176 380" marker-start="url(#head)" marker-end="url(#head)" />
+    <!-- 3 Return: one-time account → Lovejoin -->
+    <path class="line" d="M 830 468 L 830 648" marker-end="url(#head)" />
+    <!-- 4 Back, mixed: Lovejoin → private balance -->
+    <path class="line" d="M 602 740 C 450 740, 292 735, 292 652" marker-end="url(#head)" />
+
+    <g class="badge"><circle cx="386" cy="399" r="20" /><text x="386" y="400">1</text></g>
+    <text class="label" x="354" y="408" text-anchor="end">Fund</text>
+
+    <g class="badge"><circle cx="1119" cy="380" r="20" /><text x="1119" y="381">2</text></g>
+    <text class="label" x="1119" y="339" text-anchor="middle">Use</text>
+
+    <g class="badge"><circle cx="830" cy="558" r="20" /><text x="830" y="559">3</text></g>
+    <text class="label" x="864" y="567">Return</text>
+
+    <g class="badge"><circle cx="390" cy="727" r="20" /><text x="390" y="728">4</text></g>
+    <text class="label" x="390" y="787" text-anchor="middle">Back, mixed</text>
+  </svg>
+
+  <div class="card private">
+    <div class="icon"><img src="../../../../extension/public/brand/emblem.png" alt="" /></div>
+    <div><h2>Private balance</h2><p>Your Seedelfs, under<br />stealth registers</p></div>
+  </div>
+
+  <div class="card session">
+    <div class="icon">
+      <svg viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="16" cy="24" r="8" />
+        <path d="M24 24 H42 M36 24 V31 M42 24 V29" />
+      </svg>
+    </div>
+    <div><h2>One-time account</h2><p>Fresh keys, and its own<br />5&nbsp;₳ collateral</p></div>
+  </div>
+
+  <div class="card dapp">
+    <div class="icon">
+      <svg viewBox="0 0 48 48" fill="none" stroke="#9ba3b1" stroke-width="3" stroke-linejoin="round">
+        <rect x="7" y="7" width="14" height="14" rx="3" />
+        <rect x="27" y="7" width="14" height="14" rx="3" />
+        <rect x="7" y="27" width="14" height="14" rx="3" />
+        <rect x="27" y="27" width="14" height="14" rx="3" />
+      </svg>
+    </div>
+    <div><h2>The dApp</h2><p>Sees an ordinary<br />wallet</p></div>
+  </div>
+
+  <div class="card lovejoin">
+    <div class="icon">
+      <svg viewBox="0 0 32 32">
+        <rect width="32" height="32" rx="6" fill="#0a0a0c" />
+        <rect x="9" y="7" width="4" height="18" fill="#f1efe9" />
+        <rect x="9" y="21" width="11" height="4" fill="#f1efe9" />
+        <circle cx="23.5" cy="23" r="2.5" fill="#f5b200" />
+      </svg>
+    </div>
+    <div><h2>Lovejoin</h2><p>Mixed with other<br />people's UTxOs</p></div>
+  </div>
+
+  <ul class="points">
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>The dApp gets only<br />a one-time account</span>
+    </li>
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>Its transactions can chain</span>
+    </li>
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>No contract-to-contract limits</span>
+    </li>
+  </ul>
+</body>
+</html>
