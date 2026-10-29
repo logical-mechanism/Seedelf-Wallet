@@ -315,24 +315,7 @@ It points at `main`: check it renders there (200) before submitting. The wallet'
 
 ## Test instructions
 
-Paste this if the dashboard asks for test instructions:
-
-```text
-The wallet opens on Cardano mainnet, where ADA is real money. Nothing needs an account or real funds to review: everything below works on preprod, Cardano's test network.
-
-1. Click the toolbar icon: the wallet opens in a tab.
-2. On the welcome screen, under Create and Restore, set Network to Preprod. Every screen then shows a PREPROD badge and a strip saying its ADA has no value.
-3. To see a wallet with test funds: choose "Restore wallet" and paste the standard public BIP39 test phrase:
-   abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
-   Set any password.
-4. Home now shows the phrase's preprod balances. The phrase is public, so its funds are shared test ADA: never send real funds to it on mainnet.
-
-Settings (the gear) switches the network too, under Network: it says first what the other network is.
-
-To see an empty wallet instead, choose "Create new wallet": reveal and write down the phrase, confirm three of its words, then set a password.
-
-The wallet contacts only its developer's Cardano server (mainnet.seedelf.logicalmechanism.io, on mainnet), Koios (api.koios.rest on mainnet when that server can't answer, and to check a new Lovejoin pool it lists; preprod.koios.rest on preprod), www.giveme.my, CoinGecko (api.coingecko.com, on mainnet, for ADA's price), for a swap, Minswap's aggregator (agg-api.minswap.org on mainnet, aggr.monorepo-testnet-preprod.minswap.org on preprod), and for an NFT's image the user asks to see, Blockfrost's IPFS gateway (ipfs.blockfrost.dev).
-```
+Leave the tab empty, as every upload so far has: there's no account, so no username or password, and a review needs no funds or steps. Its *Additional instructions* box takes 500 characters, and never put a recovery phrase in it, not even a public test one.
 
 ## Submitting again
 
