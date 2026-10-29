@@ -117,6 +117,7 @@ function listing(verify: () => string) {
     wasm: { lovejoinCandidate: refused, lovejoinLaunchCheck: refused, lovejoinVerifyPool: verify },
     koios: () => ({ koiosAlone: refused }) as never,
     index: client,
+    wallet: { trapped: async () => undefined },
     now: () => 1_800_000_000_000,
     listed: () => new Set(["02d597331203e9e2ec8b954b26a33503f044578c836407bf125f31fa4c4a54455354"]),
     headStart: () => ({ height: 0, pools: [] }),

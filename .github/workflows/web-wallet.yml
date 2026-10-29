@@ -9,9 +9,19 @@ name: Web Wallet
 on:
   pull_request:
 
+# A read-only token for every job but changes, which names its own: the
+# repository's default is write, and the check runs every dependency's code.
+permissions:
+  contents: read
+
 jobs:
   # Whether the pull request touches what the check covers: seedelf-platform/
-  # and this file. Its files from the API, so nothing is checked out.
+  # and this file. Its files from the API, so nothing is checked out. A
+  # renamed file's old path is read too, so a move out of the folder counts,
+  # and a list that can't be trusted counts as touching it (1.7.0's release
+  # review): one the API cut short (it lists 3,000 files at most), or one
+  # against a base other than main, since a change of base runs nothing and
+  # the skip would stand once the base is main.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -22,10 +32,15 @@ jobs:
       - id: files
         env:
           GH_TOKEN: ${{ github.token }}
-          FILES: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
+          FILES: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100
+          CHANGED: ${{ github.event.pull_request.changed_files }}
+          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
-          files=$(gh api --paginate "$FILES" --jq '.[].filename')
-          if grep -q -E '^(seedelf-platform/|\.github/workflows/web-wallet\.yml$)' <<<"$files"; then
+          # A line a file: its path, and a renamed file's old one after a tab.
+          rows=$(gh api --paginate "$FILES" --jq '.[] | [.filename, (.previous_filename // empty)] | @tsv')
+          paths=$(tr '\t' '\n' <<<"$rows")
+          if [ "$BASE" != main ] || [ "$(wc -l <<<"$rows")" -lt "$CHANGED" ] ||
+            grep -q -E '^(seedelf-platform/|\.github/workflows/web-wallet\.yml$)' <<<"$paths"; then
             echo "platform=true" >> "$GITHUB_OUTPUT"
           else
             echo "platform=false" >> "$GITHUB_OUTPUT"
@@ -39,7 +54,10 @@ jobs:
       run:
         working-directory: seedelf-platform
     steps:
+      # No token left in .git: the check runs every dependency's build script.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # The toolchain seedelf-platform/rust-toolchain.toml pins: keep the two
       # in step, so CI builds and tests what ships (launch review #61).
@@ -132,8 +150,9 @@ jobs:
           node scripts/package.mjs mainnet
           npm run e2e
 
-  # The one check main requires (its branch protection names *Web Wallet
-  # required*; data-layer.yml's job is called `check` too, so not that name).
+  # The one check for main's branch protection to require, *Web Wallet
+  # required* (data-layer.yml's job is called `check` too, so not that name).
+  # main's ruleset requires it, with no bypass (1.7.0's item 2).
   # Green when the check passed, or was skipped because the pull request
   # touches nothing it covers; red otherwise: a failed look at the files, or a
   # check that failed or was cancelled.

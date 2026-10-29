@@ -503,6 +503,9 @@ describe("the Bootstrap form's bounds are the worker's (1.6.0's release review, 
     const dear = wasm.lovejoinBootstrapReserve(JSON.stringify({ ...(epochParams[0] as object), coins_per_utxo_size: "6465" }));
     expect(dear).toBe("1800000");
     expect(bootstrapLimits(box, "private", ada(needs), 96, 30, dear).short).toBe(true);
+    // The form counts those 0.3 ₳ and no more: its room for the funding's fee and change stays a fixed 2 ₳ (FEE_ROOM),
+    // which at this price is about 0.4 ₳ short of the change's dearer least and the fee, so the build may still refuse
+    // what passes here, in words (1.7.0's release review, pr333#0).
     expect(bootstrapLimits(box, "private", ada(needs + 300_000n), 96, 30, dear).short).toBe(false);
   });
 });

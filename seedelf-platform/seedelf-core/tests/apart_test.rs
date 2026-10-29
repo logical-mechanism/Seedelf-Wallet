@@ -661,3 +661,66 @@ fn a_sessions_fundings_changes_are_spent_together_before_anything_is_merged() {
     );
     assert!(h.merged(&spend.inputs()).is_empty());
 }
+
+/// Lovelace an index reports past what the chain holds (a u64 holds 400 times
+/// all the ADA there is: a data layer that lies, or a bug in one) is compared
+/// while choosing, never summed into an overflow. Since #332 the store's
+/// module traps on one, which locks the wallet (1.7.0's release review,
+/// x-overflow#0). What can't pay is refused in words.
+#[test]
+fn lovelace_past_what_a_u64_holds_is_never_summed_into_a_trap_when_choosing() {
+    let w = world();
+    let half = 1u64 << 63;
+    let spend = |available: &[UtxoResponse], h: &Histories, payments: &[AddressPayment]| {
+        build::sweep_many_apart(&w.chain, available, h, payments, &w.owner, w.signer)
+    };
+    let of = |utxos: &[UtxoResponse]| {
+        let known: Vec<(&UtxoResponse, Class)> = utxos.iter().map(|u| (u, received(u))).collect();
+        histories(Purpose::Pay, &known)
+    };
+    let paying_tokens = |lovelace: u64, amount: u64| {
+        vec![AddressPayment {
+            to: key_address(),
+            lovelace,
+            tokens: token("nft", amount),
+        }]
+    };
+    let mut refusals = Vec::new();
+
+    // The UTxOs holding the tokens sent, together.
+    let tokens = [
+        owned(&w, 0x41, 0, half, &[("nft", 1)]),
+        owned(&w, 0x41, 1, half, &[("nft", 1)]),
+    ];
+    refusals.push(spend(&tokens, &of(&tokens), &paying_tokens(2 * ADA, 2)));
+
+    // Theirs and one more UTxO.
+    let short = [
+        owned(&w, 0x42, 0, 2 * ADA, &[("nft", 1)]),
+        owned(&w, 0x42, 1, u64::MAX, &[]),
+    ];
+    refusals.push(spend(&short, &of(&short), &paying_tokens(10 * ADA, 1)));
+
+    // UTxOs of one class, none paying alone, ranked among the classes.
+    let classes = [
+        owned(&w, 0x43, 0, half, &[]),
+        owned(&w, 0x43, 1, half, &[]),
+        owned(&w, 0x43, 2, 2 * ADA, &[]),
+    ];
+    let mut known: Vec<(&UtxoResponse, Class)> = classes[..2]
+        .iter()
+        .map(|u| (u, class("public", Origin::Own)))
+        .collect();
+    known.push((&classes[2], received(&classes[2])));
+    refusals.push(spend(
+        &classes,
+        &histories(Purpose::Pay, &known),
+        &pay(half + 1),
+    ));
+
+    // The spend's own checked sum refuses them.
+    for refused in refusals {
+        let err = refused.err().expect("refused").to_string();
+        assert_eq!(err, "Lovelace sum overflow");
+    }
+}

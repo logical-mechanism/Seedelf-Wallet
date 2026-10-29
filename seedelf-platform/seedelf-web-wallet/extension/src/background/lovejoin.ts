@@ -2960,8 +2960,9 @@ export class LovejoinService {
   /**
    * The Bootstrap form's bounds from the private balance, from one read of the parameters: the most boxes
    * (privateBootstrapMost), and the way back's reserve its funding carries beside the deposit's (`back`, lovelace:
-   * lovejoinBootstrapReserve, as sessions.ts mixFunding adds it), so what the form says the balance must hold is what
-   * the funding takes at any price of a byte (1.6.0's release review, bootstrap's call 1; 1.7.0).
+   * lovejoinBootstrapReserve, as sessions.ts mixFunding adds it), so what the form says the balance must hold counts
+   * that reserve at any price of a byte (1.6.0's release review, bootstrap's call 1; 1.7.0). Its room for the funding's
+   * fee and change is the form's own, fixed (FEE_ROOM): the build decides exactly (1.7.0's release review, pr333#0).
    */
   async privateBootstrapBounds(network: NetworkName, pool?: string): Promise<{ most: number; back: string }> {
     const params = await this.deps.koios(network).epochParams();
@@ -4822,6 +4823,11 @@ export class LovejoinService {
       }
       return !done;
     } catch (e) {
+      // WebAssembly that trapped (its watch's read of its pools verifies them) is broken for good: handed on before
+      // anything is recorded, as a session's chain hands one on (sessions.ts pump), to where the wallet locks (runs.ts,
+      // the Lovejoin page's progress, its Send). The lock wipes its progress, and it reads as cut (cuts), its first
+      // transaction's mark kept, never stopped for the trap's raw word (1.7.0's review of the fixes, worker#1).
+      if (isTrap(e)) throw e;
       // A lock cut it: whatever holds its place now stays as it is, and its record says it was cut; its first
       // transaction's mark with it, unless that's known to have gone.
       if (e instanceof ChainGone) {

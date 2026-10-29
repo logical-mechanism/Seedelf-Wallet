@@ -39,6 +39,7 @@ import { t as tr } from "../src/i18n";
 import { NETWORKS } from "../src/networks";
 import type { LovejoinDelay } from "../src/shared/preferences";
 import tokenList from "../src/tokens/list.json";
+import { reviewAfterSkip } from "../src/ui/components/LovejoinReturn";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, koiosPreprod, loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
@@ -1825,6 +1826,250 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
       const back = await sessions.backBuild("preprod", 0);
       expect(back.collateralTail).toBeUndefined();
       expect(t.collateral.asked).toHaveLength(1);
+    });
+
+    // 1.7.0's release review of #337's way out: what holds a return, what its line says in every state that holds, a press
+    // on a page brought back by hand, a press the runner's rebuild of that mix overlapped, a chain a lock cut, a mix that
+    // runs itself, and the view's own guards.
+    describe("the way out of a return held at its collateral's mix (1.7.0's release review)", () => {
+      const view = async (sessions: SessionService) => (await sessions.list("preprod")).find((v) => v.index === 0)!;
+
+      /** The hour since the last chain's collateral's deposit went in gone by (moved back in its record: the wallet would lock first). */
+      async function pastTheHour(t: T) {
+        const s = await schedule(t);
+        s.chains.at(-1)!.tail!.landed! -= TAIL_OFFER_MS;
+        await t.store.set("lovejoin.preprod", s);
+      }
+
+      /** setUp's return sent, its chain still being sent, its collateral's mix waiting for a busy giveme.my (#337's test). */
+      async function waitingAtMix() {
+        const set = await setUp("16000000");
+        const { t, sessions } = set;
+        const review = await sessions.backBuild("preprod", 0);
+        const chain = await steps(t);
+        await sessions.backSubmit("preprod", review.txHash);
+        t.koios.confirmations = 1;
+        t.collateral.answer = { status: 503, body: { error: "busy" } };
+        await sessions.runAll("preprod");
+        expect(t.collateral.asked).toHaveLength(1);
+        const deposit = chain.at(-3)!;
+        const box = paid(deposit.txCbor).find((o) => o.index === review.collateralTail!.box.txIndex)!;
+        const change = paid(deposit.txCbor).find((o) => o.address === sessionSwap.address)!;
+        return { ...set, chain, deposit, box, change };
+      }
+
+      /**
+       * setUp's session a mix that runs itself, not a site's: its runner sent its return's chain, and its collateral's mix
+       * waits for a busy giveme.my, everything before it on chain.
+       */
+      async function mixHeld() {
+        const set = await setUp("16000000");
+        const { t, sessions } = set;
+        type Book = { next: number; sessions: Array<Record<string, unknown>> };
+        const book = (await t.store.get<Book>("sessions.preprod"))!;
+        const { site: _site, ...record } = book.sessions[0]!;
+        const auto = { approved: { minAmountOut: "0", fund: { lovelace: "16000000", tokens: [] } } };
+        await t.store.set("sessions.preprod", { ...book, sessions: [{ ...record, mix: { boxes: 1 }, auto }] });
+        t.collateral.answer = { status: 503, body: { error: "busy" } };
+        await sessions.advance("preprod", 0, true);
+        type Pending = { txs: Step[]; summary: { collateralTail?: { box: { txIndex: number } } } };
+        const pending = (await t.wallet.withKeys(() => t.session.get<Pending>(`${SESSION_CHAIN_PREFIX}preprod.0`)))!;
+        const chain = pending.txs;
+        expect(chain.slice(-3).map((x) => x.kind)).toEqual(["deposit", "mix", "back"]);
+        t.koios.confirmations = 1;
+        await sessions.advance("preprod", 0, true);
+        expect(t.collateral.asked).toHaveLength(1);
+        const deposit = chain.at(-3)!;
+        const box = paid(deposit.txCbor).find((o) => o.index === pending.summary.collateralTail!.box.txIndex)!;
+        const change = paid(deposit.txCbor).find((o) => o.address === sessionSwap.address)!;
+        return { ...set, chain, deposit, box, change };
+      }
+
+      /** On chain as the chain left it: its box in the 5 ₳ pool, the deposit's change at the account, what it spent gone. */
+      function landedAtMix(t: T, five: { mixBox: string }, chain: Step[], deposit: Step, box: Out, change: Out): void {
+        t.koios.addedToAccounts.push(listed(deposit, box, five.mixBox), atSession(deposit.txHash, change.index, String(change.value.ada.lovelace)));
+        for (const tx of chain.slice(0, -2)) for (const o of spent(tx)) t.koios.spent.add(o);
+      }
+
+      it("holds nothing once the rest came back directly another way, its chain stopped at the mix, returning or landed (pr337#0)", async () => {
+        const { t, sessions } = await stoppedAtMix();
+        await pastTheHour(t);
+        expect((await view(sessions)).collateralHeld).toBeDefined();
+        // Bring everything back's switch on directly: the rest comes back, the deposit's change that paid for that mix with it.
+        const back = await sessions.backBuild("preprod", 0, true);
+        expect(back.collateralTail).toBeUndefined();
+        t.koios.missing.add(back.txHash);
+        await sessions.backSubmit("preprod", back.txHash);
+        const returning = await view(sessions);
+        expect(returning.stage).toBe("returning");
+        expect(returning.collateralHeld).toBeUndefined();
+        // Landed, the site's session still open: nothing waits for that mix, so nothing offers to stop waiting for it.
+        t.koios.missing.delete(back.txHash);
+        const open = (await sessions.list("preprod", true)).find((v) => v.index === 0)!;
+        expect(open.stage).toBe("open");
+        expect(open.collateralHeld).toBeUndefined();
+      });
+
+      it("says the collateral's mix hasn't gone, never that giveme.my is what it waits for, where it waits for the 5 ₳ pool's boxes (x-priv#3, x-ui#0, x-docs#5, x-scen#2)", async () => {
+        const { t, theirs, sessions } = await stoppedAtMix();
+        // Someone else's mix took both of the pool's other boxes: its mix waits for more, as the return's error says.
+        for (const u of theirs) t.koios.spent.add(`${u.tx_hash}#${u.tx_index}`);
+        await pastTheHour(t);
+        await expect(sessions.backBuild("preprod", 0)).rejects.toThrow(tr("lj.tail.fewBoxes"));
+        // Held all the same, the page offers the way out beside that error: its line holds there as where giveme.my is asked.
+        expect((await view(sessions)).collateralHeld).toBeDefined();
+        expect(tr("lj.tail.privacy.wayOut")).not.toContain("giveme.my");
+      });
+
+      it("says the user chose not to wait, never that the rest came back, once a site's session's press stopped its chain (pr337#1, x-merge#2, x-ui#1, x-scen#1)", async () => {
+        const { t, lj, sessions } = await waitingAtMix();
+        await pastTheHour(t);
+        const sent = t.koios.submitted.length;
+        const after = await sessions.skipCollateralMix("preprod", 0);
+        expect(after.collateralHeld).toBeUndefined();
+        // Nothing brings a site's session's rest back by itself: nothing went, and it waits at the account for its review.
+        expect(t.koios.submitted).toHaveLength(sent);
+        expect(after.chain).toMatchObject({ cut: false, stopped: tr("lj.tail.skipped") });
+        // Meanwhile the Lovejoin page's row says why the chain stopped: the user's choice, not a return that hasn't gone.
+        const [row] = await lj.chains("preprod");
+        expect(row!.stopped).toBe(tr("lj.tail.skipped"));
+        expect(tr("lj.tail.skipped")).not.toMatch(/brought the rest back|came back/);
+      });
+
+      it("never loses a press that came while the runner built that mix again: the chain it built stops at its mix (pr337#3, x-scen#0)", async () => {
+        const { t, five, chain, deposit, box, change } = await mixHeld();
+        // A lock cuts the chain while its mix waits, an hour on.
+        await t.wallet.withKeys(() => t.session.remove(`${SESSION_CHAIN_PREFIX}preprod.0`));
+        await pastTheHour(t);
+        landedAtMix(t, five, chain, deposit, box, change);
+        // Its runner builds that mix again, and the press comes as it does: between its read of the tail and its record.
+        const wasm = loadTestWasm();
+        let press: ReturnType<SessionService["skipCollateralMix"]> | undefined;
+        const lj = pooled(t, [five.ref], {
+          wasm: {
+            ...wasm,
+            finishLovejoinWithdraw: (request: string) => {
+              const { txCbor } = JSON.parse(request) as { txCbor: string };
+              return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+            },
+            buildCollateralMix: (...args: Parameters<typeof wasm.buildCollateralMix>) => {
+              press ??= sessions.skipCollateralMix("preprod", 0);
+              return wasm.buildCollateralMix(...args);
+            },
+          } as typeof wasm,
+        });
+        const sessions = runner(t, lj);
+        const asked = t.collateral.asked.length;
+        await sessions.advance("preprod", 0, true);
+        expect(press).toBeDefined();
+        const answer = await press!;
+        // The press took: the chain built again ends at its mix, nothing's held, and the rest came back directly.
+        expect(answer.collateralHeld).toBeUndefined();
+        const chains = (await schedule(t)).chains;
+        expect(chains).toHaveLength(2);
+        expect(chains.every((c) => c.tail?.over)).toBe(true);
+        type Book = { sessions: Array<{ txs: Array<{ kind: string; txHash: string }> }> };
+        const txs = (await t.store.get<Book>("sessions.preprod"))!.sessions[0]!.txs;
+        expect(txs.at(-1)!.kind).toBe("back");
+        expect(txs.at(-1)!.txHash).not.toBe(chains.at(-1)!.id);
+        // giveme.my is asked at most by the step already under way as the press came, never after it.
+        expect(t.collateral.asked.length).toBeLessThanOrEqual(asked + 1);
+      });
+
+      it("offers the way out once a lock cut the chain while its mix waited, and the return after the press leaves that mix out (pr337#2, x-scen#6, x-mut-ts#1)", async () => {
+        const { t, five, lj, sessions, chain, deposit, box, change } = await waitingAtMix();
+        const landed = (await schedule(t)).chains.at(-1)!.tail!.landed!;
+        // A lock cuts it: its progress goes, and a Lovejoin read marks it so. Its mix is one to build again now.
+        await t.wallet.withKeys(() => t.session.remove(`${SESSION_CHAIN_PREFIX}preprod.0`));
+        await lj.cuts("preprod");
+        expect((await schedule(t)).chains.at(-1)!.ended).toBeDefined();
+        const held = { offerAt: landed + TAIL_OFFER_MS };
+        expect((await view(sessions)).collateralHeld).toEqual(held);
+        // Before the hour, the press changes nothing, and its answer and an advance's still offer it, as the list's does.
+        expect((await sessions.skipCollateralMix("preprod", 0)).collateralHeld).toEqual(held);
+        expect((await sessions.advance("preprod", 0, true)).collateralHeld).toEqual(held);
+        expect((await schedule(t)).chains.at(-1)!.tail?.over).toBeUndefined();
+        await pastTheHour(t);
+        expect((await sessions.skipCollateralMix("preprod", 0)).collateralHeld).toBeUndefined();
+        expect((await schedule(t)).chains.at(-1)!.tail?.over).toBe(true);
+        // Its box in the pool, the deposit's change at the account: the return leaves that mix out, giveme.my not asked again.
+        landedAtMix(t, five, chain, deposit, box, change);
+        const back = await sessions.backBuild("preprod", 0);
+        expect(back.collateralTail).toBeUndefined();
+        expect((await kept(t)).chain).toBeUndefined();
+        expect(t.collateral.asked).toHaveLength(1);
+      });
+
+      it("brings a mix's rest back directly in the press's own request, giveme.my not asked again (pr337#2, x-scen#6)", async () => {
+        const { t, five, sessions, chain, deposit, box, change } = await mixHeld();
+        await pastTheHour(t);
+        landedAtMix(t, five, chain, deposit, box, change);
+        const sent = t.koios.submitted.length;
+        const after = await sessions.skipCollateralMix("preprod", 0);
+        expect(after.collateralHeld).toBeUndefined();
+        expect((await schedule(t)).chains.at(-1)!.tail?.over).toBe(true);
+        // One transaction went, in the same request: the return, spending the deposit's change, that mix left out.
+        expect(t.koios.submitted).toHaveLength(sent + 1);
+        const back = t.koios.submitted.at(-1)!;
+        expect(txInputs(back)).toContain(`${deposit.txHash}#${change.index}`);
+        expect(txInputs(back)).not.toContain(`${deposit.txHash}#${box.index}`);
+        expect(t.collateral.asked).toHaveLength(1);
+      });
+
+      it("holds nothing once its mix was sent, on a session that's over, or before its deposit was known in (x-mut-ts#2)", async () => {
+        const { t, sessions } = await waitingAtMix();
+        expect((await view(sessions)).collateralHeld).toBeDefined();
+        // Its mix sent: nothing waits for it any more.
+        const s = await schedule(t);
+        s.chains.at(-1)!.tail!.scheduled = true;
+        await t.store.set("lovejoin.preprod", s);
+        expect((await view(sessions)).collateralHeld).toBeUndefined();
+        delete s.chains.at(-1)!.tail!.scheduled;
+        await t.store.set("lovejoin.preprod", s);
+        expect((await view(sessions)).collateralHeld).toBeDefined();
+        // A session that's over offers nothing.
+        type Book = { sessions: Array<{ closedAt?: number }> };
+        const book = (await t.store.get<Book>("sessions.preprod"))!;
+        book.sessions[0]!.closedAt = t.clock.now;
+        await t.store.set("sessions.preprod", book);
+        expect((await sessions.advance("preprod", 0, true)).collateralHeld).toBeUndefined();
+        // A chain a lock cut before its deposit was known in, marked so, its mix one to build again: no hour to count from
+        // yet, so no offer, never one at NaN.
+        const cut = await cutAfterDeposit();
+        await cut.lj.cuts("preprod");
+        expect((await schedule(cut.t)).chains.at(-1)).toMatchObject({ ended: expect.any(Number), tail: { tries: 1 } });
+        expect((await schedule(cut.t)).chains.at(-1)!.tail?.landed).toBeUndefined();
+        expect((await cut.sessions.list("preprod")).find((v) => v.index === 0)!.collateralHeld).toBeUndefined();
+      });
+
+      it("hands on a trap under the press's pump, never swallowing it (x-mut-ts#7)", async () => {
+        const { t, lj, sessions } = await waitingAtMix();
+        await pastTheHour(t);
+        vi.spyOn(lj, "tailIsOver").mockRejectedValue(new WebAssembly.RuntimeError("unreachable"));
+        await expect(sessions.skipCollateralMix("preprod", 0)).rejects.toBeInstanceOf(WebAssembly.RuntimeError);
+      });
+
+      it("opens no review once the press finds the chain still being sent, nothing held: its own return brings the rest back (1.7.0's fixes' review, screens#3)", async () => {
+        const { t, five, sessions, chain, deposit, box, change } = await waitingAtMix();
+        await pastTheHour(t);
+        // Its mix went as the press came (its tail marked sent), the chain's return still to go: nothing's held, nothing
+        // stopped, the chain still being sent, as a new chain is while an earlier chain's tail is held. The page read the
+        // account before: the deposit's change there, for that return.
+        const s = await schedule(t);
+        s.chains.at(-1)!.tail!.scheduled = true;
+        await t.store.set("lovejoin.preprod", s);
+        landedAtMix(t, five, chain, deposit, box, change);
+        await sessions.list("preprod", true);
+        const after = await sessions.skipCollateralMix("preprod", 0);
+        expect(after).toMatchObject({ stage: "open", chain: { cut: false } });
+        expect(after.collateralHeld).toBeUndefined();
+        expect(after.chain!.stopped).toBeUndefined();
+        expect(after.chain!.sent).toBeLessThan(after.chain!.total);
+        expect(after.holding!.utxos).toBeGreaterThan(0);
+        // A review then would only be the worker's refusal: the page opens none, and the chain's own return goes.
+        await expect(sessions.backBuild("preprod", 0)).rejects.toThrow(tr("sess.chainSending"));
+        expect(reviewAfterSkip(after)).toBe(false);
+      });
     });
 
     it("gives its collateral's mix up once it was built twice, the second stopping too, and the rest comes back without it (323-worker#8)", async () => {

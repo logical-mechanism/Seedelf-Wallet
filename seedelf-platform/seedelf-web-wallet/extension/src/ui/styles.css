@@ -3790,6 +3790,13 @@ button.dapp-tile:hover {
   color: var(--muted);
 }
 
+/* A choice under a row, across it, at the page's own size: a mix's way out of its collateral's mix, its button as on a
+   session's page, not the detail line's 12 px (1.7.0's release review, x-ui#2). */
+.token-row__wide {
+  grid-column: 2 / -1;
+  margin: 4px 0 0;
+}
+
 /* How far a pool's bootstrap has got, of its floor (chunk 34's session 1, 16): under its row on the hub, and on its
    page, larger. */
 .meter {

@@ -210,3 +210,22 @@ test("a box comes back paid from the private balance, the first UTxO of ADA alon
   assert.equal(JSON.parse(buildLovejoinWithdrawPrivate(key, request(owned))).spent, back.spent);
   key.free();
 });
+
+test("a pool row naming its NFT twice, past what an output holds, is refused in words, the module whole (1.7.0's release review, x-overflow#0)", () => {
+  // The chain lists a token once an output, but a data layer that lies could name the NFT twice. Since #332 the module
+  // checks core's overflow, and this sum trapped, which locked the wallet at every read of such a pool list. Before it,
+  // the sum wrapped to 1, and the pool verified: a device that kept it then reads it again at once.
+  const nft = found.reference.asset_list[0];
+  const doubled = { ...found.reference, asset_list: [{ ...nft, quantity: "18446744073709551615" }, { ...nft, quantity: "2" }] };
+  const words = `UTxO ${found.reference.tx_hash}#0 holds more of a token than one output can`;
+  const verify = (reference) => JSON.parse(lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: { ...poolRef, reference } })));
+  // Twice: a trap would leave the module broken for the second.
+  for (let i = 0; i < 2; i++) {
+    assert.throws(() => verify(doubled), { message: words });
+    // A candidate's cheap checks read the same row first.
+    assert.throws(() => lovejoinCandidate(JSON.stringify({ network: "preprod", reference: doubled })), { message: words });
+  }
+  // Named twice within what an output holds, it's one amount, as ever: two NFTs, no pool.
+  assert.throws(() => verify({ ...doubled, asset_list: [nft, nft] }), /one Lovejoin NFT/);
+  assert.equal(verify(found.reference).version, "tokenV1");
+});

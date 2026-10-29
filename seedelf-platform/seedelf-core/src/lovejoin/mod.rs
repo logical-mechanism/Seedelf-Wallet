@@ -1385,11 +1385,22 @@ fn withdraw_with(
     let topped = paid_back.saturating_sub(total);
     // What the register gets: a Seedelf UTxO's ADA comes back with the boxes, less the fee. Less than the fee
     // itself is nothing, which the output's minimum then refuses as CantPayBack (or PrivateTooSmall), as it does
-    // a little more: a plain error here read as a check that couldn't be made (session 5's review, L1).
+    // a little more: a plain error here read as a check that couldn't be made (session 5's review, L1). A UTxO an
+    // index reports past what a u64 holds with the boxes is refused in words: the store's module traps on an
+    // overflow here, and Bring every box back now tries again at every unlock (1.7.0's release review).
     let into_register = |fee: u64| -> Result<u64> {
         Ok(match (payer, seedelf) {
             (Some(_), _) => paid_back,
-            (None, Some(s)) => (total + s.coin.lovelace).saturating_sub(fee),
+            (None, Some(s)) => total
+                .checked_add(s.coin.lovelace)
+                .with_context(|| {
+                    format!(
+                        "UTxO {}#{} holds more ADA than there is",
+                        hex::encode(s.coin.utxo.tx_hash),
+                        s.coin.utxo.index
+                    )
+                })?
+                .saturating_sub(fee),
             (None, None) => total.saturating_sub(fee),
         })
     };
@@ -1739,8 +1750,9 @@ pub const BOOTSTRAP_BACK_RESERVE: u64 = 1_500_000;
 /// transaction's most, [`crate::build::MAX_TX_SIZE`]), rounded up to a tenth
 /// of an ADA, and never less than [`BOOTSTRAP_BACK_RESERVE`]. 1.1 ₳ at today's
 /// 4,310 lovelace a byte, so 1.5 ₳ as before; 1.8 ₳ at 6,465, where a fixed
-/// 1.5 ₳ held a Bootstrap to 68 classic boxes, and 51 of LJTEST, rather than
-/// one deposit's most. [`bootstrap_most`] builds with it.
+/// 1.5 ₳ held a Bootstrap to 68 classic boxes, and 51 in a token pool, rather
+/// than one deposit's most (LJTEST's own pool takes no new box there: its 2 ₳
+/// boxes are under the ledger's least). [`bootstrap_most`] builds with it.
 pub fn bootstrap_back_reserve(params: &ProtocolParameters) -> Result<u64> {
     // The sweep of the deposit's change into one Seedelf output: a direct tail's sweep's shape.
     let sweep = linear_fee(params, TAIL_SWEEP_BYTES).max(crate::build::FIRST_DRAFT_FEE);
@@ -1755,9 +1767,10 @@ pub fn bootstrap_back_reserve(params: &ProtocolParameters) -> Result<u64> {
 /// datum, which allows any amount up to that, and the WebAssembly build
 /// didn't check overflow: unchecked, such a sum wrapped there to a small,
 /// false figure, a Bootstrap of one box quoted 1.5 ₳ (1.6.0's release review,
-/// 314-core#1). Since 1.7.0 the module checks core's (Cargo.toml's
-/// `wasm-release`), so one missed would trap and lock the wallet; checked
-/// here, it's refused in words.
+/// 314-core#1). Since 1.7.0 the module checks core's overflow where core
+/// compiles the code (Cargo.toml's `wasm-release`), so one missed would trap
+/// and lock the wallet, or wrap in a small function compiled into seedelf-wasm
+/// (1.7.0's release review, pr332#0). Checked here, it's refused in words.
 pub const MORE_THAN_THERE_IS: &str = "These boxes cost more ADA than there is";
 
 /// How many boxes of `per` each `spare` lovelace pays for, the deposit's

@@ -2666,7 +2666,11 @@ fn apart<T>(
 ) -> Result<T> {
     let purpose = &histories.purpose;
     let class = |u: &UtxoResponse| histories.class_of(u);
-    let base_lovelace: u64 = base.iter().map(lovelace_of).sum();
+    // The totals here are only compared, so in u128: a lying index's lovelace
+    // can pass a u64 together, and the store's module traps on an overflow
+    // (1.7.0's release review, x-overflow#0). The spend refuses it in words.
+    let lovelace_in = |u: &&UtxoResponse| u128::from(lovelace_of(u));
+    let base_lovelace: u128 = base.iter().map(|u| lovelace_in(&u)).sum();
     let base_classes: Vec<String> = base.iter().map(|u| class(u).id).collect();
     // Money that adds no history to what the tokens sent bring.
     let joins_base = |u: &UtxoResponse| base.is_empty() || base_classes.contains(&class(u).id);
@@ -2674,8 +2678,8 @@ fn apart<T>(
     let mut not_enough: Option<anyhow::Error> = None;
     let mut other: Option<anyhow::Error> = None;
     let mut try_with = |extra: &[&UtxoResponse]| -> Tried<T> {
-        let lovelace = base_lovelace + extra.iter().map(|u| lovelace_of(u)).sum::<u64>();
-        if lovelace <= floor || (base.is_empty() && extra.is_empty()) {
+        let lovelace = base_lovelace + extra.iter().map(lovelace_in).sum::<u128>();
+        if lovelace <= u128::from(floor) || (base.is_empty() && extra.is_empty()) {
             return Tried::Skipped;
         }
         let selected: Vec<UtxoResponse> = base
@@ -2719,7 +2723,7 @@ fn apart<T>(
         }
     }
     classes.sort_by_key(|(c, rows)| {
-        let total: u64 = rows.iter().map(|u| lovelace_of(u)).sum();
+        let total: u128 = rows.iter().map(lovelace_in).sum();
         (purpose.rank(c), std::cmp::Reverse(total), c.id.clone())
     });
     for (_, rows) in &mut classes {

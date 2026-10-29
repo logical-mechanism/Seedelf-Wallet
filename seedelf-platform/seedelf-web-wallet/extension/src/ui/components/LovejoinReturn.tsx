@@ -527,6 +527,24 @@ export function ReturnLinks({ back, after }: { back: SessionBackSummary; after?:
   );
 }
 
+/** Whether a return held at its collateral's mix is offered the way out at `now`: from the worker's `offerAt` on. */
+export const wayOutOffered = (held: SessionView["collateralHeld"], now = Date.now()): boolean => !!held && now >= held.offerAt;
+
+/**
+ * Whether a page opens its return's review once the way out took effect, by the press's answer (`after`): a session
+ * brought back by hand, nothing held now, its rest at the account as last read (the page's own reading, `read`, where a
+ * worker started afresh since has none). Nothing else brings that rest back, so Bring the rest back now goes on to it,
+ * as Bring it back does; a swap or a mix that runs itself sent its return in the press's own request (1.7.0's release
+ * review, pr337#1). Never while its chain is still being sent, as Swaps' `chainGoing` reads it: that chain's own return
+ * brings the rest back, and the worker refuses another till it's sent. The press's own stop, or a lock's cut, leaves
+ * none going (1.7.0's fixes' review, screens#3).
+ */
+export function reviewAfterSkip(after: SessionView, read: SessionView["holding"] = null): boolean {
+  const holding = after.holding ?? read;
+  const going = !!after.chain && !after.chain.cut && !after.chain.stopped && after.chain.sent < after.chain.total;
+  return !after.auto && !after.collateralHeld && after.stage === "open" && !going && !!holding && holding.utxos > 0;
+}
+
 /**
  * A session's return held at its collateral's mix (SessionView `collateralHeld`), once its page offers the way out (an
  * hour after the mix's deposit went in, the worker's `offerAt`): what's still waiting, that bringing the rest back
@@ -545,7 +563,7 @@ export function CollateralHeldWayOut({
   now?: number;
 }) {
   const tr = useT();
-  if (!held || now < held.offerAt) return null;
+  if (!wayOutOffered(held, now)) return null;
   return (
     <div className="stack" data-testid="collateral-held">
       <Callout tone="privacy">{tr("lj.tail.privacy.wayOut")}</Callout>

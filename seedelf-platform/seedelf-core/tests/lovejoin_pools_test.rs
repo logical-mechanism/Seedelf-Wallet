@@ -1131,6 +1131,40 @@ fn a_box_too_poor_to_come_back_is_paid_for_from_the_private_balance() {
     assert_eq!(back.lovelace, 10_000_000 + 5_000_000 - back.fee);
 }
 
+// 1.7.0's release review (the overflow sweep): a private UTxO an index
+// reports past what a u64 holds with the box's ADA (a data layer that lies)
+// was added to the box's in a plain sum. Since #332 the store's module traps
+// on it, and Bring every box back now tries again at every unlock, so the
+// wallet locked each time. It's refused in words.
+#[test]
+fn a_private_payer_holding_more_ada_than_there_is_is_refused_in_words() {
+    let sk = Scalar::from(777u64);
+    let owner = Register::create(sk).unwrap();
+    let classic = Protocol::of(true).unwrap();
+    let boxes = vec![made_up_box(&classic, Some(&sk), 0x32)];
+    let back = |lovelace: u64| {
+        lovejoin::withdraw_private(
+            &params(),
+            &classic,
+            &boxes,
+            &sk,
+            owner.clone().rerandomize().unwrap(),
+            &seedelf_payer(sk, 0xf5, lovelace),
+        )
+    };
+    let err = back(u64::MAX).unwrap_err().to_string();
+    assert_eq!(
+        err,
+        format!(
+            "UTxO {}#0 holds more ADA than there is",
+            hex::encode([0xf5; 32])
+        )
+    );
+    // Up to what a u64 holds with the box, it's built as ever: the ledger
+    // refuses the lie.
+    assert!(back(u64::MAX - 10_000_000).is_ok());
+}
+
 #[test]
 fn a_classic_box_comes_back_paid_by_an_account_too() {
     let classic = Protocol::of(true).unwrap();
@@ -1790,8 +1824,8 @@ fn a_private_bootstrap_is_held_to_what_its_funding_pays_its_deposit_and_way_back
     );
 
     // At half as dear again a byte, the way back's Seedelf output needs more than a large deposit leaves with 1.5 ₳
-    // beside it: a fixed reserve let the sweep hold a Bootstrap to fewer (68 classic boxes, 51 of LJTEST). Priced from
-    // the parameters, the reserve grows with them, and one deposit's most still goes, its way back paid (1.6.0's
+    // beside it: a fixed reserve let the sweep hold a Bootstrap to fewer (68 classic boxes, 51 in a token pool). Priced
+    // from the parameters, the reserve grows with them, and one deposit's most still goes, its way back paid (1.6.0's
     // release review, bootstrap's call 1; 1.7.0).
     let dear = ProtocolParameters {
         coins_per_utxo_size: params().coins_per_utxo_size * 3 / 2,
@@ -1810,6 +1844,68 @@ fn a_private_bootstrap_is_held_to_what_its_funding_pays_its_deposit_and_way_back
         96
     );
     assert!(bootstraps(&dear, &classic, true, 96).is_some());
-    assert_eq!(lovejoin::bootstrap_most(&dear, &lj, true, 64).unwrap(), 64);
-    assert!(bootstraps(&dear, &lj, true, 64).is_some());
+    // LJTEST's 2 ₳ boxes are under the ledger's least there, so its pool takes no new box: a token pool whose boxes
+    // hold 4.5 ₳ stands in (1.7.0's release review, pr333#4).
+    assert!(matches!(
+        lovejoin::usable(&dear, &lj, true).unwrap_err(),
+        lovejoin::Unusable::BelowMinimum { .. }
+    ));
+    let held = Protocol {
+        denom: 4_500_000,
+        ..lj_pool()
+    };
+    assert!(lovejoin::usable(&dear, &held, true).is_ok());
+    assert!(
+        bootstraps_with(&dear, &held, true, 64, lovejoin::BOOTSTRAP_BACK_RESERVE).is_none(),
+        "a fixed 1.5 ₳ can't pay the way back of a token deposit's most there"
+    );
+    assert_eq!(
+        lovejoin::bootstrap_most(&dear, &held, true, 64).unwrap(),
+        64
+    );
+    assert!(bootstraps(&dear, &held, true, 64).is_some());
+
+    // The fees too: the sweep's and the largest deposit's follow the network's (1.7.0's release review, x-mut-rs#1).
+    // A fee half as dear again a byte beside it asks 2.2 ₳, where the dearer byte's 1.8 ₳ holds the classic pool to
+    // fewer.
+    let dearer = ProtocolParameters {
+        min_fee_a: params().min_fee_a * 3 / 2,
+        ..dear.clone()
+    };
+    assert_eq!(
+        lovejoin::bootstrap_back_reserve(&dearer).unwrap(),
+        2_200_000
+    );
+    assert!(bootstraps_with(&dearer, &classic, true, 96, reserve).is_none());
+    assert_eq!(
+        lovejoin::bootstrap_most(&dearer, &classic, true, 96).unwrap(),
+        96
+    );
+    assert!(bootstraps(&dearer, &classic, true, 96).is_some());
+}
+
+/// Where a private Bootstrap's cap binds below what's asked (1.7.0's release
+/// review, x-mut-rs#0): `bootstrap_most` searches for the most whose deposit
+/// and way back build, so asked past one deposit's size it stops at what a
+/// transaction holds, and at a fee past the wallet's limit (`build::MAX_FEE`)
+/// at what that pays. One more doesn't build.
+#[test]
+fn the_most_a_private_bootstrap_puts_in_is_the_most_that_builds() {
+    let classic = Protocol::of(true).unwrap();
+    let sized = lovejoin::bootstrap_most(&params(), &classic, true, 200).unwrap();
+    println!("asked 200: at most {sized}");
+    assert!((96..200).contains(&sized), "{sized}");
+    assert!(bootstraps(&params(), &classic, true, sized).is_some());
+    assert!(bootstraps(&params(), &classic, true, sized + 1).is_none());
+
+    let fees = ProtocolParameters {
+        min_fee_a: 1_000,
+        min_fee_b: 2_000_000,
+        ..params()
+    };
+    let paid = lovejoin::bootstrap_most(&fees, &classic, true, 96).unwrap();
+    println!("at a dearer fee: at most {paid}");
+    assert!((1..96).contains(&paid), "{paid}");
+    assert!(bootstraps(&fees, &classic, true, paid).is_some());
+    assert!(bootstraps(&fees, &classic, true, paid + 1).is_none());
 }

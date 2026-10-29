@@ -468,6 +468,7 @@ describe("the data layer's crowds go with the data layer (UI-9)", () => {
       wasm: {} as never,
       koios: () => undefined as never,
       index: client,
+      wallet: { trapped: async () => undefined },
       now: () => clock.now,
       listed: () => new Set(),
       headStart: () => ({ height: 0, pools: [] }),

@@ -896,9 +896,13 @@ fn build_cancel(
         Some((_, refunded)) => tokens_in.separate(refunded.clone())?,
         None => tokens_in.clone(),
     };
+    // Checked whole: an order an index reports near what a u64 holds passes
+    // the inputs' checked sum, and the store's module traps on an overflow
+    // (1.7.0's release review). Past a u64 it's past `lovelace_in` too.
     let keep = spend_collateral
-        && lovelace_in
-            .checked_sub(refunded_lovelace + KEEP_AT_FEE + SESSION_COLLATERAL)
+        && refunded_lovelace
+            .checked_add(KEEP_AT_FEE + SESSION_COLLATERAL)
+            .and_then(|held| lovelace_in.checked_sub(held))
             .and_then(|rest| {
                 change_outputs(c.params, c.address, rest, &kept_tokens, CANCEL_SHORT).ok()
             })

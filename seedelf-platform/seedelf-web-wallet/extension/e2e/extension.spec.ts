@@ -2666,10 +2666,13 @@ test("withdraw: more UTxOs than one transaction spends go as several, said on th
   await snap(page, "tx-detail-parts");
   await page.getByRole("button", { name: "Next transaction" }).click();
   await expect(page.getByTestId("withdraw-tx-part")).toHaveText("Transaction 2 of 2");
-  await expect(view).toContainText("Pays");
   await expect(page.getByTestId("withdraw-tx-hash")).not.toHaveAttribute("data-value", first!);
-  await expect(page.getByRole("button", { name: "Next transaction" })).toBeDisabled();
+  // The second's own read answered before anything is checked of it, so what follows is the second's (1.7.0's release
+  // review, pr335#3).
+  await expect(page.getByTestId("withdraw-tx-loading")).toHaveCount(0);
   await expect(page.getByTestId("withdraw-tx-error")).toHaveCount(0);
+  await expect(view).toContainText("Pays");
+  await expect(page.getByRole("button", { name: "Next transaction" })).toBeDisabled();
   await page.getByRole("button", { name: "Previous transaction" }).click();
   await expect(page.getByTestId("withdraw-tx-hash")).toHaveAttribute("data-value", first!);
   expect(koios.calls.length).toBe(reads);

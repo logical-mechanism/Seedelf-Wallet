@@ -8,13 +8,15 @@
 // The parts that wait are held in session storage (`seedelf.waiting.<network>`), each kept under its own key so a new
 // review never takes it, and what they spend reserved (spent.ts) so nothing else builds on it: both written before
 // the parts that go at Send are, so a worker stopped meanwhile leaves them to the pump, never held by nobody. The
-// sessions alarm and Home's poll send each once its parent shows (`pumpParts`), never as the wallet unlocks. A lock
-// wipes session storage, and with it what waits: the rest never go, and what they'd have spent stays in the private
-// balance. The lock countdown and Remove wallet say so first (`waiting`), and the part the watch holds keeps how far
-// the payment went, sealed with it, so Home says it went in part, never that it's confirmed (1.6.0's release review:
-// handlers.ts `pending-tx`). A session's funding short of them is the session's to tell (10a's rule: sessions.ts
-// `fundingState`), and is told at once when a part is turned away (`stopped`); it's asked before each goes whether it
-// still may (`mayGo`).
+// sessions alarm and Home's poll send each once its parent shows (`pumpParts`), never as the wallet unlocks. A lock, a
+// closed browser or an update wipes session storage, and with it what waits: the rest never go, and what they'd have
+// spent stays in the private balance. The lock countdown and Remove wallet say so first (`waiting`); nothing can before
+// a closed browser or an update. The part the watch holds keeps how far the payment went, sealed with it only while it
+// may still go through (pending.ts: until Koios takes it, or it's settled), so Home then says it went in part, never
+// that it's confirmed (1.6.0's release review: handlers.ts `pending-tx`). One Koios took is sealed no longer: after a
+// wipe, nothing says the rest didn't go (1.7.0's release review, x-upgrade#1). A session's funding short of them is
+// the session's to tell (10a's rule: sessions.ts `fundingState`), and is told at once when a part is turned away
+// (`stopped`); it's asked before each goes whether it still may (`mayGo`).
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
