@@ -6,9 +6,7 @@ It's written to sell, for someone who wants privacy rather than the maths; the d
 
 ## 1 · [01-the-loop.png](01-the-loop.png)
 
-> How do you use Cardano smart contracts privately?
->
-> Here's how Seedelf Wallet does it: private balance → one-time account → the dApp → back through Lovejoin → private again. 🧵
+> Ever wondered how Seedelf keeps you private on #Cardano? Let's look inside: how it uses smart contracts without the dApp ever seeing your wallet. 🧵👇
 
 **Alt text:** A diagram titled "Smart contracts, privately". Step 1, Fund: the private balance (your Seedelfs, under stealth registers) pays a one-time account, with fresh keys and its own 5 ₳ collateral. Step 2, Use: the one-time account and the dApp work back and forth; the dApp sees an ordinary wallet. Step 3, Return: everything goes from the one-time account into Lovejoin, mixed with other people's UTxOs. Step 4, Back, mixed: the boxes come back to the private balance. Notes: the dApp gets only a one-time account; its transactions can chain; no contract-to-contract limits.
 
