@@ -23,7 +23,7 @@ pub struct CreateArgs {
     #[arg(
         short = 'a',
         long,
-        help = "The address paying for the seedelf.",
+        help = "The address paying for the seedelf. It needs a UTxO of exactly 5 ADA, holding no tokens, for collateral.",
         display_order = 1
     )]
     pub address: String,
@@ -334,6 +334,12 @@ async fn assign_collateral_and_get_utxos(
         } else {
             all_utxos.push(utxo.clone());
         }
+    }
+    // the mint needs collateral: without one, the node refuses the transaction
+    if !found_collateral {
+        bail!(
+            "No Collateral Found\nSend a UTxO of exactly 5 ADA, holding no tokens, to the address and try again."
+        );
     }
     Ok((draft_tx, all_utxos))
 }
