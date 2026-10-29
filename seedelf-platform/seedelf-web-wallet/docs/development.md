@@ -296,7 +296,14 @@ The next `npm run package` overwrites a zip of the same version, so take the has
 3. Complete the **Store Listing**, **Privacy**, **Distribution**, and **Test instructions** tabs using [store/README.md](store/README.md). The Store Listing tab has a language list at its top, one for each of the package's `_locales`: fill in English, then Español and 日本語, each with its own description and screenshots ([In Spanish and Japanese](store/README.md#in-spanish-and-japanese)).
 4. Set visibility (**Public** for launch, or **Unlisted** for a quieter start), check the host justifications match the manifest's four hosts, and verify the privacy-policy URL resolves.
 5. Submit for review.
-6. Record the version, the commit it was built from, the zip's SHA-256, and the C compiler, Node and zlib lines in the roadmap's handoff notes, then share the store link with the intended users.
+6. Tag the commit the zip was built from, still `HEAD` if `main` hasn't moved since step 2. The slash keeps [release.yml](../../../.github/workflows/release.yml) off it, and [SECURITY.md](../../../SECURITY.md)'s bounty scope is the latest such tag:
+
+   ```bash
+   git tag "web-wallet/$release_version" HEAD
+   git push origin "web-wallet/$release_version"
+   ```
+
+7. Record the version, the commit it was built from, the zip's SHA-256, and the C compiler, Node and zlib lines in the roadmap's handoff notes, then share the store link with the intended users.
 
 The official Chrome upload flow is also described in [Publish in the Chrome Web Store](https://developer.chrome.com/docs/webstore/publish/).
 
@@ -326,7 +333,8 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
 9. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 9](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
 10. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([archive/plans/launch-review.md](archive/plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
 11. **Upload** the zip on the dashboard's Package tab. If the listing's text or images changed, copy them from [store/README.md](store/README.md), in each of its three languages ([In Spanish and Japanese](store/README.md#in-spanish-and-japanese)). Then submit for review.
-12. **Record it** in the roadmap's handoff notes: the version, the commit it was built from (`git rev-parse HEAD`), the zip's SHA-256, and the C compiler, Node and zlib lines.
+12. **Tag it** `web-wallet/<version>` on the commit it was built from, and push the tag ([step 6 above](#3-upload-and-submit)).
+13. **Record it** in the roadmap's handoff notes: the version, the commit it was built from (`git rev-parse HEAD`), the zip's SHA-256, and the C compiler, Node and zlib lines.
 
 ## Sharing with testers before launch (history)
 
