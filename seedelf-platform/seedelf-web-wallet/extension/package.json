@@ -19,6 +19,7 @@
     "tokens": "node scripts/tokens.mjs",
     "dreps": "node scripts/dreps.mjs",
     "lovejoin-pools": "LOVEJOIN_POOLS_WRITE=1 vitest run tests/lovejoin-pools-head-start.test.ts",
+    "lovejoin-registry": "node scripts/lovejoin-registry.mjs",
     "dev": "vite build --watch --mode development",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
