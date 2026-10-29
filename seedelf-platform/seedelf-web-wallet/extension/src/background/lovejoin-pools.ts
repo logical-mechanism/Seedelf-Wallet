@@ -31,9 +31,13 @@
 // - **The data layer** (mainnet), at most every REFRESH_MS: its list of every
 //   shown pool, each verified here again. It can leave a pool out, never pass
 //   off other scripts as a pool's. Verified offline, a pool may still not be
-//   on chain (a seed no launch spent verifies as well), so the ledger is the
-//   judge of that: every transaction into a token pool reads its reference
-//   UTxO, a deposit too (1.6.0's release review, 317-wallet#0).
+//   on chain (a seed no launch spent verifies as well), nor finished, and its
+//   datum and its scripts' places are the list's word alone. So a pool new to
+//   the device is kept only once Koios's chain data finds it as the holder's
+//   look would, its rows and its launch read from Koios (`confirmed`, 1.7.0).
+//   A look waits for that check, no pool read does: till it ends, they read
+//   the pools kept before. A pool's start reads the list as it came too, so
+//   its copy check sees a pool Koios hasn't confirmed yet (`lastListed`).
 // - **Koios** (preprod, or while the data layer can't answer), when the
 //   Lovejoin page opens: the holder's outputs since the last look, each
 //   candidate's launch transaction, read in batches.
@@ -235,6 +239,12 @@ export interface DiscoveryDeps {
   koios: (network: NetworkName) => Pick<Koios, "koiosAlone">;
   /** The private index on `network`, when it's to be read now (private-index.ts). */
   index?: (network: NetworkName) => Promise<PrivateIndex | undefined>;
+  /**
+   * The wallet's lock (wallet.ts `trapped`): WebAssembly that trapped under the Koios check is broken for good, and
+   * no request hears it (a look waits for the check, but the check keeps its own failure), so the wallet locks, as
+   * under a request (sw.ts answerUi; 1.6.0's release review, 314-wasm#0).
+   */
+  wallet: { trapped: () => Promise<void> };
   now: () => number;
   /** The tokens whose pools are shown: the wallet's list unless a test names others. */
   listed?: (network: NetworkName) => ReadonlySet<string>;
@@ -261,6 +271,13 @@ export class PoolDiscovery {
   private crowds = new Map<NetworkName, Map<string, IndexCrowd>>();
   /** A look at Koios under way, by network: the page opening twice looks once. */
   private looking = new Map<NetworkName, Promise<void>>();
+  /** The data layer's last list, by network, each pool verified here: what Koios hasn't confirmed yet too (lastListed). */
+  private lists = new Map<NetworkName, FoundPool[]>();
+  /**
+   * A check under way of the listed pools new to the device (confirmed), by network: one at a time, waited for by a
+   * look alone, never by a pool read (1.7.0's release review, pr336#1).
+   */
+  private checking = new Map<NetworkName, Promise<void>>();
   /**
    * The last write of what's kept, by network: each reads what's kept and writes it again, so they go one at a time.
    * A refresh and a look finishing together would each write over the other's pools or height (1.6.0's release
@@ -345,6 +362,16 @@ export class PoolDiscovery {
     return this.crowds.get(network);
   }
 
+  /**
+   * The data layer's last list on `network` while the worker runs, each pool verified here, those Koios hasn't
+   * confirmed yet among them: a pool started with one's values would be its copy, never shown once Koios confirms it
+   * (lovejoin-launch.ts; 1.7.0's release review, x-merge#0). Never handed over to a pool read, which reads only what
+   * Koios confirmed. Each list replaces the last; the data layer down, or Koios only, leaves it as it was. No request.
+   */
+  lastListed(network: NetworkName): FoundPool[] {
+    return this.lists.get(network) ?? [];
+  }
+
   private async kept(network: NetworkName): Promise<Merged> {
     const head = this.deps.headStart?.(network) ?? (bundled as unknown as Record<NetworkName, Kept>)[network] ?? { height: 0, pools: [] };
     const stored = await this.deps.local.get<Stored>(key(network));
@@ -386,10 +413,14 @@ export class PoolDiscovery {
   /**
    * Looks for pools launched since the wallet last did (the Lovejoin page, as
    * it opens): the data layer's list where it answers, or answered within
-   * REFRESH_MS; Koios's holder otherwise.
+   * REFRESH_MS, and Koios's check of what's new in it; Koios's holder
+   * otherwise.
    */
   async look(network: NetworkName): Promise<void> {
     await this.refresh(network);
+    // What the list named new is kept once Koios confirms it: the look waits for that, so the page reads it at once
+    // (R10).
+    await this.checking.get(network);
     const answered = this.answered.get(network);
     const at = this.deps.now();
     if (answered !== undefined && at >= answered && at - answered < REFRESH_MS) return;
@@ -398,8 +429,9 @@ export class PoolDiscovery {
 
   /**
    * The data layer's list, at most every REFRESH_MS on a network: every pool
-   * it shows, verified here again, kept. Nothing when the network has no data
-   * layer, or it can't answer.
+   * it shows, verified here again. One new to the device is kept once Koios
+   * confirms it, a check this starts and doesn't wait for (`confirm`).
+   * Nothing when the network has no data layer, or it can't answer.
    */
   async refresh(network: NetworkName): Promise<void> {
     // The data layer's crowds go with it: with Settings' Koios-only on, or the data layer marked down, the hub showed
@@ -433,9 +465,8 @@ export class PoolDiscovery {
     const found: FoundPool[] = [];
     for (const p of answer.pools) {
       // A launch puts the reference UTxO and both scripts at the holder in one transaction, the one listed as its
-      // launch: a list saying otherwise contradicts itself, and isn't built on. That the pool is on chain at all, the
-      // ledger checks: every transaction into a token pool reads its reference UTxO, a deposit too (1.6.0's release
-      // review, 317-wallet#0).
+      // launch: a list saying otherwise contradicts itself, and isn't built on (1.6.0's release review,
+      // 317-wallet#0). That the pool is on chain as listed, Koios says before it's kept (`confirmed`).
       const launched = txOf(p.reference.ref);
       if (p.launch.tx !== launched || p.scripts.some((s) => txOf(s.ref) !== launched)) continue;
       const [txHash, txIndex] = p.seed.split("#");
@@ -451,7 +482,29 @@ export class PoolDiscovery {
       if (pool) found.push(pool);
     }
     this.crowds.set(network, new Map([["classic", answer.classic.crowd], ...answer.pools.map((p) => [p.id, p.crowd] as const)]));
-    await this.keep(network, await this.confirmed(network, found));
+    this.lists.set(network, found);
+    // Kept at once with the list it was read under, as the throttle above reads that (1.7.0's release review,
+    // pr336#2); what's new in it, once Koios confirms it.
+    await this.keep(network, []);
+    this.confirm(network, found);
+  }
+
+  /**
+   * Starts Koios's check of `found`'s pools new to the device, unless one is under way: those it confirms are kept,
+   * and read from the next pool read on. Only a look waits for it: a Koios slow or hung would hold every pool read
+   * through its timeouts and tries again, the classic pool's too (1.7.0's release review, pr336#1, x-priv#2).
+   */
+  private confirm(network: NetworkName, found: FoundPool[]): void {
+    if (this.checking.has(network)) return;
+    const check = this.confirmed(network, found)
+      .then((ok) => this.keep(network, ok))
+      .catch(async (e: unknown) => {
+        // WebAssembly that trapped under it is broken for good, and no request hears it: the wallet locks (pr336#4).
+        // Anything else leaves what's new for the next list.
+        if (isTrap(e)) await this.deps.wallet.trapped().catch(() => undefined);
+      })
+      .finally(() => this.checking.delete(network));
+    this.checking.set(network, check);
   }
 
   /** `ref` verified here, if it's a pool of a listed token or ADA, its scripts at the holder. */
@@ -554,33 +607,38 @@ export class PoolDiscovery {
   }
 
   /**
-   * Of `found`, the data layer's list verified offline, those this device takes: every pool it holds already, and a
-   * pool new to it only once Koios's chain data finds it as the holder's look would (launched). Offline, a pool's
-   * scripts prove it a genuine Lovejoin pool, but not that its launch is on chain (a seed no launch spent verifies as
-   * well) nor that L is registered, and a pool handed over stays for good: a server that lied, or a deep rollback, could
-   * otherwise list one that isn't there, or one that never paid to be finished (1.6.0's release review, pool-exists and
-   * docs-small#1; 1.7.0). Koios rather than the data layer, which listed it: the check is one no single operator
-   * answers. A pool Koios can't confirm yet, or a Koios that can't answer, leaves it for the next list.
+   * Of `found`, the data layer's list verified offline, the pools new to this device that Koios's chain data finds as
+   * the holder's look would (launched), as it finds them: their reference UTxO and scripts read from Koios, so their
+   * datum (a box's ADA and token, the most a mix pays), their scripts' places and their launch's place are the
+   * chain's, never the list's (1.7.0's release review, pr336#0). Offline, a pool's scripts prove it a genuine Lovejoin
+   * pool, but not that its launch is on chain (a seed no launch spent verifies as well), nor that L is registered, nor
+   * its datum's values, and a pool handed over stays for good: a server that lied, or a deep rollback, could otherwise
+   * list one that isn't there, one that never paid to be finished, or one whose boxes no mix takes (1.6.0's release
+   * review, pool-exists and docs-small#1; 1.7.0). Koios rather than the data layer, which listed it: the check is one
+   * no single operator answers. Pools the device holds aren't asked about again; one Koios can't confirm yet, or a
+   * Koios that can't answer, leaves it for the next list.
    */
   private async confirmed(network: NetworkName, found: FoundPool[]): Promise<FoundPool[]> {
     const was = await this.kept(network);
     const known = new Set(was.pools.map((p) => refOf(p.ref.reference)));
     const fresh = found.filter((p) => !known.has(refOf(p.ref.reference)));
-    if (!fresh.length) return found;
+    if (!fresh.length) return [];
     const koios = this.deps.koios(network).koiosAlone();
-    let standard: FoundPool[];
+    // Its reference UTxO and scripts where the list puts them, as Koios has them: rows at the holder alone, as the
+    // holder's look reads.
+    const outputs = (p: FoundPool) => [p.ref.reference, ...(p.ref.scripts ?? [])].map(refOf);
     try {
-      ({ standard } = await this.launched(
-        network,
-        koios,
-        fresh.map((p) => ({ row: p.ref.reference, scripts: p.ref.scripts ?? [] })),
-      ));
+      const rows = new Map((await koios.utxoInfo(fresh.flatMap(outputs))).filter((r) => r.payment_cred === HOLDER).map((r) => [refOf(r), r]));
+      const candidates = fresh.flatMap((p) => {
+        const [row, ...scripts] = outputs(p).map((r) => rows.get(r));
+        const at = scripts.filter((s): s is KoiosUtxo => s !== undefined);
+        return row && at.length === scripts.length ? [{ row, scripts: at }] : [];
+      });
+      return candidates.length ? (await this.launched(network, koios, candidates)).standard : [];
     } catch (e) {
       if (isTrap(e)) throw e;
-      standard = [];
+      return [];
     }
-    const ok = new Set(standard.map((p) => `${p.id}:${refOf(p.ref.reference)}`));
-    return found.filter((p) => known.has(refOf(p.ref.reference)) || ok.has(`${p.id}:${refOf(p.ref.reference)}`));
   }
 }
 

@@ -88,6 +88,7 @@ import {
   lovejoinHides,
   mixesPerBox,
   useSessionsWhile,
+  wayOutOffered,
   WidthNote,
   CollateralMixLine,
   CollateralReserveRow,
@@ -203,10 +204,11 @@ const BOX = 10_000_000n;
 /** A one-time account's own collateral (sessions.ts SESSION_COLLATERAL). */
 const COLLATERAL = 5_000_000n;
 /**
- * Left aside for a funding from the private balance: its network fee, about 0.25 ₳, and the least its change holds,
- * a Seedelf output's, 1.46 ₳ at today's 4,310 lovelace a byte, with room for a dearer byte. The build decides exactly.
- * 1 ₳ left the change's least out, so the stepper offered a box the funding then refused (1.6.0's release review,
- * 323-worker#0).
+ * Left aside for a funding from the private balance: its network fee, about 0.25 ₳ from one UTxO, and the least its
+ * change holds, a Seedelf output's, 1.46 ₳ at today's 4,310 lovelace a byte. Fixed, so from about 5,200 lovelace a
+ * byte, or for a funding that spends many UTxOs, it can hold too little, and the build refuses that in words (1.7.0's
+ * release review, pr333#0). The build decides exactly. 1 ₳ left the change's least out, so the stepper offered a box
+ * the funding then refused (1.6.0's release review, 323-worker#0).
  */
 const FEE_ROOM = 2_000_000n;
 /** The boxes of other people's a collateral's mix draws from the pool of 5 ₳ boxes (the worker's TAIL_DRAWS). */
@@ -2582,9 +2584,10 @@ function MixCard({
           )}
         </p>
       )}
-      {/* Its return held at its collateral's mix past the hour (1.7.0). */}
-      {s && s.collateralHeld && !isOver(s) && onSkipCollateral && (
-        <div className="token-row__detail">
+      {/* Its return held at its collateral's mix past the hour (1.7.0): nothing before then, not even an empty row, and
+          at the page's size, as on a session's page, not the detail line's (1.7.0's release review, x-ui#2). */}
+      {s && wayOutOffered(s.collateralHeld) && !isOver(s) && onSkipCollateral && (
+        <div className="token-row__wide">
           <CollateralHeldWayOut held={s.collateralHeld} busy={busy} onSkip={() => onSkipCollateral(s.index)} />
         </div>
       )}

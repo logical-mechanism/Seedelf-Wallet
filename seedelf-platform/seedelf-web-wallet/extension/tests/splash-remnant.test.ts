@@ -13,7 +13,7 @@ import { bodyOutpoints } from "../src/background/cbor";
 import type { KoiosUtxo } from "../src/background/koios";
 import { bech32 } from "./fixtures/bech32";
 import { bytes, SESSION_ADDRESS } from "./fixtures/swap-tx";
-import { sessionSwap } from "./fakes";
+import { loadTestWasm, sessionSwap } from "./fakes";
 import { ASK, atSession, busy, MIN, signing, unlocked, type T } from "./swap-session";
 
 const PAYMENT = sessionSwap.keyHash;
@@ -295,5 +295,36 @@ describe("a datum nested thousands of levels deep at a spent Splash order's addr
     const cancelled = bodyOutpoints(t.koios.submitted.at(-1)!, 0)!;
     expect(cancelled).toContain(`${FILL_H}#0`);
     expect(cancelled).not.toContain(`${DEEP_H}#0`);
+  });
+});
+
+// 1.7.0's release review, pr330#0: a restore's scan locks the wallet on a trap (handlers.ts `unawaited`) only if the scan
+// hands it on. What anyone puts at a spent Splash order's address reaches WebAssembly in its look for the order's rest
+// (liveOrders), which the scan reads only once it's found the session's own order there spent.
+describe("a trap reading what a stranger put at a spent Splash order's address, in a restore's scan", () => {
+  it("is handed on, never read on from as no order: the scan fails, writing nothing", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    // Session 0's account used on mainnet: its funding, then its swap, whose Splash order (SWAP_H#0) was filled since.
+    const stake = await t.wallet.withKeys((keys) => keys.oneTime.rewardAddress(loadTestWasm().Network.Mainnet, 0));
+    t.koios.usedStakes.add(stake);
+    t.koios.accountTxs.set(stake, [
+      { tx_hash: SWAP_H, block_height: 5_000_100, block_time: 1_700_000_100 },
+      { tx_hash: FUNDING_H, block_height: 5_000_000, block_time: 1_700_000_000 },
+    ]);
+    t.koios.txSpends.set(SWAP_H, [{ payment_addr: { bech32: ACCOUNT, cred: PAYMENT }, tx_hash: FUNDING_H, tx_index: 1 }]);
+    t.koios.txOutputs.set(SWAP_H, [{ payment_addr: { bech32: ORDER_AT, cred: SPLASH }, tx_index: 0 }]);
+    t.koios.addedToAccounts.push(atOrders(SWAP_H), atOrders(OTHER_H, STRANGERS));
+    t.koios.spent.add(`${SWAP_H}#0`);
+    // WebAssembly traps reading the stranger's, as the worker asks it (its own copy of the module's functions).
+    const wasm = (sessions as unknown as { deps: { wasm: { readDexOrder(request: string): string } } }).deps.wasm;
+    const read = wasm.readDexOrder;
+    const trap = new WebAssembly.RuntimeError("unreachable");
+    wasm.readDexOrder = (request) => {
+      if (request.includes(STRANGERS)) throw trap;
+      return read(request);
+    };
+    await expect(sessions.scan("mainnet")).rejects.toBe(trap);
+    expect(await t.store.get("sessions.mainnet")).toBeUndefined();
   });
 });

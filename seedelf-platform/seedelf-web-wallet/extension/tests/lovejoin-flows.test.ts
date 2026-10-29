@@ -13,6 +13,7 @@ import { describe as describeTxs } from "../src/background/activity";
 import { CONTRACT_V1 } from "../src/background/balances";
 import { bodyOutpoints, txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
+import { handle, type Context } from "../src/background/handlers";
 import type { KoiosTxInfo, KoiosTxOut, KoiosUtxo } from "../src/background/koios";
 import { CLASSIC, LovejoinService, STUCK_WAIT_MS, type PoolRef } from "../src/background/lovejoin";
 import { LovejoinLaunchService, SESSION_LOVEJOIN_LAUNCH } from "../src/background/lovejoin-launch";
@@ -501,10 +502,14 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     expect(await lj.privateBootstrapBounds("preprod")).toEqual({ most: 96, back: "1500000" });
     // At half as dear again a byte, the way back's Seedelf output needs more than a large deposit's change leaves with
     // 1.5 ₳ beside it, which held a Bootstrap to 68 classic boxes. Priced from the parameters, the reserve is 1.8 ₳, and
-    // one deposit's most still goes (1.7.0; core's test has a token pool's too: this fixture's token box is below the
-    // network's least at that price, so it takes no new box at all).
+    // one deposit's most still goes (1.7.0; core's test has a token pool's too, its boxes holding their least there:
+    // this fixture's token box is below the network's least at that price, so it takes no new box at all).
     t.koios.params = { coins_per_utxo_size: "6465", epoch_no: 291 };
     expect(await lj.privateBootstrapBounds("preprod")).toEqual({ most: 96, back: "1800000" });
+    // The form asks it through the handler, which answers the bounds whole, `back` with them: handle()'s type is every
+    // request's result, so nothing else holds it (1.7.0's release review, x-mut-ts#4).
+    const ctx = { lovejoin: lj, network: "preprod" } as unknown as Context;
+    expect(await handle({ type: "lovejoin-bootstrap-most" }, ctx)).toEqual({ most: 96, back: "1800000" });
     // Its funding carries that reserve, as its review says: one box of 10 ₳, the deposit's 1.5 ₳ and the way back's.
     const funded = await sessions.mixOutBuild("preprod", 1, { bootstrap: true });
     expect(funded.bootstrapReserve).toBe("1800000");

@@ -1066,6 +1066,49 @@ describe("a restore's scan that doesn't finish", () => {
   });
 });
 
+// 1.7.0's release review, pr330#0: a restore's scan locks the wallet on a trap (handlers.ts `unawaited`), which needs
+// the scan to hand on a trap from the WebAssembly it calls outside the wallet's queue: an output's address
+// (cip30Address), and whether it's an order of the session's (readDexOrder). A trap at a spent Splash order's address,
+// the one liveOrders reads there, is splash-remnant.test.ts'.
+describe("a trap in the restore scan's own WebAssembly", () => {
+  /** The WebAssembly module with `name` trapping. */
+  const trapping = (name: "cip30Address" | "readDexOrder", trap: Error) =>
+    ({
+      ...loadTestWasm(),
+      [name]: () => {
+        throw trap;
+      },
+    }) as ReturnType<typeof loadTestWasm>;
+
+  /** Session 0 used: its funding, then its swap, whose order still waits at Minswap V1's script. */
+  async function swappedOnce(t: T) {
+    await usedWith(t, 0, [
+      [SWAP_TX, 5_000_100],
+      [FUNDING_TX, 5_000_000],
+    ]);
+    swapped(t);
+    t.koios.addedToAccounts.push(orderRow(SWAP_TX));
+  }
+
+  it.each(["cip30Address", "readDexOrder"] as const)("hands on a trap in %s, reading what the session's swap paid, and writes nothing", async (name) => {
+    const t = await unlocked();
+    const trap = new WebAssembly.RuntimeError("unreachable");
+    const sessions = signing(t, { wasm: trapping(name, trap) });
+    await swappedOnce(t);
+    await expect(sessions.scan("preprod")).rejects.toBe(trap);
+    expect(await bookOf(t)).toBeUndefined();
+  });
+
+  it("locks the wallet when a restore's own scan traps there, the restore answered", async () => {
+    const t = await unlocked();
+    await swappedOnce(t);
+    await t.wallet.reset();
+    const ctx = context(t, signing(t, { wasm: trapping("cip30Address", new WebAssembly.RuntimeError("unreachable")) }));
+    expect(await ask({ type: "restore-wallet", phrase: PHRASE, password: PASSWORD }, ctx)).toMatchObject({ state: "unlocked" });
+    await vi.waitFor(async () => expect(await ask({ type: "status" }, ctx)).toMatchObject({ state: "locked", lockedBy: "trap" }));
+  });
+});
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 

@@ -74,8 +74,10 @@ export function TxDetailButton({
           {label ?? tr("tx.detailsButton")}
         </button>
       </div>
+      {/* By the transaction: a review built again in place under the open view is a new one (each build signs with a
+          new one-time key), and its view starts afresh, on its first (1.7.0's release review, pr335#0). */}
       {open && (
-        <TxDetailModal txHash={txHash} parts={parts?.map((p) => p.txHash)} testId={testId} site={site} onClose={() => setOpen(false)} />
+        <TxDetailModal key={txHash} txHash={txHash} parts={parts?.map((p) => p.txHash)} testId={testId} site={site} onClose={() => setOpen(false)} />
       )}
     </>
   );
@@ -119,21 +121,24 @@ export function TxDetailModal({
 }) {
   const tr = useT();
   const network = useNetwork();
-  const [view, setView] = useState<TxView>();
-  const [error, setError] = useState<string>();
+  // The worker's answer, with the hash it was asked for, and shown only under that one: another transaction of the
+  // payment shows nothing of the last one's while it's asked for, not even for the render before (1.7.0's release
+  // review, pr335#3).
+  const [read, setRead] = useState<{ of: string; view?: TxView; error?: string }>();
   const [tab, setTab] = useState<Tab>("transaction");
   const many = parts && parts.length > 1 ? parts : undefined;
   const [shown, setShown] = useState(0);
-  const hash = many?.[shown] ?? txHash;
+  // Never past the last: a view left open while its review was built again in fewer parts (pr335#0).
+  const at = many ? Math.min(shown, many.length - 1) : 0;
+  const hash = many?.[at] ?? txHash;
+  const view = read?.of === hash ? read.view : undefined;
+  const error = read?.of === hash ? read.error : undefined;
 
   useEffect(() => {
     let gone = false;
-    // Another transaction of the payment: nothing of the last one's stays on screen while it's asked for.
-    setView(undefined);
-    setError(undefined);
     call("tx-detail", { txHash: hash }).then(
-      (answer) => !gone && setView(answer),
-      (e: Error) => !gone && setError(e.message),
+      (answer) => !gone && setRead({ of: hash, view: answer }),
+      (e: Error) => !gone && setRead({ of: hash, error: e.message }),
     );
     return () => {
       gone = true;
@@ -149,21 +154,21 @@ export function TxDetailModal({
               type="button"
               className="icon-button"
               aria-label={tr("tx.partPrevious")}
-              disabled={shown === 0}
-              onClick={() => setShown((i) => i - 1)}
+              disabled={at === 0}
+              onClick={() => setShown(at - 1)}
               data-testid={`${testId}-part-previous`}
             >
               <ChevronLeftIcon size={16} />
             </button>
             <output className="stepper__value" data-testid={`${testId}-part`}>
-              {tr("tx.partOf", { n: shown + 1, total: many.length })}
+              {tr("tx.partOf", { n: at + 1, total: many.length })}
             </output>
             <button
               type="button"
               className="icon-button"
               aria-label={tr("tx.partNext")}
-              disabled={shown === many.length - 1}
-              onClick={() => setShown((i) => i + 1)}
+              disabled={at === many.length - 1}
+              onClick={() => setShown(at + 1)}
               data-testid={`${testId}-part-next`}
             >
               <ChevronRightIcon size={16} />

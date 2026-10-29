@@ -266,6 +266,7 @@ function discoveryOf(t: T, local = memoryArea(), index?: Parameters<typeof priva
     wasm: loadTestWasm(),
     koios: t.deps.koios,
     ...(index ? { index: privateIndexClient({ koiosOnly: async () => false, parts, fetch: index, limits: {} }, () => "https://data.test") } : {}),
+    wallet: t.wallet,
     now: () => t.clock.now,
     listed: () => new Set([LJTEST]),
     headStart: () => ({ height: 0, pools: [] }),
@@ -519,6 +520,10 @@ describe("a look for pools says whether what the wallet reads changed (1.6.0's r
       inputs: [{ tx_hash: FOUND.seed.txHash, tx_index: FOUND.seed.txIndex }],
       certificates: [{ type: "stake_registration", info: { stake_address: l } }],
     } as never);
+    // And its outputs at the holder, as utxo_info gives them (1.7.0's release review, pr336#0): the fake answers that
+    // with any UTxO it holds, these under no key of the wallet's.
+    const at = { tx_hash: FOUND.reference.tx_hash, address: FOUND.reference.address, payment_cred: HOLDER, stake_address: null, block_height: BLOCK };
+    t.koios.addedToAccounts.push(FOUND.reference, ...FOUND.scripts.map((s, i) => ({ ...s, ...at, tx_index: i + 1 })));
     index.poolList = listed();
     t.clock.now += 10 * 60_000;
     expect(await handle({ type: "lovejoin-look-for-pools" } as Message, ctx)).toEqual({ grew: true });
@@ -540,6 +545,72 @@ describe("a look for pools says whether what the wallet reads changed (1.6.0's r
     const lj = pooled(t, [], { ...serviceDeps(discovery), lookForPools: look });
     expect(await lj.lookForPools("preprod")).toEqual({ grew: true });
     expect(await lj.lookForPools("preprod")).toEqual({ grew: false });
+  });
+});
+
+describe("a start of the values of a pool the data layer lists, before Koios confirms it (1.7.0's release review, x-merge#0)", SLOW, () => {
+  it("is refused as a copy, though the pool isn't read or offered to join till Koios confirms it", async () => {
+    const t = await wallet();
+    // The data layer lists the token pool; Koios is down, refusing this IP, or behind, so it doesn't confirm it.
+    const slot = 100_000_000;
+    const scripts = FOUND.scripts.map((s, i) => ({ ...s, tx_hash: FOUND.reference.tx_hash, tx_index: i + 1, address: FOUND.reference.address, payment_cred: HOLDER, stake_address: null, block_height: BLOCK }));
+    const index = fakeIndex();
+    index.poolList = {
+      network: "mainnet",
+      cursor: `${slot}.${"0".repeat(64)}`,
+      classic: { crowd: { boxes: 80, deposits: 12, mixed: 70 } },
+      pools: [
+        {
+          id: TOKEN,
+          seed: `${FOUND.seed.txHash}#${FOUND.seed.txIndex}`,
+          reference: indexRowOf(FOUND.reference, slot),
+          scripts: scripts.map((s, i) => ({ ...indexRowOf(s as KoiosUtxo, slot), script: true, script_hash: [VIEW.mixBoxHash, "ada2c293ad286873fb2d265b4a8597edc5271e927e13dc0496e7b953"][i] })),
+          launch: { tx: FOUND.reference.tx_hash, block: BLOCK, index: 3, slot, time: slot + 1_591_566_291 },
+          crowd: { boxes: 30, deposits: 1, mixed: 0 },
+        },
+      ],
+    };
+    const discovery = discoveryOf(t, memoryArea(), index.fetch);
+    const min = { policyId: VIEW.token.policyId, assetName: VIEW.token.assetName };
+    const launch = new LovejoinLaunchService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      lovejoin: t.lovejoin,
+      discovery,
+      listed: () => true,
+    });
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"));
+    // Its start would lock about 23 ₳ for good: a later launch of its values, which no wallet shows. No screen has it
+    // to use yet, so the refusal says it shows once it's confirmed, never "Use that pool instead" (1.7.0's fixes'
+    // review, screens#1).
+    await expect(launch.build("preprod", { from: "public", token: min, quantity: Q.toString(), boxLovelace: VIEW.boxLovelace })).rejects.toThrow(
+      tr("lj.launch.copyListed"),
+    );
+    // Never shown till Koios confirms it: no pool read hands it over, and the form's terms don't offer it.
+    expect(await discovery.known("preprod")).toEqual([]);
+    expect((await launch.terms("preprod", min, Q.toString())).pools).toEqual([]);
+    // Other values aren't its copy: they go on to the checks after it.
+    const other = await launch.build("preprod", { from: "public", token: min, quantity: (Q * 2n).toString(), boxLovelace: VIEW.boxLovelace }).then(
+      () => undefined,
+      (e: Error) => e.message,
+    );
+    expect([tr("lj.launch.copy"), tr("lj.launch.copyListed")]).not.toContain(other);
+  });
+
+  it("says to use the pool where it's shown and the list names it too: the form offers it to join (1.7.0's fixes' review, screens#1)", async () => {
+    const t = await wallet();
+    const min = { policyId: VIEW.token.policyId, assetName: VIEW.token.assetName };
+    const launch = new LovejoinLaunchService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      lovejoin: t.lovejoin,
+      discovery: { known: async () => [REAL], look: async () => undefined, lastListed: () => [REAL] },
+      listed: () => true,
+    });
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"));
+    await expect(launch.build("preprod", { from: "public", token: min, quantity: Q.toString(), boxLovelace: VIEW.boxLovelace })).rejects.toThrow(
+      tr("lj.launch.copy"),
+    );
   });
 });
 
