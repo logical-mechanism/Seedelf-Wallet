@@ -30,13 +30,13 @@ It's written to sell, for someone who wants privacy rather than the maths; the d
 
 ## 5 · [05-through-lovejoin.png](05-through-lovejoin.png)
 
-> When you're done, it all comes back through Lovejoin on the way: your UTxOs are mixed with other people's UTxOs, and each comes back on its own, hours later. ADA or tokens, Lovejoin can handle it all.
+> When you're done, it all comes back through Lovejoin: your UTxOs are mixed with other people's UTxOs, and each comes back on its own, hours later. ADA or tokens, Lovejoin can handle it all.
 
 **Alt text:** Titled "Back through Lovejoin", steps 3 and 4. The one-time account returns what the dApp paid back into Lovejoin, a pool of equal boxes. Two of your boxes go in among other people's, are mixed several times, and come out looking alike: which are yours? They come back to the private balance under fresh registers, each on its own, at its own random time, hours later. Ticks: ADA and tokens alike, where a pool takes them; on by default, and yours to turn off.
 
 ## 6 · [06-private-again.png](06-private-again.png)
 
-> It lands in your private balance under fresh registers, and the one-time account is never used again. Lovejoin breaks the on-chain link between the dApp's account and your balance.
+> Then your funds land in your private balance under fresh registers, and the one-time account is never used again. Lovejoin breaks the on-chain link between the dApp's account and your balance.
 
 **Alt text:** Titled "Private again": what someone watching the chain can follow. Brought back directly, a switch away: a solid line from the one-time account to the private balance, and anyone can tie it to the session and its funding. Through Lovejoin, the default: the line from the one-time account reaches Lovejoin, then breaks at a question mark before the private balance; the trail breaks in the pool, and boxes come back mixed, hours apart. Ticks: back under fresh registers; the one-time account is never used again; no two sessions share a key.
 
