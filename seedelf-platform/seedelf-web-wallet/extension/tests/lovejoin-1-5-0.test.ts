@@ -790,18 +790,22 @@ describe("1.5.0's Lovejoin, through token pools (chunk 34's gate)", SLOW, () => 
   });
 
   describe("with the token pools every preprod wallet is handed shown (1.6.0's release review, x-compat#2)", () => {
-    const bundled = (JSON.parse(readFileSync(new URL("../src/lovejoin-pools.json", import.meta.url), "utf8")) as {
-      preprod: { pools: Array<{ id: string; boxLovelace: string; token?: unknown }> };
-    }).preprod.pools;
+    const head = JSON.parse(readFileSync(new URL("../src/lovejoin-pools.json", import.meta.url), "utf8")) as Record<
+      "preprod" | "mainnet",
+      { pools: Array<{ id: string; boxLovelace: string; token?: unknown }> }
+    >;
+    const bundled = head.preprod.pools;
     const minPool = bundled.find((p) => p.token)!;
-    const fivePool = bundled.find((p) => !p.token && p.boxLovelace === "5000000")!;
+    // Each network's 5 ₳ pool its head start bundles: preprod's, and mainnet's since 1.7.0's head start, its first.
+    const fivePoolOn = (network: "preprod" | "mainnet") => head[network].pools.find((p) => !p.token && p.boxLovelace === "5000000");
 
     it("plans every return and mix as 1.5.0 did, but what a shown pool adds of its own", async () => {
       const got = (await plans(headStart)) as Plans;
       expect(nearly(classicPlans(got), classicPlans(recorded.plans))).toEqual([]);
-      // What's left out is the pools' own: the 5 ₳ pool's reserve wherever a preprod mix makes mixes, none on mainnet;
-      // the token's way into the MIN pool as the user types, and back directly at Review, its pool empty.
-      for (const f of got.funding) expect(f.funding.collateralPool, `${f.network} ${f.depth}`).toBe(f.network === "preprod" && f.depth > 0 ? fivePool.id : undefined);
+      // What's left out is the pools' own: the 5 ₳ pool's reserve wherever a mix makes mixes on a network whose head start
+      // bundles one (preprod, and mainnet since 1.7.0's); the token's way into the MIN pool as the user types, and back
+      // directly at Review, its pool empty.
+      for (const f of got.funding) expect(f.funding.collateralPool, `${f.network} ${f.depth}`).toBe(f.depth > 0 ? fivePoolOn(f.network as "preprod" | "mainnet")?.id : undefined);
       expect(got.swap.quote.ways).toEqual([expect.objectContaining({ pool: minPool.id })]);
       expect(got.swap.review.ways).toEqual([expect.objectContaining({ boxes: 0, pools: [] })]);
     });
