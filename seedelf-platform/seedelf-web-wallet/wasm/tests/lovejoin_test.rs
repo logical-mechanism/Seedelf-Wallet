@@ -336,6 +336,12 @@ fn a_bootstrap_with_no_collateral_deposits_and_sweeps_back() {
         &seedelf_core::assets::Assets::new(),
     )
     .unwrap();
+    // The way back's reserve, priced from the parameters as the worker's lovejoinBootstrapReserve is (1.7.0's release
+    // review, x-mut-rs#4).
+    let back_reserve = seedelf_core::lovejoin::bootstrap_back_reserve(
+        &seedelf_koios::koios::ProtocolParameters::from_koios(&params()).unwrap(),
+    )
+    .unwrap();
     for boxes in [1, most] {
         let funding = lovejoin::funding(FundingRequest {
             network: "preprod".into(),
@@ -344,8 +350,7 @@ fn a_bootstrap_with_no_collateral_deposits_and_sweeps_back() {
             again: false,
         })
         .unwrap();
-        let lovelace = funding.lovelace.parse::<u64>().unwrap()
-            + seedelf_core::lovejoin::BOOTSTRAP_BACK_RESERVE;
+        let lovelace = funding.lovelace.parse::<u64>().unwrap() + back_reserve;
         let funded = vec![row(1, 0, &at, lovelace, &[])];
         let plan = lovejoin::plan(
             &accounts(),
