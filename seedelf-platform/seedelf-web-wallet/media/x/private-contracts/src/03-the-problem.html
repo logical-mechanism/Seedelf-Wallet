@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Why not pay the dApp directly?</title>
+<link rel="stylesheet" href="../../../shared.css" />
+<style>
+  .panels { position: absolute; left: 72px; right: 72px; top: 296px; bottom: 48px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px; }
+  .panel {
+    display: flex; flex-direction: column; gap: 26px;
+    padding: 30px 32px;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 24px;
+  }
+  .panel h2 { display: flex; align-items: center; gap: 14px; font-size: 32px; font-weight: 700; }
+  .panel h2 svg { flex: none; width: 36px; height: 36px; }
+  .panel > p { font-size: 23px; font-weight: 500; line-height: 1.4; color: var(--muted); }
+  .visual { flex: 1; display: flex; align-items: center; justify-content: center; gap: 12px; }
+
+  .tx {
+    width: 262px; padding: 18px;
+    display: grid; gap: 10px;
+    border: 2px solid var(--border-strong); border-radius: 16px;
+    background: rgb(255 255 255 / 0.03);
+  }
+  .tx .cap { font-size: 18px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+  .chip {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; border-radius: 10px;
+    background: rgb(255 255 255 / 0.06);
+    font-size: 21px; font-weight: 600;
+  }
+  .chip img, .chip svg { width: 26px; height: 26px; flex: none; }
+  .chip.seedelf { background: var(--teal-soft); color: var(--teal); }
+  .chip.broken { background: var(--danger-soft); color: var(--danger-text); text-decoration: line-through; text-decoration-thickness: 2px; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 21px; font-weight: 700; }
+  .status.ok { color: var(--teal); }
+  .status.bad { color: var(--danger-text); }
+  .status svg { width: 24px; height: 24px; }
+
+  .swap { display: grid; justify-items: center; gap: 6px; width: 92px; text-align: center; font-size: 18px; font-weight: 600; color: var(--muted); line-height: 1.25; }
+  .swap svg { width: 64px; height: 24px; }
+
+  .tx .note { font-size: 20px; font-weight: 500; line-height: 1.35; color: var(--muted); }
+</style>
+</head>
+<body>
+  <header>
+    <p class="kicker">The problem</p>
+    <h1>Why not pay the dApp directly?</h1>
+    <p class="sub">Two walls between a private balance and a dApp</p>
+  </header>
+  <img class="wordmark" src="../../../../extension/public/brand/wordmark-on-dark.png" alt="" />
+
+  <div class="panels">
+    <section class="panel">
+      <h2>
+        <svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="17" fill="rgb(224 30 90 / 0.16)" /><path d="M12 12 L24 24 M24 12 L12 24" stroke="#ff7a9a" stroke-width="3.2" stroke-linecap="round" /></svg>
+        dApps build for keys
+      </h2>
+      <div class="visual">
+        <div class="tx">
+          <span class="cap">Built by the dApp</span>
+          <span class="chip">
+            <svg viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="16" cy="24" r="8" /><path d="M24 24 H42 M36 24 V31 M42 24 V29" /></svg>
+            A key's UTxO
+          </span>
+          <span class="chip">Its signatures</span>
+          <span class="status ok"><svg viewBox="0 0 24 24"><path d="M5 12.5 L10 17.5 L19 7.5" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>Works</span>
+        </div>
+        <div class="swap">
+          <svg viewBox="0 0 64 24"><path d="M4 12 H56 M48 5 L57 12 L48 19" fill="none" stroke="#9ba3b1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          Swap the input
+        </div>
+        <div class="tx">
+          <span class="cap">Seedelf input in</span>
+          <span class="chip seedelf"><img src="../../../../extension/public/brand/emblem.png" alt="" />Seedelf UTxO</span>
+          <span class="chip broken">Its signatures</span>
+          <span class="status bad"><svg viewBox="0 0 24 24"><path d="M7 7 L17 17 M17 7 L7 17" stroke="#ff7a9a" stroke-width="3" stroke-linecap="round" /></svg>Refused</span>
+        </div>
+      </div>
+      <p>A dApp builds its transaction for a wallet with keys. Swapping a Seedelf input in changes its body: signatures break, and scripts expecting you find a contract.</p>
+    </section>
+
+    <section class="panel">
+      <h2>
+        <svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="17" fill="rgb(224 30 90 / 0.16)" /><path d="M12 12 L24 24 M24 12 L12 24" stroke="#ff7a9a" stroke-width="3.2" stroke-linecap="round" /></svg>
+        dApps refuse other contracts
+      </h2>
+      <div class="visual">
+        <div class="tx">
+          <span class="cap">One transaction</span>
+          <span class="chip">
+            <svg viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="3.5" stroke-linejoin="round"><rect x="7" y="7" width="14" height="14" rx="3" /><rect x="27" y="7" width="14" height="14" rx="3" /><rect x="7" y="27" width="14" height="14" rx="3" /><rect x="27" y="27" width="14" height="14" rx="3" /></svg>
+            dApp contract
+          </span>
+          <span class="chip seedelf"><img src="../../../../extension/public/brand/emblem.png" alt="" />Seedelf UTxO</span>
+        </div>
+        <div class="swap">
+          <svg viewBox="0 0 64 24"><path d="M4 12 H56 M48 5 L57 12 L48 19" fill="none" stroke="#9ba3b1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          The dApp checks it
+        </div>
+        <div class="tx">
+          <span class="cap">Its contract</span>
+          <span class="note">Another contract is spent here too</span>
+          <span class="status bad"><svg viewBox="0 0 24 24"><path d="M7 7 L17 17 M17 7 L7 17" stroke="#ff7a9a" stroke-width="3" stroke-linecap="round" /></svg>Refused</span>
+        </div>
+      </div>
+      <p>To guard against double satisfaction, some dApps' contracts refuse any transaction that spends another contract too. And your private balance is a contract.</p>
+    </section>
+  </div>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Private again</title>
+<link rel="stylesheet" href="../../../shared.css" />
+<style>
+  .rows { position: absolute; left: 72px; right: 72px; top: 300px; display: grid; gap: 28px; }
+  .row {
+    height: 176px; padding: 0 32px;
+    display: grid; grid-template-columns: 300px 1fr; align-items: center; gap: 28px;
+    border: 2px solid var(--border); border-radius: 24px; background: var(--surface);
+  }
+  .row.chosen { border-color: var(--teal); background: var(--teal-soft); }
+  .row h2 { font-size: 28px; font-weight: 700; line-height: 1.2; }
+  .row h2 span { display: block; margin-top: 6px; font-size: 21px; font-weight: 550; color: var(--muted); }
+  .row.chosen h2 span { color: var(--teal); }
+
+  .what { display: grid; gap: 16px; }
+  .flowline { display: flex; align-items: center; }
+  .pill {
+    flex: none; height: 64px; padding: 0 18px;
+    display: flex; align-items: center; gap: 12px;
+    border: 2px solid var(--border-strong); border-radius: 14px; background: rgb(15 20 29 / 0.6);
+    font-size: 22px; font-weight: 650; white-space: nowrap;
+  }
+  .pill img, .pill svg { width: 32px; height: 32px; flex: none; }
+  .pill.private { border-color: var(--teal); color: var(--teal); }
+  .pill.lovejoin { border-color: var(--amber); color: var(--amber); }
+  .link { flex: 1; height: 0; border-top: 4px solid var(--warn); margin: 0 10px; position: relative; }
+  .link.short { flex: 0 0 120px; border-color: var(--teal-line); }
+  .link.broken { border-top: 4px dashed rgb(155 163 177 / 0.45); }
+  .link.broken b {
+    position: absolute; left: 50%; top: -22px; transform: translateX(-50%);
+    width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--bg); border: 2px solid var(--border-strong); color: var(--muted); font-size: 22px; font-weight: 800;
+  }
+
+  .note { display: flex; gap: 14px; align-items: flex-start; font-size: 22px; font-weight: 550; line-height: 1.35; }
+  .note svg { flex: none; width: 30px; height: 30px; margin-top: 1px; }
+
+  .points { position: absolute; left: 72px; right: 72px; top: 790px; grid-template-columns: repeat(3, auto); justify-content: space-between; }
+</style>
+</head>
+<body>
+  <header>
+    <p class="kicker">The result</p>
+    <h1>Private again</h1>
+    <p class="sub">What someone watching the chain can follow</p>
+  </header>
+  <img class="wordmark" src="../../../../extension/public/brand/wordmark-on-dark.png" alt="" />
+
+  <div class="rows">
+    <section class="row">
+      <h2>Brought back directly<span>A switch away</span></h2>
+      <div class="what">
+      <div class="flowline">
+        <span class="pill">
+          <svg viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="16" cy="24" r="8" /><path d="M24 24 H42 M36 24 V31 M42 24 V29" /></svg>
+          One-time account
+        </span>
+        <span class="link"></span>
+        <span class="pill private"><img src="../../../../extension/public/brand/emblem.png" alt="" />Private balance</span>
+      </div>
+      <p class="note">
+        <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(242 184 75 / 0.16)" /><path d="M15 8 V17" stroke="#f2b84b" stroke-width="3" stroke-linecap="round" /><circle cx="15" cy="22" r="1.8" fill="#f2b84b" /></svg>
+        Anyone can tie it to the session and its funding
+      </p>
+      </div>
+    </section>
+
+    <section class="row chosen">
+      <h2>Through Lovejoin<span>The default</span></h2>
+      <div class="what">
+      <div class="flowline">
+        <span class="pill">
+          <svg viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="16" cy="24" r="8" /><path d="M24 24 H42 M36 24 V31 M42 24 V29" /></svg>
+          One-time account
+        </span>
+        <span class="link short"></span>
+        <span class="pill lovejoin">
+          <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#0a0a0c" /><rect x="9" y="7" width="4" height="18" fill="#f1efe9" /><rect x="9" y="21" width="11" height="4" fill="#f1efe9" /><circle cx="23.5" cy="23" r="2.5" fill="#f5b200" /></svg>
+          Lovejoin
+        </span>
+        <span class="link broken"><b>?</b></span>
+        <span class="pill private"><img src="../../../../extension/public/brand/emblem.png" alt="" />Private balance</span>
+      </div>
+      <p class="note">
+        <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        The trail breaks in the pool: boxes come back mixed, hours apart
+      </p>
+      </div>
+    </section>
+  </div>
+
+  <ul class="points">
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>Back under fresh registers</span>
+    </li>
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>The one-time account is never used again</span>
+    </li>
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>No two sessions share a key</span>
+    </li>
+  </ul>
+</body>
+</html>

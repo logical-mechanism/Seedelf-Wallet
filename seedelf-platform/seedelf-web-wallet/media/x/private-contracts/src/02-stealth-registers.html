@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Your private balance</title>
+<link rel="stylesheet" href="../../../shared.css" />
+<style>
+  .seedelf { left: 72px; top: 379px; width: 384px; }
+
+  .contract {
+    position: absolute; left: 660px; top: 286px; width: 868px; height: 400px;
+    padding: 26px 28px;
+    background: var(--surface);
+    border: 2px solid var(--border-strong);
+    border-radius: 24px;
+  }
+  .contract h2 { font-size: 30px; font-weight: 700; }
+  .contract h2 span { margin-left: 12px; font-size: 22px; font-weight: 500; color: var(--muted); }
+  .tiles { margin-top: 22px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .tile {
+    height: 74px; padding: 10px 16px;
+    display: grid; align-content: center; gap: 2px;
+    border: 2px solid var(--border); border-radius: 14px;
+    font-family: var(--mono); font-size: 19px; color: var(--muted);
+  }
+  .tile.yours { border: 2px dashed var(--teal); background: var(--teal-soft); }
+  .legend { margin-top: 20px; display: flex; align-items: center; gap: 12px; justify-content: flex-start; font-size: 22px; font-weight: 550; color: var(--teal); }
+  .legend i { width: 34px; height: 22px; border: 2px dashed var(--teal); border-radius: 6px; }
+  .curious { position: absolute; right: 72px; top: 852px; font-size: 18px; font-weight: 500; color: var(--muted); }
+
+  .maths { position: absolute; left: 72px; right: 72px; top: 726px; display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
+  .maths div { padding-left: 22px; border-left: 4px solid var(--teal-line); }
+  .maths b { display: block; font-size: 32px; font-weight: 700; letter-spacing: 0.01em; }
+  .maths p { margin-top: 8px; font-size: 23px; font-weight: 500; line-height: 1.35; color: var(--muted); }
+</style>
+</head>
+<body>
+  <header>
+    <p class="kicker">Where it starts</p>
+    <h1>Your private balance</h1>
+    <p class="sub">Everyone's private money in one place, every payment in disguise</p>
+  </header>
+  <img class="wordmark" src="../../../../extension/public/brand/wordmark-on-dark.png" alt="" />
+
+  <svg class="flow" viewBox="0 0 1600 900" aria-hidden="true">
+    <defs>
+      <marker id="head" viewBox="0 0 10 10" refX="7" refY="5" markerUnits="userSpaceOnUse"
+              markerWidth="22" markerHeight="22" orient="auto-start-reverse">
+        <path d="M1,1 L9,5 L1,9" style="fill:none; stroke:#00c4bc; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round" />
+      </marker>
+    </defs>
+    <path class="line" d="M 470 459 L 646 459" marker-end="url(#head)" />
+    <text class="label small" x="558" y="420" text-anchor="middle">Every payment</text>
+    <text class="label small" x="558" y="506" text-anchor="middle">in disguise</text>
+  </svg>
+
+  <div class="card private seedelf">
+    <div class="icon"><img src="../../../../extension/public/brand/emblem.png" alt="" /></div>
+    <div>
+      <h2>Your Seedelf</h2>
+      <p>The name people<br />pay you at</p>
+    </div>
+  </div>
+
+  <div class="contract">
+    <h2>The Seedelf contract<span>one address, shared by everyone</span></h2>
+    <div class="tiles">
+      <div class="tile"><span>a7f3…19c2</span><span>5e0b…d4a8</span></div>
+      <div class="tile yours"><span>3c9e…7102</span><span>f81a…0be5</span></div>
+      <div class="tile"><span>b240…e6f1</span><span>09cd…3a77</span></div>
+      <div class="tile"><span>6d1e…44b0</span><span>c3f9…8e12</span></div>
+      <div class="tile"><span>e05a…b3d9</span><span>7a62…1fc0</span></div>
+      <div class="tile"><span>18bf…9a2e</span><span>d4e7…6c35</span></div>
+      <div class="tile yours"><span>9b37…c0a4</span><span>2e58…f7d1</span></div>
+      <div class="tile"><span>f6c2…085b</span><span>41a0…be93</span></div>
+      <div class="tile"><span>0d93…71fe</span><span>8c4b…25a6</span></div>
+      <div class="tile yours"><span>c71d…e2b8</span><span>63f0…9d4c</span></div>
+      <div class="tile"><span>5a08…d6c1</span><span>be2f…0713</span></div>
+      <div class="tile"><span>2f4c…a95d</span><span>e9b1…48f2</span></div>
+    </div>
+    <p class="legend"><i></i>Yours, and only your key can tell which</p>
+  </div>
+
+  <div class="maths">
+    <div>
+      <b>Every payment in disguise</b>
+      <p>The chain can't tell whose Seedelf was paid,<br />or who spends it.</p>
+    </div>
+    <div>
+      <b>Only your key knows</b>
+      <p>Your wallet finds what's yours, and spends it<br />with a proof that never shows your key.</p>
+    </div>
+  </div>
+  <p class="curious">For the curious: re-randomized BLS12-381 registers and Schnorr proofs</p>
+</body>
+</html>
