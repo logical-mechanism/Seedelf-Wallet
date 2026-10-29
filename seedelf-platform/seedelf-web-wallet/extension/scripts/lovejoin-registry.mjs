@@ -107,6 +107,7 @@ if (!target) {
   console.log(JSON.stringify(wanted, null, 2));
   console.log(`${listed}, ${wanted.length} entries. Give the fork's projects/lovejoin.json to add the new ones.`);
 } else {
+  if (!existsSync(target)) throw new Error(`No ${target}: the owner's fork of StricaHQ/cardano-contracts-registry isn't there.`);
   const registry = JSON.parse(readFileSync(target, "utf8"));
   if (registry.projectName !== "Lovejoin") throw new Error(`${target} isn't Lovejoin's registry file.`);
   const hashes = new Set(registry.contracts.map((c) => c.scriptHash));

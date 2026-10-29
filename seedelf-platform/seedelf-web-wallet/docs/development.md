@@ -192,13 +192,27 @@ Then the pools' names on Cardanoscan (step 3 says why), in the owner's fork of S
 
 ```bash
 registry=../../../../cardano-contracts-registry
-git -C "$registry" fetch https://github.com/StricaHQ/cardano-contracts-registry.git master
-git -C "$registry" switch --detach FETCH_HEAD
-npm run lovejoin-registry -- "$registry/projects/lovejoin.json"
-git -C "$registry" status --short
+if [ ! -d "$registry/.git" ]; then
+  echo "No registry fork at $registry: skipped. It's the owner's step, never a release gate."
+elif [ -n "$(git -C "$registry" status --porcelain --untracked-files=no)" ]; then
+  echo "The fork at $registry has uncommitted changes: commit or discard them, then run this again."
+elif pending=$(gh pr list --repo StricaHQ/cardano-contracts-registry --author @me --state open \
+    --search "Lovejoin token pools in:title" --json url --jq '.[0].url // empty') && [ -n "$pending" ]; then
+  echo "The last pools PR is still open ($pending): run this again once it's merged, or close it and run this again."
+else
+  git -C "$registry" fetch -q https://github.com/StricaHQ/cardano-contracts-registry.git master \
+    && git -C "$registry" switch -q --detach FETCH_HEAD \
+    && npm run -s lovejoin-registry -- "$registry/projects/lovejoin.json"
+fi
 ```
 
-If the last line prints nothing, no pool is new since the last time: there's nothing to send, and the fork is left as Strica's `master`. Otherwise send the new entries, then message Cardanoscan the PR's link from the official X account or email, as their README asks. `npm ci` comes first, as Strica's validator has changed its dependencies before:
+It skips, saying why, in three cases:
+
+- **No fork beside this repository,** as in any other clone: only the owner can send the entries, and Cardanoscan checks the PR with the owner's X account or email.
+- **The fork has uncommitted changes.** Switching to Strica's `master` could keep them, and they'd go out in the PR.
+- **The last pools PR is still open.** Most of Strica's merges take a day or less, but some have taken weeks: their slowest of 20 took 65 days. A new PR from their `master` would repeat the open one's entries. Closing it is fine: the next run adds its pools again, since the script adds what Strica's `master` lacks.
+
+Otherwise the script's last line says what it did. "No new pools" means there's nothing to send, and the fork is left at Strica's `master`. Otherwise send the new entries, then message Cardanoscan the PR's link from the official X account or email, as their README asks. `npm ci` comes first, as Strica's validator has changed its dependencies before:
 
 ```bash
 (cd "$registry" && npm ci && npm run validate && git switch -c "lovejoin-pools-$release_version" \
