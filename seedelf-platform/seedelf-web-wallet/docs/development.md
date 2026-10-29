@@ -180,7 +180,7 @@ cargo test --workspace --locked
 cargo test --release --locked -p seedelf-wasm --test payment_parts_shapes_test -- --ignored
 cd seedelf-web-wallet/extension
 npm ci
-release_version=1.6.0
+release_version=1.7.0
 npm version "$release_version" --no-git-tag-version
 npm run tokens
 npm run dreps
@@ -276,7 +276,7 @@ The package to upload is:
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-With `package.json` at 1.6.0, that file is `extension/release/seedelf-wallet-1.6.0-mainnet.zip`.
+With `package.json` at 1.7.0, that file is `extension/release/seedelf-wallet-1.7.0-mainnet.zip`.
 
 `npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it.
 
