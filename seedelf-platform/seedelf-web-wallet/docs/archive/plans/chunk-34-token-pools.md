@@ -6,7 +6,7 @@
 
 **Why it matters:** today a token in a one-time account, or one coming back into a Seedelf, is never mixed, so under some circumstances it can be tied to its owner. With token pools, someone buying NIGHT or a stable token can mix it and go back into the mixer, the way ADA already does.
 
-**Status: ✅ done, in 1.6.0** (#308, #312, #314–#321 and #323, then the gate, #324, merged as `babb8e76`; the release's record is [roadmap.md](../../roadmap.md#handoff-notes)'s handoff note). Archived after 1.6.0, its open items carried into [post-release-roadmap.md](../../post-release-roadmap.md#kept-in-mind)'s *Kept in mind* (*Left by 1.6.0's release review* and *Left by chunk 34's sessions*). Every step below happened, [34g](#34g--the-preprod-rehearsal-and-the-release-2026-10-18-in-progress) last: its release review of every PR since 1.5.0, its fix rounds and the blind back-translation ([Session 12](#session-12-the-release-review-and-its-fix-rounds-2026-10-2425)), the final checks, the live run of the collateral's mix, the PR, the deploy and the upload. The plan went through two rounds of the owner's questions on 2026-10-13.
+**Status: ✅ done, in 1.6.0** (#308, #312, #314–#321 and #323, then the gate, #324, merged as `babb8e76`; the release's record is [roadmap.md](../../roadmap.md#handoff-notes)'s handoff note). Archived after 1.6.0, its open items carried into [post-release-roadmap.md](../../post-release-roadmap.md#kept-in-mind)'s *Kept in mind* (*Left by 1.6.0's release review* and *Left by chunk 34's sessions*). Every step below happened, [34g](#34g--the-preprod-rehearsal-and-the-release-from-2026-10-18) last: its release review of every PR since 1.5.0, its fix rounds and the blind back-translation ([Session 12](#session-12-the-release-review-and-its-fix-rounds-2026-10-2425)), the final checks, the live run of the collateral's mix, the PR, the deploy and the upload. The plan went through two rounds of the owner's questions on 2026-10-13.
 - **The groundwork** (`web-wallet/token-pools-groundwork`, 2026-10-17) did every step that needs no more design: S0a, S0b, S0d, S0c's evaluation, 34a and 34b, core and WebAssembly. Nothing in the worker uses them yet. What it built and found is under [The groundwork](#the-groundwork-2026-10-17).
 - **The design sessions** (the owner, 2026-10-17: "the biggest back n forth we will have will be how this all looks for the ux ui and how we handle the pool discovery part") run on `web-wallet/token-pools-design`. **[Session 1](#design-session-1-2026-10-17)'s calls override the sections below** wherever they differ, until a later session folds them in. Still to settle: its *Still open after session 1*, each small and owned by a step. The design is otherwise ready for the steps: 34a′ and 34c first.
 - **[34a′, the records](#34a--the-records-2026-10-17)** (`web-wallet/token-pools-records`, 2026-10-17): every pool's records beside the classic pool's, every mix followed until its boxes are back, Bootstrap's boxes held, gated on 1.5.0's own record of how it planned and ran.
@@ -907,11 +907,11 @@ Branch `web-wallet/token-pools-screens`, from main 6ca8016 (after #319 merged). 
 - The preprod rehearsal over these screens, Claude's in dev mode, then the owner's by hand (29).
 - The style pass waits for feature parity (the owner, 2026-10-02); the owner's look at these screens comes first.
 
-## 34g · The preprod rehearsal and the release (2026-10-18, in progress)
+## 34g · The preprod rehearsal and the release (from 2026-10-18)
 
 Branch `web-wallet/release-1.6.0`, from main e6b5dae (after #320 merged); sessions 1 to 3 committed as 8cc0044 (code) and 030fdcf (docs), the last review's fixes on top (*The last review* below), and session 5's three owner calls on top of those (the owner: "start 34g", then "get a handoff going right now so we can continue this into a new context window"). The step's row: Claude's preprod rehearsal in dev mode, the release review across everything since 1.5.0, its fixes, the policy's *Changes* entry, the lists and the version; then the owner's rehearsal by hand, the PR, the deploy and the upload. #321 merged sessions 1 to 10 into main (`68150b39`) and #323 Session 11 (`web-wallet/collateral-mix`, `499768f6`); Session 12, the release review, is on `web-wallet/review-1.6.0`.
 
-### Start here (the next session)
+### The last handoff
 
 **Done:** every step this section names happened, and 1.6.0 shipped from `babb8e76` (#324). What it left is in [post-release-roadmap.md](../../post-release-roadmap.md#kept-in-mind)'s *Kept in mind*; what follows is the record.
 
@@ -1150,7 +1150,7 @@ Built as *10b, the design* (under *Session 7*) has it, but where it bent (below)
 
 **The live case is ready on A** (driver on port 47001, build `dist-A-parts-5` = 10a; rebuild with `DIST_TAG=parts-6 FRESH_DIST=1`, after a `kill -9` of the old driver, which ignores SIGTERM and keeps the profile locked). A holds 24 private UTxOs: the 400 test tokens in 20 bundles at exactly their least, 120.496922 MIN in 2 UTxOs (one also holding the 2,218 tADA back from 10a's swap), and two 1.75 tADA UTxOs. All 400 tokens, 0 tADA, to A's own Seedelf was refused before (409 tADA in one UTxO, 3+ parts by size): with 10b it should go as a chain. That run also shows whether the "1 of 3" words read right, the open question (b) under *Also item 10*.
 
-#### Session 6: the owner's test by hand (2026-10-19, in progress; items 1–5 pushed)
+#### Session 6: the owner's test by hand (2026-10-19)
 
 The owner tests chunk 34 by hand on the dev build and hands over items, mostly the screens'. Each is fixed with a test that fails without it, looked at in the screens harness, and `dist` rebuilt.
 
@@ -1484,17 +1484,17 @@ Each step ends with its tests green. The steps can land as parts, but they ship 
 
 | Step | What | Waits on |
 |---|---|---|
-| **S0** | Free spikes: **(a)** ✅ `uplc` 1.1.23 against the 1.1.24 artifacts, reproducing the hashes and running `last-run.json`'s token Mix and Owner (a failure means a coordinated Pallas/uplc bump); **(b)** ✅ a synthetic token Mix and Owner evaluated by mainnet's Ogmios; **(c)** a preprod launch probe (a foreign inline mint, cert 0, reference outputs at the holder, giveme.my signing): its evaluation ✅, the submit still to send; **(d)** ✅ the box ADA test below, measured, the figure the owner's | — |
+| **S0** | Free spikes: **(a)** ✅ `uplc` 1.1.23 against the 1.1.24 artifacts, reproducing the hashes and running `last-run.json`'s token Mix and Owner (a failure means a coordinated Pallas/uplc bump); **(b)** ✅ a synthetic token Mix and Owner evaluated by mainnet's Ogmios; **(c)** a preprod launch probe (a foreign inline mint, cert 0, reference outputs at the holder, giveme.my signing): its evaluation ✅, and its submit settled by the rehearsal's MIN pool launch ✅ (*The rehearsal*: cert 0 registers `mix_logic` with no script witness, and giveme.my signs a launch); **(d)** ✅ the box ADA test below, measured, the figure the owner's | — |
 | **S1** | ~~Asks of PR #163~~: moot, PR #163 merged as it was (8131b1d) | — |
 | **34a** | ✅ Core: `Pool`, `BoxValue`, the templates (at the merge, 8131b1d), derive, `verify_pool`, the generalized `ScriptSpend` and builders; the classic path byte-identical | S0a |
 | **34a′** | ✅ Records: their shapes, migrating 1.5.0's, and reading every shown pool. Each mix's record lasts until its boxes are counted back, and Bootstrap is a kind of its own. **Gated on [backward compatibility](#backward-compatibility-with-the-classic-ada-pool) 3–5 and 8**: the plan-equality test and the mid-flight 1.5.0 vault ([as built](#34a--the-records-2026-10-17)) | 34a; session 1 |
-| **34b** | ✅ The launch builder and its WebAssembly (cert 0; S0c's submit still to confirm it) | S0c |
+| **34b** | ✅ The launch builder and its WebAssembly (cert 0, which the rehearsal's launch confirmed: S0c) | S0c |
 | **34c** | ✅ Discovery and the data layer: the holder index, the shown-pool rule (standard, finished by its launch, earliest for its values), the bundled head start, the data layer's own copy of the rules (32), the pool list and the combined box feed, and deposit counts as possible origins ([as built](#34c--discovery-and-the-data-layer-2026-10-17); its live db-sync run is the owner's) | session 1 (11, 12) |
 | **34d** | ✅ The tile's flows per pool (private, public, again); **Bootstrap a pool**, which replaces the seed; the launch from either side (an account-paid builder); the withdraw and its escape hatch; Activity ([as built](#34d--the-flows-2026-10-18)) | 34a′, 34c |
 | **34e** | ✅ The planner, and returns through each token's most used pool, with Change; D3's four-wide option and its fallback; a swap's token boxes funded (33) ([as built](#34e--the-planner-returns-through-token-pools-and-four-boxes-a-mix-2026-10-18)) | 34a′ |
 | **34f** | ✅ Screens, strings, es and ja, and the docs ([as built](#34f--the-screens-2026-10-18)); the policy's *Changes* entry is 34g's, with the release PR (19) | 34d, 34e |
 | **Re-pin** | ✅ Folded into 34a: the templates were pinned to the merge from the start | the merge |
-| **34g** | ✅ The preprod rehearsal, dual: Claude's in dev mode, then the owner's by hand (session 1, 29); the cross-area release review (✅, and the release review of #308–#323 with its fix rounds, [Session 12](#session-12-the-release-review-and-its-fix-rounds-2026-10-2425)); the policy's *Changes* entry; `npm run tokens`, `dreps` and `lovejoin-pools` (✅); deploy 34c; then package and upload; the handoff note ([done](#34g--the-preprod-rehearsal-and-the-release-2026-10-18-in-progress)) | all |
+| **34g** | ✅ The preprod rehearsal, dual: Claude's in dev mode, then the owner's by hand (session 1, 29); the cross-area release review (✅, and the release review of #308–#323 with its fix rounds, [Session 12](#session-12-the-release-review-and-its-fix-rounds-2026-10-2425)); the policy's *Changes* entry; `npm run tokens`, `dreps` and `lovejoin-pools` (✅); deploy 34c; then package and upload; the handoff note ([done](#34g--the-preprod-rehearsal-and-the-release-from-2026-10-18)) | all |
 
 **S0d, the box ADA test the owner asked for** (✅ `seedelf-core/tests/lovejoin_box_value_test.rs`, results under [The groundwork](#the-groundwork-2026-10-17)). A Rust test that proves the figure rather than estimating it.
 - **What it builds,** under given protocol parameters, for the worst-case token (a 32-byte name, Q = 2^64−1) and for a typical one:

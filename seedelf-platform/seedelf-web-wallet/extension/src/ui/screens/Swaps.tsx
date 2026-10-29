@@ -69,6 +69,7 @@ import {
   TokenWays,
   WidthNote,
   ReturnLinks,
+  reviewAfterSkip,
   useSendingLabel,
   useSessionsWhile,
 } from "../components/LovejoinReturn";
@@ -2195,17 +2196,17 @@ export function Session({
   };
   /** Builds its return as approved, or directly: Bring it back, then its review's switch. */
   /** Its return, built through Lovejoin or not; `pools`: Change's choices for its tokens, kept until it's built directly. */
-  const buildBack = (through: boolean, pools: Record<string, string | null> = through ? backPools : {}) =>
-    void act(async () => {
-      setRebuilding(true);
-      try {
-        setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }), ...(through && Object.keys(pools).length ? { pools } : {}) }));
-        setBackThrough(through);
-        setBackPools(pools);
-      } finally {
-        setRebuilding(false);
-      }
-    });
+  const reviewBack = async (through: boolean, pools: Record<string, string | null> = through ? backPools : {}) => {
+    setRebuilding(true);
+    try {
+      setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }), ...(through && Object.keys(pools).length ? { pools } : {}) }));
+      setBackThrough(through);
+      setBackPools(pools);
+    } finally {
+      setRebuilding(false);
+    }
+  };
+  const buildBack = (through: boolean, pools?: Record<string, string | null>) => void act(() => reviewBack(through, pools));
   /** Builds the 5 ₳ for the cancel's collateral, or the return's (`back`), for its review, or again after a refusal. */
   const buildCollateral = (back: boolean) =>
     void act(async () => {
@@ -2399,8 +2400,15 @@ export function Session({
     });
   const forget = () => (s.unsent || !s.auto ? forgetNow() : setForgetting(true));
   const lookAgain = () => void act(async () => setS(await call("session-resume", { index: s.index })));
-  // Its return held at its collateral's mix past the hour: the rest back without it (1.7.0).
-  const skipCollateralMix = () => void act(async () => setS(await call("session-skip-collateral-mix", { index: s.index })));
+  // Its return held at its collateral's mix past the hour: the rest back without it (1.7.0). A swap that runs itself sends
+  // it in the press's own request; one brought back by hand opens its review, as Bring it back does (1.7.0's release
+  // review, pr337#1).
+  const skipCollateralMix = () =>
+    void act(async () => {
+      const after = await call("session-skip-collateral-mix", { index: s.index });
+      setS(after);
+      if (reviewAfterSkip(after, s.holding)) await reviewBack(true);
+    });
   const forgetModal = forgetting && <ForgetSwap busy={busy} onKeep={() => setForgetting(false)} onForget={forgetNow} />;
 
   if (s.auto) {

@@ -13,8 +13,10 @@
 //   (round three, 20); an ADA pool names none, and is never the classic
 //   pool's 10 ₳, whose copy no wallet shows (session 1, 17);
 // - no shown pool has these values already (11), once discovery has looked
-//   for pools launched since it last did: a copy is never shown, so it's
-//   refused, and the form lists the pools there are to join (14); one of
+//   for pools launched since it last did, nor one on the data layer's last
+//   list that Koios hasn't confirmed yet: a copy is never shown, so it's
+//   refused, and the form lists the pools there are to join (14), or, for
+//   one on the list alone, the refusal says it shows once confirmed; one of
 //   these values the wallet started that no look has found yet is said on the
 //   review, never refused, as the chain takes both (1.6.0's release review,
 //   318-worker#1);
@@ -147,9 +149,10 @@ export interface LaunchDeps extends ScriptSpendDeps {
   lovejoin: Pick<LovejoinService, "recordLaunch" | "launches">;
   /**
    * The pools shown on a network (lovejoin-pools.ts): a launch of their values would be a copy, never shown. Looked
-   * for again before the check, as the Lovejoin page does as it opens.
+   * for again before the check, as the Lovejoin page does as it opens. And the data layer's last list, those Koios
+   * hasn't confirmed yet among it (`lastListed`; none unless given).
    */
-  discovery: Pick<PoolDiscovery, "known" | "look">;
+  discovery: Pick<PoolDiscovery, "known" | "look"> & Partial<Pick<PoolDiscovery, "lastListed">>;
   /** Whether a token has pools on a network: the wallet's list unless a test names others. */
   listed?: (network: NetworkName, token: Token) => boolean;
 }
@@ -242,10 +245,16 @@ export class LovejoinLaunchService {
     // handed over has a shown pool's values too, so either refuses it (MERGED-1).
     await this.deps.discovery.look(network);
     const known = await this.deps.discovery.known(network);
-    const copy = known.find(
-      (p) => BigInt(p.boxLovelace) === box && sameToken(p.token, token) && (!p.token || p.token.quantity === tokenQuantity?.quantity),
-    );
-    if (copy) throw new Error(t("lj.launch.copy"));
+    // And the data layer's last list: a pool on it new to the device is read only once Koios confirms it, which a
+    // Koios down or behind holds back, but a launch of its values is its copy all the same (1.7.0's release review,
+    // x-merge#0).
+    const listed = this.deps.discovery.lastListed?.(network) ?? [];
+    const same = (p: FoundPool) =>
+      BigInt(p.boxLovelace) === box && sameToken(p.token, token) && (!p.token || p.token.quantity === tokenQuantity?.quantity);
+    if (known.some(same)) throw new Error(t("lj.launch.copy"));
+    // On the list alone, no screen offers it to join yet: the refusal says it shows once it's confirmed, never to use it
+    // now (1.7.0's fixes' review, screens#1).
+    if (listed.some(same)) throw new Error(t("lj.launch.copyListed"));
     const before = await this.startedBefore(network, known, box, tokenQuantity);
     const koios = this.deps.koios(network);
     const params = await koios.epochParams();

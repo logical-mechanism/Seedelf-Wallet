@@ -45,6 +45,13 @@ fn params() -> Value {
     rows[0].clone()
 }
 
+/// The way back's reserve a private Bootstrap's session is funded with, priced
+/// from the parameters as the worker's `lovejoinBootstrapReserve` is (1.7.0's
+/// release review, x-mut-rs#4).
+fn back_reserve() -> u64 {
+    lovejoin::bootstrap_back_reserve(&ProtocolParameters::from_koios(&params()).unwrap()).unwrap()
+}
+
 fn derived() -> templates::Derived {
     let seed: [u8; 32] = hex::decode(LJ_SEED).unwrap().try_into().unwrap();
     templates::derive(&seed, 2).unwrap()
@@ -353,7 +360,7 @@ fn a_private_bootstrap_of_a_token_pool_deposits_and_sweeps_back() {
             Some(&pool_ref()),
         )
         .unwrap();
-        let lovelace = funded.lovelace.parse::<u64>().unwrap() + lovejoin::BOOTSTRAP_BACK_RESERVE;
+        let lovelace = funded.lovelace.parse::<u64>().unwrap() + back_reserve();
         let quantity: u64 = funded.token.unwrap().quantity.parse().unwrap();
         assert_eq!(quantity, boxes as u64 * Q);
         let chain = wasm::chain_in(
@@ -516,7 +523,7 @@ fn every_deposit_into_a_token_pool_reads_its_reference_utxo() {
             .lovelace
             .parse::<u64>()
             .unwrap()
-            + lovejoin::BOOTSTRAP_BACK_RESERVE
+            + back_reserve()
     };
     let bootstrap = in_session(
         vec![at_session(

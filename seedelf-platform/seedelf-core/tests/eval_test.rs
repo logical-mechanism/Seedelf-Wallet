@@ -1,9 +1,12 @@
 //! Local script evaluation (`seedelf_core::eval`) against transactions that
 //! are on preprod: every budget must equal the one the chain accepted.
 
+use hex_literal::hex;
+use pallas_addresses::Address;
 use seedelf_core::build::Budgets;
 use seedelf_core::eval::{self, Resolved};
-use serde_json::Value;
+use seedelf_koios::koios::UtxoResponse;
+use serde_json::{Value, json};
 
 fn cases() -> Vec<Value> {
     let doc: Value =
@@ -214,4 +217,57 @@ fn outputs_go_to_ogmios_as_its_utxos() {
             .starts_with("addr_test1w")
     );
     assert!(first["datum"].as_str().unwrap().starts_with("d879"));
+}
+
+/// A key address's UTxO listing one token once for each of `quantities`. The
+/// chain lists a token once an output; a data layer that lies, or a bug in
+/// one, could list it twice, as a Lovejoin pool's reference.
+fn row_naming_a_token(quantities: &[&str]) -> UtxoResponse {
+    let address = Address::from_bytes(&[&[0x60][..], &[7; 28]].concat()).unwrap();
+    let asset_list: Vec<Value> = quantities
+        .iter()
+        .map(|quantity| {
+            json!({
+                "decimals": 0, "quantity": quantity, "fingerprint": "",
+                "policy_id": hex::encode([0xc5; 28]), "asset_name": hex::encode("lovejoin"),
+            })
+        })
+        .collect();
+    serde_json::from_value(json!({
+        "tx_hash": hex::encode([7; 32]), "tx_index": 0,
+        "address": address.to_bech32().unwrap(),
+        "value": "1719690", "stake_address": null, "payment_cred": "", "epoch_no": 0,
+        "block_height": 0, "block_time": 0, "datum_hash": null, "inline_datum": null,
+        "reference_script": null, "asset_list": asset_list, "is_spent": false,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_row_naming_a_token_past_what_an_output_holds_is_refused_in_words() {
+    // 1.7.0's release review, x-overflow#0: since #332 the store's module
+    // checks core's overflow, and this sum trapped there, which locked the
+    // wallet at every read of a pool list naming such a pool. Before #332 it
+    // wrapped to 1, so the NFT named twice read as one, and the pool verified.
+    let row = row_naming_a_token(&[&u64::MAX.to_string(), "2"]);
+    let err = eval::resolve_row(&row).unwrap_err().to_string();
+    assert_eq!(
+        err,
+        format!(
+            "UTxO {}#0 holds more of a token than one output can",
+            row.tx_hash
+        )
+    );
+    // A pool's script rows go through the same reading.
+    let script = hex!("4e4d01000033222220051200120011");
+    assert_eq!(
+        eval::resolve_reference(&row, 3, &script)
+            .unwrap_err()
+            .to_string(),
+        err
+    );
+    // Within what a u64 holds, the two are one amount, as before.
+    let most = row_naming_a_token(&[&(u64::MAX - 2).to_string(), "2"]);
+    let output = eval::resolve_row(&most).unwrap().output;
+    assert!(find(&output, &hex!("1b ffffffffffffffff")).is_some());
 }

@@ -44,6 +44,7 @@ import {
   LovejoinSwitch,
   TokenWays,
   ReturnLinks,
+  reviewAfterSkip,
   useSendingLabel,
 } from "../components/LovejoinReturn";
 import { CopyButton } from "../components/CopyButton";
@@ -226,17 +227,17 @@ export function SiteSession({
 
   /** Builds the return through Lovejoin, as Settings has it, or directly: Bring it back, then its review's switch. */
   /** Its return, built through Lovejoin or not; `pools`: Change's choices for its tokens, kept until it's built directly. */
-  const buildBack = (through: boolean, pools: Record<string, string | null> = through ? backPools : {}) =>
-    void act(async () => {
-      setRebuilding(true);
-      try {
-        setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }), ...(through && Object.keys(pools).length ? { pools } : {}) }));
-        setBackThrough(through);
-        setBackPools(pools);
-      } finally {
-        setRebuilding(false);
-      }
-    });
+  const reviewBack = async (through: boolean, pools: Record<string, string | null> = through ? backPools : {}) => {
+    setRebuilding(true);
+    try {
+      setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }), ...(through && Object.keys(pools).length ? { pools } : {}) }));
+      setBackThrough(through);
+      setBackPools(pools);
+    } finally {
+      setRebuilding(false);
+    }
+  };
+  const buildBack = (through: boolean, pools?: Record<string, string | null>) => void act(() => reviewBack(through, pools));
 
   if (back) {
     return (
@@ -407,14 +408,17 @@ export function SiteSession({
           <Row label={tr("sites.throughLovejoin")} value={chainText(s.chain, !s.auto)} />
         )}
       </ReviewRows>
-      {/* Its return held at its collateral's mix past the hour: the rest back without it, then the page reads again (1.7.0). */}
+      {/* Its return held at its collateral's mix past the hour: the rest back without it, then the page reads again (1.7.0),
+          and its return's review opens, as Bring it back's does: nothing brings a site's session back by itself (1.7.0's
+          release review, pr337#1). */}
       <CollateralHeldWayOut
         held={s.collateralHeld}
         busy={busy}
         onSkip={() =>
           void act(async () => {
-            await call("session-skip-collateral-mix", { index: s.index });
+            const after = await call("session-skip-collateral-mix", { index: s.index });
             onRefresh();
+            if (reviewAfterSkip(after, s.holding)) await reviewBack(true);
           })
         }
       />

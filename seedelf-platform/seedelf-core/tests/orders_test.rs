@@ -781,6 +781,57 @@ fn a_splash_cancel_spends_the_collateral_only_when_nothing_else_can_pay() {
     }
 }
 
+/// 1.7.0's release review (the overflow sweep): an order an index reports
+/// near what a u64 holds (a data layer that lies) passed the inputs' checked
+/// sum and overflowed the plain one beside it, the refund with the collateral
+/// kept. Since #332 the store's module traps there, and a stopping session
+/// cancels again at every unlock, so the wallet locked each time. It's built
+/// as exact arithmetic says, keeping no collateral, and the ledger refuses
+/// the lie.
+#[test]
+fn an_order_reported_near_what_a_u64_holds_never_overflows_its_cancel() {
+    let s = Setup::of(&fixture("Splash", "mainnet"));
+    let collateral = own(&s.address, 0xbb, SESSION_COLLATERAL);
+    let mut order = s.order.clone();
+    order.value = (u64::MAX - 5_500_000).to_string();
+    let funds = vec![collateral.clone()];
+    let to_cancel = OrderToCancel {
+        utxo: order.clone(),
+        datum: s.datum.clone(),
+    };
+    let built = s.cancel(&[to_cancel], &funds, &collateral).unwrap();
+    let tx = MultiEraTx::decode(&built.tx.tx_bytes.0).unwrap();
+    assert_eq!(tx.outputs()[0].value().coin().to_string(), order.value);
+    assert!(inputs_of(&tx).contains(&outpoint(&collateral)));
+    assert_eq!(tx.outputs().len(), 2);
+    let out: u64 = coins(&tx).iter().sum();
+    assert_eq!(out + built.fee, lovelace_of(&[order]) + SESSION_COLLATERAL);
+}
+
+/// The same review: the row a cancel reads its order's script from comes
+/// from Koios, and one naming a token twice past what an output holds trapped
+/// the store's module as it was read (`eval::resolve`). It's refused in words.
+#[test]
+fn a_reference_row_naming_a_token_past_what_an_output_holds_is_refused_in_words() {
+    let mut s = Setup::of(&fixture("MinswapV2", "mainnet"));
+    let token = |quantity: &str| {
+        json!({ "decimals": 0, "quantity": quantity, "fingerprint": "",
+                "policy_id": "c0".repeat(28), "asset_name": "" })
+    };
+    s.references[0].asset_list =
+        Some(serde_json::from_value(json!([token(&u64::MAX.to_string()), token("2")])).unwrap());
+    let collateral = own(&s.address, 0xbb, SESSION_COLLATERAL);
+    let funds = vec![collateral.clone(), own(&s.address, 0xaa, 5_000_000)];
+    let err = s
+        .cancel(&[s.order()], &funds, &collateral)
+        .err()
+        .expect("refused");
+    assert!(
+        format!("{err:#}").contains("holds more of a token than one output can"),
+        "{err:#}"
+    );
+}
+
 /// When no UTxO of exactly 5 ADA is left, the worker puts up the account's
 /// largest of ADA alone. Spent for the fee, it leaves an exact 5 ADA of ADA
 /// alone behind, so the session's return still finds a collateral for

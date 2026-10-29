@@ -14,9 +14,11 @@
 // vote [abstain|no-confidence|drep1…], withdraw-rewards, unstake.
 //
 // "staking" stakes with TPREP (registering the key if it isn't), delegates
-// the vote to always abstain, then moves to LOGIC. Rewards take 15 to 20
-// days to arrive, so withdraw-rewards and unstake are run on their own,
-// later.
+// the vote to no confidence and then to always abstain, then moves to LOGIC.
+// The vote changes twice so each review has something to send: a wallet
+// whose vote already goes to always abstain, as a run before leaves it,
+// can't review that again (1.7.0's live run). Rewards take 15 to 20 days to
+// arrive, so withdraw-rewards and unstake are run on their own, later.
 //
 // "all" is the whole lifecycle, in the order that keeps a new wallet's
 // seedelf apart from what it moves in: mint (account), move in, a stealth
@@ -31,7 +33,7 @@ import { log, openWallet } from "./lib.mjs";
 const stamp = Date.now().toString(36).slice(-4);
 const ALL = `mint live1-${stamp} account + move-in 25.5 + mint live2-${stamp} seedelf + transfer 3.3 live1-${stamp} + withdraw 5.5 + remove live2-${stamp} seedelf`;
 
-const STAKING = "stake TPREP + vote abstain + stake LOGIC";
+const STAKING = "stake TPREP + vote no-confidence + vote abstain + stake LOGIC";
 
 const words = process.argv.slice(2).join(" ").trim() || "all";
 const preset = { all: ALL, staking: STAKING }[words] ?? words;

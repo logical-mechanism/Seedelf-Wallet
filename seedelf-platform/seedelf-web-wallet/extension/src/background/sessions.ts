@@ -3184,7 +3184,7 @@ export class SessionService {
     };
   }
 
-  /** Sends the returns Bring everything back built, those chosen, one after another. One that fails doesn't stop the rest. */
+  /** Sends the returns Bring everything back built, those chosen, one after another. One that fails doesn't stop the rest; a trap does. */
   claimSubmit(
     network: NetworkName,
     txHashes: string[],
@@ -3204,6 +3204,11 @@ export class SessionService {
           await this.sendBack(network, built, SESSION_CLAIM);
           sent.push({ index: built.index, txHash: built.txHash });
         } catch (e) {
+          // WebAssembly that trapped outside the wallet's queue as a chain was sent (the witness of a collateral's mix
+          // built again) is broken for good: no other return goes out on it, and the request locks the wallet as it's
+          // answered (sw.ts answerUi), which cuts that chain, as claimBuild has it. Listed as failed, it would show the
+          // trap's raw word, its chain still being sent (1.7.0's review of the fixes, worker#0).
+          if (isTrap(e)) throw e;
           failed.push({ index: built.index, error: (e as Error).message });
         }
       }
@@ -3364,8 +3369,14 @@ export class SessionService {
     await this.serial(() => this.markCut(network)).catch(() => undefined);
     const run: Run = unlock ? "unlock" : "run";
     for (const s of book.sessions.filter(running)) await this.serial(() => this.step(network, s.index, run)).catch(() => undefined);
+    // A session's failure is its own, but a trap under a chain's sending or a return's look (WebAssembly outside the
+    // wallet's queue) goes on to runs.ts, where the wallet locks, as a step locks it itself (1.7.0's release review,
+    // x-merge#1).
+    const unlessTrap = (e: unknown) => {
+      if (isTrap(e)) throw e;
+    };
     for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt)) {
-      if (await this.pendingChain(network, s.index)) await this.serial(() => this.pump(network, s.index)).catch(() => undefined);
+      if (await this.pendingChain(network, s.index)) await this.serial(() => this.pump(network, s.index)).catch(unlessTrap);
     }
     // A return whose history isn't written yet, of a session nothing steps (a site's, a hand-run swap, a paused
     // one): looked for, and written once on chain, as act does for a running one (independent review M7). And a
@@ -3374,7 +3385,7 @@ export class SessionService {
     const at = this.deps.now();
     const waits = (r: SessionRecord) => r.txs.some((t) => t.summary || (!r.auto && awaitsLanding(t, at)));
     for (const s of book.sessions.filter((r) => !running(r) && !r.closedAt && waits(r))) {
-      await this.serial(() => this.settleReturns(network, s.index)).catch(() => undefined);
+      await this.serial(() => this.settleReturns(network, s.index)).catch(unlessTrap);
     }
     const now = this.deps.now();
     const after = await this.book(network);
@@ -5051,6 +5062,11 @@ export class SessionService {
         budgetMs,
       );
     } catch (e) {
+      // WebAssembly that trapped (a chain's watch reading its pools, giveme.my's signature on its collateral's mix) is
+      // broken for good: handed on before anything is recorded, as a step's trap is, to where the wallet locks (runs.ts
+      // through runAll, a step, a page's request). The lock wipes the chain's progress, and it reads as cut (markCut,
+      // lovejoin.ts cuts), never stopped for the trap's raw word (1.7.0's release review, x-merge#1).
+      if (isTrap(e)) throw e;
       const why = e instanceof Error ? e.message : String(e);
       // Said on the session, where its page shows it in full: here, once the chain has stopped, not when one
       // send gave up, which pumpChain may yet get past (independent review L25).
@@ -5521,20 +5537,26 @@ export class SessionService {
    * over, as a day gone by makes it, its 5 ₳ box waits in the pool not mixed yet, tied to the session, for Mix my
    * boxes again, and a chain still being sent stops at it (witnessTail). Then its next step, as session-advance's: a
    * swap's return goes by itself; one brought back by hand is offered on its page. Nothing held, or not yet: nothing
-   * changes.
+   * changes. In turn with the runner from its look at what's held on: a step building that mix again as the press came
+   * has recorded its chain by then, and it's that chain that stops, never one the press missed (1.7.0's release review,
+   * pr337#3).
    */
-  async skipCollateralMix(network: NetworkName, index: number): Promise<SessionView> {
-    const held = await this.deps.lovejoin?.tailHeld(network, index);
-    if (held && this.deps.now() >= held.offerAt) {
-      await this.deps.lovejoin!.tailOver(network, held.id);
-      // A chain still being sent stops at the mix now, whatever the session, as the alarm's run (runAll) would at its next.
-      if (await this.pendingChain(network, index)) {
-        await this.serial(() => this.pump(network, index)).catch((e: unknown) => {
-          if (isTrap(e)) throw e;
-        });
+  skipCollateralMix(network: NetworkName, index: number): Promise<SessionView> {
+    return this.serial(async () => {
+      const held = await this.deps.lovejoin?.tailHeld(network, index);
+      if (held && this.deps.now() >= held.offerAt) {
+        await this.deps.lovejoin!.tailOver(network, held.id);
+        // A chain still being sent stops at the mix now, whatever the session, as the alarm's run (runAll) would at its next.
+        if (await this.pendingChain(network, index)) {
+          await this.pump(network, index).catch((e: unknown) => {
+            if (isTrap(e)) throw e;
+          });
+        }
       }
-    }
-    return this.advance(network, index, true);
+      // Its next step, as session-advance's (advance: the queue isn't entered twice).
+      await this.step(network, index, "asked");
+      return this.one(network, index);
+    });
   }
 
   /**
@@ -5613,8 +5635,10 @@ export class SessionService {
       // What its return brought back, once it's over (DX-5).
       ...(stage === "closed" && s.received ? { received: s.received } : {}),
       ...(s.recovered ? { recovered: true as const } : {}),
-      // Its return held at its collateral's mix: from `offerAt` its page offers the rest back without it (1.7.0).
-      ...(stage !== "closed" && tail ? { collateralHeld: tail } : {}),
+      // Its return held at its collateral's mix: from `offerAt` its page offers the rest back without it (1.7.0). Not once
+      // a return of the rest went after its chain (`cut`: Bring everything back's switch, say), which took what pays for
+      // that mix: nothing waits for it then (1.7.0's release review, pr337#0).
+      ...(stage !== "closed" && tail && !(s.chain && chainView(s.chain, txs).cut) ? { collateralHeld: tail } : {}),
       // Found, with nothing sent for it from here, and waiting to end by itself (`quietAt`, cross-area review X01): its
       // page says so, rather than to bring back what a refresh didn't find (the last review, L4). A mark kept from
       // before this device sent something for it is no wait: only its own return ends it, and no refresh clears it.

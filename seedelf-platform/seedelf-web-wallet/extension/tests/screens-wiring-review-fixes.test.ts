@@ -100,7 +100,11 @@ const seam = vi.hoisted(() => {
     /** Every useState's initial value, in the order called. */
     initials: [] as unknown[],
     /** Done once, inside the render that makes the first element `match` takes: a press, a tick, a late answer. */
-    ons: [] as Array<{ match: (name: string, props: Record<string, unknown>) => boolean; act: (props: Record<string, unknown>) => void; done?: true }>,
+    ons: [] as Array<{
+      match: (name: string, props: Record<string, unknown>) => boolean;
+      act: (props: Record<string, unknown>, key?: unknown) => void;
+      done?: true;
+    }>,
     /** Components made as nothing, by name: a review's body, where only its wiring is under test. */
     stubbed: new Set<string>(),
     late,
@@ -143,7 +147,8 @@ const seam = vi.hoisted(() => {
           for (const on of state.ons) {
             if (on.done || !on.match(name, props ?? {})) continue;
             on.done = true;
-            on.act(props ?? {});
+            // With the element's key, where it has one: jsx, jsxs and jsxDEV each take it third.
+            on.act(props ?? {}, rest[0]);
           }
           return create(state.stubbed.has(name) ? Stub : type, props, ...rest);
         };
@@ -216,6 +221,9 @@ const { SiteSession } = await import("../src/ui/screens/SiteSessions");
 const { COLLATERAL_MIX_COST } = await import("../src/ui/components/LovejoinReturn");
 const { adaText, formatAda } = await import("../src/ui/format");
 const { SESSION_FEE_ESTIMATE, toCents } = await import("../src/ui/swap");
+const { TxDetailButton, TxDetailModal } = await import("../src/ui/components/TxDetail");
+const { Transfer } = await import("../src/ui/screens/Transfer");
+const { Withdraw } = await import("../src/ui/screens/Withdraw");
 
 /** The test's clock, as the fake timers keep it. */
 const NOW = Date.UTC(2026, 9, 25, 12);
@@ -231,8 +239,11 @@ function answers(type: string, ...values: unknown[]) {
   let i = 0;
   seam.answers.set(type, () => values[Math.min(i++, values.length - 1)]);
 }
-/** Once, inside the render that makes the first element `match` takes: `act` with its props. */
-function on(match: string | ((name: string, props: Record<string, unknown>) => boolean), act: (props: Record<string, unknown>) => void) {
+/** Once, inside the render that makes the first element `match` takes: `act` with its props, and its key. */
+function on(
+  match: string | ((name: string, props: Record<string, unknown>) => boolean),
+  act: (props: Record<string, unknown>, key?: unknown) => void,
+) {
   seam.ons.push({ match: typeof match === "string" ? (name) => name === match : match, act });
 }
 /** The requests made, by name. */
@@ -399,6 +410,27 @@ describe("a pool's Mix form, its collateral's mix and its public side wired (1.6
     expect(words(form)).toContain(t("lovejoin.mix.privacy.collateralIfLeft").replace(/\s+/g, " "));
     expect(form).toContain('data-testid="lovejoin-boxes">1 ');
     expect(has(form, "lovejoin-boxes-none")).toBe(false);
+  });
+
+  it("holds the Bootstrap form from the private balance to the way back's reserve the worker priced, never the 1.5 ₳ that stands in (1.7.0's release review, pr333#1)", () => {
+    /** The page below the pool's floor, its Bootstrap form leading at the 27 boxes that start it, the worker's `back`. */
+    const formOf = (back: string) => {
+      seam.reset();
+      seam.effects.add("PoolPage");
+      answer("lovejoin-funding", funding);
+      answer("lovejoin-bootstrap-most", { most: 96, back });
+      return page({ pool: { ...classic, others: 3, free: 3 }, seedelf: seedelf("275000000") });
+    };
+    const bootstrapOff = /<button[^>]*disabled=""[^>]*data-testid="lovejoin-bootstrap"/;
+    // 275 ₳: 27 boxes, the deposit's 1.5 ₳ and the fee's room, beside today's 1.5 ₳ for the way back.
+    const today = formOf("1500000");
+    expect(payloads("lovejoin-bootstrap-most")).toEqual([{}]);
+    expect(has(today, "lovejoin-bootstrap-why")).toBe(false);
+    expect(today).not.toMatch(bootstrapOff);
+    // Not the 1.8 ₳ a dearer byte asks: the form says so, and Bootstrap waits.
+    const dear = formOf("1800000");
+    expect(has(dear, "lovejoin-bootstrap-why")).toBe(true);
+    expect(dear).toMatch(bootstrapOff);
   });
 
   it("says its collateral's mix one of three ways: its reserve counted, mixed only if enough is left, or nothing where no 5 ₳ pool takes it (1.6.0's review of the fixes, fx-promise)", () => {
@@ -838,5 +870,285 @@ describe("a site's funding review and its top-up's, counting what the summary th
         expect(words(page), note).toContain(words(t(note)));
       }
     });
+  });
+});
+
+describe("Transaction details' stepper, through a payment's parts (1.7.0's release review: pr335#0, pr335#3, x-mut-ts#6)", () => {
+  const [first, second] = ["a1".repeat(32), "b2".repeat(32)];
+  /** What the worker hands back for transaction `txHash`: its body is made as nothing here, so only its id is read. */
+  const viewOf = (txHash: string) => ({ detail: { txHash }, cbor: "84a0a0f5f6" });
+  /** The view of a payment in two transactions, opened on the first. */
+  const modal = () => render(createElement(TxDetailModal, { txHash: first, parts: [first, second], testId: "tx", onClose: noop }));
+  /** The id the view shows. */
+  const idOf = (markup: string) => /data-testid="tx-hash" data-value="([^"]*)"/.exec(markup)?.[1];
+  /** Where the stepper stands, in its own words. */
+  const partOf = (n: number) => t("tx.partOf", { n, total: 2 });
+  const off = (label: string) => new RegExp(`aria-label="${label}" disabled=""`);
+  /** The step the view had reached (from 0), as React keeps it while its review is built again in place. */
+  const stepped = (step: number) => seam.seeds.push({ after: ["transaction"], initial: 0, value: step });
+  const press = (testId: string) => on((name, props) => name === "button" && props["data-testid"] === testId, (props) => (props.onClick as () => void)());
+
+  beforeEach(() => seam.stubbed.add("TxDetailBody"));
+
+  it("never stands past its last part: a review built again in fewer leaves its view on the last, never 'Transaction 3 of 2' (pr335#0)", () => {
+    // Open on the third of three when the review was built again, in two.
+    stepped(2);
+    const page = modal();
+    expect(words(page)).toContain(partOf(2));
+    expect(idOf(page)).toBe(second);
+    expect(page).toMatch(off(t("tx.partNext")));
+    expect(page).not.toMatch(off(t("tx.partPrevious")));
+  });
+
+  it("steps back from there to the one before it, so no press goes for nothing (pr335#0)", () => {
+    stepped(2);
+    press("tx-part-previous");
+    const page = modal();
+    expect(words(page)).toContain(partOf(1));
+    expect(idOf(page)).toBe(first);
+  });
+
+  it("opens a review built again on its first transaction: its view is the review's, by the first's hash (pr335#0)", () => {
+    // Open: the button's own state.
+    seam.seeds.push({ after: [], initial: false, value: true });
+    const handed: { key?: unknown; parts?: unknown } = {};
+    on("TxDetailModal", (props, key) => Object.assign(handed, { key, parts: props.parts }));
+    render(createElement(TxDetailButton, { txHash: first, parts: [{ txHash: first }, { txHash: second }], testId: "tx" }));
+    // Each build signs with a new one-time key, so a review built again in place has a new first: its view starts afresh.
+    expect(handed).toEqual({ key: first, parts: [first, second] });
+  });
+
+  it("asks for the next as it steps, and shows nothing of the last one's under it meanwhile, not for one render (pr335#3, x-mut-ts#6)", () => {
+    seam.effects.add("TxDetailModal");
+    // The first's read answers; the second's never does here.
+    const never = seam.late();
+    answer("tx-detail", (payload: unknown) => ((payload as { txHash: string }).txHash === first ? viewOf(first) : never.answer));
+    // Every render's label, and the id and the body under it: each is what React puts on screen in turn.
+    const renders: Array<{ label: unknown; id?: unknown; body?: unknown }> = [];
+    on((name, props) => {
+      if (name === "output" && props["data-testid"] === "tx-part") renders.push({ label: props.children });
+      if (name === "code" && props["data-testid"] === "tx-hash") renders.at(-1)!.id = props["data-value"];
+      if (name === "TxDetailBody") renders.at(-1)!.body = (props.detail as { txHash: string }).txHash;
+      return false;
+    }, noop);
+    // Next, pressed once the first's view is in: its tabs show only then.
+    let next: (() => void) | undefined;
+    on((name, props) => {
+      if (name === "button" && props["data-testid"] === "tx-part-next") next = props.onClick as () => void;
+      return false;
+    }, noop);
+    on("Tabs", () => next!());
+    const page = modal();
+    expect(payloads("tx-detail")).toEqual([{ txHash: first }, { txHash: second }]);
+    // The second's place and id while it's asked for, and Next off on the last.
+    expect(words(page)).toContain(partOf(2));
+    expect(idOf(page)).toBe(second);
+    expect(has(page, "tx-loading")).toBe(true);
+    expect(page).toMatch(off(t("tx.partNext")));
+    // The first's view showed under its own label, and nothing of it under the second's.
+    expect(renders).toContainEqual({ label: partOf(1), id: first, body: first });
+    const later = renders.filter((r) => r.label === partOf(2));
+    expect(later.length).toBeGreaterThan(0);
+    for (const r of later) expect({ id: r.id, body: r.body }).toEqual({ id: second, body: undefined });
+  });
+});
+
+describe("Transaction details for every part, handed on by each review in parts (1.7.0's release review: pr335#2, x-mut-ts#5)", () => {
+  /** Two transactions: the second spends what the first carried forward. */
+  const parts = [
+    { txHash: TX, fee: "300000", inputs: 20 },
+    { txHash: "cd".repeat(32), fee: "250000", inputs: 3, waits: true as const },
+  ];
+  const fee = { size: "500000", compute: "50000", scriptReference: "0", total: "550000" };
+  /** A private payment's figures, as Send privately, Make public and a session's funding share them. */
+  const figures = {
+    network: "preprod",
+    txHash: TX,
+    max: false,
+    fee,
+    changeLovelace: "0",
+    changeTokens: 0,
+    changeOutputs: 0,
+    changeMinimum: "0",
+    inputs: 23,
+    left: 0,
+    parts,
+  };
+  const address = "addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz";
+  const seedelf = { lovelace: "800000000", tokens: [], utxos: 23, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+  /** What the review with Transaction details `testId` hands it: its transaction, and the parts the review holds. */
+  function handedBy(testId: string) {
+    const handed: { txHash?: unknown; parts?: unknown } = {};
+    on((name, props) => name === "TxDetailButton" && props.testId === testId, (props) => Object.assign(handed, { txHash: props.txHash, parts: props.parts }));
+    return handed;
+  }
+
+  it("Send privately", () => {
+    const handed = handedBy("transfer-tx");
+    // The review's state starts after the form's lookups' and its Max's.
+    seed([{}, false], { ...figures, payments: [{ to: "53656564656c66", lovelace: "600000000", minimum: null, tokens: [], toSelf: false }] });
+    render(createElement(Transfer, { seedelf, onCancel: noop, onSent: noop }));
+    expect(handed).toEqual({ txHash: TX, parts });
+  });
+
+  it("Make public", () => {
+    const handed = handedBy("withdraw-tx");
+    // The review's state starts after the form's reads' and its Max's.
+    seed([{}, false], { ...figures, payments: [{ address, own: false, lovelace: "600000000", minimum: null, tokens: [] }] });
+    render(createElement(Withdraw, { seedelf, onCancel: noop, onSent: noop }));
+    expect(handed).toEqual({ txHash: TX, parts });
+  });
+
+  it("a swap's funding", () => {
+    const handed = handedBy("swap-out-tx");
+    seed([(v: unknown) => (v as { id?: string } | undefined)?.id === "lovelace"], {
+      id: "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e",
+      side: { label: "MIN", decimals: 6 },
+    });
+    // The approval, built: the state after ADA's price (null until read) holds it; its body is made as nothing here.
+    seed([null], { summary: { ...figures, index: 0, address, payments: [] }, quote: {} });
+    seam.stubbed.add("SwapApproval");
+    render(createElement(NewSwap, { seedelf, onCancel: noop, onStarted: noop } as never));
+    expect(handed).toEqual({ txHash: TX, parts });
+  });
+
+  it("a mix into Lovejoin from the private balance", () => {
+    const handed = handedBy("lovejoin-tx");
+    const classic = { box: { lovelace: "10000000" }, others: 41, free: 41, floor: 30, boxes: [], lovelace: "0", due: [], notMixed: [], fromPublic: [] };
+    // The page's states, in order, up to its review: the side chosen, the count, a Bootstrap's count, the funding asked.
+    seed(["private", 1, undefined, undefined], {
+      source: "private",
+      summary: { ...figures, index: 0, address, payments: [], mix: { again: false, width: 3, boxes: 10, depth: 2, mixes: 40 } },
+    });
+    seam.stubbed.add("PrivateReview");
+    render(
+      createElement(PoolPage, {
+        pool: classic,
+        pools: [classic],
+        seedelf,
+        reading: false,
+        readFailed: false,
+        mixingAgain: false,
+        sending: null,
+        onSendingPublic: noop,
+        onSending: noop,
+        onRefresh: async () => undefined,
+        onBack: noop,
+        onPending: noop,
+      } as never),
+    );
+    expect(handed).toEqual({ txHash: TX, parts });
+  });
+
+  it("a site's funding", () => {
+    const handed = handedBy("dapp-funding-tx");
+    // The review's state starts after its amount's and its tokens', both empty.
+    seed(["", {}], {
+      ...figures,
+      index: 0,
+      address,
+      payments: [
+        { address, own: false, lovelace: "24000000", minimum: null, tokens: [] },
+        { address, own: false, lovelace: "5000000", minimum: null, tokens: [] },
+      ],
+    });
+    render(
+      createElement(ConnectRequest, {
+        approval: { kind: "connect", id: "a1", origin: "https://example.org", title: "Example" },
+        busy: false,
+        held: false,
+        onError: noop,
+        onAnswer: async () => false,
+      } as never),
+      { lovejoinReturns: true },
+    );
+    expect(handed).toEqual({ txHash: TX, parts });
+  });
+});
+
+// 1.7.0's release review: #337's way out, each page that shows it pressed (x-mut-ts#3, x-scen#6). A page brought back by
+// hand then opens its return's review, as Bring it back does: nothing brings its rest back by itself (pr337#1). What the
+// press does after its first answer runs past the render, once the answers waiting are in (`settled`).
+describe("the way out of a return held at its collateral's mix, wired (1.7.0's release review)", () => {
+  /** A swap's session past its hour at the collateral's mix, its account read holding the rest. */
+  const held = {
+    index: 0,
+    network: "preprod",
+    address: "addr_test1",
+    createdAt: NOW,
+    stage: "open",
+    txs: [{ kind: "out", txHash: TX, at: NOW, confirmed: true }],
+    holding: { lovelace: "9000000", tokens: [], utxos: 1 },
+    collateralHeld: { offerAt: NOW - 1 },
+  };
+  const auto = { step: "returning", stopping: false, filled: true, approvedMinOut: "0" };
+  const back = { network: "preprod", index: 0, txHash: TX, fee: "300000", lovelace: "9000000", tokens: [], depositOutputs: 0, inputs: 1 };
+  const seedelf = { lovelace: "50000000", tokens: [], utxos: 2, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+  /** Bring the rest back now, pressed as the page makes it. */
+  const press = () => on((name, props) => name === "button" && props["data-testid"] === "collateral-held-skip", (props) => (props.onClick as () => void)());
+  /** Every answer the press waits on in. */
+  const settled = () => new Promise((done) => setImmediate(done));
+
+  it("on a swap brought back by hand: the press, then its return's review", async () => {
+    answer("session-skip-collateral-mix", { ...held, collateralHeld: undefined });
+    answer("session-back-build", back);
+    press();
+    render(createElement(Session, { session: held, reading: false, onRefresh: noop, onBack: noop, onChanged: noop } as never));
+    expect(payloads("session-skip-collateral-mix")).toEqual([{ index: 0 }]);
+    await settled();
+    expect(payloads("session-back-build")).toEqual([{ index: 0 }]);
+  });
+
+  it("on a swap that runs itself: the press alone, its return sent in the press's own request", async () => {
+    answer("session-skip-collateral-mix", { ...held, auto, collateralHeld: undefined });
+    press();
+    render(createElement(Session, { session: { ...held, auto }, reading: false, onRefresh: noop, onBack: noop, onChanged: noop } as never));
+    expect(payloads("session-skip-collateral-mix")).toEqual([{ index: 0 }]);
+    await settled();
+    expect(asked()).not.toContain("session-back-build");
+  });
+
+  it("on a site's session: the press, the page read again, then its return's review", async () => {
+    const site = { ...held, site: { origin: "https://example.org" } };
+    answer("session-skip-collateral-mix", { ...site, collateralHeld: undefined });
+    answer("session-back-build", back);
+    const onRefresh = vi.fn();
+    press();
+    render(createElement(SiteSession, { session: site, seedelf, reading: false, onRefresh, onBack: noop, onPending: noop, onDisconnected: noop } as never));
+    expect(payloads("session-skip-collateral-mix")).toEqual([{ index: 0 }]);
+    await settled();
+    expect(onRefresh).toHaveBeenCalled();
+    expect(payloads("session-back-build")).toEqual([{ index: 0 }]);
+  });
+
+  it("opens no review where the press's answer still holds it, or leaves nothing at the account", async () => {
+    for (const answered of [held, { ...held, collateralHeld: undefined, holding: { lovelace: "0", tokens: [], utxos: 0 } }]) {
+      seam.reset();
+      answer("session-skip-collateral-mix", answered);
+      answer("session-back-build", back);
+      press();
+      render(createElement(Session, { session: held, reading: false, onRefresh: noop, onBack: noop, onChanged: noop } as never));
+      await settled();
+      expect(asked()).toEqual(["session-skip-collateral-mix"]);
+    }
+  });
+
+  it("on a mix's card: its session's index, for the Lovejoin page to press with", async () => {
+    const { MixList } = await import("../src/ui/screens/Lovejoin");
+    const onSkipCollateral = vi.fn();
+    press();
+    render(
+      createElement(MixList, {
+        entries: [],
+        sessions: [{ ...held, index: 3, mix: { boxes: 1 }, auto: { ...auto, filled: false }, chain: { total: 5, sent: 3, confirmed: 3, cut: false } }],
+        chains: [],
+        pools: [],
+        busy: false,
+        onRetry: noop,
+        onStop: noop,
+        onSkipCollateral,
+      } as never),
+    );
+    expect(onSkipCollateral).toHaveBeenCalledWith(3);
   });
 });

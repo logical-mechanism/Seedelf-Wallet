@@ -145,11 +145,22 @@ fn resolve(row: &UtxoResponse, script: Option<(u8, &[u8])>) -> Result<Resolved> 
                 row.tx_index
             )
         })?;
-        *tokens
+        // A token named twice is one amount. Past what a u64 holds, no output
+        // holds it, so the row is refused: the chain never lists one, but a
+        // data layer could, and the module traps on an overflow here (1.7.0's
+        // release review, x-overflow#0).
+        let held = tokens
             .entry(hex::decode(&asset.policy_id)?)
             .or_default()
             .entry(hex::decode(&asset.asset_name)?)
-            .or_default() += quantity;
+            .or_default();
+        *held = held.checked_add(quantity).ok_or_else(|| {
+            anyhow!(
+                "UTxO {}#{} holds more of a token than one output can",
+                row.tx_hash,
+                row.tx_index
+            )
+        })?;
     }
     let inline = row
         .inline_datum

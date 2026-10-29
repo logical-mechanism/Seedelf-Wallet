@@ -48,6 +48,14 @@ strip = true
 # +4 KB gzipped. Not seedelf-wasm, the module's own crate: there the checks
 # double the module (3.2 MB to 6.4 MB, 982 KB to 1,289 KB gzipped). The
 # dependencies keep release's arithmetic.
+#
+# A check goes with the crate that compiles the code, not the one that defines
+# it (1.7.0's release review, pr332#0): a small core function with no call in
+# it, or a generic one instantiated with seedelf-wasm's types, compiles into
+# seedelf-wasm and wraps there, and a seedelf-wasm sum over a type core also
+# sums can link core's checked copy and trap. So no crate leans on the checks:
+# a value from outside the wallet is summed with checked_* and refused in
+# words. seedelf-core/tests/wasm_profile_test.rs fails without these sections.
 [profile.wasm-release.package.seedelf-core]
 overflow-checks = true
 
