@@ -35,7 +35,9 @@ We have Lace 2.4.2 checked out (`_reference/lace` at `e431933`). 2.5.0 came out 
   - Since 1.2.0, `@midnightntwrk` (no hyphen) is the wallet SDK's scope. `@midnight-ntwrk/wallet-*` is a deprecated alias that lags behind. The ledger and the connector keep the hyphen.
   - Some of Lace's pins are betas of the 2.0 line.
 - **Keys come from the same phrase.** `HDWallet.fromSeed(bip39.mnemonicToSeed(phrase))`, then `selectAccount(i).selectRole(role).deriveKeyAt(0)` for three roles: `Zswap`, `NightExternal` and `Dust`. Each key is sealed under the password.
-- **Its services.** The indexer and the node go through IOG's Blockfrost proxy for Lace (`blockfrost.lw.iog.io/midnight-{mainnet,preprod,preview}/`).
+- **Its services.** The indexer and the node go through IOG's Blockfrost proxy for Lace (`blockfrost.lw.iog.io/midnight-{mainnet,preprod,preview}/`, and `…-rpc/` for the node).
+  - The proxy adds Blockfrost's project key on the server: "no config carries a `projectId`" (`packages/lib/cardano-provider-core/src/blockfrost-config.ts`, citing an audit, LW-14499). Lace's Cardano reads use the same proxy.
+  - The addresses are feature flags (`apps/lace-extension/src/feature-flags.ts`), so IOG can move them without a release.
   - **The proof server is `http://localhost:6300` on every network, mainnet included.** The user runs one on their own machine, and a banner tells them when it's missing.
   - 2.4.0 removed the remote proof server option. 2.5.0's source adds a WebAssembly prover that runs in an offscreen document, and a remote prover inside a trusted execution environment (TEE) behind a feature flag. We haven't checked which of these 2.5.0 turns on by default.
 - **Generate DUST.** Lace builds the registration on Cardano, from the Cardano account, after Midnight's reference dApp (`midnightntwrk/midnight-cnight-to-dust-dapp`) and its validator (`cnight_generates_dust` in `midnightntwrk/midnight-reserve-contracts`). Lace's README for this code warns that Midnight's indexer only recognises a datum byte for byte as the reference dApp writes it. [38b](#steps) has the transaction.
@@ -207,8 +209,15 @@ Each has a recommendation, which the owner can overturn.
    - Until then, nothing of Midnight's loads, derives or phones home. The zip carries it either way.
    - 38b's Generate DUST sits on the public account and needs no switch: it's a Cardano transaction.
 2. **Where mainnet's Midnight data comes from.** The indexer sees the unshielded addresses and the IP address, and the event stream is heavy.
-   - **Recommended: our own Midnight node and indexer,** at home behind the droplet, as [seedelf-data](../../../../seedelf-data/README.md) is. The no-log promise then covers it, as it covers the private side. Home already runs mainnet db-sync, which a Midnight node follows Cardano through. 38a prices the hardware.
-   - **Until then, Blockfrost through our server,** which adds the token, so no token ships and Blockfrost sees our server rather than the user.
+   - **Recommended first: Blockfrost through our server.** A route on the droplet adds the token, as Lace's proxy does, so no token ships and Blockfrost sees our server rather than the user.
+   - **Later: our own Midnight node and indexer,** behind the droplet as [seedelf-data](../../../../seedelf-data/README.md) is, so the no-log promise covers it as it covers the private side. What that takes, as of 2026-10-30 (no mainnet figures are published):
+     - **The node reads Cardano only from db-sync's Postgres.** It needs db-sync 13.7.1.0, replayed, with `tx_in` filled, the ledger state on and no address table. At its first start it adds three indexes of its own to db-sync's tables.
+     - **CPU and memory:** about 8 vCPU and 32 GB for the node (Midnight's archived guidance), and 5–12 GiB for the indexer (seen on Preprod).
+     - **Disk:** about 200 GB for the node and 300–350 GB for the indexer, both on Preprod and both growing.
+     - **Sync:** a re-index takes 3–4 days, and the node's first sync puts at least 18 hours of load on db-sync.
+     - **Network:** P2P on port 30333, which should be reachable from outside.
+     - **So it needs about 40–45 GB of RAM more** than home's 64 GB box carries today with the relay, db-sync, Kupo and Ogmios: more memory, or a box of its own.
+     - Midnight calls its indexer "a reference implementation … not designed to be public facing", so it stays behind the API, as Postgres does.
    - A user's own Blockfrost token in Settings is the fallback for someone who wants neither. **Never a token in the zip.**
 3. **The test network.**
    - **Recommended:** Cardano preprod maps to Midnight Preprod, through the same Blockfrost-on-our-server route, since home's preprod server belongs to another project.
@@ -245,3 +254,7 @@ Read on 2026-10-30.
   - `_reference/lace` at `e431933` (2.4.2): `packages/contract/midnight-context/src/const.ts`, `packages/module/midnight-sync/src/exported-modules/in-memory-wallet-integration/in-memory-wallet-integration-factory.ts`, `packages/lib/cnight-dust-designation`, and `apps/lace-extension/webpack/webpack-utils.js`;
   - its [releases](https://github.com/input-output-hk/lace/releases): 2.0.0, 2.4.0 and 2.5.0.
 - **The chain:** Koios's `asset_info` for NIGHT, and the registrations at the mainnet script's address.
+- **Running a node:**
+  - Midnight's docs: [full node](https://docs.midnight.network/nodes/full-node.md) and [Cardano db-sync for Midnight](https://docs.midnight.network/nodes/cardano-db-sync.md);
+  - `midnight-node` at `node-1.0.400`: `node/src/main_chain_follower.rs`, and issues #1983 (disk) and #2343 (db-sync load);
+  - `midnight-indexer` at v4.3.7, and its issues #1272, #1417 and #1479.
