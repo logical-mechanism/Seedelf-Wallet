@@ -403,6 +403,17 @@ describe("what a device keeps of what it found (1.6.0's release review)", () => 
     expect((await found.known("preprod")).map((p) => p.id)).toEqual(["aa".repeat(28), ID]);
   });
 
+  it("keeps a pool found before that the data layer's list leaves out (STATE-2; 1.7.1's release review)", async () => {
+    const on = onIndex();
+    on.index.poolList = listed();
+    const { found, local } = discovery(koiosOf([], []), { index: on });
+    // Found before, from Koios's holder while the data layer was down, and handed over: the wallet may hold boxes in it.
+    await local.set(KEY, { height: 0, pools: [poolAt("bb", 20)] });
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual(["bb".repeat(28)]);
+    await found.refresh("preprod");
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual(["bb".repeat(28), ID]);
+  });
+
   it("keeps a pool a head start showed when a later release's head start names an earlier launch of its values instead", async () => {
     let head: Kept = { height: 0, pools: [poolAt("bb", 20)] };
     const { found } = discovery(koiosOf([], []), { head: () => head });

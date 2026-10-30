@@ -7,11 +7,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { epochStart, slotStart } from "../src/networks";
+import { epochStart, type NetworkName, slotStart } from "../src/networks";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { DappTxSummary, KnownAccount } from "../src/shared/rpc";
 import { AccountsContext } from "../src/ui/accounts";
 import { slotText } from "../src/ui/format";
+import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import {
   ConnectRequest,
@@ -62,8 +63,14 @@ const summary = (over: Partial<DappTxSummary>): DappTxSummary => ({
   ...over,
 });
 
-const render = (s: DappTxSummary) =>
-  renderToStaticMarkup(createElement(SignTx, { summary: s, partial: false, session: false, collateralSpent: false }));
+const render = (s: DappTxSummary, network: NetworkName = "preprod") =>
+  renderToStaticMarkup(
+    createElement(
+      NetworkContext.Provider,
+      { value: network },
+      createElement(SignTx, { summary: s, partial: false, session: false, collateralSpent: false }),
+    ),
+  );
 
 /** The page's text, without its tags. */
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
@@ -149,8 +156,28 @@ describe("a site's signing prompt", () => {
     const slotIn = (ms: number) => 86_400 + Math.round((Date.now() + ms - 1_655_769_600_000) / 1000);
     const until = slotIn(2 * 3_600_000);
     const page = text(render(summary({ validUntil: until })));
-    expect(page).toContain(`Expires ${slotText("preprod", until)}`);
+    expect(page).toContain(`Expires ${slotText("preprod", until, true)}`);
     expect(page).not.toContain("Valid from");
+    // An end is rounded up to the minute, never shown before the slot it can't land in starts: one starting at :30
+    // reads as the next minute's, on the window too, whatever the clock says (1.7.1's release review).
+    const half = until - ((until - 86_400) % 60) + 30;
+    expect(slotText("preprod", half, true)).toBe(slotText("preprod", half + 30));
+    expect(slotText("preprod", half, true)).not.toBe(slotText("preprod", half));
+    expect(text(render(summary({ validUntil: half })))).toContain(`Expires ${slotText("preprod", half + 30)}`);
+    // The last slot a Date holds says its year; the next one never ends.
+    const last = 86_400 + (8.64e15 - 1_655_769_600_000) / 1000;
+    expect(slotText("preprod", last)).toMatch(/275760/);
+    expect(slotText("preprod", last + 1)).toBeUndefined();
+    // On mainnet, by the window's network: Shelley's start there, never preprod's. An end 10 s into its minute reads
+    // as the next and a start 30 s into one as its own: no other rounding gives both.
+    const mainnetIn = (ms: number) => 4_492_800 + Math.round((Date.now() + ms - 1_596_059_091_000) / 1000);
+    const into = (slot: number, s: number) => slot - Math.round((slotStart("mainnet", slot) % 60_000) / 1000) + s;
+    const end = into(mainnetIn(60 * 86_400_000), 10);
+    const start = into(mainnetIn(30 * 86_400_000), 30);
+    const onMainnet = text(render(summary({ validFrom: start, validUntil: end }), "mainnet"));
+    expect(onMainnet).toContain(`Expires ${slotText("mainnet", end + 50)}`);
+    expect(onMainnet).toContain(`Valid from ${slotText("mainnet", start - 30)}`);
+    expect(text(render(summary({ validFrom: mainnetIn(-60_000), validUntil: end }), "mainnet"))).not.toContain("Valid from");
     // No end, or one past what a date can say, never ends.
     expect(text(render(summary({})))).toContain("Expires Never");
     expect(text(render(summary({ validUntil: 2 ** 63 })))).toContain("Expires Never");

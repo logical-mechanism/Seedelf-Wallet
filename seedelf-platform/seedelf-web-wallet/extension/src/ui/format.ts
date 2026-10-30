@@ -124,11 +124,13 @@ export function epochEnds(network: NetworkName, epoch: number): string {
 
 /**
  * When `slot` comes on `network`, "6 Nov 2026, 14:02", for a transaction's validity interval: a site's, on its sign
- * window. Counted from Shelley's start (networks.ts), so no request. Undefined past the last moment a Date holds, in
- * the year 275760, which a slot of a u64 can name.
+ * window. Counted from Shelley's start (networks.ts), so no request. `up` rounds the minute up, for an end: a
+ * transaction lands until its end's slot starts, so an end shown so is never early (1.7.1's release review).
+ * Undefined past the last moment a Date holds, in the year 275760, which a slot of a u64 can name.
  */
-export function slotText(network: NetworkName, slot: number): string | undefined {
-  const ms = slotStart(network, slot);
+export function slotText(network: NetworkName, slot: number, up = false): string | undefined {
+  const at = slotStart(network, slot);
+  const ms = up ? Math.ceil(at / 60_000) * 60_000 : at;
   return Math.abs(ms) <= 8.64e15 ? momentText(ms) : undefined;
 }
 
