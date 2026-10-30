@@ -37,5 +37,6 @@ Clarifications on scope:
 - If the vulnerability involves binary exploitation, we may ask you to provide a proof of concept of secret key exfiltration.
 - Vulnerabilities present in Aiken that the Seedelf developers have not introduced are not eligible for a bounty from this program.
 - Vulnerabilities present in any of our third-party dependencies must be reported upstream and are not eligible for a bounty from this program.
+- Attacks that need a compromised or dishonest data source (Logical Mechanism's data layer or a Koios backend) are out of scope: the CLI and the Seedelf Wallet trust their data sources to report the chain truthfully (see [Data Layer Reliance](./README.md#data-layer-reliance)).
 - Known vulnerabilities will result in a bounty not being awarded. We might make an exception if the developers underestimated the severity of the reported issue without an immediate fix.
 - If, during your research, you disrupt Seedelf's release infrastructure or services or attempt to coerce its developers, you will not be awarded a bounty.
