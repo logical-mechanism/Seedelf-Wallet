@@ -94,8 +94,6 @@ function discovery(holder: KoiosUtxo[], index?: ReturnType<typeof fakeIndex>) {
     const path = new URL(url).pathname.split("/").pop()!;
     const body = JSON.parse(String(init.body));
     if (path === "credential_utxos") return Response.json(holder.filter((r) => body._payment_credentials.includes(r.payment_cred)));
-    // The chain's outputs, as a standard launch leaves them, for the check of a listed pool (1.7.0's release review).
-    if (path === "utxo_info") return Response.json([FOUND.reference, ...scripts()].filter((r) => body._utxo_refs.includes(`${r.tx_hash}#${r.tx_index}`)));
     if (path === "tx_info") return Response.json(body._tx_hashes.includes(LAUNCH) ? [LAUNCH_TX] : []);
     return Response.json([]);
   };
@@ -107,7 +105,6 @@ function discovery(holder: KoiosUtxo[], index?: ReturnType<typeof fakeIndex>) {
     wasm,
     koios: () => koios,
     ...(index ? { index: privateIndexClient({ koiosOnly: async () => false, parts, fetch: index.fetch, limits: {} }, () => "https://data.test") } : {}),
-    wallet: { trapped: async () => undefined },
     now: () => clock.now,
     listed: () => new Set([LJTEST]),
     headStart: () => ({ height: 0, pools: [] }),
@@ -120,16 +117,15 @@ describe("a launch's script under a datum too deep to read (1.6.0's release revi
     const index = fakeIndex();
     index.poolList = listed(DEEP);
     const { found, clock } = discovery([], index);
-    // Twice: a first overflow could pass, or only leak the stack. The second a look, which waits for Koios's check of
-    // what the list named new: a pool let through here would be kept by then (1.7.0's review of the fixes, tests#1).
+    // Twice: a first overflow could pass, or only leak the stack.
     await found.refresh("preprod");
     clock.now += REFRESH_MS;
-    await found.look("preprod");
+    await found.refresh("preprod");
     expect(await found.known("preprod")).toEqual([]);
     // The same pool listed with its scripts as a standard launch leaves them is kept: the module still answers.
     index.poolList = listed();
     clock.now += REFRESH_MS;
-    await found.look("preprod");
+    await found.refresh("preprod");
     expect((await found.known("preprod")).map((p) => p.id)).toEqual([ID]);
   });
 

@@ -161,7 +161,7 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - Settings, Network: moving to preprod says first that its ADA has no value; then every screen, and the connector's window, shows the **PREPROD** badge and strip, and Home the preprod balances;
    - a payment reviewed on one network and sent after a switch is refused ("isn't ready to send");
    - a site connected on one network asks again on the other, and one waiting as you switch is declined;
-   - on mainnet, the worker's network panel shows only `mainnet.seedelf.logicalmechanism.io`, `www.giveme.my` and `api.coingecko.com` (and `agg-api.minswap.org`, for a swap, and `ipfs.blockfrost.dev` for an NFT image you asked to see), plus `preprod.koios.rest` only for something still on its way on preprod, and `api.koios.rest` only for a part the data layer couldn't answer, or to confirm each Lovejoin pool the data layer lists that the head start doesn't hold (`utxo_info`, `tx_info`);
+   - on mainnet, the worker's network panel shows only `mainnet.seedelf.logicalmechanism.io`, `www.giveme.my` and `api.coingecko.com` (and `agg-api.minswap.org`, for a swap, and `ipfs.blockfrost.dev` for an NFT image you asked to see), plus `preprod.koios.rest` only for something still on its way on preprod, and `api.koios.rest` only for a part the data layer couldn't answer;
    - Settings, Network, on mainnet: **Read Cardano through Koios only** on sends nothing more to `mainnet.seedelf.logicalmechanism.io`, and off, the next reading goes there again. The line under it says *Using Seedelf's data layer.* with a green light while it's off, and *Using Koios only.* in grey once it's on.
 
 ## Web Store release: copy/paste procedure

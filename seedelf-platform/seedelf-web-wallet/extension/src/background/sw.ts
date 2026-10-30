@@ -233,7 +233,7 @@ function getContext(): Promise<Worker> {
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
     // Lovejoin's token pools: the data layer's list at each pool read, Koios's holder as the Lovejoin page opens
     // (chunk 34's 34c).
-    const discovery = new PoolDiscovery({ local, wasm, koios, index, wallet, now: Date.now });
+    const discovery = new PoolDiscovery({ local, wasm, koios, index, now: Date.now });
     // No box is withdrawn while a chain mixing them again may still spend it.
     const lovejoin: LovejoinService = new LovejoinService({
       ...spends,
