@@ -61,7 +61,6 @@ describe.skipIf(process.env.LOVEJOIN_POOLS_WRITE !== "1")("writing the head star
           local,
           wasm: loadTestWasm(),
           koios: () => new Koios(NETWORKS[network].koios),
-          wallet: { trapped: async () => undefined },
           now: Date.now,
           headStart: () => ({ height: 0, pools: [] }),
         });

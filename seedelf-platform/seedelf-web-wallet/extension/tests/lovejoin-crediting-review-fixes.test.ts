@@ -453,7 +453,6 @@ describe("a public deposit's box, its chain's record and its mix gone (1.6.0's r
         wasm: loadTestWasm(),
         koios: t.deps.koios,
         index: async () => down,
-        wallet: t.wallet,
         now: () => t.clock.now,
         listed: () => new Set([VIEW.token.policyId + VIEW.token.assetName]),
         headStart: () => ({ height: 0, pools: [] }),
