@@ -15,10 +15,12 @@
 // Networks    Each call is on the network the wallet is on as it's made
 //             (Settings switches it): `getNetworkId` says which, and a site
 //             connected on one isn't on the other. What sites were asking
-//             on the network the wallet left is declined (`networkChanged`).
-//             So is a signature waiting when Settings chooses another dApp
-//             account, with CIP-30's AccountChange: it was checked for the
-//             account it left (`dappAccountChanged`, chunk 25). One still
+//             on the network the wallet left is declined (`networkChanged`),
+//             and a signature still being read then is refused so, never
+//             shown (`sameNetwork`; 1.7.1's release review). A signature
+//             waiting when Settings chooses another dApp account is
+//             declined too, with CIP-30's AccountChange: it was checked for
+//             the account it left (`dappAccountChanged`, chunk 25). One still
 //             being read, or being approved, is refused so too
 //             (`sameAccount`), and only the keys of the account it was read
 //             for ever read or sign it (`withViewKeys`; 1.3.0's release
@@ -1373,9 +1375,10 @@ export class DappService {
   /**
    * Refuses a public-side signature read for a dApp account Settings has
    * since left, with CIP-30's AccountChange (chunk 25). Looked at last before
-   * it's put in front of the user: `ask` puts it in `waiting` at once, and
-   * Settings writes the account before it declines what waits, so a change
-   * is seen here or finds it there. And last before it's signed, past
+   * it's put in front of the user, read in one turn with the network's
+   * (`sameNetwork`): `ask` puts it in `waiting` at once, and Settings writes
+   * the account before it declines what waits, so a change is seen here or
+   * finds it there. And last before it's signed, past
    * whatever else an approval reads; one landing after can't move the keys,
    * which are the account's it was read for (`withViewKeys`; 1.3.0's release
    * review, C26, C27). A private session's has its own account.
@@ -1383,6 +1386,20 @@ export class DappService {
   private async sameAccount(holder: Holder, view: View): Promise<void> {
     if (holder || (view.account ?? 0) === (await this.dappAccount())) return;
     throw siteError(APIError.AccountChange, ACCOUNT_MOVED);
+  }
+
+  /**
+   * Refuses a signature read on the network the wallet has since left, with
+   * what `networkChanged` tells one that waited (`declined`): never shown on
+   * the network it's on, where its dates and tokens would read as that one's
+   * (1.7.1's release review). Read in one turn with `sameAccount`'s, the last
+   * look before `ask`, which puts it in `waiting` at once: read one after the
+   * other, a change could land between them (1.7.1's fixes' review, code#0).
+   * Settings writes the network before it declines what waits, so a move is
+   * seen here or finds it there.
+   */
+  private async sameNetwork(network: NetworkName, declined: number): Promise<void> {
+    if (network !== (await this.deps.network())) throw siteError(declined, NETWORK_LEFT);
   }
 
   /**
@@ -2117,8 +2134,9 @@ export class DappService {
       if (isTrap(e)) throw e;
       return undefined;
     });
-    // Read for a dApp account Settings has left meanwhile: refused, never shown. The last await before `ask`.
-    await this.sameAccount(holder, view);
+    // Read for a dApp account, or on a network, Settings has left meanwhile: refused, never shown. The last look
+    // before `ask`, both in one turn.
+    await Promise.all([this.sameAccount(holder, view), this.sameNetwork(network, TxSignError.UserDeclined)]);
     const ask: DappAsk = {
       kind: "sign-tx",
       partial: partialSign,
@@ -2429,8 +2447,9 @@ export class DappService {
     if (!signer) {
       throw siteError(DataSignError.ProofGeneration, (lng) => t("dapp.addressNotOurs", { whose: whoseKeys(holder, lng), lng }));
     }
-    // As a signTx's: read for a dApp account Settings has left meanwhile, never shown. The last await before `ask`.
-    await this.sameAccount(holder, view);
+    // As a signTx's: read for a dApp account, or on a network, Settings has left meanwhile, never shown. The last
+    // look before `ask`, both in one turn.
+    await Promise.all([this.sameAccount(holder, view), this.sameNetwork(network, DataSignError.UserDeclined)]);
     const text = readableText(hex);
     return this.ask(
       session,

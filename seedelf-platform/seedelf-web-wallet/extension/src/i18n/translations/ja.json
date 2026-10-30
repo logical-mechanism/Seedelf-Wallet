@@ -473,7 +473,7 @@
   "dappUi.ties.privacy.thisSession": "このプライベートセッション",
   "dappUi.ties.privacy.yourAccount": "あなたの公開アカウント",
   "dappUi.titleAndOrigin": "{{title}} · {{origin}}",
-  "dappUi.validFrom": "有効開始",
+  "dappUi.validFrom": "有効開始日時",
   "dappUi.waitingForFunding": "プライベートセッション {{number}} に資金提供しています。ネットワークが確定するとサイトが接続します。通常は 1 分ほどです。",
   "dappUi.warn.anyName": "どんな名前のトークンも誰でも作れます。",
   "dappUi.warn.collateralSpent": "このセッションのコラテラルを使うため、サイトのコントラクト用のコラテラルが残りません。",

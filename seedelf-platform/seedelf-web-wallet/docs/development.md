@@ -10,7 +10,7 @@ This is how we run and test the extension before a release goes to the Chrome We
 
 - **Start every feature branch from `main`** and name it `web-wallet/<topic>`. Keep the prefix: it reads well in the log, and it's what tags use.
 - **Open PRs into `main`.**
-  - CI ([web-wallet.yml](../../../.github/workflows/web-wallet.yml)) runs on every pull request, into any branch. Its check runs when the PR touches `seedelf-platform/` other than its Markdown (but `wasm/README.md`, which a test reads) or the workflow (a renamed file's old path counts), has more files than the API lists (3,000), or goes into a branch other than `main`. The check is five jobs side by side: Rust, the WebAssembly, and on that WebAssembly the extension's unit tests, end-to-end tests and store package. Its last job, **Web Wallet required**, always reports: green when every job passed, or all were skipped because the PR touches nothing they cover. `main`'s ruleset requires that job, with no bypass (1.7.0's item 2), so no merge lands while the check is red or still running, and no path filter can leave a PR waiting on a check that never comes.
+  - CI ([web-wallet.yml](../../../.github/workflows/web-wallet.yml)) runs on every pull request, into any branch. Its check runs when the PR touches `seedelf-platform/` other than its Markdown (but `wasm/README.md`, which a test reads) and the web wallet's [media/](../media/), or the workflow (a renamed file's old path counts), has more files than the API lists (3,000), or goes into a branch other than `main`. The check is five jobs side by side: Rust, the WebAssembly, and on that WebAssembly the extension's unit tests, end-to-end tests and store package. Its last job, **Web Wallet required**, always reports: green when every job passed, or all were skipped because the PR touches nothing they cover. `main`'s ruleset requires that job, with no bypass (1.7.0's item 2), so no merge lands while the check is red or still running, and no path filter can leave a PR waiting on a check that never comes. No approving review is asked while the project has one maintainer (the owner, 2026-10-30).
   - A PR that edits `web-wallet.yml` runs its own copy of it, so it decides its own *Web Wallet required*: read that diff before trusting the green.
   - A push runs it only on `main`, after a merge, so go through a PR even for a docs change: one that's only Markdown skips the check and goes green at once.
   - **Merge only once its check is green on every job,** never while it's still running. `main` runs the check again after each merge, which keeps the caches every PR's first run starts from, but a red there only shows after the fact: #323 merged while its check was still running, which failed 12 minutes later at *Extension unit tests*, and no e2e ran on its tree (1.6.0's release review).
@@ -180,7 +180,7 @@ cargo test --workspace --locked
 cargo test --release --locked -p seedelf-wasm --test payment_parts_shapes_test -- --ignored
 cd seedelf-web-wallet/extension
 npm ci
-release_version=1.7.0
+release_version=1.7.1
 npm version "$release_version" --no-git-tag-version
 npm run tokens
 npm run dreps
@@ -276,7 +276,7 @@ The package to upload is:
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-With `package.json` at 1.7.0, that file is `extension/release/seedelf-wallet-1.7.0-mainnet.zip`.
+With `package.json` at 1.7.1, that file is `extension/release/seedelf-wallet-1.7.1-mainnet.zip`.
 
 `npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it.
 

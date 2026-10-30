@@ -15,6 +15,7 @@ import { SessionService } from "../src/background/sessions";
 import { SESSION_RESERVED_PREFIX } from "../src/background/spent";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
 import { APIError, DataSignError, TxSendError, TxSignError } from "../src/shared/dapp";
+import { LOCAL_NETWORK, LOCAL_PREFERENCES } from "../src/shared/preferences";
 import type { DappTxSummary } from "../src/shared/rpc";
 import { certificateLine, paidTo, stakingComesBack, withdrawalLine } from "../src/ui/dapp";
 import { txIdOf } from "./fixtures/cbor";
@@ -309,6 +310,97 @@ describe("the dApp connector", () => {
     // Back on preprod, the site is connected as it was.
     expect(await t.dapp.call(s, "getNetworkId", [])).toBe(0);
     expect((await t.dapp.sites()).map((x) => x.origin)).toEqual(["https://app.example.com"]);
+  });
+
+  it("refuses a signature still being read as the wallet moves to another network, never shown (1.7.1's release review)", async () => {
+    for (const method of ["signTx", "signData"] as const) {
+      const t = await on();
+      const s = await connected(t);
+      const { tx } = await built(t);
+      const shown = t.dappWindow.shown;
+      // The kept reading has aged, so the request reads the account again, from a Koios held mid-read.
+      t.clock.now += 31_000;
+      let release!: () => void;
+      t.koios.hold = new Promise<void>((r) => (release = r));
+      const asked = t.koios.calls.length;
+      const args = method === "signTx" ? [tx, false] : [t.deps.wasm.cip30Address(OWN), hex("Sign in: nonce 7")];
+      const heard: { error?: DappError } = {};
+      const signing = t.dapp.call(s, method, args).catch((e: DappError) => (heard.error = e));
+      await until(() => t.koios.calls.length > asked);
+      // Settings' network-set: writes the network, then declines what waits, which is nothing yet.
+      await t.networkChoice.set("mainnet");
+      await t.dapp.networkChanged();
+      t.koios.hold = undefined;
+      release();
+      await until(() => heard.error !== undefined || t.dapp.approvals().length > 0);
+      // Never put in front of the user on the other network, where its dates and tokens would read wrong, and heard
+      // as a request waiting then would hear it.
+      expect(t.dapp.approvals()).toEqual([]);
+      expect(t.dappWindow.shown).toBe(shown);
+      await signing;
+      const declined = method === "signTx" ? TxSignError.UserDeclined : DataSignError.UserDeclined;
+      expect(heard.error).toMatchObject({ failure: { code: declined, info: expect.stringContaining("another network") } });
+    }
+  });
+
+  it("refuses a signature whose last look read the old account or network as Settings moved it, never left waiting (1.7.1's fixes' review)", { timeout: 30_000 }, async () => {
+    // Settings writes first and tells the connector a turn or more later (handlers.ts). Here the write lands just as
+    // the request's last look reads the old value: read in one turn, the two looks see it, or the request is waiting
+    // when the connector hears. One after the other, the second's read let an account change slip between them.
+    for (const method of ["signTx", "signData"] as const) {
+      for (const what of ["account", "network"] as const) {
+        for (let turns = 1; turns <= 3; turns++) {
+          const t = await on();
+          const s = await connected(t);
+          const tx = method === "signTx" ? (await built(t)).tx : undefined;
+          const at = `${method}, ${what}, ${turns} turns`;
+          let telling: Promise<void> | undefined;
+          const tell = async () => {
+            for (let i = 0; i < turns; i++) await Promise.resolve();
+            await (what === "account" ? t.dapp.dappAccountChanged() : t.dapp.networkChanged());
+          };
+          if (what === "account") {
+            const get = t.preferences.get.bind(t.preferences);
+            t.preferences.get = async () => {
+              const last = new Error().stack?.includes("sameAccount") ?? false;
+              const prefs = await get();
+              if (last && !telling) {
+                await t.local.set(LOCAL_PREFERENCES, { ...prefs, dappAccount: 1 });
+                telling = tell();
+              }
+              return prefs;
+            };
+          } else {
+            const get = t.networkChoice.get.bind(t.networkChoice);
+            t.networkChoice.get = async () => {
+              const last = new Error().stack?.includes("sameNetwork") ?? false;
+              const network = await get();
+              if (last && !telling) {
+                await t.local.set(LOCAL_NETWORK, "mainnet");
+                telling = tell();
+              }
+              return network;
+            };
+          }
+          const heard: { error?: DappError } = {};
+          const args = method === "signTx" ? [tx, false] : [t.deps.wasm.cip30Address(OWN), hex("Sign in: nonce 7")];
+          const signing = t.dapp.call(s, method, args).catch((e: DappError) => (heard.error = e));
+          await until(() => telling !== undefined || heard.error !== undefined || t.dapp.approvals().length > 0);
+          expect(telling, `${at}: the last look was never reached`).toBeDefined();
+          await telling;
+          await until(() => heard.error !== undefined || t.dapp.approvals().length > 0);
+          expect(t.dapp.approvals(), at).toEqual([]);
+          await signing;
+          // What a request waiting then would hear: AccountChange, or declined on the network it left.
+          const declined = method === "signTx" ? TxSignError.UserDeclined : DataSignError.UserDeclined;
+          expect(heard.error, at).toMatchObject(
+            what === "account"
+              ? { failure: { code: APIError.AccountChange } }
+              : { failure: { code: declined, info: expect.stringContaining("another network") } },
+          );
+        }
+      }
+    }
   });
 
   it("refuses without asking a transaction that isn't the account's to sign, or can't be read", async () => {

@@ -454,7 +454,7 @@ export class PoolDiscovery {
       if (pool) found.push(pool);
     }
     this.crowds.set(network, new Map([["classic", answer.classic.crowd], ...answer.pools.map((p) => [p.id, p.crowd] as const)]));
-    // Kept with the list it was read under, as the throttle above reads that (1.7.0's release review, pr336#2).
+    // Kept with the list it was read under, as the throttle reads that (1.6.0's release review, state.md's notes).
     await this.keep(network, found);
   }
 

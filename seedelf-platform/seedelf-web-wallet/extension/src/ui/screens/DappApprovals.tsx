@@ -1011,8 +1011,9 @@ export function SignTx({
   const back = stakingComesBack(s);
   const ownKey = s.paid.filter((p) => p.ownPaymentKey).length;
   // When the site may send it: a signed transaction is the site's to send at any time before it expires, and
-  // after a disconnect too (a bounty report against 1.7.0). Its start only while it's still to come.
-  const expires = s.validUntil === null ? undefined : slotText(network, s.validUntil);
+  // after a disconnect too (a bounty report against 1.7.0). Its end rounded up, never early; its start only while
+  // it's still to come.
+  const expires = s.validUntil === null ? undefined : slotText(network, s.validUntil, true);
   const validFrom =
     s.validFrom !== null && slotStart(network, s.validFrom) > Date.now() ? slotText(network, s.validFrom) : undefined;
 
