@@ -7,9 +7,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { epochStart, slotStart } from "../src/networks";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { DappTxSummary, KnownAccount } from "../src/shared/rpc";
 import { AccountsContext } from "../src/ui/accounts";
+import { slotText } from "../src/ui/format";
 import { PreferencesContext } from "../src/ui/preferences";
 import {
   ConnectRequest,
@@ -132,6 +134,30 @@ describe("a site's signing prompt", () => {
     expect(data("drep", "Account 2")).toContain("Signs with The DRep of Account 2");
     // One account: nothing to tell apart.
     expect(data("payment")).toContain("Signs with Your address");
+  });
+
+  it("says when the site may send it: when it expires, and when it starts while that's to come (a bounty report against 1.7.0)", () => {
+    // The slots as seedelf-core's slot_config counts them, and the epochs' starts agree.
+    expect(slotStart("mainnet", 4_492_800)).toBe(1_596_059_091_000);
+    expect(new Date(slotStart("mainnet", 0)).toISOString()).toBe("2017-09-23T21:44:51.000Z");
+    expect(slotStart("preprod", 135_302_400)).toBe(epochStart("preprod", 317));
+    expect(slotStart("mainnet", 199_324_800)).toBe(epochStart("mainnet", 659));
+    // The report's: a preprod payment that stayed valid for 173 days.
+    expect(new Date(slotStart("preprod", 152_671_012)).toISOString()).toBe("2027-04-22T00:36:52.000Z");
+    expect(slotText("preprod", 152_671_012)).toMatch(/^2[12] Apr 2027, \d{2}:\d{2}$/);
+
+    const slotIn = (ms: number) => 86_400 + Math.round((Date.now() + ms - 1_655_769_600_000) / 1000);
+    const until = slotIn(2 * 3_600_000);
+    const page = text(render(summary({ validUntil: until })));
+    expect(page).toContain(`Expires ${slotText("preprod", until)}`);
+    expect(page).not.toContain("Valid from");
+    // No end, or one past what a date can say, never ends.
+    expect(text(render(summary({})))).toContain("Expires Never");
+    expect(text(render(summary({ validUntil: 2 ** 63 })))).toContain("Expires Never");
+    // A start already passed says nothing; one to come is said.
+    expect(text(render(summary({ validFrom: slotIn(-60_000), validUntil: until })))).not.toContain("Valid from");
+    const later = slotIn(30 * 86_400_000);
+    expect(text(render(summary({ validFrom: later, validUntil: until })))).toContain(`Valid from ${slotText("preprod", later)}`);
   });
 });
 

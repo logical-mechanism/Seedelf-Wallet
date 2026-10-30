@@ -27,7 +27,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { joinSentences, t, useT } from "../../i18n";
 
-import { lovejoinOn } from "../../networks";
+import { lovejoinOn, slotStart } from "../../networks";
 import type { Balances, DappApproval, DappTie, DappToken, DappTxSummary, SessionOutSummary } from "../../shared/rpc";
 import { accountNumberAndName, useAccounts } from "../accounts";
 import { call, onDappChanged, RpcError } from "../background";
@@ -49,7 +49,7 @@ import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
 import { certificateLine, certifiedLine, paidTo, signingTies, stakedLine, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
-import { adaText, formatAda, formatQuantity, shortHex, unlocked } from "../format";
+import { adaText, formatAda, formatQuantity, shortHex, slotText, unlocked } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts, usePreferences } from "../preferences";
 import { aboutAda, SESSION_FEE_ESTIMATE, toCents } from "../swap";
@@ -1010,6 +1010,11 @@ export function SignTx({
   const staking = BigInt(s.stakingLovelace);
   const back = stakingComesBack(s);
   const ownKey = s.paid.filter((p) => p.ownPaymentKey).length;
+  // When the site may send it: a signed transaction is the site's to send at any time before it expires, and
+  // after a disconnect too (a bounty report against 1.7.0). Its start only while it's still to come.
+  const expires = s.validUntil === null ? undefined : slotText(network, s.validUntil);
+  const validFrom =
+    s.validFrom !== null && slotStart(network, s.validFrom) > Date.now() ? slotText(network, s.validFrom) : undefined;
 
   const notes: ReactNode[] = [];
   if (s.scripts) notes.push(tr("dappUi.note.scripts"));
@@ -1050,6 +1055,8 @@ export function SignTx({
         {s.collateral && s.collateral.own > 0 && (
           <Row label={tr("swaps.tx.collateralAtRisk")} value={`${formatAda(s.collateral.atRisk)}\u00a0₳`} />
         )}
+        {validFrom && <Row label={tr("dappUi.validFrom")} value={validFrom} />}
+        <Row label={tr("dappUi.expires")} value={expires ?? tr("dappUi.expiresNever")} />
         <Row label={tr("dappUi.signsWith")} value={signers} />
       </ReviewRows>
 

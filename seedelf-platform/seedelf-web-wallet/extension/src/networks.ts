@@ -118,6 +118,20 @@ export function epochAt(network: NetworkName, ms: number): number {
   return shelley.epoch + Math.floor((ms - shelley.startMs) / EPOCH_MS);
 }
 
+/** A Byron epoch: 21,600 slots of 20 s, on both networks, before Shelley's one-second slots. */
+const BYRON_EPOCH_SLOTS = 21_600;
+const BYRON_SLOT_MS = 20_000;
+
+/**
+ * When `slot` starts on `network` (ms since 1970), the slots a transaction's validity interval is counted in:
+ * seedelf-core's `slot_config` from Shelley's start, Byron's before it. No request.
+ */
+export function slotStart(network: NetworkName, slot: number): number {
+  const shelley = SHELLEY[network];
+  const first = shelley.epoch * BYRON_EPOCH_SLOTS;
+  return shelley.startMs + (slot - first) * (slot < first ? BYRON_SLOT_MS : 1000);
+}
+
 /** Whether Lovejoin is deployed on `network`: the worker's gate and the UI's, one source. */
 export function lovejoinOn(network: NetworkName): boolean {
   return NETWORKS[network].lovejoin !== undefined;
