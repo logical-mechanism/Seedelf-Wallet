@@ -2,7 +2,7 @@
 // strings and are handled as bigint, so nothing is rounded on the way.
 
 import { currentLanguage, dateLocale, t } from "../i18n";
-import { epochStart, type NetworkName } from "../networks";
+import { epochStart, type NetworkName, slotStart } from "../networks";
 import {
   ALWAYS_ABSTAIN,
   ALWAYS_NO_CONFIDENCE,
@@ -119,7 +119,21 @@ export function whenOf(at: number, now: Date): string {
  * Counted from Shelley's start (networks.ts), so no request. In the language's own way (`dateLocale`).
  */
 export function epochEnds(network: NetworkName, epoch: number): string {
-  const ms = epochStart(network, epoch + 1);
+  return momentText(epochStart(network, epoch + 1));
+}
+
+/**
+ * When `slot` comes on `network`, "6 Nov 2026, 14:02", for a transaction's validity interval: a site's, on its sign
+ * window. Counted from Shelley's start (networks.ts), so no request. Undefined past the last moment a Date holds, in
+ * the year 275760, which a slot of a u64 can name.
+ */
+export function slotText(network: NetworkName, slot: number): string | undefined {
+  const ms = slotStart(network, slot);
+  return Math.abs(ms) <= 8.64e15 ? momentText(ms) : undefined;
+}
+
+/** A moment, "9 Oct 2026, 21:44", its seconds dropped. */
+function momentText(ms: number): string {
   const time = new Date(ms).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" });
   return t("format.dateAndTime", { date: dayText(ms), time });
 }
