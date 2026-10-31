@@ -1,0 +1,19 @@
+{
+ "recorded": "2026-10-31, POST https://preprod.koios.rest/api/v1/tx_cbor and tx_info: the transaction a bounty report against 1.7.1 sent (2026-10-31), a governance proposal whose deposit goes back to a stake key that isn't its payer's. Read once and kept; chunk 39.",
+ "tx_hash": "8751ca96591ae84d16c35d0d232c1b24f1c846bc31a602c6f9eb492567fb99a8",
+ "block_height": 5354141,
+ "cbor": "84a60081825820bba9ace02d563e82e61b4fa38ab938243d730455d73f3b8290c503faca761a5301018182583900e92df995ad420efc84298f4b601304bd65a937f791b133bdda89351eaa4d0e20912632f8443702f42201bc8fd927a104d1275716849f9e9b1b0000000217898c8c021a000493e0031a083545b20f001481841a3b9aca00581de04415d467a052af216b10d8dac8d9f13983ca8cd8691f39e9d3361c64810682781c68747470733a2f2f6578616d706c652e636f6d2f72352d312d706f635820685375d1d4cadfe9306e7255640e1759d11a324413572ca480a4036bedbcc6a5a10081825820d1bbf49bc571a9e7bcd464ed3526155b5548c812a0358a9e340f880367052c4558409e65ff8d5ca14bd333f9fec725fcb06c3ae85d6dda0ede2b8483c129086d853f04d9ac634264fa14d6833d345e8f147a913238016f0bf56f56a6579683c9f70df5f6",
+ "input": {
+  "tx_hash": "bba9ace02d563e82e61b4fa38ab938243d730455d73f3b8290c503faca761a53",
+  "tx_index": 1,
+  "address": "addr_test1qr5jm7v444pqalyy9x85kcqnqj7kt2fh77gmzvaam2yn2842f58zpyfxxtuygdcz7s3qr0y0myn6zpx3yat3dpyln6ds4vd7q7",
+  "value": "9985124972",
+  "asset_list": []
+ },
+ "koios": {
+  "type": "InfoAction",
+  "deposit": "1000000000",
+  "return_address": "stake_test1upzpt4r85pf27gttzrvd4jxe7yuc8j5vmp537w0f6vmpceqq7cun8",
+  "payer_stake_address": "stake_test1uz4y6r3qjynr97zyxup0ggsphj8ajfapqngjw4cksj0eaxchyz27p"
+ }
+}

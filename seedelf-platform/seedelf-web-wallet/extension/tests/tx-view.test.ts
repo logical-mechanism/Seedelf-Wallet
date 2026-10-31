@@ -110,6 +110,44 @@ describe("the transaction view", () => {
     expect(t.koios.calls.length).toBe(before);
   });
 
+  it("marks a withdrawal's and a proposal's deposit back by stake key: the account's, a session's, another account's (chunk 39)", async () => {
+    const t = await unlocked();
+    const net = t.deps.wasm.Network.Preprod;
+    const hex = (bech32: string) => t.deps.wasm.cip30Address(bech32);
+    const [active, session] = await t.wallet.withKeys((k) => [hex(k.cardano.stakeAddress(net)), hex(k.oneTime.rewardAddress(net, 0))]);
+    const second = await t.wallet.withAccount(1, (k) => hex(k.cardano.stakeAddress(net)));
+    const stranger = `e0${"44".repeat(28)}`;
+    const bytes = (h: string) => `581d${h}`;
+    // A site's transaction, waiting for its signature: two withdrawals, and three proposals of information.
+    const proposal = (reward: string) => `841a3b9aca00${bytes(reward)}8106826b${Buffer.from("https://x.y").toString("hex")}5820${"33".repeat(32)}`;
+    const cbor =
+      `84a5` +
+      `0081825820${"11".repeat(32)}00` +
+      `0180` +
+      `021a00029810` +
+      `05a2${bytes(active)}00${bytes(session)}00` +
+      `1483${proposal(second)}${proposal(stranger)}${proposal(active)}` +
+      `a0f5f6`;
+    const before = t.koios.calls.length;
+    const { detail } = await txView(
+      { ...deps(t), knownAccounts: async () => [0, 1], sessionIndices: async () => [0] },
+      "preprod",
+      "ab".repeat(32),
+      () => cbor,
+    );
+    expect(detail.withdrawals.map((w) => w.yours)).toEqual([
+      { kind: "account", account: 0 },
+      { kind: "session", index: 0 },
+    ]);
+    // Account 2's, by its index; anyone else's isn't marked.
+    expect(detail.proposals.map((p) => p.yours)).toEqual([{ kind: "account", account: 1 }, undefined, { kind: "account", account: 0 }]);
+    // Not knowing Account 2 or the session, the wallet doesn't guess.
+    const alone = await txView(deps(t), "preprod", "ab".repeat(32), () => cbor);
+    expect(alone.detail.withdrawals.map((w) => w.yours)).toEqual([{ kind: "account", account: 0 }, undefined]);
+    expect(alone.detail.proposals.map((p) => p.yours)).toEqual([undefined, undefined, { kind: "account", account: 0 }]);
+    expect(t.koios.calls.length).toBe(before);
+  });
+
   it("marks a private payment's change into the private balance, and not the Seedelf it pays (blind test §9.9)", async () => {
     const t = await unlocked();
     t.koios.evaluation = transferPreprod.evaluation;

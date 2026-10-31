@@ -314,7 +314,7 @@ describe("the public account's signing prompt, with several public accounts (C05
       .replace(/\s+/g, " ");
     expect(page).toContain("A certificate for the stake key of Account 3 · Savings.");
     expect(page).toContain(
-      "A certificate or withdrawal in it names the stake key of Account 3 · Savings: signing ties Account 1 · Main to Account 3 · Savings on chain, where anyone can see it.",
+      "A certificate, withdrawal or proposal in it names the stake key of Account 3 · Savings: signing ties Account 1 · Main to Account 3 · Savings on chain, where anyone can see it.",
     );
     expect(page).not.toContain("isn't yours");
   });

@@ -1266,6 +1266,187 @@ fn nothing_to_sign_is_refused() {
     assert!(refused.to_string().contains("Nothing in this transaction"));
 }
 
+// --- A proposal's deposit, and whose key it goes back to (chunk 39) --------
+
+/// A governance proposal of `action`, its deposit going back to `reward_account`.
+fn proposal(
+    reward_account: Vec<u8>,
+    deposit: u64,
+    action: conway::GovAction,
+) -> conway::ProposalProcedure {
+    conway::ProposalProcedure {
+        deposit,
+        reward_account: Bytes::from(reward_account),
+        gov_action: action,
+        anchor: conway::Anchor {
+            url: "https://example.com/proposal.jsonld".into(),
+            content_hash: Hash::new([3; 32]),
+        },
+    }
+}
+
+/// The account's UTxO paying for `proposals`, with its change back.
+fn proposing(proposals: Vec<conway::ProposalProcedure>) -> (String, Vec<KoiosRow>) {
+    let deposits: u64 = proposals.iter().map(|p| p.deposit).sum();
+    let mut b = body(
+        vec![input(TX_B, 0)],
+        vec![out(&ours(Role::Change, 0), 4_800_000, None)],
+    );
+    b.proposal_procedures = NonEmptySet::try_from(proposals).ok();
+    let rows = vec![row(
+        TX_B,
+        0,
+        &ours(Role::Receive, 0),
+        deposits + 5_000_000,
+        &[],
+    )];
+    (tx_hex(b), rows)
+}
+
+/// Someone else's stake key: the same phrase's account 1's.
+fn their_stake() -> Hash<28> {
+    CardanoAccount::from_phrase(PHRASE, 1)
+        .unwrap()
+        .key_hash(Role::Staking, 0)
+        .unwrap()
+}
+
+/// A reward address, from its header and hash.
+fn reward_bytes(header: u8, hash: Hash<28>) -> Vec<u8> {
+    [&[header][..], hash.as_ref()].concat()
+}
+
+#[test]
+fn a_proposal_says_whose_stake_key_its_deposit_goes_back_to() {
+    // The ledger sends the deposit to the reward account a proposal names when
+    // the action ends, and it takes no signature of that key's: a site can name
+    // anyone's (a bounty report against 1.7.1). Each is said, with its kind,
+    // and none is refused.
+    let script = Hash::new([6; 28]);
+    let (tx, rows) = proposing(vec![
+        proposal(
+            stake_account_bytes(),
+            100_000_000_000,
+            conway::GovAction::Information,
+        ),
+        proposal(
+            reward_bytes(0xe0, their_stake()),
+            100_000_000_000,
+            conway::GovAction::NoConfidence(Nullable::Null),
+        ),
+        proposal(
+            reward_bytes(0xf0, script),
+            100_000_000_000,
+            conway::GovAction::TreasuryWithdrawals(
+                vec![(Bytes::from(stake_account_bytes()), 5_000_000)].into(),
+                Nullable::Null,
+            ),
+        ),
+    ]);
+    let summary = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
+    let ours = Some(hex::encode(account().key_hash(Role::Staking, 0).unwrap()));
+    let said: Vec<(&str, &str, bool, Option<String>)> = summary
+        .proposals
+        .iter()
+        .map(|p| {
+            (
+                p.action.as_str(),
+                p.deposit.as_str(),
+                p.own,
+                p.credential.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        said,
+        vec![
+            ("information", "100000000000", true, ours),
+            (
+                "noConfidence",
+                "100000000000",
+                false,
+                Some(hex::encode(their_stake()))
+            ),
+            ("treasuryWithdrawals", "100000000000", false, None),
+        ]
+    );
+    let addresses: Vec<&str> = summary
+        .proposals
+        .iter()
+        .map(|p| p.address.as_str())
+        .collect();
+    assert_eq!(
+        addresses,
+        vec![
+            account().stake_address(true).unwrap().to_bech32().unwrap(),
+            Address::from_bytes(&reward_bytes(0xe0, their_stake()))
+                .unwrap()
+                .to_bech32()
+                .unwrap(),
+            Address::from_bytes(&reward_bytes(0xf0, script))
+                .unwrap()
+                .to_bech32()
+                .unwrap(),
+        ]
+    );
+    // The deposits leave with the account's UTxO, counted in what it sends, and
+    // none comes back in this transaction. No key signs for a proposal.
+    assert_eq!(summary.net_lovelace, "-300000200000");
+    assert_eq!(summary.staking_lovelace, "0");
+    assert_eq!(summary.signs, vec!["0/0"]);
+    assert!(summary.complete);
+    // In the JSON the extension reads, by these names.
+    let json = serde_json::to_value(&summary).unwrap();
+    assert_eq!(
+        json["proposals"][1]["credential"],
+        serde_json::json!(hex::encode(their_stake()))
+    );
+    assert_eq!(json["proposals"][1]["own"], serde_json::json!(false));
+    assert!(json["proposals"][2]["credential"].is_null());
+}
+
+#[test]
+fn a_proposal_whose_deposit_goes_back_on_the_other_network_is_refused() {
+    // The ledger refuses it (ProposalProcedureNetworkIdMismatch): said as a
+    // withdrawal from the other network is.
+    let (tx, rows) = proposing(vec![proposal(
+        account().stake_address(false).unwrap().to_vec(),
+        100_000_000_000,
+        conway::GovAction::Information,
+    )]);
+    let refused = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap_err();
+    assert!(refused.to_string().contains("mainnet"), "{refused}");
+    assert!(refused.to_string().contains("proposal"), "{refused}");
+}
+
+#[test]
+fn the_reports_proposal_says_its_deposit_goes_to_someone_elses_key() {
+    // The bounty report's own transaction, read from preprod once and kept
+    // (fixtures/proposal-report-preprod.json): its deposit goes back to a stake
+    // key that isn't its payer's, which the sign window said only as "It makes
+    // 1 governance proposal". Koios's reading of it is the check, not ours.
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/proposal-report-preprod.json")).unwrap();
+    let rows: Vec<KoiosRow> = vec![serde_json::from_value(fixture["input"].clone()).unwrap()];
+    let tx = fixture["cbor"].as_str().unwrap().to_string();
+    let summary = cip30::inspect_tx(&account(), &request(tx.clone(), rows, true)).unwrap();
+    assert_eq!(summary.tx_hash, fixture["tx_hash"].as_str().unwrap());
+    let koios = &fixture["koios"];
+    assert_eq!(koios["type"], "InfoAction");
+    assert_ne!(koios["return_address"], koios["payer_stake_address"]);
+    let [p] = summary.proposals.as_slice() else {
+        panic!("one proposal: {:?}", summary.proposals);
+    };
+    assert_eq!(p.action, "information");
+    assert_eq!(p.deposit, koios["deposit"].as_str().unwrap());
+    assert_eq!(p.address, koios["return_address"].as_str().unwrap());
+    assert!(!p.own);
+    let Address::Stake(back) = Address::from_bech32(&p.address).unwrap() else {
+        panic!("a reward address");
+    };
+    assert_eq!(p.credential, Some(hex::encode(back.payload().as_hash())));
+}
+
 // --- A site's bytes, bounded before they're decoded -------------------------
 
 /// A transaction with nothing in its body whose witness set holds `data`,

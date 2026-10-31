@@ -2,7 +2,7 @@
 
 Branch `web-wallet/proposal-deposit`, from `main`.
 
-**Status: ⬜ planning.** A patch, for 1.7.2 (the owner, 2026-10-31). Nothing is built yet.
+**Status: ✅ built 2026-10-31** on `web-wallet/proposal-deposit`, from `main` after #356. A patch, for 1.7.2 (the owner, 2026-10-31). One PR: the build, the translations and the docs together, so this file went straight to the archive, as chunks 36 and 37's did. What still holds is in [architecture.md](../../architecture.md) (the transaction view's marks, and the dApp prompt's X05 paragraph) and [flows.md](../../flows.md) (*Transaction details*, and the sign window). **The privacy policy is unchanged:** nothing new is asked of anyone or kept. *As built*, below, says where the build went past the plan or away from it.
 
 **Why.** A bounty report against 1.7.1 (2026-10-31). A site's sign window shows a governance proposal only as a count: "It makes 1 governance proposal." When the action ends, the deposit (100,000 ₳ on mainnet) goes back to the reward address the proposal names, and the site can name anyone's. The report was out of the bounty's scope, since the sign window's **Transaction details** already lists each proposal's action, deposit and "Deposit back to" address. The owner thought the patch worth making anyway.
 
@@ -45,15 +45,25 @@ The worker resolves `yours` for a proposal's credential the way it does for a ce
 ## Tests
 
 - `wasm/tests/cip30_test.rs`: one proposal with the account's reward address, a stranger's, a script's, the other network's (refused), and two in one transaction.
-- **The report's own transaction as a fixture:** preprod `8751ca96591ae84d16c35d0d232c1b24f1b846bc31a602c6f9eb492567fb99a8`, block 5354141. Its CBOR is read from Koios once and kept. Its deposit goes back to a stranger's key.
+- **The report's own transaction as a fixture:** preprod `8751ca96591ae84d16c35d0d232c1b24f1c846bc31a602c6f9eb492567fb99a8` (the plan had `…f1b846…`, one character off), block 5354141. Its CBOR is read from Koios once and kept. Its deposit goes back to a stranger's key.
 - `dapp.test.ts`: `proposalLine`'s three cases. A `DappApprovals` test checks the lines and the callout's tone.
 - The tx-view tests: `markYours` tags a withdrawal and a proposal's deposit back, for the active account, a session and another account.
 - e2e, if the fake site can send a proposal: one run with a stranger's return address, showing the warning.
-- [flows.md](../flows.md)'s sign window says what the summary shows, in the same PR.
+- [flows.md](../../flows.md)'s sign window says what the summary shows, in the same PR.
 
 ## Not in it
 
 - No refusal and no extra confirmation for a stranger's return address: it's shown, never blocked.
-- The wallet's own proposal screens stay out ([backlog.md](../backlog.md#declined)'s *The rest of governance*).
+- The wallet's own proposal screens stay out ([backlog.md](../../backlog.md#declined)'s *The rest of governance*).
 - Other voters' votes stay a count: no money moves with them.
 - No new requests and no data layer change, so no privacy policy entry and no API deploy. The release cycle is merge → package → upload → record PR, tagged `web-wallet/1.7.2`.
+
+## As built
+
+- **WebAssembly** (`wasm/src/cip30.rs`): `TxSummary.proposals` is a `Vec<Proposal>` (`action`, `deposit`, `address`, `own`, `credential`). The kind comes from `decode.rs`'s new `action_kind`, which `proposal_detail` now names its action by too: one match for the names. A proposal adds no signer and nothing to the staking money, since the deposit leaves with the account's UTxOs and is already in the total. Refused, besides the other network: a reward account that's no address, or no reward address, which the ledger can't decode either (a withdrawal's are refused the same way). `tied`, the check that a transaction names its network, doesn't count a proposal, though the ledger would let it: unchanged, and not needed.
+- **The sign window** (`ui/dapp.ts` `proposalLine`, `DappApprovals.tsx`): as planned, with "the stake key of {{name}}" for another of the wallet's, worded as the certificate's line is. `proposalWords` moved from `TxDetail.tsx` to `ui/format.ts`, beside `voteLabel`, so the helper doesn't import a component; its seven `tx.proposal.*` names are `SHARED_WORDS` in the critical-helpers guard, as the vote labels are: Transaction details shows them on their own.
+- **The callout's tone:** a warning when any proposal's deposit isn't the account's own. The plan said "as it is for a stranger's certificate", but it isn't: a stranger's certificate alone leaves the callout informational, as it did before. Unchanged here; the owner's call.
+- **Ties** (`background/dapp.ts` `ties`): a proposal's stake key is matched as a certificate's, named by `yours`, and put in `certified`, whose warning now reads "A certificate, withdrawal or proposal in it names the stake key of …" in all three languages. Without that, a proposal back to a session's key would have let the window say the private balance isn't in it (X05's bug, again).
+- **Transaction details** (`tx-view.ts` `markYours`, `TxDetail.tsx`): as planned. "Deposit back to" is its own line, the address whole with a copy button, and the tag under it; the proposal's other fields still come from `Fields`.
+- **Translations:** the three lines and the widened certified warning were back-translated blind, a fresh agent each round with no English. Round one corrected Spanish "Su depósito", which beside the informal "tuya" could read as the site's own deposit (now "El depósito … de la propuesta"), and Japanese bare アクション, which could read as the signing itself (now ガバナンスアクション); Spanish says "la acción de gobernanza" to match. Round two kept every clause; a comma after 終わると fixed a garden path in the Japanese stranger's line. Recorded in `verified-critical-es.json` and `-ja.json`.
+- **Tests:** `cip30_test.rs` (one transaction with the account's, a stranger's and a script's, each with its kind; the other network refused; the report's transaction against Koios's own reading of it, `fixtures/proposal-report-preprod.json`), `dapp.test.ts` (`proposalLine`'s cases), `dapp-prompt.test.ts` (the lines and the tone), `dapp-ties.test.ts` (a session's stake key named and tied through the worker, a stranger's tying nothing), `tx-view.test.ts` (a withdrawal and proposals marked for the active account, a session and another account), `tx-view-screen.test.ts` (the tags and the one "Deposit back to"), and one e2e run, a site's proposal back to a stranger's key: the warning, the whole address, and Transaction details' line. Four runs each on 2 CPUs, dev and store builds: all passed.

@@ -410,7 +410,7 @@ function summaryOf(over: Partial<DappTxSummary>): DappTxSummary {
     scripts: false,
     referenceInputs: 0,
     votes: 0,
-    proposals: 0,
+    proposals: [],
     donation: null,
     note: null,
     metadata: false,

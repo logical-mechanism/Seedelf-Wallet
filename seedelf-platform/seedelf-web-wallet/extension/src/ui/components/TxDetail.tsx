@@ -33,7 +33,7 @@ import { ChevronLeftIcon, ChevronRightIcon, ExpandIcon, SpinnerIcon } from "./Ic
 import { Modal } from "./Modal";
 import { Row, ReviewRows } from "./ReviewRows";
 import { Tabs } from "./Tabs";
-import { adaText, formatAda, formatQuantity, shortHex } from "../format";
+import { adaText, formatAda, formatQuantity, proposalWords, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { tokenDecimals, tokenText } from "../tokens";
 
@@ -490,6 +490,8 @@ export function TxDetailBody({
                   </span>
                   <CopyButton value={w.address} label={tr("tx.copyRewardAddress")} />
                 </span>
+                {/* Whose reward address it is, where it's the user's, by its stake key (tx-view.ts, chunk 39). */}
+                {w.yours && <YoursTag yours={w.yours} testId="tx-withdrawal-yours" />}
                 <span className="dapp-amount">{adaText(w.lovelace)}</span>
               </li>
             ))}
@@ -521,10 +523,20 @@ export function TxDetailBody({
               <li key={`p${i}`} className="list__row tx-detail__wrap">
                 <span className="tx-detail__name">{tr("tx.proposes", { what: proposalWords(p.action) })}</span>
                 <span className="dapp-amount">{tr("tx.depositAmount", { amount: formatAda(p.deposit) })}</span>
+                {/* Where the deposit goes back to when the action ends, which a site can make anyone's: the whole
+                    address, and whose it is where it's the user's, as an output's (chunk 39). */}
+                <span className="note tx-detail__line--wide">{tr("tx.proposalField.rewardAccount")}</span>
+                <span className="tx-detail__line tx-detail__line--wide">
+                  <span className="dapp-address" data-value={p.rewardAccount}>
+                    {p.rewardAccount}
+                  </span>
+                  <CopyButton value={p.rewardAccount} label={tr("tx.copyRewardAddress")} />
+                </span>
+                {p.yours && <YoursTag yours={p.yours} testId="tx-proposal-yours" />}
                 <div className="tx-detail__tree">
                   <Fields
                     of={{ ...p, parameters: p.parameters.length ? p.parameters : null, withdrawals: p.withdrawals.length ? p.withdrawals : null }}
-                    skip={["action", "deposit"]}
+                    skip={["action", "deposit", "rewardAccount", "yours"]}
                     labels={PROPOSAL_FIELDS}
                   />
                 </div>
@@ -746,7 +758,10 @@ function Output({
   );
 }
 
-/** An output's owner, where it's the user: the account by name when there's more than one, as the windows do. */
+/**
+ * An output's owner, or a reward address's, where it's the user: the account by name when there's more than one, as
+ * the windows do.
+ */
 function YoursTag({ yours, testId }: { yours: TxYours; testId: string }) {
   const tr = useT();
   const { accounts, several } = useAccounts();
@@ -840,7 +855,6 @@ const CERT_FIELDS: Record<string, I18nKey> = {
 };
 
 const PROPOSAL_FIELDS: Record<string, I18nKey> = {
-  rewardAccount: "tx.proposalField.rewardAccount",
   follows: "tx.proposalField.follows",
   parameters: "tx.proposalField.parameters",
   withdrawals: "tx.proposalField.withdrawals",
@@ -911,21 +925,6 @@ export function certificateWords(kind: string): string {
   };
   const key = words[kind];
   return key ? t(key) : kind;
-}
-
-/** A governance action's kind in words. */
-export function proposalWords(action: string): string {
-  const words: Record<string, I18nKey> = {
-    parameterChange: "tx.proposal.parameterChange",
-    hardFork: "tx.proposal.hardFork",
-    treasuryWithdrawals: "tx.proposal.treasuryWithdrawals",
-    noConfidence: "tx.proposal.noConfidence",
-    updateCommittee: "tx.proposal.updateCommittee",
-    newConstitution: "tx.proposal.newConstitution",
-    information: "tx.proposal.information",
-  };
-  const key = words[action];
-  return key ? t(key) : action;
 }
 
 /** What a redeemer's tag is for. */

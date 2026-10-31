@@ -6581,7 +6581,7 @@ function refuseOddities(
   }
   if (s.unknownInputs.length) throw new Refused(t("sess.refuse.warn.unknownInputs"), of);
   // A direct swap's zero withdrawals, from its DEX's scripts, are checked with its spends (directSpends).
-  if (s.certificates.length || (s.withdrawals.length && !allow.direct) || s.votes || s.proposals) {
+  if (s.certificates.length || (s.withdrawals.length && !allow.direct) || s.votes || s.proposals.length) {
     throw new Refused(t("sess.refuse.warn.staking"), of);
   }
   if (s.mint.length) throw new Refused(t("sess.refuse.warn.mints"), of);

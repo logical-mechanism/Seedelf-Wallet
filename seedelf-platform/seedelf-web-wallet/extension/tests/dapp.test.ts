@@ -17,7 +17,7 @@ import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
 import { APIError, DataSignError, TxSendError, TxSignError } from "../src/shared/dapp";
 import { LOCAL_NETWORK, LOCAL_PREFERENCES } from "../src/shared/preferences";
 import type { DappTxSummary } from "../src/shared/rpc";
-import { certificateLine, paidTo, stakingComesBack, withdrawalLine } from "../src/ui/dapp";
+import { certificateLine, paidTo, proposalLine, stakingComesBack, withdrawalLine } from "../src/ui/dapp";
 import { txIdOf } from "./fixtures/cbor";
 import {
   koiosPreprod,
@@ -1616,6 +1616,37 @@ describe("the prompt's words for the account's staking", () => {
     // Staking money comes back when the account's own outputs get at least as much, the fee aside.
     expect(stakingComesBack({ returnedLovelace: "1830000", stakingLovelace: "2000000", fee: "170000" })).toBe(true);
     expect(stakingComesBack({ returnedLovelace: "1829999", stakingLovelace: "2000000", fee: "170000" })).toBe(false);
+  });
+
+  it("says whose stake key a proposal's deposit goes back to: the account's, another of the wallet's, or anyone's (chunk 39)", () => {
+    type Proposal = DappTxSummary["proposals"][number];
+    const STRANGER = "stake_test1upzpt4r85pf27gttzrvd4jxe7yuc8j5vmp537w0f6vmpceqq7cun8";
+    const proposal = (p: Partial<Proposal>): Proposal => ({
+      action: "information",
+      deposit: "100000000000",
+      address: STRANGER,
+      own: false,
+      credential: "44".repeat(28),
+      ...p,
+    });
+    expect(proposalLine(proposal({ own: true }), "your public account")).toBe(
+      "Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit comes back to your public account when the action ends.",
+    );
+    expect(proposalLine(proposal({ action: "treasuryWithdrawals", own: true }), "your private session")).toBe(
+      "Proposes withdrawals from the treasury. Its 100,000\u00a0₳ deposit comes back to your private session when the action ends.",
+    );
+    // Another of the wallet's, by its name, never as a stranger's (X05).
+    const named = (index: number) => `Account ${index + 1}${index === 2 ? " · Savings" : ""}`;
+    expect(proposalLine(proposal({ yours: { account: 2 } }), "your public account", named)).toBe(
+      "Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit comes back to the stake key of Account 3 · Savings when the action ends.",
+    );
+    expect(proposalLine(proposal({ yours: 1 }), "your public account")).toBe(
+      "Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit comes back to the stake key of your private session 2 when the action ends.",
+    );
+    // Anyone else's, with its whole address.
+    expect(proposalLine(proposal({}), "your public account")).toBe(
+      `Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit goes to a stake key that isn't yours, ${STRANGER}, when the action ends.`,
+    );
   });
 });
 

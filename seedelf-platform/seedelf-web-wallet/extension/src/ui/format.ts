@@ -1,7 +1,7 @@
 // Display formatting for amounts and token names. Amounts arrive as integer
 // strings and are handled as bigint, so nothing is rounded on the way.
 
-import { currentLanguage, dateLocale, t } from "../i18n";
+import { currentLanguage, dateLocale, type I18nKey, t } from "../i18n";
 import { epochStart, type NetworkName, slotStart } from "../networks";
 import {
   ALWAYS_ABSTAIN,
@@ -436,6 +436,21 @@ export function voteLabel(drep: string | null, name?: string): string {
   if (drep === ALWAYS_ABSTAIN) return t("format.vote.abstain");
   if (drep === ALWAYS_NO_CONFIDENCE) return t("format.vote.noConfidence");
   return name ?? shortId(drep);
+}
+
+/** A governance action's kind in words, as Transaction details and a site's sign window say what a proposal proposes. */
+export function proposalWords(action: string): string {
+  const words: Record<string, I18nKey> = {
+    parameterChange: "tx.proposal.parameterChange",
+    hardFork: "tx.proposal.hardFork",
+    treasuryWithdrawals: "tx.proposal.treasuryWithdrawals",
+    noConfidence: "tx.proposal.noConfidence",
+    updateCommittee: "tx.proposal.updateCommittee",
+    newConstitution: "tx.proposal.newConstitution",
+    information: "tx.proposal.information",
+  };
+  const key = words[action];
+  return key ? t(key) : action;
 }
 
 /**

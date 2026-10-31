@@ -24,13 +24,15 @@
 // chain, and those the last reading found, as balances count them), one under
 // the user's own register in the wallet contract, or a private session's
 // one-time account. A stake key alone doesn't make an output the user's: its
-// payment key is someone else's, who can spend it.
+// payment key is someone else's, who can spend it. A reward address is the
+// user's by its stake key, which is all it has: a withdrawal's, and where a
+// proposal's deposit goes back to, which a site can make anyone's (chunk 39).
 
 import type * as Wasm from "@seedelf/wasm";
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
-import type { TxAddress, TxDetail, TxOutput, TxRegister, TxView } from "../shared/rpc";
+import type { TxAddress, TxDetail, TxOutput, TxRegister, TxView, TxYours } from "../shared/rpc";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { CONTRACT_V1 } from "./balances";
 import { GAP_LIMIT } from "./chain";
@@ -200,6 +202,18 @@ function paymentKey(address: TxAddress): string | undefined {
   return hash.length === 56 ? hash.toLowerCase() : undefined;
 }
 
+/** A reward address's stake key hash (hex), when a key and not a script it is: none for any other address. */
+function stakeKey(wasm: typeof Wasm, address: string): string | undefined {
+  let hex: string;
+  try {
+    hex = wasm.cip30Address(address);
+  } catch (e) {
+    if (isTrap(e)) throw e;
+    return undefined;
+  }
+  return hex.length === 58 && hex[0]!.toLowerCase() === "e" ? hex.slice(2).toLowerCase() : undefined;
+}
+
 /** An account's payment key hashes as balances count them: the first GAP_LIMIT of each chain, and `found`. */
 function accountKeys(cardano: Wasm.CardanoAccount, found: readonly string[] = []): Set<string> {
   const keys = new Set(found.map((k) => k.toLowerCase()));
@@ -225,13 +239,24 @@ function ownRegister(wasm: typeof Wasm, keys: Keys, register: TxRegister): boole
 
 /**
  * Marks each output of `d` (its collateral's return too) that pays the user,
- * with whose: the active account and the private balance in one turn of the
- * wallet's lock, then any other account the wallet knows, each in its own.
+ * with whose, and each reward address that's the user's by its stake key: a
+ * withdrawal's, and a proposal's deposit back. The active account, the
+ * private balance and the sessions in one turn of the wallet's lock, then any
+ * other account the wallet knows, each in its own.
  */
 async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): Promise<void> {
   const { wasm, wallet, session } = deps;
   const outputs: TxOutput[] = [...d.outputs, ...(d.collateralReturn ? [d.collateralReturn] : [])];
-  if (!outputs.length) return;
+  const rewards: Array<[{ yours?: TxYours }, string]> = [];
+  for (const [r, address] of [
+    ...d.withdrawals.map((w) => [w, w.address] as const),
+    ...d.proposals.map((p) => [p, p.rewardAccount] as const),
+  ]) {
+    const key = stakeKey(wasm, address);
+    if (key) rewards.push([r, key]);
+  }
+  if (!outputs.length && !rewards.length) return;
+  const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const [indices, known] = await Promise.all([
     deps.sessionIndices?.(network).catch(() => []) ?? [],
     deps.knownAccounts?.().catch(() => []) ?? [],
@@ -249,14 +274,27 @@ async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): P
         o.yours = { kind: seedelf ? "seedelf" : "private" };
       }
     }
+    if (rewards.length) {
+      const stake = stakeKey(wasm, keys.cardano.stakeAddress(net));
+      const sessionStakes = new Map(indices.map((index) => [stakeKey(wasm, keys.oneTime.rewardAddress(net, index)), index]));
+      for (const [r, key] of rewards) {
+        if (key === stake) r.yours = { kind: "account", account: keys.account };
+        else if (sessionStakes.has(key)) r.yours = { kind: "session", index: sessionStakes.get(key)! };
+      }
+    }
     return keys.account;
   });
   for (const index of known) {
     const rest = outputs.filter((o) => !o.yours && paymentKey(o.address));
-    if (!rest.length) return;
+    const restRewards = rewards.filter(([r]) => !r.yours);
+    if (!rest.length && !restRewards.length) return;
     if (index === active) continue;
-    const theirs = await wallet.withAccount(index, (keys) => accountKeys(keys.cardano));
-    for (const o of rest) if (theirs.has(paymentKey(o.address)!)) o.yours = { kind: "account", account: index };
+    const theirs = await wallet.withAccount(index, (keys) => ({
+      payment: rest.length ? accountKeys(keys.cardano) : undefined,
+      stake: stakeKey(wasm, keys.cardano.stakeAddress(net)),
+    }));
+    for (const o of rest) if (theirs.payment?.has(paymentKey(o.address)!)) o.yours = { kind: "account", account: index };
+    for (const [r, key] of restRewards) if (key === theirs.stake) r.yours = { kind: "account", account: index };
   }
 }
 
