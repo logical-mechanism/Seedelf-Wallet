@@ -11,7 +11,8 @@ import { describe, expect, it } from "vitest";
 
 import type { TxDetail, TxPlutus } from "../src/shared/rpc";
 import { plutusJson } from "../src/ui/components/PlutusTree";
-import { TxDetailBody, TxDetailModal, addressWords, certificateWords, proposalWords, redeemerWords } from "../src/ui/components/TxDetail";
+import { TxDetailBody, TxDetailModal, addressWords, certificateWords, redeemerWords } from "../src/ui/components/TxDetail";
+import { proposalWords } from "../src/ui/format";
 import { AccountsContext } from "../src/ui/accounts";
 import { NetworkContext } from "../src/ui/network";
 import { loadTestWasm, transferPreprod } from "./fakes";
@@ -338,6 +339,40 @@ describe("nothing the decoder found is left off the page", () => {
     expect(page).toContain("Follows abababab");
     expect(page).toContain("Script cdcdcd");
     expect(page).toContain("https://example.com/withdraw");
+    // Where its deposit goes back to, on its own line, and never twice.
+    expect(page).toContain("Deposit back to stake_test1uzf20srl7uvcknahpn4wq7q4xs8e0xdcgyf28a6mwv7jcrqq987ua");
+    expect(page.match(/Deposit back to/g)).toHaveLength(1);
+    expect(page).not.toContain("Yours");
+  });
+
+  it("tags a withdrawal and a proposal's deposit back as the user's, by whose stake key they are (chunk 39)", () => {
+    const base = read(cborOf("governance"));
+    const reward = "stake_test1uzf20srl7uvcknahpn4wq7q4xs8e0xdcgyf28a6mwv7jcrqq987ua";
+    const proposal = {
+      deposit: "100000000000",
+      rewardAccount: reward,
+      action: "information",
+      follows: null,
+      parameters: [],
+      withdrawals: [],
+      script: null,
+      version: null,
+      anchor: { url: "https://example.com/info", contentHash: "00".repeat(32) },
+    };
+    const detail: TxDetail = {
+      ...base,
+      withdrawals: [{ address: reward, lovelace: "5000000", yours: { kind: "account", account: 0 } }],
+      proposals: [{ ...proposal, yours: { kind: "session", index: 1 } }, proposal],
+    };
+    const html = renderToStaticMarkup(
+      createElement(NetworkContext.Provider, { value: "preprod" }, createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" })),
+    );
+    expect(html.match(/data-testid="tx-withdrawal-yours"[^>]*>Yours, in your public account</g)).toHaveLength(1);
+    // The first proposal's only: the other's reward address isn't the user's.
+    expect(html.match(/data-testid="tx-proposal-yours"[^>]*>Yours, in private session 2</g)).toHaveLength(1);
+    expect(html.match(/tx-proposal-yours/g)).toHaveLength(1);
+    // The tag is the row's, not one of its fields.
+    expect(html).not.toContain(">yours<");
   });
 
   it("shows a collateral return and a total even with no collateral inputs", () => {

@@ -48,7 +48,7 @@ import { refusalOf, SessionRefusedFoot, type Refusal } from "../components/Sessi
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
-import { certificateLine, certifiedLine, paidTo, signingTies, stakedLine, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
+import { certificateLine, certifiedLine, paidTo, proposalLine, signingTies, stakedLine, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
 import { adaText, formatAda, formatQuantity, shortHex, slotText, unlocked } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts, usePreferences } from "../preferences";
@@ -1021,7 +1021,6 @@ export function SignTx({
   if (s.scripts) notes.push(tr("dappUi.note.scripts"));
   if (s.referenceInputs) notes.push(tr("dappUi.note.reads", { count: s.referenceInputs }));
   if (s.votes && s.votes > (s.ownVotes ?? 0)) notes.push(tr("dappUi.note.votes", { count: s.votes - (s.ownVotes ?? 0) }));
-  if (s.proposals) notes.push(tr("dappUi.note.proposals", { count: s.proposals }));
   if (s.donation) notes.push(tr("dappUi.note.donates", { ada: formatAda(s.donation) }));
   if (s.metadata && !s.note) notes.push(tr("dappUi.note.metadata"));
 
@@ -1139,9 +1138,13 @@ export function SignTx({
         </ReviewRows>
       )}
 
-      {(s.certificates.length > 0 || s.withdrawals.length > 0) && (
+      {/* A proposal's deposit goes back to the stake key it names, which a site can make anyone's: a warning when it
+          isn't the account's own (chunk 39). */}
+      {(s.certificates.length > 0 || s.withdrawals.length > 0 || s.proposals.length > 0) && (
         <Callout
-          tone={s.certificates.some((c) => c.own) || (staking > 0n && !back) ? "warn" : "info"}
+          tone={
+            s.certificates.some((c) => c.own) || (staking > 0n && !back) || s.proposals.some((p) => !p.own) ? "warn" : "info"
+          }
           testId="dapp-staking"
         >
           <ul className="dapp-points">
@@ -1150,6 +1153,9 @@ export function SignTx({
             ))}
             {s.withdrawals.map((w, i) => (
               <li key={`w${i}`}>{withdrawalLine(w, back, whose, named)}</li>
+            ))}
+            {s.proposals.map((p, i) => (
+              <li key={`p${i}`}>{proposalLine(p, whose, named)}</li>
             ))}
           </ul>
         </Callout>

@@ -6,7 +6,7 @@ import { crc32, deflateSync } from "node:zlib";
 import type { BrowserContext, Locator, Page } from "@playwright/test";
 
 import { epochAt, NETWORKS } from "../src/networks";
-import { bech32Bytes, preprodAddress } from "../tests/fixtures/bech32";
+import { bech32, bech32Bytes, preprodAddress } from "../tests/fixtures/bech32";
 
 import {
   accountMintPreprod,
@@ -5342,7 +5342,7 @@ test.describe("the dApp connector", () => {
     await expect(staking).toContainText("A certificate for the stake key of Account 2.");
     await expect(staking).not.toContainText("isn't yours");
     await expect(sign.getByTestId("dapp-certified")).toHaveText(
-      "A certificate or withdrawal in it names the stake key of Account 2: signing ties Account 1 to Account 2 on chain, where anyone can see it.",
+      "A certificate, withdrawal or proposal in it names the stake key of Account 2: signing ties Account 1 to Account 2 on chain, where anyone can see it.",
     );
     await expect(sign.getByTestId("dapp-ties")).toHaveCount(0);
     await expect(sign.getByTestId("dapp-staked")).toHaveCount(0);
@@ -5352,6 +5352,48 @@ test.describe("the dApp connector", () => {
     );
     await expect(sign.getByText(/(isn't|aren't) in it/)).toHaveCount(0);
     await snap(sign, "dapp-sign-tx-certified");
+    await sign.getByRole("button", { name: "Decline" }).click();
+    expect((await signing).error?.code).toBe(2);
+  });
+
+  test("a site's prompt says a proposal's deposit goes to a stake key that isn't yours, with its whole address (chunk 39)", async ({
+    context,
+    koios,
+  }) => {
+    const { dapp, input } = await siteOnAccount1(context, koios);
+    // A site's transaction, by hand, as a bounty report's against 1.7.1: one of Account 1's UTxOs, 2 ₳ to someone
+    // else, and a proposal of information whose 100,000 ₳ deposit goes back to someone else's stake key when the
+    // action ends. It takes no signature of that key's: the prompt said only "It makes 1 governance proposal".
+    const to = `00${"ab".repeat(28)}${"cd".repeat(28)}`;
+    const reward = `e0${"44".repeat(28)}`;
+    const anchor = `826b${Buffer.from("https://x.y").toString("hex")}5820${"33".repeat(32)}`;
+    const tx = `84a40081${input}0181825839${to}1a001e8480021a00029810148184${"1b000000174876e800"}581d${reward}8106${anchor}a0f5f6`;
+
+    const opened = connectorWindow(context);
+    const signing = cip30(dapp, "signTx", tx, false);
+    const sign = await opened;
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    // A warning, with the whole address: nothing is refused, and it's the user's to sign.
+    const staking = sign.getByTestId("dapp-staking");
+    await expect(staking).toHaveClass(/callout--warn/);
+    await expect(staking).toHaveText(
+      `Proposes information, which changes nothing. Its 100,000 ₳ deposit goes to a stake key that isn't yours, ${bech32("stake_test", Buffer.from(reward, "hex"))}, when the action ends.`,
+    );
+    await expect(sign.getByText(/governance proposal/)).toHaveCount(0);
+    // No account of the wallet's is in it: nothing tied.
+    await expect(sign.getByTestId("dapp-certified")).toHaveCount(0);
+    await expect(sign.getByRole("button", { name: "Sign", exact: true })).toBeVisible();
+    await snap(sign, "dapp-sign-tx-proposal");
+    // Transaction details shows the same address on its own line, and doesn't call it the user's.
+    await sign.getByTestId("dapp-tx-open").click();
+    const view = sign.getByTestId("dapp-tx");
+    await expect(view).toContainText("Deposit back to");
+    await expect(view.locator(`[data-value="${bech32("stake_test", Buffer.from(reward, "hex"))}"]`)).toBeVisible();
+    await expect(view.getByTestId("tx-proposal-yours")).toHaveCount(0);
+    await view.getByText("Deposit back to").scrollIntoViewIfNeeded();
+    await snap(sign, "dapp-tx-detail-proposal");
+    await sign.keyboard.press("Escape");
+    await expect(view).toHaveCount(0);
     await sign.getByRole("button", { name: "Decline" }).click();
     expect((await signing).error?.code).toBe(2);
   });

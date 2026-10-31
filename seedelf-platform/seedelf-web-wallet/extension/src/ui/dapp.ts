@@ -6,11 +6,12 @@
 
 import { joinSentences, t } from "../i18n";
 import type { DappTie, DappTxSummary } from "../shared/rpc";
-import { formatAda, voteLabel } from "./format";
+import { formatAda, proposalWords, voteLabel } from "./format";
 
 type Paid = DappTxSummary["paid"][number];
 type Certificate = DappTxSummary["certificates"][number];
 type Withdrawal = DappTxSummary["withdrawals"][number];
+type Proposal = DappTxSummary["proposals"][number];
 
 /** A public account's number and name, where the wallet has more than one; undefined with one, "your public account" says it. */
 export type AccountNamer = (index: number) => string | undefined;
@@ -201,6 +202,20 @@ export function certificateLine(c: Certificate, back: boolean, whose: string, na
     c.kind === "unregister" && stopsLine(c, back, whose),
     delegationLine(c.pool, what),
   ]);
+}
+
+/**
+ * A governance proposal in a sentence: what it proposes, and whose stake key its deposit goes back to when the action
+ * ends, which a site can make anyone's (chunk 39, a bounty report against 1.7.1). `whose` and `named` as for a
+ * withdrawal: another of the wallet's stake keys by its name, never as one that isn't yours (X05); anyone else's with
+ * its whole address. The deposit itself is in what the account sends, above.
+ */
+export function proposalLine(p: Proposal, whose: string, named?: AccountNamer): string {
+  const what = proposalWords(p.action);
+  const amount = formatAda(p.deposit);
+  if (p.own) return t("dappUi.proposal.warn.own", { what, amount, whose });
+  if (p.yours !== undefined) return t("dappUi.proposal.warn.wallet", { what, amount, name: tiedName(p.yours, named) });
+  return t("dappUi.proposal.warn.notYours", { what, amount, address: p.address });
 }
 
 /** The account's staking stopped, and whether the deposit it gets back comes back to it. */

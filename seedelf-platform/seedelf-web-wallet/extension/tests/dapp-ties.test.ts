@@ -53,14 +53,25 @@ function paying(inputs: string[], to: string[]) {
   return `84a300${outpoints(inputs)}01${outputs}021a00029810a0f5f6`;
 }
 
-/** As `paying`, with `certificates` (CBOR, hex) and a zero withdrawal from each of `withdrawals` (reward addresses, CIP-30 hex). */
-function carrying(inputs: string[], to: string[], { certificates = [], withdrawals = [] }: { certificates?: string[]; withdrawals?: string[] }) {
+/**
+ * As `paying`, with `certificates` (CBOR, hex), a zero withdrawal from each of `withdrawals` and a proposal whose deposit
+ * goes back to each of `proposals` (reward addresses, CIP-30 hex).
+ */
+function carrying(
+  inputs: string[],
+  to: string[],
+  { certificates = [], withdrawals = [], proposals = [] }: { certificates?: string[]; withdrawals?: string[]; proposals?: string[] },
+) {
   const outputs = `8${to.length}${to.map((a) => `82${bytesOf(a)}1a003d0900`).join("")}`;
   const fields = [`00${outpoints(inputs)}`, `01${outputs}`, "021a00029810"];
   if (certificates.length) fields.push(`048${certificates.length}${certificates.join("")}`);
   if (withdrawals.length) fields.push(`05a${withdrawals.length}${withdrawals.map((w) => `${bytesOf(w)}00`).join("")}`);
+  if (proposals.length) fields.push(`148${proposals.length}${proposals.map(proposes).join("")}`);
   return `84a${fields.length}${fields.join("")}a0f5f6`;
 }
+
+/** An Info action with a 1,000 ₳ deposit that goes back to `reward` (a reward address, CIP-30 hex): it takes no signature of that key's. */
+const proposes = (reward: string) => `841a3b9aca00${bytesOf(reward)}8106826b${Buffer.from("https://x.y").toString("hex")}5820${"33".repeat(32)}`;
 
 /** An old-style stake registration (certificate kind 0) of a stake key hash: it needs no signature of that key's. */
 const registers = (stakeHash: string) => `82008200581c${stakeHash}`;
@@ -259,7 +270,7 @@ describe("a private session's signing prompt", () => {
     const page = shown(registering, true);
     expect(page).toContain("A certificate for the stake key of your public account.");
     expect(page).toContain(
-      "A certificate or withdrawal in it names the stake key of your public account: signing ties this private session to your public account on chain, where anyone can see it.",
+      "A certificate, withdrawal or proposal in it names the stake key of your public account: signing ties this private session to your public account on chain, where anyone can see it.",
     );
     expect(page).not.toContain("isn't yours");
     expect(page).not.toContain("in it.");
@@ -287,7 +298,7 @@ describe("a private session's signing prompt", () => {
     expect(approval.summary.certificates.map((c) => [c.kind, c.own, c.credential, c.yours])).toEqual([["pool", false, reward.slice(2), { account: 0 }]]);
     const page = shown(approval, true, true);
     expect(page).toContain(
-      "A certificate or withdrawal in it names the stake key of your public account: signing ties this private session to your public account on chain, where anyone can see it.",
+      "A certificate, withdrawal or proposal in it names the stake key of your public account: signing ties this private session to your public account on chain, where anyone can see it.",
     );
     expect(page).not.toContain("in it.");
     // Someone else's reward account is none of the wallet's: the other side is still said not to be in it.
@@ -384,10 +395,36 @@ describe("the public account's signing prompt", () => {
     const page = shown(approval, false);
     expect(page).toContain("A certificate for the stake key of your private session 1.");
     expect(page).toContain(
-      "A certificate or withdrawal in it names the stake key of your private session 1: signing ties your public account to your private session 1 on chain, where anyone can see it.",
+      "A certificate, withdrawal or proposal in it names the stake key of your private session 1: signing ties your public account to your private session 1 on chain, where anyone can see it.",
     );
     expect(page).not.toContain("isn't yours");
     expect(page).not.toContain("isn't in it");
+  });
+
+  it("names a private session a proposal's deposit goes back to, and never says the private balance isn't in it (chunk 39)", async () => {
+    const { t, dapp, s, spend } = await withTwoSessions();
+    const { wasm } = t.deps;
+    const reward = await t.wallet.withKeys((k) => wasm.cip30Address(k.oneTime.rewardAddress(wasm.Network.Preprod, 0)));
+    // The public account pays the deposit, and the ledger sends it to private session 1's reward account when the
+    // action ends: no signature of that key's, and the two are tied on chain.
+    const approval = await prompt(dapp, s, carrying([spend], [wasm.cip30Address(THEIRS)], { proposals: [reward] }));
+    expect(approval.summary.complete).toBe(true);
+    expect([approval.ties, approval.staked, approval.certified]).toEqual([[], [], [0]]);
+    expect(approval.summary.proposals.map((p) => [p.action, p.own, p.credential, p.yours])).toEqual([["information", false, reward.slice(2), 0]]);
+    const page = shown(approval, false);
+    expect(page).toContain("Its 1,000 ₳ deposit comes back to the stake key of your private session 1 when the action ends.");
+    expect(page).toContain(
+      "A certificate, withdrawal or proposal in it names the stake key of your private session 1: signing ties your public account to your private session 1 on chain, where anyone can see it.",
+    );
+    expect(page).not.toContain("isn't yours");
+    expect(page).not.toContain("isn't in it");
+
+    // Anyone else's: said with its whole address, and it ties nothing.
+    const stranger = `e0${"44".repeat(28)}`;
+    const theirs = await prompt(dapp, s, carrying([spend], [wasm.cip30Address(THEIRS)], { proposals: [stranger] }));
+    expect([theirs.ties, theirs.staked, theirs.certified]).toEqual([[], [], []]);
+    expect(theirs.summary.proposals.map((p) => p.yours)).toEqual([undefined]);
+    expect(shown(theirs, false)).toContain(`Its 1,000 ₳ deposit goes to a stake key that isn't yours, ${theirs.summary.proposals[0]!.address}, when the action ends.`);
   });
 
   it("names a private session a stake pool's registration makes its reward account, and never says the private balance isn't in it (the last review, L1)", async () => {
@@ -403,7 +440,7 @@ describe("the public account's signing prompt", () => {
     const page = shown(approval, false, true);
     expect(page).toContain("Registers stake pool");
     expect(page).toContain(
-      "A certificate or withdrawal in it names the stake key of your private session 1: signing ties your public account to your private session 1 on chain, where anyone can see it.",
+      "A certificate, withdrawal or proposal in it names the stake key of your private session 1: signing ties your public account to your private session 1 on chain, where anyone can see it.",
     );
     expect(page).not.toContain("isn't in it");
   });
@@ -446,7 +483,7 @@ describe("the prompt's words", () => {
     scripts: false,
     referenceInputs: 0,
     votes: 0,
-    proposals: 0,
+    proposals: [],
     donation: null,
     note: null,
     metadata: false,
@@ -555,7 +592,7 @@ describe("the prompt's words", () => {
     );
     expect(withdrawalLine(withdrawal, true, "your public account")).toBe("Withdraws 5\u00a0₳ from a reward account that isn't yours.");
     expect(certifiedLine([{ account: 2 }, 1], false, named, "Account 1")).toBe(
-      "A certificate or withdrawal in it names the stake key of Account 3 · Savings and your private session 2: signing ties Account 1 to Account 3 · Savings and your private session 2 on chain, where anyone can see it.",
+      "A certificate, withdrawal or proposal in it names the stake key of Account 3 · Savings and your private session 2: signing ties Account 1 to Account 3 · Savings and your private session 2 on chain, where anyone can see it.",
     );
     // In the window: the tie said, and the other side never said to be out of it.
     const page = text({

@@ -809,6 +809,25 @@ pub struct Withdrawal {
     pub own: bool,
 }
 
+/// A governance proposal, and whose stake key its deposit goes back to when
+/// the action ends: the reward account it names, which can be anyone's (a
+/// bounty report against 1.7.1). It takes no signature of that key's.
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Proposal {
+    /// Its kind, as the transaction view names it (decode.rs `action_kind`).
+    pub action: String,
+    pub deposit: String,
+    /// The reward account it goes back to, bech32, as a withdrawal's.
+    pub address: String,
+    /// It's the account's own stake key's. A script's never is.
+    pub own: bool,
+    /// That stake key, its hash in hex, the account's own or anyone's: the
+    /// extension names it when it's another of the wallet's, as it does a
+    /// certificate's (X05). None for a script's.
+    pub credential: Option<String>,
+}
+
 #[derive(Serialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CollateralOut {
@@ -873,7 +892,7 @@ pub struct TxSummary {
     pub own_votes: usize,
     /// Each of them: which governance action, and how (C14).
     pub own_ballots: Vec<Ballot>,
-    pub proposals: usize,
+    pub proposals: Vec<Proposal>,
     pub donation: Option<String>,
     /// CIP-20's message (label 674), when there is one.
     pub note: Option<Vec<String>>,
@@ -1506,6 +1525,36 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         });
     }
 
+    // A proposal's deposit leaves with the account's UTxOs, counted in what it
+    // spends, and goes back to the reward account it names when the action
+    // ends: said here, never refused for being someone else's, which is legal
+    // and the user's to sign. The other network's is refused, as the ledger
+    // refuses it (ProposalProcedureNetworkIdMismatch).
+    let mut proposals = Vec::new();
+    for proposal in body.proposal_procedures.iter().flat_map(|p| p.iter()) {
+        let address = Address::from_bytes(&proposal.reward_account)
+            .map_err(|e| anyhow!("A proposal's reward address is unreadable: {e}"))?;
+        let Address::Stake(s) = &address else {
+            bail!("A proposal's deposit doesn't go back to a reward address.");
+        };
+        if s.network() != network {
+            bail!(
+                "This transaction's proposal returns its deposit on {other_name}, and the wallet is on {network_name}."
+            );
+        }
+        let key = match s.payload() {
+            StakePayload::Stake(h) => Some(*h),
+            StakePayload::Script(_) => None,
+        };
+        proposals.push(Proposal {
+            action: crate::decode::action_kind(&proposal.gov_action).to_string(),
+            deposit: proposal.deposit.to_string(),
+            address: address.to_bech32().unwrap_or_else(|_| address.to_hex()),
+            own: key == Some(keys.stake),
+            credential: key.map(hex::encode),
+        });
+    }
+
     let mut votes = 0;
     let mut own_votes = 0;
     let mut own_ballots = Vec::new();
@@ -1624,7 +1673,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         votes,
         own_votes,
         own_ballots,
-        proposals: body.proposal_procedures.as_ref().map_or(0, |p| p.len()),
+        proposals,
         donation: body.donation.map(|d| u64::from(d).to_string()),
         note,
         metadata,

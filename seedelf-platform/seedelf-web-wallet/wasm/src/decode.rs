@@ -1111,7 +1111,7 @@ fn proposal_detail(proposal: &conway::ProposalProcedure) -> Result<DetailProposa
     let mut detail = DetailProposal {
         deposit: proposal.deposit.to_string(),
         reward_account: reward_address(&proposal.reward_account),
-        action: String::new(),
+        action: action_kind(&proposal.gov_action).to_string(),
         follows: None,
         parameters: Vec::new(),
         withdrawals: Vec::new(),
@@ -1122,7 +1122,7 @@ fn proposal_detail(proposal: &conway::ProposalProcedure) -> Result<DetailProposa
             content_hash: hex::encode(proposal.anchor.content_hash.as_ref()),
         },
     };
-    detail.action = match &proposal.gov_action {
+    match &proposal.gov_action {
         A::ParameterChange(previous, update, guardrail) => {
             detail.follows = id(previous);
             detail.script = script(guardrail);
@@ -1139,12 +1139,10 @@ fn proposal_detail(proposal: &conway::ProposalProcedure) -> Result<DetailProposa
                     hex: hex::encode(value),
                 })
                 .collect();
-            "parameterChange"
         }
         A::HardForkInitiation(previous, (major, minor)) => {
             detail.follows = id(previous);
             detail.version = Some(format!("{major}.{minor}"));
-            "hardFork"
         }
         A::TreasuryWithdrawals(payments, guardrail) => {
             detail.script = script(guardrail);
@@ -1154,25 +1152,32 @@ fn proposal_detail(proposal: &conway::ProposalProcedure) -> Result<DetailProposa
                     lovelace: amount.to_string(),
                 });
             }
-            "treasuryWithdrawals"
         }
-        A::NoConfidence(previous) => {
-            detail.follows = id(previous);
-            "noConfidence"
-        }
-        A::UpdateCommittee(previous, ..) => {
-            detail.follows = id(previous);
-            "updateCommittee"
+        A::NoConfidence(previous) | A::UpdateCommittee(previous, ..) => {
+            detail.follows = id(previous)
         }
         A::NewConstitution(previous, constitution) => {
             detail.follows = id(previous);
             detail.script = script(&constitution.guardrail_script);
-            "newConstitution"
         }
+        A::Information => {}
+    }
+    Ok(detail)
+}
+
+/// A governance action's kind, as the transaction view names it and a site's
+/// sign window says what a proposal proposes (cip30.rs).
+pub(crate) fn action_kind(action: &conway::GovAction) -> &'static str {
+    use conway::GovAction as A;
+    match action {
+        A::ParameterChange(..) => "parameterChange",
+        A::HardForkInitiation(..) => "hardFork",
+        A::TreasuryWithdrawals(..) => "treasuryWithdrawals",
+        A::NoConfidence(..) => "noConfidence",
+        A::UpdateCommittee(..) => "updateCommittee",
+        A::NewConstitution(..) => "newConstitution",
         A::Information => "information",
     }
-    .to_string();
-    Ok(detail)
 }
 
 /// A script's kind, hash and size, from the bytes the ledger hashes.

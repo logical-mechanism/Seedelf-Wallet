@@ -50,7 +50,7 @@ const summary = (over: Partial<DappTxSummary>): DappTxSummary => ({
   scripts: false,
   referenceInputs: 0,
   votes: 0,
-  proposals: 0,
+  proposals: [],
   donation: null,
   note: null,
   metadata: false,
@@ -126,6 +126,27 @@ describe("a site's signing prompt", () => {
     expect(page).not.toMatch(/, net|the net/);
     const gets = text(render(summary({ netLovelace: "2000000", spentLovelace: "0", returnedLovelace: "2000000", ownInputs: 0 })));
     expect(gets).toMatch(/Total coming into your public account\s+2 ₳/);
+  });
+
+  it("says whose stake key each proposal's deposit goes back to, and warns when it isn't the account's (chunk 39)", () => {
+    // The bounty report's transaction (wasm/tests/fixtures/proposal-report-preprod.json): it read only "It makes 1
+    // governance proposal", and its deposit went back to a stake key that wasn't the payer's.
+    const theirs = "stake_test1upzpt4r85pf27gttzrvd4jxe7yuc8j5vmp537w0f6vmpceqq7cun8";
+    const proposal = { action: "information", deposit: "1000000000", address: theirs, own: false, credential: "44".repeat(28) };
+    const stranger = render(summary({ proposals: [proposal] }));
+    expect(stranger).toContain('<div class="callout callout--warn" data-testid="dapp-staking">');
+    expect(text(stranger)).toContain(
+      `Proposes information, which changes nothing. Its 1,000 ₳ deposit goes to a stake key that isn't yours, ${theirs}, when the action ends.`,
+    );
+    expect(text(stranger)).not.toContain("governance proposal");
+    // The account's own: said where it comes back, and nothing to warn of.
+    const own = render(summary({ proposals: [{ ...proposal, own: true }] }));
+    expect(own).toContain('<div class="callout callout--info" data-testid="dapp-staking">');
+    expect(text(own)).toContain("Its 1,000 ₳ deposit comes back to your public account when the action ends.");
+    // Two in one: each its own line, and a warning if either isn't the account's.
+    const both = render(summary({ proposals: [{ ...proposal, own: true }, proposal] }));
+    expect(both).toContain('<div class="callout callout--warn" data-testid="dapp-staking">');
+    expect(text(both).match(/Proposes information/g)).toHaveLength(2);
   });
 
   it("names the account that signs when the wallet has more than one, and only then (chunk 23's second review, CW-5)", () => {

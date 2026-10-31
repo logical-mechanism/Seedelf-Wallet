@@ -1107,7 +1107,23 @@ export interface DappTxSummary {
   ownVotes?: number;
   /** Each vote the account's own DRep casts: which action, and how (C14). */
   ownBallots?: Array<{ txHash: string; index: number; vote: "yes" | "no" | "abstain" }>;
-  proposals: number;
+  /**
+   * Each governance proposal, and whose stake key its deposit goes back to when the action ends: the reward account it
+   * names, which can be anyone's and takes no signature of theirs (chunk 39, a bounty report against 1.7.1).
+   */
+  proposals: Array<{
+    /** Its kind, as the transaction view names it (`proposalWords`). */
+    action: string;
+    deposit: string;
+    /** The reward address it goes back to, bech32. */
+    address: string;
+    /** The signing account's own stake key's. */
+    own: boolean;
+    /** That stake key, its hash in hex, the account's own or anyone's; none for a script's (WebAssembly's, as a certificate's). */
+    credential: string | null;
+    /** Another of the wallet's accounts or sessions whose stake key it is, as for a certificate (X05). */
+    yours?: DappTie;
+  }>;
   donation: string | null;
   /** CIP-20's message lines. */
   note: string[] | null;
@@ -1276,6 +1292,8 @@ export interface TxWithdrawal {
   /** The reward address in bech32, or its bytes in hex when they're no address. */
   address: string;
   lovelace: string;
+  /** Whose reward address it is, where it's the user's, by its stake key: the body's withdrawals only (tx-view.ts). */
+  yours?: TxYours;
 }
 
 /** One vote on one governance action. */
@@ -1291,6 +1309,8 @@ export interface TxVote {
 export interface TxProposal {
   deposit: string;
   rewardAccount: string;
+  /** Whose `rewardAccount` is, where it's the user's, by its stake key, as a withdrawal's (tx-view.ts). */
+  yours?: TxYours;
   action: string;
   follows: TxActionId | null;
   /** A parameter change's parameters, by the ledger's numbering, each as raw CBOR. */

@@ -2223,8 +2223,10 @@ export class DappService {
    * the signing account's keys alone. An old-style registration of one needs
    * no signature of that key's, and the prompt said "a stake key that isn't
    * yours" and that the other side wasn't in it (1.5.0's release review,
-   * X05). Each output, certificate and withdrawal is named in the summary
-   * this returns (`yours`), where it's another of the wallet's.
+   * X05). So does a proposal whose deposit goes back to one, which takes no
+   * signature of its key's either (chunk 39). Each output, certificate,
+   * withdrawal and proposal is named in the summary this returns (`yours`),
+   * where it's another of the wallet's.
    */
   private async ties(
     network: NetworkName,
@@ -2292,11 +2294,13 @@ export class DappService {
     const all: DappTie[] = [];
     const staked: DappTie[] = [];
     for (const [address, own] of read) (ours(address, own) ? all : staked).push(...whose(address));
-    // The stake key a certificate or a withdrawal names, when it isn't the signing account's: another of the
-    // wallet's, or anyone's. A script's, as a contract's "withdraw zero", names no key, and is nobody's (X05).
+    // The stake key a certificate, a withdrawal or a proposal's deposit names, when it isn't the signing account's:
+    // another of the wallet's, or anyone's. A script's, as a contract's "withdraw zero", names no key, and is
+    // nobody's (X05).
     const byStake = (stake: string | null | undefined) => (stake ? byKeys(undefined, stake)[0] : undefined);
     const certificates = summary.certificates.map((c) => (c.own ? undefined : byStake(c.credential)));
     const withdrawals = summary.withdrawals.map((w) => (w.own ? undefined : byStake(keysOf(wasm, w.address).stake)));
+    const proposals = summary.proposals.map((p) => (p.own ? undefined : byStake(p.credential)));
     const rank = (t: DappTie): [number, number] => (typeof t === "number" ? [1, t] : [0, t.account]);
     // Each once, public accounts first.
     const listed = (ties: DappTie[]) =>
@@ -2313,10 +2317,11 @@ export class DappService {
         paid: named(summary.paid, summary.paid.map((p) => whose(p.address, true)[0])),
         certificates: named(summary.certificates, certificates),
         withdrawals: named(summary.withdrawals, withdrawals),
+        proposals: named(summary.proposals, proposals),
       },
       all: listed(all),
       staked: listed(staked),
-      certified: listed([...certificates, ...withdrawals].filter((t) => t !== undefined)),
+      certified: listed([...certificates, ...withdrawals, ...proposals].filter((t) => t !== undefined)),
     };
   }
 
