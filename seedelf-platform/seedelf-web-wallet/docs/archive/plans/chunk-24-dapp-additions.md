@@ -2,7 +2,7 @@
 
 Branch `web-wallet/dapp-additions`, from `main`. **One long branch for all of it** (the owner, 2026-10-06), with a PR at the end.
 
-**Status: built and run live (2026-10-06 and 07).** SundaeSwap V3 and Danogo are routed, routes are direct, and Stop cancels every order itself. The owner ran every DEX the wallet routes on mainnet but Splash and Spectrum, and two Stops there cancelled, and the stuck preprod V3 order cancelled live ([*Mainnet runs*](#mainnet-runs-the-pairs-2026-10-07), [Step 3](#step-3--stops-own-cancel-2026-10-07)). It goes out in 1.3.0 (the owner, 2026-10-07). What's still open is in [post-release-roadmap.md](../../post-release-roadmap.md)'s *Owed* (O2, O4) and *Kept in mind*.
+**Status: built and run live (2026-10-06 and 07).** SundaeSwap V3 and Danogo are routed, routes are direct, and Stop cancels every order itself. The owner ran every DEX the wallet routes on mainnet but Splash and Spectrum, and two Stops there cancelled, and the stuck preprod V3 order cancelled live ([*Mainnet runs*](#mainnet-runs-the-pairs-2026-10-07), [Step 3](#step-3--stops-own-cancel-2026-10-07)). It goes out in 1.3.0 (the owner, 2026-10-07). What's still open is in [post-release-roadmap.md](../post-release-roadmap.md)'s *Owed* (O2, O4) and *Kept in mind*.
 
 ## The owner's calls (2026-10-06)
 
@@ -19,7 +19,7 @@ Checked against live chain data, APIs and repos.
   - Minswap was within 0.12% of the best quote at 500 ADA or more.
   - Steelswap's CORS refuses `chrome-extension://` origins, and it has no preprod.
   - DexHunter costs 0.25% plus 2–5 ₳, and makes the stake key a required signer.
-  - No aggregator takes a receiver or receiver datum, so A2 ([O4](../../post-release-roadmap.md#owed)) needs DEX-specific builders. That's not this chunk.
+  - No aggregator takes a receiver or receiver datum, so A2 ([O4](../post-release-roadmap.md#owed)) needs DEX-specific builders. That's not this chunk.
 - **Volume.**
   - DefiLlama's "SundaeSwap V2" is Sundae's V1 contracts. Its $47M a month is Sundae's self-reported total across all versions. Pool-script transactions over a week: V3 ~3,480, Stableswaps 445, V4 237, V1 177.
   - "Dano Finance" is Danogo. Its TVL counts lending too; the concentrated-liquidity DEX (CLMM) holds about 2.87M ₳ on the ADA side.
@@ -126,7 +126,7 @@ The DEX runs are mainnet's: preprod's pools route almost nothing the wallet can 
 
 Minswap charges its aggregator fee (0.85 ₳; 1 ₳ for a stablecoin pair) on every route but its own pools.
 
-**Run (the owner, 2026-10-07): "everything works."** Every pair above but Spectrum's and Splash's, on a mainnet test wallet: each order placed, filled and its money back, Danogo's filled in the swap itself; and a Stop on an NTX swap (Minswap V2) and a MIN one (Minswap V1), each cancelled before its fill and the money back. The MIN one is the first live Plutus V1 cancel: the order's script and datum in the transaction, and its script data hash `with_integrity`'s, which the node took. With the WingRiders runs, that's the smoke test. Splash and Spectrum stay open ([O2](../../post-release-roadmap.md#owed)).
+**Run (the owner, 2026-10-07): "everything works."** Every pair above but Spectrum's and Splash's, on a mainnet test wallet: each order placed, filled and its money back, Danogo's filled in the swap itself; and a Stop on an NTX swap (Minswap V2) and a MIN one (Minswap V1), each cancelled before its fill and the money back. The MIN one is the first live Plutus V1 cancel: the order's script and datum in the transaction, and its script data hash `with_integrity`'s, which the node took. With the WingRiders runs, that's the smoke test. Splash and Spectrum stay open ([O2](../post-release-roadmap.md#owed)).
 
 ## Step 3 · Stop's own cancel (2026-10-07)
 

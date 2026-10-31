@@ -24,7 +24,7 @@
 ## Start here
 
 1. `git fetch origin && git checkout -b web-wallet/staking origin/seedelf-web-wallet`
-2. Read this plan, then chunk 12's handoff note in [roadmap.md](../../roadmap.md#handoff-notes).
+2. Read this plan, then chunk 12's handoff note in [roadmap.md](../roadmap.md#handoff-notes).
 3. Build and test (from `extension/`): `npm run build && npm test && npm run e2e`.
 4. Record the fixtures below from preprod before writing the worker.
 

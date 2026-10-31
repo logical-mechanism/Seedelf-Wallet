@@ -2,7 +2,7 @@
 
 Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The data layer goes public on a DigitalOcean droplet, home's services are reached through a tunnel, and the drills run. Then the store build gets the API's address, and that's 1.4.0.
 
-**Status: ✅ done, in 1.4.0:** the VPS, the deploy workflow, CI and the drills (#291–#293), then [the 1.4.0 PR](#the-140-pr) (#294), deployed and packaged ([After the merge](#after-the-merge)) and recorded (#295). Archived at 1.4.1, its open items carried into [post-release-roadmap.md](../../post-release-roadmap.md#kept-in-mind)'s *Kept in mind*.
+**Status: ✅ done, in 1.4.0:** the VPS, the deploy workflow, CI and the drills (#291–#293), then [the 1.4.0 PR](#the-140-pr) (#294), deployed and packaged ([After the merge](#after-the-merge)) and recorded (#295). Archived at 1.4.1, its open items carried into [post-release-roadmap.md](../post-release-roadmap.md#kept-in-mind)'s *Kept in mind*.
 
 **Done so far (2026-10-09):**
 - the decisions below are settled;
@@ -43,11 +43,11 @@ Then [the 1.4.0 PR](#the-140-pr).
 The brief it started from, kept as written; [what was done](#what-the-pr-did-2026-10-09) follows it.
 
 
-**The branch is `web-wallet/release-1.4.0`,** from `main` at #293's merge (`56696f2`). It's the release PR, shaped like 1.3.0's (#286): a review, its fixes, the lists and the bump. After the upload comes a `release-1.4.0-record` PR with the package's commit and SHA-256, as #287 was. **No tag:** the handoff note is the record ([post-release-roadmap.md](../../post-release-roadmap.md#how-this-file-works)). If the owner wants one, it needs a slash: `web-wallet/1.4.0`.
+**The branch is `web-wallet/release-1.4.0`,** from `main` at #293's merge (`56696f2`). It's the release PR, shaped like 1.3.0's (#286): a review, its fixes, the lists and the bump. After the upload comes a `release-1.4.0-record` PR with the package's commit and SHA-256, as #287 was. **No tag:** the handoff note is the record ([post-release-roadmap.md](../post-release-roadmap.md#how-this-file-works)). If the owner wants one, it needs a slash: `web-wallet/1.4.0`.
 
 **Read first:**
 - [development.md](../../development.md)'s *Web Store release: copy/paste procedure* and *The data layer, locally*;
-- [roadmap.md](../../roadmap.md)'s handoff notes for 1.3.0 and 1.2.0: the release review, and the DRep refresh that lost names;
+- [roadmap.md](../roadmap.md)'s handoff notes for 1.3.0 and 1.2.0: the release review, and the DRep refresh that lost names;
 - 26b's [Docs: now, and at the VPS](chunk-26b-data-layer-wallet.md#docs-now-and-at-the-vps) and [Left for later](chunk-26b-data-layer-wallet.md#left-for-later);
 - item 8 of [The work, in order](#the-work-in-order), and [The drills](#the-drills-2026-10-09).
 
@@ -123,7 +123,7 @@ So the test sees a wrong ID, and the store's passes it: CORS holds for the listi
 **Checked and sound:** every request `koios.ts` makes is one the API accepts, inside its caps, with Koios's shapes (rule for rule against Koios's grest SQL); CORS for both IDs on every answer the API makes, 429s and 503s included; the bucket's IP can't be spoofed through Caddy; ordinary use of one wallet can't trip a 429; Caddy and the API log no client address and no path; the sealed record stays consistent across lock, restart, account and network switches and the Koios-only switch; a 1.3.0 wallet updating carries nothing over that a feed watch could misread.
 
 **Left as found:**
-- **Home's node behind the chain** (restarting, say, more than 3 minutes). **Fixed for 1.4.1** ([O10](../../post-release-roadmap.md#owed)): the submit part answers 503 while Ogmios says the node isn't synced. As found: the reads go to Koios on their 503s, but the submit part has no freshness check, so the node, catching up, can refuse a valid spend of a newer UTxO as "spent", and a Lovejoin chain's first step stops on it. No money is at risk; the chain is started again. A first fix, asking Koios whenever home said "spent", was taken back: a resend already in home's mempool is answered "spent" too, and a Koios timeout then read as busy and stopped chains (the last review of the fix-ups). **The fix belongs in the API:** a submit part that answers 503 while the node isn't synced (Ogmios's `/health`, `networkSynchronization` and `lastTipUpdate`), so the wallet goes to Koios at once. A candidate for 1.4.1.
+- **Home's node behind the chain** (restarting, say, more than 3 minutes). **Fixed for 1.4.1** ([O10](../post-release-roadmap.md#owed)): the submit part answers 503 while Ogmios says the node isn't synced. As found: the reads go to Koios on their 503s, but the submit part has no freshness check, so the node, catching up, can refuse a valid spend of a newer UTxO as "spent", and a Lovejoin chain's first step stops on it. No money is at risk; the chain is started again. A first fix, asking Koios whenever home said "spent", was taken back: a resend already in home's mempool is answered "spent" too, and a Koios timeout then read as busy and stopped chains (the last review of the fix-ups). **The fix belongs in the API:** a submit part that answers 503 while the node isn't synced (Ogmios's `/health`, `networkSynchronization` and `lastTipUpdate`), so the wallet goes to Koios at once. A candidate for 1.4.1.
 - **Caddy's own error pages** (its 502 while the API restarts, its 413) carry `Server: Caddy` and no HSTS: the `header` block's deletion is deferred to a proxied response. The API's answers have neither problem, and the wallet only uses https.
 - **Many wallets behind one IPv4 address** (a CGNAT, a VPN exit) share one bucket; past it, each part goes to Koios 5 minutes at a time. Slower, never broken.
 - **The data client's window** lets 20 live-SQL requests through every 10 s (80 units), against Koios's 40 requests: a burst past it waits about 10 s.
@@ -134,7 +134,7 @@ So the test sees a wrong ID, and the store's passes it: CORS holds for the listi
 
 ### After the merge
 
-**Done for 1.4.0:** PR #294 merged as `b5ad15a`; the API deployed from it through the workflow, and the live API then answered the store's ID with `cache-control: no-store`; the package built from it, SHA-256 `b1ba594f3d4f2705c075e51c3ca561613db12528bbd76405ff045bcf74571c0a` ([roadmap.md](../../roadmap.md)'s handoff note has the rest). The steps, for the record:
+**Done for 1.4.0:** PR #294 merged as `b5ad15a`; the API deployed from it through the workflow, and the live API then answered the store's ID with `cache-control: no-store`; the package built from it, SHA-256 `b1ba594f3d4f2705c075e51c3ca561613db12528bbd76405ff045bcf74571c0a` ([roadmap.md](../roadmap.md)'s handoff note has the rest). The steps, for the record:
 
 1. **Deploy the API from the merge commit:** Actions → *Data layer deploy*, `deploy`, approved, then `status`. Then check from anywhere: `curl -sI -H 'Origin: chrome-extension://dkefopeefhophfkjkkdebhoklagjdmcp' https://mainnet.seedelf.logicalmechanism.io/api/v1/tip` says `cache-control: no-store`. **The package isn't uploaded before this.**
 2. **The package**, on `main` at the merge commit ([development.md](../../development.md#2-on-main-after-the-merge-build-and-test-the-store-package)): `npm run package`, `npm run e2e` on it, the SHA-256.

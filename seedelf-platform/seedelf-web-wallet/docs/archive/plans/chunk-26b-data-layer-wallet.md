@@ -2,7 +2,7 @@
 
 Step 4 of [chunk 26](chunk-26-data-layer.md#order-of-work): Seedelf Wallet reads mainnet through `seedelf-data`, falling back to Koios one part at a time. Preprod doesn't change.
 
-**Status: ✅ done, in 1.4.0** (#290; built, reviewed and checked 2026-10-09 on `web-wallet/data-layer-wallet`, from `main` after #289). Archived at 1.4.1, its open items carried into [post-release-roadmap.md](../../post-release-roadmap.md#kept-in-mind)'s *Kept in mind*. Steps 1 to 7 and the developer docs are done; [what changed from the plan](#what-changed-from-the-plan) is at the end. The free checks and the review are in [Verification](#verification); the owner's own-wallet parity and everyday spends are what's left.
+**Status: ✅ done, in 1.4.0** (#290; built, reviewed and checked 2026-10-09 on `web-wallet/data-layer-wallet`, from `main` after #289). Archived at 1.4.1, its open items carried into [post-release-roadmap.md](../post-release-roadmap.md#kept-in-mind)'s *Kept in mind*. Steps 1 to 7 and the developer docs are done; [what changed from the plan](#what-changed-from-the-plan) is at the end. The free checks and the review are in [Verification](#verification); the owner's own-wallet parity and everyday spends are what's left.
 
 **Read first:**
 - the parent plan's [The wallet's side](chunk-26-data-layer.md#the-wallets-side), the contract this builds to;

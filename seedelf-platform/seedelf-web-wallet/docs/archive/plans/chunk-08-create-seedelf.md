@@ -12,7 +12,7 @@ This is the first **script spend** in the web wallet. Every Seedelf spend in chu
    git log --oneline HEAD..origin/main   # merge main first if this lists anything
    git checkout -b web-wallet/create-seedelf
    ```
-2. Read this plan, then the chunk 7 entry in [roadmap.md](../../roadmap.md#handoff-notes), [architecture.md](../../architecture.md) *Transaction building*, [flows.md](../../flows.md) *Create a Seedelf*, and [privacy.md](../../privacy.md) *Rules the wallet enforces*.
+2. Read this plan, then the chunk 7 entry in [roadmap.md](../roadmap.md#handoff-notes), [architecture.md](../../architecture.md) *Transaction building*, [flows.md](../../flows.md) *Create a Seedelf*, and [privacy.md](../../privacy.md) *Rules the wallet enforces*.
 3. Read the code this chunk extracts: `seedelf-cli/src/commands/util/mint.rs` (about 500 lines), and the helpers it uses in `seedelf-core/src/transaction.rs` (`seedelf_token_name`, `extract_budgets`, `total_computation_fee`, `seedelf_minimum_lovelace`, `collateral_input`, `reference_utxo`), `seedelf-core/src/data_structures.rs` (the redeemers), and `seedelf-cli/src/commands/fee.rs` (the collateral output and even rounding).
 4. **Finish chunk 7's live move-in first.** Minting spends *owned contract UTxOs*, and on preprod none exist for a phrase wallet until a move-in lands.
    - The test wallet is in `extension/.preprod-test-wallet.txt` (gitignored). The user funds its `receive_0` from the faucet.

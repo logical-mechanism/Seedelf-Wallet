@@ -54,6 +54,6 @@ The worker resolves `yours` for a proposal's credential the way it does for a ce
 ## Not in it
 
 - No refusal and no extra confirmation for a stranger's return address: it's shown, never blocked.
-- The wallet's own proposal screens stay out ([post-release-roadmap.md](../post-release-roadmap.md)'s *The rest of governance*).
+- The wallet's own proposal screens stay out ([backlog.md](../backlog.md#declined)'s *The rest of governance*).
 - Other voters' votes stay a count: no money moves with them.
 - No new requests and no data layer change, so no privacy policy entry and no API deploy. The release cycle is merge → package → upload → record PR, tagged `web-wallet/1.7.2`.

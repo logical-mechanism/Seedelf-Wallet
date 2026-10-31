@@ -19,7 +19,7 @@ What's new: change that goes to an **address** instead of back into the contract
    ```
 2. Read:
    - this plan
-   - the chunk 9 entry in [roadmap.md](../../roadmap.md#handoff-notes)
+   - the chunk 9 entry in [roadmap.md](../roadmap.md#handoff-notes)
    - [flows.md](../../flows.md) *Withdraw* and *Transfer*
    - [privacy.md](../../privacy.md) *Known links*, especially *Exit*
 3. Read the code this chunk extracts and copies:

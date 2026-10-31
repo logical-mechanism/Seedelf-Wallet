@@ -4,7 +4,7 @@ The public side gets more than account `0'`. A picker discovers the phrase's
 Cardano accounts in order, the wallet works on one at a time, and money made
 private from different accounts is kept apart in the private balance.
 
-[P1](../../post-release-roadmap.md#p1--several-accounts), the owner's first pick
+[P1](../post-release-roadmap.md#p1--several-accounts), the owner's first pick
 after the release (2026-10-02). Branch `web-wallet/several-accounts`, from
 `main`.
 

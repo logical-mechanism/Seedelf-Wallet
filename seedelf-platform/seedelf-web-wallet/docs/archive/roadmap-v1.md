@@ -1,12 +1,12 @@
 # Roadmap, v1 — the full record (archived)
 
-> **Frozen on 2026-10-02.** This is [roadmap.md](../roadmap.md) exactly as it stood when v1 finished: every chunk's full scope, and all 30 handoff notes, about 90 KB of them. The live file was compressed to an index on the same day; **nothing was deleted, it was moved here.**
+> **Frozen on 2026-10-02.** This is [roadmap.md](roadmap.md) exactly as it stood when v1 finished: every chunk's full scope, and all 30 handoff notes, about 90 KB of them. The live file was compressed to an index on the same day; **nothing was deleted, it was moved here.**
 >
 > **Read this when** a one-line entry in the live roadmap isn't enough — when you need the reasoning behind a decision, what a chunk actually did, what surprised the session that built it, or a transaction hash and fee from a live run.
 >
 > **Line references** to `roadmap.md` written before 2026-10-02 (such as the one in [plans/privacy-review.md](plans/privacy-review.md)) resolve against this file, not the live one.
 >
-> **Don't edit this file.** It's a record. New handoff notes go in the live [roadmap.md](../roadmap.md); what comes next is in [post-release-roadmap.md](../post-release-roadmap.md).
+> **Don't edit this file.** It's a record. New handoff notes go in the live [roadmap.md](roadmap.md); what comes next is in [post-release-roadmap.md](post-release-roadmap.md).
 >
 > *Every relative link below has gained one `../`, since this copy sits one directory deeper than the original. Nothing else in the text was changed.*
 
@@ -52,7 +52,7 @@ The wallet is built in **chunks**, each about one working session.
 
 ## After v1
 
-**This section is closed, and so is this file.** Chunk 17 was the last thing chosen from it. Everything after v1.1.0 is tracked in [post-release-roadmap.md](../post-release-roadmap.md) — what's owed, what the owner wants, and what we've decided against — and a chunk picked up from there still lands its handoff note in this file.
+**This section is closed, and so is this file.** Chunk 17 was the last thing chosen from it. Everything after v1.1.0 is tracked in [post-release-roadmap.md](post-release-roadmap.md) — what's owed, what the owner wants, and what we've decided against — and a chunk picked up from there still lands its handoff note in this file.
 
 | # | Chunk | Status | Scope |
 |---|---|---|---|

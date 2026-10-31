@@ -20,7 +20,7 @@ This chunk is mostly a new kind of output (the recipient's re-randomized registe
    ```
 2. Read:
    - this plan
-   - the chunk 8 and 8b entries in [roadmap.md](../../roadmap.md#handoff-notes)
+   - the chunk 8 and 8b entries in [roadmap.md](../roadmap.md#handoff-notes)
    - [flows.md](../../flows.md) *Transfer* and *Create a Seedelf*
    - [privacy.md](../../privacy.md) *Rules the wallet enforces* and *Known links*
    - [architecture.md](../../architecture.md) *Transaction building*

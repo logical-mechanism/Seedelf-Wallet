@@ -2,7 +2,7 @@
 
 Branch `web-wallet/data-layer`, from `main`.
 
-**Status: ✅ done, in 1.4.0** with [26b](chunk-26b-data-layer-wallet.md) (the wallet's side) and [26c](chunk-26c-data-layer-vps.md) (the server). Archived at 1.4.1, its open items carried into [post-release-roadmap.md](../../post-release-roadmap.md#kept-in-mind)'s *Kept in mind*.
+**Status: ✅ done, in 1.4.0** with [26b](chunk-26b-data-layer-wallet.md) (the wallet's side) and [26c](chunk-26c-data-layer-vps.md) (the server). Archived at 1.4.1, its open items carried into [post-release-roadmap.md](../post-release-roadmap.md#kept-in-mind)'s *Kept in mind*.
 
 **For the API as built, [seedelf-data/README.md](../../../../../seedelf-data/README.md) is the reference.** This plan says why; that README says what the routes return.
 
@@ -15,11 +15,11 @@ This plan is the data layer's side. The wallet's side, the client that uses it, 
 
 **Why now.** On mainnet the Koios public tier is slow and its limits bite:
 
-- "Couldn't read your balances" after an unlock ([Kept in mind](../../post-release-roadmap.md#kept-in-mind));
+- "Couldn't read your balances" after an unlock ([Kept in mind](../post-release-roadmap.md#kept-in-mind));
 - the splash reaching its 8 s cap;
 - `TIMEOUT_MS` at 45 s, because one `credential_utxos` over an account with real history "can take tens of seconds".
 
-The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*](../../post-release-roadmap.md#the-data-layer) still holds, and this plan builds on it.
+The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*](../post-release-roadmap.md#the-data-layer) still holds, and this plan builds on it.
 
 **No cloud node, no cloud db-sync: there's no money for it.** So:
 
@@ -360,7 +360,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 **The VPS:**
 
 - 2 vCPU and 4 GB, in the region nearest home;
-- L3/L4 DDoS filtering that never terminates TLS ([roadmap](../../post-release-roadmap.md#dos-protection-on-clearnet--the-owners-question): "an upstream that sees only encrypted bytes");
+- L3/L4 DDoS filtering that never terminates TLS ([roadmap](../post-release-roadmap.md#dos-protection-on-clearnet--the-owners-question): "an upstream that sees only encrypted bytes");
 - traffic for the P2P relay, about 1–2 TB a month (none since 26c: only the API's);
 - **terms that allow blockchain workloads.** Hetzner's don't: it has banned running nodes since 2022.
 
@@ -423,7 +423,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 ## What the service learns
 
-This is for the policy, in [the roadmap's words](../../post-release-roadmap.md#dos-protection-on-clearnet--the-owners-question).
+This is for the policy, in [the roadmap's words](../post-release-roadmap.md#dos-protection-on-clearnet--the-owners-question).
 
 - **The private index** learns:
   - that an IP uses Seedelf;

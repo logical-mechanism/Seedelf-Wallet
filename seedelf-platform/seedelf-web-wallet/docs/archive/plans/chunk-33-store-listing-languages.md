@@ -1,6 +1,6 @@
 # Chunk 33 · The store listing in Spanish and Japanese
 
-The owner asked on 2026-10-12, as 1.5.0's last feature, from [post-release-roadmap.md](../../post-release-roadmap.md)'s [Kept in mind](../../post-release-roadmap.md#kept-in-mind): the listing in Spanish and Japanese, which the wallet has spoken since chunk 19. The store's analytics show users of both.
+The owner asked on 2026-10-12, as 1.5.0's last feature, from [post-release-roadmap.md](../post-release-roadmap.md)'s [Kept in mind](../post-release-roadmap.md#kept-in-mind): the listing in Spanish and Japanese, which the wallet has spoken since chunk 19. The store's analytics show users of both.
 
 **Status: ✅ built 2026-10-12** on `web-wallet/store-listing-i18n`, from `main` after #304. One PR: the build and the docs together, so this file went straight to the archive. What still holds is in [store/README.md](../../store/README.md#in-spanish-and-japanese), with each language's text ready to paste. The privacy policy has no new entry: nothing is sent or kept.
 

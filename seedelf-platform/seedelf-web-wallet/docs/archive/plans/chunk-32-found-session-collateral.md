@@ -1,6 +1,6 @@
 # Chunk 32 · 5 ₳ for a found session's cancel
 
-The owner asked on 2026-10-12, from [post-release-roadmap.md](../../post-release-roadmap.md)'s [Kept in mind](../../post-release-roadmap.md#kept-in-mind): a top-up for a session the restore scan found, so it can cancel an open order when its account holds no ADA, and to check that this case is handled properly.
+The owner asked on 2026-10-12, from [post-release-roadmap.md](../post-release-roadmap.md)'s [Kept in mind](../post-release-roadmap.md#kept-in-mind): a top-up for a session the restore scan found, so it can cancel an open order when its account holds no ADA, and to check that this case is handled properly.
 
 **Status: ✅ built 2026-10-12** on `web-wallet/found-session-top-up`, from `main` after #303. One PR: the build and the docs together, so this file went straight to the archive. What still holds is in [architecture.md](../../architecture.md) (*The cancel is the wallet's own*), [flows.md](../../flows.md) (*If a session stalls*), [keys-and-accounts.md](../../keys-and-accounts.md) (*The restore scan*) and [privacy.md](../../privacy.md). The privacy policy has no new entry: nothing new is sent or kept.
 
