@@ -11,7 +11,7 @@ The brief was adversarial: treat every screen as guilty until proven usable, for
 ## How it was tested
 
 - **The build:** `dist/` (1.1.0) built from `web-wallet/style-flow-3` at `16c6539` plus the uncommitted fix round from the first review (`ReviewTotals`, `RadioCards`, `StaleReview`, `ui/history.ts`, `ui/sites.ts`).
-- **The harness:** Playwright's Chromium driving `dist/` with the fakes from [e2e/support.ts](../extension/e2e/support.ts), so Koios, giveme.my and Minswap answer from the recorded preprod fixtures. Four passes ran side by side:
+- **The harness:** Playwright's Chromium driving `dist/` with the fakes from [e2e/support.ts](../../../extension/e2e/support.ts), so Koios, giveme.my and Minswap answer from the recorded preprod fixtures. Four passes ran side by side:
   - onboarding, the private side, accounts, settings and failure states;
   - public money (send, make private, tokens, activity, UTxOs);
   - staking and governance;
@@ -1025,7 +1025,7 @@ Then: Activity that names the other side ([AC-1](#ac-1)), the pool sort ([ST-5](
 
 The usual rules apply to each change:
 
-- A renamed control or moved screen updates the e2e tests and [flows.md](flows.md) in the same commit.
+- A renamed control or moved screen updates the e2e tests and [flows.md](../../flows.md) in the same commit.
 - Every new or changed string goes into `en`, `es` and `ja`.
 - No privacy note is dropped; a change may move or shorten one.
 - Nothing new phones home.

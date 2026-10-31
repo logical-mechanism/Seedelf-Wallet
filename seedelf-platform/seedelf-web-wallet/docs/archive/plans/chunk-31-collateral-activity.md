@@ -1,6 +1,6 @@
 # Chunk 31 · The collateral payment in Activity
 
-The owner asked on 2026-10-12, from [post-release-roadmap.md](../../post-release-roadmap.md)'s [Kept in mind](../../post-release-roadmap.md#kept-in-mind): how Lace and Eternl handle a site asking for collateral when none is set, and, if anything, for the collateral payment to show right in Public activity.
+The owner asked on 2026-10-12, from [post-release-roadmap.md](../post-release-roadmap.md)'s [Kept in mind](../post-release-roadmap.md#kept-in-mind): how Lace and Eternl handle a site asking for collateral when none is set, and, if anything, for the collateral payment to show right in Public activity.
 
 **Status: ✅ built 2026-10-12** on `web-wallet/collateral-activity`, from `main` after #302. One PR: the build and the docs together, so this file went straight to the archive. What still holds is in [architecture.md](../../architecture.md) (*Activity*) and [flows.md](../../flows.md) (*Activity*, *Collateral*). The privacy policy has a dated entry: the wallet keeps something new on the device, though it sends nothing new.
 
@@ -24,7 +24,7 @@ Looked at, nothing built. The roadmap said the connector "never offers to set a 
 - **Eternl** (closed source): collateral is set in Settings → Collateral. Since v1.11.17 (December 2023) it makes 3 ₳ collateral-sized UTxOs in ordinary sends, and may spend them when nothing else is left; Set Collateral still pays 3 ₳ to the account. Whether it opens a window on a site's `getCollateral`, and how its history names the payment, isn't documented anywhere found.
 - **CIP-30** marks `getCollateral` deprecated: a wallet may leave it out.
 
-So this wallet's `null` matches Lace today. A window would be a payment a site starts, behind the password; it waits for a site that needs it ([Kept in mind](../../post-release-roadmap.md#kept-in-mind)).
+So this wallet's `null` matches Lace today. A window would be a payment a site starts, behind the password; it waits for a site that needs it ([Kept in mind](../post-release-roadmap.md#kept-in-mind)).
 
 ## Tests
 

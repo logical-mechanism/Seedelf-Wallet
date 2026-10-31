@@ -1,6 +1,6 @@
 # 1.7.1's release review and its fixes (2026-10-30)
 
-**Status: ✅ done.** It's on branch `web-wallet/review-1.7.1`, from `main` at `4c06171a` (after #351). It reviewed everything since `web-wallet/1.7.0` (`f375af62`, the commit 1.7.0's zip was built from), and its fixes go into 1.7.1 before it's packaged. What still holds is in the design docs, and the open items are in [post-release-roadmap.md](../../post-release-roadmap.md) and the release's handoff note in [roadmap.md](../../roadmap.md).
+**Status: ✅ done.** It's on branch `web-wallet/review-1.7.1`, from `main` at `4c06171a` (after #351). It reviewed everything since `web-wallet/1.7.0` (`f375af62`, the commit 1.7.0's zip was built from), and its fixes go into 1.7.1 before it's packaged. What still holds is in the design docs, and the open items are in [post-release-roadmap.md](../post-release-roadmap.md) and the release's handoff note in [roadmap.md](../roadmap.md).
 
 ## The review
 

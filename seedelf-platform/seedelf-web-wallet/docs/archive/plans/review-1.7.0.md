@@ -1,6 +1,6 @@
 # 1.7.0's release review, its fixes and the gate (2026-10-28)
 
-**Status: ✅ done, the gate for 1.7.0.** It's on branch `web-wallet/release-1.7.0` (PR #340). The working folder (`docs/plans/review-1.7.0/`: the brief, every reviewer's and verifier's report, the overflow sweep, the fixers' brief and every lane's report, and `FINDINGS.md`) was compressed into this file when the PR was ready. The full text is in git at `e8b007f8`; [The IDs](#the-ids) says where each family is. What still holds is in the design docs, and the open items are in [post-release-roadmap.md](../../post-release-roadmap.md)'s *Kept in mind* and the release's handoff note in [roadmap.md](../../roadmap.md).
+**Status: ✅ done, the gate for 1.7.0.** It's on branch `web-wallet/release-1.7.0` (PR #340). The working folder (`docs/plans/review-1.7.0/`: the brief, every reviewer's and verifier's report, the overflow sweep, the fixers' brief and every lane's report, and `FINDINGS.md`) was compressed into this file when the PR was ready. The full text is in git at `e8b007f8`; [The IDs](#the-ids) says where each family is. What still holds is in the design docs, and the open items are in [post-release-roadmap.md](../post-release-roadmap.md)'s *Kept in mind* and the release's handoff note in [roadmap.md](../roadmap.md).
 
 ## The review
 

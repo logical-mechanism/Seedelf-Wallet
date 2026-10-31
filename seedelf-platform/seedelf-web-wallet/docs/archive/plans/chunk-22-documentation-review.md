@@ -1,8 +1,8 @@
 # Chunk 22: the documentation review
 
-> **Finished record**, branch `web-wallet/doc-review` from `main` at `452c1fd` (after PR #277, chunk 21). It went straight into [archive/plans/](README.md), since it's done when its branch is. What it settled is in [post-release-roadmap.md](../../post-release-roadmap.md#the-documentation-review); what it left is in that file's *Owed*, *Kept in mind* and *Open questions*.
+> **Finished record**, branch `web-wallet/doc-review` from `main` at `452c1fd` (after PR #277, chunk 21). It went straight into [archive/plans/](README.md), since it's done when its branch is. What it settled is in [post-release-roadmap.md](../post-release-roadmap.md#the-documentation-review); what it left is in that file's *Owed*, *Kept in mind* and *Open questions*.
 
-**The brief** was [post-release-roadmap.md](../../post-release-roadmap.md#the-documentation-review)'s: a major review once parity and the public side had landed, because every chunk since v1 rewrote part of what the docs say. **The owner brought it forward, ahead of the UX pass** (2026-10-04), and took the cost that implies: the pass keeps the docs current as it goes, rather than a second review after it ([development.md](../../development.md#rules-for-a-change-to-the-screens)).
+**The brief** was [post-release-roadmap.md](../post-release-roadmap.md#the-documentation-review)'s: a major review once parity and the public side had landed, because every chunk since v1 rewrote part of what the docs say. **The owner brought it forward, ahead of the UX pass** (2026-10-04), and took the cost that implies: the pass keeps the docs current as it goes, rather than a second review after it ([development.md](../../development.md#rules-for-a-change-to-the-screens)).
 
 ## The owner's calls
 
@@ -40,5 +40,5 @@ Nine reviewers in parallel, each owning a set of files no other one touched, so 
 ## For the owner
 
 - **Merge = publish** for the privacy policy, and the next upload uses store/README.md's texts.
-- **Open questions** ([post-release-roadmap.md](../../post-release-roadmap.md#open-questions-for-the-owner)): `rustls`, Spanish "Configuración", and whether the web wallet is in the bug bounty's scope (SECURITY.md says "the latest tagged release", which it never is).
+- **Open questions** ([post-release-roadmap.md](../post-release-roadmap.md#open-questions-for-the-owner)): `rustls`, Spanish "Configuración", and whether the web wallet is in the bug bounty's scope (SECURITY.md says "the latest tagged release", which it never is).
 - **Not done:** the crate READMEs written here reach crates.io only with the next CLI publish; the two release sections in development.md overlap and were left as they are.

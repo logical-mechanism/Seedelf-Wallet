@@ -4,7 +4,7 @@ A Cardano wallet for Chrome, with private payments built in: Seedelf, the Cardan
 
 **Install it** from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp).
 
-> **Status:** version 1.x, the web wallet's own version line, kept apart from the Rust workspace's 0.x (see the root [CLAUDE.md](../../CLAUDE.md#release--versioning)). Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), what was built is in [docs/roadmap.md](docs/roadmap.md), and what comes next is in [docs/post-release-roadmap.md](docs/post-release-roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
+> **Status:** version 1.x, the web wallet's own version line, kept apart from the Rust workspace's 0.x (see the root [CLAUDE.md](../../CLAUDE.md#release--versioning)). Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), what's being built in [docs/plans/](docs/plans/), what could come next in [docs/backlog.md](docs/backlog.md), and every release in [docs/releases.md](docs/releases.md). To try it in Chrome, see [extension/README.md](extension/README.md).
 
 ## What it is
 
@@ -56,11 +56,9 @@ So money that sits stays staked in the public account, and is made private when 
 
 **After v1: Lovejoin's other pools, and payments in parts** (chunk 34; [architecture.md](docs/architecture.md#lovejoin), [flows.md](docs/flows.md#mix-through-lovejoin-the-dapps-page)). Beside the 10 ₳ pool, Lovejoin has pools of one token each, or of ADA at another amount, and anyone can start one from the wallet (**Start a pool**, about 23 ₳ that never comes back); the wallet shows the earliest genuine pool of each box value. A private session's tokens come back through their pool by default where one is shown, as its ADA does, and its 5 ₳ collateral is mixed once in a pool of 5 ₳ boxes where one holds enough other people's boxes and enough of the session's ADA is left to pay for it, which a Settings switch turns off. A **Bootstrap** puts boxes into a pool for others to mix with, and they stay until you bring them back. **Four boxes a mix** is a Settings option, and **Bring every box back now** brings every box back at once, which ties them together. And a payment from the private balance too large for one transaction goes as several, one after another.
 
-**Next** ([docs/post-release-roadmap.md](docs/post-release-roadmap.md) has the whole picture, and the reasoning): a pass over how all of it looks and reads.
+**Next:** what users ask for, and Midnight beside the private and public sides, which is being planned ([chunk 38](docs/plans/chunk-38-midnight.md)). What's being built is in [docs/plans/](docs/plans/); the candidates, the open calls and what's declined are in [docs/backlog.md](docs/backlog.md).
 
-**Later, maybe:** word of an incoming payment without opening the wallet. It needs the chain read in the background, which the public Koios tier can't carry, so it waits on a data layer built for the wallet. And `web+cardano` payment links (CIP-13), so a link can open Send with the recipient filled in.
-
-**Not planned:** several pools per account (one pool per account is the model, and several accounts spread stake across pools anyway), folders or an account centre, a Seedelf key per account (one private balance for the whole phrase), reading several accounts at once or a total across them (either would link them), Earn / RealFi USDr staking and CIP-99 claims (likely AML/KYC), other chains, mobile. **Hardware wallets can't be done at all:** the Seedelf key is derived from the recovery phrase's seed, and a hardware wallet's whole purpose is that the seed never leaves it — so a device could hold the public account and never the private balance. And nothing that reports on you or ties you to an identity: no analytics, no AML/KYC, no on-ramp. We add features only if there's demand.
+**Not planned:** several pools per account (one pool per account is the model, and several accounts spread stake across pools anyway), folders or an account centre, a Seedelf key per account (one private balance for the whole phrase), reading several accounts at once or a total across them (either would link them), a notification centre (a private payment can't be found while the wallet is locked, so it would mostly repeat Activity), `web+cardano` payment links (CIP-13, a phone feature), Earn / RealFi USDr staking and CIP-99 claims (likely AML/KYC), chains other than Cardano and Midnight, mobile. **Hardware wallets can't be done at all:** the Seedelf key is derived from the recovery phrase's seed, and a hardware wallet's whole purpose is that the seed never leaves it — so a device could hold the public account and never the private balance. And nothing that reports on you or ties you to an identity: no analytics, no AML/KYC, no on-ramp. We add features only if there's demand ([the reasons](docs/backlog.md#declined)).
 
 ## Relationship to the CLI
 
@@ -84,10 +82,10 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 | [development.md](docs/development.md) | The branching rule and where plans live, running it in Chrome, test funds, the testing layers, the rules for a change to the screens, the release checklist, sharing with testers |
 | [store/](docs/store/README.md) | The Chrome Web Store listing: its text, images and privacy policy |
 | [i18n/glossary.md](docs/i18n/glossary.md) | The translations: the words fixed in every language, and how each Spanish and Japanese string is recorded |
-| [roadmap.md](docs/roadmap.md) | How v1 was built: the 17 chunks and a one-line handoff note each ([archive/](docs/archive/roadmap-v1.md) keeps every note in full), then the handoff note of every chunk since |
-| [post-release-roadmap.md](docs/post-release-roadmap.md) | What comes after v1: the order (parity, then the look and feel), where Cardano parity stands against Lace, and what's declined and why |
-| [usability-review.md](docs/usability-review.md) | Chunk 23's second adversarial usability review of the built wallet, and what its fix round did |
-| [blind-task-usability-test.md](docs/blind-task-usability-test.md) | Chunk 23's blind task-completion test: fresh testers given goals, what they hit, and what the fix round did with it |
+| [plans/](docs/plans/README.md) | How the work happens: a chunk's number, branch and plan, how it lands, and how a release is cut; and the plans being built now |
+| [backlog.md](docs/backlog.md) | What could become a chunk, one line each; the owner's open calls; and what's declined, and why |
+| [releases.md](docs/releases.md) | Every release: what it carried, the commit its zip was built from, and the zip's SHA-256 |
+| [archive/](docs/archive/plans/README.md) | The record, not maintained: every finished plan and review (chunk 23's usability review and blind test among them), and the two roadmaps the wallet was built from, [v1's](docs/archive/roadmap.md) and [what came after](docs/archive/post-release-roadmap.md) |
 
 ## Reference: Lace
 

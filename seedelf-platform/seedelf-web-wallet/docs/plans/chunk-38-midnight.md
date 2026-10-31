@@ -8,7 +8,7 @@ Branch `web-wallet/midnight`, from `main`.
 
 - **It adds; it doesn't rework.** The private balance and the public account stay as they are. Midnight is a third part beside them, with its own keys, chain data, transactions and screens. The few places where it meets them are listed in [Where it touches the wallet](#where-it-touches-the-wallet).
 - **It reverses two settled lines, on the owner's own call.**
-  - [post-release-roadmap.md](../post-release-roadmap.md) listed Midnight as "Cardano only for now", in the parity table and under *Not planned*. Both now point here.
+  - [post-release-roadmap.md](../archive/post-release-roadmap.md) listed Midnight as "Cardano only for now", in the parity table and under *Not planned*. Both now point here.
   - [architecture.md](../architecture.md#what-we-borrow-from-lace) takes "nothing for Bitcoin or Midnight" from Lace. That line changes once the owner decides what we read from Lace's Midnight code (call 7). Its licensing rule stays: Lace's repository is Apache-2.0, whatever its packages' `package.json` files say.
 - **We won't be first.** Lace (since 2.0.0), 1AM, Gero and Ctrl already pair Cardano and Midnight in one extension. What we can offer that they don't is a privacy-first Cardano side next to Midnight's shielded one.
 
@@ -153,7 +153,7 @@ What Midnight adds:
 - **The private balance's NIGHT generates no DUST.** A Seedelf UTxO sits at the contract's address, which has no stake part (`address.rs`'s `wallet_contract`: `ShelleyDelegationPart::Null`). Midnight's observer skips such an address, so no one else can claim DUST from it either.
   - To generate DUST, NIGHT has to be made public first, and Make public's link applies.
   - The wallet says so where it matters and adds no guard: the owner's rule is to refuse only what the ledger refuses.
-- **One IP address reads both chains,** so whoever runs both sets of services sees them together. That's us if we run Midnight's (call 2), as we already do for the private side ([Kept in mind](../post-release-roadmap.md#kept-in-mind)'s Tor entry), and Blockfrost if it does.
+- **One IP address reads both chains,** so whoever runs both sets of services sees them together. That's us if we run Midnight's (call 2), as we already do for the private side ([the backlog](../backlog.md#network-privacy)'s Tor entry), and Blockfrost if it does.
 - **The indexer and the prover** are covered under [Data](#data) and [Proofs](#proofs): no viewing key, no lookups by hash, and no prover of ours.
 
 ## Steps
@@ -198,7 +198,7 @@ Each step is a PR from `main` and ships in the next release after it lands.
 
 - **The Seedelf derivation** (frozen, v1), the CIP-1852 tree, and every Cardano flow: Make private, Make public, Send, staking, governance, Lovejoin, private sessions, and both CIP-30 connectors.
 - **The data layer's Cardano routes,** and Koios as their fallback.
-- **No hardware wallets** ([the proof](../post-release-roadmap.md#why-hardware-wallets-cant-cover-seedelf)).
+- **No hardware wallets** ([the proof](../backlog.md#why-hardware-wallets-cant-cover-seedelf)).
 
 ## The owner's calls
 
@@ -221,7 +221,7 @@ Each has a recommendation, which the owner can overturn.
    - A user's own Blockfrost token in Settings is the fallback for someone who wants neither. **Never a token in the zip.**
 3. **The test network.**
    - **Recommended:** Cardano preprod maps to Midnight Preprod, through the same Blockfrost-on-our-server route, since home's preprod server belongs to another project.
-   - Development uses Preview, which needs no token. The wallet still has no Cardano preview ([Lace parity](../post-release-roadmap.md#where-cardano-parity-stands)).
+   - Development uses Preview, which needs no token. The wallet still has no Cardano preview ([Lace parity](../archive/post-release-roadmap.md#where-cardano-parity-stands)).
 4. **Proofs.**
    - **Recommended: the WebAssembly prover by default,** so keys stay on the machine and nobody needs Docker. A local proof server is a visible switch for speed.
    - **Never a remote prover.**

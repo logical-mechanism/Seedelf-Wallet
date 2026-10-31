@@ -1,6 +1,6 @@
 # Chunk 28 · The public Activity's blind spots
 
-[O7](../../post-release-roadmap.md#owed): the public Activity listed by stake address (`account_txs`) while the balance reads by payment key (`credential_utxos`), so a transaction touching only an enterprise address of the account, or its key under someone else's stake key, was counted and spent but never listed, nor in the CSV. And a Lovejoin mix from the public account listed its deposit and every mix as plain **Sent**, since an account transaction's kind came only from the private history (chunk 16's *Not done*).
+[O7](../post-release-roadmap.md#owed): the public Activity listed by stake address (`account_txs`) while the balance reads by payment key (`credential_utxos`), so a transaction touching only an enterprise address of the account, or its key under someone else's stake key, was counted and spent but never listed, nor in the CSV. And a Lovejoin mix from the public account listed its deposit and every mix as plain **Sent**, since an account transaction's kind came only from the private history (chunk 16's *Not done*).
 
 **Status: ✅ built 2026-10-11** on `web-wallet/activity-blind-spots`, from `main` after #299. One PR: the plan, the build and the docs together, so this file went straight to the archive. What still holds is in the design docs: [flows.md](../../flows.md) (Activity's *Cardano account*), [architecture.md](../../architecture.md) (Activity), [privacy.md](../../privacy.md) (*When the wallet reads*), and the data layer's [README](../../../../../seedelf-data/README.md#the-public-routes). The privacy policy is unchanged: Activity sends the server the account's keys, which the balance reading already sends, and the policy's *Your addresses, balances and transactions* covers both.
 
@@ -52,4 +52,4 @@
 ## Left for later
 
 - **An account's own transactions past the gap** (another wallet with the phrase, its keys beyond 20 unused) are neither counted nor listed, as before.
-- **A sent chain's audit** ([the owner's question 4](../../post-release-roadmap.md#open-questions-for-the-owner)) can now be answered in Activity for a public mix, whose transactions are named; a session's mix is the one-time account's, and isn't in Public activity.
+- **A sent chain's audit** ([the owner's question 4](../post-release-roadmap.md#open-questions-for-the-owner)) can now be answered in Activity for a public mix, whose transactions are named; a session's mix is the one-time account's, and isn't in Public activity.

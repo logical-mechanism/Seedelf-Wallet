@@ -1,6 +1,6 @@
 # Chunk 30 · Rewards history
 
-The owner picked it on 2026-10-12, from [post-release-roadmap.md](../../post-release-roadmap.md)'s *Kept in mind* ("Small ones: … rewards history (chunk 13)"): "Rewards history on the Staking and governance page. Mainnet needs a new data-layer route; preprod has Koios's account_rewards."
+The owner picked it on 2026-10-12, from [post-release-roadmap.md](../post-release-roadmap.md)'s *Kept in mind* ("Small ones: … rewards history (chunk 13)"): "Rewards history on the Staking and governance page. Mainnet needs a new data-layer route; preprod has Koios's account_rewards."
 
 **Status: ✅ built 2026-10-12** on `web-wallet/rewards-history`, from `main` after #301. One PR: the plan, the build and the docs together, so this file went straight to the archive. What still holds is in [architecture.md](../../architecture.md) (*Staking*: the request), [flows.md](../../flows.md) (*Staking and voting*: the page), [privacy.md](../../privacy.md) (*What Koios learns*) and [seedelf-data's README](../../../../../seedelf-data/README.md) (the route). The privacy policy is unchanged: its staking row already says "your rewards" go to the Cardano server as the stake address, and nothing is kept.
 

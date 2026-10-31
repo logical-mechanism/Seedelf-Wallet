@@ -1,12 +1,12 @@
 # Chunk 21 plan: be your own DRep, and vote
 
-The public account registers its own DRep, votes Yes, No or Abstain on live governance actions, keeps an optional profile, and retires to get its deposit back. Then the dApp connector learns CIP-95, so GovTool and the other governance sites work too. [post-release-roadmap.md](../../post-release-roadmap.md#public-side-completeness)'s item 2, the last of public-side completeness, and the last chunk before [the UX pass](../../post-release-roadmap.md#the-ux-and-ui-pass).
+The public account registers its own DRep, votes Yes, No or Abstain on live governance actions, keeps an optional profile, and retires to get its deposit back. Then the dApp connector learns CIP-95, so GovTool and the other governance sites work too. [post-release-roadmap.md](../post-release-roadmap.md#public-side-completeness)'s item 2, the last of public-side completeness, and the last chunk before [the UX pass](../post-release-roadmap.md#the-ux-and-ui-pass).
 
 **Status: built, 21a and 21b (2026-10-04).** Branch `web-wallet/governance`, from `main` at `3a3deed` (chunk 20 merged). What landed, and where it went differently from this plan, is under [*What was built*](#what-was-built). **The owner ran it on preprod (2026-10-04):** a DRep registered with its own vote, and a vote on an info action. **Not done, and the owner's:** retiring live (and its move of the account's own vote to Always abstain), and GovTool by hand.
 
 ## Why
 
-Chunk 13 delegated the vote and stopped there: Always abstain, Always no confidence, or a DRep. The owner (2026-10-02, and again 2026-10-04): voting is **"a required feature for a complete wallet experience"**. Registering is the gate on voting, not a sibling of it: a plain delegator casts no vote, DReps do. So the chunk is *be your own DRep and vote*, one thing ([the correction](../../post-release-roadmap.md#public-side-completeness), confirmed by the owner's pick).
+Chunk 13 delegated the vote and stopped there: Always abstain, Always no confidence, or a DRep. The owner (2026-10-02, and again 2026-10-04): voting is **"a required feature for a complete wallet experience"**. Registering is the gate on voting, not a sibling of it: a plain delegator casts no vote, DReps do. So the chunk is *be your own DRep and vote*, one thing ([the correction](../post-release-roadmap.md#public-side-completeness), confirmed by the owner's pick).
 
 ## Decided with the owner (2026-10-04)
 

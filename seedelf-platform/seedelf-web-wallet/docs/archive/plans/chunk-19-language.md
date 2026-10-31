@@ -4,7 +4,7 @@ The wallet speaks English, Spanish and Japanese. Every locale is bundled, so
 nothing is fetched and no new host is asked for; a picker in Settings chooses,
 and the system's language is used when it is one we ship.
 
-[P2](../../post-release-roadmap.md#p2--language), the owner's pick after chunk 18.
+[P2](../post-release-roadmap.md#p2--language), the owner's pick after chunk 18.
 Branch `web-wallet/language`, from `main`.
 
 **The owner's call (2026-10-02):** copy what Lace does, including its

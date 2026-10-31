@@ -22,7 +22,7 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
    ```
 2. **Read:**
    - this plan
-   - the newest entries in [roadmap.md](../../roadmap.md#handoff-notes)
+   - the newest entries in [roadmap.md](../roadmap.md#handoff-notes)
    - the part's reading list below
    - The memory notes load on their own. The ones that matter here are *Style polish later*, *Chrome web wallet direction* and *Web wallet branching*.
 3. **Build and check that everything passes before changing anything** (from `seedelf-platform/`):

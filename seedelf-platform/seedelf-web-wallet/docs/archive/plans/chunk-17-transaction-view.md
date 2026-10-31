@@ -3,7 +3,7 @@
 Open the transaction itself — inputs, outputs, datums, scripts, certificates,
 metadata — decoded from the CBOR that is about to be signed, plus the raw bytes.
 The owner's ask from the 2026-09-28 mainnet test, listed under *After v1* in
-[roadmap.md](../../roadmap.md#after-v1). Eternl is the model: a detail view with a
+[roadmap.md](../roadmap.md#after-v1). Eternl is the model: a detail view with a
 way to read the CBOR.
 
 **Status: built (2026-10-01).** Branch `web-wallet/transaction-view`, from `main`. What
