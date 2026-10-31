@@ -43,6 +43,8 @@ It was parked on 2026-10-02, while Koios was good enough: "it will require some 
 
 **Then 1.7.1: a patch** (the owner, 2026-10-29). Item 5's Koios check comes out. On mainnet a pool the data layer lists is kept as it comes, the way the wallet takes the rest of what the data layer reports (the root README's *Data Layer Reliance*), and Koios's holder is read only where Koios is the source: preprod, Koios only, or the data layer down. The check held new pools, a look and a pool's start on Koios while the data layer answered, and let Koios guess who started a pool. A 30 October entry in the privacy policy records its removal; the 29 October one stays. With it, a site's sign window says when the transaction expires, and when it starts if that's still to come, as a date and time: a bounty report against 1.7.0 found it only as a slot, under Transaction details (the owner, 2026-10-30: a suggestion, out of the bounty's scope).
 
+**Then Midnight, a candidate for 1.8.0 and the releases after it** (the owner, 2026-10-30): "the basis for midnight support", as Lace has it, spread over several versions. The private balance and the public account stay as they are, and Midnight becomes a third part beside them. ⬜ Chunk 38: [plans/chunk-38-midnight.md](plans/chunk-38-midnight.md), a plan only so far, with the owner's calls still open.
+
 **[dApp additions](#dapp-additions)** run alongside all of it and are not counted in parity.
 
 ## Where Cardano parity stands
@@ -72,7 +74,8 @@ Measured against **Lace 2.4.2** (`_reference/lace` at `e431933`, pulled 2026-10-
 | Several pools per account | One pool | **one pool per account** is the model — and Lace is coming the same way: `migrate-multi-delegation` at tip is a *multi→single* migration |
 | Hardware wallets | None | **can't be done** — see [the proof](#why-hardware-wallets-cant-cover-seedelf) |
 | Earn / RealFi USDr staking, CIP-99 claims | None | **no** — likely AML/KYC, which doesn't align with Seedelf |
-| Bitcoin, Midnight, mobile | None | **Cardano only for now**; others maybe much later |
+| Midnight | None | **planned, chunk 38** ([its plan](plans/chunk-38-midnight.md)): a third part beside the private and public sides (the owner, 2026-10-30) |
+| Bitcoin, mobile | None | **Cardano and Midnight only**; others maybe much later |
 
 **Dark only**, by the owner's call — there is no light theme and no theme picker, and that isn't a gap. **One recovery phrase**, likewise: not a gap, not wanted.
 
@@ -468,7 +471,7 @@ Shorter than it was: the owner has reopened the governance items for the public 
 - **The rest of governance** (chunk 21): proposing actions (100,000 ₳ on mainnet, and nothing a wallet's user needs); script DReps, the constitutional committee and pool votes; and, unless the owner asks, a rationale on a vote (a CIP-136 anchor, which could work the way the profile does) and tallies per action (`proposal_voting_summary`, one more request an action).
 - **Hardware wallets** — see [the proof](#why-hardware-wallets-cant-cover-seedelf).
 - **Earn / RealFi USDr staking, and CIP-99 claims:** likely AML/KYC, which doesn't align with Seedelf.
-- **Cardano only for now.** Other chains, and mobile, maybe much later; nothing is designed for them.
+- **No chain but Cardano and Midnight, and no mobile, for now.** Others maybe much later; nothing is designed for them. Midnight was here until the owner opened it on 2026-10-30: chunk 38.
 - **Nothing that reports on the user or ties them to an identity** — analytics, AML/KYC, an on-ramp. Confirmed by the owner, 2026-10-02. Lace ships all three; they're the opposite of what this wallet is for.
 
 ### Why hardware wallets can't cover Seedelf
