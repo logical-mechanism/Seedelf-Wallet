@@ -39,4 +39,4 @@ aiken check
 
 ## Contact
 
-For questions, suggestions, or concerns, please reach out to support@logicalmechanism.io.
+For support and bugs, open a [GitHub issue](https://github.com/logical-mechanism/Seedelf-Wallet/issues) or a support ticket in the [Seedelf Discord](https://discord.gg/r8VwV2jGBy). For questions, suggestions, or concerns, please reach out to support@logicalmechanism.io. Security vulnerabilities go by email only: see [SECURITY.md](../SECURITY.md).

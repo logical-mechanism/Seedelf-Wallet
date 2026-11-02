@@ -260,4 +260,4 @@ Users can interact with the wallet protocol via the [seedelf-platform](./seedelf
 
 ## Contact
 
-For questions, suggestions, or concerns, please get in touch with support@logicalmechanism.io or join the [Seedelf Discord](https://discord.gg/r8VwV2jGBy).
+For support and bugs, open a [GitHub issue](https://github.com/logical-mechanism/Seedelf-Wallet/issues) or a support ticket in the [Seedelf Discord](https://discord.gg/r8VwV2jGBy). For questions, suggestions, or concerns, please get in touch with support@logicalmechanism.io or join the Discord. Security vulnerabilities go by email only: see [SECURITY.md](./SECURITY.md).

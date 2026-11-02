@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-Please do not open an issue to report security issues.
+Please do not open a GitHub issue or a Discord support ticket to report security issues: those are for support and bugs.
 
 To report a vulnerability, send an email to support@logicalmechanism.io
 

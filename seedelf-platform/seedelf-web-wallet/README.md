@@ -117,6 +117,7 @@ Every Lace path in these docs is relative to that checkout. `e431933` is where L
 
 ## Community
 
-- **Questions and discussion:** the [Seedelf Discord](https://discord.gg/r8VwV2jGBy).
-- **Bugs:** [GitHub issues](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
+- **Support and bugs:** [GitHub issues](https://github.com/logical-mechanism/Seedelf-Wallet/issues), or a support ticket in the [Seedelf Discord](https://discord.gg/r8VwV2jGBy).
+- **Questions and discussion:** the Seedelf Discord.
+- **Security vulnerabilities:** by email only, never an issue or a ticket: see [SECURITY.md](../../SECURITY.md).
 - **Anything else:** support@logicalmechanism.io.
