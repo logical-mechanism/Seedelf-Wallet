@@ -782,7 +782,7 @@ export interface WithdrawDestination {
   address: string;
   /** The ADA Handle it was found by, without the "$". */
   handle?: string;
-  /** It carries one of this wallet's Cardano accounts' keys: paying it re-links the money. */
+  /** It's under one of this wallet's Cardano accounts' payment keys: paying it re-links the money. */
   own: boolean;
   /**
    * Which of this wallet's public accounts it is, when `own` (chunk 18), so
@@ -795,6 +795,12 @@ export interface WithdrawDestination {
    * known link is handled (docs/privacy.md).
    */
   ownAccount?: number;
+  /**
+   * Which of this wallet's public accounts' stake key it carries, when it isn't `own`: someone else's payment key
+   * under it, so only they can spend what's paid there, while anyone sees it tied to that account (the 2026-11-02
+   * bounty report).
+   */
+  staked?: number;
 }
 
 /** A finished withdrawal, waiting for the user to send it. Amounts are lovelace strings. */

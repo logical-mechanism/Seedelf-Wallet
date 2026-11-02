@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX } from "../src/background/activity";
-import { preprodAddress } from "./fixtures/bech32";
+import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { loadTestWasm, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -19,11 +19,22 @@ async function unlocked() {
   return t;
 }
 
-/** The 12-word phrase's payment key hash at `role/index`; `words` picks another phrase's. */
-function keyHash(role: 0 | 1, index: number, words = 12): string {
-  const account = loadTestWasm().CardanoAccount.fromPhrase(phrase(words), 0);
+/** The 12-word phrase's payment key hash at `role/index`; `words` picks another phrase's, `of` another account. */
+function keyHash(role: 0 | 1, index: number, words = 12, of = 0): string {
+  const account = loadTestWasm().CardanoAccount.fromPhrase(phrase(words), of);
   try {
     return account.paymentKeyHash(role, index);
+  } finally {
+    account.free();
+  }
+}
+
+/** The 12-word phrase's account `of`'s stake key hash, hex. */
+function stakeHash(of = 0): string {
+  const wasm = loadTestWasm();
+  const account = wasm.CardanoAccount.fromPhrase(phrase(12), of);
+  try {
+    return Buffer.from(bech32Bytes(account.stakeAddress(wasm.Network.Preprod)).slice(1)).toString("hex");
   } finally {
     account.free();
   }
@@ -55,5 +66,33 @@ describe("a destination under the account's own payment key", () => {
     const t = await unlocked();
     const address = preprodAddress(keyHash(0, 0, 15));
     expect(await t.withdraw.resolve("preprod", address)).toEqual({ address, own: false });
+  });
+});
+
+// The 2026-11-02 bounty report: anyone can pair their own payment key with the
+// account's stake key, public in every address it hands out, and Send said a
+// payment there came back. Its payment key says whose it is; the stake key
+// alone makes it `staked`, for the screens to say it isn't the user's.
+describe("a destination under the account's stake key", () => {
+  it("isn't the account's own under someone else's payment key", async () => {
+    const t = await unlocked();
+    const address = preprodAddress(keyHash(0, 0, 15), stakeHash());
+    expect(await t.withdraw.resolve("preprod", address)).toEqual({ address, own: false, staked: 0 });
+    expect(t.koios.calls).toHaveLength(0);
+  });
+
+  it("is under one of its own keys past the first 20, as another wallet of the phrase may hand out", async () => {
+    const t = await unlocked();
+    const address = preprodAddress(keyHash(1, 300), stakeHash());
+    expect(await t.withdraw.resolve("preprod", address)).toEqual({ address, own: true, ownAccount: 0 });
+  });
+
+  it("says whose stake key it carries, and another account's payment key still makes it that account's", async () => {
+    const t = await unlocked();
+    await t.accounts.add(1);
+    const staked = preprodAddress(keyHash(0, 0, 15), stakeHash(1));
+    expect(await t.withdraw.resolve("preprod", staked)).toEqual({ address: staked, own: false, staked: 1 });
+    const theirs = preprodAddress(keyHash(0, 0, 12, 1), stakeHash(0));
+    expect(await t.withdraw.resolve("preprod", theirs)).toEqual({ address: theirs, own: true, ownAccount: 1 });
   });
 });

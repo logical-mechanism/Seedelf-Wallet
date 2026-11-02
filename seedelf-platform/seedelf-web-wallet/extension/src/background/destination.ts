@@ -60,8 +60,12 @@ export async function resolveDestination(
     address = found;
   }
   checkPayable(wasm, network, address);
-  const { own, account } = await ownAccount(deps, network, address);
-  const mine = { own, ...(account !== undefined ? { ownAccount: account } : {}) };
+  const { own, account, staked } = await ownAccount(deps, network, address);
+  const mine = {
+    own,
+    ...(account !== undefined ? { ownAccount: account } : {}),
+    ...(staked !== undefined ? { staked } : {}),
+  };
   return handle ? { address, handle, ...mine } : { address, ...mine };
 }
 
@@ -96,26 +100,40 @@ export function checkPayable(wasm: typeof Wasm, network: NetworkName, address: s
  * Whether `address` is one of this wallet's public accounts', and which: the
  * active account first, then any other the wallet knows. Nothing is asked of
  * anyone — the other accounts' keys are derived on the device.
+ *
+ * Its payment key says, never its stake key alone: anyone can pair their own
+ * payment key with an account's stake key, and Send said a payment there
+ * came back (the 2026-11-02 bounty report). Such an address is `staked`, by
+ * the account whose stake key it carries, for the screens to say it isn't
+ * the user's.
  */
 export async function ownAccount(
   deps: DestinationDeps,
   network: NetworkName,
   address: string,
-): Promise<{ own: boolean; account?: number }> {
+): Promise<{ own: boolean; account?: number; staked?: number }> {
   const { wallet } = deps;
   const active = await wallet.withKeys(async (keys) => {
     const found = await deps.session?.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
-    return { index: keys.account, own: keys.cardano.isOwnAddress(address, found?.keys ?? []) };
+    return {
+      index: keys.account,
+      own: keys.cardano.isOwnAddress(address, found?.keys ?? []),
+      staked: keys.cardano.carriesStakeKey(address),
+    };
   });
   if (active.own) return { own: true, account: active.index };
+  let staked = active.staked ? active.index : undefined;
   const known = (await deps.knownAccounts?.().catch(() => [])) ?? [];
   for (const index of known) {
     if (index === active.index) continue;
-    if (await wallet.withAccount(index, (keys) => keys.cardano.isOwnAddress(address, []))) {
-      return { own: true, account: index };
-    }
+    const other = await wallet.withAccount(index, (keys) => ({
+      own: keys.cardano.isOwnAddress(address, []),
+      staked: keys.cardano.carriesStakeKey(address),
+    }));
+    if (other.own) return { own: true, account: index };
+    if (other.staked) staked ??= index;
   }
-  return { own: false };
+  return staked === undefined ? { own: false } : { own: false, staked };
 }
 
 /**

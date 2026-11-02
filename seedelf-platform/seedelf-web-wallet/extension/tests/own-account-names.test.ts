@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import type { KnownAccount } from "../src/shared/rpc";
 import { AccountsContext } from "../src/ui/accounts";
 import { ownAccountNumber } from "../src/ui/components/AccountRecipients";
+import { StakedWarning } from "../src/ui/components/StakedWarning";
 import { OtherAccountNote } from "../src/ui/screens/CardanoSend";
 import { OwnWarning } from "../src/ui/screens/Withdraw";
 
@@ -56,5 +57,21 @@ describe("an own account in a warning", () => {
   it("is named so on the public Send", () => {
     expect(shown(createElement(OtherAccountNote, { index: 1 }))).toContain("This is your own Account 2 · Savings.");
     expect(shown(createElement(OtherAccountNote, { index: 2 }))).toContain("This is your own Account 3.");
+  });
+
+  it("isn't the user's when only its stake key is that account's (the 2026-11-02 bounty report)", () => {
+    expect(shown(createElement(StakedWarning, { side: "send", account: 0 }), [{ index: 0 }])).toBe(
+      "This isn't your public account: it has that account's stake key but someone else's payment key, so only they can spend this.",
+    );
+    expect(shown(createElement(StakedWarning, { side: "send", account: 1, nth: 2 }))).toContain(
+      "Recipient 2 isn't your Account 2 · Savings:",
+    );
+    // Make public's says what it links too, as its own-account warning does.
+    expect(shown(createElement(StakedWarning, { side: "withdraw", account: 2 }))).toBe(
+      "This isn't your Account 3: it has that account's stake key but someone else's payment key, so only they can spend this. Anyone can still link the address to this money and to whoever made it private.",
+    );
+    expect(shown(createElement(StakedWarning, { side: "withdraw", account: 0, nth: 1 }))).toContain(
+      "Recipient 1 isn't your Account 1 · Main:",
+    );
   });
 });

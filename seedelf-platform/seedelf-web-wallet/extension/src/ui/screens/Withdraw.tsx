@@ -36,6 +36,7 @@ import {
 } from "../components/Recipients";
 import { Row } from "../components/ReviewRows";
 import { againOrForm, RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
+import { StakedWarning } from "../components/StakedWarning";
 import { TotalRows } from "../components/ReviewTotals";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
@@ -243,7 +244,16 @@ export function Withdraw({
         <MaxLeftNote of={summary} testId="withdraw-left" />
         <LeftOutNote leftOut={summary.leftOut} testId="withdraw-left-out" />
         {/* With several, each of the user's own by its number: the warning didn't say which it meant (PY-5). */}
-        {summary.payments.map((p, i) => p.own && <OwnWarning key={i} account={p.ownAccount} nth={several ? i + 1 : undefined} />)}
+        {/* Someone else's key under an account's stake key isn't the user's own (the 2026-11-02 bounty report). */}
+        {summary.payments.map((p, i) =>
+          p.own ? (
+            <OwnWarning key={i} account={p.ownAccount} nth={several ? i + 1 : undefined} />
+          ) : (
+            p.staked !== undefined && (
+              <StakedWarning key={i} side="withdraw" account={p.staked} nth={several ? i + 1 : undefined} />
+            )
+          ),
+        )}
         <p className="note">{t("send.review.confirmTime")}</p>
         <GivemeNote />
       </Screen>
@@ -305,6 +315,9 @@ export function Withdraw({
               ownAccounts="private"
             />
             {read.state === "read" && read.destination.own && <OwnWarning account={read.destination.ownAccount} />}
+            {read.state === "read" && !read.destination.own && read.destination.staked !== undefined && (
+              <StakedWarning side="withdraw" account={read.destination.staked} />
+            )}
 
             <div className="field">
               <label htmlFor={fieldId("withdraw-amount", d, i)}>{t("common.amount")}</label>

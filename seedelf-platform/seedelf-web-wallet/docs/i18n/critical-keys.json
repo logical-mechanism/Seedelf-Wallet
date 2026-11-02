@@ -291,6 +291,8 @@
   "send.privacy.otherAccount",
   "send.warn.ownAccount",
   "send.warn.ownAccountNth",
+  "send.warn.staked",
+  "send.warn.stakedNth",
   "serviceAccess.warn.blocked",
   "serviceAccess.warn.stillRefused",
   "sess.refuse.warn.cancelFee",
@@ -463,6 +465,8 @@
   "withdraw.warn.ownAccount",
   "withdraw.warn.ownAccountNth",
   "withdraw.warn.publicAccount",
+  "withdraw.warn.staked",
+  "withdraw.warn.stakedNth",
   "worker.record.warn.unreadable",
   "worker.staking.warn.rewardsOnTheWay"
 ]
