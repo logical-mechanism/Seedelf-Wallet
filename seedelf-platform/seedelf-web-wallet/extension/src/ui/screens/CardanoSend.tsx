@@ -39,6 +39,7 @@ import {
 import { Row } from "../components/ReviewRows";
 import { RewardsRow, RewardsSetting, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
+import { StakedWarning } from "../components/StakedWarning";
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
@@ -227,9 +228,14 @@ export function CardanoSend({
           />
         ))}
         {/* With several, each own one by its number: "your own public account" didn't say which it meant (PY-5).
-            Another of the user's accounts says what paying it shows, as the form did: it doesn't come back here. */}
+            Another of the user's accounts says what paying it shows, as the form did: it doesn't come back here.
+            Someone else's key under an account's stake key is neither, and leaves (the 2026-11-02 bounty report). */}
         {summary.payments.map((p, i) =>
-          !p.own ? null : p.ownAccount !== undefined && p.ownAccount !== active ? (
+          !p.own ? (
+            p.staked !== undefined && (
+              <StakedWarning key={i} side="send" account={p.staked} nth={several ? i + 1 : undefined} />
+            )
+          ) : p.ownAccount !== undefined && p.ownAccount !== active ? (
             <OtherAccountNote key={i} index={p.ownAccount} />
           ) : (
             <OwnNote key={i} nth={several ? i + 1 : undefined} />
@@ -289,6 +295,9 @@ export function CardanoSend({
             {read.state === "read" &&
               read.destination.own &&
               (otherAccount(read) !== undefined ? <OtherAccountNote index={otherAccount(read)!} /> : <OwnNote />)}
+            {read.state === "read" && !read.destination.own && read.destination.staked !== undefined && (
+              <StakedWarning side="send" account={read.destination.staked} />
+            )}
 
             <div className="field">
               <label htmlFor={fieldId("send-amount", d, i)}>{t("common.amount")}</label>

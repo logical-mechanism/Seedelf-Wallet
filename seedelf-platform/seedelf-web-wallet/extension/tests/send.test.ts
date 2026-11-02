@@ -12,6 +12,7 @@ import { publicShort } from "../src/background/short";
 import { WalletLocked, WASM_BROKEN } from "../src/background/wallet";
 import { MAX_RECIPIENTS } from "../src/shared/recipients";
 import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NOT_AN_ADDRESS } from "../src/shared/seedelf-name";
+import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { ttlOf, txIdOf } from "./fixtures/cbor";
 import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 
@@ -99,6 +100,18 @@ describe("send", () => {
     expect(await t.send.build("preprod", [{ to: OWN, lovelace: "2000000", tokens: [] }])).toMatchObject({
       payments: [{ address: OWN, own: true }],
     });
+  });
+
+  it("never calls a handle's address the account's own by its stake key alone (the 2026-11-02 bounty report)", async () => {
+    const t = await unlocked();
+    // Someone else's payment key under the account's stake key, the bytes after OWN's payment key.
+    const stake = Buffer.from(bech32Bytes(OWN).slice(29)).toString("hex");
+    const theirs = Buffer.from(bech32Bytes(THEIRS).slice(1, 29)).toString("hex");
+    const staked = preprodAddress(theirs, stake);
+    t.koios.nfts.set(`${ADA_HANDLE_POLICY}.${Buffer.from("me").toString("hex")}`, staked);
+    const summary = await t.send.build("preprod", [{ to: "$me", lovelace: "2000000", tokens: [] }]);
+    expect(summary.payments).toMatchObject([{ address: staked, handle: "me", own: false, staked: 0 }]);
+    expect(summary.payments[0]).not.toHaveProperty("ownAccount");
   });
 
   it("pays someone's Seedelf, found in the contract without asking Koios about it", async () => {

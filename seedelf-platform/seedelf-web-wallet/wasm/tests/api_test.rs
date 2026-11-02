@@ -2919,7 +2919,6 @@ mod withdraw {
         let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
         let own = |a: &str, known: &[String]| api::is_own_address(&account, a, known).unwrap();
         let key = |role, index| account.key_hash(role, index).unwrap();
-        let stake = key(Role::Staking, 0);
         let foreign_stake = Hash::<28>::from([7; 28]);
         let foreign_key = Hash::<28>::from([9; 28]);
 
@@ -2943,14 +2942,6 @@ mod withdraw {
             ),
             &[],
         ));
-        // Someone else's key with ours: an observer sees our stake credential.
-        assert!(own(
-            &shelley(
-                ShelleyPaymentPart::Key(foreign_key),
-                ShelleyDelegationPart::Key(stake),
-            ),
-            &[],
-        ));
         // A key past the first 20 counts once the last reading found it.
         let far = enterprise(Role::Receive, 25);
         assert!(!own(&far, &[]));
@@ -2971,6 +2962,45 @@ mod withdraw {
             ),
             &[],
         ));
+    }
+
+    #[test]
+    fn the_accounts_stake_key_alone_doesnt_make_an_address_its_own() {
+        // The 2026-11-02 bounty report: anyone can pair their own payment key
+        // with the account's stake key, public in every address it hands out,
+        // and Send said a payment there comes back.
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let own = |a: &str| api::is_own_address(&account, a, &[]).unwrap();
+        let carries = |a: &str| api::carries_stake_key(&account, a).unwrap();
+        let key = |role, index| account.key_hash(role, index).unwrap();
+        let ours = ShelleyDelegationPart::Key(key(Role::Staking, 0));
+        let stranger = CardanoAccount::from_phrase(PHRASE, 1)
+            .unwrap()
+            .key_hash(Role::Receive, 0)
+            .unwrap();
+
+        let franken = shelley(ShelleyPaymentPart::Key(stranger), ours.clone());
+        assert!(!own(&franken));
+        assert!(carries(&franken));
+
+        // The account's own key past the first 20, under its stake key, as
+        // another wallet of the same phrase may hand out: looked for further.
+        let far = shelley(
+            ShelleyPaymentPart::Key(key(Role::Change, api::OWN_KEYS_STAKED - 1)),
+            ours.clone(),
+        );
+        assert!(own(&far));
+        assert!(carries(&far));
+        // Without the stake key it isn't, until a reading finds the key.
+        let far = shelley(
+            ShelleyPaymentPart::Key(key(Role::Receive, 300)),
+            ShelleyDelegationPart::Null,
+        );
+        assert!(!own(&far));
+        assert!(!carries(&far));
+
+        assert!(!carries(&theirs()));
+        assert!(!carries("nope"));
     }
 }
 
