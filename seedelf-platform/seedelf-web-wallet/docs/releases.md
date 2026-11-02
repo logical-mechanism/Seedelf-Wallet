@@ -17,14 +17,14 @@ Every Seedelf Wallet package uploaded to the Chrome Web Store: the commit it was
 | 1.1.0 | The transaction view, chunk 17 (#270), and the gate (#271) | the owner has it | the owner has it | none |
 | 1.0.0 | v1, chunks 1–16, merged into `main` by #266 | `0d5ec42` | `85c0fb093fa8bb157f5ad3d9ea1fd001db75d7273c3068aa52ea65932dee714b` | none |
 
-**The full record of each release up to 1.7.1** (its review, the lists, the translations, the checks, the toolchain lines, and what surprised it) is its handoff note in [archive/roadmap.md](archive/roadmap.md#handoff-notes), and 1.0.0's is in [archive/roadmap-v1.md](archive/roadmap-v1.md). From 1.7.2 on, it's here.
+**The full record of each release up to 1.7.1** (its review, the lists, the translations, the checks, the toolchain lines, and what surprised it) is its handoff note in [archive/roadmap.md](archive/roadmap.md#handoff-notes), and 1.0.0's and 1.1.0's are in full in [archive/roadmap-v1.md](archive/roadmap-v1.md). From 1.7.2 on, it's here.
 
 ## Recording a release
 
 The release's record PR, after the upload ([development.md](development.md#releasing-to-the-web-store)'s last step), adds a row to the table and a section below it, newest first, headed by the version. The section says:
 
 - **The branch and what it carried:** the PRs, the plans they built, and the review's record in [archive/plans/](archive/plans/) if there was one.
-- **The lists** each release refreshes: the tokens, the DReps, the Lovejoin pools' head start and their Cardanoscan names; what changed, or that nothing did.
+- **The lists** each release refreshes: the tokens, the DReps, the Lovejoin pools' head start and their Cardanoscan names, and the data layer's token decimals; what changed, or that nothing did.
 - **The translations** that changed, and how each was checked; and the privacy policy's entry, if it owed one.
 - **The checks** run on the merged tree, and whether the data layer's API was deployed, and from which commit.
 - **The package:** the commit it was built from, the zip's SHA-256, its size, and the `C compiler`, Node and zlib lines the build printed; and that a second build of the same commit gave the same bytes.

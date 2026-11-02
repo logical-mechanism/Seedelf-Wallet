@@ -2218,15 +2218,25 @@ export class DappService {
    * by the stake key it carries (X06): it read "Someone else's address …
    * that money isn't yours".
    *
+   * An address paid to one of the wallet's stake or DRep keys' hashes is
+   * spent by that key's witness, as the ledger has it and WebAssembly counts
+   * it for the signing account (#358), so it ties that account or session
+   * too, while its row stays "An address": the wallet never reads it.
+   * Matched by payment keys alone, a session's prompt paying the public
+   * account's stake key's own address said the public account wasn't in it
+   * (1.7.2's release review, pr358#0).
+   *
    * A certificate or a withdrawal that names another of the wallet's stake
    * keys ties it too (`certified`), which WebAssembly can't tell: it knows
    * the signing account's keys alone. An old-style registration of one needs
    * no signature of that key's, and the prompt said "a stake key that isn't
    * yours" and that the other side wasn't in it (1.5.0's release review,
    * X05). So does a proposal whose deposit goes back to one, which takes no
-   * signature of its key's either (chunk 39). Each output, certificate,
-   * withdrawal and proposal is named in the summary this returns (`yours`),
-   * where it's another of the wallet's.
+   * signature of its key's either (chunk 39), and a treasury withdrawal that
+   * pays one, which takes no signature of any reward account it pays
+   * (1.7.2's release review, pr357#0). Each output (by its payment key),
+   * certificate, withdrawal and proposal (by its deposit) is named in the
+   * summary this returns (`yours`), where it's another of the wallet's.
    */
   private async ties(
     network: NetworkName,
@@ -2246,33 +2256,57 @@ export class DappService {
         stake: keysOf(wasm, oneTime.rewardAddress(net, index)).stake,
       })),
     );
-    /** Whose a payment key and a stake key are: public accounts first, then sessions, each once. */
-    const byKeys = (payment: string | undefined, stake: string | undefined): DappTie[] => {
+    /**
+     * Whose a payment key and a stake key are: public accounts first, then sessions, each once. Unless it names an
+     * output (`label`), a payment key that's a stake or DRep key's hash is that key's too (pr358#0).
+     */
+    const byKeys = (payment: string | undefined, stake: string | undefined, label = false): DappTie[] => {
       const ties: DappTie[] = [];
-      for (const index of new Set([payment && accounts.payment.get(payment), stake && accounts.stake.get(stake)])) {
+      const spender = label ? undefined : payment;
+      for (const index of new Set([
+        payment && accounts.payment.get(payment),
+        spender && accounts.stake.get(spender),
+        spender && accounts.drep.get(spender),
+        stake && accounts.stake.get(stake),
+      ])) {
         if (typeof index === "number" && (holder || index !== view.account)) ties.push({ account: index });
       }
       // A session's by each key apart, as a public account's: one session's key under another's stake key ties both,
       // and the payment key's comes first, which an output is named by (X07).
       const matched = [
         payment !== undefined && others.find((s) => s.payment === payment),
+        spender !== undefined && others.find((s) => s.stake === spender),
         stake !== undefined && others.find((s) => s.stake === stake),
       ];
       for (const s of new Set(matched)) if (s) ties.push(s.index);
       return ties;
     };
-    /** `spends`: only who can spend what it holds, by its payment key. */
+    /**
+     * `spends`: only who can spend what it holds, by its payment key, as an output is named. One paid to a stake or
+     * DRep key's hash stays "An address": that key spends it, but the wallet never reads it (pr358#0).
+     */
     const whose = (address: string, spends = false): DappTie[] => {
       const { payment, stake } = keysOf(wasm, address);
-      return byKeys(payment, spends ? undefined : stake);
+      return byKeys(payment, spends ? undefined : stake, spends);
     };
     // Whether one of the wallet's keys spends it, the site's own included (WebAssembly's `ownPaymentKey`): what it
-    // holds is the user's, whatever stake key it carries. Anyone else's ties only by its stake key.
+    // holds is the user's, whatever stake key it carries. Anyone else's ties only by its stake key. A stake or DRep
+    // key's witness spends an address paid to its hash, as a payment key's does (#358): what's there is never
+    // someone else's money, nor looked for further (1.7.2's release review, pr358#0). The session's own stake key's
+    // too: under the public account's stake key, it read "Someone else's address … that money isn't yours".
+    const holderStake = holder && keysOf(wasm, holder.reward).stake;
     const ours = (address: string, own: boolean) => {
       if (own) return true;
       const { payment } = keysOf(wasm, address);
       if (payment === undefined) return false;
-      return accounts.payment.has(payment) || payment === holder?.keyHash || others.some((s) => s.payment === payment);
+      return (
+        accounts.payment.has(payment) ||
+        accounts.stake.has(payment) ||
+        accounts.drep.has(payment) ||
+        payment === holder?.keyHash ||
+        payment === holderStake ||
+        others.some((s) => s.payment === payment || s.stake === payment)
+      );
     };
     const read = [...summary.paid.map((p) => [p.address, p.ownPaymentKey] as const), ...rows.map((r) => [r.address, false] as const)];
     // Under an account's stake key, a payment key none of those in range: the account's own past them, before a
@@ -2301,6 +2335,10 @@ export class DappService {
     const certificates = summary.certificates.map((c) => (c.own ? undefined : byStake(c.credential)));
     const withdrawals = summary.withdrawals.map((w) => (w.own ? undefined : byStake(keysOf(wasm, w.address).stake)));
     const proposals = summary.proposals.map((p) => (p.own ? undefined : byStake(p.credential)));
+    // The stake keys a treasury withdrawal pays, which take no signature of theirs: tied as its deposit's key is,
+    // while its line stays about the deposit. byKeys leaves the signing account's own out, as it does for any
+    // address (1.7.2's release review, pr357#0).
+    const recipients = summary.proposals.flatMap((p) => p.recipients.map((key) => byStake(key)));
     const rank = (t: DappTie): [number, number] => (typeof t === "number" ? [1, t] : [0, t.account]);
     // Each once, public accounts first.
     const listed = (ties: DappTie[]) =>
@@ -2321,29 +2359,35 @@ export class DappService {
       },
       all: listed(all),
       staked: listed(staked),
-      certified: listed([...certificates, ...withdrawals, ...proposals].filter((t) => t !== undefined)),
+      certified: listed([...certificates, ...withdrawals, ...proposals, ...recipients].filter((t) => t !== undefined)),
     };
   }
 
   /**
-   * The payment keys in range (both chains, as balances count them) and the
-   * stake keys of every public account the wallet knows, each to its index:
-   * the one on screen, with those its last balance reading found past the
-   * first 20 (destination.ts), the dApp account and every other recorded.
-   * Derived on the device, asking nobody, as tx-view.ts does. Throws when
-   * the accounts can't be read: a check of some of them can't say none is
-   * in it.
+   * The payment keys in range (both chains, as balances count them), the
+   * stake keys and the DRep keys of every public account the wallet knows,
+   * each to its index: the one on screen, with those its last balance
+   * reading found past the first 20 (destination.ts), the dApp account and
+   * every other recorded. A stake or DRep key spends what's at an address
+   * paid to its hash (1.7.2's release review, pr358#0); a session has no
+   * DRep key. Derived on the device, asking nobody, as tx-view.ts does.
+   * Throws when the accounts can't be read: a check of some of them can't
+   * say none is in it.
    */
-  private async publicKeys(network: NetworkName): Promise<{ payment: Map<string, number>; stake: Map<string, number> }> {
+  private async publicKeys(
+    network: NetworkName,
+  ): Promise<{ payment: Map<string, number>; stake: Map<string, number>; drep: Map<string, number> }> {
     const { wasm, wallet, session } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const known = (await this.deps.knownAccounts?.()) ?? [];
     const payment = new Map<string, number>();
     const stake = new Map<string, number>();
+    const drep = new Map<string, number>();
     const add = (cardano: Keys["cardano"], index: number) => {
       for (let i = 0; i < GAP_LIMIT; i++) payment.set(cardano.paymentKeyHash(0, i), index).set(cardano.paymentKeyHash(1, i), index);
       const key = keysOf(wasm, cardano.stakeAddress(net)).stake;
       if (key) stake.set(key, index);
+      drep.set((JSON.parse(cardano.drepOf()) as { hash: string }).hash, index);
     };
     const active = await wallet.withKeys(async ({ cardano, account }) => {
       add(cardano, account);
@@ -2354,7 +2398,7 @@ export class DappService {
     for (const index of new Set([await this.dappAccount(), ...known])) {
       if (index !== active) await wallet.withAccount(index, ({ cardano }) => add(cardano, index));
     }
-    return { payment, stake };
+    return { payment, stake, drep };
   }
 
   /**

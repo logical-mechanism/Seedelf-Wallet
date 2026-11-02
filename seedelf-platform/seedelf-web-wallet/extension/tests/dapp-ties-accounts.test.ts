@@ -62,6 +62,26 @@ function certifying(inputs: string[], to: string[], certificates: string[]) {
   return `84a400${outpoints(inputs)}01${outputs}021a00029810048${certificates.length}${certificates.join("")}a0f5f6`;
 }
 
+/**
+ * As `paying`, with a treasury withdrawal of 5 ₳ to each of `recipients` (reward addresses, CIP-30 hex), its 1,000 ₳
+ * deposit going back to `reward`: none of them takes a signature of its key's (1.7.2's release review, pr357#0).
+ */
+function withdrawingTreasury(inputs: string[], to: string[], reward: string, recipients: string[]) {
+  const outputs = `8${to.length}${to.map((a) => `82${bytesOf(a)}1a003d0900`).join("")}`;
+  const payments = `a${recipients.length}${recipients.map((r) => `${bytesOf(r)}1a004c4b40`).join("")}`;
+  const proposal = `841a3b9aca00${bytesOf(reward)}8302${payments}f6826b${Buffer.from("https://x.y").toString("hex")}5820${"33".repeat(32)}`;
+  return `84a400${outpoints(inputs)}01${outputs}021a000298101481${proposal}a0f5f6`;
+}
+
+/** The window's text for a public prompt (or a session's), the accounts named as Settings names them. */
+function shownNamed(approval: Extract<DappApproval, { kind: "sign-tx" }>, session = false) {
+  const accounts = [{ index: 0, name: "Main" }, { index: 1 }, { index: 2, name: "Savings" }];
+  const value = { accounts, active: 0, loaded: true, name: "Account 1 · Main", several: true, reload: async () => undefined };
+  const { summary, ties, staked, certified } = approval;
+  const props = { summary, partial: false, session, collateralSpent: false, ties, staked, certified, account: "Account 1 · Main" };
+  return renderToStaticMarkup(createElement(AccountsContext.Provider, { value }, createElement(SignTx, props)));
+}
+
 /** The 12-word wallet with three public accounts, the connector on. */
 async function on() {
   const t = testBalances();
@@ -205,6 +225,23 @@ describe("a private session's signing prompt, with several public accounts", () 
     expect(approval.summary.paid.map((p) => p.yours)).toEqual([{ account: 2 }, { account: 2 }]);
   });
 
+  it("names another public account when it pays that account's DRep key's own address (1.7.2's review of its fixes, r2-tests#0)", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    // Every known account's DRep key is derived for the check, not the first one's alone.
+    const drep3 = await t.wallet.withAccount(2, ({ cardano }) => (JSON.parse(cardano.drepOf()) as { hash: string }).hash);
+    const approval = await prompt(dapp, s, paying([SESSION_INPUT], [`60${drep3}`]));
+    expect([approval.ties, approval.staked, approval.certified]).toEqual([[{ account: 2 }], [], []]);
+    expect(approval.summary.paid.map((p) => p.yours)).toEqual([undefined]);
+    const page = shownNamed(approval, true)
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&#x27;/g, "'")
+      .replace(/\s+/g, " ");
+    expect(page).toContain("It moves money between this private session and Account 3 · Savings.");
+    expect(page).not.toContain("aren't in it");
+  });
+
   it("promises nothing when the wallet can't read which accounts it has", async () => {
     const t = await on();
     const dapp = privately(t, async () => {
@@ -319,16 +356,54 @@ describe("the public account's signing prompt, with several public accounts (C05
     expect(page).not.toContain("isn't yours");
   });
 
+  it("names another public account when it pays that account's stake key's own address, the row still \"An address\" (1.7.2's release review, pr358#0)", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const { s, spend } = await connectedPublicly(t, dapp);
+    const stake2 = (await addressesOf(t, 1)).stakedTo.slice(58);
+    // Account 2's stake key spends it, and every base address of Account 2 carries that key.
+    const approval = await prompt(dapp, s, paying([spend], [`60${stake2}`]));
+    expect(approval.ties).toEqual([{ account: 1 }]);
+    expect(approval.staked).toEqual([]);
+    expect(approval.summary.paid.map((p) => p.yours)).toEqual([undefined]);
+    const page = shownNamed(approval)
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&#x27;/g, "'")
+      .replace(/\s+/g, " ");
+    expect(page).toContain("It moves money between Account 1 · Main and Account 2.");
+    expect(page).toContain("An address");
+    // Its DRep key's own address too, which only that key spends (1.7.2's review of its fixes, r2-tests#0).
+    const drep2 = await t.wallet.withAccount(1, ({ cardano }) => (JSON.parse(cardano.drepOf()) as { hash: string }).hash);
+    const byDrep = await prompt(dapp, s, paying([spend], [`60${drep2}`]));
+    expect([byDrep.ties, byDrep.staked]).toEqual([[{ account: 1 }], []]);
+    expect(byDrep.summary.paid.map((p) => p.yours)).toEqual([undefined]);
+  });
+
+  it("names another public account a treasury withdrawal pays, in the window's warning of what it names (1.7.2's release review, pr357#0)", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const { s, spend } = await connectedPublicly(t, dapp);
+    const [own, stake3] = [(await addressesOf(t, 0)).stakedTo.slice(58), (await addressesOf(t, 2)).stakedTo.slice(58)];
+    // Its deposit comes back to Account 1's own key; Account 3's is paid, with no signature of its own.
+    const approval = await prompt(dapp, s, withdrawingTreasury([spend], [t.deps.wasm.cip30Address(THEIRS)], `e0${own}`, [`e0${stake3}`]));
+    expect([approval.ties, approval.staked, approval.certified]).toEqual([[], [], [{ account: 2 }]]);
+    const certified = shownNamed(approval).match(/data-testid="dapp-certified">.*?<div class="callout__body">(.*?)<\/div>/)?.[1];
+    expect(certified).toBe(
+      "A certificate, withdrawal or proposal in it names the stake key of Account 3 · Savings: signing ties Account 1 · Main to Account 3 · Savings on chain, where anyone can see it.",
+    );
+  });
+
   it("takes WebAssembly's word that the site's own key is its own, past the keys derived for the check (C01)", async () => {
     const t = await on();
     const dapp = privately(t);
     const { s, spend } = await connectedPublicly(t, dapp);
     const [first, third] = [await addressesOf(t, 0), await addressesOf(t, 2)];
     // As for a key of the dApp account past the first 20 of a chain, which only its own reading finds: none of the
-    // payment keys derived, the stake keys all there.
-    const derived = dapp as unknown as { publicKeys: (n: string) => Promise<{ payment: Map<string, number>; stake: Map<string, number> }> };
-    const { stake } = await derived.publicKeys("preprod");
-    derived.publicKeys = async () => ({ payment: new Map(), stake });
+    // payment keys derived, the stake and DRep keys all there.
+    type Derived = { payment: Map<string, number>; stake: Map<string, number>; drep: Map<string, number> };
+    const derived = dapp as unknown as { publicKeys: (n: string) => Promise<Derived> };
+    const { stake, drep } = await derived.publicKeys("preprod");
+    derived.publicKeys = async () => ({ payment: new Map(), stake, drep });
     const approval = await prompt(dapp, s, paying([spend], [`00${first.receive.slice(2, 58)}${third.stakedTo.slice(58)}`]));
     expect(approval.summary.paid.map((p) => p.ownPaymentKey)).toEqual([true]);
     // The user's own money, under Account 3's stake key: never said to be someone else's.

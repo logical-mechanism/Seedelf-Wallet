@@ -971,7 +971,10 @@ export function SignTx({
   ties?: DappTie[];
   /** Those whose stake key alone is in it, at an address none of the wallet's keys spends (C01). */
   staked?: DappTie[];
-  /** Those whose stake key a certificate or a withdrawal in it names (X05). */
+  /**
+   * Those whose stake key a certificate, a withdrawal or a proposal in it names (X05): a proposal's by the reward
+   * address its deposit goes back to, or one a treasury withdrawal pays.
+   */
   certified?: DappTie[];
   /** The public account it's for, by number and name, when the wallet has more than one (`useSiteAccount`). */
   account?: string;
@@ -1139,11 +1142,14 @@ export function SignTx({
       )}
 
       {/* A proposal's deposit goes back to the stake key it names, which a site can make anyone's: a warning when it
-          isn't the account's own (chunk 39). */}
+          isn't the account's own (chunk 39), or is a private session's, this one's or another's, whose rewards the
+          wallet never reads or withdraws (1.7.2's release review, critic#0). */}
       {(s.certificates.length > 0 || s.withdrawals.length > 0 || s.proposals.length > 0) && (
         <Callout
           tone={
-            s.certificates.some((c) => c.own) || (staking > 0n && !back) || s.proposals.some((p) => !p.own) ? "warn" : "info"
+            s.certificates.some((c) => c.own) || (staking > 0n && !back) || s.proposals.some((p) => !p.own || session)
+              ? "warn"
+              : "info"
           }
           testId="dapp-staking"
         >
@@ -1155,7 +1161,7 @@ export function SignTx({
               <li key={`w${i}`}>{withdrawalLine(w, back, whose, named)}</li>
             ))}
             {s.proposals.map((p, i) => (
-              <li key={`p${i}`}>{proposalLine(p, whose, named)}</li>
+              <li key={`p${i}`}>{proposalLine(p, whose, session, named)}</li>
             ))}
           </ul>
         </Callout>
@@ -1219,8 +1225,9 @@ export function SignTx({
       )}
 
       <Callout tone="privacy" testId="dapp-tx-privacy">
-        {/* A stake key alone ties as much as a payment does, in an address, a certificate or a withdrawal: neither side
-            is said to be out of it then. */}
+        {/* A stake key alone ties as much as a payment does, in an address, a certificate, a withdrawal or a proposal
+            (the reward address its deposit goes back to, or one a treasury withdrawal pays): neither side is said to
+            be out of it then. */}
         {signingTies(
           ties && [...ties, ...(staked ?? []), ...(certified ?? [])],
           session,

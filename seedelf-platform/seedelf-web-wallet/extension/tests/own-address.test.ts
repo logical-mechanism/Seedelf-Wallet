@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX } from "../src/background/activity";
+import { FARTHER_KEYS, fartherKeys } from "../src/background/chain";
 import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { loadTestWasm, testBalances, vectors } from "./fakes";
 
@@ -85,6 +86,25 @@ describe("a destination under the account's stake key", () => {
     const t = await unlocked();
     const address = preprodAddress(keyHash(1, 300), stakeHash());
     expect(await t.withdraw.resolve("preprod", address)).toEqual({ address, own: true, ownAccount: 0 });
+  });
+
+  it("is looked for as far along each chain as a site's prompt and Lovejoin look, and no further", async () => {
+    // WebAssembly's OWN_KEYS_STAKED and chain.ts's FARTHER_KEYS agreed only by a comment (1.7.2's release review,
+    // pr359#4).
+    const t = await unlocked();
+    const account = loadTestWasm().CardanoAccount.fromPhrase(phrase(12), 0);
+    try {
+      for (const role of [0, 1] as const) {
+        const [last, past] = [keyHash(role, FARTHER_KEYS - 1), keyHash(role, FARTHER_KEYS)];
+        expect(fartherKeys((r, i) => account.paymentKeyHash(r, i), [last, past])).toEqual([last]);
+        const reached = preprodAddress(last, stakeHash());
+        expect(await t.withdraw.resolve("preprod", reached)).toEqual({ address: reached, own: true, ownAccount: 0 });
+        const beyond = preprodAddress(past, stakeHash());
+        expect(await t.withdraw.resolve("preprod", beyond)).toEqual({ address: beyond, own: false, staked: 0 });
+      }
+    } finally {
+      account.free();
+    }
   });
 
   it("says whose stake key it carries, and another account's payment key still makes it that account's", async () => {

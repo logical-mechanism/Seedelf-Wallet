@@ -224,6 +224,7 @@ const { SESSION_FEE_ESTIMATE, toCents } = await import("../src/ui/swap");
 const { TxDetailButton, TxDetailModal } = await import("../src/ui/components/TxDetail");
 const { Transfer } = await import("../src/ui/screens/Transfer");
 const { Withdraw } = await import("../src/ui/screens/Withdraw");
+const { CardanoSend } = await import("../src/ui/screens/CardanoSend");
 
 /** The test's clock, as the fake timers keep it. */
 const NOW = Date.UTC(2026, 9, 25, 12);
@@ -1150,5 +1151,103 @@ describe("the way out of a return held at its collateral's mix, wired (1.7.0's r
       } as never),
     );
     expect(onSkipCollateral).toHaveBeenCalledWith(3);
+  });
+});
+
+// 1.7.2's release review: #359's warning, for someone else's payment key under one of the accounts' stake keys, in the
+// four places that show it, none of which a test rendered (pr359#1, own#3); and Send's, when that stake key is another
+// account's than the one paying, saying the payment ties the two (pr359#0). Only the screens' wiring is under test: the
+// worker's verdict is seeded beside any address, as own-address.test.ts and send.test.ts have it.
+describe("someone else's payment key under an account's stake key, on Send's and Make public's forms and reviews, wired (1.7.2's release review: pr359#0, pr359#1, own#3)", () => {
+  const address = "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp";
+  /** What the worker says of it: account 0's stake key, someone else's payment key. */
+  const staked = { address, own: false, staked: 0 };
+  const none = { lovelace: "0", tokens: [], utxos: 0 };
+  const cardano = { lovelace: "100000000", tokens: [], utxos: 3, addressesUsed: 1, locked: none, staking: { registered: false, pool: null, drep: null, rewards: "0", deposit: "0" } };
+  const seedelf = { lovelace: "800000000", tokens: [], utxos: 23, seedelfs: [], locked: none };
+  const token = { policyId: "aa".repeat(28), assetName: "01", quantity: "1" };
+  /** `element` in a wallet of `count` accounts, account 0 on screen. */
+  const among = (element: ReactElement, count = 1) =>
+    createElement(
+      AccountsContext.Provider,
+      {
+        value: {
+          accounts: [0, 1, 2].slice(0, count).map((index) => ({ index })),
+          active: 0,
+          loaded: true,
+          name: "Account 1",
+          several: count > 1,
+          reload: async () => undefined,
+        },
+      },
+      element,
+    );
+  /** The To field read so: the page's reads, by draft (the first is 0). DestinationInput keeps it, asking nothing. */
+  const read = () => seedInitial({}, { 0: { to: address, read: { state: "read", destination: staked } } });
+  /** Send's review, built: its state starts after the form's reads', its Max's, its note's and the note's cut's. */
+  function sendReview(payments: unknown[], count = 1): string {
+    seed([{}, false, "", false], { network: "preprod", txHash: TX, max: false, fee: "200000", changeLovelace: "0", changeTokens: 0, inputs: 1, payments });
+    return render(among(createElement(CardanoSend, { cardano, total: "100000000", onCancel: noop, onSent: noop }), count));
+  }
+
+  it("Send's form warns once the To field reads it", () => {
+    read();
+    const page = render(among(createElement(CardanoSend, { cardano, to: address, onCancel: noop, onSent: noop })));
+    expect(has(page, "send-staked")).toBe(true);
+    expect(has(page, "send-own")).toBe(false);
+  });
+
+  it("Make public's form warns once the To field reads it", () => {
+    read();
+    const page = render(among(createElement(Withdraw, { seedelf, to: address, onCancel: noop, onSent: noop })));
+    expect(has(page, "withdraw-staked")).toBe(true);
+    expect(has(page, "withdraw-own")).toBe(false);
+  });
+
+  it("Send's review warns, and counts the payment and its token as leaving, where the account's own address leaves the fee alone", () => {
+    const paid = { lovelace: "5000000", minimum: null, tokens: [token] };
+    const page = sendReview([{ ...staked, ...paid }]);
+    expect(has(page, "send-staked")).toBe(true);
+    expect(has(page, "send-own")).toBe(false);
+    // The 5 ₳, the 0.2 ₳ fee and the token: "5.2 ₳ and 1 token".
+    expect(row(page, "send-review", t("review.total.public"))).toBe(words(t("format.adaAndTokens", { ada: formatAda("5200000"), count: 1 })));
+    seam.reset();
+    const own = sendReview([{ address, own: true, ownAccount: 0, ...paid }]);
+    expect(has(own, "send-staked")).toBe(false);
+    expect(has(own, "send-own")).toBe(true);
+    expect(row(own, "send-review", t("review.total.public"))).toBe(ada("200000"));
+  });
+
+  it("Send's review says which recipient has another account's stake key, and that paying it ties the two accounts", () => {
+    const page = sendReview(
+      [
+        { address: "addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz", own: false, lovelace: "1000000", minimum: null, tokens: [] },
+        { ...staked, staked: 1, lovelace: "5000000", minimum: null, tokens: [] },
+      ],
+      3,
+    );
+    expect(words(page)).toContain(words(t("send.warn.stakedOtherNth", { whose: t("accountPicker.numbered", { number: "2" }), number: 2 })));
+  });
+
+  it("Make public's review warns, its total counting every payment already", () => {
+    const fee = { size: "500000", compute: "50000", scriptReference: "0", total: "550000" };
+    seed([{}, false], {
+      network: "preprod",
+      txHash: TX,
+      max: false,
+      fee,
+      changeLovelace: "0",
+      changeTokens: 0,
+      changeOutputs: 0,
+      changeMinimum: "0",
+      inputs: 3,
+      left: 0,
+      payments: [{ ...staked, lovelace: "600000000", minimum: null, tokens: [] }],
+    });
+    const page = render(among(createElement(Withdraw, { seedelf, onCancel: noop, onSent: noop })));
+    expect(has(page, "withdraw-staked")).toBe(true);
+    expect(has(page, "withdraw-own")).toBe(false);
+    // The payment and the fee, as every payment is counted (1.7.2's review of its fixes, r2-tests#2).
+    expect(row(page, "withdraw-review", t("review.total.private"))).toBe(ada("600550000"));
   });
 });

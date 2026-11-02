@@ -1627,24 +1627,36 @@ describe("the prompt's words for the account's staking", () => {
       address: STRANGER,
       own: false,
       credential: "44".repeat(28),
+      recipients: [],
       ...p,
     });
-    expect(proposalLine(proposal({ own: true }), "your public account")).toBe(
+    expect(proposalLine(proposal({ own: true }), "your public account", false)).toBe(
       "Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit comes back to your public account when the action ends.",
     );
-    expect(proposalLine(proposal({ action: "treasuryWithdrawals", own: true }), "your private session")).toBe(
-      "Proposes withdrawals from the treasury. Its 100,000\u00a0₳ deposit comes back to your private session when the action ends.",
+    // A private session's stake key, its own or another's: the wallet never reads or withdraws its rewards, so the
+    // deposit goes there and never comes back (1.7.2's release review, critic#0).
+    expect(proposalLine(proposal({ action: "treasuryWithdrawals", own: true }), "your private session", true)).toBe(
+      "Proposes withdrawals from the treasury. Its 100,000\u00a0₳ deposit goes to the stake key of this private session when the action ends, and the wallet never brings it back.",
     );
-    // Another of the wallet's, by its name, never as a stranger's (X05).
+    expect(proposalLine(proposal({ yours: 1 }), "your public account", false)).toBe(
+      "Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit goes to the stake key of your private session 2 when the action ends, and the wallet never brings it back.",
+    );
+    expect(proposalLine(proposal({ yours: 0 }), "your private session", true)).toBe(
+      "Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit goes to the stake key of your private session 1 when the action ends, and the wallet never brings it back.",
+    );
+    // Another of the wallet's public accounts, by its name, never as a stranger's (X05): from a session too.
     const named = (index: number) => `Account ${index + 1}${index === 2 ? " · Savings" : ""}`;
-    expect(proposalLine(proposal({ yours: { account: 2 } }), "your public account", named)).toBe(
+    expect(proposalLine(proposal({ yours: { account: 2 } }), "your public account", false, named)).toBe(
       "Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit comes back to the stake key of Account 3 · Savings when the action ends.",
     );
-    expect(proposalLine(proposal({ yours: 1 }), "your public account")).toBe(
-      "Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit comes back to the stake key of your private session 2 when the action ends.",
+    expect(proposalLine(proposal({ yours: { account: 0 } }), "your private session", true)).toBe(
+      "Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit comes back to the stake key of your public account when the action ends.",
     );
     // Anyone else's, with its whole address.
-    expect(proposalLine(proposal({}), "your public account")).toBe(
+    expect(proposalLine(proposal({}), "your public account", false)).toBe(
+      `Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit goes to a stake key that isn't yours, ${STRANGER}, when the action ends.`,
+    );
+    expect(proposalLine(proposal({}), "your private session", true)).toBe(
       `Proposes information, which changes nothing. Its 100,000\u00a0₳ deposit goes to a stake key that isn't yours, ${STRANGER}, when the action ends.`,
     );
   });

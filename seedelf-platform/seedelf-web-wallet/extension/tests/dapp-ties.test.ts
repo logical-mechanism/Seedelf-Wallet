@@ -5,13 +5,17 @@
 // sessions; for a site on the public account, the sessions. Signing would
 // tie them on chain. Only the prompt says so: the site is never refused, so
 // it learns nothing. "Your public account and your private balance aren't in
-// it" is said only when the worker checked and nothing matched. Someone
-// else's address that carries one of their stake keys ties them too, but
-// isn't theirs to spend, and is said apart (1.5.0's release review, C01). So
-// does a certificate or a withdrawal that names one of their stake keys: an
-// old-style registration needs no signature of that key's (X05), nor does a
-// stake pool's registration that makes one its reward account (the last
-// review, L1).
+// it" is said only when the worker checked and nothing matched. An address
+// paid to one of their stake or DRep keys' hashes ties them as well: that
+// key's witness spends it, though the wallet never reads it, so its row still
+// reads "An address" (1.7.2's release review, pr358#0). Someone else's
+// address that carries one of their stake keys ties them too, but isn't
+// theirs to spend, and is said apart (1.5.0's release review, C01). So does
+// a certificate, a withdrawal or a proposal that names one of their stake
+// keys (its deposit's, or a treasury withdrawal's recipient's): an old-style
+// registration needs no signature of that key's (X05), nor does a stake
+// pool's registration that makes one its reward account (the last review,
+// L1), nor a proposal (chunk 39; 1.7.2's release review, pr357#0).
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -82,6 +86,19 @@ const registers = (stakeHash: string) => `82008200581c${stakeHash}`;
  */
 const registersPool = (reward: string) =>
   `8a03581c${"77".repeat(28)}5820${"88".repeat(32)}001a0a21fe80d81e820001581d${reward}81581c${"99".repeat(28)}80f6`;
+
+/**
+ * A treasury withdrawal of 5 ₳ to each of `to` (reward addresses, CIP-30 hex), its 1,000 ₳ deposit going back to
+ * `reward`: none of them takes a signature of its key's (1.7.2's release review, pr357#0).
+ */
+const withdrawsTreasury = (reward: string, to: string[]) =>
+  `841a3b9aca00${bytesOf(reward)}8302a${to.length}${to.map((r) => `${bytesOf(r)}1a004c4b40`).join("")}f6826b${Buffer.from("https://x.y").toString("hex")}5820${"33".repeat(32)}`;
+
+/** As `paying`, with `proposals` (CBOR, hex) after its fee. */
+function proposing(inputs: string[], to: string[], proposals: string[]) {
+  const outputs = `8${to.length}${to.map((a) => `82${bytesOf(a)}1a003d0900`).join("")}`;
+  return `84a400${outpoints(inputs)}01${outputs}021a00029810148${proposals.length}${proposals.join("")}a0f5f6`;
+}
 
 async function on() {
   const t = testBalances();
@@ -325,6 +342,121 @@ describe("a private session's signing prompt", () => {
     expect(shown(approval, true, true)).toContain("Your public account and your private balance aren't in it.");
   });
 
+  it("names the public account when it pays its stake key's own address, which that key spends, the row still \"An address\" (1.7.2's release review, pr358#0)", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    const { wasm } = t.deps;
+    const stakeHash = wasm.cip30Address(await t.wallet.withKeys((k) => k.cardano.stakeAddress(wasm.Network.Preprod))).slice(2);
+    // Its stake key hash is in every base address the public account hands out: paying it ties the two on chain.
+    const approval = await prompt(dapp, s, paying([SESSION_INPUT], [`60${stakeHash}`]));
+    expect(approval.ties).toEqual([{ account: 0 }]);
+    expect(approval.staked).toEqual([]);
+    // The wallet never reads that address: the row names no account of the user's.
+    expect(approval.summary.paid.map((p) => p.yours)).toEqual([undefined]);
+    expect(paidTo(approval.summary.paid[0]!)).toBe("An address");
+    const page = shown(approval, true);
+    expect(page).toContain("It moves money between this private session and your public account.");
+    expect(page).not.toContain("aren't in it");
+  });
+
+  it("names the public account when it pays an address paid to and staked by its stake key, never as someone else's money (1.7.2's release review, pr358#0)", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    const { wasm } = t.deps;
+    const stakeHash = wasm.cip30Address(await t.wallet.withKeys((k) => k.cardano.stakeAddress(wasm.Network.Preprod))).slice(2);
+    // The public account's stake key spends it: it read "Someone else's address … that money isn't yours" (C01's words).
+    const approval = await prompt(dapp, s, paying([SESSION_INPUT], [`00${stakeHash}${stakeHash}`]));
+    expect(approval.ties).toEqual([{ account: 0 }]);
+    expect(approval.staked).toEqual([]);
+    expect(approval.summary.paid.map((p) => p.yours)).toEqual([undefined]);
+    expect(shown(approval, true)).not.toContain("that money isn't yours");
+  });
+
+  it("names the public account when the session's own stake key spends what it pays under that account's stake key (1.7.2's release review, pr358#0)", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    const { wasm } = t.deps;
+    const [mine, theirs] = await t.wallet.withKeys((k) => [
+      wasm.cip30Address(k.oneTime.rewardAddress(wasm.Network.Preprod, 0)).slice(2),
+      wasm.cip30Address(k.cardano.stakeAddress(wasm.Network.Preprod)).slice(2),
+    ]);
+    // The session's own stake key spends it: never someone else's money, though the public account's stake key ties it.
+    const approval = await prompt(dapp, s, paying([SESSION_INPUT], [`00${mine}${theirs}`]));
+    expect(approval.ties).toEqual([{ account: 0 }]);
+    expect(approval.staked).toEqual([]);
+    expect(shown(approval, true)).not.toContain("that money isn't yours");
+    // Under no stake key, it's the session's alone: it ties nothing.
+    const alone = await prompt(dapp, s, paying([SESSION_INPUT], [`60${mine}`]));
+    expect([alone.ties, alone.staked, alone.certified]).toEqual([[], [], []]);
+  });
+
+  it("names the public account when it pays its DRep key's own address (1.7.2's release review, pr358#0)", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    const drep = await t.wallet.withKeys((k) => (JSON.parse(k.cardano.drepOf()) as { hash: string }).hash);
+    const approval = await prompt(dapp, s, paying([SESSION_INPUT], [`60${drep}`]));
+    expect(approval.ties).toEqual([{ account: 0 }]);
+    expect(approval.staked).toEqual([]);
+    expect(approval.summary.paid.map((p) => p.yours)).toEqual([undefined]);
+    expect(shown(approval, true)).not.toContain("aren't in it");
+  });
+
+  it("names the public account when it spends from its stake key's own address, with partialSign (1.7.2's release review, pr358#0)", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    const { wasm } = t.deps;
+    const stakeHash = wasm.cip30Address(await t.wallet.withKeys((k) => k.cardano.stakeAddress(wasm.Network.Preprod))).slice(2);
+    // A UTxO there, as Koios lists it: the public account's stake key signs to spend it, never the session's.
+    t.koios.addedToAccounts.push({ ...atSession("cd".repeat(32), 0, "3000000"), address: preprodAddress(stakeHash), payment_cred: stakeHash, stake_address: null });
+    const approval = await prompt(dapp, s, paying([SESSION_INPUT, `${"cd".repeat(32)}#0`], [wasm.cip30Address(THEIRS)]), true);
+    expect(approval.summary.othersSign).toBe(1);
+    expect(approval.ties).toEqual([{ account: 0 }]);
+    expect(approval.staked).toEqual([]);
+    expect(shown(approval, true, true)).not.toContain("aren't in it");
+  });
+
+  it("names the public account a treasury withdrawal pays, which takes no signature of its key's, and never says it isn't in it (1.7.2's release review, pr357#0)", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    const { wasm } = t.deps;
+    const reward = wasm.cip30Address(await t.wallet.withKeys((k) => k.cardano.stakeAddress(wasm.Network.Preprod)));
+    // Its deposit goes back to a stranger's key: the proposal's own line stays about that, and the recipient is tied,
+    // after a stranger's (1.7.2's review of its fixes, r2-tests#1).
+    const tx = proposing([SESSION_INPUT], [wasm.cip30Address(THEIRS)], [
+      withdrawsTreasury(`e0${"44".repeat(28)}`, [`e0${"44".repeat(28)}`, reward]),
+    ]);
+    const approval = await prompt(dapp, s, tx);
+    expect([approval.ties, approval.staked, approval.certified]).toEqual([[], [], [{ account: 0 }]]);
+    expect(approval.summary.proposals.map((p) => [p.action, p.own, p.recipients, p.yours])).toEqual([
+      ["treasuryWithdrawals", false, ["44".repeat(28), reward.slice(2)], undefined],
+    ]);
+    const page = shown(approval, true);
+    expect(page).toContain("Proposes withdrawals from the treasury. Its 1,000 ₳ deposit goes to a stake key that isn't yours");
+    expect(page).toContain(
+      "A certificate, withdrawal or proposal in it names the stake key of your public account: signing ties this private session to your public account on chain, where anyone can see it.",
+    );
+    expect(page).not.toContain("in it.");
+  });
+
+  it("still says the other side isn't in it for a treasury withdrawal to a contract's reward account (1.7.2's release review, pr357#0)", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    const { wasm } = t.deps;
+    // A script's names no key: nobody's account.
+    const tx = proposing([SESSION_INPUT], [wasm.cip30Address(THEIRS)], [withdrawsTreasury(`e0${"44".repeat(28)}`, [`f0${"cd".repeat(28)}`])]);
+    const approval = await prompt(dapp, s, tx);
+    expect(approval.summary.proposals.map((p) => p.recipients)).toEqual([[]]);
+    expect([approval.ties, approval.staked, approval.certified]).toEqual([[], [], []]);
+    expect(shown(approval, true)).toContain("Your public account and your private balance aren't in it.");
+  });
+
   it("promises nothing when the wallet couldn't check", async () => {
     const t = await on();
     const { dapp, sessions } = privately(t);
@@ -412,7 +544,10 @@ describe("the public account's signing prompt", () => {
     expect([approval.ties, approval.staked, approval.certified]).toEqual([[], [], [0]]);
     expect(approval.summary.proposals.map((p) => [p.action, p.own, p.credential, p.yours])).toEqual([["information", false, reward.slice(2), 0]]);
     const page = shown(approval, false);
-    expect(page).toContain("Its 1,000 ₳ deposit comes back to the stake key of your private session 1 when the action ends.");
+    // Never said to come back: the wallet never reads or withdraws a session's rewards (1.7.2's release review, critic#0).
+    expect(page).toContain(
+      "Its 1,000 ₳ deposit goes to the stake key of your private session 1 when the action ends, and the wallet never brings it back.",
+    );
     expect(page).toContain(
       "A certificate, withdrawal or proposal in it names the stake key of your private session 1: signing ties your public account to your private session 1 on chain, where anyone can see it.",
     );
@@ -461,6 +596,56 @@ describe("the public account's signing prompt", () => {
     // A session's own address ties it alone.
     const own = await prompt(dapp, s, paying([spend], [`00${second.key}${second.stake}`]));
     expect(own.ties).toEqual([1]);
+  });
+
+  it("names a private session when it pays its stake key's own address, and never the site's own (1.7.2's release review, pr358#0)", async () => {
+    const { t, dapp, s, spend, sessions } = await withTwoSessions();
+    const { wasm } = t.deps;
+    // Session 1's stake key spends it, and every address of the session carries that key: the two are tied on chain.
+    const approval = await prompt(dapp, s, paying([spend], [`60${sessions[0]!.stake}`]));
+    expect(approval.ties).toEqual([0]);
+    expect(approval.staked).toEqual([]);
+    expect(approval.summary.paid.map((p) => p.yours)).toEqual([undefined]);
+    expect(paidTo(approval.summary.paid[0]!)).toBe("An address");
+    const page = shown(approval, false);
+    expect(page).toContain("It moves money between your public account and your private session 1.");
+    expect(page).not.toContain("isn't in it");
+    // The site's own account's stake key: it ties nothing (X06).
+    const own = wasm.cip30Address(await t.wallet.withKeys((k) => k.cardano.stakeAddress(wasm.Network.Preprod))).slice(2);
+    const self = await prompt(dapp, s, paying([spend], [`60${own}`]));
+    expect([self.ties, self.staked, self.certified]).toEqual([[], [], []]);
+  });
+
+  it("names a private session a treasury withdrawal pays, which takes no signature of its key's (1.7.2's release review, pr357#0)", async () => {
+    const { t, dapp, s, spend, sessions } = await withTwoSessions();
+    const { wasm } = t.deps;
+    const own = wasm.cip30Address(await t.wallet.withKeys((k) => k.cardano.stakeAddress(wasm.Network.Preprod)));
+    // Its deposit comes back to the public account's own key, which ties nothing: sessions 1 and 2, the recipients after
+    // a stranger, each do (1.7.2's review of its fixes, r2-tests#1).
+    const tx = proposing([spend], [wasm.cip30Address(THEIRS)], [
+      withdrawsTreasury(own, [`e0${"44".repeat(28)}`, `e0${sessions[0]!.stake}`, `e0${sessions[1]!.stake}`]),
+    ]);
+    const approval = await prompt(dapp, s, tx);
+    expect([approval.ties, approval.staked, approval.certified]).toEqual([[], [], [0, 1]]);
+    expect(approval.summary.proposals.map((p) => [p.own, p.recipients, p.yours])).toEqual([
+      [true, ["44".repeat(28), sessions[0]!.stake, sessions[1]!.stake], undefined],
+    ]);
+    const page = shown(approval, false);
+    expect(page).toContain(
+      "A certificate, withdrawal or proposal in it names the stake key of your private session 1 and your private session 2: signing ties your public account to your private session 1 and your private session 2 on chain, where anyone can see it.",
+    );
+    expect(page).not.toContain("isn't in it");
+  });
+
+  it("warns of a proposal whose deposit goes back to another of the wallet's keys, as of anyone's (1.7.2's release review, pr357#2)", async () => {
+    const { t, dapp, s, spend, sessions } = await withTwoSessions();
+    const { wasm } = t.deps;
+    const approval = await prompt(dapp, s, carrying([spend], [wasm.cip30Address(THEIRS)], { proposals: [`e0${sessions[0]!.stake}`] }));
+    expect(approval.summary.proposals.map((p) => [p.own, p.yours])).toEqual([[false, 0]]);
+    // Its tone is in the markup, which `shown` leaves out.
+    const { summary, ties, staked, certified } = approval;
+    const html = renderToStaticMarkup(createElement(SignTx, { summary, partial: false, session: false, collateralSpent: false, ties, staked, certified }));
+    expect(html).toContain('<div class="callout callout--warn" data-testid="dapp-staking">');
   });
 });
 

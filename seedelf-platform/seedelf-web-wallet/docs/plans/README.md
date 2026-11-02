@@ -26,5 +26,5 @@ Status in a plan: ✅ done · 🚧 in progress · ⬜ not started · ⛔ blocked
 
 - **A release is cut when enough has landed to be worth one:** `1.x.0` for features, `1.x.y` for a fix, and a break on mainnet goes out alone as a patch. The web wallet's version line is its own, apart from the Rust workspace's 0.x (the root [CLAUDE.md](../../../../CLAUDE.md#release--versioning)).
 - **The steps are [development.md's](../development.md#releasing-to-the-web-store)**, and the record goes in [releases.md](../releases.md).
-- **The tag is `web-wallet/<version>`,** on the commit the uploaded zip was built from, pushed at the upload. [SECURITY.md](../../../../SECURITY.md)'s bounty scope is the latest such tag. The slash matters: [release.yml](../../../../.github/workflows/release.yml) ships signed CLI binaries off any tag without one.
+- **The tag is `web-wallet/<version>`,** on the commit the uploaded zip was built from, pushed at the upload. [SECURITY.md](../../../../SECURITY.md)'s bounty scope is the latest such tag. The slash matters: [release.yml](../../../../.github/workflows/release.yml) ships signed CLI binaries off any tag matching `*.*.*`, whose `*` matches anything but a slash, so `v1.7.2` would ship a false CLI release.
 - **The docs don't date releases or say what the store is doing** (the owner, 2026-10-04). Ask the owner when it matters.

@@ -18,11 +18,11 @@ import { OwnWarning } from "../src/ui/screens/Withdraw";
 
 const KNOWN: KnownAccount[] = [{ index: 0, name: "Main" }, { index: 1, name: "  Savings " }, { index: 2 }];
 
-const shown = (element: ReactElement, accounts = KNOWN) =>
+const shown = (element: ReactElement, accounts = KNOWN, active = 0) =>
   renderToStaticMarkup(
     createElement(
       AccountsContext.Provider,
-      { value: { accounts, active: 0, loaded: true, name: "", several: accounts.length > 1, reload: async () => {} } },
+      { value: { accounts, active, loaded: true, name: "", several: accounts.length > 1, reload: async () => {} } },
       element,
     ),
   )
@@ -72,6 +72,34 @@ describe("an own account in a warning", () => {
     );
     expect(shown(createElement(StakedWarning, { side: "withdraw", account: 0, nth: 1 }))).toContain(
       "Recipient 1 isn't your Account 1 · Main:",
+    );
+  });
+
+  it("says on Send that another account's stake key ties the two accounts (1.7.2's release review, pr359#0)", () => {
+    // Account 1 is on screen: paying an address with Account 2's stake key ties the two on chain.
+    expect(shown(createElement(StakedWarning, { side: "send", account: 1 }))).toBe(
+      "This isn't your Account 2 · Savings: it has that account's stake key but someone else's payment key, so only they can spend this. Paying it still ties your two accounts together on chain, where anyone can see it.",
+    );
+    expect(shown(createElement(StakedWarning, { side: "send", account: 1, nth: 2 }))).toBe(
+      "Recipient 2 isn't your Account 2 · Savings: it has that account's stake key but someone else's payment key, so only they can spend that payment. Paying it still ties your two accounts together on chain, where anyone can see it.",
+    );
+    // The account on screen's own stake key ties nothing new: as before.
+    expect(shown(createElement(StakedWarning, { side: "send", account: 0 }))).toBe(
+      "This isn't your Account 1 · Main: it has that account's stake key but someone else's payment key, so only they can spend this.",
+    );
+    expect(shown(createElement(StakedWarning, { side: "send", account: 0, nth: 2 }))).toBe(
+      "Recipient 2 isn't your Account 1 · Main: it has that account's stake key but someone else's payment key, so only they can spend that payment.",
+    );
+    // It's the account on screen that decides, not the first: with Account 2 on screen, the other way round.
+    expect(shown(createElement(StakedWarning, { side: "send", account: 1 }), KNOWN, 1)).toBe(
+      "This isn't your Account 2 · Savings: it has that account's stake key but someone else's payment key, so only they can spend this.",
+    );
+    expect(shown(createElement(StakedWarning, { side: "send", account: 0 }), KNOWN, 1)).toBe(
+      "This isn't your Account 1 · Main: it has that account's stake key but someone else's payment key, so only they can spend this. Paying it still ties your two accounts together on chain, where anyone can see it.",
+    );
+    // Make public's says what it links already, whichever account's stake key it is.
+    expect(shown(createElement(StakedWarning, { side: "withdraw", account: 1, nth: 2 }))).toBe(
+      "Recipient 2 isn't your Account 2 · Savings: it has that account's stake key but someone else's payment key, so only they can spend that payment. Anyone can still link the address to this money and to whoever made it private.",
     );
   });
 });

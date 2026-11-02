@@ -826,6 +826,13 @@ pub struct Proposal {
     /// extension names it when it's another of the wallet's, as it does a
     /// certificate's (X05). None for a script's.
     pub credential: Option<String>,
+    /// The stake keys a treasury withdrawal pays, their hashes in hex, the
+    /// account's own or anyone's: each takes no signature of its key's, as
+    /// the deposit's return doesn't, and the extension ties one that's
+    /// another of the wallet's (1.7.2's release review, pr357#0). A script's
+    /// is left out, as is one that isn't a reward address, which the ledger
+    /// can't decode either. Empty for any other kind.
+    pub recipients: Vec<String>,
 }
 
 #[derive(Serialize, Debug, Clone, Default)]
@@ -1079,10 +1086,12 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     // Who can spend an input: one of our keys, someone else's key, or a
     // script (whose own rules decide, with no key needed). Any of our keys:
     // the ledger takes a stake or DRep key's signature for an address paid
-    // to its hash as it takes a payment key's, so a UTxO at one's enterprise
-    // address is the account's, and its value and collateral count as such
-    // (the 2026-11-02 bounty report: read as a stranger's, a site could take
-    // it with the stake key's witness, the prompt showing nothing leaving).
+    // to its hash as it takes a payment key's, so a UTxO at any such address
+    // (the key's own enterprise address, or the hash under any staking part:
+    // 1.7.2's release review, pr358#2) is the account's, and its value and
+    // collateral count as such (the 2026-11-02 bounty report: read as a
+    // stranger's, a site could take it with the stake key's witness, the
+    // prompt showing nothing leaving).
     let mut owner = |row: &KoiosRow| -> Result<Option<Signer>> {
         let address = Address::from_bech32(&row.address).map_err(|e| {
             anyhow!(
@@ -1551,12 +1560,30 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             StakePayload::Stake(h) => Some(*h),
             StakePayload::Script(_) => None,
         };
+        // A treasury withdrawal's payees, by key, on either network: the
+        // ledger refuses the other's (TreasuryWithdrawalsNetworkIdMismatch),
+        // and these only tell the extension whose keys they are, so none is
+        // refused here.
+        let recipients = match &proposal.gov_action {
+            conway::GovAction::TreasuryWithdrawals(payments, _) => payments
+                .iter()
+                .filter_map(|(account, _)| match Address::from_bytes(account) {
+                    Ok(Address::Stake(s)) => match s.payload() {
+                        StakePayload::Stake(h) => Some(hex::encode(h)),
+                        StakePayload::Script(_) => None,
+                    },
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         proposals.push(Proposal {
             action: crate::decode::action_kind(&proposal.gov_action).to_string(),
             deposit: proposal.deposit.to_string(),
             address: address.to_bech32().unwrap_or_else(|_| address.to_hex()),
             own: key == Some(keys.stake),
             credential: key.map(hex::encode),
+            recipients,
         });
     }
 
@@ -1615,13 +1642,13 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     // A payment key's signature spends every UTxO under that key, one the
     // wallet couldn't find too, whatever partialSign says: the account's own
     // that isn't on chain yet (a Send's change, a top-up) is one. So does
-    // the DRep key's, for anything at its key's own enterprise address,
-    // which `signData` names it by (CIP-95). The stake key's spends what's
-    // at its own enterprise address too, but no wallet hands that out or
-    // pays it, so one there the wallet can't find is one its data source
-    // left out: it still signs over those, as a site's delegation paid from
-    // a UTxO not on chain yet needs (chunk 29), and found ones are the
-    // account's (`owner`).
+    // the DRep key's, for anything at an address paid to its hash: its own
+    // enterprise address, which `signData` names it by (CIP-95), or the hash
+    // under any staking part. The stake key's spends what's at an address
+    // paid to its hash too, but no wallet hands one out or pays it, so one
+    // there the wallet can't find is one its data source left out: it still
+    // signs over those, as a site's delegation paid from a UTxO not on chain
+    // yet needs (chunk 29), and found ones are the account's (`owner`).
     let payment_signs = signers
         .iter()
         .any(|s| matches!(s, Signer::Payment(_) | Signer::Drep));

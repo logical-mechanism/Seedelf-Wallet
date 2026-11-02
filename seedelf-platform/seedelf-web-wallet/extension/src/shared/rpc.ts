@@ -1056,7 +1056,9 @@ export interface DappTxSummary {
     ownPaymentKey: boolean;
     /**
      * Another of the wallet's accounts that can spend it, by its payment key, as the worker found it for a site's
-     * prompt (`DappTie`): never by its stake key alone, which anyone can pair with their own payment key (C01).
+     * prompt (`DappTie`): never by its stake key alone, which anyone can pair with their own payment key (C01), nor
+     * when it's paid to a stake or DRep key's hash, which ties that account but which the wallet never reads (1.7.2's
+     * release review, pr358#0).
      */
     yours?: DappTie;
   }>;
@@ -1127,6 +1129,13 @@ export interface DappTxSummary {
     own: boolean;
     /** That stake key, its hash in hex, the account's own or anyone's; none for a script's (WebAssembly's, as a certificate's). */
     credential: string | null;
+    /**
+     * The stake keys a treasury withdrawal pays, their hashes in hex, the account's own or anyone's, a script's left
+     * out (WebAssembly's); empty for any other kind. They take no signature of theirs, as the deposit's return
+     * doesn't: the worker ties one that's another of the wallet's (`certified`), and `yours` stays the deposit's
+     * (1.7.2's release review, pr357#0).
+     */
+    recipients: string[];
     /** Another of the wallet's accounts or sessions whose stake key it is, as for a certificate (X05). */
     yours?: DappTie;
   }>;
@@ -1507,10 +1516,12 @@ export type DappAsk =
        */
       staked?: DappTie[];
       /**
-       * Those whose stake key a certificate or a withdrawal in it names: an
-       * old-style registration of one needs no signature of that key's, and
-       * signing ties them on chain all the same (1.5.0's release review,
-       * X05). Public accounts first, as `ties`; missing with it.
+       * Those whose stake key a certificate, a withdrawal or a proposal in
+       * it names (its deposit's, or a treasury withdrawal's recipient's): an
+       * old-style registration of one needs no signature of that key's, nor
+       * does a proposal, and signing ties them on chain all the same (1.5.0's
+       * release review, X05; chunk 39; 1.7.2's release review, pr357#0).
+       * Public accounts first, as `ties`; missing with it.
        */
       certified?: DappTie[];
     }

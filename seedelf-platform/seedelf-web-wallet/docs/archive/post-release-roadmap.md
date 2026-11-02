@@ -1,6 +1,6 @@
 # Post-release roadmap
 
-> **Archived on 2026-10-31, as it stood that day.** Everything it set out after v1 was done, and it had become three things at once: the rules for a chunk, the list of what's open, and a record. The rules are [plans/README.md](../plans/README.md) now, what's still open is [backlog.md](../backlog.md), one line an entry, and the releases are [releases.md](../releases.md). Kept for the reasoning; don't build from it.
+> **Archived on 2026-10-31, as it stood that day.** Most of what it set out after v1 was done (parity, the public side, the data layer, the reviews), what was still open went to the backlog, and it had become three things at once: the rules for a chunk, the list of what's open, and a record. The rules are [plans/README.md](../plans/README.md) now, what's still open is [backlog.md](../backlog.md), one line an entry, and the releases are [releases.md](../releases.md). Kept for the reasoning; don't build from it.
 
 [roadmap.md](roadmap.md) is closed: every chunk in it is done, through 1.1.0, the transaction view. This file is what comes after it.
 

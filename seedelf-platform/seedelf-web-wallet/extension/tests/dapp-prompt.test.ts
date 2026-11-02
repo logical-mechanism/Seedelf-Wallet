@@ -5,8 +5,9 @@
 import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { i18n } from "../src/i18n/core";
 import { epochStart, type NetworkName, slotStart } from "../src/networks";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { DappTxSummary, KnownAccount } from "../src/shared/rpc";
@@ -63,17 +64,21 @@ const summary = (over: Partial<DappTxSummary>): DappTxSummary => ({
   ...over,
 });
 
-const render = (s: DappTxSummary, network: NetworkName = "preprod") =>
+const render = (s: DappTxSummary, network: NetworkName = "preprod", props: Partial<Parameters<typeof SignTx>[0]> = {}) =>
   renderToStaticMarkup(
     createElement(
       NetworkContext.Provider,
       { value: network },
-      createElement(SignTx, { summary: s, partial: false, session: false, collateralSpent: false }),
+      createElement(SignTx, { summary: s, partial: false, session: false, collateralSpent: false, ...props }),
     ),
   );
 
 /** The page's text, without its tags. */
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
+
+afterEach(async () => {
+  await i18n.changeLanguage("en");
+});
 
 describe("a site's signing prompt", () => {
   it("never shows a stranger's token called ₳ or tUSDM as ADA or the listed tUSDM", () => {
@@ -132,7 +137,7 @@ describe("a site's signing prompt", () => {
     // The bounty report's transaction (wasm/tests/fixtures/proposal-report-preprod.json): it read only "It makes 1
     // governance proposal", and its deposit went back to a stake key that wasn't the payer's.
     const theirs = "stake_test1upzpt4r85pf27gttzrvd4jxe7yuc8j5vmp537w0f6vmpceqq7cun8";
-    const proposal = { action: "information", deposit: "1000000000", address: theirs, own: false, credential: "44".repeat(28) };
+    const proposal = { action: "information", deposit: "1000000000", address: theirs, own: false, credential: "44".repeat(28), recipients: [] };
     const stranger = render(summary({ proposals: [proposal] }));
     expect(stranger).toContain('<div class="callout callout--warn" data-testid="dapp-staking">');
     expect(text(stranger)).toContain(
@@ -147,6 +152,61 @@ describe("a site's signing prompt", () => {
     const both = render(summary({ proposals: [{ ...proposal, own: true }, proposal] }));
     expect(both).toContain('<div class="callout callout--warn" data-testid="dapp-staking">');
     expect(text(both).match(/Proposes information/g)).toHaveLength(2);
+  });
+
+  it("warns that a proposal's deposit to a private session's stake key never comes back (1.7.2's release review, critic#0)", () => {
+    // The wallet never reads or withdraws a session's rewards, so "comes back to your private session" was untrue of
+    // the session's own key, and said in an info callout.
+    const reward = "stake_test1upzpt4r85pf27gttzrvd4jxe7yuc8j5vmp537w0f6vmpceqq7cun8";
+    const own = { action: "information", deposit: "1000000000", address: reward, own: true, credential: "44".repeat(28), recipients: [] };
+    const session = render(summary({ proposals: [own] }), "preprod", { session: true });
+    expect(session).toContain('<div class="callout callout--warn" data-testid="dapp-staking">');
+    expect(text(session)).toContain(
+      "Proposes information, which changes nothing. Its 1,000 ₳ deposit goes to the stake key of this private session when the action ends, and the wallet never brings it back.",
+    );
+    expect(text(session)).not.toContain("deposit comes back");
+    // The public account's own still comes back to it, with nothing to warn of.
+    const account = render(summary({ proposals: [own] }));
+    expect(account).toContain('<div class="callout callout--info" data-testid="dapp-staking">');
+    expect(text(account)).toContain("Its 1,000 ₳ deposit comes back to your public account when the action ends.");
+    // Another session's, from the public account: by its number, and the same.
+    const other = render(summary({ proposals: [{ ...own, own: false, yours: 1 }] }));
+    expect(other).toContain('<div class="callout callout--warn" data-testid="dapp-staking">');
+    expect(text(other)).toContain(
+      "Proposes information, which changes nothing. Its 1,000 ₳ deposit goes to the stake key of your private session 2 when the action ends, and the wallet never brings it back.",
+    );
+  });
+
+  it("says what it can't show of inputs it couldn't find, and that only the stake key signs, word for word (1.7.2's release review, i18n#0)", async () => {
+    // #358 took "and it spends none of them" out of all three languages: the stake key spends any at its own
+    // enterprise address. Exact values, so neither that clause nor Spanish's old order, which read as an order to
+    // sign, can come back with every test passing.
+    const signing = (n: number) =>
+      render(
+        summary({ signs: ["stake"], ownInputs: 0, unknownInputs: new Array<string>(n).fill(`${"cd".repeat(32)}#0`), complete: false }),
+        "preprod",
+        { partial: true },
+      );
+    const unknown = (n: number) =>
+      /data-testid="dapp-unknown"[^>]*>.*?<div class="callout__body">(.*?)<\/div>/.exec(signing(n))?.[1]?.replace(/&#x27;/g, "'");
+    expect(signing(0)).not.toContain('data-testid="dapp-unknown"');
+    expect(unknown(1)).toBe("It spends 1 UTxO the wallet couldn't find, so what it holds can't be shown. Only your stake key signs here.");
+    expect(unknown(2)).toBe("It spends 2 UTxOs the wallet couldn't find, so what they hold can't be shown. Only your stake key signs here.");
+    await i18n.changeLanguage("es");
+    expect(unknown(1)).toBe(
+      "Gasta 1 UTxO que la billetera no pudo encontrar, así que no se puede mostrar lo que contiene. Solo tu clave de stake firma aquí.",
+    );
+    expect(unknown(2)).toBe(
+      "Gasta 2 UTxOs que la billetera no pudo encontrar, así que no se puede mostrar lo que contienen. Solo tu clave de stake firma aquí.",
+    );
+    // A million is Spanish's "many".
+    expect(unknown(1_000_000)).toBe(
+      "Gasta 1000000 UTxOs que la billetera no pudo encontrar, así que no se puede mostrar lo que contienen. Solo tu clave de stake firma aquí.",
+    );
+    await i18n.changeLanguage("ja");
+    expect(unknown(2)).toBe(
+      "ウォレットが見つけられなかった UTxO を 2 件使用するため、その内容は表示できません。ここで署名するのはあなたのステーク鍵だけです。",
+    );
   });
 
   it("names the account that signs when the wallet has more than one, and only then (chunk 23's second review, CW-5)", () => {
