@@ -484,7 +484,7 @@
   "dappUi.warn.noRegister": "レジスターなしで Seedelf Wallet のコントラクトへ支払います。そこへ入ったものは誰でも取れます。",
   "dappUi.warn.ownKey": "あなたの支払鍵に、あなたのものではないステーク部分を付けて支払うため、出ていく分として数えます。このウォレットから使えはしますが、ステーキング報酬はあなたのものになりません。",
   "dappUi.warn.replaced": "読んでいたリクエストはなくなりました。回答する前にこのリクエストを確認してください。",
-  "dappUi.warn.unknownInputs_other": "ウォレットが見つけられなかった UTxO を {{count}} 件使用するため、その内容は表示できません。ここで署名するのはあなたのステーク鍵だけで、ステーク鍵はそれらの UTxO をどれも使用しません。",
+  "dappUi.warn.unknownInputs_other": "ウォレットが見つけられなかった UTxO を {{count}} 件使用するため、その内容は表示できません。ここで署名するのはあなたのステーク鍵だけです。",
   "dappUi.whatToPutIn": "入れる金額",
   "dappUi.whose.warn.account": "公開アカウント",
   "dappUi.whose.warn.session": "プライベートセッション",
