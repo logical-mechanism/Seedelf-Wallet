@@ -1,7 +1,7 @@
 {
   "//": "Lovejoin's token pools shown on each network when this was written, the block Koios's holder was read to from its start, and the token list it was read under (`listed`): a new device's head start, and where a device looks from again when an update changes its list (chunk 34's 34c). Written at each release by `npm run lovejoin-pools`; never a gate, as the wallet verifies every pool and looks on from the height.",
   "preprod": {
-    "height": 5350391,
+    "height": 5356458,
     "pools": [
       {
         "id": "dfa1f845875b627fff04fbd37b4545f3a07caf5214e03a3f4557911d",
@@ -270,12 +270,98 @@
           "index": 5,
           "tx": "389ff2d3adf66f5d716ce9be491f3eb93e4b3f76118eb8f255380435fbab0e53"
         }
+      },
+      {
+        "id": "aab7c72d2c839b69db1a7e9fde3f6dec641f5b8a395067013e80bebe",
+        "boxLovelace": "7000000",
+        "ref": {
+          "reference": {
+            "tx_hash": "9af16e4201a6893983c02257271ab1e16008b9b712d81a71e15126db8d7a6df2",
+            "tx_index": 0,
+            "address": "addr_test1wq5gl6nh5rm8f3sgp2ka3mfu5skdt2fqhu0spsxnucesdeqxrttf6",
+            "value": "1534360",
+            "stake_address": null,
+            "payment_cred": "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4",
+            "epoch_no": 322,
+            "block_height": 5356458,
+            "block_time": 1793436358,
+            "datum_hash": "2a3476a071fabdc68b60a9d5942197b07d384f6735d6863a7fbde495958a4ccf",
+            "inline_datum": {
+              "bytes": "d8799f1a006acfc04040001a0016e360581cde2d03652463c4f7a2cb3d612707214e5485b894b600986d3da102a6581c556e7751b45acebf78e25917c9ff5244055f72a58b1986a14dd75cbb581c7a193b21e8d0ee7b3917ccc8fee24b180900395090853c94a5b8ae23ff",
+              "value": null
+            },
+            "reference_script": null,
+            "asset_list": [
+              {
+                "decimals": 0,
+                "quantity": "1",
+                "policy_id": "aab7c72d2c839b69db1a7e9fde3f6dec641f5b8a395067013e80bebe",
+                "asset_name": "6c6f76656a6f696e",
+                "fingerprint": "asset147ktslf2f008la2mdsnnj8dplm4fvs8vn73hwt"
+              }
+            ],
+            "is_spent": false
+          },
+          "seed": {
+            "txHash": "f6d30d38ef5bd90d78bb45d1fd08f94e19205b132e719fbf67cd536d3cb88203",
+            "txIndex": 1
+          },
+          "scripts": [
+            {
+              "tx_hash": "9af16e4201a6893983c02257271ab1e16008b9b712d81a71e15126db8d7a6df2",
+              "tx_index": 1,
+              "address": "addr_test1wq5gl6nh5rm8f3sgp2ka3mfu5skdt2fqhu0spsxnucesdeqxrttf6",
+              "value": "3616090",
+              "stake_address": null,
+              "payment_cred": "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4",
+              "epoch_no": 322,
+              "block_height": 5356458,
+              "block_time": 1793436358,
+              "datum_hash": null,
+              "inline_datum": null,
+              "reference_script": {
+                "hash": "de2d03652463c4f7a2cb3d612707214e5485b894b600986d3da102a6",
+                "size": 629,
+                "type": "plutusV3",
+                "bytes": null
+              },
+              "asset_list": [],
+              "is_spent": false
+            },
+            {
+              "tx_hash": "9af16e4201a6893983c02257271ab1e16008b9b712d81a71e15126db8d7a6df2",
+              "tx_index": 2,
+              "address": "addr_test1wq5gl6nh5rm8f3sgp2ka3mfu5skdt2fqhu0spsxnucesdeqxrttf6",
+              "value": "15809080",
+              "stake_address": null,
+              "payment_cred": "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4",
+              "epoch_no": 322,
+              "block_height": 5356458,
+              "block_time": 1793436358,
+              "datum_hash": null,
+              "inline_datum": null,
+              "reference_script": {
+                "hash": "556e7751b45acebf78e25917c9ff5244055f72a58b1986a14dd75cbb",
+                "size": 3458,
+                "type": "plutusV3",
+                "bytes": null
+              },
+              "asset_list": [],
+              "is_spent": false
+            }
+          ]
+        },
+        "launch": {
+          "block": 5356458,
+          "index": 0,
+          "tx": "9af16e4201a6893983c02257271ab1e16008b9b712d81a71e15126db8d7a6df2"
+        }
       }
     ],
     "listed": "8c98ec06d172357e"
   },
   "mainnet": {
-    "height": 14125046,
+    "height": 14139313,
     "pools": [
       {
         "id": "dc6abe3b0b184e09d11cfa918f7b57cde9ea1f61c49700894d3fe117",
