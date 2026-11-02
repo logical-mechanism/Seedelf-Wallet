@@ -32,7 +32,7 @@ Checked on 2026-10-30 against Midnight's docs and release notes, the wallet SDK'
 We have Lace 2.4.2 checked out (`_reference/lace` at `e431933`). 2.5.0 came out on 29 October 2026 with **Generate DUST from NIGHT**, and 38a pulls it. Lace's Midnight code lives in `packages/contract/midnight-context`, `packages/module/{blockchain-midnight,midnight-sync,dapp-connector-midnight,midnight-host-pull}`, `packages/lib/cnight-dust-designation` and, in 2.5.0, `packages/lib/midnight-prover`.
 
 - **The SDK.** Lace uses `@midnightntwrk/wallet-sdk` 1.2.0: its `/facade`, `/shielded`, `/unshielded`, `/dust` and `/hd` entry points, with `-abstractions`, `-address-format` and `-hd` beside them. It also uses `@midnight-ntwrk/ledger-v8` and `@midnight-ntwrk/dapp-connector-api` 4.0.1.
-  - Since 1.2.0, `@midnightntwrk` (no hyphen) is the wallet SDK's scope. `@midnight-ntwrk/wallet-*` is a deprecated alias that lags behind. The ledger and the connector keep the hyphen.
+  - Since 1.2.0, `@midnightntwrk` (no hyphen) is the wallet SDK's scope. `@midnight-ntwrk/wallet-*` is a deprecated alias that lags behind. Ledger 8 and the connector keep the hyphen; Lace pins ledger 9's release candidate as `@midnightntwrk/ledger-v9` (38a checks its release's scope).
   - Some of Lace's pins are betas of the 2.0 line.
 - **Keys come from the same phrase.** `HDWallet.fromSeed(bip39.mnemonicToSeed(phrase))`, then `selectAccount(i).selectRole(role).deriveKeyAt(0)` for three roles: `Zswap`, `NightExternal` and `Dust`. Each key is sealed under the password.
 - **Its services.** The indexer and the node go through IOG's Blockfrost proxy for Lace (`blockfrost.lw.iog.io/midnight-{mainnet,preprod,preview}/`, and `…-rpc/` for the node).
@@ -82,7 +82,7 @@ Seedelf Wallet, one phrase
   - the prover (`zkir-v2`) is 1.97 MB, 0.68 MB gzipped;
   - so the zip goes from 2.10 MB (1.7.1) to about 7.5 MB;
   - the SDK's 2.0 line ships ledger 9 as well (11.0 MB unpacked).
-- **All of it ships in the zip,** because the Web Store allows no remote code. It goes in a chunk of its own, loaded only once Midnight is turned on, so a wallet that never turns it on runs as it does now.
+- **All of it ships in the zip,** because the Web Store allows no remote code. It goes in a chunk of its own, loaded only once Midnight is turned on or Generate DUST is pressed (call 1), so a wallet that does neither runs as it does now.
 - **Sync** is a long-running WebSocket stream plus trial decryption in WebAssembly.
   - The worker dies after about 30 s idle, so sync must resume from saved state on every wake.
   - Chrome keeps a worker alive while its WebSocket is active, and the SDK's notes say its node client opens its socket only when needed, "to prevent service worker timer leaks". 38a measures how it behaves.
@@ -120,7 +120,7 @@ Seedelf Wallet, one phrase
 - **The proving keys are about 28 MB, fetched at the first proof:**
   - spend 11.0 MB, output 5.7 MB, sign 2.8 MB, DUST spend 2.2 MB, plus the parameters (3.1 MB and 6.3 MB);
   - SDK 1.2.0 fetches them from an S3 bucket with no integrity check;
-  - the SDK's main fetches them from `srs.midnight.network` with SHA-256 checks. That host sends no CORS headers, so we would need a host permission for it;
+  - the SDK's main fetches them from `srs.midnight.network` with SHA-256 checks. That host sends no CORS headers, so we would need a host permission for it: an optional one, inside the declared `https://*/*`, asked for when Midnight is turned on. An install-time one would have Chrome disable the updated wallet for every user until they accept it;
   - every user fetches the same public data, so the fetch says only that this IP address proves on Midnight. It's still a new host, with its own entry in the privacy policy;
   - we pin the hashes ourselves either way.
 
@@ -131,7 +131,7 @@ Seedelf Wallet, one phrase
   - Chunk 14 named the tabs Private and Public because both are Cardano ([architecture.md](../architecture.md#ui)). Midnight is another chain, so the tab takes its name.
   - Inside it we use Midnight's own words: *unshielded*, *shielded*, *DUST*. They name Midnight's things, so they don't clash with the private balance.
 - **Settings:** Midnight on or off, and where its indexer, node and proof server are.
-- **The public account:** **Generate DUST** for the NIGHT it holds, a Cardano transaction built in core beside staking ([38b](#steps)).
+- **The public account:** **Generate DUST** for the NIGHT it holds, a Cardano transaction built in core beside `build::account_mint` ([38b](#steps)).
 - **The connector:** Midnight's own API beside CIP-30, under the same rule: off until turned on, nothing injected before that ([38f](#steps)).
   - A page can see `window.midnight`, so turning it on makes the wallet detectable, as CIP-30 already does.
 - **Networks:** the wallet's switch picks Midnight's mainnet, or its Preprod when on Cardano preprod. Preview and Preprod share one testnet cNIGHT policy, so Generate DUST can be tested end to end on preprod (call 3).
@@ -150,7 +150,7 @@ What Midnight adds:
   - Anyone can tie the public account's history to that DUST key.
   - Whether Midnight then links the DUST *spends* to it hasn't been checked (38a).
   - The Generate DUST review says so in one line.
-- **The private balance's NIGHT generates no DUST.** A Seedelf UTxO sits at the contract's address, which has no stake part (`address.rs`'s `wallet_contract`: `ShelleyDelegationPart::Null`). Midnight's observer skips such an address, so no one else can claim DUST from it either.
+- **The private balance's NIGHT generates no DUST for its owner.** A new Seedelf UTxO sits at the contract's enterprise address, with no stake part (`address.rs`'s `wallet_contract`: `ShelleyDelegationPart::Null`, every web wallet build and the CLI from 0.5.0). Midnight's observer skips such an address, so no one can claim DUST from it. Older ones can sit at a staked form: the CLI up to 0.4.10 paid the contract under the [LOGIC] pool's stake key (`MAINNET_STAKE_HASH`, `PREPROD_STAKE_HASH`), and the validator never reads the stake part, so any payer can pick one. NIGHT there generates DUST for whoever registers that stake key, never the Seedelf's owner, and the private balance counts it all the same: it reads the contract by its payment credential. 38a counts the mainnet NIGHT at staked-form contract UTxOs before 38b's privacy line is written.
   - To generate DUST, NIGHT has to be made public first, and Make public's link applies.
   - The wallet says so where it matters and adds no guard: the owner's rule is to refuse only what the ledger refuses.
 - **One IP address reads both chains,** so whoever runs both sets of services sees them together. That's us if we run Midnight's (call 2), as we already do for the private side ([the backlog](../backlog.md#network-privacy)'s Tor entry), and Blockfrost if it does.
@@ -160,7 +160,7 @@ What Midnight adds:
 
 Each step is a PR from `main` and ships in the next release after it lands.
 
-1. ⬜ **38a · The spike.** No screens. It produces numbers and calls, recorded here, on a branch that may stay unmerged, as the Tor spike's did.
+1. ⬜ **38a · The spike.** No screens. It produces numbers and calls, recorded here, on a branch that may stay unmerged, as the Leios run's (`web-wallet/leios-musashi`) does.
    - **The SDK in our build:** Vite, the worker against an offscreen document, the CSP, the zip's size, the licences (the SDK is Apache-2.0, and the ledger repository's licence is Apache-2.0 too).
    - **Keys:** the vectors, equal to Lace's for the same phrase.
    - **Sync on Preview** (no token needed):
@@ -169,7 +169,7 @@ Each step is a PR from `main` and ships in the next release after it lands.
      - surviving a killed worker;
      - the history service replaced.
    - **A whole transfer proved in the browser,** timed, with its memory, against a local proof server doing the same.
-   - **Generate DUST on Cardano preprod,** built in core and checked with Ogmios's `additionalUtxo`, spending nothing, as `tests/fixtures/probe-staking.mjs` does for staking.
+   - **Generate DUST on Cardano preprod,** built in core and checked with Ogmios's `additionalUtxo`, spending nothing, as `tests/fixtures/probe-governance.mjs` does for a DRep's deposit, with an input the account doesn't hold.
      - Its datum is byte for byte the reference dApp's and Lace's.
      - It matches a live mainnet registration.
    - **The data question, priced:** what a Midnight node and indexer need at home (hardware, and the db-sync connection the node follows Cardano through) against Blockfrost's plans.
@@ -179,14 +179,14 @@ Each step is a PR from `main` and ships in the next release after it lands.
    - **Register:**
      - mint one token under the script's own policy, with an empty name and redeemer `Create` (`Constr 0 []`);
      - pay it to the script's address with at least 1.58608 ₳, which comes back on Stop, and the inline datum `Constr 0 [Constr 0 [stake key hash], DUST key ≤ 33 bytes]`;
-     - spend at least one cNIGHT UTxO;
+     - spend at least one cNIGHT UTxO. Unverified: Lace's designation builder, which this follows, refuses with no cNIGHT and puts every cNIGHT UTxO the account holds in as inputs, on register, change and stop alike, for what it calls the validator's rotation scan of the inputs. 38a reads the validator for which purposes scan them, and whether Stop needs NIGHT still held;
      - name the stake key as a required signer.
    - **Change the DUST address:** spend the registration and add a zero withdrawal from the script.
    - **Stop:** spend it and burn the token (`Burn`, `Constr 1 []`).
    - **Mainnet's script** is `73e4aea31b5b51d9b0ca386196fc6a4c422f74c5aea011e4b8bdf4e5` (`addr1w9e7ft4rrdd4rkdseguxr9hudfxyytm5ckh2qy0yhz7lfeg9lvhq7`, with 3,885 registrations there on 2026-10-30). It's a pinned Plutus V3 script, like Lovejoin's templates.
-   - **Built in core** on `build::account_staking`'s machinery: Pallas can't stage the withdrawal or the mint's redeemer, and `staking.rs` and `withdraw_zero.rs` already patch both. No Seedelf contract changes and no variant is involved.
+   - **Built in core** beside `build::account_mint`, an account-paid Plutus V3 mint with the account's collateral, where Pallas stages the mint and its redeemer. It can't stage Change's zero withdrawal or its `Reward` redeemer, which `withdraw_zero.rs` patches, as Lovejoin's mixes use it. No Seedelf contract changes and no variant is involved.
    - **Finding the registration again:** it sits among everyone's at the script's address. On mainnet, a data-layer route reads it by its datum; the Koios fallback pages through the address (4 pages today), and the wallet keeps the one it sent. This is the step's Koios cost.
-   - **On screen:** the public account's NIGHT, whether it's generating and to which DUST address, Change and Stop, and the review's one privacy line.
+   - **On screen:** the public account's NIGHT, whether it's generating and to which DUST address, Change and Stop, and the review's one privacy line. Only NIGHT at an address carrying the registered stake key generates, by line 25's rule, and the account also holds NIGHT under its payment keys at its enterprise address or under someone else's stake key: the screen counts each UTxO by its stake part, and says what doesn't generate.
    - **What it can't show yet is the DUST balance.** That needs Midnight's data (38c), so the screen says when generation starts (about 12 hours) instead.
 3. ⬜ **38c · A Midnight tab that reads.** Turn Midnight on. Receive shows its three addresses, Home shows the unshielded, shielded and DUST balances and the sync state, from the data source call 2 picks.
 4. ⬜ **38d · Send on Midnight:** shielded tokens, and unshielded NIGHT once the bridge puts any there, with the fee paid in DUST and the proofs where call 4 puts them.
@@ -206,25 +206,26 @@ Each has a recommendation, which the owner can overturn.
 
 1. **On for everyone, or off until turned on?**
    - **Recommended: off until turned on**, from the Midnight tab or Settings, as the connector is.
-   - Until then, nothing of Midnight's loads, derives or phones home. The zip carries it either way.
-   - 38b's Generate DUST sits on the public account and needs no switch: it's a Cardano transaction.
+   - Until then, nothing of Midnight's loads, derives or phones home, but Generate DUST once it's pressed. The zip carries it either way.
+   - 38b's Generate DUST sits on the public account and needs no switch: it's a Cardano transaction. Pressed, it derives the DUST key, and loads whatever computes it (38a decides).
 2. **Where mainnet's Midnight data comes from.** The indexer sees the unshielded addresses and the IP address, and the event stream is heavy.
    - **Recommended first: Blockfrost through our server.** A route on the droplet adds the token, as Lace's proxy does, so no token ships and Blockfrost sees our server rather than the user.
    - **Later: our own Midnight node and indexer,** behind the droplet as [seedelf-data](../../../../seedelf-data/README.md) is, so the no-log promise covers it as it covers the private side. What that takes, as of 2026-10-30 (no mainnet figures are published):
      - **The node reads Cardano only from db-sync's Postgres.** It needs db-sync 13.7.1.0, replayed, with `tx_in` filled, the ledger state on and no address table. At its first start it adds three indexes of its own to db-sync's tables.
+     - **Home's db-sync can't be it.** It runs `tx_out` as `consumed` with the address table, which the API's SQL relies on and only an empty database can change ([its options](../../../../seedelf-data/deploy/home/db-sync-insert-options.json)), and it ran 13.7.0.1 when chunk 26 checked. So the node needs a mainnet db-sync and Postgres of its own, replayed from empty.
      - **CPU and memory:** about 8 vCPU and 32 GB for the node (Midnight's archived guidance), and 5–12 GiB for the indexer (seen on Preprod).
      - **Disk:** about 200 GB for the node and 300–350 GB for the indexer, both on Preprod and both growing.
      - **Sync:** a re-index takes 3–4 days, and the node's first sync puts at least 18 hours of load on db-sync.
      - **Network:** P2P on port 30333, which should be reachable from outside.
-     - **So it needs about 40–45 GB of RAM more** than home's 64 GB box carries today with the relay, db-sync, Kupo and Ogmios: more memory, or a box of its own.
+     - **So it needs about 40–45 GB of RAM more** for the node and the indexer, and up to about 21 GB for that db-sync (2–3 GB with `ledger_backend: "lsm"`, by chunk 26's measure), than home's 64 GB box carries today with the relay, db-sync, Kupo and Ogmios: more memory, or a box of its own.
      - Midnight calls its indexer "a reference implementation … not designed to be public facing", so it stays behind the API, as Postgres does.
    - A user's own Blockfrost token in Settings is the fallback for someone who wants neither. **Never a token in the zip.**
 3. **The test network.**
    - **Recommended:** Cardano preprod maps to Midnight Preprod, through the same Blockfrost-on-our-server route, since home's preprod server belongs to another project.
-   - Development uses Preview, which needs no token. The wallet still has no Cardano preview ([Lace parity](../archive/post-release-roadmap.md#where-cardano-parity-stands)).
+   - Development uses Preview, which needs no token. The wallet still has no Cardano preview ([the backlog's *Declined*](../backlog.md#declined)).
 4. **Proofs.**
    - **Recommended: the WebAssembly prover by default,** so keys stay on the machine and nobody needs Docker. A local proof server is a visible switch for speed.
-   - **Never a remote prover.**
+   - **Never a prover of ours, and never a remote one by default.** A proof server the user names elsewhere in Settings is theirs to choose, with a one-line note of what it's sent (38a says what that is).
    - **This depends on 38a's numbers,** and on accepting the offscreen document as the one place besides the worker that holds a Midnight key, and only for a proof.
 5. **1.8.0's scope.**
    - **Recommended: 38a and 38b.** Generate DUST is the one mainnet action open to a Cardano wallet today, and it needs neither of the hard calls (2 and 4).

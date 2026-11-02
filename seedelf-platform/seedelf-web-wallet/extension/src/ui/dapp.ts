@@ -77,12 +77,14 @@ export function stakedLine(staked: DappTie[], session: boolean, named?: AccountN
 }
 
 /**
- * The wallet's other accounts whose stake key a certificate or a withdrawal
- * in it names (`certified`), as `tiesLine`'s. An old-style registration of
- * one needs no signature of that key's, so a site's transaction ties the two
- * with the one signature; WebAssembly knows the signing account's keys alone,
- * and the prompt said "a stake key that isn't yours" and that the other side
- * wasn't in it (1.5.0's release review, X05).
+ * The wallet's other accounts whose stake key a certificate, a withdrawal or
+ * a proposal in it names (`certified`), as `tiesLine`'s: a proposal's by the
+ * reward address its deposit goes back to, or one a treasury withdrawal pays.
+ * An old-style registration of one needs no signature of that key's, so a
+ * site's transaction ties the two with the one signature; WebAssembly knows
+ * the signing account's keys alone, and the prompt said "a stake key that
+ * isn't yours" and that the other side wasn't in it (1.5.0's release review,
+ * X05).
  */
 export function certifiedLine(certified: DappTie[], session: boolean, named?: AccountNamer, site?: string): string {
   return t("dappUi.ties.privacy.certified", { from: tiedFrom(session, site), list: tiedList(certified, named) });
@@ -209,10 +211,21 @@ export function certificateLine(c: Certificate, back: boolean, whose: string, na
  * ends, which a site can make anyone's (chunk 39, a bounty report against 1.7.1). `whose` and `named` as for a
  * withdrawal: another of the wallet's stake keys by its name, never as one that isn't yours (X05); anyone else's with
  * its whole address. The deposit itself is in what the account sends, above.
+ *
+ * `session`: the site is on a private session, so `own` is that session's stake key. A session's stake key is one
+ * whose rewards the wallet never reads or withdraws: its return and Disconnect read UTxOs only, as the worker says
+ * where it refuses a session's own registration. So a deposit there, this session's or another's, never comes back to
+ * anything the wallet shows, and is never said to (1.7.2's release review, critic#0).
  */
-export function proposalLine(p: Proposal, whose: string, named?: AccountNamer): string {
+export function proposalLine(p: Proposal, whose: string, session: boolean, named?: AccountNamer): string {
   const what = proposalWords(p.action);
   const amount = formatAda(p.deposit);
+  if (p.own && session) {
+    return t("dappUi.proposal.warn.session", { what, amount, name: t("dappUi.ties.privacy.thisSession") });
+  }
+  if (typeof p.yours === "number") {
+    return t("dappUi.proposal.warn.session", { what, amount, name: tiedName(p.yours, named) });
+  }
   if (p.own) return t("dappUi.proposal.warn.own", { what, amount, whose });
   if (p.yours !== undefined) return t("dappUi.proposal.warn.wallet", { what, amount, name: tiedName(p.yours, named) });
   return t("dappUi.proposal.warn.notYours", { what, amount, address: p.address });

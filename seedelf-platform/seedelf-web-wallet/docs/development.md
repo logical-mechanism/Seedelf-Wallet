@@ -178,7 +178,7 @@ cargo test --workspace --locked
 cargo test --release --locked -p seedelf-wasm --test payment_parts_shapes_test -- --ignored
 cd seedelf-web-wallet/extension
 npm ci
-release_version=1.7.1
+release_version=1.7.2
 npm version "$release_version" --no-git-tag-version
 npm run tokens
 npm run dreps
@@ -263,6 +263,7 @@ release_version=$(node -p "require('./package.json').version")
 npm run package
 npm run e2e
 sha256sum "release/seedelf-wallet-$release_version-mainnet.zip"
+stat -c %s "release/seedelf-wallet-$release_version-mainnet.zip"
 git rev-parse HEAD
 ```
 
@@ -274,16 +275,27 @@ The package to upload is:
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-With `package.json` at 1.7.1, that file is `extension/release/seedelf-wallet-1.7.1-mainnet.zip`.
+With `package.json` at 1.7.2, that file is `extension/release/seedelf-wallet-1.7.2-mainnet.zip`.
 
 `npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it.
 
-**Keep for the release record**, with the commit `git rev-parse HEAD` printed and the SHA-256:
+**Keep for the release record**, with the commit `git rev-parse HEAD` printed, the SHA-256 and the size in bytes:
 
 - `wasm/build.sh`'s last line, `C compiler: <first line of clang --version>`, or `C compiler: unknown`;
 - `scripts/package.mjs`'s `sha256 <hex>`, and the line after it, `Zipped with Node <version>, zlib <version>`.
 
 The next `npm run package` overwrites a zip of the same version, so take the hash from the zip you upload, never from one rebuilt since.
+
+**Then build it a second time, apart,** for the record's reproducibility line: the same commit in a worktree of its own, with its own `node_modules` and its own cargo target, so nothing built for the first zip is reused. In the same terminal, from `extension/`, it prints the second zip's SHA-256, which must be the first's, and removes the worktree:
+
+```bash
+second=$(mktemp -d)
+git worktree add --detach "$second/tree" HEAD
+(cd "$second/tree/seedelf-platform/seedelf-web-wallet/extension" && npm ci && env -u CARGO_TARGET_DIR npm run package && sha256sum "release/seedelf-wallet-$release_version-mainnet.zip")
+git worktree remove --force "$second/tree"
+```
+
+Its WebAssembly builds from nothing, which takes a while. Never make the second build in the main tree: there it reuses the first's target, which proves nothing, and it overwrites the zip you upload.
 
 `npm run package:preprod` makes a preprod-only store build (`-preprod.zip`) for tests. Never upload it.
 
@@ -301,7 +313,7 @@ The next `npm run package` overwrites a zip of the same version, so take the has
    git push origin "web-wallet/$release_version"
    ```
 
-7. Record the version, the commit it was built from, the zip's SHA-256, and the C compiler, Node and zlib lines in [releases.md](releases.md), then share the store link with the intended users.
+7. Record it in [releases.md](releases.md), as its *Recording a release* lists, then share the store link with the intended users.
 
 The official Chrome upload flow is also described in [Publish in the Chrome Web Store](https://developer.chrome.com/docs/webstore/publish/).
 
@@ -327,12 +339,12 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
    - The WebAssembly is built from the tracked `Cargo.lock` (`--locked`) with the pinned Rust (`rust-toolchain.toml`), and carries no local path.
    - It adds `licenses/THIRD-PARTY.txt`: every Rust crate compiled into the WebAssembly, every bundled npm package, and SecretBox, each with its licence text. It fails if one of them ships no licence and has no known fallback (`scripts/third-party.mjs`).
    - It writes `release/seedelf-wallet-<version>-mainnet.zip` and prints `sha256 <hex>`, then `Zipped with Node <version>, zlib <version>`. `wasm/build.sh` ends its part with `C compiler: <first line of clang --version>`, or `C compiler: unknown`.
-   - The zip is reproducible: the same commit and toolchain (Rust, wasm-bindgen, clang, an official Node build) give the same bytes. Official Node builds 20 to 24 zip alike, and one linked to the system's zlib may not. blst's C goes through the unpinned clang on `PATH`.
+   - The zip is reproducible: the same commit and toolchain (Rust, wasm-bindgen, clang, an official Node build) give the same bytes, which [part 2](#2-on-main-after-the-merge-build-and-test-the-store-package)'s second build shows. Official Node builds 20 to 24 zip alike, and one linked to the system's zlib may not. blst's C goes through the unpinned clang on `PATH`.
 9. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 9](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
 10. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([archive/plans/launch-review.md](archive/plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
 11. **Upload** the zip on the dashboard's Package tab. If the listing's text or images changed, copy them from [store/README.md](store/README.md), in each of its three languages ([In Spanish and Japanese](store/README.md#in-spanish-and-japanese)). Then submit for review.
 12. **Tag it** `web-wallet/<version>` on the commit it was built from, and push the tag ([step 6 above](#3-upload-and-submit)).
-13. **Record it** in [releases.md](releases.md), a row in its table and a section that says what its *Recording a release* lists: the version, the commit it was built from (`git rev-parse HEAD`), the zip's SHA-256, and the C compiler, Node and zlib lines.
+13. **Record it** in [releases.md](releases.md): a row in its table, and a section that says what its *Recording a release* lists.
 
 ## Sharing with testers before launch (history)
 

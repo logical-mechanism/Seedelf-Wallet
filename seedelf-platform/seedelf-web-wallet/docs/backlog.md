@@ -18,6 +18,9 @@ What could become a chunk, the calls still open for the owner, and what's declin
 - ❓ **The blind test's calls** ([its *Left for the owner*](archive/plans/blind-task-usability-test.md#left-for-the-owner)): a dozen of its fix round's own calls to confirm or reverse, and a site-signed transaction's change not counted as on its way.
 - ❓ **The UX pass's third round** (chunk 23 began it with two usability reviews and a blind test): the rest of its list is the owner's to write, from using the wallet.
 - ❓ **More ⓘ hints:** which other note paragraphs go behind an icon, by [development.md's rule](development.md#rules-for-a-change-to-the-screens). Privacy callouts and warnings stay where they are.
+- ❓ **A stranger's certificate alone leaves a site's staking callout informational** (chunk 39, #357): a proposal whose deposit goes back to a key that isn't the account's makes it a warning; the plan said a stranger's certificate would too, and it never has.
+- ❓ **The critical-words gate reads key names, not values** (1.7.0's release review, *Lessons*): a critical value changed with no fresh back-translation passes CI. A hash of each value beside its verified key would catch it.
+- ❓ **The release refreshes trust Node's own CA store** (1.7.0's release review, pr327#0): `npm run tokens`, `dreps` and `lovejoin-pools` fetch Koios through a Node whose built-in store still trusted emSign ECC Root CA - G3, the root GHSA-6q48-6c7w-9gw2 is about, and their answers ship in the bundle.
 - ❓ **Asking Minswap to list Seedelf Wallet** (outward-facing): its wallet list is fixed, so its own site never offers this wallet, and answering as Eternl would be impersonation. Listed, its site would reach the connector and private CIP-30.
 
 ## Owed
@@ -56,7 +59,7 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 - ❓ **Which boxes tie a public account** (R3-2, R3-3): the payer order and a withdraw's history use different models.
 - ⬜ **Four boxes a mix and a later token** (319-rust#1, 319-worker#1): four wide can leave a later leg no box where three would mix it.
 - ⬜ **A box's dropped withdraw, taken again later, counts back twice** (w-left's call 1): only Bring every box back now's are kept apart.
-- ⬜ **Home's two-window watch has no test** (R3-20): one e2e case covers it.
+- ⬜ **Home's two-window watch has no test** (R3-20): one e2e case would cover it, the Collateral page open in a second window as its payment lands, then Home reading the balances again.
 - ⬜ **A five-minute room cache for funding reviews** (x-privacy#3): every private funding reads every pool again.
 - ⬜ **Put in 5 ₳ for Lovejoin doesn't read the pool** (1.5.0's release review, C53).
 - ⬜ **Four wide waits on the CPU limit** ([lovejoin-mix-width.md](lovejoin-mix-width.md)): reasonable from about 11 billion `max_tx_ex_steps`. Run `lovejoin_width_test -- --ignored` again after a hard fork or a parameter change.
@@ -84,8 +87,9 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 
 - ⬜ **A swap or a mix another browser brought back stays open here** (1.5.0's release review, C18): the money is safe, and the page waits for good.
 - ⬜ **A swap that runs itself can't cancel the order a return from before chunk 24 left open** (chunk 32; X01, L6).
-- ⬜ **A session's stake key registered from another account's site keeps its deposit there** (X05, L2): nothing in the wallet deregisters it.
+- ⬜ **A session's stake key registered from another account's site keeps its deposit there** (X05, L2): nothing in the wallet deregisters it. A proposal's deposit back to it stays there too, as the sign window now says (1.7.2's release review, critic#0), and so does an output paid to its hash (r2-docs#0).
 - ⬜ **A found session waiting to end, and a mix's chain cut before it began, on the other screens** (L4, L5): each needs a word of its own.
+- ⬜ **Put in 5 ₳ to cancel has never run end to end** (1.5.0's last review, L13): the e2e fakes plant a found session with money and no order, and the button needs an order.
 
 ## Activity
 
@@ -93,8 +97,18 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 - ⬜ **A Refresh during a Load more** (G2): disable Refresh while a page loads.
 - ⬜ **A CSV of the rewards** (chunk 30), for taxes, as Activity has one.
 
+## Send and Make public
+
+- ⬜ **A payment to the account's own key past what the balance reads "comes back"** (1.7.2's release review, own#1): under the account's stake key, Send and Make public take its keys up to the 500th on each chain as its own, as another wallet of the phrase may hand them out, but the balance reads only those its walk reaches (20 past the last used), so the money shows only in the other wallet. Count it as leaving with a line of its own, or have the balance read what Send matches. 1.7.1 did the same.
+- ⬜ **An address paid to one of the accounts' stake key hashes** (1.7.2's release review, own#2): that key spends it, and the hash is public in every address the account hands out, but Send and Make public read it as anyone's, so Make public warns of no link, and base(hash, hash) is called "someone else's payment key". Crafted only: no wallet hands such an address out. A line of its own (a critical string) would say it.
+
 ## Signing and the connector
 
+- ⬜ **"It signs for your staking" when the stake key only spends a UTxO at an address paid to its hash** (1.7.2's release review, pr358#3): the signer row names the stake key by its staking role alone; WebAssembly would have to say what it signs for.
+- ⬜ **An output paid to one of the wallet's stake or DRep keys' hashes reads as money moving between the two sides** (1.7.2's review of its fixes, r2-docs#0): the tie is real and its row says "An address", but the wallet never reads that address. A line of its own would say so (a critical string).
+- ⬜ **A wallet key's hash where a stake key goes ties nothing** (1.7.2's review of its fixes, r2-worker#0, r2-screens#0): a public account's payment or DRep key, or a session's payment key, as a certificate's credential, a reward account or an address's staking part is called someone else's ("a stake key that isn't yours", "a reward account that isn't yours", "a stake part that isn't yours") or isn't named at all, and the prompt can say the other side isn't in it. Tying it needs words of its own ("a key of …", critical strings).
+- ⬜ **A committee update's members and a committee hot key aren't matched** (1.7.2's review of its fixes, r2-critic#0): key hashes that take no signature, so a session's prompt can say the public account isn't in it, as a treasury withdrawal's recipient could before pr357#0.
+- ⬜ **Transaction details doesn't tag a treasury withdrawal's recipients** (1.7.2's release review, pr357#0): the sign window ties another of the wallet's stake keys among them now, and the view lists them as plain fields.
 - ⬜ **Private spends carry no validity interval** (launch review, *Still open* #2): waits on a live check that giveme.my signs one.
 - ⬜ **A site's `submitTx` refusal lost the node's own reason:** `KoiosError` would have to carry the node's text apart.
 - ⬜ **The connector never offers to set a collateral** (chunks 12, 31), as Lace 2.x doesn't: it waits for a site that needs it.
@@ -119,7 +133,7 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 From the headless run on Musashi (1.7.0's item 8). Its branch, `web-wallet/leios-musashi`, stays unmerged, with the harness and the record.
 
 - ⬜ **Dijkstra refuses the wallet's script transactions as core builds them:** redeemers as a list, where protocol version 12 takes only a map, and certificate 0 for a pool's launch. A Pallas update, then a CLI and a web wallet release, much later (the owner, 2026-10-28); core's zero-withdrawal patch and `uplc` move with it.
-- ⬜ **What Leios would change in the wallet:** a chain's window in flight could be the whole chain; core's fee doesn't count Dijkstra's reference-input fees, and holds as Conway's constants what Dijkstra makes parameters; `cbor.ts` refuses Dijkstra's three-element transaction from a site.
+- ⬜ **What Leios would change in the wallet:** a chain's window in flight could be the whole chain; core's fee doesn't count Dijkstra's reference-input fees, and holds as Conway's constants what Dijkstra makes parameters; `cbor.ts` refuses Dijkstra's three-element transaction from a site; and a body field Dijkstra adds goes unnamed in the signing prompt, where Transaction details lists it as a field it can't name.
 
 ## The CLI
 

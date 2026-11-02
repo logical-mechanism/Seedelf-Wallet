@@ -362,8 +362,10 @@ fn someone_elses_input_needs_partial_signing() {
 #[test]
 fn an_input_the_wallet_cant_find_is_unknown() {
     // Signed for by the stake key alone, as a site's zero withdrawal is
-    // (chunk 29). Its witness would spend the input only at the key's own
-    // enterprise address, which no wallet hands out or pays.
+    // (chunk 29). Its witness would spend the input only at an address paid
+    // to its hash, its own enterprise address or the hash under any staking
+    // part, which no wallet hands out or pays (1.7.2's release review,
+    // pr358#2).
     let (_, rows) = swap();
     let mut b = body(vec![input(TX_B, 7)], vec![out(&theirs(), 1_000_000, None)]);
     b.withdrawals =
@@ -956,6 +958,38 @@ fn stake_hash() -> Hash<28> {
     account().key_hash(Role::Staking, 0).unwrap()
 }
 
+/// Every kind of address paid to a key hash: its own enterprise address, and
+/// the hash under the account's stake key, someone else's, a script's or a
+/// pointer. The ledger takes the key's signature for each alike, whatever the
+/// staking part: tested on the enterprise address alone, `owner` could be
+/// narrowed to it and nothing would fail (1.7.2's release review, pr358#1),
+/// and with no script's staking part, it could skip those (1.7.2's review of
+/// its fixes, r2-critic#1).
+fn paid_to(hash: Hash<28>) -> Vec<(&'static str, Address)> {
+    let with = |delegation: ShelleyDelegationPart| -> Address {
+        ShelleyAddress::new(Network::Testnet, ShelleyPaymentPart::Key(hash), delegation).into()
+    };
+    vec![
+        ("enterprise", enterprise(hash)),
+        (
+            "base, the account's stake",
+            with(ShelleyDelegationPart::Key(stake_hash())),
+        ),
+        (
+            "base, someone else's stake",
+            with(ShelleyDelegationPart::Key(their_stake())),
+        ),
+        (
+            "base, a script's stake",
+            with(ShelleyDelegationPart::Script(Hash::new([7; 28]))),
+        ),
+        (
+            "pointer",
+            with(ShelleyDelegationPart::Pointer(Pointer::new(1, 2, 3))),
+        ),
+    ]
+}
+
 /// `tx_hex`, marked to fail its scripts: the ledger takes the collateral.
 fn failing_tx_hex(body: conway::TransactionBody) -> String {
     let mut tx = conway::Tx::decode_fragment(&hex::decode(tx_hex(body)).unwrap()).unwrap();
@@ -965,64 +999,81 @@ fn failing_tx_hex(body: conway::TransactionBody) -> String {
 
 #[test]
 fn an_input_at_the_stake_keys_own_address_is_the_accounts() {
-    let rows = vec![row(TX_B, 0, &enterprise(stake_hash()), 5_000_000, &[])];
-    let mut b = body(vec![input(TX_B, 0)], vec![out(&theirs(), 4_800_000, None)]);
-    b.required_signers = NonEmptySet::try_from(vec![stake_hash()]).ok();
-    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows.clone(), false)).unwrap();
-    assert_eq!(summary.own_inputs, 1);
-    assert_eq!(summary.spent_lovelace, "5000000");
-    assert_eq!(summary.net_lovelace, "-5000000", "all of it leaves");
-    assert_eq!(summary.signs, vec!["stake"]);
-    assert_eq!(summary.others_sign, 0, "no one else's key is needed");
-    assert!(summary.complete);
+    for (shape, address) in paid_to(stake_hash()) {
+        let rows = vec![row(TX_B, 0, &address, 5_000_000, &[])];
+        let mut b = body(vec![input(TX_B, 0)], vec![out(&theirs(), 4_800_000, None)]);
+        b.required_signers = NonEmptySet::try_from(vec![stake_hash()]).ok();
+        let summary =
+            cip30::inspect_tx(&account(), &request(tx_hex(b), rows.clone(), false)).unwrap();
+        assert_eq!(summary.own_inputs, 1, "{shape}");
+        assert_eq!(summary.spent_lovelace, "5000000", "{shape}");
+        assert_eq!(
+            summary.net_lovelace, "-5000000",
+            "{shape}: all of it leaves"
+        );
+        assert_eq!(summary.signs, vec!["stake"], "{shape}");
+        assert_eq!(
+            summary.others_sign, 0,
+            "{shape}: no one else's key is needed"
+        );
+        assert!(summary.complete, "{shape}");
 
-    // Its key signs for it with no required signer naming it.
-    let tx = tx_hex(body(
-        vec![input(TX_B, 0)],
-        vec![out(&theirs(), 4_800_000, None)],
-    ));
-    let signed = cip30::sign_tx(&account(), &request(tx, rows, false)).unwrap();
-    assert_eq!(signed.summary.signs, vec!["stake"]);
+        // Its key signs for it with no required signer naming it.
+        let tx = tx_hex(body(
+            vec![input(TX_B, 0)],
+            vec![out(&theirs(), 4_800_000, None)],
+        ));
+        let signed = cip30::sign_tx(&account(), &request(tx, rows, false)).unwrap();
+        assert_eq!(signed.summary.signs, vec!["stake"], "{shape}");
+    }
 }
 
 #[test]
 fn collateral_at_the_stake_keys_own_address_is_the_accounts() {
     // The report's transaction: a site's input, the account's collateral at
     // its stake key's address, the stake key a required signer.
-    let rows = vec![
-        row(TX_A, 0, &theirs(), 10_000_000, &[]),
-        row(TX_B, 0, &enterprise(stake_hash()), 5_000_000, &[]),
-    ];
-    let mut b = body(
-        vec![input(TX_A, 0)],
-        vec![out(&ours(Role::Receive, 0), 4_700_000, None)],
-    );
-    b.collateral = NonEmptySet::try_from(vec![input(TX_B, 0)]).ok();
-    b.required_signers = NonEmptySet::try_from(vec![stake_hash()]).ok();
-    b.total_collateral = Some(500_000);
-    let refused = |tx: String| {
-        let request = request(tx, rows.clone(), true);
-        assert!(cip30::sign_tx(&account(), &request).is_err());
-        cip30::inspect_tx(&account(), &request)
-            .unwrap_err()
-            .to_string()
-    };
+    for (shape, address) in paid_to(stake_hash()) {
+        let rows = vec![
+            row(TX_A, 0, &theirs(), 10_000_000, &[]),
+            row(TX_B, 0, &address, 5_000_000, &[]),
+        ];
+        let mut b = body(
+            vec![input(TX_A, 0)],
+            vec![out(&ours(Role::Receive, 0), 4_700_000, None)],
+        );
+        b.collateral = NonEmptySet::try_from(vec![input(TX_B, 0)]).ok();
+        b.required_signers = NonEmptySet::try_from(vec![stake_hash()]).ok();
+        b.total_collateral = Some(500_000);
+        let refused = |tx: String| {
+            let request = request(tx, rows.clone(), true);
+            assert!(cip30::sign_tx(&account(), &request).is_err(), "{shape}");
+            cip30::inspect_tx(&account(), &request)
+                .unwrap_err()
+                .to_string()
+        };
 
-    b.collateral_return = Some(out(&theirs(), 4_500_000, None));
-    let err = refused(tx_hex(b.clone()));
-    assert!(err.contains("collateral would go to someone else"), "{err}");
+        b.collateral_return = Some(out(&theirs(), 4_500_000, None));
+        let err = refused(tx_hex(b.clone()));
+        assert!(
+            err.contains("collateral would go to someone else"),
+            "{shape}: {err}"
+        );
 
-    b.collateral_return = Some(out(&ours(Role::Receive, 0), 4_500_000, None));
-    let err = refused(failing_tx_hex(b.clone()));
-    assert!(err.contains("marked to fail"), "{err}");
+        b.collateral_return = Some(out(&ours(Role::Receive, 0), 4_500_000, None));
+        let err = refused(failing_tx_hex(b.clone()));
+        assert!(err.contains("marked to fail"), "{shape}: {err}");
 
-    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
-    let collateral = summary.collateral.unwrap();
-    assert_eq!(collateral.own, 1);
-    assert_eq!(collateral.lovelace, "5000000");
-    assert_eq!(collateral.at_risk, "500000");
-    assert_eq!(summary.signs, vec!["stake"]);
-    assert_eq!(summary.others_sign, 1, "only the site's input's key");
+        let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+        let collateral = summary.collateral.unwrap();
+        assert_eq!(collateral.own, 1, "{shape}");
+        assert_eq!(collateral.lovelace, "5000000", "{shape}");
+        assert_eq!(collateral.at_risk, "500000", "{shape}");
+        assert_eq!(summary.signs, vec!["stake"], "{shape}");
+        assert_eq!(
+            summary.others_sign, 1,
+            "{shape}: only the site's input's key"
+        );
+    }
 }
 
 #[test]
@@ -1496,15 +1547,65 @@ fn a_proposal_says_whose_stake_key_its_deposit_goes_back_to() {
 #[test]
 fn a_proposal_whose_deposit_goes_back_on_the_other_network_is_refused() {
     // The ledger refuses it (ProposalProcedureNetworkIdMismatch): said as a
-    // withdrawal from the other network is.
-    let (tx, rows) = proposing(vec![proposal(
+    // withdrawal from the other network is. A key's, and a script's, which
+    // names no key (1.7.2's release review, pr357#2): on preprod, mainnet's
+    // reward addresses are 0xe1 and 0xf1.
+    for back in [
         account().stake_address(false).unwrap().to_vec(),
-        100_000_000_000,
-        conway::GovAction::Information,
-    )]);
-    let refused = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap_err();
-    assert!(refused.to_string().contains("mainnet"), "{refused}");
-    assert!(refused.to_string().contains("proposal"), "{refused}");
+        reward_bytes(0xf1, Hash::new([6; 28])),
+    ] {
+        let (tx, rows) = proposing(vec![proposal(
+            back,
+            100_000_000_000,
+            conway::GovAction::Information,
+        )]);
+        let refused = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap_err();
+        assert!(refused.to_string().contains("mainnet"), "{refused}");
+        assert!(refused.to_string().contains("proposal"), "{refused}");
+    }
+}
+
+#[test]
+fn a_treasury_withdrawal_says_whose_stake_keys_it_pays() {
+    // A treasury withdrawal pays reward accounts that take no signature of
+    // theirs, as its deposit's return doesn't: each key's hash, for the
+    // extension to tie one that's another of the wallet's (1.7.2's release
+    // review, pr357#0), the account's own and the other network's among
+    // them. A script's names no key, and an unreadable one or one that isn't
+    // a reward address names nothing: left out, never refused.
+    let (tx, rows) = proposing(vec![
+        proposal(
+            reward_bytes(0xe0, their_stake()),
+            100_000_000_000,
+            conway::GovAction::TreasuryWithdrawals(
+                vec![
+                    (Bytes::from(stake_account_bytes()), 5_000_000),
+                    (
+                        Bytes::from(reward_bytes(0xf0, Hash::new([6; 28]))),
+                        5_000_000,
+                    ),
+                    (Bytes::from(reward_bytes(0xe1, their_stake())), 5_000_000),
+                    (Bytes::from(vec![0xe0, 1, 2]), 5_000_000),
+                    (Bytes::from(enterprise(their_stake()).to_vec()), 5_000_000),
+                ]
+                .into(),
+                Nullable::Null,
+            ),
+        ),
+        proposal(
+            reward_bytes(0xe0, their_stake()),
+            100_000_000_000,
+            conway::GovAction::Information,
+        ),
+    ]);
+    let summary = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
+    // In the JSON the extension reads, by that name: none for another kind.
+    let json = serde_json::to_value(&summary).unwrap();
+    assert_eq!(
+        json["proposals"][0]["recipients"],
+        serde_json::json!([hex::encode(stake_hash()), hex::encode(their_stake())])
+    );
+    assert_eq!(json["proposals"][1]["recipients"], serde_json::json!([]));
 }
 
 #[test]
@@ -1839,25 +1940,27 @@ fn without_governance_the_drep_key_is_a_strangers() {
 
 #[test]
 fn an_input_at_the_drep_keys_own_address_is_the_accounts_only_with_governance() {
-    let rows = vec![row(TX_B, 0, &enterprise(drep_hash()), 5_000_000, &[])];
-    let mut b = body(vec![input(TX_B, 0)], vec![out(&theirs(), 4_800_000, None)]);
-    b.required_signers = NonEmptySet::try_from(vec![drep_hash()]).ok();
-    let tx = tx_hex(b);
-    let granted = TxRequest {
-        governance: true,
-        ..request(tx.clone(), rows.clone(), false)
-    };
-    let summary = cip30::inspect_tx(&account(), &granted).unwrap();
-    assert_eq!(summary.own_inputs, 1);
-    assert_eq!(summary.net_lovelace, "-5000000");
-    assert_eq!(summary.signs, vec!["drep"]);
-    assert!(summary.complete);
+    for (shape, address) in paid_to(drep_hash()) {
+        let rows = vec![row(TX_B, 0, &address, 5_000_000, &[])];
+        let mut b = body(vec![input(TX_B, 0)], vec![out(&theirs(), 4_800_000, None)]);
+        b.required_signers = NonEmptySet::try_from(vec![drep_hash()]).ok();
+        let tx = tx_hex(b);
+        let granted = TxRequest {
+            governance: true,
+            ..request(tx.clone(), rows.clone(), false)
+        };
+        let summary = cip30::inspect_tx(&account(), &granted).unwrap();
+        assert_eq!(summary.own_inputs, 1, "{shape}");
+        assert_eq!(summary.net_lovelace, "-5000000", "{shape}");
+        assert_eq!(summary.signs, vec!["drep"], "{shape}");
+        assert!(summary.complete, "{shape}");
 
-    // Without it, the DRep key is a stranger's, and so is what's there.
-    let summary = cip30::inspect_tx(&account(), &request(tx, rows, true)).unwrap();
-    assert_eq!(summary.own_inputs, 0);
-    assert!(summary.signs.is_empty());
-    assert_eq!(summary.others_sign, 1);
+        // Without it, the DRep key is a stranger's, and so is what's there.
+        let summary = cip30::inspect_tx(&account(), &request(tx, rows, true)).unwrap();
+        assert_eq!(summary.own_inputs, 0, "{shape}");
+        assert!(summary.signs.is_empty(), "{shape}");
+        assert_eq!(summary.others_sign, 1, "{shape}");
+    }
 }
 
 #[test]

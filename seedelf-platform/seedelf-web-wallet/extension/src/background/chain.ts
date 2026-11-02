@@ -141,7 +141,10 @@ export function discoverChain(
  * How far along each of a public account's chains its payment keys are
  * looked for (`fartherKeys`): a thousand key hashes at most, about a fifth of
  * a second, each time an address carries the account's stake key under a
- * payment key the wallet doesn't know.
+ * payment key the wallet doesn't know. Send and Make public look as far, in
+ * WebAssembly (lib.rs `OWN_KEYS_STAKED`), and own-address.test.ts holds the
+ * two together: one changed alone, a key read as the account's in a site's
+ * prompt and as someone else's on Send (1.7.2's release review, pr359#4).
  */
 export const FARTHER_KEYS = 500;
 

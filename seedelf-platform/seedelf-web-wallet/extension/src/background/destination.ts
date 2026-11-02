@@ -2,11 +2,13 @@
 // or an ADA Handle. A handle is looked up through Koios
 // (`asset_nft_address`), which sees which handle is asked about. A
 // destination that's this account's own is flagged: paying it from Seedelf
-// re-links the money to the account. That's one carrying the account's
-// staking key, or under one of its payment keys, whatever its staking part
-// (an enterprise address, say), as the wallet counts and spends the account
-// (account.ts): the first 20 of each chain, and those the last balance
-// reading found (privacy review §2.17). Nothing is asked of anyone for it.
+// re-links the money to the account. That's one under one of its payment
+// keys, whatever its staking part (an enterprise address, say): the first 20
+// of each chain, those the last balance reading found (privacy review §2.17),
+// and up to 500 on each chain when it carries the account's own stake key.
+// One that only carries the stake key is `staked`, not the account's: anyone
+// can pair their own payment key with it (the 2026-11-02 bounty report).
+// Nothing is asked of anyone for it.
 
 import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
