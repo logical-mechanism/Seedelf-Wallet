@@ -7,8 +7,8 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 | Step | Status |
 |---|---|
 | 0 · Forks, clones, runner | ✅ |
-| 1 · Datatype parameter names | 🚧 issue filed, [Lean-blaster #454](https://github.com/input-output-hk/Lean-blaster/issues/454); fix `6526c4b` + test `25c0ee0` pushed; the fix passes our full repro; the test passes (2026-11-03: four Valid, one Expected Falsified); PR text written, not opened |
-| 2 · `ByteStringToInteger` alias | 🚧 fix `3dd76d7` + `28910c6` pushed; the first build failed on a bare `Integer` (auto-bound), fixed in `28910c6`; the second build failed in the test (below), fixed in `cfa8c53`, which passes (one Valid, two Expected Falsified); PR text written, not opened |
+| 1 · Datatype parameter names | 🚧 issue [#454](https://github.com/input-output-hk/Lean-blaster/issues/454), PR [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) open (2026-11-03); fix `6526c4b` + test `25c0ee0`, the test passes (four Valid, one Expected Falsified) |
+| 2 · `ByteStringToInteger` alias | 🚧 PR [PlutusCoreBlaster #71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71) open (2026-11-03); fix `3dd76d7` + `28910c6`, test `cfa8c53` passes (one Valid, two Expected Falsified) |
 | 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; fix + test `ae0a7cd` on `fix/fq1-nat` pushed; its first build failed in the test (below), fixed in `f146c10`, which passes (two Valid, one Expected Falsified, and the test vectors); the #29 question [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) 2026-11-03, no answer yet; the PR text written, not opened |
 | 4 · WalletRegister | ✅ Valid in the script's own order (2026-11-03, 737 MB with the rebuild), in `check.sh`'s default list, README and chunk 40 updated |
 | 5 · Operand order (Fix 4) | 🚧 fix + test `b60ff2a` pass (three Falsified before, three Valid after); PR text written, waits for Fix 3's PR |
@@ -23,11 +23,10 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
      - The baseline: the same eight `ok`, with PolicyBurn and PolicyMint failing on `BitVec` alone. The first build took 394 s at 1.4 GB.
      - Steps: the valid spend halts after 1281 steps, and the other signer errors after 1306.
      - WalletRegister translated for the first time and came back **Falsified** in 1 s, every input empty. The cause is the operand order (Fix 4).
-2. **The owner opens the Lean-blaster PR** (Issue454 passes): `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/Lean-blaster --base beta-lambda-cache-optimization --head logicalmechanism:fix/datatype-param-names --title "$(cat posts/lean-blaster-pr.title)" --body-file posts/lean-blaster-pr.md`.
-3. **The owner opens the PlutusCoreBlaster PR for Fix 2** (its test passes as the text says): `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:feat/opaque-bytestring-to-integer --title "$(cat posts/plutuscoreblaster-pr.title)" --body-file posts/plutuscoreblaster-pr.md`.
-   - It's a PR, not a separate issue. The body carries [the issue draft](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md)'s case, on the repo's template.
+2. ✅ **The Lean-blaster PR is [#455](https://github.com/input-output-hk/Lean-blaster/pull/455)**, opened by the owner on 2026-11-03 into `beta-lambda-cache-optimization`, at `25c0ee0`.
+3. ✅ **The Fix 2 PR is [PlutusCoreBlaster #71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71)**, opened by Claude on 2026-11-03 at the owner's word ("go ahead with the Prs"), into `main`, at `cfa8c53`. Its text says the wallet's property now proves on our forks.
 4. **Fix 3's PR waits for #29's answer.** The question was [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) on 2026-11-03. Claude ran it at the owner's word ("Gonna trust you on running" the command), as `logicalmechanism`. Then: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:fix/fq1-nat --title "$(cat posts/plutuscoreblaster-fq1-pr.title)" --body-file posts/plutuscoreblaster-fq1-pr.md`.
-5. **Claude fills in the PR numbers** in [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md) (its "we've asked PlutusCoreBlaster" line points at the Fix 2 PR) and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md) (it points at #454; add the Lean-blaster PR). Then the owner posts both.
+5. **The #153 and #68 comments are ready, with the PR numbers in** ([#153](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md), now about the policy's slicing, with #71 as the wallet's way around; [#68](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md), pointing at #455). The owner posts them, or says the word.
 6. **WalletRegister, from step 1's result,** as Step 4 below says. If a PR's branch changes in review, rebuild `seedelf` and re-pin.
 
 ### Fix 4 · Operand order of the BLS12-381 builtins (PlutusCoreBlaster), found 2026-11-03 ✅ on the fork
@@ -106,8 +105,8 @@ Chunk 40's [baseline](chunk-40-verification-upstream.md#the-baseline-2026-11-02-
 
 | Package | Fork commit | PR | Remove when |
 |---|---|---|---|
-| Blaster | `25c0ee0` (`fix/datatype-param-names`) | not opened | the fix is on `beta-lambda-cache-optimization`, or wherever CardanoLedgerApiBlaster requires Blaster from |
-| PlutusCore | `c7d8741` (`seedelf`: `cfa8c53`, `f146c10` and `b60ff2a` merged onto `1c23de8`) | not opened | both PRs are on PlutusCoreBlaster `main` |
+| Blaster | `25c0ee0` (`fix/datatype-param-names`) | [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) | the fix is on `beta-lambda-cache-optimization`, or wherever CardanoLedgerApiBlaster requires Blaster from |
+| PlutusCore | `c7d8741` (`seedelf`: `cfa8c53`, `f146c10` and `b60ff2a` merged onto `1c23de8`) | [#71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71); Fix 3's and Fix 4's not opened | both PRs are on PlutusCoreBlaster `main` |
 
 ## Fix 1 · Datatype parameter names (Lean-blaster) 🚧
 
