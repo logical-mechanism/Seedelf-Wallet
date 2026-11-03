@@ -11,7 +11,7 @@ The specs call the builtins as the script does (README rule 7): `serialise_data`
 operations opaque, and `scalar.from_int` as `modInteger`, which is `Int.fmod`. -/
 
 namespace Lovejoin.Classic
-open CardanoLedgerApi.IsData.Class (toData)
+open CardanoLedgerApi.IsData.Class (IsData)
 open CardanoLedgerApi.V3
 open PlutusCore.ByteString
 open PlutusCore.Integer (Integer)
@@ -89,7 +89,7 @@ transaction's outputs and inputs. The outputs are serialised as `txInfoOutputs` 
 encoded (its own `IsData` instance); the input refs as the script lists them. -/
 def ownerAccepts (a b t z : ByteString) (out : TxOut) : Bool :=
   wellFormed a b &&
-    match ownerContext (toData ([out] : List TxOut)) (Data.List [toData boxRef]) with
+    match ownerContext (IsData.toData ([out] : List TxOut)) (Data.List [IsData.toData boxRef]) with
     | some ctx => schnorrVerifies a b t z ctx
     | none => false
 

@@ -26,6 +26,14 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
    - **Owner:** `owner_withdraws_iff_proof` Valid. If it's Falsified, run the counterexample through Aiken first (*When a property comes back Falsified*). If it's `KILLED`, split it: the box fixed well-formed, or the payout fixed.
 2. **Then step 5.**
 
+**Step 4's first build (2026-11-03)** failed on a name. `toData` is a class method, `IsData.toData`, so `open CardanoLedgerApi.IsData.Class (toData)` can't name it. Lean reported only those three errors, so the rest of `Logic` elaborated. Steps and Owner failed only by importing it. Fixed in both files by opening `(IsData)`; not rebuilt. The other 36 theorems were still ✅.
+
+**Where everything is, for a new session:**
+- This branch, `lovejoin-verification`, is local only; see the memory file `lovejoin-verification-local-only.md`. The working copy is on it.
+- The chunk 41 forks are under `../blaster-forks/`. This branch pins PlutusCoreBlaster `seedelf` at `7fc0aa3`, with #27's alias; `verification` pins `c7d8741`.
+- The open upstream PRs are Lean-blaster #455 and PlutusCoreBlaster #71, #72 and #73 (chunk 41).
+- Lovejoin's sources are in `../lovejoin`, for reading: `git show c1239fb:contracts/…` for the classic pool, and `8131b1d` for the templates.
+
 **Steps 2 and 3's run (2026-11-03):** eight `ok`, 36 ✅. mix_logic errors after 216 steps on minting, and on publish halts after 290 for its registration and errors after 290 for an unregistration. The Seedelf baseline was unchanged with #27's alias pinned.
 
 **Step 1's run (2026-11-03):** seven `ok`, 30 ✅.

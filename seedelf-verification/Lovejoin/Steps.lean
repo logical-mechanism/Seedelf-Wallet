@@ -7,7 +7,7 @@ pairs with a case in `concrete/lovejoin_mix_box.sh`, which Aiken's evaluator agr
 with. -/
 
 namespace Lovejoin.Classic
-open CardanoLedgerApi.IsData.Class (toData)
+open CardanoLedgerApi.IsData.Class (IsData)
 open PlutusCore.ByteString (ByteString)
 open PlutusCore.Integer (Integer)
 open PlutusCore.Data (Data)
@@ -54,7 +54,7 @@ def ownerVector : Option (ByteString × ByteString × ByteString) := do
   let r : Integer := 0x1234567
   let b := bls12_381_G1_compress (bls12_381_G1_scalarMul x G)
   let t := bls12_381_G1_compress (bls12_381_G1_scalarMul r G)
-  let ctx ← ownerContext (toData ([payout0] : List TxOut)) (Data.List [toData boxRef])
+  let ctx ← ownerContext (IsData.toData ([payout0] : List TxOut)) (Data.List [IsData.toData boxRef])
   let c := Int.fmod (byteStringToIntegerOpaque true (fsHashSchnorr g1 b t ctx).data) q
   let z ← (PlutusCore.Bitwise.integerToByteString true 32 (Int.fmod (r + c * x) q)).toOption
   pure (b, t, ⟨z⟩)
