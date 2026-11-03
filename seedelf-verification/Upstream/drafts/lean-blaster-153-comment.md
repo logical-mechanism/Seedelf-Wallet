@@ -35,6 +35,6 @@ Each ❌ is `Inductive datatype with instance parameters not supported: `BitVec`
 What it blocks for us, on [Seedelf](https://github.com/logical-mechanism/Seedelf-Wallet)'s deployed contracts, proving properties of the compiled UPLC:
 
 - the minting policy (`84967d91…`) derives token names with `sliceByteString`, so neither its naming rule nor a successful burn can be proved over a symbolic name;
-- the wallet validator (`94bca9c0…`) decodes its Schnorr scalar and challenge with `byteStringToInteger`. An `opaque` alias gets around that, input-output-hk/PlutusCoreBlaster#71 (as #27 did for `serialiseData`), and with it, #455 and two more PlutusCoreBlaster changes on our forks, the wallet's core property proves. A slice has no such way around: an alias loses what slicing means.
+- the wallet validator (`94bca9c0…`) decodes its Schnorr scalar and challenge with `byteStringToInteger`. An `opaque` alias gets around that, input-output-hk/PlutusCoreBlaster#71 (as #27 did for `serialiseData`), and with it, #455, input-output-hk/PlutusCoreBlaster#72 and #73, the wallet's core property proves. A slice has no such way around: an alias loses what slicing means.
 
 30 properties of the same scripts prove, so it's this gap, not the scripts' size. Is the `BitVec`/indexed-type support from your July note still on the way (we saw `feat/indexed-types`, last touched in June), and is there a branch we could run against? Our suite is a reproducible Lake package and we're glad to report back.

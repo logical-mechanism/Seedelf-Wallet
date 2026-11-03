@@ -9,9 +9,9 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 | 0 · Forks, clones, runner | ✅ |
 | 1 · Datatype parameter names | 🚧 issue [#454](https://github.com/input-output-hk/Lean-blaster/issues/454), PR [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) open (2026-11-03); fix `6526c4b` + test `25c0ee0`, the test passes (four Valid, one Expected Falsified) |
 | 2 · `ByteStringToInteger` alias | 🚧 PR [PlutusCoreBlaster #71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71) open (2026-11-03); fix `3dd76d7` + `28910c6`, test `cfa8c53` passes (one Valid, two Expected Falsified) |
-| 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; fix + test `ae0a7cd` on `fix/fq1-nat` pushed; its first build failed in the test (below), fixed in `f146c10`, which passes (two Valid, one Expected Falsified, and the test vectors); the #29 question [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) 2026-11-03, no answer yet; the PR text written, not opened |
+| 3 · `Fin` in `Fq1` | 🚧 PR [PlutusCoreBlaster #72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72) open (2026-11-03), after no reply on [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) (the owner: "seems like that pr just died"); fix `ae0a7cd` + test `f146c10` pass |
 | 4 · WalletRegister | ✅ Valid in the script's own order (2026-11-03, 737 MB with the rebuild), in `check.sh`'s default list, README and chunk 40 updated |
-| 5 · Operand order (Fix 4) | 🚧 fix + test `b60ff2a` pass (three Falsified before, three Valid after); PR text written, waits for Fix 3's PR |
+| 5 · Operand order (Fix 4) | 🚧 PR [PlutusCoreBlaster #73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) open (2026-11-03), stacked on #72; fix + test `b60ff2a` pass (three Falsified before, three Valid after) |
 
 ### Next session, in order
 
@@ -25,7 +25,7 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
      - WalletRegister translated for the first time and came back **Falsified** in 1 s, every input empty. The cause is the operand order (Fix 4).
 2. ✅ **The Lean-blaster PR is [#455](https://github.com/input-output-hk/Lean-blaster/pull/455)**, opened by the owner on 2026-11-03 into `beta-lambda-cache-optimization`, at `25c0ee0`.
 3. ✅ **The Fix 2 PR is [PlutusCoreBlaster #71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71)**, opened by Claude on 2026-11-03 at the owner's word ("go ahead with the Prs"), into `main`, at `cfa8c53`. Its text says the wallet's property now proves on our forks.
-4. **Fix 3's PR waits for #29's answer.** The question was [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) on 2026-11-03. Claude ran it at the owner's word ("Gonna trust you on running" the command), as `logicalmechanism`. Then: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:fix/fq1-nat --title "$(cat posts/plutuscoreblaster-fq1-pr.title)" --body-file posts/plutuscoreblaster-fq1-pr.md`.
+4. ✅ **Fix 3 is [#72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72) and Fix 4 is [#73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73)**, opened by Claude on 2026-11-03. #29 had no reply to our question (the owner: "if 29 is just idle then we may want to kind of just do it … seems like that pr just died"). #72 says we asked first and will close in #29's favour if #29 lands. #73 is stacked on it: its diff is `b60ff2a` alone once #72 merges.
 5. **The #153 and #68 comments are ready, with the PR numbers in** ([#153](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md), now about the policy's slicing, with #71 as the wallet's way around; [#68](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md), pointing at #455). The owner posts them, or says the word.
 6. **WalletRegister, from step 1's result,** as Step 4 below says. If a PR's branch changes in review, rebuild `seedelf` and re-pin.
 
@@ -74,7 +74,7 @@ Chunk 40's [baseline](chunk-40-verification-upstream.md#the-baseline-2026-11-02-
 
 - **Claude:** the forks and pushes to them, the edits and tests, local commits, PR and comment texts, and the owner's command blocks (each names its host, with no placeholders and no `set -e`).
 - **The owner:** every post to IOG's repos (issues, PRs, comments) and every build, pasting the output back. On 2026-11-02 the permission classifier let Claude fork and push to the owner's own forks, but refused `gh issue create` on input-output-hk ("External System Writes"), as it refused Claude's `lake build` and `check.sh`. The owner can instead add a permission rule for those commands; until then they run them.
-- **The owner monitors** the issues and PRs for comments.
+- **The owner monitors** the issues and PRs for comments. Open since 2026-11-03: Lean-blaster #455, and PlutusCoreBlaster #71, #72 and #73.
 
 ## Step 0 · Setup ✅
 
@@ -106,7 +106,7 @@ Chunk 40's [baseline](chunk-40-verification-upstream.md#the-baseline-2026-11-02-
 | Package | Fork commit | PR | Remove when |
 |---|---|---|---|
 | Blaster | `25c0ee0` (`fix/datatype-param-names`) | [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) | the fix is on `beta-lambda-cache-optimization`, or wherever CardanoLedgerApiBlaster requires Blaster from |
-| PlutusCore | `c7d8741` (`seedelf`: `cfa8c53`, `f146c10` and `b60ff2a` merged onto `1c23de8`) | [#71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71); Fix 3's and Fix 4's not opened | both PRs are on PlutusCoreBlaster `main` |
+| PlutusCore | `c7d8741` (`seedelf`: `cfa8c53`, `f146c10` and `b60ff2a` merged onto `1c23de8`) | [#71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71), [#72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72), [#73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) | both PRs are on PlutusCoreBlaster `main` |
 
 ## Fix 1 · Datatype parameter names (Lean-blaster) 🚧
 
