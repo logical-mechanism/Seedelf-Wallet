@@ -19,7 +19,7 @@ Needs [elan](https://github.com/leanprover/elan) (it installs the Lean that `lea
 **Lake pins two of our forks** in `lakefile.lean`, above CardanoLedgerApiBlaster's own requirements, until upstream merges the fixes (chunk 41):
 
 - [logicalmechanism/Lean-blaster](https://github.com/logicalmechanism/Lean-blaster) `25c0ee0`: beta `46c8479` plus the fix for [#454](https://github.com/input-output-hk/Lean-blaster/issues/454).
-- [logicalmechanism/PlutusCoreBlaster](https://github.com/logicalmechanism/PlutusCoreBlaster) `1524b7a`, its `seedelf` branch: `main` `1c23de8` plus an `opaque` `ByteStringToInteger` and `Fq1.t` as a `Nat`.
+- [logicalmechanism/PlutusCoreBlaster](https://github.com/logicalmechanism/PlutusCoreBlaster) `c7d8741`, its `seedelf` branch: `main` `1c23de8` plus an `opaque` `ByteStringToInteger`, `Fq1.t` as a `Nat`, and the BLS12-381 builtins' operands in order.
 
 As each fix lands upstream, its `require` comes out.
 
@@ -34,6 +34,7 @@ On the bytes of `94bca9c0…` (wallet), `84967d91…` (policy) and `6777ba4d…`
 | `AlwaysFalse` | always_false reaches `Error`, for any purpose and redeemer | 1 |
 | `WalletPurpose` | The wallet is spend-only: minting, rewarding, certifying, voting and proposing reach `Error` | 5 |
 | `WalletNoLock` | No accidental locks: a UTxO whose datum isn't exactly `Some(Constr 0 [B _, B _])` is spendable with any well-formed proof. 18 datum shapes, which together cover every datum but a Register (listed in the module) | 18 |
+| `WalletRegister` | **The wallet's core property:** a Register UTxO moves iff the Schnorr check holds and `vkh` signed. The check is the Aiken source's `prove`, in its order: z and c = blake2b_224(g ‖ g_r ‖ u ‖ vkh) decode into the scalar field, and g^z = g_r · u^c. One input and one signer; g, u, z, g_r, `vkh` and the signer all symbolic | 1 |
 | `PolicyAmount` | Any amount other than ±1 fails | 1 |
 | `PolicyForeign` | A mint or burn whose one line is another policy's fails | 2 |
 | `PolicyBurn` | No 5eed0e1f token burns off a first input at #256 or -1 | 2 |
@@ -41,7 +42,7 @@ On the bytes of `94bca9c0…` (wallet), `84967d91…` (policy) and `6777ba4d…`
 What a ✅ is worth:
 
 - **Z3's word, not Lean's kernel.** Blaster closes a goal with `axiom blasterProven : ∀ {α}, α` once Z3 finds no counterexample (proof reconstruction is a TODO upstream), hence the `declaration uses 'blasterProven'` warnings.
-- **IOG's model of the machine.** PlutusCoreBlaster's CEK machine and builtins are tested against the Plutus conformance suite, not proved equal to the node's. It runs the post-Conway V3 builtin semantics (`defaultFunSemanticsVariantE`). The crypto builtins (BLS12-381, the hashes) are `opaque`, and so is `ByteStringToInteger` through our PlutusCoreBlaster fork: a property holds for any interpretation of them, so it says what the bytes check, not that the check is hard to fool. Where a spec decodes a scalar (`scalarOf`), it calls the same alias the builtin runs.
+- **IOG's model of the machine.** PlutusCoreBlaster's CEK machine and builtins are tested against the Plutus conformance suite, not proved equal to the node's. We run our fork of it (see *Running it*); its three changes don't change what any script evaluates to. It runs the post-Conway V3 builtin semantics (`defaultFunSemanticsVariantE`). The crypto builtins (BLS12-381, the hashes) are `opaque`, and so is `ByteStringToInteger` through our PlutusCoreBlaster fork: a property holds for any interpretation of them, so it says what the bytes check, not that the check is hard to fool. Where a spec decodes a scalar (`scalarOf`), it calls the same alias the builtin runs.
 - **Strings over the solver's alphabet.** Blaster gives a `String` the SMT string sort, whose characters are `0x0`–`0x2FFFF` where Lean's are scalar values up to `0x10FFFF` ([Lean-blaster #389](https://github.com/input-output-hk/Lean-blaster/issues/389), which shows it proving `False`). A `ByteString` is a `String` of characters `0`–`255`, inside both, so a theorem over bytestrings covers every bytestring; it says nothing about strings with characters above `0x2FFFF`, which no script sees.
 - **Scenarios, not every transaction.** Each module fixes the fields its script never reads (an empty transaction from `Scenario.lean`) and leaves symbolic only what the property is about. Some properties fix more than that: see the module docs.
 - **Bounded runs.** A property holds for runs within the module's step limit, above the longest concrete run `Steps.lean` measures.
@@ -53,13 +54,15 @@ These need Blaster or PlutusCoreBlaster to change, not our scripts. `Upstream/` 
 
 | Property | Blocked by |
 |---|---|
-| **A Register UTxO moves iff the Schnorr check holds and `vkh` signed** (`WalletRegister`, left out of `check.sh`): the wallet's core property | Three things. On the Blaster beta branch Lake pins (PlutusCoreBlaster `main` pins a commit with it too), a datatype's SMT parameters take the binder names of an alpha-equivalent type translated before it (`genIndParams` hash-conses the inductive's type), so `Except ε α` (what `bls12_381_G1_uncompress` returns) is declared `(par (@α @β) …)` with fields over `@ε`, which Z3 rejects (`Upstream/ExceptParams`); and `byteStringToInteger` (z and the challenge) folds `Char.toNat`, and a `Char` is a `BitVec`, which Blaster can't translate over a symbolic input (`Upstream/ByteStrings`); and behind those, a BLS12-381 coordinate is `Fq1.t : Fin fieldPrime`, the same kind of throw (`Upstream/Fq1Fin`; PlutusCoreBlaster draft #29 changes it to `Nat`). Our forks fix all three; WalletRegister hasn't been run on them yet |
 | Mints name the token after the first input, for any input; burns of 5eed0e1f tokens succeed | `sliceByteString` is `take`/`drop` on the `List Char`, so any slice of a symbolic bytestring reaches `Char`'s `BitVec`, even `lengthOfByteString (sliceByteString 0 4 bs) ≤ 4` (`Upstream/ByteStrings`). Separately, a wholly symbolic name took the policy past 8 GB; a minimal symbolic slice doesn't (`Upstream/Slice*`: ~290 MB at every length), so that cost's cause isn't isolated |
 
-Until the first is fixed, the wallet's Schnorr path rests on the Aiken tests, `seedelf-crypto`'s proptests and seedelf-core's recorded-transaction evaluations.
 
 ## Found along the way
 
+- **PlutusCoreBlaster applied six BLS12-381 builtins' operands swapped:** G1 and G2 `add` and `equal`, `mulMlResult` and `finalVerify`. The CEK machine hands a builtin its arguments last-first, and these six didn't undo it.
+  - All six are commutative or symmetric on real points, so no evaluation shows it.
+  - Over the `opaque` builtins, though, the script's `equal(g^z, add(g_r, u^c))` was the model's `equal(add(u^c, g_r), g^z)`, so WalletRegister was Falsified.
+  - Fixed in our fork (`BuiltinOperandOrder` test), and offered upstream.
 - **A burn fails when the transaction's first input is output #256 or later.** `xor(burn, mint)` takes both blocks, so a burn builds the mint's token name too, and `consByteString` refuses an index past a byte (`PolicyBurn`, `concrete/policy_burns.sh`). seedelf-core refuses such an input for a mint (`seedelf_token_name`), not for Remove's burn; local evaluation fails before submit, so nothing is lost, and the same Seedelf burns with other inputs. AUDIT.md §3.4 (on the later revision) covers mints only, and a 16 KB transaction fits about 400 small outputs, so #256 is reachable.
 
 ## Writing a property
@@ -69,10 +72,12 @@ What a run teaches the hard way:
 1. **Measure steps first.** Blaster's machine counts return steps too, so it takes about twice what the chain's cost model charges (wallet: 409 steps against a cost-model 233). Add the scenario's concrete run to `Steps.lean` and set the limit above it.
 2. **Failure is `isUnsuccessful`, never `¬ isSuccessful`.** A run cut off by the step limit is neither (`isExhausted`), so `¬ isSuccessful` holds for nothing when the limit is too small. Two of the first "proofs" here did.
 3. **Pair a failure property with a run that passes.** A malformed scenario fails for its own reasons; `Steps.lean` shows the same context halting when it's valid.
-4. **Symbolic only what the property needs.** Every symbolic value the script compares splits the symbolic run, and the splits multiply. Never symbolic: a list the script walks, a bytestring it slices or turns into an integer, a path into the crypto builtins (keep the branch out of the scenario: a hypothesis excluding it still leaves it in the run).
+4. **Symbolic only what the property needs.** Every symbolic value the script branches on splits the symbolic run, and the splits multiply. Never symbolic: a list the script walks, or a bytestring it slices (keep the branch out of the scenario: a hypothesis excluding it still leaves it in the run). An opaque call doesn't split: WalletRegister's six symbolic bytestrings, through the scalar decode and the crypto builtins, take about a second.
 5. **Small modules.** A module killed at the cap loses all its messages, including the ✅ before it.
+6. **Read a result through a match, never a whole `State`.** `prop … = State.Halt (…)` makes Blaster declare the CEK datatype, constants and all. Match on the halted value, as `isSuccessful` does.
+7. **A spec over opaque builtins must call them exactly as the script does:** the same function, the same arguments, in the same order. Commutativity is lost on the solver. `Steps.lean`'s concrete check of the spec (`schnorrAccepts` on a real proof) catches a wrong spec, but not a wrong order.
 
 ## Next
 
 - **Lovejoin.** Its scripts' bytes are in seedelf-core: the generalized pool scripts, before their parameters, in `src/lovejoin/templates.rs`, and the classic pool bundled whole. A `Lovejoin/` beside `Seedelf/`, with its own `Scripts.lean` and an `extract.sh` step that checks its hashes.
-- Raise the blockers upstream, from `Upstream/drafts/` (the owner files them): the datatype parameter names (Lean-blaster, a beta-branch regression, filed as #454 on 2026-11-02), `BitVec` through the bytestring builtins (on Lean-blaster #153, with `opaque` aliases in PlutusCoreBlaster as the stopgap, as #27 did for `serialiseData`), and the Z3 version in PlutusCoreBlaster's README (its PR #68 moves to 5.3.1). Resuming once they're fixed: [chunk 40](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-40-verification-upstream.md).
+- **Get the fixes upstream,** so the forks can go: four PRs from our forks ([chunk 41](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-41-blaster-fixes.md)), and the comments in `Upstream/drafts/` (the owner posts them). `BitVec` itself, which blocks the policy's success directions, is Lean-blaster #153's.

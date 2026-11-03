@@ -10,25 +10,13 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 | 1 · Datatype parameter names | 🚧 issue filed, [Lean-blaster #454](https://github.com/input-output-hk/Lean-blaster/issues/454); fix `6526c4b` + test `25c0ee0` pushed; the fix passes our full repro; the test passes (2026-11-03: four Valid, one Expected Falsified); PR text written, not opened |
 | 2 · `ByteStringToInteger` alias | 🚧 fix `3dd76d7` + `28910c6` pushed; the first build failed on a bare `Integer` (auto-bound), fixed in `28910c6`; the second build failed in the test (below), fixed in `cfa8c53`, which passes (one Valid, two Expected Falsified); PR text written, not opened |
 | 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; fix + test `ae0a7cd` on `fix/fq1-nat` pushed; its first build failed in the test (below), fixed in `f146c10`, which passes (two Valid, one Expected Falsified, and the test vectors); the #29 question [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) 2026-11-03, no answer yet; the PR text written, not opened |
-| 4 · WalletRegister | 🚧 ✅ Valid in the model's operand order (2026-11-03); Fix 4 (`b60ff2a`) and the spec in the script's order (`e46dff8f`) pinned, not yet run |
-| 5 · Operand order (Fix 4) | 🚧 found by WalletRegister's first counterexample; fix + test on `fix/bls-operand-order`, not built; PR text written, waits for Fix 3's PR |
+| 4 · WalletRegister | ✅ Valid in the script's own order (2026-11-03, 737 MB with the rebuild), in `check.sh`'s default list, README and chunk 40 updated |
+| 5 · Operand order (Fix 4) | 🚧 fix + test `b60ff2a` pass (three Falsified before, three Valid after); PR text written, waits for Fix 3's PR |
 
 ### Next session, in order
 
-1. **The owner checks Fix 4, then WalletRegister in the script's order** (dev box). Each line stands alone:
-   ```bash
-   # dev box (this machine)
-   cd /home/logic/Documents/LogicalMechanism/blaster-forks && git -C PlutusCoreBlaster switch fix/bls-operand-order && git -C PlutusCoreBlaster checkout fix/fq1-nat -- PlutusCore/UPLC/BuiltinFunctions/Crypto.lean && CAP=24G LIMIT=90m ./check.sh PlutusCoreBlaster Tests.Cryptograph.BLS12_381.BuiltinOperandOrder; git -C PlutusCoreBlaster checkout fix/bls-operand-order -- PlutusCore/UPLC/BuiltinFunctions/Crypto.lean && CAP=24G LIMIT=90m ./check.sh PlutusCoreBlaster Tests.Cryptograph.BLS12_381.BuiltinOperandOrder
-   cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && lake update PlutusCore && grep -q c7d874182d9ee0af2b06ecff6466eea030ef2f4c lake-manifest.json && echo "== seedelf c7d8741 pinned" && CAP=16G LIMIT=30m ./check.sh Seedelf.WalletRegister && ./check.sh && ./check.sh upstream
-   ```
-   - Expected from the first line:
-     - the test under the old patterns, `FAILED` with three ❌ Falsified (the PR's "before");
-     - then under the fix, `ok` with three ✅ Valid. The checkout puts the file back either way.
-   - Expected from the second: WalletRegister `ok` with `wallet_register_spend_iff` Valid, then the baseline and `upstream` as in the pinned run below.
-   - Then Claude adds WalletRegister to `check.sh`'s default list, updates the README's *What's proved* and *Not proved*, and chunk 40's status.
-   - **The model-order check (2026-11-03)** confirmed the cause:
-     - `wallet_register_spend_iff`, with `add`'s and `equal`'s operands in the model's order, was ✅ Valid in 1.1 s at 305 MB. The script-order case was Expected Falsified.
-     - Steps: `schnorrAccepts` was true on the real proof and false with z changed.
+1. ✅ **Fix 4 and WalletRegister, 2026-11-03.** Fix 4's test: three Falsified under the old patterns, three Valid with the fix. WalletRegister: ✅ Valid in the script's order. The baseline and `upstream` were unchanged. WalletRegister is now in `check.sh`'s default list.
+   - **Before that, the model-order check** confirmed the cause: `wallet_register_spend_iff`, with `add`'s and `equal`'s operands in the model's order, was ✅ Valid in 1.1 s at 305 MB, and `schnorrAccepts` was true on the real proof and false with z changed.
    - **The pinned run before it (2026-11-03)** matched every expectation:
      - `lake update` recloned both packages from the forks.
      - `upstream`: ExceptParams and Fq1Fin `ok`, ByteStrings `FAILED` on its four `BitVec` cases, the Slice modules `ok`.
@@ -42,7 +30,7 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 5. **Claude fills in the PR numbers** in [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md) (its "we've asked PlutusCoreBlaster" line points at the Fix 2 PR) and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md) (it points at #454; add the Lean-blaster PR). Then the owner posts both.
 6. **WalletRegister, from step 1's result,** as Step 4 below says. If a PR's branch changes in review, rebuild `seedelf` and re-pin.
 
-### Fix 4 · Operand order of the BLS12-381 builtins (PlutusCoreBlaster), found 2026-11-03 🚧
+### Fix 4 · Operand order of the BLS12-381 builtins (PlutusCoreBlaster), found 2026-11-03 ✅ on the fork
 
 - **The bug.** The CEK machine conses each argument onto a builtin's list (`V :: Vs`), so the list is last-first. The integer builtins match `[op2, op1]` and call `f op1 op2`. `bls12381G1Add`, `G1Equal`, `G2Add`, `G2Equal`, `MulMlResult` and `FinalVerify` match `[x, y]` and call `f x y`: the operands are swapped.
   - `scalarMul`, `hashToGroup` and the Miller loop are in order.
@@ -54,7 +42,7 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
   - `finalVerify(mulMlResult(m1, m2), m1)` over two Miller loops.
 - **The PR** is stacked on Fix 3's and says so. It changes no evaluation, since every operation is symmetric. Its text is `../blaster-forks/posts/plutuscoreblaster-operand-order-pr.md`; its *Testing* states step 1's expected results.
   - Open it after Fix 3's: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:fix/bls-operand-order --title "$(cat posts/plutuscoreblaster-operand-order-pr.title)" --body-file posts/plutuscoreblaster-operand-order-pr.md`.
-- **Done:** `b60ff2a` on `fix/bls-operand-order` (from `fix/fq1-nat`), with its test, merged into `seedelf` as `c7d8741` and pinned; WalletRegister is back on `schnorrAccepts` (`e46dff8f`). Waiting: step 1's run.
+- **Done:** `b60ff2a` on `fix/bls-operand-order` (from `fix/fq1-nat`), with its test, merged into `seedelf` as `c7d8741` and pinned; WalletRegister is back on `schnorrAccepts` (`e46dff8f`) and Valid. Waiting: Fix 3's PR, then this one.
 - **Our side.** `schnorrAcceptsAsModelled` goes, `wallet_register_spend_iff` uses `schnorrAccepts`, and the expected-Falsified case is deleted.
 
 
@@ -227,7 +215,7 @@ Done: `3dd76d7` on `feat/opaque-bytestring-to-integer`, pushed to the fork: the 
   - If they say no, keep the alias in our fork as our own patch, and say so in the README. The real fix is #153.
   - If they want another form (a rewrite, another name, another place), follow theirs and move `scalarOf` with it.
 
-## Step 4 · WalletRegister 🚧
+## Step 4 · WalletRegister ✅
 
 - **Follow [chunk 40's step 5.1](chunk-40-verification-upstream.md#resuming)** with both pins in place.
   - Measure first: a valid spend in `Steps.lean`, with a real proof, and the step limit above it (2500 now).

@@ -2,7 +2,7 @@
 
 Branch `verification`, from `main`, pushed to origin, with no PR on purpose (the owner, 2026-11-02). It isn't a `web-wallet/…` branch because the work lives in [seedelf-verification/](../../../../seedelf-verification/README.md), not in the wallet.
 
-**Status: ⛔ blocked on upstream.** Three gaps in IOG's tools stand between us and the wallet's core property. The first two are reproduced in [Upstream/](../../../../seedelf-verification/Upstream/), with controls; the third was found in the code. Nothing more gets built until they're fixed. In the owner's words: "I would want these upstream bugs fixed then work everything out before we continue on." This file says how to tell when they are, and what to do then.
+**Status: ✅ the wallet's core property is proved (2026-11-03), on our forks.** [Chunk 41](chunk-41-blaster-fixes.md) fixed the three gaps this file waited on, and a fourth that only showed once they were fixed: the BLS12-381 builtins' operand order. It fixed them in forks of IOG's tools, which `lakefile.lean` pins, and `WalletRegister` is ✅ Valid in the script's own order. What stays here: the policy's success directions, which wait on `BitVec` (Lean-blaster #153), and, as each upstream PR lands, re-running against upstream with this file's *How to tell each is fixed*. Before chunk 41 this file read ⛔, in the owner's words: "I would want these upstream bugs fixed then work everything out before we continue on."
 
 **What the owner asked (2026-11-02):** "a verification folder and branch that we can work on further because it would be interesting to do this for lovejoin as well." On the wallet's property: "proving the wallet part of things is verified is huge."
 
@@ -11,6 +11,7 @@ Branch `verification`, from `main`, pushed to origin, with no PR on purpose (the
 - **29 theorems** about variant 1's deployed bytes: wallet `94bca9c0…`, policy `84967d91…`, always_false `6777ba4d…`. They're proved with IOG's Blaster, which is Lean 4 and Z3 5.3.1 over PlutusCoreBlaster's model of UPLC.
   - The [README](../../../../seedelf-verification/README.md)'s table lists them: always_false always fails; the wallet is spend-only and never locks a UTxO whose datum isn't a Register; the policy refuses other amounts, other policies' lines, and burns off a first input at #256 or -1.
   - Its *What a ✅ is worth* says what a proof means: Z3's word, IOG's model, opaque crypto builtins, scenarios, bounded runs.
+- **WalletRegister, the 30th** (2026-11-03, [chunk 41](chunk-41-blaster-fixes.md)): a Register UTxO moves iff the Schnorr check holds and `vkh` signed, over our forks.
 - **The blockers, isolated.** `./check.sh upstream` runs a minimal case of each, beside controls that pass. `./check.sh upstream-main` runs the `Except` case against Lean-blaster main.
 - **Four upstream drafts** in [Upstream/drafts/](../../../../seedelf-verification/Upstream/drafts/). None is filed: the owner files them.
 - **One finding** on the deployed policy ([below](#found-along-the-way)).
