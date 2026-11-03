@@ -12,3 +12,4 @@ import Lovejoin.V2.MixProofs
 import Lovejoin.Template.MixBoxPurpose
 import Lovejoin.Template.MixBoxGate
 import Lovejoin.Template.MixBoxNoLock
+import Lovejoin.Template.OneShotMint
