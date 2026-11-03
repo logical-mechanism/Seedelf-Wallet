@@ -21,7 +21,7 @@ open Lovejoin.Classic (payout)
 def ownerArgsV2 (a b t z pkh : ByteString) (amt : Integer) : List Term :=
   [toTerm (ownerCtx a b t z (payout pkh amt))]
 
-#prep_uplc appliedOwnerV2 mixLogic ownerArgsV2 10000
+#prep_uplc appliedOwnerV2 mixLogicV2 ownerArgsV2 10000
 
 /-- An owner withdraws a box iff the box is well-formed and the proof verifies for this
 transaction's outputs and inputs. -/

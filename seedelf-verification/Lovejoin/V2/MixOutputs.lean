@@ -41,10 +41,10 @@ def tokenFirstArgs (p nm : ByteString) (qty : Integer) : List Term :=
 def tokenSecondArgs (p nm : ByteString) (qty : Integer) : List Term :=
   [toTerm (outputsCtx (box outA1 outB1) (tokenBox outA2 outB2 p nm qty))]
 
-#prep_uplc appliedAddress mixLogic addressArgs 30000
-#prep_uplc appliedAmount mixLogic amountArgs 30000
-#prep_uplc appliedTokenFirst mixLogic tokenFirstArgs 30000
-#prep_uplc appliedTokenSecond mixLogic tokenSecondArgs 30000
+#prep_uplc appliedAddress mixLogicV2 addressArgs 30000
+#prep_uplc appliedBoxValue mixLogicV2 amountArgs 30000
+#prep_uplc appliedTokenFirst mixLogicV2 tokenFirstArgs 30000
+#prep_uplc appliedTokenSecond mixLogicV2 tokenSecondArgs 30000
 
 /-- A box out anywhere but mix_box, or with a stake credential or a reference script,
 fails the Mix: a key's address, another script's, mix_box's with a stake part. -/
@@ -56,7 +56,7 @@ theorem mix_pays_its_boxes_to_mix_box : ∀ (c1 c2 : Credential) (s1 s2 : Option
 
 /-- A box out holding anything but the box value in lovelace fails the Mix. -/
 theorem mix_boxes_hold_the_box_value : ∀ (n1 n2 : Integer),
-    (n1 ≠ 10000000 ∨ n2 ≠ 10000000) → isUnsuccessful (appliedAmount.prop n1 n2) := by blaster
+    (n1 ≠ 10000000 ∨ n2 ≠ 10000000) → isUnsuccessful (appliedBoxValue.prop n1 n2) := by blaster
 
 /-- So does a first box out holding any token beside its 10 ₳. -/
 theorem mix_first_box_holds_no_token : ∀ (p nm : ByteString) (qty : Integer),

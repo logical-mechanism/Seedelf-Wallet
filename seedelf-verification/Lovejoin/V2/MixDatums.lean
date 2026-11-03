@@ -25,9 +25,9 @@ def boxByHash (h : ByteString) : TxOut :=
 def hashFirstArgs (h : ByteString) : List Term := [toTerm (outputsCtx (boxByHash h) (box outA2 outB2))]
 def hashSecondArgs (h : ByteString) : List Term := [toTerm (outputsCtx (box outA1 outB1) (boxByHash h))]
 
-#prep_uplc appliedDatums mixLogic datumArgs 30000
-#prep_uplc appliedHashFirst mixLogic hashFirstArgs 30000
-#prep_uplc appliedHashSecond mixLogic hashSecondArgs 30000
+#prep_uplc appliedDatums mixLogicV2 datumArgs 30000
+#prep_uplc appliedHashFirst mixLogicV2 hashFirstArgs 30000
+#prep_uplc appliedHashSecond mixLogicV2 hashSecondArgs 30000
 
 /-- A box out whose datum's bytes aren't a well-formed `MixDatum` fails the Mix. -/
 theorem mix_boxes_carry_well_formed_datums : ∀ (a1 b1 a2 b2 : ByteString),

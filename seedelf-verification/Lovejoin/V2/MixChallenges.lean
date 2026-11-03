@@ -21,7 +21,7 @@ open PlutusCore.UPLC.Utils
 def challengeArgs (c11 c12 c21 c22 : ByteString) : List Term :=
   [toTerm (mixCtx (mixRedeemer (katProofs c11 c12 c21 c22)))]
 
-#prep_uplc appliedChallenges mixLogic challengeArgs 30000
+#prep_uplc appliedChallenges mixLogicV2 challengeArgs 30000
 
 /-- A challenge of any other length, in any branch of either proof, fails the Mix. -/
 theorem mix_refuses_a_challenge_not_32_bytes : ∀ (c11 c12 c21 c22 : ByteString),

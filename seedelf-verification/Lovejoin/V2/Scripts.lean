@@ -13,6 +13,6 @@ As in `Lovejoin.Scripts`, only the import lives here. -/
 
 namespace Lovejoin.V2
 
-#import_uplc mixLogic PlutusV3 single_cbor_hex "Lovejoin/V2/Scripts/mix_logic.hex"
+#import_uplc mixLogicV2 PlutusV3 single_cbor_hex "Lovejoin/V2/Scripts/mix_logic.hex"
 
 end Lovejoin.V2

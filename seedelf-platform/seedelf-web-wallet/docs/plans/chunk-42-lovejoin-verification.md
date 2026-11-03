@@ -13,17 +13,20 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 | 5 · mix_logic, Mix | ⬜ on v2 instead (step 8): the wallet moves to v2 alone, and the classic pool keeps only its Owner |
 | 6 · fee_contract and one_shot_mint | ⬜ |
 | 7 · The token-pool templates | ⬜ on v2 instead (step 8); 8131b1d's only mainnet pool (5 ₳) is empty |
-| 8 · v2: the templates with xor32's fix | 🚧 `MixChallenges` ✅ (1 theorem, 2026-11-03); `Owner` (1), `MixOutputs` (4) and `MixDatums` (3) written, not built |
+| 8 · v2: the templates with xor32's fix | 🚧 `MixChallenges` (1), `MixOutputs` (4) and `MixDatums` (3) ✅ (2026-11-03); `Owner` (1) and `MixProofs` (1, the Mix iff) written, not built |
 | 9 · The wallet on v2 alone | ⬜ waits on step 8 and a v2 launch |
 
 ### Next session, in order
 
-1. **The owner builds step 8's new modules** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=30m ./check.sh lovejoin-v2`.
-   - `V2/Steps`, Mix lines: the KAT `halt after 11497`; first box +1 lovelace `error`; the builder on the KAT `halt`, with about the KAT's count; no datum, first or second, `error`. If the builder errors, it doesn't make the KAT's outputs: fix that before reading `MixOutputs` or `MixDatums`.
-   - `V2/Steps`, Owner lines: the vector's b and t are `Lovejoin.Steps`' own (b `8c6b52ee…`, t `820ad0f2…`), z its own. Valid `halt after N`, spec `true`, N under 10000. The other payout and z changed `error`, spec `false`.
-   - Then `owner_withdraws_iff_proof` (v2), the four `MixOutputs` theorems and the three `MixDatums` theorems, all Valid. A Falsified one: Aiken first (*When a property comes back Falsified*). A `KILLED` one: split it, one field at a time.
+1. **The owner builds step 8's modules** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=30m ./check.sh lovejoin-v2`.
+   - `V2/Steps`, Mix lines: the KAT `halt after 11497`; first box +1 lovelace `error`; the builder on the KAT `halt`; no datum, first or second, `error`.
+   - `v2 mixAccepts, the KAT: true`. If it's `false`, the spec doesn't compute the challenge as Lovejoin's prover did: fix it before reading `MixProofs`. With z11 changed: `error`, spec `false`.
+   - Owner lines: b `8c6b52ee…` and t `820ad0f2…` as `Lovejoin.Steps`' own; valid `halt after N` (N under 10000), spec `true`; the other payout and z changed `error`, spec `false`.
+   - Then `owner_withdraws_iff_proof` (v2) and `mix_iff_every_proof_verifies` Valid. A Falsified one: Aiken first (*When a property comes back Falsified*). A `KILLED` one: split it (MixProofs by input: one proof's fields symbolic, the other the KAT's).
 2. **Then `./check.sh`:** the Seedelf baseline under the xor alias, not yet run.
-3. **Then the Mix iff on v2** (step 5's (b)): a Mix succeeds iff the outputs are as `MixOutputs` and `MixDatums` say and every input's sigma-OR proof verifies. With n = 2 that's 2 × 2 DH-tuple checks over opaque builtins.
+3. **Then the gate on v2's mix_box**, and fee_contract and one_shot_mint on v2 (step 6), all on the test launch, then re-run on the real launch.
+
+**Step 8's second build (2026-11-03):** `MixOutputs`' 4 and `MixDatums`' 3 Valid, in 10 s and 7 s at most 356 MB. `V2/Logic` failed on `import Lovejoin.Scripts`: `#import_uplc` and `#prep_uplc` names are global, whatever the namespace, so v2's `mixLogic` met the classic pool's (and `appliedAmount` Seedelf's policy one). Now `mixLogicV2` and `appliedBoxValue`; no bare `mixLogic` is left in `V2/`.
 
 **Step 8's first build (2026-11-03):** four `ok`. The KAT's Mix halts after 11497 steps, and with its first box a lovelace over errors after 4802. `mix_refuses_a_challenge_not_32_bytes` is Valid in 3 s, peaking at 340 MB. The step 4 run in the same session: ten `ok`, 37 ✅.
 
@@ -139,11 +142,13 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
   - It stays local, since this finding motivated it. It goes to the public fork, and the pin back to GitHub, when the owner publishes.
 - **The scenario** (`Lovejoin/V2/Mix.lean`) is Lovejoin's KAT `mix_real_proofs_ada_pool_n2_passes` as a full ScriptContext: its test launch (NFT policy `abab…`), its two boxes in and out, and its real proofs. `extract-lovejoin-v2.sh` applies mix_logic to that launch (60294352…).
 - **Proved:** `mix_refuses_a_challenge_not_32_bytes` ✅. With the KAT's four `c`s symbolic, a `c` of any other length, in any branch, fails the Mix. The rest of the proof stays the KAT's (rule 4).
-- **Written, not built:**
-  - `V2/Owner`: step 4's iff on v2. validate_owner and its libraries are the classic pool's line for line, so the spec is `Lovejoin.Classic`'s, with v2's mix_box hash.
+- **Proved too (the second build):**
   - `V2/MixOutputs`: no value leaves the pool. A box out anywhere but mix_box, with a stake credential or a reference script, with other lovelace than the box value, or with a token, fails the Mix (4 theorems).
   - `V2/MixDatums`: a box out's datum must be inline and well-formed, so every box paid out can be withdrawn (3 theorems).
-- **Not covered yet:** the Mix iff, N > 2, the gate on v2's mix_box, and a real launch's parameters, re-run once one exists.
+- **Written, not built:**
+  - `V2/Owner`: step 4's iff on v2. validate_owner and its libraries are the classic pool's line for line, so the spec is `Lovejoin.Classic`'s, with v2's mix_box hash.
+  - `V2/MixProofs`: the Mix iff. The KAT's transaction, with every field of both proofs symbolic, succeeds iff `mixAccepts` (`V2/MixSpec`, line for line with `verify_pre`).
+- **Not covered yet:** N > 2, the gate on v2's mix_box, fee_contract and one_shot_mint, and a real launch's parameters, re-run once one exists.
 
 ## Step 9 · The wallet on v2 alone ⬜
 

@@ -49,14 +49,16 @@ def box (a b : ByteString) (lovelace : Integer := 10000000) : TxOut :=
   ⟨⟨.ScriptCredential mixBoxHash, none⟩, [(Data.B "", Data.Map [(Data.B "", Data.I lovelace)])],
    .OutputDatum (mixDatum a b), none⟩
 
+/-- The points of the KAT's two boxes in: `(inA1, inB1)`, then `(inA2, inB2)`. -/
+def inA1 : ByteString := ofHex "b928f3beb93519eecf0145da903b40a4c97dca00b21f12ac0df3be9116ef2ef27b2ae6bcd4c5bc2d54ef5a70627efcb7"
+def inB1 : ByteString := ofHex "a6e5f7f4d52b2042153f1a0b0bb88a116a39370408f4fee2a9bb7181f3632dee528122882050d9ec416cac2e3b260459"
+def inA2 : ByteString := ofHex "99cdf3807146e68e041314ca93e1fee0991224ec2a74beb2866816fd0826ce7b6263ee31e953a86d1b72cc2215a57793"
+def inB2 : ByteString := ofHex "8366fea2d3d7cd341ee789fa10f803e96c24ed7106e7d1fff3109d9f86fd897a3fb3352d1fc7328f3b75c7549258b89b"
+
 /-- The KAT's two boxes in, at `a0a0…#0` and `a1a1…#0`. -/
 def inputs : List TxInInfo :=
-  [⟨⟨ofHex "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0", 0⟩,
-    box (ofHex "b928f3beb93519eecf0145da903b40a4c97dca00b21f12ac0df3be9116ef2ef27b2ae6bcd4c5bc2d54ef5a70627efcb7")
-        (ofHex "a6e5f7f4d52b2042153f1a0b0bb88a116a39370408f4fee2a9bb7181f3632dee528122882050d9ec416cac2e3b260459")⟩,
-   ⟨⟨ofHex "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 0⟩,
-    box (ofHex "99cdf3807146e68e041314ca93e1fee0991224ec2a74beb2866816fd0826ce7b6263ee31e953a86d1b72cc2215a57793")
-        (ofHex "8366fea2d3d7cd341ee789fa10f803e96c24ed7106e7d1fff3109d9f86fd897a3fb3352d1fc7328f3b75c7549258b89b")⟩]
+  [⟨⟨ofHex "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0", 0⟩, box inA1 inB1⟩,
+   ⟨⟨ofHex "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 0⟩, box inA2 inB2⟩]
 
 /-- The points of the KAT's two boxes out: `(outA1, outB1)`, then `(outA2, outB2)`. -/
 def outA1 : ByteString := ofHex "a2d25c15e557379e810ec2631ee5aafbd3b66debc2d175a9d2cc20c52730d4ffe06c063403f6549f4c12f9e17c6e5e6e"
@@ -79,21 +81,26 @@ def branch (t0 t1 c z : ByteString) : Data := .Constr 0 [.B t0, .B t1, .B c, .B 
 def mixRedeemer (proofs : List (List Data)) : Data :=
   .Constr 1 [.List (proofs.map fun branches => .Constr 0 [.List branches])]
 
+/-- The KAT's proofs' fields but the challenges: input i's branch j is
+`(katT0ij, katT1ij, katCij, katZij)`. -/
+def katT011 : ByteString := ofHex "aa57049c1dd893b253147efbae26d3be241cbf6e3eb029ba58a51a97dcec0578f575424137fb3e33088259007c36c463"
+def katT111 : ByteString := ofHex "b17d33abef270622c8ba5b5ce3a118a52afd6312b56d199550dce4d5a7a286a147fbd0b3daafd890d1abd4d0148c70a0"
+def katZ11 : ByteString := ofHex "1f68751f34d21bb3fed0d9a391fcfc632e9f20f71520e5c602e7deb35e61cd0d"
+def katT012 : ByteString := ofHex "b9409315230f07fdd133f572f909460d6aaee47b25a89200ff7b905eb9835e50f73fdd9ed093ad635f6ec3b8a2758416"
+def katT112 : ByteString := ofHex "a2637c4d68106ce5a4cf1e669b70c5c1f458988a17cab9e10d33cced4ab52cd6bc56758434a763595a21864996cff94c"
+def katZ12 : ByteString := ofHex "517744a18027d39276157b757bcf7bfb924a84903fbfa3138a89c48a1726499c"
+def katT021 : ByteString := ofHex "b270340c955fa3daf6d0ff29592d20758bad10d512220f980b0c2114db43083578ede4650f09c70f0fff693a37ae5b40"
+def katT121 : ByteString := ofHex "b5bd06b653e924ebec3bc0b7e1cb50bb598945a703a67773dcf9f8b6f89e1985c1a3a02e3d51f022e680819ba913b4d3"
+def katZ21 : ByteString := ofHex "1e141398a071fabe146321243d98ab2823295880179d433c58f825491a102ee7"
+def katT022 : ByteString := ofHex "81498187cf3d90edac08a26fa7a632f060c741abdd9dd4fdbe3ed3987eee9526ab32d401b19ff7df8e65efbf5b1ed735"
+def katT122 : ByteString := ofHex "ab9f81ba42aa93faf2b3fd6900faa8b2ff942648e3d417cd2393917d360844110f1bcb6e92ebdbd2657aee42d489a85d"
+def katZ22 : ByteString := ofHex "4edb0fb70d87ce6f0c113717b89b222642296e151ba68f2d1753a6118c794c00"
+
 /-- The KAT's two proofs, with each branch's `c` given: input 1's branches take `c11` and
 `c12`, input 2's `c21` and `c22`. Every `t0`, `t1` and `z` is the KAT's. -/
 def katProofs (c11 c12 c21 c22 : ByteString) : List (List Data) :=
-  [[branch (ofHex "aa57049c1dd893b253147efbae26d3be241cbf6e3eb029ba58a51a97dcec0578f575424137fb3e33088259007c36c463")
-           (ofHex "b17d33abef270622c8ba5b5ce3a118a52afd6312b56d199550dce4d5a7a286a147fbd0b3daafd890d1abd4d0148c70a0")
-           c11 (ofHex "1f68751f34d21bb3fed0d9a391fcfc632e9f20f71520e5c602e7deb35e61cd0d"),
-    branch (ofHex "b9409315230f07fdd133f572f909460d6aaee47b25a89200ff7b905eb9835e50f73fdd9ed093ad635f6ec3b8a2758416")
-           (ofHex "a2637c4d68106ce5a4cf1e669b70c5c1f458988a17cab9e10d33cced4ab52cd6bc56758434a763595a21864996cff94c")
-           c12 (ofHex "517744a18027d39276157b757bcf7bfb924a84903fbfa3138a89c48a1726499c")],
-   [branch (ofHex "b270340c955fa3daf6d0ff29592d20758bad10d512220f980b0c2114db43083578ede4650f09c70f0fff693a37ae5b40")
-           (ofHex "b5bd06b653e924ebec3bc0b7e1cb50bb598945a703a67773dcf9f8b6f89e1985c1a3a02e3d51f022e680819ba913b4d3")
-           c21 (ofHex "1e141398a071fabe146321243d98ab2823295880179d433c58f825491a102ee7"),
-    branch (ofHex "81498187cf3d90edac08a26fa7a632f060c741abdd9dd4fdbe3ed3987eee9526ab32d401b19ff7df8e65efbf5b1ed735")
-           (ofHex "ab9f81ba42aa93faf2b3fd6900faa8b2ff942648e3d417cd2393917d360844110f1bcb6e92ebdbd2657aee42d489a85d")
-           c22 (ofHex "4edb0fb70d87ce6f0c113717b89b222642296e151ba68f2d1753a6118c794c00")]]
+  [[branch katT011 katT111 c11 katZ11, branch katT012 katT112 c12 katZ12],
+   [branch katT021 katT121 c21 katZ21, branch katT022 katT122 c22 katZ22]]
 
 /-- The KAT's own challenges. -/
 def katC11 : ByteString := ofHex "56a67ef60452564d376bce75074c937103b75f8eed1eb9e9cf0d433b8ca0ba61"
