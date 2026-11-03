@@ -18,13 +18,15 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 ### Next session, in order
 
-1. **The owner builds the general Mix** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh Lovejoin.Template.Scripts Lovejoin.V2.MixAny Lovejoin.V2.MixAnySpec Lovejoin.V2.MixAnySteps Lovejoin.V2.MixAnyFirst Lovejoin.V2.MixAnySecond Lovejoin.V2.MixAnyPasses`.
-   - It's mix_logic's template, applied to a symbolic NFT policy `P`, with mix_box `M`, the box value `bl` and all eight box points symbolic. So it covers every v2 ADA pool, the owner's new 5 ₳ pool included, and every pair of boxes.
-   - `V2/MixAnySteps`: at the test launch with the KAT's points, the template `halt`s in about the KAT's 11497 steps and `mixAcceptsAny` is `true`. z11 changed, or the KAT's proofs in a 5 ₳ pool, `error` with the spec `false`.
-   - `MixAnyFirst` and `MixAnySecond` (3 each, the security direction) and `MixAnyPasses` (1, given a sane pool and well-formed boxes). A ❌ is a spec gap at that check: read the compiled UPLC there.
-2. **Then the same at n = 3**, then Owner withdrawals of several boxes (the game plan's list, *The owner's decisions*).
-3. **The owner's calls before the v2 launch:** the side finding below (`precompute_statements`' cost: now or never for v2) and disclosure (the PR).
-4. **Then the v2 launch** (the new 5 ₳ pool). The general theorems already hold for it; the KAT-based ones are their special case.
+1. **The owner builds the general Mix for every pool kind and n = 2 to 4** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=60m ./check.sh lovejoin-v2-pools`.
+   - `MixAny` (ADA pools, n = 2) built `ok` on 68c5399 (2026-11-03): its 7 theorems hold. Its `Steps` lines are still to read: the KAT `halt`, `mixAcceptsAny` `true`, the other two `error` with spec `false`.
+   - `gen-lovejoin-mix.py` writes the rest from `mix_kat.test.ak`, checked value for value: ADA pools at n = 3 and 4 (`MixAny3*`, `MixAny4*`), and token pools at n = 2, 3 and 4 (`MixTok2*` to `MixTok4*`), the token's policy, name and quantity symbolic too. That's 75 theorems: each box's challenge and branches, then the converse.
+   - Each `…Steps`: the KAT at the test launch must `halt` (its step count under the module's limit), the spec `true`, z11 or zNN changed `error` and spec `false`.
+   - A ❌ is a spec gap at that check: read the compiled UPLC there. For a token pool, check `boxValuePool` against `value.box_value` and the stdlib's `assets.add` first.
+   - After this, every v2 Mix the wallet can make, ADA or token, 2 to 4 boxes, is covered for every pool.
+2. **Then Owner withdrawals of several boxes**, v2 and the classic pool (1.8.0's returns).
+3. **The owner's calls before the PR:** the side finding below (`precompute_statements`' cost, the one contract change still open) and disclosure (the PR).
+4. **Then the v2 launch** (the new 5 ₳ pool): the general theorems already hold for it.
 5. **Then step 9**, the wallet on v2 alone (1.8.0).
 
 **Everything on 68c5399 (2026-11-03):** `./check.sh lovejoin` 10 `ok`, `./check.sh lovejoin-v2` 29 `ok`, 105 ✅: the classic pool's 37 and v2's 68. Every `Steps` line as before. `V2/Mix3Steps`: the KAT halts after 19204 steps, `mixAccepts3` is `true`, and z11 or z33 changed errors (after 11486 and 18882 steps) with the spec `false`. The n = 3 theorems each solved in 0.02 s, at most 412 MB; `(verbose: 1)` is out.

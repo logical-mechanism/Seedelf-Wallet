@@ -8,6 +8,7 @@
 #   ./check.sh upstream-main         ExceptParams against Lean-blaster main
 #   ./check.sh lovejoin              Lovejoin's classic pool (chunk 42)
 #   ./check.sh lovejoin-v2           v2, the templates with xor32's length checks (chunk 42)
+#   ./check.sh lovejoin-v2-pools     v2's general Mix alone, for every pool kind and n = 2 to 4
 #   ./check.sh Seedelf.PolicyMint    some modules
 #   CAP=12G LIMIT=20m ./check.sh     other limits
 cd "$(dirname "$0")" || exit 1
@@ -23,6 +24,21 @@ mods=("$@")
 [ "${mods[0]}" = lovejoin ] && mods=(Lovejoin.Scripts Lovejoin.Box Lovejoin.Steps Lovejoin.ReferenceHolder
   Lovejoin.MixBoxPurpose Lovejoin.MixBoxGate Lovejoin.MixBoxNoLock Lovejoin.MixLogicPurpose Lovejoin.Logic
   Lovejoin.Owner)
+# v2's general Mix: mix_logic's template, every pool parameter, box point and proof field symbolic.
+# MixAny is ADA pools at n = 2; the rest gen-lovejoin-mix.py writes (ADA n = 3, 4; token n = 2, 3, 4).
+pools=(
+  Lovejoin.V2.MixAny Lovejoin.V2.MixAnySpec Lovejoin.V2.MixAnySteps Lovejoin.V2.MixAnyFirst
+  Lovejoin.V2.MixAnySecond Lovejoin.V2.MixAnyPasses Lovejoin.V2.MixAny3 Lovejoin.V2.MixAny3Spec
+  Lovejoin.V2.MixAny3Steps Lovejoin.V2.MixAny3Box1 Lovejoin.V2.MixAny3Box2 Lovejoin.V2.MixAny3Box3
+  Lovejoin.V2.MixAny3Passes Lovejoin.V2.MixAny4 Lovejoin.V2.MixAny4Spec Lovejoin.V2.MixAny4Steps
+  Lovejoin.V2.MixAny4Box1 Lovejoin.V2.MixAny4Box2 Lovejoin.V2.MixAny4Box3 Lovejoin.V2.MixAny4Box4
+  Lovejoin.V2.MixAny4Passes Lovejoin.V2.MixTok2 Lovejoin.V2.MixTok2Spec Lovejoin.V2.MixTok2Steps
+  Lovejoin.V2.MixTok2Box1 Lovejoin.V2.MixTok2Box2 Lovejoin.V2.MixTok2Passes Lovejoin.V2.MixTok3
+  Lovejoin.V2.MixTok3Spec Lovejoin.V2.MixTok3Steps Lovejoin.V2.MixTok3Box1 Lovejoin.V2.MixTok3Box2
+  Lovejoin.V2.MixTok3Box3 Lovejoin.V2.MixTok3Passes Lovejoin.V2.MixTok4 Lovejoin.V2.MixTok4Spec
+  Lovejoin.V2.MixTok4Steps Lovejoin.V2.MixTok4Box1 Lovejoin.V2.MixTok4Box2 Lovejoin.V2.MixTok4Box3
+  Lovejoin.V2.MixTok4Box4 Lovejoin.V2.MixTok4Passes)
+[ "${mods[0]}" = lovejoin-v2-pools ] && mods=("${pools[@]}")
 # v2: the token-pool templates with xor32's length checks (chunk 42), after ./extract-lovejoin-v2.sh.
 [ "${mods[0]}" = lovejoin-v2 ] && mods=(Lovejoin.V2.Scripts Lovejoin.V2.Mix Lovejoin.V2.Logic
   Lovejoin.V2.Steps Lovejoin.V2.MixChallenges Lovejoin.V2.Owner Lovejoin.V2.MixOutputs Lovejoin.V2.MixDatums
@@ -31,8 +47,7 @@ mods=("$@")
   Lovejoin.Template.MixBoxPurpose Lovejoin.Template.MixBoxGate Lovejoin.Template.MixBoxNoLock
   Lovejoin.Template.Launch Lovejoin.Template.OneShotMint Lovejoin.Template.Fee Lovejoin.Template.FeeContract
   Lovejoin.V2.Mix3 Lovejoin.V2.Mix3Spec Lovejoin.V2.Mix3Steps Lovejoin.V2.Mix3First Lovejoin.V2.Mix3Second
-  Lovejoin.V2.Mix3Third Lovejoin.V2.Mix3Passes Lovejoin.V2.MixAny Lovejoin.V2.MixAnySpec Lovejoin.V2.MixAnySteps
-  Lovejoin.V2.MixAnyFirst Lovejoin.V2.MixAnySecond Lovejoin.V2.MixAnyPasses)
+  Lovejoin.V2.Mix3Third Lovejoin.V2.Mix3Passes "${pools[@]}")
 # The same ExceptParams file in its own package, against Lean-blaster main.
 [ "${mods[0]}" = upstream-main ] && { cd Upstream/blaster-main || exit 1; mods=(BlasterMain.ExceptParams); }
 peakf=$(mktemp)
