@@ -18,7 +18,7 @@ Branch `verification`, from `main`, pushed to origin, with no PR on purpose (the
 
 ## What blocks it
 
-1. ⛔ **A datatype's parameter names.** This is a Lean-blaster regression, not reported yet.
+1. ⛔ **A datatype's parameter names.** This is a Lean-blaster regression, filed as [#454](https://github.com/input-output-hk/Lean-blaster/issues/454) on 2026-11-02; our fix is on its way as a PR ([chunk 41](chunk-41-blaster-fixes.md)).
    - Our manifest pins Lean-blaster's `beta-lambda-cache-optimization` branch at `46c8479`, through CardanoLedgerApiBlaster `9938562`.
    - On that branch, `genIndParams` in `Blaster/Smt/Translate/Quantifier.lean` telescopes `(← hashcons indVal.type)`. So a datatype takes the parameter names of an earlier alpha-equivalent type.
    - Any goal with both `Except` and `Prod` fails, in either order ("unknown sort '@ε'"). PlutusCoreBlaster's goals translate `Data × Data` before a BLS12-381 builtin's `Except String _`.
@@ -33,7 +33,7 @@ Branch `verification`, from `main`, pushed to origin, with no PR on purpose (the
    - The stopgap's precedent is PlutusCoreBlaster [#27](https://github.com/input-output-hk/PlutusCoreBlaster/pull/27), an `opaque` alias for `serialiseData`. It was still open on 2026-11-02.
    - Drafts: [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md), [the PlutusCoreBlaster issue](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md), and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md). The #68 comment needs the number of bug 1's issue once that's filed.
    - The "very soon" work looks like branch `feat/indexed-types` (RSoulatIOHK, last touched 2026-06-21, never a PR), which leaves out `Char` and `toNat`, the two things `byteStringToInteger` needs.
-3. ⛔ **`Fin` in a BLS12-381 coordinate.** `Fq1.t : Fin fieldPrime` (`Cryptograph/BLS12_381/Basic.lean`), and `Fin n` is an indexed type: the same throw, waiting behind 1 and 2 for anything holding a symbolic G1 point. Found from the code on 2026-11-02, not yet run. PlutusCoreBlaster draft [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29) (BLS axiomatization, idle since 2026-09-21) changes it to `Nat` and adds BLS12-381 axioms and an ownership-verification example: read it before WalletRegister.
+3. ⛔ **`Fin` in a BLS12-381 coordinate.** `Fq1.t : Fin fieldPrime` (`Cryptograph/BLS12_381/Basic.lean`), and `Fin n` is an indexed type: the same throw, waiting behind 1 and 2 for anything holding a symbolic G1 point. Confirmed by a run on 2026-11-02: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s point cases fail with "Inductive datatype with instance parameters not supported: `Fin", its control passes. PlutusCoreBlaster draft [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29) (BLS axiomatization, idle since 2026-09-21) changes it to `Nat` and adds BLS12-381 axioms and an ownership-verification example: read it before WalletRegister.
 
 What they block:
 

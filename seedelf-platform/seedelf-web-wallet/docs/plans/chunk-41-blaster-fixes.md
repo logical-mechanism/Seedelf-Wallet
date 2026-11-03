@@ -7,10 +7,19 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 | Step | Status |
 |---|---|
 | 0 · Forks, clones, runner | ✅ |
-| 1 · Datatype parameter names | 🚧 fix pushed; the issue, its test and the PR wait on the owner filing |
-| 2 · `ByteStringToInteger` alias | 🚧 fix and test pushed; build and PR wait on the owner |
-| 3 · `Fin` in `Fq1` | ⬜ repro written, not run |
+| 1 · Datatype parameter names | 🚧 issue filed, [Lean-blaster #454](https://github.com/input-output-hk/Lean-blaster/issues/454); fix `6526c4b` + test `25c0ee0` pushed; the fix passes our full repro; PR not opened |
+| 2 · `ByteStringToInteger` alias | 🚧 fix `3dd76d7` + `28910c6` pushed; the first build failed on a bare `Integer` (auto-bound), fixed in `28910c6`, not rebuilt yet; PR not opened |
+| 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; nothing asked on #29 yet |
 | 4 · WalletRegister | ⬜ |
+
+### Next session, in order
+
+1. **The owner rebuilds Fix 2** and builds Fix 1's test (dev box): `cd /home/logic/Documents/LogicalMechanism/blaster-forks && CAP=24G LIMIT=90m ./check.sh PlutusCoreBlaster Tests.Bitwise.ByteStringToIntegerSymbolic`, then `./check.sh Lean-blaster Tests.FixedIssues.Issue454`. Expected: Fix 2's test one Valid and two Expected Falsified; Issue454 four Valid and one Expected Falsified.
+2. **The owner opens the Lean-blaster PR** once Issue454 passes: `gh pr create -R input-output-hk/Lean-blaster --base beta-lambda-cache-optimization --head logicalmechanism:fix/datatype-param-names --title "$(cat posts/lean-blaster-pr.title)" --body-file posts/lean-blaster-pr.md` (from `blaster-forks/`; both files are written).
+3. **Claude writes the PlutusCoreBlaster PR body** in `posts/` from [the issue draft](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md), on the repo's template (it lives in the fork's `.github/`), and the owner opens it into `main` once Fix 2's test passes. A PR, not a separate issue.
+4. **Claude drafts the #29 question** (`posts/plutuscoreblaster-29-comment.md`, per Fix 3 below); the owner posts it. Then Fix 3 on `fix/fq1-nat`.
+5. **The owner posts the comments,** with the PR numbers filled in: [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md) (its "we've asked PlutusCoreBlaster" line points at the PR) and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md) (already points at #454).
+6. **Pins and WalletRegister** as below, once Fixes 1–3 build.
 
 Chunk 40's [baseline](chunk-40-verification-upstream.md#the-baseline-2026-11-02-z3-531), [practicalities and rules](chunk-40-verification-upstream.md#practicalities-and-rules) and [what each fix should flip](chunk-40-verification-upstream.md#how-to-tell-each-is-fixed) hold here. They aren't repeated.
 

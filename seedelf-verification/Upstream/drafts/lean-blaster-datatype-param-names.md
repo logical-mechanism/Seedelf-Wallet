@@ -1,4 +1,4 @@
-<!-- New issue on https://github.com/input-output-hk/Lean-blaster -->
+<!-- Filed 2026-11-02 as https://github.com/input-output-hk/Lean-blaster/issues/454 (this text). -->
 
 # [Bug]: regression on `beta-lambda-cache-optimization`: a datatype is declared with another type's parameter names, so any goal with both `Except` and `Prod` fails
 

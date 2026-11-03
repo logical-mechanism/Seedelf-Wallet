@@ -40,6 +40,6 @@ theorem slice_length : ∀ (bs : ByteString),
 
 ## Why
 
-We're proving properties of [Seedelf](https://github.com/logical-mechanism/Seedelf-Wallet)'s validators as deployed on mainnet, from their UPLC. The wallet (`94bca9c0…`) decodes its Schnorr scalar and challenge with `byteStringToInteger`; the minting policy (`84967d91…`) names tokens with `sliceByteString`. 29 properties of the same scripts prove; these two builtins block the rest, most of all the wallet's core property, that a Register UTxO moves only with a valid proof. (That one also needs a Lean-blaster fix for datatype parameter names, filed separately, and `Fq1.t` off `Fin fieldPrime`, the same throw, which draft #29 does.)
+We're proving properties of [Seedelf](https://github.com/logical-mechanism/Seedelf-Wallet)'s validators as deployed on mainnet, from their UPLC. The wallet (`94bca9c0…`) decodes its Schnorr scalar and challenge with `byteStringToInteger`; the minting policy (`84967d91…`) names tokens with `sliceByteString`. 29 properties of the same scripts prove; these two builtins block the rest, most of all the wallet's core property, that a Register UTxO moves only with a valid proof. (That one also needs a Lean-blaster fix for datatype parameter names (input-output-hk/Lean-blaster#454), and `Fq1.t` off `Fin fieldPrime`, the same throw, which draft #29 does.)
 
 We can open a PR for (1) along the lines of #27 if that's welcome.
