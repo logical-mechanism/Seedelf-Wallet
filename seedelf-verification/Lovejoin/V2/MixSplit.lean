@@ -36,6 +36,18 @@ def secondAccepts (t021 t121 c21 z21 t022 t122 c22 z22 : ByteString) : Bool :=
   | some ctx => verifyPre inA2 inB2 t021 t121 c21 z21 t022 t122 c22 z22 ctx
   | none => false
 
+/-- Box in 1's challenge: its branches' `c`s xor to `c_global`. -/
+def firstChallengeHolds (t011 t111 c11 t012 t112 c12 : ByteString) : Bool :=
+  match mixContext, xorOfChallenges c11 c12 with
+  | some ctx, some x => challenge inA1 inB1 t011 t111 t012 t112 ctx == x
+  | _, _ => false
+
+/-- Box in 2's. -/
+def secondChallengeHolds (t021 t121 c21 t022 t122 c22 : ByteString) : Bool :=
+  match mixContext, xorOfChallenges c21 c22 with
+  | some ctx, some x => challenge inA2 inB2 t021 t121 t022 t122 ctx == x
+  | _, _ => false
+
 def splitArgs (t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22 : ByteString) : List Term :=
   [toTerm (mixCtx (proofsRedeemer t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22))]
 

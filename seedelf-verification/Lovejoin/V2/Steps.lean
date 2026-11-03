@@ -14,6 +14,8 @@ the v2 modules' limits (see `Seedelf.Steps`).
 - `mixAccepts` on the KAT's own proofs must be `true`: the spec computes the challenge as
   Lovejoin's prover did. With input 1's first `z` changed, the spec is `false` and the
   script errors.
+- `MixFirst`'s first counterexample, every field of both proofs 32 zero bytes, must error
+  with the spec `false`: it passed only by the solver's choice of the opaque functions.
 - The Owner lines are `Lovejoin.Steps`' on v2: a real proof, made with the builtins' own
   implementations and bound to the same 9 ₳ payout, then the script and the spec on it,
   on a payout a lovelace more, and with z changed. -/
@@ -44,6 +46,8 @@ def zOne : ByteString := Seedelf.V1.ofHex "0000000000000000000000000000000000000
 
 #eval s!"v2 mixAccepts, the KAT:                  {mixAccepts katT011 katT111 katC11 katZ11 katT012 katT112 katC12 katZ12 katT021 katT121 katC21 katZ21 katT022 katT122 katC22 katZ22}"
 #eval s!"v2 mix_logic, Mix, z11 changed:          {stepsUsed mixLogicV2 (mixCtx (proofsRedeemer katT011 katT111 katC11 zOne katT012 katT112 katC12 katZ12 katT021 katT121 katC21 katZ21 katT022 katT122 katC22 katZ22)) 60000}, spec {mixAccepts katT011 katT111 katC11 zOne katT012 katT112 katC12 katZ12 katT021 katT121 katC21 katZ21 katT022 katT122 katC22 katZ22}"
+
+#eval s!"v2 mix_logic, Mix, every field zero:     {stepsUsed mixLogicV2 (mixCtx (proofsRedeemer zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32)) 60000}, spec {mixAccepts zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32 zero32}"
 
 /-- A real Owner proof for the box `(g1, x·g1)` on v2: x = 0x5eed0e1f, nonce 0x1234567,
 bound to `payout0`. Returns `(b, t, z)`. b and t are `Lovejoin.Steps`' (they don't depend

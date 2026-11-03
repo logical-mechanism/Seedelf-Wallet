@@ -18,14 +18,18 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 ### Next session, in order
 
-1. **The owner builds the Mix iff's three parts** (dev box), the first alone as a probe: `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh Lovejoin.V2.MixFirst`. If it's `ok`, the other two: `LIMIT=40m ./check.sh Lovejoin.V2.MixSecond Lovejoin.V2.MixPasses`.
+1. **The owner builds the Mix iff's parts** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh Lovejoin.V2.Steps Lovejoin.V2.MixFirst Lovejoin.V2.MixSecond Lovejoin.V2.MixPasses`.
+   - `V2/Steps`: `every field zero` must `error`, spec `false`, and the KAT lines stay as in the third build (`mixAccepts` still `true` with `zero32` a literal).
+   - `MixFirst` and `MixSecond` have three theorems each: the challenge, then each branch. `MixPasses` has one.
    - Each runs `blaster (timeout: 1200) (verbose: 1)`, so its log has four timed phases: `Optimization`, `Translation`, `Submitting Smt Query` and `Solve`.
    - ✅ Valid: done. Write the times here, and take `(verbose: 1)` out.
-   - `FAILED` with "unsolved goals": Z3 ran out of its 20 minutes (Undetermined; Blaster leaves the goal open, so it can't pass). Split finer by the check that fails: the xor of the `c`s, the challenge, each branch.
-   - `TIMEOUT` with no phase lines: Lean's side (`Optimization`) took the 40 minutes. Then fewer symbolic fields per theorem, not more parts.
-   - `mixAccepts_halves` (in `MixPasses`) is a plain Lean proof (`cases mixContext <;> rfl`). If it fails to elaborate, the blaster theorem beside it is still reported.
+   - ❌ Falsified: the spec and the script differ, at the theorem's check. Read the script's source for that check, and find a term the spec makes that the script doesn't: a function the solver can't reduce, or a builtin called another way. Then run the counterexample in `V2/Steps` (the zero line's way): it must error.
+   - `FAILED` with "unsolved goals" and no ❌: Z3 ran out of its 20 minutes (Undetermined; Blaster leaves the goal open, so it can't pass).
+   - `firstAccepts_parts`, `secondAccepts_parts` and `mixAccepts_halves` are plain Lean proofs (`unfold`, `cases`, `rfl`). If one fails to elaborate, the blaster theorems beside it are still reported.
 2. **Then `./check.sh`:** the Seedelf baseline under the xor alias. Its theorems haven't run; `Seedelf.Steps` has (step 8's third build), every line as before.
 3. **Then what's left before the switch:** N > 2 for the Mix (n = 3 at least, the wallet's default width), and a v2 launch on chain; then every v2 theorem re-run on its parameters (the template ones already hold for it).
+
+**`MixFirst`'s first build (2026-11-03):** ❌ Falsified in 0.6 s (Optimization 1.55 s), every field 32 zero bytes. With the real builtins that fails, since a 32-byte string isn't a G1 point (`V2/Steps` now runs it): the solver passed it by its choice of the opaque functions. The likely cause: the spec's `zero32` was `ofHex "00…"`, a recursive parser, where the script has a literal constant, so the xor folds started from different terms. Every other `ofHex` term is the scenario's, on both sides. `zero32` is a literal now, and each half is three theorems, so a second gap would name its check. The 85 ✅ stand: a term the solver can't reduce only gives it more freedom, which can make a false Falsified, never a false Valid.
 
 **Step 8's third build (2026-11-03):** 18 `ok`, 1 `TIMEOUT`, every `ok` module in seconds, at most 523 MB.
 - `V2/Steps`: the KAT halts after 11497 steps, `mixAccepts` is `true` on it, and with z11 changed the script errors and the spec says `false`. v2's Owner: valid `halt after 3195`, spec `true`; the other payout and z changed `error`, spec `false`.

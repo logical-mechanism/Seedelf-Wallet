@@ -21,7 +21,6 @@ open PlutusCore.Crypto.BLS12_381.G1
 open PlutusCore.Crypto.Hash
 open PlutusCore.UPLC.BuiltinFunctions.Bitwise (byteStringToIntegerOpaque xorByteStringOpaque)
 open Lovejoin.Classic (q serialised)
-open Seedelf.V1 (ofHex)
 
 /-- The ADA pool's box value as Data: `assets.from_lovelace(10 ₳)`. -/
 def boxValueData : Data := .Map [(.B "", .Map [(.B "", .I 10000000)])]
@@ -50,7 +49,10 @@ def challenge (a b t01 t11 t02 t12 ctx : ByteString) : ByteString :=
     withBranches t01) t11) t02) t12
   blake2b_256 (appendByteString withCommitments ctx)
 
-def zero32 : ByteString := ofHex "0000000000000000000000000000000000000000000000000000000000000000"
+/-- 32 zero bytes, written out as the script's constant is. Through `ofHex`, a recursive
+parser, the spec's xor fold needn't start from the same term as the script's, and
+`MixFirst`'s first build came back Falsified with every field zero. -/
+def zero32 : ByteString := ⟨"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"⟩
 
 /-- xor32, as the script runs it: both operands 32 bytes, then the builtin with `False`. -/
 def xor32 (left right : ByteString) : Option ByteString :=
