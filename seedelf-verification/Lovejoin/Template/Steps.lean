@@ -3,9 +3,9 @@ import Lovejoin.Steps
 
 /-! How many steps Blaster's CEK machine takes on concrete runs of mix_box's template, to
 size the template modules' limits (see `Seedelf.Steps`). At the classic L, each line must
-end as `Lovejoin.Steps`' mix_box line does, the template taking a step or two more for
-its parameter. At v2's test launch L (`6666…`), a well-formed box moves with that L's
-withdrawal and not with the classic one's.
+end as `Lovejoin.Steps`' mix_box line does, step for step: the deployed script is this
+template applied to L. At v2's test launch L (`6666…`), a well-formed box moves with
+that L's withdrawal and not with the classic one's.
 
 one_shot_mint's template at the mainnet 5 ₳ pool's own parameters (its seed d4c72bc2…#0,
 reference_holder) on that pool's launch, its datum as it sits on chain: it must halt.

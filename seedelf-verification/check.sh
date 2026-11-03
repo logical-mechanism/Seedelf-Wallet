@@ -26,7 +26,8 @@ mods=("$@")
 # v2: the token-pool templates with xor32's length checks (chunk 42), after ./extract-lovejoin-v2.sh.
 [ "${mods[0]}" = lovejoin-v2 ] && mods=(Lovejoin.V2.Scripts Lovejoin.V2.Mix Lovejoin.V2.Logic
   Lovejoin.V2.Steps Lovejoin.V2.MixChallenges Lovejoin.V2.Owner Lovejoin.V2.MixOutputs Lovejoin.V2.MixDatums
-  Lovejoin.V2.MixSpec Lovejoin.V2.MixProofs Lovejoin.Template.Scripts Lovejoin.Template.Steps
+  Lovejoin.V2.MixSpec Lovejoin.V2.MixSplit Lovejoin.V2.MixFirst Lovejoin.V2.MixSecond Lovejoin.V2.MixPasses
+  Lovejoin.Template.Scripts Lovejoin.Template.Steps
   Lovejoin.Template.MixBoxPurpose Lovejoin.Template.MixBoxGate Lovejoin.Template.MixBoxNoLock
   Lovejoin.Template.Launch Lovejoin.Template.OneShotMint Lovejoin.Template.Fee Lovejoin.Template.FeeContract)
 # The same ExceptParams file in its own package, against Lean-blaster main.

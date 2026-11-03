@@ -8,7 +8,9 @@ import Lovejoin.V2.MixChallenges
 import Lovejoin.V2.Owner
 import Lovejoin.V2.MixOutputs
 import Lovejoin.V2.MixDatums
-import Lovejoin.V2.MixProofs
+import Lovejoin.V2.MixFirst
+import Lovejoin.V2.MixSecond
+import Lovejoin.V2.MixPasses
 import Lovejoin.Template.MixBoxPurpose
 import Lovejoin.Template.MixBoxGate
 import Lovejoin.Template.MixBoxNoLock

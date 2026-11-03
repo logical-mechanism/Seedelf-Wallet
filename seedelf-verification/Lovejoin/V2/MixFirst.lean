@@ -9,13 +9,13 @@ namespace Lovejoin.V2
 open PlutusCore.ByteString (ByteString)
 open PlutusCore.UPLC.Utils
 
-#prep_uplc appliedMixFirst mixLogicV2 splitArgs 30000
+#prep_uplc appliedMixFirst mixLogicV2 splitArgs 15000
 
 /-- A Mix whose first box's proof doesn't verify fails. -/
 theorem mix_needs_the_first_proof :
     ∀ (t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22 : ByteString),
       firstAccepts t011 t111 c11 z11 t012 t112 c12 z12 = false →
         isUnsuccessful (appliedMixFirst.prop t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22) := by
-  blaster
+  blaster (timeout: 1200) (verbose: 1)
 
 end Lovejoin.V2

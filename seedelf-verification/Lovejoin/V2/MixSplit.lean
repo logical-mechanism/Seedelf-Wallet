@@ -1,10 +1,23 @@
 import Lovejoin.V2.MixSpec
 
-/-! v2's Mix iff (`MixProofs`) in three parts, for the solver: a Mix fails if box in 1's
+/-! v2's Mix, n = 2: the KAT's transaction succeeds iff each box in's sigma-OR proof
+verifies against the boxes out (`mixAccepts`, line for line with `verify_pre`), with
+every field of both proofs symbolic: 4 branches of `(t0, t1, c, z)`. So a Mix moves
+boxes only with a proof for each, bound to the outputs it pays, and nothing else gets it
+through.
+
+As one iff it ran past 30 minutes, so it's in three parts: a Mix fails if box in 1's
 proof doesn't verify (`MixFirst`), and if box in 2's doesn't (`MixSecond`). With both
 verifying, it succeeds (`MixPasses`). Each part keeps every field of both proofs
 symbolic. `mixAccepts` is the two halves' `&&` (`MixPasses`' `mixAccepts_halves`), so
-the three together are `MixProofs`' iff, failure stated as `isUnsuccessful`. -/
+the three together are the iff, failure stated as `isUnsuccessful`.
+
+With `MixOutputs` and `MixDatums` (what a Mix must pay) and `MixChallenges` (the fix),
+this is step 5's (b) on v2. The crypto is opaque: the theorems say the script checks
+exactly these equations, not that they're hard to fake. Each part's step limit sits
+above the KAT's run in `V2.Steps` (11497), where `mixAccepts` is `true` on the KAT's own
+proofs. Each runs `blaster (timeout: 1200) (verbose: 1)`: a solver past 20 minutes
+leaves the goal unsolved, so the module fails, and the log times each phase. -/
 
 namespace Lovejoin.V2
 open CardanoLedgerApi.IsData.Class (toTerm)
