@@ -58,12 +58,15 @@ def inputs : List TxInInfo :=
     box (ofHex "99cdf3807146e68e041314ca93e1fee0991224ec2a74beb2866816fd0826ce7b6263ee31e953a86d1b72cc2215a57793")
         (ofHex "8366fea2d3d7cd341ee789fa10f803e96c24ed7106e7d1fff3109d9f86fd897a3fb3352d1fc7328f3b75c7549258b89b")⟩]
 
+/-- The points of the KAT's two boxes out: `(outA1, outB1)`, then `(outA2, outB2)`. -/
+def outA1 : ByteString := ofHex "a2d25c15e557379e810ec2631ee5aafbd3b66debc2d175a9d2cc20c52730d4ffe06c063403f6549f4c12f9e17c6e5e6e"
+def outB1 : ByteString := ofHex "868eb931121f4a6505181f28259db1208367eda315ec89525f285122c118aa62a65b6c259f497b1e20534ee3f26b976d"
+def outA2 : ByteString := ofHex "85b512992a9fa3d1e4be92ccd12c5525abe55079cfc70a7d1aaf6db54b475402fbb72dd4b6b2edbbc84d9112f6110a52"
+def outB2 : ByteString := ofHex "8cf8c209b63db57b5662836168336dc2c78097a98ee99c37c0374b43308e237e8061c7e6f33a469c32d57ed78a26bbe9"
+
 /-- The KAT's two boxes out, the first holding `first` lovelace (10 ₳ in the KAT). -/
 def boxesOut (first : Integer := 10000000) : List TxOut :=
-  [box (ofHex "a2d25c15e557379e810ec2631ee5aafbd3b66debc2d175a9d2cc20c52730d4ffe06c063403f6549f4c12f9e17c6e5e6e")
-       (ofHex "868eb931121f4a6505181f28259db1208367eda315ec89525f285122c118aa62a65b6c259f497b1e20534ee3f26b976d") first,
-   box (ofHex "85b512992a9fa3d1e4be92ccd12c5525abe55079cfc70a7d1aaf6db54b475402fbb72dd4b6b2edbbc84d9112f6110a52")
-       (ofHex "8cf8c209b63db57b5662836168336dc2c78097a98ee99c37c0374b43308e237e8061c7e6f33a469c32d57ed78a26bbe9")]
+  [box outA1 outB1 first, box outA2 outB2]
 
 /-- The KAT's change after the boxes: 5 ₳ to a key. -/
 def change : TxOut :=
@@ -109,7 +112,18 @@ def mixCtx (redeemer : Data) (outs : List TxOut := boxesOut ++ [change]) : Scrip
     txInfoWdrl            := [(.ScriptCredential mixLogicHash, 0)] }
   ⟨tx, redeemer, .RewardingScript (.ScriptCredential mixLogicHash)⟩
 
+/-- The KAT's redeemer: its two proofs, its own challenges. -/
+def katRedeemer : Data := mixRedeemer (katProofs katC11 katC12 katC21 katC22)
+
 /-- The KAT's Mix, its own redeemer. -/
-def katMix : ScriptContext := mixCtx (mixRedeemer (katProofs katC11 katC12 katC21 katC22))
+def katMix : ScriptContext := mixCtx katRedeemer
+
+/-- An output with each field given, its value `lovelace` alone. -/
+def boxOut (cred : Credential) (stake : Option StakingCredential) (lovelace : Integer)
+    (datum : OutputDatum) (ref : Option ByteString) : TxOut :=
+  ⟨⟨cred, stake⟩, [(Data.B "", Data.Map [(Data.B "", Data.I lovelace)])], datum, ref⟩
+
+/-- The KAT's Mix with `o1` and `o2` for its two boxes out; its change follows them. -/
+def outputsCtx (o1 o2 : TxOut) : ScriptContext := mixCtx katRedeemer [o1, o2, change]
 
 end Lovejoin.V2

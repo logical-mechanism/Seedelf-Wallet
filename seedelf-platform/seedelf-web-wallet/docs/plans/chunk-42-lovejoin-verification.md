@@ -9,35 +9,30 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 | 1 · Setup, reference_holder and mix_box | ✅ 30 theorems (2026-11-03), every module in seconds, at most 525 MB |
 | 2 · mix_logic's easy parts | ✅ 6 theorems (2026-11-03) |
 | 3 · `serialise_data` behind an `opaque` alias | ✅ #27's commit on the fork (`0a25f13`, Rob van Leeuwen's), in `seedelf` at `7fc0aa3`, pinned on this branch; the Seedelf baseline unchanged |
-| 4 · mix_logic, Owner | 🚧 the deployed bytes accept a real Owner proof under Aiken and refuse it for a payout a lovelace off; `Owner` (1 theorem, the iff) and the Lean vector written, not built |
-| 5 · mix_logic, Mix | ⬜ |
+| 4 · mix_logic, Owner | ✅ `owner_withdraws_iff_proof` (2026-11-03): the Lean vector's z is Aiken's, and a real proof halts after 3099 steps |
+| 5 · mix_logic, Mix | ⬜ on v2 instead (step 8): the wallet moves to v2 alone, and the classic pool keeps only its Owner |
 | 6 · fee_contract and one_shot_mint | ⬜ |
-| 7 · The token-pool templates | ⬜ |
-| 8 · v2: the templates with xor32's fix | 🚧 the fix built and tested in `../lovejoin-v2` (5cc3631); `MixChallenges` (1 theorem) and the KAT's Mix in `V2/Steps` written, not built |
-| 9 · The move to v2 | ⬜ waits on step 4, step 7's Owner, step 8 and a v2 launch |
+| 7 · The token-pool templates | ⬜ on v2 instead (step 8); 8131b1d's only mainnet pool (5 ₳) is empty |
+| 8 · v2: the templates with xor32's fix | 🚧 `MixChallenges` ✅ (1 theorem, 2026-11-03); `Owner` (1), `MixOutputs` (4) and `MixDatums` (3) written, not built |
+| 9 · The wallet on v2 alone | ⬜ waits on step 8 and a v2 launch |
 
 ### Next session, in order
 
-0. **The PlutusCoreBlaster pin moved** to the local clone's `local/opaque-xor` (96a36cb, step 8), so the first build re-clones it from disk and rebuilds everything above it. Expect it to take longer than usual.
-1. **The owner builds step 4** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=30m ./check.sh lovejoin`.
-   - Steps' `owner vector` line must show z `42c969789cb2d8b9c68683f7c897e2961a92fd40bed7226b929f544a8c1b90ba`, as `concrete/lovejoin_owner.sh` computes it. If it doesn't, the two sides serialise the transaction differently: fix that before reading the theorem.
-   - Then four mix_logic Owner lines:
-     - valid: `halt after N`, spec `true`;
-     - other payout: `error`, spec `false`;
-     - z changed: `error`, spec `false`.
-   - N must be under 10000, Owner's limit.
-   - **Owner:** `owner_withdraws_iff_proof` Valid. If it's Falsified, run the counterexample through Aiken first (*When a property comes back Falsified*). If it's `KILLED`, split it: the box fixed well-formed, or the payout fixed.
-2. **The owner builds step 8:** `./extract-lovejoin-v2.sh && LIMIT=30m ./check.sh lovejoin-v2`.
-   - `V2/Steps`: the KAT's Mix `halt after N`, and its first box +1 lovelace `error`. A KAT `error` means the Lean context isn't the one Lovejoin's prover hashed: fix that before reading the theorem.
-   - `mix_refuses_a_challenge_not_32_bytes` Valid. N must be under 30000, its limit; past it, the theorem comes back Falsified (`isExhausted`), never vacuously Valid.
-   - Then `./check.sh`: the Seedelf baseline must be unchanged under the xor alias.
-3. **Then step 5, on v2 first:** the move needs v2's Mix shown sound before anyone's boxes go there.
+1. **The owner builds step 8's new modules** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=30m ./check.sh lovejoin-v2`.
+   - `V2/Steps`, Mix lines: the KAT `halt after 11497`; first box +1 lovelace `error`; the builder on the KAT `halt`, with about the KAT's count; no datum, first or second, `error`. If the builder errors, it doesn't make the KAT's outputs: fix that before reading `MixOutputs` or `MixDatums`.
+   - `V2/Steps`, Owner lines: the vector's b and t are `Lovejoin.Steps`' own (b `8c6b52ee…`, t `820ad0f2…`), z its own. Valid `halt after N`, spec `true`, N under 10000. The other payout and z changed `error`, spec `false`.
+   - Then `owner_withdraws_iff_proof` (v2), the four `MixOutputs` theorems and the three `MixDatums` theorems, all Valid. A Falsified one: Aiken first (*When a property comes back Falsified*). A `KILLED` one: split it, one field at a time.
+2. **Then `./check.sh`:** the Seedelf baseline under the xor alias, not yet run.
+3. **Then the Mix iff on v2** (step 5's (b)): a Mix succeeds iff the outputs are as `MixOutputs` and `MixDatums` say and every input's sigma-OR proof verifies. With n = 2 that's 2 × 2 DH-tuple checks over opaque builtins.
 
-**Step 4's first build (2026-11-03)** failed on a name. `toData` is a class method, `IsData.toData`, so `open CardanoLedgerApi.IsData.Class (toData)` can't name it. Lean reported only those three errors, so the rest of `Logic` elaborated. Steps and Owner failed only by importing it. Fixed in both files by opening `(IsData)`; not rebuilt. The other 36 theorems were still ✅.
+**Step 8's first build (2026-11-03):** four `ok`. The KAT's Mix halts after 11497 steps, and with its first box a lovelace over errors after 4802. `mix_refuses_a_challenge_not_32_bytes` is Valid in 3 s, peaking at 340 MB. The step 4 run in the same session: ten `ok`, 37 ✅.
+
+**Step 4's first build (2026-11-03)** failed on a name. `toData` is a class method, `IsData.toData`, so `open CardanoLedgerApi.IsData.Class (toData)` can't name it. Fixed by opening `(IsData)`. The second build was ✅.
 
 **Where everything is, for a new session:**
 - This branch, `lovejoin-verification`, is local only; see the memory file `lovejoin-verification-local-only.md`. The working copy is on it.
-- The chunk 41 forks are under `../blaster-forks/`. This branch pins PlutusCoreBlaster `seedelf` at `7fc0aa3`, with #27's alias; `verification` pins `c7d8741`.
+- The chunk 41 forks are under `../blaster-forks/`. This branch pins the PlutusCoreBlaster clone's `local/opaque-xor` (96a36cb: `seedelf` 7fc0aa3, with #27's alias, plus the xor alias) by local path; `verification` pins `c7d8741`.
+- v2's sources are in `../lovejoin-v2` (5cc3631), local only.
 - The open upstream PRs are Lean-blaster #455 and PlutusCoreBlaster #71, #72 and #73 (chunk 41).
 - Lovejoin's sources are in `../lovejoin`, for reading: `git show c1239fb:contracts/…` for the classic pool, and `8131b1d` for the templates.
 
@@ -103,7 +98,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
   - It says nothing about Lovejoin, so it can go on the public fork. #27 itself is the PR, so no new one.
 - **A spec that hashes the same serialisation** calls the same alias, as `scalarOf` does (README rule 7).
 
-## Step 4 · mix_logic, Owner 🚧
+## Step 4 · mix_logic, Owner ✅
 
 - **Done:** `concrete/lovejoin_owner.sh` builds an Owner proof outside Lean, with Aiken's evaluator for the curve points and `serialise_data` and Python for the hashes. The box is `(g1, x·g1)` with x = 0x5eed0e1f, the nonce is 0x1234567, and the proof is bound to a 9 ₳ payout. The deployed mix_logic returns unit for it, and crashes for the same proof with the payout a lovelace more, or with z changed.
 - `Lovejoin/Logic.lean` holds the scenario: the reference input as it sits on chain (decoded from seedelf-core's `LOVEJOIN_MAINNET_REFERENCE`), the box, one payout. It also holds the spec, `ownerAccepts`, line for line with `validate_owner` and `schnorr.verify`: the aliases, `Int.fmod` for `scalar.from_int`, and the G1 operations in the script's order.
@@ -143,22 +138,27 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 - **PlutusCoreBlaster can't read xor over a symbolic bytestring:** `byteStringOp` slices with `String.dropRight` and maps through `UInt8`. The fix is an opaque alias at the builtin, as chunk 41's `byteStringToInteger` was: `local/opaque-xor` 96a36cb, from `seedelf` 7fc0aa3, push remote `no-push-local-only`.
   - It stays local, since this finding motivated it. It goes to the public fork, and the pin back to GitHub, when the owner publishes.
 - **The scenario** (`Lovejoin/V2/Mix.lean`) is Lovejoin's KAT `mix_real_proofs_ada_pool_n2_passes` as a full ScriptContext: its test launch (NFT policy `abab…`), its two boxes in and out, and its real proofs. `extract-lovejoin-v2.sh` applies mix_logic to that launch (60294352…).
-- **The property:** `mix_refuses_a_challenge_not_32_bytes`. With the KAT's four `c`s symbolic, a `c` of any other length, in any branch, fails the Mix. The rest of the proof stays the KAT's (rule 4).
-- **Not covered yet:** v2's Mix iff and "no value leaves the pool" (step 5 on v2), v2's Owner (step 4's theorem on v2), N > 2, and a real launch's parameters, re-run once one exists.
+- **Proved:** `mix_refuses_a_challenge_not_32_bytes` ✅. With the KAT's four `c`s symbolic, a `c` of any other length, in any branch, fails the Mix. The rest of the proof stays the KAT's (rule 4).
+- **Written, not built:**
+  - `V2/Owner`: step 4's iff on v2. validate_owner and its libraries are the classic pool's line for line, so the spec is `Lovejoin.Classic`'s, with v2's mix_box hash.
+  - `V2/MixOutputs`: no value leaves the pool. A box out anywhere but mix_box, with a stake credential or a reference script, with other lovelace than the box value, or with a token, fails the Mix (4 theorems).
+  - `V2/MixDatums`: a box out's datum must be inline and well-formed, so every box paid out can be withdrawn (3 theorems).
+- **Not covered yet:** the Mix iff, N > 2, the gate on v2's mix_box, and a real launch's parameters, re-run once one exists.
 
-## Step 9 · The move to v2 ⬜
+## Step 9 · The wallet on v2 alone ⬜
 
-The owner, 2026-11-03: "when we can prove what is safe we then create a safe transfer case here to the new lovejoin contracts".
+The owner, 2026-11-03: "if we did fix this and its formally verified then we could update lovejoin to only use this new contract since I think we almost already cleared out the old pools".
 
-- **Which pools:** the classic pool (c1239fb) and every pool on 8131b1d's templates (the 5 ₳ pool, and any the wallet launched). All of them run the unfixed mix_logic.
-- **The way out is the Owner branch:** Schnorr, which never reaches xor32. Step 4 proves it on the classic pool's bytes, and step 7's Owner on 8131b1d's. The move is built only on those proofs.
-- **Before it:** a v2 launch on chain (the owner's), then seedelf-core gets v2 templates beside 8131b1d's (`templates.rs`'s own rule), and so does the data layer's copy. The wallet then launches only on v2, and stops depositing into or mixing in the old pools.
-- **For the owner to decide, when it's built:**
-  - **The fee.** An Owner withdrawal pays its fee from the box, so the box can't land in v2 as exactly 10 ₳, and only exact boxes mix. One option is a fee input from elsewhere, which links a payer to the box. The other is k old boxes into k−1 new ones, with the rest going to a fresh Seedelf register.
-  - **Privacy:** one transaction a box keeps boxes apart, while batching links them. The most private option is the default.
-  - **Disclosure:** a public release saying "move your boxes" tells everyone why. When, and in what order, is the owner's call.
+- **The old pools are nearly empty** (Koios, 2026-11-03): the classic pool's mix_box holds 3 boxes (30 ₳), and the 5 ₳ pool's (8131b1d, mainnet's only token pool) holds none. So there's no migration feature to build.
+- **The old pools keep their Owner withdrawal alone,** so any box still in them comes home. The classic pool's is proved (step 4). The wallet stops depositing into or mixing in them.
+- **Before the switch, on v2:** the Mix iff (step 5's (b)), the Mix's outputs (`MixOutputs`, `MixDatums`) and the Owner iff, all Valid. mix_box's source is the classic pool's, unchanged (step 1's gate), but its bytes take v2's L, so the gate is re-run on them.
+- **Then a v2 launch on chain** (the owner's). Every v2 theorem is re-run on its parameters, not the test launch's.
+- **Then the wallet:** seedelf-core gets v2 templates beside 8131b1d's (`templates.rs`'s own rule), and so does the data layer's copy, with the shared vectors re-recorded. Launches use v2 only, and pools on 8131b1d's templates are shown only for their withdrawals.
+- **Disclosure is still the owner's call:** what the release and Lovejoin's own repo say, and when.
 
 ## The owner's decisions
 
 - **2026-11-03, the start:** "is it possible to do it for lovejoin … maybe a local only branch until we prove it good?"
 - **2026-11-03, the fix:** xor32 checks both lengths (`expect` on `left` and `right`), "then continue with the formal verification on that new code base", then the move (step 9).
+- **2026-11-03, the old pools:** once the fix is verified, Lovejoin in the wallet uses only the new contracts; the old pools are almost cleared out (step 9).
+- **2026-11-03, the priority:** "number one goal right now is to make lovejoin formally verified and secure!"
