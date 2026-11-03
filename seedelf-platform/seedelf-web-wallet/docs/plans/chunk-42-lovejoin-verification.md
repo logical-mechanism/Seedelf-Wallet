@@ -18,7 +18,8 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 ### Next session, in order
 
-1. **The owner builds the Mix iff's parts** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh Lovejoin.V2.Steps Lovejoin.V2.MixFirst Lovejoin.V2.MixSecond Lovejoin.V2.MixPasses`.
+1. **The owner runs the branch diagnostic** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=15m ./check.sh Lovejoin.V2.MixBranch`. Six theorems, about a second each; the Falsified ones name the gap (step 8's notes, `MixFirst`'s second build). Then fix `branchHolds`, delete `MixBranch.lean`, and run the parts below.
+   The parts, once it's closed: `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh Lovejoin.V2.Steps Lovejoin.V2.MixFirst Lovejoin.V2.MixSecond Lovejoin.V2.MixPasses`.
    - `V2/Steps`: `every field zero` must `error`, spec `false`, and the KAT lines stay as in the third build (`mixAccepts` still `true` with `zero32` a literal).
    - `MixFirst` and `MixSecond` have three theorems each: the challenge, then each branch. `MixPasses` has one.
    - Each runs `blaster (timeout: 1200) (verbose: 1)`, so its log has four timed phases: `Optimization`, `Translation`, `Submitting Smt Query` and `Solve`.
@@ -28,6 +29,8 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
    - `firstAccepts_parts`, `secondAccepts_parts` and `mixAccepts_halves` are plain Lean proofs (`unfold`, `cases`, `rfl`). If one fails to elaborate, the blaster theorems beside it are still reported.
 2. **Then `./check.sh`:** the Seedelf baseline under the xor alias. Its theorems haven't run; `Seedelf.Steps` has (step 8's third build), every line as before.
 3. **Then what's left before the switch:** N > 2 for the Mix (n = 3 at least, the wallet's default width), and a v2 launch on chain; then every v2 theorem re-run on its parameters (the template ones already hold for it).
+
+**`MixFirst`'s second build (2026-11-03):** `mix_needs_the_first_challenge` ✅ in 0.02 s, so the literal `zero32` closed that gap. `V2/Steps`' all-zero run errors after 7869 steps, spec `false`. Both branch theorems ❌ Falsified in under a second, so `branchHolds` and the script's branch still differ somewhere. Each equation has the Owner's shape (Valid on v2), and the stdlib's `from_int` (`n % field_prime`), `scale`, `add` and `equal` match the spec. What the Owner never had is a constant point: there `a` and `b` are symbolic, while every Mix point is the KAT's. `V2/MixBranch` (a diagnostic, run by name) takes box in 1's first branch condition by condition: a constant point, a symbolic one, `z`'s checks, each equation. `MixSecond` didn't finish in its first minutes, likely its own copy of the gap; it waits on this.
 
 **`MixFirst`'s first build (2026-11-03):** ❌ Falsified in 0.6 s (Optimization 1.55 s), every field 32 zero bytes. With the real builtins that fails, since a 32-byte string isn't a G1 point (`V2/Steps` now runs it): the solver passed it by its choice of the opaque functions. The likely cause: the spec's `zero32` was `ofHex "00…"`, a recursive parser, where the script has a literal constant, so the xor folds started from different terms. Every other `ofHex` term is the scenario's, on both sides. `zero32` is a literal now, and each half is three theorems, so a second gap would name its check. The 85 ✅ stand: a term the solver can't reduce only gives it more freedom, which can make a false Falsified, never a false Valid.
 
