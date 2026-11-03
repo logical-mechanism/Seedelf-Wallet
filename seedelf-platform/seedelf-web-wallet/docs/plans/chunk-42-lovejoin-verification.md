@@ -7,25 +7,26 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 | Step | Status |
 |---|---|
 | 1 · Setup, reference_holder and mix_box | ✅ 30 theorems (2026-11-03), every module in seconds, at most 525 MB |
-| 2 · mix_logic's easy parts | 🚧 `MixLogicPurpose` written (6 theorems), not built |
-| 3 · `serialise_data` behind an `opaque` alias | 🚧 #27's commit on the fork (`0a25f13`, Rob van Leeuwen's), in `seedelf` at `7fc0aa3`, pinned on this branch; not built |
-| 4 · mix_logic, Owner | ⬜ |
+| 2 · mix_logic's easy parts | ✅ 6 theorems (2026-11-03) |
+| 3 · `serialise_data` behind an `opaque` alias | ✅ #27's commit on the fork (`0a25f13`, Rob van Leeuwen's), in `seedelf` at `7fc0aa3`, pinned on this branch; the Seedelf baseline unchanged |
+| 4 · mix_logic, Owner | 🚧 the deployed bytes accept a real Owner proof under Aiken and refuse it for a payout a lovelace off; `Owner` (1 theorem, the iff) and the Lean vector written, not built |
 | 5 · mix_logic, Mix | ⬜ |
 | 6 · fee_contract and one_shot_mint | ⬜ |
 | 7 · The token-pool templates | ⬜ |
 
 ### Next session, in order
 
-1. **The owner builds steps 2 and 3** (dev box). It stops before building if the pin didn't take:
-   ```bash
-   # dev box (this machine)
-   cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && lake update PlutusCore && grep -q 7fc0aa3e17cee7b9a0c908dec1add11249f36b7d lake-manifest.json && echo "== seedelf 7fc0aa3 pinned" && CAP=16G LIMIT=30m ./check.sh lovejoin && ./check.sh
-   ```
-   - Expected from `lovejoin`: eight `ok`. MixLogicPurpose adds 6 ✅. Steps adds three mix_logic lines: minting errors, the registration halts, the unregistration errors.
-   - Expected from the baseline: the same nine `ok` as on `verification`, and PolicyBurn and PolicyMint failing on `BitVec` alone. The new alias touches no Seedelf script, which never calls `serialise_data`.
-2. **Then step 4:**
-   - First a real Owner withdrawal through Aiken. seedelf-core builds them (a session's return), and its proof code is in `seedelf-crypto`'s `lovejoin.rs`.
-   - Then `Steps`, then the property.
+1. **The owner builds step 4** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=30m ./check.sh lovejoin`.
+   - Steps' `owner vector` line must show z `42c969789cb2d8b9c68683f7c897e2961a92fd40bed7226b929f544a8c1b90ba`, as `concrete/lovejoin_owner.sh` computes it. If it doesn't, the two sides serialise the transaction differently: fix that before reading the theorem.
+   - Then four mix_logic Owner lines:
+     - valid: `halt after N`, spec `true`;
+     - other payout: `error`, spec `false`;
+     - z changed: `error`, spec `false`.
+   - N must be under 10000, Owner's limit.
+   - **Owner:** `owner_withdraws_iff_proof` Valid. If it's Falsified, run the counterexample through Aiken first (*When a property comes back Falsified*). If it's `KILLED`, split it: the box fixed well-formed, or the payout fixed.
+2. **Then step 5.**
+
+**Steps 2 and 3's run (2026-11-03):** eight `ok`, 36 ✅. mix_logic errors after 216 steps on minting, and on publish halts after 290 for its registration and errors after 290 for an unregistration. The Seedelf baseline was unchanged with #27's alias pinned.
 
 **Step 1's run (2026-11-03):** seven `ok`, 30 ✅.
 - reference_holder errors after 178 steps on a spend, 130 on minting.
@@ -73,12 +74,12 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
     - **MixBoxNoLock** (19): every other datum shape moves with no withdrawal, as `Seedelf.WalletNoLock`'s shapes cover. That includes a box stored by hash whatever its witness says (F-2), and holds for any redeemer.
 - **Not covered:** a transaction with more inputs than the box, or more withdrawals than one. Both are lists the script walks (`list.find`, `pairs.has_key`). One box and one withdrawal, symbolic everywhere else, is the scenario.
 
-## Step 2 · mix_logic's easy parts ⬜
+## Step 2 · mix_logic's easy parts ✅
 
 - Its purposes: spend, mint, vote and propose fail. Publish succeeds only for a `RegisterCredential` certificate, for any credential, and fails for every other certificate.
 - The scenario reads the reference input: `read_reference_datum` looks for the pool's NFT among the reference inputs. Fix one reference input holding it, with the deployed `ReferenceDatum`: denomination 10 ₳, 1 ₳ maximum fee per mix, and the three hashes.
 
-## Step 3 · `serialise_data` behind an `opaque` alias 🚧
+## Step 3 · `serialise_data` behind an `opaque` alias ✅
 
 - **Done:** #27's commit, cherry-picked from SundaeSwap's fork as `0a25f13` (its author kept), on our fork's `feat/opaque-serialise-data` from `main` `1c23de8`. It's merged into `seedelf` as `7fc0aa3`, which this branch pins. `verification` still pins `c7d8741`.
 - **mix_logic hashes `serialise_data`** of the outputs and the input refs (Owner), and of the box value (Mix). PlutusCoreBlaster's encoder can't be translated (Lean-blaster #152, #153).
@@ -87,7 +88,11 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
   - It says nothing about Lovejoin, so it can go on the public fork. #27 itself is the PR, so no new one.
 - **A spec that hashes the same serialisation** calls the same alias, as `scalarOf` does (README rule 7).
 
-## Step 4 · mix_logic, Owner ⬜
+## Step 4 · mix_logic, Owner 🚧
+
+- **Done:** `concrete/lovejoin_owner.sh` builds an Owner proof outside Lean, with Aiken's evaluator for the curve points and `serialise_data` and Python for the hashes. The box is `(g1, x·g1)` with x = 0x5eed0e1f, the nonce is 0x1234567, and the proof is bound to a 9 ₳ payout. The deployed mix_logic returns unit for it, and crashes for the same proof with the payout a lovelace more, or with z changed.
+- `Lovejoin/Logic.lean` holds the scenario: the reference input as it sits on chain (decoded from seedelf-core's `LOVEJOIN_MAINNET_REFERENCE`), the box, one payout. It also holds the spec, `ownerAccepts`, line for line with `validate_owner` and `schnorr.verify`: the aliases, `Int.fmod` for `scalar.from_int`, and the G1 operations in the script's order.
+- `Lovejoin/Owner.lean`: `owner_withdraws_iff_proof`, with the box's bytes, the proof and the payout's key and amount symbolic.
 
 - **The property, with n = 1:** a withdrawal under `Owner` succeeds iff the box's Schnorr proof verifies against `ctx = blake2b_256(serialise(outputs) ‖ serialise(input refs) ‖ mix_script_hash)`. So an owner's proof is bound to the transaction's outputs and inputs, and can't be replayed to redirect them.
 - **Measure first:** a real Owner spend from Lovejoin's own vectors (`schnorr_kat.test.ak`, `mix_kat.test.ak`), through Aiken and then `Steps`.
