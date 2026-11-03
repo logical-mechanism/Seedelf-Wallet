@@ -9,25 +9,26 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 | 1 · Setup, reference_holder and mix_box | ✅ 30 theorems (2026-11-03), every module in seconds, at most 525 MB |
 | 2 · mix_logic's easy parts | ✅ 6 theorems (2026-11-03) |
 | 3 · `serialise_data` behind an `opaque` alias | ✅ #27's commit on the fork (`0a25f13`, Rob van Leeuwen's), in `seedelf` at `7fc0aa3`, pinned on this branch; the Seedelf baseline unchanged |
-| 4 · mix_logic, Owner | ✅ `owner_withdraws_iff_proof` (2026-11-03): the Lean vector's z is Aiken's, and a real proof halts after 3099 steps |
+| 4 · mix_logic, Owner | ✅ `owner_withdraws_iff_proof` (2026-11-03): the Lean vector's z is Aiken's, and a real proof halts after 3099 steps. Withdrawals of 1 to 3 boxes, every field symbolic (`OwnClassic*`, 9, on 68c5399): 1.8.0's returns |
 | 5 · mix_logic, Mix | ⬜ on v2 instead (step 8): the wallet moves to v2 alone, and the classic pool keeps only its Owner |
 | 6 · fee_contract and one_shot_mint | ✅ on their templates, for every pool (step 8): `OneShotMint` (5) and `FeeContract` (5) (2026-11-03) |
-| 7 · The token-pool templates | ⬜ on v2 instead (step 8); 8131b1d's only mainnet pool (5 ₳) is empty |
-| 8 · v2: the templates with xor32's fix | ✅ on the test launch (2026-11-03, PlutusCoreBlaster 68c5399): `MixChallenges` (1), `MixOutputs` (4), `MixDatums` (3), `Owner` (1), the Mix iff at n = 2 (7) and n = 3 (13), and the templates for every pool (mix_box 29, one_shot_mint 5, fee_contract 5): 68. mix_logic's re-run on a real v2 launch's parameters waits on the launch |
+| 7 · The token-pool templates | ✅ on v2 instead (step 8): the Mix for any token pool at n = 2 to 4. 8131b1d's only mainnet pool (5 ₳) is empty |
+| 8 · v2: the templates with xor32's fix | ✅ (2026-11-03, PlutusCoreBlaster 68c5399), 164 theorems. On the test launch: `MixChallenges` (1), `MixOutputs` (4), `MixDatums` (3), `Owner` (1), the Mix iff at n = 2 (7) and n = 3 (13), and the templates for every pool (mix_box 29, one_shot_mint 5, fee_contract 5): 68. On mix_logic's template, so for every pool: the Mix for any ADA or token pool at n = 2 to 4 (82), and Owner withdrawals of 1 to 4 boxes (`OwnAny*`, 14) |
 | 9 · The wallet on v2 alone | ⬜ waits on step 8 and a v2 launch |
 
 ### Next session, in order
 
-1. **The owner builds the Owner withdrawals of several boxes** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh lovejoin-owner`.
-   - The wallet withdraws one box a transaction (seedelf-wasm's `withdraw_in`), but a withdrawal's safety is about what anyone can build. `gen-lovejoin-owner.py` writes n boxes with every point and proof symbolic, a payer's key input beside them, and two outputs (a Seedelf register at a wallet contract, then change), every field symbolic.
-   - v2 through mix_logic's template (`OwnAny1*` to `OwnAny4*`, any pool), and the deployed classic pool (`OwnClassic1*` to `OwnClassic3*`, 1.8.0's returns). That's 23 theorems: for each box, a well-formed box whose proof doesn't verify fails the withdrawal; then the converse.
-   - Each `…Steps`: honest proofs (box i `(g1, x·g1)`, x = 0x5eed0e1f + i) must `halt`, spec `true`. z1 changed, the change a lovelace more, or two boxes' proofs swapped must `error`, spec `false`.
-2. **Then the `Steps` lines of the general Mix** (`lovejoin-v2-pools`, `ok` on 68c5399, 2026-11-03): `./check.sh Lovejoin.V2.MixAnySteps Lovejoin.V2.MixAny3Steps Lovejoin.V2.MixAny4Steps Lovejoin.V2.MixTok2Steps Lovejoin.V2.MixTok3Steps Lovejoin.V2.MixTok4Steps 2>&1 | grep "V2/Mix.*Steps.lean"`. Each KAT must `halt` with spec `true`: that's what shows the theorems' scenario has a passing run.
-3. **The owner's calls before the PR:** the side finding below (`precompute_statements`' cost, the one contract change still open) and disclosure (the PR).
-4. **Then the v2 launch** (the new 5 ₳ pool): the general theorems already hold for it.
-5. **Then step 9**, the wallet on v2 alone (1.8.0).
+1. **The owner's calls before the PR:** the side finding below (`precompute_statements`' cost, the one contract change still open) and disclosure (the PR). v2's verification for the PR is otherwise done: 210 ✅ on 68c5399.
+2. **Then the v2 launch** (the new 5 ₳ pool): the template theorems already hold for it.
+3. **Then step 9**, the wallet on v2 alone (1.8.0).
 
-**v2's general Mix (2026-11-03, 68c5399):** `./check.sh lovejoin-v2-pools` 42 `ok`: 82 theorems on mix_logic's template, ADA pools at n = 2, 3 and 4 and token pools at n = 2, 3 and 4. Every pool parameter, box point and proof field is symbolic. The slowest module was 13 s at 740 MB (token pools at n = 4). Its `Steps` lines are still to read (item 2).
+**v2's general Mix (2026-11-03, 68c5399):** `./check.sh lovejoin-v2-pools` 42 `ok`: 82 theorems on mix_logic's template, ADA pools at n = 2, 3 and 4 and token pools at n = 2, 3 and 4. Every pool parameter, box point and proof field is symbolic. The slowest module was 13 s at 740 MB (token pools at n = 4). Each family's `Steps`: the KAT halts (11497, 19204 and 29007 steps for ADA at n = 2 to 4; 11798, 19505 and 29308 for tokens) with the spec `true`. Its first box's or last box's z changed errors with the spec `false`, and so does n = 2's ADA KAT in a 5 ₳ pool.
+
+**Owner withdrawals of several boxes (2026-11-03, 68c5399):** `./check.sh lovejoin-owner` 35 `ok`, 23 theorems, the slowest module 9 s at 458 MB. The wallet withdraws one box a transaction (seedelf-wasm's `withdraw_in`), but a withdrawal's safety is about what anyone can build.
+- **The scenario** (`gen-lovejoin-owner.py`): n boxes with every point and proof symbolic, a payer's key input beside them, and two outputs, a Seedelf register at a wallet contract and then change, every field symbolic.
+- **Which code:** v2 through mix_logic's template (`OwnAny1*` to `OwnAny4*`, any pool), and the deployed classic pool (`OwnClassic1*` to `OwnClassic3*`, 1.8.0's returns).
+- **The theorems:** for each box, a well-formed box whose proof doesn't verify against the transaction fails the withdrawal (`…Boxes`), and with every proof verifying it succeeds (`…Passes`).
+- **`Steps`:** honest proofs (box i `(g1, x·g1)`, x = 0x5eed0e1f + i) halt with the spec `true` in all seven (v2: 3415, 4846, 6277 and 7708 steps for 1 to 4 boxes; classic: 3319, 4754 and 6189). z1 changed, the change a lovelace more, and two boxes' proofs swapped each error with the spec `false`, all at the same step within a family: each breaks box 1's proof, the change by moving the outputs it's bound to.
 
 **Everything on 68c5399 (2026-11-03):** `./check.sh lovejoin` 10 `ok`, `./check.sh lovejoin-v2` 29 `ok`, 105 ✅: the classic pool's 37 and v2's 68. Every `Steps` line as before. `V2/Mix3Steps`: the KAT halts after 19204 steps, `mixAccepts3` is `true`, and z11 or z33 changed errors (after 11486 and 18882 steps) with the spec `false`. The n = 3 theorems each solved in 0.02 s, at most 412 MB; `(verbose: 1)` is out.
 
@@ -140,17 +141,17 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 - **Expect cost.** That's n² DH-tuple checks over opaque builtins. If (b) is `KILLED`, split it by input, as chunk 40's stop rules say.
 - **Possible blocker:** `hash.ak`'s Fiat-Shamir header calls `from_int_big_endian` on n. With n fixed it may evaluate away. If it reaches `BitVec`, it needs an `IntegerToByteString` alias, which chunk 41 deferred.
 
-## Step 6 · fee_contract and one_shot_mint ⬜
+## Step 6 · fee_contract and one_shot_mint ✅ (on their templates, step 8)
 
 - **fee_contract:** what `PayMixFee` and `Replenish` allow. Read it first.
 - **one_shot_mint:** the NFT mints once, only with the seed spent, and lands at reference_holder with a well-formed `ReferenceDatum`. On mainnet the seed (`ba815aa5…#2`) is spent, so the policy can never mint again, a ledger fact beside the theorem.
 
-## Step 7 · The token-pool templates ⬜
+## Step 7 · The token-pool templates ✅ (on v2, step 8)
 
-- The same properties, over `8131b1d`'s scripts, applied to a launched pool's parameters.
-- First list what changed from `c1239fb`, and which theorems carry over.
+- **Done on v2 instead:** the Mix for any token pool at n = 2 to 4 (`V2/MixTok*`), through mix_logic's template. 8131b1d's only mainnet pool (5 ₳) is empty, and the wallet moves to v2 alone.
+- **The plan was:** the same properties over `8131b1d`'s scripts, applied to a launched pool's parameters, after listing what changed from `c1239fb` and which theorems carry over.
 
-## Step 8 · v2: the templates with xor32's fix 🚧
+## Step 8 · v2: the templates with xor32's fix ✅
 
 - **The fix is the owner's:** xor32 checks both operands are 32 bytes before `xor_bytearray(False, …)`, which truncates rather than fails. It's committed as 5cc3631 on 8131b1d, with the owner's eight boundary tests, in `../lovejoin-v2` (branch `local/xor32-length-check`).
   - That clone was made from `../lovejoin`, and its push URL is `no-push-local-only`.
@@ -172,7 +173,8 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
   - one_shot_mint (the seed, reference_holder and P symbolic): a mint needs the seed spent and exactly one token named `lovejoin`, at reference_holder with no stake part or reference script, under a sane `ReferenceDatum` (`OneShotMint`, 5). With the ledger's spend-once rule, a pool's NFT exists once. mix_logic's reference lookup relies on that.
   - fee_contract (P, the cap and the amounts symbolic): a shard loses exactly the fee, at most the cap, only for a Mix of three boxes or more, and replenished only grows (`FeeContract`, 5).
 - **Proved on 68c5399:** the Mix at n = 3 (`V2/Mix3*`): the KAT `mix_real_proofs_ada_pool_n3_passes`, generated from `mix_kat.test.ak` by a script and checked value for value (51 hex strings). The spec is n = 2's unrolled for three, so each box's four checks are four theorems, and `Mix3Passes` the converse.
-- **Not covered yet:** a real launch's parameters for v2's mix_logic, re-run once one exists; n = 4.
+- **Proved on 68c5399, on mix_logic's template:** the Mix for any ADA or token pool at n = 2 to 4 (`V2/MixAny*`, `V2/MixTok*`, 82, written by `gen-lovejoin-mix.py`), and Owner withdrawals of 1 to 4 boxes (`V2/OwnAny*`, 14, by `gen-lovejoin-owner.py`). With the pool's parameters symbolic, they hold for a real launch with no re-run.
+- **Not covered:** a Mix of more than 4 boxes (validate_mix takes up to 255, the wallet makes 3 or 4) and Owner withdrawals of more than 4 boxes (3 on the classic pool). Each is the same check repeated per box, but no theorem says so for every n.
 
 ## Step 9 · The wallet on v2 alone ⬜
 
@@ -201,3 +203,4 @@ The owner, 2026-11-03: "if we did fix this and its formally verified then we cou
     2. The same at n = 3.
     3. Owner withdrawals of several boxes, v2 and the classic pool (1.8.0's returns).
     4. N = 4 and token pools later, since the new pool is an ADA pool.
+  - **2026-11-03, tokens and N = 4 now:** "Just get it done now so we dont have to make any new contract changes down the line." All four are proved (210 ✅).

@@ -54,7 +54,7 @@ def honest : Option (List ByteString) := do
   | _ => "own_any4: no honest proofs"
 
 #eval match honest with
-  | some [b1, t1, z1, b2, t2, z2, b3, t3, z3, b4, t4, z4] => s!"own_any4, z1 changed:      {stepsWith mixLogicTemplate [toTerm nftPolicy, toTerm nftName] (ownCtx nftPolicy mixBoxHash g1 b1 g1 b2 g1 b3 g1 b4 t1 zOneOwn t2 z2 t3 z3 t4 z4 kP 3000000 kS kG kU 20000000 kC 1000000) 60000}, spec {ownerAcceptsOwn mixBoxHash g1 b1 g1 b2 g1 b3 g1 b4 t1 zOneOwn t2 z2 t3 z3 t4 z4 kS kG kU 20000000 kC 1000000}"
+  | some [b1, t1, _, b2, t2, z2, b3, t3, z3, b4, t4, z4] => s!"own_any4, z1 changed:      {stepsWith mixLogicTemplate [toTerm nftPolicy, toTerm nftName] (ownCtx nftPolicy mixBoxHash g1 b1 g1 b2 g1 b3 g1 b4 t1 zOneOwn t2 z2 t3 z3 t4 z4 kP 3000000 kS kG kU 20000000 kC 1000000) 60000}, spec {ownerAcceptsOwn mixBoxHash g1 b1 g1 b2 g1 b3 g1 b4 t1 zOneOwn t2 z2 t3 z3 t4 z4 kS kG kU 20000000 kC 1000000}"
   | _ => "own_any4: no honest proofs"
 
 #eval match honest with

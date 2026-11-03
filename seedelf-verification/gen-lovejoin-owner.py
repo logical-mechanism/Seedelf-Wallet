@@ -161,6 +161,7 @@ end {ns}
     hpat = ", ".join(f"b{i}, t{i}, z{i}" for i in range(1, n + 1))
     hprf = " ".join(f"t{i} z{i}" for i in range(1, n + 1))
     hprf_z = hprf.replace("z1", "zOneOwn", 1)
+    hpat_z = hpat.replace("z1", "_", 1)
     hprf_sw = (" ".join([f"t2 z2", f"t1 z1"] + [f"t{i} z{i}" for i in range(3, n + 1)]) if n >= 2 else None)
     pool_c = "nftPolicy mixBoxHash " if v2 else ""
     m_c = "mixBoxHash " if v2 else ""
@@ -170,7 +171,7 @@ end {ns}
         run = lambda prfs, ch: f"stepsUsed mixLogic (ownCtx {hpts} {prfs} kP 3000000 kS kG kU 20000000 kC {ch}) 60000"
     spec = lambda prfs, ch: f"ownerAcceptsOwn {m_c}{hpts} {prfs} kS kG kU 20000000 kC {ch}"
     evals = [f'| some [{hpat}] => s!"{tag}, honest:          {{{run(hprf, "1000000")}}}, spec {{{spec(hprf, "1000000")}}}"',
-             f'| some [{hpat}] => s!"{tag}, z1 changed:      {{{run(hprf_z, "1000000")}}}, spec {{{spec(hprf_z, "1000000")}}}"',
+             f'| some [{hpat_z}] => s!"{tag}, z1 changed:      {{{run(hprf_z, "1000000")}}}, spec {{{spec(hprf_z, "1000000")}}}"',
              f'| some [{hpat}] => s!"{tag}, change + 1:      {{{run(hprf, "1000001")}}}, spec {{{spec(hprf, "1000001")}}}"']
     if hprf_sw:
         evals.append(f'| some [{hpat}] => s!"{tag}, proofs swapped:  {{{run(hprf_sw, "1000000")}}}, spec {{{spec(hprf_sw, "1000000")}}}"')
