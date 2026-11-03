@@ -17,21 +17,21 @@ theorem mix_needs_the_second_challenge :
     ∀ (t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22 : ByteString),
       secondChallengeHolds t021 t121 c21 t022 t122 c22 = false →
         isUnsuccessful (appliedMixSecond.prop t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22) := by
-  blaster (timeout: 1200) (verbose: 1)
+  blaster (timeout: 1200)
 
 /-- So does one whose second box's first branch doesn't hold against the first box out. -/
 theorem mix_needs_the_second_proofs_first_branch :
     ∀ (t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22 : ByteString),
       branchHolds inA2 inB2 outA1 outB1 t021 t121 c21 z21 = false →
         isUnsuccessful (appliedMixSecond.prop t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22) := by
-  blaster (timeout: 1200) (verbose: 1)
+  blaster (timeout: 1200)
 
 /-- Or its second branch, against the second box out. -/
 theorem mix_needs_the_second_proofs_second_branch :
     ∀ (t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22 : ByteString),
       branchHolds inA2 inB2 outA2 outB2 t022 t122 c22 z22 = false →
         isUnsuccessful (appliedMixSecond.prop t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22) := by
-  blaster (timeout: 1200) (verbose: 1)
+  blaster (timeout: 1200)
 
 /-- `secondAccepts` is those three checks. -/
 theorem secondAccepts_parts (t021 t121 c21 z21 t022 t122 c22 z22 : ByteString) :

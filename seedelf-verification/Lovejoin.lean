@@ -11,6 +11,10 @@ import Lovejoin.V2.MixDatums
 import Lovejoin.V2.MixFirst
 import Lovejoin.V2.MixSecond
 import Lovejoin.V2.MixPasses
+import Lovejoin.V2.Mix3First
+import Lovejoin.V2.Mix3Second
+import Lovejoin.V2.Mix3Third
+import Lovejoin.V2.Mix3Passes
 import Lovejoin.Template.MixBoxPurpose
 import Lovejoin.Template.MixBoxGate
 import Lovejoin.Template.MixBoxNoLock

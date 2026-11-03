@@ -16,7 +16,7 @@ theorem mix_passes_with_both_proofs :
     ∀ (t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22 : ByteString),
       mixAccepts t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22 = true →
         isSuccessful (appliedMixPasses.prop t011 t111 c11 z11 t012 t112 c12 z12 t021 t121 c21 z21 t022 t122 c22 z22) := by
-  blaster (timeout: 1200) (verbose: 1)
+  blaster (timeout: 1200)
 
 /-- `mixAccepts` is box in 1's check and box in 2's. -/
 theorem mixAccepts_halves

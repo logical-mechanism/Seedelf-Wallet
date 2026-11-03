@@ -13,24 +13,23 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 | 5 · mix_logic, Mix | ⬜ on v2 instead (step 8): the wallet moves to v2 alone, and the classic pool keeps only its Owner |
 | 6 · fee_contract and one_shot_mint | ✅ on their templates, for every pool (step 8): `OneShotMint` (5) and `FeeContract` (5) (2026-11-03) |
 | 7 · The token-pool templates | ⬜ on v2 instead (step 8); 8131b1d's only mainnet pool (5 ₳) is empty |
-| 8 · v2: the templates with xor32's fix | 🚧 `MixChallenges` (1), `MixOutputs` (4), `MixDatums` (3), `Owner` (1) and the templates for every pool (mix_box 29, one_shot_mint 5, fee_contract 5) ✅ (2026-11-03); the Mix iff ran past 30 minutes as one theorem, and is now three (`MixFirst`, `MixSecond`, `MixPasses`), not built |
+| 8 · v2: the templates with xor32's fix | 🚧 `MixChallenges` (1), `MixOutputs` (4), `MixDatums` (3), `Owner` (1), the templates for every pool (mix_box 29, one_shot_mint 5, fee_contract 5) and the Mix iff at n = 2 (`MixFirst` 3, `MixSecond` 3, `MixPasses` 1) ✅ (2026-11-03); the Mix iff at n = 3, the wallet's default width (13), written, not built |
 | 9 · The wallet on v2 alone | ⬜ waits on step 8 and a v2 launch |
 
 ### Next session, in order
 
-1. **The owner builds the Mix iff's parts, on the new pin** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh Lovejoin.V2.Steps Lovejoin.V2.MixFirst Lovejoin.V2.MixSecond Lovejoin.V2.MixPasses`.
-   - The pin moved to 68c5399, so the first module rebuilds the dependencies: about 6 minutes at 1.4 GB in the repin worktree. If lake complains about the manifest, `lake update PlutusCore` alone.
-   - The alias returns a `Nat` now. Every Lovejoin call wraps it in `.ofNat`, as the builtin does, so the solver knows a conversion is never negative. A Valid result stays Valid. An expected-Falsified case that leaned on a negative conversion could flip, but no Lovejoin theorem expects Falsified.
-   - Then the 85 again, on the new pin: `LIMIT=30m ./check.sh lovejoin`, then `LIMIT=40m ./check.sh lovejoin-v2`.
-   - `V2/Steps`: `every field zero` must `error`, spec `false`, and the KAT lines stay as in the third build (`mixAccepts` still `true` with `zero32` a literal).
-   - `MixFirst` and `MixSecond` have three theorems each: the challenge, then each branch. `MixPasses` has one.
-   - Each runs `blaster (timeout: 1200) (verbose: 1)`, so its log has four timed phases: `Optimization`, `Translation`, `Submitting Smt Query` and `Solve`.
-   - ✅ Valid: done. Write the times here, and take `(verbose: 1)` out.
-   - ❌ Falsified: the spec and the script differ, at the theorem's check. Read the script's source for that check, and find a term the spec makes that the script doesn't: a function the solver can't reduce, or a builtin called another way. Then run the counterexample in `V2/Steps` (the zero line's way): it must error.
-   - `FAILED` with "unsolved goals" and no ❌: Z3 ran out of its 20 minutes (Undetermined; Blaster leaves the goal open, so it can't pass).
-   - `firstAccepts_parts`, `secondAccepts_parts` and `mixAccepts_halves` are plain Lean proofs (`unfold`, `cases`, `rfl`). If one fails to elaborate, the blaster theorems beside it are still reported.
-2. **Then `./check.sh`:** the Seedelf baseline under the xor alias. Its theorems haven't run; `Seedelf.Steps` has (step 8's third build), every line as before.
-3. **Then what's left before the switch:** N > 2 for the Mix (n = 3 at least, the wallet's default width), and a v2 launch on chain; then every v2 theorem re-run on its parameters (the template ones already hold for it).
+1. **The owner re-runs everything on the new pin, n = 3 last** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=30m ./check.sh lovejoin; LIMIT=40m ./check.sh lovejoin-v2`.
+   - The 92 so far should all come back ✅ on 68c5399: the classic pool's 37 and v2's 55.
+   - `V2/Mix3Steps`: the KAT `halt` (its step count sizes the n = 3 limit, 40000), `mixAccepts3` `true`, and z11 or z33 changed `error`, spec `false`.
+   - Then `Mix3First`, `Mix3Second` and `Mix3Third` (4 each: the challenge, then each branch) and `Mix3Passes` (1). They run with `(timeout: 540) (verbose: 1)`. A ❌ means a spec gap at that check: read the compiled UPLC there (`aiken uplc decode --hex --cbor` into the scratchpad), as for n = 2's branches.
+   - If they're ✅, take `(verbose: 1)` out.
+2. **The Seedelf baseline on 68c5399 is done** (the PR-review session, before the merge): nine `ok`, `WalletRegister` Valid, `PolicyBurn` and `PolicyMint` on `BitVec` alone, as before.
+3. **Then what's left before the switch:**
+   - A v2 launch on chain (the owner's), then every v2 mix_logic theorem re-run on its parameters. The template ones already hold for it.
+   - The owner's call on the side finding below, `precompute_statements`' cost, before that launch: a change after it means another launch.
+   - N = 4, the Settings option, the same way if wanted (`ada_n4_*` in `mix_kat.test.ak`).
+
+**Step 8's Mix iff at n = 2, on 68c5399 (2026-11-03):** `MixFirst`' 3, `MixSecond`'s 3 and `MixPasses`' 1 ✅, each solve 0.02 s and each module under 10 s at 366 MB, after the dependencies' rebuild (93 s). `V2/Steps` unchanged on the new pin. The three tie-in lemmas elaborated. So a Mix of two moves boxes iff each box's sigma-OR proof verifies against the boxes it pays, with every field of both proofs symbolic. `(verbose: 1)` is out.
 
 **`V2/MixBranch`, the diagnostic (2026-11-03):** every uncompression (a constant input point, a constant output point, a symbolic `t0`) and `z`'s checks ✅; both equations ❌. The compiled UPLC (`aiken uplc decode`) shows why. `DHTupleStatementPt` is Data-encoded, so walk_outputs stores each box out's point as `bData(compress(uncompress a'))`, and each branch uncompresses it again. The script's statement point is `uncompress(compress(uncompress a'))`, the spec's was `uncompress a'`, and the solver can't equate them over opaque builtins. `branchHolds` now takes the script's form, and `MixBranch` is deleted.
 - **A side finding, about cost, not safety:** `precompute_statements`' comment says it saves N²−N uncompressions a Mix, but the record's encoding undoes that. Each box out's point is uncompressed, compressed, then uncompressed again in every branch: 2N + 2N² uncompressions and 2N compressions, where the comment counts 2N. While v2 isn't launched, changing it costs no migration, but it changes mix_logic's hash and its proofs re-run. The owner's call.
@@ -165,12 +164,13 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
   - `V2/MixOutputs`: no value leaves the pool. A box out anywhere but mix_box, with a stake credential or a reference script, with other lovelace than the box value, or with a token, fails the Mix (4 theorems).
   - `V2/MixDatums`: a box out's datum must be inline and well-formed, so every box paid out can be withdrawn (3 theorems).
 - **Proved in the third build:** `V2/Owner`, step 4's iff on v2. validate_owner and its libraries are the classic pool's line for line, so the spec is `Lovejoin.Classic`'s, with v2's mix_box hash.
-- **Written, not built:** the Mix iff, in three parts (`V2/MixSplit`). The KAT's transaction, with every field of both proofs symbolic, fails if box in 1's proof doesn't verify (`MixFirst`), fails if box in 2's doesn't (`MixSecond`), and succeeds with both (`MixPasses`). The spec is `mixAccepts` (`V2/MixSpec`, line for line with `verify_pre`). As one iff (`MixProofs`), it ran past 30 minutes.
+- **Proved on 68c5399:** the Mix iff, in three parts (`V2/MixSplit`). The KAT's transaction, with every field of both proofs symbolic, fails if box in 1's proof doesn't verify (`MixFirst`), fails if box in 2's doesn't (`MixSecond`), and succeeds with both (`MixPasses`). The spec is `mixAccepts` (`V2/MixSpec`, line for line with `verify_pre`). As one iff (`MixProofs`), it ran past 30 minutes.
 - **The other templates, for every pool (✅ in the third build):** mix_box, one_shot_mint and fee_contract are byte for byte 8131b1d's, and each deployed script is its template applied to the pool's parameters: `extract-lovejoin-v2.sh` checks the classic pool's mix_box and the 5 ₳ pool's policy and fee_contract. So `Lovejoin/Template/` takes the parameters as symbolic arguments, and its theorems hold for every pool on them, a v2 launch's included.
   - mix_box (L symbolic): `Lovejoin.Classic`'s 29 on the template (`MixBoxPurpose`, `MixBoxGate`, `MixBoxNoLock`).
   - one_shot_mint (the seed, reference_holder and P symbolic): a mint needs the seed spent and exactly one token named `lovejoin`, at reference_holder with no stake part or reference script, under a sane `ReferenceDatum` (`OneShotMint`, 5). With the ledger's spend-once rule, a pool's NFT exists once. mix_logic's reference lookup relies on that.
   - fee_contract (P, the cap and the amounts symbolic): a shard loses exactly the fee, at most the cap, only for a Mix of three boxes or more, and replenished only grows (`FeeContract`, 5).
-- **Not covered yet:** N > 2 for the Mix, and a real launch's parameters for v2's mix_logic, re-run once one exists.
+- **Written, not built:** the Mix at n = 3 (`V2/Mix3*`): the KAT `mix_real_proofs_ada_pool_n3_passes`, generated from `mix_kat.test.ak` by a script and checked value for value (51 hex strings). The spec is n = 2's unrolled for three, so each box's four checks are four theorems, and `Mix3Passes` the converse.
+- **Not covered yet:** a real launch's parameters for v2's mix_logic, re-run once one exists; n = 4.
 
 ## Step 9 · The wallet on v2 alone ⬜
 

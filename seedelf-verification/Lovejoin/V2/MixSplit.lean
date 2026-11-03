@@ -16,8 +16,8 @@ With `MixOutputs` and `MixDatums` (what a Mix must pay) and `MixChallenges` (the
 this is step 5's (b) on v2. The crypto is opaque: the theorems say the script checks
 exactly these equations, not that they're hard to fake. Each part's step limit sits
 above the KAT's run in `V2.Steps` (11497), where `mixAccepts` is `true` on the KAT's own
-proofs. Each runs `blaster (timeout: 1200) (verbose: 1)`: a solver past 20 minutes
-leaves the goal unsolved, so the module fails, and the log times each phase. -/
+proofs. Each runs `blaster (timeout: 1200)`: a solver past 20 minutes leaves the goal
+unsolved, so the module fails. On 68c5399 each part's solve took 0.02 s. -/
 
 namespace Lovejoin.V2
 open CardanoLedgerApi.IsData.Class (toTerm)
