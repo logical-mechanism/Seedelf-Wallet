@@ -7,26 +7,28 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 | Step | Status |
 |---|---|
 | 0 · Forks, clones, runner | ✅ |
-| 1 · Datatype parameter names | 🚧 issue filed, [Lean-blaster #454](https://github.com/input-output-hk/Lean-blaster/issues/454); fix `6526c4b` + test `25c0ee0` pushed; the fix passes our full repro; test not built; PR text written, not opened |
-| 2 · `ByteStringToInteger` alias | 🚧 fix `3dd76d7` + `28910c6` pushed; the first build failed on a bare `Integer` (auto-bound), fixed in `28910c6`, not rebuilt yet; PR text written, not opened |
-| 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; fix + test `ae0a7cd` on `fix/fq1-nat` pushed, not built; the #29 question [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) 2026-11-03, no answer yet; the PR text written, not opened |
+| 1 · Datatype parameter names | 🚧 issue filed, [Lean-blaster #454](https://github.com/input-output-hk/Lean-blaster/issues/454); fix `6526c4b` + test `25c0ee0` pushed; the fix passes our full repro; the test passes (2026-11-03: four Valid, one Expected Falsified); PR text written, not opened |
+| 2 · `ByteStringToInteger` alias | 🚧 fix `3dd76d7` + `28910c6` pushed; the first build failed on a bare `Integer` (auto-bound), fixed in `28910c6`; the second build failed in the test (below), fixed in `cfa8c53`, not rebuilt; PR text written, not opened |
+| 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; fix + test `ae0a7cd` on `fix/fq1-nat` pushed; its first build failed in the test (below), fixed in `f146c10`, not rebuilt, but its point case already came out Expected Falsified; the #29 question [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) 2026-11-03, no answer yet; the PR text written, not opened |
 | 4 · WalletRegister | ⬜ |
 
 ### Next session, in order
 
-1. **The owner builds the three fixes' tests** (dev box). Each line stands alone, so one failing doesn't stop the others:
+1. **The owner rebuilds Fixes 2 and 3's tests** (dev box). Each line stands alone:
    ```bash
    # dev box (this machine)
    cd /home/logic/Documents/LogicalMechanism/blaster-forks && git -C PlutusCoreBlaster switch feat/opaque-bytestring-to-integer && CAP=24G LIMIT=90m ./check.sh PlutusCoreBlaster Tests.Bitwise.ByteStringToIntegerSymbolic
    cd /home/logic/Documents/LogicalMechanism/blaster-forks && git -C PlutusCoreBlaster switch fix/fq1-nat && CAP=24G LIMIT=90m ./check.sh PlutusCoreBlaster Tests.Cryptograph.BLS12_381.SymbolicPoints Tests.Cryptograph.BLS12_381.TestVectors
-   cd /home/logic/Documents/LogicalMechanism/blaster-forks && ./check.sh Lean-blaster Tests.FixedIssues.Issue454
    ```
    Expected:
    - Fix 2's test: one Valid and two Expected Falsified.
    - Fix 3's: two Valid and one Expected Falsified, and the test vectors hold.
-   - Issue454: four Valid and one Expected Falsified.
-   - Each PlutusCoreBlaster line may rebuild most of PlutusCore: the two branches change different files that much of it imports.
-2. **The owner opens the Lean-blaster PR** once Issue454 passes: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/Lean-blaster --base beta-lambda-cache-optimization --head logicalmechanism:fix/datatype-param-names --title "$(cat posts/lean-blaster-pr.title)" --body-file posts/lean-blaster-pr.md` (both files are written).
+   - The first round (2026-11-03) took 28 s and 95 s at peaks of 647 MB and 1.4 GB. Issue454 passed then.
+   - **What the first round found, all in the tests, not the fixes:**
+     - A doc comment (`/-- -/`) above `#blaster` doesn't parse. `#blaster` isn't a declaration, so use `--` there. The command still ran after the parse error.
+     - **Never compare a whole CEK `State`.** `prop a ≠ State.Halt (…)` makes Blaster declare the CEK datatype, whose `Const` holds BLS12-381 points, so it fails on `Fin` even with no point in the goal. Read the result through a match (`haltsWithInteger`), as PlutusCoreBlaster's `Tests/BlueprintVerify/BooleanCase.lean` and our `isSuccessful` do.
+     - Inside `namespace Tests.Cryptograph.…`, `Cryptograph.BLS12_381` resolves to the test's own parent namespace. Use `TestVectors.lean`'s namespace.
+2. **The owner opens the Lean-blaster PR** now that Issue454 passes: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/Lean-blaster --base beta-lambda-cache-optimization --head logicalmechanism:fix/datatype-param-names --title "$(cat posts/lean-blaster-pr.title)" --body-file posts/lean-blaster-pr.md` (both files are written).
 3. **The owner opens the PlutusCoreBlaster PR for Fix 2** once its test passes: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:feat/opaque-bytestring-to-integer --title "$(cat posts/plutuscoreblaster-pr.title)" --body-file posts/plutuscoreblaster-pr.md`.
    - It's a PR, not a separate issue. The body carries [the issue draft](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md)'s case, on the repo's template.
    - Its *Testing* states the result step 1 expects. If the run says anything else, Claude rewrites it first.
