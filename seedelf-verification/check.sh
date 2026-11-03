@@ -7,6 +7,7 @@
 #   ./check.sh upstream              the upstream reproductions (Upstream/)
 #   ./check.sh upstream-main         ExceptParams against Lean-blaster main
 #   ./check.sh lovejoin              Lovejoin's classic pool (chunk 42)
+#   ./check.sh lovejoin-v2           v2, the templates with xor32's length checks (chunk 42)
 #   ./check.sh Seedelf.PolicyMint    some modules
 #   CAP=12G LIMIT=20m ./check.sh     other limits
 cd "$(dirname "$0")" || exit 1
@@ -22,6 +23,8 @@ mods=("$@")
 [ "${mods[0]}" = lovejoin ] && mods=(Lovejoin.Scripts Lovejoin.Box Lovejoin.Steps Lovejoin.ReferenceHolder
   Lovejoin.MixBoxPurpose Lovejoin.MixBoxGate Lovejoin.MixBoxNoLock Lovejoin.MixLogicPurpose Lovejoin.Logic
   Lovejoin.Owner)
+# v2: the token-pool templates with xor32's length checks (chunk 42), after ./extract-lovejoin-v2.sh.
+[ "${mods[0]}" = lovejoin-v2 ] && mods=(Lovejoin.V2.Scripts Lovejoin.V2.Mix Lovejoin.V2.Steps Lovejoin.V2.MixChallenges)
 # The same ExceptParams file in its own package, against Lean-blaster main.
 [ "${mods[0]}" = upstream-main ] && { cd Upstream/blaster-main || exit 1; mods=(BlasterMain.ExceptParams); }
 peakf=$(mktemp)
