@@ -7,18 +7,32 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 | Step | Status |
 |---|---|
 | 0 · Forks, clones, runner | ✅ |
-| 1 · Datatype parameter names | 🚧 issue filed, [Lean-blaster #454](https://github.com/input-output-hk/Lean-blaster/issues/454); fix `6526c4b` + test `25c0ee0` pushed; the fix passes our full repro; PR not opened |
-| 2 · `ByteStringToInteger` alias | 🚧 fix `3dd76d7` + `28910c6` pushed; the first build failed on a bare `Integer` (auto-bound), fixed in `28910c6`, not rebuilt yet; PR not opened |
-| 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; nothing asked on #29 yet |
+| 1 · Datatype parameter names | 🚧 issue filed, [Lean-blaster #454](https://github.com/input-output-hk/Lean-blaster/issues/454); fix `6526c4b` + test `25c0ee0` pushed; the fix passes our full repro; test not built; PR text written, not opened |
+| 2 · `ByteStringToInteger` alias | 🚧 fix `3dd76d7` + `28910c6` pushed; the first build failed on a bare `Integer` (auto-bound), fixed in `28910c6`, not rebuilt yet; PR text written, not opened |
+| 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; fix + test `ae0a7cd` on `fix/fq1-nat` pushed, not built; the #29 question and the PR text written, neither posted |
 | 4 · WalletRegister | ⬜ |
 
 ### Next session, in order
 
-1. **The owner rebuilds Fix 2** and builds Fix 1's test (dev box): `cd /home/logic/Documents/LogicalMechanism/blaster-forks && CAP=24G LIMIT=90m ./check.sh PlutusCoreBlaster Tests.Bitwise.ByteStringToIntegerSymbolic`, then `./check.sh Lean-blaster Tests.FixedIssues.Issue454`. Expected: Fix 2's test one Valid and two Expected Falsified; Issue454 four Valid and one Expected Falsified.
-2. **The owner opens the Lean-blaster PR** once Issue454 passes: `gh pr create -R input-output-hk/Lean-blaster --base beta-lambda-cache-optimization --head logicalmechanism:fix/datatype-param-names --title "$(cat posts/lean-blaster-pr.title)" --body-file posts/lean-blaster-pr.md` (from `blaster-forks/`; both files are written).
-3. **Claude writes the PlutusCoreBlaster PR body** in `posts/` from [the issue draft](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md), on the repo's template (it lives in the fork's `.github/`), and the owner opens it into `main` once Fix 2's test passes. A PR, not a separate issue.
-4. **Claude drafts the #29 question** (`posts/plutuscoreblaster-29-comment.md`, per Fix 3 below); the owner posts it. Then Fix 3 on `fix/fq1-nat`.
-5. **The owner posts the comments,** with the PR numbers filled in: [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md) (its "we've asked PlutusCoreBlaster" line points at the PR) and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md) (already points at #454).
+1. **The owner builds the three fixes' tests** (dev box). Each line stands alone, so one failing doesn't stop the others:
+   ```bash
+   # dev box (this machine)
+   cd /home/logic/Documents/LogicalMechanism/blaster-forks && git -C PlutusCoreBlaster switch feat/opaque-bytestring-to-integer && CAP=24G LIMIT=90m ./check.sh PlutusCoreBlaster Tests.Bitwise.ByteStringToIntegerSymbolic
+   cd /home/logic/Documents/LogicalMechanism/blaster-forks && git -C PlutusCoreBlaster switch fix/fq1-nat && CAP=24G LIMIT=90m ./check.sh PlutusCoreBlaster Tests.Cryptograph.BLS12_381.SymbolicPoints Tests.Cryptograph.BLS12_381.TestVectors
+   cd /home/logic/Documents/LogicalMechanism/blaster-forks && ./check.sh Lean-blaster Tests.FixedIssues.Issue454
+   ```
+   Expected:
+   - Fix 2's test: one Valid and two Expected Falsified.
+   - Fix 3's: two Valid and one Expected Falsified, and the test vectors hold.
+   - Issue454: four Valid and one Expected Falsified.
+   - Each PlutusCoreBlaster line may rebuild most of PlutusCore: the two branches change different files that much of it imports.
+2. **The owner opens the Lean-blaster PR** once Issue454 passes: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/Lean-blaster --base beta-lambda-cache-optimization --head logicalmechanism:fix/datatype-param-names --title "$(cat posts/lean-blaster-pr.title)" --body-file posts/lean-blaster-pr.md` (both files are written).
+3. **The owner opens the PlutusCoreBlaster PR for Fix 2** once its test passes: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:feat/opaque-bytestring-to-integer --title "$(cat posts/plutuscoreblaster-pr.title)" --body-file posts/plutuscoreblaster-pr.md`.
+   - It's a PR, not a separate issue. The body carries [the issue draft](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md)'s case, on the repo's template.
+   - Its *Testing* states the result step 1 expects. If the run says anything else, Claude rewrites it first.
+4. **The owner posts the #29 question** any time, since it waits on no build: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr comment 29 -R input-output-hk/PlutusCoreBlaster --body-file posts/plutuscoreblaster-29-comment.md`.
+   - Fix 3's PR waits for the answer and for its test. Then: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:fix/fq1-nat --title "$(cat posts/plutuscoreblaster-fq1-pr.title)" --body-file posts/plutuscoreblaster-fq1-pr.md`.
+5. **Claude fills in the PR numbers** in [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md) (its "we've asked PlutusCoreBlaster" line points at the Fix 2 PR) and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md) (it points at #454; add the Lean-blaster PR). Then the owner posts both.
 6. **Pins and WalletRegister** as below, once Fixes 1–3 build.
 
 Chunk 40's [baseline](chunk-40-verification-upstream.md#the-baseline-2026-11-02-z3-531), [practicalities and rules](chunk-40-verification-upstream.md#practicalities-and-rules) and [what each fix should flip](chunk-40-verification-upstream.md#how-to-tell-each-is-fixed) hold here. They aren't repeated.
@@ -105,13 +119,20 @@ Done: the one-line change, `6526c4b` on `fix/datatype-param-names`, pushed to th
   - If #155 merges first, retarget the PR to `main`. The line is the same.
   - If they decline, keep the pin and rebase it when beta moves.
 
-## Fix 3 · `Fin` in `Fq1` (PlutusCoreBlaster) ⬜
+## Fix 3 · `Fin` in `Fq1` (PlutusCoreBlaster) 🚧
 
-- **The repro first: [Upstream/Fq1Fin.lean](../../../../seedelf-verification/Upstream/Fq1Fin.lean),** already in `check.sh`'s `upstream` list. It was written on 2026-11-02 and hasn't been run.
+Done: `ae0a7cd` on `fix/fq1-nat`, pushed to the fork, with `Co-authored-by` for #29's author.
+- It's #29's `Fq1` part line for line. That includes three uses the list below missed: `Fq2.sgn₀`'s two `Fin.toNat` (lines 660 and 662) and `compressG2`'s `.val` (802). It also has #29's `toNat_ofNat_381` beside the test vectors' hex printers.
+- The PR's test is `Tests/Cryptograph/BLS12_381/SymbolicPoints.lean`, with two Valid cases and one Falsified and no `Except`.
+- The #29 question is `../blaster-forks/posts/plutuscoreblaster-29-comment.md`, and the PR text `posts/plutuscoreblaster-fq1-pr.md`.
+- `Upstream/Fq1Fin.lean` has its Valid case, `fq1_eq_of_t_eq`.
+- Waiting: the owner's build, the question, then the PR.
+
+- **The repro first: [Upstream/Fq1Fin.lean](../../../../seedelf-verification/Upstream/Fq1Fin.lean),** already in `check.sh`'s `upstream` list. Run on 2026-11-02: the point cases fail on `Fin`, and the control passes.
   - It has a control (`blake2b_224`), symbolic points, and `bls12_381_G1_uncompress` of a symbolic bytestring. Each expects Falsified.
   - Run `./check.sh Upstream.Fq1Fin` first. The point cases should fail on `Fin`, and the control should pass. If they fail on anything else, record it before fixing anything.
   - Add one Valid case beside them, such as `∀ (x y : Fq1), x.t = y.t → x = y`, so a pass isn't only the solver finding a model.
-- **Ask on [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29) first.** Claude drafts `Upstream/drafts/plutuscoreblaster-29-comment.md`, and the owner posts it.
+- **Ask on [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29) first.** Claude drafts `../blaster-forks/posts/plutuscoreblaster-29-comment.md`, and the owner posts it.
   - The question: may we send #29's `Fq1.t : Nat` part as a small PR of its own, crediting #29, or is #29 about to land?
   - Our fork carries the change meanwhile. Only the PR waits for the answer.
 - **The change, on the fork's branch `fix/fq1-nat` from `1c23de8`.** About 50 lines, all taken from #29's own diff:
@@ -138,7 +159,7 @@ Done: the one-line change, `6526c4b` on `fix/datatype-param-names`, pushed to th
 
 ## Fix 2 · `ByteStringToInteger` behind an `opaque` alias (PlutusCoreBlaster) 🚧
 
-Done: `3dd76d7` on `feat/opaque-bytestring-to-integer`, pushed to the fork: the alias as below, and the PR's test, `Tests/Bitwise/ByteStringToIntegerSymbolic.lean` (two textual programs beside it, `bstoi_one.uplc` and `bstoi_two.uplc`, checked with `aiken uplc eval`), imported from `Tests/Basic.lean`. Its Falsified case ("some bytestring converts to 258") needs the builtin's value, so it fails on `BitVec` without the alias; it uses no `Except`. Waiting: the owner's build, then the PR.
+Done: `3dd76d7` on `feat/opaque-bytestring-to-integer`, pushed to the fork: the alias as below, and the PR's test, `Tests/Bitwise/ByteStringToIntegerSymbolic.lean` (two textual programs beside it, `bstoi_one.uplc` and `bstoi_two.uplc`, checked with `aiken uplc eval`), imported from `Tests/Basic.lean`. Its Falsified case ("some bytestring converts to 258") needs the builtin's value, so it fails on `BitVec` without the alias; it uses no `Except`. The PR text is `../blaster-forks/posts/plutuscoreblaster-pr.md`. Waiting: the owner's build, then the PR.
 
 - **The repro, if one is wanted on our side too:** the same two programs in `Upstream/`, run as the Slice modules are. The fork's test already shows it, so this is optional.
 - **The change, on the fork's branch `feat/opaque-bytestring-to-integer` from `1c23de8`.** It follows [#27](https://github.com/input-output-hk/PlutusCoreBlaster/pull/27)'s pattern, in 10–15 lines.
