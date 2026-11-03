@@ -8,13 +8,21 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 |---|---|
 | 0 · Forks, clones, runner | ✅ |
 | 1 · Datatype parameter names | 🚧 issue [#454](https://github.com/input-output-hk/Lean-blaster/issues/454), PR [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) open (2026-11-03); fix `6526c4b` + test `25c0ee0`, the test passes (four Valid, one Expected Falsified) |
-| 2 · `ByteStringToInteger` alias | 🚧 PR [PlutusCoreBlaster #71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71) open (2026-11-03); fix `3dd76d7` + `28910c6`, test `cfa8c53` passes (one Valid, two Expected Falsified) |
-| 3 · `Fin` in `Fq1` | 🚧 PR [PlutusCoreBlaster #72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72) open (2026-11-03), after no reply on [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) (the owner: "seems like that pr just died"); fix `ae0a7cd` + test `f146c10` pass |
+| 2 · `ByteStringToInteger` alias | 🚧 PR [PlutusCoreBlaster #71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71) open (2026-11-03); fix `3dd76d7` + `28910c6`, test `cfa8c53` passes (one Valid, two Expected Falsified); review round 1 `f411ef6` (four Valid, three Expected Falsified, a `#guard`) |
+| 3 · `Fin` in `Fq1` | 🚧 PR [PlutusCoreBlaster #72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72) open (2026-11-03), after no reply on [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) (the owner: "seems like that pr just died"); fix `ae0a7cd` + test `f146c10` pass; review round 1 `89d8c6d` |
 | 4 · WalletRegister | ✅ Valid in the script's own order (2026-11-03, 737 MB with the rebuild), in `check.sh`'s default list, README and chunk 40 updated |
-| 5 · Operand order (Fix 4) | 🚧 PR [PlutusCoreBlaster #73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) open (2026-11-03), stacked on #72; fix + test `b60ff2a` pass (three Falsified before, three Valid after) |
+| 5 · Operand order (Fix 4) | 🚧 PR [PlutusCoreBlaster #73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) open (2026-11-03), stacked on #72; fix + test `b60ff2a` pass (three Falsified before, three Valid after), rebased onto round 1 as `b01509a` |
 
 ### Next session, in order
 
+0. **Review round 1, 2026-11-03: answered, waiting on mpetruska.** Replies and the round's state are in `../blaster-forks/posts/review-round-1-replies.md`.
+   - **#71 (changes requested):** the alias returns a `Nat` and the builtin applies `.ofNat`; the goals are also stated over `cekExecuteProgram`; a `#guard` checks `#0102` is 258 (`f411ef6`).
+     - We kept the `haltsWithInteger`/`haltsWithBool` matches. The `State` equality the review suggested fails on `Fin` on `main`, and passes with #72 underneath (local-only `local/state-equality`, `346fe6a`). So switch to it once #72 lands, or stack #71 on #72 if they ask.
+     - **Open:** their main point is re-modelling `ByteString` as `ByteArray`. We agreed, asked for an issue to follow, and asked whether they'd take #71 as a stopgap like #27. If not, close #71 and keep the alias on our fork.
+   - **#72 ("Nice work! Just a minor request"):** the short doc comment and `private mk ::` (`89d8c6d`). `G1.lean`'s `ToExpr Fq1` now builds through `Fq1.ofNat`, since `Fq1.mk` is private. #73 is rebased onto it (`b01509a`, force-pushed).
+   - **Checked (the owner's runs):** every fork test passes on its own branch. `./check.sh` on the new pin matched the baseline: nine `ok`, WalletRegister Valid, PolicyBurn and PolicyMint on `BitVec` alone.
+   - **GitHub won't let us re-request a review:** the API refuses non-collaborators. The replies notify the reviewer instead.
+   - **Pins:** `seedelf` is `1e38b23` on the fork. On `lovejoin-verification`, `local/opaque-xor` is `68c5399` (that plus the xor alias) and `scalarOf` applies `.ofNat`, from `local/seedelf-repin`. Lovejoin's four calls of the alias need the same `.ofNat` when that lands. `verification` still pins `c7d8741`: re-pin it to `1e38b23` the same way.
 1. ✅ **Fix 4 and WalletRegister, 2026-11-03.** Fix 4's test: three Falsified under the old patterns, three Valid with the fix. WalletRegister: ✅ Valid in the script's order. The baseline and `upstream` were unchanged. WalletRegister is now in `check.sh`'s default list.
    - **Before that, the model-order check** confirmed the cause: `wallet_register_spend_iff`, with `add`'s and `equal`'s operands in the model's order, was ✅ Valid in 1.1 s at 305 MB, and `schnorrAccepts` was true on the real proof and false with z changed.
    - **The pinned run before it (2026-11-03)** matched every expectation:
@@ -106,7 +114,7 @@ Chunk 40's [baseline](chunk-40-verification-upstream.md#the-baseline-2026-11-02-
 | Package | Fork commit | PR | Remove when |
 |---|---|---|---|
 | Blaster | `25c0ee0` (`fix/datatype-param-names`) | [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) | the fix is on `beta-lambda-cache-optimization`, or wherever CardanoLedgerApiBlaster requires Blaster from |
-| PlutusCore | `c7d8741` (`seedelf`: `cfa8c53`, `f146c10` and `b60ff2a` merged onto `1c23de8`) | [#71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71), [#72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72), [#73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) | both PRs are on PlutusCoreBlaster `main` |
+| PlutusCore | `c7d8741` (`seedelf`: `cfa8c53`, `f146c10` and `b60ff2a` merged onto `1c23de8`); after review round 1, `seedelf` `1e38b23`, which `lovejoin-verification` pins as `local/opaque-xor` `68c5399` | [#71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71), [#72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72), [#73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) | both PRs are on PlutusCoreBlaster `main` |
 
 ## Fix 1 · Datatype parameter names (Lean-blaster) 🚧
 
