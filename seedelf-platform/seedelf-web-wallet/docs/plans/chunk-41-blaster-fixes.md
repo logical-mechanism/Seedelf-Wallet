@@ -9,7 +9,7 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 | 0 · Forks, clones, runner | ✅ |
 | 1 · Datatype parameter names | 🚧 issue filed, [Lean-blaster #454](https://github.com/input-output-hk/Lean-blaster/issues/454); fix `6526c4b` + test `25c0ee0` pushed; the fix passes our full repro; test not built; PR text written, not opened |
 | 2 · `ByteStringToInteger` alias | 🚧 fix `3dd76d7` + `28910c6` pushed; the first build failed on a bare `Integer` (auto-bound), fixed in `28910c6`, not rebuilt yet; PR text written, not opened |
-| 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; fix + test `ae0a7cd` on `fix/fq1-nat` pushed, not built; the #29 question and the PR text written, neither posted |
+| 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; fix + test `ae0a7cd` on `fix/fq1-nat` pushed, not built; the #29 question [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) 2026-11-03, no answer yet; the PR text written, not opened |
 | 4 · WalletRegister | ⬜ |
 
 ### Next session, in order
@@ -30,7 +30,7 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 3. **The owner opens the PlutusCoreBlaster PR for Fix 2** once its test passes: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:feat/opaque-bytestring-to-integer --title "$(cat posts/plutuscoreblaster-pr.title)" --body-file posts/plutuscoreblaster-pr.md`.
    - It's a PR, not a separate issue. The body carries [the issue draft](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md)'s case, on the repo's template.
    - Its *Testing* states the result step 1 expects. If the run says anything else, Claude rewrites it first.
-4. **The owner posts the #29 question** any time, since it waits on no build: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr comment 29 -R input-output-hk/PlutusCoreBlaster --body-file posts/plutuscoreblaster-29-comment.md`.
+4. ✅ **The #29 question is [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930)** (2026-11-03). Claude ran it at the owner's word ("Gonna trust you on running" the command), as `logicalmechanism`.
    - Fix 3's PR waits for the answer and for its test. Then: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:fix/fq1-nat --title "$(cat posts/plutuscoreblaster-fq1-pr.title)" --body-file posts/plutuscoreblaster-fq1-pr.md`.
 5. **Claude fills in the PR numbers** in [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md) (its "we've asked PlutusCoreBlaster" line points at the Fix 2 PR) and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md) (it points at #454; add the Lean-blaster PR). Then the owner posts both.
 6. **Pins and WalletRegister** as below, once Fixes 1–3 build.
@@ -126,7 +126,7 @@ Done: `ae0a7cd` on `fix/fq1-nat`, pushed to the fork, with `Co-authored-by` for 
 - The PR's test is `Tests/Cryptograph/BLS12_381/SymbolicPoints.lean`, with two Valid cases and one Falsified and no `Except`.
 - The #29 question is `../blaster-forks/posts/plutuscoreblaster-29-comment.md`, and the PR text `posts/plutuscoreblaster-fq1-pr.md`.
 - `Upstream/Fq1Fin.lean` has its Valid case, `fq1_eq_of_t_eq`.
-- Waiting: the owner's build, the question, then the PR.
+- Waiting: the owner's build and #29's answer, then the PR.
 
 - **The repro first: [Upstream/Fq1Fin.lean](../../../../seedelf-verification/Upstream/Fq1Fin.lean),** already in `check.sh`'s `upstream` list. Run on 2026-11-02: the point cases fail on `Fin`, and the control passes.
   - It has a control (`blake2b_224`), symbolic points, and `bls12_381_G1_uncompress` of a symbolic bytestring. Each expects Falsified.
