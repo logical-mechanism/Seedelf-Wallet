@@ -77,7 +77,9 @@ error: Unexpected smt error: (error "line 26 column 219: unknown constant @isInt
 
 ## Impact
 
-PlutusCoreBlaster's BLS12-381 builtins (`bls12_381_G1_uncompress` and friends) return `Except String _`, and goals over its CEK model translate `Prod` (`Data × Data`) first, so no property of a validator that reaches a BLS12-381 builtin over a symbolic input can be checked. We hit it proving [Seedelf](https://github.com/logical-mechanism/Seedelf-Wallet)'s wallet validator as deployed on mainnet (script hash `94bca9c0…`, a Schnorr proof over BLS12-381), with exactly the `@Except` error above. CardanoLedgerApiBlaster already pins this branch, and PlutusCoreBlaster #68 moves PlutusCoreBlaster onto the beta-based Blaster, so every PlutusCoreBlaster user would meet it.
+PlutusCoreBlaster's BLS12-381 builtins (`bls12_381_G1_uncompress` and friends) return `Except String _`, and goals over its CEK model translate `Prod` (`Data × Data`) first, so no property of a validator that reaches a BLS12-381 builtin over a symbolic input can be checked. We hit it proving [Seedelf](https://github.com/logical-mechanism/Seedelf-Wallet)'s wallet validator as deployed on mainnet (script hash `94bca9c0…`, a Schnorr proof over BLS12-381), with exactly the `@Except` error above. Every PlutusCoreBlaster user meets it today: PlutusCoreBlaster `main` pins `bc03bb4`, which has the line, PlutusCoreBlaster #68 moves that pin to `8816f72`, which has it too, and CardanoLedgerApiBlaster requires the beta branch. #155 (beta → `main`) would bring it to `main`.
+
+Draft #335 would fix it as a side effect (it takes the names from the first constructor's type), but it has no test for this case and comes with the match-translation changes; the one-line fix below, with this repro as its regression test, could land on its own first.
 
 ## Suggested fix
 
@@ -93,6 +95,6 @@ In `genIndParams`, telescope `indVal.type` itself, as `main` does, or take the p
 
 ## Additional Context
 
-- Fails: Lean-blaster `46c8479cec1c3e45775ffb873397783a459fa9cc` (`beta-lambda-cache-optimization`), as pinned by CardanoLedgerApiBlaster `9938562`.
+- Fails: Lean-blaster `46c8479cec1c3e45775ffb873397783a459fa9cc` (`beta-lambda-cache-optimization`), as CardanoLedgerApiBlaster `9938562` resolves it. The line was added in `bafdd4f` (the hash-consing squash); PlutusCoreBlaster's pins `bc03bb4` and `8816f72` have it.
 - Passes: Lean-blaster `a16614e5e44a693664043552f259235f15f1c884` (`main`), same file, same Lean and Z3.
 - Linux x86_64.

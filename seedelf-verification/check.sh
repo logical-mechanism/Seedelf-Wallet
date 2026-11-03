@@ -12,11 +12,11 @@ cd "$(dirname "$0")" || exit 1
 CAP=${CAP:-8G}
 LIMIT=${LIMIT:-10m}
 mods=("$@")
-# WalletRegister is left out until its two blockers are fixed (see its module).
+# WalletRegister is left out until its three blockers are fixed (see its module).
 [ ${#mods[@]} -eq 0 ] && mods=(Seedelf.Scripts Seedelf.Scenario Seedelf.Steps Seedelf.AlwaysFalse
   Seedelf.WalletPurpose Seedelf.WalletNoLock Seedelf.PolicyAmount Seedelf.PolicyForeign
   Seedelf.PolicyBurn Seedelf.PolicyMint)
-[ "${mods[0]}" = upstream ] && mods=(Upstream.ExceptParams Upstream.ByteStrings Upstream.SlicePrograms
+[ "${mods[0]}" = upstream ] && mods=(Upstream.ExceptParams Upstream.ByteStrings Upstream.Fq1Fin Upstream.SlicePrograms
   Upstream.SliceNone Upstream.Slice1 Upstream.Slice4 Upstream.Slice16 Upstream.Slice32)
 # The same ExceptParams file in its own package, against Lean-blaster main.
 [ "${mods[0]}" = upstream-main ] && { cd Upstream/blaster-main || exit 1; mods=(BlasterMain.ExceptParams); }

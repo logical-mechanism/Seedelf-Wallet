@@ -37,4 +37,6 @@ What it blocks for us, on [Seedelf](https://github.com/logical-mechanism/Seedelf
 - the wallet validator (script hash `94bca9c0…`) decodes its Schnorr proof's scalar and Fiat-Shamir challenge with `byteStringToInteger`, so "a Register UTxO moves only with a valid proof" can't be stated over a symbolic proof;
 - the minting policy (`84967d91…`) derives token names with `sliceByteString`, so neither its naming rule nor a successful burn can be proved over a symbolic name.
 
-29 other properties of the same scripts prove fine, so it's this gap, not the scripts' size. Is the `BitVec`/indexed-type support from your July note still on the way, and is there a branch we could run against? Our suite is a reproducible Lake package and we're glad to report back. In the meantime we've asked PlutusCoreBlaster for `opaque` aliases, as #27 did for `serialiseData`.
+Behind these, the same throw on `Fin` waits for any BLS12-381 value over a symbolic input: `Fq1.t : Fin fieldPrime` (PlutusCoreBlaster draft #29 changes it to `Nat`).
+
+29 other properties of the same scripts prove fine, so it's this gap, not the scripts' size. Is the `BitVec`/indexed-type support from your July note still on the way (we saw `feat/indexed-types`, last touched in June), and is there a branch we could run against? Our suite is a reproducible Lake package and we're glad to report back. In the meantime we've asked PlutusCoreBlaster for `opaque` aliases, as #27 did for `serialiseData`.

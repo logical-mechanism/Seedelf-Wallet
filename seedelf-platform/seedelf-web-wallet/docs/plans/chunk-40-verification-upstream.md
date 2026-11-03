@@ -2,7 +2,7 @@
 
 Branch `verification`, from `main`, pushed to origin, with no PR on purpose (the owner, 2026-11-02). It isn't a `web-wallet/…` branch because the work lives in [seedelf-verification/](../../../../seedelf-verification/README.md), not in the wallet.
 
-**Status: ⛔ blocked on upstream.** Two bugs in IOG's tools stand between us and the wallet's core property. Both are reproduced in [Upstream/](../../../../seedelf-verification/Upstream/), with controls. Nothing more gets built until they're fixed. In the owner's words: "I would want these upstream bugs fixed then work everything out before we continue on." This file says how to tell when they are, and what to do then.
+**Status: ⛔ blocked on upstream.** Three gaps in IOG's tools stand between us and the wallet's core property. The first two are reproduced in [Upstream/](../../../../seedelf-verification/Upstream/), with controls; the third was found in the code. Nothing more gets built until they're fixed. In the owner's words: "I would want these upstream bugs fixed then work everything out before we continue on." This file says how to tell when they are, and what to do then.
 
 **What the owner asked (2026-11-02):** "a verification folder and branch that we can work on further because it would be interesting to do this for lovejoin as well." On the wallet's property: "proving the wallet part of things is verified is huge."
 
@@ -23,19 +23,23 @@ Branch `verification`, from `main`, pushed to origin, with no PR on purpose (the
    - On that branch, `genIndParams` in `Blaster/Smt/Translate/Quantifier.lean` telescopes `(← hashcons indVal.type)`. So a datatype takes the parameter names of an earlier alpha-equivalent type.
    - Any goal with both `Except` and `Prod` fails, in either order ("unknown sort '@ε'"). PlutusCoreBlaster's goals translate `Data × Data` before a BLS12-381 builtin's `Except String _`.
    - Lean-blaster main at `a16614e` telescopes `indVal.type` and passes the same file.
-   - Draft: [lean-blaster-datatype-param-names.md](../../../../seedelf-verification/Upstream/drafts/lean-blaster-datatype-param-names.md). PlutusCoreBlaster [#68](https://github.com/input-output-hk/PlutusCoreBlaster/pull/68) (open) moves PlutusCoreBlaster onto the beta-based Blaster, so every PlutusCoreBlaster user would meet this.
+   - Draft: [lean-blaster-datatype-param-names.md](../../../../seedelf-verification/Upstream/drafts/lean-blaster-datatype-param-names.md).
+   - **It's already out there:** PlutusCoreBlaster `main` pins Blaster `bc03bb4`, which has the line, and its [#68](https://github.com/input-output-hk/PlutusCoreBlaster/pull/68) moves the pin to `8816f72`, which has it too. Lean-blaster [#155](https://github.com/input-output-hk/Lean-blaster/pull/155) (beta → `main`, under review on 2026-11-02) would bring it to `main`.
+   - The line came in with `bafdd4f` (2025-12-04, the hash-consing squash). Draft [#335](https://github.com/input-output-hk/Lean-blaster/pull/335) would fix it as a side effect, but has no test for it and was idle from 2026-10-18.
 2. ⛔ **`BitVec` through `Char`.**
    - A `ByteString` is a `String`, which is a `List Char`, and a `Char` is a `UInt32`, which is a `BitVec 32`.
    - `byteStringToInteger` folds `Char.toNat`, and `sliceByteString` is `take`/`drop` on the chars. Over a symbolic bytestring, either fails with "Inductive datatype with instance parameters not supported: `BitVec`".
    - The upstream issues are Lean-blaster [#153](https://github.com/input-output-hk/Lean-blaster/issues/153), [#69](https://github.com/input-output-hk/Lean-blaster/issues/69) and [#67](https://github.com/input-output-hk/Lean-blaster/issues/67). On 2026-07-29 a maintainer said BitVec/Fin support would come "very soon".
    - The stopgap's precedent is PlutusCoreBlaster [#27](https://github.com/input-output-hk/PlutusCoreBlaster/pull/27), an `opaque` alias for `serialiseData`. It was still open on 2026-11-02.
    - Drafts: [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md), [the PlutusCoreBlaster issue](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md), and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md). The #68 comment needs the number of bug 1's issue once that's filed.
+   - The "very soon" work looks like branch `feat/indexed-types` (RSoulatIOHK, last touched 2026-06-21, never a PR), which leaves out `Char` and `toNat`, the two things `byteStringToInteger` needs.
+3. ⛔ **`Fin` in a BLS12-381 coordinate.** `Fq1.t : Fin fieldPrime` (`Cryptograph/BLS12_381/Basic.lean`), and `Fin n` is an indexed type: the same throw, waiting behind 1 and 2 for anything holding a symbolic G1 point. Found from the code on 2026-11-02, not yet run. PlutusCoreBlaster draft [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29) (BLS axiomatization, idle since 2026-09-21) changes it to `Nat` and adds BLS12-381 axioms and an ownership-verification example: read it before WalletRegister.
 
 What they block:
 
 | Property | Needs |
 |---|---|
-| **A Register UTxO moves iff the Schnorr check holds and `vkh` signed** ([WalletRegister](../../../../seedelf-verification/Seedelf/WalletRegister.lean), left out of `check.sh`'s list): the wallet's core property | 1 and 2 |
+| **A Register UTxO moves iff the Schnorr check holds and `vkh` signed** ([WalletRegister](../../../../seedelf-verification/Seedelf/WalletRegister.lean), left out of `check.sh`'s list): the wallet's core property | 1, 2 and 3 |
 | Burns of 5eed0e1f tokens succeed (`burn_at_0`, `burn_at_255` in `PolicyBurn`). A mint passes for exactly the name `generate` gives (`mint_at_0_iff`, `mint_at_255_iff` in `PolicyMint`), then for any input | 2 |
 
 Until then, the wallet's Schnorr path rests on the Aiken tests, `seedelf-crypto`'s proptests and seedelf-core's recorded-transaction evaluations.
@@ -76,6 +80,7 @@ gh pr view 27 -R input-output-hk/PlutusCoreBlaster
 - **Bug 1 is fixed when** `genIndParams` on our pinned branch stops telescoping `(← hashcons indVal.type)`. It can take main's form or take the names from the recursor rule. CardanoLedgerApiBlaster moving to a Blaster without the bug counts too.
   - Then `./check.sh upstream` says `ok Upstream.ExceptParams`: the five ❌ turn ✅, as they already are on main.
   - If the beta branch merges into Lean-blaster main and CardanoLedgerApiBlaster follows it, the check is the same.
+- **Bug 3 is fixed when** `Fq1.t` is no longer a `Fin` in PlutusCoreBlaster (#29 or similar), or Lean-blaster translates `Fin`. There's no repro yet: add one to `Upstream/` beside the others (a symbolic `Fq1`, or `bls12_381_G1_uncompress` of a symbolic bytestring, once bug 1 is out of the way).
 - **Bug 2, fixed by `BitVec` support in Lean-blaster (#153):** `ok Upstream.ByteStrings`. Its four ❌ turn ✅, and the two `#blaster` cases show as Expected Falsified. This unblocks everything in the table above.
 - **Bug 2, fixed by `opaque` aliases in PlutusCoreBlaster (the stopgap):** the `BitVec` errors go away, but less gets unblocked, and the reproduction may not show it.
   - **Only properties that use the function the same way on both sides can be proved,** because the function is uninterpreted.
@@ -105,7 +110,7 @@ The owner runs every build and pastes the output back ([Practicalities](#practic
    - `./check.sh upstream-main`: it's pinned to `a16614e`, so it shouldn't change.
    - `./check.sh`: all 29 theorems must still be ✅ before anything is un-parked. If a bump breaks them, that's a regression to report, from a minimal case in `Upstream/`, as these were.
 5. **Un-park, one at a time.** Each gets its own `./check.sh <module>` run under the cap.
-   1. ⛔ **WalletRegister** (needs bugs 1 and 2).
+   1. ⛔ **WalletRegister** (needs bugs 1, 2 and 3).
       - **Measure first.** Put a valid spend's concrete run in `Steps.lean`, with a real proof from `schnorr.ak`'s or seedelf-crypto's test vectors. Set the step limit above it (2500 now). That run is also the passing run rule 3 pairs the property with.
       - **It may run out of memory.** It has six symbolic bytestrings and runs into the crypto builtins, which the README's rule 4 warns against. If it's `KILLED`, split it: one direction per module, or the signer fixed to `vkh`.
       - **Once it proves,** add it to `check.sh`'s default list and update the README's tables.
@@ -187,4 +192,4 @@ The owner runs every build and pastes the output back ([Practicalities](#practic
 
 ## Fixing it ourselves
 
-A separate investigation, started 2026-11-02, is checking whether we could fix these bugs ourselves in forks and PR the fixes upstream. If that goes ahead, it's chunk 41.
+The 2026-11-02 investigation found it within reach, about 3-5 days: bug 1 is one line plus a test; 3 is #29's `Fq1` change; 2 takes an `opaque` stopgap for `byteStringToInteger` (real `BitVec`/`Char` support is upstream's design work, weeks to months). The plan for doing it is [chunk 41](chunk-41-blaster-fixes.md).
