@@ -14,7 +14,7 @@ open PlutusCore.Integer (Integer)
 open PlutusCore.Data (Data)
 open PlutusCore.Crypto.BLS12_381.G1
 open PlutusCore.Crypto.Hash
-open PlutusCore.Bitwise
+open PlutusCore.UPLC.BuiltinFunctions.Bitwise (byteStringToIntegerOpaque)
 
 /-- Spending `#0` of an empty id, with `datum` and the redeemer
 `Proof { z_b, g_r_b, vkh }`, signed by `signer` alone. -/
@@ -34,8 +34,11 @@ def registerOf : Option Data → Option (ByteString × ByteString)
 /-- BLS12-381's scalar field order, `scalar.from_bytearray_big_endian`'s bound. -/
 def q : Integer := 52435875175126190479447740508185965837690552500527637822603658699938581184513
 
+/-- `scalar.from_bytearray_big_endian`, through the alias the `ByteStringToInteger`
+builtin runs (our PlutusCoreBlaster fork), so the spec and the script share one
+uninterpreted conversion. -/
 def scalarOf (b : ByteString) : Option Integer :=
-  let n := byteStringToInteger true b.data
+  let n := byteStringToIntegerOpaque true b.data
   if 0 ≤ n ∧ n < q then some n else none
 
 /-- `schnorr.prove`, over the builtins themselves:

@@ -12,11 +12,12 @@ open PlutusCore.UPLC.Utils
 def registerArgs (g u z gr vkh signer : ByteString) : List Term :=
   [toTerm (spendCtx (some (.Constr 0 [.B g, .B u])) z gr vkh signer)]
 
--- Blocked twice (Upstream/): `byteStringToInteger` (z and the challenge) folds
--- `Char.toNat`, so a symbolic input reaches `Char`'s `BitVec`, unless it's made
--- `opaque` in PlutusCoreBlaster as the crypto builtins are; and the pinned
--- Blaster declares `bls12_381_G1_uncompress`'s `Except` with `Prod`'s parameter
--- names. Not in check.sh's default list.
+-- Needs the forks lakefile.lean pins (chunk 41), for three gaps upstream (Upstream/):
+-- Blaster declared `bls12_381_G1_uncompress`'s `Except` with `Prod`'s parameter
+-- names (Lean-blaster #454); `byteStringToInteger` (z and the challenge) folds
+-- `Char.toNat` into `Char`'s `BitVec`, so the builtin runs an `opaque` alias; and a
+-- G1 coordinate was a `Fin`. Not in check.sh's default list until it proves.
+-- 2500 steps: `Steps.lean` measures a valid spend.
 #prep_uplc appliedRegister wallet registerArgs 2500
 
 /-- A Register UTxO moves iff the proof checks and the one-time key signed. -/

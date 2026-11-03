@@ -8,34 +8,45 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 |---|---|
 | 0 · Forks, clones, runner | ✅ |
 | 1 · Datatype parameter names | 🚧 issue filed, [Lean-blaster #454](https://github.com/input-output-hk/Lean-blaster/issues/454); fix `6526c4b` + test `25c0ee0` pushed; the fix passes our full repro; the test passes (2026-11-03: four Valid, one Expected Falsified); PR text written, not opened |
-| 2 · `ByteStringToInteger` alias | 🚧 fix `3dd76d7` + `28910c6` pushed; the first build failed on a bare `Integer` (auto-bound), fixed in `28910c6`; the second build failed in the test (below), fixed in `cfa8c53`, not rebuilt; PR text written, not opened |
-| 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; fix + test `ae0a7cd` on `fix/fq1-nat` pushed; its first build failed in the test (below), fixed in `f146c10`, not rebuilt, but its point case already came out Expected Falsified; the #29 question [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) 2026-11-03, no answer yet; the PR text written, not opened |
-| 4 · WalletRegister | ⬜ |
+| 2 · `ByteStringToInteger` alias | 🚧 fix `3dd76d7` + `28910c6` pushed; the first build failed on a bare `Integer` (auto-bound), fixed in `28910c6`; the second build failed in the test (below), fixed in `cfa8c53`, which passes (one Valid, two Expected Falsified); PR text written, not opened |
+| 3 · `Fin` in `Fq1` | 🚧 confirmed by a run: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s two point cases fail with "instance parameters not supported: `Fin", the control passes; fix + test `ae0a7cd` on `fix/fq1-nat` pushed; its first build failed in the test (below), fixed in `f146c10`, which passes (two Valid, one Expected Falsified, and the test vectors); the #29 question [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) 2026-11-03, no answer yet; the PR text written, not opened |
+| 4 · WalletRegister | 🚧 forks pinned in `lakefile.lean` (PlutusCoreBlaster's `seedelf` branch `1524b7a`, Lean-blaster `25c0ee0`), not yet `lake update`d; `scalarOf` calls the alias; a valid spend with a real proof added to `Steps.lean` and `concrete/wallet_register.sh` (Aiken: valid returns unit, three changes of it crash) |
 
 ### Next session, in order
 
-1. **The owner rebuilds Fixes 2 and 3's tests** (dev box). Each line stands alone:
+1. **The owner moves our package onto the forks and runs everything** (dev box). It stops before building if either fork didn't take:
    ```bash
    # dev box (this machine)
-   cd /home/logic/Documents/LogicalMechanism/blaster-forks && git -C PlutusCoreBlaster switch feat/opaque-bytestring-to-integer && CAP=24G LIMIT=90m ./check.sh PlutusCoreBlaster Tests.Bitwise.ByteStringToIntegerSymbolic
-   cd /home/logic/Documents/LogicalMechanism/blaster-forks && git -C PlutusCoreBlaster switch fix/fq1-nat && CAP=24G LIMIT=90m ./check.sh PlutusCoreBlaster Tests.Cryptograph.BLS12_381.SymbolicPoints Tests.Cryptograph.BLS12_381.TestVectors
+   cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && lake update Blaster PlutusCore && grep -q 'logicalmechanism/Lean-blaster' lake-manifest.json && grep -q 'logicalmechanism/PlutusCoreBlaster' lake-manifest.json && echo "== forks pinned" && CAP=16G LIMIT=90m ./check.sh Seedelf.Scripts && ./check.sh upstream && ./check.sh && ./check.sh Seedelf.WalletRegister
    ```
-   Expected:
-   - Fix 2's test: one Valid and two Expected Falsified.
-   - Fix 3's: two Valid and one Expected Falsified, and the test vectors hold.
-   - The first round (2026-11-03) took 28 s and 95 s at peaks of 647 MB and 1.4 GB. Issue454 passed then.
-   - **What the first round found, all in the tests, not the fixes:**
-     - A doc comment (`/-- -/`) above `#blaster` doesn't parse. `#blaster` isn't a declaration, so use `--` there. The command still ran after the parse error.
-     - **Never compare a whole CEK `State`.** `prop a ≠ State.Halt (…)` makes Blaster declare the CEK datatype, whose `Const` holds BLS12-381 points, so it fails on `Fin` even with no point in the goal. Read the result through a match (`haltsWithInteger`), as PlutusCoreBlaster's `Tests/BlueprintVerify/BooleanCase.lean` and our `isSuccessful` do.
-     - Inside `namespace Tests.Cryptograph.…`, `Cryptograph.BLS12_381` resolves to the test's own parent namespace. Use `TestVectors.lean`'s namespace.
-2. **The owner opens the Lean-blaster PR** now that Issue454 passes: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/Lean-blaster --base beta-lambda-cache-optimization --head logicalmechanism:fix/datatype-param-names --title "$(cat posts/lean-blaster-pr.title)" --body-file posts/lean-blaster-pr.md` (both files are written).
-3. **The owner opens the PlutusCoreBlaster PR for Fix 2** once its test passes: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:feat/opaque-bytestring-to-integer --title "$(cat posts/plutuscoreblaster-pr.title)" --body-file posts/plutuscoreblaster-pr.md`.
+   - The first `check.sh` compiles Blaster, PlutusCore and CardanoLedgerApi again from the forks, hence its larger cap and limit.
+   - Expected from `upstream`:
+     - `ok` ExceptParams: its five ❌ turn ✅.
+     - `ok` Fq1Fin: the control and both point cases Expected Falsified, `fq1_eq_of_t_eq` Valid.
+     - `FAILED` ByteStrings, unchanged with four ❌ on `BitVec`: it calls `PlutusCore.Bitwise` directly.
+     - `ok` SlicePrograms and the five Slice modules.
+   - Expected from the baseline: eight `ok`, and PolicyBurn and PolicyMint `FAILED` on `BitVec` alone.
+     - Steps prints two new lines: `wallet, Register, valid: halt after N` and `other signer: error after M`.
+     - N must be under 2500, WalletRegister's limit. If it isn't, raise the limit and ignore this WalletRegister run.
+     - If the valid spend errors, Blaster's machine disagrees with Aiken's evaluator: stop and find out why.
+   - **WalletRegister** is new ground: Valid is the wallet's core property, proved. If it's Falsified, read the counterexample. If it's `KILLED` or `TIMEOUT`, see *Stop rules*.
+   - Then Claude reads `lake-manifest.json`: both packages should show the fork's URL and commit, with `"inherited": false`.
+2. **The owner opens the Lean-blaster PR** (Issue454 passes): `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/Lean-blaster --base beta-lambda-cache-optimization --head logicalmechanism:fix/datatype-param-names --title "$(cat posts/lean-blaster-pr.title)" --body-file posts/lean-blaster-pr.md`.
+3. **The owner opens the PlutusCoreBlaster PR for Fix 2** (its test passes as the text says): `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:feat/opaque-bytestring-to-integer --title "$(cat posts/plutuscoreblaster-pr.title)" --body-file posts/plutuscoreblaster-pr.md`.
    - It's a PR, not a separate issue. The body carries [the issue draft](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md)'s case, on the repo's template.
-   - Its *Testing* states the result step 1 expects. If the run says anything else, Claude rewrites it first.
-4. ✅ **The #29 question is [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930)** (2026-11-03). Claude ran it at the owner's word ("Gonna trust you on running" the command), as `logicalmechanism`.
-   - Fix 3's PR waits for the answer and for its test. Then: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:fix/fq1-nat --title "$(cat posts/plutuscoreblaster-fq1-pr.title)" --body-file posts/plutuscoreblaster-fq1-pr.md`.
+4. **Fix 3's PR waits for #29's answer.** The question was [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) on 2026-11-03. Claude ran it at the owner's word ("Gonna trust you on running" the command), as `logicalmechanism`. Then: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:fix/fq1-nat --title "$(cat posts/plutuscoreblaster-fq1-pr.title)" --body-file posts/plutuscoreblaster-fq1-pr.md`.
 5. **Claude fills in the PR numbers** in [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md) (its "we've asked PlutusCoreBlaster" line points at the Fix 2 PR) and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md) (it points at #454; add the Lean-blaster PR). Then the owner posts both.
-6. **Pins and WalletRegister** as below, once Fixes 1–3 build.
+6. **WalletRegister, from step 1's result,** as Step 4 below says. If a PR's branch changes in review, rebuild `seedelf` and re-pin.
+
+**The fork tests' first round (2026-11-03)** failed in the tests, not in the fixes. Each was fixed and passed on the second round:
+- A doc comment (`/-- -/`) above `#blaster` doesn't parse. `#blaster` isn't a declaration, so use `--` there. The command still ran after the parse error.
+- **Never compare a whole CEK `State`.** `prop a ≠ State.Halt (…)` makes Blaster declare the CEK datatype, whose `Const` holds BLS12-381 points, so it fails on `Fin` even with no point in the goal. Read the result through a match (`haltsWithInteger`), as PlutusCoreBlaster's `Tests/BlueprintVerify/BooleanCase.lean` and our `isSuccessful` do.
+- Inside `namespace Tests.Cryptograph.…`, `Cryptograph.BLS12_381` resolves to the test's own parent namespace. Use `TestVectors.lean`'s namespace.
+- Each PlutusCoreBlaster test then took about 40 s, at a 1.4–1.5 GB peak.
+
+**The valid spend** in `Steps.lean` and `concrete/wallet_register.sh` is a proof from `seedelf-crypto`'s own `create_proof` (secret `0x5eed0e1f`, a 28-byte key hash), printed by a scratch crate outside the repo.
+- The deployed bytes accept it, at 72,113 memory units, and refuse a changed z, another signer, and a proof bound to another key hash.
+- The schnorr.ak vector (`real_fiat_shamir_transform`) isn't a proof for `valid_schnorr_proof`'s x and r: a z made from it fails.
 
 Chunk 40's [baseline](chunk-40-verification-upstream.md#the-baseline-2026-11-02-z3-531), [practicalities and rules](chunk-40-verification-upstream.md#practicalities-and-rules) and [what each fix should flip](chunk-40-verification-upstream.md#how-to-tell-each-is-fixed) hold here. They aren't repeated.
 
@@ -87,8 +98,8 @@ Chunk 40's [baseline](chunk-40-verification-upstream.md#the-baseline-2026-11-02-
 
 | Package | Fork commit | PR | Remove when |
 |---|---|---|---|
-| Blaster | — | — | the fix is on `beta-lambda-cache-optimization`, or wherever CardanoLedgerApiBlaster requires Blaster from |
-| PlutusCore | — | — | both PRs are on PlutusCoreBlaster `main` |
+| Blaster | `25c0ee0` (`fix/datatype-param-names`) | not opened | the fix is on `beta-lambda-cache-optimization`, or wherever CardanoLedgerApiBlaster requires Blaster from |
+| PlutusCore | `1524b7a` (`seedelf`: `cfa8c53` and `f146c10` merged onto `1c23de8`) | not opened | both PRs are on PlutusCoreBlaster `main` |
 
 ## Fix 1 · Datatype parameter names (Lean-blaster) 🚧
 
@@ -196,7 +207,7 @@ Done: `3dd76d7` on `feat/opaque-bytestring-to-integer`, pushed to the fork: the 
   - If they say no, keep the alias in our fork as our own patch, and say so in the README. The real fix is #153.
   - If they want another form (a rewrite, another name, another place), follow theirs and move `scalarOf` with it.
 
-## Step 4 · WalletRegister ⬜
+## Step 4 · WalletRegister 🚧
 
 - **Follow [chunk 40's step 5.1](chunk-40-verification-upstream.md#resuming)** with both pins in place.
   - Measure first: a valid spend in `Steps.lean`, with a real proof, and the step limit above it (2500 now).
