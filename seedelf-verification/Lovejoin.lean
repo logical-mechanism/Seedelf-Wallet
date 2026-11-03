@@ -44,3 +44,17 @@ import Lovejoin.Template.MixBoxGate
 import Lovejoin.Template.MixBoxNoLock
 import Lovejoin.Template.OneShotMint
 import Lovejoin.Template.FeeContract
+import Lovejoin.V2.OwnAny1Boxes
+import Lovejoin.V2.OwnAny1Passes
+import Lovejoin.V2.OwnAny2Boxes
+import Lovejoin.V2.OwnAny2Passes
+import Lovejoin.V2.OwnAny3Boxes
+import Lovejoin.V2.OwnAny3Passes
+import Lovejoin.V2.OwnAny4Boxes
+import Lovejoin.V2.OwnAny4Passes
+import Lovejoin.OwnClassic1Boxes
+import Lovejoin.OwnClassic1Passes
+import Lovejoin.OwnClassic2Boxes
+import Lovejoin.OwnClassic2Passes
+import Lovejoin.OwnClassic3Boxes
+import Lovejoin.OwnClassic3Passes

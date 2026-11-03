@@ -9,6 +9,7 @@
 #   ./check.sh lovejoin              Lovejoin's classic pool (chunk 42)
 #   ./check.sh lovejoin-v2           v2, the templates with xor32's length checks (chunk 42)
 #   ./check.sh lovejoin-v2-pools     v2's general Mix alone, for every pool kind and n = 2 to 4
+#   ./check.sh lovejoin-owner        Owner withdrawals of several boxes, v2 and the classic pool
 #   ./check.sh Seedelf.PolicyMint    some modules
 #   CAP=12G LIMIT=20m ./check.sh     other limits
 cd "$(dirname "$0")" || exit 1
@@ -20,10 +21,24 @@ mods=("$@")
   Seedelf.PolicyForeign Seedelf.PolicyBurn Seedelf.PolicyMint)
 [ "${mods[0]}" = upstream ] && mods=(Upstream.ExceptParams Upstream.ByteStrings Upstream.Fq1Fin Upstream.SlicePrograms
   Upstream.SliceNone Upstream.Slice1 Upstream.Slice4 Upstream.Slice16 Upstream.Slice32)
+# Owner withdrawals of several boxes, a payer's input and two outputs (gen-lovejoin-owner.py):
+# v2 through mix_logic's template, 1 to 4 boxes; the deployed classic pool, 1 to 3.
+owners_v2=(
+  Lovejoin.V2.OwnAny1 Lovejoin.V2.OwnAny1Spec Lovejoin.V2.OwnAny1Steps Lovejoin.V2.OwnAny1Boxes
+  Lovejoin.V2.OwnAny1Passes Lovejoin.V2.OwnAny2 Lovejoin.V2.OwnAny2Spec Lovejoin.V2.OwnAny2Steps
+  Lovejoin.V2.OwnAny2Boxes Lovejoin.V2.OwnAny2Passes Lovejoin.V2.OwnAny3 Lovejoin.V2.OwnAny3Spec
+  Lovejoin.V2.OwnAny3Steps Lovejoin.V2.OwnAny3Boxes Lovejoin.V2.OwnAny3Passes Lovejoin.V2.OwnAny4
+  Lovejoin.V2.OwnAny4Spec Lovejoin.V2.OwnAny4Steps Lovejoin.V2.OwnAny4Boxes Lovejoin.V2.OwnAny4Passes)
+owners_classic=(
+  Lovejoin.OwnClassic1 Lovejoin.OwnClassic1Spec Lovejoin.OwnClassic1Steps Lovejoin.OwnClassic1Boxes
+  Lovejoin.OwnClassic1Passes Lovejoin.OwnClassic2 Lovejoin.OwnClassic2Spec Lovejoin.OwnClassic2Steps
+  Lovejoin.OwnClassic2Boxes Lovejoin.OwnClassic2Passes Lovejoin.OwnClassic3 Lovejoin.OwnClassic3Spec
+  Lovejoin.OwnClassic3Steps Lovejoin.OwnClassic3Boxes Lovejoin.OwnClassic3Passes)
+[ "${mods[0]}" = lovejoin-owner ] && mods=("${owners_v2[@]}" "${owners_classic[@]}")
 # Lovejoin's classic mainnet pool (chunk 42), after ./extract-lovejoin.sh.
 [ "${mods[0]}" = lovejoin ] && mods=(Lovejoin.Scripts Lovejoin.Box Lovejoin.Steps Lovejoin.ReferenceHolder
   Lovejoin.MixBoxPurpose Lovejoin.MixBoxGate Lovejoin.MixBoxNoLock Lovejoin.MixLogicPurpose Lovejoin.Logic
-  Lovejoin.Owner)
+  Lovejoin.Owner "${owners_classic[@]}")
 # v2's general Mix: mix_logic's template, every pool parameter, box point and proof field symbolic.
 # MixAny is ADA pools at n = 2; the rest gen-lovejoin-mix.py writes (ADA n = 3, 4; token n = 2, 3, 4).
 pools=(
@@ -47,7 +62,7 @@ pools=(
   Lovejoin.Template.MixBoxPurpose Lovejoin.Template.MixBoxGate Lovejoin.Template.MixBoxNoLock
   Lovejoin.Template.Launch Lovejoin.Template.OneShotMint Lovejoin.Template.Fee Lovejoin.Template.FeeContract
   Lovejoin.V2.Mix3 Lovejoin.V2.Mix3Spec Lovejoin.V2.Mix3Steps Lovejoin.V2.Mix3First Lovejoin.V2.Mix3Second
-  Lovejoin.V2.Mix3Third Lovejoin.V2.Mix3Passes "${pools[@]}")
+  Lovejoin.V2.Mix3Third Lovejoin.V2.Mix3Passes "${pools[@]}" "${owners_v2[@]}")
 # The same ExceptParams file in its own package, against Lean-blaster main.
 [ "${mods[0]}" = upstream-main ] && { cd Upstream/blaster-main || exit 1; mods=(BlasterMain.ExceptParams); }
 peakf=$(mktemp)
