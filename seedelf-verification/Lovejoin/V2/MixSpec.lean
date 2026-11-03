@@ -10,8 +10,9 @@ The builtins are called as the script calls them (README rule 7): `serialise_dat
 `bytearray_to_integer` and `xor_bytearray` through their opaque aliases, the hash and
 the G1 operations opaque, `scalar.from_int` as `Int.fmod`, `g1.scale(p, k)` as
 `scalarMul k p`, and each point's uncompression where the script uncompresses it. An
-uncompression is a pure function of its bytes, so taking it again for each branch is the
-same term as the script's one. -/
+uncompression is a pure function of its bytes, so taking an input's again for each branch
+is the same term as the script's one. A box out's point is the exception: the script
+stores it compressed and uncompresses it in each branch (`branchHolds`). -/
 
 namespace Lovejoin.V2
 open PlutusCore.ByteString
@@ -67,18 +68,29 @@ def xorOfChallenges (c1 c2 : ByteString) : Option ByteString :=
   | none => none
 
 /-- One branch against its statement `(ap, bp)`, for the input `(a, b)`: `z` 32 bytes below
-the field order, then `z·a = t0 + c·ap` and `z·b = t1 + c·bp`, `c` read modulo the order. -/
+the field order, then `z·a = t0 + c·ap` and `z·b = t1 + c·bp`, `c` read modulo the order.
+
+The statement's points are as the script has them. walk_outputs uncompresses `ap` and `bp`
+into a `DHTupleStatementPt`, a Data-encoded record, so Aiken stores each point compressed
+(`bData(compress(uncompress ap))`), and each branch uncompresses it again. On real points
+that's the point itself, but to the solver the builtins are opaque: with `uncompress ap`
+alone, both equations came back Falsified. The input's `a` and `b` are `let`-bound
+points, used as they are. -/
 def branchHolds (a b ap bp t0 t1 c z : ByteString) : Bool :=
   match bls12_381_G1_uncompress a, bls12_381_G1_uncompress b, bls12_381_G1_uncompress ap,
         bls12_381_G1_uncompress bp, bls12_381_G1_uncompress t0, bls12_381_G1_uncompress t1 with
-  | .ok A, .ok B, .ok AP, .ok BP, .ok T0, .ok T1 =>
-      let zi := byteStringToIntegerOpaque true z.data
-      if lengthOfByteString z == 32 && decide (zi < q) then
-        let zs := Int.fmod zi q
-        let cs := Int.fmod (byteStringToIntegerOpaque true c.data) q
-        bls12_381_G1_equal (bls12_381_G1_scalarMul zs A) (bls12_381_G1_add T0 (bls12_381_G1_scalarMul cs AP)) &&
-          bls12_381_G1_equal (bls12_381_G1_scalarMul zs B) (bls12_381_G1_add T1 (bls12_381_G1_scalarMul cs BP))
-      else false
+  | .ok A, .ok B, .ok AP0, .ok BP0, .ok T0, .ok T1 =>
+      match bls12_381_G1_uncompress (bls12_381_G1_compress AP0),
+            bls12_381_G1_uncompress (bls12_381_G1_compress BP0) with
+      | .ok AP, .ok BP =>
+          let zi := byteStringToIntegerOpaque true z.data
+          if lengthOfByteString z == 32 && decide (zi < q) then
+            let zs := Int.fmod zi q
+            let cs := Int.fmod (byteStringToIntegerOpaque true c.data) q
+            bls12_381_G1_equal (bls12_381_G1_scalarMul zs A) (bls12_381_G1_add T0 (bls12_381_G1_scalarMul cs AP)) &&
+              bls12_381_G1_equal (bls12_381_G1_scalarMul zs B) (bls12_381_G1_add T1 (bls12_381_G1_scalarMul cs BP))
+          else false
+      | _, _ => false
   | _, _, _, _, _, _ => false
 
 /-- verify_pre for the input `(a, b)` and its two branches: the branches' `c`s xor to
