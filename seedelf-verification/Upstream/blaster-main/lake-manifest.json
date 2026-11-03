@@ -1,0 +1,15 @@
+{"version": "1.1.0",
+ "packagesDir": ".lake/packages",
+ "packages":
+ [{"url": "https://github.com/input-output-hk/Lean-blaster",
+   "type": "git",
+   "subDir": null,
+   "scope": "",
+   "rev": "a16614e5e44a693664043552f259235f15f1c884",
+   "name": "Blaster",
+   "manifestFile": "lake-manifest.json",
+   "inputRev": "a16614e5e44a693664043552f259235f15f1c884",
+   "inherited": false,
+   "configFile": "lakefile.lean"}],
+ "name": "BlasterMain",
+ "lakeDir": ".lake"}

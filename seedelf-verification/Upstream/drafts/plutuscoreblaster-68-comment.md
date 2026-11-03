@@ -1,0 +1,3 @@
+<!-- Comment on https://github.com/input-output-hk/PlutusCoreBlaster/pull/68 -->
+
+While this moves to Z3 5.3.1: the README's *Installation and building* still says "Install z3 version 4.15.2." With the beta-based Blaster (from `88588c5`, "set min z3 version to 5.3.1"), every proof that reaches the solver fails on 4.15.2 with `invalid tactic, unknown tactic recfun-finder` (the simplifier arrived in Z3 5.3.0), while goals the optimizer closes still pass, so it looks half-working. Lean-blaster's own README says both (4.15.2 in the badge and install section, 5.3.1 under Prerequisites). Worth updating here with the dependency.

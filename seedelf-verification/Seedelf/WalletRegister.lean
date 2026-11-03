@@ -12,9 +12,11 @@ open PlutusCore.UPLC.Utils
 def registerArgs (g u z gr vkh signer : ByteString) : List Term :=
   [toTerm (spendCtx (some (.Constr 0 [.B g, .B u])) z gr vkh signer)]
 
--- Blocked: `byteStringToInteger` (z and the challenge) is a plain definition in
--- PlutusCoreBlaster, so a symbolic input reaches its `BitVec`. It needs to be
--- `opaque` there, as the crypto builtins are. Not in check.sh's default list.
+-- Blocked twice (Upstream/): `byteStringToInteger` (z and the challenge) folds
+-- `Char.toNat`, so a symbolic input reaches `Char`'s `BitVec`, unless it's made
+-- `opaque` in PlutusCoreBlaster as the crypto builtins are; and the pinned
+-- Blaster declares `bls12_381_G1_uncompress`'s `Except` with `Prod`'s parameter
+-- names. Not in check.sh's default list.
 #prep_uplc appliedRegister wallet registerArgs 2500
 
 /-- A Register UTxO moves iff the proof checks and the one-time key signed. -/

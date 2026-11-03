@@ -10,3 +10,7 @@ package «SeedelfVerification» where
 
 @[default_target]
 lean_lib «Seedelf» where
+
+-- Minimal reproductions of the Blaster and PlutusCoreBlaster gaps that block
+-- Seedelf's proofs, for upstream issues: `./check.sh upstream`.
+lean_lib «Upstream» where

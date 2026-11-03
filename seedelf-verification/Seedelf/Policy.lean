@@ -24,11 +24,12 @@ def mintCtx (own cs tn txid tag : ByteString) (idx n : Integer) : ScriptContext 
 
 def seedelfPrefix : ByteString := "\x5e\xed\x0e\x1f"
 
-/-- A 5eed0e1f name with a symbolic rest. A wholly symbolic name doesn't scale:
-`sliceByteString` is `take`/`drop` on the `List Char`, so slicing a symbolic
-string splits the symbolic run on its length, and each branch carries the rest
-of a ~1300-step run (`take(tn, 4)` alone took a run past 8 GB). A concrete
-prefix slices without looking at the rest. -/
+/-- A 5eed0e1f name with a symbolic rest. A wholly symbolic name took a run past
+8 GB, for a cause a minimal symbolic slice doesn't reproduce (Upstream/Slice*).
+A known prefix doesn't save the success properties either: `sliceByteString`
+is `take`/`drop` on the `List Char`, and any symbolic slice reaches `Char`'s
+`BitVec` (Upstream/ByteStrings). The failure properties pass, since the run
+reaches `Error` before it compares the slice. -/
 def prefixed (rest : ByteString) : ByteString := appendByteString seedelfPrefix rest
 
 /-- An input id from token_name.ak's tests, 32 bytes as on chain. -/

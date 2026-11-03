@@ -34,19 +34,19 @@ What a ✅ is worth:
 
 - **Z3's word, not Lean's kernel.** Blaster closes a goal with `axiom blasterProven : ∀ {α}, α` once Z3 finds no counterexample (proof reconstruction is a TODO upstream), hence the `declaration uses 'blasterProven'` warnings.
 - **IOG's model of the machine.** PlutusCoreBlaster's CEK machine and builtins are tested against the Plutus conformance suite, not proved equal to the node's. It runs the post-Conway V3 builtin semantics (`defaultFunSemanticsVariantE`). The crypto builtins (BLS12-381, the hashes) are `opaque`: a property holds for any interpretation of them, so it says what the bytes check, not that the check is hard to fool.
+- **Strings over the solver's alphabet.** Blaster gives a `String` the SMT string sort, whose characters are `0x0`–`0x2FFFF` where Lean's are scalar values up to `0x10FFFF` ([Lean-blaster #389](https://github.com/input-output-hk/Lean-blaster/issues/389), which shows it proving `False`). A `ByteString` is a `String` of characters `0`–`255`, inside both, so a theorem over bytestrings covers every bytestring; it says nothing about strings with characters above `0x2FFFF`, which no script sees.
 - **Scenarios, not every transaction.** Each module fixes the fields its script never reads (an empty transaction from `Scenario.lean`) and leaves symbolic only what the property is about. Some properties fix more than that: see the module docs.
 - **Bounded runs.** A property holds for runs within the module's step limit, above the longest concrete run `Steps.lean` measures.
 - The 18 shapes covering every non-Register datum is checked by reading them, not by a Lean theorem tying them together.
 
 ## Not proved, and why
 
-These need Blaster or PlutusCoreBlaster to change, not our scripts:
+These need Blaster or PlutusCoreBlaster to change, not our scripts. `Upstream/` holds a minimal reproduction of each, with controls (`./check.sh upstream`); the related upstream issues are Lean-blaster [#153](https://github.com/input-output-hk/Lean-blaster/issues/153), [#69](https://github.com/input-output-hk/Lean-blaster/issues/69) and [#67](https://github.com/input-output-hk/Lean-blaster/issues/67) (`BitVec`, `Char`), [#138](https://github.com/input-output-hk/Lean-blaster/issues/138) and [#233](https://github.com/input-output-hk/Lean-blaster/issues/233) (`#prep_uplc` cost, symbolic list tails), and PlutusCoreBlaster [#27](https://github.com/input-output-hk/PlutusCoreBlaster/pull/27) (an `opaque` builtin as the stopgap).
 
 | Property | Blocked by |
 |---|---|
-| **A Register UTxO moves iff the Schnorr check holds and `vkh` signed** (`WalletRegister`, left out of `check.sh`): the wallet's core property | Blaster declares Lean's `Except ε α` (what `bls12_381_G1_uncompress` returns) as `(par (@α @β) …)` with fields over `@ε`, which Z3 rejects; and `byteStringToInteger` (z and the challenge) is a plain definition built on `BitVec`, which Blaster can't translate over a symbolic input |
-| Mints name the token after the first input, for any input; burns of 5eed0e1f tokens succeed | `sliceByteString` is `take`/`drop` on the `List Char`: slicing a symbolic string branches on its length, and each branch carries the rest of a ~1300-step run (8 GB). Comparing a partly symbolic name reaches `Char`, a `UInt32`, so `BitVec` again |
-| Any first-input index | `consByteString`'s `UInt8` is a `BitVec` |
+| **A Register UTxO moves iff the Schnorr check holds and `vkh` signed** (`WalletRegister`, left out of `check.sh`): the wallet's core property | On the Blaster branch Lake pins, a datatype's SMT parameters take the binder names of an alpha-equivalent type translated before it (`genIndParams` hash-conses the inductive's type), so `Except ε α` (what `bls12_381_G1_uncompress` returns) is declared `(par (@α @β) …)` with fields over `@ε`, which Z3 rejects (`Upstream/ExceptParams`); and `byteStringToInteger` (z and the challenge) folds `Char.toNat`, and a `Char` is a `BitVec`, which Blaster can't translate over a symbolic input (`Upstream/ByteStrings`) |
+| Mints name the token after the first input, for any input; burns of 5eed0e1f tokens succeed | `sliceByteString` is `take`/`drop` on the `List Char`, so any slice of a symbolic bytestring reaches `Char`'s `BitVec`, even `lengthOfByteString (sliceByteString 0 4 bs) ≤ 4` (`Upstream/ByteStrings`). Separately, a wholly symbolic name took the policy past 8 GB; a minimal symbolic slice doesn't (`Upstream/Slice*`: ~290 MB at every length), so that cost's cause isn't isolated |
 
 Until the first is fixed, the wallet's Schnorr path rests on the Aiken tests, `seedelf-crypto`'s proptests and seedelf-core's recorded-transaction evaluations.
 
@@ -61,10 +61,10 @@ What a run teaches the hard way:
 1. **Measure steps first.** Blaster's machine counts return steps too, so it takes about twice what the chain's cost model charges (wallet: 409 steps against a cost-model 233). Add the scenario's concrete run to `Steps.lean` and set the limit above it.
 2. **Failure is `isUnsuccessful`, never `¬ isSuccessful`.** A run cut off by the step limit is neither (`isExhausted`), so `¬ isSuccessful` holds for nothing when the limit is too small. Two of the first "proofs" here did.
 3. **Pair a failure property with a run that passes.** A malformed scenario fails for its own reasons; `Steps.lean` shows the same context halting when it's valid.
-4. **Symbolic only what the property needs.** Every symbolic value the script compares splits the symbolic run, and the splits multiply. Never symbolic: a list the script walks, a bytestring it slices, an integer it turns into a byte, a path into the crypto builtins (keep the branch out of the scenario: a hypothesis excluding it still leaves it in the run).
+4. **Symbolic only what the property needs.** Every symbolic value the script compares splits the symbolic run, and the splits multiply. Never symbolic: a list the script walks, a bytestring it slices or turns into an integer, a path into the crypto builtins (keep the branch out of the scenario: a hypothesis excluding it still leaves it in the run).
 5. **Small modules.** A module killed at the cap loses all its messages, including the ✅ before it.
 
 ## Next
 
 - **Lovejoin.** Its scripts' bytes are in seedelf-core: the generalized pool scripts, before their parameters, in `src/lovejoin/templates.rs`, and the classic pool bundled whole. A `Lovejoin/` beside `Seedelf/`, with its own `Scripts.lean` and an `extract.sh` step that checks its hashes.
-- Raise the blockers upstream: the `Except` declaration (Lean-blaster), `BitVec` through `byteStringToInteger`, `consByteString` and `Char` (PlutusCoreBlaster), slicing on SMT strings, and the Z3 version in PlutusCoreBlaster's README.
+- Raise the blockers upstream, from `Upstream/`'s results: the `Except` declaration (Lean-blaster, not yet reported), `BitVec` through the bytestring builtins (on Lean-blaster #153, with `opaque` aliases in PlutusCoreBlaster as the stopgap, as #27 did for `serialiseData`), the cost of a symbolic slice, and the Z3 version in PlutusCoreBlaster's README (its PR #68 moves to 5.3.1).

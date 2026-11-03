@@ -3,10 +3,10 @@ import Blaster
 
 /-! Mints under policy `p` off `exampleTxid#i` (i = 0, 255), no tag, of a
 5eed0e1f token with a symbolic rest. The input id and the tag are concrete:
-`generate` slices them, and a symbolic slice splits the run on the string's
-length (see `prefixed`). So this pins the one name a given input allows, not
-`generate` over every input. The expected name spells the index byte as a
-literal, since a computed one is a `UInt8`. -/
+`generate` slices them, and a symbolic slice reaches `Char`'s `BitVec` (see
+`prefixed`). So this pins the one name a given input allows, not `generate`
+over every input; with the name's rest symbolic it still fails on the burn
+block's `take(tn, 4)`. -/
 
 namespace Seedelf.V1
 open CardanoLedgerApi.IsData.Class (toTerm)

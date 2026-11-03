@@ -2,9 +2,10 @@ import Seedelf.Policy
 import Blaster
 
 /-! Burns of any 5eed0e1f token (`prefixed rest`, rest symbolic) under policy
-`p`, first input `01#i`, no tag. The index is fixed per scenario: a symbolic
-one reaches `consByteString`'s `UInt8`, a `BitVec` Blaster can't translate.
-`xor` takes both blocks, so a burn builds the mint's name too: first seen
+`p`, first input `01#i`, no tag. The index is fixed per scenario: a run with a
+symbolic index (and symbolic names) failed on `BitVec`, which Upstream/ByteStrings
+later traced to the slicing, not to `consByteString`'s byte, so a symbolic
+index is worth retrying. `xor` takes both blocks, so a burn builds the mint's name too: first seen
 running the deployed bytes with `aiken uplc eval`. -/
 
 namespace Seedelf.V1
