@@ -18,9 +18,19 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 ### Next session, in order
 
-1. **The owner's calls before the PR:** the side finding below (`precompute_statements`' cost, the one contract change still open) and disclosure (the PR). v2's verification for the PR is otherwise done: 210 ✅ on 68c5399.
-2. **Then the v2 launch** (the new 5 ₳ pool): the template theorems already hold for it.
-3. **Then step 9**, the wallet on v2 alone (1.8.0).
+1. **The owner builds what a Mix must pay, for every pool** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh lovejoin-v2-outputs`. 24 modules, 66 theorems (`gen-lovejoin-mix-outputs.py`), below.
+   - Each `…OutSteps`: `honest` must `halt`, and every other line `error`.
+2. **Then the PR,** on the owner's call (disclosure). The contract is final: `precompute_statements` stays (the owner, 2026-11-03).
+3. **Then the v2 launch** (the new 5 ₳ pool): the template theorems already hold for it.
+4. **Then step 9**, the wallet on v2 alone (1.8.0).
+
+**What a Mix must pay, for every pool (written 2026-11-03, not built):** `V2/MixOutputs` and `V2/MixDatums` hold at the test launch with two boxes alone, and the general Mix's scenario fixes every box out as it should be, so it couldn't say what a wrong one does. `gen-lovejoin-mix-outputs.py` takes them to mix_logic's template, for the six families of the general Mix (ADA and token pools, n = 2 to 4), with the pool's parameters, every box's points and every proof field symbolic. It's walk_outputs, so a Mix fails if:
+- one of its first n outputs is anywhere but mix_box, or has a stake credential or a reference script (`…Outputs`);
+- one holds other than exactly the box value (its lovelace, or a token pool's token quantity), or holds any other token beside it;
+- it has fewer than n outputs, or a later output is another box at mix_box;
+- one's datum isn't two unequal 48-byte points, or isn't inline (`…Datums`).
+- **The builder** (`…Out`'s `mixCtxOuts`) is the scenario's Mix with its outputs given, and with the scenario's outputs it is the scenario's (`mixCtxOuts_is_the_mix`, by `rfl`). So each theorem changes one thing in the Mix whose iff the family proves.
+- **`MixChallenges` needs no lift:** the general Mix's spec has xor32 return `none` for a `c` of any other length, so a box with one fails its challenge theorem, for every pool and n = 2 to 4.
 
 **v2's general Mix (2026-11-03, 68c5399):** `./check.sh lovejoin-v2-pools` 42 `ok`: 82 theorems on mix_logic's template, ADA pools at n = 2, 3 and 4 and token pools at n = 2, 3 and 4. Every pool parameter, box point and proof field is symbolic. The slowest module was 13 s at 740 MB (token pools at n = 4). Each family's `Steps`: the KAT halts (11497, 19204 and 29007 steps for ADA at n = 2 to 4; 11798, 19505 and 29308 for tokens) with the spec `true`. Its first box's or last box's z changed errors with the spec `false`, and so does n = 2's ADA KAT in a 5 ₳ pool.
 
@@ -35,7 +45,8 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 **Step 8's Mix iff at n = 2, on 68c5399 (2026-11-03):** `MixFirst`' 3, `MixSecond`'s 3 and `MixPasses`' 1 ✅, each solve 0.02 s and each module under 10 s at 366 MB, after the dependencies' rebuild (93 s). `V2/Steps` unchanged on the new pin. The three tie-in lemmas elaborated. So a Mix of two moves boxes iff each box's sigma-OR proof verifies against the boxes it pays, with every field of both proofs symbolic. `(verbose: 1)` is out.
 
 **`V2/MixBranch`, the diagnostic (2026-11-03):** every uncompression (a constant input point, a constant output point, a symbolic `t0`) and `z`'s checks ✅; both equations ❌. The compiled UPLC (`aiken uplc decode`) shows why. `DHTupleStatementPt` is Data-encoded, so walk_outputs stores each box out's point as `bData(compress(uncompress a'))`, and each branch uncompresses it again. The script's statement point is `uncompress(compress(uncompress a'))`, the spec's was `uncompress a'`, and the solver can't equate them over opaque builtins. `branchHolds` now takes the script's form, and `MixBranch` is deleted.
-- **A side finding, about cost, not safety:** `precompute_statements`' comment says it saves N²−N uncompressions a Mix, but the record's encoding undoes that. Each box out's point is uncompressed, compressed, then uncompressed again in every branch: 2N + 2N² uncompressions and 2N compressions, where the comment counts 2N. While v2 isn't launched, changing it costs no migration, but it changes mix_logic's hash and its proofs re-run. The owner's call.
+- **A side finding, about cost, not safety:** `precompute_statements`' comment says it saves N²−N uncompressions a Mix, but the record's encoding undoes that. Each box out's point is uncompressed, compressed, then uncompressed again in every branch: 2N + 2N² uncompressions and 2N compressions, where the comment counts 2N. While v2 isn't launched, changing it costs no migration, but it changes mix_logic's hash and its proofs re-run.
+  - **The owner's call (2026-11-03): keep it.** N = 4 is the chain's limit "for a while if not forever", and it fits: the width test measured a four-box Mix of the token pool's test launch at 9.889B of 10B steps (2026-10-16), and xor32's fix adds 10.8M at N = 4, so about 9.90B.
 
 **`MixFirst`'s second build (2026-11-03):** `mix_needs_the_first_challenge` ✅ in 0.02 s, so the literal `zero32` closed that gap. `V2/Steps`' all-zero run errors after 7869 steps, spec `false`. Both branch theorems ❌ Falsified in under a second, so `branchHolds` and the script's branch still differ somewhere. Each equation has the Owner's shape (Valid on v2), and the stdlib's `from_int` (`n % field_prime`), `scale`, `add` and `equal` match the spec. What the Owner never had is a constant point: there `a` and `b` are symbolic, while every Mix point is the KAT's. `V2/MixBranch` (a diagnostic, run by name) takes box in 1's first branch condition by condition: a constant point, a symbolic one, `z`'s checks, each equation. `MixSecond` didn't finish in its first minutes, likely its own copy of the gap; it waits on this.
 
@@ -174,6 +185,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
   - fee_contract (P, the cap and the amounts symbolic): a shard loses exactly the fee, at most the cap, only for a Mix of three boxes or more, and replenished only grows (`FeeContract`, 5).
 - **Proved on 68c5399:** the Mix at n = 3 (`V2/Mix3*`): the KAT `mix_real_proofs_ada_pool_n3_passes`, generated from `mix_kat.test.ak` by a script and checked value for value (51 hex strings). The spec is n = 2's unrolled for three, so each box's four checks are four theorems, and `Mix3Passes` the converse.
 - **Proved on 68c5399, on mix_logic's template:** the Mix for any ADA or token pool at n = 2 to 4 (`V2/MixAny*`, `V2/MixTok*`, 82, written by `gen-lovejoin-mix.py`), and Owner withdrawals of 1 to 4 boxes (`V2/OwnAny*`, 14, by `gen-lovejoin-owner.py`). With the pool's parameters symbolic, they hold for a real launch with no re-run.
+- **Written, not built:** what that Mix must pay, for the same families (`V2/Mix*Out*`, `…Outputs`, `…Datums`, 66, by `gen-lovejoin-mix-outputs.py`): `MixOutputs` and `MixDatums` on the template. Until it's built, those two hold at the test launch alone.
 - **Not covered:** a Mix of more than 4 boxes (validate_mix takes up to 255, the wallet makes 3 or 4) and Owner withdrawals of more than 4 boxes (3 on the classic pool). Each is the same check repeated per box, but no theorem says so for every n.
 
 ## Step 9 · The wallet on v2 alone ⬜
@@ -204,3 +216,4 @@ The owner, 2026-11-03: "if we did fix this and its formally verified then we cou
     3. Owner withdrawals of several boxes, v2 and the classic pool (1.8.0's returns).
     4. N = 4 and token pools later, since the new pool is an ADA pool.
   - **2026-11-03, tokens and N = 4 now:** "Just get it done now so we dont have to make any new contract changes down the line." All four are proved (210 ✅).
+  - **2026-11-03, the cost:** `precompute_statements` stays as it is. "So at N=4 which is the chain limit for a while if not forever, can be proven to be safe then we are good to go."

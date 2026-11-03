@@ -9,6 +9,7 @@
 #   ./check.sh lovejoin              Lovejoin's classic pool (chunk 42)
 #   ./check.sh lovejoin-v2           v2, the templates with xor32's length checks (chunk 42)
 #   ./check.sh lovejoin-v2-pools     v2's general Mix alone, for every pool kind and n = 2 to 4
+#   ./check.sh lovejoin-v2-outputs   what that Mix must pay, for the same pools and n
 #   ./check.sh lovejoin-owner        Owner withdrawals of several boxes, v2 and the classic pool
 #   ./check.sh Seedelf.PolicyMint    some modules
 #   CAP=12G LIMIT=20m ./check.sh     other limits
@@ -54,6 +55,16 @@ pools=(
   Lovejoin.V2.MixTok4Steps Lovejoin.V2.MixTok4Box1 Lovejoin.V2.MixTok4Box2 Lovejoin.V2.MixTok4Box3
   Lovejoin.V2.MixTok4Box4 Lovejoin.V2.MixTok4Passes)
 [ "${mods[0]}" = lovejoin-v2-pools ] && mods=("${pools[@]}")
+# What a Mix must pay, for the same families (gen-lovejoin-mix-outputs.py): its boxes out, any
+# pool parameter, box point and proof field symbolic.
+outputs=(
+  Lovejoin.V2.MixAnyOut Lovejoin.V2.MixAnyOutSteps Lovejoin.V2.MixAnyOutputs Lovejoin.V2.MixAnyDatums
+  Lovejoin.V2.MixAny3Out Lovejoin.V2.MixAny3OutSteps Lovejoin.V2.MixAny3Outputs Lovejoin.V2.MixAny3Datums
+  Lovejoin.V2.MixAny4Out Lovejoin.V2.MixAny4OutSteps Lovejoin.V2.MixAny4Outputs Lovejoin.V2.MixAny4Datums
+  Lovejoin.V2.MixTok2Out Lovejoin.V2.MixTok2OutSteps Lovejoin.V2.MixTok2Outputs Lovejoin.V2.MixTok2Datums
+  Lovejoin.V2.MixTok3Out Lovejoin.V2.MixTok3OutSteps Lovejoin.V2.MixTok3Outputs Lovejoin.V2.MixTok3Datums
+  Lovejoin.V2.MixTok4Out Lovejoin.V2.MixTok4OutSteps Lovejoin.V2.MixTok4Outputs Lovejoin.V2.MixTok4Datums)
+[ "${mods[0]}" = lovejoin-v2-outputs ] && mods=("${outputs[@]}")
 # v2: the token-pool templates with xor32's length checks (chunk 42), after ./extract-lovejoin-v2.sh.
 [ "${mods[0]}" = lovejoin-v2 ] && mods=(Lovejoin.V2.Scripts Lovejoin.V2.Mix Lovejoin.V2.Logic
   Lovejoin.V2.Steps Lovejoin.V2.MixChallenges Lovejoin.V2.Owner Lovejoin.V2.MixOutputs Lovejoin.V2.MixDatums
@@ -62,7 +73,7 @@ pools=(
   Lovejoin.Template.MixBoxPurpose Lovejoin.Template.MixBoxGate Lovejoin.Template.MixBoxNoLock
   Lovejoin.Template.Launch Lovejoin.Template.OneShotMint Lovejoin.Template.Fee Lovejoin.Template.FeeContract
   Lovejoin.V2.Mix3 Lovejoin.V2.Mix3Spec Lovejoin.V2.Mix3Steps Lovejoin.V2.Mix3First Lovejoin.V2.Mix3Second
-  Lovejoin.V2.Mix3Third Lovejoin.V2.Mix3Passes "${pools[@]}" "${owners_v2[@]}")
+  Lovejoin.V2.Mix3Third Lovejoin.V2.Mix3Passes "${pools[@]}" "${outputs[@]}" "${owners_v2[@]}")
 # The same ExceptParams file in its own package, against Lean-blaster main.
 [ "${mods[0]}" = upstream-main ] && { cd Upstream/blaster-main || exit 1; mods=(BlasterMain.ExceptParams); }
 peakf=$(mktemp)
