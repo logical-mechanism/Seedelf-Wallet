@@ -6,9 +6,9 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 | Step | Status |
 |---|---|
-| 1 · Setup, reference_holder and mix_box | 🚧 written; the bytes and the concrete cases checked; Lean not yet built |
-| 2 · mix_logic's easy parts | ⬜ |
-| 3 · `serialise_data` behind an `opaque` alias | ⬜ |
+| 1 · Setup, reference_holder and mix_box | ✅ 30 theorems (2026-11-03), every module in seconds, at most 525 MB |
+| 2 · mix_logic's easy parts | 🚧 `MixLogicPurpose` written (6 theorems), not built |
+| 3 · `serialise_data` behind an `opaque` alias | 🚧 #27's commit on the fork (`0a25f13`, Rob van Leeuwen's), in `seedelf` at `7fc0aa3`, pinned on this branch; not built |
 | 4 · mix_logic, Owner | ⬜ |
 | 5 · mix_logic, Mix | ⬜ |
 | 6 · fee_contract and one_shot_mint | ⬜ |
@@ -16,11 +16,24 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 ### Next session, in order
 
-1. **The owner builds step 1** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && ./check.sh lovejoin`.
-   - The first line must print `lovejoin-verification`: these files exist only on this branch.
-   - Expected: seven `ok`, and 30 theorems ✅. ReferenceHolder has 1, MixBoxPurpose 5, MixBoxGate 5 and MixBoxNoLock 19.
-   - Steps prints each scenario's concrete run, which should match `concrete/lovejoin_mix_box.sh`. If a run passes a module's limit (500 for the purposes, 1500 for the boxes), Claude raises the limit.
-2. **Then step 2.**
+1. **The owner builds steps 2 and 3** (dev box). It stops before building if the pin didn't take:
+   ```bash
+   # dev box (this machine)
+   cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && lake update PlutusCore && grep -q 7fc0aa3e17cee7b9a0c908dec1add11249f36b7d lake-manifest.json && echo "== seedelf 7fc0aa3 pinned" && CAP=16G LIMIT=30m ./check.sh lovejoin && ./check.sh
+   ```
+   - Expected from `lovejoin`: eight `ok`. MixLogicPurpose adds 6 ✅. Steps adds three mix_logic lines: minting errors, the registration halts, the unregistration errors.
+   - Expected from the baseline: the same nine `ok` as on `verification`, and PolicyBurn and PolicyMint failing on `BitVec` alone. The new alias touches no Seedelf script, which never calls `serialise_data`.
+2. **Then step 4:**
+   - First a real Owner withdrawal through Aiken. seedelf-core builds them (a session's return), and its proof code is in `seedelf-crypto`'s `lovejoin.rs`.
+   - Then `Steps`, then the property.
+
+**Step 1's run (2026-11-03):** seven `ok`, 30 ✅.
+- reference_holder errors after 178 steps on a spend, 130 on minting.
+- mix_box, by datum:
+  - well-formed with no withdrawal errors after 1029; with mix_logic's withdrawal it halts after 1060; with another's it errors after 1089;
+  - `a = b` halts after 889, three fields after 676;
+  - no datum, and by hash, halt after 447.
+- Each matches `concrete/lovejoin_mix_box.sh`.
 
 ## When a property comes back Falsified
 
@@ -46,7 +59,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
    - Commit `8131b1d` was fetched into `../lovejoin` on 2026-11-03 to read it. That checkout stays on its own branch.
 3. **The preprod pool isn't a target:** its scripts are recompiled and hash differently.
 
-## Step 1 · Setup, reference_holder and mix_box 🚧
+## Step 1 · Setup, reference_holder and mix_box ✅
 
 - **Done:**
   - `extract-lovejoin.sh`: all five scripts `ok`, as above.
@@ -65,8 +78,9 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 - Its purposes: spend, mint, vote and propose fail. Publish succeeds only for a `RegisterCredential` certificate, for any credential, and fails for every other certificate.
 - The scenario reads the reference input: `read_reference_datum` looks for the pool's NFT among the reference inputs. Fix one reference input holding it, with the deployed `ReferenceDatum`: denomination 10 ₳, 1 ₳ maximum fee per mix, and the three hashes.
 
-## Step 3 · `serialise_data` behind an `opaque` alias ⬜
+## Step 3 · `serialise_data` behind an `opaque` alias 🚧
 
+- **Done:** #27's commit, cherry-picked from SundaeSwap's fork as `0a25f13` (its author kept), on our fork's `feat/opaque-serialise-data` from `main` `1c23de8`. It's merged into `seedelf` as `7fc0aa3`, which this branch pins. `verification` still pins `c7d8741`.
 - **mix_logic hashes `serialise_data`** of the outputs and the input refs (Owner), and of the box value (Mix). PlutusCoreBlaster's encoder can't be translated (Lean-blaster #152, #153).
 - **PlutusCoreBlaster #27 (Luivatra, a draft since July) is the fix:** `encodeDataOpaque` at the builtin's dispatch.
   - Take it onto our fork's `seedelf` branch, credited, as #72 took #29's part.

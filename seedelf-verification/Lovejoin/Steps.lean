@@ -26,5 +26,9 @@ def notG1 : PlutusCore.ByteString.ByteString :=
 #eval s!"mix_box, Constr 0 [B,B,B]:   {stepsUsed mixBox (inlineBoxCtx (.Constr 0 [.B g1, .B notG1, .B g1]) [])}"
 #eval s!"mix_box, no datum:           {stepsUsed mixBox (spendBoxCtx .NoOutputDatum none [])}"
 #eval s!"mix_box, by hash (F-2):      {stepsUsed mixBox (spendBoxCtx (.OutputDatumHash "h") (some (mixDatum g1 notG1)) [])}"
+-- mix_logic: another purpose, then publish with its own registration and with another certificate
+#eval s!"mix_logic, minting purpose:  {stepsUsed mixLogic ⟨emptyTx, Data.Constr 0 [], .MintingScript ""⟩}"
+#eval s!"mix_logic, registration:     {stepsUsed mixLogic ⟨emptyTx, Data.Constr 0 [], .CertifyingScript 0 (.TxCertRegStaking (.ScriptCredential mixLogicHash) none)⟩}"
+#eval s!"mix_logic, unregistration:   {stepsUsed mixLogic ⟨emptyTx, Data.Constr 0 [], .CertifyingScript 0 (.TxCertUnRegStaking (.ScriptCredential mixLogicHash) none)⟩}"
 
 end Lovejoin.Classic
