@@ -14,29 +14,36 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 
 ### Next session, in order
 
-1. **The owner moves our package onto the forks and runs everything** (dev box). It stops before building if either fork didn't take:
-   ```bash
-   # dev box (this machine)
-   cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && lake update Blaster PlutusCore && grep -q 'logicalmechanism/Lean-blaster' lake-manifest.json && grep -q 'logicalmechanism/PlutusCoreBlaster' lake-manifest.json && echo "== forks pinned" && CAP=16G LIMIT=90m ./check.sh Seedelf.Scripts && ./check.sh upstream && ./check.sh && ./check.sh Seedelf.WalletRegister
-   ```
-   - The first `check.sh` compiles Blaster, PlutusCore and CardanoLedgerApi again from the forks, hence its larger cap and limit.
-   - Expected from `upstream`:
-     - `ok` ExceptParams: its five ❌ turn ✅.
-     - `ok` Fq1Fin: the control and both point cases Expected Falsified, `fq1_eq_of_t_eq` Valid.
-     - `FAILED` ByteStrings, unchanged with four ❌ on `BitVec`: it calls `PlutusCore.Bitwise` directly.
-     - `ok` SlicePrograms and the five Slice modules.
-   - Expected from the baseline: eight `ok`, and PolicyBurn and PolicyMint `FAILED` on `BitVec` alone.
-     - Steps prints two new lines: `wallet, Register, valid: halt after N` and `other signer: error after M`.
-     - N must be under 2500, WalletRegister's limit. If it isn't, raise the limit and ignore this WalletRegister run.
-     - If the valid spend errors, Blaster's machine disagrees with Aiken's evaluator: stop and find out why.
-   - **WalletRegister** is new ground: Valid is the wallet's core property, proved. If it's Falsified, read the counterexample. If it's `KILLED` or `TIMEOUT`, see *Stop rules*.
-   - Then Claude reads `lake-manifest.json`: both packages should show the fork's URL and commit, with `"inherited": false`.
+1. **The owner checks the operand-order finding** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && ./check.sh Seedelf.Steps Seedelf.WalletRegister`.
+   - Expected from Steps: `schnorrAccepts, valid: true` and `z changed: false`.
+   - Expected from WalletRegister: `ok`, with `wallet_register_spend_iff` Valid and the source-order case Expected Falsified.
+   - If so, Fix 4 below goes on the fork, and the spec moves back to the script's order.
+   - **The pinned run before it (2026-11-03)** matched every expectation:
+     - `lake update` recloned both packages from the forks.
+     - `upstream`: ExceptParams and Fq1Fin `ok`, ByteStrings `FAILED` on its four `BitVec` cases, the Slice modules `ok`.
+     - The baseline: the same eight `ok`, with PolicyBurn and PolicyMint failing on `BitVec` alone. The first build took 394 s at 1.4 GB.
+     - Steps: the valid spend halts after 1281 steps, and the other signer errors after 1306.
+     - WalletRegister translated for the first time and came back **Falsified** in 1 s, every input empty. The cause is the operand order (Fix 4).
 2. **The owner opens the Lean-blaster PR** (Issue454 passes): `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/Lean-blaster --base beta-lambda-cache-optimization --head logicalmechanism:fix/datatype-param-names --title "$(cat posts/lean-blaster-pr.title)" --body-file posts/lean-blaster-pr.md`.
 3. **The owner opens the PlutusCoreBlaster PR for Fix 2** (its test passes as the text says): `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:feat/opaque-bytestring-to-integer --title "$(cat posts/plutuscoreblaster-pr.title)" --body-file posts/plutuscoreblaster-pr.md`.
    - It's a PR, not a separate issue. The body carries [the issue draft](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md)'s case, on the repo's template.
 4. **Fix 3's PR waits for #29's answer.** The question was [posted](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) on 2026-11-03. Claude ran it at the owner's word ("Gonna trust you on running" the command), as `logicalmechanism`. Then: `cd /home/logic/Documents/LogicalMechanism/blaster-forks && gh pr create -R input-output-hk/PlutusCoreBlaster --base main --head logicalmechanism:fix/fq1-nat --title "$(cat posts/plutuscoreblaster-fq1-pr.title)" --body-file posts/plutuscoreblaster-fq1-pr.md`.
 5. **Claude fills in the PR numbers** in [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md) (its "we've asked PlutusCoreBlaster" line points at the Fix 2 PR) and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md) (it points at #454; add the Lean-blaster PR). Then the owner posts both.
 6. **WalletRegister, from step 1's result,** as Step 4 below says. If a PR's branch changes in review, rebuild `seedelf` and re-pin.
+
+### Fix 4 · Operand order of the BLS12-381 builtins (PlutusCoreBlaster), found 2026-11-03
+
+- **The bug.** The CEK machine conses each argument onto a builtin's list (`V :: Vs`), so the list is last-first. The integer builtins match `[op2, op1]` and call `f op1 op2`. `bls12381G1Add`, `G1Equal`, `G2Add`, `G2Equal`, `MulMlResult` and `FinalVerify` match `[x, y]` and call `f x y`: the operands are swapped.
+  - `scalarMul`, `hashToGroup` and the Miller loop are in order.
+  - All six are commutative or symmetric on real values, so evaluation and conformance can't see it.
+  - Over the `opaque` builtins, `add(a, b)` and `add(b, a)` are different terms. A spec in the script's order is Falsified.
+- **The fix.** Swap the six patterns to `[y, x] => f x y` (or `[op2, op1]`, the house style), on a fork branch from `fix/fq1-nat`: its test needs symbolic points, which only Fix 3 allows.
+- **The test.** Small textual programs, read through a match, each Valid only in order:
+  - `equal(add(a, b), a)` over two G1 points, and the same over G2;
+  - `finalVerify(mulMlResult(m1, m2), m1)` over two Miller loops.
+- **The PR** is stacked on Fix 3's and says so. It changes no evaluation, since every operation is symmetric.
+- **Our side.** `schnorrAcceptsAsModelled` goes, `wallet_register_spend_iff` uses `schnorrAccepts`, and the expected-Falsified case is deleted.
+
 
 **The fork tests' first round (2026-11-03)** failed in the tests, not in the fixes. Each was fixed and passed on the second round:
 - A doc comment (`/-- -/`) above `#blaster` doesn't parse. `#blaster` isn't a declaration, so use `--` there. The command still ran after the parse error.
