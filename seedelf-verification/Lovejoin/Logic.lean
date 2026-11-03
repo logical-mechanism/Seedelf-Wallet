@@ -76,9 +76,9 @@ def fsHashSchnorr (g u t ctx : ByteString) : ByteString :=
 def schnorrVerifies (base u t z ctx : ByteString) : Bool :=
   match bls12_381_G1_uncompress base, bls12_381_G1_uncompress u, bls12_381_G1_uncompress t with
   | .ok B, .ok U, .ok T =>
-      let zi := byteStringToIntegerOpaque true z.data
+      let zi : Integer := .ofNat (byteStringToIntegerOpaque true z.data)
       if lengthOfByteString z == 32 && decide (zi < q) then
-        let c := Int.fmod (byteStringToIntegerOpaque true (fsHashSchnorr base u t ctx).data) q
+        let c := Int.fmod (.ofNat (byteStringToIntegerOpaque true (fsHashSchnorr base u t ctx).data)) q
         bls12_381_G1_equal (bls12_381_G1_scalarMul (Int.fmod zi q) B)
           (bls12_381_G1_add T (bls12_381_G1_scalarMul c U))
       else false

@@ -18,7 +18,10 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 ### Next session, in order
 
-1. **The owner builds the Mix iff's parts** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh Lovejoin.V2.Steps Lovejoin.V2.MixFirst Lovejoin.V2.MixSecond Lovejoin.V2.MixPasses`.
+1. **The owner builds the Mix iff's parts, on the new pin** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh Lovejoin.V2.Steps Lovejoin.V2.MixFirst Lovejoin.V2.MixSecond Lovejoin.V2.MixPasses`.
+   - The pin moved to 68c5399, so the first module rebuilds the dependencies: about 6 minutes at 1.4 GB in the repin worktree. If lake complains about the manifest, `lake update PlutusCore` alone.
+   - The alias returns a `Nat` now. Every Lovejoin call wraps it in `.ofNat`, as the builtin does, so the solver knows a conversion is never negative. A Valid result stays Valid. An expected-Falsified case that leaned on a negative conversion could flip, but no Lovejoin theorem expects Falsified.
+   - Then the 85 again, on the new pin: `LIMIT=30m ./check.sh lovejoin`, then `LIMIT=40m ./check.sh lovejoin-v2`.
    - `V2/Steps`: `every field zero` must `error`, spec `false`, and the KAT lines stay as in the third build (`mixAccepts` still `true` with `zero32` a literal).
    - `MixFirst` and `MixSecond` have three theorems each: the challenge, then each branch. `MixPasses` has one.
    - Each runs `blaster (timeout: 1200) (verbose: 1)`, so its log has four timed phases: `Optimization`, `Translation`, `Submitting Smt Query` and `Solve`.
@@ -50,7 +53,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 **Where everything is, for a new session:**
 - This branch, `lovejoin-verification`, is local only; see the memory file `lovejoin-verification-local-only.md`. The working copy is on it.
-- The chunk 41 forks are under `../blaster-forks/`. This branch pins the PlutusCoreBlaster clone's `local/opaque-xor` (96a36cb: `seedelf` 7fc0aa3, with #27's alias, plus the xor alias) by local path; `verification` pins `c7d8741`.
+- The chunk 41 forks are under `../blaster-forks/`. This branch pins the PlutusCoreBlaster clone's `local/opaque-xor` by local path: 68c5399 since the merge of `local/seedelf-repin` (fork `seedelf` 1e38b23, with the #71 and #72 review rounds, plus the xor alias), 96a36cb before; `verification` pins `c7d8741`.
 - v2's sources are in `../lovejoin-v2` (5cc3631), local only.
 - The open upstream PRs are Lean-blaster #455 and PlutusCoreBlaster #71, #72 and #73 (chunk 41).
 - Lovejoin's sources are in `../lovejoin`, for reading: `git show c1239fb:contracts/…` for the classic pool, and `8131b1d` for the templates.

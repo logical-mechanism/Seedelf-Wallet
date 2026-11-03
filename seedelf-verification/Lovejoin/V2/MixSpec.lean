@@ -83,10 +83,10 @@ def branchHolds (a b ap bp t0 t1 c z : ByteString) : Bool :=
       match bls12_381_G1_uncompress (bls12_381_G1_compress AP0),
             bls12_381_G1_uncompress (bls12_381_G1_compress BP0) with
       | .ok AP, .ok BP =>
-          let zi := byteStringToIntegerOpaque true z.data
+          let zi : Integer := .ofNat (byteStringToIntegerOpaque true z.data)
           if lengthOfByteString z == 32 && decide (zi < q) then
             let zs := Int.fmod zi q
-            let cs := Int.fmod (byteStringToIntegerOpaque true c.data) q
+            let cs := Int.fmod (.ofNat (byteStringToIntegerOpaque true c.data)) q
             bls12_381_G1_equal (bls12_381_G1_scalarMul zs A) (bls12_381_G1_add T0 (bls12_381_G1_scalarMul cs AP)) &&
               bls12_381_G1_equal (bls12_381_G1_scalarMul zs B) (bls12_381_G1_add T1 (bls12_381_G1_scalarMul cs BP))
           else false

@@ -55,7 +55,7 @@ def ownerVector : Option (ByteString × ByteString × ByteString) := do
   let b := bls12_381_G1_compress (bls12_381_G1_scalarMul x G)
   let t := bls12_381_G1_compress (bls12_381_G1_scalarMul r G)
   let ctx ← ownerContext (IsData.toData ([payout0] : List TxOut)) (Data.List [IsData.toData boxRef])
-  let c := Int.fmod (byteStringToIntegerOpaque true (fsHashSchnorr g1 b t ctx).data) q
+  let c := Int.fmod (.ofNat (byteStringToIntegerOpaque true (fsHashSchnorr g1 b t ctx).data)) q
   let z ← (PlutusCore.Bitwise.integerToByteString true 32 (Int.fmod (r + c * x) q)).toOption
   pure (b, t, ⟨z⟩)
 
