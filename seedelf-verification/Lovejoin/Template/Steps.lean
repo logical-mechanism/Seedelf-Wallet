@@ -1,4 +1,4 @@
-import Lovejoin.Template.Launch
+import Lovejoin.Template.Fee
 import Lovejoin.Steps
 
 /-! How many steps Blaster's CEK machine takes on concrete runs of mix_box's template, to
@@ -9,7 +9,11 @@ withdrawal and not with the classic one's.
 
 one_shot_mint's template at the mainnet 5 ₳ pool's own parameters (its seed d4c72bc2…#0,
 reference_holder) on that pool's launch, its datum as it sits on chain: it must halt.
-Minting two, or without the seed, must error. -/
+Minting two, or without the seed, must error.
+
+fee_contract's template at the 5 ₳ pool's NFT: a shard of 5 ₳ paying a three-box Mix's
+0.8 ₳ fee under a 1 ₳ cap must halt, and a lovelace short must error. Replenished from
+5 ₳ to 6 ₳, it must halt. -/
 
 namespace Lovejoin.Template
 open CardanoLedgerApi.IsData.Class (toTerm)
@@ -63,5 +67,11 @@ def atPool5 : List Term := [toTerm pool5Seed, toTerm (0 : Integer), toTerm rhHas
 #eval s!"one_shot_mint, the 5 ₳ pool's launch:   {stepsWith oneShotMintTemplate atPool5 (launchCtx ⟨pool5Seed, 0⟩ pool5Policy (mintOf pool5Policy nftName 1) (refAt rhHash pool5Policy pool5Datum))}"
 #eval s!"one_shot_mint, minting two:              {stepsWith oneShotMintTemplate atPool5 (launchCtx ⟨pool5Seed, 0⟩ pool5Policy (mintOf pool5Policy nftName 2) (refAt rhHash pool5Policy pool5Datum))}"
 #eval s!"one_shot_mint, without the seed:         {stepsWith oneShotMintTemplate atPool5 (launchCtx ⟨pool5Seed, 1⟩ pool5Policy (mintOf pool5Policy nftName 1) (refAt rhHash pool5Policy pool5Datum))}"
+
+def atPool5Fee : List Term := [toTerm pool5Policy, toTerm nftName]
+
+#eval s!"fee_contract, a Mix's fee:               {stepsWith feeContractTemplate atPool5Fee (feeCtx pool5Policy 1000000 5000000 threeBoxes 4200000 800000 (some mixRedeemerData) payMixFee)}"
+#eval s!"fee_contract, a lovelace short:          {stepsWith feeContractTemplate atPool5Fee (feeCtx pool5Policy 1000000 5000000 threeBoxes 4199999 800000 (some mixRedeemerData) payMixFee)}"
+#eval s!"fee_contract, replenished:               {stepsWith feeContractTemplate atPool5Fee (feeCtx pool5Policy 1000000 5000000 [] 6000000 0 none replenish)}"
 
 end Lovejoin.Template

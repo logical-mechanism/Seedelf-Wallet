@@ -8,10 +8,12 @@
 # and checks that hash too. Last, mix_box's template, unapplied, for the theorems that hold
 # for every L: applied to the classic pool's mix_logic hash it must be the classic pool's
 # mix_box, c145c10f…, as it sits on chain. And one_shot_mint's: applied to the mainnet
-# 5 ₳ pool's seed it must be that pool's NFT policy, dc6abe3b….
+# 5 ₳ pool's seed it must be that pool's NFT policy, dc6abe3b…. And fee_contract's: at that
+# pool's policy it must be that pool's fee_contract, 20aae476….
 #   Lovejoin/V2/Scripts/mix_logic.hex             one CBOR layer, as the ledger hashes it
 #   Lovejoin/Template/Scripts/mix_box.hex         the same, unapplied
 #   Lovejoin/Template/Scripts/one_shot_mint.hex   the same, unapplied
+#   Lovejoin/Template/Scripts/fee_contract.hex    the same, unapplied
 # LOVEJOIN_V2= points elsewhere. Anything that doesn't match writes nothing and exits 1.
 cd "$(dirname "$0")" || exit 1
 LOVEJOIN_V2=${LOVEJOIN_V2:-../../lovejoin-v2}
@@ -33,7 +35,10 @@ name=48$(printf lovejoin | od -An -tx1 | tr -d ' \n')
     5820d4c72bc25582a0e5caff6395f708cfd173535fae3c61d8ecbccbd1ad447add22 > "$out/osm1.json" 2>/dev/null &&
   aiken blueprint apply -i "$out/osm1.json" -m one_shot_mint -v one_shot_mint 00 > "$out/osm2.json" 2>/dev/null &&
   aiken blueprint apply -i "$out/osm2.json" -m one_shot_mint -v one_shot_mint \
-    581c288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4 > "$out/one_shot_mint_pool5.json" 2>/dev/null) ||
+    581c288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4 > "$out/one_shot_mint_pool5.json" 2>/dev/null &&
+  aiken blueprint apply -i "$out/unapplied.json" -m fee_contract -v fee_contract \
+    581cdc6abe3b0b184e09d11cfa918f7b57cde9ea1f61c49700894d3fe117 > "$out/fc1.json" 2>/dev/null &&
+  aiken blueprint apply -i "$out/fc1.json" -m fee_contract -v fee_contract "$name" > "$out/fee_contract_pool5.json" 2>/dev/null) ||
   { echo "aiken blueprint apply failed"; exit 1; }
 mkdir -p Lovejoin/V2/Scripts Lovejoin/Template/Scripts
 python3 - "$out" <<'EOF'
@@ -54,6 +59,7 @@ APPLIED_MIX_LOGIC = "60294352f5eaeb0ca3e0f3de623707fee54c0fdd66b343f3203fcbd7"
 CLASSIC_MIX_BOX = "c145c10ff4bcaef7f5a4dbb3fcbfddca4b6c7b08191b0690b12f1fad"
 # The mainnet 5 ₳ pool's NFT policy (extension/src/lovejoin-pools.json), seed d4c72bc2…#0.
 POOL5_POLICY = "dc6abe3b0b184e09d11cfa918f7b57cde9ea1f61c49700894d3fe117"
+POOL5_FEE = "20aae4761e1b54e852fa7067aa0e51eee2d991346c6c9579373c330d"
 
 def scripts(path):
     """Each validator's compiled code (one CBOR layer), by module, checked against its hash."""
@@ -79,10 +85,14 @@ ok &= classic == CLASSIC_MIX_BOX
 pool5 = scripts(f"{out}/one_shot_mint_pool5.json")["one_shot_mint"][0]
 print(f"one_shot_mint: the template at the 5 ₳ pool's seed {pool5} {'ok' if pool5 == POOL5_POLICY else 'expected ' + POOL5_POLICY}")
 ok &= pool5 == POOL5_POLICY
+fee5 = scripts(f"{out}/fee_contract_pool5.json")["fee_contract"][0]
+print(f"fee_contract: the template at the 5 ₳ pool's policy {fee5} {'ok' if fee5 == POOL5_FEE else 'expected ' + POOL5_FEE}")
+ok &= fee5 == POOL5_FEE
 if ok:
     open("Lovejoin/V2/Scripts/mix_logic.hex", "w").write(code.hex())
     open("Lovejoin/Template/Scripts/mix_box.hex", "w").write(unapplied["mix_box"][1].hex())
     open("Lovejoin/Template/Scripts/one_shot_mint.hex", "w").write(unapplied["one_shot_mint"][1].hex())
+    open("Lovejoin/Template/Scripts/fee_contract.hex", "w").write(unapplied["fee_contract"][1].hex())
     sys.exit(0)
 sys.exit(1)
 EOF

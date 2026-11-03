@@ -13,3 +13,4 @@ import Lovejoin.Template.MixBoxPurpose
 import Lovejoin.Template.MixBoxGate
 import Lovejoin.Template.MixBoxNoLock
 import Lovejoin.Template.OneShotMint
+import Lovejoin.Template.FeeContract
