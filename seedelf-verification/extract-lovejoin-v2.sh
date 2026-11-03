@@ -5,8 +5,11 @@
 # Checks every template's unapplied hash first: the four the fix leaves alone must be
 # templates_are_frozen's, and mix_logic the new one. Then applies mix_logic to the test
 # launch Lovejoin's own KATs use (test_fixtures.ak: the NFT policy abab…, `lovejoin`)
-# and checks that hash too.
-#   Lovejoin/V2/Scripts/mix_logic.hex   one CBOR layer, as the ledger hashes it
+# and checks that hash too. Last, mix_box's template, unapplied, for the theorems that hold
+# for every L: applied to the classic pool's mix_logic hash it must be the classic pool's
+# mix_box, c145c10f…, as it sits on chain.
+#   Lovejoin/V2/Scripts/mix_logic.hex         one CBOR layer, as the ledger hashes it
+#   Lovejoin/Template/Scripts/mix_box.hex     the same, unapplied
 # LOVEJOIN_V2= points elsewhere. Anything that doesn't match writes nothing and exits 1.
 cd "$(dirname "$0")" || exit 1
 LOVEJOIN_V2=${LOVEJOIN_V2:-../../lovejoin-v2}
@@ -21,9 +24,11 @@ policy=581c$(printf 'ab%.0s' $(seq 28))
 name=48$(printf lovejoin | od -An -tx1 | tr -d ' \n')
 (cd "$LOVEJOIN_V2/contracts" &&
   aiken blueprint apply -i "$out/unapplied.json" -m mix_logic -v mix_logic "$policy" > "$out/policy.json" 2>/dev/null &&
-  aiken blueprint apply -i "$out/policy.json" -m mix_logic -v mix_logic "$name" > "$out/applied.json" 2>/dev/null) ||
+  aiken blueprint apply -i "$out/policy.json" -m mix_logic -v mix_logic "$name" > "$out/applied.json" 2>/dev/null &&
+  aiken blueprint apply -i "$out/unapplied.json" -m mix_box -v mix_box 581c0dad3046f90d9cf8354eb8b743d50fb2c25d581269b94ffcdf59499e \
+    > "$out/mix_box_classic.json" 2>/dev/null) ||
   { echo "aiken blueprint apply failed"; exit 1; }
-mkdir -p Lovejoin/V2/Scripts
+mkdir -p Lovejoin/V2/Scripts Lovejoin/Template/Scripts
 python3 - "$out" <<'EOF'
 import hashlib, json, sys
 
@@ -38,6 +43,8 @@ UNAPPLIED = {
     "reference_holder": "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4",
 }
 APPLIED_MIX_LOGIC = "60294352f5eaeb0ca3e0f3de623707fee54c0fdd66b343f3203fcbd7"
+# The classic pool's mix_box on chain (seedelf-core's lovejoin::Protocol::of, mainnet).
+CLASSIC_MIX_BOX = "c145c10ff4bcaef7f5a4dbb3fcbfddca4b6c7b08191b0690b12f1fad"
 
 def scripts(path):
     """Each validator's compiled code (one CBOR layer), by module, checked against its hash."""
@@ -56,8 +63,13 @@ for name, expected in UNAPPLIED.items():
     ok &= got == expected
 got, code = scripts(f"{out}/applied.json")["mix_logic"]
 print(f"mix_logic: applied to the test launch {got} {'ok' if got == APPLIED_MIX_LOGIC else 'expected ' + APPLIED_MIX_LOGIC}")
-if ok and got == APPLIED_MIX_LOGIC:
+ok &= got == APPLIED_MIX_LOGIC
+classic = scripts(f"{out}/mix_box_classic.json")["mix_box"][0]
+print(f"mix_box: the template at the classic L {classic} {'ok' if classic == CLASSIC_MIX_BOX else 'expected ' + CLASSIC_MIX_BOX}")
+ok &= classic == CLASSIC_MIX_BOX
+if ok:
     open("Lovejoin/V2/Scripts/mix_logic.hex", "w").write(code.hex())
+    open("Lovejoin/Template/Scripts/mix_box.hex", "w").write(unapplied["mix_box"][1].hex())
     sys.exit(0)
 sys.exit(1)
 EOF
