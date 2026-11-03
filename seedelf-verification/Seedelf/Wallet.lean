@@ -38,7 +38,7 @@ def q : Integer := 5243587517512619047944774050818596583769055250052763782260365
 builtin runs (our PlutusCoreBlaster fork), so the spec and the script share one
 uninterpreted conversion. -/
 def scalarOf (b : ByteString) : Option Integer :=
-  let n := byteStringToIntegerOpaque true b.data
+  let n : Integer := .ofNat (byteStringToIntegerOpaque true b.data)
   if 0 ≤ n ∧ n < q then some n else none
 
 /-- `schnorr.prove`, over the builtins themselves:

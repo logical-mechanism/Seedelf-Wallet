@@ -9,12 +9,12 @@ package «SeedelfVerification» where
   -- the opaque ByteStringToInteger, Fq1.t as a Nat, the BLS12-381 builtins' operands in
   -- order and #27's opaque SerializeData (its `seedelf` branch; #27 for Lovejoin, chunk 42).
   -- Here, on the local-only branch, PlutusCoreBlaster is the local clone's
-  -- `local/opaque-xor` (seedelf 7fc0aa3 plus an opaque XorByteString), which is never
-  -- pushed: chunk 42's xor32 work motivated it.
+  -- `local/opaque-xor` (seedelf 1e38b23, with the #71 and #72 review rounds, plus an opaque
+  -- XorByteString), which is never pushed: chunk 42's xor32 work motivated it.
   require Blaster from git
     "https://github.com/logicalmechanism/Lean-blaster" @ "25c0ee0904c089333a56ff7036d184da0d9209cb"
   require PlutusCore from git
-    "/home/logic/Documents/LogicalMechanism/blaster-forks/PlutusCoreBlaster" @ "96a36cb8d82bf9bdbb9276aa1b7cf42f53f394b8"
+    "/home/logic/Documents/LogicalMechanism/blaster-forks/PlutusCoreBlaster" @ "68c5399b7ded5726cf1e22f644c42a551a05f9d2"
   -- Brings PlutusCoreBlaster (UPLC + CEK in Lean) and Blaster (the SMT tactic) with it.
   require CardanoLedgerApi from git
     "https://github.com/input-output-hk/CardanoLedgerApiBlaster" @ "9938562fd452351655fe2f6b63e583c62422687c"
