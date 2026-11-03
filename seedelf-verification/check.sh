@@ -6,6 +6,7 @@
 #   ./check.sh                       every Seedelf module
 #   ./check.sh upstream              the upstream reproductions (Upstream/)
 #   ./check.sh upstream-main         ExceptParams against Lean-blaster main
+#   ./check.sh lovejoin              Lovejoin's classic pool (chunk 42)
 #   ./check.sh Seedelf.PolicyMint    some modules
 #   CAP=12G LIMIT=20m ./check.sh     other limits
 cd "$(dirname "$0")" || exit 1
@@ -17,6 +18,9 @@ mods=("$@")
   Seedelf.PolicyForeign Seedelf.PolicyBurn Seedelf.PolicyMint)
 [ "${mods[0]}" = upstream ] && mods=(Upstream.ExceptParams Upstream.ByteStrings Upstream.Fq1Fin Upstream.SlicePrograms
   Upstream.SliceNone Upstream.Slice1 Upstream.Slice4 Upstream.Slice16 Upstream.Slice32)
+# Lovejoin's classic mainnet pool (chunk 42), after ./extract-lovejoin.sh.
+[ "${mods[0]}" = lovejoin ] && mods=(Lovejoin.Scripts Lovejoin.Box Lovejoin.Steps Lovejoin.ReferenceHolder
+  Lovejoin.MixBoxPurpose Lovejoin.MixBoxGate Lovejoin.MixBoxNoLock)
 # The same ExceptParams file in its own package, against Lean-blaster main.
 [ "${mods[0]}" = upstream-main ] && { cd Upstream/blaster-main || exit 1; mods=(BlasterMain.ExceptParams); }
 peakf=$(mktemp)

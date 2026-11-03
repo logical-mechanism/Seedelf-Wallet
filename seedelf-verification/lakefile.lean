@@ -19,6 +19,10 @@ package «SeedelfVerification» where
 @[default_target]
 lean_lib «Seedelf» where
 
+-- Lovejoin's classic mainnet pool (local branch lovejoin-verification, chunk 42):
+-- `./extract-lovejoin.sh`, then `./check.sh lovejoin`.
+lean_lib «Lovejoin» where
+
 -- Minimal reproductions of the Blaster and PlutusCoreBlaster gaps that block
 -- Seedelf's proofs, for upstream issues: `./check.sh upstream`.
 lean_lib «Upstream» where
