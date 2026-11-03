@@ -9,8 +9,10 @@
 # for every L: applied to the classic pool's mix_logic hash it must be the classic pool's
 # mix_box, c145c10f…, as it sits on chain. And one_shot_mint's: applied to the mainnet
 # 5 ₳ pool's seed it must be that pool's NFT policy, dc6abe3b…. And fee_contract's: at that
-# pool's policy it must be that pool's fee_contract, 20aae476….
+# pool's policy it must be that pool's fee_contract, 20aae476…. mix_logic's own template too,
+# unapplied (7fb45b75…), for the theorems that hold for every v2 launch.
 #   Lovejoin/V2/Scripts/mix_logic.hex             one CBOR layer, as the ledger hashes it
+#   Lovejoin/Template/Scripts/mix_logic.hex       the same, unapplied
 #   Lovejoin/Template/Scripts/mix_box.hex         the same, unapplied
 #   Lovejoin/Template/Scripts/one_shot_mint.hex   the same, unapplied
 #   Lovejoin/Template/Scripts/fee_contract.hex    the same, unapplied
@@ -90,6 +92,7 @@ print(f"fee_contract: the template at the 5 ₳ pool's policy {fee5} {'ok' if fe
 ok &= fee5 == POOL5_FEE
 if ok:
     open("Lovejoin/V2/Scripts/mix_logic.hex", "w").write(code.hex())
+    open("Lovejoin/Template/Scripts/mix_logic.hex", "w").write(unapplied["mix_logic"][1].hex())
     open("Lovejoin/Template/Scripts/mix_box.hex", "w").write(unapplied["mix_box"][1].hex())
     open("Lovejoin/Template/Scripts/one_shot_mint.hex", "w").write(unapplied["one_shot_mint"][1].hex())
     open("Lovejoin/Template/Scripts/fee_contract.hex", "w").write(unapplied["fee_contract"][1].hex())

@@ -11,11 +11,16 @@ seed and reference_holder's hash: at the mainnet 5 ₳ pool's seed it's that poo
 policy, dc6abe3b…, which `extract-lovejoin-v2.sh` checks too. fee_contract's, 3698bbfd…,
 takes the pool's NFT: at the 5 ₳ pool's it's that pool's fee_contract, 20aae476….
 
+mix_logic's template, 7fb45b75…, is v2's (5cc3631): it takes the pool's NFT, policy and
+name. At the test launch's (`abab…`, `lovejoin`) it's `V2.Scripts`' 60294352…, which
+`extract-lovejoin-v2.sh` checks.
+
 The theorems on them take the parameters as the program's first arguments, symbolic, so
 they hold for every pool on them at once. -/
 
 namespace Lovejoin.Template
 
+#import_uplc mixLogicTemplate PlutusV3 single_cbor_hex "Lovejoin/Template/Scripts/mix_logic.hex"
 #import_uplc mixBoxTemplate PlutusV3 single_cbor_hex "Lovejoin/Template/Scripts/mix_box.hex"
 #import_uplc oneShotMintTemplate PlutusV3 single_cbor_hex "Lovejoin/Template/Scripts/one_shot_mint.hex"
 #import_uplc feeContractTemplate PlutusV3 single_cbor_hex "Lovejoin/Template/Scripts/fee_contract.hex"

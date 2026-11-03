@@ -18,12 +18,14 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 ### Next session, in order
 
-1. **The owner's calls before a v2 launch:**
-   - The side finding below, `precompute_statements`' cost. A change to mix_logic after the launch means another launch, so it's now or never for v2. A change re-runs the v2 mix_logic modules (the template ones don't touch it).
-   - N = 4, the Settings option, if wanted before the switch: the same way as n = 3, from `ada_n4_*` in `mix_kat.test.ak`.
-   - Disclosure: what Lovejoin's repo and the release say, and when. This branch stays local until then.
-2. **Then the v2 launch** (the owner's, on chain), and every v2 mix_logic theorem re-run on its parameters: `extract-lovejoin-v2.sh` gets the launch's NFT policy, and `V2/Mix.lean`'s and `V2/Mix3.lean`'s reference input become the launch's. The template theorems already hold for it.
-3. **Then step 9**, the wallet on v2 alone.
+1. **The owner builds the general Mix** (dev box): `cd /home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification && git branch --show-current && LIMIT=40m ./check.sh Lovejoin.Template.Scripts Lovejoin.V2.MixAny Lovejoin.V2.MixAnySpec Lovejoin.V2.MixAnySteps Lovejoin.V2.MixAnyFirst Lovejoin.V2.MixAnySecond Lovejoin.V2.MixAnyPasses`.
+   - It's mix_logic's template, applied to a symbolic NFT policy `P`, with mix_box `M`, the box value `bl` and all eight box points symbolic. So it covers every v2 ADA pool, the owner's new 5 ₳ pool included, and every pair of boxes.
+   - `V2/MixAnySteps`: at the test launch with the KAT's points, the template `halt`s in about the KAT's 11497 steps and `mixAcceptsAny` is `true`. z11 changed, or the KAT's proofs in a 5 ₳ pool, `error` with the spec `false`.
+   - `MixAnyFirst` and `MixAnySecond` (3 each, the security direction) and `MixAnyPasses` (1, given a sane pool and well-formed boxes). A ❌ is a spec gap at that check: read the compiled UPLC there.
+2. **Then the same at n = 3**, then Owner withdrawals of several boxes (the game plan's list, *The owner's decisions*).
+3. **The owner's calls before the v2 launch:** the side finding below (`precompute_statements`' cost: now or never for v2) and disclosure (the PR).
+4. **Then the v2 launch** (the new 5 ₳ pool). The general theorems already hold for it; the KAT-based ones are their special case.
+5. **Then step 9**, the wallet on v2 alone (1.8.0).
 
 **Everything on 68c5399 (2026-11-03):** `./check.sh lovejoin` 10 `ok`, `./check.sh lovejoin-v2` 29 `ok`, 105 ✅: the classic pool's 37 and v2's 68. Every `Steps` line as before. `V2/Mix3Steps`: the KAT halts after 19204 steps, `mixAccepts3` is `true`, and z11 or z33 changed errors (after 11486 and 18882 steps) with the spec `false`. The n = 3 theorems each solved in 0.02 s, at most 412 MB; `(verbose: 1)` is out.
 
@@ -187,3 +189,13 @@ The owner, 2026-11-03: "if we did fix this and its formally verified then we cou
 - **2026-11-03, the fix:** xor32 checks both lengths (`expect` on `left` and `right`), "then continue with the formal verification on that new code base", then the move (step 9).
 - **2026-11-03, the old pools:** once the fix is verified, Lovejoin in the wallet uses only the new contracts; the old pools are almost cleared out (step 9).
 - **2026-11-03, the priority:** "number one goal right now is to make lovejoin formally verified and secure!"
+- **2026-11-03, the game plan:**
+  - Verify v2, then open the PR on Lovejoin's repo.
+  - Seedelf Wallet 1.8.0 allows no mixing into the old pools and returns every box in them as soon as it can. The UI hides the old pools, shown for withdrawal alone, and the release integrates v2.
+  - Once v2 is merged, the owner launches a new 5 ₳ pool and keeps it as the only pool for now. The old pools hold about 30 ₳, so little money moves.
+  - Then a wallet with both Seedelf and Lovejoin formally verified, "great for security and a great marketing tool too". But "first thing first, get lovejoin safe asap".
+  - What v2's verification needs before the PR, in order:
+    1. The Mix for any boxes and any v2 ADA pool (`V2/MixAny*`, mix_logic's template).
+    2. The same at n = 3.
+    3. Owner withdrawals of several boxes, v2 and the classic pool (1.8.0's returns).
+    4. N = 4 and token pools later, since the new pool is an ADA pool.

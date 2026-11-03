@@ -31,7 +31,8 @@ mods=("$@")
   Lovejoin.Template.MixBoxPurpose Lovejoin.Template.MixBoxGate Lovejoin.Template.MixBoxNoLock
   Lovejoin.Template.Launch Lovejoin.Template.OneShotMint Lovejoin.Template.Fee Lovejoin.Template.FeeContract
   Lovejoin.V2.Mix3 Lovejoin.V2.Mix3Spec Lovejoin.V2.Mix3Steps Lovejoin.V2.Mix3First Lovejoin.V2.Mix3Second
-  Lovejoin.V2.Mix3Third Lovejoin.V2.Mix3Passes)
+  Lovejoin.V2.Mix3Third Lovejoin.V2.Mix3Passes Lovejoin.V2.MixAny Lovejoin.V2.MixAnySpec Lovejoin.V2.MixAnySteps
+  Lovejoin.V2.MixAnyFirst Lovejoin.V2.MixAnySecond Lovejoin.V2.MixAnyPasses)
 # The same ExceptParams file in its own package, against Lean-blaster main.
 [ "${mods[0]}" = upstream-main ] && { cd Upstream/blaster-main || exit 1; mods=(BlasterMain.ExceptParams); }
 peakf=$(mktemp)
