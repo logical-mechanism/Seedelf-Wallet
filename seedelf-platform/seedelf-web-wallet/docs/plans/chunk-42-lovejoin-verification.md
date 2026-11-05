@@ -15,7 +15,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 | 7 · The token-pool templates | ✅ on v2 instead (step 8): the Mix for any token pool at n = 2 to 4. 8131b1d's only mainnet pool (5 ₳) is empty |
 | 8 · v2: the templates with xor32's fix | ✅ (2026-11-03, PlutusCoreBlaster 68c5399), 230 theorems. On the test launch: `MixChallenges` (1), `MixOutputs` (4), `MixDatums` (3), `Owner` (1), the Mix iff at n = 2 (7) and n = 3 (13), and the templates for every pool (mix_box 29, one_shot_mint 5, fee_contract 5): 68. On mix_logic's template, so for every pool: the Mix for any ADA or token pool at n = 2 to 4 (82), what it must pay (66), and Owner withdrawals of 1 to 4 boxes (`OwnAny*`, 14) |
 | 9 · The wallet on v2 alone | ⬜ waits on step 8 and a v2 launch |
-| 10 · Every transaction (the owner's bar, 2026-11-04) | In part. Seedelf ✅: the wallet and always_false, 59 (`./check.sh seedelf-any-tx`). v2 ✅: every script's other purposes, mix_logic's publish and reference_holder, 17 (`./check.sh lovejoin-any-tx`). ⬜ the Mix, Owner withdrawals and mix_box's spend: the owner's to write |
+| 10 · Every transaction (the owner's bar, 2026-11-04) | In part. Seedelf ✅ all three scripts (2026-11-05): the wallet with none to 128 signatories, always_false, the policy in every context, and kernel-checked covers (seedelf-verification's README). v2 ✅: every script's other purposes, mix_logic's publish and reference_holder, 17 (`./check.sh lovejoin-any-tx`). ⬜ the Mix, Owner withdrawals and mix_box's spend: the owner's to write |
 
 ### Next session, in order
 
@@ -29,6 +29,12 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
   - The wallet's core property holds with none to three signatories.
   - Its other purposes fail, any redeemer but a proof fails, and WalletNoLock's 18 datum shapes move with a proof.
   - always_false fails on any argument at all.
+- **Seedelf's rest (2026-11-05), so every Seedelf script in every transaction.** `./check.sh` 158 `ok` (PolicyBurn and PolicyMint fail on `BitVec` alone, as before) and `./check.sh seedelf-slice` 10 `ok`. Every trace was recounted against its source: 377 ✅ and 7 controls Falsified, plus Slice's 258 ✅ and 6. No trace logs a `sorry`.
+  - **Signers:** 4 to 128 signatories (`gen-seedelf-signers.py`, 250 ✅, the slowest 4 s at 355 MB). A 16,384-byte transaction holds at most 125.
+  - **The policy, with no slice involved:** mint-only, a redeemer that isn't a `B` fails, and mints of no lines or 2 to 5 lines fail (40 ✅).
+  - **Every length, kernel-checked, no Z3:** `PolicyLinesAll` and `LinesAllAnyMint` prove any mint that doesn't flatten to exactly one line fails. They work by induction over the mint on a CEK evaluator (`LinesAllCek`). The chain's budget allows about 3,000 lines.
+  - **The one-line rule, both directions:** in `Slice/`, a package of its own over PlutusCoreBlaster's local-only `local/opaque-slice` (96261cc, an `opaque` `SliceByteString`). It's 256 per-index theorems and 2 off a byte, assembled in the kernel. Its spec was checked against Aiken on 9 contexts.
+  - **Covers:** `AnyTxShapes` and `PolicyShapes` show the scenarios are every V3 context. The policy's cover assumes CardanoLedgerApiBlaster's input and mint rules.
 - `./check.sh lovejoin-any-tx`: `Template.AnyTxPurposes` `ok`, 17 ✅, every parameter symbolic, so for every pool on v2's templates.
   - mix_logic publishes exactly a registration and fails its other purposes.
   - mix_box is spend only, and one_shot_mint mint only.
@@ -43,7 +49,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 - **The crypto is opaque:** the scripts check exactly the right equations, not that the equations are hard to forge.
 - **Up to 4 boxes:** Mixes and withdrawals of up to 4 boxes (3 for the classic pool's withdrawals).
 - **Transaction layouts (2026-11-04):**
-  - In every transaction: Seedelf's wallet (a Register spend with up to three signatories) and always_false, and v2's other purposes and reference_holder.
+  - In every transaction: all three of Seedelf's scripts (the wallet's Register spends with up to 128 signatories, past the chain's 125; the policy's one-line rule over the opaque slice), and v2's other purposes and reference_holder.
   - For every value, but only in their scenarios' layouts: the Mix, Owner withdrawals and mix_box's spend.
 - **For Lovejoin, from 1.8.0:** the classic pool's Mix isn't verified (step 5), and the wallet mixes there until 1.8.0 moves it to v2.
 - **The wallet's own code isn't covered.** `V2/MixOutputs` and `V2/MixDatums` hold at the test launch with two boxes alone, and the general Mix's scenario fixes every box out as it should be, so it couldn't say what a wrong one does. `gen-lovejoin-mix-outputs.py` takes them to mix_logic's template, for the six families of the general Mix (ADA and token pools, n = 2 to 4), with the pool's parameters, every box's points and every proof field symbolic. It's walk_outputs, so a Mix fails if:

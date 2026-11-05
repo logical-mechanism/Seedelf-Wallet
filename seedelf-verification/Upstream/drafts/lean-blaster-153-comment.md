@@ -1,8 +1,8 @@
 <!-- Comment on https://github.com/input-output-hk/Lean-blaster/issues/153 -->
 
-Two PlutusCoreBlaster bytestring functions hit this on a symbolic input, with controls next to them that pass. It's what stands between us and the rest of a minting policy deployed on mainnet.
+The rejection is still on `main` after #155 (`02c9566`, `Blaster/Smt/Translate/Quantifier.lean:941`). Two more PlutusCoreBlaster bytestring functions reach it on a symbolic input, with passing controls next to them.
 
-Lean 4.24.0, Z3 5.3.1, Lean-blaster `46c8479` (`beta-lambda-cache-optimization`, pinned by CardanoLedgerApiBlaster `9938562`), PlutusCoreBlaster `1c23de8`:
+Run on Lean 4.24.0, Z3 5.3.1, Lean-blaster `46c8479` (`beta-lambda-cache-optimization`, pinned by CardanoLedgerApiBlaster `9938562`), PlutusCoreBlaster `1c23de8`:
 
 ```lean
 import Blaster
@@ -30,11 +30,8 @@ theorem slice_length : ∀ (bs : ByteString),
     lengthOfByteString (sliceByteString 0 4 bs) ≤ 4 := by blaster                      -- ❌ BitVec
 ```
 
-Each ❌ is `Inductive datatype with instance parameters not supported: `BitVec`. Whole bytestrings go to SMT strings fine; anything that looks at characters reaches `Char`, whose `val : UInt32` is a `BitVec 32` (so #67 and #69 too).
+Each ❌ is `Inductive datatype with instance parameters not supported: `BitVec``. Whole bytestrings translate to SMT strings fine. Anything that looks at characters reaches `Char`, whose `val : UInt32` is a `BitVec 32` (so #67 and #69 too).
 
-What it blocks for us, on [Seedelf](https://github.com/logical-mechanism/Seedelf-Wallet)'s deployed contracts, proving properties of the compiled UPLC:
+For us it's the last gap in proving [Seedelf](https://github.com/logical-mechanism/Seedelf-Wallet)'s deployed scripts from their compiled UPLC. An `opaque` alias gets around `byteStringToInteger` (input-output-hk/PlutusCoreBlaster#71, as #27 did for `serialiseData`), but an alias only proves a rule for every interpretation of the builtin, not for PlutusCore's own definition. With this fixed, the minting policy's token-name rule could be proved over the real `sliceByteString`, and we could drop the aliases.
 
-- the minting policy (`84967d91…`) derives token names with `sliceByteString`, so neither its naming rule nor a successful burn can be proved over a symbolic name;
-- the wallet validator (`94bca9c0…`) decodes its Schnorr scalar and challenge with `byteStringToInteger`. An `opaque` alias gets around that, input-output-hk/PlutusCoreBlaster#71 (as #27 did for `serialiseData`), and with it, #455, input-output-hk/PlutusCoreBlaster#72 and #73, the wallet's core property proves. A slice has no such way around: an alias loses what slicing means.
-
-30 properties of the same scripts prove, so it's this gap, not the scripts' size. Is the `BitVec`/indexed-type support from your July note still on the way (we saw `feat/indexed-types`, last touched in June), and is there a branch we could run against? Our suite is a reproducible Lake package and we're glad to report back.
+Is the `BitVec`/indexed-type support from your July note still planned? We saw `feat/indexed-types`, last touched June 21. If there's a branch to try, our suite is a reproducible Lake package and we'll report back.
