@@ -1,0 +1,12 @@
+diff --color -ru '--exclude=build' '--exclude=plutus.json' v2/contracts/validators/fee_contract.ak mut/fee_twoboxes/contracts/validators/fee_contract.ak
+--- v2/contracts/validators/fee_contract.ak	2026-11-03 01:00:04.000000000 -0800
++++ mut/fee_twoboxes/contracts/validators/fee_contract.ak	2026-11-03 12:53:53.851839220 -0800
+@@ -154,7 +154,7 @@
+   // stricter floor lives here because consuming a fee shard at N=2 would
+   // collapse the anonymity set against an observer who knows the shard
+   // input.
+-  expect mix_input_count >= 3
++  expect mix_input_count >= 2
+   expect fee_input_count == 1
+ 
+   let fee_outputs = self.outputs

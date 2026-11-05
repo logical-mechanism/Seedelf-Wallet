@@ -29,3 +29,7 @@ lean_lib «Lovejoin» where
 -- Minimal reproductions of the Blaster and PlutusCoreBlaster gaps that block
 -- Seedelf's proofs, for upstream issues: `./check.sh upstream`.
 lean_lib «Upstream» where
+
+-- The audit of the proofs above (local only): mutation and negative-control suites, and the
+-- modules that close the gaps it found. `./check.sh audit-quick` first; Audit/README.md.
+lean_lib «Audit» where

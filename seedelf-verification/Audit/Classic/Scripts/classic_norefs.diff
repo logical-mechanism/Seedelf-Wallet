@@ -1,0 +1,11 @@
+diff --color -ru '--exclude=build' '--exclude=plutus.json' classic/contracts/validators/mix_logic.ak mut/classic_norefs/contracts/validators/mix_logic.ak
+--- classic/contracts/validators/mix_logic.ak	2026-09-26 21:50:50.000000000 -0700
++++ mut/classic_norefs/contracts/validators/mix_logic.ak	2026-11-03 12:53:53.766624885 -0800
+@@ -128,7 +128,6 @@
+     self.inputs |> list.map(fn(i) { i.output_reference }),
+   )
+   let ctx_preimage = outputs_bytes
+-    |> bytearray.concat(input_refs_bytes)
+     |> bytearray.concat(reference_datum.mix_script_hash)
+   let ctx = builtin.blake2b_256(ctx_preimage)
+ 

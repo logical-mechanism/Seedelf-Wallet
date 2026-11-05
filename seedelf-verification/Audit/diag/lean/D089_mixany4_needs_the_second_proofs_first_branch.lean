@@ -1,0 +1,5 @@
+import Lovejoin.V2.MixAny4Box2
+import Blaster
+
+-- Lovejoin.V2.MixAny4Box2 line 25: blaster (timeout: 540)
+#blaster (only-smt-lib: 1) (dump-smt-lib: 1) [Lovejoin.V2.Any4.mixany4_needs_the_second_proofs_first_branch]

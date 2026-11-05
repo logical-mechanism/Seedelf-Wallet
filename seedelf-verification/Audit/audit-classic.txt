@@ -1,0 +1,25 @@
+# ./check.sh audit-classic, then python3 -I Audit/count.py audit-classic
+# The classic pool (being retired; its Owner returns still run in 1.8.0): the same kinds of
+# controls, the ref-symbolic Owner, mutant scripts.
+Audit.Classic.RefHolder
+Audit.Classic.GateSpec
+Audit.Classic.GateLimits
+Audit.Classic.GateGaps
+Audit.Classic.OwnerSpecA
+Audit.Classic.OwnerSpecB
+Audit.Classic.OwnerFlip
+Audit.Classic.OwnerLimits
+Audit.Classic.OwnerGaps
+Audit.Classic.OwnerMutants
+Audit.Classic.OwnerAnyRef
+Audit.Classic.OwnerExec
+Audit.Classic.Own1Spec
+Audit.Classic.Own1Limits
+Audit.Classic.Own1Gaps
+Audit.Classic.Own1Mutants
+Audit.Classic.Own1Exec
+Audit.Classic.Own3Spec
+Audit.Classic.Own3Limits
+Audit.Classic.Own3Gaps
+Audit.Classic.Own3Mutants
+Audit.Classic.Own3Exec

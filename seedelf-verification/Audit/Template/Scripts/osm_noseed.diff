@@ -1,0 +1,11 @@
+diff --color -ru '--exclude=build' '--exclude=plutus.json' v2/contracts/validators/one_shot_mint.ak mut/osm_noseed/contracts/validators/one_shot_mint.ak
+--- v2/contracts/validators/one_shot_mint.ak	2026-11-03 01:00:04.000000000 -0800
++++ mut/osm_noseed/contracts/validators/one_shot_mint.ak	2026-11-03 12:53:53.809360457 -0800
+@@ -119,7 +119,6 @@
+     }
+ 
+     and {
+-      seed_consumed,
+       asset_name == #"6c6f76656a6f696e",
+       quantity == 1,
+       datum_sane,

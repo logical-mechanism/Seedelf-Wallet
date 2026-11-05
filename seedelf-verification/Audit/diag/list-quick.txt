@@ -1,0 +1,9 @@
+/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification/Audit/diag/lean/D044_owner_withdraws_iff_proof.lean
+/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification/Audit/diag/lean/D133_mix_refuses_a_challenge_not_32_bytes.lean
+/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification/Audit/diag/lean/D137_mix_needs_the_first_challenge.lean
+/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification/Audit/diag/lean/D140_mix_pays_its_boxes_to_mix_box.lean
+/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification/Audit/diag/lean/D144_mix_passes_with_both_proofs.lean
+/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification/Audit/diag/lean/D236_owner_withdraws_iff_proof.lean
+/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification/Audit/diag/lean/D276_always_false_always_fails.lean
+/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification/Audit/diag/lean/D277_other_amounts_fail.lean
+/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification/Audit/diag/lean/D309_wallet_register_spend_iff.lean

@@ -6,7 +6,7 @@ reference and its datum, and its TxInfo is `TxRest.infoWith` of its 15 other fie
 signatories. Each is `rfl`: the encoding unfolds to the same `Data`. Kernel-checked, no blaster.
 
 So a theorem over every `TxRest`, `ref` and datum holds of every spend whose signatories,
-redeemer and datum have the shape it fixes. For the wallet's spends that's none to three
+redeemer and datum have the shape it fixes. For the wallet's spends that's none to 128
 signatories, and each redeemer and datum shape its scenarios list. -/
 
 namespace Seedelf.V1

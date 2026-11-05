@@ -1,0 +1,49 @@
+# ./check.sh audit-gaps, then python3 -I Audit/count.py audit-gaps
+# fee_contract is left out (owner, 2026-11-03: unused in practice, since Seedelf and one-time
+# accounts make it useless): Audit.Gaps.Template.AuditFee{Trust,Outputs,Key} stay, by name.
+# New theorems that close the review's gaps, high findings first: token identity, box-out datum
+# shapes, uncounted boxes and proofs, the trust anchor, fee retention and recognition, v2's
+# mix_logic purposes, then the medium ones. Every check here is expected Valid.
+Audit.Gaps.V2.MixTok2Values1
+Audit.Gaps.V2.MixTok2Values2
+Audit.Gaps.V2.MixTok3Values1
+Audit.Gaps.V2.MixTok3Values2
+Audit.Gaps.V2.MixTok3Values3
+Audit.Gaps.V2.MixTok4Values1
+Audit.Gaps.V2.MixTok4Values2
+Audit.Gaps.V2.MixTok4Values3
+Audit.Gaps.V2.MixTok4Values4
+Audit.Gaps.V2.GapMixShapes1
+Audit.Gaps.V2.GapMixShapes2
+Audit.Gaps.V2.GapMixShapes3
+Audit.Gaps.V2.GapMixShapes4
+Audit.Gaps.V2.GapMixCount
+Audit.Gaps.V2.GapMixRedeemer
+Audit.Gaps.V2.GapOwnBoxes
+Audit.Gaps.V2.GapOwnPasses
+Audit.Gaps.V2.AuditOwnRef
+Audit.Gaps.Template.AuditOneShot
+Audit.Gaps.Classic.AuditClassicRef
+Audit.Gaps.Template.CompletenessMixLogicPurpose
+Audit.Gaps.Template.AuditPasses
+Audit.Gaps.Classic.ClassicMint
+Audit.Gaps.Template.AuditGateInputs
+Audit.Gaps.Template.CheckGateShapes
+Audit.Gaps.Classic.Gate2Props
+Audit.Gaps.Classic.OwnWallet1Boxes
+Audit.Gaps.Classic.OwnWallet1Passes
+Audit.Gaps.V2.GapMixOtherAfter
+Audit.Gaps.V2.GapMixOtherAfterPasses
+Audit.Gaps.V2.GapMixOtherBefore
+Audit.Gaps.V2.GapMixOtherBeforePasses
+Audit.Gaps.V2.GapMixOtherBetween
+Audit.Gaps.V2.GapMixOtherBetweenPasses
+Audit.Gaps.V2.GapMixDatumBetween
+Audit.Gaps.V2.GapMixDatumBetweenPasses
+Audit.Gaps.V2.GapMixRefs
+Audit.Gaps.V2.GapMixTail
+Audit.Gaps.V2.ChkMixAnyLaunchFails
+Audit.Gaps.V2.ChkMixAnyLaunchPasses
+Audit.Gaps.Classic.AuditOwnerFails
+Audit.Gaps.V2.AuditOwnerFailsV2
+Audit.Gaps.Classic.OwnerErrors

@@ -1,0 +1,2 @@
+/tmp/y.lean:4:0: ✅ Valid
+rc=0

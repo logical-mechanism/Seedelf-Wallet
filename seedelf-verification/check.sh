@@ -3,8 +3,11 @@
 # kernel kills that build (and everything it started), never the desktop.
 # Every module runs, cheapest first; the summary says how each went and the
 # most memory its scope used.
-#   ./check.sh                       every Seedelf module
+#   ./check.sh                       every Seedelf module (Slice/ is its own: seedelf-slice)
 #   ./check.sh seedelf-any-tx        Seedelf's properties in every transaction (Seedelf/AnyTx.lean)
+#   ./check.sh seedelf-signers       the wallet's core property with 4 to 128 signatories
+#   ./check.sh seedelf-policy-any-tx the policy in every transaction, where it needs no slice
+#   ./check.sh seedelf-slice         the policy's one-line rule, over an opaque slice (Slice/)
 #   ./check.sh upstream              the upstream reproductions (Upstream/)
 #   ./check.sh upstream-main         ExceptParams against Lean-blaster main
 #   ./check.sh lovejoin              Lovejoin's classic pool (chunk 42)
@@ -12,7 +15,8 @@
 #   ./check.sh lovejoin-v2-pools     v2's general Mix alone, for every pool kind and n = 2 to 4
 #   ./check.sh lovejoin-v2-outputs   what that Mix must pay, for the same pools and n
 #   ./check.sh lovejoin-owner        Owner withdrawals of several boxes, v2 and the classic pool
-#   ./check.sh lovejoin-any-tx       v2's properties in every transaction
+#   ./check.sh lovejoin-any-tx       v2 scenario families with arbitrary uninspected fields
+#   ./check.sh audit-quick           an audit family (Audit/audit-*.txt), then Audit/count.py
 #   ./check.sh Seedelf.PolicyMint    some modules
 #   CAP=12G LIMIT=20m ./check.sh     other limits
 cd "$(dirname "$0")" || exit 1
@@ -23,11 +27,22 @@ mods=("$@")
 # the script doesn't read left as any Data.
 any_tx=(Seedelf.AnyTx Seedelf.AnyTxCover Seedelf.AnyTxSteps Seedelf.AlwaysFalseAnyTx
   Seedelf.WalletPurposeAnyTx Seedelf.WalletNoLockAnyTx Seedelf.WalletRedeemerAnyTx Seedelf.WalletAnyTx Seedelf.WalletAnyTxTwo
-  Seedelf.WalletAnyTxThree)
+  Seedelf.WalletAnyTxThree Seedelf.AnyTxShapes)
+# The wallet's core property with four signatories and more (gen-seedelf-signers.py), one module
+# a length, listed in Seedelf/Signers/modules.txt.
+mapfile -t signers < <(grep -v -e '^#' -e '^[[:space:]]*$' Seedelf/Signers/modules.txt)
+# The policy in every transaction, where it needs no slice: its other purposes, its redeemer,
+# mints of other than one line (to five by Blaster, every length and any mint Data by the kernel:
+# the LinesAll modules), and the cover of every context.
+policy_any_tx=(Seedelf.PolicyAnyTx Seedelf.PolicyAnyTxSteps Seedelf.PolicyPurposeAnyTx
+  Seedelf.PolicyRedeemerAnyTx Seedelf.PolicyLinesAnyTx Seedelf.PolicyLinesFourAnyTx Seedelf.PolicyLinesFiveAnyTx
+  Seedelf.LinesAllCek Seedelf.LinesAllLoops Seedelf.PolicyLinesAll Seedelf.LinesAllAnyMint Seedelf.PolicyShapes)
 [ ${#mods[@]} -eq 0 ] && mods=(Seedelf.Scripts Seedelf.Scenario Seedelf.Steps Seedelf.AlwaysFalse
-  Seedelf.WalletPurpose Seedelf.WalletNoLock Seedelf.WalletRegister "${any_tx[@]}" Seedelf.PolicyAmount
-  Seedelf.PolicyForeign Seedelf.PolicyBurn Seedelf.PolicyMint)
+  Seedelf.WalletPurpose Seedelf.WalletNoLock Seedelf.WalletRegister "${any_tx[@]}" "${policy_any_tx[@]}"
+  "${signers[@]}" Seedelf.PolicyAmount Seedelf.PolicyForeign Seedelf.PolicyBurn Seedelf.PolicyMint)
 [ "${mods[0]}" = seedelf-any-tx ] && mods=("${any_tx[@]}")
+[ "${mods[0]}" = seedelf-signers ] && mods=("${signers[@]}")
+[ "${mods[0]}" = seedelf-policy-any-tx ] && mods=("${policy_any_tx[@]}")
 [ "${mods[0]}" = upstream ] && mods=(Upstream.ExceptParams Upstream.ByteStrings Upstream.Fq1Fin Upstream.SlicePrograms
   Upstream.SliceNone Upstream.Slice1 Upstream.Slice4 Upstream.Slice16 Upstream.Slice32)
 # Owner withdrawals of several boxes, a payer's input and two outputs (gen-lovejoin-owner.py):
@@ -82,13 +97,59 @@ outputs=(
   Lovejoin.Template.Launch Lovejoin.Template.OneShotMint Lovejoin.Template.Fee Lovejoin.Template.FeeContract
   Lovejoin.V2.Mix3 Lovejoin.V2.Mix3Spec Lovejoin.V2.Mix3Steps Lovejoin.V2.Mix3First Lovejoin.V2.Mix3Second
   Lovejoin.V2.Mix3Third Lovejoin.V2.Mix3Passes "${pools[@]}" "${outputs[@]}" "${owners_v2[@]}")
-# v2 in every transaction: the same properties with every field a script doesn't read as any Data.
-any_tx_v2=(Lovejoin.Template.AnyTxPurposes)
+# v2 scenario families and unbounded kernel-checked mix_box/purpose proofs.
+any_tx_v2=(Lovejoin.Template.AnyTxPurposes Lovejoin.AnyTx.FeePurpose Lovejoin.AnyTx.PurposesKernel Lovejoin.AnyTx.LogicPublishKernel
+  Lovejoin.AnyTx.LogicLength Lovejoin.AnyTx.LogicProofPairs Lovejoin.AnyTx.LogicInputFilter Lovejoin.AnyTx.LogicInputHelpers
+  Lovejoin.AnyTx.LogicInputMalformed Lovejoin.AnyTx.LogicInputExtended Lovejoin.AnyTx.LogicInputCover Lovejoin.AnyTx.LogicOwnerVerifier Lovejoin.AnyTx.LogicOwnerScalar
+  Lovejoin.AnyTx.LogicOwnerScalarSteps Lovejoin.AnyTx.LogicOwnerPartial Lovejoin.AnyTx.LogicOwnerPairing
+  Lovejoin.AnyTx.LogicOwnerPairingPartial Lovejoin.AnyTx.LogicOwnerFinish Lovejoin.AnyTx.LogicOwnerHash
+  Lovejoin.AnyTx.LogicOwnerContextPairing Lovejoin.AnyTx.LogicOwnerConditions Lovejoin.AnyTx.LogicOwnerBoundary
+  Lovejoin.AnyTx.LogicOwnerBoundaryPartial Lovejoin.AnyTx.LogicOwnerShapesJoin
+  Lovejoin.AnyTx.LogicOwnerEntry Lovejoin.AnyTx.LogicOwnerCollectedEntry Lovejoin.AnyTx.LogicOwnerReachableBoundary Lovejoin.AnyTx.LogicOwnerProgramBoundary
+  Lovejoin.AnyTx.LaunchSeedSearch Lovejoin.AnyTx.LaunchSeedSlots Lovejoin.AnyTx.LaunchOutputSearch
+  Lovejoin.AnyTx.LogicInputRefs Lovejoin.AnyTx.LogicReferenceFilter
+  Lovejoin.AnyTx.LogicOwnerParse Lovejoin.AnyTx.LogicMixParse Lovejoin.AnyTx.LogicMixShape Lovejoin.AnyTx.LogicProofBoundary Lovejoin.AnyTx.LogicMixBoundary
+  Lovejoin.AnyTx.LogicOwnerMalformed Lovejoin.AnyTx.LogicNoReferenceMany Lovejoin.AnyTx.LogicOwnerNoCarrier Lovejoin.AnyTx.LogicOwnerShape Lovejoin.AnyTx.LogicMixNoCarrier
+  Lovejoin.AnyTx.LogicPolicyLookup Lovejoin.AnyTx.LogicNameLookup Lovejoin.AnyTx.LogicCarrierPredicate Lovejoin.AnyTx.LogicCarrierFilterExact
+  Lovejoin.AnyTx.LogicWrongQuantity Lovejoin.AnyTx.LogicDuplicateCarrier Lovejoin.AnyTx.LogicCarrierNecessary
+  Lovejoin.AnyTx.LogicCarrierVariable Lovejoin.AnyTx.LogicVariableNecessary Lovejoin.AnyTx.LogicBadCarrierDatum Lovejoin.AnyTx.LogicWrongQuantityControls
+  Lovejoin.AnyTx.LogicAbsentName Lovejoin.AnyTx.LogicAbsentNameSafety Lovejoin.AnyTx.LogicAbsentNameAfter Lovejoin.AnyTx.LogicAbsentNameAfterSafety
+  Lovejoin.AnyTx.LogicAbsentPolicy Lovejoin.AnyTx.LogicAbsentPolicyAfter Lovejoin.AnyTx.LogicCarrierCover Lovejoin.AnyTx.LogicCarrierCoverSafety
+  Lovejoin.AnyTx.LogicLedgerValueCover Lovejoin.AnyTx.LogicLedgerCarrier Lovejoin.AnyTx.LogicValueOf Lovejoin.AnyTx.LogicSortedValue Lovejoin.AnyTx.LogicLedgerUniqueness
+  Lovejoin.AnyTx.LogicLedgerInline Lovejoin.AnyTx.LogicInlineMalformed Lovejoin.AnyTx.ReferenceHolderPersistence
+  Lovejoin.AnyTx.LogicBoxComposition Lovejoin.AnyTx.LogicCarrierCoverControls
+  Lovejoin.AnyTx.LogicNoReference Lovejoin.AnyTx.LogicRedeemerFailures Lovejoin.AnyTx.LogicLongControls
+  Lovejoin.AnyTx.Common Lovejoin.AnyTx.LogicEmpty Lovejoin.AnyTx.LogicControls
+  Lovejoin.AnyTx.OwnerOne Lovejoin.AnyTx.OwnerControls Lovejoin.AnyTx.BoxGate Lovejoin.AnyTx.BoxBoundary Lovejoin.AnyTx.BoxSuffix
+  Lovejoin.AnyTx.BoxDatum Lovejoin.AnyTx.BoxControls
+  Lovejoin.AnyTx.CekCase Lovejoin.AnyTx.BoxSearch Lovejoin.AnyTx.WithdrawSearch Lovejoin.AnyTx.BoxAll
+  Lovejoin.AnyTx.BoxGateAll Lovejoin.AnyTx.BoxMalformed Lovejoin.AnyTx.BoxMalformedShapes Lovejoin.AnyTx.BoxInlineAll
+  Lovejoin.AnyTx.BoxComplete Lovejoin.AnyTx.BoxCover Lovejoin.AnyTx.BoxSemantics Lovejoin.AnyTx.BoxPurposesAll Lovejoin.AnyTx.BoxAllControls
+  Lovejoin.AnyTx.OwnerLayouts Lovejoin.AnyTx.OwnerTwo
+  Lovejoin.AnyTx.Owner3 Lovejoin.AnyTx.Owner4 Lovejoin.AnyTx.OwnerOtherInputs Lovejoin.AnyTx.OwnerMoreControls
+  Lovejoin.AnyTx.OwnerManyControls Lovejoin.AnyTx.OwnerOtherControls Lovejoin.AnyTx.Reference Lovejoin.AnyTx.ReferenceControls
+  Lovejoin.AnyTx.MixTwo Lovejoin.AnyTx.MixTwoControls Lovejoin.AnyTx.MixOutputs Lovejoin.AnyTx.MixOutputControls
+  Lovejoin.AnyTx.MixTokenTwo Lovejoin.AnyTx.MixTokenControls Lovejoin.AnyTx.MixTokenOutputs Lovejoin.AnyTx.MixTokenOutputControls
+  Lovejoin.AnyTx.MixAda3 Lovejoin.AnyTx.MixAda3Controls Lovejoin.AnyTx.MixAda3Output Lovejoin.AnyTx.MixAda3OutputControls
+  Lovejoin.AnyTx.MixAda4 Lovejoin.AnyTx.MixAda4Controls Lovejoin.AnyTx.MixAda4Output Lovejoin.AnyTx.MixAda4OutputControls
+  Lovejoin.AnyTx.MixToken3 Lovejoin.AnyTx.MixToken3Controls Lovejoin.AnyTx.MixToken3Output Lovejoin.AnyTx.MixToken3OutputControls
+  Lovejoin.AnyTx.MixToken4 Lovejoin.AnyTx.MixToken4Controls Lovejoin.AnyTx.MixToken4Output Lovejoin.AnyTx.MixToken4OutputControls
+  Lovejoin.AnyTx.FeeSpend Lovejoin.AnyTx.FeeRecovery Lovejoin.AnyTx.FeeControls Lovejoin.AnyTx.Launch Lovejoin.AnyTx.LaunchControls
+  Lovejoin.AnyTx.OwnerIff Lovejoin.AnyTx.MixIff Lovejoin.AnyTx.FeeMix Lovejoin.AnyTx.FeeMixControls)
 [ "${mods[0]}" = lovejoin-any-tx ] && mods=("${any_tx_v2[@]}")
+# The audit (Audit/): each family's modules, cheapest first, one per line in Audit/<family>.txt.
+case ${mods[0]} in audit-*) [ -f "Audit/${mods[0]}.txt" ] &&
+  mapfile -t mods < <(grep -v -e '^#' -e '^[[:space:]]*$' "Audit/${mods[0]}.txt") ;; esac
+# The policy's rule for one mint line in every transaction, over an opaque SliceByteString, in
+# its own package (Slice/): the modules given, or those in Slice/modules.txt.
+[ "${mods[0]}" = seedelf-slice ] && { cd Slice || exit 1
+  if [ ${#mods[@]} -gt 1 ]; then mods=("${mods[@]:1}")
+  else mapfile -t mods < <(grep -v -e '^#' -e '^[[:space:]]*$' modules.txt); fi; }
 # The same ExceptParams file in its own package, against Lean-blaster main.
 [ "${mods[0]}" = upstream-main ] && { cd Upstream/blaster-main || exit 1; mods=(BlasterMain.ExceptParams); }
 peakf=$(mktemp)
 summary=()
+check_failed=0
 for m in "${mods[@]}"; do
   echo "== $m (cap $CAP, limit $LIMIT)"
   start=$SECONDS
@@ -100,6 +161,7 @@ for m in "${mods[@]}"; do
       exit $rc' _ "$LIMIT" "$m" "$peakf" 2>&1 \
     | grep -v -E 'Replayed|CekMachine.lean:309|Successfully decoded|^trace: \.> LEAN_PATH'
   rc=${PIPESTATUS[0]}
+  [ "$rc" -eq 0 ] || check_failed=1
   took=$((SECONDS - start))s
   peak=$(cat "$peakf")
   [ -n "$peak" ] && peak=", peak $((peak / 1048576)) MB"
@@ -114,3 +176,4 @@ rm -f "$peakf"
 echo
 echo "== summary"
 printf '%s\n' "${summary[@]}"
+exit "$check_failed"

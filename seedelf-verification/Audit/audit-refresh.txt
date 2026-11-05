@@ -1,0 +1,26 @@
+# ./check.sh audit-refresh: the proof modules whose builds are older than their sources or
+# imports (68c5399 and Wallet.lean's scalarOf moved under them), rebuilt before the audit
+# imports them; else each would rebuild inside the first audit module's own time limit.
+# Run with LIMIT=30m. PolicyBurn and PolicyMint stay out: they fail on BitVec by design.
+Seedelf.AlwaysFalse
+Seedelf.WalletPurpose
+Seedelf.WalletNoLock
+Seedelf.PolicyAmount
+Seedelf.PolicyForeign
+Seedelf.WalletRegister
+Lovejoin.OwnClassic1Steps
+Lovejoin.OwnClassic2Steps
+Lovejoin.OwnClassic3Steps
+Lovejoin.Template.MixBoxPurpose
+Lovejoin.Template.MixBoxGate
+Lovejoin.Template.MixBoxNoLock
+Lovejoin.Template.OneShotMint
+Lovejoin.Template.FeeContract
+Lovejoin.V2.OwnAny1Steps
+Lovejoin.V2.OwnAny2Steps
+Lovejoin.V2.OwnAny3Steps
+Lovejoin.V2.OwnAny4Steps
+Lovejoin.V2.Mix3First
+Lovejoin.V2.Mix3Second
+Lovejoin.V2.Mix3Third
+Lovejoin.V2.Mix3Passes

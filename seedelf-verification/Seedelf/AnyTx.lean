@@ -8,10 +8,11 @@ these scripts that made the symbolic run branch on every list and datum it met, 
 52 GB (Scripts.lean). Here the context is `Data`, built as the ledger encodes it, and every
 field a script doesn't read is a `Data` of its own: any value at all, values the ledger never
 produces included. Only what a script walks or takes apart stays fixed: the number of
-signatories (none to three), and the shape of the redeemer and the datum, one scenario per
+signatories (none to three here, 4 to 128 in `Signers/`, one module a length: a 16,384-byte
+transaction holds at most 125), and the shape of the redeemer and the datum, one scenario per
 shape as in WalletNoLock. `AnyTxCover` shows every V3 spend's context has this form, so each
-scenario holds of every spend with its signatories, redeemer and datum. Not proved: four
-signatories or more, a list the wallet walks (README rule 4).
+scenario holds of every spend with its signatories, redeemer and datum, and `AnyTxShapes` that
+the scenarios are every context there is.
 
 The encoding (CardanoLedgerApiBlaster, V3/Contexts.lean and IsData/Class.lean):
 - the context is `Constr 0 [txInfo, redeemer, scriptInfo]`;

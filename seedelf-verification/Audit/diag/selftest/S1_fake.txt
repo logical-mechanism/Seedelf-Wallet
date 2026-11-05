@@ -1,0 +1,26 @@
+Smt Query:
+(set-option :print-success true)
+(set-option :produce-models true)
+(set-option :smt.pull-nested-quantifiers true)
+(set-option :smt.mbqi true)
+(set-option :auto_config false)
+(set-simplifier recfun-finder)
+(set-option :smt.macro_finder true)
+(set-option :smt.qi.persist_instances true)
+(set-option :smt.arith.nl.grobner_expand_terms false)
+(set-option :smt.arith.nl.reduce_pseudo_linear false)
+(set-option :smt.arith.nl.grobner_exp_delay false)
+(define-sort Nat () Int)
+(define-fun @isNat ((@x Nat)) Bool (<= 0 @x))
+(declare-fun @f (Nat) Nat)
+(define-fun @f_LRec (($0 Nat)) Nat (ite (= $0 0) 0
+ (+ 1 (@f (- $0 1)))))
+(assert (forall (($0 Nat))
+ (!(= (@f $0) (@f_LRec $0))  :pattern ( (@f $0))))
+)
+(declare-const $1 Nat)
+(declare-const |@s x| String)
+(assert (= |@s x| "a""b\u{5c}"))
+(assert (not (=> (@isNat $1) (=> (= $1 3) (= (@f $1) 3)))))
+/tmp/x.lean:4:0: warning: ⚠️ Undetermined
+rc=0

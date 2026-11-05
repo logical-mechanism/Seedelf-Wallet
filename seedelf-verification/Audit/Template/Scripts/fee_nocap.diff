@@ -1,0 +1,11 @@
+diff --color -ru '--exclude=build' '--exclude=plutus.json' v2/contracts/validators/fee_contract.ak mut/fee_nocap/contracts/validators/fee_contract.ak
+--- v2/contracts/validators/fee_contract.ak	2026-11-03 01:00:04.000000000 -0800
++++ mut/fee_nocap/contracts/validators/fee_contract.ak	2026-11-03 12:53:53.830698905 -0800
+@@ -168,7 +168,6 @@
+   and {
+     is_unit_inline_datum(fee_output.datum),
+     fee_in_lovelace - fee_out_lovelace == self.fee,
+-    self.fee <= reference_datum.max_fee_per_mix_lovelace,
+   }
+ }
+ 
