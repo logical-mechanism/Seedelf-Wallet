@@ -2,7 +2,7 @@
 # The deployed Seedelf policy (concrete/build/seedelf.flat) on PolicyAmount's and
 # PolicyForeign's Lean scenarios, through Aiken's evaluator: own "p" (0x70), one
 # mint line (cs, tn, n), first input "\x01"#0, personal tag "" (Data.B "").
-D=/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification/concrete/build
+D=$(cd "$(dirname "$0")/../../../concrete/build" && pwd)
 ctx() { # $1 cs hex, $2 token name hex, $3 amount, $4 own hex
   echo "(con data (Constr 0 [Constr 0 [List [Constr 0 [Constr 0 [B #01, I 0], Constr 0 [Constr 0 [Constr 0 [B #], Constr 1 []], Map [], Constr 0 [], Constr 1 []]]], List [], List [], I 0, Map [(B #$1, Map [(B #$2, I $3)])], List [], Map [], Constr 0 [Constr 0 [Constr 0 [], Constr 1 []], Constr 0 [Constr 2 [], Constr 1 []]], List [], Map [], Map [], B #, Map [], List [], Constr 1 [], Constr 1 []], B #, Constr 0 [B #$4]]))"
 }

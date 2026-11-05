@@ -12,7 +12,7 @@
    "inherited": false,
    "configFile": "lakefile.lean"},
   {"url":
-   "/home/logic/Documents/LogicalMechanism/blaster-forks/PlutusCoreBlaster",
+   "https://github.com/logicalmechanism/PlutusCoreBlaster",
    "type": "git",
    "subDir": null,
    "scope": "",

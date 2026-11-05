@@ -1,6 +1,6 @@
 # The audit
 
-A review of the proofs in `Seedelf/` and `Lovejoin/` (2026-11-03): whether each ✅ is real, and what the proofs leave out. Local only, like the branch: the Lovejoin parts are confidential, and the mutant scripts must never be deployed.
+A review of the proofs in `Seedelf/` and `Lovejoin/` (2026-11-03): whether each ✅ is real, and what the proofs leave out. The mutant scripts are negative controls: never deploy them.
 
 ## What's here
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Writes v2 mix_logic, the token-pool templates with xor32's two length checks, where
-# the proofs read it. v2 is the local-only Lovejoin clone ../../lovejoin-v2 at 5cc3631:
-# 8131b1d (the templates seedelf-core pins) plus the fix, built with Aiken v1.1.24.
+# the proofs read it. v2 is Lovejoin's main at 29573c5 (PRs #165 and #166): 8131b1d (the
+# templates seedelf-core pins) plus the fix, built with Aiken v1.1.24. A Lovejoin clone,
+# ../../lovejoin by default, checked out there (git checkout 29573c5).
 # Checks every template's unapplied hash first: the four the fix leaves alone must be
 # templates_are_frozen's, and mix_logic the new one. Then applies mix_logic to the test
 # launch Lovejoin's own KATs use (test_fixtures.ak: the NFT policy abab…, `lovejoin`)
@@ -18,8 +19,8 @@
 #   Lovejoin/Template/Scripts/fee_contract.hex    the same, unapplied
 # LOVEJOIN_V2= points elsewhere. Anything that doesn't match writes nothing and exits 1.
 cd "$(dirname "$0")" || exit 1
-LOVEJOIN_V2=${LOVEJOIN_V2:-../../lovejoin-v2}
-COMMIT=5cc3631
+LOVEJOIN_V2=${LOVEJOIN_V2:-../../lovejoin}
+COMMIT=29573c5
 [ "$(git -C "$LOVEJOIN_V2" rev-parse --short=7 HEAD)" = "$COMMIT" ] || { echo "$LOVEJOIN_V2 isn't at $COMMIT"; exit 1; }
 git -C "$LOVEJOIN_V2" diff --quiet HEAD -- contracts || { echo "$LOVEJOIN_V2/contracts has changes"; exit 1; }
 aiken --version | grep -q "v1.1.24" || { echo "needs Aiken v1.1.24, found $(aiken --version)"; exit 1; }

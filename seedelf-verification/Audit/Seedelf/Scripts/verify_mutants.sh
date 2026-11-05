@@ -7,7 +7,7 @@
 #  3. alpha.py: each hex decodes back to its mutant, up to variable names;
 #  4. wallet_mutants.sh and policy_scenarios.sh: Aiken's evaluator on the honest vectors.
 cd "$(dirname "$0")" || exit 1
-SV=/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification
+SV=$(cd ../../.. && pwd)
 A=~/.aiken/bin/aiken
 $A uplc decode "$SV/concrete/build/wallet.flat" | python3 -I -c "
 import re,sys

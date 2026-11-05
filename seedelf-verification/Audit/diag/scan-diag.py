@@ -26,7 +26,7 @@ For every theorem it reports:
                           (D050, D116, D187, D221) timed out at 1800 s; their .premc came back
                           sat in seconds in a test run (2026-11-04).
               .alt.smt2   the full query without recfun-finder and the 5.x-only options, for
-                          --alt Z3 (default /home/logic/tools/z3-4.15.2-x64-glibc-2.39/bin/z3):
+                          --alt Z3 (default $Z3_ALT, else ~/tools/z3-4.15.2-x64-glibc-2.39/bin/z3):
                           a second solver build; sat there on a query 5.3.1 calls unsat = LOOK
   flags     LOOK for any of the above. INCONCLUSIVE when a replay neither confirms nor refutes:
             full or alt not unsat, bg not sat, or neither prem nor premc sat (a timeout, an
@@ -218,7 +218,7 @@ def main():
     if '--alt' in args:
         k = args.index('--alt')
         alt = args[k + 1] if k + 1 < len(args) and not args[k + 1].startswith('--') \
-              else '/home/logic/tools/z3-4.15.2-x64-glibc-2.39/bin/z3'
+              else (os.environ.get('Z3_ALT') or os.path.expanduser('~/tools/z3-4.15.2-x64-glibc-2.39/bin/z3'))
         if use_z3 and not os.access(alt, os.X_OK):
             sys.exit(f'scan-diag.py: no --alt z3 at {alt}')
     rows, seen = [], set()

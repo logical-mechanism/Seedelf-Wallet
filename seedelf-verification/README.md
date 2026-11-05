@@ -2,7 +2,7 @@
 
 Formal verification of the deployed contracts' bytes, with IOG's [Blaster](https://github.com/input-output-hk/Lean-blaster): Lean 4 with Z3 behind it, over [PlutusCoreBlaster](https://github.com/input-output-hk/PlutusCoreBlaster)'s model of UPLC and the CEK machine, and [CardanoLedgerApiBlaster](https://github.com/input-output-hk/CardanoLedgerApiBlaster)'s ledger types. The proofs are about the scripts on chain, not their Aiken source: variant 1, the bytes commit `5b82530`'s `seedelf-contracts/contracts/` holds, which `extract.sh` checks against the on-chain hashes.
 
-Lovejoin goes here too, beside `Seedelf/` (see [Next](#next)).
+Lovejoin's proofs are here too, in `Lovejoin/`: its classic mainnet pool, and v2, the token-pool templates with xor32's two length checks (Lovejoin `main` `29573c5`, PRs #165 and #166). [Chunk 42](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-42-lovejoin-verification.md) says what they cover and what they leave out. `Audit/` is a review of every proof here ([its README](Audit/README.md)).
 
 ## Running it
 
@@ -23,11 +23,11 @@ Needs [elan](https://github.com/leanprover/elan) (it installs the Lean that `lea
 **Lake pins two of our forks** in `lakefile.lean`, above CardanoLedgerApiBlaster's own requirements, until upstream merges the fixes (chunk 41):
 
 - [logicalmechanism/Lean-blaster](https://github.com/logicalmechanism/Lean-blaster) `25c0ee0`: beta `46c8479` plus the fix for [#454](https://github.com/input-output-hk/Lean-blaster/issues/454).
-- [logicalmechanism/PlutusCoreBlaster](https://github.com/logicalmechanism/PlutusCoreBlaster) `c7d8741`, its `seedelf` branch: `main` `1c23de8` plus an `opaque` `ByteStringToInteger`, `Fq1.t` as a `Nat`, and the BLS12-381 builtins' operands in order.
+- [logicalmechanism/PlutusCoreBlaster](https://github.com/logicalmechanism/PlutusCoreBlaster) `68c5399`, its `opaque-xor` branch: the `seedelf` branch (`main` `1c23de8` plus an `opaque` `ByteStringToInteger`, `Fq1.t` as a `Nat`, and the BLS12-381 builtins' operands in order, with the #71 and #72 review rounds), plus an `opaque` `XorByteString` for Lovejoin's xor32.
 
 As each fix lands upstream, its `require` comes out.
 
-**`Slice/` is a package of its own,** with the same pins but one: PlutusCoreBlaster's `local/opaque-slice` (`96261cc`), which is the main package's pin plus an `opaque` `SliceByteString` (see *What a ✅ is worth*). So the alias changes no other proof. The branch is local only, like the xor alias under it.
+**`Slice/` is a package of its own,** with the same pins but one: the fork's `opaque-slice` (`96261cc`), which is the main package's pin plus an `opaque` `SliceByteString` (see *What a ✅ is worth*). So the alias changes no other proof.
 
 **Never build bare** (`lake build`). `check.sh` builds each module in its own memory-capped scope (8 GB, `CAP=` to change), which the kernel kills past the cap. One preparation step over a fully symbolic transaction took 52 GB before it was killed by hand. The first build fetches and compiles the dependencies and takes a while.
 
@@ -132,5 +132,5 @@ What a run teaches the hard way:
 
 ## Next
 
-- **Lovejoin.** Its scripts' bytes are in seedelf-core: the generalized pool scripts, before their parameters, in `src/lovejoin/templates.rs`, and the classic pool bundled whole. A `Lovejoin/` beside `Seedelf/`, with its own `Scripts.lean` and an `extract.sh` step that checks its hashes.
+- **Lovejoin.** What's left is in [chunk 42](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-42-lovejoin-verification.md).
 - **Get the fixes upstream,** so the forks can go: four PRs from our forks ([chunk 41](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-41-blaster-fixes.md)), and the comments in `Upstream/drafts/` (the owner posts them). `BitVec` itself, which blocks the policy's success directions, is Lean-blaster #153's.

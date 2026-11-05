@@ -11,7 +11,7 @@
 #   SCAN_TIMEOUT=1800 …        a longer Z3 limit for each replay (default 600 s)
 #   CAP=12G LIMIT=30m bash run-diag.sh quick
 D=$(cd "$(dirname "$0")" && pwd)
-SV=/home/logic/Documents/LogicalMechanism/Seedelf-Wallet/seedelf-verification
+SV=$(cd "$D/../.." && pwd)
 mode=${1:-quick}
 CAP=${CAP:-8G}
 LIMIT=${LIMIT:-20m}

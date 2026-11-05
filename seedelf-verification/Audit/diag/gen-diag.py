@@ -4,6 +4,7 @@ logged ("✅ Valid" = closed by the optimizer alone, "⚠️ Undetermined" = it 
 query Blaster would send is printed. Nothing in the repository is touched."""
 import json, os, sys
 D = os.path.dirname(os.path.abspath(__file__))
+SV = os.path.dirname(os.path.dirname(D))  # run-diag.sh reads the lists from here
 thms = json.load(open(os.path.join(D, '..', 'thms.json')))
 thms = [t for t in thms if t['tactic'].startswith('blaster')]
 os.makedirs(os.path.join(D, 'lean'), exist_ok=True)
@@ -23,10 +24,11 @@ for i, t in enumerate(thms):
         f.write(f"import {t['module']}\nimport Blaster\n\n"
                 f"-- {t['module']} line {t['line']}: {t['tactic']}\n"
                 f"#blaster (only-smt-lib: 1) (dump-smt-lib: 1) [{t['name']}]\n")
-    lists['all'].append(path)
+    rel = os.path.relpath(path, SV)
+    lists['all'].append(rel)
     if t['module'] not in seen_mod:
-        seen_mod.add(t['module']); lists['modules'].append(path)
-    if t['name'] in quick_names: lists['quick'].append(path)
+        seen_mod.add(t['module']); lists['modules'].append(rel)
+    if t['name'] in quick_names: lists['quick'].append(rel)
 for k, v in lists.items():
     open(os.path.join(D, f'list-{k}.txt'), 'w').write('\n'.join(v) + '\n')
     print(k, len(v))

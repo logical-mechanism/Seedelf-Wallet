@@ -1,6 +1,6 @@
-# Chunk 42 · Lovejoin, verified (local only)
+# Chunk 42 · Lovejoin, verified
 
-Branch `lovejoin-verification`, from `verification` at `63cdb465`. **Local only:** it's never pushed, and its push remote points nowhere (`branch.lovejoin-verification.pushRemote = no-push-local-only`), so a plain `git push` fails. The owner, 2026-11-03: "A lot of the seedelf web wallet depends on lovejoin working as well. Trickier and if something is found wrong then it would be bad for us to push it into this branch so maybe a local only branch until we prove it good?"
+Branch `lovejoin-verification`, from `verification` at `63cdb465`. It stayed local until the fix was public: the xor32 fix merged into Lovejoin's `main` as `29573c5` (PRs #165 and #166, 2026-11-05), and the branch went to `main` after it. The owner, 2026-11-03: "A lot of the seedelf web wallet depends on lovejoin working as well. Trickier and if something is found wrong then it would be bad for us to push it into this branch so maybe a local only branch until we prove it good?"
 
 The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the same pinned forks (chunk 41). The README's rules for writing a property hold here.
 
@@ -19,8 +19,8 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 ### Next session, in order
 
-1. **The PR,** on the owner's call (disclosure). v2's verification is done: 276 ✅ on 68c5399. The contract is final: `precompute_statements` stays (the owner, 2026-11-03).
-2. **Then publishing the proofs,** so others can re-run them: the xor alias (`local/opaque-xor`) onto the public PlutusCoreBlaster fork and the pin back to GitHub, then this branch into `verification`. Each waits on the PR.
+1. ✅ **The PR** (2026-11-05): Lovejoin #165 into `dev` and #166 into `main`, `29573c5`. The owner: the old pools hold 3 UTxOs and their users were told to leave, so the disclosure is fine. Lovejoin's E2E job fails at installing Chromium on the runner's Ubuntu 26.04, which the owner accepts (Lovejoin's front end isn't worked on).
+2. **Publishing the proofs** (2026-11-05): the aliases on the public PlutusCoreBlaster fork (`opaque-xor` 68c5399, `opaque-slice` 96261cc), both pins on GitHub, and this branch into `main`, so the Seedelf work can branch from it.
 3. **Then the v2 launch** (the new 5 ₳ pool): the template theorems already hold for it.
 4. **Then step 9**, the wallet on v2 alone (1.8.0).
 
@@ -33,7 +33,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
   - **Signers:** 4 to 128 signatories (`gen-seedelf-signers.py`, 250 ✅, the slowest 4 s at 355 MB). A 16,384-byte transaction holds at most 125.
   - **The policy, with no slice involved:** mint-only, a redeemer that isn't a `B` fails, and mints of no lines or 2 to 5 lines fail (40 ✅).
   - **Every length, kernel-checked, no Z3:** `PolicyLinesAll` and `LinesAllAnyMint` prove any mint that doesn't flatten to exactly one line fails. They work by induction over the mint on a CEK evaluator (`LinesAllCek`). The chain's budget allows about 3,000 lines.
-  - **The one-line rule, both directions:** in `Slice/`, a package of its own over PlutusCoreBlaster's local-only `local/opaque-slice` (96261cc, an `opaque` `SliceByteString`). It's 256 per-index theorems and 2 off a byte, assembled in the kernel. Its spec was checked against Aiken on 9 contexts.
+  - **The one-line rule, both directions:** in `Slice/`, a package of its own over PlutusCoreBlaster's `opaque-slice` (96261cc, an `opaque` `SliceByteString`). It's 256 per-index theorems and 2 off a byte, assembled in the kernel. Its spec was checked against Aiken on 9 contexts.
   - **Covers:** `AnyTxShapes` and `PolicyShapes` show the scenarios are every V3 context. The policy's cover assumes CardanoLedgerApiBlaster's input and mint rules.
 - `./check.sh lovejoin-any-tx`: `Template.AnyTxPurposes` `ok`, 17 ✅, every parameter symbolic, so for every pool on v2's templates.
   - mix_logic publishes exactly a registration and fails its other purposes.
@@ -93,9 +93,8 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 **Step 4's first build (2026-11-03)** failed on a name. `toData` is a class method, `IsData.toData`, so `open CardanoLedgerApi.IsData.Class (toData)` can't name it. Fixed by opening `(IsData)`. The second build was ✅.
 
 **Where everything is, for a new session:**
-- This branch, `lovejoin-verification`, is local only; see the memory file `lovejoin-verification-local-only.md`. The working copy is on it.
-- The chunk 41 forks are under `../blaster-forks/`. This branch pins the PlutusCoreBlaster clone's `local/opaque-xor` by local path: 68c5399 since the merge of `local/seedelf-repin` (fork `seedelf` 1e38b23, with the #71 and #72 review rounds, plus the xor alias), 96a36cb before; `verification` pins `c7d8741`.
-- v2's sources are in `../lovejoin-v2` (5cc3631), local only.
+- The chunk 41 forks are under `../blaster-forks/`. The package pins the fork's `opaque-xor`, 68c5399: `seedelf` 1e38b23, with the #71 and #72 review rounds, plus the xor alias. `Slice/` pins `opaque-slice`, 96261cc, the same plus the slice alias.
+- v2's sources are Lovejoin's `main` at `29573c5`. On `main` the fix is the cherry-pick `ecc0313` of the owner's `5cc3631`, and every template builds byte for byte the same (`extract-lovejoin-v2.sh`, 2026-11-05).
 - The open upstream PRs are Lean-blaster #455 and PlutusCoreBlaster #71, #72 and #73 (chunk 41).
 - Lovejoin's sources are in `../lovejoin`, for reading: `git show c1239fb:contracts/…` for the classic pool, and `8131b1d` for the templates.
 
@@ -194,12 +193,12 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 - **The fix is the owner's:** xor32 checks both operands are 32 bytes before `xor_bytearray(False, …)`, which truncates rather than fails. It's committed as 5cc3631 on 8131b1d, with the owner's eight boundary tests, in `../lovejoin-v2` (branch `local/xor32-length-check`).
   - That clone was made from `../lovejoin`, and its push URL is `no-push-local-only`.
-  - Lovejoin's repo is public, so the commit itself would be the disclosure.
+  - Lovejoin's repo is public, so the commit itself would be the disclosure. It merged on 2026-11-05 (above, step 1 of the next session).
   - `../lovejoin` is back on its own branch with a clean tree: its untracked regression test and this folder's patch, which carried it, are deleted (the owner, 2026-11-03), and the fix lives only in v2. This work never builds or runs a forged-challenge vector.
 - **Tested:** Lovejoin's 3724 checks pass unchanged, plus the 8 boundary tests (3732). A mix costs about 0.1% more CPU: N=3 +6.1M of 5.7B steps, N=4 +10.8M of 9.7B.
 - **Hashes:** only mix_logic's unapplied bytes change, 62befd1e… to 7fb45b75…. one_shot_mint, mix_box, fee_contract and reference_holder build byte for byte as 8131b1d's (`templates_are_frozen`'s hashes). A v2 pool still has its own P (its seed), L and M (mix_box applied to L).
 - **PlutusCoreBlaster can't read xor over a symbolic bytestring:** `byteStringOp` slices with `String.dropRight` and maps through `UInt8`. The fix is an opaque alias at the builtin, as chunk 41's `byteStringToInteger` was: `local/opaque-xor` 96a36cb, from `seedelf` 7fc0aa3, push remote `no-push-local-only`.
-  - It stays local, since this finding motivated it. It goes to the public fork, and the pin back to GitHub, when the owner publishes.
+  - It stayed local while the finding was private. On the public fork since 2026-11-05: `opaque-xor`, 68c5399.
 - **The scenario** (`Lovejoin/V2/Mix.lean`) is Lovejoin's KAT `mix_real_proofs_ada_pool_n2_passes` as a full ScriptContext: its test launch (NFT policy `abab…`), its two boxes in and out, and its real proofs. `extract-lovejoin-v2.sh` applies mix_logic to that launch (60294352…).
 - **Proved:** `mix_refuses_a_challenge_not_32_bytes` ✅. With the KAT's four `c`s symbolic, a `c` of any other length, in any branch, fails the Mix. The rest of the proof stays the KAT's (rule 4).
 - **Proved too (the second build):**

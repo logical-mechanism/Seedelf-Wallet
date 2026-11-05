@@ -11,7 +11,7 @@
    "inputRev": "9938562fd452351655fe2f6b63e583c62422687c",
    "inherited": false,
    "configFile": "lakefile.lean"},
-  {"url": "/home/logic/Documents/LogicalMechanism/blaster-forks/PlutusCoreBlaster",
+  {"url": "https://github.com/logicalmechanism/PlutusCoreBlaster",
    "type": "git",
    "subDir": null,
    "scope": "",
