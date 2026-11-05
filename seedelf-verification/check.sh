@@ -4,6 +4,7 @@
 # Every module runs, cheapest first; the summary says how each went and the
 # most memory its scope used.
 #   ./check.sh                       every Seedelf module
+#   ./check.sh seedelf-any-tx        Seedelf's properties in every transaction (Seedelf/AnyTx.lean)
 #   ./check.sh upstream              the upstream reproductions (Upstream/)
 #   ./check.sh upstream-main         ExceptParams against Lean-blaster main
 #   ./check.sh lovejoin              Lovejoin's classic pool (chunk 42)
@@ -11,15 +12,22 @@
 #   ./check.sh lovejoin-v2-pools     v2's general Mix alone, for every pool kind and n = 2 to 4
 #   ./check.sh lovejoin-v2-outputs   what that Mix must pay, for the same pools and n
 #   ./check.sh lovejoin-owner        Owner withdrawals of several boxes, v2 and the classic pool
+#   ./check.sh lovejoin-any-tx       v2's properties in every transaction
 #   ./check.sh Seedelf.PolicyMint    some modules
 #   CAP=12G LIMIT=20m ./check.sh     other limits
 cd "$(dirname "$0")" || exit 1
 CAP=${CAP:-8G}
 LIMIT=${LIMIT:-10m}
 mods=("$@")
+# Seedelf's every-transaction modules (Seedelf/AnyTx.lean): the same properties with every field
+# the script doesn't read left as any Data.
+any_tx=(Seedelf.AnyTx Seedelf.AnyTxCover Seedelf.AnyTxSteps Seedelf.AlwaysFalseAnyTx
+  Seedelf.WalletPurposeAnyTx Seedelf.WalletNoLockAnyTx Seedelf.WalletRedeemerAnyTx Seedelf.WalletAnyTx Seedelf.WalletAnyTxTwo
+  Seedelf.WalletAnyTxThree)
 [ ${#mods[@]} -eq 0 ] && mods=(Seedelf.Scripts Seedelf.Scenario Seedelf.Steps Seedelf.AlwaysFalse
-  Seedelf.WalletPurpose Seedelf.WalletNoLock Seedelf.WalletRegister Seedelf.PolicyAmount
+  Seedelf.WalletPurpose Seedelf.WalletNoLock Seedelf.WalletRegister "${any_tx[@]}" Seedelf.PolicyAmount
   Seedelf.PolicyForeign Seedelf.PolicyBurn Seedelf.PolicyMint)
+[ "${mods[0]}" = seedelf-any-tx ] && mods=("${any_tx[@]}")
 [ "${mods[0]}" = upstream ] && mods=(Upstream.ExceptParams Upstream.ByteStrings Upstream.Fq1Fin Upstream.SlicePrograms
   Upstream.SliceNone Upstream.Slice1 Upstream.Slice4 Upstream.Slice16 Upstream.Slice32)
 # Owner withdrawals of several boxes, a payer's input and two outputs (gen-lovejoin-owner.py):
@@ -74,6 +82,9 @@ outputs=(
   Lovejoin.Template.Launch Lovejoin.Template.OneShotMint Lovejoin.Template.Fee Lovejoin.Template.FeeContract
   Lovejoin.V2.Mix3 Lovejoin.V2.Mix3Spec Lovejoin.V2.Mix3Steps Lovejoin.V2.Mix3First Lovejoin.V2.Mix3Second
   Lovejoin.V2.Mix3Third Lovejoin.V2.Mix3Passes "${pools[@]}" "${outputs[@]}" "${owners_v2[@]}")
+# v2 in every transaction: the same properties with every field a script doesn't read as any Data.
+any_tx_v2=(Lovejoin.Template.AnyTxPurposes)
+[ "${mods[0]}" = lovejoin-any-tx ] && mods=("${any_tx_v2[@]}")
 # The same ExceptParams file in its own package, against Lean-blaster main.
 [ "${mods[0]}" = upstream-main ] && { cd Upstream/blaster-main || exit 1; mods=(BlasterMain.ExceptParams); }
 peakf=$(mktemp)

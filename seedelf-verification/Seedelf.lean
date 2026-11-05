@@ -6,3 +6,12 @@ import Seedelf.PolicyForeign
 import Seedelf.WalletPurpose
 import Seedelf.WalletNoLock
 import Seedelf.WalletRegister
+import Seedelf.AnyTxCover
+import Seedelf.AnyTxSteps
+import Seedelf.AlwaysFalseAnyTx
+import Seedelf.WalletPurposeAnyTx
+import Seedelf.WalletNoLockAnyTx
+import Seedelf.WalletRedeemerAnyTx
+import Seedelf.WalletAnyTx
+import Seedelf.WalletAnyTxTwo
+import Seedelf.WalletAnyTxThree

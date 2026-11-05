@@ -56,6 +56,7 @@ import Lovejoin.Template.MixBoxGate
 import Lovejoin.Template.MixBoxNoLock
 import Lovejoin.Template.OneShotMint
 import Lovejoin.Template.FeeContract
+import Lovejoin.Template.AnyTxPurposes
 import Lovejoin.V2.OwnAny1Boxes
 import Lovejoin.V2.OwnAny1Passes
 import Lovejoin.V2.OwnAny2Boxes
