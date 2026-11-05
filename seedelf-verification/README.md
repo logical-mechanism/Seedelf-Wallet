@@ -11,6 +11,7 @@ Needs [elan](https://github.com/leanprover/elan) (it installs the Lean that `lea
 ```bash
 ./extract.sh            # the deployed scripts, hash-checked, into Seedelf/Scripts/ and concrete/build/
 ./check.sh              # every module, cheapest first; or ./check.sh Seedelf.PolicyBurn
+./check.sh seedelf-any-tx     # the every-transaction modules alone
 ./concrete/wallet_datums.sh   # cross-checks with Aiken's evaluator
 ./concrete/policy_burns.sh
 ./concrete/wallet_register.sh
@@ -39,14 +40,26 @@ On the bytes of `94bca9c0…` (wallet), `84967d91…` (policy) and `6777ba4d…`
 | `PolicyForeign` | A mint or burn whose one line is another policy's fails | 2 |
 | `PolicyBurn` | No 5eed0e1f token burns off a first input at #256 or -1 | 2 |
 
+**The wallet and always_false in every transaction** (`./check.sh seedelf-any-tx`): the same properties, with every field the script doesn't read left as any `Data`, values the ledger never produces included (`AnyTx.lean`). `AnyTxCover` shows that every V3 spend's context has that form, by `rfl` and kernel-checked, no Blaster.
+
+| Module | Property | Theorems |
+|---|---|---|
+| `AlwaysFalseAnyTx` | always_false reaches `Error` whatever its argument: every V3 context, and any other `Data` | 1 |
+| `WalletPurposeAnyTx` | Spend-only, with any TxInfo, redeemer and purpose payload | 5 |
+| `WalletNoLockAnyTx` | No accidental locks: WalletNoLock's 18 datum shapes return unit, which the ledger accepts, with any well-formed proof, any TxInfo and any output reference | 18 |
+| `WalletRedeemerAnyTx` | A redeemer that isn't a proof, `Constr 0 [B _, B _, B _]`, reaches `Error`, with any TxInfo, output reference and datum. 22 shapes, which together cover every redeemer but a proof (listed in the module) | 22 |
+| `WalletAnyTx`, `WalletAnyTxTwo`, `WalletAnyTxThree` | **The core property in every transaction:** a Register UTxO moves iff the Schnorr check holds and `vkh` is among the signatories, with none to three signatories and every other field any `Data`. Every run returns unit or reaches `Error` | 5, 4, 4 |
+
+So, for every spend at the wallet: a redeemer that isn't a proof fails; with a proof, a UTxO whose datum isn't a Register moves; and with a proof, a Register UTxO moves exactly when the Schnorr check holds and `vkh` signed, for none to three signatories. Nothing but a spend passes.
+
 What a ✅ is worth:
 
 - **Z3's word, not Lean's kernel.** Blaster closes a goal with `axiom blasterProven : ∀ {α}, α` once Z3 finds no counterexample (proof reconstruction is a TODO upstream), hence the `declaration uses 'blasterProven'` warnings.
 - **IOG's model of the machine.** PlutusCoreBlaster's CEK machine and builtins are tested against the Plutus conformance suite, not proved equal to the node's. We run our fork of it (see *Running it*); its three changes don't change what any script evaluates to. It runs the post-Conway V3 builtin semantics (`defaultFunSemanticsVariantE`). The crypto builtins (BLS12-381, the hashes) are `opaque`, and so is `ByteStringToInteger` through our PlutusCoreBlaster fork: a property holds for any interpretation of them, so it says what the bytes check, not that the check is hard to fool. Where a spec decodes a scalar (`scalarOf`), it calls the same alias the builtin runs.
 - **Strings over the solver's alphabet.** Blaster gives a `String` the SMT string sort, whose characters are `0x0`–`0x2FFFF` where Lean's are scalar values up to `0x10FFFF` ([Lean-blaster #389](https://github.com/input-output-hk/Lean-blaster/issues/389), which shows it proving `False`). A `ByteString` is a `String` of characters `0`–`255`, inside both, so a theorem over bytestrings covers every bytestring; it says nothing about strings with characters above `0x2FFFF`, which no script sees.
-- **Scenarios, not every transaction.** Each module fixes the fields its script never reads (an empty transaction from `Scenario.lean`) and leaves symbolic only what the property is about. Some properties fix more than that: see the module docs.
-- **Bounded runs.** A property holds for runs within the module's step limit, above the longest concrete run `Steps.lean` measures.
-- The 18 shapes covering every non-Register datum is checked by reading them, not by a Lean theorem tying them together.
+- **Every transaction for the wallet and always_false, scenarios for the policy.** The `…AnyTx` modules fix only what their script walks or takes apart: the number of signatories (none to three, for a Register spend) and the shape of the redeemer and the datum, one scenario per shape. The policy's modules fix the fields it never reads (an empty transaction from `Scenario.lean`) and leave symbolic only what the property is about. Some properties fix more than that: see the module docs.
+- **Bounded runs.** A property holds for runs within the module's step limit, above the longest concrete run `Steps.lean` and `AnyTxSteps.lean` measure.
+- The 18 shapes covering every non-Register datum, and the 22 covering every redeemer but a proof, are checked by reading them, not by a Lean theorem tying them together.
 
 ## Not proved, and why
 
@@ -55,6 +68,7 @@ These need Blaster or PlutusCoreBlaster to change, not our scripts. `Upstream/` 
 | Property | Blocked by |
 |---|---|
 | Mints name the token after the first input, for any input; burns of 5eed0e1f tokens succeed | `sliceByteString` is `take`/`drop` on the `List Char`, so any slice of a symbolic bytestring reaches `Char`'s `BitVec`, even `lengthOfByteString (sliceByteString 0 4 bs) ≤ 4` (`Upstream/ByteStrings`). Separately, a wholly symbolic name took the policy past 8 GB; a minimal symbolic slice doesn't (`Upstream/Slice*`: ~290 MB at every length), so that cost's cause isn't isolated |
+| A Register spend with four signatories or more | The wallet walks the signatories looking for `vkh`, and a list the script walks can't be left symbolic (rule 4; symbolic list tails, #233), so each length is a module of its own. Three is more than any spend seedelf-core builds; the ledger bounds the list only by the transaction's size |
 
 
 ## Found along the way

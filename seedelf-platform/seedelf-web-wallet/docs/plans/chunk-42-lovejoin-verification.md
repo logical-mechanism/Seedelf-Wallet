@@ -15,6 +15,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 | 7 · The token-pool templates | ✅ on v2 instead (step 8): the Mix for any token pool at n = 2 to 4. 8131b1d's only mainnet pool (5 ₳) is empty |
 | 8 · v2: the templates with xor32's fix | ✅ (2026-11-03, PlutusCoreBlaster 68c5399), 230 theorems. On the test launch: `MixChallenges` (1), `MixOutputs` (4), `MixDatums` (3), `Owner` (1), the Mix iff at n = 2 (7) and n = 3 (13), and the templates for every pool (mix_box 29, one_shot_mint 5, fee_contract 5): 68. On mix_logic's template, so for every pool: the Mix for any ADA or token pool at n = 2 to 4 (82), what it must pay (66), and Owner withdrawals of 1 to 4 boxes (`OwnAny*`, 14) |
 | 9 · The wallet on v2 alone | ⬜ waits on step 8 and a v2 launch |
+| 10 · Every transaction (the owner's bar, 2026-11-04) | In part. Seedelf ✅: the wallet and always_false, 59 (`./check.sh seedelf-any-tx`). v2 ✅: every script's other purposes, mix_logic's publish and reference_holder, 17 (`./check.sh lovejoin-any-tx`). ⬜ the Mix, Owner withdrawals and mix_box's spend: the owner's to write |
 
 ### Next session, in order
 
@@ -23,12 +24,27 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 3. **Then the v2 launch** (the new 5 ₳ pool): the template theorems already hold for it.
 4. **Then step 9**, the wallet on v2 alone (1.8.0).
 
+**Every transaction (2026-11-04):** the same properties, with every field a script doesn't read left as any `Data` (Seedelf's `AnyTx.lean`, and `AnyTxCover`'s `rfl`s for every V3 spend).
+- `./check.sh seedelf-any-tx`: 10 `ok`, 59 ✅, the longest run 1446 steps (a key missed among three signatories), at most 540 MB.
+  - The wallet's core property holds with none to three signatories.
+  - Its other purposes fail, any redeemer but a proof fails, and WalletNoLock's 18 datum shapes move with a proof.
+  - always_false fails on any argument at all.
+- `./check.sh lovejoin-any-tx`: `Template.AnyTxPurposes` `ok`, 17 ✅, every parameter symbolic, so for every pool on v2's templates.
+  - mix_logic publishes exactly a registration and fails its other purposes.
+  - mix_box is spend only, and one_shot_mint mint only.
+  - reference_holder fails on every context.
+  - The first build failed on two `open` lines that named `#import_uplc` programs by namespace; those names are global (step 8's second build).
+- **Not lifted: the Mix, Owner withdrawals and mix_box's spend.** A safety classifier stopped Claude's generator for them, so Claude sessions don't write them: they're the owner's. `Lovejoin/AnyTx/Common.lean`, written before the stop, is unused, untracked and outside `check.sh`.
+
 **What a Mix must pay, for every pool (2026-11-03, 68c5399):** `./check.sh lovejoin-v2-outputs` 24 `ok`, 66 theorems, the slowest module 61 s at 704 MB (`MixTok4Outputs`), the most memory 816 MB (`MixTok4Datums`). Each `…OutSteps`: `honest` halts after the general Mix's own KAT count (11497, 19204 and 29007 for ADA at n = 2 to 4; 11798, 19505 and 29308 for tokens), and each of the eight changed outputs errors, long before the proofs are read.
 
 **What the claim can say (2026-11-03):** the wallet's on-chain contracts, Seedelf's and Lovejoin v2's, are formally verified on their compiled bytes. Its limits:
 - **Blaster's proofs are Z3's:** each theorem is SMT-verified (`blasterProven`), not a Lean proof term.
 - **The crypto is opaque:** the scripts check exactly the right equations, not that the equations are hard to forge.
 - **Up to 4 boxes:** Mixes and withdrawals of up to 4 boxes (3 for the classic pool's withdrawals).
+- **Transaction layouts (2026-11-04):**
+  - In every transaction: Seedelf's wallet (a Register spend with up to three signatories) and always_false, and v2's other purposes and reference_holder.
+  - For every value, but only in their scenarios' layouts: the Mix, Owner withdrawals and mix_box's spend.
 - **For Lovejoin, from 1.8.0:** the classic pool's Mix isn't verified (step 5), and the wallet mixes there until 1.8.0 moves it to v2.
 - **The wallet's own code isn't covered.** `V2/MixOutputs` and `V2/MixDatums` hold at the test launch with two boxes alone, and the general Mix's scenario fixes every box out as it should be, so it couldn't say what a wrong one does. `gen-lovejoin-mix-outputs.py` takes them to mix_logic's template, for the six families of the general Mix (ADA and token pools, n = 2 to 4), with the pool's parameters, every box's points and every proof field symbolic. It's walk_outputs, so a Mix fails if:
 - one of its first n outputs is anywhere but mix_box, or has a stake credential or a reference script (`…Outputs`);
