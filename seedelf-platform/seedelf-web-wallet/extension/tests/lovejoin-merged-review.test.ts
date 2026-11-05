@@ -53,6 +53,12 @@ const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoi
   scripts: KoiosUtxo[];
 };
 const TOKEN_POOL: PoolRef = { reference: FOUND.reference, seed: FOUND.seed, scripts: FOUND.scripts };
+/** The same launch with its scripts derived on v2, at the holder: a v2 pool, never on chain (chunk 44, wasm/tests/fixtures). */
+const FOUND_V2 = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json", import.meta.url), "utf8")) as {
+  seed: { txHash: string; txIndex: number };
+  reference: KoiosUtxo;
+  scripts: KoiosUtxo[];
+};
 const VIEW = JSON.parse(loadTestWasm().lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: TOKEN_POOL }))) as {
   id: string;
   mixBoxHash: string;
@@ -403,7 +409,8 @@ describe("a copy in the worker (the merged fixes' review, MERGED-1)", SLOW, () =
       ...t.deps,
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
       lovejoin: t.lovejoin,
-      discovery: { known: async () => [earlier("aa"), { ...REAL, copy: true as const }], look: async () => undefined },
+      // v2 pools: a start runs v2's scripts, and only a v2 pool's values make it a copy or one to join (chunk 44).
+      discovery: { known: async () => [{ ...earlier("aa"), version: "v2" }, { ...REAL, version: "v2", copy: true as const }], look: async () => undefined },
       listed: () => true,
     });
     const terms = await launch.terms("preprod", min, Q.toString());
@@ -535,9 +542,10 @@ describe("a look for pools says whether what the wallet reads changed (1.6.0's r
 describe("a start of the values of a pool the data layer lists (1.7.1)", SLOW, () => {
   it("is refused as a copy at once, the pool read and offered to join from the list alone, never held for Koios", async () => {
     const t = await wallet();
-    // The data layer lists the token pool. Koios knows nothing of its launch (behind, or down): it isn't asked.
+    // The data layer lists the token pool, on v2 (chunk 44): only a v2 pool's values make a start a copy. Koios knows
+    // nothing of its launch (behind, or down): it isn't asked.
     const slot = 100_000_000;
-    const scripts = FOUND.scripts.map((s, i) => ({ ...s, tx_hash: FOUND.reference.tx_hash, tx_index: i + 1, address: FOUND.reference.address, payment_cred: HOLDER, stake_address: null, block_height: BLOCK }));
+    const scripts = FOUND_V2.scripts.map((s) => ({ ...s, block_height: BLOCK }));
     const index = fakeIndex();
     index.poolList = {
       network: "mainnet",
@@ -546,10 +554,10 @@ describe("a start of the values of a pool the data layer lists (1.7.1)", SLOW, (
       pools: [
         {
           id: TOKEN,
-          seed: `${FOUND.seed.txHash}#${FOUND.seed.txIndex}`,
-          reference: indexRowOf(FOUND.reference, slot),
-          scripts: scripts.map((s, i) => ({ ...indexRowOf(s as KoiosUtxo, slot), script: true, script_hash: [VIEW.mixBoxHash, "ada2c293ad286873fb2d265b4a8597edc5271e927e13dc0496e7b953"][i] })),
-          launch: { tx: FOUND.reference.tx_hash, block: BLOCK, index: 3, slot, time: slot + 1_591_566_291 },
+          seed: `${FOUND_V2.seed.txHash}#${FOUND_V2.seed.txIndex}`,
+          reference: indexRowOf(FOUND_V2.reference, slot),
+          scripts: scripts.map((s) => ({ ...indexRowOf(s as KoiosUtxo, slot), script: true, script_hash: s.reference_script!.hash })),
+          launch: { tx: FOUND_V2.reference.tx_hash, block: BLOCK, index: 3, slot, time: slot + 1_591_566_291 },
           crowd: { boxes: 30, deposits: 1, mixed: 0 },
         },
       ],

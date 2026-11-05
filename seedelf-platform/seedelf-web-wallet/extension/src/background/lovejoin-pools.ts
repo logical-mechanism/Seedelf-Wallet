@@ -95,10 +95,15 @@ export interface PoolValues {
   token?: TokenQuantity;
 }
 
-/** A standard pool as the wallet keeps it: what WebAssembly verifies it from, its values, and where its launch is. */
+/**
+ * A standard pool as the wallet keeps it: what WebAssembly verifies it from, its values, and where its launch is.
+ * `version` is `v2` for a pool on Lovejoin v2's scripts (chunk 44), and absent for one on 8131b1d's, retired: every
+ * pool kept before v2 is one, so its record stays as it was.
+ */
 export interface FoundPool extends PoolValues {
   /** Its NFT's policy. */
   id: string;
+  version?: "v2";
   ref: PoolRef;
   launch: { block: number; index: number; tx: string };
 }
@@ -158,11 +163,12 @@ function earlier(a: FoundPool, b: FoundPool): boolean {
   return a.id < b.id;
 }
 
-const valuesOf = (p: PoolValues) =>
-  JSON.stringify([p.boxLovelace, p.token ? [p.token.policyId, p.token.assetName, p.token.quantity] : null]);
+/** A pool's values on its set: a v2 pool is never a copy of an 8131b1d pool of its values (chunk 44). */
+const valuesOf = (p: PoolValues & { version?: "v2" }) =>
+  JSON.stringify([p.version ?? "tokenV1", p.boxLovelace, p.token ? [p.token.policyId, p.token.assetName, p.token.quantity] : null]);
 
 /**
- * Of `pools`, all standard, the earliest launched of each value, in the order
+ * Of `pools`, all standard, the earliest launched of each value on each set, in the order
  * they were launched (tests/fixtures/lovejoin-shown.json, which the data
  * layer's own copy of this rule is held to too).
  */
@@ -212,6 +218,8 @@ const keptOf = (was: Merged) => ({
 /** What WebAssembly answers about a pool (`lovejoin::PoolView`), as discovery reads it. */
 interface PoolView {
   id: string;
+  /** `tokenV1` (8131b1d, retired) or `v2`: the scripts it runs. */
+  version: string;
   boxLovelace: string;
   token?: TokenQuantity;
   scriptsInline: number;
@@ -462,7 +470,14 @@ export class PoolDiscovery {
   private verified(network: NetworkName, ref: PoolRef, launch: FoundPool["launch"]): FoundPool | undefined {
     const view = tried<PoolView>(() => this.deps.wasm.lovejoinVerifyPool(JSON.stringify({ network, pool: ref })));
     if (!view || view.scriptsInline !== 0 || !this.listedValue(network, view)) return undefined;
-    return { id: view.id, boxLovelace: view.boxLovelace, ...(view.token ? { token: view.token } : {}), ref, launch };
+    return {
+      id: view.id,
+      ...(view.version === "v2" ? { version: "v2" as const } : {}),
+      boxLovelace: view.boxLovelace,
+      ...(view.token ? { token: view.token } : {}),
+      ref,
+      launch,
+    };
   }
 
   /** Whether a pool of these values may be shown: a listed token's, or an ADA pool's but at the classic pool's 10 ₳. */

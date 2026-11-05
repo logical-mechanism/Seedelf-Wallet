@@ -71,6 +71,9 @@ struct ScriptRow {
 #[derive(Serialize)]
 struct PoolView {
     id: String,
+    /// The template set it runs, as the wallet's WebAssembly names it:
+    /// `tokenV1` (8131b1d, retired) or `v2`.
+    version: &'static str,
     seed: String,
     reference: Row,
     /// Its `mix_box` and `mix_logic`, as its launch put them at the holder.
@@ -163,6 +166,7 @@ async fn pools_at(
         .zip(crowds)
         .map(|(p, crowd)| PoolView {
             id: hex(&p.id),
+            version: p.derived.set.version(),
             seed: format!("{}#{}", hex(&p.seed.0), p.seed.1),
             reference: p.reference,
             scripts: p

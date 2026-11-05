@@ -63,6 +63,7 @@ const button = (markup: string, testId: string) => markup.match(new RegExp(`<but
 const MIN = { policyId: "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72", assetName: "4d494e" };
 const A = "a1".repeat(28);
 const B = "b2".repeat(28);
+const C = "c3".repeat(28);
 const MIN_100 = { lovelace: "4500000", token: { ...MIN, quantity: "100000000" } };
 const at = (i: number) => ({ txHash: `${i}`.padStart(64, "0"), txIndex: 0, pool: A });
 const nothing = () => undefined;
@@ -185,13 +186,15 @@ describe("a copy pool's words (MERGED-1, the screens' side)", () => {
     expect(text(shown(createElement(PoolGroupList, { group: groupPools([poolOf({ others: 3 })], [])[0]!, onOpen: nothing })))).toContain(
       "Being started: 3 of 30 boxes",
     );
-    // Start a pool's list of the pools to join rather than split: a 5 ₳ ADA pool, and a copy of its values.
-    const shownFive = { ...poolOf({ id: A, box: { lovelace: "5000000" } }) };
-    const copyFive = { ...poolOf({ id: B, box: { lovelace: "5000000" }, unusable: { why: "superseded" as const } }) };
+    // Start a pool's list of the pools to join rather than split: a 5 ₳ ADA pool on v2, and a copy of its values. One on
+    // 8131b1d's scripts is retired, never one to join (chunk 44).
+    const shownFive = { ...poolOf({ id: A, version: "v2", box: { lovelace: "5000000" } }) };
+    const copyFive = { ...poolOf({ id: B, version: "v2", box: { lovelace: "5000000" }, unusable: { why: "superseded" as const } }) };
+    const retiredFive = { ...poolOf({ id: C, box: { lovelace: "5000000" } }) };
     const form = html(
       createElement(LaunchScreen.LovejoinLaunch, {
         seedelf: { lovelace: "0", tokens: [] } as never,
-        pools: [shownFive, copyFive],
+        pools: [shownFive, copyFive, retiredFive],
         holdings: [],
         onBack: nothing,
         onOpenPool: nothing,
@@ -200,6 +203,7 @@ describe("a copy pool's words (MERGED-1, the screens' side)", () => {
     );
     expect(form).toContain(`data-testid="lovejoin-launch-join-${A}"`);
     expect(form).not.toContain(`data-testid="lovejoin-launch-join-${B}"`);
+    expect(form).not.toContain(`data-testid="lovejoin-launch-join-${C}"`);
   });
 });
 

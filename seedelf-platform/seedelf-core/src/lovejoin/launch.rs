@@ -200,7 +200,8 @@ fn shaped(chain: &Chain, seed: ([u8; 32], u64), terms: &Terms, register: bool) -
     let network_flag = chain.network_flag;
     let params = &chain.params;
     check_terms(terms, &chain.config.contract.seedelf_policy_id)?;
-    let derived = templates::derive(&seed.0, seed.1)?;
+    // Every launch the wallet makes runs v2 (chunk 44).
+    let derived = templates::derive_in(templates::Set::V2, &seed.0, seed.1)?;
     let datum = ReferenceDatum {
         box_value: BoxValue {
             lovelace: terms.box_lovelace,

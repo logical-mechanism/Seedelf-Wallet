@@ -314,7 +314,8 @@ fn a_pool_starts_from_the_seedelf_balance_and_signs_as_any_spend() {
         register: true,
     };
     let launched = api::build_launch(sk, request).unwrap();
-    assert_eq!(launched.pool.version, "tokenV1");
+    // Every launch the wallet makes runs v2 (chunk 44).
+    assert_eq!(launched.pool.version, "v2");
     assert_eq!(launched.pool.scripts_inline, 0);
     assert_eq!(launched.pool.box_lovelace, "4500000");
     let seed = launched.pool.seed.as_ref().unwrap();
@@ -323,7 +324,8 @@ fn a_pool_starts_from_the_seedelf_balance_and_signs_as_any_spend() {
         launched.pool.id,
         hex::encode(templates::derive(&seed_tx, seed.tx_index).unwrap().policy())
     );
-    assert_eq!(launched.locked.total, "23123310");
+    // v2's mix_logic is 29 bytes longer than 8131b1d's: 124,990 more at the holder.
+    assert_eq!(launched.locked.total, "23248300");
     // The 40 ₳ pays alone; the seed is one it spends.
     assert_eq!(launched.inputs.len(), 1);
     assert_eq!(launched.inputs[0].tx_hash, seed.tx_hash);

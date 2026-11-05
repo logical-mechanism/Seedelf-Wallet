@@ -632,6 +632,8 @@ export interface LovejoinPool {
   ref?: PoolRef;
   /** A copy (CopyRef): its boxes are read, come back and are watched as any pool's, and it takes no new box (usableNow). */
   copy?: true;
+  /** `v2` for a pool on Lovejoin v2's scripts (chunk 44); none for the classic pool and 8131b1d's, both retired. */
+  version?: "v2";
 }
 
 /** WebAssembly's verified view of a token pool (`lovejoin::PoolView`). */
@@ -2749,6 +2751,7 @@ export class LovejoinService {
       ...(view.token ? { token: view.token } : {}),
       ref,
       ...(copy ? { copy: true as const } : {}),
+      ...(view.version === "v2" ? { version: "v2" as const } : {}),
     };
   }
 
@@ -5882,6 +5885,7 @@ export class LovejoinService {
               const launch = facts?.launches.get(r.pool.id);
               return {
                 id: r.pool.id,
+                ...(r.pool.version ? { version: r.pool.version } : {}),
                 box: { lovelace: r.pool.lovelace.toString(), ...(token ? { token } : {}) },
                 ...v,
                 ...(token ? { token: { ...token, quantity: (BigInt(token.quantity) * BigInt(v.boxes.length)).toString() } } : {}),

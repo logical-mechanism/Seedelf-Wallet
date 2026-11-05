@@ -2336,6 +2336,8 @@ export interface LovejoinCrowd {
 export interface LovejoinPoolStatus {
   /** Its NFT's policy: the pool's id. */
   id: string;
+  /** `v2` for a pool on Lovejoin v2's scripts (chunk 44); none for one on 8131b1d's, retired. */
+  version?: "v2";
   /** What every box holds. */
   box: { lovelace: string; token?: TokenQuantity };
   others: number;

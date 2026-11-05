@@ -710,7 +710,8 @@ fn a_pool_starts_from_the_public_account_signed_by_its_keys() {
         },
     )
     .unwrap();
-    assert_eq!(launched.pool.version, "tokenV1");
+    // Every launch the wallet makes runs v2 (chunk 44).
+    assert_eq!(launched.pool.version, "v2");
     assert_eq!(launched.pool.scripts_inline, 0);
     // The seed is the largest UTxO, its first input.
     let seed = launched.pool.seed.as_ref().unwrap();
@@ -721,7 +722,8 @@ fn a_pool_starts_from_the_public_account_signed_by_its_keys() {
     // Two inputs under two keys and the collateral under a third: three signatures.
     assert_eq!(launched.inputs.len(), 2);
     assert_eq!(witnesses(&launched.tx_cbor), 3);
-    assert_eq!(launched.locked.total, "23123310");
+    // v2's mix_logic is 29 bytes longer than 8131b1d's: 124,990 more at the holder.
+    assert_eq!(launched.locked.total, "23248300");
 }
 
 #[test]

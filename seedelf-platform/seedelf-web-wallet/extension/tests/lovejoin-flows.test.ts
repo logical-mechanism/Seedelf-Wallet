@@ -758,12 +758,15 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     const t = await wallet();
     const shown: FoundPool = {
       id: "cd".repeat(28),
+      version: "v2",
       boxLovelace: "4500000",
       token: { ...min, quantity: "100000000" },
       ref: TOKEN_POOL,
       launch: { block: 1, index: 0, tx: "aa".repeat(32) },
     };
-    const terms = await launching(t, [shown]).terms("preprod", min, "100000000");
+    // A pool of the token on 8131b1d's scripts is retired, never one to join (chunk 44).
+    const retired: FoundPool = { ...shown, id: "ce".repeat(28), version: undefined, launch: { block: 0, index: 0, tx: "ab".repeat(32) } };
+    const terms = await launching(t, [retired, shown]).terms("preprod", min, "100000000");
     expect(BigInt(terms.least)).toBeGreaterThan(3_000_000n);
     expect(terms.suggested).toBe("4500000");
     expect(terms.most).toBe("9000000");
@@ -787,12 +790,15 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     const t = await wallet();
     const shown: FoundPool = {
       id: "cd".repeat(28),
+      version: "v2",
       boxLovelace: "4500000",
       token: { ...min, quantity: "1000" },
       ref: TOKEN_POOL,
       launch: { block: 1, index: 0, tx: "aa".repeat(32) },
     };
-    const launch = launching(t, [shown]);
+    // One of other values on 8131b1d's scripts: a start of them runs v2's, so it's no copy (chunk 44).
+    const retired: FoundPool = { ...shown, id: "ce".repeat(28), version: undefined, token: { ...min, quantity: "2000" } };
+    const launch = launching(t, [shown, retired]);
     const build = (payload: { token?: typeof min; quantity?: string; boxLovelace: string }) => launch.build("preprod", { from: "public", ...payload });
     // A token off the list: LJTEST.
     await expect(build({ token: { policyId: VIEW.token.policyId, assetName: VIEW.token.assetName }, quantity: "1", boxLovelace: "4500000" })).rejects.toThrow(
@@ -807,6 +813,9 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     await expect(build({ token: min, quantity: "1000", boxLovelace: "2000000" })).rejects.toThrow("at least");
     await expect(build({ token: min, quantity: "1000", boxLovelace: "9500000" })).rejects.toThrow("at most 9");
     expect(launch.builds).toEqual([]);
+    // A retired pool's values aren't a copy's: that start is built.
+    await build({ token: min, quantity: "2000", boxLovelace: "4500000" });
+    expect(launch.builds.length).toBeGreaterThan(0);
   });
 
   it("never pays from the public account unless asked to (34d's review 8)", async () => {
@@ -832,7 +841,7 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     // A pool of the same values, launched since discovery last looked: the look finds it.
     const look = async () => {
       looked++;
-      shown.push({ id: "cd".repeat(28), boxLovelace: "25000000", ref: TOKEN_POOL, launch: { block: 2, index: 0, tx: "bb".repeat(32) } });
+      shown.push({ id: "cd".repeat(28), version: "v2", boxLovelace: "25000000", ref: TOKEN_POOL, launch: { block: 2, index: 0, tx: "bb".repeat(32) } });
     };
     const launch = launching(t, shown, { look });
     await expect(launch.build("preprod", { from: "public", boxLovelace: "25000000" })).rejects.toThrow("exists already");

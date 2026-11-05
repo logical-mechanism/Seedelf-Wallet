@@ -144,14 +144,20 @@ pub fn protocol_of(network_flag: bool, pool: Option<&PoolRef>) -> Result<Protoco
             })?,
             // Named by its hash alone, as the data layer's pool list names a
             // pool's scripts: the bytes are the ones derived here, if they
-            // hash to it. `verify_pool` then checks them as any others.
+            // hash to it, on the set the reference datum's L names (none read:
+            // v2's). `verify_pool` then checks them as any others.
             (Some("plutusV3") | None, None, Some(hash)) => {
                 let derived = match &mut derived {
                     Some(d) => d,
-                    none => none.insert(
-                        lovejoin::templates::derive(&seed, pool.seed.tx_index)
-                            .map_err(|e| anyhow!("{e}"))?,
-                    ),
+                    none => {
+                        let named = lovejoin::candidate(network_flag, &reference)
+                            .map(|(_, datum)| datum.mix_logic_hash)
+                            .unwrap_or_default();
+                        none.insert(
+                            lovejoin::templates::derive_for(&seed, pool.seed.tx_index, &named)
+                                .map_err(|e| anyhow!("{e}"))?,
+                        )
+                    }
                 };
                 let Some(found) = [&derived.mix_box, &derived.mix_logic]
                     .into_iter()
@@ -565,7 +571,8 @@ fn format_ada(lovelace: u64) -> String {
 pub struct PoolView {
     /// Its NFT's policy, P: the pool's id.
     pub id: String,
-    /// `classic` or `tokenV1`.
+    /// `classic`, `tokenV1` or `v2`. Every one but `v2` is retired: it takes
+    /// no new boxes.
     pub version: String,
     pub box_lovelace: String,
     /// What a box holds besides its ADA; absent in the classic pool.
@@ -595,6 +602,7 @@ impl PoolView {
             version: match pool.version {
                 Version::Classic => "classic",
                 Version::TokenV1 => "tokenV1",
+                Version::V2 => "v2",
             }
             .to_string(),
             box_lovelace: pool.denom.to_string(),

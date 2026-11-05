@@ -96,7 +96,7 @@ impl Probe {
         Ok(Probe {
             network_flag,
             seed,
-            derived: templates::derive(&seed.0, seed.1)?,
+            derived: templates::derive_in(templates::Set::V2, &seed.0, seed.1)?,
             by_reference,
         })
     }
