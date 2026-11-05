@@ -1,0 +1,6 @@
+.lake/
+concrete/build/
+# Run output: the diag replay cache (run-diag.sh resumes from it), console logs, Python bytecode
+Audit/diag/out/
+Audit/logs/
+__pycache__/

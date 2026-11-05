@@ -1,0 +1,5 @@
+import Lovejoin.MixLogicPurpose
+import Blaster
+
+-- Lovejoin.MixLogicPurpose line 51: blaster
+#blaster (only-smt-lib: 1) (dump-smt-lib: 1) [Lovejoin.Classic.mix_logic_refuses_other_certificates]

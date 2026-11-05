@@ -1,0 +1,27 @@
+# ./check.sh audit-seedelf, then python3 -I Audit/count.py audit-seedelf
+# Seedelf (on chain): mutated specs, vacuity and step-limit controls, mutant wallets, the exec
+# form, the policy with its input's own token name, and the gaps the review found.
+Audit.Seedelf.AlwaysFalse
+Audit.Seedelf.Purpose
+Audit.Seedelf.ExecCheap
+Audit.Seedelf.NoLock
+Audit.Seedelf.NoLockUnit1
+Audit.Seedelf.NoLockUnit2
+Audit.Seedelf.RegisterSpec
+Audit.Seedelf.RegisterHash
+Audit.Seedelf.RegisterNeeds
+Audit.Seedelf.RegisterBounds
+Audit.Seedelf.RegisterWrongScript
+Audit.Seedelf.RegisterSteps
+Audit.Seedelf.RegisterSteps2
+Audit.Seedelf.RegisterTwoSigners
+Audit.Seedelf.MutantNoSchnorr
+Audit.Seedelf.MutantNoSigner
+Audit.Seedelf.MutantNoVkh
+Audit.Seedelf.PolicyAmount
+Audit.Seedelf.PolicyForeign
+Audit.Seedelf.PolicyAmountGood
+Audit.Seedelf.PolicyForeignGood
+Audit.Seedelf.RegisterExec
+Audit.Seedelf.GapPolicyPurpose
+Audit.Seedelf.GapRegisterFails

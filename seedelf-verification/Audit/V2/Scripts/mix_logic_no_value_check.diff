@@ -1,0 +1,10 @@
+--- a/contracts/validators/mix_logic.ak
++++ b/contracts/validators/mix_logic.ak
+@@ -273,7 +273,6 @@
+       if prefix_remaining > 0 {
+         // Prefix step: at_script + decode + accumulate.
+         expect output_at_script(output, mix_script_hash)
+-        expect output.value == box_value
+         expect InlineDatum(inline_data) = output.datum
+         let mix_datum = decode_mix_datum_strict(inline_data)
+         let stmt = DHTupleStatementPt {

@@ -1,0 +1,5 @@
+import Lovejoin.V2.MixAnyOutputs
+import Blaster
+
+-- Lovejoin.V2.MixAnyOutputs line 27: blaster (timeout: 540)
+#blaster (only-smt-lib: 1) (dump-smt-lib: 1) [Lovejoin.V2.Any.mixany_pays_its_boxes_to_mix_box]

@@ -1,0 +1,32 @@
+# ./check.sh audit-v2, then python3 -I Audit/count.py audit-v2
+# Lovejoin v2's mix_logic template: mutated specs, vacuity and step-limit controls, mutant
+# scripts (one check each removed), a payer's input, unit results, the exec form.
+Audit.V2.MixAnyVacuity
+Audit.V2.MixAnyMutants
+Audit.V2.MixAnySideConditions
+Audit.V2.MixAnyOutVacuity
+Audit.V2.MixAnyOutMutants
+Audit.V2.OwnerControls
+Audit.V2.OwnAny1Controls
+Audit.V2.OwnAny4Controls
+Audit.V2.MixTok2Controls
+Audit.V2.MixAny4Vacuity
+Audit.V2.MixAny4Mutants
+Audit.V2.OwnBounds
+Audit.V2.OwnerBounds
+Audit.V2.MixAnyBounds
+Audit.V2.MixAnyOutBounds
+Audit.V2.MixTok2Bounds
+Audit.V2.MixAny4Bounds
+Audit.V2.MixAnyWrongScript
+Audit.V2.OwnWrongScript
+Audit.V2.MixTok2WrongScript
+Audit.V2.MixAny4WrongScript
+Audit.V2.MixAnyPayerBefore
+Audit.V2.MixAnyPayerBetween
+Audit.V2.MixAnyPayerAfter
+Audit.V2.OwnExec
+Audit.V2.MixAnyOutExec
+Audit.V2.MixTok2Exec
+Audit.V2.MixAnyExec
+Audit.V2.MixAny4Exec

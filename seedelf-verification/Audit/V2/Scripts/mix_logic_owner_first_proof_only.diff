@@ -1,0 +1,21 @@
+--- a/contracts/validators/mix_logic.ak
++++ b/contracts/validators/mix_logic.ak
+@@ -135,13 +135,11 @@
+   // Per-input Schnorr verification. Each proof proves "I know x_i such that
+   // b_i = [x_i] a_i" against the shared ctx — see 
+   // §"Schnorr".
+-  pairs_match_and_all(
+-    mix_inputs,
+-    proofs,
+-    fn(mix_input, proof) {
+-      schnorr.verify(mix_input.a, mix_input.b, proof, ctx)
+-    },
+-  )
++  when (mix_inputs, proofs) is {
++    ([first_input, ..], [first_proof, ..]) ->
++      schnorr.verify(first_input.a, first_input.b, first_proof, ctx)
++    _ -> False
++  }
+ }
+ 
+ // ---------------------------------------------------------------------------

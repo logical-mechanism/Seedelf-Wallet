@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Layout
 
-This is a multi-language monorepo for **Seedelf**, a Cardano stealth wallet. Three top-level components:
+This is a multi-language monorepo for **Seedelf**, a Cardano stealth wallet. Four top-level components:
 
 - [seedelf-contracts/](seedelf-contracts/) — on-chain validators written in **Aiken**.
 - [seedelf-platform/](seedelf-platform/) — a Cargo workspace of Rust crates implementing the CLI and supporting libraries.
   - It also holds the Chrome web wallet (Seedelf Wallet), [seedelf-platform/seedelf-web-wallet/](seedelf-platform/seedelf-web-wallet/), where nearly all work now happens. Start with its [README](seedelf-platform/seedelf-web-wallet/README.md) and [seedelf-platform/CLAUDE.md](seedelf-platform/CLAUDE.md).
 - [seedelf-data/](seedelf-data/) — the web wallet's mainnet data layer (chunk 26), its own Cargo workspace: `seedelf-data-api`, live at `https://mainnet.seedelf.logicalmechanism.io` on a DigitalOcean droplet, reading home's node, db-sync and Kupo through WireGuard.
+- [seedelf-verification/](seedelf-verification/) — formal verification of the deployed contracts' bytes with IOG's Blaster (Lean 4 + Z3); start at its [README](seedelf-verification/README.md). Build only through its `check.sh`, which caps each module's memory: one bare build took 52 GB.
 
 The Rust code hardcodes the deployed contracts' script hashes, reference UTxOs and reference outputs, per variant (`seedelf-core`'s `constants.rs` and `references.rs`). Variant 1 is what's on chain and it's frozen: commit `5b82530`, built with Aiken v1.1.9 (see [seedelf-contracts/README.md](seedelf-contracts/README.md)). The contracts' current source, `contracts/` and `hashes/` are a later revision that was never deployed, so never copy `hashes/` into the Rust constants. Changing validator code, the toolchain or the `acabcafe` random seed changes the hashes: putting that on chain is a new variant with its own reference UTxOs, added beside variant 1, never an edit to it.
 

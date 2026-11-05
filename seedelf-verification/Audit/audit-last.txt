@@ -1,0 +1,3 @@
+# ./check.sh audit-last, then python3 -I Audit/count.py audit-last
+# After every other family: the axioms behind each theorem (never sorryAx).
+Audit.Checks.PrintAxioms

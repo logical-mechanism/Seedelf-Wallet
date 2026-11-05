@@ -1,0 +1,14 @@
+# ./check.sh audit-template, then python3 -I Audit/count.py audit-template
+# fee_contract is left out (owner, 2026-11-03: unused in practice, since Seedelf and one-time
+# accounts make it useless): Audit.Template.Fee{Spec,Limits,Iff,Gaps,Mutants} stay, by name.
+# The 8131b1d templates (mix_box, one_shot_mint, fee_contract): the same kinds of controls,
+# mutant scripts, and the converse iffs.
+Audit.Template.GateSpec
+Audit.Template.GateLimits
+Audit.Template.GateGaps
+Audit.Template.OneShotSpec
+Audit.Template.OneShotBounds
+Audit.Template.OneShotLimits
+Audit.Template.OneShotIff
+Audit.Template.OneShotGaps
+Audit.Template.OneShotMutants

@@ -1,0 +1,11 @@
+--- a/contracts/lib/lovejoin/sigma_or.ak
++++ b/contracts/lib/lovejoin/sigma_or.ak
+@@ -192,7 +192,7 @@
+       let rhs0 = bls.point_add(t0_pt, bls.scalar_mul(c, stmt.ap_pt))
+       let lhs1 = bls.scalar_mul(z, b_pt)
+       let rhs1 = bls.point_add(t1_pt, bls.scalar_mul(c, stmt.bp_pt))
+-      bls.point_equal(lhs0, rhs0) && bls.point_equal(lhs1, rhs1)
++      bls.point_equal(lhs0, rhs0)
+     },
+   )
+ }
