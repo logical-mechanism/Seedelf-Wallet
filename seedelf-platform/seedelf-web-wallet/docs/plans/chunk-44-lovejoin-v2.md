@@ -17,7 +17,7 @@ Branch `web-wallet/lovejoin-v2`, from `main` at `c15603d5`. It's chunk 42's step
   4. **The earliest v2 5 ₳ ADA pool** takes a return's spare ADA and the session's 5 ₳ collateral, by the rule the collateral pool already uses. Until it holds 30 other boxes (the mainnet floor), returns come back direct; Bootstrap fills it.
 - **Kept as they are, unless the owner says otherwise:** no ADA pool of exactly 10 ₳ on the new scripts (it would look like the classic pool's copy), and the floor of 30.
 
-## 44a · v2 recognised and launched 🚧
+## 44a · v2 recognised and launched ✅
 
 Its own PR: core, WebAssembly, the data layer's copy, and the extension's discovery and launch checks, as the copies change together. After it merges and the data layer is deployed, a dev build can launch the v2 pool. Wallets already installed drop v2 pools: their `verify_pool` refuses them.
 
@@ -38,7 +38,7 @@ Its own PR: core, WebAssembly, the data layer's copy, and the extension's discov
 - ✅ **The extension:** a found pool keeps `version: "v2"` (absent for every pool kept before, so old records are unchanged), and so do `LovejoinPool` and the status. A launch is a copy only of a v2 pool, and joins only v2 pools (worker and form).
 - ✅ `wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json`: Lovejoin's preprod token-pool launch with its scripts derived on v2 and put at the holder. It's never on chain, and `lovejoin_v2_fixture_test.rs` writes it and verifies it as `v2` (`RECORD_LOVEJOIN_V2_FIXTURE=1`). The tests that a start of a listed pool's values is a copy run on it, and 44b's fixtures can grow from it.
 - **Between 44a and 44b (dev builds only):** a retired pool still takes boxes, and the collateral still goes to the first 5 ₳ ADA pool read. With the v2 pool launched, the hub lists it beside 8131b1d's 5 ₳ pool. 1.8.0 ships both parts, so no release sees this.
-- ⬜ The PR.
+- ✅ PR #363: CI green (unit on both builds, e2e, store, rust, wasm).
 
 ## 44b · The extension on v2 ⬜
 
