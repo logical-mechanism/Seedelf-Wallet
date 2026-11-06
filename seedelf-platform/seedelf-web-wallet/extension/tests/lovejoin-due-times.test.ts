@@ -2,17 +2,17 @@
 // counted from the schedule as it is when it's changed, so a chain the user
 // sends while the run reads the pool keeps its boxes' times, and no box goes
 // back while that chain is sent (independent review L29). The real
-// WebAssembly, a recorded preprod pool, and fakes of Koios and giveme.my.
-import { readFileSync } from "node:fs";
-
+// WebAssembly, v2's 5 ₳ pool (the classic pool, retired, brings its boxes all
+// back at the first run, with no due time: chunk 44), and fakes of Koios and
+// giveme.my.
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
-import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService } from "../src/background/lovejoin";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
-import { loadTestWasm, madeByMix, testBalances, vectors } from "./fakes";
+import { loadTestWasm, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix, ownDatum } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -20,20 +20,13 @@ const PHRASE = vectors("cardano_account.json").find((v) => v.account === 0 && v.
 /** Each withdraw is built and measured in WebAssembly: past Vitest's 5 s on CI's runners. */
 const SLOW = { timeout: 30_000 };
 
-/** Lovejoin's preprod pool, as Koios lists it (2026-09-25). */
-const POOL = (
-  JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-).pool;
-
 type T = ReturnType<typeof testBalances>;
 
 /** A box of ours in the pool: a fresh re-randomization of the Seedelf key's register. */
-async function ownedBox(t: T, tx: string): Promise<KoiosUtxo> {
-  const wasm = loadTestWasm();
-  const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
+async function ownedBox(t: T, tx: string) {
   // Someone else's mix moved it: Koios says so, as the wallet asks before it takes a box no record accounts for (M14).
-  madeByMix(t.koios, tx.repeat(32));
-  return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
+  madeByAdaMix(t.koios, tx.repeat(32));
+  return adaBox(tx, await ownDatum(t.wallet), t.clock.now);
 }
 
 /**
@@ -42,12 +35,12 @@ async function ownedBox(t: T, tx: string): Promise<KoiosUtxo> {
  * Lovejoin with giveme.my's witness stood in for.
  */
 async function withBox(due: (now: number) => number[]) {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(PHRASE, PASSWORD);
-  t.koios.addedToAccounts.push(...POOL, await ownedBox(t, "d1"));
+  t.koios.addedToAccounts.push(...ADA_ROWS, await ownedBox(t, "d1"));
   const unlocked = t.clock.now - HOUR;
   await t.wallet.withKeys(() => t.session.set(SESSION_UNLOCKED_AT, unlocked));
-  await t.store.set("lovejoin.preprod", { due: due(t.clock.now), unlock: unlocked });
+  await t.store.set("lovejoin.preprod", { due: [], pools: { [ADA]: { due: due(t.clock.now) } }, unlock: unlocked });
   const wasm = loadTestWasm();
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
   const lovejoin = new LovejoinService({
@@ -61,11 +54,16 @@ async function withBox(due: (now: number) => number[]) {
     } as typeof wasm,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     store: t.store,
+    pools: async () => [ADA_POOL],
   });
   return { t, lovejoin };
 }
 
-const due = async (t: T) => (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due;
+/** The 5 ₳ pool's due times. */
+const due = async (t: T) => {
+  const s = (await t.store.get<{ pools?: Record<string, { due: number[] }> }>("lovejoin.preprod"))!;
+  return s.pools?.[ADA]?.due ?? [];
+};
 
 describe("a box's due times against the pool (independent review L29)", SLOW, () => {
   it("keeps those a chain sent while the run read the pool set, and brings no box back while it's sent", async () => {
@@ -78,7 +76,7 @@ describe("a box's due times against the pool (independent review L29)", SLOW, ()
     // Meanwhile the user sends a session's return through Lovejoin: its chain is recorded, and its deposit sets two boxes' times.
     const key = "seedelf.lovejoin.sending.preprod";
     const txs = (["deposit", "mix"] as const).map((kind, i) => ({ kind, txCbor: "", txHash: "a1".repeat(31) + `0${i}`, fee: "0" }));
-    await t.lovejoin.recordChain("preprod", { progress: key, txs, leaves: [], boxes: 2 });
+    await t.lovejoin.recordChain("preprod", { progress: key, txs, leaves: [], boxes: 2, pools: { [ADA]: 2 } });
     await t.wallet.withKeys(() => t.session.set(key, { txs, next: 1, flying: [] }));
     await t.lovejoin.chainSent("preprod", txs.at(-1)!.txHash, 0);
     const drawn = await due(t);

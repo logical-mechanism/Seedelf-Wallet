@@ -2,10 +2,10 @@
 // fresh draw from the unlock, whichever run or page gets there first. And no
 // Lovejoin box goes back within minutes of the wallet's own send, one a lock
 // or a closed browser made it forget included, while an unlock alone isn't a
-// send (independent review M10, L10, L11, L12, L13). The real WebAssembly, a
-// recorded preprod pool, and fakes of Koios, giveme.my and Minswap.
-import { readFileSync } from "node:fs";
-
+// send (independent review M10, L10, L11, L12, L13). The real WebAssembly,
+// v2's 5 ₳ pool (the classic pool, retired, brings its boxes all back at the
+// first run, with no wait: chunk 44), and fakes of Koios, giveme.my and
+// Minswap.
 import { describe, expect, it, vi } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
@@ -19,7 +19,8 @@ import { noteStart, SESSION_SENDS, SESSION_UNLOCKED_AT } from "../src/background
 import type { NetworkName } from "../src/networks";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
-import { busyFor, loadTestWasm, madeByMix, minswapEstimate, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
+import { busyFor, loadTestWasm, minswapEstimate, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix, ownDatum } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -27,20 +28,13 @@ const PHRASE = vectors("cardano_account.json").find((v) => v.account === 0 && v.
 /** Each withdraw is built and measured in WebAssembly: past Vitest's 5 s on CI's runners. */
 const SLOW = { timeout: 30_000 };
 
-/** Lovejoin's preprod pool, as Koios lists it (2026-09-25). */
-const POOL = (
-  JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-).pool;
-
 type T = ReturnType<typeof testBalances>;
 
 /** A box of ours in the pool: a fresh re-randomization of the Seedelf key's register. */
-async function ownedBox(t: T, tx: string): Promise<KoiosUtxo> {
-  const wasm = loadTestWasm();
-  const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
+async function ownedBox(t: T, tx: string) {
   // Someone else's mix moved it: Koios says so, as the wallet asks before it takes a box no record accounts for (M14).
-  madeByMix(t.koios, tx.repeat(32));
-  return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
+  madeByAdaMix(t.koios, tx.repeat(32));
+  return adaBox(tx, await ownDatum(t.wallet), t.clock.now);
 }
 
 /** Lovejoin with giveme.my's witness stood in for, so a withdraw that goes is submitted; its draws `random`'s, if given. */
@@ -59,19 +53,31 @@ function witnessed(t: T, random?: () => number): LovejoinService {
     } as typeof wasm,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     store: t.store,
+    pools: async () => [ADA_POOL],
   });
 }
 
-/** An unlocked wallet with Lovejoin's pool and one box of its own in it. */
+/** An unlocked wallet with Lovejoin's 5 ₳ pool and one box of its own in it. */
 async function withBox(random?: () => number) {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(PHRASE, PASSWORD);
-  t.koios.addedToAccounts.push(...POOL, await ownedBox(t, "e1"));
+  t.koios.addedToAccounts.push(...ADA_ROWS, await ownedBox(t, "e1"));
   return { t, lovejoin: witnessed(t, random) };
 }
 
-const schedule = async (t: T) =>
-  (await t.store.get<{ due: number[]; marks?: Record<string, { unlock?: true; pushes?: number }> }>("lovejoin.preprod"))!;
+/** A box of the 5 ₳ pool due at each of `due`, with `marks`. */
+const dueAt = (t: T, due: number[], marks?: Record<string, { unlock?: true }>) =>
+  t.store.set("lovejoin.preprod", { due: [], pools: { [ADA]: { due } }, ...(marks ? { marks } : {}) });
+
+interface Kept {
+  pools?: Record<string, { due: number[] }>;
+  marks?: Record<string, { unlock?: true; pushes?: number }>;
+}
+/** The record, with the 5 ₳ pool's due times as `due`. */
+const schedule = async (t: T) => {
+  const s = (await t.store.get<Kept>("lovejoin.preprod"))!;
+  return { due: s.pools?.[ADA]?.due ?? [], marks: s.marks };
+};
 
 /** Koios answers `path` with a 502 until the undo. */
 function failing(t: T, path: string) {
@@ -109,7 +115,7 @@ describe("the quiet after the wallet's own send, across a lock or a closed brows
     await busyFor(t, HOUR);
     // The wallet pays at T; a box is due four minutes on.
     const paid = t.clock.now;
-    await t.store.set("lovejoin.preprod", { due: [paid + 4 * 60_000] });
+    await dueAt(t, [paid + 4 * 60_000]);
     await pays(t, paid);
     // Half a minute later it locks; a minute after the payment it's unlocked again.
     t.clock.now += 30_000;
@@ -139,7 +145,7 @@ describe("the quiet after the wallet's own send, across a lock or a closed brows
     const { t, lovejoin } = await withBox();
     await busyFor(t, HOUR);
     const paid = t.clock.now;
-    await t.store.set("lovejoin.preprod", { due: [paid + 4 * 60_000] });
+    await dueAt(t, [paid + 4 * 60_000]);
     await pays(t, paid);
     // Half a minute later the browser closes, unlocked: session storage goes, unseen.
     t.clock.now += 30_000;
@@ -188,7 +194,7 @@ describe("the quiet after the wallet's own send, across a lock or a closed brows
     const { t, lovejoin } = await withBox(() => 0.5);
     await t.deps.preferences.set({ lockAfterMinutes: 5 });
     await busyFor(t, HOUR);
-    await t.store.set("lovejoin.preprod", { due: [t.clock.now + 30 * 60_000] });
+    await dueAt(t, [t.clock.now + 30 * 60_000]);
     await t.wallet.lock();
     t.clock.now += 3 * HOUR;
     const went = await idleUnlock(t, lovejoin);
@@ -201,7 +207,7 @@ describe("the quiet after the wallet's own send, across a lock or a closed brows
     const { t, lovejoin } = await withBox(() => 0.5);
     await t.deps.preferences.set({ lockAfterMinutes: 5 });
     await busyFor(t, HOUR);
-    await t.store.set("lovejoin.preprod", { due: [t.clock.now + 30 * 60_000] });
+    await dueAt(t, [t.clock.now + 30 * 60_000]);
     // The browser closes, unlocked; hours later it starts, and the wallet is unlocked half a minute on.
     t.session.data.clear();
     t.clock.now += 3 * HOUR;
@@ -224,7 +230,7 @@ describe("the quiet after the wallet's own send, across a lock or a closed brows
 describe("the unlock's fresh draws, whichever run gets there first (independent review L10, L13)", SLOW, () => {
   it("draws a box's wait though the unlock's pool read fails, so the next run doesn't send it a minute in", async () => {
     const { t, lovejoin } = await withBox();
-    await t.store.set("lovejoin.preprod", { due: [t.clock.now + HOUR] });
+    await dueAt(t, [t.clock.now + HOUR]);
     await t.wallet.lock();
     t.clock.now += 7 * HOUR;
     await t.wallet.unlock(PASSWORD);
@@ -245,7 +251,7 @@ describe("the unlock's fresh draws, whichever run gets there first (independent 
 
   it("draws it at the first run after the unlock when the unlock's own run never came, and sends it after", async () => {
     const { t, lovejoin } = await withBox();
-    await t.store.set("lovejoin.preprod", { due: [t.clock.now + HOUR] });
+    await dueAt(t, [t.clock.now + HOUR]);
     await t.wallet.lock();
     t.clock.now += 7 * HOUR;
     await t.wallet.unlock(PASSWORD);
@@ -269,7 +275,7 @@ describe("the unlock's fresh draws, whichever run gets there first (independent 
     const { t, lovejoin } = await withBox();
     // Due three hours on, and half a minute: the wallet locks, and unlocks three hours on.
     const due = t.clock.now + 3 * HOUR + 30_000;
-    await t.store.set("lovejoin.preprod", { due: [due] });
+    await dueAt(t, [due]);
     await t.wallet.lock();
     t.clock.now += 3 * HOUR;
     await t.wallet.unlock(PASSWORD);
@@ -285,7 +291,7 @@ describe("the unlock's fresh draws, whichever run gets there first (independent 
   it("leaves a box due later than the least of a fresh wait as it was", async () => {
     const { t, lovejoin } = await withBox();
     const due = t.clock.now + 3 * HOUR + UNLOCK_WAIT_MS[0] + 60_000;
-    await t.store.set("lovejoin.preprod", { due: [due] });
+    await dueAt(t, [due]);
     await t.wallet.lock();
     t.clock.now += 3 * HOUR;
     await t.wallet.unlock(PASSWORD);
@@ -345,7 +351,7 @@ describe("a run under way across a lock and an unlock (independent review L11)",
     await busyFor(t, HOUR);
     // A box drawn at an unlock before, and due: the next unlock won't draw it again.
     const due = t.clock.now - 60_000;
-    await t.store.set("lovejoin.preprod", { due: [due], marks: { [due]: { unlock: true } } });
+    await dueAt(t, [due], { [due]: { unlock: true } });
     // The run begins; the wallet locks and unlocks while it reads Koios.
     const since = t.clock.now;
     await t.wallet.lock();
@@ -398,7 +404,7 @@ describe("a swap's step at the unlock (independent review L10, L12)", SLOW, () =
     await sessions.outSubmit("preprod", out.txHash);
     t.koios.confirmations = 1;
     t.koios.addedToAccounts.push({
-      ...POOL[0]!,
+      ...ADA_ROWS[0]!,
       tx_hash: sessionSwap.utxo.tx_hash,
       tx_index: sessionSwap.utxo.tx_index,
       address: sessionSwap.address,

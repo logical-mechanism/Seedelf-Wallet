@@ -6,43 +6,32 @@
 // chain's record stays until its boxes have waited, even past the time an
 // ended record is kept. A box someone else's mix moved since may be any
 // chain's that went in before that move, so it waits the longest of theirs
-// (final review F9, independent review L21).
-import { readFileSync } from "node:fs";
-
+// (final review F9, independent review L21). In v2's 5 ₳ pool: the classic
+// pool, retired, brings its boxes all back at the first run, with no wait
+// (chunk 44).
 import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
-import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, WITHDRAW_SPREAD_MS } from "../src/background/lovejoin";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
-import { loadTestWasm, madeByMix, testBalances, vectors } from "./fakes";
+import { loadTestWasm, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix, ownDatum } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
 const PHRASE = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!.phrase;
 const SLOW = { timeout: 30_000 };
-const POOL = (
-  JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-).pool;
 
 type T = ReturnType<typeof testBalances>;
 
 /** A box of ours in the pool, where tx `tx` put it at `at` (ms). */
-async function ownedBox(t: T, tx: string, at: number): Promise<KoiosUtxo> {
-  const wasm = loadTestWasm();
-  const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
+async function ownedBox(t: T, tx: string, at: number) {
   // Someone else's mix moved it: Koios says so, as the wallet asks before it takes a box no record accounts for (M14).
-  madeByMix(t.koios, tx.repeat(32));
-  return {
-    ...POOL[0]!,
-    tx_hash: tx.repeat(32),
-    tx_index: 0,
-    block_time: Math.floor(at / 1000),
-    inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} },
-  };
+  madeByAdaMix(t.koios, tx.repeat(32));
+  return adaBox(tx, await ownDatum(t.wallet), at, 0);
 }
 
 /** A session's chain, all sent, whose one box's last mix (`tx`) put it in the pool: recorded at `at`, waiting `delay`. */
@@ -52,8 +41,9 @@ const chain = (session: number, tx: string, at: number, delay: string) => ({
   progress: `seedelf.session.chain.preprod.${session}`,
   deposit: `${tx.slice(0, 1)}0`.repeat(32),
   mixes: [tx.repeat(32)],
-  leaves: [{ txHash: tx.repeat(32), txIndex: 0 }],
+  leaves: [{ txHash: tx.repeat(32), txIndex: 0, pool: ADA }],
   boxes: 1,
+  pools: { [ADA]: 1 },
   total: 3,
   sent: 3,
   at,
@@ -70,17 +60,18 @@ const chain = (session: number, tx: string, at: number, delay: string) => ({
  * `otherAgo` ago at 1 to 6 hours; due times `due`.
  */
 async function pooled(swapAgo: number, otherAgo: number, due: (now: number) => number[]) {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(PHRASE, PASSWORD);
   await t.preferences.set({ lovejoinDelay: "1-6" });
   const now = t.clock.now;
   const swapAt = now - swapAgo;
   const otherAt = now - otherAgo;
-  t.koios.addedToAccounts.push(...POOL, await ownedBox(t, "a1", swapAt + 5 * MINUTE), await ownedBox(t, "b1", otherAt + 5 * MINUTE));
+  t.koios.addedToAccounts.push(...ADA_ROWS, await ownedBox(t, "a1", swapAt + 5 * MINUTE), await ownedBox(t, "b1", otherAt + 5 * MINUTE));
   const unlocked = now - 2 * HOUR;
   await t.wallet.withKeys(() => t.session.set(SESSION_UNLOCKED_AT, unlocked));
   await t.store.set("lovejoin.preprod", {
-    due: due(now),
+    due: [],
+    pools: { [ADA]: { due: due(now) } },
     unlock: unlocked,
     chains: [chain(0, "a1", swapAt, "6-24"), chain(1, "b1", otherAt, "1-6")],
   });
@@ -97,6 +88,7 @@ async function pooled(swapAgo: number, otherAgo: number, due: (now: number) => n
     } as typeof wasm,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     store: t.store,
+    pools: async () => [ADA_POOL],
   });
   return { t, lovejoin };
 }
@@ -106,7 +98,15 @@ const OTHER = `${"b1".repeat(32)}#0`;
 /** The wallet's box where someone else's mix put it: no recorded chain made it. */
 const MOVED = `${"c1".repeat(32)}#0`;
 const spends = (t: T) => txInputs(t.koios.submitted.at(-1)!);
-const kept = async (t: T) => (await t.store.get<{ due: number[]; chains: Array<{ session: number }> }>("lovejoin.preprod"))!;
+interface Kept {
+  pools?: Record<string, { due: number[] }>;
+  chains: Array<{ session: number }>;
+}
+/** The record, with the 5 ₳ pool's due times as `due`. */
+const kept = async (t: T) => {
+  const s = (await t.store.get<Kept>("lovejoin.preprod"))!;
+  return { due: s.pools?.[ADA]?.due ?? [], chains: s.chains };
+};
 
 describe("a box and its own chain's wait (final review F9)", SLOW, () => {
   it("brings back the other chain's box at its due time, never the swap's before its approved wait", async () => {
