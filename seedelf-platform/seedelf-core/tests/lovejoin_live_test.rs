@@ -32,7 +32,8 @@ use seedelf_core::build::{Budgets, Chain};
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::eval::{self, Resolved};
 use seedelf_core::lovejoin::{
-    self, BoxToken, BoxValue, Coin, Payer, PoolBox, Protocol, ReferenceDatum, Terms, templates,
+    self, BoxToken, BoxValue, Coin, Payer, PoolBox, Protocol, ReferenceDatum, Rewards, Terms,
+    templates,
 };
 use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
@@ -282,7 +283,7 @@ fn each_network_measures_a_token_mix_and_withdraw_as_the_wallet_does() {
             address: session(network_flag),
             signers: 1,
         };
-        let mixed = lovejoin::mix(&params, &pool, &boxes, &payer).unwrap();
+        let mixed = lovejoin::mix(&params, &pool, &boxes, &payer, &mut Rewards::none()).unwrap();
         let mut synthetic: Vec<Resolved> = boxes.iter().map(|b| b.utxo.clone()).collect();
         synthetic.push(payer.fee.utxo.clone());
         synthetic.push(payer.collateral.clone().unwrap().utxo);
@@ -299,8 +300,15 @@ fn each_network_measures_a_token_mix_and_withdraw_as_the_wallet_does() {
         let sk = random_scalar();
         let owner = Register::create(sk).unwrap();
         let mine = vec![made_up_box(&pool, Some(&sk), 0x60)];
-        let back =
-            lovejoin::withdraw(&params, &pool, &mine, &sk, owner.rerandomize().unwrap()).unwrap();
+        let back = lovejoin::withdraw(
+            &params,
+            &pool,
+            &mine,
+            &sk,
+            owner.rerandomize().unwrap(),
+            &mut Rewards::none(),
+        )
+        .unwrap();
         let mut synthetic: Vec<Resolved> = mine.iter().map(|b| b.utxo.clone()).collect();
         synthetic.extend(reference.iter().cloned());
         the_network_agrees(

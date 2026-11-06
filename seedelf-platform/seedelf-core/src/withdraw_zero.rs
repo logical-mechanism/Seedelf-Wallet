@@ -1,7 +1,13 @@
-//! A zero withdrawal from a script's reward account, with its redeemer: the
+//! A withdrawal from a script's reward account, with its redeemer: the
 //! "withdraw-zero" pattern, where a script registered as a stake credential
 //! runs once per transaction to check the whole of it. Lovejoin's `mix_logic`
 //! works this way: every mix and every withdraw of a box carries one.
+//!
+//! The amount is 0 nearly always, and whatever the account holds otherwise:
+//! the ledger takes a withdrawal only of an account's whole balance
+//! (`WithdrawalsNotInRewards`), and anyone can put money in one with no
+//! witness of the script's, as a retired stake pool's deposit that names it
+//! does (chunk 43). The script never reads the amount.
 //!
 //! Pallas's builder can stage neither a withdrawal nor a `Reward` redeemer
 //! (`pallas-txbuilder` 0.33 to 1.4 all write `withdrawals: None`, and its
@@ -51,19 +57,27 @@ pub fn script_data_hash(
     Ok(Hasher::<256>::hash(&preimage))
 }
 
-/// A zero withdrawal from `account` whose script is run with `redeemer`.
+/// A withdrawal of `lovelace` from `account`, whose script is run with
+/// `redeemer`: the account's whole balance, 0 nearly always.
 #[derive(Debug, Clone)]
 pub struct WithdrawZero {
     pub account: Vec<u8>,
+    pub lovelace: u64,
     pub redeemer: PlutusData,
 }
 
 impl WithdrawZero {
-    pub fn new(script_hash: &[u8; 28], network_flag: bool, redeemer_cbor: &[u8]) -> Result<Self> {
+    pub fn new(
+        script_hash: &[u8; 28],
+        network_flag: bool,
+        lovelace: u64,
+        redeemer_cbor: &[u8],
+    ) -> Result<Self> {
         let redeemer = PlutusData::decode_fragment(redeemer_cbor)
             .map_err(|e| anyhow!("The withdrawal's redeemer isn't Plutus data: {e}"))?;
         Ok(WithdrawZero {
             account: reward_account(script_hash, network_flag),
+            lovelace,
             redeemer,
         })
     }
@@ -93,7 +107,7 @@ impl WithdrawZero {
         if others {
             bail!("The transaction already withdraws from another account");
         }
-        body.withdrawals = Some(NonEmptyKeyValuePairs::Def(vec![(account, 0)]));
+        body.withdrawals = Some(NonEmptyKeyValuePairs::Def(vec![(account, self.lovelace)]));
 
         let witness = &mut tx.transaction_witness_set;
         if witness.plutus_data.is_some() {

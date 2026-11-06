@@ -26,7 +26,7 @@ use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::eval::{self, Resolved};
 use seedelf_core::lovejoin::{
     self, BoxToken, BoxValue, Coin, Holding, Payer, PoolBox, Protocol, ReferenceDatum, Rejected,
-    Version, templates,
+    Rewards, Version, templates,
 };
 use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
@@ -889,7 +889,14 @@ fn a_token_pool_mixes_with_its_scripts_inline_and_by_reference() {
         let boxes: Vec<PoolBox> = (0..3)
             .map(|i| made_up_box(&pool, None, 0x20 + 0x10 * i))
             .collect();
-        let mixed = lovejoin::mix(&params(), &pool, &boxes, &payer(true, 50_000_000)).unwrap();
+        let mixed = lovejoin::mix(
+            &params(),
+            &pool,
+            &boxes,
+            &payer(true, 50_000_000),
+            &mut Rewards::none(),
+        )
+        .unwrap();
         assert_eq!(mixed.outputs.len(), 3);
         for out in &mixed.outputs {
             assert!(PoolBox::from_resolved(out.utxo.clone(), &pool).is_some());
@@ -919,6 +926,7 @@ fn a_token_box_comes_back_into_a_seedelf_holding_its_token() {
             &boxes,
             &sk,
             owner.clone().rerandomize().unwrap(),
+            &mut Rewards::none(),
         )
         .unwrap();
         let token = pool.token.clone().unwrap();
@@ -950,6 +958,7 @@ fn a_token_box_comes_back_into_a_seedelf_holding_its_token() {
         &boxes,
         &sk,
         owner.clone().rerandomize().unwrap(),
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(back.token.unwrap().1, 2 * pool.token.unwrap().quantity);
@@ -976,6 +985,7 @@ fn a_box_too_poor_to_come_back_says_so_and_an_account_can_pay() {
         &boxes,
         &sk,
         owner.clone().rerandomize().unwrap(),
+        &mut Rewards::none(),
     )
     .unwrap_err();
     assert!(
@@ -991,6 +1001,7 @@ fn a_box_too_poor_to_come_back_says_so_and_an_account_can_pay() {
         &sk,
         owner.clone().rerandomize().unwrap(),
         &payer(true, 20_000_000),
+        &mut Rewards::none(),
     )
     .unwrap();
     assert!(paid.lovelace > 1_500_000);
@@ -1011,6 +1022,7 @@ fn a_box_too_poor_to_come_back_says_so_and_an_account_can_pay() {
         &boxes,
         &sk,
         owner.clone().rerandomize().unwrap(),
+        &mut Rewards::none(),
     )
     .unwrap_err();
     assert!(
@@ -1024,6 +1036,7 @@ fn a_box_too_poor_to_come_back_says_so_and_an_account_can_pay() {
         &sk,
         owner.clone().rerandomize().unwrap(),
         &payer(true, 20_000_000),
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(paid.lovelace, 1_800_000);
@@ -1052,6 +1065,7 @@ fn a_box_worth_less_than_the_fee_cant_pay_its_way_back() {
         &boxes,
         &sk,
         owner.clone().rerandomize().unwrap(),
+        &mut Rewards::none(),
     )
     .unwrap_err();
     assert!(
@@ -1065,6 +1079,7 @@ fn a_box_worth_less_than_the_fee_cant_pay_its_way_back() {
         &sk,
         owner.clone().rerandomize().unwrap(),
         &seedelf_payer(sk, 0xf2, 1_000_000),
+        &mut Rewards::none(),
     )
     .unwrap_err();
     assert!(
@@ -1079,6 +1094,7 @@ fn a_box_worth_less_than_the_fee_cant_pay_its_way_back() {
         &sk,
         owner.clone().rerandomize().unwrap(),
         &seedelf_payer(sk, 0xf2, 20_000_000),
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(back.lovelace, pool.denom + 20_000_000 - back.fee);
@@ -1139,6 +1155,7 @@ fn a_box_too_poor_to_come_back_is_paid_for_from_the_private_balance() {
         &sk,
         owner.clone().rerandomize().unwrap(),
         &payer,
+        &mut Rewards::none(),
     )
     .unwrap();
     // The box and the UTxO come back together, in one output holding the token, less the fee.
@@ -1169,6 +1186,7 @@ fn a_box_too_poor_to_come_back_is_paid_for_from_the_private_balance() {
         &sk,
         owner.clone().rerandomize().unwrap(),
         &small,
+        &mut Rewards::none(),
     )
     .unwrap_err();
     assert!(
@@ -1185,6 +1203,7 @@ fn a_box_too_poor_to_come_back_is_paid_for_from_the_private_balance() {
         &sk,
         owner.rerandomize().unwrap(),
         &seedelf_payer(sk, 0xf4, 5_000_000),
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(back.lovelace, 10_000_000 + 5_000_000 - back.fee);
@@ -1209,6 +1228,7 @@ fn a_private_payer_holding_more_ada_than_there_is_is_refused_in_words() {
             &sk,
             owner.clone().rerandomize().unwrap(),
             &seedelf_payer(sk, 0xf5, lovelace),
+            &mut Rewards::none(),
         )
     };
     let err = back(u64::MAX).unwrap_err().to_string();
@@ -1237,10 +1257,126 @@ fn a_classic_box_comes_back_paid_by_an_account_too() {
         &sk,
         owner.clone().rerandomize().unwrap(),
         &payer(true, 20_000_000),
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(paid.lovelace, 10_000_000);
     assert!(paid.token.is_none());
+}
+
+/// What a `tx` withdraws, from which reward accounts.
+fn withdrawals(tx: &[u8]) -> Vec<(Vec<u8>, u64)> {
+    let tx = MultiEraTx::decode(tx).unwrap();
+    tx.as_conway()
+        .unwrap()
+        .transaction_body
+        .withdrawals
+        .as_ref()
+        .map(|w| w.iter().map(|(a, l)| (a.to_vec(), *l)).collect())
+        .unwrap_or_default()
+}
+
+// Chunk 43: what sits in a pool's mix_logic reward account goes to the
+// wallet's own output: a mix's change, and a withdraw's register whoever
+// pays, so a box too poor to come back alone comes back with it.
+#[test]
+fn a_token_pools_reward_balance_goes_to_the_change_or_the_register() {
+    const WINDFALL: u64 = 500_000_000;
+    let sk = Scalar::from(777u64);
+    let owner = Register::create(sk).unwrap();
+    let poor = Protocol {
+        denom: 1_500_000,
+        token: Some(BoxToken {
+            policy: [0xab; 28],
+            name: vec![0xcd; 32],
+            quantity: u64::MAX,
+        }),
+        ..lj_pool()
+    };
+    let rewards = || Rewards::of([(poor.mix_logic_hash, WINDFALL)]);
+    let account = seedelf_core::withdraw_zero::reward_account(&poor.mix_logic_hash, true);
+    let boxes = vec![made_up_box(&poor, Some(&sk), 0x30)];
+
+    // The box paying: too poor alone (CantPayBack above), it comes back with it.
+    let back = lovejoin::withdraw(
+        &params(),
+        &poor,
+        &boxes,
+        &sk,
+        owner.clone().rerandomize().unwrap(),
+        &mut rewards(),
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawals(&back.tx.tx_bytes.0),
+        vec![(account.clone(), WINDFALL)]
+    );
+    assert_eq!(back.taken, WINDFALL);
+    assert_eq!(back.lovelace, 1_500_000 + WINDFALL - back.fee);
+
+    // An account paying: the register holds it, so the account pays the fee
+    // alone, with nothing to make up.
+    let paid = lovejoin::withdraw_paid(
+        &params(),
+        &poor,
+        &boxes,
+        &sk,
+        owner.clone().rerandomize().unwrap(),
+        &payer(true, 20_000_000),
+        &mut rewards(),
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawals(&paid.tx.tx_bytes.0),
+        vec![(account.clone(), WINDFALL)]
+    );
+    assert_eq!(paid.lovelace, 1_500_000 + WINDFALL);
+    assert_eq!(paid.change.unwrap().lovelace, 20_000_000 - paid.fee);
+
+    // A private UTxO paying: the register holds the box, the UTxO and it.
+    let private = lovejoin::withdraw_private(
+        &params(),
+        &poor,
+        &boxes,
+        &sk,
+        owner.rerandomize().unwrap(),
+        &seedelf_payer(sk, 0xf2, 20_000_000),
+        &mut rewards(),
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawals(&private.tx.tx_bytes.0),
+        vec![(account.clone(), WINDFALL)]
+    );
+    assert_eq!(
+        private.lovelace,
+        1_500_000 + 20_000_000 + WINDFALL - private.fee
+    );
+
+    // A mix of the token pool's boxes: into the change, every box as it was.
+    let pool = lj_pool();
+    let mixed: Vec<PoolBox> = (0..3).map(|i| made_up_box(&pool, None, 0x40 + i)).collect();
+    let mut rewards = Rewards::of([(pool.mix_logic_hash, WINDFALL)]);
+    let mix = lovejoin::mix(
+        &params(),
+        &pool,
+        &mixed,
+        &payer(true, 20_000_000),
+        &mut rewards,
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawals(&mix.tx.tx_bytes.0),
+        vec![(
+            seedelf_core::withdraw_zero::reward_account(&pool.mix_logic_hash, true),
+            WINDFALL
+        )]
+    );
+    assert_eq!(mix.change.lovelace, 20_000_000 + WINDFALL - mix.fee);
+    for out in &mix.outputs {
+        assert!(PoolBox::from_resolved(out.utxo.clone(), &pool).is_some());
+    }
+    assert_eq!(rewards, Rewards::none());
 }
 
 fn token_holding(
@@ -1351,8 +1487,17 @@ fn a_token_chain_deposits_mixes_and_comes_back() {
         mix_signers: 1,
     };
     let tokens = vec![token_holding(&pool, 0x10, 3_000_000, 1, None)];
-    let chain =
-        lovejoin::chain_from(&params(), &pool, &funding, &tokens, &owners, 2, &others).unwrap();
+    let chain = lovejoin::chain_from(
+        &params(),
+        &pool,
+        &funding,
+        &tokens,
+        &owners,
+        2,
+        &others,
+        &mut Rewards::none(),
+    )
+    .unwrap();
     // A deposit and four mixes: one box fanned out two waves deep.
     assert_eq!(chain.txs.len(), 5);
     assert_eq!(chain.leaves.len(), 1);
@@ -1364,6 +1509,7 @@ fn a_token_chain_deposits_mixes_and_comes_back() {
         std::slice::from_ref(leaf),
         &sk,
         owner.clone().rerandomize().unwrap(),
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(back.token.unwrap().1, pool.token.unwrap().quantity);
@@ -1401,7 +1547,14 @@ fn the_mainnet_parameters_take_a_token_pool_too() {
     let boxes: Vec<PoolBox> = (0..3)
         .map(|i| made_up_box(&pool, None, 0x20 + 0x10 * i))
         .collect();
-    lovejoin::mix(&mainnet_params(), &pool, &boxes, &payer(false, 50_000_000)).unwrap();
+    lovejoin::mix(
+        &mainnet_params(),
+        &pool,
+        &boxes,
+        &payer(false, 50_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap();
 }
 
 /// What a transaction reads: its reference inputs, as `(transaction, index)`.
@@ -1567,6 +1720,7 @@ fn a_token_pools_deposit_reads_its_reference_utxo() {
         &others,
         &session(true),
         1,
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(

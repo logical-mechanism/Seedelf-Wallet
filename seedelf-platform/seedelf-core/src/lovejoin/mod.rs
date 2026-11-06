@@ -26,6 +26,11 @@
 //!   with giveme.my's collateral and no key of ours on it. One Schnorr proof
 //!   per box binds every output and input, so the fee is settled by building,
 //!   proving and measuring until it stops moving.
+//! - **The reward balance:** a mix and a withdraw run `mix_logic` by
+//!   withdrawing from its reward account, and the ledger takes only the
+//!   account's whole balance. That's 0 unless someone put money there
+//!   ([`Rewards`]), and then the first transaction to take it keeps it: the
+//!   wallet's take it into the user's own output (chunk 43).
 //!
 //! A [`chain`] is a deposit and each of its boxes fanned out; [`again`] fans
 //! out boxes of ours already in the pool, with no deposit.
@@ -69,6 +74,7 @@ use rand_core::{OsRng, RngCore};
 use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
+use std::collections::BTreeMap;
 use uplc::tx::to_plutus_data::ToPlutusData;
 
 mod box_value;
@@ -565,6 +571,47 @@ pub struct Payer {
     pub signers: usize,
 }
 
+/// What sits in each pool's `mix_logic` reward account, by its hash, as the
+/// caller read it (chunk 43). Anyone can put money there with no witness of
+/// `mix_logic`'s: a stake pool that names the account and retires has its
+/// deposit refunded there, and a proposal that names it has its deposit back
+/// there. The ledger takes a withdrawal only of an account's whole balance,
+/// so while one sits there it refuses every mix and withdraw that withdraws
+/// less, at no cost, until someone takes it all and keeps it. The scripts
+/// never read the amount.
+///
+/// It hands a pool's balance to the first transaction built in that pool,
+/// and 0 to every one after, so one `Rewards` goes through a whole chain and
+/// whatever is built after it in the same breath. A transaction that fails to
+/// build takes nothing; a chain that fails part-way keeps what its mixes
+/// before took, so a caller that tries again starts from its own copy.
+/// [`Rewards::none`] builds what the wallet always built.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Rewards(BTreeMap<[u8; 28], u64>);
+
+impl Rewards {
+    /// Nothing in any pool's account: every transaction withdraws 0.
+    pub fn none() -> Self {
+        Rewards::default()
+    }
+
+    /// Each pool's balance, by its `mix_logic` hash.
+    pub fn of(balances: impl IntoIterator<Item = ([u8; 28], u64)>) -> Self {
+        Rewards(balances.into_iter().filter(|(_, l)| *l > 0).collect())
+    }
+
+    /// What `protocol`'s account still holds for the next transaction there.
+    pub fn balance(&self, protocol: &Protocol) -> u64 {
+        self.0.get(&protocol.mix_logic_hash).copied().unwrap_or(0)
+    }
+
+    /// Hands `protocol`'s balance to a transaction just built, which took it
+    /// all: the next one there takes 0.
+    fn taken(&mut self, protocol: &Protocol) {
+        self.0.remove(&protocol.mix_logic_hash);
+    }
+}
+
 /// The least an ADA-only output at `address` may hold.
 fn least_change(params: &ProtocolParameters, address: &Address) -> Result<u64> {
     crate::transaction::calculate_min_required_utxo(Output::new(address.clone(), 1_000_000), params)
@@ -820,9 +867,14 @@ pub struct Mix {
     pub tx: BuiltTransaction,
     pub fee: u64,
     pub outputs: Vec<PoolBox>,
+    /// The payer's ADA and what it took from `mix_logic`'s reward account,
+    /// less the fee.
     pub change: Coin,
     /// Where each input box (in the order given) went among `outputs`.
     pub moved_to: Vec<usize>,
+    /// What it took from `mix_logic`'s reward account ([`Rewards`]), into
+    /// `change`: 0 nearly always.
+    pub taken: u64,
 }
 
 /// A random scalar in `[1, r)`.
@@ -860,12 +912,14 @@ fn list(items: Vec<PlutusData>) -> PlutusData {
 }
 
 /// Mixes `boxes` (two or more, none of them ours to know) into as many fresh
-/// ones, paid by `payer`. Measured against `mix_logic` before it's returned.
+/// ones, paid by `payer`, taking what `rewards` holds for the pool into the
+/// change. Measured against `mix_logic` before it's returned.
 pub fn mix(
     params: &ProtocolParameters,
     protocol: &Protocol,
     boxes: &[PoolBox],
     payer: &Payer,
+    rewards: &mut Rewards,
 ) -> Result<Mix> {
     // A mix spends the pool's scripts, so it always puts collateral up; only a
     // seed, which makes no mixes, ever goes without, and never reaches here.
@@ -879,6 +933,7 @@ pub fn mix(
         boxes,
         payer,
         MixCollateral::Own(collateral),
+        rewards,
     )
 }
 
@@ -894,8 +949,16 @@ pub fn mix_giveme(
     protocol: &Protocol,
     boxes: &[PoolBox],
     payer: &Payer,
+    rewards: &mut Rewards,
 ) -> Result<Mix> {
-    mix_with(params, protocol, boxes, payer, MixCollateral::Giveme)
+    mix_with(
+        params,
+        protocol,
+        boxes,
+        payer,
+        MixCollateral::Giveme,
+        rewards,
+    )
 }
 
 /// Who puts up a mix's collateral.
@@ -913,6 +976,7 @@ fn mix_with(
     boxes: &[PoolBox],
     payer: &Payer,
     collateral: MixCollateral<'_>,
+    rewards: &mut Rewards,
 ) -> Result<Mix> {
     let n = boxes.len();
     if n < 2 {
@@ -976,7 +1040,21 @@ fn mix_with(
     let redeemer = constr(1, vec![list(proofs)])
         .encode_fragment()
         .map_err(|e| anyhow!("{e}"))?;
-    let withdraw = WithdrawZero::new(&protocol.mix_logic_hash, protocol.network_flag, &redeemer)?;
+    // The reward account's whole balance, as the ledger takes no less: into
+    // the change, the one output the scripts leave free. The proofs bind only
+    // the boxes, so nothing else moves.
+    let taken = rewards.balance(protocol);
+    let withdraw = WithdrawZero::new(
+        &protocol.mix_logic_hash,
+        protocol.network_flag,
+        taken,
+        &redeemer,
+    )?;
+    let paying = payer
+        .fee
+        .lovelace
+        .checked_add(taken)
+        .context("Lovejoin's reward account holds more ADA than there is")?;
 
     let mut all_inputs: Vec<Input> = sorted.iter().map(|b| b.input()).collect();
     all_inputs.push(payer.fee.input());
@@ -984,9 +1062,7 @@ fn mix_with(
 
     let least = least_change(params, &payer.address)?;
     let stage = |fee: u64, budgets: Option<&Budgets>| -> Result<BuiltTransaction> {
-        let change = payer
-            .fee
-            .lovelace
+        let change = paying
             .checked_sub(fee)
             .filter(|c| *c >= least)
             .context("There isn't enough ADA left to pay this mix's fee and keep the change")?;
@@ -1118,7 +1194,7 @@ fn mix_with(
         .collect();
     let change = Coin {
         utxo: resolved.get(n).context("The mix has no change")?.clone(),
-        lovelace: payer.fee.lovelace - fee,
+        lovelace: paying - fee,
     };
     let moved_to = boxes
         .iter()
@@ -1130,12 +1206,14 @@ fn mix_with(
             perm[i]
         })
         .collect();
+    rewards.taken(protocol);
     Ok(Mix {
         tx,
         fee,
         outputs,
         change,
         moved_to,
+        taken,
     })
 }
 
@@ -1145,12 +1223,17 @@ fn mix_with(
 pub struct Withdraw {
     pub tx: BuiltTransaction,
     pub fee: u64,
+    /// What the register holds: the boxes' ADA and what was taken from
+    /// `mix_logic`'s reward account, less the fee where the boxes pay it.
     pub lovelace: u64,
     pub register: Register,
     /// A token pool's token, and how much of it the register holds.
     pub token: Option<(BoxToken, u64)>,
     /// The payer's change, for [`withdraw_paid`].
     pub change: Option<Coin>,
+    /// What it took from `mix_logic`'s reward account ([`Rewards`]), into the
+    /// register: 0 nearly always.
+    pub taken: u64,
 }
 
 /// A withdraw whose boxes can't pay their own way back: what's left of them
@@ -1200,15 +1283,26 @@ pub fn owner_context(tx_cbor: &[u8], mix_box_hash: &[u8; 28]) -> Result<[u8; 32]
 
 /// Takes `boxes`, all owned by `owner`, into `destination` (a fresh
 /// re-randomization of the Seedelf register), paying the fee from them, with
-/// giveme.my's collateral. Measured against the scripts before it's returned.
+/// giveme.my's collateral. What `rewards` holds for the pool goes into the
+/// register too, as it does for [`withdraw_paid`] and [`withdraw_private`].
+/// Measured against the scripts before it's returned.
 pub fn withdraw(
     params: &ProtocolParameters,
     protocol: &Protocol,
     boxes: &[PoolBox],
     owner: &Scalar,
     destination: Register,
+    rewards: &mut Rewards,
 ) -> Result<Withdraw> {
-    withdraw_with(params, protocol, boxes, owner, destination, Paying::Boxes)
+    withdraw_with(
+        params,
+        protocol,
+        boxes,
+        owner,
+        destination,
+        Paying::Boxes,
+        rewards,
+    )
 }
 
 /// [`withdraw`] with the fee paid by `payer`, a key account, which puts up
@@ -1225,6 +1319,7 @@ pub fn withdraw_paid(
     owner: &Scalar,
     destination: Register,
     payer: &Payer,
+    rewards: &mut Rewards,
 ) -> Result<Withdraw> {
     withdraw_with(
         params,
@@ -1233,6 +1328,7 @@ pub fn withdraw_paid(
         owner,
         destination,
         Paying::Account(payer),
+        rewards,
     )
 }
 
@@ -1264,6 +1360,7 @@ pub fn withdraw_private(
     owner: &Scalar,
     destination: Register,
     payer: &SeedelfPayer,
+    rewards: &mut Rewards,
 ) -> Result<Withdraw> {
     withdraw_with(
         params,
@@ -1272,6 +1369,7 @@ pub fn withdraw_private(
         owner,
         destination,
         Paying::Seedelf(payer),
+        rewards,
     )
 }
 
@@ -1314,6 +1412,7 @@ fn withdraw_with(
     owner: &Scalar,
     destination: Register,
     paying: Paying<'_>,
+    rewards: &mut Rewards,
 ) -> Result<Withdraw> {
     let payer = match paying {
         Paying::Account(p) => Some(p),
@@ -1347,6 +1446,12 @@ fn withdraw_with(
     let to = wallet_contract(protocol.network_flag, config.contract.wallet_contract_hash);
     let datum = destination.to_vec()?;
     let total = protocol.denom * sorted.len() as u64;
+    // The reward account's whole balance, as the ledger takes no less: into
+    // the register, with the boxes, whoever pays.
+    let taken = rewards.balance(protocol);
+    let coming = total
+        .checked_add(taken)
+        .context("Lovejoin's reward account holds more ADA than there is")?;
     let token = protocol.box_value().token_total(sorted.len())?;
     let least = match payer {
         None => 0,
@@ -1384,17 +1489,17 @@ fn withdraw_with(
     };
     let minimum =
         |lovelace: u64| crate::transaction::calculate_min_required_utxo(back(lovelace)?, params);
-    // Paid: the boxes' ADA, or what the output needs if that's more, the
-    // payer making up the difference.
+    // Paid: the boxes' ADA and the reward balance, or what the output needs
+    // if that's more, the payer making up the difference.
     let paid_back = match payer {
         None => 0,
         Some(_) => {
-            let first = minimum(total)?;
-            total.max(minimum(total.max(first))?)
+            let first = minimum(coming)?;
+            coming.max(minimum(coming.max(first))?)
         }
     };
-    let topped = paid_back.saturating_sub(total);
-    // What the register gets: a Seedelf UTxO's ADA comes back with the boxes, less the fee. Less than the fee
+    let topped = paid_back.saturating_sub(coming);
+    // What the register gets: a Seedelf UTxO's ADA comes back with the boxes and the reward balance, less the fee. Less than the fee
     // itself is nothing, which the output's minimum then refuses as CantPayBack (or PrivateTooSmall), as it does
     // a little more: a plain error here read as a check that couldn't be made (session 5's review, L1). A UTxO an
     // index reports past what a u64 holds with the boxes is refused in words: the store's module traps on an
@@ -1402,7 +1507,7 @@ fn withdraw_with(
     let into_register = |fee: u64| -> Result<u64> {
         Ok(match (payer, seedelf) {
             (Some(_), _) => paid_back,
-            (None, Some(s)) => total
+            (None, Some(s)) => coming
                 .checked_add(s.coin.lovelace)
                 .with_context(|| {
                     format!(
@@ -1412,7 +1517,7 @@ fn withdraw_with(
                     )
                 })?
                 .saturating_sub(fee),
-            (None, None) => total.saturating_sub(fee),
+            (None, None) => coming.saturating_sub(fee),
         })
     };
 
@@ -1492,11 +1597,13 @@ fn withdraw_with(
                 .build_conway_raw()
                 .context("Failed To Build The Withdraw")?;
             let reward = budgets.and_then(|b| b.withdraw(0)).unwrap_or(DRAFT_BUDGET);
-            WithdrawZero::new(&protocol.mix_logic_hash, protocol.network_flag, redeemer)?.patch(
-                built,
-                units(reward),
-                &params.cost_model_v3,
-            )
+            WithdrawZero::new(
+                &protocol.mix_logic_hash,
+                protocol.network_flag,
+                taken,
+                redeemer,
+            )?
+            .patch(built, units(reward), &params.cost_model_v3)
         };
     // Owner { proofs }, one Schnorr proof per box in the ledger's order.
     let prove = |tx: &BuiltTransaction| -> Result<Vec<u8>> {
@@ -1606,6 +1713,7 @@ fn withdraw_with(
                             lovelace: p.fee.lovelace - fee - topped,
                         }),
                     };
+                    rewards.taken(protocol);
                     return Ok(Withdraw {
                         tx,
                         fee,
@@ -1613,6 +1721,7 @@ fn withdraw_with(
                         register: destination,
                         token,
                         change,
+                        taken,
                     });
                 }
                 // Even, so giveme.my's collateral return (5 ₳ − 3/2 × fee) is
@@ -2092,6 +2201,8 @@ pub struct ChainTx {
     pub kind: &'static str,
     pub tx: BuiltTransaction,
     pub fee: u64,
+    /// What a mix took from `mix_logic`'s reward account ([`Mix::taken`]).
+    pub taken: u64,
 }
 
 /// A chain through Lovejoin: its transactions in order, our boxes at the
@@ -2110,7 +2221,8 @@ pub struct Chain {
 /// deep with fresh boxes drawn at random from `pool` (never one twice). Each
 /// wave's mixes go in a random order, so the order doesn't point at our
 /// branch. Every transaction pays from the one before's change; the
-/// collateral is never spent. Each is measured against the scripts.
+/// collateral is never spent. Each is measured against the scripts. Its
+/// first mix takes what `rewards` holds for the pool ([`Rewards`]).
 pub fn chain(
     params: &ProtocolParameters,
     protocol: &Protocol,
@@ -2118,14 +2230,16 @@ pub fn chain(
     owners: &[Register],
     depth: u32,
     pool: &[PoolBox],
+    rewards: &mut Rewards,
 ) -> Result<Chain> {
-    chain_from(params, protocol, funding, &[], owners, depth, pool)
+    chain_from(params, protocol, funding, &[], owners, depth, pool, rewards)
 }
 
 /// [`chain`] whose deposit spends `tokens` too, UTxOs of the same account
 /// holding a token pool's token: its boxes take `Q` each, and what they
 /// don't take is [`Chain::token_change`]. The mixes are paid from ADA alone,
 /// as ever.
+#[allow(clippy::too_many_arguments)]
 pub fn chain_from(
     params: &ProtocolParameters,
     protocol: &Protocol,
@@ -2134,13 +2248,14 @@ pub fn chain_from(
     owners: &[Register],
     depth: u32,
     pool: &[PoolBox],
+    rewards: &mut Rewards,
 ) -> Result<Chain> {
     let leg = Leg {
         protocol,
         owners,
         pool,
     };
-    chain_across(params, funding, tokens, &[leg], depth, 3)
+    chain_across(params, funding, tokens, &[leg], depth, 3, rewards)
 }
 
 /// One pool's part of a chain that spans pools: the pool, a register for each
@@ -2157,7 +2272,8 @@ pub struct Leg<'a> {
 /// boxes fanned out in its own pool, a leg at a time, every mix paid from the
 /// one before's change. [`Chain::leaves`] are in the legs' order: each of a
 /// leg's boxes ends as one leaf, so a leg's leaves are as many as its owners.
-/// One leg three wide is [`chain_from`] exactly.
+/// One leg three wide is [`chain_from`] exactly. Each leg's first mix takes
+/// what `rewards` holds for its pool, and the chain's last change carries it.
 pub fn chain_across(
     params: &ProtocolParameters,
     funding: &Funding,
@@ -2165,6 +2281,7 @@ pub fn chain_across(
     legs: &[Leg],
     depth: u32,
     width: usize,
+    rewards: &mut Rewards,
 ) -> Result<Chain> {
     check_width(width)?;
     let Funding {
@@ -2191,6 +2308,7 @@ pub fn chain_across(
         kind: "deposit",
         tx: deposit.tx,
         fee: deposit.fee,
+        taken: 0,
     }];
     let mut leaves = Vec::new();
     let mut change = deposit.change;
@@ -2203,7 +2321,16 @@ pub fn chain_across(
             address: address.clone(),
             signers: *mix_signers,
         };
-        let fanned = fan_out(params, leg.protocol, start, &payer, depth, width, fresh)?;
+        let fanned = fan_out(
+            params,
+            leg.protocol,
+            start,
+            &payer,
+            depth,
+            width,
+            fresh,
+            rewards,
+        )?;
         txs.extend(fanned.txs);
         leaves.extend(fanned.leaves);
         change = fanned.change;
@@ -2221,7 +2348,8 @@ pub fn chain_across(
 /// deposit's: every output of each wave mixed again in the next, in a random
 /// order. There's no deposit: the first mix pays from `payer.fee`, and each
 /// after from the one before's change; the collateral is never spent. For a
-/// chain cut short, or boxes that haven't moved since.
+/// chain cut short, or boxes that haven't moved since. Its first mix takes
+/// what `rewards` holds for the pool.
 pub fn again(
     params: &ProtocolParameters,
     protocol: &Protocol,
@@ -2229,11 +2357,13 @@ pub fn again(
     boxes: &[PoolBox],
     depth: u32,
     pool: &[PoolBox],
+    rewards: &mut Rewards,
 ) -> Result<Chain> {
-    again_at(params, protocol, payer, boxes, depth, 3, pool)
+    again_at(params, protocol, payer, boxes, depth, 3, pool, rewards)
 }
 
 /// [`again`], `width` boxes a mix (chunk 34's D3).
+#[allow(clippy::too_many_arguments)]
 pub fn again_at(
     params: &ProtocolParameters,
     protocol: &Protocol,
@@ -2242,13 +2372,23 @@ pub fn again_at(
     depth: u32,
     width: usize,
     pool: &[PoolBox],
+    rewards: &mut Rewards,
 ) -> Result<Chain> {
     check_width(width)?;
     if boxes.is_empty() {
         bail!("There's no box to mix again");
     }
     let fresh = fresh_for(boxes.len(), depth, width, pool, boxes)?;
-    fan_out(params, protocol, boxes.to_vec(), payer, depth, width, fresh)
+    fan_out(
+        params,
+        protocol,
+        boxes.to_vec(),
+        payer,
+        depth,
+        width,
+        fresh,
+        rewards,
+    )
 }
 
 /// A session's collateral, mixed once (the owner, 2026-10-23): the deposit
@@ -2267,7 +2407,9 @@ pub struct Tail {
 /// change, then mixes that box once ([`collateral_mix`]). Both are measured
 /// before either is on chain, as a chain's transactions are. `pool` is the
 /// pool's boxes the mix may draw from: never the wallet's own, nor any its
-/// chain drew, which the caller leaves out.
+/// chain drew, which the caller leaves out. The mix takes what `rewards`
+/// still holds for the pool: nothing once the chain before it mixed there.
+#[allow(clippy::too_many_arguments)]
 pub fn collateral_tail(
     params: &ProtocolParameters,
     protocol: &Protocol,
@@ -2276,6 +2418,7 @@ pub fn collateral_tail(
     pool: &[PoolBox],
     address: &Address,
     signers: usize,
+    rewards: &mut Rewards,
 ) -> Result<Tail> {
     let deposit = deposit(
         params,
@@ -2297,6 +2440,7 @@ pub fn collateral_tail(
         pool,
         address,
         signers,
+        rewards,
     )?;
     Ok(Tail { deposit, mix, leaf })
 }
@@ -2306,7 +2450,9 @@ pub fn collateral_tail(
 /// under giveme.my's collateral ([`mix_giveme`]): a session's collateral has
 /// gone into `boxed`, so nothing else of the session's can be put up. Built
 /// again with fresh draws when one drawn before is spent by the time it goes.
-/// Returns the mix and the box it made of `boxed`.
+/// Returns the mix and the box it made of `boxed`. It takes what `rewards`
+/// holds for the pool into its change.
+#[allow(clippy::too_many_arguments)]
 pub fn collateral_mix(
     params: &ProtocolParameters,
     protocol: &Protocol,
@@ -2315,6 +2461,7 @@ pub fn collateral_mix(
     pool: &[PoolBox],
     address: &Address,
     signers: usize,
+    rewards: &mut Rewards,
 ) -> Result<(Mix, PoolBox)> {
     let fresh = fresh_for(1, 1, 3, pool, std::slice::from_ref(boxed))?;
     let mut boxes = vec![boxed.clone()];
@@ -2325,7 +2472,7 @@ pub fn collateral_mix(
         address: address.clone(),
         signers,
     };
-    let mix = mix_giveme(params, protocol, &boxes, &payer)?;
+    let mix = mix_giveme(params, protocol, &boxes, &payer, rewards)?;
     let leaf = mix.outputs[mix.moved_to[0]].clone();
     Ok((mix, leaf))
 }
@@ -2388,7 +2535,9 @@ fn fresh_for(
 /// Fans each of `start` (all ours) out `depth` waves deep, `width` boxes a
 /// mix, with boxes from `fresh`, each wave's mixes in a random order so the
 /// order doesn't point at our branch. The first mix pays from `payer.fee`;
-/// each after from the one before's change.
+/// each after from the one before's change. The first takes what `rewards`
+/// holds for the pool, which each change after carries on.
+#[allow(clippy::too_many_arguments)]
 fn fan_out(
     params: &ProtocolParameters,
     protocol: &Protocol,
@@ -2397,6 +2546,7 @@ fn fan_out(
     depth: u32,
     width: usize,
     mut fresh: Vec<PoolBox>,
+    rewards: &mut Rewards,
 ) -> Result<Chain> {
     let mut txs = Vec::new();
     let mut change = payer.fee.clone();
@@ -2416,7 +2566,7 @@ fn fan_out(
                 fee: change.clone(),
                 ..payer.clone()
             };
-            let mixed = mix(params, protocol, &inputs, &paying)?;
+            let mixed = mix(params, protocol, &inputs, &paying, rewards)?;
             if ours.contains(boxed) {
                 ours_next.push(mixed.outputs[mixed.moved_to[0]].clone());
             }
@@ -2426,6 +2576,7 @@ fn fan_out(
                 kind: "mix",
                 tx: mixed.tx,
                 fee: mixed.fee,
+                taken: mixed.taken,
             });
         }
         ours = ours_next;
