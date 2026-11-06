@@ -14,18 +14,23 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ActivityService } from "../src/background/activity";
 import { Collateral } from "../src/background/collateral";
+import { DataParts } from "../src/background/data-layer";
 import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, SESSION_LOVEJOIN_SENDING, type PoolRef } from "../src/background/lovejoin";
+import { HOLDER } from "../src/background/lovejoin-pools";
 import { Minswap } from "../src/background/minswap";
 import { pendingKey } from "../src/background/pending";
+import { privateIndexClient } from "../src/background/private-index";
 import { runNetworks, type Runner } from "../src/background/runs";
 import { SessionService } from "../src/background/sessions";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { NETWORKS, type NetworkName } from "../src/networks";
-import { publicFunded } from "./chain-fixtures";
+import { atSession, publicFunded } from "./chain-fixtures";
+import { fakeIndex, indexRowOf } from "./fake-index";
+import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
-import { loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
-import { ADA, ADA_POOL } from "./v2-pools";
+import { loadTestWasm, memoryArea, ownedUtxos, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_VIEW, adaStrangers, retiredAlready } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -124,7 +129,12 @@ async function classicBox(t: T, tx: string): Promise<KoiosUtxo> {
   } as KoiosUtxo;
 }
 
-/** A chain of the wallet's in the classic pool, recorded and sent whole: its leaf is `leaf`, due an hour ago. */
+/**
+ * A chain of the wallet's in the classic pool, recorded and sent whole: its leaf is `leaf`, due an hour ago, on a
+ * record past 1.8.0's first run. Before it, the run that finds the box retires the classic pool and brings it back with
+ * the retired pools' (retireOnce), so a test of the box's own withdraw ran Bring every box back's instead, and the
+ * scheduled withdraw's catch went untested (1.8.0's release review, R6).
+ */
 async function dueBox(t: T, lj: LovejoinService, leaf: string): Promise<void> {
   const txs = [
     { kind: "deposit" as const, txCbor: "", txHash: "d0".repeat(32), fee: "0" },
@@ -136,6 +146,7 @@ async function dueBox(t: T, lj: LovejoinService, leaf: string): Promise<void> {
   // The unlock an hour ago drew its fresh waits already (unlockDraws), as wallet() has it.
   const kept = (await t.store.get<{ due: number[] }>("lovejoin.preprod"))!;
   await t.store.set("lovejoin.preprod", { ...kept, due: [t.clock.now - HOUR], unlock: t.clock.now - HOUR });
+  await retiredAlready(t.store, "preprod", t.clock.now - HOUR);
 }
 
 /** Bring every box back now's sealed record. */
@@ -509,13 +520,44 @@ describe("a trap under a catch that takes any failure (1.6.0's release review, L
   });
 
   it("hands a trap in a funding's look for the 5 ₳ pool on, the funding going on without its reserve where that look fails otherwise", async () => {
-    const funded = async (failure: unknown) => {
+    // The look is the review's one read of every pool's boxes (lovejoin.ts collateralRoom, rooms), on mainnet from the
+    // data layer's token feed where it covers the pool: a trap there, in the address of one of its rows (cip30Address,
+    // outside withKeys), is handed on, never answered as no read. A site's funding review reads the pools for its card's
+    // mark too (lovejoinRoomNow), so on either collateral switch; a top-up's review for its new collateral's mix alone
+    // (1.8.0's review of its fixes, r2-worker#1: a spy on collateralPool stood in for the trap here).
+    const holder = bech32("addr", Uint8Array.from([0x71, ...Buffer.from(HOLDER, "hex")]));
+    const five: PoolRef = { ...FIVE, reference: { ...FIVE.reference, address: holder }, scripts: (FIVE.scripts ?? []).map((s) => ({ ...s, address: holder })) };
+    const strangers = adaStrangers(32);
+    const mainnet = async (wasm: Partial<ReturnType<typeof loadTestWasm>>, { collateral = true, down = false } = {}) => {
       const t = testBalances({ owned: false });
       await t.wallet.create(PHRASE, PASSWORD);
       t.koios.evaluation = AGREES;
       t.koios.added.push({ ...ownedUtxos[0]!, tx_hash: "d1".repeat(32), tx_index: 0, value: "40000000" } as KoiosUtxo);
-      const lj = lovejoin(t, async () => [FIVE]);
-      vi.spyOn(lj, "collateralPool").mockRejectedValue(failure);
+      t.koios.addedToAccounts.push(...strangers);
+      await t.deps.preferences.set({ lovejoinCollateral: collateral });
+      const idx = fakeIndex();
+      idx.tokenPools = [ADA_VIEW.mixBoxHash];
+      idx.tokens = strangers.map((u) => ({ row: indexRowOf(u, 1000) }));
+      if (down) {
+        // The data layer's token pools down, and Koios after it.
+        idx.tokensFail = new Response("db-sync is down", { status: 503 });
+        const real = t.koios.fetch;
+        t.koios.fetch = async (url, init) => (String(url).includes("/credential_utxos") && String(init?.body ?? "").includes(ADA_VIEW.mixBoxHash) ? new Response("down", { status: 500 }) : real(url, init));
+      }
+      const index = privateIndexClient(
+        { koiosOnly: async () => false, parts: new DataParts(memoryArea(), () => t.clock.now), fetch: idx.fetch, limits: {} },
+        (n) => (n === "mainnet" ? "https://data.test" : undefined),
+      );
+      const real = loadTestWasm();
+      const lj = new LovejoinService({
+        ...t.deps,
+        index,
+        wasm: { ...real, ...wasm } as typeof real,
+        collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+        store: t.store,
+        pools: async () => [five],
+        random: () => 0.5,
+      });
       const sessions = new SessionService({
         ...t.deps,
         collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
@@ -525,10 +567,37 @@ describe("a trap under a catch that takes any failure (1.6.0's release review, L
         sleep: async () => undefined,
         alarm: { start: async () => undefined },
       });
-      return sessions.siteOutBuild("preprod", "https://example.org", "10000000", []);
+      // A site's session, its 5 ₳ collateral spent by the site: its top-up puts a new one in.
+      await t.store.set("sessions.mainnet", {
+        next: 1,
+        sessions: [
+          {
+            index: 0,
+            ownStake: true,
+            createdAt: t.clock.now,
+            txs: [{ kind: "out", txHash: "ab".repeat(32), at: t.clock.now, confirmed: true }],
+            site: { origin: "https://example.org" },
+          },
+        ],
+      });
+      t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "3000000"));
+      return sessions;
     };
-    for (const [what, trap] of traps()) await expect(funded(trap), what).rejects.toBe(trap);
-    expect((await funded(new Error("The server didn't answer."))).collateralReserve).toBeUndefined();
+    for (const [what, trap] of traps()) {
+      const trapping = {
+        cip30Address: () => {
+          throw trap;
+        },
+      };
+      for (const collateral of [true, false]) {
+        const sessions = await mainnet(trapping, { collateral });
+        await expect(sessions.siteOutBuild("mainnet", "https://example.org", "10000000", []), `${what}, collateral ${collateral}`).rejects.toBe(trap);
+      }
+      await expect((await mainnet(trapping)).topUpBuild("mainnet", 0, "3000000", []), what).rejects.toBe(trap);
+    }
+    const failing = await mainnet({}, { down: true });
+    expect((await failing.siteOutBuild("mainnet", "https://example.org", "10000000", [])).collateralReserve).toBeUndefined();
+    expect((await failing.topUpBuild("mainnet", 0, "3000000", [])).collateralReserve).toBeUndefined();
   });
 
   it("tells a funding's look at the 5 ₳ pool a read that fails, rather than answer none, a trap handed on as ever (1.6.0's review of the fixes, fx-may; last-3d, 2)", async () => {

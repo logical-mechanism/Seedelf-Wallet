@@ -921,6 +921,23 @@ fn every_width_measured() {
             for fee_at in [FeeAt::First, FeeAt::Middle, FeeAt::Last] {
                 let mix = build(&pool, &inputs(&pool, n, fee_at));
                 println!("{}", row(&mix, WALLET));
+                // What the wallet plans a mix of three or four on, before it
+                // measures one, covers its fee wherever the fee input sorts,
+                // on every pool: v2's too, which costs a little more than the
+                // others, and only the classic pools' fees were held to it
+                // (1.8.0's release review, tests-e2e#5).
+                let planned = match n {
+                    3 => Some(lovejoin::MIX_FEE_ESTIMATE),
+                    4 => Some(lovejoin::MIX_FEE_ESTIMATE_FOUR),
+                    _ => None,
+                };
+                if let Some(planned) = planned {
+                    assert!(
+                        mix.fee <= planned,
+                        "{}: over the {planned} planned",
+                        row(&mix, WALLET)
+                    );
+                }
                 if worst
                     .as_ref()
                     .is_none_or(|w| mix.total.steps > w.total.steps)

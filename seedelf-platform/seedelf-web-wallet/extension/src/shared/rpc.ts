@@ -1493,6 +1493,13 @@ export type DappAsk =
        * Not for a site connected already, which a no leaves connected.
        */
       declineWaitMs?: number;
+      /**
+       * Where the wallet last read v2's 5 ₳ pool, asking nobody, as taking a box of a private session's spare ADA now
+       * (sessions.ts lovejoinRoomKept): its card then says that ADA is mixed through Lovejoin with nothing after it.
+       * Absent, it adds that it is only if Lovejoin's pool has room when it comes back, as a swap's approval says it
+       * (1.8.0's release review, O3). No read is tied to a site's connect, so it's absent unless a read lately found room.
+       */
+      lovejoinRoom?: true;
     }
   | {
       kind: "sign-tx";
@@ -1661,7 +1668,7 @@ export interface SwapQuote {
 
 /**
  * What bringing a swap's session back through Lovejoin is expected to take
- * (Settings, Lovejoin): the 10 ₳ boxes its spare ADA pays for, the
+ * (Settings, Lovejoin): the 5 ₳ pool's boxes its spare ADA pays for, the
  * proceeds' too when they're ADA, at most (the pool may take fewer, or
  * none); their `mixes` at `depth`, about `mixFees` all together; and about
  * `withdrawFees` for them all to come back, each after a wait in `delay`
@@ -1996,6 +2003,14 @@ export interface SessionOutSummary extends WithdrawSummary {
    */
   collateralMix?: CollateralMix;
   /**
+   * A site's funding alone (siteOutBuild): v2's 5 ₳ pool, the one its return's spare ADA goes into, takes a box of it
+   * as Review read it, by a swap's Review's rule (priced's `skipped`: shown, at the network's floor, with room for a
+   * box), and takes new boxes now (usableNow). Its review then says that ADA is mixed; absent, only if Lovejoin's pool
+   * has room by then, which stays true once a pool fills, as the direct words wouldn't (1.8.0's release review, O3).
+   * A read that fails leaves it absent.
+   */
+  lovejoinRoom?: true;
+  /**
    * A Bootstrap's from the private balance: what its one payment carries beside its boxes and the deposit's reserve
    * for its way back, in lovelace, since it puts up no collateral and its return sweeps the deposit's change alone
    * (1.6.0's release review, 318-rust#0). What that sweep doesn't spend comes back. Absent for anything else.
@@ -2039,10 +2054,10 @@ export interface SessionBackSummary {
    */
   merged?: number;
   /**
-   * When the spare ADA goes through Lovejoin first: its boxes (10 ₳ each),
-   * the fan-out, and every fee of the chain. `lovelace` is then what comes
-   * back at once; each box comes back later, after a random wait in `delay`
-   * (hours, "1-6").
+   * When the spare ADA goes through Lovejoin first: its boxes (the 5 ₳
+   * pool's, and a token pool's at its own value), the fan-out, and every fee
+   * of the chain. `lovelace` is then what comes back at once; each box comes
+   * back later, after a random wait in `delay` (hours, "1-6").
    */
   lovejoin?: {
     boxes: number;
@@ -2458,6 +2473,12 @@ export interface LovejoinChainView {
   maybeSent?: true;
   /** Its mixes took four boxes each (chunk 34's D3); none: three. */
   width?: 4;
+  /**
+   * It stopped partway, and every pool it put boxes in is retired (chunk 44): nothing mixes them again there, and they
+   * come back as any pool's do, so its row says why it stopped alone, never that Mix my boxes again mixes the boxes it
+   * didn't (1.8.0's release review, W8).
+   */
+  retired?: true;
   /**
    * Its transactions in order, while it's being sent and the wallet holds
    * them: what each is, and whether it's on chain, sent and not seen yet,
@@ -3011,10 +3032,11 @@ export interface Requests {
   /**
    * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0): every box of the wallet's in every
    * pool comes back, one withdraw after another, with none of its waits, from a run started at once (lovejoin.ts
-   * bringAllBackNow); `pool`, from a pool's page, that pool's alone (`classic` for the classic pool's). `-stop` stops
-   * it, or forgets that it stopped.
+   * bringAllBackNow); `pool`, from a pool's page, that pool's alone (`classic` for the classic pool's); `retired`, with
+   * no pool, the retired pools' run again, Settings' Try again once it stopped by itself (1.8.0's release review, R4).
+   * `-stop` stops it, or forgets that it stopped.
    */
-  "lovejoin-bring-all-back": { payload: { pool?: string }; result: None };
+  "lovejoin-bring-all-back": { payload: { pool?: string; retired?: true }; result: None };
   "lovejoin-bring-all-back-stop": { payload: None; result: None };
   /**
    * Clears mixes from Lovejoin's Your mixes (the owner's test of 1.6.0): `entries`, the list's by id, and `sessions`,

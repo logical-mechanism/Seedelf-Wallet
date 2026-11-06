@@ -581,7 +581,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.lovejoin.releaseBootstrap(ctx.network, message.pool ?? CLASSIC).then(() => ({}));
     // Bring every box back now (Settings): asked, then its first run started now, not at the alarm's next minute.
     case "lovejoin-bring-all-back":
-      await ctx.lovejoin.bringAllBack(ctx.network, typeof message.pool === "string" ? message.pool : undefined);
+      await ctx.lovejoin.bringAllBack(ctx.network, typeof message.pool === "string" ? message.pool : undefined, message.retired === true);
       unawaited(ctx, ctx.lovejoin.withdrawDue(ctx.network));
       return {};
     case "lovejoin-bring-all-back-stop":

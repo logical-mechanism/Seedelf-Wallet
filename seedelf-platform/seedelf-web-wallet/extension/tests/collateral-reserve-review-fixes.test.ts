@@ -582,7 +582,7 @@ describe("1.6.0's release review, round 3b: the collateral's mix on the swap and
             createdAt: t.clock.now,
             txs: [{ kind: "out", txHash: out, at: t.clock.now, confirmed: true }],
             swap: { ...minswapEstimate.ask, amountOut: "906594100", minAmountOut: "902083681" },
-            auto: { approved: { minAmountOut: "902083681", fund: { lovelace: fund.toString(), tokens: [] } }, direct: false, lovejoin: { depth: 1, delay: "1-6" } },
+            auto: { approved: { minAmountOut: "902083681", fund: { lovelace: fund.toString(), tokens: [] } }, direct: false, lovejoin: { depth: 1, delay: "1-6", box: "5000000" } },
             ...(reserved ? { collateralReserve: true } : {}),
           },
         ],
@@ -833,7 +833,7 @@ describe("1.6.0's review of the fixes, fx-promise: the collateral's mix said by 
               aggregatorFee: "0",
             },
             direct: false,
-            lovejoin: { depth: o.depth ?? 1, delay: "1-6" },
+            lovejoin: { depth: o.depth ?? 1, delay: "1-6", box: "5000000" },
             ...(o.filled ? { filled: t.clock.now } : {}),
           },
           ...(o.reserved ? { collateralReserve: true } : {}),
@@ -1049,14 +1049,17 @@ describe("1.6.0's review of the fixes, fx-promise: the collateral's mix said by 
         ? read(createElement(FundingWayBack, { fee: summary.fee.total, lovejoin: true, perBox: "4.1", summary }))
         : read(createElement(TopUpCollateralNote, { summary }));
       expect(said, what).toContain("only if enough is left");
-      expect(said, what).not.toContain("the 5 ₳ come back at once");
+      expect(said, what).not.toContain("the 5 ₳ kept aside come back at once");
       expect(summary.collateralMix, what).toBe("ifLeft");
     }
-    // No 5 ₳ pool shown: nothing said of that mix.
+    // No 5 ₳ pool shown: nothing said of that mix, and the spare ADA said mixed only if a pool has room by then (1.8.0's
+    // release review, O3).
     const none = await wallet(15n * ADA + 3n * ADA);
     const plain = await runner(none, pooled(none, [])).siteOutBuild("preprod", "https://example.org", (10n * ADA).toString(), []);
     expect(plain.collateralMix).toBeUndefined();
-    expect(read(createElement(FundingWayBack, { fee: plain.fee.total, lovejoin: true, perBox: "4.1", summary: plain }))).not.toContain("only if enough is left");
+    const noneSaid = read(createElement(FundingWayBack, { fee: plain.fee.total, lovejoin: true, perBox: "4.1", summary: plain }));
+    expect(noneSaid).not.toContain("only if enough is left");
+    expect(noneSaid).toContain("if its pool has room by then");
   });
 
   it("a mix's review: mixed where its funding paid the reserve, which its chain sets aside; only if enough is left where it didn't; nothing with no 5 ₳ pool", async () => {
@@ -1160,7 +1163,7 @@ describe("1.6.0's review of the fixes, fx-promise: the collateral's mix said by 
           auto: {
             approved: { minAmountOut: "902083681", fund: { lovelace: (10n * ADA).toString(), tokens: [] }, aggregatorFee: "0" },
             direct: false,
-            lovejoin: { depth: 1, delay: "1-6" },
+            lovejoin: { depth: 1, delay: "1-6", box: "5000000" },
             paused: { at: t.clock.now, why: "short", landed: 1, total: 2 },
           },
           collateralReserve: true,
@@ -1213,8 +1216,11 @@ describe("1.6.0's review of the fixes, fx-promise: the collateral's mix said by 
     const into = await buying.outBuild("preprod", await buying.quote("preprod", minswapEstimate.ask));
     expect(into.collateralReserve).toBeUndefined();
     expect(into.collateralMix).toBe("ifLeft");
-    // Read last as taking none (one of other people's boxes there), or against the pools with no box of MIN's own,
-    // whose return can't build that mix (R3-10): nothing said, the read failing or not.
+    // Read last as taking none (one of other people's boxes there): nothing said. That read is kept, so the Review
+    // reads nothing again: its collateral's look answers from it (collateralRoom), whose free check this holds, one box
+    // free under that mix's two draws. fiveDown is never met now; it stays for a look that reads the pool afresh, as
+    // before 1.8.0's review of its fixes (r2-worker#1): that read fails, and the kept read's "no" says nothing. A look
+    // that fails now is lovejoin-round2-sessions' mainnet case (1.8.0's release review, last-code#2).
     const one = await wallet(40n * ADA);
     oneStranger(one);
     const lj = pooled(one);
@@ -1222,6 +1228,8 @@ describe("1.6.0's review of the fixes, fx-promise: the collateral's mix said by 
     fiveDown(one);
     const refused = runner(one, lj);
     expect((await refused.outBuild("preprod", await refused.quote("preprod", minswapEstimate.ask))).collateralMix).toBeUndefined();
+    // Against the pools with no box of MIN's own, whose return can't build that mix (R3-10): nothing said, its read
+    // failing.
     const d = await wallet(40n * ADA);
     d.minswap.estimate = DANOGO;
     fiveDown(d);
@@ -1264,7 +1272,11 @@ describe("1.6.0's review of the fixes, fx-promise: the collateral's mix said by 
     fiveDown(s);
     const site = await runner(s).siteOutBuild("preprod", "https://example.org", (10n * ADA).toString(), []);
     expect(site.collateralReserve).toBeUndefined();
-    expect(read(createElement(FundingWayBack, { fee: site.fee.total, lovejoin: true, perBox: "4.1", summary: site }))).toContain("only if enough is left");
+    // Its review's note: a failed read counts as no room for a box of the spare ADA, so hedged, never the 5 ₳ said back
+    // at once (1.8.0's release review, O3).
+    const siteSaid = read(createElement(FundingWayBack, { fee: site.fee.total, lovejoin: true, perBox: "4.1", summary: site }));
+    expect(siteSaid).toContain("if its pool has room by then. What isn't mixed comes back at once.");
+    expect(siteSaid).not.toContain("the 5 ₳ kept aside come back at once");
     expect(site.collateralMix).toBe("ifLeft");
     const u = await wallet(8n * ADA + BigInt(DIRECT) + 3n * ADA);
     await siteSession(u);

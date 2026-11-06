@@ -82,6 +82,36 @@ struct PoolView {
     crowd: Crowd,
 }
 
+impl PoolView {
+    /// A shown pool as the list names it, with its crowd: worked out here,
+    /// apart from db-sync's reads, so a test can hold what it says (1.8.0's
+    /// release review, pr363#2).
+    fn of(p: Pool, crowd: Crowd) -> Self {
+        PoolView {
+            id: hex(&p.id),
+            version: p.derived.set.version(),
+            seed: format!("{}#{}", hex(&p.seed.0), p.seed.1),
+            reference: p.reference,
+            scripts: p
+                .scripts
+                .into_iter()
+                .zip([p.derived.mix_box, p.derived.mix_logic])
+                .map(|(row, hash)| ScriptRow {
+                    row,
+                    script_hash: hex(&hash),
+                })
+                .collect(),
+            launch: LaunchView {
+                tx: p.launch.tx,
+                block: p.launch.block,
+                index: p.launch.index,
+                at: Point::at(p.launch.slot),
+            },
+            crowd,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct ClassicView {
     crowd: Crowd,
@@ -164,28 +194,7 @@ async fn pools_at(
     let pools = shown
         .into_iter()
         .zip(crowds)
-        .map(|(p, crowd)| PoolView {
-            id: hex(&p.id),
-            version: p.derived.set.version(),
-            seed: format!("{}#{}", hex(&p.seed.0), p.seed.1),
-            reference: p.reference,
-            scripts: p
-                .scripts
-                .into_iter()
-                .zip([p.derived.mix_box, p.derived.mix_logic])
-                .map(|(row, hash)| ScriptRow {
-                    row,
-                    script_hash: hex(&hash),
-                })
-                .collect(),
-            launch: LaunchView {
-                tx: p.launch.tx,
-                block: p.launch.block,
-                index: p.launch.index,
-                at: Point::at(p.launch.slot),
-            },
-            crowd,
-        })
+        .map(|(p, crowd)| PoolView::of(p, crowd))
         .collect();
     to_json(&Pools {
         network: "mainnet",
@@ -503,6 +512,25 @@ mod tests {
         let answer = pools_with(&state, &tip("bb"), slow, list).await;
         assert_eq!(answer.unwrap(), LAST);
         assert!(started.elapsed() <= READ_TIMEOUT, "{:?}", started.elapsed());
+    }
+
+    /// 1.8.0's release review, pr363#2: each listed pool names its set as
+    /// the wallet's WebAssembly names it, which the README documents, and
+    /// no test held it: a constant in the list, or one set given the other's
+    /// name, listed every 8131b1d pool as v2's.
+    #[test]
+    fn a_listed_pool_names_its_set() {
+        use crate::lovejoin::standard::{Verdict, tests::standard_pool_in};
+        use crate::lovejoin::templates::Set;
+        for (set, name) in [(Set::V1, "tokenV1"), (Set::V2, "v2")] {
+            let Verdict::Standard(pool) = standard_pool_in(set) else {
+                panic!("{set:?}: not standard");
+            };
+            let id = hex(&pool.id);
+            let view = serde_json::to_value(PoolView::of(*pool, Crowd::default())).unwrap();
+            assert_eq!(view["id"], id, "{set:?}");
+            assert_eq!(view["version"], name, "{set:?}");
+        }
     }
 
     /// 317-data#2: the stable cursor was read of db-sync at every request,

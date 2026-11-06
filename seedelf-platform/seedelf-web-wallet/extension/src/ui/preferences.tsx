@@ -3,10 +3,11 @@
 // screens that show what the wallet holds (Home, Tokens, UTxOs, Activity,
 // Receive, Staking, Lovejoin) write their amounts through `useAmounts`,
 // which masks them, and a count that is an amount too (Lovejoin's boxes,
-// each 10 ₳). So do the payment forms' lines about the balance (what's
-// available, Max's most, a token's "of 1,234"; chunk 23's second review,
-// HM-9). What's typed and a review's amounts don't: what's being sent is
-// always shown, since it's read before it's sent.
+// every box of a pool holding the same). So do the payment forms' lines
+// about the balance (what's available, Max's most, a token's "of 1,234";
+// chunk 23's second review, HM-9). What's typed and a review's amounts
+// don't: what's being sent is always shown, since it's read before it's
+// sent.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
@@ -86,8 +87,9 @@ export function useAmounts() {
       /** Any amount already written out. */
       text: (text: string) => (hidden ? HIDDEN : text),
       /**
-       * A count that is an amount too, as "3 boxes": every Lovejoin box is
-       * 10 ₳, so the count says what's in the pool (privacy review §2.16).
+       * A count that is an amount too, as "3 boxes": every box of a Lovejoin
+       * pool holds the same, so the count says what's in the pool (privacy
+       * review §2.16).
        *
        * `key` is a plural key whose forms carry the noun, because "3 boxes" is
        * not a number and a word everywhere — Japanese counts with a classifier

@@ -66,7 +66,7 @@ describe("an approved swap's way back through Lovejoin (independent review L21)"
       const auto = book.sessions[0]!.auto;
       expect(auto.direct).toBe(direct);
       if (direct) expect(auto.lovejoin).toBeUndefined();
-      else expect(auto.lovejoin).toEqual({ depth: 1, delay: "2-12" });
+      else expect(auto.lovejoin).toEqual({ depth: 1, delay: "2-12", box: "5000000" });
     }
   });
 

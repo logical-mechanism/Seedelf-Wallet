@@ -36,7 +36,7 @@ import { account, AGREES, atSession, CHAINS, HOUR, PASSWORD, POOL, publicFunded,
 import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, loadTestWasm, sessionSwap, testBalances, withdrawPreprod } from "./fakes";
-import { ADA, ADA_ADDRESS, ADA_POOL, ADA_ROWS, ADA_VIEW, adaBox, ownDatum } from "./v2-pools";
+import { ADA, ADA_ADDRESS, ADA_POOL, ADA_ROWS, ADA_VIEW, adaBox, ownDatum, retiredAlready } from "./v2-pools";
 
 const MIX_BOX = NETWORKS.preprod.lovejoin!.mixBox;
 const hash = (h: string) => (h.length === 64 ? h : h.repeat(32));
@@ -310,6 +310,9 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     // Two boxes other people's mixes moved since, no record of them left, and their due times.
     t.koios.addedToAccounts.push(await ownedBox(t, "b7"), await ownedBox(t, "c7"));
     await t.store.set("lovejoin.preprod", { due: [t.clock.now + HOUR, t.clock.now + 2 * HOUR], chains: [] });
+    // Past 1.8.0's first run: before it, the unlock's run is the retired pools' bring-back, which never asks what made
+    // a box, so its steady state went untested (1.8.0's release review, R7).
+    await retiredAlready(t.store);
     // Its pool reads (Mix my boxes again asks where it takes a box: "taking a box no record accounts for").
     await t.lovejoin.status("preprod");
     await t.lovejoin.withdrawDue("preprod", true);
@@ -703,6 +706,8 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     t.koios.addedToAccounts.push(await ownedBox(t, B), await ownedBox(t, C), await ownedBox(t, D));
     for (const tx of [B, C, D]) t.koios.txSpends.set(tx, mix());
     await t.store.set("lovejoin.preprod", { due: [1, 2, 3].map((h) => t.clock.now + h * HOUR), chains: [] });
+    // Past 1.8.0's first run, so the unlock's run below is the steady state's own (R7).
+    await retiredAlready(t.store);
     // Mix my boxes again takes B and C: its first mix spends B and leaves its box mixed, C's mix isn't sent yet.
     const [X, Y] = [hash("e7"), hash("f7")];
     await againSending(t, "seedelf.lovejoin.test", [X, Y], B);

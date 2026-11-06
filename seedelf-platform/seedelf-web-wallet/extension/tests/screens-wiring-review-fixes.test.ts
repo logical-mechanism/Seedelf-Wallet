@@ -769,7 +769,7 @@ describe("a site's funding review and its top-up's, counting what the summary th
    * too where the funding pays it (`collateralReserve`), the 5 ₳ collateral, and the fee. `collateralMix`: a 5 ₳ pool
    * may take the collateral, its reserve paid or not, so it's mixed only if enough is left (fx-promise).
    */
-  const built = (extra: { collateralReserve?: string; collateralMix?: "mixed" | "ifLeft" } = {}) => ({
+  const built = (extra: { collateralReserve?: string; collateralMix?: "mixed" | "ifLeft"; lovejoinRoom?: true } = {}) => ({
     network: "preprod",
     txHash: TX,
     index: 0,
@@ -810,8 +810,10 @@ describe("a site's funding review and its top-up's, counting what the summary th
       );
     };
 
+    // Review read v2's 5 ₳ pool taking a box of the spare ADA (`lovejoinRoom`) unless a case says otherwise: with none,
+    // the note is hedged (1.8.0's release review, O3).
     it("pays the reserve: the site's figure less it, its own row, the mix in the way back's fees, the 5 ₳ said mixed only if enough is left", () => {
-      const page = funding(built({ collateralReserve: RESERVE, collateralMix: "ifLeft" }));
+      const page = funding(built({ collateralReserve: RESERVE, collateralMix: "ifLeft", lovejoinRoom: true }));
       expect(row(page, "dapp-funding-rows", t("dappUi.forTheSite"))).toBe(ada("24000000"));
       expect(row(page, "dapp-funding-rows", t("lovejoin.collateralReserve.label"))).toBe(words(t("lovejoin.collateralReserve.value", { ada: formatAda(RESERVE) })));
       expect(row(page, "dapp-funding-back", t("lovejoin.collateralMix.label"))).toBe(ada(toCents(COLLATERAL_MIX_COST)));
@@ -821,8 +823,11 @@ describe("a site's funding review and its top-up's, counting what the summary th
 
     it("without it, counts no mix, and says the 5 ₳ is mixed only if enough is left where a pool takes it, back at once where none does", () => {
       for (const [summary, note] of [
-        [built({ collateralMix: "ifLeft" }), "dappUi.back.privacy.noteLovejoinMixed"],
-        [built(), "dappUi.back.privacy.noteLovejoin"],
+        [built({ collateralMix: "ifLeft", lovejoinRoom: true }), "dappUi.back.privacy.noteLovejoinMixed"],
+        [built({ lovejoinRoom: true }), "dappUi.back.privacy.noteLovejoin"],
+        // Review read no room for a box of the spare ADA: the rows the same, the note hedged.
+        [built({ collateralMix: "ifLeft" }), "dappUi.back.privacy.noteLovejoinPoolShort"],
+        [built(), "dappUi.back.privacy.noteLovejoinPoolShort"],
       ] as const) {
         seam.reset();
         const page = funding(summary);

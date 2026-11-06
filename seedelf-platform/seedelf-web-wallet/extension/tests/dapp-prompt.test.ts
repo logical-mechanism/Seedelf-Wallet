@@ -282,8 +282,10 @@ describe("who's asking", () => {
 });
 
 describe("a private session's way back, on its funding's review (blind test §9.8, T16)", () => {
+  // Where Review read v2's 5 ₳ pool taking a box of the spare ADA; with none, the note is hedged (1.8.0's release
+  // review, O3: connector-lovejoin-review-fixes.test.ts).
   const wayBack = (lovejoin: boolean) =>
-    text(renderToStaticMarkup(createElement(FundingWayBack, { fee: "233208", lovejoin, perBox: "4.1", summary: {} })));
+    text(renderToStaticMarkup(createElement(FundingWayBack, { fee: "233208", lovejoin, perBox: "4.1", summary: { lovejoinRoom: true } })));
 
   it("gives the return's fee as an estimate, and both ways' together with this one's exact", () => {
     const direct = wayBack(false);

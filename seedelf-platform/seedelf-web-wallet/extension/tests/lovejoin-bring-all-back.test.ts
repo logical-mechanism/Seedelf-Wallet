@@ -274,6 +274,8 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
 
   it("from a pool's page brings back that pool's boxes alone: the other pools' keep their waits", async () => {
     const t = await wallet();
+    // Past 1.8.0's first run, which widens a retired pool's run going to the retired pools' (retireOnce, R1).
+    await retiredAlready(t.store);
     const lj = pooled(t);
     t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1"), await tokenBox(t, "f1"), ...(await strangers(t)));
     await lj.status("preprod");

@@ -301,6 +301,15 @@ pub(crate) mod tests {
         )
     }
 
+    /// [`standard_pool`] on `set`.
+    pub(crate) fn standard_pool_in(set: templates::Set) -> Verdict {
+        check(
+            &launch_in(set, 4_500_000, djed()),
+            &Listed::of(&[DJED]),
+            &holder_address(),
+        )
+    }
+
     /// Lovejoin's own preprod seed (the vectors' first), standing in for a launch on mainnet.
     const SEED: &str = "5c6f327e511818805adb6b4e055a6b222f9f8706cfda3540bdb0e9bb0f6acc0b";
     const DJED: (&str, &str) = (
@@ -624,10 +633,19 @@ pub(crate) mod tests {
                     });
                     pool.launch.block = p["launch"]["block"].as_i64().unwrap();
                     pool.launch.index = p["launch"]["index"].as_i64().unwrap();
-                    // The set, by the name the wallet gives it; v2's when none is given.
-                    if p["version"] == "tokenV1" {
-                        pool.derived.set = templates::Set::V1;
-                    }
+                    // The set, by the name the wallet gives it, read as the
+                    // wallet's own test reads it (lovejoin-discovery.test.ts):
+                    // none is 8131b1d's, as the fixture says, and a name
+                    // neither knows fails both, never a set guessed apart
+                    // (1.8.0's release review, pr363#1).
+                    pool.derived.set = match p.get("version") {
+                        None => templates::Set::V1,
+                        Some(name) => match name.as_str() {
+                            Some("tokenV1") => templates::Set::V1,
+                            Some("v2") => templates::Set::V2,
+                            _ => panic!("{}: no set is named {name}", s["about"]),
+                        },
+                    };
                     pool
                 })
                 .collect();

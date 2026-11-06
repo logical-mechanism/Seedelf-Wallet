@@ -126,6 +126,7 @@ import {
   checkBoxes,
   CLASSIC,
   evaluable,
+  LOVEJOIN_DENOM,
   mostBootstrap,
   MAX_MIX_BOXES,
   MAX_TOKEN_DEPOSIT_BOXES,
@@ -134,9 +135,13 @@ import {
   mayBeIn,
   mixesPerBox,
   pumpChain,
+  roomLeavingTail,
   secureRandom,
   sentAlready,
   SpentUnread,
+  STALE_POOL_TRIES,
+  StalePool,
+  TAIL_DRAWS,
   TAIL_KEEP_MS,
   tailWaiting,
   UNLOCK_WAIT_MS,
@@ -447,6 +452,12 @@ interface AutoRecord {
     tokenBoxes?: Record<string, number>;
     /** What its funding added for those boxes, in lovelace, beside the swap's own (`approved.fund`, which withinFunding holds the swap to). */
     fund?: string;
+    /**
+     * What a box of its ADA's pool holds, in lovelace, as its approval priced them: 5 ₳ since 1.8.0, the 5 ₳ pool's
+     * (priced, chunk 44). None, approved before: priced in the classic pool's 10 ₳ boxes, which its return takes no
+     * more of than that counts for its ADA (pricedClassic; 1.8.0's release review, critic#4).
+     */
+    box?: string;
   };
   /**
    * The transactions the runner took for its order's fill or refund (outcomeOf): a batcher's, not the session's
@@ -759,6 +770,9 @@ const PENDING_KIND = {
 
 /** Why a return leaves Lovejoin out when its account's collateral is gone (privacy review §2.15). */
 const NO_COLLATERAL = () => t("sess.skip.warn.noCollateral");
+
+/** Why it does, and a swap's price says, while the wallet knows of no 5 ₳ pool to take the ADA (adaPool, chunk 44). */
+const NO_ADA_POOL = () => t("sess.skip.warn.noAdaPool");
 
 /** Why it does while 5 ₳ put in for that collateral is on its way, not there yet (cross-area review X20). */
 const COLLATERAL_COMING = () => t("sess.skip.warn.collateralComing");
@@ -1741,22 +1755,45 @@ export class SessionService {
    * (adaPool, chunk 44), at most what one chain takes (chainBoxes:
    * MAX_CHAIN_MIXES, and what one deposit makes), their mixes (WebAssembly's
    * MIX_FEE_ESTIMATE each) and about what bringing them back takes. None
-   * while no such pool is shown, and `skipped` says so. `pool`: also as that
-   * pool has room for now (room, a read kept five minutes), `of` the boxes
-   * the ADA pays for when that's fewer, and `skipped`, why it has none.
+   * while no such pool is shown, and `skipped` says so, `of` what the ADA
+   * would pay for in 5 ₳ boxes. `pool`: at Review and in Stop's dialog, asked
+   * of discovery where none is kept (adaPool's ask), and as that pool has
+   * room for now (room, a read kept five minutes), `of` the boxes the ADA
+   * pays for when that's fewer, and `skipped`, why it has none.
    * `fixed`: a swap's approved depth and wait, rather than Settings' now.
+   * `classic`: a swap approved before 1.8.0 (pricedClassic), whose return
+   * takes no more boxes than its approval priced in the classic pool's 10 ₳
+   * ones (chain()'s `classic`, critic#4): so many at most, counted as 1.7.2
+   * counted them. Stop's dialog said the 5 ₳ count, and about twice the mix
+   * fees its return pays (1.8.0's release review, the chain lane's For the
+   * lead, 4).
    *
    * Four boxes a mix as approved, or as Settings has it (chunk 34's D3), or
    * `width`; and three where four can't take what three would, as its
    * return goes (wayOver, 34e's review, 5): `price` from a width down, with
    * the width it went at and why; `at` each width's own, and what D3's rule
-   * weighs (`leg`). `skipped` is three's: four falls back to it.
+   * weighs (`leg`). `skipped` is three's: four falls back to it. `room`:
+   * that read of the pool, for what Stop's dialog says of its collateral's
+   * mix (tailDrawn).
+   *
+   * `held` (`price`'s and `leg`'s): the boxes counted leave the session's
+   * collateral's mix its two draws there (roomLeavingTail), as its return's
+   * chain leaves them where that collateral goes into the same 5 ₳ pool
+   * (holdTail, roomIn), so D3's rule weighs here what fanOut weighs. Stop's
+   * dialog holds them where its return will (stopCost); a swap's Review,
+   * a forecast, never does (1.8.0's release review, P1). Counted without
+   * them, the dialog named a box more than its return makes where the room
+   * binds, and at four a mix the wrong width (1.8.0's review of its fixes,
+   * r2-worker#0).
    */
-  private async priced(network: NetworkName, pool: boolean, fixed?: AutoRecord["lovejoin"], width?: LovejoinWidth) {
+  private async priced(network: NetworkName, pool: boolean, fixed?: AutoRecord["lovejoin"], width?: LovejoinWidth, classic = false) {
     const lovejoin = this.deps.lovejoin!;
     const asked: LovejoinWidth = width ?? (fixed ? (fixed.width ?? 3) : (await lovejoin.settings()).width);
-    // As discovery last kept the pools, asking nobody: priced as the user types too.
-    const ada = await lovejoin.adaPool(network);
+    // At Review and in Stop's dialog (`pool`), asked of discovery where it kept none, and looked for (adaPool's ask), as
+    // the collateral's pick in the same review asks (tailReserve): one review that reserved the collateral's mix in the
+    // pool said "no pool" beside it, and its return later mixed there with fees its approval never showed (1.8.0's
+    // release review, O2). As the user types, as discovery last kept the pools, asking nobody.
+    const ada = await lovejoin.adaPool(network, pool);
     const room = pool && ada ? await lovejoin.room(network, ada.id) : undefined;
     const at = async (w: LovejoinWidth) => {
       // What each box more takes, and what the chain takes besides: the deposit and its change. With no 5 ₳ pool,
@@ -1767,20 +1804,40 @@ export class SessionService {
       ]);
       const perBox = BigInt(two.lovelace) - BigInt(one.lovelace);
       const besides = BigInt(one.lovelace) - perBox;
-      const fits = !ada
-        ? 0
-        : !room
-          ? Infinity
-          : poolShort(network, room, one.depth, w)
-            ? 0
-            : Math.floor(room.free / (mixesPerBox(one.depth, w) * (w - 1)));
+      // What each box's mixes draw of the pool's boxes, never one twice; and how many boxes it has room for, `held`
+      // leaving the collateral's mix its two draws.
+      const draws = mixesPerBox(one.depth, w) * (w - 1);
+      const fitsOf = (held: boolean) =>
+        !ada
+          ? 0
+          : !room
+            ? Infinity
+            : poolShort(network, room, one.depth, w)
+              ? 0
+              : held
+                ? roomLeavingTail(room.free, draws)
+                : Math.floor(room.free / draws);
       // With no 5 ₳ pool shown, nothing is paid for: no box of the classic pool's price is said to be left out.
       const affordable = (spare: bigint) => (ada && spare > besides ? Number((spare - besides) / perBox) : 0);
+      // But what the spare would pay for at a 5 ₳ box's own price is said, as `of`: its approval keeps its Lovejoin
+      // choice where a pool found as it comes back takes some ("when it exists it uses it", the owner, 2026-11-06), and
+      // says the spare is too little only where it pays for no box (1.8.0's release review, O2; o2-trace's narrowing).
+      // The classic pool's box less its 10 ₳, and a 5 ₳ box's 5 ₳: WebAssembly prices a box's mixes the same in either.
+      const perFive = perBox - LOVEJOIN_DENOM + SESSION_COLLATERAL;
+      const unpooled = (spare: bigint) => (!ada && spare > besides ? Number((spare - besides) / perFive) : 0);
       // One deposit into a pool on the new scripts makes MAX_TOKEN_DEPOSIT_BOXES at most, as the chain holds it (fanOut).
       const most = Math.min(chainBoxes(one.depth, w), MAX_TOKEN_DEPOSIT_BOXES);
-      const price = (spare: bigint) => {
-        const pays = Math.min(affordable(spare), most);
-        const boxes = Math.min(pays, fits);
+      // A swap approved before 1.8.0: the boxes the classic pool's funding of one and of two counts at this width, as
+      // its approval did, at most (`classic`).
+      const tens = classic && ada
+        ? await Promise.all([lovejoin.funding(network, 1, false, fixed?.depth, undefined, w), lovejoin.funding(network, 2, false, fixed?.depth, undefined, w)])
+        : undefined;
+      const tenPer = tens ? BigInt(tens[1].lovelace) - BigInt(tens[0].lovelace) : 0n;
+      const tenBesides = tens ? BigInt(tens[0].lovelace) - tenPer : 0n;
+      const approved = (spare: bigint) => (!tens ? Infinity : spare > tenBesides ? Number((spare - tenBesides) / tenPer) : 0);
+      const price = (spare: bigint, held = false) => {
+        const pays = Math.min(ada ? affordable(spare) : unpooled(spare), most, approved(spare));
+        const boxes = Math.min(pays, fitsOf(held));
         return {
           boxes,
           mixes: boxes * one.mixes,
@@ -1789,19 +1846,23 @@ export class SessionService {
           ...(boxes < pays ? { of: pays } : {}),
         };
       };
-      const leg = (spare: bigint) => ({ pays: affordable(spare), fits: Math.min(affordable(spare), most, fits), room: fits });
+      const leg = (spare: bigint, held = false) => {
+        const fits = fitsOf(held);
+        const pays = Math.min(affordable(spare), approved(spare));
+        return { pays, fits: Math.min(pays, most, fits), room: fits };
+      };
       return { one, price, leg };
     };
     const three = await at(3);
     const four = asked === 4 ? await at(4) : undefined;
-    const price = (spare: bigint, upTo: LovejoinWidth = asked) => {
-      if (upTo === 3 || !four) return three.price(spare);
-      const way = wayOver([four.leg(spare)], [three.leg(spare)]);
-      if (way.width === 4) return { ...four.price(spare), width: 4 as const };
-      return { ...three.price(spare), ...(way.fellBack ? { fellBack: way.fellBack } : {}) };
+    const price = (spare: bigint, upTo: LovejoinWidth = asked, held = false) => {
+      if (upTo === 3 || !four) return three.price(spare, held);
+      const way = wayOver([four.leg(spare, held)], [three.leg(spare, held)]);
+      if (way.width === 4) return { ...four.price(spare, held), width: 4 as const };
+      return { ...three.price(spare, held), ...(way.fellBack ? { fellBack: way.fellBack } : {}) };
     };
-    const skipped = !ada ? t("sess.skip.warn.noAdaPool") : room && poolShort(network, room, three.one.depth);
-    return { price, at: { 3: three, 4: four }, skipped, depth: three.one.depth, delay: fixed?.delay ?? three.one.delay, asked };
+    const skipped = !ada ? NO_ADA_POOL() : room && poolShort(network, room, three.one.depth);
+    return { price, at: { 3: three, 4: four }, skipped, depth: three.one.depth, delay: fixed?.delay ?? three.one.delay, asked, room };
   }
 
   /**
@@ -1909,6 +1970,9 @@ export class SessionService {
             ...(lovejoin.width === 4 ? { width: 4 as const } : {}),
             ...tokens,
             ...(lovejoin.fund ? { fund: lovejoin.fund } : {}),
+            // Priced in the 5 ₳ pool's boxes, each holding a session's collateral's 5 ₳ (priced, adaPoolOf), whether or
+            // not one was shown: its return isn't held to the classic pool's count (1.8.0's release review, critic#4).
+            box: SESSION_COLLATERAL.toString(),
           },
         }
       : {};
@@ -1943,9 +2007,15 @@ export class SessionService {
   async siteOutBuild(network: NetworkName, origin: string, lovelace: string, tokens: TokenQuantity[]): Promise<SessionOutSummary> {
     const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
+    // The parameters, once: for the funding, its collateral's reserve, and whether v2's 5 ₳ pool takes a new box.
+    const params = await this.deps.koios(network).epochParams();
+    const through = await this.throughLovejoin();
     // Its collateral, mixed on its way into a 5 ₳ pool as it comes back, paid for too (tailReserve): what that takes
     // with nothing else left, since a site may spend all but the reserve. Without it where it isn't paid for too.
-    const tail = await this.tailReserve(network, await this.throughLovejoin(), { direct: true });
+    const tail = await this.tailReserve(network, through, { params, direct: true });
+    // Whether that pool takes a box of its spare ADA now, by a swap's Review's rule: its review says that ADA is mixed
+    // only then, on any collateral switch (1.8.0's release review, O3).
+    const room = through && (await this.lovejoinRoomNow(network, params));
     const asked = tail.reserve;
     const {
       built: { summary, txCbor, seed, first, later },
@@ -1960,6 +2030,8 @@ export class SessionService {
           { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
         ],
         t("sess.emptySession"),
+        undefined,
+        params,
       ),
     );
     const kept: Omit<KeptFunding, "builtAt"> = {
@@ -1977,7 +2049,55 @@ export class SessionService {
       ...summary,
       ...(reserve ? { collateralReserve: reserve.toString() } : {}),
       ...(asked || tail.may ? { collateralMix: "ifLeft" as const } : {}),
+      ...(room ? { lovejoinRoom: true as const } : {}),
     };
+  }
+
+  /**
+   * Whether v2's 5 ₳ pool, the one a return's spare ADA goes into (adaPool, chunk 44), takes a box of a site session's
+   * spare ADA now, as its funding's review reads it (1.8.0's release review, O3): by the rule a swap's Review reads
+   * (priced's `skipped`), the pool asked for as a return asks (adaPool) and read once, kept POOL_ROOM_MS (room). Shown,
+   * taking new boxes under `params` (usable), at the network's floor, and with room for a box three a mix at Settings'
+   * depth (poolShort). The review says that ADA is mixed only then, and otherwise that it is if its pool has room by
+   * then, which a pool found or filled later keeps true, as the direct words wouldn't. A read that fails says no, never
+   * yes; a trap is handed on.
+   */
+  private async lovejoinRoomNow(network: NetworkName, params: Record<string, unknown>): Promise<boolean> {
+    const lovejoin = this.deps.lovejoin;
+    if (!lovejoin?.available(network)) return false;
+    try {
+      const ada = await lovejoin.adaPool(network, true);
+      if (!ada || !(await lovejoin.usable(network, [ada], params)).length) return false;
+      const room = await lovejoin.room(network, ada.id);
+      return !!room && !poolShort(network, room, (await lovejoin.settings()).depth);
+    } catch (e) {
+      if (isTrap(e)) throw e;
+      return false;
+    }
+  }
+
+  /**
+   * lovejoinRoomNow's answer as the wallet last read the pool, asking nobody: a site's connect window says it on its
+   * private session's card, so no read is tied to the connect (1.8.0's release review, O3). collateralPoolTakes's `yes`
+   * reads only what's kept (the pool shown and taking new boxes as last measured, the data layer's last count, and a
+   * pool read within POOL_ROOM_MS at the floor with room for the collateral's mix), then that read's room for a box at
+   * Settings' depth, three a mix (poolShort). Nothing read lately: no. Never throws but a trap.
+   */
+  async lovejoinRoomKept(network: NetworkName): Promise<boolean> {
+    const lovejoin = this.deps.lovejoin;
+    if (!lovejoin?.available(network)) return false;
+    try {
+      const ada = await lovejoin.adaPool(network);
+      const { depth } = await lovejoin.settings();
+      if (!ada || (await lovejoin.collateralPoolTakes(network)) !== "yes") return false;
+      // Its yes is that read, kept: room answers from it, quiet, asking nobody. Asked loud, a read that lapsed between
+      // the two looks read every pool at the site's connect (1.8.0's review of its fixes, r2-worker#2).
+      const room = await lovejoin.room(network, ada.id, true);
+      return !!room && !poolShort(network, room, depth);
+    } catch (e) {
+      if (isTrap(e)) throw e;
+      return false;
+    }
   }
 
   /** Records the site's private session, then sends its funding. The connector waits for it to arrive. */
@@ -2099,8 +2219,11 @@ export class SessionService {
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     // Its collateral, mixed on its way into a 5 ₳ pool as it comes back, paid for too (tailReserve): in the one UTxO
     // that pays the mixes, whose change pays that mix too, and its chain's deposit's reserve the sweep after it. Not a
-    // Bootstrap's, which puts up no collateral (buildBack).
-    const tail = mix.bootstrap ? undefined : await this.tailReserve(network, true, { params });
+    // Bootstrap's, which puts up no collateral (buildBack). Its own chain's draws, in its pool, which is that 5 ₳ pool
+    // for every ADA mix since chunk 44: what they leave decides whether that mix goes (1.8.0's release review, P1).
+    const wide = mix.width ?? 3;
+    const draws = { ...(mix.pool ? { pool: mix.pool } : {}), count: mix.boxes * mixesPerBox(mix.depth, wide) * (wide - 1) };
+    const tail = mix.bootstrap ? undefined : await this.tailReserve(network, true, { params, draws });
     const asked = tail?.reserve ?? 0n;
     // A Bootstrap's way back in its place (1.6.0's release review, 318-rust#0): with no collateral its return is a
     // sweep of the deposit's change alone, whose Seedelf output must hold its least after the sweep's fee, and the
@@ -2148,13 +2271,16 @@ export class SessionService {
     await this.keepFunding(SESSION_MIX_OUT, kept, later);
     // What its review says of its collateral's mix, wherever a 5 ₳ pool takes it, or may, its read having failed
     // (fx-may): mixed where its reserve is paid, which its chain sets aside before its boxes (tail_reserve); mixed only
-    // if enough is left where it isn't (CollateralMix; 1.6.0's review of the fixes, fx-promise).
+    // if enough is left where it isn't (CollateralMix; 1.6.0's review of the fixes, fx-promise), nor where its own boxes
+    // leave that mix fewer than its two draws (`short`): the tile's Mix at a count the user chose, or Mix my boxes
+    // again's one box that fits. Built, that mix then had none to draw, and its 5 ₳ came back with the rest, unmixed,
+    // under a review that said it was mixed (1.8.0's release review, P1).
     return {
       ...summary,
       mix,
       ...(reserve ? { collateralReserve: reserve.toString() } : {}),
       ...(back ? { bootstrapReserve: back.toString() } : {}),
-      ...(asked || tail?.may ? { collateralMix: reserve ? ("mixed" as const) : ("ifLeft" as const) } : {}),
+      ...(asked || tail?.may ? { collateralMix: reserve && !tail?.short ? ("mixed" as const) : ("ifLeft" as const) } : {}),
     };
   }
 
@@ -2333,7 +2459,8 @@ export class SessionService {
     }
     const rows = await this.utxosOf(network, keyHash);
     if (rows.some(collateralFits)) throw new Error(t("sess.backCollateral.there"));
-    if (!(await this.lovejoinWantsCollateral(network, s, rows))) throw new Error(t("sess.backCollateral.notNeeded"));
+    // Asked as its return's build asks, where no 5 ₳ pool is kept: 5 ₳ for a mix no pool takes is refused (O2).
+    if (!(await this.lovejoinWantsCollateral(network, s, rows, true))) throw new Error(t("sess.backCollateral.notNeeded"));
     if (topUpComing(s, rows, this.deps.now())) throw new Error(t("sess.backCollateral.coming"));
     return this.collateralTopUp(network, s, address);
   }
@@ -3283,11 +3410,17 @@ export class SessionService {
    * order of a token, as nothing, since its cancel gives the token back beside
    * all the ADA (1.6.0's review of the fixes, fx-promise; last-3c's fourth).
    * And what its dialog says of its collateral's mix on its way into the 5 ₳
-   * pool first (`collateralMix`), as that read has the pool: what its funding
-   * paid for that mix is set aside before the boxes are counted, as
-   * WebAssembly's chain sets it aside, so the dialog never names a box more
-   * than the return makes (1.6.0's release review, L1). Null when it comes
-   * back directly: approved that way, or where Lovejoin isn't.
+   * pool first (`collateralMix`), as that read has the pool. Its boxes are
+   * counted as its return's chain counts them: what its funding paid for
+   * that mix set aside first, as WebAssembly's chain sets it aside (1.6.0's
+   * release review, L1), and, where that collateral goes into the same pool
+   * as its ADA (chunk 44), the room that mix's two draws need there held, as
+   * the chain holds it (priced's `held`). Counted on the whole room, the
+   * dialog named a box more than the return makes where the room binds, with
+   * its mixes and fees, and at four a mix the wrong width (1.8.0's review of
+   * its fixes, r2-worker#0). So it names no box more than its return makes
+   * from that read. Null when it comes back directly: approved that way, or
+   * where Lovejoin isn't.
    */
   async stopCost(network: NetworkName, index: number): Promise<SwapLovejoin | null> {
     const s = await this.automatic(network, index);
@@ -3303,7 +3436,7 @@ export class SessionService {
     const funded = auto.filled ? 0n : (adaIn ? BigInt(auto.approved.fund.lovelace) : 0n) + BigInt(auto.lovejoin?.fund ?? "0");
     // As deep and as long as the swap was approved (independent review L21), and as wide: three for a swap from
     // before approvals kept a way, as its return goes (wayOf).
-    const { price, skipped, depth, delay } = await this.priced(network, true, auto.lovejoin, auto.lovejoin ? undefined : 3);
+    const { price, skipped, depth, delay, room } = await this.priced(network, true, auto.lovejoin, auto.lovejoin ? undefined : 3, pricedClassic(s));
     // Its collateral may go into the 5 ₳ pool first, as its return puts it (buildBack's intoPool): the account holds it,
     // and ADA alone to pay for that mix, which a token's UTxO isn't, or a swap out that may bring some; Settings has it
     // go in; and that pool isn't known to refuse it, by the read just made (a read that failed says it may), asking
@@ -3319,11 +3452,11 @@ export class SessionService {
     const landing =
       funding === "funding" || (funding === "landed" && !sent && fundingOf(s).some((t) => !listed.has(t.txHash)));
     const spare = rows ? spareOf(returnable(s, rows)) : 0n;
-    const mayMix =
-      (!!rows?.some(collateralFits) || landing) &&
-      (spare > 0n || out || (landing && adaIn)) &&
-      (await this.collateralIntoPool()) &&
-      (await this.deps.lovejoin!.collateralPoolTakes(network)) !== "no";
+    const takes =
+      (!!rows?.some(collateralFits) || landing) && (spare > 0n || out || (landing && adaIn)) && (await this.collateralIntoPool())
+        ? await this.deps.lovejoin!.collateralPoolTakes(network)
+        : "no";
+    const mayMix = takes !== "no";
     const aside = mayMix && s.collateralReserve ? BigInt(this.deps.wasm.lovejoinCollateralReserve()) : 0n;
     const held = spare > aside ? spare - aside : 0n;
     // What its return will hold: what's there once filled or refunded; with an order on chain, what its cancel brings
@@ -3339,9 +3472,19 @@ export class SessionService {
     // while a swap against the pools may yet land, a token's beside all of it, or not, a token's funding as it was. Mixed
     // only if enough is left wherever else it may go (CollateralMix; 1.6.0's review of the fixes, fx-promise; last-3c).
     const keeps = !out || (!sent!.againstPools && adaIn);
-    const mix: CollateralMix | undefined = !mayMix ? undefined : s.collateralReserve && keeps ? "mixed" : "ifLeft";
+    // Counted leaving that mix its two draws where its return's chain will leave them: where its collateral goes into the
+    // pool, by buildBack's intoPool's rule on the read priced just made (`takes`). Never on what was kept before that
+    // read: on a device that kept none, that said maybe, and the whole room was counted (1.8.0's review of its fixes,
+    // r2-worker#0).
+    const cost = price(counted, undefined, takes === "yes");
+    // Nor where its return's one box, the pool having room for it alone, leaves that mix fewer than its two draws: the
+    // chain keeps the box (roomLeavingTail), and that mix goes only if enough is left by then. From priced's read, at
+    // the width just counted, the chain's, so it asks nobody more. A swap's approval forecasts a room it can't know,
+    // and says as it did (1.8.0's release review, P1).
+    const drawn = takes === "yes" && tailDrawn(room, cost, depth);
+    const mix: CollateralMix | undefined = !mayMix ? undefined : s.collateralReserve && keeps && !drawn ? "mixed" : "ifLeft";
     return {
-      ...price(counted),
+      ...cost,
       depth,
       delay,
       on: true,
@@ -4461,10 +4604,13 @@ export class SessionService {
         // it; a top-up puts one back, and a session brought back by hand is offered 5 ₳ for it): no mix can go, so
         // it comes back directly, and says so when its spare ADA would have paid for a box. A session brought back
         // by hand whose 5 ₳ is on its way says that instead: every top-up of one is 5 ₳ the mixes can put up, and
-        // it isn't gone, only not there yet (cross-area review X20).
-        if (await this.collateralWanted(network, record, rows)) {
+        // it isn't gone, only not there yet (cross-area review X20). Asked first, as a return with its collateral asks:
+        // where no 5 ₳ pool is known even so, or one under its floor would take nothing, that's the reason, never that
+        // the spare ADA is too little for a box, nor its collateral (1.8.0's release review, O2 and critic#1).
+        const wanted = await this.collateralWanted(network, record, rows, true);
+        if (wanted === true) {
           skipped = record && byHand(record) && topUpComing(record, rows, now()) ? COLLATERAL_COMING() : NO_COLLATERAL();
-        }
+        } else if (wanted) skipped = wanted;
       } else {
         try {
           // A Bootstrap funded with neither a collateral nor its way back's reserve (62162483 until 1.6.0's release
@@ -4496,9 +4642,10 @@ export class SessionService {
             // a 1.7 session's is refused there, retired since (chunk 44). None: a return's, into the 5 ₳ pool.
             record?.mix ? (record.mix.pool ?? CLASSIC) : undefined,
             // Its width, a return's tokens' pools (chunk 34's 34e), and its collateral's, which a funding may have
-            // paid for (tailReserve).
+            // paid for (tailReserve). A swap approved before 1.8.0, no more boxes than it was priced for (critic#4).
             {
               ...wayOf(record, pools),
+              ...(pricedClassic(record) ? { classic: true as const } : {}),
               ...(intoPool ? { collateralPool: intoPool, ...(record?.collateralReserve ? { collateralReserve: true } : {}) } : {}),
             },
           );
@@ -4567,48 +4714,73 @@ export class SessionService {
     }
     // No chain this time: a chain built for it before won't be sent, so nothing stays reserved for it.
     await lovejoin?.release(network, chainOwner(index));
-    let result: Omit<SessionBackSummary, "network" | "index"> & { txCbor: string; tail?: CollateralTail & { txs: LovejoinChain["txs"] } };
-    try {
-      result = await wallet.withKeys(
-        (keys) =>
-          JSON.parse(
-            wasm.buildSessionReturn(
-              keys.oneTime,
-              keys.seedelf,
-              JSON.stringify({
-                network,
-                params,
-                index,
-                utxos: rows,
-                merge,
-                own,
-                ...(intoPool?.pool.ref ? { collateralPool: intoPool.pool.ref, collateralBoxes: intoPool.rows } : {}),
-              }),
-            ),
-          ) as typeof result,
-      );
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      if (e instanceof WalletLocked || !TOO_LITTLE.test(message)) throw e;
-      // Even the session's own doesn't pay its way back (WebAssembly takes a stranger's token only when it pays
-      // its own): it stays, rather than be tried for ever, and is tried again once more arrives (act, a top-up).
-      await this.leaveBehind(network, index, rows, "fee");
-      await this.nothingBack(network, index, rows);
-      throw new NothingComesBack(t("sess.tooLittleBack"));
+    type Built = Omit<SessionBackSummary, "network" | "index"> & { txCbor: string; tail?: CollateralTail & { txs: LovejoinChain["txs"] } };
+    // The return, its collateral's mix drawing from `boxes`, the 5 ₳ pool's rows: none, no mix.
+    const build = async (boxes?: KoiosUtxo[]): Promise<Built> => {
+      try {
+        return await wallet.withKeys(
+          (keys) =>
+            JSON.parse(
+              wasm.buildSessionReturn(
+                keys.oneTime,
+                keys.seedelf,
+                JSON.stringify({
+                  network,
+                  params,
+                  index,
+                  utxos: rows,
+                  merge,
+                  own,
+                  ...(intoPool?.pool.ref && boxes ? { collateralPool: intoPool.pool.ref, collateralBoxes: boxes } : {}),
+                }),
+              ),
+            ) as Built,
+        );
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        if (e instanceof WalletLocked || !TOO_LITTLE.test(message)) throw e;
+        // Even the session's own doesn't pay its way back (WebAssembly takes a stranger's token only when it pays
+        // its own): it stays, rather than be tried for ever, and is tried again once more arrives (act, a top-up).
+        await this.leaveBehind(network, index, rows, "fee");
+        await this.nothingBack(network, index, rows);
+        throw new NothingComesBack(t("sess.tooLittleBack"));
+      }
+    };
+    // Its collateral mixed on its way into the 5 ₳ pool: the deposit, the mix, then the return, sent as a chain.
+    const chainOf = ({ tail, ...back }: Built): LovejoinChain["txs"] => [
+      ...(tail?.txs ?? []),
+      { kind: "back", txCbor: back.txCbor, txHash: back.txHash, fee: back.fee },
+    ];
+    let result = await build(intoPool?.rows);
+    // Kept for Send as soon as it's built, as a chain is (fanOut): no other chain of the wallet's draws the two boxes its
+    // collateral's mix drew meanwhile. Unreserved until Send, a chain built after it from the same 5 ₳ pool (Bring
+    // everything back's next session, the runner's) drew them again, and one of the two Sends was refused (1.8.0's
+    // release review, P2). A box another chain reserved since this pool read (a mix from the public account, built
+    // meanwhile) is drawn no more: the return is built again without it, as a chain is (unstale), STALE_POOL_TRIES
+    // times, and past that with no mix, its collateral coming back with the rest, as its review then says.
+    const avoid = new Set<string>();
+    for (let tries = 0; result.tail && intoPool; tries++) {
+      try {
+        await lovejoin!.reserve(network, chainOwner(index), chainOf(result), now() + BUILT_TTL_MS);
+        break;
+      } catch (e) {
+        if (!(e instanceof StalePool)) throw e;
+        for (const o of e.unknown) avoid.add(o);
+        result = await build(tries < STALE_POOL_TRIES ? intoPool.rows.filter((u) => !avoid.has(outpoint(u))) : undefined);
+      }
     }
     await this.leftBy(network, index, rows, result.leftOut);
     const { tail, ...back } = result;
     const said = skipped ? { lovejoinSkipped: skipped } : {};
     if (!tail || !intoPool) return { ...back, network, index, ...said, builtAt: now() };
-    // Its collateral mixed on its way into the 5 ₳ pool: the deposit, the mix, then the return, sent as a chain.
-    const { txs, ...made } = tail;
+    const { txs: _txs, ...made } = tail;
     return {
       ...back,
       network,
       index,
       fee: (BigInt(back.fee) + BigInt(made.fee)).toString(),
       ...said,
-      chain: [...txs, { kind: "back", txCbor: back.txCbor, txHash: back.txHash, fee: back.fee }],
+      chain: chainOf(result),
       leaves: [],
       ...tailIn(made),
       ...(delay ? { tailOf: { delay } } : {}),
@@ -4631,17 +4803,28 @@ export class SessionService {
    * directly with nothing else left, a site's or its top-up's, takes what that needs, priced from the parameters
    * (1.6.0's release review, 323-rust#1; 2.8 ₳ today). `may`: none added, its look at that pool having failed, though
    * the pool may take the collateral all the same as the session comes back, which its review says (CollateralMix).
+   * `draws`: a mix session's own chain, `count` boxes of other people's drawn in `pool`; where that's this pool, `short`
+   * says they leave its mix fewer than its two (TAIL_DRAWS), so it's mixed only if enough is left by then, its reserve
+   * paid all the same: the pool may grow, and the figures stay the form's (1.8.0's release review, P1).
+   *
+   * The look is the review's one read of every pool (collateralRoom), which its price and its card's mark read too: it
+   * read the pools again on its own, every pool twice in one review (1.8.0's review of its fixes, r2-worker#1). Not a
+   * mix's, whose `draws` are weighed against a read of its own made now (collateralPool): a kept one doesn't see the
+   * boxes the wallet's chains reserved since, and `short` would say mixed where its draws leave that mix none.
    */
   private async tailReserve(
     network: NetworkName,
     through: boolean,
-    { params, direct = false }: { params?: unknown; direct?: boolean } = {},
-  ): Promise<{ reserve: bigint; may?: true }> {
+    { params, direct = false, draws }: { params?: unknown; direct?: boolean; draws?: { pool?: string; count: number } } = {},
+  ): Promise<{ reserve: bigint; may?: true; short?: true }> {
     const lovejoin = this.deps.lovejoin;
     if (!through || !lovejoin?.available(network) || !(await this.collateralIntoPool())) return { reserve: 0n };
     const read = params ?? (await this.deps.koios(network).epochParams());
     // A look that fails funds without the reserve; a trap in it is handed on, never built on (1.6.0's release review, L3).
-    const pool = await lovejoin.collateralPool(network, read, undefined, true).catch((e: unknown) => {
+    const look: Promise<{ pool: LovejoinPool; free: number } | "failed" | undefined> = draws
+      ? lovejoin.collateralPool(network, read, undefined, true)
+      : lovejoin.collateralRoom(network, read);
+    const pool = await look.catch((e: unknown) => {
       if (isTrap(e)) throw e;
       return "failed" as const;
     });
@@ -4650,7 +4833,8 @@ export class SessionService {
     if (pool === "failed") return (await lovejoin.collateralPoolTakes(network)) === "no" ? { reserve: 0n } : { reserve: 0n, may: true };
     if (!pool) return { reserve: 0n };
     const { wasm } = this.deps;
-    return { reserve: BigInt(direct ? wasm.lovejoinDirectCollateralReserve(JSON.stringify(read)) : wasm.lovejoinCollateralReserve()) };
+    const short = draws && draws.pool === pool.pool.id && pool.free - draws.count < TAIL_DRAWS ? { short: true as const } : {};
+    return { reserve: BigInt(direct ? wasm.lovejoinDirectCollateralReserve(JSON.stringify(read)) : wasm.lovejoinCollateralReserve()), ...short };
   }
 
   /**
@@ -4689,39 +4873,52 @@ export class SessionService {
    * collateral (collateralFits), whether its return through Lovejoin leaves
    * Lovejoin out for that (NO_COLLATERAL) rather than for want of a box
    * (noBox): a mix's always does, and anything else's whose spare ADA pays
-   * for a box.
+   * for a box. Or, as a reason, why Lovejoin is left out whatever the account
+   * holds, where no token's pool wants the collateral either: no 5 ₳ pool
+   * known (noAdaPool), or one under the network's floor where the spare pays
+   * for a box, as the pool was last read (room). Said so, a return with 40 ₳
+   * and no pool no longer says its spare is too little for a box, and one
+   * under the floor isn't offered 5 ₳ for a mix the floor refuses (1.8.0's
+   * release review, O2 and critic#1). `ask`: a return's build and the offer's
+   * top-up (backCollateralBuild) ask discovery where no pool is kept, and
+   * look, and read the pool; the session list's view reads the device alone.
    */
-  private async collateralWanted(network: NetworkName, s: SessionRecord | undefined, rows: KoiosUtxo[]): Promise<boolean> {
+  private async collateralWanted(network: NetworkName, s: SessionRecord | undefined, rows: KoiosUtxo[], ask = false): Promise<boolean | string> {
     if (rows.some(collateralFits)) return false;
     if (s?.mix) return !depositOnly(s);
     // A box three a mix: four falls back to three where it costs more than the spare pays (34e's review, 6).
     const lovejoin = this.deps.lovejoin!;
     const spare = spareOf(rows);
-    // A box of the 5 ₳ pool a return's ADA goes into (adaPool, chunk 44), while one is shown.
-    const ada = await lovejoin.adaPool(network);
-    if (ada && spare >= BigInt((await lovejoin.funding(network, 1, false, undefined, ada, 3)).lovelace)) return true;
+    // A box of the 5 ₳ pool a return's ADA goes into (adaPool, chunk 44), while one is shown, and past its floor.
+    const ada = await lovejoin.adaPool(network, ask);
+    const pays = !!ada && spare >= BigInt((await lovejoin.funding(network, 1, false, undefined, ada, 3)).lovelace);
+    const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
+    const room = pays && floor > 0 ? await lovejoin.room(network, ada!.id, !ask) : undefined;
+    const short = room && room.others < floor ? t("lj.skip.warn.floorShort", { count: room.others, floor }) : undefined;
+    if (pays && !short) return true;
     // Or a box of a token the session's own UTxOs (or its swap's fill) hold, in a pool of it its return may use, which
     // its spare ADA pays for (chunk 34's 34e, for 34f): its box's ADA and its mixes, as acrossOf counts them (wayOf:
     // an approved swap's token in its approved pool only). The pools as discovery kept them, asking nobody.
     const returns = s ? wayOf(s).returns : undefined;
-    if (!s || !returns) return false;
-    const own = new Set([...s.txs.map((t) => t.txHash), ...(returns.fills ?? [])]);
-    const held = new Map<string, bigint>();
-    for (const u of rows) {
-      // Only what a deposit takes, as acrossOf counts it (evaluable; 1.6.0's release review, rr-1's note on 319-rust#0).
-      if (!own.has(u.tx_hash) || !evaluable(u)) continue;
-      for (const a of u.asset_list ?? []) held.set(a.policy_id + a.asset_name, (held.get(a.policy_id + a.asset_name) ?? 0n) + BigInt(a.quantity));
-    }
-    for (const [unit, quantity] of held) {
-      const named = returns.tokens && unit in returns.tokens ? returns.tokens[unit] : returns.only ? null : undefined;
-      if (named === null) continue;
-      for (const pool of await lovejoin.poolsOf(network, unit, true)) {
-        if (named !== undefined && pool.id !== named) continue;
-        if (quantity < BigInt(pool.token!.quantity)) continue;
-        if (spare >= BigInt((await lovejoin.funding(network, 1, false, undefined, pool, 3)).lovelace)) return true;
+    if (s && returns) {
+      const own = new Set([...s.txs.map((t) => t.txHash), ...(returns.fills ?? [])]);
+      const held = new Map<string, bigint>();
+      for (const u of rows) {
+        // Only what a deposit takes, as acrossOf counts it (evaluable; 1.6.0's release review, rr-1's note on 319-rust#0).
+        if (!own.has(u.tx_hash) || !evaluable(u)) continue;
+        for (const a of u.asset_list ?? []) held.set(a.policy_id + a.asset_name, (held.get(a.policy_id + a.asset_name) ?? 0n) + BigInt(a.quantity));
+      }
+      for (const [unit, quantity] of held) {
+        const named = returns.tokens && unit in returns.tokens ? returns.tokens[unit] : returns.only ? null : undefined;
+        if (named === null) continue;
+        for (const pool of await lovejoin.poolsOf(network, unit, true)) {
+          if (named !== undefined && pool.id !== named) continue;
+          if (quantity < BigInt(pool.token!.quantity)) continue;
+          if (spare >= BigInt((await lovejoin.funding(network, 1, false, undefined, pool, 3)).lovelace)) return true;
+        }
       }
     }
-    return false;
+    return !ada ? NO_ADA_POOL() : (short ?? false);
   }
 
   /**
@@ -4731,13 +4928,14 @@ export class SessionService {
    * (throughLovejoin: Settings', for a session brought back by hand), no
    * chain of it went in partly (chainSoFar), and it wants that collateral
    * alone (collateralWanted). The offer of 5 ₳ for it asks the same, so the
-   * two agree (1.5.0's release review, C53).
+   * two agree (1.5.0's release review, C53). `ask`: as a return's build asks
+   * (the offer's top-up); the session list's view asks nobody.
    */
-  private async lovejoinWantsCollateral(network: NetworkName, s: SessionRecord, rows: KoiosUtxo[]): Promise<boolean> {
+  private async lovejoinWantsCollateral(network: NetworkName, s: SessionRecord, rows: KoiosUtxo[], ask = false): Promise<boolean> {
     if (!this.deps.lovejoin?.available(network) || chainSoFar(s).started || !(await this.throughLovejoin(s))) return false;
     // buildBack's own rows, so the two read the same. It changes nothing here: every UTxO WebAssembly can't measure
     // carries a reference script, which neither collateralFits nor spareOf counts (cross-area review X15).
-    return this.collateralWanted(network, s, rows.filter(measurable));
+    return (await this.collateralWanted(network, s, rows.filter(measurable), ask)) === true;
   }
 
   /**
@@ -6137,6 +6335,20 @@ function poolShort(network: NetworkName, room: { others: number; free: number },
 }
 
 /**
+ * Whether a return of `cost.boxes` boxes into the 5 ₳ pool, `depth` waves deep at its width, leaves its collateral's
+ * mix there fewer than its two draws (TAIL_DRAWS), as `room` has the pool: counted leaving that mix its draws (priced's
+ * `held`), its one box is all that still can, where the pool has room for it alone (roomLeavingTail). Stop's dialog
+ * (stopCost; 1.8.0's release review, P1), from the read priced made and at the width it counted, the chain's: it read
+ * the pool again, loud, and counted at the width the whole room gave (1.8.0's review of its fixes, r2-worker#0 and #2).
+ */
+function tailDrawn(room: { free: number } | undefined, cost: { boxes: number; width?: LovejoinWidth }, depth: number): boolean {
+  const w = cost.width ?? 3;
+  const draws = mixesPerBox(depth, w) * (w - 1);
+  if (!room || cost.boxes < 1 || draws < 1) return false;
+  return room.free - cost.boxes * draws < TAIL_DRAWS;
+}
+
+/**
  * The spare ADA among a session's UTxOs, as a return through Lovejoin
  * counts it: ADA alone, less its collateral (one of exactly 5 ₳). A token's
  * UTxO, or one carrying a reference script, comes back as it is.
@@ -6166,6 +6378,16 @@ export function wayOf(s: SessionRecord | undefined, pools?: Record<string, strin
     return { width: approved.width ?? 3, ...(tokens ? { returns: { tokens, only: !pools, ...fills, ...most } } : {}) };
   }
   return { returns: { ...(pools ? { tokens: pools } : {}), ...fills } };
+}
+
+/**
+ * Whether session `s` is a swap that runs itself approved before 1.8.0, whose approval names no box (AutoRecord
+ * `lovejoin.box`): it priced its way back in the classic pool's 10 ₳ boxes, so its return into the 5 ₳ pool takes no
+ * more than that counts for its ADA, as it comes back by itself with no review (lovejoin.ts ChainWay `classic`; 1.8.0's
+ * release review, critic#4).
+ */
+function pricedClassic(s: SessionRecord | undefined): boolean {
+  return !!s?.swap && !!s.auto && !s.auto.lovejoin?.box;
 }
 
 /**

@@ -318,8 +318,9 @@ describe("right away (chunk 44, the owner's call 3)", SLOW, () => {
 
   it("lets go of a Bootstrap's hold and a collateral's mix in a retired pool, and asks for their boxes", async () => {
     const t = await wallet();
-    const lj = pooled(t);
-    const old = "cc".repeat(28);
+    // A retired pool the read set has: one it lacks is undecided, and nothing is decided then (1.8.0's release review, R3).
+    const lj = pooled(t, [ADA_POOL, OLD_FIVE]);
+    const old = (JSON.parse(loadTestWasm().lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: OLD_FIVE }))) as { id: string }).id;
     await t.store.set("lovejoin.preprod", {
       due: [],
       chains: [

@@ -56,7 +56,7 @@ describe("a mix from the public account stopped at a transaction that may have g
     expect(await reservedPublic(t)).toEqual({ inputs: deposit.inputs, collateral: [] });
     expect(deposit.inputs).not.toContain(COLLATERAL);
     // None of the pool boxes its mixes would have taken is held back from another chain's draw.
-    const room = (await t.lovejoin.room("preprod"))!;
+    const room = (await t.lovejoin.room("preprod", ADA))!;
     expect(room.free).toBe(room.others);
   });
 
@@ -69,7 +69,7 @@ describe("a mix from the public account stopped at a transaction that may have g
     const whole = reservationOf(chain);
     expect(whole.inputs.length).toBeGreaterThan(mix.inputs.length);
     // The mix's own pool boxes count as spent; the ones the mixes after it would have taken are free.
-    const room = (await t.lovejoin.room("preprod"))!;
+    const room = (await t.lovejoin.room("preprod", ADA))!;
     expect(room.free).toBe(room.others);
   });
 

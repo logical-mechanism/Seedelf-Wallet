@@ -155,14 +155,17 @@ describe("1.6.0's release review: a site's funding review counts the collateral'
 
 describe("1.6.0's release review: where the reviews that pay for the collateral's mix say its 5 ₳ goes (323-worker#6, gap-3#2)", () => {
   it("a site's funding review never says the 5 ₳ comes back at once", () => {
-    // Mixed only if enough is left, since 1.6.0's review of the fixes (fx-promise): what the site leaves decides.
-    const mixed = text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary: siteFunding() }));
-    expect(mixed).not.toContain("the 5 ₳ come back at once");
-    expect(mixed).toContain("Lovejoin mixes the spare ADA in 5 ₳ boxes, and the 5 ₳ once, in a box of its own, only if enough is left");
+    // Mixed only if enough is left, since 1.6.0's review of the fixes (fx-promise): what the site leaves decides. Where
+    // Review read v2's 5 ₳ pool taking a box of the spare ADA (`lovejoinRoom`), the words a pool that takes it says:
+    // its hedged note is 1.8.0's (connector-lovejoin-review-fixes.test.ts, O3), and the 5 ₳ "kept aside" since W5, its
+    // "mixed once" said of the mix, never of the keeping (1.8.0's review of its fixes, r2-screens#2).
+    const mixed = text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary: { ...siteFunding(), lovejoinRoom: true } }));
+    expect(mixed).not.toContain("the 5 ₳ kept aside come back at once");
+    expect(mixed).toContain("Lovejoin mixes the spare ADA in 5 ₳ boxes, and the 5 ₳ kept aside in a box of its own, mixed once, only if enough is left");
     expect(mixed).toContain("The rest comes back at once.");
     // Paid nothing for, as before: the 5 ₳ comes back with the rest.
-    expect(text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary: funding(false) }))).toContain(
-      "The rest and the 5 ₳ come back at once.",
+    expect(text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary: { ...funding(false), lovejoinRoom: true } }))).toContain(
+      "The rest and the 5 ₳ kept aside come back at once.",
     );
   });
 
@@ -321,8 +324,10 @@ describe("1.6.0's release review, round 3b: the reviews' collateral words follow
   const paid = (): SessionOutSummary => ({ ...funding(false), collateralReserve: "2800000", collateralMix: "ifLeft" });
   const fallback = (): SessionOutSummary => ({ ...funding(false), collateralMix: "ifLeft" });
   const plain = () => funding(false);
-  const wayBack = (summary: SessionOutSummary) => text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary }));
-  const MIXED_ONCE = "Lovejoin mixes the spare ADA in 5 ₳ boxes, and the 5 ₳ once, in a box of its own, only if enough is left";
+  // Review read v2's 5 ₳ pool taking a box of the spare ADA: the words of a pool that takes it (1.8.0's release review, O3).
+  const wayBack = (summary: SessionOutSummary) =>
+    text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary: { ...summary, lovejoinRoom: true } }));
+  const MIXED_ONCE = "Lovejoin mixes the spare ADA in 5 ₳ boxes, and the 5 ₳ kept aside in a box of its own, mixed once, only if enough is left";
 
   it("a site's funding review counts the mix only where its reserve is paid, and says the 5 ₳ is mixed wherever a pool takes it (R3-1, R3-9)", () => {
     const reserved = wayBack(paid());
@@ -333,11 +338,11 @@ describe("1.6.0's release review, round 3b: the reviews' collateral words follow
     // row for what it didn't pay.
     const without = wayBack(fallback());
     expect(without).toContain(MIXED_ONCE);
-    expect(without).not.toContain("the 5 ₳ come back at once");
+    expect(without).not.toContain("the 5 ₳ kept aside come back at once");
     expect(without).not.toContain("Its collateral's mix");
     expect(without).toContain("Network fees both ways, about 0.73 ₳");
     // No pool takes it: as before.
-    expect(wayBack(plain())).toContain("The rest and the 5 ₳ come back at once.");
+    expect(wayBack(plain())).toContain("The rest and the 5 ₳ kept aside come back at once.");
   });
 
   it("a site's top-up says its new 5 ₳ is mixed wherever a pool takes it, its reserve paid or not (R3-1, R3-9)", () => {
@@ -556,7 +561,9 @@ describe("1.6.0's review of the fixes, fx-promise: each screen says the collater
   });
 
   it("a site's funding review and its top-up: only if enough is left wherever a pool may take it, never mixed, its cost row on the reserve alone", () => {
-    const wayBack = (summary: SessionOutSummary, lovejoin = true) => text(createElement(FundingWayBack, { fee: "233208", lovejoin, perBox: "4.1", summary }));
+    // Review read v2's 5 ₳ pool taking a box of the spare ADA: the words of a pool that takes it (1.8.0's release review, O3).
+    const wayBack = (summary: SessionOutSummary, lovejoin = true) =>
+      text(createElement(FundingWayBack, { fee: "233208", lovejoin, perBox: "4.1", summary: { ...summary, lovejoinRoom: true } }));
     const note = (summary: SessionOutSummary) => text(createElement(TopUpCollateralNote, { summary }));
     // What the site leaves decides whether that mix goes, its reserve paid or not, so a worker's "mixed" would say no more.
     for (const [summary, cost] of [
@@ -566,15 +573,15 @@ describe("1.6.0's review of the fixes, fx-promise: each screen says the collater
     ] as const) {
       const what = `${summary.collateralReserve ?? "no reserve"} ${summary.collateralMix}`;
       const back = wayBack(summary);
-      expect(back, what).toContain("and the 5 ₳ once, in a box of its own, only if enough is left");
-      expect(back, what).not.toContain("the 5 ₳ come back at once");
+      expect(back, what).toContain("and the 5 ₳ kept aside in a box of its own, mixed once, only if enough is left");
+      expect(back, what).not.toContain("the 5 ₳ kept aside come back at once");
       expect(back.includes("Its collateral's mix, about 1.5 ₳"), what).toBe(cost);
       const topUp = note(summary);
       expect(topUp, what).toContain("At the next return it's mixed once, in a box of its own, only if enough is left");
       expect(topUp, what).not.toContain("It comes back with the next return.");
     }
     // No mix can go: back with the rest, as before.
-    expect(wayBack(summaryOf(false))).toContain("The rest and the 5 ₳ come back at once.");
+    expect(wayBack(summaryOf(false))).toContain("The rest and the 5 ₳ kept aside come back at once.");
     expect(wayBack(summaryOf(false), false)).toContain("straight into your private balance, the 5 ₳ kept aside too.");
     expect(note(summaryOf(false))).toContain("It comes back with the next return.");
     expect(note(summaryOf(false))).not.toContain("only if enough is left");

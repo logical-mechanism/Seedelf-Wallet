@@ -150,6 +150,17 @@ the section above, these are Claude's choices, the owner's to overrule.
 | change (what a transaction gives back) | el cambio | 釣り銭 | Lace has お釣り; おつり, in two values, says the same |
 | an amount in ₳ | a no-break space (U+00A0) before ₳ | the same | the house's rule in every language (usability review V-7); 15 of the keys 1.6.0's review added or changed had a plain space, in the English too |
 
+## Chosen for 1.8.0 (the release review, 2026-11-06)
+
+Lovejoin v2 came in 1.8.0 (chunk 44), and the pools on Lovejoin's older
+scripts were retired: withdraw-only. Like the sections above, these are
+Claude's choices, the owner's to overrule (1.8.0's release review, W11).
+
+| English | Spanish | Japanese | Note |
+|---|---|---|---|
+| retired (a Lovejoin pool, its scripts) | los scripts retirados de Lovejoin; los pools retirados | 廃止済みのスクリプト; 廃止されたプール | said of the scripts and the pools that run them, never of Lovejoin, which goes on: "Lovejoin's retired scripts", "the retired pools". es says "retirado" alone: "retiro" is a withdrawal (above), and a pool's boxes are withdrawn from it. A stake pool's retirement keeps "se ha retirado" and 引退, a DRep's "retirar tu DRep" and 退任 |
+| Lovejoin's current contracts; its older ones (the store listing) | los contratos actuales de Lovejoin; los contratos anteriores de Lovejoin | Lovejoin の現行のコントラクト; 以前のコントラクト | the listing's words for v2's scripts and the retired ones: it says contracts, as its "Lovejoin's own contracts" does. es names Lovejoin in both, as the listing does: "sus contratos anteriores" could be read as the pools' own |
+
 ## How a translation is recorded
 
 Three files beside this one, one set per language:

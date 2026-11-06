@@ -1547,6 +1547,14 @@ export function Plan({
 }
 
 /**
+ * Why Lovejoin's pool takes nothing now, as the worker says it, opening a sentence of its own (swaps.lovejoin.warn.pool,
+ * swaps.stop.poolShort): its first letter a capital, where its language has one, as asSentence gives it one. The
+ * reason a return keeps for no 5 ₳ pool opens with the wallet, set after a colon in a return's own frames (1.8.0's
+ * release review, O4).
+ */
+const opening = (why: string) => `${why.charAt(0).toUpperCase()}${why.slice(1)}`;
+
+/**
  * How a swap comes back, on its approval (privacy review §4.1): a switch,
  * through Lovejoin as Settings starts it, or directly, kept with the swap.
  * Through it: what that takes (LovejoinCost), what a stop or a refund of an
@@ -1574,7 +1582,7 @@ export function LovejoinChoice({
   busy: boolean;
 }) {
   const tr = useT();
-  // What goes through Lovejoin: the spare ADA's boxes, where the classic pool takes them; the token's, in its pool.
+  // What goes through Lovejoin: the spare ADA's boxes, where the 5 ₳ pool takes them; the token's, in its pool.
   const tokenBoxes = through ? (l.ways ?? []).reduce((sum, w) => sum + (w.pool ? w.boxes : 0), 0) : 0;
   const ada = through && !l.skipped && l.boxes > 0;
   const cost = ada || tokenBoxes > 0;
@@ -1612,7 +1620,7 @@ export function LovejoinChoice({
       </div>
       {through && l.skipped && (
         <Callout tone="warn" testId="swap-lovejoin-pool">
-          {tr("swaps.lovejoin.warn.pool", { why: l.skipped })}
+          {tr("swaps.lovejoin.warn.pool", { why: opening(l.skipped) })}
         </Callout>
       )}
       {/* The token it gets, through a pool of it, with Change (chunk 34's 34e and 34f); its boxes' costs below. */}
@@ -1647,7 +1655,11 @@ export function LovejoinChoice({
   );
 }
 
-/** About how many boxes of 10 ₳: at most, or as many as the pool has room for now (`of`: what the ADA pays for). */
+/**
+ * About how many boxes of 5 ₳, the 5 ₳ pool's (sessions.ts priced, chunk 44): at most, or as many as the pool has room
+ * for now (`of`: what the ADA pays for). They said 10 ₳, the classic pool's, after 44b moved them (1.8.0's release
+ * review, W1).
+ */
 function boxesText(l: { boxes: number; of?: number }): string {
   return l.of
     ? t("swaps.boxes.roomFor", { count: l.boxes, of: l.of })
@@ -1777,7 +1789,7 @@ function TokenBoxesRows({
 
 /**
  * Lovejoin's costs on a swap's way back, for its totals: the spare ADA's boxes' mixes and their way back where the
- * classic pool takes them (`ada`), and the token's boxes' in its own pool (`token`, chunk 34's 34e).
+ * 5 ₳ pool takes them (`ada`), and the token's boxes' in its own pool (`token`, chunk 34's 34e).
  */
 function lovejoinOf(
   ada: { mixFees: string; withdrawFees: string } | undefined,
@@ -2926,7 +2938,7 @@ export function StopDialog({
       </p>
       {cost?.skipped && (
         <p className="note" data-testid="session-stop-pool">
-          {tr("swaps.stop.poolShort", { why: cost.skipped })}
+          {tr("swaps.stop.poolShort", { why: opening(cost.skipped) })}
         </p>
       )}
       {/* Four boxes a mix asked, and it would go three: why (chunk 34's D3). */}

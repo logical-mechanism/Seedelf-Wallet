@@ -815,8 +815,6 @@ describe("every pool's room in one read (chunk 34's 34e)", SLOW, () => {
     const reads = () => t.koios.calls.filter((c) => c.path === "credential_utxos").length;
     const before = reads();
     expect(await lj.room("preprod", TOKEN)).toEqual({ others: 5, free: 5 });
-    // A room named no pool is the 5 ₳ pool's, where a return's ADA goes (chunk 44).
-    expect(await lj.room("preprod")).toEqual({ others: ADA_ROWS.length, free: ADA_ROWS.length });
     expect(await lj.room("preprod", ADA)).toEqual({ others: ADA_ROWS.length, free: ADA_ROWS.length });
     expect(reads() - before).toBe(1);
     // The classic pool's too: retired, it's still read, for the boxes the wallet may have there.
@@ -960,7 +958,9 @@ describe("34e's review findings, each with a test", SLOW, () => {
     // for one at three, none at four.
     const t = await wallet();
     const sessions = runner(t, pooled(t, [ADA_POOL]));
-    await approvedSwap(t, { depth: 2, delay: "1-6", width: 4 });
+    // Approved on 1.8.0, priced in the 5 ₳ pool's boxes (its `box`): one with none is 1.7.2's, its return no more than
+    // the classic pool's count (1.8.0's release review, critic#4).
+    await approvedSwap(t, { depth: 2, delay: "1-6", width: 4, box: "5000000" });
     t.koios.addedToAccounts.push(...ADA_ROWS.slice(0, 12));
     const stop = (await sessions.stopCost("preprod", 0))!;
     expect(stop.skipped).toBeUndefined();
@@ -1168,7 +1168,8 @@ describe("34e's fixes' review, each with a test", SLOW, () => {
     const sessions = runner(t, pooled(t, [ADA_POOL]));
     // 40 ₳ for the swap and 15.3 ₳ for its token's boxes, one wave deep: 6 boxes of 5.95 ₳ without the boxes' ADA, 9
     // with it, the 1.5 ₳ the deposit takes aside.
-    await approvedSwap(t, { depth: 1, delay: "1-6", fund: "15300000" });
+    // Approved on 1.8.0 (its `box`; critic#4).
+    await approvedSwap(t, { depth: 1, delay: "1-6", fund: "15300000", box: "5000000" });
     t.koios.addedToAccounts.push(...ADA_ROWS);
     expect((await sessions.stopCost("preprod", 0))!.boxes).toBe(9);
   });

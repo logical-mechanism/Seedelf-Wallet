@@ -1062,6 +1062,10 @@ export class DappService {
       if (site.session !== undefined) await this.funded(session, network, site.session);
       return true;
     }
+    // Whether its private session's card says the spare ADA is mixed through Lovejoin with nothing after it: only where
+    // the wallet last read v2's 5 ₳ pool taking a box of it, asking nobody, so no read is tied to a site's connect
+    // (1.8.0's release review, O3). Asked about governance alone, a connected site has no card.
+    const room = !site && (await this.deps.sessions.lovejoinRoomKept(network));
     // Nothing is awaited from here until it's asked, so two pages can't both ask.
     const asking = this.waiting.find((w) => w.approval.kind === "connect" && w.session.origin === origin && w.network === network);
     if (asking) {
@@ -1081,7 +1085,13 @@ export class DappService {
       this.askedAgain(origin);
       throw refused(this.declinedWait(origin));
     }
-    const ask: DappAsk = { kind: "connect", password, ...(wants ? { governance: true } : {}), ...(site ? { connected: true } : {}) };
+    const ask: DappAsk = {
+      kind: "connect",
+      password,
+      ...(wants ? { governance: true } : {}),
+      ...(site ? { connected: true } : {}),
+      ...(room ? { lovejoinRoom: true } : {}),
+    };
     await this.ask(session, network, ask, APIError.Refused, async ({ governance }) => {
       if (site) await this.grantGovernance(network, origin);
       // Asked for, governance goes with the connection only when the window's switch says so (off by default).

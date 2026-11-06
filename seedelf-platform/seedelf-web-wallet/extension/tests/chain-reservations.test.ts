@@ -103,7 +103,7 @@ describe("chains built at the same time (independent review L27)", CHAINS, () =>
     await held.checking;
     // The pool's twenty boxes: the return's two boxes take sixteen, and its collateral's mix into the same 5 ₳ pool two
     // (chunk 44), reserved already.
-    expect(await t.lovejoin.room("preprod")).toEqual({ others: 20, free: 2 });
+    expect(await t.lovejoin.room("preprod", ADA)).toEqual({ others: 20, free: 2 });
     held.open();
     await built;
   });
@@ -118,6 +118,6 @@ describe("chains built at the same time (independent review L27)", CHAINS, () =>
     await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("so nothing was sent");
     const reserved = await t.wallet.withKeys(() => t.session.get<Record<string, unknown>>(SESSION_RESERVED_PREFIX + "preprod"));
     expect(reserved?.public).toBeUndefined();
-    expect(await t.lovejoin.room("preprod")).toEqual({ others: 20, free: 20 });
+    expect(await t.lovejoin.room("preprod", ADA)).toEqual({ others: 20, free: 20 });
   });
 });

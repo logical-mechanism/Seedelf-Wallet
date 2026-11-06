@@ -232,7 +232,10 @@ function getContext(): Promise<Worker> {
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
     // Lovejoin's token pools: the data layer's list at each pool read, Koios's holder as the Lovejoin page opens
-    // (chunk 34's 34c).
+    // (chunk 34's 34c), and, at most every five minutes while this worker runs (the throttle is this instance's, in
+    // memory), where a return, a review or a funding asks for the 5 ₳ pool and none is kept, and at Settings' Bring
+    // every box back asked with no pool named, whatever is kept (serviceDeps' lookSoon; 1.8.0's release review, O1;
+    // 1.8.0's review of its fixes, r2-worker#3 and r2-critic#2).
     const discovery = new PoolDiscovery({ local, wasm, koios, index, now: Date.now });
     // No box is withdrawn while a chain mixing them again may still spend it.
     const lovejoin: LovejoinService = new LovejoinService({

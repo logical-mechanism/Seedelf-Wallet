@@ -432,9 +432,9 @@ export function fundingPrivacy(changeLovelace: string): string {
  * Lovejoin, as Settings has it" meant nothing to the tester (blind test §9.8,
  * T16). The return's fee as the reviews estimate one (ui/swap.ts), the
  * network fees both ways with this one's exact, and, when Settings brings
- * sessions back through Lovejoin (`lovejoin`), what a 10 ₳ box of it costs
- * (`perBox`, in ₳) and what Lovejoin is, in plain words. `fee`: the
- * funding's. Exported for its test.
+ * sessions back through Lovejoin (`lovejoin`), what a box of v2's 5 ₳ pool
+ * costs (`perBox`, in ₳, chunk 44) and what Lovejoin is, in plain words.
+ * `fee`: the funding's. Exported for its test.
  *
  * Through Lovejoin the way back is a chain (sessions.ts backBuild): a deposit,
  * the mixes, then the return, so two network fees besides the mixes', as a
@@ -448,6 +448,13 @@ export function fundingPrivacy(changeLovelace: string): string {
  * says which before anything is sent (1.6.0's release review, 323-worker#1,
  * 323-worker#6, R3-9; its review of the fixes, fx-promise). Required, so no
  * review can leave it out (R3-1).
+ *
+ * The spare ADA is said mixed only where Review read v2's 5 ₳ pool taking a
+ * box of it (`lovejoinRoom`): with none shown, under the floor or too few
+ * boxes free, the return comes back directly as things are, and a note that
+ * said so would turn false once a pool fills, so the note is hedged, its rows
+ * kept, each "about" (1.8.0's release review, O3). Its collateral is "the 5 ₳
+ * kept aside", never "the 5 ₳" beside "5 ₳ boxes" (W5).
  */
 export function FundingWayBack({
   fee,
@@ -458,7 +465,7 @@ export function FundingWayBack({
   fee: string;
   lovejoin: boolean;
   perBox: string;
-  summary: Pick<SessionOutSummary, "collateralReserve" | "collateralMix">;
+  summary: Pick<SessionOutSummary, "collateralReserve" | "collateralMix" | "lovejoinRoom">;
 }) {
   const tr = useT();
   const paid = !!summary.collateralReserve;
@@ -485,7 +492,15 @@ export function FundingWayBack({
         />
       </ReviewRows>
       <p className="note" data-testid="dapp-funding-way-back">
-        {tr(collateral ? "dappUi.back.privacy.noteLovejoinMixed" : lovejoin ? "dappUi.back.privacy.noteLovejoin" : "dappUi.back.noteDirect")}
+        {tr(
+          (collateral || lovejoin) && !summary.lovejoinRoom
+            ? "dappUi.back.privacy.noteLovejoinPoolShort"
+            : collateral
+              ? "dappUi.back.privacy.noteLovejoinMixed"
+              : lovejoin
+                ? "dappUi.back.privacy.noteLovejoin"
+                : "dappUi.back.noteDirect",
+        )}
       </p>
     </>
   );
@@ -527,8 +542,10 @@ export function ConnectRequest({
   // Asked for, governance goes with the public account only when switched on: off, as the most private choice is.
   const [governance, setGovernance] = useState(false);
   const [seedelf, setSeedelf] = useState<Balances["seedelf"]>();
-  // How a private session would come back, as Settings has it: through Lovejoin, and what a 10 ₳ box of it costs at
-  // Settings' depth, said in plain words with a figure where it's chosen (blind test §9.8, T16).
+  // How a private session would come back, as Settings has it: through Lovejoin, and what a box of v2's 5 ₳ pool
+  // costs at Settings' depth, said in plain words with a figure where it's chosen (blind test §9.8, T16). Said
+  // plainly only where the worker last read that pool taking a box of its spare ADA (`lovejoinRoom`), and with a
+  // swap's hedge after it everywhere else (1.8.0's release review, O3).
   const { prefs } = usePreferences();
   const lovejoinBack = prefs.lovejoinReturns && lovejoinOn(network);
   // At Settings' width (chunk 34's D3): four boxes a mix costs more a box.
@@ -918,7 +935,12 @@ export function ConnectRequest({
                 account" (the copy-trim pass). */}
             <ul className="dapp-points" data-testid="dapp-private-points">
               <li data-testid="dapp-private-way-back">
-                {tr(lovejoinBack ? "dappUi.private.privacy.staysLovejoin" : "dappUi.private.staysDirect", { box: perBox })}
+                {lovejoinBack
+                  ? joinSentences([
+                      tr("dappUi.private.privacy.staysLovejoin", { box: perBox }),
+                      !approval.lovejoinRoom && tr("swaps.lovejoin.privacy.onPoolShort"),
+                    ])
+                  : tr("dappUi.private.staysDirect")}
               </li>
               {approval.governance && <li data-testid="dapp-private-no-governance">{tr("dappUi.private.noGovernance")}</li>}
             </ul>
