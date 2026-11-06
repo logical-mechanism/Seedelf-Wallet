@@ -295,13 +295,14 @@ describe("a private session's way back, on its funding's review (blind test §9.
 
   it("says in plain words what coming back through Lovejoin is, and what a box of it costs", () => {
     const through = wayBack(true);
-    expect(through).toContain("Through Lovejoin first, about 4.1 ₳ a 10 ₳ box");
+    // A return's ADA goes into the 5 ₳ pool (chunk 44).
+    expect(through).toContain("Through Lovejoin first, about 4.1 ₳ a 5 ₳ box");
     // Through Lovejoin the way back is a deposit, the mixes and the return (sessions.ts backBuild): two network fees
     // besides the mixes', so both ways are 0.233208 + 2 × about 0.25, about 0.73 ₳, as swapCosts and mixCosts count it.
     expect(through).toContain("Its network fees, about 0.5 ₳: Lovejoin's deposit and the return");
     expect(through).toContain("Network fees both ways, about 0.73 ₳");
     expect(through).not.toContain("Its network fee, about 0.25 ₳");
-    expect(through).toContain("Lovejoin mixes the spare ADA so it's harder to tie to this session, back in 10 ₳ boxes hours later.");
+    expect(through).toContain("Lovejoin mixes the spare ADA so it's harder to tie to this session, back in 5 ₳ boxes hours later.");
     expect(through).toContain("Settings → Lovejoin turns that off.");
     expect(through).not.toContain("as Settings has it");
   });

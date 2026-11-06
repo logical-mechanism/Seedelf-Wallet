@@ -1,19 +1,13 @@
 // How an approved swap comes back through Lovejoin (independent review L21):
 // as deep and as long as its approval showed, whatever Settings says since,
 // and Settings' off changes only swaps started later.
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
-import type { KoiosUtxo } from "../src/background/koios";
+import { lovejoinOf } from "./chain-fixtures";
 import { ASK, atSession, signing, unlocked } from "./swap-session";
+import { ADA_ROWS } from "./v2-pools";
 
 const HOUR = 3_600_000;
-
-/** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
-const POOL = (
-  JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-).pool;
 
 /** Ogmios's answer when the network measures no more than a transaction declares. */
 const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
@@ -44,8 +38,10 @@ describe("an approved swap's way back through Lovejoin (independent review L21)"
         },
       ],
     });
-    t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession(out, 1, "5000000"), ...POOL);
-    const sessions = signing(t, { lovejoin: t.lovejoin, sleep: async () => undefined });
+    // Lovejoin reading the 5 ₳ pool, which a swap's ADA goes back into (chunk 44: the classic pool, retired, takes
+    // none).
+    t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession(out, 1, "5000000"), ...ADA_ROWS);
+    const sessions = signing(t, { lovejoin: lovejoinOf(t), sleep: async () => undefined });
     // Since, Settings says three waves deep, 1 to 6 hours, and Lovejoin off.
     await t.deps.preferences.set({ lovejoinDepth: 3, lovejoinDelay: "1-6", lovejoinReturns: false });
 

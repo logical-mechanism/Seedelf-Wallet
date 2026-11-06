@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { bodyOutpoints } from "../src/background/cbor";
 import { Collateral, StaleReviewError } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { MAX_DEPOSIT_BOXES, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
+import { MAX_TOKEN_DEPOSIT_BOXES, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { type BuiltOutput, builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, Minswap } from "../src/background/minswap";
 import { pendingKey } from "../src/background/pending";
 import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
@@ -28,6 +28,7 @@ import { WalletLocked } from "../src/background/wallet";
 import { i18n, t as translate } from "../src/i18n/core";
 import { activityDetail } from "../src/ui/activity";
 import { SESSION_FEE_ESTIMATE } from "../src/ui/swap";
+import { lovejoinOf } from "./chain-fixtures";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, ORDER_SCRIPT, recordedSwap, SENDER, SESSION_ADDRESS, swapTx } from "./fixtures/swap-tx";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
@@ -288,7 +289,9 @@ describe("a swap's quote", () => {
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
       store: t.store,
       minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
-      lovejoin: t.lovejoin,
+      // Lovejoin reading the 5 ₳ pool, whose boxes a swap's price counts (chunk 44: the classic pool, retired, takes
+      // none).
+      lovejoin: lovejoinOf(t),
     });
     // ADA for MIN: the tokens come back with their deposit, and the 2 ₳ of room pays for no box. Stopped or
     // refunded, its 16 ₳ of funding come back instead, and pay for one (privacy review §2.8).
@@ -302,30 +305,36 @@ describe("a swap's quote", () => {
       on: true,
       ifStopped: { boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" },
     });
-    // MIN for 50 ₳: the proceeds, the deposit back and the room, 54 ₳, pay for 3 boxes at 13.8 ₳ each and the deposit.
+    // MIN for 50 ₳: the proceeds, the deposit back and the room, 54 ₳, pay for 5 boxes at 9.1 ₳ each (a 5 ₳ box, its
+    // four mixes and its way back) and the deposit: six would take 54.6 ₳ before it.
     t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "50000000", min_amount_out: "49750000" };
     const selling = { ...ASK, tokenIn: MIN, tokenOut: "lovelace", amount: "500" };
     expect((await sessions.quote("preprod", selling)).lovejoin).toEqual({
-      boxes: 3,
+      boxes: 5,
       depth: 2,
-      mixes: 12,
-      mixFees: "11400000",
-      withdrawFees: "900000",
+      mixes: 20,
+      mixFees: "19000000",
+      withdrawFees: "1500000",
       delay: "1-6",
       on: true,
     });
     // A large one: no more than one chain takes (MAX_CHAIN_MIXES, 32 boxes of 4 mixes).
     t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "906594100" };
     expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({ boxes: 32, mixes: 128, mixFees: "121600000" });
-    // One wave deep, 1,600 ₳: no more than one deposit makes (final review lovejoin-5).
+    // One wave deep, 1,600 ₳: no more than one deposit makes (final review lovejoin-5), into a pool on the new scripts
+    // 64 (chunk 44).
     await t.deps.preferences.set({ lovejoinDepth: 1 });
     t.minswap.estimate = { ...minswapEstimate.estimate, amount_out: "1600000000" };
-    expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({ boxes: MAX_DEPOSIT_BOXES, depth: 1, mixes: MAX_DEPOSIT_BOXES });
+    expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({
+      boxes: MAX_TOKEN_DEPOSIT_BOXES,
+      depth: 1,
+      mixes: MAX_TOKEN_DEPOSIT_BOXES,
+    });
     // Where Lovejoin isn't, there's nothing to say.
     expect((await t.sessions.quote("preprod", selling)).lovejoin).toBeUndefined();
     // Where Settings brings sessions back directly, the approval's switch starts off (privacy review §4.1).
     await t.deps.preferences.set({ lovejoinReturns: false });
-    expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({ on: false, boxes: MAX_DEPOSIT_BOXES });
+    expect((await sessions.quote("preprod", selling)).lovejoin).toMatchObject({ on: false, boxes: MAX_TOKEN_DEPOSIT_BOXES });
   });
 
   it("leaves Splash out of routing on preprod, where Minswap builds its orders with a mainnet address", () => {

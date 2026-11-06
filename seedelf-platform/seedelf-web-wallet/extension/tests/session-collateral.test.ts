@@ -1,9 +1,8 @@
 // A private session's own 5 ₳ collateral: what its return's chain through
 // Lovejoin puts up, never a stranger's 5 ₳ its evaluator can't take
 // (independent review L20), and put back by a top-up once a return took it
-// (M9). The real WebAssembly, a recorded preprod pool, and fakes of Koios.
-import { readFileSync } from "node:fs";
-
+// (M9). The real WebAssembly, Lovejoin v2's 5 ₳ pool (v2-pools.ts), and
+// fakes of Koios.
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
@@ -11,15 +10,11 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { sessionSwap, testBalances, vectors } from "./fakes";
+import { ADA_POOL, ADA_ROWS } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const account = (words: number) =>
   vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === words)!;
-
-/** 20 boxes from Lovejoin's preprod pool, as Koios lists them. */
-const POOL = (
-  JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-).pool;
 
 /** Chains are built and measured in WebAssembly: a few seconds each, more on CI. */
 const CHAINS = { timeout: 30_000 };
@@ -49,9 +44,11 @@ function atSession(tx_hash: string, tx_index: number, value: string): KoiosUtxo 
 /**
  * A site's private session 0, funded by `ab…`, whose own collateral a site's
  * transaction spent: it holds 40 ₳ and another 5 ₳ of ADA alone (`c2…#1`).
+ * Its return's ADA goes into Lovejoin's 5 ₳ pool (chunk 44: the classic
+ * pool, retired, takes none).
  */
 async function withSession() {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(account(12).phrase, PASSWORD);
   await t.store.set("sessions.preprod", {
     next: 1,
@@ -65,7 +62,7 @@ async function withSession() {
       },
     ],
   });
-  t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...POOL);
+  t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...ADA_ROWS);
   t.koios.evaluation = AGREES;
   const sessions = new SessionService({
     ...t.deps,
@@ -116,8 +113,11 @@ describe("a site's session topped up after a return took its collateral (indepen
     // Its collateral's gone: a return took it with everything else (40 ₳ came since), or a site's transaction spent it.
     t.koios.spent.add(`${"c2".repeat(32)}#1`);
     const topUp = await sessions.topUpBuild("preprod", 0, "3000000", []);
+    // With the 3 ₳ asked, what the new collateral's mix into the 5 ₳ pool takes as it comes back, with nothing else
+    // left (tailReserve's direct reserve, 2.8 ₳ on preprod's parameters): that pool is shown here (chunk 44).
+    expect(topUp.collateralReserve).toBe("2800000");
     expect(topUp.payments.map((p) => [p.address, p.lovelace])).toEqual([
-      [sessionSwap.address, "3000000"],
+      [sessionSwap.address, "5800000"],
       [sessionSwap.address, "5000000"],
     ]);
     const kept = (await t.session.get<{ txCbor: string }>("seedelf.session.top-up"))!;

@@ -1,15 +1,13 @@
 // 1.6.0's branch review, the sessions' fixes: a session's funding in parts (10a) and its parts that wait for the one
 // before to be in a block (10b), as Stop, a return, a failure, a site and the runner's clock meet them. Session 0 of
 // the 12-word phrase, the real WebAssembly, and the fakes of swap-session.ts and site-funding-parts.test.ts.
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { DappService, type DappSession } from "../src/background/dapp";
 import type { KoiosUtxo } from "../src/background/koios";
-import { LovejoinService, type PoolRef } from "../src/background/lovejoin";
+import { LovejoinService } from "../src/background/lovejoin";
 import { builtOutputs } from "../src/background/minswap";
 import { LOOK_EVERY_MS, PartsService, SESSION_WAITING_PREFIX, type OnStopped, type Waiting } from "../src/background/parts";
 import { partKey } from "../src/background/script-spend";
@@ -19,6 +17,7 @@ import { TransferService } from "../src/background/transfer";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, ownedUtxos, sessionSwap, testBalances, transferPreprod, vectors } from "./fakes";
 import { ASK, atSession, bookOf, busy, PASSWORD, signing, type T } from "./swap-session";
+import { ADA, ADA_POOL } from "./v2-pools";
 
 const SLOW = { timeout: 300_000 };
 const PHRASE = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!.phrase;
@@ -406,13 +405,7 @@ describe("a chained funding's review (1.6.0's review: carry-has-no-history, a se
 });
 
 describe("a Bootstrap's funding (1.6.0's review: bootstrap-cap-vs-funding-parts)", SLOW, () => {
-  const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-token-pool-preprod.json", import.meta.url), "utf8")) as {
-    seed: { txHash: string; txIndex: number };
-    reference: KoiosUtxo;
-    scripts: KoiosUtxo[];
-  };
-  const TOKEN_POOL: PoolRef = { reference: FOUND.reference, seed: FOUND.seed, scripts: FOUND.scripts };
-
+  /** Lovejoin reading v2's 5 ₳ pool, which a Bootstrap names: the classic pool, retired, takes none (chunk 44). */
   function withLovejoin(t: T) {
     t.koios.evaluation = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
     t.koios.tip = 110_000_000;
@@ -421,7 +414,7 @@ describe("a Bootstrap's funding (1.6.0's review: bootstrap-cap-vs-funding-parts)
       wasm: loadTestWasm(),
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
       store: t.store,
-      pools: async () => [TOKEN_POOL],
+      pools: async () => [ADA_POOL],
       random: () => 0.5,
     });
     return signing(t, { lovejoin, sleep: async () => undefined });
@@ -429,20 +422,21 @@ describe("a Bootstrap's funding (1.6.0's review: bootstrap-cap-vs-funding-parts)
 
   it("stays one transaction, as its cap's deposit has it: never parts its deposit then can't pay", async () => {
     // Before 1.6.0's review it went in parts here, and a deposit of every part's output near the cap couldn't pay. Its
-    // one payment, 13 ₳ for a box with its way back (1.6.0's release review, 318-rust#0), takes 33 of these 40 UTxOs of
-    // 0.5 ₳ (as parts would spend them), well past what one transaction spends (about 22), and 20 ₳ pays for it: the
-    // refusal is for its inputs, never for its ADA, whatever the reserve or the fees move by.
-    const t = await spread(40, "500000");
+    // one payment, 8 ₳ for a box of the 5 ₳ pool with its way back (1.6.0's release review, 318-rust#0; 13 ₳ for the
+    // classic pool's 10 ₳ box before chunk 44), takes about 28 of these 40 UTxOs of 0.4 ₳ (as parts would spend them),
+    // well past what one transaction spends (about 22), and 16 ₳ pays for it: the refusal is for its inputs, never for
+    // its ADA, whatever the reserve or the fees move by.
+    const t = await spread(40, "400000");
     const sessions = withLovejoin(t);
     const asked = t.collateral.asked.length;
-    await expect(sessions.mixOutBuild("preprod", 1, { bootstrap: true })).rejects.toThrow(
+    await expect(sessions.mixOutBuild("preprod", 1, { bootstrap: true, pool: ADA })).rejects.toThrow(
       "That Bootstrap needs more UTxOs than one transaction can spend. Bootstrap fewer boxes.",
     );
     expect(t.koios.submitted).toHaveLength(0);
     expect(t.collateral.asked.length).toBe(asked);
     // What one transaction can spend funds it, as one.
     const fewer = await spread(3, "40000000");
-    const out = await withLovejoin(fewer).mixOutBuild("preprod", 1, { bootstrap: true });
+    const out = await withLovejoin(fewer).mixOutBuild("preprod", 1, { bootstrap: true, pool: ADA });
     expect(out.parts).toBeUndefined();
   });
 });

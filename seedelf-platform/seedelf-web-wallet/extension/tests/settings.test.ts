@@ -180,7 +180,8 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     const shown = text(html);
     expect(shown).toContain("Bring private sessions back through Lovejoin");
     expect(shown).toContain("Each swap and return can still come back directly, if you choose.");
-    expect(shown).toContain("mixed in 10 ₳ boxes so it's harder to tie to them");
+    // A return's ADA goes into the 5 ₳ pool (chunk 44).
+    expect(shown).toContain("mixed in 5 ₳ boxes so it's harder to tie to them");
     expect(shown).not.toContain("isn't tied");
     // What counts as spare, what bringing a box back costs, and that a lock stops a chain (privacy review §6).
     expect(shown).toContain("a token→ADA swap's proceeds included");

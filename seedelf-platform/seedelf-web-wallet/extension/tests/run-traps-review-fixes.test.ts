@@ -21,11 +21,11 @@ import { pendingKey } from "../src/background/pending";
 import { runNetworks, type Runner } from "../src/background/runs";
 import { SessionService } from "../src/background/sessions";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
-import bundled from "../src/lovejoin-pools.json";
 import { NETWORKS, type NetworkName } from "../src/networks";
 import { publicFunded } from "./chain-fixtures";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -329,8 +329,11 @@ describe("a trap in Lovejoin's pool read and withdraws (1.6.0's release review, 
 /** PR #163's token pool's id, as WebAssembly verifies it. */
 const TOKEN = (JSON.parse(loadTestWasm().lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: TOKEN_POOL }))) as { id: string }).id;
 
-/** Preprod's 5 ₳ pool, as the wallet bundles it: the one a session's collateral goes into. */
-const FIVE = (bundled.preprod.pools.find((p) => p.boxLovelace === "5000000")! as unknown as { ref: PoolRef }).ref;
+/**
+ * Lovejoin v2's 5 ₳ pool (v2-pools.ts): the one a session's collateral goes into. The bundled 5 ₳ pool runs 8131b1d's
+ * scripts, retired, and takes none since chunk 44.
+ */
+const FIVE = ADA_POOL;
 
 /** WebAssembly's check of the pools discovery hands over, failing with `failure` on PR #163's token pool alone. */
 function onToken(failure: unknown): Partial<ReturnType<typeof loadTestWasm>> {
@@ -457,11 +460,12 @@ describe("a trap under a catch that takes any failure (1.6.0's release review, L
   it("keeps Home's watch of a mix from the public account it sent before it hands on a trap in the read of its feed", async () => {
     for (const [what, trap] of traps()) {
       const t = await publicFunded();
-      const mix = await t.lovejoin.publicBuild("preprod", 1);
+      const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
       vi.spyOn(t.lovejoin, "watchOf").mockRejectedValue(trap);
       await expect(t.lovejoin.publicSubmit("preprod", mix.txHash), what).rejects.toBe(trap);
       expect(t.koios.submitted.length, what).toBeGreaterThan(0);
-      // Home's banner watches it all the same, on the classic pool's feed, where this mix is.
+      // Home's banner watches it all the same, on the 5 ₳ pool's feed, where this mix is (chunk 44: the classic pool's,
+      // retired, takes none).
       const watched = await t.wallet.withKeys(() => t.session.get<{ txHash: string; kind: string }>(pendingKey("preprod")));
       expect(watched, what).toMatchObject({ txHash: mix.txHash, kind: "lovejoin-mix" });
     }
