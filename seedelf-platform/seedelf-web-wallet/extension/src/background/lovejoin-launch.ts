@@ -15,9 +15,9 @@
 // - no shown pool has these values already (11), once discovery has looked
 //   for pools launched since it last did: a copy is never shown, so it's
 //   refused, and the form lists the pools there are to join (14); one of
-//   these values the wallet started that no look has found yet is said on the
-//   review, never refused, as the chain takes both (1.6.0's release review,
-//   318-worker#1);
+//   these values the wallet started on v2's scripts that no look has found
+//   yet is said on the review, never refused, as the chain takes both (1.6.0's
+//   release review, 318-worker#1; 1.8.0's, pr363#0);
 // - every box's ADA is at least what one needs to come back and pay part of
 //   itself on its own under the live parameters (S0d's rule, worked out in
 //   WebAssembly: lovejoinBoxValue), and at most 9 ₳ in a token pool (27).
@@ -293,14 +293,18 @@ export class LovejoinLaunchService {
    * block, and on mainnet the data layer's list is asked every few minutes, so the copy check above can't see it yet.
    * Sent again, one of the two lands after the other, a copy no wallet shows, what it locks gone for good. The chain
    * takes both, so nothing is refused (the owner's rule): its review says so (1.6.0's release review, 318-worker#1).
-   * From the device alone, asking no one.
+   * Only a start on v2's scripts, as this one is: one 1.7 recorded ran 8131b1d's (its record names no set), and a v2
+   * pool is never a copy of an 8131b1d pool. Matched by its values alone, the review called a pool that's shown a copy
+   * (1.8.0's release review, pr363#0). From the device alone, asking no one.
    */
   private async startedBefore(network: NetworkName, known: FoundPool[], box: bigint, token?: TokenQuantity) {
     const now = this.deps.now();
     const same = (b: { lovelace: string; token?: TokenQuantity }) =>
       b.lovelace === box.toString() && sameToken(b.token, token) && (!token || b.token?.quantity === token.quantity);
     return (await this.deps.lovejoin.launches(network))
-      .filter((l) => !!l.box && same(l.box) && now - l.at < STARTED_SAID_MS && !known.some((p) => p.id === l.id))
+      .filter(
+        (l) => l.version === "v2" && !!l.box && same(l.box) && now - l.at < STARTED_SAID_MS && !known.some((p) => p.id === l.id),
+      )
       .at(-1);
   }
 
@@ -394,9 +398,12 @@ export class LovejoinLaunchService {
         .recordLaunch(network, {
           id: kept.pool.id,
           txHash: kept.txHash,
+          // The set it runs: v2's, as every start's since chunk 44, whichever build goes (1.8.0's release review,
+          // pr363#0).
+          version: "v2",
           from: kept.from,
           ...(kept.from === "public" && kept.account !== undefined ? { account: kept.account } : {}),
-          // Its values, so a start of the same ones before a look finds this one says so (startedBefore).
+          // Its values, so a start of the same ones on its set before a look finds this one says so (startedBefore).
           box: { lovelace: kept.pool.boxLovelace, ...(kept.pool.token ? { token: kept.pool.token } : {}) },
           ...(kept.reviewed !== kept.txHash ? { reviewed: kept.reviewed } : {}),
         })

@@ -350,7 +350,7 @@ describe("a swap's approval (launch review #21, #26)", () => {
   it("shows what bringing it back through Lovejoin is expected to cost, and that Lovejoin has had no audit", () => {
     const lovejoin = { boxes: 4, depth: 2, mixes: 16, mixFees: "15200000", withdrawFees: "1200000", delay: "1-6", on: true };
     const line = text(createElement(LovejoinCost, { lovejoin }));
-    expect(line).toContain("Boxes of 10 ₳ About 4, at most");
+    expect(line).toContain("Boxes of 5 ₳ About 4, at most");
     expect(line).toContain("Mix fees, about 15.2 ₳");
     expect(line).toContain("Bringing them back, about 1.2 ₳");
     // When each box comes back is its row; which money goes in is the Plan's last step: the note doesn't repeat them.
@@ -363,7 +363,7 @@ describe("a swap's approval (launch review #21, #26)", () => {
     expect(line).toContain("Lovejoin has had no third-party audit");
     // As many as the pool has room for at Review (privacy review §2.7).
     const capped = text(createElement(LovejoinCost, { lovejoin: { ...lovejoin, boxes: 2, of: 4 } }));
-    expect(capped).toContain("Boxes of 10 ₳ About 2 of 4, as the pool is now");
+    expect(capped).toContain("Boxes of 5 ₳ About 2 of 4, as the pool is now");
   });
 
   it("says which check what Minswap built failed", () => {
@@ -443,7 +443,7 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     const line = approval({ ...through, boxes: 0, mixes: 0, mixFees: "0", withdrawFees: "0", ifStopped: { boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" } });
     expect(line).toContain("Bring it back through Lovejoin");
     expect(line).toContain(
-      "If you stop it or the order is refunded, its 16 ₳ come back through Lovejoin instead: at most 1 box of 10 ₳, about 3.8 ₳ in mix fees and 0.3 ₳ to bring them back",
+      "If you stop it or the order is refunded, its 16 ₳ come back through Lovejoin instead: at most 1 box of 5 ₳, about 3.8 ₳ in mix fees and 0.3 ₳ to bring them back",
     );
     expect(line).toContain("Lovejoin has had no third-party audit");
     expect(line).not.toContain("Too little spare ADA for a Lovejoin box");
@@ -567,7 +567,7 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     expect(mixes).toContain("Bring it back through Lovejoin");
     expect(mixes).toContain("Stop, through Lovejoin");
     expect(mixes).toContain(
-      "Its ADA goes through Lovejoin first: at most 1 box of 10 ₳, about 3.8 ₳ in mix fees and 0.3 ₳ to bring them back, each after 1 to 6 hours",
+      "Its ADA goes through Lovejoin first: at most 1 box of 5 ₳, about 3.8 ₳ in mix fees and 0.3 ₳ to bring them back, each after 1 to 6 hours",
     );
     // Off: Stop says it comes back directly, for one fee, and what that ties.
     const off = text(dialog(cost, false, false));

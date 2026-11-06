@@ -7,10 +7,10 @@
 //! the hashes of the pool's three scripts. `one_shot_mint` checks the datum's
 //! shape and ranges, but **never its three hashes**: anyone can launch a pool
 //! whose datum names scripts of their own. So the wallet trusts no hash a
-//! datum gives. It derives the scripts itself from the seed the launch spent
-//! ([`super::templates::derive`]), and a pool is one whose datum names
-//! exactly those. Every address and reward account the wallet builds comes
-//! from what it derived, never from the datum.
+//! datum gives. It derives the scripts itself from the seed the launch spent,
+//! on the set the datum's L names ([`super::templates::derive_for`]), and a
+//! pool is one whose datum names exactly those. Every address and reward
+//! account the wallet builds comes from what it derived, never from the datum.
 //!
 //! The seed alone proves the NFT genuine, whoever supplies it: the policy
 //! `one_shot_mint(seed)` hashes to can mint only in the one transaction that

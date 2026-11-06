@@ -785,7 +785,7 @@ describe("the pool the chains draw from", CHAINS, () => {
       const review = await sessions.backBuild("preprod", 0);
       expect(review.lovejoin).toBeUndefined();
       expect(review.lovejoinSkipped).toBe(
-        "Lovejoin's pool holds 20 boxes not yours, and the wallet mixes only from 25",
+        "Lovejoin's pool held 20 boxes not yours when the wallet read it, and the wallet mixes only from 25",
       );
       await expect(sessions.mixOutBuild("preprod", 1, { pool: ADA })).rejects.toThrow("pool holds 25 boxes not yours. It holds 20");
     } finally {
@@ -2337,9 +2337,10 @@ describe("mixing from the tile", CHAINS, () => {
     // One wave deep, 40 others mix twenty: all twelve go.
     await t.deps.preferences.set({ lovejoinDepth: 1 });
     expect(await t.lovejoin.againBoxes("preprod", false, ADA)).toEqual({ boxes: 12, owned: 12 });
-    // Two waves deep, each box takes eight others: five of the twelve go.
+    // Two waves deep, each box takes eight others: four of the twelve go, leaving its collateral's mix two (1.8.0's
+    // release review, P1: five took all forty, and that mix had none).
     await t.deps.preferences.set({ lovejoinDepth: 2 });
-    expect(await t.lovejoin.againBoxes("preprod", false, ADA)).toEqual({ boxes: 5, owned: 12 });
+    expect(await t.lovejoin.againBoxes("preprod", false, ADA)).toEqual({ boxes: 4, owned: 12 });
   });
 
   it("won't mix again with no box of the wallet's in the pool", async () => {
@@ -2480,8 +2481,12 @@ describe("a swap's way back (privacy review §2.7, §2.8, §4.1)", CHAINS, () =>
     return { t, sessions };
   }
 
-  /** A swap that runs itself, approved `direct` or not (none: from before), funded, its account holding 40 ₳ and its 5 ₳ collateral. */
-  async function approved(direct?: boolean) {
+  /**
+   * A swap that runs itself, approved `direct` or not (none: from before), funded, its account holding 40 ₳ and its 5 ₳
+   * collateral; `lovejoin`, the way back its approval recorded (none: from before approvals kept one, so priced in the
+   * classic pool's boxes, as its return counts them: 1.8.0's release review, critic#4).
+   */
+  async function approved(direct?: boolean, lovejoin?: object) {
     const t = testBalances({ pools: [ADA_POOL] });
     await t.wallet.create(account(12).phrase, PASSWORD);
     await t.store.set("sessions.preprod", {
@@ -2496,6 +2501,7 @@ describe("a swap's way back (privacy review §2.7, §2.8, §4.1)", CHAINS, () =>
           auto: {
             approved: { minAmountOut: "902083681", fund: { lovelace: "40000000", tokens: [] } },
             ...(direct === undefined ? {} : { direct }),
+            ...(lovejoin ? { lovejoin } : {}),
           },
         },
       ],
@@ -2534,11 +2540,16 @@ describe("a swap's way back (privacy review §2.7, §2.8, §4.1)", CHAINS, () =>
         skipped: "Right now Lovejoin's pool holds 20 boxes that aren't yours, under the 25 it needs",
         ifStopped: { boxes: 0, of: 1 },
       });
-      // Two reads: its room, and whether the 5 ₳ pool takes the session's collateral's mix, the same pool since chunk 44.
-      expect(poolReads(t)).toBe(2);
-      // Reviewed again within five minutes: the same reading of its room, and that look again.
+      // Nor its collateral's 5 ₳: nothing set aside for its mix, nor said, under the floor (collateralRoom's floor, as
+      // collateralPool's at the build; 1.8.0's release review, last-code#0).
+      expect(out.collateralReserve).toBeUndefined();
+      expect(out.collateralMix).toBeUndefined();
+      // One read: its room, which its collateral's look at the same pool reads too (collateralRoom; 1.8.0's review of its
+      // fixes, r2-worker#1: that look read the pools again, on its own).
+      expect(poolReads(t)).toBe(1);
+      // Reviewed again within five minutes: the same reading, for both.
       await sessions.outBuild("preprod", quote);
-      expect(poolReads(t)).toBe(3);
+      expect(poolReads(t)).toBe(1);
     } finally {
       preprod.poolFloor = floor;
     }
@@ -2558,8 +2569,9 @@ describe("a swap's way back (privacy review §2.7, §2.8, §4.1)", CHAINS, () =>
     const again = (await sessions.outBuild("preprod", quote)).lovejoin!;
     expect(again.skipped).toBeUndefined();
     expect(again.ifStopped).toEqual({ boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" });
-    // Each Review read its room, and whether the pool takes the session's collateral's mix (chunk 44: the same pool).
-    expect(poolReads(t)).toBe(4);
+    // Each Review read its room once, whether the pool takes the session's collateral's mix answered from it (chunk 44:
+    // the same pool; 1.8.0's review of its fixes, r2-worker#1).
+    expect(poolReads(t)).toBe(2);
   });
 
   it("reads no pool at Review when Settings brings sessions back directly, and keeps what the approval chose", async () => {
@@ -2600,7 +2612,9 @@ describe("a swap's way back (privacy review §2.7, §2.8, §4.1)", CHAINS, () =>
   });
 
   it("says what Stop brings back through Lovejoin, as the pool has room for, and stops directly when asked", async () => {
-    const { t, sessions } = await approved(false);
+    // Approved on 1.8.0, priced in the 5 ₳ pool's boxes (its `box`).
+    const NOW = { depth: 2, delay: "1-6", box: "5000000" };
+    const { t, sessions } = await approved(false, NOW);
     await sessions.list("preprod", true);
     // 40 ₳ at the account, its collateral aside, pays for four 5 ₳ boxes, and the pool's 20 others mix two, four mixes
     // each. Its collateral goes into the 5 ₳ pool after them if what's left pays for that (chunk 44: that pool is shown).
@@ -2621,7 +2635,7 @@ describe("a swap's way back (privacy review §2.7, §2.8, §4.1)", CHAINS, () =>
     expect(view.auto?.direct).toBe(true);
 
     // A pool with room for one box: one of the four.
-    const small = await approved(false);
+    const small = await approved(false, NOW);
     small.t.koios.addedToAccounts = small.t.koios.addedToAccounts.filter((u) => !ADA_ROWS.slice(9).includes(u));
     await small.sessions.list("preprod", true);
     expect(await small.sessions.stopCost("preprod", 0)).toMatchObject({ boxes: 1, of: 4, mixes: 4 });

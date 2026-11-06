@@ -719,6 +719,8 @@ describe("a withdraw of Bring every box back now that a node dropped (1.6.0's re
 describe("Bring every box back now stopped by Stop (1.6.0's release review, L2)", SLOW, () => {
   it("marks the stop with how many it sent and its pool, kept sealed through a restart, until it's asked again", async () => {
     const t = await wallet();
+    // Past 1.8.0's first run, which widens a retired pool's run going to the retired pools' (retireOnce, R1).
+    await retiredAlready(t.store);
     const lj = pooled(t);
     t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1", 60), await classicBox(t, "c2", 60), ...(await strangers(t)));
     await lj.status("preprod");

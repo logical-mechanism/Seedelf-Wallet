@@ -1465,7 +1465,7 @@ export function PublicMixHolding({ progress, onOpen }: { progress: NonNullable<M
  * own wait: not counted in the balance until they're here. Boxes a chain cut
  * short didn't mix never come back by themselves, and a mix that stopped
  * partway needs looking at: both are said under it. Opens Lovejoin's page.
- * Every box is 10 ₳, so the counts are hidden with the balances.
+ * Every box of a pool holds the same, so the counts are hidden with the balances.
  */
 /**
  * Whether Home shows In Lovejoin: a box on its way back or not mixed yet in any pool, or a chain stopped partway. A

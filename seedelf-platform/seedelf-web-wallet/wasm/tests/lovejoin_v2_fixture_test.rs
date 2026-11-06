@@ -35,6 +35,14 @@ const ADA_FILE: &str = concat!(
 /// What every box of the ADA pool holds: the 5 ₳ a session's collateral is.
 const ADA_BOX: u64 = 5_000_000;
 
+/// Where `reference`'s row sits on chain, which the launch's script rows
+/// take too: one transaction's outputs are in one block. They kept the
+/// blocks of the rows they're made from, so a launch's three outputs sat in
+/// three blocks (1.8.0's release review, tests-e2e#6).
+fn in_block(reference: &Value) -> [(&'static str, Value); 3] {
+    ["block_height", "block_time", "epoch_no"].map(|key| (key, reference[key].clone()))
+}
+
 fn fixture() -> Value {
     let mut pool: Value = serde_json::from_str(&std::fs::read_to_string(FROM).unwrap()).unwrap();
     let seed_tx: [u8; 32] = hex::decode(pool["seed"]["txHash"].as_str().unwrap())
@@ -70,6 +78,7 @@ fn fixture() -> Value {
 
     // Its two scripts at the holder, in the launch's own transaction, as the wallet's launches put them.
     let (holder, tx) = (reference["address"].clone(), reference["tx_hash"].clone());
+    let block = in_block(reference);
     let cred = hex::encode(templates::REFERENCE_HOLDER_HASH);
     let scripts = pool["scripts"].as_array_mut().unwrap();
     for (i, (row, script)) in scripts
@@ -77,6 +86,9 @@ fn fixture() -> Value {
         .zip([&v2.mix_box, &v2.mix_logic])
         .enumerate()
     {
+        for (key, value) in &block {
+            row[*key] = value.clone();
+        }
         row["tx_hash"] = tx.clone();
         row["tx_index"] = json!(i + 1);
         row["address"] = holder.clone();
@@ -144,6 +156,7 @@ fn ada_fixture() -> Value {
     reference["asset_list"][0]["policy_id"] = json!(hex::encode(v2.policy()));
     reference["asset_list"][0]["fingerprint"] = json!("");
     let (holder, tx) = (reference["address"].clone(), reference["tx_hash"].clone());
+    let block = in_block(reference);
     let cred = hex::encode(templates::REFERENCE_HOLDER_HASH);
     let scripts = pool["scripts"].as_array_mut().unwrap();
     for (i, (row, script)) in scripts
@@ -151,6 +164,9 @@ fn ada_fixture() -> Value {
         .zip([&v2.mix_box, &v2.mix_logic])
         .enumerate()
     {
+        for (key, value) in &block {
+            row[*key] = value.clone();
+        }
         row["tx_hash"] = tx.clone();
         row["tx_index"] = json!(i + 1);
         row["address"] = holder.clone();
@@ -198,6 +214,24 @@ fn the_v2_pool_fixture_is_its_derivation() {
 #[test]
 fn the_v2_ada_pool_fixture_is_its_derivation() {
     held_to(&ada_fixture(), ADA_FILE);
+}
+
+/// Each committed pool's launch, its reference and its two scripts, sits in
+/// one block, as one transaction's outputs do: a test that scans the holder
+/// from these rows starts from a launch that could be (1.8.0's release
+/// review, tests-e2e#6).
+#[test]
+fn each_launch_is_in_one_block() {
+    for file in [FILE, ADA_FILE] {
+        let pool: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        let reference = &pool["reference"];
+        for row in pool["scripts"].as_array().unwrap() {
+            assert_eq!(row["tx_hash"], reference["tx_hash"], "{file}");
+            for key in ["block_height", "block_time", "epoch_no"] {
+                assert_eq!(row[key], reference[key], "{file} {key}");
+            }
+        }
+    }
 }
 
 /// The worker's WebAssembly verifies the ADA pool as v2's, of 5 ₳ a box and no token, its scripts read from the

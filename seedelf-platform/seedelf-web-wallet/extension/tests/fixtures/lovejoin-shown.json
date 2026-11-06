@@ -1,5 +1,5 @@
 {
-  "//": "The shown-pool rule's last step, earliest of each value (web wallet chunk 34's 34c), for the wallet (tests/lovejoin-discovery.test.ts) and the data layer (seedelf-data/api/src/lovejoin/standard.rs). Every pool here is standard; a value is (boxLovelace, token), on one set: a pool's version is tokenV1 (8131b1d's scripts, retired) when it names none, or v2 (chunk 44), and a v2 pool is never a copy of a tokenV1 pool. Ordered by block, then place in the block, then id.",
+  "//": "The shown-pool rule's last step, earliest of each value (web wallet chunk 34's 34c), for the wallet (tests/lovejoin-discovery.test.ts) and the data layer (seedelf-data/api/src/lovejoin/standard.rs). Every pool here is standard; a value is (boxLovelace, token), on one set: a pool's version is tokenV1 (8131b1d's scripts, retired) when it names none, or v2 (chunk 44), and a v2 pool is never a copy of a tokenV1 pool. Both readers refuse any other name. Ordered by block, then place in the block, then id.",
   "scenarios": [
     {
       "about": "one pool",
@@ -347,6 +347,34 @@
         {
           "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "version": "tokenV1",
+          "boxLovelace": "5000000",
+          "token": null,
+          "launch": {
+            "block": 10,
+            "index": 0
+          }
+        },
+        {
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "v2",
+          "boxLovelace": "5000000",
+          "token": null,
+          "launch": {
+            "block": 20,
+            "index": 0
+          }
+        }
+      ],
+      "shown": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "about": "an 8131b1d pool that names no version, beside a v2 pool of its values: both shown",
+      "pools": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "boxLovelace": "5000000",
           "token": null,
           "launch": {

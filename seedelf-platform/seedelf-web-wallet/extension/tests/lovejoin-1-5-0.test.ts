@@ -32,12 +32,15 @@
 // review, x-compat#2; its review of the fixes, R3-17).
 //
 // Since chunk 44 the classic pool is retired, and so is every pool the head
-// start bundles (all on 8131b1d's scripts): what 1.5.0 planned to mix is
-// planned as it was, but no pool shown takes a return's ADA, so every return
-// comes back directly; and the vault's boxes don't wait their due times: the
-// first run after the update asks Bring every box back over the retired
-// pools (retireOnce, the owner's call 3 of 2026-11-05), and they all come
-// back at once. The gate holds this tree to that, against 1.5.0's record.
+// start bundled before it (all on 8131b1d's scripts): what 1.5.0 planned to
+// mix is planned as it was, but no pool shown takes a return's ADA, so every
+// return comes back directly; and the vault's boxes don't wait their due
+// times: the first run after the update asks Bring every box back over the
+// retired pools (retireOnce, the owner's call 3 of 2026-11-05), and they all
+// come back at once. The gate holds this tree to that, against 1.5.0's
+// record. The v2 pools the head start bundles since 1.8.0's prep take a
+// return's ADA, which 1.5.0's record can't say anything of: the gate holds
+// them apart (1.8.0's release review, D6).
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -417,15 +420,15 @@ type Recorded = {
 };
 
 /** What a return, a swap's quote and Stop say with no 5 ₳ pool shown (sess.skip.warn.noAdaPool). */
-const NO_ADA_POOL = "Lovejoin has no pool of 5\u00a0₳ boxes to take it yet";
+const NO_ADA_POOL = "the wallet knew of no Lovejoin pool of 5\u00a0₳ boxes to take it";
 
 /**
  * 1.5.0's plans as this tree makes them from 1.5.0's start (chunk 44): the classic pool, retired, takes no new box,
  * and no pool shown is on v2's scripts, so none takes a return's ADA (adaPool). What mixing takes (`funding`, `plans`)
  * is 1.5.0's still. Every return comes back directly, as 1.5.0's direct return of as much did (its deepest, which the
- * pool was too short for), saying why, with no chain; a swap's spare and Stop's pay for no box, and say of none that
- * it's left out (`of`): nothing would take it. So a swap stopped puts no more through Lovejoin than one filled, and its
- * review says nothing of that (`ifStopped`).
+ * pool was too short for), saying why, with no chain; a swap's spare and Stop's pay for no box, and say what they'd
+ * pay for in 5 ₳ boxes (`of`), so a swap's approval keeps its Lovejoin choice for a pool found as it comes back (1.8.0's
+ * release review, O2): a stopped swap's funding one, Stop's 40 ₳ four.
  */
 function asRetired(plans: unknown): unknown {
   const p = structuredClone(plans) as Recorded;
@@ -434,12 +437,13 @@ function asRetired(plans: unknown): unknown {
     r.review = { ...direct.get(r.lovelace)!, lovejoinSkipped: NO_ADA_POOL };
     r.chain = null;
   }
-  const none = <T extends Priced>({ of: _of, ...way }: T): T => ({ ...way, boxes: 0, mixes: 0, mixFees: "0", withdrawFees: "0" }) as T;
+  const none = <T extends Priced>({ of: _of, ...way }: T, of?: number): T =>
+    ({ ...way, boxes: 0, mixes: 0, mixFees: "0", withdrawFees: "0", ...(of ? { of } : {}) }) as T;
   for (const side of [p.swap.quote, p.swap.review]) {
     side.skipped = NO_ADA_POOL;
-    delete (side as Partial<typeof side>).ifStopped;
+    side.ifStopped = none(side.ifStopped, 1);
   }
-  p.stop = { ...none(p.stop), skipped: NO_ADA_POOL };
+  p.stop = { ...none(p.stop, 4), skipped: NO_ADA_POOL };
   return p;
 }
 
@@ -786,7 +790,9 @@ function finishesRetired(got: After, recorded: After, vault: Vault): void {
       if (label === "status") {
         return { ...r, boxes: [], lovelace: "0", notMixed: [], chains: [], unusable: { why: "retired" } };
       }
-      return label === "chains" && at !== MINUTE ? [] : r;
+      // The cut chain's row, its pool retired, says why it stopped alone (1.8.0's release review, W8).
+      if (label === "chains") return at !== MINUTE ? [] : (result as Array<Record<string, unknown>>).map((c) => ({ ...c, retired: true }));
+      return r;
     }),
   );
   // Retired at the unlock, once; Bring every box back asked then, and over once its boxes are back.
@@ -811,18 +817,33 @@ function finishesRetired(got: After, recorded: After, vault: Vault): void {
 // ---------------------------------------------------------------------------
 
 /**
- * The pools discovery hands every wallet on `network` from its first read: the bundled head start's (preprod's MIN
- * pools of 4.5 ₳ and 100 MIN a box, and its 5 ₳ and 7 ₳ ADA pools; mainnet's 5 ₳ pool), as discovery's kept() merges
- * them. Every one is on 8131b1d's scripts, retired since chunk 44. Read only when this case runs: 1.5.0's tree, where
- * this file records, has no such file.
+ * Every pool the bundled head start holds on `network`, as the file has them: `version` is `v2` for a pool on Lovejoin
+ * v2's scripts, and absent for one on 8131b1d's. Read only when this case runs: 1.5.0's tree, where this file records,
+ * has no such file.
  */
-const headStart: Handed = (network) => {
-  const file = JSON.parse(readFileSync(new URL("../src/lovejoin-pools.json", import.meta.url), "utf8")) as Record<string, { pools: Array<{ ref: PoolRef; copy?: true }> }>;
-  return file[network]!.pools.map((p) => (p.copy ? { copy: p.ref } : p.ref));
-};
+function bundledPools(network: NetworkName): Array<{ ref: PoolRef; copy?: true; version?: "v2" }> {
+  const file = JSON.parse(readFileSync(new URL("../src/lovejoin-pools.json", import.meta.url), "utf8")) as Record<
+    string,
+    { pools: Array<{ ref: PoolRef; copy?: true; version?: "v2" }> }
+  >;
+  return file[network]!.pools;
+}
 
 /**
- * The pools the head start shows on `network`, each as WebAssembly derives it from the bundled templates and the pool's
+ * The pools discovery hands every wallet on `network` from its first read, of the bundled head start's, as discovery's
+ * kept() merges them: those on 8131b1d's scripts, retired since chunk 44 (preprod's MIN pools of 4.5 ₳ and 100 MIN a
+ * box, and its 5 ₳ and 7 ₳ ADA pools; mainnet's 5 ₳ pool). Not the v2 pools it bundles since 1.8.0's prep: a return's
+ * ADA goes into one (adaPool), and 1.5.0's record can't say what that return does. So the gate compares the retired
+ * pools alone with it, and asserts the v2 ones apart (v2Pools); a return into the 5 ₳ pool, given boxes to mix with, is
+ * lovejoin-retired.test.ts's (1.8.0's release review, D6).
+ */
+const headStart: Handed = (network) =>
+  bundledPools(network)
+    .filter((p) => p.version !== "v2")
+    .map((p) => (p.copy ? { copy: p.ref } : p.ref));
+
+/**
+ * The pools headStart hands on `network`, each as WebAssembly derives it from the bundled templates and the pool's
  * seed, as the wallet verifies a pool: its scripts' version, and its mix box, which every read of the shown pools names
  * beside the classic pool's. From the head start itself, so its refresh at each release (`npm run lovejoin-pools`)
  * carries over.
@@ -836,7 +857,15 @@ function shownPools(network: NetworkName = "preprod"): Array<{ version: string; 
   });
 }
 
-/** The mix boxes of the pools the head start shows on preprod but the classic pool's. */
+/** The v2 pools the head start bundles on `network`, which headStart leaves out, each as WebAssembly verifies it. */
+function v2Pools(network: NetworkName): Array<{ version: string; boxLovelace: string; token?: unknown }> {
+  const wasm = loadTestWasm();
+  return bundledPools(network)
+    .filter((p) => p.version === "v2")
+    .map((p) => JSON.parse(wasm.lovejoinVerifyPool(JSON.stringify({ network, pool: p.ref }))) as { version: string; boxLovelace: string; token?: unknown });
+}
+
+/** The mix boxes of the pools headStart hands on preprod but the classic pool's. */
 function shownMixBoxes(): string[] {
   return shownPools()
     .map((p) => p.mixBoxHash)
@@ -915,12 +944,18 @@ describe("1.5.0's Lovejoin, through token pools (chunk 34's gate)", SLOW, () => 
   });
 
   describe("with the token pools every preprod wallet is handed shown (1.6.0's release review, x-compat#2)", () => {
-    it("plans every return and mix as with the classic pool alone: every pool shown is retired, and adds nothing (chunk 44)", async () => {
-      // The head start bundles no pool on v2's scripts yet: each it shows takes no box, so none adds a collateral's 5 ₳
-      // pool, a token's way or a return's ADA pool. A refresh (`npm run lovejoin-pools`) that bundles one changes that.
+    it("plans every return and mix as with the classic pool alone: every retired pool shown adds nothing, and the v2 pools are held apart (chunk 44; 1.8.0's release review, D6)", async () => {
+      // Each pool handed is retired, as WebAssembly verifies it: none takes a box, so none adds a collateral's 5 ₳ pool,
+      // a token's way or a return's ADA pool. The v2 pools the head start bundles, held apart, are each a 5 ₳ ADA pool
+      // (adaPoolOf's), whose returns lovejoin-retired.test.ts tests: preprod's since 1.8.0's prep, and mainnet's once a
+      // refresh (`npm run lovejoin-pools`) bundles its launch. A refresh that bundles a v2 pool of other values (a
+      // token's) fails here, as no test here or there says what a return does with it.
       for (const network of ["preprod", "mainnet"] as const) {
         expect(shownPools(network).filter((p) => p.version === "v2")).toEqual([]);
+        const v2 = v2Pools(network).map(({ version, boxLovelace, token }) => ({ version, boxLovelace, token }));
+        expect(v2).toEqual(v2.map(() => ({ version: "v2", boxLovelace: "5000000", token: undefined })));
       }
+      expect(v2Pools("preprod")).toHaveLength(1);
       expect(nearly(await plans(headStart), asRetired(recorded.plans))).toEqual([]);
     });
 

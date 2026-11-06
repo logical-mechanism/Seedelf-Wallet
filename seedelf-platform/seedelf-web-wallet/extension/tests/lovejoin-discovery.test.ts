@@ -25,7 +25,7 @@ const SCENARIOS = JSON.parse(readFileSync(new URL("./fixtures/lovejoin-shown.jso
     about: string;
     pools: Array<{
       id: string;
-      version?: "tokenV1" | "v2";
+      version?: unknown;
       boxLovelace: string;
       token: { policy: string; name: string; quantity: string } | null;
       launch: { block: number; index: number };
@@ -33,6 +33,17 @@ const SCENARIOS = JSON.parse(readFileSync(new URL("./fixtures/lovejoin-shown.jso
     shown: string[];
   }>;
 };
+
+/**
+ * A scenario pool's set, as the data layer's test reads it (standard.rs): none, or `tokenV1`, is 8131b1d's, which
+ * FoundPool names by none, and `v2` is v2's. A name neither knows fails both, so a typo can't read as one set here and
+ * another there (1.8.0's release review, pr363#1).
+ */
+function setOf(p: { version?: unknown }, about: string): { version?: "v2" } {
+  if (!("version" in p) || p.version === "tokenV1") return {};
+  if (p.version === "v2") return { version: "v2" };
+  throw new Error(`${about}: no set is named ${JSON.stringify(p.version)}`);
+}
 
 const ID = "c5852bb700034b0b259c9e237e58ffc5d022ce8f67600fbf32736e69";
 const LJTEST = "02d597331203e9e2ec8b954b26a33503f044578c836407bf125f31fa" + Buffer.from("LJTEST").toString("hex");
@@ -133,7 +144,7 @@ describe("the shown-pool rule's last step", () => {
     for (const s of SCENARIOS.scenarios) {
       const pools: FoundPool[] = s.pools.map((p) => ({
         id: p.id,
-        ...(p.version === "v2" ? { version: "v2" as const } : {}),
+        ...setOf(p, s.about),
         boxLovelace: p.boxLovelace,
         ...(p.token ? { token: { policyId: p.token.policy, assetName: p.token.name, quantity: p.token.quantity } } : {}),
         ref: { reference: FOUND.reference, seed: FOUND.seed },

@@ -209,7 +209,7 @@ describe("no pool read names the pool a mix goes into (chunk 34's §3, 34d's rev
     await lj.fits("preprod", 1, TOKEN);
     await lj.fits("preprod", 1, ADA).catch(() => undefined);
     // A swap's review (the 5 ₳ pool's room), and a mix from the public account into the token pool.
-    await lj.room("preprod");
+    await lj.room("preprod", ADA);
     await lj.publicBuild("preprod", 1, { pool: TOKEN });
     expect(reads().length).toBeGreaterThanOrEqual(4);
     for (const c of reads()) expect([...(c.body._payment_credentials as string[])].sort()).toEqual(boxes);
@@ -535,10 +535,13 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     expect(t.koios.submitted).toHaveLength(0);
   });
 
-  it("still brings a 1.5.0 seed's box back by itself once someone else's mix moved it, as a Bootstrap's never does (34d's review 6)", async () => {
+  it("still brings a 1.5.0 seed's box back by itself once someone else's mix moved it, the classic pool holding nothing, as a Bootstrap's never does (34d's review 6)", async () => {
     /**
      * A public Bootstrap of one box of the 5 ₳ pool, its deposit in; then, when `old`, its record as 1.5.0 kept it, a
      * seed's in the classic pool, the one pool 1.5.0 had (the classic pool, retired, takes no new Bootstrap: chunk 44).
+     * Its box comes back by itself whatever the rule for a seed, as every box there does: a retired pool holds nothing
+     * (the owner, 2026-11-06), and a seed is in no other pool, so no test tells a seed held from one not. What this
+     * pins of 1.5.0's seed is that its record, read on 1.8.0, gives its box a due time (1.8.0's release review, R7).
      */
     const putIn = async (old: boolean) => {
       const t = await wallet();
@@ -912,7 +915,7 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     expect(Buffer.from(sent).toString("hex")).toContain(HOLDER);
     // With its values, so a start of the same ones before a look finds it says so (1.6.0's release review, 318-worker#1).
     expect((await sealed(t)).launches).toEqual([
-      { id: summary.pool.id, txHash: summary.txHash, from: "public", account: 0, at: t.clock.now, box: { lovelace: "4500000", token: { ...min, quantity: "1000" } } },
+      { id: summary.pool.id, txHash: summary.txHash, version: "v2", from: "public", account: 0, at: t.clock.now, box: { lovelace: "4500000", token: { ...min, quantity: "1000" } } },
     ]);
     // Kept for Send no more.
     expect(await t.wallet.withKeys(() => t.session.get(SESSION_LOVEJOIN_LAUNCH))).toBeUndefined();

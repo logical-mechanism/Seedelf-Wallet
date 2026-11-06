@@ -42,8 +42,12 @@ const CRITICAL = new Set(criticalKeys(Object.keys(en)));
 
 /** The errors whose argument is the reason: a paused swap shows a Refused's, a return a LovejoinSkipped's. */
 const REASON_ERRORS = new Set(["Refused", "LovejoinSkipped"]);
-/** The helpers whose return is a reason: why a chain failed, a message made a clause of one, the pool too thin. */
-const REASON_FUNCTIONS = new Set(["leftOut", "clauseOf", "poolShort", "floorShort"]);
+/**
+ * The helpers whose return is a reason: why a chain failed, a message made a clause of one, the pool too thin, and why
+ * a pool takes no new box, which chain() hands a return as a LovejoinSkipped's own words (`e.message`): followed,
+ * the retired reason a 1.7 mix session saves is held to the set by more than its name (1.8.0's release review, W7).
+ */
+const REASON_FUNCTIONS = new Set(["leftOut", "clauseOf", "poolShort", "floorShort", "unusableReason"]);
 /** The fields a warning shows as a reason: what's assigned to them, or given them in an object. */
 const REASON_FIELDS = new Set(["skipped", "lovejoinSkipped"]);
 /** A pause's own field: `paused = { …, detail }`. */
@@ -581,6 +585,11 @@ describe("a reason the worker gives a warning", () => {
     ["sess.skip.warn.noBox", "lovejoinSkipped:", "skipped", "background/sessions.ts"],
     ["sess.skip.warn.poolFloor", "skipped:", "skipped", "background/sessions.ts"],
     ["sess.skip.warn.deep", "poolShort's return", "-", "background/sessions.ts"],
+    // Why a pool takes no new box: chain() hands it on as a LovejoinSkipped's own words, the retired reason a 1.7 mix
+    // session's (1.8.0's release review, W7).
+    ["lj.unusable.warn.retired", "unusableReason's return", "-", "background/lovejoin.ts"],
+    ["lj.unusable.warn.superseded", "unusableReason's return", "-", "background/lovejoin.ts"],
+    ["lj.unusable.warn.belowMinimum", "unusableReason's return", "-", "background/lovejoin.ts"],
   ])("%s is given as %s, through %s, in %s, and is critical", (key, sink, first, file) => {
     const routes = FOUND.filter((r) => r.key === key);
     expect(
@@ -872,10 +881,10 @@ describe("what the back-translation of these reasons corrected, as the worker sa
       // "Other than yours" (あなた以外) said the same, but with no negation for the critical set's check to read.
       const review = await sessions.backBuild("preprod", 0);
       expect(review.lovejoinSkipped).toBe(
-        "Lovejoin のプールにはあなたのものではないボックスが 20 件あり、ウォレットがミックスするのは 25 件からです",
+        "ウォレットが読んだ時点で、Lovejoin のプールにはあなたのものではないボックスが 20 件あり、ウォレットがミックスするのは 25 件からです",
       );
       expect(tr("lovejoin.warn.skippedThis", { why: withoutStop(review.lovejoinSkipped!) })).toContain(
-        "この返却では Lovejoin が除外されます: Lovejoin のプールにはあなたのものではないボックスが 20 件あり、",
+        "この返却では Lovejoin が除外されます: ウォレットが読んだ時点で、Lovejoin のプールにはあなたのものではないボックスが 20 件あり、",
       );
       // A swap's approval, as its pool reading says it.
       expect(tr("swaps.lovejoin.warn.pool", { why: tr("sess.skip.warn.poolFloor", { count: 12, floor: 30 }) })).toContain(

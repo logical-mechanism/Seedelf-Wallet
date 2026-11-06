@@ -4,7 +4,8 @@
 // and every wallet reads the same pools: no read names a pool of anyone's.
 //
 // A pool is shown when it's standard and the earliest launched of its values
-// (the box's ADA and its token). Standard means genuine (its seed among its
+// (the box's ADA and its token) on its set: a v2 pool is never a copy of an
+// 8131b1d pool (chunk 44). Standard means genuine (its seed among its
 // launch's inputs makes its NFT, and the datum names exactly the scripts that
 // seed makes: WebAssembly derives them from the bundled templates), of a
 // token in the wallet's list or of ADA at any amount but the classic pool's
@@ -28,18 +29,24 @@
 // device that found it (round two's review, R2-4).
 //
 // Where they're found:
-// - **The data layer** (mainnet), at most every REFRESH_MS: its list of every
-//   shown pool, each verified here again. It can leave a pool out, never pass
-//   off other scripts as a pool's. Verified offline, a pool may still not be
-//   on chain (a seed no launch spent verifies as well), so the ledger is the
-//   judge of that: every transaction into a token pool reads its reference
-//   UTxO, a deposit too (1.6.0's release review, 317-wallet#0). The rest, as
-//   L's registration, is the list's word, as all the data layer reports is:
-//   1.7.1 took out 1.7.0's check of a new pool with Koios (the owner,
-//   2026-10-29: the wallet trusts its data source).
-// - **Koios** (preprod, or while the data layer can't answer), when the
-//   Lovejoin page opens: the holder's outputs since the last look, each
-//   candidate's launch transaction, read in batches.
+// - **The data layer** (mainnet), at most every REFRESH_MS while the worker
+//   runs (`asked` is in its memory: a worker Chrome started again asks at its
+//   first pool read): its list of every shown pool, each verified here again.
+//   It can leave a pool out, never pass off other scripts as a pool's.
+//   Verified offline, a pool may still not be on chain (a seed no launch
+//   spent verifies as well), so the ledger is the judge of that: every
+//   transaction into a token pool reads its reference UTxO, a deposit too
+//   (1.6.0's release review, 317-wallet#0). The rest, as L's registration, is
+//   the list's word, as all the data layer reports is: 1.7.1 took out 1.7.0's
+//   check of a new pool with Koios (the owner, 2026-10-29: the wallet trusts
+//   its data source).
+// - **Koios** (preprod, or while the data layer can't answer): the holder's
+//   outputs since the last look, each candidate's launch transaction, read in
+//   batches. As the Lovejoin page opens, and at a pool's start; and, at most
+//   every REFRESH_MS while the worker runs, at an ask for the 5 ₳ pool that
+//   finds none kept, and at Settings' Bring every box back, asked with no pool
+//   named, whatever is kept (`lookSoon`; 1.8.0's review of its fixes,
+//   r2-critic#1 and #2).
 // - **The bundled head start** (`src/lovejoin-pools.json`, written at each
 //   release by `npm run lovejoin-pools`, from the holder's start under that
 //   release's token list): every pool shown then, and the height looked to,
@@ -272,6 +279,10 @@ export class PoolDiscovery {
   private crowds = new Map<NetworkName, Map<string, IndexCrowd>>();
   /** A look at Koios under way, by network: the page opening twice looks once. */
   private looking = new Map<NetworkName, Promise<void>>();
+  /** When a look at Koios's holder last started, by network, the page's or an ask's: lookSoon's throttle. */
+  private scanned = new Map<NetworkName, number>();
+  /** A refresh under way, by network: a look or a pool read beside it waits for its list. */
+  private refreshing = new Map<NetworkName, Promise<void>>();
   /**
    * The last write of what's kept, by network: each reads what's kept and writes it again, so they go one at a time.
    * A refresh and a look finishing together would each write over the other's pools or height (1.6.0's release
@@ -401,18 +412,56 @@ export class PoolDiscovery {
    */
   async look(network: NetworkName): Promise<void> {
     await this.refresh(network);
-    const answered = this.answered.get(network);
-    const at = this.deps.now();
-    if (answered !== undefined && at >= answered && at - answered < REFRESH_MS) return;
+    if (this.answeredWithin(network, this.deps.now())) return;
     await this.scan(network);
   }
 
   /**
-   * The data layer's list, at most every REFRESH_MS on a network: every pool
-   * it shows, verified here again, kept. Nothing when the network has no data
-   * layer, or it can't answer.
+   * `look`, at most every REFRESH_MS a network while this worker runs (`scanned` is in its memory, as `asked` is, so a
+   * worker Chrome started again looks at its first ask): the data layer's list, as any pool read asks it, and Koios's
+   * holder where that doesn't answer, unless a look there started within REFRESH_MS, the page's too, whatever it found
+   * or however it failed. One under way is joined. So a 5 ₳ pool launched later is found and used without Lovejoin's
+   * page (the owner's call of 2026-11-06: "when it exists it uses it"): on preprod, with Koios-only on and with the
+   * data layer down, the page's look alone found one before. It's the page's read, the same for every wallet with the
+   * same history, made where a return, a review or a funding asks for the 5 ₳ pool and none is kept or listed
+   * (lovejoin.ts adaPool's ask), and where Settings' Bring every box back is asked with no pool named, whatever is kept
+   * (bringAllBack). Not any pool: once a 5 ₳ pool is kept, no ask looks, so a token pool launched later on those paths
+   * is found as Lovejoin's page opens, at a pool's start, or at Settings' press (1.8.0's release review, O1 and its
+   * hardening a; 1.8.0's review of its fixes, r2-worker#3, r2-critic#1 and #2).
    */
-  async refresh(network: NetworkName): Promise<void> {
+  async lookSoon(network: NetworkName): Promise<void> {
+    await this.refresh(network);
+    const at = this.deps.now();
+    if (this.answeredWithin(network, at)) return;
+    const last = this.scanned.get(network);
+    if (!this.looking.has(network) && last !== undefined && at >= last && at - last < REFRESH_MS) return;
+    await this.scan(network);
+  }
+
+  /** Whether the data layer answered `network`'s list within REFRESH_MS of `at`: a look reads that answer alone. */
+  private answeredWithin(network: NetworkName, at: number): boolean {
+    const answered = this.answered.get(network);
+    return answered !== undefined && at >= answered && at - answered < REFRESH_MS;
+  }
+
+  /**
+   * The data layer's list, at most every REFRESH_MS on a network while this
+   * worker runs (`asked` is in its memory): every pool it shows, verified here
+   * again, kept. Nothing when the network has no data layer, or it can't
+   * answer. One under way is shared: a look that went on without it found no
+   * answer yet, and read Koios's holder while the data layer was answering
+   * (1.8.0's release review, O1's hardening b).
+   */
+  refresh(network: NetworkName): Promise<void> {
+    const running = this.refreshing.get(network);
+    if (running) return running;
+    const run = this.refreshNow(network).finally(() => this.refreshing.delete(network));
+    this.refreshing.set(network, run);
+    return run;
+  }
+
+  /** `refresh`, this once. */
+  private async refreshNow(network: NetworkName): Promise<void> {
     // The data layer's crowds go with it: with Settings' Koios-only on, or the data layer marked down, the hub showed
     // its last counts until the worker restarted, where Koios's crowd line is boxes alone. Asks no one, and holds at
     // the next pool read, the five minutes or not (1.6.0's release review, UI-9).
@@ -488,13 +537,16 @@ export class PoolDiscovery {
   }
 
   /**
-   * Koios's holder, from where the last look stopped (the Lovejoin page, as it
-   * opens): every standard pool launched since, kept. A look that fails keeps
+   * Koios's holder, from where the last look stopped (`look`, as the Lovejoin
+   * page opens and at a pool's start; `lookSoon`, at an ask and at Settings'
+   * press): every standard pool launched since, kept. A look that fails keeps
    * nothing of itself, and the next starts where this one did.
    */
   scan(network: NetworkName): Promise<void> {
     const running = this.looking.get(network);
     if (running) return running;
+    // Counted from its start, whatever it finds or however it fails (lookSoon).
+    this.scanned.set(network, this.deps.now());
     const look = this.holder(network).finally(() => this.looking.delete(network));
     this.looking.set(network, look);
     return look;
@@ -577,9 +629,12 @@ export class PoolDiscovery {
  * What the Lovejoin service reads of discovery (sw.ts; here so the tests wire it as the worker does). The pools handed
  * over, each copy named one (`{ copy }`, apart from its PoolRef, which goes to WebAssembly as it is): at a pool read
  * after the data layer's list, asking nobody otherwise. And the copies a pool read reads once, and that it read them
- * (MERGED-1; which held the wallet's boxes the service keeps sealed, R2-4).
+ * (MERGED-1; which held the wallet's boxes the service keeps sealed, R2-4). And the look an ask makes that found no
+ * 5 ₳ pool (lookSoon; 1.8.0's release review, O1).
  */
-export function serviceDeps(discovery: PoolDiscovery): Required<Pick<LovejoinDeps, "pools" | "known" | "copies" | "copiesRead">> {
+export function serviceDeps(
+  discovery: PoolDiscovery,
+): Required<Pick<LovejoinDeps, "pools" | "known" | "copies" | "copiesRead" | "lookSoon">> {
   const handed = async (network: NetworkName) => (await discovery.known(network)).map((p) => (p.copy ? { copy: p.ref } : p.ref));
   return {
     // The data layer's list failing is no pool gone: what was found before is read. A trap isn't swallowed.
@@ -597,6 +652,7 @@ export function serviceDeps(discovery: PoolDiscovery): Required<Pick<LovejoinDep
         network,
         read.map((r) => refOf(r.reference)),
       ),
+    lookSoon: (network) => discovery.lookSoon(network),
   };
 }
 

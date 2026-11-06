@@ -3,7 +3,7 @@
 // moved them, when each is due back, and a way to bring one back now. A
 // private session's spare ADA goes in on its way back (Settings, Lovejoin).
 //
-// Mix puts ADA in from here, in boxes of 10 ₳:
+// Mix puts boxes into a pool from here, each holding what a box of it holds:
 //   from the private balance   a new one-time account is funded (one
 //                              review), then it runs by itself: the deposit,
 //                              the mixes, and the rest back, merged into the
@@ -42,9 +42,9 @@
 // few seconds while one is being sent. A mix from the private balance
 // can be stopped before its boxes go in: it then comes back directly. What
 // the wallet has in the pool is hidden with the balances (#56), and so is
-// how many boxes, since every box is 10 ₳ (privacy review §2.16); the Mix
-// form and the reviews show what's being sent. The page says Lovejoin has
-// had no third-party audit.
+// how many boxes, since every box of a pool holds the same (privacy review
+// §2.16); the Mix form and the reviews show what's being sent. The page says
+// Lovejoin has had no third-party audit.
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { dateLocale, type I18nKey, joinList, joinSentences, sentenceGap, t, useT } from "../../i18n";
 
@@ -344,8 +344,10 @@ export function tailReserveOf(
  * the fixes, R3-7). `tail`: the reserve the figures count, where this count leaves room for it too, as the worker then
  * builds it, so the form's totals are the review's either way. `tailShort`: asked, and this count goes without it,
  * which the form says in a line, never a refusal: its 5 ₳ is then mixed only if enough is left when it comes back.
- * `account`: the public account's UTxOs once they answer, which a token pool's count is picked from (mixMost).
- * Exported for its test.
+ * So too where its boxes leave that mix fewer than its two draws (`left`: what this count leaves free in the pool of 5 ₳
+ * boxes, where that's the pool it mixes in), its reserve counted all the same, as the worker's review has it: the count
+ * is the user's, never capped for that mix (1.8.0's release review, P1). `account`: the public account's UTxOs once
+ * they answer, which a token pool's count is picked from (mixMost). Exported for its test.
  */
 export function mixOffer(
   source: Source,
@@ -357,10 +359,12 @@ export function mixOffer(
   boxes: number,
   asked = 0n,
   account?: UtxoInfo[],
+  left?: number,
 ) {
   const offer = mixMost(source, side, token, funding, box, roomMost, 0n, account);
   const tail = asked > 0n && mixMost(source, side, token, funding, box, roomMost, asked).adaMost >= boxes ? asked : 0n;
-  return { ...offer, tail, tailShort: asked > 0n && tail === 0n && offer.adaMost >= boxes };
+  const drawn = left !== undefined && left < COLLATERAL_MIX_DRAWS;
+  return { ...offer, tail, tailShort: asked > 0n && (tail === 0n || drawn) && offer.adaMost >= boxes };
 }
 
 /** A Cardano output's least ADA a byte today, 4,310 lovelace on both networks (the parameters' coinsPerUTxOByte). */
@@ -929,10 +933,11 @@ const chainName = (c: LovejoinChainView) =>
 /**
  * The wallet's chains through Lovejoin that aren't all sent: one being sent
  * holds every box back until it's done; one that stopped partway says why,
- * and the boxes it didn't mix wait for Mix my boxes again. One whose boxes
- * were all mixed again or brought back since isn't listed (lovejoin.ts
- * `shown`). `onOpen`: the page opens a transaction of one in its own view
- * (ChainTxs).
+ * and the boxes it didn't mix wait for Mix my boxes again, but in a retired
+ * pool (`retired`), which mixes none again: there it says why alone (1.8.0's
+ * release review, W8). One whose boxes were all mixed again or brought back
+ * since isn't listed (lovejoin.ts `shown`). `onOpen`: the page opens a
+ * transaction of one in its own view (ChainTxs).
  */
 export function Chains({ chains, onOpen }: { chains: LovejoinChainView[]; onOpen?: OpenChainTx }) {
   const amounts = useAmounts();
@@ -965,7 +970,9 @@ export function Chains({ chains, onOpen }: { chains: LovejoinChainView[]; onOpen
             </span>
             <p className="token-row__detail" data-testid="lovejoin-chain-detail">
               {c.stopped
-                ? tr("lovejoin.chains.whyStopped", { why: withoutStop(c.stopped) })
+                ? tr(c.retired ? "lovejoin.detail.whyStopped" : "lovejoin.chains.whyStopped", {
+                    why: withoutStop(c.stopped),
+                  })
                 : tr("lovejoin.chains.waitAll")}
             </p>
             {c.txs && <ChainTxs txs={c.txs} onOpen={onOpen} />}
@@ -1587,7 +1594,9 @@ export function AgainActions({
   const nowRefused = !!why && pool.boxes.every((b) => holds.has(key(b)) || unmixed.has(key(b)));
   return (
     <div className="stack">
-      <OtherAccounts accounts={otherAccounts} />
+      {/* Not where mixing again is refused: that account's Mix again is off too, in a retired pool or one below the
+          network's minimum (1.8.0's release review, W9). */}
+      {!why && <OtherAccounts accounts={otherAccounts} />}
       {/* The active account's boxes alone: paying for another's mixes would tie the two accounts (§2.10). */}
       {fromAccount > 0 && (
         <button
@@ -1694,9 +1703,12 @@ export function Lovejoin({
   const [error, setError] = useState<string>();
   // The last pool read failed: what the page showed from before isn't the pool now (LJ-5).
   const [readFailed, setReadFailed] = useState(false);
-  // A pool's own page, by its id (none: the classic pool), opened from a token's list (`token`) or the hub; a token's
-  // list of pools, by its group's key (the owner's test of 1.6.0); or Start a pool; nothing, the hub.
-  const [view, setView] = useState<{ pool: string | undefined; token?: string } | { token: string } | { launch: true }>();
+  // A pool's own page, by its id (none: the classic pool), opened from a token's list (`token`) or the hub, and the
+  // pool as it last read it once its run of Bring every box back ended there (`ended`, keptPage); a token's list of
+  // pools, by its group's key (the owner's test of 1.6.0); or Start a pool; nothing, the hub.
+  const [view, setView] = useState<
+    { pool: string | undefined; token?: string; ended?: ShownPool } | { token: string } | { launch: true }
+  >();
   const [query, setQuery] = useState("");
 
   // One pool read on open, and on Refresh; the mixes from the device's record.
@@ -1888,8 +1900,9 @@ export function Lovejoin({
       </Screen>
     );
   }
-  // A pool's page stays open through a read that fails, saying so, with what it last read (34f's review, 10).
-  const page = view && "pool" in view ? poolNamed(pools, view.pool) : undefined;
+  // A pool's page stays open through a read that fails, saying so, with what it last read (34f's review, 10), and
+  // through one that lists its pool no more once its run of Bring every box back ended there (keptPage).
+  const page = view && "pool" in view ? keptPage(pools, view) : undefined;
   if (page && status) {
     return (
       <PoolPage
@@ -1908,6 +1921,8 @@ export function Lovejoin({
         onSendingPublic={setSendingPublic}
         onSending={setSending}
         onRefresh={load}
+        // Its run ended: the pool as the page reads it now is kept for it, should the read after list it no more.
+        onRunOver={() => setView((v) => (v && "pool" in v && v.pool === page.id ? { ...v, ended: page } : v))}
         // Back to its token's list where it was opened from one; a mix sent, to the hub, where it's followed.
         onBack={() => setView(view && "pool" in view && view.token ? { token: view.token } : undefined)}
         onHub={() => setView(undefined)}
@@ -1918,7 +1933,22 @@ export function Lovejoin({
 
   // The public mix being sent shows its own progress below: the list takes the others.
   const chains = rows.filter((c) => !(sending && c.session === undefined));
-  const listed = searchGroups(network, groups, query);
+  // What's searched for, only while the search shows: a query typed while it showed went on filtering once the groups
+  // it searched left the hub, as the retired pools' do once emptied, with no box to clear it, and every pool hidden
+  // (1.8.0's release review, S1). Kept, it searches again if the box comes back.
+  const searched = groups.length > SEARCH_FROM ? query.trim() : "";
+  const listed = searchGroups(network, groups, searched);
+  // A pool that takes boxes: none that's `unusable`, retired, a copy or below the network's minimum, where the wallet
+  // puts no new box; one below the minimum was counted as taking them (1.8.0's review of its fixes, r2-screens#3). The
+  // aside names tokens only where a token pool does, and with none listed that does, the hub says there's no pool to
+  // mix in yet, beside a retired pool listed for the wallet's boxes (1.8.0's release review, O6). Its "in 5 ₳ boxes"
+  // holds only where every ADA pool that takes boxes holds 5 ₳, a session's collateral's box, or none does: anyone can
+  // start one at another value, and it stood above a 20 ₳ pool alone (r2-screens#4). Start a pool's note on cost keeps
+  // its own gate: any pool read but the classic.
+  const takes = (p: ShownPool) => !p.unusable;
+  const tokenTakes = pools.some((p) => !!p.box.token && takes(p));
+  const fiveOnly = pools.every((p) => !!p.box.token || !takes(p) || BigInt(p.box.lovelace) === COLLATERAL);
+  const noneTakes = !listed.some((g) => g.pools.some(takes));
   const tokenPools = pools.some((p) => p.id !== undefined);
   return (
     <Screen
@@ -1926,7 +1956,7 @@ export function Lovejoin({
       titleId="lovejoin-title"
       onBack={onBack}
       backDisabled={busy}
-      aside={tr(tokenPools ? "lovejoin.asideTokens" : "lovejoin.aside")}
+      aside={tr(tokenTakes ? "lovejoin.asideTokens" : fiveOnly ? "lovejoin.aside" : "lovejoin.asideAda")}
       error={error}
     >
       {banner}
@@ -2000,11 +2030,12 @@ export function Lovejoin({
           ) : (
             listed.map((g) => <PoolGroupList key={g.key} group={g} onOpen={(id) => setView({ pool: id })} />)
           )}
-          {/* Nothing searched for and none listed: no pool takes boxes, the retired ones hidden with nothing of the
-              wallet's in them (chunk 44); it said that no pool's token matched "". */}
-          {!listed.length && (
+          {/* Searched for, and none matched; or nothing searched for and none listed takes boxes, the retired ones
+              hidden with nothing of the wallet's in them (chunk 44) or listed for it: no pool to mix in yet. It said
+              that no pool's token matched "". */}
+          {(searched ? !listed.length : noneTakes) && (
             <p className="note" data-testid="lovejoin-pools-none">
-              {query.trim() ? tr("lovejoin.pools.noneMatch", { query: query.trim() }) : tr("lovejoin.pools.noneYet")}
+              {searched ? tr("lovejoin.pools.noneMatch", { query: searched }) : tr("lovejoin.pools.noneYet")}
             </p>
           )}
           <StartedPools started={status.started} now={Date.now()} />
@@ -2042,6 +2073,23 @@ export function Lovejoin({
       )}
     </Screen>
   );
+}
+
+/**
+ * The pool a pool's page shows (`view.pool`; none, the classic pool): as the last read has it; or, where that read
+ * lists it no more, as the page last read it once its run of Bring every box back ended there (`ended`), with nothing
+ * of the wallet's left in it. A retired pool or a copy is listed only while the wallet has something there (lovejoin.ts
+ * listedHere), so the run that emptied a retired token pool took it off the list, and the hub replaced its page at the
+ * read after the run, "Done: N back in your private balance." with it (1.8.0's release review, S2). Exported for its
+ * test.
+ */
+export function keptPage(pools: ShownPool[], view: { pool: string | undefined; ended?: ShownPool }): ShownPool | undefined {
+  const read = poolNamed(pools, view.pool);
+  if (read || !view.ended || view.ended.id !== view.pool) return read;
+  // What the wallet had there: none of it is left, which is why the read lists the pool no more.
+  const { token: _token, unsure: _unsure, deposits: _deposits, otherAccounts: _others, bootstrap: _held, ...pool } =
+    view.ended;
+  return { ...pool, boxes: [], lovelace: "0", due: [], notMixed: [], fromPublic: [] };
 }
 
 /**
@@ -2621,6 +2669,7 @@ export function PoolPage({
   onSendingPublic,
   onSending,
   onRefresh,
+  onRunOver,
   onBack,
   onHub,
   onPending,
@@ -2647,6 +2696,8 @@ export function PoolPage({
   onSendingPublic: (sending: boolean) => void;
   onSending: (progress: PublicProgress | null) => void;
   onRefresh: () => Promise<void>;
+  /** Its run of Bring every box back ended, before the pool is read again: the hub keeps this page (keptPage, S2). */
+  onRunOver?: () => void;
   onBack: () => void;
   /** To the hub, where a mix sent is followed: Back's way where none is given. */
   onHub?: () => void;
@@ -2784,7 +2835,9 @@ export function PoolPage({
   // What a mix from the private balance pays for its collateral's mix, while the pool of 5 ₳ boxes takes it: in the
   // form's figures where this many boxes leave room for it, never what caps the stepper or refuses (mixOffer: 1.6.0's
   // release review, 320-screens#2, 323-worker#0; its review of the fixes, R3-7). From the public account in a token
-  // pool, the stepper counts the chain's own pick, count by count (R3-14).
+  // pool, the stepper counts the chain's own pick, count by count (R3-14). In the pool of 5 ₳ boxes its collateral goes
+  // into, what this count leaves free there, for the line where that's under its mix's two draws (1.8.0's release
+  // review, P1).
   const { tokenMost, adaMost, affordable, most, tail, tailShort } = mixOffer(
     source,
     side,
@@ -2795,6 +2848,7 @@ export function PoolPage({
     boxes,
     tailReserveOf(funding, source, pools),
     mixable ? accountUtxos : undefined,
+    funding?.collateralPool && funding.collateralPool === pool.id && room && !room.floorShort ? room.have - room.need : undefined,
   );
   // What's shown beside the count, and named where one box can't go: in a token pool, what the chain picks for the most
   // boxes the stepper offers, one where none fits. The count's own pick grew as + was pressed, and sat below what the
@@ -3566,7 +3620,10 @@ export function PoolPage({
         pool={pool.id ?? CLASSIC_ID}
         retired={isRetired(pool)}
         shown={owned > 0 || held > 0 || notMixed > 0}
-        onOver={() => void onRefresh()}
+        onOver={() => {
+          onRunOver?.();
+          void onRefresh();
+        }}
       />
 
       <WayBack />
@@ -3631,9 +3688,10 @@ const BOOTSTRAP_BACK_LEAST = 1_500_000n;
  * page says it under Mix, Bootstrap and Mix again before Review, and the hub on its row (1.6.0's release review,
  * MONEY-3; the merged fixes' review, MERGED-4). A box below the network's minimum, which nothing can be built for, or
  * a copy (`superseded`), read for the boxes already in it and taking no new one, for good (MERGED-1); or a retired
- * pool (`retired`, chunk 44), whose boxes come back by themselves. Boxes that can't pay their own way back, or a check
- * that couldn't be made, are no reason since the owner's call 34: the first is the page's stuck callout. Keys, not
- * words.
+ * pool (`retired`, chunk 44), its boxes coming back as any pool's do, so its words say nothing of how: not by
+ * themselves where they can't pay their own way back (1.8.0's release review, W4). Boxes that can't pay their own way
+ * back, or a check that couldn't be made, are no reason since the owner's call 34: the first is the page's stuck
+ * callout. Keys, not words.
  */
 const UNUSABLE: Record<LovejoinUnusable["why"], I18nKey> = {
   belowMinimum: "lj.unusable.warn.belowMinimum",
