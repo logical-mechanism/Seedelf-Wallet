@@ -23,6 +23,7 @@ import { dayHeading, ExportNote, Who } from "../src/ui/screens/Activity";
 import { retryReason } from "../src/ui/screens/Swaps";
 import { account, CHAINS, lovejoinOf, PASSWORD, publicFunded, sessionsOf, withSession, type Tested } from "./chain-fixtures";
 import { busyFor, testBalances } from "./fakes";
+import { ADA } from "./v2-pools";
 
 afterEach(async () => {
   await i18n.changeLanguage("en");
@@ -142,7 +143,8 @@ describe("Lovejoin's pool under its floor", CHAINS, () => {
     preprod.poolFloor = 25;
     try {
       await i18n.changeLanguage("ja");
-      const e = (await t.lovejoin.fits("preprod", 1).catch((x: unknown) => x)) as Error;
+      // In the 5 ₳ pool, as every mix goes since the classic pool retired (chunk 44): its 20 strangers' boxes.
+      const e = (await t.lovejoin.fits("preprod", 1, ADA).catch((x: unknown) => x)) as Error;
       expect(e.message).toBe(`${tr("lj.floorShortSentence", { count: 20, floor: 25 })}${tr("lj.poolBootstrap")}`);
       expect(e.message).toContain("今は 20 件です。代わりに");
     } finally {
@@ -154,7 +156,7 @@ describe("Lovejoin's pool under its floor", CHAINS, () => {
 describe("a mix from the public account a lock cut", CHAINS, () => {
   /** Its deposit goes, and the wallet locks before Koios's answer is taken in: the mix is cut there. */
   async function cut(t: Tested) {
-    const mix = await t.lovejoin.publicBuild("preprod", 1);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const fetch = t.koios.fetch;
     let locked = false;
     t.koios.fetch = async (url, init) => {
@@ -180,7 +182,7 @@ describe("a mix from the public account a lock cut", CHAINS, () => {
 
     // Half an hour on, the wallet can only be sure in an hour and a half: hours and minutes joined with "y".
     await busyFor(t, 30 * 60_000);
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("aproximadamente 1 hora y 30 minutos si no.");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("aproximadamente 1 hora y 30 minutos si no.");
 
     // The user switched to English since. Its deposit lands, and the mix says a lock cut it, not that it stopped.
     await i18n.changeLanguage("en");

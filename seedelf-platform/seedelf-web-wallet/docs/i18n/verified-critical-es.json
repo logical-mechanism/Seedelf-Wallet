@@ -473,6 +473,8 @@
     "withdraw.warn.stakedNth",
     "dappUi.proposal.warn.session",
     "send.warn.stakedOther",
-    "send.warn.stakedOtherNth"
+    "send.warn.stakedOtherNth",
+    "lj.unusable.warn.retired",
+    "sess.skip.warn.noAdaPool"
   ]
 }
