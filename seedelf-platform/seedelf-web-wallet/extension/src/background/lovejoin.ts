@@ -3508,7 +3508,7 @@ export class LovejoinService {
     if (!this.available(network) || (!collateral && (fixed !== 0 || again))) return undefined;
     // The pool its mix session was funded for (chunk 34's 34d), the classic pool's by its name (sessions.ts); a return's
     // ADA goes into the 5 ₳ pool (adaPool, the owner's call 4 of 2026-11-05), and comes back directly while none is shown.
-    const into = pool === undefined && !again ? await this.adaPool(network) : await this.poolNamed(network, pool);
+    const into = pool === undefined && !again ? await this.adaPool(network, true) : await this.poolNamed(network, pool);
     if (!into) throw new LovejoinSkipped(t("sess.skip.warn.noAdaPool"));
     // Checked at its review, that pool may take no new box by the time the funding lands and this builds (an earlier
     // pool of its values found since makes it a copy; an epoch it can't pay its way back under; a 1.7 session's pool,
@@ -4045,11 +4045,13 @@ export class LovejoinService {
   /**
    * The pool a return's spare ADA goes into, and its session's collateral (adaPoolOf, the owner's call 4 of
    * 2026-11-05: the earliest v2 5 ₳ ADA pool), as discovery last kept the pools, asking nobody. None until one is
-   * shown: a return comes back directly.
+   * shown: a return comes back directly. `ask`: with none kept, discovery is asked once (the data layer's list, on
+   * mainnet), as a pool read asks it: before chunk 44 a return's pool, the classic pool, needed no discovery, so a
+   * wallet that never opened Lovejoin's page knew of no 5 ₳ pool, and brought every return back unmixed.
    */
-  async adaPool(network: NetworkName): Promise<LovejoinPool | undefined> {
+  async adaPool(network: NetworkName, ask = false): Promise<LovejoinPool | undefined> {
     if (!this.available(network)) return undefined;
-    return adaPoolOf(await this.readSet(network, true));
+    return adaPoolOf(await this.readSet(network, true)) ?? (ask ? adaPoolOf(await this.readSet(network)) : undefined);
   }
 
   /**
@@ -4109,7 +4111,7 @@ export class LovejoinService {
    */
   async collateralPool(network: NetworkName, params: unknown, owner?: string, tell = false): Promise<CollateralPool | undefined> {
     if (!this.available(network)) return undefined;
-    const pool = adaPoolOf(await this.readSet(network, true));
+    const pool = await this.adaPool(network, true);
     if (!pool || this.usableNow(network, pool, params)) return undefined;
     const read = this.split(network, owner, undefined, pool);
     const split = await (tell ? read : read.catch(unlessTrap(undefined)));

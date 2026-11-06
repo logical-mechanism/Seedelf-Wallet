@@ -175,8 +175,8 @@ describe("a retired pool takes no new box (chunk 44, the owner's call 2)", SLOW,
 });
 
 describe("a session's return (chunk 44, the owner's call 4)", SLOW, () => {
-  /** A site's private session 0 holding `lovelace` and its 5 ₳ collateral, Lovejoin reading `pools`. */
-  async function session(lovelace: string, pools: PoolRef[]) {
+  /** A site's private session 0 holding `lovelace` and its 5 ₳ collateral, Lovejoin reading `pools` (`extra`, deps of a test's own). */
+  async function session(lovelace: string, pools: PoolRef[], extra: Partial<LovejoinDeps> = {}) {
     const t = await wallet();
     await t.store.set("sessions.preprod", {
       next: 1,
@@ -191,7 +191,7 @@ describe("a session's return (chunk 44, the owner's call 4)", SLOW, () => {
       ],
     });
     t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, lovelace), atSession("c2".repeat(32), 1, "5000000"), ...POOL, ...ADA_ROWS);
-    const lj = pooled(t, pools);
+    const lj = pooled(t, pools, extra);
     return { t, sessions: sessionsOf(t, undefined, lj) };
   }
 
@@ -209,6 +209,17 @@ describe("a session's return (chunk 44, the owner's call 4)", SLOW, () => {
     const classic = new Set(POOL.map((u) => `${u.tx_hash}#${u.tx_index}`));
     expect(t.koios.submitted.length).toBeGreaterThan(0);
     expect(t.koios.submitted.flatMap((tx) => txInputs(tx)).filter((o) => classic.has(o))).toEqual([]);
+  });
+
+  it("asks discovery once for the 5 ₳ pool where it had kept none, as a wallet that never opened Lovejoin's page has", async () => {
+    // Discovery kept nothing (`known`); asked, its list has the pool (`pools`, the data layer's on mainnet).
+    let asked = 0;
+    const { sessions } = await session("40000000", [ADA_POOL], { known: async () => [], pools: async () => (asked++, [ADA_POOL]) });
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoinSkipped).toBeUndefined();
+    expect(review.lovejoin).toMatchObject({ pool: ADA });
+    expect(review.collateralTail).toMatchObject({ pool: ADA });
+    expect(asked).toBeGreaterThan(0);
   });
 
   it("comes back directly while no 5 ₳ pool is shown, and says why", async () => {
