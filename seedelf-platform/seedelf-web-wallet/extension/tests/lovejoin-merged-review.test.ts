@@ -4,7 +4,8 @@
 // the wallet has something in it (decision 30). A restore reads every copy discovery keeps once, and hands over one
 // where it finds the wallet's boxes. A look for pools says whether what the wallet reads changed (R10). A Bootstrap
 // whose deposit a watch saw land keeps its hold (MERGED-5). With the real WebAssembly, the classic pool's recorded
-// preprod boxes, and PR #163's preprod token pool (2 ₳ and LJTEST a box).
+// preprod boxes, v2's 5 ₳ pool, and PR #163's preprod token pool (2 ₳ and LJTEST a box) on v2's scripts: on 8131b1d's,
+// as it was launched, it's retired, and a retired pool's reason wins over a copy's (chunk 44).
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -33,6 +34,7 @@ import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { fakeIndex, indexRowOf } from "./fake-index";
 import { koiosPreprod, loadTestWasm, madeByMix, memoryArea, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -46,19 +48,23 @@ const SLOW = { timeout: 180_000 };
 /** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
 const POOL = (JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }).pool;
 
-/** PR #163's token pool on preprod, as Koios lists it (wasm/tests/fixtures). */
+/** PR #163's token pool on preprod, as Koios lists it (wasm/tests/fixtures): on 8131b1d's scripts, retired (chunk 44). */
 const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-token-pool-preprod.json", import.meta.url), "utf8")) as {
   seed: { txHash: string; txIndex: number };
   reference: KoiosUtxo;
   scripts: KoiosUtxo[];
 };
-const TOKEN_POOL: PoolRef = { reference: FOUND.reference, seed: FOUND.seed, scripts: FOUND.scripts };
 /** The same launch with its scripts derived on v2, at the holder: a v2 pool, never on chain (chunk 44, wasm/tests/fixtures). */
 const FOUND_V2 = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json", import.meta.url), "utf8")) as {
   seed: { txHash: string; txIndex: number };
   reference: KoiosUtxo;
   scripts: KoiosUtxo[];
 };
+/**
+ * The token pool these tests hand over: the v2 twin, which takes new boxes, and whose copy is a copy. The same seed makes
+ * the same pool id on either set of scripts.
+ */
+const TOKEN_POOL: PoolRef = { reference: FOUND_V2.reference, seed: FOUND_V2.seed, scripts: FOUND_V2.scripts };
 const VIEW = JSON.parse(loadTestWasm().lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: TOKEN_POOL }))) as {
   id: string;
   mixBoxHash: string;
@@ -211,6 +217,15 @@ async function classicBox(t: T, tx: string, hours = 7): Promise<KoiosUtxo> {
   } as KoiosUtxo;
 }
 
+/** A box of the wallet's in v2's 5 ₳ pool that someone else's mix made, `hours` ago. */
+async function adaOwnBox(t: T, tx: string, hours = 7): Promise<KoiosUtxo> {
+  madeByAdaMix(t.koios, tx.repeat(32));
+  return adaBox(tx, await datum(t, true), t.clock.now, hours);
+}
+
+/** What the 5 ₳ pool's part of `lj`'s status holds for Bootstraps. */
+const adaBootstrap = async (lj: LovejoinService) => (await lj.status("preprod")).pools?.find((p) => p.id === ADA)?.bootstrap;
+
 /** Every input of what giveme.my was asked to witness: a box's withdraw among them. */
 const spentBy = (t: T) => t.collateral.asked.flatMap((tx) => txInputs(Uint8Array.from(Buffer.from(tx, "hex"))));
 
@@ -354,7 +369,8 @@ describe("a copy in the worker (the merged fixes' review, MERGED-1)", SLOW, () =
     const t = await wallet();
     await t.deps.preferences.set({ lovejoinDepth: 1 });
     t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
-    const lj = pooled(t, [COPY]);
+    // The ADA into the 5 ₳ pool, as every return's goes since the classic pool retired (chunk 44).
+    const lj = pooled(t, [ADA_POOL, COPY]);
     const sessions = runner(t, lj);
     const OUT = "ab".repeat(32);
     await t.store.set("sessions.preprod", {
@@ -365,7 +381,7 @@ describe("a copy in the worker (the merged fixes' review, MERGED-1)", SLOW, () =
       atSession(OUT, 0, "3000000", [ljtest(2n * Q)]),
       atSession(OUT, 1, "40000000"),
       atSession(OUT, 2, "5000000"),
-      ...POOL,
+      ...ADA_ROWS,
       ...(await strangers(t)),
     );
     const review = await sessions.backBuild("preprod", 0);
@@ -590,20 +606,21 @@ describe("a start of the values of a pool the data layer lists (1.7.1)", SLOW, (
   });
 });
 
+// In v2's 5 ₳ pool: the classic pool, retired, takes no Bootstrap, and lets go of those it held (chunk 44).
 describe("a Bootstrap whose deposit a watch saw land (the merged fixes' review, MERGED-5)", SLOW, () => {
   it("keeps holding from the public account once Home's watch saw it, though no read listed a box at its deposit", async () => {
     const t = await wallet();
-    const lj = pooled(t, []);
+    const lj = pooled(t, [ADA_POOL]);
     // Home's watch, as sw.ts wires it.
     const pending = new PendingService({ ...t.deps, depositLanded: (n, h) => lj.landedDeposit(n, h) });
-    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"), ...POOL);
-    const summary = await lj.publicBuild("preprod", 2, { bootstrap: true });
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"), ...ADA_ROWS);
+    const summary = await lj.publicBuild("preprod", 2, { pool: ADA, bootstrap: true });
     await lj.publicSubmit("preprod", summary.txHash);
     t.koios.confirmations = 1;
     await lj.pumpPublic("preprod");
     expect((await pending.pending("preprod"))?.confirmations).toBe(1);
     // Before any pool read, other people's mixes moved both its boxes: the wallet's, at their outputs.
-    t.koios.addedToAccounts.push(await classicBox(t, "f1"), await classicBox(t, "f2"));
+    t.koios.addedToAccounts.push(await adaOwnBox(t, "f1"), await adaOwnBox(t, "f2"));
     for (const h of [4, 8, 24, 48]) {
       t.clock.now += h * HOUR;
       await t.wallet.unlock(PASSWORD);
@@ -612,20 +629,20 @@ describe("a Bootstrap whose deposit a watch saw land (the merged fixes' review, 
       await lj.withdrawDue("preprod");
     }
     expect((await sealed(t)).mixes!.find((e) => e.bootstrap)).toMatchObject({ found: true });
-    expect((await lj.status("preprod")).bootstrap).toHaveLength(2);
+    expect(await adaBootstrap(lj)).toHaveLength(2);
     expect(spentBy(t)).not.toContain(`${"f1".repeat(32)}#0`);
     expect(spentBy(t)).not.toContain(`${"f2".repeat(32)}#0`);
   });
 
   it("keeps holding from the private balance once its session saw the deposit land", async () => {
     const t = await wallet();
-    const lj = pooled(t, []);
+    const lj = pooled(t, [ADA_POOL]);
     const sessions = runner(t, lj);
-    const out = await sessions.mixOutBuild("preprod", 1, { bootstrap: true });
+    const out = await sessions.mixOutBuild("preprod", 1, { pool: ADA, bootstrap: true });
     const { index } = await sessions.mixOutSubmit("preprod", out.txHash);
     // Its funding lands as it paid the account, with no 5 ₳ (1.6.0's release review, x-compat#0).
     const paid = landed(t, out.txHash);
-    t.koios.addedToAccounts.push(...POOL, ...paid);
+    t.koios.addedToAccounts.push(...ADA_ROWS, ...paid);
     t.koios.confirmations = 1;
     const before = t.koios.submitted.length;
     await sessions.advance("preprod", index, true);
@@ -635,7 +652,7 @@ describe("a Bootstrap whose deposit a watch saw land (the merged fixes' review, 
     await sessions.list("preprod", true);
     expect((await sealed(t)).mixes!.find((e) => e.bootstrap)).toMatchObject({ found: true });
     // Before any pool read, someone else's mix moved its box: the wallet's, at that mix's output.
-    t.koios.addedToAccounts.push(await classicBox(t, "f1"));
+    t.koios.addedToAccounts.push(await adaOwnBox(t, "f1"));
     for (const h of [4, 8, 24, 48]) {
       t.clock.now += h * HOUR;
       await t.wallet.unlock(PASSWORD);
@@ -643,7 +660,7 @@ describe("a Bootstrap whose deposit a watch saw land (the merged fixes' review, 
       await lj.status("preprod");
       await lj.withdrawDue("preprod");
     }
-    expect((await lj.status("preprod")).bootstrap).toEqual([{ txHash: "f1".repeat(32), txIndex: 0 }]);
+    expect(await adaBootstrap(lj)).toEqual([{ txHash: "f1".repeat(32), txIndex: 0, pool: ADA }]);
     expect(spentBy(t)).not.toContain(`${"f1".repeat(32)}#0`);
   });
 
@@ -653,10 +670,10 @@ describe("a Bootstrap whose deposit a watch saw land (the merged fixes' review, 
   it("keeps holding when its chain's record says nothing of it was sent (34g's last review, WORKER-1)", async () => {
     for (const sent of [1, 0]) {
       const t = await wallet();
-      const lj = pooled(t, []);
+      const lj = pooled(t, [ADA_POOL]);
       const [deposit, back] = ["d0".repeat(32), "b0".repeat(32)];
       const at = t.clock.now - HOUR;
-      // A private Bootstrap of one classic box, [deposit, return], its send stopped.
+      // A private Bootstrap of one box in the 5 ₳ pool, [deposit, return], its send stopped.
       await t.store.set("lovejoin.preprod", {
         due: [],
         chains: [
@@ -666,8 +683,9 @@ describe("a Bootstrap whose deposit a watch saw land (the merged fixes' review, 
             progress: "test.p",
             deposit,
             mixes: [],
-            leaves: [{ txHash: deposit, txIndex: 0 }],
+            leaves: [{ txHash: deposit, txIndex: 0, pool: ADA }],
             boxes: 1,
+            pools: { [ADA]: 1 },
             bootstrap: true,
             total: 2,
             sent,
@@ -676,11 +694,11 @@ describe("a Bootstrap whose deposit a watch saw land (the merged fixes' review, 
             ended: at,
           },
         ],
-        mixes: [{ id: back, deposit, at, session: 0, bootstrap: true, shares: [{ boxes: 1 }] }],
+        mixes: [{ id: back, deposit, at, session: 0, bootstrap: true, shares: [{ pool: ADA, boxes: 1 }] }],
       });
       // The session's watch saw the deposit land; before any pool read, someone else's mix moved its box.
       await lj.landedDeposit("preprod", deposit);
-      t.koios.addedToAccounts.push(...POOL, await classicBox(t, "f1"));
+      t.koios.addedToAccounts.push(...ADA_ROWS, await adaOwnBox(t, "f1"));
       for (const h of [4, 8, 24, 48]) {
         t.clock.now += h * HOUR;
         await t.wallet.unlock(PASSWORD);
@@ -688,7 +706,7 @@ describe("a Bootstrap whose deposit a watch saw land (the merged fixes' review, 
         await lj.status("preprod");
         await lj.withdrawDue("preprod");
       }
-      expect((await lj.status("preprod")).bootstrap, `sent ${sent}`).toEqual([{ txHash: "f1".repeat(32), txIndex: 0 }]);
+      expect(await adaBootstrap(lj), `sent ${sent}`).toEqual([{ txHash: "f1".repeat(32), txIndex: 0, pool: ADA }]);
       expect(spentBy(t), `sent ${sent}`).not.toContain(`${"f1".repeat(32)}#0`);
     }
   });
