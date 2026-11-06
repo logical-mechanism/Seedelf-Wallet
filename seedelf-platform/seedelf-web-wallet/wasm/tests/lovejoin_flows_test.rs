@@ -284,6 +284,7 @@ fn a_mix_session_deposits_its_token_and_brings_back_what_the_boxes_dont_take() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
         Some(&pool_ref()),
     )
@@ -382,6 +383,7 @@ fn a_private_bootstrap_of_a_token_pool_deposits_and_sweeps_back() {
                 collateral_pool: None,
                 collateral_boxes: vec![],
                 collateral_reserve: false,
+                rewards: Default::default(),
             },
             Some(&pool_ref()),
         )
@@ -487,6 +489,7 @@ fn every_deposit_into_a_token_pool_reads_its_reference_utxo() {
                 collateral_pool: None,
                 collateral_boxes: vec![],
                 collateral_reserve: false,
+                rewards: Default::default(),
             },
             pool,
         )
@@ -566,6 +569,7 @@ fn every_deposit_into_a_token_pool_reads_its_reference_utxo() {
                 pool: others(2),
                 depth,
                 boxes: 1,
+                rewards: Default::default(),
             },
             Some(&pool_ref()),
         )
@@ -593,6 +597,7 @@ fn the_public_account_mixes_into_a_token_pool_with_its_token() {
             pool: others(4),
             depth: 1,
             boxes: 2,
+            rewards: Default::default(),
         },
         Some(&pool_ref()),
     )
@@ -634,6 +639,7 @@ fn the_public_account_mixes_into_a_token_pool_with_its_token() {
             pool: others(4),
             depth: 1,
             boxes: 2,
+            rewards: Default::default(),
         },
         Some(&pool_ref()),
     )
@@ -661,6 +667,7 @@ fn a_box_comes_back_with_the_public_account_paying() {
                 public(0x71, Role::Receive, 3, 3_000_000, vec![ljtest(5)]),
             ],
             collateral: public(0x7c, Role::Receive, 0, 5_000_000, vec![]),
+            rewards: Default::default(),
         },
         Some(&pool_ref()),
     )
@@ -843,6 +850,7 @@ fn a_large_bootstrap_from_the_public_account_takes_another_utxo_for_its_fee() {
             pool: Vec::new(),
             depth: 0,
             boxes,
+            rewards: Default::default(),
         },
         Some(&pool_ref()),
     )
@@ -902,6 +910,7 @@ fn bring_back_privately(
             pool,
             box_ref,
             utxos,
+            rewards: Default::default(),
         },
         Some(&pool_ref_worth(1_500_000)),
     )
@@ -926,6 +935,7 @@ fn a_box_too_poor_to_come_back_is_paid_from_the_private_balance() {
             params: params(),
             pool: pool.clone(),
             box_ref: None,
+            rewards: Default::default(),
         },
         Some(&poor),
     )
@@ -1104,6 +1114,7 @@ fn none_of_the_private_balance_paying_says_so_in_fixed_words() {
         &sk,
         Register::create(sk).unwrap().rerandomize().unwrap(),
         &seedelf_payer(sk, &none_pays[0]),
+        &mut lovejoin::Rewards::none(),
     )
     .unwrap_err();
     assert!(

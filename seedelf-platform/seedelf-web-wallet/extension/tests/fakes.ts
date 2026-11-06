@@ -794,6 +794,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
       ...deps,
       store,
       sessions,
+      lovejoin,
       fundingPollMs: 1,
       network: () => networkChoice.get(),
       activeAccount: () => activeAccount(t.local),

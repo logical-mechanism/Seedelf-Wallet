@@ -159,7 +159,7 @@ import { fartherKeys, GAP_LIMIT } from "./chain";
 import type { CoinControlService } from "./coin-control";
 import { CollateralRefusedError, refusedBy, StaleReviewError } from "./collateral";
 import { KoiosBusyError, KoiosError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
-import { chainOwner } from "./lovejoin";
+import { chainOwner, type LovejoinService } from "./lovejoin";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
@@ -290,6 +290,8 @@ export interface DappDeps extends AccountDeps {
   store: PrivateStore;
   /** Private sessions: a site connected to one reads and signs its account. */
   sessions: SessionService;
+  /** Lovejoin's pools the wallet knows: a transaction that pays into one's `mix_logic` reward account is refused. */
+  lovejoin?: Pick<LovejoinService, "mixLogicHashes">;
   /** The public accounts the wallet knows (accounts.ts): a session's signing prompt matches every one (`ties`). */
   knownAccounts?: () => Promise<number[]>;
   /** How often a private session's funding is looked for (tests: at once). */
@@ -2087,6 +2089,15 @@ export class DappService {
     // left behind for good. Stopping it stays possible.
     if (holder && summary.certificates.some((c) => c.own && c.kind !== "unregister")) {
       throw refuse(TxSignError.ProofGeneration, (lng) => t("dapp.sessionStakeKey", { lng }));
+    }
+    // Nor one that pays into a Lovejoin pool's `mix_logic` reward account, as a stake pool's, a proposal's deposit or a
+    // treasury withdrawal: money there stops every mix and way back in that pool until someone takes it, and anyone
+    // may. Whoever signs, the wallet never sets that account for anything (the owner, 2026-11-06; chunk 43).
+    if (summary.paidScripts?.length && this.deps.lovejoin) {
+      const pools = await this.deps.lovejoin.mixLogicHashes(network);
+      if (summary.paidScripts.some((h) => pools.has(h))) {
+        throw refuse(TxSignError.ProofGeneration, (lng) => t("dapp.lovejoinRewards", { lng }));
+      }
     }
     return { request, summary, collateralSpent, view, rows };
   }

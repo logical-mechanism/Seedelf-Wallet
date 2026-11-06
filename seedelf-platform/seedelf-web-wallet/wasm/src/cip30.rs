@@ -913,6 +913,14 @@ pub struct TxSummary {
     /// (`txhash#index`). Only ever with the stake key signing alone: with
     /// any, a payment key's signature is refused.
     pub unknown_inputs: Vec<String>,
+    /// The scripts whose reward accounts it pays into, each by its hash (hex),
+    /// once: a stake pool registration's reward account (its deposit back at
+    /// retirement, and the pool's rewards), a proposal's deposit's return, and
+    /// a treasury withdrawal's payee. None of them takes a signature of the
+    /// account's. A key's are `Cert::credential`, `Proposal::credential` and
+    /// `recipients`. The extension refuses one that's a Lovejoin pool's
+    /// `mix_logic`, where money is anyone's to take (chunk 43).
+    pub paid_scripts: Vec<String>,
     /// Signatures it needs from keys that aren't the account's.
     pub others_sign: usize,
     /// The account's signatures are all it needs, as far as the wallet can tell.
@@ -1291,6 +1299,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             .ok_or_else(|| anyhow!("an ADA amount overflows"))
     };
 
+    let mut paid_scripts = Vec::new();
     let mut certificates = Vec::new();
     for cert in body.certificates.iter().flat_map(|c| c.iter()) {
         use conway::Certificate as C;
@@ -1390,7 +1399,10 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 let reward_key = match Address::from_bytes(reward_account) {
                     Ok(Address::Stake(s)) => match s.payload() {
                         StakePayload::Stake(h) => Some(hex::encode(h)),
-                        StakePayload::Script(_) => None,
+                        StakePayload::Script(h) => {
+                            paid_scripts.push(hex::encode(h));
+                            None
+                        }
                     },
                     _ => None,
                 };
@@ -1558,7 +1570,10 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         }
         let key = match s.payload() {
             StakePayload::Stake(h) => Some(*h),
-            StakePayload::Script(_) => None,
+            StakePayload::Script(h) => {
+                paid_scripts.push(hex::encode(h));
+                None
+            }
         };
         // A treasury withdrawal's payees, by key, on either network: the
         // ledger refuses the other's (TreasuryWithdrawalsNetworkIdMismatch),
@@ -1570,7 +1585,10 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 .filter_map(|(account, _)| match Address::from_bytes(account) {
                     Ok(Address::Stake(s)) => match s.payload() {
                         StakePayload::Stake(h) => Some(hex::encode(h)),
-                        StakePayload::Script(_) => None,
+                        StakePayload::Script(h) => {
+                            paid_scripts.push(hex::encode(h));
+                            None
+                        }
                     },
                     _ => None,
                 })
@@ -1717,6 +1735,11 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         valid_until: body.ttl,
         signs: signers.iter().map(signer_name).collect(),
         unknown_inputs: unknown,
+        paid_scripts: {
+            paid_scripts.sort();
+            paid_scripts.dedup();
+            paid_scripts
+        },
         others_sign,
         complete,
     };

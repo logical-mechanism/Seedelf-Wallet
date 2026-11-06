@@ -154,6 +154,7 @@
   "lj.unusable.warn.belowMinimum",
   "lj.unusable.warn.retired",
   "lj.unusable.warn.superseded",
+  "lj.warn.rewardsMoved",
   "lj.width.warn.cost",
   "lj.width.warn.long",
   "lj.width.warn.refused",

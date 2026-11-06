@@ -85,7 +85,7 @@ fn built() -> pallas_txbuilder::BuiltTransaction {
 fn a_patch_adds_the_withdrawal_and_its_redeemer() {
     let before = built();
     let redeemer = hex::decode("d87980").unwrap();
-    let patch = WithdrawZero::new(&MIX_LOGIC, true, &redeemer).unwrap();
+    let patch = WithdrawZero::new(&MIX_LOGIC, true, 0, &redeemer).unwrap();
     let budget = ExUnits {
         mem: 1_000,
         steps: 2_000,
@@ -131,10 +131,31 @@ fn a_patch_adds_the_withdrawal_and_its_redeemer() {
 }
 
 #[test]
+fn a_patch_withdraws_the_amount_it_is_given() {
+    // What sits in the account, whole, as the ledger takes no less (chunk 43).
+    let redeemer = hex::decode("d87980").unwrap();
+    let patch = WithdrawZero::new(&MIX_LOGIC, true, 500_000_000, &redeemer).unwrap();
+    let budget = ExUnits {
+        mem: 1_000,
+        steps: 2_000,
+    };
+    let after = patch.patch(built(), budget, &[1, 2, 3]).unwrap();
+    let tx = conway::Tx::decode_fragment(&after.tx_bytes.0).unwrap();
+    let withdrawals = tx.transaction_body.withdrawals.as_ref().unwrap();
+    assert_eq!(withdrawals.len(), 1);
+    assert_eq!(withdrawals[0].0.to_vec(), reward_account(&MIX_LOGIC, true));
+    assert_eq!(withdrawals[0].1, 500_000_000);
+    assert_eq!(
+        after.tx_hash.0,
+        *seedelf_core::build::tx_id(&after.tx_bytes.0).unwrap()
+    );
+}
+
+#[test]
 fn a_signed_transaction_is_not_patched() {
     let mut signed = built();
     signed.signatures = Some(Default::default());
-    let patch = WithdrawZero::new(&MIX_LOGIC, true, &hex::decode("d87980").unwrap()).unwrap();
+    let patch = WithdrawZero::new(&MIX_LOGIC, true, 0, &hex::decode("d87980").unwrap()).unwrap();
     let err = patch
         .patch(signed, ExUnits { mem: 1, steps: 1 }, &[1])
         .unwrap_err()

@@ -193,6 +193,7 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -272,6 +273,7 @@ fn a_chains_return_merges_into_the_funding_change() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -336,6 +338,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -394,6 +397,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             params: params(),
             pool: rows,
             box_ref: None,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -457,6 +461,7 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap_err();
@@ -505,6 +510,7 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
                 pool: pool(&protocol),
                 depth: 1,
                 boxes: 2,
+                rewards: Default::default(),
             },
         )
         .unwrap()
@@ -574,6 +580,7 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
             pool: pool(&protocol),
             depth: 1,
             boxes: 2,
+            rewards: Default::default(),
         },
     )
     .unwrap_err();
@@ -650,6 +657,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -723,6 +731,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap_err();

@@ -307,6 +307,7 @@ fn a_return_across_pools_deposits_once_and_mixes_each_box_in_its_pool() {
         collateral_pool: None,
         collateral_boxes: vec![],
         collateral_reserve: false,
+        rewards: Default::default(),
     };
     let chain = wasm::chain_across_pools(
         &accounts(),
@@ -432,6 +433,7 @@ fn a_session_mixes_four_boxes_a_mix_when_asked() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
         None,
         4,
@@ -467,6 +469,7 @@ fn a_session_mixes_four_boxes_a_mix_when_asked() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
         None,
         4,

@@ -44,7 +44,7 @@ use seedelf_core::build::{
     Budget, MAX_TX_BUDGET, MAX_TX_SIZE, fake_signer, linear_fee, reference_script_fee,
 };
 use seedelf_core::eval::{self, Resolved};
-use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, Protocol, Version};
+use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, Protocol, Rewards, Version};
 use seedelf_core::transaction::computation_fee;
 use seedelf_core::withdraw_zero::WithdrawZero;
 use seedelf_crypto::lovejoin as crypto;
@@ -577,7 +577,8 @@ fn build(pool: &Pool, given: &Inputs) -> Mix {
     let redeemer = constr(1, vec![PlutusData::Array(MaybeIndefArray::Indef(proofs))])
         .encode_fragment()
         .unwrap();
-    let withdraw = WithdrawZero::new(&pool.mix_logic_hash, pool.network_flag, &redeemer).unwrap();
+    let withdraw =
+        WithdrawZero::new(&pool.mix_logic_hash, pool.network_flag, 0, &redeemer).unwrap();
 
     let mut all: Vec<Input> = sorted.iter().map(|(u, _, _)| input(u)).collect();
     all.push(input(&given.fee.utxo));
@@ -756,7 +757,7 @@ fn wallets_mix(pool: &Pool, protocol: &Protocol, given: &Inputs) -> anyhow::Resu
             .unwrap(),
         signers: 1,
     };
-    lovejoin::mix(&pool.params, protocol, &boxes, &payer)
+    lovejoin::mix(&pool.params, protocol, &boxes, &payer, &mut Rewards::none())
 }
 
 /// What `tx` declares each script may use, by purpose and index, in

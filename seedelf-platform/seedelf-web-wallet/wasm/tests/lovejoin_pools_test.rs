@@ -257,6 +257,7 @@ fn the_wallets_boxes_in_a_token_pool_are_read_and_one_comes_back() {
             params: params(),
             pool: rows,
             box_ref: None,
+            rewards: Default::default(),
         },
         Some(&pool),
     )

@@ -476,6 +476,7 @@
     "send.warn.stakedOtherNth",
     "lj.unusable.warn.retired",
     "sess.skip.warn.noAdaPool",
-    "dappUi.back.privacy.noteLovejoinPoolShort"
+    "dappUi.back.privacy.noteLovejoinPoolShort",
+    "lj.warn.rewardsMoved"
   ]
 }

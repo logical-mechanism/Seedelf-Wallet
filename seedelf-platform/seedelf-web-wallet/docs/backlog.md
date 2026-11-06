@@ -48,6 +48,9 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 
 ## Lovejoin
 
+- ❓ **A line on a review that takes a pool's reward balance** (chunk 43's call 1): a return's or a public mix's review counts what comes back with it, which can be far more than went in; one short line, only then, naming it as what sat in the pool's reward account for anyone to take. Built without it.
+- ❓ **Refusing a site's payment to an address whose stake part is a pool's `mix_logic`** (chunk 43's Step 5): it puts nothing in the account, whose stake can't be delegated, so the signer refuses only what pays into the account itself.
+- ⬜ **Building the rest of a chain a moved reward balance cut short** (chunk 43's call 2): it stops as a refused chain does, its boxes waiting for Mix my boxes again; worth a chunk only if cut chains turn up.
 - ❓ **A lock uses up a held collateral's mix** (LIVE-1): each cut counts as one of `TAIL_TRIES`, so with giveme.my down two idle locks end it, unasked. Recommended: count only builds that failed for another reason.
 - ❓ **The collateral mix's way out, what's left** (pr337#0, pr337#1): a return review built before the press and sent after it still sends the mix (keep, recommended); Bring every box back now leaves that box to its day; a site's session paid again the same day can offer the way out again.
 - ❓ **Waiting parts across a lock** (321-parts-worker#0, #2; x-upgrade#1): after a wipe Home can't say what didn't go. A sealed record of a payment's progress would, with its own privacy policy entry; parts that go after the unlock would be new.

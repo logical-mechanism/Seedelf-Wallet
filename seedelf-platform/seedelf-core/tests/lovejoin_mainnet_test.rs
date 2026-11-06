@@ -11,7 +11,7 @@ use pallas_primitives::conway::{ScriptRef, TransactionOutput, Value as Assets};
 use pallas_traverse::MultiEraTx;
 use seedelf_core::build::fake_signer;
 use seedelf_core::eval::{self, Resolved};
-use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, Protocol};
+use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, Protocol, Rewards};
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, Ratio};
 use serde_json::Value;
@@ -274,7 +274,14 @@ fn mainnet_mixes_of_two_three_and_four_pass_mix_logic_and_mix_box() {
     let protocol = mainnet();
     for n in 2..=4u8 {
         let boxes = pool(&protocol, n);
-        let mix = lovejoin::mix(&params(), &protocol, &boxes, &payer(20_000_000)).unwrap();
+        let mix = lovejoin::mix(
+            &params(),
+            &protocol,
+            &boxes,
+            &payer(20_000_000),
+            &mut Rewards::none(),
+        )
+        .unwrap();
         assert_eq!(mix.outputs.len(), n as usize);
         let mut known: Vec<Resolved> = boxes.iter().map(|b| b.utxo.clone()).collect();
         known.push(coin(0x11, 20_000_000).utxo);
@@ -299,7 +306,14 @@ fn mainnet_mixes_of_two_three_and_four_pass_mix_logic_and_mix_box() {
 fn a_mainnet_mix_and_withdraw_pay_the_ledgers_minimum() {
     let protocol = mainnet();
     let boxes = pool(&protocol, 3);
-    let mix = lovejoin::mix(&params(), &protocol, &boxes, &payer(20_000_000)).unwrap();
+    let mix = lovejoin::mix(
+        &params(),
+        &protocol,
+        &boxes,
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap();
     let needed = ledger_minimum_fee(&mix.tx, 1);
     assert!(mix.fee >= needed, "fee {} under {needed}", mix.fee);
     assert!(mix.fee - needed < 1_000, "fee {} over {needed}", mix.fee);
@@ -323,6 +337,7 @@ fn a_mainnet_mix_and_withdraw_pay_the_ledgers_minimum() {
         &deposit.boxes,
         &sk,
         base.rerandomize().unwrap(),
+        &mut Rewards::none(),
     )
     .unwrap();
     // giveme.my's is the one signature.
@@ -343,8 +358,72 @@ fn a_mainnet_mix_and_withdraw_pay_the_ledgers_minimum() {
         script_bytes: 629 + 3_156,
         ..protocol.clone()
     };
-    let short = lovejoin::mix(&params(), &stale, &boxes, &payer(20_000_000)).unwrap();
+    let short = lovejoin::mix(
+        &params(),
+        &stale,
+        &boxes,
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap();
     assert!(short.fee < ledger_minimum_fee(&short.tx, 1));
+}
+
+#[test]
+fn a_mainnet_mix_and_withdraw_that_take_a_reward_balance_pay_the_ledgers_minimum() {
+    // Chunk 43: mainnet's scripts pass a withdrawal that isn't 0, and the
+    // amount's bytes are priced as the fee settles.
+    let protocol = mainnet();
+    let windfall = Rewards::of([(protocol.mix_logic_hash, 500_000_000)]);
+    let mix = lovejoin::mix(
+        &params(),
+        &protocol,
+        &pool(&protocol, 3),
+        &payer(20_000_000),
+        &mut windfall.clone(),
+    )
+    .unwrap();
+    assert_eq!(mix.taken, 500_000_000);
+    assert_eq!(mix.change.lovelace, 20_000_000 + 500_000_000 - mix.fee);
+    let needed = ledger_minimum_fee(&mix.tx, 1);
+    assert!(mix.fee >= needed, "fee {} under {needed}", mix.fee);
+    assert!(mix.fee - needed < 1_000, "fee {} over {needed}", mix.fee);
+
+    let sk = Scalar::from(42u64);
+    let base = Register::create(sk).unwrap();
+    let deposit = lovejoin::deposit(
+        &params(),
+        &protocol,
+        &[coin(0x55, 30_000_000)],
+        &[base.clone().rerandomize().unwrap()],
+        &key_address(0x55),
+        1,
+    )
+    .unwrap();
+    let withdraw = lovejoin::withdraw(
+        &params(),
+        &protocol,
+        &deposit.boxes,
+        &sk,
+        base.rerandomize().unwrap(),
+        &mut windfall.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        withdraw.lovelace,
+        protocol.denom + 500_000_000 - withdraw.fee
+    );
+    let needed = ledger_minimum_fee(&withdraw.tx, 1);
+    assert!(
+        withdraw.fee >= needed,
+        "fee {} under {needed}",
+        withdraw.fee
+    );
+    assert!(
+        withdraw.fee - needed < 6_000,
+        "fee {} over {needed}",
+        withdraw.fee
+    );
 }
 
 #[test]
@@ -379,7 +458,7 @@ fn mainnet_deposit_mix_mix_withdraw_chain_passes() {
         fee: deposit.change.clone(),
         ..payer(0)
     };
-    let mix = lovejoin::mix(&params, &protocol, &boxes, &first).unwrap();
+    let mix = lovejoin::mix(&params, &protocol, &boxes, &first, &mut Rewards::none()).unwrap();
     assert_eq!(mix.outputs.iter().filter(|b| b.is_owned(&sk)).count(), 1);
 
     let second_payer = Payer {
@@ -388,7 +467,14 @@ fn mainnet_deposit_mix_mix_withdraw_chain_passes() {
     };
     let mut again = mix.outputs.clone();
     again.push(pool(&protocol, 3)[2].clone());
-    let second = lovejoin::mix(&params, &protocol, &again, &second_payer).unwrap();
+    let second = lovejoin::mix(
+        &params,
+        &protocol,
+        &again,
+        &second_payer,
+        &mut Rewards::none(),
+    )
+    .unwrap();
     let ours = second
         .outputs
         .iter()
@@ -402,6 +488,7 @@ fn mainnet_deposit_mix_mix_withdraw_chain_passes() {
         std::slice::from_ref(&ours),
         &sk,
         owner.rerandomize().unwrap(),
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(withdraw.lovelace, protocol.denom - withdraw.fee);
@@ -449,6 +536,7 @@ fn mainnet_withdraw_of_four_boxes_passes() {
         &deposit.boxes,
         &sk,
         base.rerandomize().unwrap(),
+        &mut Rewards::none(),
     )
     .unwrap();
     let known: Vec<Resolved> = deposit.boxes.iter().map(|b| b.utxo.clone()).collect();
@@ -474,6 +562,7 @@ fn mainnet_chains_fan_out_and_mix_again() {
         &[base.clone().rerandomize().unwrap()],
         2,
         &the_pool,
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(chain.txs.len(), 1 + lovejoin::mixes_per_box(2));
@@ -489,6 +578,7 @@ fn mainnet_chains_fan_out_and_mix_again() {
         &[base.clone().rerandomize().unwrap()],
         3,
         &the_pool,
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(deep.txs.len(), 1 + lovejoin::mixes_per_box(3));
@@ -512,7 +602,16 @@ fn mainnet_chains_fan_out_and_mix_again() {
         fee: coin(0x47, lovejoin::again_funding(2, 1)),
         ..payer(0)
     };
-    let again = lovejoin::again(&params, &protocol, &paying, &ours, 1, &pool_now).unwrap();
+    let again = lovejoin::again(
+        &params,
+        &protocol,
+        &paying,
+        &ours,
+        1,
+        &pool_now,
+        &mut Rewards::none(),
+    )
+    .unwrap();
     assert_eq!(again.txs.len(), 2);
     assert!(again.leaves.iter().all(|b| b.is_owned(&sk)));
 }
@@ -529,6 +628,13 @@ fn preprods_hashes_fail_against_the_mainnet_scripts() {
         ..mainnet()
     };
     let boxes = pool(&stale, 3);
-    let err = lovejoin::mix(&params(), &stale, &boxes, &payer(20_000_000)).unwrap_err();
+    let err = lovejoin::mix(
+        &params(),
+        &stale,
+        &boxes,
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("couldn't evaluate"), "{err}");
 }

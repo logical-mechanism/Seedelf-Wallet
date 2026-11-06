@@ -11,6 +11,7 @@ import {
   RateLimit,
   RawJson,
   retryAfterMs,
+  RewardsChangedError,
   type FetchLike,
 } from "../src/background/koios";
 
@@ -366,6 +367,11 @@ describe("Koios client: transactions", () => {
     await expect(refused("DelegateeDRepNotRegisteredDELEG")).rejects.toThrow("DRep isn't registered any more");
     await expect(refused("StakeKeyNotRegisteredDELEG")).rejects.toThrow("staking changed since you reviewed");
     await expect(refused("SomethingElse")).rejects.toThrow("The network rejected the transaction: SomethingElse");
+    // A withdrawal that doesn't take the account's whole balance has a type of its own, in staking's words still:
+    // Lovejoin tells it by that, never by its text (chunk 43). The other staking refusals don't.
+    await expect(refused("WithdrawalsNotInRewardsCERTS")).rejects.toBeInstanceOf(RewardsChangedError);
+    await expect(refused("WithdrawalsNotInRewardsCERTS")).rejects.toBeInstanceOf(KoiosError);
+    await expect(refused("ConwayWdrlNotDelegatedToDRep")).rejects.not.toBeInstanceOf(RewardsChangedError);
   });
 
   it("explains a transaction past its time, or a device clock far off, and a fee too small", async () => {

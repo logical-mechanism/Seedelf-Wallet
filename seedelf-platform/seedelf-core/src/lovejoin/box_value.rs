@@ -25,7 +25,7 @@
 use super::pool::{ReferenceDatum, holder_address, pool_of};
 use super::templates::{self, Derived, NFT_NAME};
 use super::value::{BoxToken, BoxValue};
-use super::{PoolBox, Protocol, mix_datum, withdraw};
+use super::{PoolBox, Protocol, Rewards, mix_datum, withdraw};
 use crate::address::wallet_contract;
 use crate::assets::{Asset, Assets};
 use crate::build::{self, Chain, Payment};
@@ -278,8 +278,17 @@ pub fn way_back(
         .rerandomize()
         .map_err(|e| format!("a register: {e}"))?;
     let boxed = own_box(&pool, &sk).map_err(|e| format!("the box: {e}"))?;
-    let back = withdraw(params, &pool, &[boxed], &sk, destination.clone())
-        .map_err(|e| format!("the withdraw: {e}"))?;
+    // At 0 whatever the pool's reward account holds, so a pool's verdict
+    // never moves with a windfall there (chunk 43).
+    let back = withdraw(
+        params,
+        &pool,
+        &[boxed],
+        &sk,
+        destination.clone(),
+        &mut Rewards::none(),
+    )
+    .map_err(|e| format!("the withdraw: {e}"))?;
 
     let chain = Chain {
         params: params.clone(),

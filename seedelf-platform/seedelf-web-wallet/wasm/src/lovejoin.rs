@@ -32,6 +32,12 @@
 //! worker found of it on chain. It's verified here on every call, from the
 //! bundled templates ([`protocol_of`]); a request without one is the classic
 //! pool, exactly as before.
+//!
+//! Every mix and withdraw takes whatever sits in its pool's `mix_logic`
+//! reward account, as the worker read it (a request's `rewards`,
+//! [`RewardsIn`]; chunk 43): into a mix's change, which the session's return
+//! brings into the private balance, and into a withdraw's register. Only the
+//! first transaction a call builds in a pool takes any.
 
 use crate::api;
 use anyhow::{Context, Result, anyhow, bail};
@@ -44,12 +50,13 @@ use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
 use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
 use seedelf_core::data_structures::create_spend_redeemer;
-use seedelf_core::lovejoin::{self, Coin, Holding, PoolBox, PoolShort, Protocol, Version};
+use seedelf_core::lovejoin::{self, Coin, Holding, PoolBox, PoolShort, Protocol, Rewards, Version};
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse, extract_bytes_with_logging};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 fn network_flag(network: &str) -> Result<bool> {
     match network {
@@ -99,6 +106,64 @@ pub struct PoolRef {
     pub seed: OutRef,
     #[serde(default)]
     pub scripts: Vec<UtxoResponse>,
+}
+
+/// What sits in each pool's `mix_logic` reward account, as the worker read it
+/// (chunk 43): `{ <mix_logic hash, hex>: <lovelace, a decimal string> }`.
+/// None is 0 everywhere, which builds what every request before it built.
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(transparent)]
+pub struct RewardsIn(BTreeMap<String, String>);
+
+impl RewardsIn {
+    /// The balances, read: a hash that isn't 28 bytes, or an amount that
+    /// isn't a whole number a u64 holds, is refused in words.
+    pub fn read(&self) -> Result<Rewards> {
+        self.0
+            .iter()
+            .map(|(hash, lovelace)| {
+                let script: [u8; 28] = hex::decode(hash)
+                    .ok()
+                    .and_then(|h| h.try_into().ok())
+                    .with_context(|| {
+                        format!("A reward balance names {hash}, which isn't a script's hash")
+                    })?;
+                let lovelace = lovelace.parse::<u64>().with_context(|| {
+                    format!("The reward balance of {hash} isn't a whole number of lovelace")
+                })?;
+                Ok((script, lovelace))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Rewards::of)
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MixLogicRequest {
+    pub network: String,
+}
+
+/// A pool's `mix_logic` and the reward account it runs through (chunk 43):
+/// what the worker reads the balance of before it builds in the pool.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MixLogicView {
+    pub hash: String,
+    /// Bech32.
+    pub stake: String,
+}
+
+/// The classic pool's `mix_logic`, or that of the token pool `pool` names.
+pub fn mix_logic(request: MixLogicRequest, pool: Option<&PoolRef>) -> Result<MixLogicView> {
+    let network_flag = network_flag(&request.network)?;
+    let protocol = protocol_of(network_flag, pool)?;
+    let account =
+        seedelf_core::withdraw_zero::reward_account(&protocol.mix_logic_hash, network_flag);
+    Ok(MixLogicView {
+        hash: hex::encode(protocol.mix_logic_hash),
+        stake: Address::from_bytes(&account)?.to_bech32()?,
+    })
 }
 
 /// The classic pool, or the token pool `pool` names, which is trusted only
@@ -202,7 +267,8 @@ impl CollateralTail {
     /// the wallet's own, nor one `avoid` names (what the chain spends). A pool
     /// that isn't 5 ₳ boxes of ADA, or doesn't verify, is refused, and so is
     /// anything but the collateral: the caller brings it back with the rest
-    /// rather than fail a session's return.
+    /// rather than fail a session's return. Its mix takes what `rewards`
+    /// still holds for the pool.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn build(
         network_flag: bool,
@@ -214,6 +280,7 @@ impl CollateralTail {
         payers: Vec<Coin>,
         avoid: &[OutRef],
         address: &Address,
+        rewards: &mut Rewards,
     ) -> Result<Self> {
         let protocol = collateral_protocol(network_flag, pool)?;
         if !fits_collateral(collateral) {
@@ -230,6 +297,7 @@ impl CollateralTail {
             &draws(&protocol, rows, sk, avoid),
             address,
             1,
+            rewards,
         )?;
         Ok(CollateralTail {
             deposit: tail.deposit,
@@ -354,7 +422,7 @@ impl DirectTail {
 /// pool `pool` names, drawing from its `rows`: the session's own collateral
 /// among `utxos`, paid for by every other ADA-only UTxO there the wallet's
 /// evaluator can take. Refused where there's no such collateral, or nothing
-/// else to pay.
+/// else to pay. Its mix takes what `rewards` holds for the pool.
 pub(crate) fn direct_tail(
     network_flag: bool,
     params: &ProtocolParameters,
@@ -362,6 +430,7 @@ pub(crate) fn direct_tail(
     pool: &PoolRef,
     rows: &[UtxoResponse],
     utxos: &[UtxoResponse],
+    rewards: &mut Rewards,
 ) -> Result<DirectTail> {
     let collateral = utxos
         .iter()
@@ -394,6 +463,7 @@ pub(crate) fn direct_tail(
         coins,
         &[],
         &address,
+        rewards,
     )?;
     let spent = |u: &UtxoResponse| {
         is_collateral(u)
@@ -440,6 +510,9 @@ pub struct CollateralMixRequest {
     /// The session's own transactions (`api::SessionReturnRequest::own`).
     #[serde(default)]
     pub own: Vec<String>,
+    /// What sits in the pool's `mix_logic` reward account: the mix takes it.
+    #[serde(default)]
+    pub rewards: RewardsIn,
 }
 
 /// The collateral's box, mixed once with two boxes drawn fresh, its fee paid
@@ -481,6 +554,7 @@ pub fn collateral_mix(
         &draws(&protocol, &request.pool, sk, &[]),
         &address,
         1,
+        &mut request.rewards.read()?,
     )?;
     let mut rows = vec![coin_row(&mix.change, &payer.address)];
     rows.extend(
@@ -1341,6 +1415,10 @@ pub struct ChainRequest {
     /// tail is paid from whatever the chain leaves, if that's enough.
     #[serde(default)]
     pub collateral_reserve: bool,
+    /// What sits in each pool's `mix_logic` reward account, the chain's
+    /// pools' and the collateral's: its first mix in each takes it.
+    #[serde(default)]
+    pub rewards: RewardsIn,
 }
 
 #[derive(Serialize, Debug)]
@@ -1515,6 +1593,7 @@ pub fn chain_at(
     let address = Address::from_bech32(&held.address)
         .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
     let collateral = mixes_collateral(&held, request.depth, request.again)?;
+    let mut rewards = request.rewards.read()?;
 
     // The ADA-only UTxOs the chain doesn't spend: they come back with the return.
     let mut unused: Vec<UtxoResponse> = Vec::new();
@@ -1556,6 +1635,7 @@ pub fn chain_at(
             request.depth,
             width,
             &pool,
+            &mut rewards,
         )
         .map(|built| (built, boxes))
     } else {
@@ -1589,8 +1669,16 @@ pub fn chain_at(
             owners: &owners,
             pool: &pool,
         };
-        lovejoin::chain_across(&params, &funding, &tokens, &[leg], request.depth, width)
-            .map(|built| (built, boxes))
+        lovejoin::chain_across(
+            &params,
+            &funding,
+            &tokens,
+            &[leg],
+            request.depth,
+            width,
+            &mut rewards,
+        )
+        .map(|built| (built, boxes))
     };
     let (built, boxes) = match fanned {
         Err(e) => match e.downcast_ref::<PoolShort>() {
@@ -1612,6 +1700,7 @@ pub fn chain_at(
             unused,
             legs: Vec::new(),
         },
+        &mut rewards,
     )
 }
 
@@ -1700,14 +1789,22 @@ pub fn chain_across_pools(
         mix_signers: 1,
     };
     let tokens: Vec<lovejoin::Holding> = held.tokens.iter().map(|(h, _)| h.clone()).collect();
-    let built =
-        match lovejoin::chain_across(&params, &funding, &tokens, &legs, request.depth, width) {
-            Err(e) => match e.downcast_ref::<PoolShort>() {
-                Some(short) => return Ok(ChainResult::skipped(request.depth, short)),
-                None => return Err(e),
-            },
-            Ok(built) => built,
-        };
+    let mut rewards = request.rewards.read()?;
+    let built = match lovejoin::chain_across(
+        &params,
+        &funding,
+        &tokens,
+        &legs,
+        request.depth,
+        width,
+        &mut rewards,
+    ) {
+        Err(e) => match e.downcast_ref::<PoolShort>() {
+            Some(short) => return Ok(ChainResult::skipped(request.depth, short)),
+            None => return Err(e),
+        },
+        Ok(built) => built,
+    };
     with_return(
         accounts,
         sk,
@@ -1721,6 +1818,7 @@ pub fn chain_across_pools(
             unused: Vec::new(),
             legs: counts,
         },
+        &mut rewards,
     )
 }
 
@@ -1738,7 +1836,9 @@ struct Fanned {
 /// the session's collateral is mixed once on its way into that pool first
 /// ([`CollateralTail`]), paid from the chain's change, and the return sweeps
 /// what that leaves; where that can't be built, the return is as before, the
-/// collateral back with the rest.
+/// collateral back with the rest. The tail's mix takes what `rewards` still
+/// holds for its pool, which is nothing once the chain mixed there.
+#[allow(clippy::too_many_arguments)]
 fn with_return(
     accounts: &CardanoAccount,
     sk: Scalar,
@@ -1747,6 +1847,7 @@ fn with_return(
     request: &ChainRequest,
     held: &Holdings,
     fanned: Fanned,
+    rewards: &mut Rewards,
 ) -> Result<ChainResult> {
     let Fanned {
         built,
@@ -1792,6 +1893,7 @@ fn with_return(
                 vec![built.change.clone()],
                 &avoid,
                 &address,
+                rewards,
             )
             .ok()
         }
@@ -2043,6 +2145,10 @@ pub struct AccountChainRequest {
     pub pool: Vec<UtxoResponse>,
     pub depth: u32,
     pub boxes: usize,
+    /// What sits in the pool's `mix_logic` reward account: the first mix
+    /// takes it, and the change that stays in the account carries it.
+    #[serde(default)]
+    pub rewards: RewardsIn,
 }
 
 /// `boxes` boxes from the public account straight into Lovejoin: the
@@ -2230,7 +2336,8 @@ pub fn chain_from_account_at(
     // an ADA change at a base address takes about 0.97 ₳. So when what was
     // picked falls short of that, the next largest UTxO is picked too and the
     // chain built again, while the account has one (1.6.0's release review,
-    // MONEY-5); only then is it short.
+    // MONEY-5); only then is it short. Each try takes the reward balance anew.
+    let rewards = request.rewards.read()?;
     let (built, deposit_keys) = loop {
         let coins = coin_rows
             .iter()
@@ -2255,7 +2362,15 @@ pub fn chain_from_account_at(
             deposit_signers: deposit_keys.len(),
             mix_signers: mix_keys.len(),
         };
-        match lovejoin::chain_across(&params, &funding, &tokens, &[leg], request.depth, width) {
+        match lovejoin::chain_across(
+            &params,
+            &funding,
+            &tokens,
+            &[leg],
+            request.depth,
+            width,
+            &mut rewards.clone(),
+        ) {
             Ok(built) => break (built, deposit_keys),
             Err(short) if build::is_short(&short) => match rest.next() {
                 Some(p) => coin_rows.push(&p.utxo),
@@ -2413,6 +2528,7 @@ pub fn again_from_account_at(
         request.depth,
         width,
         &pool,
+        &mut request.rewards.read()?,
     )?;
 
     let mut txs = Vec::with_capacity(built.txs.len());
@@ -2514,6 +2630,9 @@ pub struct WithdrawRequest {
     pub pool: Vec<UtxoResponse>,
     /// The box to take; the first of ours in the pool when absent.
     pub box_ref: Option<OutRef>,
+    /// What sits in the pool's `mix_logic` reward account: the register takes it.
+    #[serde(default)]
+    pub rewards: RewardsIn,
 }
 
 #[derive(Serialize, Debug)]
@@ -2523,7 +2642,8 @@ pub struct WithdrawResult {
     pub tx_cbor: String,
     pub tx_hash: String,
     pub fee: String,
-    /// Into the new register.
+    /// Into the new register: the box's ADA and the reward balance taken,
+    /// less the fee.
     pub lovelace: String,
     pub box_ref: OutRef,
     /// A token pool's token, into the same register.
@@ -2575,6 +2695,7 @@ pub fn withdraw_in(
         std::slice::from_ref(&chosen),
         &sk,
         destination,
+        &mut request.rewards.read()?,
     )?;
     Ok(WithdrawResult {
         tx_cbor: hex::encode(&built.tx.tx_bytes.0),
@@ -2601,6 +2722,9 @@ pub struct WithdrawPaidRequest {
     pub utxos: Vec<api::PathedUtxo>,
     /// Its collateral, with its path: put up, never spent.
     pub collateral: api::PathedUtxo,
+    /// What sits in the pool's `mix_logic` reward account: the register takes it.
+    #[serde(default)]
+    pub rewards: RewardsIn,
 }
 
 /// A box brought back paid by the public account, signed: ready to submit.
@@ -2611,8 +2735,9 @@ pub struct WithdrawPaidResult {
     pub tx_cbor: String,
     pub tx_hash: String,
     pub fee: String,
-    /// Into the new register: the box's ADA, or what the Seedelf output
-    /// needs when that's more, the account making up the rest.
+    /// Into the new register: the box's ADA and the reward balance taken, or
+    /// what the Seedelf output needs when that's more, the account making up
+    /// the rest.
     pub lovelace: String,
     /// What the public account pays: the fee, and what it made up.
     pub paid: String,
@@ -2673,6 +2798,7 @@ pub fn withdraw_paid_in(
         &sk,
         destination,
         &payer,
+        &mut request.rewards.read()?,
     )?;
     let change = built
         .change
@@ -2715,6 +2841,9 @@ pub struct WithdrawPrivateRequest {
     /// The private balance's spendable UTxOs, in the order to try them: the
     /// first that pays is spent.
     pub utxos: Vec<UtxoResponse>,
+    /// What sits in the pool's `mix_logic` reward account: the register takes it.
+    #[serde(default)]
+    pub rewards: RewardsIn,
 }
 
 /// A box brought back paid by the private balance, unsigned, as any Seedelf
@@ -2727,7 +2856,8 @@ pub struct WithdrawPrivateResult {
     /// Its one-time key's seed, for `signScriptSpend`.
     pub seed: String,
     pub fee: String,
-    /// Into the new register: the box's ADA and the private UTxO's, less the fee.
+    /// Into the new register: the box's ADA, the private UTxO's and the reward
+    /// balance taken, less the fee.
     pub lovelace: String,
     /// The private UTxO that paid, `txHash#index`.
     pub spent: String,
@@ -2762,6 +2892,8 @@ pub fn withdraw_private_in(
     let destination = Register::create(sk)?.rerandomize()?;
     let seed = api::new_seed();
     let signer = api::key_hash(&api::one_time_key(&sk, &seed));
+    // A UTxO too small is passed over having taken nothing.
+    let mut rewards = request.rewards.read()?;
     for utxo in &request.utxos {
         if utxo.asset_list.as_ref().is_some_and(|a| !a.is_empty())
             || seedelf_core::eval::refusal(utxo).is_some()
@@ -2786,6 +2918,7 @@ pub fn withdraw_private_in(
             &sk,
             destination.clone(),
             &payer,
+            &mut rewards,
         ) {
             Ok(built) => built,
             Err(e) if e.downcast_ref::<lovejoin::PrivateTooSmall>().is_some() => continue,

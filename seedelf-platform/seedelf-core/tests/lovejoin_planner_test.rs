@@ -22,7 +22,7 @@ use rand_core::OsRng;
 use seedelf_core::assets::Assets;
 use seedelf_core::eval::{self, Resolved};
 use seedelf_core::lovejoin::{
-    self, Coin, Funding, Holding, Leg, LegPlan, PoolBox, PoolShort, Protocol,
+    self, Coin, Funding, Holding, Leg, LegPlan, PoolBox, PoolShort, Protocol, Rewards,
 };
 use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
@@ -816,6 +816,7 @@ fn a_chain_across_pools_mixes_each_leg_in_its_own_pool() {
         &legs,
         1,
         3,
+        &mut Rewards::none(),
     )
     .unwrap();
     // One deposit, then one mix in each pool: the token pool's first, as the legs go.
@@ -854,12 +855,89 @@ fn a_chain_across_pools_mixes_each_leg_in_its_own_pool() {
         &short,
         1,
         3,
+        &mut Rewards::none(),
     )
     .unwrap_err();
     assert_eq!(
         err.downcast_ref::<PoolShort>(),
         Some(&PoolShort { have: 1, needed: 2 })
     );
+}
+
+/// What a `tx` withdraws, from which reward accounts.
+fn withdrawals(tx: &[u8]) -> Vec<(Vec<u8>, u64)> {
+    let tx = MultiEraTx::decode(tx).unwrap();
+    tx.as_conway()
+        .unwrap()
+        .transaction_body
+        .withdrawals
+        .as_ref()
+        .map(|w| w.iter().map(|(a, l)| (a.to_vec(), *l)).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_chain_across_pools_takes_each_pools_balance_in_its_first_mix() {
+    // Chunk 43: each pool's mix_logic account its own, one depth-2 leg each.
+    let classic = Protocol::of(true).unwrap();
+    let pool = lj_pool_by_reference();
+    let sk = Scalar::from(987_654_321u64);
+    let (in_token, in_classic) = (owners(sk, 1), owners(sk, 1));
+    let (token_others, classic_others) = (others(&pool, 8, 0x50), others(&classic, 8, 0x70));
+    let legs = [
+        Leg {
+            protocol: &pool,
+            owners: &in_token,
+            pool: &token_others,
+        },
+        Leg {
+            protocol: &classic,
+            owners: &in_classic,
+            pool: &classic_others,
+        },
+    ];
+    let tokens = vec![token_holding(&pool, 0x10, 2_000_000, 1, None)];
+    let mut rewards = Rewards::of([
+        (pool.mix_logic_hash, 500_000_000),
+        (classic.mix_logic_hash, 3_000_000),
+    ]);
+    let chain = lovejoin::chain_across(
+        &params(),
+        &funding(vec![coin(0x11, 40_000_000)]),
+        &tokens,
+        &legs,
+        2,
+        3,
+        &mut rewards,
+    )
+    .unwrap();
+    // The deposit, then four mixes in the token pool and four in the classic.
+    let account =
+        |p: &Protocol| seedelf_core::withdraw_zero::reward_account(&p.mix_logic_hash, true);
+    let withdrawn: Vec<Vec<(Vec<u8>, u64)>> = chain
+        .txs
+        .iter()
+        .map(|t| withdrawals(&t.tx.tx_bytes.0))
+        .collect();
+    assert_eq!(withdrawn.len(), 9);
+    assert!(withdrawn[0].is_empty());
+    assert_eq!(withdrawn[1], vec![(account(&pool), 500_000_000)]);
+    for w in &withdrawn[2..5] {
+        assert_eq!(*w, vec![(account(&pool), 0)]);
+    }
+    assert_eq!(withdrawn[5], vec![(account(&classic), 3_000_000)]);
+    for w in &withdrawn[6..] {
+        assert_eq!(*w, vec![(account(&classic), 0)]);
+    }
+    let taken: u64 = chain.txs.iter().map(|t| t.taken).sum();
+    assert_eq!(taken, 503_000_000);
+    // The last change carries both.
+    let fees: u64 = chain.txs.iter().map(|t| t.fee).sum();
+    assert_eq!(
+        chain.change.lovelace,
+        42_000_000 - pool.denom - classic.denom - fees + 503_000_000
+    );
+    assert_eq!(rewards, Rewards::none());
 }
 
 #[test]
@@ -881,6 +959,7 @@ fn a_four_wide_chain_mixes_four_boxes_at_a_time() {
         &legs,
         1,
         4,
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(chain.txs.len(), 2);
@@ -911,6 +990,7 @@ fn a_four_wide_chain_mixes_four_boxes_at_a_time() {
         }],
         1,
         4,
+        &mut Rewards::none(),
     )
     .unwrap_err();
     assert_eq!(
@@ -925,9 +1005,31 @@ fn a_four_wide_chain_mixes_four_boxes_at_a_time() {
         address: session(),
         signers: 1,
     };
-    let again = lovejoin::again_at(&params(), &classic, &payer, &ours, 1, 4, &pool).unwrap();
+    let again = lovejoin::again_at(
+        &params(),
+        &classic,
+        &payer,
+        &ours,
+        1,
+        4,
+        &pool,
+        &mut Rewards::none(),
+    )
+    .unwrap();
     assert_eq!(again.txs.len(), 1);
     assert_eq!(spends(&again.txs[0].tx.tx_bytes.0, &pool), 3);
     // A width that isn't one.
-    assert!(lovejoin::again_at(&params(), &classic, &payer, &ours, 1, 5, &pool).is_err());
+    assert!(
+        lovejoin::again_at(
+            &params(),
+            &classic,
+            &payer,
+            &ours,
+            1,
+            5,
+            &pool,
+            &mut Rewards::none()
+        )
+        .is_err()
+    );
 }

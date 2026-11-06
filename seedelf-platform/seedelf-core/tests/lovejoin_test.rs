@@ -8,7 +8,7 @@ use pallas_primitives::conway::{PlutusData, Redeemers};
 use pallas_primitives::{Fragment, MaybeIndefArray};
 use pallas_traverse::MultiEraTx;
 use seedelf_core::eval::Resolved;
-use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, PoolShort, Protocol};
+use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, PoolShort, Protocol, Rewards};
 use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, Ratio};
@@ -229,7 +229,14 @@ fn a_mix_of_pool_boxes_passes_mix_logic() {
     let protocol = Protocol::of(true).unwrap();
     let boxes = pool_boxes(&protocol);
     assert_eq!(boxes.len(), 3);
-    let mix = lovejoin::mix(&params(), &protocol, &boxes, &payer(20_000_000)).unwrap();
+    let mix = lovejoin::mix(
+        &params(),
+        &protocol,
+        &boxes,
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap();
     assert_eq!(mix.outputs.len(), 3);
     let mut moved = mix.moved_to.clone();
     moved.sort();
@@ -247,8 +254,24 @@ fn a_mix_of_pool_boxes_passes_mix_logic() {
 fn a_mix_needs_two_boxes_and_a_payer_who_can_pay() {
     let protocol = Protocol::of(true).unwrap();
     let boxes = pool_boxes(&protocol);
-    assert!(lovejoin::mix(&params(), &protocol, &boxes[..1], &payer(20_000_000)).is_err());
-    let short = lovejoin::mix(&params(), &protocol, &boxes, &payer(300_000)).unwrap_err();
+    assert!(
+        lovejoin::mix(
+            &params(),
+            &protocol,
+            &boxes[..1],
+            &payer(20_000_000),
+            &mut Rewards::none()
+        )
+        .is_err()
+    );
+    let short = lovejoin::mix(
+        &params(),
+        &protocol,
+        &boxes,
+        &payer(300_000),
+        &mut Rewards::none(),
+    )
+    .unwrap_err();
     assert!(short.to_string().contains("enough ADA left"), "{short}");
 }
 
@@ -267,7 +290,7 @@ fn a_mix_never_pays_a_fee_over_the_limit() {
         min_fee_b: 12_000_000,
         ..params()
     };
-    let err = lovejoin::mix(&wrong, &protocol, &boxes, &rich).unwrap_err();
+    let err = lovejoin::mix(&wrong, &protocol, &boxes, &rich, &mut Rewards::none()).unwrap_err();
     assert!(err.to_string().contains("over the wallet's limit"), "{err}");
 }
 
@@ -275,12 +298,26 @@ fn a_mix_never_pays_a_fee_over_the_limit() {
 fn a_mix_prices_its_reference_scripts_from_the_parameters() {
     let protocol = Protocol::of(true).unwrap();
     let boxes = pool_boxes(&protocol);
-    let today = lovejoin::mix(&params(), &protocol, &boxes, &payer(20_000_000)).unwrap();
+    let today = lovejoin::mix(
+        &params(),
+        &protocol,
+        &boxes,
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap();
     let dearer = ProtocolParameters {
         min_fee_ref_script_cost_per_byte: Ratio::whole(45),
         ..params()
     };
-    let mix = lovejoin::mix(&dearer, &protocol, &boxes, &payer(20_000_000)).unwrap();
+    let mix = lovejoin::mix(
+        &dearer,
+        &protocol,
+        &boxes,
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap();
     // mix_box's 629 bytes and mix_logic's 3,156, at 30 lovelace a byte more.
     // A proof's scalars move the measured budget by a hair between builds.
     let more = mix.fee - today.fee;
@@ -325,7 +362,7 @@ fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
         address: key_address(0x33),
         signers: 1,
     };
-    let mix = lovejoin::mix(&params, &protocol, &boxes, &payer).unwrap();
+    let mix = lovejoin::mix(&params, &protocol, &boxes, &payer, &mut Rewards::none()).unwrap();
     collateral_is_enough(&mix.tx.tx_bytes.0, 5_000_000);
     let ours: Vec<&PoolBox> = mix.outputs.iter().filter(|b| b.is_owned(&sk)).collect();
     assert_eq!(ours.len(), 1, "exactly one output is still ours");
@@ -338,7 +375,7 @@ fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
     };
     let mut again = mix.outputs.clone();
     again.push(pool_boxes(&protocol)[2].clone());
-    let second = lovejoin::mix(&params, &protocol, &again, &payer).unwrap();
+    let second = lovejoin::mix(&params, &protocol, &again, &payer, &mut Rewards::none()).unwrap();
     assert_eq!(second.outputs.iter().filter(|b| b.is_owned(&sk)).count(), 1);
 
     // The box comes back into a fresh register, paid from itself.
@@ -349,8 +386,15 @@ fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
         .unwrap()
         .clone();
     let destination = owner.clone().rerandomize().unwrap();
-    let withdraw =
-        lovejoin::withdraw(&params, &protocol, &[ours], &sk, destination.clone()).unwrap();
+    let withdraw = lovejoin::withdraw(
+        &params,
+        &protocol,
+        &[ours],
+        &sk,
+        destination.clone(),
+        &mut Rewards::none(),
+    )
+    .unwrap();
     assert_eq!(withdraw.lovelace, protocol.denom - withdraw.fee);
     // giveme.my's 5 ₳ covers it as the ledger counts, and every one of several draws does.
     collateral_is_enough(&withdraw.tx.tx_bytes.0, 5_000_000);
@@ -366,6 +410,7 @@ fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
                 .clone()],
             &sk,
             owner.clone().rerandomize().unwrap(),
+            &mut Rewards::none(),
         )
         .unwrap();
         assert_eq!(again.fee % 2, 0, "an even fee, so 3/2 of it is whole");
@@ -431,12 +476,26 @@ fn a_mix_under_givemes_collateral_passes_mix_logic() {
     let protocol = Protocol::of(true).unwrap();
     let boxes = pool_boxes(&protocol);
     // The payer's collateral is never put up.
-    let mix = lovejoin::mix_giveme(&params(), &protocol, &boxes, &payer(20_000_000)).unwrap();
+    let mix = lovejoin::mix_giveme(
+        &params(),
+        &protocol,
+        &boxes,
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap();
     under_givemes_collateral(&mix.tx.tx_bytes.0);
     assert_eq!(mix.outputs.len(), 3);
     assert_eq!(mix.change.lovelace, 20_000_000 - mix.fee);
     // giveme.my's signature makes it a little dearer than the same mix under the payer's own.
-    let own = lovejoin::mix(&params(), &protocol, &boxes, &payer(20_000_000)).unwrap();
+    let own = lovejoin::mix(
+        &params(),
+        &protocol,
+        &boxes,
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap();
     assert!(
         mix.fee > own.fee && mix.fee - own.fee < 20_000,
         "{} against {}",
@@ -459,8 +518,17 @@ fn a_sessions_collateral_goes_into_a_box_and_is_mixed_once() {
     let coins = [coin(0x22, 10_000_000), coin(0x44, 2_500_000)];
     let address = key_address(0x33);
     let pool = pool_boxes(&protocol);
-    let tail =
-        lovejoin::collateral_tail(&params, &protocol, &coins, &owner, &pool, &address, 1).unwrap();
+    let tail = lovejoin::collateral_tail(
+        &params,
+        &protocol,
+        &coins,
+        &owner,
+        &pool,
+        &address,
+        1,
+        &mut Rewards::none(),
+    )
+    .unwrap();
 
     // The deposit spends both, makes one box of ours, and the rest is change.
     let deposit = MultiEraTx::decode(&tail.deposit.tx.tx_bytes.0).unwrap();
@@ -510,9 +578,17 @@ fn a_sessions_collateral_goes_into_a_box_and_is_mixed_once() {
     );
 
     // Too few of the pool's boxes to draw two: said as the pool short.
-    let err =
-        lovejoin::collateral_tail(&params, &protocol, &coins, &owner, &pool[..1], &address, 1)
-            .unwrap_err();
+    let err = lovejoin::collateral_tail(
+        &params,
+        &protocol,
+        &coins,
+        &owner,
+        &pool[..1],
+        &address,
+        1,
+        &mut Rewards::none(),
+    )
+    .unwrap_err();
     assert_eq!(
         err.downcast_ref::<PoolShort>(),
         Some(&PoolShort { have: 1, needed: 2 })
@@ -525,7 +601,15 @@ fn someone_elses_box_is_not_withdrawn() {
     let boxes = pool_boxes(&protocol);
     let sk = Scalar::from(5u64);
     let destination = Register::create(sk).unwrap().rerandomize().unwrap();
-    let err = lovejoin::withdraw(&params(), &protocol, &boxes[..1], &sk, destination).unwrap_err();
+    let err = lovejoin::withdraw(
+        &params(),
+        &protocol,
+        &boxes[..1],
+        &sk,
+        destination,
+        &mut Rewards::none(),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("isn't this wallet's"), "{err}");
 }
 
@@ -623,7 +707,16 @@ fn a_chain_fans_each_box_out_and_keeps_track_of_ours() {
     // One box, two waves deep: 1 + 3 mixes, 8 fresh boxes.
     let owners = vec![base.clone().rerandomize().unwrap()];
     let coins = [coin(0x44, 20_000_000)];
-    let chain = lovejoin::chain(&params, &protocol, &funding(&coins), &owners, 2, &pool).unwrap();
+    let chain = lovejoin::chain(
+        &params,
+        &protocol,
+        &funding(&coins),
+        &owners,
+        2,
+        &pool,
+        &mut Rewards::none(),
+    )
+    .unwrap();
     assert_eq!(chain.txs.len(), 1 + lovejoin::mixes_per_box(2));
     assert_eq!(chain.txs[0].kind, "deposit");
     assert!(chain.txs[1..].iter().all(|t| t.kind == "mix"));
@@ -647,7 +740,16 @@ fn a_chain_fans_each_box_out_and_keeps_track_of_ours() {
         base.rerandomize().unwrap(),
     ];
     let coins = [coin(0x44, 30_000_000)];
-    let chain = lovejoin::chain(&params, &protocol, &funding(&coins), &owners, 1, &pool).unwrap();
+    let chain = lovejoin::chain(
+        &params,
+        &protocol,
+        &funding(&coins),
+        &owners,
+        1,
+        &pool,
+        &mut Rewards::none(),
+    )
+    .unwrap();
     assert_eq!(chain.txs.len(), 3);
     assert_eq!(chain.leaves.len(), 2);
     assert!(chain.leaves.iter().all(|b| b.is_owned(&sk)));
@@ -671,7 +773,16 @@ fn a_seed_is_the_deposit_alone_and_needs_no_pool_and_no_collateral() {
         deposit_signers: 1,
         mix_signers: 1,
     };
-    let seed = lovejoin::chain(&params, &protocol, &funding, &owners, 0, &[]).unwrap();
+    let seed = lovejoin::chain(
+        &params,
+        &protocol,
+        &funding,
+        &owners,
+        0,
+        &[],
+        &mut Rewards::none(),
+    )
+    .unwrap();
     assert_eq!(seed.txs.len(), 1, "the deposit alone");
     assert_eq!(seed.txs[0].kind, "deposit");
     assert_eq!(seed.leaves.len(), 3);
@@ -689,6 +800,7 @@ fn a_seed_is_the_deposit_alone_and_needs_no_pool_and_no_collateral() {
         &owners,
         1,
         &all_pool_boxes(&protocol),
+        &mut Rewards::none(),
     )
     .unwrap_err();
     assert!(err.to_string().contains("needs collateral"), "{err}");
@@ -711,6 +823,7 @@ fn a_chain_needs_enough_pool_boxes() {
         &owners,
         2,
         &pool,
+        &mut Rewards::none(),
     )
     .unwrap_err();
     assert!(err.to_string().contains("pool has 3 boxes"), "{err}");
@@ -761,6 +874,7 @@ fn a_chain_funded_for_its_boxes_goes_through_and_keeps_its_change() {
         &owners,
         1,
         &all_pool_boxes(&protocol),
+        &mut Rewards::none(),
     )
     .unwrap();
     assert_eq!(built.txs.len(), 3);
@@ -776,7 +890,14 @@ fn a_chain_funded_for_its_boxes_goes_through_and_keeps_its_change() {
 fn a_mix_never_leaves_change_under_an_outputs_least() {
     let protocol = Protocol::of(true).unwrap();
     let boxes = pool_boxes(&protocol);
-    let err = lovejoin::mix(&params(), &protocol, &boxes, &payer(1_500_000)).unwrap_err();
+    let err = lovejoin::mix(
+        &params(),
+        &protocol,
+        &boxes,
+        &payer(1_500_000),
+        &mut Rewards::none(),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("keep the change"), "{err}");
 }
 
@@ -813,7 +934,16 @@ fn boxes_of_ours_in_the_pool_fan_out_again_with_no_deposit() {
         fee: coin(0x44, funded),
         ..payer(0)
     };
-    let chain = lovejoin::again(&params(), &protocol, &paying, &ours, 1, &pool).unwrap();
+    let chain = lovejoin::again(
+        &params(),
+        &protocol,
+        &paying,
+        &ours,
+        1,
+        &pool,
+        &mut Rewards::none(),
+    )
+    .unwrap();
     // One wave: a mix for each box, and nothing else.
     assert_eq!(chain.txs.len(), 2);
     assert!(chain.txs.iter().all(|t| t.kind == "mix"));
@@ -870,14 +1000,23 @@ fn mixing_again_needs_a_box_and_enough_others() {
         &[],
         1,
         &all_pool_boxes(&protocol),
+        &mut Rewards::none(),
     )
     .unwrap_err();
     assert!(err.to_string().contains("no box to mix again"), "{err}");
     // Ours don't count among the boxes to mix with.
     let mut pool = vec![all_pool_boxes(&protocol)[0].clone()];
     pool.extend(ours.iter().cloned());
-    let err =
-        lovejoin::again(&params(), &protocol, &payer(20_000_000), &ours, 1, &pool).unwrap_err();
+    let err = lovejoin::again(
+        &params(),
+        &protocol,
+        &payer(20_000_000),
+        &ours,
+        1,
+        &pool,
+        &mut Rewards::none(),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("pool has 1 boxes"), "{err}");
     assert!(err.downcast_ref::<PoolShort>().is_some());
 }
@@ -895,4 +1034,369 @@ fn mixing_again_is_planned_on_the_mixes_alone() {
         }
     }
     assert_eq!(lovejoin::again_funding(1, 2), 5_300_000);
+}
+
+// ---------------------------------------------------------------------------
+// The reward balance (chunk 43): what sits in mix_logic's reward account
+// ---------------------------------------------------------------------------
+
+/// A retired stake pool's deposit, refunded into `mix_logic`'s reward account.
+const WINDFALL: u64 = 500_000_000;
+
+/// `lovelace` in `protocol`'s reward account.
+fn holding(protocol: &Protocol, lovelace: u64) -> Rewards {
+    Rewards::of([(protocol.mix_logic_hash, lovelace)])
+}
+
+/// What `tx` withdraws, from which reward accounts.
+fn withdrawals(tx_cbor: &[u8]) -> Vec<(Vec<u8>, u64)> {
+    let tx = MultiEraTx::decode(tx_cbor).unwrap();
+    tx.as_conway()
+        .unwrap()
+        .transaction_body
+        .withdrawals
+        .as_ref()
+        .map(|w| w.iter().map(|(a, l)| (a.to_vec(), *l)).collect())
+        .unwrap_or_default()
+}
+
+/// One withdrawal of `lovelace` from `protocol`'s `mix_logic` account.
+fn withdraws(protocol: &Protocol, lovelace: u64) -> Vec<(Vec<u8>, u64)> {
+    vec![(
+        seedelf_core::withdraw_zero::reward_account(&protocol.mix_logic_hash, true),
+        lovelace,
+    )]
+}
+
+/// The ledger's balance: what the inputs held and the withdrawal brings is
+/// every output's ADA and the fee.
+fn balances(tx_cbor: &[u8], inputs: u64) {
+    let tx = MultiEraTx::decode(tx_cbor).unwrap();
+    let out: u64 = tx.outputs().iter().map(|o| o.value().coin()).sum();
+    let withdrawn: u64 = withdrawals(tx_cbor).iter().map(|(_, l)| l).sum();
+    assert_eq!(inputs + withdrawn, out + tx.fee().unwrap());
+}
+
+/// Each output's ADA, in order.
+fn coins_out(tx_cbor: &[u8]) -> Vec<u64> {
+    let tx = MultiEraTx::decode(tx_cbor).unwrap();
+    tx.outputs().iter().map(|o| o.value().coin()).collect()
+}
+
+#[test]
+fn a_mix_takes_the_reward_balance_whole_into_its_change() {
+    let protocol = Protocol::of(true).unwrap();
+    let boxes = pool_boxes(&protocol);
+    let mut rewards = holding(&protocol, WINDFALL);
+    // Built at all is mix_logic passing a withdrawal that isn't 0: the mix is
+    // measured as it will be sent.
+    let mix = lovejoin::mix(
+        &params(),
+        &protocol,
+        &boxes,
+        &payer(20_000_000),
+        &mut rewards,
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawals(&mix.tx.tx_bytes.0),
+        withdraws(&protocol, WINDFALL)
+    );
+    assert_eq!(mix.taken, WINDFALL);
+    assert_eq!(mix.change.lovelace, 20_000_000 + WINDFALL - mix.fee);
+    // Every box still holds exactly the box value; the change holds it.
+    assert_eq!(
+        coins_out(&mix.tx.tx_bytes.0),
+        vec![protocol.denom; 3]
+            .into_iter()
+            .chain([mix.change.lovelace])
+            .collect::<Vec<_>>()
+    );
+    balances(&mix.tx.tx_bytes.0, 3 * protocol.denom + 20_000_000);
+    collateral_is_enough(&mix.tx.tx_bytes.0, 5_000_000);
+
+    // Taken: the next mix in the pool withdraws 0, and costs the same but for
+    // the amount's few bytes.
+    assert_eq!(rewards.balance(&protocol), 0);
+    let next = lovejoin::mix(
+        &params(),
+        &protocol,
+        &boxes,
+        &payer(20_000_000),
+        &mut rewards,
+    )
+    .unwrap();
+    assert_eq!(withdrawals(&next.tx.tx_bytes.0), withdraws(&protocol, 0));
+    assert_eq!(next.taken, 0);
+    assert_eq!(next.change.lovelace, 20_000_000 - next.fee);
+    assert!(
+        mix.fee.abs_diff(next.fee) < 2_000,
+        "{} and {}",
+        mix.fee,
+        next.fee
+    );
+}
+
+#[test]
+fn a_mix_takes_only_its_own_pools_balance() {
+    let protocol = Protocol::of(true).unwrap();
+    let other = Protocol::of(false).unwrap();
+    let mut rewards = holding(&other, WINDFALL);
+    let mix = lovejoin::mix(
+        &params(),
+        &protocol,
+        &pool_boxes(&protocol),
+        &payer(20_000_000),
+        &mut rewards,
+    )
+    .unwrap();
+    assert_eq!(withdrawals(&mix.tx.tx_bytes.0), withdraws(&protocol, 0));
+    assert_eq!(rewards.balance(&other), WINDFALL);
+    assert_eq!(rewards, holding(&other, WINDFALL));
+    // None at all is what the wallet always built.
+    assert_eq!(Rewards::of([(protocol.mix_logic_hash, 0)]), Rewards::none());
+}
+
+#[test]
+fn a_build_that_fails_takes_nothing() {
+    let protocol = Protocol::of(true).unwrap();
+    let boxes = pool_boxes(&protocol);
+    let mut rewards = holding(&protocol, WINDFALL);
+    // Collateral too small for the fee: refused after the balance was read.
+    let poor = Payer {
+        collateral: Some(coin(0x22, 100_000)),
+        ..payer(20_000_000)
+    };
+    let err = lovejoin::mix(&params(), &protocol, &boxes, &poor, &mut rewards).unwrap_err();
+    assert!(err.to_string().contains("collateral can't cover"), "{err}");
+    assert_eq!(rewards.balance(&protocol), WINDFALL);
+    // Someone else's box isn't withdrawn, and nothing is taken.
+    let sk = Scalar::from(5u64);
+    let destination = Register::create(sk).unwrap().rerandomize().unwrap();
+    assert!(
+        lovejoin::withdraw(
+            &params(),
+            &protocol,
+            &boxes[..1],
+            &sk,
+            destination,
+            &mut rewards
+        )
+        .is_err()
+    );
+    assert_eq!(rewards.balance(&protocol), WINDFALL);
+}
+
+#[test]
+fn a_reward_balance_past_what_a_u64_holds_is_refused_in_words() {
+    let protocol = Protocol::of(true).unwrap();
+    let mut rewards = holding(&protocol, u64::MAX);
+    let err = lovejoin::mix(
+        &params(),
+        &protocol,
+        &pool_boxes(&protocol),
+        &payer(20_000_000),
+        &mut rewards,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("more ADA than there is"), "{err}");
+    let sk = Scalar::from(77u64);
+    let ours = our_boxes(sk, 1);
+    let err = lovejoin::withdraw(
+        &params(),
+        &protocol,
+        &ours,
+        &sk,
+        Register::create(sk).unwrap().rerandomize().unwrap(),
+        &mut rewards,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("more ADA than there is"), "{err}");
+    assert_eq!(rewards.balance(&protocol), u64::MAX);
+}
+
+#[test]
+fn a_mix_under_givemes_collateral_takes_it_into_the_payers_change() {
+    let protocol = Protocol::of(true).unwrap();
+    let mut rewards = holding(&protocol, WINDFALL);
+    let mix = lovejoin::mix_giveme(
+        &params(),
+        &protocol,
+        &pool_boxes(&protocol),
+        &payer(20_000_000),
+        &mut rewards,
+    )
+    .unwrap();
+    under_givemes_collateral(&mix.tx.tx_bytes.0);
+    assert_eq!(
+        withdrawals(&mix.tx.tx_bytes.0),
+        withdraws(&protocol, WINDFALL)
+    );
+    assert_eq!(mix.change.lovelace, 20_000_000 + WINDFALL - mix.fee);
+    balances(&mix.tx.tx_bytes.0, 3 * protocol.denom + 20_000_000);
+    assert_eq!(rewards, Rewards::none());
+}
+
+#[test]
+fn a_withdraw_takes_the_reward_balance_into_the_register() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(31_415u64);
+    let ours = our_boxes(sk, 1);
+    let destination = Register::create(sk).unwrap().rerandomize().unwrap();
+    let mut rewards = holding(&protocol, WINDFALL);
+    let back = lovejoin::withdraw(
+        &params(),
+        &protocol,
+        &ours,
+        &sk,
+        destination.clone(),
+        &mut rewards,
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawals(&back.tx.tx_bytes.0),
+        withdraws(&protocol, WINDFALL)
+    );
+    assert_eq!(back.taken, WINDFALL);
+    assert_eq!(back.lovelace, protocol.denom + WINDFALL - back.fee);
+    assert_eq!(coins_out(&back.tx.tx_bytes.0), vec![back.lovelace]);
+    balances(&back.tx.tx_bytes.0, protocol.denom);
+    assert_eq!(back.fee % 2, 0, "an even fee, so 3/2 of it is whole");
+    collateral_is_enough(&back.tx.tx_bytes.0, 5_000_000);
+    assert_eq!(rewards, Rewards::none());
+    // Taken: the next withdraw there withdraws 0.
+    let next =
+        lovejoin::withdraw(&params(), &protocol, &ours, &sk, destination, &mut rewards).unwrap();
+    assert_eq!(withdrawals(&next.tx.tx_bytes.0), withdraws(&protocol, 0));
+    assert_eq!(next.lovelace, protocol.denom - next.fee);
+}
+
+#[test]
+fn a_chains_first_mix_takes_the_balance_and_its_change_carries_it() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(42u64);
+    let owners = vec![Register::create(sk).unwrap().rerandomize().unwrap()];
+    let coins = [coin(0x44, 20_000_000)];
+    let mut rewards = holding(&protocol, WINDFALL);
+    // One box, two waves deep: four mixes, each paid from the one before's change.
+    let chain = lovejoin::chain(
+        &params(),
+        &protocol,
+        &funding(&coins),
+        &owners,
+        2,
+        &all_pool_boxes(&protocol),
+        &mut rewards,
+    )
+    .unwrap();
+    let taken: Vec<u64> = chain.txs.iter().map(|t| t.taken).collect();
+    assert_eq!(taken, vec![0, WINDFALL, 0, 0, 0]);
+    assert!(withdrawals(&chain.txs[0].tx.tx_bytes.0).is_empty());
+    assert_eq!(
+        withdrawals(&chain.txs[1].tx.tx_bytes.0),
+        withdraws(&protocol, WINDFALL)
+    );
+    for later in &chain.txs[2..] {
+        assert_eq!(withdrawals(&later.tx.tx_bytes.0), withdraws(&protocol, 0));
+    }
+    let fees: u64 = chain.txs.iter().map(|t| t.fee).sum();
+    assert_eq!(
+        chain.change.lovelace,
+        20_000_000 - protocol.denom - fees + WINDFALL
+    );
+    assert_eq!(rewards, Rewards::none());
+
+    // Mixing again from that change takes nothing more.
+    let again = lovejoin::again(
+        &params(),
+        &protocol,
+        &payer(20_000_000),
+        &chain.leaves,
+        1,
+        &all_pool_boxes(&protocol),
+        &mut rewards,
+    )
+    .unwrap();
+    assert!(again.txs.iter().all(|t| t.taken == 0));
+
+    // Mixing again with a balance there: its first mix takes it.
+    let again = lovejoin::again(
+        &params(),
+        &protocol,
+        &payer(20_000_000),
+        &chain.leaves,
+        1,
+        &all_pool_boxes(&protocol),
+        &mut holding(&protocol, WINDFALL),
+    )
+    .unwrap();
+    assert_eq!(again.txs[0].taken, WINDFALL);
+    assert_eq!(
+        again.change.lovelace,
+        20_000_000 + WINDFALL - again.txs[0].fee
+    );
+}
+
+#[test]
+fn a_sessions_collateral_mix_takes_only_what_its_chain_left() {
+    let protocol = Protocol::of(true).unwrap();
+    let params = params();
+    let sk = Scalar::from(424_242u64);
+    let owner = Register::create(sk).unwrap().rerandomize().unwrap();
+    let coins = [coin(0x22, 10_000_000), coin(0x44, 2_500_000)];
+    let address = key_address(0x33);
+    let pool = pool_boxes(&protocol);
+
+    // Alone, the tail's mix takes the pool's balance into its change.
+    let mut rewards = holding(&protocol, WINDFALL);
+    let tail = lovejoin::collateral_tail(
+        &params,
+        &protocol,
+        &coins,
+        &owner,
+        &pool,
+        &address,
+        1,
+        &mut rewards,
+    )
+    .unwrap();
+    assert!(withdrawals(&tail.deposit.tx.tx_bytes.0).is_empty());
+    assert_eq!(tail.mix.taken, WINDFALL);
+    under_givemes_collateral(&tail.mix.tx.tx_bytes.0);
+    assert_eq!(
+        tail.mix.change.lovelace,
+        tail.deposit.change.lovelace + WINDFALL - tail.mix.fee
+    );
+    assert_eq!(rewards, Rewards::none());
+
+    // After a chain that mixed in the same pool, it takes nothing: one
+    // `Rewards` goes through both.
+    let mut rewards = holding(&protocol, WINDFALL);
+    let chain = lovejoin::chain(
+        &params,
+        &protocol,
+        &funding(&[coin(0x55, 20_000_000)]),
+        &[Register::create(sk).unwrap().rerandomize().unwrap()],
+        1,
+        &all_pool_boxes(&protocol),
+        &mut rewards,
+    )
+    .unwrap();
+    assert_eq!(chain.txs[1].taken, WINDFALL);
+    let tail = lovejoin::collateral_tail(
+        &params,
+        &protocol,
+        &coins,
+        &owner,
+        &pool,
+        &address,
+        1,
+        &mut rewards,
+    )
+    .unwrap();
+    assert_eq!(tail.mix.taken, 0);
+    assert_eq!(
+        withdrawals(&tail.mix.tx.tx_bytes.0),
+        withdraws(&protocol, 0)
+    );
 }

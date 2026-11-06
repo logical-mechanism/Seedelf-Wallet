@@ -4,6 +4,7 @@
 // one reading of the account, and nothing is signed until the user approves.
 import { describe, expect, it } from "vitest";
 
+import { t as tr } from "../src/i18n";
 import { Collateral } from "../src/background/collateral";
 import { DappService, SESSION_DAPP_SIGNED, type DappError, type DappSession } from "../src/background/dapp";
 import type { KoiosUtxo } from "../src/background/koios";
@@ -585,6 +586,26 @@ describe("the dApp connector", () => {
     // A key that isn't registered has no deposit to give back: none, and WebAssembly won't sign the stop.
     t.koios.stakes.set(stake, { ...info, status: "not registered" });
     expect(await read(siteTx({ inputs: [input], certificates: [oldStop] }))).not.toHaveProperty("stakeDeposit");
+  });
+
+  it("won't sign a site's transaction that pays into a Lovejoin pool's reward account (chunk 43)", async () => {
+    const t = await on();
+    const s = await connected(t);
+    await t.balances.get("preprod");
+    const [own] = (await t.coins.lists("preprod")).cardano;
+    const input = `${own!.txHash}#${own!.index}`;
+    // A stake pool's registration naming `reward` (29 bytes, hex) as its reward account: its deposit comes back there.
+    const pool = (reward: string) =>
+      `8a03581c${"77".repeat(28)}5820${"88".repeat(32)}001a0a21fe80d81e820001581d${reward}81581c${"99".repeat(28)}80f6`;
+    const mixLogic = (JSON.parse(loadTestWasm().lovejoinMixLogic(JSON.stringify({ network: "preprod" }))) as { hash: string }).hash;
+    const refused = { failure: { code: TxSignError.ProofGeneration, info: tr("dapp.lovejoinRewards") } };
+    await expect(t.dapp.call(s, "signTx", [siteTx({ inputs: [input], certificates: [pool(`f0${mixLogic}`)] }), true])).rejects.toMatchObject(refused);
+    expect(t.dapp.approvals()).toEqual([]);
+    // Another script's reward account is the user's to sign for, as ever: asked.
+    const signing = t.dapp.call(s, "signTx", [siteTx({ inputs: [input], certificates: [pool(`f0${"ab".repeat(28)}`)] }), true]);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+    await signing.catch(() => undefined);
   });
 
   it("won't sign a site's transaction that uses a UTxO the user locked, or spends the collateral", async () => {

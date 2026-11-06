@@ -2055,3 +2055,66 @@ fn the_drep_key_never_signs_over_an_input_the_wallet_cant_find() {
         .to_string();
     assert!(err.contains("can't find yet"), "{err}");
 }
+
+#[test]
+fn a_transaction_names_every_script_reward_account_it_pays_into() {
+    // A stake pool's registration, a proposal's deposit and a treasury
+    // withdrawal each pay a reward account that takes no signature of its
+    // own, a script's too: each script's hash is named once, for the
+    // extension to refuse a Lovejoin pool's `mix_logic` (chunk 43).
+    let (_, rows) = swap();
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 1_800_000, None)],
+    );
+    let mut c = pool_registration(vec![]);
+    if let conway::Certificate::PoolRegistration { reward_account, .. } = &mut c {
+        *reward_account = Bytes::from(reward_bytes(0xf0, Hash::new([7; 28])));
+    }
+    b.certificates = NonEmptySet::try_from(vec![c]).ok();
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    assert_eq!(summary.paid_scripts, vec![hex::encode([7; 28])]);
+
+    let (tx, rows) = proposing(vec![
+        proposal(
+            reward_bytes(0xf0, Hash::new([6; 28])),
+            100_000_000_000,
+            conway::GovAction::TreasuryWithdrawals(
+                vec![
+                    (
+                        Bytes::from(reward_bytes(0xf0, Hash::new([6; 28]))),
+                        5_000_000,
+                    ),
+                    (
+                        Bytes::from(reward_bytes(0xf0, Hash::new([5; 28]))),
+                        5_000_000,
+                    ),
+                    (Bytes::from(reward_bytes(0xe0, their_stake())), 5_000_000),
+                ]
+                .into(),
+                Nullable::Null,
+            ),
+        ),
+        proposal(
+            reward_bytes(0xe0, their_stake()),
+            100_000_000_000,
+            conway::GovAction::Information,
+        ),
+    ]);
+    let summary = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
+    // In the JSON the extension reads, by that name: each once, in order.
+    let json = serde_json::to_value(&summary).unwrap();
+    assert_eq!(
+        json["paidScripts"],
+        serde_json::json!([hex::encode([5; 28]), hex::encode([6; 28])])
+    );
+
+    // A key's are named where they always were, never here.
+    let (tx, rows) = proposing(vec![proposal(
+        reward_bytes(0xe0, their_stake()),
+        100_000_000_000,
+        conway::GovAction::Information,
+    )]);
+    let summary = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
+    assert!(summary.paid_scripts.is_empty());
+}

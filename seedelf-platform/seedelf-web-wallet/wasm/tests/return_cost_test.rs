@@ -102,6 +102,7 @@ fn request(utxos: Vec<UtxoResponse>, merge: Vec<UtxoResponse>, own: &[u8]) -> Se
         own: own.iter().map(|t| hex::encode([*t; 32])).collect(),
         collateral_pool: None,
         collateral_boxes: vec![],
+        rewards: Default::default(),
     }
 }
 
@@ -403,6 +404,7 @@ fn a_chains_return_leaves_a_strangers_junk_behind_and_the_chain_still_goes() {
                 collateral_pool: None,
                 collateral_boxes: vec![],
                 collateral_reserve: false,
+                rewards: Default::default(),
             },
         )
         .unwrap();

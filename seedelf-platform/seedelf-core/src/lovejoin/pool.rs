@@ -620,7 +620,15 @@ fn measured(
     let destination = seedelf_crypto::register::Register::create(Scalar::from(1u64))
         .and_then(|r| r.rerandomize())
         .map_err(unchecked)?;
-    match super::withdraw(params, pool, &[boxed], &sk, destination) {
+    // At 0 whatever the pool's reward account holds, as `way_back`'s.
+    match super::withdraw(
+        params,
+        pool,
+        &[boxed],
+        &sk,
+        destination,
+        &mut super::Rewards::none(),
+    ) {
         Ok(back) => Ok(Usable {
             box_minimum,
             withdraw_fee: back.fee,

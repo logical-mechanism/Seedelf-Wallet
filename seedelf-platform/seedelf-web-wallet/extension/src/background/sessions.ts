@@ -95,6 +95,7 @@ import {
   KoiosBusyError,
   KoiosError,
   measurable,
+  RewardsChangedError,
   SpentInputError,
   type KoiosAccountTx,
   type KoiosTrouble,
@@ -154,7 +155,10 @@ import {
   type LovejoinChain,
   type LovejoinPool,
   type LovejoinService,
+  REWARDS_MOVED,
+  REWARDS_MOVED_REVIEW,
 } from "./lovejoin";
+import { readsFor, rewardsField, type RewardRead } from "./lovejoin-rewards";
 import { GIVEME_BEHIND_MS, holdWaiting, partsOf, reviewParts, splitParts, unsplit, type Waiting } from "./parts";
 import { pendingKey } from "./pending";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
@@ -696,6 +700,8 @@ interface KeptBack extends SessionBackSummary {
    * whose tail this takes over, how many times its mix has been built, and when that deposit was first known in.
    */
   tailOf?: { delay?: LovejoinDelay; deposit?: string; resumes?: string; tries?: number; landed?: number };
+  /** What its chain takes of each pool's reward balance, as its build read it: read again at Send (LovejoinChain's). */
+  balances?: RewardRead[];
 }
 
 /** A return's chain through Lovejoin being sent, a window at a time, between the runner's steps. */
@@ -3270,6 +3276,7 @@ export class SessionService {
         throw new Error(t("sess.backNotReady"));
       }
       if (now() - built.builtAt > BUILT_TTL_MS) throw new Error(t("sess.backTooOld"));
+      await this.balancesHeld(network, built);
       return this.sendBack(network, built);
     });
   }
@@ -3342,6 +3349,7 @@ export class SessionService {
       const failed: Array<{ index: number; error: string }> = [];
       for (const built of chosen as KeptBack[]) {
         try {
+          await this.balancesHeld(network, built);
           await this.sendBack(network, built, SESSION_CLAIM);
           sent.push({ index: built.index, txHash: built.txHash });
         } catch (e) {
@@ -4582,6 +4590,7 @@ export class SessionService {
             ...(tail.landed !== undefined ? { landed: tail.landed } : {}),
             ...(delay ? { delay } : {}),
           },
+          ...(chain.balances ? { balances: chain.balances } : {}),
           builtAt: now(),
         };
       }
@@ -4701,6 +4710,7 @@ export class SessionService {
           chain: chain.txs,
           leaves: chain.leaves,
           ...tailIn(chain.collateralTail),
+          ...(chain.balances ? { balances: chain.balances } : {}),
           builtAt: now(),
         };
       }
@@ -4715,6 +4725,8 @@ export class SessionService {
     // No chain this time: a chain built for it before won't be sent, so nothing stays reserved for it.
     await lovejoin?.release(network, chainOwner(index));
     type Built = Omit<SessionBackSummary, "network" | "index"> & { txCbor: string; tail?: CollateralTail & { txs: LovejoinChain["txs"] } };
+    // Its collateral's mix takes what sits in that pool's reward account (chunk 43): read once, for every try below.
+    const reads = intoPool && lovejoin ? await lovejoin.rewardsIn(network, [intoPool.pool]) : [];
     // The return, its collateral's mix drawing from `boxes`, the 5 ₳ pool's rows: none, no mix.
     const build = async (boxes?: KoiosUtxo[]): Promise<Built> => {
       try {
@@ -4731,7 +4743,7 @@ export class SessionService {
                   utxos: rows,
                   merge,
                   own,
-                  ...(intoPool?.pool.ref && boxes ? { collateralPool: intoPool.pool.ref, collateralBoxes: boxes } : {}),
+                  ...(intoPool?.pool.ref && boxes ? { collateralPool: intoPool.pool.ref, collateralBoxes: boxes, ...rewardsField(reads) } : {}),
                 }),
               ),
             ) as Built,
@@ -4774,6 +4786,7 @@ export class SessionService {
     const said = skipped ? { lovejoinSkipped: skipped } : {};
     if (!tail || !intoPool) return { ...back, network, index, ...said, builtAt: now() };
     const { txs: _txs, ...made } = tail;
+    const balances = readsFor(reads, chainOf(result));
     return {
       ...back,
       network,
@@ -4784,6 +4797,7 @@ export class SessionService {
       leaves: [],
       ...tailIn(made),
       ...(delay ? { tailOf: { delay } } : {}),
+      ...(balances.length ? { balances } : {}),
       builtAt: now(),
     };
   }
@@ -5026,6 +5040,15 @@ export class SessionService {
    * first window and looks for blocks for up to `budgetMs` (none for a Send
    * the user waits on); the runner's steps and the alarm send the rest.
    */
+  /**
+   * Refuses a reviewed return whose chain takes a pool's reward balance that moved since its build (chunk 43): an
+   * epoch's start paid more there, or another wallet's Lovejoin transaction took it. Sent, it would be refused partway,
+   * so it's reviewed again before any of it goes. A runner's is built and sent at once, and isn't asked.
+   */
+  private async balancesHeld(network: NetworkName, built: KeptBack): Promise<void> {
+    if (await this.deps.lovejoin?.rewardsMoved(network, built.balances)) throw new StaleReviewError(REWARDS_MOVED_REVIEW());
+  }
+
   private async sendBack(network: NetworkName, built: KeptBack, kept = SESSION_BACK, budgetMs = 0): Promise<PendingTx> {
     if (built.chain) return this.sendChain(network, built, kept, budgetMs);
     // Nor one that comes back directly, as a chain isn't, before it's recorded or sent (refuseParts).
@@ -5282,7 +5305,8 @@ export class SessionService {
       // through runAll, a step, a page's request). The lock wipes the chain's progress, and it reads as cut (markCut,
       // lovejoin.ts cuts), never stopped for the trap's raw word (1.7.0's release review, x-merge#1).
       if (isTrap(e)) throw e;
-      const why = e instanceof Error ? e.message : String(e);
+      // Refused for its pool's reward balance moving as it was sent: in Lovejoin's words, never staking's (chunk 43).
+      const why = e instanceof RewardsChangedError ? REWARDS_MOVED() : e instanceof Error ? e.message : String(e);
       // Said on the session, where its page shows it in full: here, once the chain has stopped, not when one
       // send gave up, which pumpChain may yet get past (independent review L25).
       await this.update(network, index, (s) => {
