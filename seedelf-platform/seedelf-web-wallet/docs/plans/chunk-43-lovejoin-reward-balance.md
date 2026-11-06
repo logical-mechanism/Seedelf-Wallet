@@ -2,7 +2,7 @@
 
 Branch `web-wallet/lovejoin-reward-balance`, from `main`.
 
-**Status: 🚧 in progress, for 1.8.1.** Planned 2026-11-04; the owner picked it for 1.8.1 on 2026-11-06. Steps 1, 2, 3 and 5 are built (*Built so far*, below); the live run on preprod is what's left. A small chunk: the wallet's Lovejoin transactions withdraw whatever sits in `mix_logic`'s reward account, where today they always withdraw 0.
+**Status: 🚧 in progress, for 1.8.1.** Planned 2026-11-04; the owner picked it for 1.8.1 on 2026-11-06. Steps 1, 2, 3 and 5 are built (*Built so far*, below). The edge case's live run is declined (the owner, 2026-11-06, below). A small chunk: the wallet's Lovejoin transactions withdraw whatever sits in `mix_logic`'s reward account, where today they always withdraw 0.
 
 - **Every Mix and every Owner withdrawal the wallet builds withdraws exactly 0 from `mix_logic`'s script reward account** ([withdraw_zero.rs](../../../seedelf-core/src/withdraw_zero.rs)`:96`). `mix_logic` is a withdraw-zero validator: that withdrawal is what runs it, once a transaction.
 - **The ledger takes a withdrawal only of the account's whole balance** ([staking.rs](../../../seedelf-core/src/staking.rs)`:16-17`), and refuses anything else as `WithdrawalsNotInRewards`, which [koios.ts](../../extension/src/background/koios.ts)`:701` words today.
@@ -14,7 +14,7 @@ Branch `web-wallet/lovejoin-reward-balance`, from `main`.
 | 1 · Core: the amount, and where it goes | ✅ |
 | 2 · WebAssembly: the requests carry it | ✅ |
 | 3 · The worker: the read, Send's read, the refusal | ✅ |
-| 4 · Tests, and a live run on preprod | 🚧 every suite's done; the live run isn't |
+| 4 · Tests, and a live run on preprod | ✅ every suite; the edge case's live run declined |
 | 5 · The guard: the wallet never pays into `mix_logic`'s account | ✅ |
 
 ## What the owner decided (2026-11-04)
@@ -173,6 +173,7 @@ The owner, 2026-11-06: "the wallet at least does not allow a user to set that st
   - Send after the balance moved is a stale review, with nothing reserved, recorded or sent;
   - a withdraw refused once (`rejectSubmit`, `:233`) is built again with the new figure and sent; refused twice, its due time goes back;
   - a chain refused while it's sent stops in Lovejoin's words, never staking's ([chain-resend.test.ts](../../extension/tests/chain-resend.test.ts), through `pumpChain`).
+- **The edge case's live run is declined** (the owner, 2026-11-06: "setting this edge case up is going to be a hassle and will take over a week to prove it"). What it would add is the ledger's own rule, that a withdrawal takes exactly the balance: the scripts' side runs in every core test with the real bytes, and a wrong figure is refused at no cost. What follows is kept as the way to do it, should it ever be wanted.
 - **Live on preprod,** with the private test wallet ([development.md](../development.md)'s live runs), before it's called done:
   - register a preprod stake pool whose reward account is a test pool's `mix_logic` account, and retire it at the next epoch: its 500 tADA deposit lands there as that epoch starts;
   - then send a mix chain and a box's withdraw: the first takes the 500 tADA, the rest withdraw 0, and all of it lands;
