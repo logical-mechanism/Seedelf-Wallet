@@ -3211,6 +3211,7 @@
   "lovejoin.pools.flag.notMixed": "machine",
   "lovejoin.pools.flagJoin": "exact-reuse",
   "lovejoin.pools.noneMatch": "machine",
+  "lovejoin.pools.noneYet": "machine",
   "lovejoin.pools.search": "machine",
   "lovejoin.pools.startedNotFound": "machine",
   "lovejoin.pools.startedMissing": "machine",

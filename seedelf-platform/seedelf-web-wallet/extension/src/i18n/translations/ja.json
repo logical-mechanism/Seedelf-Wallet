@@ -1186,6 +1186,7 @@
   "lovejoin.pools.count_other": "プール {{count}} 件",
   "lovejoin.pools.search": "ティッカーまたはポリシー ID で検索",
   "lovejoin.pools.noneMatch": "「{{query}}」に一致するプールのトークンはありません。",
+  "lovejoin.pools.noneYet": "ミックスできるプールはまだありません。",
   "lovejoin.pools.startedNotFound": "あなたが開始したプール（{{when}}）は、検索で見つかるとここに表示されます。そのブロックから約 10 分後です。",
   "lovejoin.pools.startedMissing": "あなたが開始したプール（{{when}}）はまだ表示されていません。",
   "lovejoin.pools.warn.startedCopy": "開始が完了しなかったか、同じ値の先の開始が完了した可能性があります。後者の場合、あなたのプールは複製で、表示されることはなく、ロックされた額は永久に戻りません。",

@@ -1372,6 +1372,7 @@
   "lovejoin.pools.count_other": "{{count}} pools",
   "lovejoin.pools.search": "Buscar por ticker o ID de política",
   "lovejoin.pools.noneMatch": "Ningún token de los pools coincide con “{{query}}”.",
+  "lovejoin.pools.noneYet": "Aún no hay ningún pool en el que mezclar.",
   "lovejoin.pools.startedNotFound": "Un pool que iniciaste ({{when}}) aparece aquí cuando una búsqueda lo encuentra, unos 10 minutos después de su bloque.",
   "lovejoin.pools.startedMissing": "Un pool que iniciaste ({{when}}) no ha aparecido.",
   "lovejoin.pools.warn.startedCopy": "Puede que su inicio no se haya completado, o que se completara antes otro inicio con los mismos valores: en este último caso, el tuyo es una copia, nunca se muestra, y lo que bloqueó se pierde para siempre.",

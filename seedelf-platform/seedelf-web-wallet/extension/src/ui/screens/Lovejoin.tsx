@@ -2000,9 +2000,11 @@ export function Lovejoin({
           ) : (
             listed.map((g) => <PoolGroupList key={g.key} group={g} onOpen={(id) => setView({ pool: id })} />)
           )}
+          {/* Nothing searched for and none listed: no pool takes boxes, the retired ones hidden with nothing of the
+              wallet's in them (chunk 44); it said that no pool's token matched "". */}
           {!listed.length && (
             <p className="note" data-testid="lovejoin-pools-none">
-              {tr("lovejoin.pools.noneMatch", { query: query.trim() })}
+              {query.trim() ? tr("lovejoin.pools.noneMatch", { query: query.trim() }) : tr("lovejoin.pools.noneYet")}
             </p>
           )}
           <StartedPools started={status.started} now={Date.now()} />

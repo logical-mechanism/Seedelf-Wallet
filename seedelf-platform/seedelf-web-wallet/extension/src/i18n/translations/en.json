@@ -1279,6 +1279,7 @@
   "lovejoin.pools.count_other": "{{count}} pools",
   "lovejoin.pools.search": "Search by ticker or policy ID",
   "lovejoin.pools.noneMatch": "No pool's token matches “{{query}}”.",
+  "lovejoin.pools.noneYet": "No pool to mix in yet.",
   "lovejoin.pools.startedNotFound": "A pool you started ({{when}}) shows here once a look finds it, about 10 minutes after its block.",
   "lovejoin.pools.startedMissing": "A pool you started ({{when}}) hasn't shown.",
   "lovejoin.pools.warn.startedCopy": "Its start may not have gone through, or an earlier start of the same values did. If an earlier one did, yours is a copy, never shown, and what it locked is gone for good.",
