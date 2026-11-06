@@ -216,6 +216,8 @@ The everyday path, with nothing in the pool's account: the edge case's run is de
 
 ## What its PR did
 
+**#367** (`web-wallet/lovejoin-reward-balance`, into `main`):
+
 - **Core** (`ad429751`): `Rewards`, the `&mut Rewards` every Lovejoin builder takes, `WithdrawZero`'s amount, and where a balance goes: a mix's change, a withdraw's register. The tests, mainnet's and the token pools' among them.
 - **WebAssembly** (`179bba3d`): every request's `rewards`, a chain and its collateral's tail on one, and `lovejoinMixLogic`.
 - **The worker and the guard** (`7a8c9eeb`): Step 3's read, on-the-way rule, Send's read and the typed refusal; Step 5's `paidScripts` and the signer's refusal; the words in three languages; privacy.md, the privacy policy's dated entry, architecture.md and `seedelf-platform/CLAUDE.md`.
