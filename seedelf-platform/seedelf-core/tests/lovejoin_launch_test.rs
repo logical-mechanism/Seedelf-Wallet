@@ -117,14 +117,17 @@ fn a_launch_makes_a_pool_the_wallet_trusts() {
             lovejoin::launch(&w.chain, &inputs, &terms(), true, &w.owner, w.signer).unwrap();
         // The seed is the first input given.
         assert_eq!(launch.seed, ([0x31; 32], 1));
-        let derived = templates::derive(&launch.seed.0, launch.seed.1).unwrap();
+        // Every launch the wallet makes runs v2 (chunk 44).
+        let derived =
+            templates::derive_in(templates::Set::V2, &launch.seed.0, launch.seed.1).unwrap();
         assert_eq!(launch.derived, derived);
 
         let done = finished(&w, &launch);
         let tx = &done.tx.tx_bytes.0;
         assert!((tx.len() as u64) < MAX_TX_SIZE);
         let pool = lovejoin::launched_pool(network_flag, tx, launch.seed).unwrap();
-        assert_eq!(pool.version, Version::TokenV1);
+        assert_eq!(pool.version, Version::V2);
+        assert!(!pool.version.retired());
         assert_eq!(pool.id, derived.policy());
         assert_eq!(pool.mix_logic_hash, derived.mix_logic.hash);
         assert_eq!(pool.denom, 4_500_000);
@@ -313,7 +316,7 @@ fn an_ada_pool_launches_at_any_amount_but_the_classic_pools() {
         .unwrap();
         let done = finished(&w, &launch);
         let pool = lovejoin::launched_pool(network_flag, &done.tx.tx_bytes.0, launch.seed).unwrap();
-        assert_eq!(pool.version, Version::TokenV1);
+        assert_eq!(pool.version, Version::V2);
         assert_eq!(pool.denom, 25_000_000);
         assert_eq!(pool.token, None);
         assert!(pool.inline_scripts.is_empty());

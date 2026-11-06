@@ -431,20 +431,19 @@ fn decoded(cbor: &[u8]) -> Value {
     }
 }
 
-fn vectors() -> Value {
-    let unapplied = templates::unapplied_hashes();
-    json!({
-        "//": "Written by seedelf-core/tests/lovejoin_vectors_test.rs (RECORD_LOVEJOIN_VECTORS=1) from seedelf-core's own derive, ReferenceDatum::decode and cbor::within_depth. seedelf-data's copy of the token-pool checks is held to it. Never edit by hand.",
-        "commit": templates::COMMIT,
-        "holder": hex::encode(templates::REFERENCE_HOLDER_HASH),
-        "templates": {
-            "oneShotMint": hex::encode(unapplied[0]),
-            "mixLogic": hex::encode(unapplied[1]),
-            "mixBox": hex::encode(unapplied[2]),
-            "feeContract": hex::encode(unapplied[3]),
-        },
-        "derive": seeds().into_iter().map(|(tx, index)| {
-            let d = templates::derive(&tx, index).unwrap();
+/// A template set's unapplied hashes and what each of [`seeds`] derives on it.
+fn set_vectors(set: templates::Set) -> (Value, Value) {
+    let unapplied = templates::unapplied_hashes_in(set);
+    let names = json!({
+        "oneShotMint": hex::encode(unapplied[0]),
+        "mixLogic": hex::encode(unapplied[1]),
+        "mixBox": hex::encode(unapplied[2]),
+        "feeContract": hex::encode(unapplied[3]),
+    });
+    let derive = seeds()
+        .into_iter()
+        .map(|(tx, index)| {
+            let d = templates::derive_in(set, &tx, index).unwrap();
             json!({
                 "seed": format!("{}#{index}", hex::encode(tx)),
                 "oneShotMint": hex::encode(d.one_shot_mint.hash),
@@ -452,7 +451,25 @@ fn vectors() -> Value {
                 "mixBox": hex::encode(d.mix_box.hash),
                 "feeContract": hex::encode(d.fee_contract.hash),
             })
-        }).collect::<Vec<_>>(),
+        })
+        .collect::<Vec<_>>();
+    (names, json!(derive))
+}
+
+fn vectors() -> Value {
+    let (v1_templates, v1_derive) = set_vectors(templates::Set::V1);
+    let (v2_templates, v2_derive) = set_vectors(templates::Set::V2);
+    json!({
+        "//": "Written by seedelf-core/tests/lovejoin_vectors_test.rs (RECORD_LOVEJOIN_VECTORS=1) from seedelf-core's own derive, ReferenceDatum::decode and cbor::within_depth. seedelf-data's copy of the token-pool checks is held to it. Never edit by hand. The top level's commit, templates and derive are 8131b1d's set (V1); v2 holds the same for v2's.",
+        "commit": templates::COMMIT,
+        "holder": hex::encode(templates::REFERENCE_HOLDER_HASH),
+        "templates": v1_templates,
+        "derive": v1_derive,
+        "v2": {
+            "commit": templates::COMMIT_V2,
+            "templates": v2_templates,
+            "derive": v2_derive,
+        },
         "datums": datums().into_iter().map(|(about, cbor)| json!({
             "about": about,
             "cbor": hex::encode(&cbor),

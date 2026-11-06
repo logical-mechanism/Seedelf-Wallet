@@ -356,7 +356,8 @@ mod tests {
 
     #[test]
     fn the_templates_read_back_as_they_are() {
-        for script in crate::lovejoin::templates::all() {
+        use crate::lovejoin::templates::{Set, all};
+        for script in all(Set::V1).into_iter().chain(all(Set::V2)) {
             assert_eq!(round_trip(&script), script);
         }
     }

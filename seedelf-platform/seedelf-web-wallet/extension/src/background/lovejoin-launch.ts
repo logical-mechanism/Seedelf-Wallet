@@ -207,9 +207,9 @@ export class LovejoinLaunchService {
     const params = await this.deps.koios(network).epochParams();
     const value = await this.boxValue(network, params, token, q);
     // Never a copy, which takes no new box, to join: only the earliest launch of its values (the merged fixes' review,
-    // MERGED-1).
+    // MERGED-1). Nor a pool on 8131b1d's scripts, retired: a start runs v2's, and joins only v2 pools (chunk 44).
     const pools = (await this.deps.discovery.known(network))
-      .filter((p) => !p.copy && sameToken(p.token, token))
+      .filter((p) => !p.copy && p.version === "v2" && sameToken(p.token, token))
       .map((p) => ({ id: p.id, boxLovelace: p.boxLovelace, ...(p.token ? { token: p.token } : {}) }));
     return { ...value, pools };
   }
@@ -239,11 +239,16 @@ export class LovejoinLaunchService {
     }
     // A copy of a shown pool's values is never shown: the form lists the pools there are to join instead (11, 14).
     // Read once discovery has looked for pools launched since (34d's review 5): the request every wallet makes. A copy
-    // handed over has a shown pool's values too, so either refuses it (MERGED-1).
+    // handed over has a shown pool's values too, so either refuses it (MERGED-1). A start runs v2's scripts, so only a v2
+    // pool's values make it a copy: one on 8131b1d's is retired, and the two sets are shown apart (chunk 44).
     await this.deps.discovery.look(network);
     const known = await this.deps.discovery.known(network);
     const copy = known.find(
-      (p) => BigInt(p.boxLovelace) === box && sameToken(p.token, token) && (!p.token || p.token.quantity === tokenQuantity?.quantity),
+      (p) =>
+        p.version === "v2" &&
+        BigInt(p.boxLovelace) === box &&
+        sameToken(p.token, token) &&
+        (!p.token || p.token.quantity === tokenQuantity?.quantity),
     );
     if (copy) throw new Error(t("lj.launch.copy"));
     const before = await this.startedBefore(network, known, box, tokenQuantity);

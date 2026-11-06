@@ -9,16 +9,20 @@
 //! - of a token in the wallet's token list, or of ADA at any amount but the
 //!   classic pool's 10 ₳;
 //! - its NFT's policy made by one of the launch's inputs, the seed, and the
-//!   datum naming exactly the scripts that seed makes;
+//!   datum naming exactly the scripts that seed makes on one of the template
+//!   sets (`templates::Set`: 8131b1d's, retired, or v2's);
 //! - the launch transaction itself putting `mix_box` and `mix_logic` at the
 //!   holder as reference scripts, each under no datum or one the wallet reads
 //!   (nested within `datum::MAX_DEPTH`), and registering L, unless L was
 //!   registered in an earlier block.
 //!
-//! Of the standard pools with the same values (the box's ADA and its token),
-//! the **earliest launched is shown**, and only it: by block, then by place
-//! in the block, then by id. Nothing of this can change once it's on chain,
-//! so a pool shown is shown for good, and a copy never is.
+//! Of the standard pools on the same set with the same values (the box's ADA
+//! and its token), the **earliest launched is shown**, and only it: by block,
+//! then by place in the block, then by id. Nothing of this can change once
+//! it's on chain, so a pool shown is shown for good, and a copy never is. The
+//! sets are apart (chunk 44): a v2 pool is never a copy of an 8131b1d pool,
+//! whose boxes the wallet only brings back, so an 8131b1d pool shown stays
+//! shown for them.
 
 use std::collections::{HashMap, HashSet};
 
@@ -220,7 +224,8 @@ fn pool_of(
         .iter()
         .find(|(tx, index)| policy_of(tx, *index) == Some(id))
         .ok_or("none of its launch's inputs makes its NFT")?;
-    let derived = templates::derive(&seed.0, seed.1).map_err(|_| "its scripts can't be made")?;
+    let derived = templates::derive_for(&seed.0, seed.1, &datum.mix_logic)
+        .map_err(|_| "its scripts can't be made")?;
     if (datum.mix_box, datum.mix_logic, datum.fee)
         != (derived.mix_box, derived.mix_logic, derived.fee_contract)
     {
@@ -261,11 +266,11 @@ fn pool_of(
     ))
 }
 
-/// Of `standard`, the earliest launched of each value.
+/// Of `standard`, the earliest launched of each value on each set.
 pub fn shown(standard: Vec<Pool>) -> Vec<Pool> {
-    let mut first: HashMap<(u64, Option<Token>), Pool> = HashMap::new();
+    let mut first: HashMap<(templates::Set, (u64, Option<Token>)), Pool> = HashMap::new();
     for pool in standard {
-        let key = pool.values();
+        let key = (pool.derived.set, pool.values());
         let earlier = |a: &Pool, b: &Pool| {
             (a.launch.block, a.launch.index, a.id) < (b.launch.block, b.launch.index, b.id)
         };
@@ -358,9 +363,19 @@ pub(crate) mod tests {
         }
     }
 
-    /// A launch as the wallet makes one: the reference UTxO, both scripts, L registered.
+    /// A launch as the wallet makes one: the reference UTxO, both scripts, L
+    /// registered, on v2.
     fn launch(lovelace: u64, token: Option<(&str, &str, u64)>) -> Candidate {
-        let d = templates::derive(&seed().0, seed().1).unwrap();
+        launch_in(templates::Set::V2, lovelace, token)
+    }
+
+    /// [`launch`] on `set`.
+    fn launch_in(
+        set: templates::Set,
+        lovelace: u64,
+        token: Option<(&str, &str, u64)>,
+    ) -> Candidate {
+        let d = templates::derive_in(set, &seed().0, seed().1).unwrap();
         let holder = holder_address();
         let tx = "ab".repeat(32);
         let nft = Asset::new(hex(&d.policy), hex(NFT_NAME), "1".into());
@@ -511,7 +526,7 @@ pub(crate) mod tests {
         assert_eq!(refused(c), "it doesn't hold one Lovejoin NFT and ADA alone");
         // The genuine NFT, its datum naming other scripts: one_shot_mint never checks them.
         let mut c = launch(4_500_000, djed());
-        let other = templates::derive(&[1; 32], 0).unwrap();
+        let other = templates::derive_in(templates::Set::V2, &[1; 32], 0).unwrap();
         c.reference.datum = Some(datum_cbor(4_500_000, djed(), &other));
         assert_eq!(refused(c), "its datum names scripts its seed doesn't make");
     }
@@ -552,6 +567,33 @@ pub(crate) mod tests {
 
     /// The scenarios the wallet's own copy of the rule is held to too
     /// (extension/tests/fixtures/lovejoin-shown.json).
+    /// A pool on 8131b1d's set is still standard, on its set, so a wallet
+    /// finds its boxes; one whose datum names one set's L and another's M
+    /// isn't (chunk 44).
+    #[test]
+    fn a_pool_is_standard_on_its_own_set() {
+        use templates::Set;
+        for set in [Set::V1, Set::V2] {
+            match check(
+                &launch_in(set, 4_500_000, djed()),
+                &Listed::of(&[DJED]),
+                &holder_address(),
+            ) {
+                Verdict::Standard(pool) => assert_eq!(pool.derived.set, set),
+                other => panic!("{set:?}: {other:?}"),
+            }
+        }
+        let v1 = templates::derive_in(Set::V1, &seed().0, seed().1).unwrap();
+        let mut mixed = templates::derive_in(Set::V2, &seed().0, seed().1).unwrap();
+        mixed.mix_logic = v1.mix_logic;
+        let mut c = launch(4_500_000, djed());
+        c.reference.datum = Some(datum_cbor(4_500_000, djed(), &mixed));
+        assert_eq!(
+            verdict(&c),
+            Err("its datum names scripts its seed doesn't make")
+        );
+    }
+
     #[test]
     fn the_earliest_of_each_value_is_shown() {
         let scenarios: Value = serde_json::from_str(include_str!(
@@ -582,6 +624,10 @@ pub(crate) mod tests {
                     });
                     pool.launch.block = p["launch"]["block"].as_i64().unwrap();
                     pool.launch.index = p["launch"]["index"].as_i64().unwrap();
+                    // The set, by the name the wallet gives it; v2's when none is given.
+                    if p["version"] == "tokenV1" {
+                        pool.derived.set = templates::Set::V1;
+                    }
                     pool
                 })
                 .collect();

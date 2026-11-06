@@ -31,8 +31,13 @@ describe("the bundled head start", () => {
       expect(Number.isInteger(height) && height >= 0, network).toBe(true);
       expect(shown(pools), network).toEqual(pools);
       for (const p of pools) {
-        const view = JSON.parse(wasm.lovejoinVerifyPool(JSON.stringify({ network, pool: p.ref }))) as { id: string; scriptsInline: number };
-        expect([view.id, view.scriptsInline], `${network} ${p.id}`).toEqual([p.id, 0]);
+        const view = JSON.parse(wasm.lovejoinVerifyPool(JSON.stringify({ network, pool: p.ref }))) as {
+          id: string;
+          version: string;
+          scriptsInline: number;
+        };
+        // Its set as WebAssembly reads it: v2 recorded, 8131b1d's (retired) never named (chunk 44).
+        expect([view.id, view.version, view.scriptsInline], `${network} ${p.id}`).toEqual([p.id, p.version ?? "tokenV1", 0]);
       }
     }
   });

@@ -143,8 +143,11 @@ export function LovejoinLaunch({
   const box = boxAda !== undefined ? parseAda(boxAda) : undefined;
   // The token's pools already shown, with their crowds, to join rather than split (session 1, 14). Never a copy, read
   // for the boxes already in it, which takes none to join with (the merged fixes' review, MERGED-1): the earlier pool
-  // of its values is listed, and a start of those values is refused as its copy.
-  const same = pools.filter((p) => !isCopy(p) && (token ? p.box.token && tokenKey(p.box.token) === unit : !p.box.token));
+  // of its values is listed, and a start of those values is refused as its copy. A start runs v2's scripts, so only v2
+  // pools are its to join or copy: the classic pool and 8131b1d's are retired (chunk 44).
+  const same = pools.filter(
+    (p) => p.version === "v2" && !isCopy(p) && (token ? p.box.token && tokenKey(p.box.token) === unit : !p.box.token),
+  );
   const copy = same.find((p) => p.box.lovelace === box && (!token || p.box.token?.quantity === q));
   // Why Review can't be pressed yet, each before a build would say it.
   const why = !terms

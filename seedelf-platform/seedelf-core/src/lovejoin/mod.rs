@@ -119,9 +119,20 @@ pub enum Version {
     /// The classic ADA pool's, with its five-field reference datum: live on
     /// mainnet since 2026-09-26, and on preprod.
     Classic,
-    /// The generalized scripts of Lovejoin's PR #163 ([`templates`]), with an
-    /// eight-field datum: every token pool's.
+    /// The generalized scripts of Lovejoin's PR #163 ([`templates::Set::V1`]),
+    /// with an eight-field datum: every token pool's before v2.
     TokenV1,
+    /// The generalized scripts with xor32's fix ([`templates::Set::V2`]), the
+    /// same eight-field datum: every pool the wallet launches, ADA or token.
+    V2,
+}
+
+impl Version {
+    /// A pool on a retired version takes no new boxes: the wallet only
+    /// brings its boxes back (chunk 44). Every version but [`Version::V2`].
+    pub fn retired(self) -> bool {
+        !matches!(self, Version::V2)
+    }
 }
 
 /// A pool: one launch of Lovejoin's scripts on a network, with what
@@ -308,7 +319,7 @@ impl Protocol {
     fn deposit_reference(&self) -> Result<Option<Input>> {
         match self.version {
             Version::Classic => Ok(None),
-            Version::TokenV1 => {
+            Version::TokenV1 | Version::V2 => {
                 let reference = self
                     .references
                     .first()

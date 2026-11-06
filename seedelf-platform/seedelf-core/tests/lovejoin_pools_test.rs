@@ -265,6 +265,65 @@ fn templates_are_frozen() {
     );
 }
 
+/// v2's set (chunk 44): Lovejoin 29573c5, whose `mix_logic` checks both of
+/// xor32's lengths. It's the only template that differs from 8131b1d's, and
+/// its hash is the one `seedelf-verification`'s template theorems are about.
+#[test]
+fn v2_templates_are_frozen() {
+    assert_eq!(
+        templates::COMMIT_V2,
+        "29573c58ccee47f2dfde4e06e7133435369b55f9"
+    );
+    assert_eq!(templates::Set::V1.commit(), templates::COMMIT);
+    assert_eq!(templates::Set::V2.commit(), templates::COMMIT_V2);
+    let v1 = templates::unapplied_hashes();
+    assert_eq!(
+        templates::unapplied_hashes_in(templates::Set::V2),
+        [
+            v1[0],
+            h28("7fb45b750754a0fc92006db42d9fdf44af3fb842a3ed16a2cdf0c81a"),
+            v1[2],
+            v1[3],
+        ]
+    );
+}
+
+/// A seed makes the same P and F on either set, and each set's own L and M;
+/// `derive_for` takes the set a datum's L names, and v2's for an L no set
+/// makes, which `verify_pool` then refuses.
+#[test]
+fn a_seed_derives_each_sets_scripts() {
+    use templates::Set;
+    let (tx, index) = LJ_SEED;
+    let v1 = templates::derive_in(Set::V1, &tx, index).unwrap();
+    let v2 = templates::derive_in(Set::V2, &tx, index).unwrap();
+    assert_eq!(v1, templates::derive(&tx, index).unwrap());
+    assert_eq!((v1.set, v2.set), (Set::V1, Set::V2));
+    assert_eq!(v1.mix_logic.hash, LJ_MIX_LOGIC);
+    assert_eq!(v1.one_shot_mint, v2.one_shot_mint);
+    assert_eq!(v1.fee_contract, v2.fee_contract);
+    assert_ne!(v1.mix_logic.hash, v2.mix_logic.hash);
+    assert_ne!(v1.mix_box.hash, v2.mix_box.hash);
+    assert_eq!(
+        templates::derive_for(&tx, index, &v1.mix_logic.hash).unwrap(),
+        v1
+    );
+    assert_eq!(
+        templates::derive_for(&tx, index, &v2.mix_logic.hash).unwrap(),
+        v2
+    );
+    assert_eq!(templates::derive_for(&tx, index, &[0; 28]).unwrap(), v2);
+}
+
+/// Only v2's pools take new boxes; the classic pool and 8131b1d's are
+/// retired, read only to bring boxes back (chunk 44).
+#[test]
+fn only_v2_takes_new_boxes() {
+    assert!(Version::Classic.retired());
+    assert!(Version::TokenV1.retired());
+    assert!(!Version::V2.retired());
+}
+
 /// The wallet's `uplc` 1.1.23 applies the 1.1.24 templates to Lovejoin's
 /// seed and gets every hash Lovejoin's launch recorded, and the very bytes
 /// of the two scripts it published.

@@ -1,5 +1,5 @@
 {
-  "//": "Written by seedelf-core/tests/lovejoin_vectors_test.rs (RECORD_LOVEJOIN_VECTORS=1) from seedelf-core's own derive, ReferenceDatum::decode and cbor::within_depth. seedelf-data's copy of the token-pool checks is held to it. Never edit by hand.",
+  "//": "Written by seedelf-core/tests/lovejoin_vectors_test.rs (RECORD_LOVEJOIN_VECTORS=1) from seedelf-core's own derive, ReferenceDatum::decode and cbor::within_depth. seedelf-data's copy of the token-pool checks is held to it. Never edit by hand. The top level's commit, templates and derive are 8131b1d's set (V1); v2 holds the same for v2's.",
   "commit": "8131b1dffd988932fce187acfb35e740d61d460f",
   "datums": [
     {
@@ -499,5 +499,86 @@
     "mixBox": "2365a62d5bdf9b2bc2d95a727c86e1fe165b5a8f14e1e2af5e84f0e4",
     "mixLogic": "62befd1e9b7e5f8c33dd0b74d82e050072dede2803f8678320c563af",
     "oneShotMint": "6878ed6f8fc90297645c0f26e014c1aa46625b65bdb2fa8f57e3e9c6"
+  },
+  "v2": {
+    "commit": "29573c58ccee47f2dfde4e06e7133435369b55f9",
+    "derive": [
+      {
+        "feeContract": "69fca85ab7b867159465515d5c22dba7d2ea177c39c105a2a9eef332",
+        "mixBox": "5d6798223a3617c4e5784d4332ea79f6dbdbd30a4d0c2c6dba9b348b",
+        "mixLogic": "b2b21a4e5c64b6c763f9bb65a49217fdb643970f9c28db8cd645b8d2",
+        "oneShotMint": "c5852bb700034b0b259c9e237e58ffc5d022ce8f67600fbf32736e69",
+        "seed": "5c6f327e511818805adb6b4e055a6b222f9f8706cfda3540bdb0e9bb0f6acc0b#2"
+      },
+      {
+        "feeContract": "74df1afa54bed4baa1f4fc2657429c550e90f813ba760703c0c1df23",
+        "mixBox": "9bc3a732b6e141d3b767e953365291cabcc8b9f3b61750732b9c4c85",
+        "mixLogic": "fb56d002e635094de1d2951d98ce553d823a2dc420e5ed410c9d6969",
+        "oneShotMint": "a57cd7b899f6ba06476c536bb9b766558457c5441e528e4a00d0d130",
+        "seed": "000b16212c37424d58636e79848f9aa5b0bbc6d1dce7f2fd08131e29343f4a55#0"
+      },
+      {
+        "feeContract": "b93ad7ef88660da93722e40353e7f47668eb9b9c8f671a249e86dd34",
+        "mixBox": "e0f09516c093873d3b4c953b41c5046efbd7ba57cadaded0f0faa348",
+        "mixLogic": "c818ba325055d8d967f9b3e517db4f8d9ec720d1dc4813e5e4b044f6",
+        "oneShotMint": "9cb3c7f8732c625d72409c9712083712f1fabe2c16fbccab29967fdd",
+        "seed": "25303b46515c67727d88939ea9b4bfcad5e0ebf6010c17222d38434e59646f7a#1"
+      },
+      {
+        "feeContract": "eac1d2358366cd44480c431a9eccce54159abc3fee2b12bed8f8ff5e",
+        "mixBox": "a641d0909726092a7b1600c660aef4edc6e48a957b8c5ceab5779053",
+        "mixLogic": "de109949f5457c5b3c7bfe74e752ffce198fcad65ba6b0af15e8e58e",
+        "oneShotMint": "5847c4c52116a933d3ef452b63121e2c31bca24e0fb28d9a219a68bf",
+        "seed": "4a55606b76818c97a2adb8c3ced9e4effa05101b26313c47525d68737e89949f#23"
+      },
+      {
+        "feeContract": "a923fda37b1edfeee08b16985492583bb3feac272f1c81da88be366c",
+        "mixBox": "f69629c18a076546a43bec79334d55ed2e3f42e18d52d926ab3b7f38",
+        "mixLogic": "0445bed5640b17a250be3122f67417569e4da2307aa3cffc06fb42ee",
+        "oneShotMint": "f906cd898ab701f0c5796bcd4d274f77ba4f149e138f070988cfb676",
+        "seed": "6f7a85909ba6b1bcc7d2dde8f3fe09141f2a35404b56616c77828d98a3aeb9c4#24"
+      },
+      {
+        "feeContract": "f4913b4df72ca07a4e42aa9e6c91e3c3e820b7b3d1139524ed761c52",
+        "mixBox": "422b0f52bbbafde65a8e93a5273fe1813b560191a8f41178ccca6102",
+        "mixLogic": "f607936c51c92d9f36d8b1780dd9e27dd88111355dca7389b6d5849e",
+        "oneShotMint": "42ca82e87c3ffe8693aa340fda794af9cefb512e3aca80f8fce1f82e",
+        "seed": "949faab5c0cbd6e1ecf7020d18232e39444f5a65707b86919ca7b2bdc8d3dee9#255"
+      },
+      {
+        "feeContract": "b5deee3329bdede3e8e9d3f7138ab56f7dc19d72cc1e291370af3c90",
+        "mixBox": "c2e6487a16bdea3cc25b2d23cb86d4f51daeb247dc11a110424811c9",
+        "mixLogic": "00828f621ba41d5a62756933d48b24cac88a7311716c84542ef58d65",
+        "oneShotMint": "129ade63b9c3b40129a1c134a71ac0ae04cee294ef536d4e91b83b4f",
+        "seed": "b9c4cfdae5f0fb06111c27323d48535e69747f8a95a0abb6c1ccd7e2edf8030e#256"
+      },
+      {
+        "feeContract": "e453e745934397f0cbd0c26be38218d3dbb9604239fd5281ea089902",
+        "mixBox": "e55aba6ae3f7b744db31b6c7c137c15ceac16312ba44c9f870fe5ce7",
+        "mixLogic": "b3a2c2c17b20f5a0043c208c2c09a9f05c746eabddae3cde31036628",
+        "oneShotMint": "50b8cc4f28b1e9e8c56bf0d0053c72e25760216a1560dd7602dac5d3",
+        "seed": "dee9f4ff0a15202b36414c57626d78838e99a4afbac5d0dbe6f1fc07121d2833#65535"
+      },
+      {
+        "feeContract": "4ecab60b42b008e364498e376655158d503d108e1e7802cf37b3b32c",
+        "mixBox": "b2bf5fe95ffbb5559fc627bf3dd3089c6773d59196192183ad21df27",
+        "mixLogic": "fecb957a8715dec8db11bec1c64dfcf008dd1a37ca4008d15c76f6f3",
+        "oneShotMint": "2f8aa82b2a554bae39ba40e22fa241da2862c25a02737769b23dd77a",
+        "seed": "030e19242f3a45505b66717c87929da8b3bec9d4dfeaf5000b16212c37424d58#65536"
+      },
+      {
+        "feeContract": "f973f8002c1e96ae93d140defc581c57a9410bed6a26d210e8315df0",
+        "mixBox": "7372843923191da153fcefe1afa896a34686fff538c5b09b9dd014cc",
+        "mixLogic": "addc40e592000541010d9f57f3d8953e48c778256001fe76d52098eb",
+        "oneShotMint": "482c1ccc9b754eb9e9ea900a1918e3765c90d09557173fa6cfb9757d",
+        "seed": "28333e49545f6a75808b96a1acb7c2cdd8e3eef9040f1a25303b46515c67727d#4294967296"
+      }
+    ],
+    "templates": {
+      "feeContract": "3698bbfd9e1dca5a5bc0c33bb7bc8b8c02f9dfef1c84aa8e3aa7d67f",
+      "mixBox": "2365a62d5bdf9b2bc2d95a727c86e1fe165b5a8f14e1e2af5e84f0e4",
+      "mixLogic": "7fb45b750754a0fc92006db42d9fdf44af3fb842a3ed16a2cdf0c81a",
+      "oneShotMint": "6878ed6f8fc90297645c0f26e014c1aa46625b65bdb2fa8f57e3e9c6"
+    }
   }
 }

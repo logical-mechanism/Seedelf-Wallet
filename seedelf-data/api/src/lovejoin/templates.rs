@@ -10,6 +10,10 @@
 //! `one_shot_mint(seed_tx_id, seed_idx, holder)` hashes to P, the pool's id;
 //! `mix_logic(P, "lovejoin")` to L; `mix_box(L)` to M, where the boxes sit;
 //! `fee_contract(P, "lovejoin")` to F.
+//!
+//! Two sets, as in core: [`Set::V1`] (8131b1d), retired, and [`Set::V2`]
+//! (Lovejoin 29573c5), whose `mix_logic` alone differs. A seed makes the same
+//! P on either, so a pool's datum's L says which set it runs.
 
 use cryptoxide::blake2b::Blake2b;
 
@@ -23,9 +27,36 @@ pub const HOLDER_HASH: &str = "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e
 /// The NFT's name, `one_shot_mint` allows no other: ASCII `lovejoin`.
 pub const NFT_NAME: &[u8] = b"lovejoin";
 
-/// A launch's scripts' hashes, all fixed by its seed.
+/// One of Lovejoin's versions of the generalized scripts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Set {
+    /// 8131b1d's, the first: retired, its pools read for their boxes alone.
+    V1,
+    /// 29573c5's: 8131b1d's with xor32 checking both lengths.
+    V2,
+}
+
+impl Set {
+    /// The name the wallet's WebAssembly gives a pool on the set.
+    pub fn version(self) -> &'static str {
+        match self {
+            Set::V1 => "tokenV1",
+            Set::V2 => "v2",
+        }
+    }
+
+    fn mix_logic(self) -> &'static str {
+        match self {
+            Set::V1 => MIX_LOGIC,
+            Set::V2 => MIX_LOGIC_V2,
+        }
+    }
+}
+
+/// A launch's scripts' hashes, all fixed by its seed and its set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Derived {
+    pub set: Set,
     /// P: the NFT's policy, the pool's id.
     pub policy: [u8; 28],
     /// L: its credential takes every mix's zero withdrawal; a standard launch registers it.
@@ -68,12 +99,38 @@ pub fn policy_of(seed_tx: &[u8; 32], seed_index: u64) -> Result<[u8; 28], Malfor
     )
 }
 
-/// Every script a launch spending `seed_tx#seed_index` runs.
-pub fn derive(seed_tx: &[u8; 32], seed_index: u64) -> Result<Derived, Malformed> {
+/// Every script a launch spending `seed_tx#seed_index` runs on `set`.
+pub fn derive_in(set: Set, seed_tx: &[u8; 32], seed_index: u64) -> Result<Derived, Malformed> {
     let policy = policy_of(seed_tx, seed_index)?;
+    finish(set, policy)
+}
+
+/// Every script a launch spending `seed_tx#seed_index` runs, on the set whose
+/// L is `mix_logic`, the one a pool's datum names. When no set's is, V2's:
+/// the datum then names scripts its seed doesn't make, which the caller
+/// refuses. As core's `templates::derive_for`.
+pub fn derive_for(
+    seed_tx: &[u8; 32],
+    seed_index: u64,
+    mix_logic: &[u8; 28],
+) -> Result<Derived, Malformed> {
+    let policy = policy_of(seed_tx, seed_index)?;
+    let v2 = finish(Set::V2, policy)?;
+    if &v2.mix_logic != mix_logic {
+        let v1 = finish(Set::V1, policy)?;
+        if &v1.mix_logic == mix_logic {
+            return Ok(v1);
+        }
+    }
+    Ok(v2)
+}
+
+/// L, M and F on `set`, once P is known.
+fn finish(set: Set, policy: [u8; 28]) -> Result<Derived, Malformed> {
     let named = [data_bytes(&policy), data_bytes(NFT_NAME)];
-    let mix_logic = hash_of(MIX_LOGIC, &named)?;
+    let mix_logic = hash_of(set.mix_logic(), &named)?;
     Ok(Derived {
+        set,
         policy,
         mix_logic,
         mix_box: hash_of(MIX_BOX, &[data_bytes(&mix_logic)])?,
@@ -81,10 +138,10 @@ pub fn derive(seed_tx: &[u8; 32], seed_index: u64) -> Result<Derived, Malformed>
     })
 }
 
-/// The four templates, unapplied, as a transaction would carry them.
+/// `set`'s four templates, unapplied, as a transaction would carry them.
 #[cfg(test)]
-pub fn all() -> Vec<Vec<u8>> {
-    [ONE_SHOT_MINT, MIX_LOGIC, MIX_BOX, FEE_CONTRACT]
+pub fn all(set: Set) -> Vec<Vec<u8>> {
+    [ONE_SHOT_MINT, set.mix_logic(), MIX_BOX, FEE_CONTRACT]
         .map(bytes)
         .to_vec()
 }
@@ -190,6 +247,83 @@ const MIX_LOGIC: &str = concat!(
     "0301",
 );
 
+/// V2's `mix_logic`: [`MIX_LOGIC`] with xor32 checking both its operands' lengths, at Lovejoin
+/// 29573c5. 3439 bytes, as core's `MIX_LOGIC_V2`.
+const MIX_LOGIC_V2: &str = concat!(
+    "590d6c0101002229800aba4aba2aba1aba0aab9faab9eaab9dab9a9bae0039bae0024888888888966002646465300130",
+    "073754003370e90024dc3a4001300b0039805801244444b300130040058cc004c040c034dd50034dc3a4005223233001",
+    "0010032233003001300200298061baa00148888c966002601000513259800980b800c4cc010dd6180b000912cc00400a",
+    "009132598009806180a9baa0018991919912cc004c07800e2600c603c00f16406c6eb8c06c004dd7180d801180d80098",
+    "0b1baa0018b20283018002405916405060246ea801a2b300130040028992cc004c05c0062660086eb0c0580048966002",
+    "0050048992cc004c030c054dd5000c4c96600260360031330083758603400244b300100289802980e80344c966002602",
+    "060326ea80062646464653001375c6042003375c6042009375c6042007375c604200491112cc004c09801626014604c0",
+    "1716408c30210013020001301f001301a3754003164060603800480d22c80c0c058dd5000c59014180c001202c8b2028",
+    "3012375400d1640408080660024602a602c602c0032301530160019180a980b180b180b180b180b000cdc3a40c1374a9",
+    "00048966002003148002266e0120023300200230170014051222329800800c0120068008888c8cc89660020051598009",
+    "bac301d301e0038a51800a0368992cc00400600515980099804180f001980f000c6600200f301f003980f800a00e8a50",
+    "406480e0dd6180e980f001a036375860360022940cc064dd38011980c9ba70014bd704dc3a408123370c66f2928800a4",
+    "105010101c1fffffffff7bfcbff7f0349f79d550177d1091161cf330753bf9d534d3bdb7c1c911111111194c004cc88c",
+    "8cc004004dd61810980f1baa0132259800800c52f5c1132332259800980a18109baa002899802802800c4cc090c094c0",
+    "88dd500119802802800a04059800992cc004c04cc080dd5000c4cdc79bae30243021375400200b14a080f8c08cc080dd",
+    "5181198101baa300e3020375400313259800980c18101baa0018992cc0056600200314a314a114a114a114a0813a264b",
+    "30013019375a60440031332259800800c00a264b3001001801c56600260540031332259800acc004c03400a2601a0031",
+    "4a0813226644b300159800980b1b8d0028acc004c058dc6800c6600266e3c008006942945028452820508a5040a11301",
+    "53302c30153302c3752004660586ea40052f5c097ae08a6103d87a800040a06eb8008dd7000c530103d87a8000409860",
+    "520046052003003409c8138c0a40050260a60103d87a80003758604600314c0103d87a800040846466ec0dd418110009",
+    "ba73023001375400314c0103d87a80004080604860426ea80062980103d87a8000407c601e60406ea8c038c080dd5000",
+    "c5300103d87a8000407860480046044002810096600200314a114a114a114a114a28108dd71804180d9baa00192cc004",
+    "c010dc6800c4c96600266e200052082808080e0fffffffffbdfe5ffbf81a4fbceaa80bbe88488b0e79983a9dfcea9a69",
+    "dedbe0e899b860014820a02020383ffffffffef7f97fefe0693ef3aaa02efa21222c39e660ea77f3aa69a77b6f83a2c8",
+    "0d8cde52510018b20349802802a444b30013014301d3754025133225980099b89480080062b30013370e600600400313",
+    "29800803400e44664466ee4cddc18049bae3013302537540066eec008cddb1bbb375c6050604a6ea800ccddc18061b94",
+    "3371466e28cdc519b8a489176c6f76656a6f696e2f7369676d616a6f696e2f76312f0100002001375c6050604a6ea800",
+    "c014ddd8009bae3026302337540046eb8c044c08cdd50012014372866e28cdc51bb3300f3020375402a6eccdd3991980",
+    "08009bac30243021375402c44b30010018a5eb82266048604a60446ea8c094004cc008008c0980050231bae300d30203",
+    "75400d1640791640786eb0c084c078dd50091800801c660026eb0c084c078dd5009488cc088cdd81ba9002375000297a",
+    "def6c6091811181198119811800c888ca6002003004801a00222259800801440063300100398140014cc010c09c00800",
+    "5003204a9800801a4444464b3001337129002001456600266e1cc01c01800a26464646644b30013371200e907f01c4ca",
+    "600201f00c9119912cc004c0c801a2d15980099b8f372866e2a60026eb0c0c4c0b8dd5001e600200d3371466e2801400",
+    "80064466e28cdc50009bae3033303037540046eb8c078c0c0dd5001201a9119b8a337140026eb8c0ccc0c0dd50011bae",
+    "301e30303754004806801e60026eb0c0c4c0b8dd5001d221200000000000000000000000000000000000000000000000",
+    "0000000000000000000091192cc004c064dc6801456600260326e34006330014a1002800af351640bd1640bc6eb8c07c",
+    "c0c0dd5001201a89991194c0040060133758606860626ea80190011111919912cc00400a2b300137586072607400714a",
+    "300140dd13259800800c00a264b30013233225980099bb93377000401a66ed8ddd9bae303e303b375400666ee0004ddd",
+    "9bae302a303b375400913377266ee0008030cddb1bbb375c605260766ea800ccddc0009bbb375c603660766ea8012294",
+    "1039180e9bae30193039375400260406eb8c0a0c0e4dd5000981d801466002011303c004981e00120108a5040d860740",
+    "0681c0dd6181c981d001a06e3758606e0022940cc0d4dd38011981a9ba70014bd701bbb00237760031640b08178dd718",
+    "1798161baa002375c603460586ea800901319b8a4881176c6f76656a6f696e2f7369676d616a6f696e2f76312f030098",
+    "00a51a40050075e4a2c8138dca19b8a337146eb8c0a8004dd7181518158009bae30143027375401a6530010019bac302",
+    "b003a5eb810011112cc00400a200319800801cc0b800a66058605a004002801902b1815000999119914c00400a003007",
+    "a5eb82910100a441004008444444b30010058acc004c08c01226605e6e9c00ccc0bcdd4801198179ba90014bd7045902",
+    "b44cc896600266e2120000068acc004cc03000802a2b30013375e603a605e6ea8008dd3005c4c966002604e605e6ea80",
+    "0626465300100b8024cdc02400201333034301d3303430353032375400266068604060646ea8004cc0d0dd49bba37766",
+    "eb8c0d4c0c8dd50009981a1ba937746eecdd7181018191baa0014bd700044cdc50039bb300299b8a00600c402cb30013",
+    "0273030375400313232332259800981c801c56600260426e34dd7181c181a9baa0058acc004c084dc69bae3023303537",
+    "5400b159800cc004cdc79bae30383035375400a6eb8c08cc0d4dd5002d28528a0668802c590334590334590334590361",
+    "bae3036001375c606c004606c00260626ea80062c8178c0ccc0c0dd5000c5902e180f18179baa0028b205a8b205a8acc",
+    "0066002660180040154a14a2816a33001008800d2000802c01200680422c816902d18180029818802a05c3758602c604",
+    "e6ea8070dd7180918129baa00b37666e98004c96600266e3d22100375c6026604a6ea802e2003198009bae3013302537",
+    "54017375c6028604a6ea802e6eb4c014c094dd5005a444b3001301e001880244c8c8cc004004018896600200313302d3",
+    "37606ea4018dd3001a5eb7bdb1822646644b30013372201200515980099b8f0090028992cc004cdd7a6101a000374c00",
+    "3100289981899bb037520146e9800400902d19198008009bab302f0042259800800c4cc0c8cdd81ba900a375001297ad",
+    "ef6c6089919912cc004cdc8806801456600266e3c03400a264b30013370e00266e05200000d880144cc0d8cdd81ba900",
+    "e375066e000040340090321bad303300389981a99bb0375201a6ea003001103144cc0d400ccc0140140050311bae3030",
+    "0013035002303300140c5133030337606ea4024dd3003002205889981800199802802800a058375c6056002606000460",
+    "5c0028160cc0240080050261023192cc004c06c006297adef6c6089981399bb04c01014000374c6600c911000014bd6f",
+    "7b6302046375a604e60486ea802a2c81122c811088c9660026030604a6ea80062b30013371e6eb8c0a4c098dd5000801",
+    "456600266ebd300103d87a80003014302637546052604c6ea800e266ebd30103d87a800030063026375400714a081222",
+    "941024452820483028302537546050604a6ea800880e064b3001301f0018992cc004c04cc06cdd5000c4c96600260266",
+    "0386ea8006264646464646464653001375c6050003375a6050011375c605000f375c605000d375a605000b375a605000",
+    "9375c6050007375c6050004911111112cc004c0c402620231640b8302800130270013026001302500130240013023001",
+    "3022001301d375400316406c603e60386ea80062c80d0c028c06cdd5180f180f980d9baa301e0018b203832330010013",
+    "758601260366ea8040896600200314bd7044cc896600260206466446600400400244b3001001801c4c8c96600266e440",
+    "7c0062b30013371e03e0031375a60460050054085133004004302700340846eb8c084004c0900050221919198008009b",
+    "ab300f30213754601e60426ea80148966002003003899192cc004cdc8810800c56600266e3c08400626eacc09000a00a",
+    "811226600800860500068110dd718110009812800a04614bd6f7b6300a400113302000233004004001899802002000a0",
+    "38301f00130200014074456600266e1d2006005899192cc004c014c038dd5180918098014528c528201a375a60220026",
+    "01a6ea801a2c805900b0c028c02c004c028004c014dd5005c52689b2b20061",
+);
+
 /// `mix_box(mix_logic_script_hash)`: where the boxes sit, M. 594 bytes.
 const MIX_BOX: &str = concat!(
     "59024f010100229800aba4aba2aba1aba0aab9faab9eaab9dab9a9bae002488888888966002646530013009001980498",
@@ -273,34 +407,57 @@ pub(crate) mod tests {
         hash.iter().map(|b| format!("{b:02x}")).collect()
     }
 
+    /// Core's vectors for `set`: the top level for V1, `v2` for V2.
+    fn of(v: &Value, set: Set) -> &Value {
+        match set {
+            Set::V1 => v,
+            Set::V2 => &v["v2"],
+        }
+    }
+
     #[test]
     fn the_templates_are_seedelf_cores() {
         let v = vectors();
         assert_eq!(v["commit"], "8131b1dffd988932fce187acfb35e740d61d460f");
+        assert_eq!(
+            v["v2"]["commit"],
+            "29573c58ccee47f2dfde4e06e7133435369b55f9"
+        );
         assert_eq!(v["holder"], HOLDER_HASH);
         let pinned = ["oneShotMint", "mixLogic", "mixBox", "feeContract"];
-        for (script, name) in all().iter().zip(pinned) {
-            assert_eq!(h(script_hash(script)), v["templates"][name], "{name}");
+        for set in [Set::V1, Set::V2] {
+            let scripts = all(set);
+            assert_eq!(scripts.len(), pinned.len());
+            for (script, name) in scripts.iter().zip(pinned) {
+                assert_eq!(
+                    h(script_hash(script)),
+                    of(&v, set)["templates"][name],
+                    "{set:?} {name}"
+                );
+            }
         }
     }
 
     #[test]
     fn a_seed_derives_what_seedelf_core_derives() {
         let v = vectors();
-        let seeds = v["derive"].as_array().unwrap();
-        assert_eq!(seeds.len(), 10);
-        for seed in seeds {
-            let (tx, index) = seed["seed"].as_str().unwrap().split_once('#').unwrap();
-            let tx: [u8; 32] = bytes(tx).try_into().unwrap();
-            let derived = derive(&tx, index.parse().unwrap()).unwrap();
-            assert_eq!(h(derived.policy), seed["oneShotMint"], "{seed}");
-            assert_eq!(h(derived.mix_logic), seed["mixLogic"], "{seed}");
-            assert_eq!(h(derived.mix_box), seed["mixBox"], "{seed}");
-            assert_eq!(h(derived.fee_contract), seed["feeContract"], "{seed}");
-            assert_eq!(
-                policy_of(&tx, index.parse().unwrap()).unwrap(),
-                derived.policy
-            );
+        for set in [Set::V1, Set::V2] {
+            let seeds = of(&v, set)["derive"].as_array().unwrap();
+            assert_eq!(seeds.len(), 10);
+            for seed in seeds {
+                let (tx, index) = seed["seed"].as_str().unwrap().split_once('#').unwrap();
+                let tx: [u8; 32] = bytes(tx).try_into().unwrap();
+                let index: u64 = index.parse().unwrap();
+                let derived = derive_in(set, &tx, index).unwrap();
+                assert_eq!(h(derived.policy), seed["oneShotMint"], "{seed}");
+                assert_eq!(h(derived.mix_logic), seed["mixLogic"], "{seed}");
+                assert_eq!(h(derived.mix_box), seed["mixBox"], "{seed}");
+                assert_eq!(h(derived.fee_contract), seed["feeContract"], "{seed}");
+                assert_eq!(policy_of(&tx, index).unwrap(), derived.policy);
+                // The set a datum's L names is the one derived; no set's L, V2's.
+                assert_eq!(derive_for(&tx, index, &derived.mix_logic).unwrap(), derived);
+                assert_eq!(derive_for(&tx, index, &[0; 28]).unwrap().set, Set::V2);
+            }
         }
     }
 }

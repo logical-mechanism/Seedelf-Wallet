@@ -370,7 +370,9 @@ pub fn verify_pool(
     script_refs: &[Resolved],
 ) -> Result<Protocol, Rejected> {
     let (policy, datum) = candidate(network_flag, reference)?;
-    let derived = templates::derive(&seed.0, seed.1).map_err(|_| Rejected::WrongSeed)?;
+    // The datum's L says which set it claims; derived_from checks the rest.
+    let derived = templates::derive_for(&seed.0, seed.1, &datum.mix_logic_hash)
+        .map_err(|_| Rejected::WrongSeed)?;
     derived_from(
         network_flag,
         reference,
@@ -469,7 +471,10 @@ pub(crate) fn pool_of(
         mix_logic_hash: derived.mix_logic.hash,
         references,
         script_bytes,
-        version: Version::TokenV1,
+        version: match derived.set {
+            templates::Set::V1 => Version::TokenV1,
+            templates::Set::V2 => Version::V2,
+        },
         id: derived.policy(),
         token: datum.box_value.token.clone(),
         max_fee: datum.max_fee,

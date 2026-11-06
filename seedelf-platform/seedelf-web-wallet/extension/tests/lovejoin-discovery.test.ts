@@ -21,7 +21,17 @@ const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoi
   scripts: KoiosUtxo[];
 };
 const SCENARIOS = JSON.parse(readFileSync(new URL("./fixtures/lovejoin-shown.json", import.meta.url), "utf8")) as {
-  scenarios: Array<{ about: string; pools: Array<{ id: string; boxLovelace: string; token: { policy: string; name: string; quantity: string } | null; launch: { block: number; index: number } }>; shown: string[] }>;
+  scenarios: Array<{
+    about: string;
+    pools: Array<{
+      id: string;
+      version?: "tokenV1" | "v2";
+      boxLovelace: string;
+      token: { policy: string; name: string; quantity: string } | null;
+      launch: { block: number; index: number };
+    }>;
+    shown: string[];
+  }>;
 };
 
 const ID = "c5852bb700034b0b259c9e237e58ffc5d022ce8f67600fbf32736e69";
@@ -123,6 +133,7 @@ describe("the shown-pool rule's last step", () => {
     for (const s of SCENARIOS.scenarios) {
       const pools: FoundPool[] = s.pools.map((p) => ({
         id: p.id,
+        ...(p.version === "v2" ? { version: "v2" as const } : {}),
         boxLovelace: p.boxLovelace,
         ...(p.token ? { token: { policyId: p.token.policy, assetName: p.token.name, quantity: p.token.quantity } } : {}),
         ref: { reference: FOUND.reference, seed: FOUND.seed },
