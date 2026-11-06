@@ -4399,7 +4399,8 @@ export class LovejoinService {
     const { wasm } = this.deps;
     // The first mix, or, across pools, each pool's first: each runs scripts of its own (chunk 34's §8).
     const firsts = at ?? [chain.txs.findIndex((t) => t.kind === "mix" && !t.tail)];
-    const deposit = chain.txs.find((t) => t.kind === "deposit");
+    // The chain's own deposit, never its collateral's, which goes after its mixes: Mix again has none of its own.
+    const deposit = chain.txs.find((t) => t.kind === "deposit" && !t.tail);
     for (const i of firsts) {
       const mix = chain.txs[i];
       if (i < 0 || mix?.kind !== "mix") continue;
