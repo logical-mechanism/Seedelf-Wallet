@@ -7468,9 +7468,13 @@ export class LovejoinService {
             bringStopped: {
               back: kept!.bringStopped!.back,
               ...(typeof kept!.bringStopped!.pool === "string" ? { pool: kept!.bringStopped!.pool } : {}),
+              ...(kept!.bringStopped!.retired === true ? { retired: true as const } : {}),
             },
           }
         : {}),
+      // Kept before chunk 44 retired the old pools: none, and the first run that finds the wallet's boxes in one asks
+      // for them back (retireOnce).
+      ...(typeof kept?.retired === "number" ? { retired: kept.retired } : {}),
     };
   }
 
