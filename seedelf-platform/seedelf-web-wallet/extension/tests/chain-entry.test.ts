@@ -11,6 +11,7 @@ import { SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
 import { SESSION_BACK } from "../src/background/sessions";
 import { txView } from "../src/background/tx-view";
 import { CHAINS, publicFunded, withSession, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 const deps = (t: Tested) => ({ wasm: t.deps.wasm, wallet: t.wallet, session: t.session });
 
@@ -21,7 +22,7 @@ const keptChain = (t: Tested, key: string) =>
 describe("the transaction a chain's review shows", CHAINS, () => {
   it("is the deposit of a mix from the public account, not the last mix Send names", async () => {
     const t = await publicFunded();
-    const summary = await t.lovejoin.publicBuild("preprod", 1);
+    const summary = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const chain = await keptChain(t, SESSION_LOVEJOIN_PUBLIC);
 
     expect(summary.txs).toBe(chain.length);

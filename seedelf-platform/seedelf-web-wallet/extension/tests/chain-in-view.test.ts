@@ -27,6 +27,7 @@ import type { TxView } from "../src/shared/rpc";
 import { TxDetailBody } from "../src/ui/components/TxDetail";
 import { NetworkContext } from "../src/ui/network";
 import { chainNet, CHAINS, lovejoinOf, publicFunded, sessionsOf, withSession, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 import { txIdOf } from "./fixtures/cbor";
 
 /** Time passes as the chain waits on the network. */
@@ -48,6 +49,24 @@ const viewWith = (t: Tested, indices: number[], lovejoin: LovejoinService) => ({
   ...viewOf(t, indices),
   inChain: (network: "preprod" | "mainnet", txHash: string) => lovejoin.inChain(network, txHash),
 });
+
+/**
+ * Lovejoin with giveme.my's signature on a session's collateral's mix stood in for, which the fakes' giveme.my
+ * refuses: since chunk 44 that collateral goes into the 5 ₳ pool too, its deposit and its mix just before the return.
+ */
+function backed(t: Tested) {
+  const wasm = t.deps.wasm;
+  t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+  return lovejoinOf(t, {
+    wasm: {
+      ...wasm,
+      finishLovejoinWithdraw: (request: string) => {
+        const { txCbor } = JSON.parse(request) as { txCbor: string };
+        return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+      },
+    } as typeof wasm,
+  });
+}
 
 /** Counts every request to Koios from here on, those chainNet answers itself included. */
 function counting(t: Tested) {
@@ -77,7 +96,7 @@ describe("a chain through Lovejoin being sent", CHAINS, () => {
     const t = await publicFunded();
     const lovejoin = lovejoinOf(t, { sleep: passing(t) });
     await t.deps.preferences.set({ lovejoinDepth: 1 });
-    const summary = await lovejoin.publicBuild("preprod", 4);
+    const summary = await lovejoin.publicBuild("preprod", 4, { pool: ADA });
     const kept = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string }> }>(SESSION_LOVEJOIN_PUBLIC));
     const order = kept!.chain.map((c) => c.txHash);
     expect(order).toHaveLength(5);
@@ -137,7 +156,7 @@ describe("a chain through Lovejoin being sent", CHAINS, () => {
     const t = await publicFunded();
     const lovejoin = lovejoinOf(t, { sleep: passing(t) });
     await t.deps.preferences.set({ lovejoinDepth: 1 });
-    const summary = await lovejoin.publicBuild("preprod", 2);
+    const summary = await lovejoin.publicBuild("preprod", 2, { pool: ADA });
     const kept = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string }> }>(SESSION_LOVEJOIN_PUBLIC));
     const order = kept!.chain.map((c) => c.txHash);
     expect(order).toHaveLength(3);
@@ -158,7 +177,7 @@ describe("a chain through Lovejoin being sent", CHAINS, () => {
 
   it("a session's return: its row lists each where it is, and each opens, found where that session's chain is sent from", async () => {
     const { t } = await withSession("40000000");
-    const sessions = sessionsOf(t, passing(t));
+    const sessions = sessionsOf(t, passing(t), backed(t));
     const review = await sessions.backBuild("preprod", 0);
     const kept = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string }> }>(SESSION_BACK));
     const order = kept!.chain.map((c) => c.txHash);
@@ -173,7 +192,9 @@ describe("a chain through Lovejoin being sent", CHAINS, () => {
 
     let [row] = (await t.lovejoin.status("preprod")).chains;
     expect(row!.session).toBe(0);
-    expect(row!.txs?.map((tx) => tx.kind)).toEqual(["deposit", ...order.slice(1, -1).map(() => "mix"), "back"]);
+    // Its deposit and its two boxes' eight mixes, then its collateral's deposit and mix into the same 5 ₳ pool
+    // (chunk 44), and the return.
+    expect(row!.txs?.map((tx) => tx.kind)).toEqual(["deposit", ...Array<string>(8).fill("mix"), "deposit", "mix", "back"]);
     expect(row!.txs?.[0]?.state).toBe("sent");
 
     // A block takes the deposit: the next look marks it on chain, and the rest go on as they were.
@@ -227,7 +248,7 @@ describe("a mix from the public account whose transaction may be in already", CH
     let order: string[] = [];
     lovejoin = lovejoinOf(t, { sleep: (ms) => sleep(t, () => lovejoin, ms) });
     await t.deps.preferences.set({ lovejoinDepth: 1 });
-    const summary = await lovejoin.publicBuild("preprod", 4);
+    const summary = await lovejoin.publicBuild("preprod", 4, { pool: ADA });
     const kept = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string }> }>(SESSION_LOVEJOIN_PUBLIC));
     order = kept!.chain.map((c) => c.txHash);
     const net = chainNet(t, () => order);

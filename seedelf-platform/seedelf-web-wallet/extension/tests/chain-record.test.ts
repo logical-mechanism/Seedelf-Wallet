@@ -9,6 +9,7 @@ import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { SESSION_CHAIN_PREFIX } from "../src/background/sessions";
 import { SESSION_RESERVED_PREFIX } from "../src/background/spent";
 import { CHAINS, lovejoinOf, publicFunded, withSession, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 /** The sealed Lovejoin record on preprod can't be written while `failing()`: local storage refuses it (its quota). */
 function sealedRefused(t: Tested, failing: () => boolean) {
@@ -25,7 +26,7 @@ const chains = async (t: Tested) => (await t.store.get<{ chains: Array<{ id: str
 describe("a mix from the public account and its record (independent review L28)", CHAINS, () => {
   it("never starts when its record can't be written: nothing is left for the page or the alarm to send", async () => {
     const t = await publicFunded();
-    const summary = await t.lovejoin.publicBuild("preprod", 1);
+    const summary = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     let failing = true;
     sealedRefused(t, () => failing);
     const submits = t.koios.submitted.length;
@@ -45,7 +46,7 @@ describe("a mix from the public account and its record (independent review L28)"
 
   it("takes its record back, and lets go of what it reserved, when its progress can't be kept", async () => {
     const t = await publicFunded();
-    const summary = await t.lovejoin.publicBuild("preprod", 1);
+    const summary = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const set = t.session.set.bind(t.session);
     t.session.set = async (key, value) => {
       if (key === SESSION_LOVEJOIN_SENDING + "preprod") throw new Error("QUOTA_BYTES quota exceeded");

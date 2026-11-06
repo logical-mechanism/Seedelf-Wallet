@@ -14,6 +14,7 @@ import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { Chains } from "../src/ui/screens/Lovejoin";
 import { CHAINS, PASSWORD, publicFunded, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 const DEPOSIT_INPUT = `${"e6".repeat(32)}#0`;
 
@@ -43,7 +44,7 @@ const record = async (t: Tested) =>
 /** A mix of one box sent from the public account, whose deposit's every submit Koios didn't answer. */
 async function stoppedMaybe() {
   const t = await publicFunded("60000000", ["60000000"]);
-  const mix = await t.lovejoin.publicBuild("preprod", 1);
+  const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   const net = unanswered(t);
   await expect(t.lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow("may have gone through");
   net.down = false;
@@ -64,13 +65,13 @@ describe("a mix from the public account whose transaction may have gone through 
     expect(await spent(t)).toContain(DEPOSIT_INPUT);
     expect(await reservedPublic(t)).toEqual(expect.objectContaining({ inputs: expect.arrayContaining([DEPOSIT_INPUT]) }));
     expect((await reservedPublic(t))?.until).toBeUndefined();
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("may have gone through");
-    await expect(t.lovejoin.publicAgainBuild("preprod")).rejects.toThrow("may have gone through");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("may have gone through");
+    await expect(t.lovejoin.publicAgainBuild("preprod", ADA)).rejects.toThrow("may have gone through");
     expect((await t.lovejoin.status("preprod")).chains).toEqual([expect.objectContaining({ sent: 0, maybeSent: true })]);
 
     // It lands: the mix stopped after its deposit, which went, and another may be built.
     t.koios.confirmations = 1;
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     expect(await record(t)).toMatchObject({ sent: 1, stopped: "The server didn't answer when its deposit was sent. It went through, and the mix stopped there." });
     expect((await record(t)).maybe).toBeUndefined();
     const progress = await t.wallet.withKeys(() => t.session.get<{ next: number; maybe?: number }>(SESSION_LOVEJOIN_SENDING + "preprod"));
@@ -83,7 +84,7 @@ describe("a mix from the public account whose transaction may have gone through 
   it("lets another be built once what the transaction spends is spent otherwise: it can't go anymore", async () => {
     const { t } = await stoppedMaybe();
     t.koios.spent.add(DEPOSIT_INPUT);
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     expect((await record(t)).stopped).toMatch("what it spends is spent now");
     expect((await t.lovejoin.progress("preprod"))?.maybeSent).toBeUndefined();
   });
@@ -93,17 +94,17 @@ describe("a mix from the public account whose transaction may have gone through 
     await t.wallet.lock();
     await t.wallet.unlock(PASSWORD);
     // The lock wiped its progress; its record still says it may have gone through.
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("may have gone through");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("may have gone through");
     expect(await t.lovejoin.progress("preprod")).toMatchObject({ sent: 0, maybeSent: true });
     t.clock.now += SPENT_KEEP_MS;
     await t.wallet.unlock(PASSWORD);
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     expect((await record(t)).stopped).toBe("The server didn't answer when its deposit was sent, and it never went through.");
   });
 
   it("stops as before when Koios only ever asked the wallet to slow down: nothing went", async () => {
     const t = await publicFunded("60000000");
-    const mix = await t.lovejoin.publicBuild("preprod", 1);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const fetch = t.koios.fetch;
     t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? new Response("", { status: 429 }) : fetch(url, init));
     await expect(t.lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow("The server is limiting requests");
@@ -112,7 +113,7 @@ describe("a mix from the public account whose transaction may have gone through 
     expect(progress?.maybeSent).toBeUndefined();
     expect(await reservedPublic(t)).toBeUndefined();
     t.koios.fetch = fetch;
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   });
 
   it("is listed as stopped with the next transaction maybe gone through", () => {

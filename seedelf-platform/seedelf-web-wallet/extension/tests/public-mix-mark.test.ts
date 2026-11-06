@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { CHAIN_CUT, PUBLIC_LOOK_MS } from "../src/background/lovejoin";
 import { CHAINS, lovejoinOf, PASSWORD, publicFunded, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 const DEPOSIT_INPUT = `${"e6".repeat(32)}#0`;
 
@@ -18,7 +19,7 @@ describe("a mix from the public account's first transaction, marked while it's s
   it("is looked for after a lock while it waited to be tried again, and no other mix is built until it's settled", async () => {
     const t = await publicFunded("60000000", ["60000000"]);
     const locking = lovejoinOf(t, { sleep: () => t.wallet.lock() });
-    const mix = await locking.publicBuild("preprod", 1);
+    const mix = await locking.publicBuild("preprod", 1, { pool: ADA });
     // Its deposit's first submit reaches the node, and Koios's answer is lost; the wallet locks while the send
     // waits to try it again.
     const fetch = t.koios.fetch;
@@ -36,13 +37,13 @@ describe("a mix from the public account's first transaction, marked while it's s
 
     // It says the deposit may have gone through, and no mix from the account is built meanwhile.
     expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT(), maybeSent: true });
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("may have gone through");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("may have gone through");
     expect((await t.lovejoin.status("preprod")).chains).toEqual([expect.objectContaining({ sent: 0, maybeSent: true })]);
 
     // It lands: the mix says its deposit went, and another may be built from what's left.
     t.koios.spent.add(DEPOSIT_INPUT);
     t.koios.confirmations = 1;
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     expect(await record(t)).toMatchObject({
       sent: 1,
       stopped: "The wallet locked, or the browser closed, as its deposit was sent. It went through, and the mix stopped there.",
@@ -52,7 +53,7 @@ describe("a mix from the public account's first transaction, marked while it's s
 
   it("is looked for when the wallet locked as its deposit's answer came in", async () => {
     const t = await publicFunded();
-    const mix = await t.lovejoin.publicBuild("preprod", 1);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     // Its deposit goes, and the wallet locks before the answer is taken in: a closed browser leaves the same.
     const fetch = t.koios.fetch;
     let locked = false;
@@ -67,7 +68,7 @@ describe("a mix from the public account's first transaction, marked while it's s
     await expect(t.lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(/locked/i);
     await t.wallet.unlock(PASSWORD);
     expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT(), maybeSent: true });
-    await expect(t.lovejoin.publicAgainBuild("preprod")).rejects.toThrow("may have gone through");
+    await expect(t.lovejoin.publicAgainBuild("preprod", ADA)).rejects.toThrow("may have gone through");
     t.koios.confirmations = 1;
     // The page looks for it again after a while (PUBLIC_LOOK_MS).
     t.clock.now += PUBLIC_LOOK_MS;
@@ -77,19 +78,19 @@ describe("a mix from the public account's first transaction, marked while it's s
 
   it("goes once its deposit went: nothing is held back while the rest is sent, or after", async () => {
     const t = await publicFunded();
-    const mix = await t.lovejoin.publicBuild("preprod", 1);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     await t.lovejoin.publicSubmit("preprod", mix.txHash);
     expect((await record(t)).maybe).toBeUndefined();
     t.koios.confirmations = 1;
     while (await t.lovejoin.pumpPublic("preprod", 0));
     expect(await record(t)).toMatchObject({ done: true, sent: 5 });
     expect((await record(t)).maybe).toBeUndefined();
-    await t.lovejoin.publicAgainBuild("preprod").catch((e: unknown) => expect(String(e)).not.toMatch("may have gone through"));
+    await t.lovejoin.publicAgainBuild("preprod", ADA).catch((e: unknown) => expect(String(e)).not.toMatch("may have gone through"));
   });
 
   it("goes when the network refused its deposit outright: another may be built at once", async () => {
     const t = await publicFunded();
-    const mix = await t.lovejoin.publicBuild("preprod", 1);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     t.koios.rejectSubmit = "ConwayUtxowFailure (UtxoFailure (FeeTooSmallUTxO))";
     await expect(t.lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow();
     delete t.koios.rejectSubmit;
@@ -97,6 +98,6 @@ describe("a mix from the public account's first transaction, marked while it's s
     const progress = await t.lovejoin.progress("preprod");
     expect(progress).toMatchObject({ total: 5, sent: 0 });
     expect(progress?.maybeSent).toBeUndefined();
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   });
 });

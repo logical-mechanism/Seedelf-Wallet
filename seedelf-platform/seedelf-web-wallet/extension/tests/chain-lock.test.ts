@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { CHAIN_CUT, SESSION_LOVEJOIN_SENDING } from "../src/background/lovejoin";
 import { SESSION_CHAIN_PREFIX } from "../src/background/sessions";
 import { CHAINS, lovejoinOf, PASSWORD, publicFunded, sessionsOf, withSession, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 /** Koios answers the `nth` submit with a 503, and counts the submits made while the wallet is locked. */
 function busyOnce(t: Tested, nth: number) {
@@ -27,7 +28,7 @@ describe("a mix from the public account and a lock (independent review L14)", CH
   it("never tries a transaction again once the wallet locked while it waited", async () => {
     const t = await publicFunded();
     const lovejoin = lovejoinOf(t, { sleep: () => t.wallet.lock() });
-    const summary = await lovejoin.publicBuild("preprod", 1);
+    const summary = await lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const seen = busyOnce(t, 1);
     // The deposit's submit gets a 503; the wallet locks while the send waits to try it again.
     await expect(lovejoin.publicSubmit("preprod", summary.txHash)).rejects.toThrow("locked");
@@ -46,7 +47,7 @@ describe("a mix from the public account and a lock (independent review L14)", CH
         await t.wallet.unlock(PASSWORD);
       },
     });
-    const summary = await lovejoin.publicBuild("preprod", 1);
+    const summary = await lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const seen = busyOnce(t, 2);
     await expect(lovejoin.publicSubmit("preprod", summary.txHash)).rejects.toThrow(CHAIN_CUT());
     // The deposit went; its first mix got a 503, and wasn't tried again after the lock.
@@ -73,9 +74,11 @@ describe("a session's chain and a lock (independent review L14)", CHAINS, () => 
     expect(await t.wallet.withKeys(() => t.session.get(`${SESSION_CHAIN_PREFIX}preprod.0`))).toBeUndefined();
     await sessions.runAll("preprod");
     expect(seen.submits).toBe(3);
-    expect((await sessions.list("preprod"))[0]!.chain).toMatchObject({ total: 10, stopped: CHAIN_CUT() });
+    // Two boxes, as many as the 5 ₳ pool's twenty have others for two waves deep: the deposit, their eight mixes, the
+    // collateral's deposit and mix into the same pool (chunk 44), and the return.
+    expect((await sessions.list("preprod"))[0]!.chain).toMatchObject({ total: 12, stopped: CHAIN_CUT() });
     expect((await t.lovejoin.status("preprod")).chains).toEqual([
-      { session: 0, boxes: 2, total: 10, sent: 2, at: expect.any(Number), stopped: CHAIN_CUT() },
+      { session: 0, boxes: 2, total: 12, sent: 2, at: expect.any(Number), stopped: CHAIN_CUT() },
     ]);
   });
 });

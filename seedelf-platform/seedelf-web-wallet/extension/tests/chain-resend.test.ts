@@ -15,7 +15,9 @@ import {
   type ChainProgress,
 } from "../src/background/lovejoin";
 import { SESSION_BACK } from "../src/background/sessions";
-import { chainNet, CHAINS, lovejoinOf, publicFunded, withSession } from "./chain-fixtures";
+import { chainNet, CHAINS, lovejoinOf, publicFunded, sessionsOf, withSession, type Tested } from "./chain-fixtures";
+import { txIdOf } from "./fixtures/cbor";
+import { ADA } from "./v2-pools";
 
 /**
  * A chain of `n` and a mempool: a transaction goes in unless the one before
@@ -123,9 +125,28 @@ describe("a chain a node dropped (independent review L25)", () => {
   });
 });
 
+/**
+ * Lovejoin with giveme.my's signature on a session's collateral's mix stood in for, which the fakes' giveme.my
+ * refuses: since chunk 44 that collateral goes into the 5 ₳ pool too, its deposit and its mix just before the return.
+ */
+function backed(t: Tested) {
+  const wasm = t.deps.wasm;
+  t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+  return lovejoinOf(t, {
+    wasm: {
+      ...wasm,
+      finishLovejoinWithdraw: (request: string) => {
+        const { txCbor } = JSON.parse(request) as { txCbor: string };
+        return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+      },
+    } as typeof wasm,
+  });
+}
+
 describe("a chain a node dropped, sent for real", CHAINS, () => {
   it("keeps a session's return going when a node drops the mixes after its deposit landed", async () => {
-    const { t, sessions } = await withSession("40000000");
+    const { t } = await withSession("40000000");
+    const sessions = sessionsOf(t, undefined, backed(t));
     const review = await sessions.backBuild("preprod", 0);
     const kept = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string }> }>(SESSION_BACK));
     const order = kept!.chain.map((c) => c.txHash);
@@ -147,7 +168,8 @@ describe("a chain a node dropped, sent for real", CHAINS, () => {
     net.block(10);
     expect([...net.landed]).toEqual(order);
     const view = (await sessions.list("preprod"))[0]!;
-    expect(view.chain).toMatchObject({ total: 10, sent: 10 });
+    // The deposit, two boxes' eight mixes, the collateral's deposit and mix into the 5 ₳ pool (chunk 44), the return.
+    expect(view.chain).toMatchObject({ total: 12, sent: 12 });
     expect(view.chain?.stopped).toBeUndefined();
     expect((await t.lovejoin.held("preprod")).stopped).toBe(0);
   });
@@ -161,7 +183,7 @@ describe("a chain a node dropped, sent for real", CHAINS, () => {
       },
     });
     await t.deps.preferences.set({ lovejoinDepth: 1 });
-    const summary = await lovejoin.publicBuild("preprod", 4);
+    const summary = await lovejoin.publicBuild("preprod", 4, { pool: ADA });
     const kept = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string }> }>(SESSION_LOVEJOIN_PUBLIC));
     const order = kept!.chain.map((c) => c.txHash);
     const net = chainNet(t, () => order);

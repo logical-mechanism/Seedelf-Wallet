@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
 import { reservationOf, SESSION_RESERVED_PREFIX } from "../src/background/spent";
 import { CHAINS, PASSWORD, publicFunded, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 const COLLATERAL = `${"e5".repeat(32)}#0`;
 const MINUTE = 60_000;
@@ -40,7 +41,7 @@ const reservedPublic = async (t: Tested) =>
 /** A mix of one box from the public account, reviewed, whose submits from the `from`th on Koios never answers. */
 async function stoppedAt(from: number) {
   const t = await publicFunded("60000000", ["60000000"]);
-  const mix = await t.lovejoin.publicBuild("preprod", 1);
+  const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   const { chain } = (await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ kind: string; txCbor: string }> }>(SESSION_LOVEJOIN_PUBLIC)))!;
   const net = unansweredFrom(t, from);
   await expect(t.lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow("may have gone through");
@@ -74,7 +75,7 @@ describe("a mix from the public account stopped at a transaction that may have g
 
   it("says when it will be settled at the latest, if the network never shows it: two hours after it was sent", async () => {
     const { t } = await stoppedAt(1);
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow(
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow(
       "The next waits until the wallet knows: minutes if it did, about 2 hours if not.",
     );
     // The clock's jumps lock the wallet (its auto-lock): unlocked again each time, as the user would.
@@ -83,12 +84,12 @@ describe("a mix from the public account stopped at a transaction that may have g
       await t.wallet.unlock(PASSWORD);
     };
     await later(28 * MINUTE);
-    await expect(t.lovejoin.publicAgainBuild("preprod")).rejects.toThrow("about 1 hour 32 minutes if not.");
+    await expect(t.lovejoin.publicAgainBuild("preprod", ADA)).rejects.toThrow("about 1 hour 32 minutes if not.");
     await later(61 * MINUTE);
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("about 31 minutes if not.");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("about 31 minutes if not.");
     await later(30 * MINUTE);
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("about 1 minute if not.");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("about 1 minute if not.");
     await later(MINUTE);
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   });
 });

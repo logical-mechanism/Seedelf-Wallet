@@ -11,6 +11,7 @@ import { CHAIN_PUMP_MS, SESSION_LOVEJOIN_PUBLIC, SESSION_LOVEJOIN_SENDING } from
 import { reservationOf, SESSION_RESERVED_PREFIX, spentSet } from "../src/background/spent";
 import { txIdOf } from "./fixtures/cbor";
 import { chainNet, CHAINS, lovejoinOf, publicFunded } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 describe("a public mix's later transaction a try may have put in (final review F10)", CHAINS, () => {
   it("stops as maybe gone through, holding what it spends, when it's refused again after its parents went again", async () => {
@@ -28,7 +29,7 @@ describe("a public mix's later transaction a try may have put in (final review F
       },
     });
     await t.deps.preferences.set({ lovejoinDepth: 1 });
-    const summary = await lovejoin.publicBuild("preprod", 4);
+    const summary = await lovejoin.publicBuild("preprod", 4, { pool: ADA });
     const kept = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string; txCbor: string }> }>(SESSION_LOVEJOIN_PUBLIC));
     const chain = kept!.chain;
     const order = chain.map((c) => c.txHash);
@@ -71,10 +72,10 @@ describe("a public mix's later transaction a try may have put in (final review F
     for (const o of last.inputs) expect(spent).toContain(o);
     const record = (await t.store.get<{ chains: Array<{ maybe?: { index: number }; unscheduled?: number }> }>("lovejoin.preprod"))!.chains.at(-1)!;
     expect(record.maybe).toMatchObject({ index: 4 });
-    await expect(lovejoin.publicBuild("preprod", 1)).rejects.toThrow("may have gone through");
+    await expect(lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("may have gone through");
     // It lands: settled, it went, and nothing is held for it anymore.
     net.block();
-    await lovejoin.publicBuild("preprod", 1).catch(() => undefined);
+    await lovejoin.publicBuild("preprod", 1, { pool: ADA }).catch(() => undefined);
     expect((await t.lovejoin.progress("preprod"))?.maybeSent).toBeUndefined();
     const settled = (await t.store.get<{ chains: Array<{ maybe?: unknown; sent: number; stopped?: string }> }>("lovejoin.preprod"))!.chains.find(
       (c) => c.sent === 5,
