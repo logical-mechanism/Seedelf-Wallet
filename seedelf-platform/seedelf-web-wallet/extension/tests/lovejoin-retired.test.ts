@@ -24,8 +24,8 @@ import { isRetired as shownRetired, poolsOf, shownOnHub } from "../src/ui/lovejo
 import { account, AGREES, atSession, PASSWORD, POOL, publicFunded, sessionsOf } from "./chain-fixtures";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
-import { epochParams, loadTestWasm, testBalances } from "./fakes";
-import { ADA, ADA_ADDRESS, ADA_BOX, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix, ownDatum } from "./v2-pools";
+import { busyFor, epochParams, loadTestWasm, testBalances } from "./fakes";
+import { ADA, ADA_ADDRESS, ADA_BOX, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix, ownDatum, retiredAlready } from "./v2-pools";
 
 /** Real chains and withdraws are built and measured in WebAssembly: seconds each, more on CI. */
 const SLOW = { timeout: 180_000 };
@@ -351,6 +351,38 @@ describe("right away (chunk 44, the owner's call 3)", SLOW, () => {
     expect(s.retired).toBe(t.clock.now);
     expect(s.mixes?.find((e) => e.bootstrap)?.released).toBe(true);
     expect(s.chains[0]?.tail?.over).toBe(true);
+  });
+
+  it("holds nothing in a retired pool: a deposit's box found after a restore comes back by itself, as it doesn't in a v2 pool", async () => {
+    // The owner, 2026-11-06: "no mixing in retired pools withdraw only. period". A box a deposit made waits in a v2
+    // pool for Mix my boxes again; in a retired pool, which mixes none, it comes back as any box does.
+    const t = await wallet();
+    const lj = pooled(t);
+    // Past the first run's bring-back: this is the boxes' own schedule.
+    await retiredAlready(t.store);
+    const deposited = (tx: string) => t.koios.txSpends.set(tx.repeat(32), [{ payment_addr: { bech32: "addr_test1", cred: "ab".repeat(28) } }]);
+    const old = { ...(await classicBox(t, "c1", 10)) };
+    deposited("c1");
+    const kept = { ...(await fiveBox(t, "f1", 10)) };
+    deposited("f1");
+    t.koios.addedToAccounts.push(...POOL, ...ADA_ROWS, old, kept);
+    const status = await lj.status("preprod");
+    // The classic pool's: no box not mixed yet, and a due time. The 5 ₳ pool's: held, as before.
+    expect(status.notMixed).toEqual([]);
+    expect(status.deposits).toBeUndefined();
+    expect(status.due).toHaveLength(1);
+    const five = status.pools!.find((p) => p.id === ADA)!;
+    expect(five.notMixed).toEqual([{ txHash: kept.tx_hash, txIndex: 0, pool: ADA }]);
+    expect(five.due).toEqual([]);
+    // Its time comes, through the unlock's fresh draw and the spread, as the alarm's runs take it: it goes, with no
+    // "anyway" asked; the 5 ₳ pool's stays.
+    let sent: Awaited<ReturnType<LovejoinService["withdrawDue"]>> = [];
+    for (let run = 0; run < 24 && !sent.length; run++) {
+      await busyFor(t, 30 * 60_000);
+      sent = await lj.withdrawDue("preprod");
+    }
+    expect(sent).toHaveLength(1);
+    expect(withdrawn(t)).toEqual([`${old.tx_hash}#0`]);
   });
 
   it("writes nothing for a wallet with nothing in a retired pool", async () => {
