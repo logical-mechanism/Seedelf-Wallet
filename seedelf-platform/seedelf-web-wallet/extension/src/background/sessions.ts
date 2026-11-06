@@ -1774,7 +1774,8 @@ export class SessionService {
           : poolShort(network, room, one.depth, w)
             ? 0
             : Math.floor(room.free / (mixesPerBox(one.depth, w) * (w - 1)));
-      const affordable = (spare: bigint) => (spare > besides ? Number((spare - besides) / perBox) : 0);
+      // With no 5 ₳ pool shown, nothing is paid for: no box of the classic pool's price is said to be left out.
+      const affordable = (spare: bigint) => (ada && spare > besides ? Number((spare - besides) / perBox) : 0);
       // One deposit into a pool on the new scripts makes MAX_TOKEN_DEPOSIT_BOXES at most, as the chain holds it (fanOut).
       const most = Math.min(chainBoxes(one.depth, w), MAX_TOKEN_DEPOSIT_BOXES);
       const price = (spare: bigint) => {
