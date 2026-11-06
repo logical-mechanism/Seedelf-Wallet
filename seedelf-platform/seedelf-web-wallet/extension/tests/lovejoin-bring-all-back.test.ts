@@ -15,6 +15,7 @@ import { NETWORKS } from "../src/networks";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, loadTestWasm, testBalances, vectors } from "./fakes";
+import { retiredAlready } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const PHRASE = (vectors("cardano_account.json") as Array<{ account: number; phrase: string }>).find(
@@ -136,6 +137,9 @@ async function bootstrapped(t: T, lj: LovejoinService): Promise<string[]> {
 describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
   it("brings back every box in every pool in one run, one after another, a Bootstrap's held ones too, even in the unlock's run", async () => {
     const t = await wallet();
+    // Past 1.8.0's first run, which brought back what the retired pools held (retireOnce, chunk 44): their boxes since
+    // keep their waits, as any pool's do, until the user asks.
+    await retiredAlready(t.store);
     const lj = pooled(t);
     t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1"), await tokenBox(t, "f1"), ...(await strangers(t)));
     const held = await bootstrapped(t, lj);
@@ -298,6 +302,9 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
 
   it("stops when asked from Settings: the boxes left come back as before, each after its own wait", async () => {
     const t = await wallet();
+    // The classic pool's box keeps its own wait once stopped: past 1.8.0's first run, which would bring it back with
+    // the retired pools' (retireOnce, chunk 44).
+    await retiredAlready(t.store);
     const lj = pooled(t);
     t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1"), ...(await strangers(t)));
     await lj.status("preprod");

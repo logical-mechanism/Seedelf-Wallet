@@ -5,7 +5,8 @@
 // builds it again, through Lovejoin (buildBack): its row on the Lovejoin page
 // says it goes on, never that the rest comes back directly, which only a chain
 // that went in partly does (the last review, L5). The real WebAssembly,
-// Lovejoin's recorded preprod pool, and fakes of Koios.
+// Lovejoin v2's 5 ₳ pool (the classic pool, retired, takes no new box: chunk
+// 44), and fakes of Koios.
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
@@ -14,8 +15,9 @@ import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import type { SessionView } from "../src/shared/rpc";
 import { detailOf, subOf } from "../src/ui/screens/Lovejoin";
-import { account, AGREES, atSession, HOUR, PASSWORD, POOL } from "./chain-fixtures";
+import { account, AGREES, atSession, HOUR, PASSWORD } from "./chain-fixtures";
 import { testBalances } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS } from "./v2-pools";
 
 const MINUTE = 60_000;
 const FUNDING = "ab".repeat(32);
@@ -23,12 +25,12 @@ const FUNDING = "ab".repeat(32);
 const CHAINS = { timeout: 120_000 };
 
 /**
- * A mix as mixOutSubmit records it, its funding on chain an hour ago: 15.3 ₳ and its 5 ₳ collateral at its account,
- * and Lovejoin's pool listed. `lockOnce`: the wallet locks as the runs' alarm starts, after the chain's record and
- * before its first send.
+ * A mix into the 5 ₳ pool as mixOutSubmit records it, its funding on chain an hour ago: 10.3 ₳ (a box two waves deep
+ * there) and its 5 ₳ collateral at its account, and the pool listed. `lockOnce`: the wallet locks as the runs' alarm
+ * starts, after the chain's record and before its first send.
  */
 async function funded(lockOnce = false) {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(account(12).phrase, PASSWORD);
   t.koios.evaluation = AGREES;
   const created = t.clock.now - HOUR;
@@ -40,12 +42,12 @@ async function funded(lockOnce = false) {
         ownStake: true,
         createdAt: created,
         txs: [{ kind: "out", txHash: FUNDING, at: created, confirmed: true }],
-        mix: { boxes: 1 },
-        auto: { approved: { minAmountOut: "0", fund: { lovelace: "15300000", tokens: [] } } },
+        mix: { boxes: 1, pool: ADA },
+        auto: { approved: { minAmountOut: "0", fund: { lovelace: "10300000", tokens: [] } } },
       },
     ],
   });
-  t.koios.addedToAccounts.push(atSession(FUNDING, 0, "15300000"), atSession(FUNDING, 1, "5000000"), ...POOL);
+  t.koios.addedToAccounts.push(atSession(FUNDING, 0, "10300000"), atSession(FUNDING, 1, "5000000"), ...ADA_ROWS);
   let armed = lockOnce;
   const sessions = new SessionService({
     ...t.deps,

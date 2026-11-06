@@ -5,7 +5,7 @@
 // paying its own way (321-lj-worker#2). A wait for its withdraws to land that goes past BRING_LATE_MS says so
 // (321-lj-worker#4). A session's collateral's mix waiting for giveme.my holds no box of any pool back
 // (x-scenarios-lj#1). With the real WebAssembly, the classic pool's recorded preprod boxes, and PR #163's preprod token
-// pool.
+// pool's v2 twin: the one on 8131b1d's scripts is retired (chunk 44).
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -22,6 +22,7 @@ import { doneOf } from "../src/ui/components/BringAllBack";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, koiosPreprod, loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
+import { retiredAlready } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -38,7 +39,8 @@ const SLOW = { timeout: 180_000 };
 
 const POOL = (JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }).pool;
 const CLASSIC_BOX = NETWORKS.preprod.lovejoin!.mixBox;
-const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-token-pool-preprod.json", import.meta.url), "utf8")) as {
+/** PR #163's token pool's launch with its scripts derived on v2, never on chain (chunk 44, wasm/tests/fixtures). */
+const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json", import.meta.url), "utf8")) as {
   seed: { txHash: string; txIndex: number };
   reference: KoiosUtxo;
   scripts: KoiosUtxo[];
@@ -273,6 +275,9 @@ describe("Bring every box back now and a chain of the wallet's just sent (1.6.0'
 
   it("keeps a chain's due time in a box's own run while that chain lands, and sends the box due once it's in", async () => {
     const t = await wallet();
+    // The classic pool's boxes keep their own waits: past 1.8.0's first run, which would bring them back at once
+    // (retireOnce, chunk 44).
+    await retiredAlready(t.store);
     const lj = pooled(t);
     t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1", 300), ...(await strangers(t)));
     await lj.status("preprod");
@@ -490,6 +495,9 @@ describe("a session's collateral's mix waiting for giveme.my (1.6.0's release re
 
   it("sends a box due meanwhile, its chain still being sent for the lock countdown and Remove wallet", async () => {
     const t = await wallet();
+    // The classic pool's box keeps its own wait: past 1.8.0's first run, which would bring it back at once (retireOnce,
+    // chunk 44).
+    await retiredAlready(t.store);
     const lj = pooled(t);
     t.koios.addedToAccounts.push(...POOL, await classicBox(t, "d1", 300), await tokenBox(t, "e0", true, 300), ...(await strangers(t)));
     await waitingTail(t, lj);
@@ -548,6 +556,9 @@ describe("a session's collateral's mix waiting for giveme.my (1.6.0's release re
 
   it("keeps its boxes' due times in a box's own run while they may be landing, and sends the box due after (R3-6)", async () => {
     const t = await wallet();
+    // The classic pool's boxes keep their own waits: past 1.8.0's first run, which would bring them back at once
+    // (retireOnce, chunk 44).
+    await retiredAlready(t.store);
     const lj = pooled(t);
     t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1", 300), ...(await strangers(t)));
     await lj.status("preprod");
