@@ -21,7 +21,7 @@
 // wallet spent itself (independent review L7). Both count everywhere.
 
 import type { NetworkName } from "../networks";
-import { bodyOutpoints, txInputs } from "./cbor";
+import { bodyOutpoints, txInputs, txWithdrawals } from "./cbor";
 import type { KoiosUtxo } from "./koios";
 import { rememberSent } from "./sent-txs";
 import type { Area } from "./storage";
@@ -189,18 +189,32 @@ export interface Reservation {
   collateral: string[];
   /** Built and kept for Send until then (ms): its pool boxes alone count. None while it's being sent. */
   until?: number;
+  /**
+   * What it withdraws from a Lovejoin pool's `mix_logic` reward account, by the account's bytes (hex), where that's
+   * more than nothing: a chain being sent takes it, its first mix there not sent yet too (lovejoin-rewards.ts, chunk 43).
+   */
+  takes?: Record<string, string>;
 }
 
 /** A chain's reservation, from its transactions' CBOR (hex). */
 export function reservationOf(txs: Array<{ txCbor: string }>, until?: number): Reservation {
   const inputs = new Set<string>();
   const collateral = new Set<string>();
+  const takes: Record<string, string> = {};
   for (const { txCbor } of txs) {
     const bytes = Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
     for (const o of txInputs(bytes)) inputs.add(o);
     for (const o of bodyOutpoints(bytes, 13) ?? []) collateral.add(o);
+    for (const { account, lovelace } of txWithdrawals(bytes)) {
+      if (lovelace > BigInt(takes[account] ?? "0")) takes[account] = lovelace.toString();
+    }
   }
-  return { inputs: [...inputs], collateral: [...collateral], ...(until !== undefined ? { until } : {}) };
+  return {
+    inputs: [...inputs],
+    collateral: [...collateral],
+    ...(until !== undefined ? { until } : {}),
+    ...(Object.keys(takes).length ? { takes } : {}),
+  };
 }
 
 /** Every chain's reservation on `network`, less those kept for Send past their time. Call it while unlocked. */

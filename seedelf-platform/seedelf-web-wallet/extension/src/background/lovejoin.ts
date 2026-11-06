@@ -114,14 +114,25 @@ import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activ
 import { MAX_DEPTH, txInputs } from "./cbor";
 import { fartherKeys, GAP_LIMIT } from "./chain";
 import { COLLATERAL_LOVELACE } from "./coin-control";
-import { KoiosBusyError, KoiosError, RawJson, SpentInputError, TXS_PER_REQUEST, type Koios, type KoiosTxSpends, type KoiosUtxo } from "./koios";
+import {
+  KoiosBusyError,
+  KoiosError,
+  RawJson,
+  RewardsChangedError,
+  SpentInputError,
+  TXS_PER_REQUEST,
+  type Koios,
+  type KoiosTxSpends,
+  type KoiosUtxo,
+} from "./koios";
+import { balanceAfter, moved, readBalance, readsFor, rewardsField, takingFrom, type RewardRead } from "./lovejoin-rewards";
 import { chainStatus, noteCursor, type Watching } from "./feed";
 import { IndexDown, type IndexRow, utxoOf } from "./private-index";
 import { MaybeSentWait, settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { nothingToSpend, readContract, type ScriptSpendDeps } from "./script-spend";
-import { forgetSent } from "./sent-txs";
+import { forgetSent, heldSent } from "./sent-txs";
 import {
   forgetSpent,
   outpoint,
@@ -138,6 +149,7 @@ import {
 } from "./spent";
 import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WalletLocked } from "./wallet";
 import { isTrap } from "./wasm";
+import { StaleReviewError } from "./collateral";
 
 /** chrome.storage.session: a mix from the public account, built and signed, waiting for Send. */
 export const SESSION_LOVEJOIN_PUBLIC = "seedelf.lovejoin.public";
@@ -160,6 +172,16 @@ export const POOL_BOOTSTRAP = () => t("lj.poolBootstrap");
 
 /** A mix from the public account is built or sent while the last one from it is still being sent. */
 const PUBLIC_STILL_SENDING = () => t("lj.mixSending");
+/**
+ * A chain kept for Send whose pool's reward balance moved since it was built (rewardsMoved, chunk 43): it would be
+ * refused, so it's built again rather than sent. A stale review, as the account's own staking's is.
+ */
+export const REWARDS_MOVED_REVIEW = () => t("lj.rewardsMovedReview");
+/**
+ * The network refused a Lovejoin transaction because its pool's reward balance moved as it was sent (koios.ts
+ * RewardsChangedError): said in Lovejoin's words, never staking's, where a chain stops or a box's way back fails.
+ */
+export const REWARDS_MOVED = () => t("lj.warn.rewardsMoved");
 /** The mix kept for Send isn't the one asked for, or something took its place since. */
 const NOT_READY = () => t("lj.mixNotReady");
 /**
@@ -728,6 +750,11 @@ export interface LovejoinChain {
    * its 5 ₳ out.
    */
   collateralTail?: CollateralTail;
+  /**
+   * What it withdraws from each pool's `mix_logic` reward account it names, as its build read it (lovejoin-rewards.ts
+   * readsFor, chunk 43): read again at Send, where one that moved since makes it a review to make again. The worker's.
+   */
+  balances?: RewardRead[];
 }
 
 /** A session's collateral's tail, as WebAssembly builds it (`lovejoin::TailOut`). */
@@ -819,6 +846,8 @@ interface ChainCall {
    * says (sessions.ts tailReserve).
    */
   holdTail?: true;
+  /** Each pool's `mix_logic` reward balance, as this build read it (rewardsOf): read once a build. */
+  rewards?: RewardRead[];
 }
 
 /**
@@ -866,6 +895,12 @@ function collateralAsked(c: Pick<ChainCall, "collateralPool" | "collateralReserv
     ...(c.collateralPool?.pool.ref ? { collateralPool: c.collateralPool.pool.ref, collateralBoxes: rows ?? c.collateralPool.rows } : {}),
     ...(c.collateralReserve ? { collateralReserve: true } : {}),
   };
+}
+
+/** A built chain's `balances`: the reads its transactions' withdrawals name (readsFor), none when it names none. */
+function balancesOf(reads: readonly RewardRead[] | undefined, txs: LovejoinChain["txs"]): { balances?: RewardRead[] } {
+  const named = readsFor(reads ?? [], txs);
+  return named.length ? { balances: named } : {};
 }
 
 /**
@@ -1529,6 +1564,8 @@ interface KeptPublic extends LovejoinPublicSummary {
   builtAt: number;
   /** The public account whose keys built and signed it: its record's (ChainRecord `account`). None: account 0. */
   account?: number;
+  /** What it withdraws from its pool's reward account, as its build read it: read again at Send (LovejoinChain's). */
+  balances?: RewardRead[];
 }
 
 /** The public account's own boxes mixed again, as a chain's review has them. */
@@ -2809,6 +2846,8 @@ export class LovejoinService {
 
   /** The most boxes a Bootstrap paid from the private balance puts in, by network, pool and epoch (privateBootstrapMost). */
   private bootstrapMosts = new Map<string, number>();
+  /** Each pool's `mix_logic` and its reward account, by network and pool (mixLogicOf): they never change for a pool. */
+  private mixLogics = new Map<string, { hash: string; stake: string }>();
 
   /** How each of the wallet's chain transactions is watched (watchOf), by network and hash: a chain's pools never change. */
   private watches = new Map<string, Pick<Watching, "feed" | "pools">>();
@@ -3784,6 +3823,7 @@ export class LovejoinService {
         ...(w !== 3 ? { width: w } : {}),
         ...(pool.ref ? { poolRef: pool.ref } : {}),
         ...collateralAsked(c, this.tailRows(c, avoid, c.collateralPool?.pool.id === pool.id ? split : undefined)),
+        ...rewardsField(await this.rewardsOf(network, c, [pool, c.collateralPool?.pool])),
       };
       const built = await this.deps.wallet.withKeys(
         (keys) =>
@@ -3796,6 +3836,7 @@ export class LovejoinService {
         leaves: built.leaves.map(inThe(pool.id)),
         ...(pool.id !== CLASSIC ? { pool: pool.id } : {}),
         ...(w === 4 ? { width: 4 as const } : {}),
+        ...balancesOf(c.rewards, built.txs),
       };
       // Kept for Send (or sent at once) as soon as it's built, before the network's check: no other chain draws its
       // boxes meanwhile, and one that took any since this pool read has it built again (independent review L27).
@@ -3991,6 +4032,7 @@ export class LovejoinService {
           fills: returns.fills ?? [],
           ...(w !== 3 ? { width: w } : {}),
           ...collateralAsked(c, this.tailRows(c, avoid, c.collateralPool ? splits.get(c.collateralPool.pool.id) : undefined)),
+          ...rewardsField(await this.rewardsOf(network, c, [...legs.map((l) => l.pool), c.collateralPool?.pool])),
         };
         const built = await this.deps.wallet.withKeys(
           (keys) =>
@@ -4024,7 +4066,15 @@ export class LovejoinService {
           if (way.boxes < 1) way.skipped = t("sess.skip.warn.noBox");
           else delete way.skipped;
         }
-        const chain: LovejoinChain = { ...built, leaves, parts, ways: tokens, values, ...(w === 4 ? { width: 4 as const } : {}) };
+        const chain: LovejoinChain = {
+          ...built,
+          leaves,
+          parts,
+          ways: tokens,
+          values,
+          ...(w === 4 ? { width: 4 as const } : {}),
+          ...balancesOf(c.rewards, built.txs),
+        };
         const mine = await this.reserve(network, owner, chain.txs, this.deps.now() + BUILT_TTL_MS);
         await this.crossCheck(network, chain, firsts).catch(async (e: unknown) => {
           await this.unreserve(network, owner, mine).catch(() => undefined);
@@ -4431,6 +4481,8 @@ export class LovejoinService {
     }
     // Kept with the tail it hands on, so the chain built again keeps the day from this deposit, not from its own.
     tail.landed = await this.tailLanded(network, id);
+    // Its mix takes what sits in the pool's reward account (chunk 43).
+    const reads = await this.rewardsIn(network, [pool]);
     const request = {
       network,
       params,
@@ -4440,12 +4492,13 @@ export class LovejoinService {
       poolRef: pool.ref,
       pool: this.real(split),
       own,
+      ...rewardsField(reads),
     };
     try {
-      const chain = await this.deps.wallet.withKeys(
+      const built = await this.deps.wallet.withKeys(
         (keys) => JSON.parse(this.deps.wasm.buildCollateralMix(keys.oneTime, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
       );
-      return { chain, tail, resumes: id };
+      return { chain: { ...built, ...balancesOf(reads, built.txs) }, tail, resumes: id };
     } catch (e) {
       if (isTrap(e) || e instanceof WalletLocked) throw e;
       // Too few boxes to draw from waits for more; anything else won't build later either.
@@ -4539,6 +4592,86 @@ export class LovejoinService {
   }
 
   /**
+   * The `mix_logic` hash of every pool the wallet reads on `network`, the classic pool's and the retired ones' too,
+   * asking nobody (readSet): a site's transaction that pays into one's reward account is never signed (dapp.ts). Money
+   * there stops every mix and way back in that pool until someone takes it, and anyone may (the owner, 2026-11-06).
+   */
+  async mixLogicHashes(network: NetworkName): Promise<Set<string>> {
+    const pools = await this.readSet(network, true);
+    return new Set(pools.map((p) => this.mixLogicOf(network, p).hash));
+  }
+
+  /** Pool `pool`'s `mix_logic` hash and its reward account's bech32, as WebAssembly derives them. */
+  private mixLogicOf(network: NetworkName, pool: LovejoinPool): { hash: string; stake: string } {
+    const key = `${network}:${pool.id}`;
+    let found = this.mixLogics.get(key);
+    if (!found) {
+      found = JSON.parse(
+        this.deps.wasm.lovejoinMixLogic(JSON.stringify({ network, ...(pool.ref ? { poolRef: pool.ref } : {}) })),
+      ) as { hash: string; stake: string };
+      this.mixLogics.set(key, found);
+    }
+    return found;
+  }
+
+  /**
+   * What each of `pools` holds in its `mix_logic` reward account now, as a build there takes it (chunk 43,
+   * lovejoin-rewards.ts): one account_info a pool, as any public read goes, which names the pool and never the wallet.
+   * What the wallet's own transactions on their way take counts as taken. One account_info doesn't answer for is none,
+   * as before (`unread`). `known`: reads this build made already, kept as they are, so a pool is read once a build:
+   * its tries again with other boxes (unstale) and four's fall to three included.
+   */
+  async rewardsIn(network: NetworkName, pools: ReadonlyArray<LovejoinPool | undefined>, known: readonly RewardRead[] = []): Promise<RewardRead[]> {
+    const fresh = [...new Map(pools.filter((p): p is LovejoinPool => !!p && !known.some((k) => k.pool === p.id)).map((p) => [p.id, p])).values()];
+    if (!fresh.length) return [...known];
+    const header = network === "mainnet" ? "f1" : "f0";
+    const accounts = fresh.map((pool) => {
+      const { hash, stake } = this.mixLogicOf(network, pool);
+      return { pool: pool.id, hash, stake, account: header + hash };
+    });
+    return [...known, ...(await this.readRewards(network, accounts))];
+  }
+
+  /** Each of `accounts` read (rewardsIn), what the wallet's own transactions on their way take of it counted as taken. */
+  private async readRewards(network: NetworkName, accounts: ReadonlyArray<Omit<RewardRead, "lovelace" | "unread">>): Promise<RewardRead[]> {
+    const { wallet, session, now } = this.deps;
+    const koios = this.deps.koios(network);
+    const [sent, spent, kept] = await wallet.withKeys(() =>
+      Promise.all([heldSent(session, network, now()), spentSet(session, now()), reservations(session, network, now())]),
+    );
+    const sending = Object.values(kept).filter((r) => r.until === undefined);
+    return Promise.all(
+      accounts.map(async ({ pool, hash, stake, account }): Promise<RewardRead> => {
+        const info = await koios.accountInfo(stake).then(
+          (row) => ({ row }),
+          (e: unknown) => {
+            if (isTrap(e) || e instanceof WalletLocked) throw e;
+            return undefined;
+          },
+        );
+        const lovelace = balanceAfter(readBalance(info?.row?.rewards_available ?? "0"), takingFrom(sent, spent, sending, account));
+        return { pool, hash, stake, account, lovelace: lovelace.toString(), ...(info ? {} : { unread: true as const }) };
+      }),
+    );
+  }
+
+  /** `c`'s reads, with those of `pools` it hasn't made yet (rewardsIn): kept on it for the rest of its build. */
+  private async rewardsOf(network: NetworkName, c: { rewards?: RewardRead[] }, pools: ReadonlyArray<LovejoinPool | undefined>): Promise<RewardRead[]> {
+    c.rewards = await this.rewardsIn(network, pools, c.rewards);
+    return c.rewards;
+  }
+
+  /**
+   * Whether what a chain kept for Send withdraws from a pool's reward account (`reads`, readsFor) moved since it was
+   * built: an epoch's start paid more there, or another wallet's Lovejoin transaction took it. It would be refused,
+   * so it's a review to make again before any of it goes. Each read again, as a build reads it.
+   */
+  async rewardsMoved(network: NetworkName, reads: readonly RewardRead[] | undefined): Promise<boolean> {
+    if (!reads?.length) return false;
+    return moved(reads, await this.readRewards(network, reads));
+  }
+
+  /**
    * Reserves what chain `owner`'s transactions spend and put up as
    * collateral (spent.ts), in place of its reservation before: kept for Send
    * until `until`, or, without it, being sent. Never what another chain of
@@ -4603,7 +4736,11 @@ export class LovejoinService {
     const whole = reservationOf(txs);
     return this.reserving(network, (kept) => {
       const r = kept[chainOwner()];
-      if (r && r.until === undefined && sameInputs(r, whole)) kept[chainOwner()] = { inputs: reservationOf([step]).inputs, collateral: [] };
+      if (r && r.until === undefined && sameInputs(r, whole)) {
+        // What it takes of a pool's reward balance stays held with it: it may be on its way (chunk 43).
+        const held = reservationOf([step]);
+        kept[chainOwner()] = { inputs: held.inputs, collateral: [], ...(held.takes ? { takes: held.takes } : {}) };
+      }
     });
   }
 
@@ -4712,6 +4849,8 @@ export class LovejoinService {
     // A Bootstrap makes no mixes, so it draws nothing from the pool and the
     // floor doesn't apply: that's the point of it.
     const depth = bootstrap ? 0 : chosen;
+    // Its first mix takes what sits in the pool's reward account (chunk 43); a Bootstrap runs no script, and reads none.
+    const reads = bootstrap ? [] : await this.rewardsIn(network, [into]);
     const chain = await this.unstale(async (avoid) => {
       const split = await this.split(network, chainOwner(), avoid, into);
       if (!bootstrap) this.floor(network, split.others.length, true);
@@ -4728,6 +4867,7 @@ export class LovejoinService {
           boxes,
           ...(w !== 3 ? { width: w } : {}),
           ...(into.ref ? { poolRef: into.ref } : {}),
+          ...rewardsField(reads),
         };
         // The account whose keys sign it is the one its record names (ChainRecord `account`).
         const built = await wallet.withKeys((keys) => ({
@@ -4773,6 +4913,7 @@ export class LovejoinService {
       leaves: chain.leaves.map(inThe(into.id)),
       builtAt: now(),
       account: chain.account,
+      ...balancesOf(reads, chain.txs),
     };
     await this.keep(network, kept, chain.reserved);
     return summary;
@@ -4859,6 +5000,8 @@ export class LovejoinService {
     const { depth, delay, width: setting } = await this.settings();
     // The review's switch where it was turned (the owner's test of 1.6.0), else Settings'.
     const asked = width ?? setting;
+    // Its first mix takes what sits in the pool's reward account (chunk 43).
+    const reads = await this.rewardsIn(network, [into]);
     // The account's boxes in the pool, and what three a mix would take where four takes fewer: the review says both.
     let owned = 0;
     let three: { atThree?: number } = {};
@@ -4892,7 +5035,18 @@ export class LovejoinService {
         .filter((u) => !mine.has(outpoint(u)) || taken.has(outpoint(u)))
         .sort((a, b) => first(a) - first(b));
       const build = async (w: LovejoinWidth, n: number) => {
-        const request = { network, params, utxos, collateral, pool, depth, boxes: n, ...(w !== 3 ? { width: w } : {}), ...(into.ref ? { poolRef: into.ref } : {}) };
+        const request = {
+          network,
+          params,
+          utxos,
+          collateral,
+          pool,
+          depth,
+          boxes: n,
+          ...(w !== 3 ? { width: w } : {}),
+          ...(into.ref ? { poolRef: into.ref } : {}),
+          ...rewardsField(reads),
+        };
         const built = await wallet.withKeys((keys) => {
           // Still the account the boxes were picked for: a switch since would have another account pay for them.
           if (keys.account !== account) throw new Error(NOT_READY());
@@ -4929,7 +5083,11 @@ export class LovejoinService {
       ...(chain.width ? { width: chain.width, ...three } : {}),
       ...(chain.fellBack ? { fellBack: chain.fellBack } : {}),
     };
-    await this.keep(network, { ...summary, chain: chain.txs, leaves: chain.leaves.map(inThe(into.id)), builtAt: now(), account }, chain.reserved);
+    await this.keep(
+      network,
+      { ...summary, chain: chain.txs, leaves: chain.leaves.map(inThe(into.id)), builtAt: now(), account, ...balancesOf(reads, chain.txs) },
+      chain.reserved,
+    );
     return summary;
   }
 
@@ -4989,6 +5147,9 @@ export class LovejoinService {
     const built = await wallet.withKeys(() => session.get<KeptPublic>(SESSION_LOVEJOIN_PUBLIC));
     if (!built || built.txHash !== txHash || built.network !== network) throw new Error(NOT_READY());
     if (now() - built.builtAt > BUILT_TTL_MS) throw new Error(t("lj.mixTooOld"));
+    // What its first mix takes of its pool's reward balance moved since (an epoch's start, another wallet's mix): it
+    // would be refused, so it's reviewed again before any of it goes (chunk 43).
+    if (await this.rewardsMoved(network, built.balances)) throw new StaleReviewError(REWARDS_MOVED_REVIEW());
     // Its pool may have turned into a copy since the review (an earlier pool of its values found meanwhile): no new
     // box goes there (34g's last review, CROSS-1). Asking nobody: the read set as discovery last kept it. Mixing again
     // puts none in, and an epoch's other reasons wait for the next review, at most BUILT_TTL_MS away.
@@ -5228,9 +5389,11 @@ export class LovejoinService {
       sending.stopped =
         unsure !== undefined
           ? t("lj.stepMaybeSent", { what: stepName(sending.txs, unsure) })
-          : e instanceof Error
-            ? e.message
-            : String(e);
+          : e instanceof RewardsChangedError
+            ? REWARDS_MOVED()
+            : e instanceof Error
+              ? e.message
+              : String(e);
       if (maybe) {
         sending.maybe = maybe.index;
         await wallet.withKeys(() => rememberSpent(session, network, hexBytes(step!.txCbor), maybe.at)).catch(() => undefined);
@@ -7337,7 +7500,9 @@ export class LovejoinService {
    * `bootstrap`: a box a Bootstrap held, brought back by hand, and `holder`
    * the one that held it (Withdrawing `bootstrap`, `holder`). `paid`: the
    * public account (`true`) or the private balance (`"private"`) pays its
-   * fee, for a box that can't pay its own way back.
+   * fee, for a box that can't pay its own way back. The box's register takes
+   * what sits in its pool's reward account (chunk 43); refused because that
+   * moved since it was read, it's built again once, at once (`again`).
    */
   private async withdrawOne(
     network: NetworkName,
@@ -7351,6 +7516,7 @@ export class LovejoinService {
       params: known,
       paid,
       bring,
+      again,
     }: {
       unlocked?: number;
       due?: number | "earliest";
@@ -7360,12 +7526,15 @@ export class LovejoinService {
       paid?: true | "private";
       /** Bring every box back now's: once it went, its box is kept as counted back (Schedule `counted`). */
       bring?: true;
+      /** Built again after its pool's reward balance moved: refused once more, it goes as any refusal. */
+      again?: true;
     } = {},
   ): Promise<PendingTx> {
     const { wasm, wallet, session, now } = this.deps;
     const koios = this.deps.koios(network);
     const { pool } = read;
     const boxRef = { txHash: box.txHash, txIndex: box.txIndex };
+    const rewards = rewardsField(await this.rewardsIn(network, [pool]));
     type Built = { txCbor: string; txHash: string; fee: string; lovelace: string; token?: TokenQuantity };
     let built: Built;
     let finished: { txCbor: string; txHash: string };
@@ -7379,7 +7548,7 @@ export class LovejoinService {
       const { params, utxos, collateral, held } = await readAccount(this.deps, network);
       if (!collateral) throw new Error(t("lj.needCollateral"));
       if (!utxos.length) throw nothingInAccount(held, t("lj.accountEmptyPay"));
-      const request = { network, params, pool: read.rows, boxRef, utxos, collateral, ...(pool.ref ? { poolRef: pool.ref } : {}) };
+      const request = { network, params, pool: read.rows, boxRef, utxos, collateral, ...(pool.ref ? { poolRef: pool.ref } : {}), ...rewards };
       built = await wallet.withKeys((keys) => {
         payer = keys.account;
         return JSON.parse(wasm.buildLovejoinWithdrawPaid(keys.cardano, keys.seedelf, JSON.stringify(request))) as Built;
@@ -7402,7 +7571,7 @@ export class LovejoinService {
       const order = [...utxos].sort(
         (a, b) => fromLovejoin(a) - fromLovejoin(b) || another(a) - another(b) || Number(BigInt(a.value) - BigInt(b.value)),
       );
-      const request = { network, params, pool: read.rows, boxRef, utxos: order, ...(pool.ref ? { poolRef: pool.ref } : {}) };
+      const request = { network, params, pool: read.rows, boxRef, utxos: order, ...(pool.ref ? { poolRef: pool.ref } : {}), ...rewards };
       type Private = Built & { seed: string; spent: string; spentLovelace: string };
       let made: Private;
       try {
@@ -7428,7 +7597,7 @@ export class LovejoinService {
       );
     } else {
       const params = known ?? (await koios.epochParams());
-      const request = { network, params, pool: read.rows, boxRef, ...(pool.ref ? { poolRef: pool.ref } : {}) };
+      const request = { network, params, pool: read.rows, boxRef, ...(pool.ref ? { poolRef: pool.ref } : {}), ...rewards };
       built = await wallet.withKeys((keys) => JSON.parse(wasm.buildLovejoinWithdraw(keys.seedelf, JSON.stringify(request))) as Built);
       const collateral = await this.deps.collateral(network).witness(built.txCbor);
       finished = JSON.parse(wasm.finishLovejoinWithdraw(JSON.stringify({ txCbor: built.txCbor, collateral }))) as {
@@ -7498,6 +7667,13 @@ export class LovejoinService {
       // lock meanwhile too (final review F5).
       await this.neverWent(network, built.txHash);
       await wallet.withKeys(() => forgetWithdraw(session, network, built.txHash, bytes)).catch(() => undefined);
+      // Its pool's reward balance moved since it was read (an epoch's start, another wallet's Lovejoin transaction):
+      // read again and built again once, giveme.my asked again too, with its due time taken back as before. Refused
+      // again, it's said in Lovejoin's words, and its due time waits for a later run (chunk 43).
+      if (e instanceof RewardsChangedError) {
+        if (!again) return this.withdrawOne(network, read, box, { unlocked, due, bootstrap, holder, params: known, paid, bring, again: true });
+        throw new KoiosError(REWARDS_MOVED());
+      }
       throw e;
     }
     if (submitted !== built.txHash) {

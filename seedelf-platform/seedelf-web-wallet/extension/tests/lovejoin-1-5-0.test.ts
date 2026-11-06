@@ -746,6 +746,9 @@ function shape(s: Step) {
  * run after reads the pool once more and finds them gone; no run reads it again. Session 0 comes back as it did, and
  * every page reads as it did but for those boxes. A restore finds nothing, and asks Koios of nothing but the pool.
  */
+/** The read of the classic pool's `mix_logic` reward account, as a box's way back asks it (chunk 43). */
+const CLASSIC_REWARDS = `account_info ${(JSON.parse(loadTestWasm().lovejoinMixLogic(JSON.stringify({ network: "preprod" }))) as { stake: string }).stake}`;
+
 function finishesRetired(got: After, recorded: After, vault: Vault): void {
   const withdraw = Uint8Array.from(Buffer.from(vault.submitted[0]!, "hex"));
   const unseen = { tx: txIdOf(withdraw), spends: txInputs(withdraw).sort() };
@@ -772,7 +775,8 @@ function finishesRetired(got: After, recorded: After, vault: Vault): void {
     {
       at: seen,
       label: "run",
-      calls: [look, read, "epoch_params limit=1", ...boxes.map(() => "submittx")],
+      // Each box's way back reads the classic pool's `mix_logic` reward balance first, which its register takes (chunk 43).
+      calls: [look, read, "epoch_params limit=1", ...boxes.flatMap(() => [CLASSIC_REWARDS, "submittx"])],
       sends: boxes.map((b) => ({ tx: "new", spends: [b] })),
       asked: boxes.length,
     },

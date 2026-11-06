@@ -1148,6 +1148,11 @@ export interface DappTxSummary {
   /** The account's keys that sign: `0/3`, `1/0`, `stake`, `drep` (CIP-95). */
   signs: string[];
   unknownInputs: string[];
+  /**
+   * The scripts whose reward accounts it pays into, by hash: a stake pool registration's, a proposal's deposit's
+   * return, a treasury withdrawal's. One that's a Lovejoin pool's `mix_logic` is refused (chunk 43).
+   */
+  paidScripts?: string[];
   othersSign: number;
   complete: boolean;
 }

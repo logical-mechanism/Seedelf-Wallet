@@ -270,6 +270,7 @@ function getContext(): Promise<Worker> {
       preferences,
       store,
       sessions,
+      lovejoin,
       network: () => networkChoice.get(),
       activeAccount: () => activeAccount(local),
       window: approvalWindow,

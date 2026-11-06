@@ -625,6 +625,14 @@ export const KOIOS_LIMIT = new RateLimit(undefined, undefined, undefined, undefi
 export class SpentInputError extends KoiosError {}
 
 /**
+ * The network refused a withdrawal for not taking a reward account's whole balance (`WithdrawalsNotInRewards`), in
+ * staking's words: the account changed since the transaction was built. A Lovejoin transaction withdraws only from
+ * its pool's `mix_logic` account, so there it means that balance moved (chunk 43): Lovejoin tells it by this type and
+ * says it in its own words.
+ */
+export class RewardsChangedError extends KoiosError {}
+
+/**
  * Koios didn't answer a submit (a timeout, a lost connection), asked the
  * wallet to slow down (429), or failed on its side (5xx). Sending the same
  * transaction again later is safe (the ledger takes it once). `maybeSent`:
@@ -1222,7 +1230,7 @@ export class Koios {
       );
     }
     const staking = stakingRefusal(text);
-    if (staking) throw new KoiosError(staking);
+    if (staking) throw text.includes("WithdrawalsNotInRewards") ? new RewardsChangedError(staking) : new KoiosError(staking);
     // The public account's transactions are valid for two hours from this device's clock (account.ts).
     if (text.includes("OutsideValidityIntervalUTxO")) {
       throw new KoiosError(

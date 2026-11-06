@@ -2,7 +2,7 @@
 
 Branch `web-wallet/lovejoin-reward-balance`, from `main`.
 
-**Status: 🚧 in progress, for 1.8.1.** Planned 2026-11-04; the owner picked it for 1.8.1 on 2026-11-06. Steps 1 and 2 are built (*Built so far*, below). A small chunk: the wallet's Lovejoin transactions withdraw whatever sits in `mix_logic`'s reward account, where today they always withdraw 0.
+**Status: 🚧 in progress, for 1.8.1.** Planned 2026-11-04; the owner picked it for 1.8.1 on 2026-11-06. Steps 1, 2, 3 and 5 are built (*Built so far*, below); the live run on preprod is what's left. A small chunk: the wallet's Lovejoin transactions withdraw whatever sits in `mix_logic`'s reward account, where today they always withdraw 0.
 
 - **Every Mix and every Owner withdrawal the wallet builds withdraws exactly 0 from `mix_logic`'s script reward account** ([withdraw_zero.rs](../../../seedelf-core/src/withdraw_zero.rs)`:96`). `mix_logic` is a withdraw-zero validator: that withdrawal is what runs it, once a transaction.
 - **The ledger takes a withdrawal only of the account's whole balance** ([staking.rs](../../../seedelf-core/src/staking.rs)`:16-17`), and refuses anything else as `WithdrawalsNotInRewards`, which [koios.ts](../../extension/src/background/koios.ts)`:701` words today.
@@ -13,9 +13,9 @@ Branch `web-wallet/lovejoin-reward-balance`, from `main`.
 |---|---|
 | 1 · Core: the amount, and where it goes | ✅ |
 | 2 · WebAssembly: the requests carry it | ✅ |
-| 3 · The worker: the read, Send's read, the refusal | ⬜ |
-| 4 · Tests, and a live run on preprod | 🚧 core's and WebAssembly's done |
-| 5 · The guard: the wallet never pays into `mix_logic`'s account | ⬜ |
+| 3 · The worker: the read, Send's read, the refusal | ✅ |
+| 4 · Tests, and a live run on preprod | 🚧 every suite's done; the live run isn't |
+| 5 · The guard: the wallet never pays into `mix_logic`'s account | ✅ |
 
 ## What the owner decided (2026-11-04)
 
@@ -35,6 +35,18 @@ Branch `web-wallet/lovejoin-reward-balance`, from `main`.
 - **`Mix`, `Withdraw` and `ChainTx` carry `taken`.** The WebAssembly results add no field: `returned` and a withdraw's `lovelace` count the balance, and the worker can read what its own transactions withdraw from the bytes it holds (`txWithdrawals`, as `withdrawingOf` does).
 - **The requests' field is `rewards`, `{ <mix_logic hash>: <lovelace, a decimal string> }`** (`RewardsIn`), on `ChainRequest`, `CollateralMixRequest`, `AccountChainRequest`, the three withdraws' and `api::SessionReturnRequest`. A hash that isn't 28 bytes, or an amount a u64 doesn't hold, is refused in words.
 - **The export is `lovejoinMixLogic`:** `{ network, poolRef }` in, the classic pool without a `poolRef`, `{ hash, stake }` out. wasm/README.md names it and every request's `rewards`.
+
+**Steps 3 and 5, 2026-11-06.** The extension's Vitest suite passes with the new tests (`lovejoin-reward-balance.test.ts`, and in `koios.test.ts`, `dapp.test.ts`, wasm's `cip30_test.rs`); the 1.5.0 replay's trace now has one `account_info` before each box's way back. Where the build departs from the plan:
+
+- **The read is `LovejoinService.rewardsIn`,** in [lovejoin-rewards.ts](../../extension/src/background/lovejoin-rewards.ts)'s rules. A session's chain keeps its reads on its `ChainCall` (`rewardsOf`), so each pool is read once a build, its stale rebuilds and four's fall to three included; `acrossOf` adds its legs' pools to the same reads.
+- **A read account_info doesn't answer is 0,** as before, and marked `unread`: never taken at Send for a balance that moved. A figure that's no whole number, or past all the ADA there is, is 0 too.
+- **What counts as on its way:** what the wallet sent and still holds as spent (`heldSent`, `goingOut`'s either), and a chain being sent, its unsent first mix included: its reservation now keeps `takes`, what it withdraws by account, and `holdOnly` keeps a held step's. A chain kept for Send doesn't count: Send's read catches two that took one balance. The rule is account.ts's: on its way and read at least as much, 0; read less, that one landed, and what's read is new.
+- **Send's read** is `rewardsMoved`, of the accounts a kept chain's transactions withdraw from (`balances`, readsFor), in `publicStart`, `backSubmit` and `claimSubmit`, a `StaleReviewError` in `lj.rewardsMovedReview`'s words. A runner's return is built and sent at once, and isn't asked.
+- **The refusal** is koios.ts's `RewardsChangedError`, staking's words still. A chain it stops says `lj.warn.rewardsMoved` (`pumpPublicNow`, sessions.ts `pump`). `withdrawOne` builds again once, in its submit's catch, with giveme.my asked again; refused again, it's a `KoiosError` in those words, its due time back.
+- **No cache of the balance:** each withdraw of Bring every box back reads it, 9 reads for 9 boxes. A cache would need forcing at Send and after a refusal, and the plan priced one read a withdraw.
+- **Step 5:** the summary names `paidScripts` (cip30.rs: a pool registration's reward account, a proposal's return, a treasury withdrawal's payee, where each is a script's), and `DappService` refuses one among `LovejoinService.mixLogicHashes` (every pool `readSet` keeps, the classic and retired pools and copies included, asking nobody), in `dapp.lovejoinRewards`'s words, before the user is asked.
+- **The words:** `lj.rewardsMovedReview`, `lj.warn.rewardsMoved` (accuracy-critical, back-translated without the English in view, in verified-critical-es/ja.json) and `dapp.lovejoinRewards`, in en, es and ja.
+- **Landed with it:** privacy.md's Lovejoin *What Koios learns*, the privacy policy's entry under *Changes* (dated 6 November 2026), architecture.md's *What each costs*, and `seedelf-platform/CLAUDE.md`'s *Things that bite*.
 
 ## Why the wallet can take it
 
