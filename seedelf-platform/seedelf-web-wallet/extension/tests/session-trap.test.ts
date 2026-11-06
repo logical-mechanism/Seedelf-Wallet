@@ -14,9 +14,10 @@ import { runNetworks, type Runner } from "../src/background/runs";
 import { SESSION_CLAIM, type SessionService } from "../src/background/sessions";
 import { WalletLocked, WASM_BROKEN } from "../src/background/wallet";
 import { isTrap } from "../src/background/wasm";
-import { account, AGREES, atSession, CHAINS, lovejoinOf, PASSWORD, POOL, publicFunded, sessionsOf, withSession, type Tested } from "./chain-fixtures";
+import { account, AGREES, atSession, CHAINS, lovejoinOf, PASSWORD, publicFunded, sessionsOf, withSession, type Tested } from "./chain-fixtures";
 import { testBalances } from "./fakes";
 import { txIdOf } from "./fixtures/cbor";
+import { ADA, ADA_POOL, ADA_ROWS } from "./v2-pools";
 
 type Book = { sessions: Array<{ auto?: { retry?: unknown } }> };
 
@@ -31,9 +32,12 @@ function trapping(t: Tested) {
   return { lovejoin, built };
 }
 
-/** An unlocked wallet with two sites' private sessions, 0 and 1, each holding 40 ₳ and its 5 ₳ collateral, and Lovejoin's pool. */
+/**
+ * An unlocked wallet with two sites' private sessions, 0 and 1, each holding 40 ₳ and its 5 ₳ collateral, and
+ * Lovejoin's 5 ₳ pool, which their returns' ADA goes into (chunk 44).
+ */
 async function twoSites() {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(account(12).phrase, PASSWORD);
   const one = await t.wallet.withKeys((keys) => ({
     address: keys.oneTime.address(t.deps.wasm.Network.Preprod, 1),
@@ -61,7 +65,7 @@ async function twoSites() {
     atSession("c2".repeat(32), 1, "5000000"),
     atOne("d1".repeat(32), 0, "40000000"),
     atOne("d2".repeat(32), 1, "5000000"),
-    ...POOL,
+    ...ADA_ROWS,
   );
   t.koios.evaluation = AGREES;
   return t;
@@ -69,10 +73,11 @@ async function twoSites() {
 
 /**
  * An unlocked wallet with a mix from the private balance that runs itself, funded: 40 ₳ and its 5 ₳ collateral at its
- * account. `depth`: its box's mixes, each a transaction of its chain.
+ * account, for a box of the 5 ₳ pool (the classic pool, retired, takes none: chunk 44). `depth`: its box's mixes,
+ * each a transaction of its chain.
  */
 async function runningMix(depth = 1) {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(account(12).phrase, PASSWORD);
   const now = t.clock.now;
   await t.store.set("sessions.preprod", {
@@ -83,7 +88,7 @@ async function runningMix(depth = 1) {
         ownStake: true,
         createdAt: now,
         txs: [{ kind: "out", txHash: "ab".repeat(32), at: now, confirmed: true }],
-        mix: { boxes: 1 },
+        mix: { boxes: 1, pool: ADA },
         auto: {
           approved: { minAmountOut: "0", fund: { lovelace: "40000000", tokens: [] } },
           direct: false,
@@ -92,7 +97,7 @@ async function runningMix(depth = 1) {
       },
     ],
   });
-  t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...POOL);
+  t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...ADA_ROWS);
   t.koios.evaluation = AGREES;
   return t;
 }
@@ -118,7 +123,8 @@ describe("WebAssembly that traps outside the wallet's queue as a session's money
     const built = await sessions.claimBuild("preprod", [0, 1]);
     expect(built.returns.map((r) => r.index)).toEqual([0, 1]);
     const kept = (await t.wallet.withKeys(() => t.deps.session.get<Array<{ txHash: string; chain?: Array<{ txHash: string }> }>>(SESSION_CLAIM)))!;
-    // Session 1's, its own or its chain's: here it comes back directly, session 0's chain holding the pool's boxes.
+    // Session 1's, its own or its chain's: here its spare ADA comes back directly, session 0's chain holding the pool's
+    // boxes, and its collateral's mix into the 5 ₳ pool is its chain (chunk 44).
     const one = [kept[1]!.txHash, ...(kept[1]!.chain ?? []).map((tx) => tx.txHash)];
     // Stands in for WebAssembly's own as session 0's chain is sent (with Send's budget, a collateral's mix built
     // again: its witness).
@@ -202,9 +208,11 @@ describe("WebAssembly that traps under the alarm's run, as a chain or a return n
     // Two deep: a chain longer than the transactions that wait in the mempool at once.
     const t = await runningMix(2);
     const sessions = sessionsOf(t);
-    // Its step sends the return's chain, a block's worth: the rest waits for its next steps.
+    // Its step sends the return's chain, a block's worth: the rest waits for its next steps. The deposit, the box's
+    // four mixes, its collateral's deposit and mix into the 5 ₳ pool (chunk 44: none before, with no such pool), the
+    // return.
     await sessions.advance("preprod", 0, true);
-    expect((await sessions.list("preprod"))[0]!.chain).toMatchObject({ total: 6, sent: 4 });
+    expect((await sessions.list("preprod"))[0]!.chain).toMatchObject({ total: 8, sent: 4 });
     const watch = vi.spyOn(t.lovejoin, "watchOf").mockRejectedValue(trap());
     const e = await sessions.advance("preprod", 0, true).catch((x: unknown) => x);
     expect(watch).toHaveBeenCalled();
@@ -220,7 +228,7 @@ describe("WebAssembly that traps under the alarm's run, as a chain or a return n
   it("locks it when a mix from the public account traps as the alarm sends more of it, the chain cut by the lock, not stopped for the trap's raw word", async () => {
     // A session's chain's sibling (1.7.0's review of the fixes, worker#1).
     const t = await publicFunded();
-    const mix = await t.lovejoin.publicBuild("preprod", 1);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     // Its first window sent: the rest is the alarm's.
     await t.lovejoin.publicSubmit("preprod", mix.txHash);
     const watch = vi.spyOn(t.lovejoin, "watchOf").mockRejectedValue(trap());

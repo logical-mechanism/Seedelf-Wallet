@@ -4,22 +4,21 @@
 // (M11); and one that may have is sent again only under a new withdraw's
 // timing rules, each resend counting as the wallet's send (M11, L8), and a
 // fresh draw into an unlock. None is sent when the wallet locked and
-// unlocked while it was built (L11). The real WebAssembly, a recorded
-// preprod pool, and fakes of Koios and giveme.my.
-import { readFileSync } from "node:fs";
-
+// unlocked while it was built (L11). The real WebAssembly, v2's 5 ₳ pool
+// (the classic pool, retired, brings its boxes all back at the first run,
+// with no wait: chunk 44), and fakes of Koios and giveme.my.
 import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
-import type { KoiosUtxo } from "../src/background/koios";
 import { CHAIN_RESEND_MS, LovejoinService, QUIET_AFTER_SEND_MS, QUIET_PUSH_MS, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { SESSION_SENT_PREFIX } from "../src/background/sent-txs";
 import { lastSpentAt, SESSION_SPENT, spentSet } from "../src/background/spent";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
-import { busyFor, loadTestWasm, madeByMix, testBalances, vectors } from "./fakes";
+import { busyFor, loadTestWasm, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix, ownDatum } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -27,44 +26,42 @@ const PHRASE = vectors("cardano_account.json").find((v) => v.account === 0 && v.
 /** Each withdraw is built and measured in WebAssembly: past Vitest's 5 s on CI's runners. */
 const SLOW = { timeout: 30_000 };
 
-/** Lovejoin's preprod pool, as Koios lists it (2026-09-25). */
-const POOL = (
-  JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-).pool;
-
 type T = ReturnType<typeof testBalances>;
 
 interface Kept {
-  due: number[];
+  pools?: Record<string, { due: number[] }>;
   marks?: Record<string, { unlock?: true; pushes?: number }>;
   withdrawing?: { txHash: string; sentAt: number; waitUntil?: number; pushes?: number; unlock?: true };
 }
-const kept = async (t: T) => (await t.store.get<Kept>("lovejoin.preprod"))!;
+/** The record, with the 5 ₳ pool's due times as `due`. */
+const kept = async (t: T) => {
+  const s = (await t.store.get<Kept>("lovejoin.preprod"))!;
+  return { ...s, due: s.pools?.[ADA]?.due ?? [] };
+};
 /** The transactions kept as sent on preprod (sent-txs.ts), whatever their age. Call it while unlocked. */
 const sentKept = async (t: T) => (await t.session.get<unknown[]>(`${SESSION_SENT_PREFIX}preprod`)) ?? [];
 
 /** A box of ours in the pool: a fresh re-randomization of the Seedelf key's register. */
-async function ownedBox(t: T, tx: string): Promise<KoiosUtxo> {
-  const wasm = loadTestWasm();
-  const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
+async function ownedBox(t: T, tx: string) {
   // Someone else's mix moved it: Koios says so, as the wallet asks before it takes a box no record accounts for (M14).
-  madeByMix(t.koios, tx.repeat(32));
-  return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
+  madeByAdaMix(t.koios, tx.repeat(32));
+  return adaBox(tx, await ownDatum(t.wallet), t.clock.now);
 }
 
 /**
  * An unlocked wallet, unlocked an hour ago with its unlock's draws made, with
- * Lovejoin's pool and `boxes` boxes of its own in it, all due; and Lovejoin
+ * Lovejoin's 5 ₳ pool and `boxes` boxes of its own in it, all due; and Lovejoin
  * with giveme.my's witness stood in for, so a withdraw that goes is submitted.
  */
 async function due(boxes = 1) {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(PHRASE, PASSWORD);
   const owned = await Promise.all(["e1", "e2"].slice(0, boxes).map((tx) => ownedBox(t, tx)));
-  t.koios.addedToAccounts.push(...POOL, ...owned);
+  t.koios.addedToAccounts.push(...ADA_ROWS, ...owned);
   const unlocked = t.clock.now - HOUR;
   await t.wallet.withKeys(() => t.session.set(SESSION_UNLOCKED_AT, unlocked));
-  await t.store.set("lovejoin.preprod", { due: owned.map(() => t.clock.now - HOUR), unlock: unlocked });
+  const due = owned.map(() => t.clock.now - HOUR);
+  await t.store.set("lovejoin.preprod", { due: [], pools: { [ADA]: { due } }, unlock: unlocked });
   const wasm = loadTestWasm();
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
   const lovejoin = new LovejoinService({
@@ -78,6 +75,7 @@ async function due(boxes = 1) {
     } as typeof wasm,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     store: t.store,
+    pools: async () => [ADA_POOL],
   });
   return { t, lovejoin, box: `${"e1".repeat(32)}#0` };
 }
@@ -233,7 +231,7 @@ describe("a withdraw that may have gone through, sent again (independent review 
     const txHash = txIdOf(bytes(cbor));
     const at = t.clock.now - ago;
     const kept = (await t.store.get<object>("lovejoin.preprod")) ?? {};
-    await t.store.set("lovejoin.preprod", { ...kept, withdrawing: { txHash, txCbor: cbor, lovelace: "9700000", fee: "300000", at, sentAt: at } });
+    await t.store.set("lovejoin.preprod", { ...kept, withdrawing: { txHash, txCbor: cbor, lovelace: "4700000", fee: "300000", pool: ADA, at, sentAt: at } });
     await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [txInputs(bytes(cbor))[0]!]: at }));
     t.koios.missing.add(txHash);
     return txHash;

@@ -5,57 +5,56 @@
 // time is back, drawn afresh into the unlock, never sent again as one that
 // may have gone. A worker that stopped meanwhile forgot that: the record is
 // looked for and sent again under a new withdraw's rules, as before, and
-// leaves no second due time behind once it's seen (final review F5).
-import { readFileSync } from "node:fs";
-
+// leaves no second due time behind once it's seen (final review F5). Its box
+// is in v2's 5 ₳ pool: the classic pool, retired, brings its boxes all back
+// at the first run, with no due time (chunk 44).
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
-import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { spentSet } from "../src/background/spent";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
-import { busyFor, loadTestWasm, madeByMix, testBalances, vectors } from "./fakes";
+import { busyFor, loadTestWasm, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix, ownDatum } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
 const PHRASE = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!.phrase;
 const SLOW = { timeout: 30_000 };
-const POOL = (
-  JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-).pool;
 
 type T = ReturnType<typeof testBalances>;
 
 interface Kept {
-  due: number[];
+  pools?: Record<string, { due: number[] }>;
   withdrawing?: { txHash: string; due?: number; waitUntil?: number };
 }
-const kept = async (t: T) => (await t.store.get<Kept>("lovejoin.preprod"))!;
+/** The record, with the 5 ₳ pool's due times as `due`. */
+const kept = async (t: T) => {
+  const s = (await t.store.get<Kept>("lovejoin.preprod"))!;
+  return { ...s, due: s.pools?.[ADA]?.due ?? [] };
+};
 
-async function ownedBox(t: T, tx: string): Promise<KoiosUtxo> {
-  const wasm = loadTestWasm();
-  const datum = await t.wallet.withKeys((keys) => wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister())));
+async function ownedBox(t: T, tx: string) {
   // Someone else's mix moved it: Koios says so, as the wallet asks before it takes a box no record accounts for (M14).
-  madeByMix(t.koios, tx.repeat(32));
-  return { ...POOL[0]!, tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: Buffer.from(datum).toString("hex"), value: {} } };
+  madeByAdaMix(t.koios, tx.repeat(32));
+  return adaBox(tx, await ownDatum(t.wallet), t.clock.now);
 }
 
 /**
  * An unlocked wallet, unlocked an hour ago with its unlock's draws made, one
- * box of its own in Lovejoin's pool, due an hour ago; and a Lovejoin
+ * box of its own in Lovejoin's 5 ₳ pool, due an hour ago; and a Lovejoin
  * (`service()`, one per worker) with giveme.my's witness stood in for.
  */
 async function due() {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(PHRASE, PASSWORD);
-  t.koios.addedToAccounts.push(...POOL, await ownedBox(t, "e1"));
+  t.koios.addedToAccounts.push(...ADA_ROWS, await ownedBox(t, "e1"));
   const unlocked = t.clock.now - HOUR;
   await t.wallet.withKeys(() => t.session.set(SESSION_UNLOCKED_AT, unlocked));
   const time = t.clock.now - HOUR;
-  await t.store.set("lovejoin.preprod", { due: [time], unlock: unlocked });
+  await t.store.set("lovejoin.preprod", { due: [], pools: { [ADA]: { due: [time] } }, unlock: unlocked });
   const wasm = loadTestWasm();
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
   const service = () =>
@@ -70,6 +69,7 @@ async function due() {
       } as typeof wasm,
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
       store: t.store,
+      pools: async () => [ADA_POOL],
     });
   return { t, lovejoin: service(), service, box: `${"e1".repeat(32)}#0`, time };
 }

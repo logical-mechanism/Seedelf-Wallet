@@ -9,15 +9,16 @@ import { txInputs } from "../src/background/cbor";
 import { SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
 import { SESSION_BACK } from "../src/background/sessions";
 import { SESSION_RESERVED_PREFIX } from "../src/background/spent";
-import { NETWORKS } from "../src/networks";
-import { CHAINS, POOL, publicFunded, sessionsOf, withSession, atSession, type Tested } from "./chain-fixtures";
+import { CHAINS, publicFunded, sessionsOf, withSession, atSession, type Tested } from "./chain-fixtures";
+import { ADA, ADA_ROWS, ADA_VIEW } from "./v2-pools";
 
 const hexBytes = (hex: string) => Uint8Array.from(Buffer.from(hex, "hex"));
-const poolRefs = new Set(POOL.map((u) => `${u.tx_hash}#${u.tx_index}`));
+// The 5 ₳ pool's twenty boxes, which both chains draw from since the classic pool retired (chunk 44).
+const poolRefs = new Set(ADA_ROWS.map((u) => `${u.tx_hash}#${u.tx_index}`));
 /** The pool boxes a kept chain spends. */
 const picks = (chain: Array<{ txCbor: string }>) => new Set(chain.flatMap((c) => txInputs(hexBytes(c.txCbor))).filter((o) => poolRefs.has(o)));
 
-const MIX_BOX = NETWORKS.preprod.lovejoin!.mixBox;
+const MIX_BOX = ADA_VIEW.mixBoxHash;
 
 /** Holds Koios's reads of Lovejoin's pool until `count` of them wait, then lets them all go at once. */
 function poolReadsTogether(t: Tested, count: number) {
@@ -72,10 +73,13 @@ describe("chains built at the same time (independent review L27)", CHAINS, () =>
     });
     t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"));
     const sessions = sessionsOf(t);
-    // Two waves deep, the return's two boxes take sixteen of the pool's twenty and the mix's one box eight: drawn
-    // from the same read, they can't both have their own.
+    // Two waves deep, the return's two boxes take sixteen of the pool's twenty, its collateral's mix two more (chunk
+    // 44), and the mix's one box eight: drawn from the same read, they can't both have their own.
     poolReadsTogether(t, 2);
-    const [back, mix] = await Promise.allSettled([sessions.backBuild("preprod", 0), t.lovejoin.publicBuild("preprod", 1)]);
+    const [back, mix] = await Promise.allSettled([
+      sessions.backBuild("preprod", 0),
+      t.lovejoin.publicBuild("preprod", 1, { pool: ADA }),
+    ]);
     expect(back.status).toBe("fulfilled");
     const session = await t.wallet.withKeys(() => t.session.get<{ chain?: Array<{ txCbor: string }> }>(SESSION_BACK));
     const account = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txCbor: string }> }>(SESSION_LOVEJOIN_PUBLIC));
@@ -97,8 +101,9 @@ describe("chains built at the same time (independent review L27)", CHAINS, () =>
     const held = ogmiosHeld(t);
     const built = sessions.backBuild("preprod", 0);
     await held.checking;
-    // The pool's twenty boxes: the return's two boxes take sixteen, reserved already.
-    expect(await t.lovejoin.room("preprod")).toEqual({ others: 20, free: 4 });
+    // The pool's twenty boxes: the return's two boxes take sixteen, and its collateral's mix into the same 5 ₳ pool two
+    // (chunk 44), reserved already.
+    expect(await t.lovejoin.room("preprod")).toEqual({ others: 20, free: 2 });
     held.open();
     await built;
   });
@@ -110,7 +115,7 @@ describe("chains built at the same time (independent review L27)", CHAINS, () =>
       method: "evaluateTransaction",
       error: { code: 3010, message: "Some scripts of the transactions terminated with error(s).", data: [] },
     };
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("so nothing was sent");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("so nothing was sent");
     const reserved = await t.wallet.withKeys(() => t.session.get<Record<string, unknown>>(SESSION_RESERVED_PREFIX + "preprod"));
     expect(reserved?.public).toBeUndefined();
     expect(await t.lovejoin.room("preprod")).toEqual({ others: 20, free: 20 });

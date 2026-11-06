@@ -4,7 +4,8 @@
 // (PRIV-3); both of a Bootstrap's ways back ask first, and say who pays (PRIV-5); a Bootstrap whose deposit never
 // landed lets go of the boxes it held in its place (STATE-5); Bring one back now on a pool whose boxes a Bootstrap
 // holds says so (UI-5); and the Bootstrap form's bounds are the worker's (MONEY-6 = UI-10). With the real WebAssembly,
-// the classic pool's recorded preprod boxes, and PR #163's preprod token pool (2 ₳ and LJTEST a box).
+// the classic pool's recorded preprod boxes, and PR #163's preprod token pool's v2 twin (2 ₳ and LJTEST a box): the
+// one on 8131b1d's scripts is retired, and takes no new box anyway (chunk 44).
 import { readFileSync } from "node:fs";
 
 import { createElement, type ReactElement } from "react";
@@ -28,6 +29,7 @@ import { bootstrapLimits, HeldQuestion } from "../src/ui/screens/Lovejoin";
 import { txIdOf } from "./fixtures/cbor";
 import { bech32 } from "./fixtures/bech32";
 import { epochParams, koiosPreprod, loadTestWasm, madeByMix, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, ownDatum } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -41,8 +43,8 @@ const SLOW = { timeout: 120_000 };
 /** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
 const POOL = (JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }).pool;
 
-/** PR #163's token pool on preprod, as Koios lists it (wasm/tests/fixtures). */
-const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-token-pool-preprod.json", import.meta.url), "utf8")) as {
+/** PR #163's token pool's launch with its scripts derived on v2, never on chain (chunk 44, wasm/tests/fixtures). */
+const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json", import.meta.url), "utf8")) as {
   seed: { txHash: string; txIndex: number };
   reference: KoiosUtxo;
   scripts: KoiosUtxo[];
@@ -197,6 +199,7 @@ describe("a token pool that takes no new box (1.6.0's release review, MONEY-3)",
       atAccount("e2", "30000000"),
       atAccount("e5", "5000000"),
       ...POOL,
+      ...ADA_ROWS,
       ...(await strangers(t)),
     );
     // Under preprod's parameters the pool takes a box: the checks before a mix pass.
@@ -206,7 +209,7 @@ describe("a token pool that takes no new box (1.6.0's release review, MONEY-3)",
 
     // A byte costs three times as much: a 2 ₳ box is less than the network asks of one.
     t.koios.params = DEAR;
-    const lj = pooled(t);
+    const lj = pooled(t, [TOKEN_POOL, ADA_POOL]);
     const sessions = runner(t, lj);
     const words = tr("lj.unusable.warn.belowMinimum");
     await expect(lj.fits("preprod", 1, TOKEN)).rejects.toThrow(words);
@@ -218,8 +221,10 @@ describe("a token pool that takes no new box (1.6.0's release review, MONEY-3)",
     await expect(lj.publicAgainBuild("preprod", TOKEN)).rejects.toThrow(words);
     expect(t.koios.submitted).toHaveLength(0);
     expect(t.collateral.asked).toHaveLength(0);
-    // The classic pool takes one as it always did.
-    await expect(lj.publicBuild("preprod", 1, { bootstrap: true })).resolves.toMatchObject({ bootstrap: true, boxes: 1 });
+    // The 5 ₳ pool, whose box is more than the network asks, takes one, as the classic pool did; the classic pool,
+    // retired, takes none, in its own words (chunk 44).
+    await expect(lj.publicBuild("preprod", 1, { pool: ADA, bootstrap: true })).resolves.toMatchObject({ bootstrap: true, boxes: 1 });
+    await expect(lj.publicBuild("preprod", 1, { bootstrap: true })).rejects.toThrow(tr("lj.unusable.warn.retired"));
   });
 
   it("says why on the pool's status, whether or not the wallet has boxes there, and asks the classic pool's readers nothing more", async () => {
@@ -317,19 +322,19 @@ describe("a box back that ties a public account to the private balance (1.6.0's 
   });
 
   it("records a public Bootstrap's box brought back from where its deposit put it as the account's too", async () => {
+    // Into the 5 ₳ pool: the classic pool, retired, takes no Bootstrap (chunk 44).
     const t = await wallet();
-    const lj = pooled(t, []);
-    t.koios.addedToAccounts.push(atAccount("e1", "30000000"), atAccount("e5", "5000000"), ...POOL);
-    const summary = await lj.publicBuild("preprod", 1, { bootstrap: true });
+    const lj = pooled(t, [ADA_POOL]);
+    t.koios.addedToAccounts.push(atAccount("e1", "30000000"), atAccount("e5", "5000000"), ...POOL, ...ADA_ROWS);
+    const summary = await lj.publicBuild("preprod", 1, { pool: ADA, bootstrap: true });
     await lj.publicSubmit("preprod", summary.txHash);
     t.koios.confirmations = 1;
     await lj.pumpPublic("preprod");
     // Its box, where the deposit put it, hours ago.
-    const box = { ...POOL[0]!, tx_hash: summary.entry, tx_index: 0, block_time: Math.floor(t.clock.now / 1000) - 7 * 3600, inline_datum: { bytes: await datum(t, true), value: {} } } as KoiosUtxo;
-    t.koios.addedToAccounts.push(box);
+    t.koios.addedToAccounts.push(adaBox(summary.entry, await ownDatum(t.wallet), t.clock.now, 7));
     t.clock.now += 10 * 60_000;
-    expect((await lj.status("preprod")).bootstrap).toEqual([{ txHash: summary.entry, txIndex: 0 }]);
-    const pending = await lj.withdrawNow("preprod", { txHash: summary.entry, txIndex: 0 });
+    expect((await lj.status("preprod")).pools![0]!.bootstrap).toEqual([{ txHash: summary.entry, txIndex: 0, pool: ADA }]);
+    const pending = await lj.withdrawNow("preprod", { txHash: summary.entry, txIndex: 0, pool: ADA });
     expect(txInputs(t.koios.submitted.at(-1)!)).toContain(`${summary.entry}#0`);
     expect((await historyOf(t, pending.txHash))?.origin).toEqual({ id: `box:${pending.txHash}+public:0`, origin: "own" });
   });

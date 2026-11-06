@@ -14,6 +14,7 @@ import { reservationOf, SESSION_RESERVED_PREFIX } from "../src/background/spent"
 import { TxSignError } from "../src/shared/dapp";
 import { busyFor, loadTestWasm, vectors } from "./fakes";
 import { CHAINS, lovejoinOf, publicFunded, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 const COLLATERAL = `${"e5".repeat(32)}#0`;
 const THEIRS = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!.preprod
@@ -68,7 +69,7 @@ async function connected(t: Tested): Promise<DappSession> {
 async function stoppedAtMix() {
   const t = await publicFunded("60000000", ["60000000"]);
   const s = await connected(t);
-  const mix = await t.lovejoin.publicBuild("preprod", 1);
+  const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   const { chain } = (await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ kind: string; txCbor: string }> }>(SESSION_LOVEJOIN_PUBLIC)))!;
   const net = unansweredFrom(t, 2);
   await expect(t.lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow("may have gone through");
@@ -149,7 +150,7 @@ describe("a mix from the public account stopped at a mix that may have gone thro
     const t = await publicFunded("60000000", ["60000000"]);
     const ring = alarm();
     const lovejoin = lovejoinOf(t, { alarm: ring });
-    const mix = await lovejoin.publicBuild("preprod", 1);
+    const mix = await lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const { chain } = (await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string; txCbor: string }> }>(SESSION_LOVEJOIN_PUBLIC)))!;
     expect(chain).toHaveLength(5);
     // Send sends the first window, and starts the alarm for the rest.

@@ -7,10 +7,11 @@ import { describe, expect, it } from "vitest";
 
 import { SESSION_LOVEJOIN_PUBLIC, SESSION_LOVEJOIN_SENDING } from "../src/background/lovejoin";
 import { SESSION_RESERVED_PREFIX } from "../src/background/spent";
-import { NETWORKS } from "../src/networks";
 import { CHAINS, publicFunded, type Tested } from "./chain-fixtures";
+import { ADA, ADA_VIEW } from "./v2-pools";
 
-const MIX_BOX = NETWORKS.preprod.lovejoin!.mixBox;
+// Where the 5 ₳ pool's boxes sit: what a review reads for its mixes (chunk 44).
+const MIX_BOX = ADA_VIEW.mixBoxHash;
 
 const sendingNow = (t: Tested) =>
   t.wallet.withKeys(() => t.session.get<{ txs: Array<{ txHash: string }>; next: number }>(SESSION_LOVEJOIN_SENDING + "preprod"));
@@ -62,10 +63,10 @@ describe("two pages and a mix from the public account (independent review L30)",
   it("never lets a Review that ends after a Send began take the mix being sent's reservation", async () => {
     const t = await publicFunded("120000000");
     // Page A reviews a mix.
-    const first = await t.lovejoin.publicBuild("preprod", 1);
+    const first = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     // Page B presses Review: it reads the pool…
     const held = poolReadHeld(t);
-    const second = t.lovejoin.publicBuild("preprod", 1);
+    const second = t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     await held.reading;
     // …while page A presses Send.
     await t.lovejoin.publicSubmit("preprod", first.txHash);
@@ -80,10 +81,10 @@ describe("two pages and a mix from the public account (independent review L30)",
 
   it("refuses a Send whose review another page's Review has since taken the place of", async () => {
     const t = await publicFunded("120000000");
-    const first = await t.lovejoin.publicBuild("preprod", 1);
+    const first = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     // Page B's Review reserves its own mix, and the network is still checking it when page A presses Send.
     const held = ogmiosHeld(t);
-    const second = t.lovejoin.publicBuild("preprod", 1);
+    const second = t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     await held.checking;
     const submits = t.koios.submitted.length;
     await expect(t.lovejoin.publicSubmit("preprod", first.txHash)).rejects.toThrow("isn't ready to send");
@@ -101,9 +102,9 @@ describe("two pages and a mix from the public account (independent review L30)",
   it("never sends a mix kept for Send in place of one still being sent", async () => {
     const t = await publicFunded("120000000");
     // A mix reviewed earlier, as another page kept it.
-    const earlier = await t.lovejoin.publicBuild("preprod", 1);
+    const earlier = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const kept = await t.wallet.withKeys(() => t.session.get(SESSION_LOVEJOIN_PUBLIC));
-    const first = await t.lovejoin.publicBuild("preprod", 1);
+    const first = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     await t.lovejoin.publicSubmit("preprod", first.txHash);
     await t.wallet.withKeys(() => t.session.set(SESSION_LOVEJOIN_PUBLIC, kept));
     const submits = t.koios.submitted.length;
@@ -119,13 +120,13 @@ describe("two pages and a mix from the public account (independent review L30)",
       t.session.set(SESSION_RESERVED_PREFIX + "preprod", { public: { inputs: [`${"e6".repeat(32)}#0`], collateral: [`${"e5".repeat(32)}#0`] } }),
     );
     // Nothing is being sent from the account: the reservation goes, and the review is built.
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     expect((await publicReservation(t))?.until).toBeDefined();
   });
 
   it("sends a mix once when its Send is pressed on two pages at once", async () => {
     const t = await publicFunded();
-    const mix = await t.lovejoin.publicBuild("preprod", 1);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const submits = t.koios.submitted.length;
     const [a, b] = await Promise.allSettled([t.lovejoin.publicSubmit("preprod", mix.txHash), t.lovejoin.publicSubmit("preprod", mix.txHash)]);
     expect([a.status, b.status].sort()).toEqual(["fulfilled", "rejected"]);

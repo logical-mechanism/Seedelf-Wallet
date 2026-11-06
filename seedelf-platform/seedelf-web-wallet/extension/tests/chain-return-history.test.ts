@@ -4,11 +4,12 @@
 // went to Koios and before its history is written, and it may land all the
 // same. Once the chain shows it, the runs write its history from that
 // summary, so what came back is the session's money, never "received". The
-// real WebAssembly, Lovejoin's recorded preprod pool, and fakes of Koios.
+// real WebAssembly (giveme.my's signature on the collateral's mix aside),
+// Lovejoin v2's 5 ₳ pool, and fakes of Koios.
 import { describe, expect, it } from "vitest";
 
 import type { KoiosUtxo } from "../src/background/koios";
-import { CHAINS, PASSWORD, sessionsOf, withSession, type Tested } from "./chain-fixtures";
+import { CHAINS, lovejoinOf, PASSWORD, sessionsOf, withSession, type Tested } from "./chain-fixtures";
 import { txIdOf } from "./fixtures/cbor";
 
 /** Koios takes every transaction submitted, and answers the chain's last (`last()`) with a 503, as a busy gateway would. */
@@ -24,6 +25,24 @@ function busyOnLast(t: Tested, last: () => string | undefined) {
     return new Response("", { status: 503 });
   };
   return seen;
+}
+
+/**
+ * Lovejoin with giveme.my's signature on a session's collateral's mix stood in for, which the fakes' giveme.my
+ * refuses: since chunk 44 that collateral goes into the 5 ₳ pool too, its deposit and its mix just before the return.
+ */
+function backed(t: Tested) {
+  const wasm = t.deps.wasm;
+  t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+  return lovejoinOf(t, {
+    wasm: {
+      ...wasm,
+      finishLovejoinWithdraw: (request: string) => {
+        const { txCbor } = JSON.parse(request) as { txCbor: string };
+        return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+      },
+    } as typeof wasm,
+  });
 }
 
 interface Book {
@@ -55,9 +74,13 @@ describe("a return through Lovejoin whose last transaction a stop cut off (final
     let back: string | undefined;
     const seen = busyOnLast(t, () => back);
     // The wallet locks while the return's send waits to try it again.
-    const sessions = sessionsOf(t, async () => {
-      if (seen.last) await t.wallet.lock();
-    });
+    const sessions = sessionsOf(
+      t,
+      async () => {
+        if (seen.last) await t.wallet.lock();
+      },
+      backed(t),
+    );
     const review = await sessions.backBuild("preprod", 0);
     back = review.txHash;
     await sessions.backSubmit("preprod", review.txHash);
@@ -86,7 +109,7 @@ describe("a return through Lovejoin whose last transaction a stop cut off (final
     t.koios.confirmations = 1;
     let back: string | undefined;
     const seen = busyOnLast(t, () => back);
-    const sessions = sessionsOf(t);
+    const sessions = sessionsOf(t, undefined, backed(t));
     const review = await sessions.backBuild("preprod", 0);
     back = review.txHash;
     await sessions.backSubmit("preprod", review.txHash);
@@ -106,7 +129,7 @@ describe("a return through Lovejoin whose last transaction a stop cut off (final
     const { t } = await withSession("40000000");
     await t.activity.arrived("preprod", []);
     t.koios.confirmations = 1;
-    const sessions = sessionsOf(t);
+    const sessions = sessionsOf(t, undefined, backed(t));
     const review = await sessions.backBuild("preprod", 0);
     await sessions.backSubmit("preprod", review.txHash);
     await runs(t, sessions, () => t.koios.submitted.some((b) => txIdOf(b) === review.txHash));
@@ -120,7 +143,7 @@ describe("a return through Lovejoin whose last transaction a stop cut off (final
     const { t } = await withSession("40000000");
     await t.activity.arrived("preprod", []);
     t.koios.confirmations = 1;
-    const sessions = sessionsOf(t);
+    const sessions = sessionsOf(t, undefined, backed(t));
     const review = await sessions.backBuild("preprod", 0);
     const write = t.activity.sent.bind(t.activity);
     t.activity.sent = async () => {

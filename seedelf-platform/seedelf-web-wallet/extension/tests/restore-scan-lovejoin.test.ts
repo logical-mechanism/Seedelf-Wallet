@@ -6,9 +6,9 @@
 // another browser's chain left at a found account goes in again, in a chain of
 // its own, though that browser would have sent it back directly: the found
 // record holds none of the chain's deposits or mixes (1.5.0's release review,
-// C51, C52). Session 0 of the 12-word phrase, the real WebAssembly, the recorded
-// preprod pool, and fakes of Koios.
-import { readFileSync } from "node:fs";
+// C51, C52). Session 0 of the 12-word phrase, the real WebAssembly, v2's 5 ₳
+// pool (a return's ADA goes there, the classic pool retired: chunk 44), and
+// fakes of Koios.
 import { describe, expect, it } from "vitest";
 
 import { bodyOutpoints, txInputs } from "../src/background/cbor";
@@ -18,14 +18,14 @@ import { SESSION_CLAIM } from "../src/background/sessions";
 import { WalletLocked } from "../src/background/wallet";
 import { isClaimable } from "../src/ui/screens/ClaimAll";
 import { chainGoing } from "../src/ui/screens/Swaps";
+import { lovejoinOf } from "./chain-fixtures";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, sessionSwap } from "./fakes";
 import { atSession, PASSWORD, signing, unlocked, type T } from "./swap-session";
+import { ADA_ADDRESS, ADA_ROWS, ADA_VIEW, adaStrangers } from "./v2-pools";
 
-const POOL = (
-  JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-).pool;
-const POOL_REFS = new Set(POOL.map((u) => `${u.tx_hash}#${u.tx_index}`));
+/** Strangers' boxes in the 5 ₳ pool, what the mixes draw from. */
+const POOL = ADA_ROWS;
 /** Ogmios agrees with every evaluation: the mixes' scripts run as their budgets say. */
 const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
 const FUNDING_TX = sessionSwap.utxo.tx_hash;
@@ -52,9 +52,29 @@ async function usedWith(t: T, index: number, txs: Array<[string, number]>) {
   );
 }
 
+/**
+ * An unlocked wallet whose Lovejoin reads the 5 ₳ pool, as discovery hands it: a return's ADA goes there, and so does
+ * its session's collateral, in a mix of its own that giveme.my signs (chunk 44). giveme.my's witness is stood in for:
+ * its recorded answer is another transaction's.
+ */
+async function withAdaPool() {
+  const t = await unlocked();
+  const wasm = loadTestWasm();
+  t.lovejoin = lovejoinOf(t, {
+    wasm: {
+      ...wasm,
+      finishLovejoinWithdraw: (request: string) => {
+        const { txCbor } = JSON.parse(request) as { txCbor: string };
+        return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+      },
+    } as typeof wasm,
+  });
+  return t;
+}
+
 /** The service with Lovejoin wired in, as the worker wires it; Ogmios agreeing, and the pool listed. */
 async function throughLovejoin() {
-  const t = await unlocked();
+  const t = await withAdaPool();
   t.koios.evaluation = AGREES;
   const sessions = signing(t, { lovejoin: t.lovejoin, sleep: async () => undefined });
   return { t, sessions };
@@ -143,6 +163,10 @@ describe("a found session's return through Lovejoin", () => {
 
   it("draws no pool box twice when Bring everything back takes several", CHAINS, async () => {
     const { t, sessions } = await throughLovejoin();
+    // Room for the three: each return's 40 ₳ pays for six 5 ₳ boxes, a mix each, and its collateral's mix: 14 strangers'
+    // boxes drawn, where the classic pool's three 10 ₳ boxes drew six (chunk 44).
+    const pool = [...POOL, ...adaStrangers(30, POOL.length)];
+    const refs = new Set(pool.map((u) => `${u.tx_hash}#${u.tx_index}`));
     await t.deps.preferences.set({ lovejoinDepth: 1 });
     for (const i of [0, 1, 2]) {
       const a = await account(t, i);
@@ -155,14 +179,14 @@ describe("a found session's return through Lovejoin", () => {
       });
       t.koios.addedToAccounts.push(at(1, "40000000"), at(2, "5000000"));
     }
-    t.koios.addedToAccounts.push(...POOL);
+    t.koios.addedToAccounts.push(...pool);
     expect(await sessions.scan("preprod")).toEqual({ used: 3, found: [0, 1, 2] });
     const { returns, skipped } = await sessions.claimBuild("preprod", [0, 1, 2]);
     expect(skipped).toEqual([]);
     expect(returns.every((r) => (r.lovejoin?.boxes ?? 0) > 0)).toBe(true);
     const kept = (await t.session.get<Array<{ chain?: Array<{ txCbor: string }> }>>(SESSION_CLAIM))!;
     const drawn = kept.flatMap((k) => [
-      ...new Set((k.chain ?? []).flatMap((x) => txInputs(Buffer.from(x.txCbor, "hex")).filter((o) => POOL_REFS.has(o)))),
+      ...new Set((k.chain ?? []).flatMap((x) => txInputs(Buffer.from(x.txCbor, "hex")).filter((o) => refs.has(o)))),
     ]);
     expect(drawn.length).toBeGreaterThan(0);
     expect(new Set(drawn).size).toBe(drawn.length);
@@ -177,7 +201,7 @@ describe("a found session's return chain a lock cut off before any of it went (c
    * session's record holds a chain that finished before, a site's session paid again, say.
    */
   async function stranded(at: "reserve" | "alarm", earlier = false) {
-    const t = await unlocked();
+    const t = await withAdaPool();
     t.koios.evaluation = AGREES;
     let armed = false;
     const lock = async () => {
@@ -265,7 +289,7 @@ describe("what another browser's chain left at a found session's account", () =>
   it("goes through Lovejoin again, in a chain of its own, and its switch brings it back directly", CHAINS, async () => {
     const { t, sessions } = await throughLovejoin();
     const at = { bech32: sessionSwap.address, cred: sessionSwap.keyHash };
-    const box = { bech32: POOL[0]!.address, cred: POOL[0]!.payment_cred! };
+    const box = { bech32: ADA_ADDRESS, cred: ADA_VIEW.mixBoxHash };
     // The other browser's chain: its deposit spent the funding's #1 and paid two boxes and change; one mix spent the
     // change and a box, paying boxes and change again. Then it stopped (a lock, a closed browser), and that browser
     // never came back to it. What it left is at the account: the last change, 25 ₳, and the funding's 5 ₳.
@@ -300,7 +324,8 @@ describe("what another browser's chain left at a found session's account", () =>
     // So it goes in again, as Settings has it, in a deposit chain of its own: the browser that ran it would have sent
     // it back directly.
     const through = await sessions.backBuild("preprod", 0);
-    expect(through.lovejoin).toMatchObject({ boxes: 1 });
+    // Two 5 ₳ boxes: the classic pool's 10 ₳ paid for one (chunk 44).
+    expect(through.lovejoin).toMatchObject({ boxes: 2 });
     expect(through.lovejoinSkipped).toBeUndefined();
     // Its review's switch brings it all back directly.
     const direct = await sessions.backBuild("preprod", 0, true);

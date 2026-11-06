@@ -12,6 +12,7 @@ import type { NetworkName } from "../src/networks";
 import type { AtStake, Message } from "../src/shared/rpc";
 import { account, CHAINS, PASSWORD, publicFunded, type Tested } from "./chain-fixtures";
 import { loadTestWasm } from "./fakes";
+import { ADA } from "./v2-pools";
 
 const KEPT = "seedelf.private.lovejoinMaybe.preprod";
 const MINE = account(12).phrase;
@@ -37,10 +38,13 @@ beforeAll(() => {
   vi.stubGlobal("location", { search: "" });
 });
 
-/** A mix of one box from the public account whose deposit Koios never answered, though it reached the node. */
+/**
+ * A mix of one box from the public account whose deposit Koios never answered, though it reached the node: into the
+ * 5 ₳ pool, as the classic pool, retired, takes no new box (chunk 44).
+ */
 async function stoppedMaybe() {
   const t = await publicFunded("60000000", ["60000000"]);
-  const mix = await t.lovejoin.publicBuild("preprod", 1);
+  const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   const fetch = t.koios.fetch;
   let submits = 0;
   let down = true;
@@ -71,13 +75,13 @@ describe("a mix from the public account that may have gone through, and Remove w
     const { t, ctx } = await stoppedMaybe();
     await ask({ type: "reset-wallet", force: true }, ctx);
     await ask({ type: "restore-wallet", phrase: MINE, password: PASSWORD }, ctx);
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("may have gone through");
-    await expect(t.lovejoin.publicAgainBuild("preprod")).rejects.toThrow("may have gone through");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("may have gone through");
+    await expect(t.lovejoin.publicAgainBuild("preprod", ADA)).rejects.toThrow("may have gone through");
     // Removing it again lists it again.
     expect(await ask({ type: "reset-check" }, ctx)).toEqual([{ network: "preprod", sessions: [], chainSending: false, mixMaybeSent: true }]);
     // The deposit lands: settled, the kept record goes, and a mix may be built.
     t.koios.confirmations = 1;
-    await t.lovejoin.publicBuild("preprod", 1).catch((e: unknown) => expect(String(e)).not.toMatch("may have gone through"));
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA }).catch((e: unknown) => expect(String(e)).not.toMatch("may have gone through"));
     expect(t.local.data.has(KEPT)).toBe(false);
     expect(await ask({ type: "reset-check" }, ctx)).toEqual([]);
   });

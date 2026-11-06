@@ -10,7 +10,7 @@ import { Collateral } from "../src/background/collateral";
 import { Koios, SpentInputError } from "../src/background/koios";
 import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
-import { CHAINS, withSession, type Tested } from "./chain-fixtures";
+import { CHAINS, lovejoinOf, withSession, type Tested } from "./chain-fixtures";
 import { txIdOf } from "./fixtures/cbor";
 
 /** Koios's answer, as it came live. */
@@ -41,12 +41,25 @@ describe("a node's \"All inputs are spent\"", () => {
 
   it("keeps a chain through Lovejoin going when a resend of one already in meets it, while tx_status is behind", CHAINS, async () => {
     const { t } = await withSession("40000000");
+    // giveme.my's signature on the collateral's mix into the 5 ₳ pool, its chain's last but the return (chunk 44),
+    // stood in for: the fakes' giveme.my refuses it.
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    const wasm = t.deps.wasm;
+    const lovejoin = lovejoinOf(t, {
+      wasm: {
+        ...wasm,
+        finishLovejoinWithdraw: (request: string) => {
+          const { txCbor } = JSON.parse(request) as { txCbor: string };
+          return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+        },
+      } as typeof wasm,
+    });
     const sessions = new SessionService({
       ...t.deps,
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
       store: t.store,
       minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
-      lovejoin: t.lovejoin,
+      lovejoin,
       sleep: async (ms: number) => {
         t.clock.now += ms;
         await t.wallet.touch();
@@ -90,11 +103,13 @@ describe("a node's \"All inputs are spent\"", () => {
     await alarm(t, 8);
     expect(met).toBeGreaterThan(0);
     expect((await sessions.list("preprod"))[0]!.chain?.stopped).toBeUndefined();
-    // tx_status answers again: the rest goes, and nothing stopped it.
+    // tx_status answers again: the rest goes, and nothing stopped it. The deposit, two boxes' four mixes each (a third
+    // box's would draw more than the pool's 20 boxes), the collateral's deposit and mix into the 5 ₳ pool (chunk 44),
+    // the return.
     down = false;
     await alarm(t, 3);
     const view = (await sessions.list("preprod"))[0]!;
-    expect(view.chain).toMatchObject({ total: 10, sent: 10 });
+    expect(view.chain).toMatchObject({ total: 12, sent: 12 });
     expect(view.chain?.stopped).toBeUndefined();
   });
 });

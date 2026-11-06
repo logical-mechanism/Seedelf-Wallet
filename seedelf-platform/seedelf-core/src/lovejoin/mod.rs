@@ -1655,15 +1655,16 @@ pub fn mixes_per_box_at(depth: u32, width: usize) -> usize {
 }
 
 /// What the wallet plans on for a 3-box mix before measuring one: preprod's
-/// cost 0.877 ₳, rounded up. One measured 0.82 ₳ against mainnet's scripts.
+/// cost 0.877 ₳, rounded up. One measured 0.82 ₳ against mainnet's scripts,
+/// and 0.837 ₳ on Lovejoin v2's (web wallet chunk 44).
 /// The wallet pays its mixes itself and never draws on Lovejoin's fee shards,
 /// so the cap Lovejoin puts on a fee a shard pays (1 ₳ on mainnet) doesn't
 /// apply.
 pub const MIX_FEE_ESTIMATE: u64 = 950_000;
 
 /// [`MIX_FEE_ESTIMATE`] for a 4-box mix: 1.214 ₳ measured on mainnet's
-/// classic pool and 1.227 ₳ on a token pool (lovejoin-mix-width.md), and
-/// about a tenth more.
+/// classic pool, 1.227 ₳ on a token pool and 1.230 ₳ on one on Lovejoin v2's
+/// scripts (lovejoin-mix-width.md), and about a tenth more.
 pub const MIX_FEE_ESTIMATE_FOUR: u64 = 1_350_000;
 
 /// What each mix in a pool no reference carries the scripts of adds: both

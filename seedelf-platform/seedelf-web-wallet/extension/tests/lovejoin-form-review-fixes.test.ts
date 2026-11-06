@@ -18,7 +18,6 @@ import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { t } from "../src/i18n";
 import { i18n } from "../src/i18n/core";
-import bundled from "../src/lovejoin-pools.json";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { LovejoinFunding, LovejoinMixView, LovejoinPublicSummary, SessionOutSummary, UtxoInfo } from "../src/shared/rpc";
 import { poolsOf, type ShownPool } from "../src/ui/lovejoin-pools";
@@ -28,6 +27,7 @@ import * as LovejoinScreen from "../src/ui/screens/Lovejoin";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
+import { ADA as FIVE, ADA_BOX, ADA_POOL, adaStrangers } from "./v2-pools";
 
 const {
   AgainSwitch,
@@ -406,8 +406,9 @@ describe("a Bootstrap of one box is said in the singular, in English and Spanish
   });
 });
 
-// The stepper's count against the real WebAssembly: session 0 of the 12-word phrase, Lovejoin one wave deep, the
-// classic pool's recorded boxes, and preprod's 5 ₳ pool as lovejoin-pools.json bundles it with other people's boxes.
+// The stepper's count against the real WebAssembly: session 0 of the 12-word phrase, Lovejoin one wave deep, and
+// Lovejoin v2's 5 ₳ pool (v2-pools.ts) with other people's boxes, which a mix and its collateral's go into. The classic
+// pool and lovejoin-pools.json's 5 ₳ pool are on retired scripts, and take neither (chunk 44).
 
 const PASSWORD = "correct horse battery";
 const PHRASE = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!.phrase;
@@ -415,60 +416,66 @@ const PHRASE = vectors("cardano_account.json").find((v) => v.account === 0 && v.
 const SLOW = { timeout: 300_000 };
 /** Ogmios's answer when the network measures no more than a transaction declares. */
 const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
-/** 20 boxes from Lovejoin's classic preprod pool, as Koios lists them (2026-09-25). */
-const POOL = (JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }).pool;
-const FIVE = bundled.preprod.pools.find((p) => p.boxLovelace === "5000000")! as unknown as { id: string; ref: PoolRef };
-const FIVE_BOX = (JSON.parse(loadTestWasm().lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: FIVE.ref }))) as { mixBoxHash: string })
-  .mixBoxHash;
+/** PR #163's token pool's launch with its scripts derived on v2, never on chain (chunk 44, wasm/tests/fixtures). */
+const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json", import.meta.url), "utf8")) as {
+  seed: { txHash: string; txIndex: number };
+  reference: KoiosUtxo;
+  scripts: KoiosUtxo[];
+};
+const TOKEN_POOL: PoolRef = { reference: FOUND.reference, seed: FOUND.seed, scripts: FOUND.scripts };
+const TOKEN_VIEW = JSON.parse(loadTestWasm().lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: TOKEN_POOL }))) as {
+  id: string;
+  mixBoxHash: string;
+  boxLovelace: string;
+  token: { policyId: string; assetName: string; quantity: string };
+};
+const LJTEST = (quantity: string) => ({ policy_id: TOKEN_VIEW.token.policyId, asset_name: TOKEN_VIEW.token.assetName, quantity });
 /** The chain's reserve, as WebAssembly has it: what a mix's funding adds. */
 const CHAIN = BigInt(loadTestWasm().lovejoinCollateralReserve());
 
 type T = ReturnType<typeof testBalances>;
 
-/** `n` of other people's boxes in the 5 ₳ pool. */
-function strangers(t: T, n: number): KoiosUtxo[] {
-  const wasm = loadTestWasm();
-  const address = bech32("addr_test", Uint8Array.from([0x70, ...Buffer.from(FIVE_BOX, "hex")]));
-  return Array.from({ length: n }, (_, i) => {
-    const tx = (0x81 + i).toString(16).padStart(2, "0").repeat(32);
-    t.koios.txSpends.set(tx, [{ payment_addr: { bech32: address, cred: FIVE_BOX } }]);
-    // A canonical scalar whichever way its bytes are read: 0x01 at both ends.
-    const stranger = wasm.SeedelfKey.fromHex(`01${(0x81 + i).toString(16).padStart(2, "0")}${"01".repeat(30)}`);
-    const datum = Buffer.from(wasm.registerToDatum(wasm.rerandomize(stranger.baseRegister()))).toString("hex");
-    stranger.free();
-    return {
-      ...POOL[0]!,
-      tx_hash: tx,
-      tx_index: 0,
-      address,
-      payment_cred: FIVE_BOX,
-      value: "5000000",
-      datum_hash: null,
-      inline_datum: { bytes: datum, value: {} },
-      asset_list: [],
-    } as KoiosUtxo;
-  });
+/** `n` of other people's boxes in the token pool, each of its box's ADA and LJTEST. */
+function tokenStrangers(n: number): KoiosUtxo[] {
+  const address = bech32("addr_test", Uint8Array.from([0x70, ...Buffer.from(TOKEN_VIEW.mixBoxHash, "hex")]));
+  return adaStrangers(n, 0x100).map((u) => ({
+    ...u,
+    address,
+    payment_cred: TOKEN_VIEW.mixBoxHash,
+    value: TOKEN_VIEW.boxLovelace,
+    asset_list: [{ ...LJTEST(TOKEN_VIEW.token.quantity), decimals: 0, fingerprint: "asset1ljtest" } as never],
+  }));
 }
 
-/** The wallet, its private balance one UTxO of `lovelace`, Lovejoin one wave deep, `others` boxes in the 5 ₳ pool. */
-async function wallet(lovelace: bigint, others = 2): Promise<T> {
+/**
+ * The wallet, its private balance one UTxO of `lovelace` (and a token box's worth of LJTEST, with `token`), Lovejoin
+ * one wave deep, `others` boxes in the 5 ₳ pool, and two in the token pool: room for one box there, one wave deep.
+ * Four in the 5 ₳ pool are room for a box's mix there and its collateral's, which draws two besides.
+ */
+async function wallet(lovelace: bigint, others = 4, token = false): Promise<T> {
   const t = testBalances({ owned: false });
   await t.wallet.create(PHRASE, PASSWORD);
   t.koios.evaluation = AGREES;
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
   await t.deps.preferences.set({ lovejoinDepth: 1 });
-  t.koios.added.push({ ...ownedUtxos[0]!, tx_hash: "d1".repeat(32), tx_index: 0, value: lovelace.toString() } as KoiosUtxo);
-  t.koios.addedToAccounts.push(...POOL, ...strangers(t, others));
+  t.koios.added.push({
+    ...ownedUtxos[0]!,
+    tx_hash: "d1".repeat(32),
+    tx_index: 0,
+    value: lovelace.toString(),
+    asset_list: token ? [{ ...LJTEST(TOKEN_VIEW.token.quantity), decimals: 0, fingerprint: "asset1ljtest" } as never] : [],
+  } as KoiosUtxo);
+  t.koios.addedToAccounts.push(...adaStrangers(others), ...tokenStrangers(2));
   return t;
 }
 
-/** Lovejoin reading the classic pool and the 5 ₳ pool. */
+/** Lovejoin reading the classic pool, the 5 ₳ pool and the token pool. */
 const pooled = (t: T) =>
   new LovejoinService({
     ...t.deps,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     store: t.store,
-    pools: async () => [FIVE.ref],
+    pools: async () => [ADA_POOL, TOKEN_POOL],
     random: () => 0.5,
   });
 
@@ -495,13 +502,14 @@ function runner(t: T): SessionService {
 
 describe("the Mix form's count is one its funding builds, with the reserve the review then shows (1.6.0's release review, 323-worker#0, 320-screens#2)", SLOW, () => {
   it("funds the least balance the stepper offers a box at without the reserve, and the least its figures count it at with it, the form's total the review's at both (R3-7)", async () => {
+    // A mix of a box of the 5 ₳ pool, which its collateral's goes into too (chunk 44).
     const lj = pooled(await wallet(ADA));
-    const funding = await lj.funding("preprod", 1);
+    const funding = await lj.funding("preprod", 1, false, undefined, FIVE);
     // The reserve the form asks, by the page's own read of the 5 ₳ pool: what the worker adds at build where it's paid.
     const pools = poolsOf(await lj.status("preprod"));
     const asked = tailReserveOf(funding, "private", pools);
     expect(asked).toBe(CHAIN);
-    const offer = (held: bigint) => mixOffer("private", { lovelace: held.toString(), tokens: [] }, undefined, funding, BOX, 10, 1, asked);
+    const offer = (held: bigint) => mixOffer("private", { lovelace: held.toString(), tokens: [] }, undefined, funding, ADA_BOX, 10, 1, asked);
     /** The least private balance at which `holds` is true of the form at one box. */
     const least = (holds: (o: ReturnType<typeof offer>) => boolean) => {
       let [low, high] = [BigInt(funding.lovelace), BigInt(funding.lovelace) + 20n * ADA];
@@ -516,12 +524,12 @@ describe("the Mix form's count is one its funding builds, with the reserve the r
     // figures and its line say. Nothing refuses it.
     const bare = least((o) => o.most >= 1);
     expect(offer(bare)).toMatchObject({ tail: 0n, tailShort: true });
-    const without = await runner(await wallet(bare)).mixOutBuild("preprod", 1);
+    const without = await runner(await wallet(bare)).mixOutBuild("preprod", 1, { pool: FIVE });
     expect(without.collateralReserve).toBeUndefined();
     // The least balance the figures count the reserve at: funded with it.
     const paid = least((o) => o.tail > 0n);
     expect(paid > bare).toBe(true);
-    const withIt = await runner(await wallet(paid)).mixOutBuild("preprod", 1);
+    const withIt = await runner(await wallet(paid)).mixOutBuild("preprod", 1, { pool: FIVE });
     expect(withIt.collateralReserve).toBe(CHAIN.toString());
     // The form's total, against the review's at both: apart only by the fee's estimate.
     for (const [built, held] of [
@@ -529,18 +537,20 @@ describe("the Mix form's count is one its funding builds, with the reserve the r
       [withIt, paid],
     ] as const) {
       const leaving = built.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(built.fee.total));
-      const form = mixCosts(funding, "private", BOX, offer(held).tail).leaving;
+      const form = mixCosts(funding, "private", ADA_BOX, offer(held).tail).leaving;
       expect(form - leaving < 50_000n && leaving - form < 50_000n).toBe(true);
     }
   });
 
   it("counts none where the 5 ₳ pool has too few boxes to draw, as the worker then funds none", async () => {
-    const t = await wallet(40n * ADA, 1);
+    // A mix of a box of the token pool, which has room for it: one box in the 5 ₳ pool, where a box's mix there would
+    // be refused too (chunk 44).
+    const t = await wallet(40n * ADA, 1, true);
     const lj = pooled(t);
-    const funding = await lj.funding("preprod", 1);
+    const funding = await lj.funding("preprod", 1, false, undefined, TOKEN_VIEW.id);
     // lovejoin-funding names the reserve without a pool read; the page's read says the pool can't take the collateral.
     expect(funding.collateralReserve).toBe(CHAIN.toString());
     expect(tailReserveOf(funding, "private", poolsOf(await lj.status("preprod")))).toBe(0n);
-    expect((await runner(t).mixOutBuild("preprod", 1)).collateralReserve).toBeUndefined();
+    expect((await runner(t).mixOutBuild("preprod", 1, { pool: TOKEN_VIEW.id })).collateralReserve).toBeUndefined();
   });
 });

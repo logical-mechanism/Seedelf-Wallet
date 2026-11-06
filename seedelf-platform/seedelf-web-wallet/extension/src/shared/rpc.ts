@@ -2315,6 +2315,8 @@ export interface LovejoinStatus {
   pools?: LovejoinPoolStatus[];
   /** The classic pool's crowd, as the data layer last counted it (chunk 34's 34c); none on Koios. */
   crowd?: LovejoinCrowd;
+  /** The classic pool takes no new box (chunk 44): it's retired, as a pool's `unusable` says it. */
+  unusable?: LovejoinUnusable;
   /**
    * Pools this wallet started that no look has found yet (chunk 34's 34d): the hub says each shows once found. The
    * device's own record, no request.
@@ -2380,12 +2382,14 @@ export interface LovejoinPoolStatus {
  * Why a token pool takes no new box (WebAssembly's usable): a box holds less ADA than the network now asks of one
  * (`belowMinimum`), so nothing can be built. Or it's a copy (`superseded`): an earlier launch of its values turned up
  * after this device read it, so it's read for the boxes already in it and takes no new one, for good (decision 30; the
- * merged fixes' review, MERGED-1). A box that couldn't pay its own way back, or a check that couldn't be made, is no
- * reason since the owner's call 34 (`cantComeBack` on the pool says the first). Words are the screens' to choose;
- * nothing here is translated.
+ * merged fixes' review, MERGED-1). Or it's retired (`retired`, chunk 44): the classic pool or one on 8131b1d's
+ * scripts, which takes no new box and mixes none again, its boxes coming back alone (the owner's calls 1 and 2,
+ * 2026-11-05). A box that couldn't pay its own way back, or a check that couldn't be made, is no reason since the
+ * owner's call 34 (`cantComeBack` on the pool says the first). Words are the screens' to choose; nothing here is
+ * translated.
  */
 export interface LovejoinUnusable {
-  why: "belowMinimum" | "superseded";
+  why: "belowMinimum" | "superseded" | "retired";
   /**
    * In a copy (`superseded`), why mixing again its boxes is refused too, if it is: mixing again makes no deposit, so a
    * copy alone doesn't refuse it, but a box's minimum does (fix round two's last review, R3-2).
@@ -2540,6 +2544,8 @@ export interface LovejoinHeld {
     bootstrap?: number;
     /** What each of its boxes holds, as the read set has it; none when the pool isn't read this time (34f). */
     box?: LovejoinBoxValue;
+    /** Retired (chunk 44): not known to be on v2's scripts, as the classic pool, whose figures are the fields above. */
+    retired?: true;
   }>;
   /**
    * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0), while asked: one pool's alone, asked
@@ -2554,6 +2560,8 @@ export interface LovejoinHeld {
   bringing?: {
     back: number;
     pool?: string;
+    /** The retired pools' alone (chunk 44): 1.8.0's first unlock asked it, the owner's call 3. */
+    retired?: true;
     left?: number;
     confirming?: number;
     why?: string;
@@ -2567,7 +2575,7 @@ export interface LovejoinHeld {
    * withdraws it sent, and its pool when it was one pool's. A page that saw it go says Stopped, never Done (1.6.0's
    * release review, L2). None once it's asked again.
    */
-  bringStopped?: { back: number; pool?: string };
+  bringStopped?: { back: number; pool?: string; retired?: true };
 }
 
 /**

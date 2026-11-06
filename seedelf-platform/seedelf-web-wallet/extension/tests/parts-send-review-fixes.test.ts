@@ -4,8 +4,6 @@
 // mid-Send leaves nothing reserved that nobody owns; the review's age is checked once, at Send; a session's funding
 // can say its parts mustn't go (`mayGo`). Then the guards no test pinned, each shown by taking it out. Through
 // WebAssembly, on the 12-word phrase's register, as payment-parts-chain.test.ts.
-import { readFileSync } from "node:fs";
-
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -41,9 +39,11 @@ import { WithdrawService } from "../src/background/withdraw";
 import type { PendingTx } from "../src/shared/rpc";
 import { PendingBanner } from "../src/ui/components/PendingBanner";
 import { NetworkContext } from "../src/ui/network";
+import { lovejoinOf } from "./chain-fixtures";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 import { atSession } from "./swap-session";
+import { ADA_ROWS } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const SLOW = { timeout: 240_000 };
@@ -55,8 +55,6 @@ const THEIRS = transferPreprod.to;
 const OWN = v12.preprod.receive_0 as string;
 /** Another wallet's address, for a payment from the public account. */
 const THEIR_ADDRESS = v15.preprod.receive_0 as string;
-/** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25): a session's return goes through it. */
-const CLASSIC_POOL = (JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }).pool;
 /** Ogmios's answer when the network measures no more than a transaction declares. */
 const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
 
@@ -1209,16 +1207,19 @@ describe("a payment in parts checked whole at Send (1.6.0's release review, 321-
         { index: 0, ownStake: true, createdAt: t.clock.now, txs: [{ kind: "out", txHash: F!.split("#")[0], at: t.clock.now, confirmed: true }], site: { origin: "https://example.org" } },
       ],
     });
-    t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...CLASSIC_POOL);
-    // The network measures a chain's first mix within what it declares; one wave deep, as the recorded pool fits.
+    // Its return's ADA goes into Lovejoin's 5 ₳ pool (v2-pools.ts; chunk 44: the classic pool, retired, takes none).
+    t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...ADA_ROWS);
+    // The network measures a chain's first mix within what it declares; one wave deep, as the pool's 20 boxes fit. Its
+    // collateral's mix off: with the 5 ₳ pool shown, that mix puts the collateral in a box, and the return after it is
+    // a sweep that merges nothing (WebAssembly's chain), where what's asked here is a return that merges into F.
     t.koios.evaluation = AGREES;
-    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    await t.deps.preferences.set({ lovejoinDepth: 1, lovejoinCollateral: false });
     const sessions = new SessionService({
       ...t.deps,
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
       store: t.store,
       minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
-      lovejoin: t.lovejoin,
+      lovejoin: lovejoinOf(t),
       sleep: async () => undefined,
     });
     const back = await sessions.backBuild("preprod", 0);
@@ -1274,7 +1275,7 @@ describe("a return that comes back directly, checked against a payment's parts a
         { index: 0, ownStake: true, createdAt: t.clock.now, txs: [{ kind: "out", txHash: F!.split("#")[0], at: t.clock.now, confirmed: true }], site: { origin: "https://example.org" } },
       ],
     });
-    t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...CLASSIC_POOL);
+    t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...ADA_ROWS);
     const sessions = new SessionService({
       ...t.deps,
       collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),

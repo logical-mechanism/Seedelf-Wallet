@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { CHAIN_CUT } from "../src/background/lovejoin";
 import { CHAINS, lovejoinOf, PASSWORD, publicFunded, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 /** Koios's submits, each answered by the next of `answers` (the last, again and again): a 429, or a try that reaches the node and is never answered. */
 function submits(t: Tested, answers: Array<"slow down" | "unanswered">) {
@@ -27,7 +28,7 @@ describe("a mix from the public account's deposit Koios asked the wallet to send
   it("holds nothing back after a lock while it waited to try again: nothing went", async () => {
     const t = await publicFunded("60000000", ["60000000"]);
     const lovejoin = lovejoinOf(t, { sleep: () => t.wallet.lock() });
-    const mix = await lovejoin.publicBuild("preprod", 1);
+    const mix = await lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const net = submits(t, ["slow down"]);
     await expect(lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(/locked/i);
     expect(net.seen.submits).toBe(1);
@@ -35,7 +36,7 @@ describe("a mix from the public account's deposit Koios asked the wallet to send
     const progress = await t.lovejoin.progress("preprod");
     expect(progress).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT() });
     net.restore();
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   });
 
   it("holds nothing back after a lock and an unlock while it waited", async () => {
@@ -46,19 +47,19 @@ describe("a mix from the public account's deposit Koios asked the wallet to send
         await t.wallet.unlock(PASSWORD);
       },
     });
-    const mix = await lovejoin.publicBuild("preprod", 1);
+    const mix = await lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const net = submits(t, ["slow down"]);
     await expect(lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(CHAIN_CUT());
     expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT() });
     net.restore();
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   });
 
   it("marks it again before the next try: one that may have reached a node is looked for after a lock", async () => {
     const t = await publicFunded("60000000", ["60000000"]);
     let waits = 0;
     const lovejoin = lovejoinOf(t, { sleep: async () => void (waits++ === 1 && (await t.wallet.lock())) });
-    const mix = await lovejoin.publicBuild("preprod", 1);
+    const mix = await lovejoin.publicBuild("preprod", 1, { pool: ADA });
     // A 429, then a try that reaches the node, unanswered; the wallet locks while the send waits after it.
     const net = submits(t, ["slow down", "unanswered"]);
     await expect(lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(/locked/i);
@@ -66,6 +67,6 @@ describe("a mix from the public account's deposit Koios asked the wallet to send
     await t.wallet.unlock(PASSWORD);
     expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT(), maybeSent: true });
     net.restore();
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("may have gone through");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("may have gone through");
   });
 });

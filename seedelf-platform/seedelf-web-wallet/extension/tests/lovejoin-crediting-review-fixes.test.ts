@@ -4,7 +4,8 @@
 // account once its chain's record and its mix are gone (316#1). A chain with no box of its own, a return's collateral
 // mixed on its way into the 5 ₳ pool, is followed as a mix of its own (316#3). And a stuck pool's Bring one back paid
 // from the private balance ties no other account where it can (x-privacy#0). With the real WebAssembly, the classic
-// pool's recorded preprod boxes, and PR #163's preprod token pool (2 ₳ and LJTEST a box).
+// pool's recorded preprod boxes, and PR #163's preprod token pool's v2 twin (2 ₳ and LJTEST a box): the one on
+// 8131b1d's scripts is retired (chunk 44).
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -21,7 +22,8 @@ import { boxFrom, madePrivate, merged, type HistoryClass } from "../src/shared/h
 import { heldRequest } from "../src/ui/screens/Lovejoin";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
-import { busyFor, koiosPreprod, loadTestWasm, madeByMix, memoryArea, ownedUtxos, testBalances, vectors } from "./fakes";
+import { busyFor, koiosPreprod, loadTestWasm, memoryArea, ownedUtxos, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix, ownDatum, retiredAlready } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -35,8 +37,8 @@ const SLOW = { timeout: 120_000 };
 /** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
 const POOL = (JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }).pool;
 
-/** PR #163's token pool on preprod, as Koios lists it (wasm/tests/fixtures). */
-const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-token-pool-preprod.json", import.meta.url), "utf8")) as {
+/** PR #163's token pool's launch with its scripts derived on v2, never on chain (chunk 44, wasm/tests/fixtures). */
+const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json", import.meta.url), "utf8")) as {
   seed: { txHash: string; txIndex: number };
   reference: KoiosUtxo;
   scripts: KoiosUtxo[];
@@ -206,6 +208,11 @@ function atAccount(tx: string, value: string): KoiosUtxo {
 /** A box of the wallet's in the classic pool at `tx`#`index`, made `hours` ago. */
 async function classicBox(t: T, tx: string, index: number, hours: number): Promise<KoiosUtxo> {
   return { ...POOL[0]!, tx_hash: tx, tx_index: index, block_time: Math.floor(t.clock.now / 1000) - hours * 3600, inline_datum: { bytes: await datum(t, true), value: {} } } as KoiosUtxo;
+}
+
+/** A box of the wallet's in the 5 ₳ pool at `tx`#`index`, made `hours` ago. */
+async function fiveBox(t: T, tx: string, index: number, hours: number): Promise<KoiosUtxo> {
+  return adaBox(tx, await ownDatum(t.wallet), t.clock.now, hours, index);
 }
 
 /** Runs `hours` apart until `count` boxes came back by themselves, or twenty runs. */
@@ -378,21 +385,22 @@ describe("two Bootstraps in one pool (1.6.0's release review, 316#0)", SLOW, () 
 
 describe("a public deposit's box, its chain's record and its mix gone (1.6.0's release review, 316#1)", SLOW, () => {
   it("records every box of a public Bootstrap let go as the account's, though another box closed its mix's count first", async () => {
+    // Into the 5 ₳ pool: the classic pool, retired, takes no Bootstrap (chunk 44).
     const t = await wallet();
-    const lj = pooled(t, []);
-    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"), ...POOL);
-    const summary = await lj.publicBuild("preprod", 2, { bootstrap: true });
+    const lj = pooled(t, [ADA_POOL]);
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"), ...POOL, ...ADA_ROWS);
+    const summary = await lj.publicBuild("preprod", 2, { pool: ADA, bootstrap: true });
     await lj.publicSubmit("preprod", summary.txHash);
     t.koios.confirmations = 1;
     await lj.pumpPublic("preprod");
     // Its boxes where its deposit put them, hours ago; and a box of the wallet's no record accounts for, a mix made it.
     const other = "f1".repeat(32);
-    madeByMix(t.koios, other);
-    t.koios.addedToAccounts.push(await classicBox(t, summary.entry, 0, 7), await classicBox(t, summary.entry, 1, 7), await classicBox(t, other, 0, 8));
+    madeByAdaMix(t.koios, other);
+    t.koios.addedToAccounts.push(await fiveBox(t, summary.entry, 0, 7), await fiveBox(t, summary.entry, 1, 7), await fiveBox(t, other, 0, 8));
     // A read hours on drops its chain's record; then Bring them all back.
     await later(t, lj, 4);
     expect((await sealed(t)).chains).toEqual([]);
-    await lj.releaseBootstrap("preprod", "classic");
+    await lj.releaseBootstrap("preprod", ADA);
     // Each comes back by itself, one a run, the other box first: counted against the Bootstrap, whose count then
     // closes with its last box still out.
     await untilBack(t, lj, 3);
@@ -419,6 +427,9 @@ describe("a public deposit's box, its chain's record and its mix gone (1.6.0's r
       notMixed: 0,
       unlock: t.clock.now - HOUR,
     });
+    // Each box of the classic pool keeps its own wait, the older one due first: past 1.8.0's first run, which would
+    // bring them all back at once (retireOnce, chunk 44).
+    await retiredAlready(t.store);
     await unlockedAnHourAgo(t);
     await lj.withdrawDue("preprod");
     expect(withdrawn(t)).toEqual([`${old}#0`]);

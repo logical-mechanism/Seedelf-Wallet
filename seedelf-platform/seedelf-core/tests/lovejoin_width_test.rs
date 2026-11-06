@@ -8,9 +8,10 @@
 //! costs is set by N, and a little by where the fee input sorts among the
 //! boxes, since each `mix_box` spend pays for its own position.
 //!
-//! - Offline: N = 2 to 6 on the classic pool, preprod's and mainnet's, and on
+//! - Offline: N = 2 to 6 on the classic pool, preprod's and mainnet's, on
 //!   the token pool Lovejoin launched on preprod to test PR #163 (the
-//!   generalized contracts), each measured with the wallet's evaluator (`uplc`,
+//!   generalized contracts), and on that pool on Lovejoin v2's scripts (the
+//!   web wallet's chunk 44), each measured with the wallet's evaluator (`uplc`,
 //!   which matches the chain exactly) under a limit far past the ledger's, so
 //!   the widths the ledger refuses are costed too. The harness here builds the
 //!   mix as `lovejoin::mix` does, which the first test checks.
@@ -43,11 +44,11 @@ use seedelf_core::build::{
     Budget, MAX_TX_BUDGET, MAX_TX_SIZE, fake_signer, linear_fee, reference_script_fee,
 };
 use seedelf_core::eval::{self, Resolved};
-use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, Protocol};
+use seedelf_core::lovejoin::{self, Coin, Payer, PoolBox, Protocol, Version};
 use seedelf_core::transaction::computation_fee;
 use seedelf_core::withdraw_zero::WithdrawZero;
 use seedelf_crypto::lovejoin as crypto;
-use seedelf_koios::koios::ProtocolParameters;
+use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
 use serde_json::{Value, json};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -199,6 +200,62 @@ fn token_preprod() -> Pool {
             hex::decode(doc["token_name"].as_str().unwrap()).unwrap(),
             doc["token_quantity"].as_str().unwrap().parse().unwrap(),
         )),
+        params: ProtocolParameters::from_koios(&epoch_params(true)).unwrap(),
+    }
+}
+
+/// The token pool above on Lovejoin v2's scripts (29573c5, whose `mix_logic`'s
+/// xor32 checks both lengths): the web wallet's stand-in for a v2 pool,
+/// `lovejoin-v2-token-pool-preprod.json`, its two scripts at the holder,
+/// verified as the wallet verifies a pool. Never on chain, and its holder rows
+/// stand in the outputs of a launch that is, so the live test leaves it out.
+fn token_v2_protocol() -> Protocol {
+    let doc: Value = serde_json::from_str(include_str!(
+        "../../seedelf-web-wallet/wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json"
+    ))
+    .unwrap();
+    let row = |v: &Value| serde_json::from_value::<UtxoResponse>(v.clone()).unwrap();
+    let reference = eval::resolve_row(&row(&doc["reference"])).unwrap();
+    let scripts: Vec<Resolved> = doc["scripts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            let bytes = hex::decode(s["reference_script"]["bytes"].as_str().unwrap()).unwrap();
+            eval::resolve_reference(&row(s), 3, &bytes).unwrap()
+        })
+        .collect();
+    let seed: [u8; 32] = hex::decode(doc["seed"]["txHash"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let protocol = lovejoin::verify_pool(
+        true,
+        &reference,
+        (seed, doc["seed"]["txIndex"].as_u64().unwrap()),
+        &scripts,
+    )
+    .unwrap();
+    assert_eq!(protocol.version, Version::V2);
+    assert!(
+        protocol.inline_scripts.is_empty(),
+        "both scripts by reference"
+    );
+    protocol
+}
+
+fn token_v2_preprod() -> Pool {
+    let protocol = token_v2_protocol();
+    let token = protocol.token.clone().unwrap();
+    Pool {
+        name: "v2 token pool",
+        network_flag: true,
+        mix_box_hash: protocol.mix_box_hash,
+        mix_logic_hash: protocol.mix_logic_hash,
+        references: protocol.references,
+        script_bytes: protocol.script_bytes,
+        box_lovelace: protocol.denom,
+        token: Some((token.policy, token.name, token.quantity)),
         params: ProtocolParameters::from_koios(&epoch_params(true)).unwrap(),
     }
 }
@@ -633,7 +690,12 @@ fn build(pool: &Pool, given: &Inputs) -> Mix {
 }
 
 fn pools() -> Vec<Pool> {
-    vec![classic(true), classic(false), token_preprod()]
+    vec![
+        classic(true),
+        classic(false),
+        token_preprod(),
+        token_v2_preprod(),
+    ]
 }
 
 fn percent(part: u64, whole: u64) -> f64 {
@@ -747,6 +809,7 @@ fn the_harness_builds_the_wallets_mix() {
         (classic(true), Protocol::of(true).unwrap()),
         (classic(false), Protocol::of(false).unwrap()),
         (token_preprod(), by_reference),
+        (token_v2_preprod(), token_v2_protocol()),
     ];
     for (pool, protocol) in &pools {
         for n in [3, 4] {
@@ -989,7 +1052,11 @@ fn the_network_measures_each_width_as_the_wallet_does() {
         );
         assert!(same_model, "re-record the epoch_params fixture first");
         let limits = Limits::of(live);
-        for pool in pools().into_iter().filter(|p| p.network_flag == flag) {
+        // The v2 pool's holder rows aren't on chain (token_v2_protocol).
+        for pool in pools()
+            .into_iter()
+            .filter(|p| p.network_flag == flag && p.name != "v2 token pool")
+        {
             for n in WIDTHS {
                 let mix = build(&pool, &inputs(&pool, n, FeeAt::First));
                 let answer = curl(

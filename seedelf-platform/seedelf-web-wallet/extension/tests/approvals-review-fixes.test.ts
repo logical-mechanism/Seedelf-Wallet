@@ -93,7 +93,7 @@ const mixedFunding = (): SessionOutSummary => ({ ...funding(true), collateralMix
 /** A site's funding or top-up with the reserve: what the site leaves decides that mix, so only if enough is left (fx-promise). */
 const siteFunding = (): SessionOutSummary => ({ ...funding(true), collateralMix: "ifLeft" });
 
-/** Its spare ADA pays for no 10 ₳ box (the reproduction's): it comes back directly, and its collateral's mix still goes. */
+/** Its spare ADA pays for no 5 ₳ box (the reproduction's): it comes back directly, and its collateral's mix still goes. */
 const noBox: SwapLovejoin = { boxes: 0, depth: 1, mixes: 0, mixFees: "0", withdrawFees: "0", delay: "1-6", on: true };
 
 const approval = (summary: SessionOutSummary, lovejoin: SwapLovejoin | undefined = noBox, through = true) =>
@@ -158,7 +158,7 @@ describe("1.6.0's release review: where the reviews that pay for the collateral'
     // Mixed only if enough is left, since 1.6.0's review of the fixes (fx-promise): what the site leaves decides.
     const mixed = text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary: siteFunding() }));
     expect(mixed).not.toContain("the 5 ₳ come back at once");
-    expect(mixed).toContain("Lovejoin mixes the spare ADA in 10 ₳ boxes, and the 5 ₳ once, in a box of its own, only if enough is left");
+    expect(mixed).toContain("Lovejoin mixes the spare ADA in 5 ₳ boxes, and the 5 ₳ once, in a box of its own, only if enough is left");
     expect(mixed).toContain("The rest comes back at once.");
     // Paid nothing for, as before: the 5 ₳ comes back with the rest.
     expect(text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary: funding(false) }))).toContain(
@@ -322,7 +322,7 @@ describe("1.6.0's release review, round 3b: the reviews' collateral words follow
   const fallback = (): SessionOutSummary => ({ ...funding(false), collateralMix: "ifLeft" });
   const plain = () => funding(false);
   const wayBack = (summary: SessionOutSummary) => text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary }));
-  const MIXED_ONCE = "Lovejoin mixes the spare ADA in 10 ₳ boxes, and the 5 ₳ once, in a box of its own, only if enough is left";
+  const MIXED_ONCE = "Lovejoin mixes the spare ADA in 5 ₳ boxes, and the 5 ₳ once, in a box of its own, only if enough is left";
 
   it("a site's funding review counts the mix only where its reserve is paid, and says the 5 ₳ is mixed wherever a pool takes it (R3-1, R3-9)", () => {
     const reserved = wayBack(paid());

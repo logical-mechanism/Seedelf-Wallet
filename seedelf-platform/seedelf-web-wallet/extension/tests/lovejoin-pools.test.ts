@@ -2,7 +2,8 @@
 // the wallet reads, its own due times, its boxes coming back through it, the
 // list of mixes followed until each box is back, and Bootstrap's boxes held.
 // With the real WebAssembly, the classic pool's recorded preprod boxes, and
-// PR #163's preprod token pool (2 ₳ and LJTEST a box), as Koios lists it.
+// PR #163's preprod token pool's v2 twin (2 ₳ and LJTEST a box): the one on
+// 8131b1d's scripts is retired (chunk 44).
 // The classic pool's own records are 1.5.0's gate's (lovejoin-1-5-0.test.ts).
 import { readFileSync } from "node:fs";
 
@@ -20,6 +21,7 @@ import { NETWORKS } from "../src/networks";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix, ownDatum, retiredAlready } from "./v2-pools";
 import { t as t_ } from "../src/i18n";
 
 const PASSWORD = "correct horse battery";
@@ -35,8 +37,8 @@ const SLOW = { timeout: 60_000 };
 const POOL = (JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }).pool;
 const CLASSIC_BOX = NETWORKS.preprod.lovejoin!.mixBox;
 
-/** PR #163's token pool on preprod, as Koios lists it (wasm/tests/fixtures). */
-const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-token-pool-preprod.json", import.meta.url), "utf8")) as {
+/** PR #163's token pool's launch with its scripts derived on v2, never on chain (chunk 44, wasm/tests/fixtures). */
+const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json", import.meta.url), "utf8")) as {
   seed: { txHash: string; txIndex: number };
   reference: KoiosUtxo;
   scripts: KoiosUtxo[];
@@ -146,6 +148,12 @@ async function classicBox(t: T, tx: string, hours = 5): Promise<KoiosUtxo> {
     block_time: Math.floor(t.clock.now / 1000) - hours * 3600,
     inline_datum: { bytes: await datum(t, true), value: {} },
   } as KoiosUtxo;
+}
+
+/** A box of the wallet's in the 5 ₳ pool, a mix there having moved it `hours` ago. */
+async function fiveBox(t: T, tx: string, hours = 5): Promise<KoiosUtxo> {
+  madeByAdaMix(t.koios, tx.repeat(32));
+  return adaBox(tx, await ownDatum(t.wallet), t.clock.now, hours);
 }
 
 /** Ten strangers' boxes in the token pool. */
@@ -281,6 +289,9 @@ describe("the pools the wallet reads (chunk 34, 34a′)", SLOW, () => {
     const lj = pooled(t);
     t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1"), await tokenBox(t, "f1"), ...(await strangers(t)));
     await t.store.set("lovejoin.preprod", { due: [t.clock.now - HOUR], chains: [], pools: { [TOKEN]: { due: [t.clock.now - 2 * HOUR] } } });
+    // The classic pool's box keeps its own wait: past 1.8.0's first run, which would bring it back at once (retireOnce,
+    // chunk 44).
+    await retiredAlready(t.store);
     await unlockedAnHourAgo(t);
     expect(await lj.withdrawDue("preprod")).toHaveLength(1);
     // The earliest first: the token pool's.
@@ -313,76 +324,97 @@ describe("the pools the wallet reads (chunk 34, 34a′)", SLOW, () => {
 
 describe("the list of mixes, followed until each box is back (session 1, 5)", SLOW, () => {
   it("keeps a chain spanning pools as one mix, draws each pool's due times, and counts each box back in its pool", async () => {
+    // Across the 5 ₳ pool and the token pool, as a return's goes since the classic pool retired (chunk 44).
     const t = await wallet();
-    const lj = pooled(t);
-    t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1"), await tokenBox(t, "f1"), await tokenBox(t, "f2"), ...(await strangers(t)));
+    const lj = pooled(t, () => [ADA_POOL, TOKEN_POOL]);
+    t.koios.addedToAccounts.push(...POOL, ...ADA_ROWS, await fiveBox(t, "c1"), await tokenBox(t, "f1"), await tokenBox(t, "f2"), ...(await strangers(t)));
     await sentChain(lj, "a2", {
-      pools: { [TOKEN]: 2 },
+      pools: { [ADA]: 1, [TOKEN]: 2 },
       leaves: [
-        { txHash: "c1".repeat(32), txIndex: 0 },
+        { txHash: "c1".repeat(32), txIndex: 0, pool: ADA },
         { txHash: "f1".repeat(32), txIndex: 0, pool: TOKEN },
         { txHash: "f2".repeat(32), txIndex: 0, pool: TOKEN },
       ],
     });
     const kept = await sealed(t);
-    expect(kept.chains[0]).toMatchObject({ boxes: 3, pools: { [TOKEN]: 2 } });
-    expect(kept.due).toHaveLength(1);
+    expect(kept.chains[0]).toMatchObject({ boxes: 3, pools: { [ADA]: 1, [TOKEN]: 2 } });
+    expect(kept.due).toEqual([]);
+    expect(kept.pools?.[ADA]?.due).toHaveLength(1);
     expect(kept.pools?.[TOKEN]?.due).toHaveLength(2);
-    expect(kept.mixes![0]!.shares).toEqual([{ boxes: 1 }, { pool: TOKEN, boxes: 2 }]);
+    expect(kept.mixes![0]!.shares).toEqual([{ pool: ADA, boxes: 1 }, { pool: TOKEN, boxes: 2 }]);
     // Every box due now: one a run, the earliest first, each counted against the mix in its own pool.
-    await t.store.set("lovejoin.preprod", { ...kept, due: [t.clock.now - HOUR], pools: { [TOKEN]: { due: [t.clock.now - 3 * HOUR, t.clock.now - 2 * HOUR] } } });
+    await t.store.set("lovejoin.preprod", {
+      ...kept,
+      pools: { [ADA]: { due: [t.clock.now - HOUR] }, [TOKEN]: { due: [t.clock.now - 3 * HOUR, t.clock.now - 2 * HOUR] } },
+    });
     await unlockedAnHourAgo(t);
     await lj.withdrawDue("preprod");
-    expect((await sealed(t)).mixes![0]!.shares).toEqual([{ boxes: 1 }, { pool: TOKEN, boxes: 2, back: 1 }]);
+    expect((await sealed(t)).mixes![0]!.shares).toEqual([{ pool: ADA, boxes: 1 }, { pool: TOKEN, boxes: 2, back: 1 }]);
   });
 
   describe("a return across pools stopped partway (1.6.0's release review, 319-worker#3)", () => {
-    // A session's return across the token pool and the classic pool, one wave deep: its deposit puts two boxes in each
-    // (the token's at #0 and #1, the classic pool's at #2 and #3), each box's own mix makes its leaf, the token leg
-    // first, then the classic leg, then the return.
+    // A session's return across the token pool and the 5 ₳ pool (its ADA's since the classic pool retired, chunk 44),
+    // one wave deep: its deposit puts two boxes in each (the token's at #0 and #1, the 5 ₳ pool's at #2 and #3), each
+    // box's own mix makes its leaf, the token leg first, then the ADA leg, then the return.
     const [dep, tm1, tm2, cm1, cm2, back] = ["d0", "a1", "a2", "c5", "c6", "b0"].map((x) => x.repeat(32)) as [string, string, string, string, string, string];
     const txs = [
       { kind: "deposit" as const, txCbor: "", txHash: dep, fee: "0" },
       ...[tm1, tm2, cm1, cm2].map((txHash) => ({ kind: "mix" as const, txCbor: "", txHash, fee: "0" })),
       { kind: "back" as const, txCbor: "", txHash: back, fee: "0" },
     ];
-    const leaves = [{ txHash: tm1, txIndex: 0, pool: TOKEN }, { txHash: tm2, txIndex: 0, pool: TOKEN }, { txHash: cm1, txIndex: 0 }, { txHash: cm2, txIndex: 0 }];
+    const leaves = [
+      { txHash: tm1, txIndex: 0, pool: TOKEN },
+      { txHash: tm2, txIndex: 0, pool: TOKEN },
+      { txHash: cm1, txIndex: 0, pool: ADA },
+      { txHash: cm2, txIndex: 0, pool: ADA },
+    ];
     type Chain = { id: string; cut?: true; unscheduled?: number; unscheduledIn?: Record<string, number> };
     const chainOf = async (t: T) => (await sealed(t)).chains.find((c) => c.id === back) as Chain;
     /** Recorded, and its first `sent` transactions sent: its deposit draws each pool's due times. */
     const sending = async (lj: LovejoinService, sent: number) => {
-      await lj.recordChain("preprod", { session: 0, progress: "test.across", txs, leaves, boxes: 4, pools: { [TOKEN]: 2 } });
+      await lj.recordChain("preprod", { session: 0, progress: "test.across", txs, leaves, boxes: 4, pools: { [TOKEN]: 2, [ADA]: 2 } });
       for (let i = 0; i < sent; i++) await lj.chainSent("preprod", back, i);
     };
     /** A box of the wallet's where its deposit put it, not mixed yet: in the token pool, its LJTEST with it. */
     const deposited = async (t: T, index: number, token = false) =>
-      ({ ...(token ? await tokenBox(t, "d0") : await classicBox(t, "d0")), tx_hash: dep, tx_index: index }) as KoiosUtxo;
+      ({ ...(token ? await tokenBox(t, "d0") : await fiveBox(t, "d0")), tx_hash: dep, tx_index: index }) as KoiosUtxo;
+    /** The status's figures of pool `id`. */
+    const poolIn = (status: Awaited<ReturnType<LovejoinService["status"]>>, id: string) => status.pools!.find((p) => p.id === id)!;
 
-    it("drops the classic leg's due times alone, once a lock cuts it after the token leg, and holds its boxes as not mixed", async () => {
+    it("drops the ADA leg's due times alone, once a lock cuts it after the token leg, and holds its boxes as not mixed", async () => {
       const t = await wallet();
-      const lj = pooled(t);
+      const lj = pooled(t, () => [ADA_POOL, TOKEN_POOL]);
       await sending(lj, 3);
-      expect((await sealed(t)).due).toHaveLength(2);
+      expect((await sealed(t)).pools?.[ADA]?.due).toHaveLength(2);
       expect((await sealed(t)).pools?.[TOKEN]?.due).toHaveLength(2);
       // Its progress gone, as a lock or a closed browser wipes it: the next look stops it as cut.
       await lj.cuts("preprod");
-      expect(await chainOf(t)).toMatchObject({ cut: true, unscheduled: 2 });
-      expect((await chainOf(t)).unscheduledIn).toBeUndefined();
-      // The classic leg's boxes never come back by themselves, tying the session's deposit to the private balance; the
+      expect(await chainOf(t)).toMatchObject({ cut: true, unscheduledIn: { [ADA]: 2 } });
+      expect((await chainOf(t)).unscheduled).toBeUndefined();
+      // The ADA leg's boxes never come back by themselves, tying the session's deposit to the private balance; the
       // token leg's, mixed, still do.
-      expect((await sealed(t)).due).toEqual([]);
+      expect((await sealed(t)).pools?.[ADA]?.due ?? []).toEqual([]);
       expect((await sealed(t)).pools?.[TOKEN]?.due).toHaveLength(2);
-      // A read finds the classic leg's boxes where the deposit put them, held as not mixed yet, and counts nothing twice.
-      t.koios.addedToAccounts.push(...POOL, ...(await strangers(t)), await deposited(t, 2), await deposited(t, 3), await tokenBox(t, "a1"), await tokenBox(t, "a2"));
+      // A read finds the ADA leg's boxes where the deposit put them, held as not mixed yet, and counts nothing twice.
+      t.koios.addedToAccounts.push(
+        ...POOL,
+        ...ADA_ROWS,
+        ...(await strangers(t)),
+        await deposited(t, 2),
+        await deposited(t, 3),
+        await tokenBox(t, "a1"),
+        await tokenBox(t, "a2"),
+      );
       const status = await lj.status("preprod");
-      expect(status.notMixed).toEqual([
-        { txHash: dep, txIndex: 2 },
-        { txHash: dep, txIndex: 3 },
+      expect(poolIn(status, ADA).notMixed).toEqual([
+        { txHash: dep, txIndex: 2, pool: ADA },
+        { txHash: dep, txIndex: 3, pool: ADA },
       ]);
-      expect(status.pools![0]!.notMixed).toEqual([]);
-      expect((await sealed(t)).due).toEqual([]);
+      expect(poolIn(status, TOKEN).notMixed).toEqual([]);
+      expect(status.notMixed).toEqual([]);
+      expect((await sealed(t)).pools?.[ADA]?.due ?? []).toEqual([]);
       expect((await sealed(t)).pools?.[TOKEN]?.due).toHaveLength(2);
-      // Due, a token leaf goes back by itself; never a box the deposit put in the classic pool.
+      // Due, a token leaf goes back by itself; never a box the deposit put in the 5 ₳ pool.
       await t.store.set("lovejoin.preprod", { ...(await sealed(t)), pools: { [TOKEN]: { due: [t.clock.now - 2 * HOUR, t.clock.now - HOUR] } } });
       await unlockedAnHourAgo(t);
       expect(await lj.withdrawDue("preprod")).toHaveLength(1);
@@ -392,16 +424,18 @@ describe("the list of mixes, followed until each box is back (session 1, 5)", SL
 
     it("drops each pool's unmixed boxes' due times in its own pool, once it stops in the token leg", async () => {
       const t = await wallet();
-      const lj = pooled(t);
+      const lj = pooled(t, () => [ADA_POOL, TOKEN_POOL]);
       // Its deposit and the token leg's first mix went; the network refused the next.
       await sending(lj, 2);
       await lj.chainEnded("preprod", back, "refused");
-      expect(await chainOf(t)).toMatchObject({ unscheduled: 2, unscheduledIn: { [TOKEN]: 1 } });
-      expect((await sealed(t)).due).toEqual([]);
+      expect(await chainOf(t)).toMatchObject({ unscheduledIn: { [TOKEN]: 1, [ADA]: 2 } });
+      expect((await chainOf(t)).unscheduled).toBeUndefined();
+      expect((await sealed(t)).pools?.[ADA]?.due ?? []).toEqual([]);
       expect((await sealed(t)).pools?.[TOKEN]?.due).toHaveLength(1);
-      // The token pool's box its first mix didn't reach is held there, not mixed yet, beside the classic leg's two.
+      // The token pool's box its first mix didn't reach is held there, not mixed yet, beside the ADA leg's two.
       t.koios.addedToAccounts.push(
         ...POOL,
+        ...ADA_ROWS,
         ...(await strangers(t)),
         await deposited(t, 1, true),
         await deposited(t, 2),
@@ -409,13 +443,13 @@ describe("the list of mixes, followed until each box is back (session 1, 5)", SL
         await tokenBox(t, "a1"),
       );
       const status = await lj.status("preprod");
-      expect(status.notMixed).toEqual([
-        { txHash: dep, txIndex: 2 },
-        { txHash: dep, txIndex: 3 },
+      expect(poolIn(status, ADA).notMixed).toEqual([
+        { txHash: dep, txIndex: 2, pool: ADA },
+        { txHash: dep, txIndex: 3, pool: ADA },
       ]);
-      expect(status.pools![0]!.notMixed).toEqual([{ txHash: dep, txIndex: 1, pool: TOKEN }]);
+      expect(poolIn(status, TOKEN).notMixed).toEqual([{ txHash: dep, txIndex: 1, pool: TOKEN }]);
       expect((await sealed(t)).pools?.[TOKEN]?.due).toHaveLength(1);
-      expect((await sealed(t)).due).toEqual([]);
+      expect((await sealed(t)).pools?.[ADA]?.due ?? []).toEqual([]);
     });
   });
 
@@ -756,19 +790,20 @@ describe("what the Lovejoin hub reads of each pool (chunk 34's 34f)", SLOW, () =
 
   it("tells a pool's page of its own boxes alone when none can come back (34f's review, 6)", async () => {
     const t = await wallet();
-    const lj = pooled(t);
+    const lj = pooled(t, () => [ADA_POOL, TOKEN_POOL]);
     // The token pool's box is held by a Bootstrap, where its deposit put it (a Bootstrap holds nothing in its place
-    // before its deposit is in: 1.6.0's release review, 316#0); the classic pool's isn't mixed yet: Koios says a
-    // deposit made it (its input sits at a key's address, not the pool's), as after a restore.
-    const deposited = await classicBox(t, "c1", 5);
+    // before its deposit is in: 1.6.0's release review, 316#0); the 5 ₳ pool's isn't mixed yet: Koios says a deposit
+    // made it (its input sits at a key's address, not the pool's), as after a restore. Not the classic pool's, which,
+    // retired, holds none (chunk 44).
+    const deposited = await fiveBox(t, "c1", 5);
     t.koios.txSpends.set("c1".repeat(32), [{ payment_addr: { bech32: TOKEN_ADDRESS.replace("addr_test1w", "addr_test1v"), cred: "ab".repeat(28) } }]);
     const deposit = "b10".padEnd(64, "0");
-    t.koios.addedToAccounts.push(...POOL, deposited, { ...(await tokenBox(t, "f1")), tx_hash: deposit }, ...(await strangers(t)));
+    t.koios.addedToAccounts.push(...POOL, ...ADA_ROWS, deposited, { ...(await tokenBox(t, "f1")), tx_hash: deposit }, ...(await strangers(t)));
     await sentChain(lj, "b1", { pools: { [TOKEN]: 1 }, leaves: [{ txHash: deposit, txIndex: 0, pool: TOKEN }], bootstrap: true });
     const status = await lj.status("preprod");
-    expect(status.notMixed).toEqual([{ txHash: "c1".repeat(32), txIndex: 0 }]);
+    expect(status.pools!.find((p) => p.id === ADA)!.notMixed).toEqual([{ txHash: "c1".repeat(32), txIndex: 0, pool: ADA }]);
     await unlockedAnHourAgo(t);
-    // The token pool's page: none of its boxes comes back now, said as its own, never the classic pool's unmixed one:
+    // The token pool's page: none of its boxes comes back now, said as its own, never the 5 ₳ pool's unmixed one:
     // a Bootstrap holds its only box, which "none of your boxes" denied (1.6.0's release review, UI-5).
     await expect(lj.withdrawNow("preprod", undefined, false, false, TOKEN)).rejects.toThrow(t_("lj.bootstrapHolds"));
   });

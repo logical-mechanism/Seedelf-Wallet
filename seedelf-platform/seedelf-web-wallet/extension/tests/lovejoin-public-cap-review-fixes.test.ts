@@ -2,8 +2,8 @@
 // chain (chain_from_account_at) picks the account's UTxOs to pay for: the fewest holding the pool's token that hold
 // the boxes' worth, the most first, less the least ADA of the output the tokens they hold beyond that go back in. It
 // counted the ADA of every UTxO holding the token, and none of that output, so it offered boxes the build refused.
-// With the real WebAssembly, the recorded public account, and PR #163's preprod token pool (2 ₳ and LJTEST a box), as
-// lovejoin-flows.test.ts has them.
+// With the real WebAssembly, the recorded public account, and PR #163's preprod token pool's v2 twin (2 ₳ and LJTEST a
+// box), as lovejoin-flows.test.ts has them: the pool on 8131b1d's scripts is retired, and takes no new box (chunk 44).
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -29,8 +29,8 @@ const SLOW = { timeout: 300_000 };
 /** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
 const POOL = (JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }).pool;
 
-/** PR #163's token pool on preprod, as Koios lists it (wasm/tests/fixtures). */
-const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-token-pool-preprod.json", import.meta.url), "utf8")) as {
+/** PR #163's token pool's launch with its scripts derived on v2, never on chain (chunk 44, wasm/tests/fixtures). */
+const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json", import.meta.url), "utf8")) as {
   seed: { txHash: string; txIndex: number };
   reference: KoiosUtxo;
   scripts: KoiosUtxo[];

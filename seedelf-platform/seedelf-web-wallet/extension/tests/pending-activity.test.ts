@@ -14,6 +14,7 @@ import { reservedSet } from "../src/background/spent";
 import { LOCAL_ACCOUNT } from "../src/shared/preferences";
 import { CHAINS, chainNet, lovejoinOf, publicFunded } from "./chain-fixtures";
 import { testBalances, vectors } from "./fakes";
+import { ADA } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const account = (words: number) =>
@@ -102,7 +103,7 @@ describe("a public mix, all sent, not in a block yet", CHAINS, () => {
       await t.wallet.touch();
     };
     const lovejoin = lovejoinOf(t, { sleep: passing });
-    const summary = await lovejoin.publicBuild("preprod", 4);
+    const summary = await lovejoin.publicBuild("preprod", 4, { pool: ADA });
     const kept = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string }> }>(SESSION_LOVEJOIN_PUBLIC));
     const order = kept!.chain.map((c) => c.txHash);
     const net = chainNet(t, () => order);
@@ -113,7 +114,7 @@ describe("a public mix, all sent, not in a block yet", CHAINS, () => {
     expect(await lovejoin.progress("preprod")).toBeNull();
     expect((await t.wallet.withKeys(() => reservedSet(t.session, "preprod"))).inputs.size).toBe(0);
     expect(net.mempool.length).toBeGreaterThan(0);
-    // They read "+19.81 ₳", "+18.99 ₳"… and the watched mix "+16.52 ₳".
+    // They read "+39.81 ₳", "+38.98 ₳"… and the watched mix "+36.50 ₳": four boxes of the 5 ₳ pool (chunk 44).
     const { entries } = await t.activity.cardano("preprod");
     expect(entries.filter((e) => e.pending)).toEqual([]);
   });

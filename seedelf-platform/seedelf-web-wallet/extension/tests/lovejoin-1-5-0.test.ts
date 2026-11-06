@@ -30,6 +30,14 @@
 // plans, transactions and Koios requests against the same record, but what a
 // shown pool asks of its own: nothing is recorded for it (1.6.0's release
 // review, x-compat#2; its review of the fixes, R3-17).
+//
+// Since chunk 44 the classic pool is retired, and so is every pool the head
+// start bundles (all on 8131b1d's scripts): what 1.5.0 planned to mix is
+// planned as it was, but no pool shown takes a return's ADA, so every return
+// comes back directly; and the vault's boxes don't wait their due times: the
+// first run after the update asks Bring every box back over the retired
+// pools (retireOnce, the owner's call 3 of 2026-11-05), and they all come
+// back at once. The gate holds this tree to that, against 1.5.0's record.
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -37,7 +45,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { LovejoinService, type PoolRef } from "../src/background/lovejoin";
+import { CHAIN_RESEND_MS, LovejoinService, type PoolRef } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
 import { SESSION_BACK, SessionService } from "../src/background/sessions";
 import { NETWORKS, type NetworkName } from "../src/networks";
@@ -398,6 +406,43 @@ async function plans(handed?: Handed): Promise<unknown> {
   return out;
 }
 
+/** What 1.5.0 priced a swap's and Stop's spare at: boxes, their mixes and their way back. */
+type Priced = { boxes: number; mixes: number; mixFees: string; withdrawFees: string; of?: number };
+
+/** 1.5.0's plans, as far as chunk 44 changes them. */
+type Recorded = {
+  returns: Array<{ lovelace: string; review: Record<string, unknown>; chain: unknown }>;
+  swap: Record<"quote" | "review", Record<string, unknown> & { ifStopped: Priced }>;
+  stop: Priced & Record<string, unknown>;
+};
+
+/** What a return, a swap's quote and Stop say with no 5 ₳ pool shown (sess.skip.warn.noAdaPool). */
+const NO_ADA_POOL = "Lovejoin has no pool of 5\u00a0₳ boxes to take it yet";
+
+/**
+ * 1.5.0's plans as this tree makes them from 1.5.0's start (chunk 44): the classic pool, retired, takes no new box,
+ * and no pool shown is on v2's scripts, so none takes a return's ADA (adaPool). What mixing takes (`funding`, `plans`)
+ * is 1.5.0's still. Every return comes back directly, as 1.5.0's direct return of as much did (its deepest, which the
+ * pool was too short for), saying why, with no chain; a swap's spare and Stop's pay for no box, and say of none that
+ * it's left out (`of`): nothing would take it. So a swap stopped puts no more through Lovejoin than one filled, and its
+ * review says nothing of that (`ifStopped`).
+ */
+function asRetired(plans: unknown): unknown {
+  const p = structuredClone(plans) as Recorded;
+  const direct = new Map(p.returns.filter((r) => r.chain === null).map((r) => [r.lovelace, r.review]));
+  for (const r of p.returns) {
+    r.review = { ...direct.get(r.lovelace)!, lovejoinSkipped: NO_ADA_POOL };
+    r.chain = null;
+  }
+  const none = <T extends Priced>({ of: _of, ...way }: T): T => ({ ...way, boxes: 0, mixes: 0, mixFees: "0", withdrawFees: "0" }) as T;
+  for (const side of [p.swap.quote, p.swap.review]) {
+    side.skipped = NO_ADA_POOL;
+    delete (side as Partial<typeof side>).ifStopped;
+  }
+  p.stop = { ...none(p.stop), skipped: NO_ADA_POOL };
+  return p;
+}
+
 // ---------------------------------------------------------------------------
 // The vault mid-flight (backward compatibility 4 and 5)
 // ---------------------------------------------------------------------------
@@ -542,7 +587,7 @@ function callsSince(t: ReturnType<typeof testBalances>, from: number, name: (h: 
  * giveme.my's, and the sealed schedule after any run that changed it. Half
  * an hour in, the user brings session 0 back.
  *
- * The schedule is compared whole but for `mixes`, which 1.5.0 never wrote:
+ * The schedule is kept whole but for `mixes`, which 1.5.0 never wrote:
  * chunk 34's list of every mix, followed until its boxes are back.
  * `handed`: the pools discovery hands the wallet, and the restore's (wire).
  */
@@ -657,78 +702,160 @@ async function afterUpdate(vault: Vault, handed?: Handed): Promise<unknown> {
   return { trace, restored };
 }
 
+/** A step of `afterUpdate`'s trace, and the whole of what it returns. */
+type Step = {
+  at: number;
+  label: string;
+  result?: unknown;
+  sends?: Array<{ tx: string; spends: string[] }>;
+  calls?: string[];
+  asked?: number;
+  schedule?: Record<string, unknown>;
+};
+type After = { trace: Step[]; restored: Record<string, unknown> };
+/** A restore's reads (afterUpdate's `restored`). */
+type Restored = {
+  status: { boxes: Array<{ txHash: string; txIndex: number }> } & Record<string, unknown>;
+  held: Record<string, unknown>;
+  calls: string[];
+};
+
+/** A step's sends, calls and giveme.my's asks: what's built afresh named `new`, sends in order of what they spend. */
+function shape(s: Step) {
+  const sends = s.sends?.map((x) => ({ tx: /^new\d+$/.test(x.tx) ? "new" : x.tx, spends: x.spends }));
+  return {
+    at: s.at,
+    label: s.label,
+    ...(s.calls ? { calls: s.calls } : {}),
+    ...(sends ? { sends: sends.sort((a, b) => a.spends.join().localeCompare(b.spends.join())) } : {}),
+    ...(s.asked ? { asked: s.asked } : {}),
+  };
+}
+
+/**
+ * What this tree does after the update from 1.5.0's vault, held to what 1.5.0 did (`recorded`; chunk 44, the owner's
+ * call 3 of 2026-11-05: "right away"). The unlock's run finds the wallet's boxes in the retired classic pool and asks
+ * Bring every box back over the retired pools (retireOnce), which waits no draw: the withdraw 1.5.0 left unseen goes
+ * again at once, and every CHAIN_RESEND_MS while it's unseen. The run that sees it (the one 1.5.0 sent its first box
+ * at) brings back every box the vault left, each in a withdraw of its own: those 1.5.0 brought back over nine hours,
+ * and the two its cut chain left not mixed yet, which 1.5.0 kept for Mix my boxes again (its restore found them). The
+ * run after reads the pool once more and finds them gone; no run reads it again. Session 0 comes back as it did, and
+ * every page reads as it did but for those boxes. A restore finds nothing, and asks Koios of nothing but the pool.
+ */
+function finishesRetired(got: After, recorded: After, vault: Vault): void {
+  const withdraw = Uint8Array.from(Buffer.from(vault.submitted[0]!, "hex"));
+  const unseen = { tx: txIdOf(withdraw), spends: txInputs(withdraw).sort() };
+  const look = `tx_status ${unseen.tx}`;
+  const restored = recorded.restored as Restored;
+  // The pool's read, as 1.5.0's restore asked it first.
+  const read = restored.calls[0]!;
+  const seen = recorded.trace.find((s) => s.sends?.length)!.at;
+  const boxes = [
+    ...recorded.trace.filter((s) => s.label === "run").flatMap((s) => (s.sends ?? []).flatMap((x) => x.spends)),
+    ...restored.status.boxes.map((b) => `${b.txHash}#${b.txIndex}`),
+  ].sort();
+  // A run a minute: each looks for the withdraw, and every CHAIN_RESEND_MS from the unlock's sends it again.
+  const runs = [];
+  for (let at = 2 * MINUTE; at < seen; at += MINUTE) {
+    const resends = (at - MINUTE) % CHAIN_RESEND_MS === 0;
+    runs.push(resends ? { at, label: "run", calls: [look, "submittx"], sends: [unseen] } : { at, label: "run", calls: [look] });
+  }
+  const pages = recorded.trace.filter((s) => s.label !== "run" && s.label !== "unlock");
+  const steps = [
+    { at: MINUTE, label: "unlock", calls: [look, "submittx"], sends: [unseen] },
+    ...pages.map(shape),
+    ...runs,
+    {
+      at: seen,
+      label: "run",
+      calls: [look, read, "epoch_params limit=1", ...boxes.map(() => "submittx")],
+      sends: boxes.map((b) => ({ tx: "new", spends: [b] })),
+      asked: boxes.length,
+    },
+    { at: seen + MINUTE, label: "run", calls: [read] },
+  ].sort((a, b) => a.at - b.at);
+  expect(got.trace.map(shape)).toEqual(steps);
+  // What each page read: 1.5.0's, but Bring every box back going, and nothing on its way once its boxes are back. The
+  // cut chain stays shown stopped, as 1.5.0 kept it, until the hub's read finds its boxes gone.
+  expect(got.trace.filter((s) => s.label !== "run" && s.label !== "unlock").map((s) => s.result)).toEqual(
+    pages.map(({ at, label, result }) => {
+      const r = result as Record<string, unknown>;
+      if (label === "held" && at === MINUTE) return { ...r, bringing: { back: 0, retired: true, waiting: "withdraw" } };
+      if (label === "held") return { ...r, boxes: 0, lovelace: "0", next: null, notMixed: 0 };
+      if (label === "bring session 0 back") return { ...r, txHash: expect.stringMatching(/^new\d+$/) };
+      if (label === "status") {
+        return { ...r, boxes: [], lovelace: "0", notMixed: [], chains: [], unusable: { why: "retired" } };
+      }
+      return label === "chains" && at !== MINUTE ? [] : r;
+    }),
+  );
+  // Retired at the unlock, once; Bring every box back asked then, and over once its boxes are back.
+  const unlocked = vault.clock + MINUTE;
+  expect(got.trace[0]!.schedule).toMatchObject({
+    retired: unlocked,
+    bringing: { at: unlocked, back: 0, retired: true },
+  });
+  const last = got.trace.findLast((s) => s.schedule)!.schedule!;
+  expect(last).toMatchObject({ due: [], chains: [], retired: unlocked });
+  expect(last).not.toHaveProperty("bringing");
+  expect(last).not.toHaveProperty("withdrawing");
+  expect(got.restored).toEqual({
+    status: { ...restored.status, boxes: [], lovelace: "0", due: [], unusable: { why: "retired" } },
+    held: { ...restored.held, boxes: 0, lovelace: "0", next: null },
+    calls: [read],
+  });
+}
+
 // ---------------------------------------------------------------------------
 // With the token pools shown (1.6.0's release review, x-compat#2)
 // ---------------------------------------------------------------------------
 
 /**
  * The pools discovery hands every wallet on `network` from its first read: the bundled head start's (preprod's MIN
- * pool of 4.5 ₳ and 100 MIN a box, and its 5 ₳ ADA pool; none on mainnet), as discovery's kept() merges them. Read
- * only when this case runs: 1.5.0's tree, where this file records, has no such file.
+ * pools of 4.5 ₳ and 100 MIN a box, and its 5 ₳ and 7 ₳ ADA pools; mainnet's 5 ₳ pool), as discovery's kept() merges
+ * them. Every one is on 8131b1d's scripts, retired since chunk 44. Read only when this case runs: 1.5.0's tree, where
+ * this file records, has no such file.
  */
 const headStart: Handed = (network) => {
   const file = JSON.parse(readFileSync(new URL("../src/lovejoin-pools.json", import.meta.url), "utf8")) as Record<string, { pools: Array<{ ref: PoolRef; copy?: true }> }>;
   return file[network]!.pools.map((p) => (p.copy ? { copy: p.ref } : p.ref));
 };
 
-type Plans = {
-  funding: Array<{ network: string; depth: number; funding: Record<string, unknown> }>;
-  swap: { quote: Record<string, unknown>; review: Record<string, unknown> };
-};
-
 /**
- * `plans` but what a token pool shown adds by design, none of it the classic pool's: what the Mix form counts for a
- * collateral's mix where a 5 ₳ pool is shown (lovejoin-funding's collateralReserve and collateralPool), and a swap's
- * way for the token it gets, through a pool of it (ways, values). As the user types, the quote funds that token's boxes
- * beside the swap (fund), so a stop would bring their ADA back through the classic pool too (ifStopped): the quote's
- * other figures are compared. At Review the token's pool has no room, so the review's are all 1.5.0's but its way.
+ * The pools the head start shows on `network`, each as WebAssembly derives it from the bundled templates and the pool's
+ * seed, as the wallet verifies a pool: its scripts' version, and its mix box, which every read of the shown pools names
+ * beside the classic pool's. From the head start itself, so its refresh at each release (`npm run lovejoin-pools`)
+ * carries over.
  */
-function classicPlans(plans: unknown): unknown {
-  const p = structuredClone(plans) as Plans;
-  for (const f of p.funding) {
-    delete f.funding.collateralReserve;
-    delete f.funding.collateralPool;
-  }
-  for (const key of ["ways", "values", "fund", "ifStopped"]) delete p.swap.quote[key];
-  for (const key of ["ways", "values"]) delete p.swap.review[key];
-  return p;
+function shownPools(network: NetworkName = "preprod"): Array<{ version: string; mixBoxHash: string }> {
+  const wasm = loadTestWasm();
+  return headStart(network).map((p) => {
+    const pool = "copy" in p ? p.copy : p;
+    const view = wasm.lovejoinVerifyPool(JSON.stringify({ network, pool }));
+    return JSON.parse(view) as { version: string; mixBoxHash: string };
+  });
 }
 
-type After = { trace: Array<{ label: string; result?: unknown; calls?: string[] }>; restored: Record<string, unknown> };
-
-/**
- * The mix boxes of the pools the head start shows on preprod, each as WebAssembly derives it from the bundled templates
- * and the pool's seed, as the wallet verifies a pool: what every read of the shown pools names beside the classic
- * pool's. From the head start itself, so its refresh at each release (`npm run lovejoin-pools`) carries over.
- */
+/** The mix boxes of the pools the head start shows on preprod but the classic pool's. */
 function shownMixBoxes(): string[] {
-  const wasm = loadTestWasm();
-  return headStart("preprod")
-    .map((p) => {
-      const pool = "copy" in p ? p.copy : p;
-      return (JSON.parse(wasm.lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool }))) as { mixBoxHash: string }).mixBoxHash;
-    })
+  return shownPools()
+    .map((p) => p.mixBoxHash)
     .filter((box) => box !== MIX_BOX);
 }
 
 /**
- * A step's Koios requests (or the restore's) as 1.5.0 asked them with the classic pool alone shown, but what a shown
- * pool asks of its own: the shown pools' mix boxes come out of each read naming them (a read of the pools names every
- * pool it reads); in the return's step (`back`), its read of the pools for its collateral's 5 ₳ pool goes; and in the
- * hub's read of the pools (`status`), the parameters a token pool's read asks go. What's left is compared exactly, and
- * so is every other request: the wallet's own credentials, transactions and UTxOs named, and a read of the shown pools
- * alone, which leaves one naming nothing (1.6.0's review of the fixes, R3-17).
+ * A step's Koios requests (or the restore's) as they're asked with the classic pool alone shown, but what a shown pool
+ * asks of its own: the shown pools' mix boxes come out of each read naming them (a read of the pools names every pool
+ * it reads); and in the hub's read of the pools (`status`), the parameters a token pool's read asks go. No return reads
+ * the pools for its collateral's 5 ₳ pool any more: the head start's is retired (chunk 44). What's left is compared
+ * exactly, and so is every other request: the wallet's own credentials, transactions and UTxOs named, and a read of the
+ * shown pools alone, which leaves one naming nothing (1.6.0's review of the fixes, R3-17).
  */
-function classicCalls(calls: string[], shown: string[], { back = false, status = false } = {}): string[] {
-  let pools = back;
+function classicCalls(calls: string[], shown: string[], { status = false } = {}): string[] {
   let params = status;
   return calls.flatMap((call) => {
     const [path, query, ...named] = call.split(" ");
     if (path === "credential_utxos" && named.some((c) => shown.includes(c))) {
-      if (pools) {
-        pools = false;
-        return [];
-      }
       return [[path, query, ...named.filter((c) => !shown.includes(c))].join(" ")];
     }
     if (path === "epoch_params" && params) {
@@ -740,20 +867,18 @@ function classicCalls(calls: string[], shown: string[], { back = false, status =
 }
 
 /**
- * `after` but what a token pool shown adds by design: what's asked of its own (classicCalls), and the token pools the
- * hub lists (status's and held's `pools`). Each run's sends, results, schedule and every other request are compared
- * whole: a request beside a pool read, such as one naming the wallet's boxes, isn't left out with what a shown pool
- * asks (R3-17).
+ * `after` but what a shown pool asks of its own (classicCalls). Each run's sends, results and every other request are
+ * compared whole: a request beside a pool read, such as one naming the wallet's boxes, isn't left out with what a shown
+ * pool asks (R3-17); nor the pools the hub lists (status's and held's `pools`), which list none of the retired pools the
+ * wallet never used (chunk 44).
  */
-function classicAfter(after: unknown): unknown {
+function classicAfter(after: unknown): After {
   const shown = shownMixBoxes();
   const a = structuredClone(after) as After;
   for (const step of a.trace) {
-    if (step.calls) step.calls = classicCalls(step.calls, shown, { back: step.label === "bring session 0 back", status: step.label === "status" });
-    if (step.result && typeof step.result === "object") delete (step.result as Record<string, unknown>).pools;
+    if (step.calls) step.calls = classicCalls(step.calls, shown, { status: step.label === "status" });
   }
   a.restored.calls = classicCalls(a.restored.calls as string[], shown, { status: true });
-  for (const key of ["status", "held"]) delete (a.restored[key] as Record<string, unknown>).pools;
   return a;
 }
 
@@ -779,44 +904,33 @@ describe("1.5.0's Lovejoin, through token pools (chunk 34's gate)", SLOW, () => 
     return;
   }
 
-  const recorded = JSON.parse(readFileSync(FIXTURE, "utf8")) as { plans: unknown; vault: Vault; after: unknown };
+  const recorded = JSON.parse(readFileSync(FIXTURE, "utf8")) as { plans: unknown; vault: Vault; after: After };
 
-  it("plans every return and mix with no tokens as 1.5.0 did: the same boxes, mixes and outputs, its fees as measured", async () => {
-    expect(nearly(await plans(), recorded.plans)).toEqual([]);
+  it("plans every mix with no tokens as 1.5.0 did, and brings every return back directly: no 5 ₳ pool is shown (chunk 44)", async () => {
+    expect(nearly(await plans(), asRetired(recorded.plans))).toEqual([]);
   });
 
-  it("finishes a 1.5.0 vault left mid-flight by an update as 1.5.0 did, and a restore finds what 1.5.0's found", async () => {
-    expect(await afterUpdate(recorded.vault)).toEqual(recorded.after);
+  it("finishes a 1.5.0 vault left mid-flight by an update: its boxes in the retired pool all come back at once, the rest as 1.5.0 did, and a restore finds none (chunk 44)", async () => {
+    finishesRetired((await afterUpdate(recorded.vault)) as After, recorded.after, recorded.vault);
   });
 
   describe("with the token pools every preprod wallet is handed shown (1.6.0's release review, x-compat#2)", () => {
-    const head = JSON.parse(readFileSync(new URL("../src/lovejoin-pools.json", import.meta.url), "utf8")) as Record<
-      "preprod" | "mainnet",
-      { pools: Array<{ id: string; boxLovelace: string; token?: unknown }> }
-    >;
-    const bundled = head.preprod.pools;
-    const minPool = bundled.find((p) => p.token)!;
-    // Each network's 5 ₳ pool its head start bundles: preprod's, and mainnet's since 1.7.0's head start, its first.
-    const fivePoolOn = (network: "preprod" | "mainnet") => head[network].pools.find((p) => !p.token && p.boxLovelace === "5000000");
-
-    it("plans every return and mix as 1.5.0 did, but what a shown pool adds of its own", async () => {
-      const got = (await plans(headStart)) as Plans;
-      expect(nearly(classicPlans(got), classicPlans(recorded.plans))).toEqual([]);
-      // What's left out is the pools' own: the 5 ₳ pool's reserve wherever a mix makes mixes on a network whose head start
-      // bundles one (preprod, and mainnet since 1.7.0's); the token's way into the MIN pool as the user types, and back
-      // directly at Review, its pool empty.
-      for (const f of got.funding) expect(f.funding.collateralPool, `${f.network} ${f.depth}`).toBe(f.depth > 0 ? fivePoolOn(f.network as "preprod" | "mainnet")?.id : undefined);
-      expect(got.swap.quote.ways).toEqual([expect.objectContaining({ pool: minPool.id })]);
-      expect(got.swap.review.ways).toEqual([expect.objectContaining({ boxes: 0, pools: [] })]);
+    it("plans every return and mix as with the classic pool alone: every pool shown is retired, and adds nothing (chunk 44)", async () => {
+      // The head start bundles no pool on v2's scripts yet: each it shows takes no box, so none adds a collateral's 5 ₳
+      // pool, a token's way or a return's ADA pool. A refresh (`npm run lovejoin-pools`) that bundles one changes that.
+      for (const network of ["preprod", "mainnet"] as const) {
+        expect(shownPools(network).filter((p) => p.version === "v2")).toEqual([]);
+      }
+      expect(nearly(await plans(headStart), asRetired(recorded.plans))).toEqual([]);
     });
 
-    it("finishes a 1.5.0 vault left mid-flight by an update as 1.5.0 did, its sends and schedules alike, and a restore finds what 1.5.0's found", async () => {
+    it("finishes a 1.5.0 vault left mid-flight by an update as with the classic pool alone, and the hub lists none of the retired pools shown (chunk 44)", async () => {
       const got = (await afterUpdate(recorded.vault, headStart)) as After;
-      expect(classicAfter(got)).toEqual(classicAfter(recorded.after));
-      // The hub lists every shown pool all along, as every preprod wallet's does: each the head start bundles, which
-      // `npm run lovejoin-pools` rewrites at each release.
-      const status = got.trace.find((s) => s.label === "status")!.result as { pools?: Array<{ id: string }> };
-      expect(status.pools?.map((p) => p.id).sort()).toEqual(bundled.map((p) => p.id).sort());
+      finishesRetired(classicAfter(got), recorded.after, recorded.vault);
+      // The hub lists a retired pool only while the wallet has something there (the owner's call 1 of 2026-11-05): it
+      // never had anything in these.
+      const status = got.trace.find((s) => s.label === "status")!.result as { pools?: unknown };
+      expect(status.pools).toBeUndefined();
     });
   });
 });

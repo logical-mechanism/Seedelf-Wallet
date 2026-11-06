@@ -2,28 +2,25 @@
 // moment of an unlock that came while Koios was asked about it: a run whose
 // tx_status call outlasted a lock and an unlock leaves the resend to the
 // next run, which draws its wait into the new unlock, as a new withdraw's
-// does (privacy review §3.1, independent review L11, final review F6).
-import { readFileSync } from "node:fs";
-
+// does (privacy review §3.1, independent review L11, final review F6). Its
+// box is in v2's 5 ₳ pool: the classic pool, retired, brings its boxes all
+// back at the first run, with no wait (chunk 44).
 import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
-import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { SESSION_SPENT } from "../src/background/spent";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
 import { busyFor, loadTestWasm, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
 const PHRASE = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!.phrase;
 const SLOW = { timeout: 30_000 };
-const POOL = (
-  JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-).pool;
 
 type T = ReturnType<typeof testBalances>;
 
@@ -40,7 +37,7 @@ const kept = async (t: T) => (await t.store.get<Kept>("lovejoin.preprod"))!;
 async function maybeSent() {
   const t = testBalances();
   await t.wallet.create(PHRASE, PASSWORD);
-  t.koios.addedToAccounts.push(...POOL);
+  t.koios.addedToAccounts.push(...ADA_ROWS);
   const unlocked = t.clock.now - HOUR;
   await t.wallet.withKeys(() => t.session.set(SESSION_UNLOCKED_AT, unlocked));
   const cbor = swapTx();
@@ -49,7 +46,7 @@ async function maybeSent() {
   await t.store.set("lovejoin.preprod", {
     due: [],
     unlock: unlocked,
-    withdrawing: { txHash, txCbor: cbor, lovelace: "9700000", fee: "300000", at, sentAt: at },
+    withdrawing: { txHash, txCbor: cbor, lovelace: "4700000", fee: "300000", pool: ADA, at, sentAt: at },
   });
   await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [txInputs(bytes(cbor))[0]!]: at }));
   t.koios.missing.add(txHash);
@@ -58,6 +55,7 @@ async function maybeSent() {
     wasm: loadTestWasm(),
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     store: t.store,
+    pools: async () => [ADA_POOL],
   });
   return { t, lovejoin, txHash, unlocked };
 }

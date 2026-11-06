@@ -22,11 +22,13 @@ import type { Message, SessionView } from "../src/shared/rpc";
 import { NetworkContext } from "../src/ui/network";
 import { toBringBack } from "../src/ui/screens/Home";
 import { Session } from "../src/ui/screens/Swaps";
+import { lovejoinOf } from "./chain-fixtures";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, ORDER_ADDRESS, ORDER_SCRIPT, SESSION_ADDRESS } from "./fixtures/swap-tx";
 import { koiosPreprod, loadTestWasm, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
 import { atSession, busy, MIN, orderRow, PASSWORD, signing, started, SWAP_TX, unlocked, type T } from "./swap-session";
+import { ADA, ADA_ROWS } from "./v2-pools";
 
 const FUNDING_TX = sessionSwap.utxo.tx_hash;
 const ORDER_AT = bech32("addr_test", bytes(ORDER_ADDRESS));
@@ -47,6 +49,15 @@ function context(t: T, sessions: SessionService): Context {
     networks,
     networkChoice: new NetworkChoice(t.local, networks),
   };
+}
+
+/**
+ * `t` with Lovejoin reading v2's 5 ₳ pool, as discovery hands it: a session's mix and its return's ADA go there, the
+ * classic pool retired (chunk 44). The worker's one Lovejoin, the handlers' and the sessions' alike.
+ */
+function withAdaPool(t: T): T {
+  t.lovejoin = lovejoinOf(t);
+  return t;
 }
 
 /** A request as the worker answers it, on `network`. */
@@ -924,10 +935,10 @@ describe("a restore scan under way when the wallet is removed", () => {
 describe("a restore's scan that doesn't finish", () => {
   /**
    * Session 0 of the phrase used, holding 20 ₳, and the wallet removed again: what a restore then finds. `lovejoin`:
-   * the sessions with Lovejoin wired in, as the worker has them, so a mix can start.
+   * the sessions with Lovejoin wired in, as the worker has them, reading the 5 ₳ pool, so a mix can start.
    */
   async function removedWithLeftovers(lovejoin = false) {
-    const t = await unlocked();
+    const t = lovejoin ? withAdaPool(await unlocked()) : await unlocked();
     await usedWith(t, 0, [[FUNDING_TX, 5_000_000]]);
     t.koios.addedToAccounts.push(atSession(FUNDING_TX, 1, "20000000"));
     await t.wallet.reset();
@@ -1034,7 +1045,8 @@ describe("a restore's scan that doesn't finish", () => {
       [
         "a mix (a Bootstrap's, which draws nothing from the pool)",
         async (sessions) => {
-          const out = await sessions.mixOutBuild("preprod", 1, { bootstrap: true });
+          // Into the 5 ₳ pool: the classic pool, retired, takes no Bootstrap (chunk 44).
+          const out = await sessions.mixOutBuild("preprod", 1, { pool: ADA, bootstrap: true });
           await sessions.mixOutSubmit("preprod", out.txHash);
         },
       ],
@@ -1386,9 +1398,6 @@ describe("a found session's 5 ₳ for its order's cancel", () => {
 });
 
 describe("a found session's 5 ₳ for its return through Lovejoin (1.5.0's release review, C53)", () => {
-  const POOL = (
-    JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-  ).pool;
   /** Ogmios agrees with every evaluation: the mixes' scripts run as their budgets say. */
   const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
   /** What reached the account after its return took everything, its collateral too: a site's refund, say. */
@@ -1396,9 +1405,12 @@ describe("a found session's 5 ₳ for its return through Lovejoin (1.5.0's relea
   /** Building a chain runs the scripts of every mix in it. */
   const CHAINS = { timeout: 300_000 };
 
-  /** Found session 0, holding `held`, with Lovejoin wired in as the worker has it and its pool listed. */
+  /**
+   * Found session 0, holding `held`, with Lovejoin wired in as the worker has it and the 5 ₳ pool listed, which a
+   * return's ADA goes into (chunk 44).
+   */
   async function foundHolding(held: KoiosUtxo[], order = false) {
-    const t = await unlocked();
+    const t = withAdaPool(await unlocked());
     t.koios.evaluation = AGREES;
     const sessions = signing(t, { lovejoin: t.lovejoin, sleep: async () => undefined });
     await usedWith(t, 0, [
@@ -1406,7 +1418,7 @@ describe("a found session's 5 ₳ for its return through Lovejoin (1.5.0's relea
       [FUNDING_TX, 5_000_000],
     ]);
     if (order) swapped(t);
-    t.koios.addedToAccounts.push(...held, ...(order ? [orderRow(SWAP_TX)] : []), ...POOL);
+    t.koios.addedToAccounts.push(...held, ...(order ? [orderRow(SWAP_TX)] : []), ...ADA_ROWS);
     expect(await sessions.scan("preprod")).toEqual({ used: 1, found: [0] });
     return { t, sessions };
   }

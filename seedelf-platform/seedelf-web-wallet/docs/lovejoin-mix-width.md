@@ -71,6 +71,16 @@ The fee input first, the costliest place. "A block holds" is how many fit in a b
 | 5 | 15,051,293,912 | 150.5% | over by 5.1 billion | 2,562,853 | 6,130 B | (1.719 ₳) | 1 |
 | 6 | 21,296,344,065 | 213.0% | over by 11.3 billion | 3,383,391 | 8,280 B | (2.312 ₳) | 0 |
 
+**That token pool on Lovejoin v2's scripts** (29573c5, the wallet's pools from 1.8.0; measured 2026-11-06 on the wallet's stand-in, `wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json`, offline alone, since it isn't on chain). v2's `mix_logic` checks both lengths in xor32, which costs 6 million steps at N = 3 and 10.8 million at N = 4. Four still fits, by 1.0%, and the fee estimates (0.95 ₳ and 1.35 ₳) still cover a mix:
+
+| N | CPU steps | Of 10 billion | Left | Memory | Size | Fee | A block holds |
+|---|---|---|---|---|---|---|---|
+| 2 | 2,815,112,979 | 28.2% | 7,184,887,021 | 800,851 | 1,740 B | 0.543 ₳ | 7 |
+| 3 | 5,815,442,941 | 58.2% | 4,184,557,059 | 1,288,339 | 2,862 B | 0.837 ₳ | 3 |
+| 4 | 9,899,749,344 | 99.0% | 100,250,656 | 1,895,077 | 4,324 B | 1.230 ₳ | 2 |
+| 5 | 15,068,082,012 | 150.7% | over by 5.1 billion | 2,621,353 | 6,130 B | (1.725 ₳) | 1 |
+| 6 | 21,320,490,769 | 213.2% | over by 11.3 billion | 3,467,455 | 8,280 B | (2.319 ₳) | 0 |
+
 **The classic pool on preprod** is within 1.3 million steps of mainnet's at every width: 5,800,296,743 at N = 3 and 9,881,216,862 at N = 4, which leaves 118,783,138. Mainnet's scripts are preprod's recompiled, and cost a touch more.
 
 **A token pool costs 5 to 10 million steps more than the classic pool,** because `mix_logic` decodes three more fields of the reference datum: 9.1 million more at N = 3, 7.8 million at N = 4. Its box carries a token too, so its mix is 49 bytes bigger a box and about 0.01 ₳ dearer.

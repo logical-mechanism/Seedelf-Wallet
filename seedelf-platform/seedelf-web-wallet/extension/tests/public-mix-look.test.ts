@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { PUBLIC_LOOK_MS } from "../src/background/lovejoin";
 import { SESSION_RESERVED_PREFIX, SPENT_KEEP_MS } from "../src/background/spent";
 import { CHAINS, PASSWORD, publicFunded, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 const DEPOSIT_INPUT = `${"e6".repeat(32)}#0`;
 
@@ -20,7 +21,7 @@ const reservedPublic = async (t: Tested) =>
 /** A mix of one box sent from the public account, whose deposit's first submit reached the node and no submit was answered. */
 async function stoppedMaybe() {
   const t = await publicFunded("60000000", ["60000000"]);
-  const mix = await t.lovejoin.publicBuild("preprod", 1);
+  const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   const fetch = t.koios.fetch;
   let submits = 0;
   t.koios.fetch = async (url, init) => {
@@ -46,7 +47,7 @@ describe("looking for a public mix's transaction that may have gone through (ind
     expect(await reservedPublic(t)).toEqual(expect.objectContaining({ inputs: expect.arrayContaining([DEPOSIT_INPUT]) }));
 
     // A Review looks each time.
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("may have gone through");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("may have gone through");
     expect(looks(t) - before).toBe(4);
 
     // It lands; the next look, two minutes after the last, says so, and what it held goes.
@@ -78,7 +79,7 @@ describe("looking for a public mix's transaction that may have gone through (ind
     await t.wallet.unlock(PASSWORD);
     const fetch = t.koios.fetch;
     t.koios.fetch = async (url, init) => (url.endsWith("/tx_status") ? new Response("", { status: 503 }) : fetch(url, init));
-    const error = await t.lovejoin.publicBuild("preprod", 1).then(
+    const error = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA }).then(
       () => undefined,
       (e: unknown) => String(e),
     );
@@ -86,6 +87,6 @@ describe("looking for a public mix's transaction that may have gone through (ind
     expect(error).not.toMatch("if not.");
     // Koios answers again: unseen, and what it spends unspent, two hours on, it never went.
     t.koios.fetch = fetch;
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   });
 });

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { SESSION_SPENT } from "../src/background/spent";
 import { CHAINS, publicFunded, type Tested } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 const DEPOSIT_INPUT = `${"e6".repeat(32)}#0`;
 
@@ -45,7 +46,7 @@ describe("a mix from the public account whose deposit a try may have put in (ind
     ["an answer the wallet can't read", () => new Response("<html>Accepted</html>", { status: 202 }), nodeDown],
   ])("stops as may have gone through after %s, and builds no other mix until it's settled", async (_, first, later) => {
     const t = await publicFunded("60000000", ["60000000"]);
-    const mix = await t.lovejoin.publicBuild("preprod", 1);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const net = answers(t, first, later);
     const error = await t.lovejoin.publicSubmit("preprod", mix.txHash).then(
       () => undefined,
@@ -60,19 +61,19 @@ describe("a mix from the public account whose deposit a try may have put in (ind
     expect(await t.lovejoin.progress("preprod")).toMatchObject({ total: 5, sent: 0, maybeSent: true });
     expect(await spent(t)).toContain(DEPOSIT_INPUT);
     // No mix from the account is built while it's unseen: not from its other UTxO either.
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("may have gone through");
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow("may have gone through");
 
     // It lands: the mix stopped after its deposit, which went, and another may be built.
     t.koios.spent.add(DEPOSIT_INPUT);
     t.koios.confirmations = 1;
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     expect(await record(t)).toMatchObject({ sent: 1 });
     expect((await record(t)).maybe).toBeUndefined();
   });
 
   it("stops as before when every try is answered that nothing went: another may be built at once", async () => {
     const t = await publicFunded("60000000", ["60000000"]);
-    const mix = await t.lovejoin.publicBuild("preprod", 1);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     const fetch = t.koios.fetch;
     t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? nodeDown() : fetch(url, init));
     await expect(t.lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow("Press Send again");
@@ -80,6 +81,6 @@ describe("a mix from the public account whose deposit a try may have put in (ind
     expect((await t.lovejoin.progress("preprod"))?.maybeSent).toBeUndefined();
     expect(await spent(t)).not.toContain(DEPOSIT_INPUT);
     t.koios.fetch = fetch;
-    await t.lovejoin.publicBuild("preprod", 1);
+    await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
   });
 });

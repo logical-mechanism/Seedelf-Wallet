@@ -2,7 +2,8 @@
 // a token pool are looked for on the token pools' feed (lovejoin/tokens/since), never on the classic pool's, which
 // doesn't list them, and never named to tx_status (DATA-1 = PRIV-1); and the reads documented as asking nobody ask
 // nobody (PRIV-4 = STATE-6 = UI-8). The data layer's client is the same on any network, so it's pointed at
-// preprod's fixtures: PR #163's preprod token pool (2 ₳ and LJTEST a box) stands in for any token pool.
+// preprod's fixtures: PR #163's preprod token pool's v2 twin (2 ₳ and LJTEST a box) stands in for any token pool, the
+// one on 8131b1d's scripts being retired (chunk 44).
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -34,8 +35,8 @@ const SLOW = { timeout: 120_000 };
 /** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
 const POOL = (JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }).pool;
 
-/** PR #163's token pool on preprod, as Koios lists it (wasm/tests/fixtures). */
-const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-token-pool-preprod.json", import.meta.url), "utf8")) as {
+/** PR #163's token pool's launch with its scripts derived on v2, never on chain (chunk 44, wasm/tests/fixtures). */
+const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json", import.meta.url), "utf8")) as {
   seed: { txHash: string; txIndex: number };
   reference: KoiosUtxo;
   scripts: KoiosUtxo[];

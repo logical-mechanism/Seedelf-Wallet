@@ -1,15 +1,22 @@
-//! A v2 token pool for the tests (web wallet chunk 44): Lovejoin's preprod
-//! token pool's launch (`fixtures/lovejoin-token-pool-preprod.json`) with its
-//! scripts derived on v2 and put at the holder, as every launch the wallet
-//! makes puts them. Its seed makes the same NFT policy on either set, so only
-//! the datum's `mix_box` and `mix_logic` and the two scripts change. Never on
-//! chain: it stands in for a v2 pool where a test needs one verified.
+//! Two v2 pools for the tests (web wallet chunk 44), never on chain: each
+//! stands in for a v2 pool where a test needs one verified.
 //!
-//! `RECORD_LOVEJOIN_V2_FIXTURE=1` writes it; the test holds the committed file
-//! to what it would write.
+//! - A token pool: Lovejoin's preprod token pool's launch
+//!   (`fixtures/lovejoin-token-pool-preprod.json`) with its scripts derived on
+//!   v2 and put at the holder, as every launch the wallet makes puts them. Its
+//!   seed makes the same NFT policy on either set, so only the datum's
+//!   `mix_box` and `mix_logic` and the two scripts change.
+//! - The 5 ₳ ADA pool a return's spare ADA and its collateral go into from
+//!   1.8.0 (the owner's call 4 of 2026-11-05): that launch's rows again, from
+//!   another seed and a launch transaction of its own, so a test may read both
+//!   pools, with an ADA pool's datum.
+//!
+//! `RECORD_LOVEJOIN_V2_FIXTURE=1` writes them; the tests hold the committed
+//! files to what they would write.
 
 use pallas_crypto::hash::Hasher;
 use seedelf_core::lovejoin::templates::{self, Set};
+use seedelf_core::lovejoin::{BoxValue, ReferenceDatum};
 use serde_json::{Value, json};
 
 const FROM: &str = concat!(
@@ -20,6 +27,13 @@ const FILE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/lovejoin-v2-token-pool-preprod.json"
 );
+const ADA_FILE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/lovejoin-v2-ada-pool-preprod.json"
+);
+
+/// What every box of the ADA pool holds: the 5 ₳ a session's collateral is.
+const ADA_BOX: u64 = 5_000_000;
 
 fn fixture() -> Value {
     let mut pool: Value = serde_json::from_str(&std::fs::read_to_string(FROM).unwrap()).unwrap();
@@ -78,14 +92,132 @@ fn fixture() -> Value {
     pool
 }
 
+/// The ADA pool: the launch's rows, at its seed's index 3 (the token pool's is
+/// 2) and in a launch transaction of its own, with an ADA pool's datum, its
+/// NFT, and its two scripts at the holder.
+fn ada_fixture() -> Value {
+    let mut pool: Value = serde_json::from_str(&std::fs::read_to_string(FROM).unwrap()).unwrap();
+    let seed_tx: [u8; 32] = hex::decode(pool["seed"]["txHash"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let v2 = templates::derive_in(Set::V2, &seed_tx, 3).unwrap();
+    pool["seed"]["txIndex"] = json!(3);
+    let tx = hex::encode(Hasher::<256>::hash(
+        b"web wallet chunk 44: a v2 ADA pool of 5 ADA a box",
+    ));
+    let reference = &mut pool["reference"];
+    let max_fee = reference["inline_datum"]["value"]["fields"][4]["int"]
+        .as_u64()
+        .unwrap();
+    let datum = ReferenceDatum {
+        box_value: BoxValue {
+            lovelace: ADA_BOX,
+            token: None,
+        },
+        max_fee,
+        mix_box_hash: v2.mix_box.hash,
+        mix_logic_hash: v2.mix_logic.hash,
+        fee_hash: v2.fee_contract.hash,
+    }
+    .encode();
+    let bytes = |b: &[u8]| json!({ "bytes": hex::encode(b) });
+    reference["inline_datum"] = json!({
+        "bytes": hex::encode(&datum),
+        "value": {
+            "constructor": 0,
+            "fields": [
+                { "int": ADA_BOX },
+                bytes(&[]),
+                bytes(&[]),
+                { "int": 0 },
+                { "int": max_fee },
+                bytes(&v2.mix_box.hash),
+                bytes(&v2.mix_logic.hash),
+                bytes(&v2.fee_contract.hash),
+            ],
+        },
+    });
+    reference["datum_hash"] = json!(hex::encode(Hasher::<256>::hash(&datum).as_ref()));
+    reference["tx_hash"] = json!(tx);
+    // Its NFT: P's `lovejoin`, which a row the wallet makes up names with no fingerprint.
+    reference["asset_list"][0]["policy_id"] = json!(hex::encode(v2.policy()));
+    reference["asset_list"][0]["fingerprint"] = json!("");
+    let (holder, tx) = (reference["address"].clone(), reference["tx_hash"].clone());
+    let cred = hex::encode(templates::REFERENCE_HOLDER_HASH);
+    let scripts = pool["scripts"].as_array_mut().unwrap();
+    for (i, (row, script)) in scripts
+        .iter_mut()
+        .zip([&v2.mix_box, &v2.mix_logic])
+        .enumerate()
+    {
+        row["tx_hash"] = tx.clone();
+        row["tx_index"] = json!(i + 1);
+        row["address"] = holder.clone();
+        row["payment_cred"] = json!(cred);
+        row["stake_address"] = Value::Null;
+        row["reference_script"]["hash"] = json!(hex::encode(script.hash));
+        row["reference_script"]["bytes"] = json!(hex::encode(&script.cbor));
+        row["reference_script"]["size"] = json!(script.cbor.len());
+    }
+    pool["about"] = json!(
+        "A v2 ADA pool of 5 ₳ a box, never on chain (web wallet chunk 44): the pool a return's spare ADA and its collateral go into from 1.8.0. Lovejoin's preprod token-pool launch's rows (lovejoin-token-pool-preprod.json) from another seed index and a launch transaction of their own, an ADA pool's datum, and its scripts derived on v2 (Lovejoin 29573c5) at the holder. Written by lovejoin_v2_fixture_test.rs (RECORD_LOVEJOIN_V2_FIXTURE=1); never edit by hand."
+    );
+    pool
+}
+
+/// Writes `pool` to `file` when asked, and holds the committed file to it.
+fn held_to(pool: &Value, file: &str) {
+    if std::env::var_os("RECORD_LOVEJOIN_V2_FIXTURE").is_some() {
+        std::fs::write(file, serde_json::to_string_pretty(pool).unwrap() + "\n").unwrap();
+    }
+    let committed: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+    assert_eq!(&committed, pool);
+}
+
+/// The worker's WebAssembly's view of `pool`, verified.
+fn view_of(pool: &Value) -> seedelf_wasm::lovejoin::PoolView {
+    let pool_ref: seedelf_wasm::lovejoin::PoolRef = serde_json::from_value(json!({
+        "reference": pool["reference"],
+        "seed": pool["seed"],
+        "scripts": pool["scripts"],
+    }))
+    .unwrap();
+    seedelf_wasm::lovejoin::verify_pool(seedelf_wasm::lovejoin::VerifyPoolRequest {
+        network: "preprod".into(),
+        pool: pool_ref,
+    })
+    .unwrap()
+}
+
 #[test]
 fn the_v2_pool_fixture_is_its_derivation() {
-    let pool = fixture();
-    if std::env::var_os("RECORD_LOVEJOIN_V2_FIXTURE").is_some() {
-        std::fs::write(FILE, serde_json::to_string_pretty(&pool).unwrap() + "\n").unwrap();
-    }
-    let committed: Value = serde_json::from_str(&std::fs::read_to_string(FILE).unwrap()).unwrap();
-    assert_eq!(committed, pool);
+    held_to(&fixture(), FILE);
+}
+
+#[test]
+fn the_v2_ada_pool_fixture_is_its_derivation() {
+    held_to(&ada_fixture(), ADA_FILE);
+}
+
+/// The worker's WebAssembly verifies the ADA pool as v2's, of 5 ₳ a box and no token, its scripts read from the
+/// holder, and never as the token pool.
+#[test]
+fn the_v2_ada_pool_fixture_verifies_as_v2() {
+    let pool = ada_fixture();
+    let view = view_of(&pool);
+    let seed_tx: [u8; 32] = hex::decode(pool["seed"]["txHash"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let v2 = templates::derive_in(Set::V2, &seed_tx, 3).unwrap();
+    assert_eq!(view.version, "v2");
+    assert_eq!(view.id, hex::encode(v2.policy()));
+    assert_eq!(view.box_lovelace, ADA_BOX.to_string());
+    assert!(view.token.is_none());
+    assert_eq!(view.mix_box_hash, hex::encode(v2.mix_box.hash));
+    assert_eq!(view.scripts_inline, 0);
+    assert_ne!(view.id, view_of(&fixture()).id);
 }
 
 /// The worker's WebAssembly verifies it as a v2 pool, both scripts read from the holder.

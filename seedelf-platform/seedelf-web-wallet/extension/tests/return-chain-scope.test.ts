@@ -2,10 +2,8 @@
 // (independent review L17): only the latest, while it went in partly and its
 // rest hasn't come back. A site's session paid again after a chain stopped,
 // once that chain's rest is back, goes through Lovejoin again, as the
-// privacy default says. The real WebAssembly, a recorded preprod pool, and
-// fakes of Koios.
-import { readFileSync } from "node:fs";
-
+// privacy default says. The real WebAssembly, Lovejoin v2's 5 ₳ pool
+// (v2-pools.ts), and fakes of Koios.
 import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
@@ -16,14 +14,12 @@ import { Minswap } from "../src/background/minswap";
 import { SESSION_BACK, SessionService } from "../src/background/sessions";
 import { SESSION_SPENT } from "../src/background/spent";
 import { sessionSwap, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const account = (words: number) =>
   vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === words)!;
 
-const POOL = (
-  JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
-).pool;
 const CHAINS = { timeout: 60_000 };
 const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
 
@@ -46,9 +42,9 @@ function atSession(tx_hash: string, tx_index: number, value: string): KoiosUtxo 
   } as KoiosUtxo;
 }
 
-/** A site's private session 0 holding 40 ₳ and its 5 ₳ collateral, and Lovejoin's pool. */
+/** A site's private session 0 holding 40 ₳ and its 5 ₳ collateral, and the 5 ₳ pool its ADA goes into (chunk 44). */
 async function withSession() {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(account(12).phrase, PASSWORD);
   await t.store.set("sessions.preprod", {
     next: 1,
@@ -62,9 +58,9 @@ async function withSession() {
       },
     ],
   });
-  t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...POOL);
+  t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...ADA_ROWS);
   t.koios.evaluation = AGREES;
-  // One wave deep: a few chains fit the recorded pool's 20 boxes.
+  // One wave deep: a few chains fit the pool's 20 boxes.
   await t.deps.preferences.set({ lovejoinDepth: 1 });
   const sessions = new SessionService({
     ...t.deps,
@@ -168,13 +164,17 @@ describe("a mix whose chain stopped partway and whose rest came back (independen
           ownStake: true,
           createdAt: at,
           txs: [done("out", "ab".repeat(32)), done("deposit", "ac".repeat(32)), done("back", "ad".repeat(32))],
-          mix: { boxes: 1 },
+          mix: { boxes: 1, pool: ADA },
           auto: { approved: { minAmountOut: "0", fund: { lovelace: "15000000", tokens: [] } } },
           chain: { total: 4, last, at, stopped: CHAIN_CUT() },
         },
       ],
     });
-    // The 40 ₳ and 5 ₳ at its account reached it since: a chain would pay for another mix with them.
+    // The 40 ₳ and 5 ₳ at its account reached it since: a chain would pay for another mix with them. Its collateral's
+    // mix into the 5 ₳ pool, a chain of its own even where the rest comes back directly (the owner, 2026-10-23), is
+    // off: with that pool shown (chunk 44) it would be recorded as the return's chain, and what's asked here is the
+    // rest.
+    await t.deps.preferences.set({ lovejoinCollateral: false });
     await sessions.advance("preprod", 0, true);
     expect(t.koios.submitted).toHaveLength(1);
     const book = await t.store.get<{ sessions: Array<{ chain: { last: string }; txs: Array<{ kind: string }> }> }>("sessions.preprod");

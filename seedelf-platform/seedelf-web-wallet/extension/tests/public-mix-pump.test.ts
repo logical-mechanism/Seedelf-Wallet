@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
 import { chainNet, CHAINS, lovejoinOf, publicFunded } from "./chain-fixtures";
+import { ADA } from "./v2-pools";
 
 describe("pumping a mix from the public account (independent review L26)", CHAINS, () => {
   async function sending() {
@@ -16,7 +17,7 @@ describe("pumping a mix from the public account (independent review L26)", CHAIN
       await t.wallet.touch();
     };
     const lovejoin = lovejoinOf(t, { sleep: passing });
-    const summary = await lovejoin.publicBuild("preprod", 4);
+    const summary = await lovejoin.publicBuild("preprod", 4, { pool: ADA });
     const kept = await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string }> }>(SESSION_LOVEJOIN_PUBLIC));
     const order = kept!.chain.map((c) => c.txHash);
     const net = chainNet(t, () => order);

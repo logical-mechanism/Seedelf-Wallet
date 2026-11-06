@@ -15,6 +15,7 @@ import { NETWORKS } from "../src/networks";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, loadTestWasm, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, ownDatum, retiredAlready } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const PHRASE = (vectors("cardano_account.json") as Array<{ account: number; phrase: string }>).find(
@@ -121,13 +122,16 @@ type Sealed = {
 };
 const sealed = async (t: T) => (await t.store.get<Sealed>("lovejoin.preprod"))!;
 
-/** A Bootstrap of two boxes in the token pool, its deposit in, still where it put them: held, never mixed. */
+/**
+ * A Bootstrap of two boxes in the 5 ₳ pool, its deposit in, still where it put them: held, never mixed. Not in the
+ * token pool here, on 8131b1d's scripts: retired, it holds none, a Bootstrap's included (chunk 44).
+ */
 async function bootstrapped(t: T, lj: LovejoinService): Promise<string[]> {
   const deposit = "b0".repeat(32);
-  const boxes = await Promise.all([0, 1].map(async (i) => ({ ...(await tokenBox(t, "b0", true, 5)), tx_index: i })));
+  const boxes = await Promise.all([0, 1].map(async (i) => adaBox("b0", await ownDatum(t.wallet), t.clock.now, 5, i)));
   t.koios.addedToAccounts.push(...boxes);
-  const leaves = boxes.map((b) => ({ txHash: deposit, txIndex: b.tx_index, pool: TOKEN }));
-  await lj.recordChain("preprod", { progress: "test.b0", txs: [{ kind: "deposit", txCbor: "", txHash: deposit, fee: "0" }], leaves, boxes: 2, pools: { [TOKEN]: 2 }, bootstrap: true, account: 0 });
+  const leaves = boxes.map((b) => ({ txHash: deposit, txIndex: b.tx_index, pool: ADA }));
+  await lj.recordChain("preprod", { progress: "test.b0", txs: [{ kind: "deposit", txCbor: "", txHash: deposit, fee: "0" }], leaves, boxes: 2, pools: { [ADA]: 2 }, bootstrap: true, account: 0 });
   await lj.chainSent("preprod", deposit, 0);
   await lj.chainEnded("preprod", deposit);
   return leaves.map((l) => `${l.txHash}#${l.txIndex}`);
@@ -136,13 +140,19 @@ async function bootstrapped(t: T, lj: LovejoinService): Promise<string[]> {
 describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
   it("brings back every box in every pool in one run, one after another, a Bootstrap's held ones too, even in the unlock's run", async () => {
     const t = await wallet();
-    const lj = pooled(t);
-    t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1"), await tokenBox(t, "f1"), ...(await strangers(t)));
+    // Past 1.8.0's first run, which brought back what the retired pools held (retireOnce, chunk 44): their boxes since
+    // keep their waits, as any pool's do, until the user asks.
+    await retiredAlready(t.store);
+    const lj = pooled(t, { pools: async () => [TOKEN_POOL, ADA_POOL] });
+    t.koios.addedToAccounts.push(...POOL, ...ADA_ROWS, await classicBox(t, "c1"), await tokenBox(t, "f1"), ...(await strangers(t)));
     const held = await bootstrapped(t, lj);
     // A pool read gives the mixed boxes their due times, hours away; the Bootstrap's hold its two.
     await lj.status("preprod");
     expect((await sealed(t)).due).toHaveLength(1);
-    expect(await lj.held("preprod")).toMatchObject({ boxes: 1, pools: [expect.objectContaining({ id: TOKEN, boxes: 1, bootstrap: 2 })] });
+    expect(await lj.held("preprod")).toMatchObject({
+      boxes: 1,
+      pools: [expect.objectContaining({ id: ADA, boxes: 0, bootstrap: 2 }), expect.objectContaining({ id: TOKEN, boxes: 1 })],
+    });
     // Nothing is due, and the wallet unlocked this minute: a box's own run would send nothing.
     expect(await lj.withdrawDue("preprod", true)).toEqual([]);
     expect(t.collateral.asked).toEqual([]);
@@ -162,7 +172,8 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
     t.store.set = set;
     expect(sent).toHaveLength(4);
     expect(counts.filter(([, left]) => left !== undefined)).toEqual(expect.arrayContaining([[0, 4], [1, 3], [2, 2], [3, 1], [4, 0]]));
-    // The classic pool's first, then the token pool's: the mixed box and the Bootstrap's two, which it never mixed.
+    // The classic pool's first, then the others': the token pool's mixed box, the 5 ₳ pool's Bootstrap's two, which it
+    // never mixed.
     expect(withdrawn(t)[0]).toBe(`${"c1".repeat(32)}#0`);
     expect(new Set(withdrawn(t))).toEqual(new Set([`${"c1".repeat(32)}#0`, `${"f1".repeat(32)}#0`, ...held]));
     expect(t.koios.submitted).toHaveLength(4);
@@ -180,6 +191,7 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
     expect(after.bringing).toBeUndefined();
     expect(after.due).toEqual([]);
     expect(after.pools?.[TOKEN]).toBeUndefined();
+    expect(after.pools?.[ADA]).toBeUndefined();
     // The Bootstrap counted its two back, so its entry is over too.
     expect(after.mixes ?? []).toEqual([]);
     const home = await lj.held("preprod");
@@ -298,6 +310,9 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
 
   it("stops when asked from Settings: the boxes left come back as before, each after its own wait", async () => {
     const t = await wallet();
+    // The classic pool's box keeps its own wait once stopped: past 1.8.0's first run, which would bring it back with
+    // the retired pools' (retireOnce, chunk 44).
+    await retiredAlready(t.store);
     const lj = pooled(t);
     t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1"), ...(await strangers(t)));
     await lj.status("preprod");

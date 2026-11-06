@@ -1,7 +1,9 @@
 // What the tests of Lovejoin's chains share (chain-*.test.ts, public-mix-*.test.ts):
 // an unlocked wallet with a session holding ADA, or a public account with
-// collateral, Lovejoin's recorded preprod pool, and a model of the network's
-// mempool that refuses a chain's transaction whose parent it doesn't have.
+// collateral, Lovejoin v2's 5 ₳ pool (v2-pools.ts: the pool a return's ADA
+// goes into since chunk 44, the classic pool retired), and a model of the
+// network's mempool that refuses a chain's transaction whose parent it
+// doesn't have.
 import { readFileSync } from "node:fs";
 
 import { Collateral } from "../src/background/collateral";
@@ -11,13 +13,14 @@ import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { koiosPreprod, sessionSwap, testBalances, vectors } from "./fakes";
+import { ADA_POOL, ADA_ROWS } from "./v2-pools";
 
 export const PASSWORD = "correct horse battery";
 export const HOUR = 3_600_000;
 export const account = (words: number) =>
   vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === words)!;
 
-/** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25). */
+/** 20 boxes from Lovejoin's classic preprod pool, as Koios lists them (2026-09-25): retired, it takes no new box. */
 export const POOL = (
   JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }
 ).pool;
@@ -62,9 +65,9 @@ export function sessionsOf(t: Tested, sleep: (ms: number) => Promise<void> = asy
   });
 }
 
-/** An unlocked wallet with a site's private session 0 holding `lovelace` and its 5 ₳ collateral, and Lovejoin's pool. */
+/** An unlocked wallet with a site's private session 0 holding `lovelace` and its 5 ₳ collateral, and Lovejoin's 5 ₳ pool. */
 export async function withSession(lovelace: string) {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(account(12).phrase, PASSWORD);
   await t.store.set("sessions.preprod", {
     next: 1,
@@ -78,21 +81,21 @@ export async function withSession(lovelace: string) {
       },
     ],
   });
-  t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, lovelace), atSession("c2".repeat(32), 1, "5000000"), ...POOL);
+  t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, lovelace), atSession("c2".repeat(32), 1, "5000000"), ...ADA_ROWS);
   t.koios.evaluation = AGREES;
   return { t, sessions: sessionsOf(t) };
 }
 
 /**
  * An unlocked wallet with collateral and `lovelace` in its public account
- * (`e6…#0`), and Lovejoin's pool. `more`: another UTxO of ADA alone in it
+ * (`e6…#0`), and Lovejoin's 5 ₳ pool. `more`: another UTxO of ADA alone in it
  * for each, `e7…#0` on.
  */
 export async function publicFunded(lovelace = "60000000", more: string[] = []) {
-  const t = testBalances();
+  const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(account(12).phrase, PASSWORD);
   t.koios.evaluation = AGREES;
-  t.koios.addedToAccounts.push(...POOL);
+  t.koios.addedToAccounts.push(...ADA_ROWS);
   const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
   const keyHash = await t.wallet.withKeys((keys) => keys.cardano.paymentKeyHash(0, 0));
   const at = (tx: string, value: string) => ({ ...first!, tx_hash: tx.repeat(32), tx_index: 0, value, payment_cred: keyHash, asset_list: [] });
@@ -100,12 +103,13 @@ export async function publicFunded(lovelace = "60000000", more: string[] = []) {
   return t;
 }
 
-/** Lovejoin on `t`'s fakes, with its own `sleep` and whatever else a test changes. */
+/** Lovejoin on `t`'s fakes, reading the 5 ₳ pool, with its own `sleep` and whatever else a test changes. */
 export function lovejoinOf(t: Tested, extra: Partial<ConstructorParameters<typeof LovejoinService>[0]> = {}) {
   return new LovejoinService({
     ...t.deps,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     store: t.store,
+    pools: async () => [ADA_POOL],
     ...extra,
   });
 }

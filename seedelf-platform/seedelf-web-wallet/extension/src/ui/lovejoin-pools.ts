@@ -1,5 +1,6 @@
 // Lovejoin's pools as the screens show them (chunk 34's 34f): what a box
-// holds, in words; every pool the wallet reads, the classic pool among them;
+// holds, in words; every pool the wallet reads, the classic pool among them,
+// retired since chunk 44 and listed only while the wallet has boxes there;
 // and the hub's order, grouped by token (session 1, 13): ADA first, then the
 // tokens the wallet holds, known without a read, then the most used, counted
 // as boxes not the wallet's. Each pool shows its own numbers and none is
@@ -32,7 +33,7 @@ export interface ShownPool extends Omit<LovejoinPoolStatus, "id"> {
  */
 export const CLASSIC_ID = "classic";
 
-/** The classic pool's box: 10 ₳, ADA alone. */
+/** The classic pool's box: 10 ₳, ADA alone. Retired (chunk 44): its boxes come back, and it takes no new one. */
 export const CLASSIC_BOX: BoxValue = { lovelace: "10000000" };
 
 /**
@@ -65,6 +66,7 @@ export function poolsOf(status: LovejoinStatus | undefined): ShownPool[] {
     ...(status.otherAccounts ? { otherAccounts: status.otherAccounts } : {}),
     ...(status.bootstrap ? { bootstrap: status.bootstrap } : {}),
     ...(status.crowd ? { crowd: status.crowd } : {}),
+    ...(status.unusable ? { unusable: status.unusable } : {}),
   };
   return [classic, ...(status.pools ?? [])];
 }
@@ -75,12 +77,16 @@ export const poolNamed = (pools: ShownPool[], id: string | undefined) => pools.f
 /** A copy of an earlier pool's values (`superseded`): read for the boxes already in it, and taking no new one, for good. */
 export const isCopy = (p: Pick<ShownPool, "unusable">) => p.unusable?.why === "superseded";
 
+/** A retired pool (chunk 44): the classic pool or one on 8131b1d's scripts, withdraw-only for good. */
+export const isRetired = (p: Pick<ShownPool, "unusable">) => p.unusable?.why === "retired";
+
 /**
- * Whether the hub lists pool `p` to open: every pool the wallet reads, but a copy while the wallet has nothing in it.
- * There it only stood beside the earlier pool of its values, a second row of the same box with nothing to do on its
- * page; while the wallet's boxes are in it, it's listed, flagged, for them (the merged fixes' review, MERGED-1).
+ * Whether the hub lists pool `p` to open: every pool the wallet reads, but a copy or a retired pool while the wallet
+ * has nothing in it. There a copy only stood beside the earlier pool of its values, a second row of the same box with
+ * nothing to do on its page; while the wallet's boxes are in it, it's listed, flagged, for them (the merged fixes'
+ * review, MERGED-1). A retired pool so too, withdraw-only (chunk 44, the owner's call 1).
  */
-export const shownOnHub = (p: ShownPool) => !isCopy(p) || p.boxes.length > 0 || (p.bootstrap?.length ?? 0) > 0;
+export const shownOnHub = (p: ShownPool) => !(isCopy(p) || isRetired(p)) || p.boxes.length > 0 || (p.bootstrap?.length ?? 0) > 0;
 
 /** A pool's token's unit, policy then name, as a balance's token key; none for an ADA pool. */
 const unitOf = (box: BoxValue) => (box.token ? tokenKey(box.token) : undefined);

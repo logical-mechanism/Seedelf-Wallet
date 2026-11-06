@@ -112,6 +112,7 @@ import {
   crowdText,
   groupPools,
   isCopy,
+  isRetired,
   poolNamed,
   poolsOf,
   searchGroups,
@@ -1999,9 +2000,11 @@ export function Lovejoin({
           ) : (
             listed.map((g) => <PoolGroupList key={g.key} group={g} onOpen={(id) => setView({ pool: id })} />)
           )}
+          {/* Nothing searched for and none listed: no pool takes boxes, the retired ones hidden with nothing of the
+              wallet's in them (chunk 44); it said that no pool's token matched "". */}
           {!listed.length && (
             <p className="note" data-testid="lovejoin-pools-none">
-              {tr("lovejoin.pools.noneMatch", { query: query.trim() })}
+              {query.trim() ? tr("lovejoin.pools.noneMatch", { query: query.trim() }) : tr("lovejoin.pools.noneYet")}
             </p>
           )}
           <StartedPools started={status.started} now={Date.now()} />
@@ -2237,8 +2240,9 @@ export function PoolGroupList({
       )}
       <ul className="list">
         {group.pools.map((p) => {
-          // A copy takes no box to start it with: never said to be being started beside the line saying so (MERGED-1).
-          const progress = isCopy(p) ? undefined : bootstrapProgress(p);
+          // A copy or a retired pool takes no box to start it with: never said to be being started beside the line saying
+          // so (MERGED-1; chunk 44).
+          const progress = isCopy(p) || isRetired(p) ? undefined : bootstrapProgress(p);
           const flags = [
             progress && tr("lovejoin.pools.starting", { have: progress.have, floor: progress.floor }),
             p.notMixed.length > 0 && tr("lovejoin.pools.flag.notMixed", { n: amounts.hidden ? tr("home.lovejoin.some") : p.notMixed.length }),
@@ -2677,9 +2681,10 @@ export function PoolPage({
   // so itself. With it, the way back's reserve that funding carries, priced from the same parameters (1.7.0).
   const [privateMost, setPrivateMost] = useState<number>();
   const [privateBack, setPrivateBack] = useState<string>();
-  // A copy takes no new box for good (MERGED-1): no Bootstrap is offered there, so nothing asks its most (R2-2).
-  const copy = isCopy(pool);
-  const bootstrapShown = !copy && (bootstrapOpen || (pool.floor > 0 && pool.others < pool.floor));
+  // A copy takes no new box for good (MERGED-1), nor does a retired pool (chunk 44): no Bootstrap is offered there, so
+  // nothing asks its most (R2-2).
+  const closed = isCopy(pool) || isRetired(pool);
+  const bootstrapShown = !closed && (bootstrapOpen || (pool.floor > 0 && pool.others < pool.floor));
   useEffect(() => {
     if (!bootstrapShown || source !== "private") return;
     let live = true;
@@ -3107,9 +3112,10 @@ export function PoolPage({
   const hatchless = new Set([...pool.notMixed, ...(pool.unsure ?? []), ...(pool.bootstrap ?? [])].map((b) => `${b.txHash}#${b.txIndex}`));
   const hatchTakes = pool.boxes.some((b) => !hatchless.has(`${b.txHash}#${b.txIndex}`));
   // The pool can't be mixed in yet: a Bootstrap is the only thing that starts one. It's offered whatever the pool
-  // holds (chunk 34's D2: "Bootstrap a pool, any time"), and leads the page while the pool is short. Never in a copy,
-  // which takes no new box for good: there Mix says why, and nothing says to help start it (round two's review, R2-2).
-  const short = !copy && pool.floor > 0 && pool.others < pool.floor;
+  // holds (chunk 34's D2: "Bootstrap a pool, any time"), and leads the page while the pool is short. Never in a copy or
+  // a retired pool, which take no new box for good: there Mix says why, and nothing says to help start it (round two's
+  // review, R2-2; chunk 44).
+  const short = !closed && pool.floor > 0 && pool.others < pool.floor;
   const progress = bootstrapProgress(pool);
   // What a Bootstrap may put in, as the worker holds it: one deposit's worth at most, from the private balance what
   // its reserves pay the deposit and its way back for; what it still needs is the default, and the user can type any
@@ -3464,9 +3470,9 @@ export function PoolPage({
       )}
       {pool.launch && (
         <div className="stack-tight">
-          {/* One this wallet started, or a copy, listed only while the wallet has something in it (34g's last review,
-              PRIVACY-3): opening it tells Cardanoscan, and the browser's history, it's of interest here. */}
-          <ExplorerLink network={network} tx={pool.launch} private={!!pool.mine || copy} className="link align-start">
+          {/* One this wallet started, or a copy or a retired pool, listed only while the wallet has something in it (34g's
+              last review, PRIVACY-3): opening it tells Cardanoscan, and the browser's history, it's of interest here. */}
+          <ExplorerLink network={network} tx={pool.launch} private={!!pool.mine || closed} className="link align-start">
             {tr("lovejoin.pool.launch")}
           </ExplorerLink>
           {pool.mine && <p className="note">{tr("lovejoin.pool.mine")}</p>}
@@ -3539,9 +3545,9 @@ export function PoolPage({
         </section>
       )}
       {mixForm}
-      {/* Not in a copy, which takes no new box for good: off with its reason, Bootstrap pointed to a way the worker
-          never takes there (R2-2). Mix, above, says why once. */}
-      {!short && !bootstrapOpen && !copy && (
+      {/* Not in a copy or a retired pool, which take no new box for good: off with its reason, Bootstrap pointed to a
+          way the worker never takes there (R2-2). Mix, above, says why once. */}
+      {!short && !bootstrapOpen && !closed && (
         <div className="stack-tight">
           <button type="button" className="link align-start" onClick={() => setBootstrapOpen(true)} data-testid="lovejoin-bootstrap-open">
             {tr("lovejoin.bootstrap.open")}
@@ -3551,11 +3557,17 @@ export function PoolPage({
           </p>
         </div>
       )}
-      {!short && bootstrapOpen && !copy && bootstrapForm}
+      {!short && bootstrapOpen && !closed && bootstrapForm}
 
       {/* Every box of the wallet's in this pool back now, behind its question (the owner's test of 1.6.0: "on that pool
           mix page, something that allows that pool specific"); Settings' brings back every pool's. */}
-      <BringAllBack network={network} pool={pool.id ?? CLASSIC_ID} shown={owned > 0 || held > 0 || notMixed > 0} onOver={() => void onRefresh()} />
+      <BringAllBack
+        network={network}
+        pool={pool.id ?? CLASSIC_ID}
+        retired={isRetired(pool)}
+        shown={owned > 0 || held > 0 || notMixed > 0}
+        onOver={() => void onRefresh()}
+      />
 
       <WayBack />
       {asking && "anyway" in asking && (
@@ -3618,13 +3630,15 @@ const BOOTSTRAP_BACK_LEAST = 1_500_000n;
  * Why a token pool takes no new box, in the words the worker refuses one with (lovejoin.ts unusableReason): the pool's
  * page says it under Mix, Bootstrap and Mix again before Review, and the hub on its row (1.6.0's release review,
  * MONEY-3; the merged fixes' review, MERGED-4). A box below the network's minimum, which nothing can be built for, or
- * a copy (`superseded`), read for the boxes already in it and taking no new one, for good (MERGED-1). Boxes that can't
- * pay their own way back, or a check that couldn't be made, are no reason since the owner's call 34: the first is the
- * page's stuck callout. Keys, not words.
+ * a copy (`superseded`), read for the boxes already in it and taking no new one, for good (MERGED-1); or a retired
+ * pool (`retired`, chunk 44), whose boxes come back by themselves. Boxes that can't pay their own way back, or a check
+ * that couldn't be made, are no reason since the owner's call 34: the first is the page's stuck callout. Keys, not
+ * words.
  */
 const UNUSABLE: Record<LovejoinUnusable["why"], I18nKey> = {
   belowMinimum: "lj.unusable.warn.belowMinimum",
   superseded: "lj.unusable.warn.superseded",
+  retired: "lj.unusable.warn.retired",
 };
 export const unusableText = (u: LovejoinUnusable): string => t(UNUSABLE[u.why]);
 
