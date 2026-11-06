@@ -795,6 +795,25 @@ interface ChainCall {
   /** Where the return mixes the session's collateral, and whether the session was funded for it (ChainWay's). */
   collateralPool?: CollateralPool;
   collateralReserve?: boolean;
+  /**
+   * The chain leaves the collateral's mix its two draws in that pool, where it mixes there too (tailHold): a return,
+   * whose boxes are as many as the pool has room for. Never a mix session's, whose boxes were paid for: short of room,
+   * its collateral comes back with the rest.
+   */
+  holdTail?: true;
+}
+
+/**
+ * How many boxes chain call `c` puts in `pool`, `free` of its boxes free, `draws` drawn for each (its mixes' others):
+ * as many as fit, leaving its collateral's mix its two draws where the collateral goes into that pool too (ChainCall
+ * `holdTail`), as a return's ADA and its collateral share the 5 ₳ pool (chunk 44). A chain that took every box there
+ * left the collateral none, so it came back with the rest, unmixed. Never at the cost of the chain's one box: a box of
+ * the spare ADA is the more worth mixing.
+ */
+function roomIn(c: Pick<ChainCall, "collateralPool" | "holdTail">, pool: LovejoinPool, free: number, draws: number): number {
+  const fit = (n: number) => Math.floor(Math.max(0, n) / draws);
+  if (!c.holdTail || c.collateralPool?.pool.id !== pool.id) return fit(free);
+  return Math.max(fit(free - TAIL_DRAWS), Math.min(1, fit(free)));
 }
 
 /** A session's collateral as a plan's or a chain's request names it: none for a Bootstrap's, which has none. */
@@ -3523,6 +3542,8 @@ export class LovejoinService {
       asked,
       ...(way.collateralPool ? { collateralPool: way.collateralPool } : {}),
       ...(way.collateralReserve ? { collateralReserve: true } : {}),
+      // A return's boxes fill the room left; a mix session's were paid for (`boxes`).
+      ...(way.collateralPool && boxes === undefined ? { holdTail: true as const } : {}),
     };
     // A return's tokens go through their own pools beside its ADA's, one chain (chunk 34's §7).
     let tokens: LovejoinTokenWay[] | undefined;
@@ -3601,7 +3622,7 @@ export class LovejoinService {
       const deposits = pool.id === CLASSIC ? chainBoxes(depth, w) : Math.min(chainBoxes(depth, w), MAX_TOKEN_DEPOSIT_BOXES);
       const most = again ? Math.floor(MAX_CHAIN_MIXES / perBox) : deposits;
       const pays = again ? Math.min(await countAt(w), owned.length) : await countAt(w);
-      const room = perBox ? Math.floor(others.length / (perBox * (w - 1))) : Infinity;
+      const room = perBox ? roomIn(c, pool, others.length, perBox * (w - 1)) : Infinity;
       return { pays, count: Math.min(pays, room, most), room, perBox };
     };
     const three = await fit(3);
@@ -3787,7 +3808,7 @@ export class LovejoinService {
       const counts = async (w: LovejoinWidth) => {
         const perBox = mixesPerBox(depth, w);
         const room = (l: (typeof legs)[number]) =>
-          l.pool === ada && adaShort ? 0 : Math.floor(free(l.split.others, l.split.reserved).length / (perBox * (w - 1)));
+          l.pool === ada && adaShort ? 0 : roomIn(c, l.pool, free(l.split.others, l.split.reserved).length, perBox * (w - 1));
         const paid = (l: (typeof legs)[number]) => (l.pool === ada && adaShort ? 0 : capOf(l.pool));
         const pays = await this.planAcross(
           network,

@@ -238,6 +238,21 @@ describe("a session's return (chunk 44, the owner's call 4)", SLOW, () => {
     expect(review.lovejoinSkipped).toBe(tr("lj.unusable.warn.retired"));
   });
 
+  it("leaves its collateral's mix two boxes of the 5 ₳ pool, never at the cost of its one box (chunk 44)", async () => {
+    // Sixteen strangers' boxes: two boxes two waves deep would take every one, and the collateral would come back
+    // unmixed. One goes, and the collateral's mix draws two of the eight left.
+    const { t, sessions } = await session("40000000", [ADA_POOL]);
+    t.koios.addedToAccounts.splice(0, t.koios.addedToAccounts.length, ...t.koios.addedToAccounts.filter((u) => !ADA_ROWS.slice(16).includes(u)));
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin).toMatchObject({ boxes: 1, depth: 2 });
+    expect(review.collateralTail).toMatchObject({ pool: ADA, txs: 2 });
+    // With nine, two boxes don't fit at all: the one box goes, though the collateral's mix then has one to draw.
+    const nine = await session("40000000", [ADA_POOL]);
+    nine.t.koios.addedToAccounts.splice(0, nine.t.koios.addedToAccounts.length, ...nine.t.koios.addedToAccounts.filter((u) => !ADA_ROWS.slice(9).includes(u)));
+    const one = await nine.sessions.backBuild("preprod", 0);
+    expect(one.lovejoin).toMatchObject({ boxes: 1 });
+  });
+
   it("mixes its collateral in v2's 5 ₳ pool alone, never 1.7's", async () => {
     const t = await wallet();
     t.koios.addedToAccounts.push(...ADA_ROWS);
