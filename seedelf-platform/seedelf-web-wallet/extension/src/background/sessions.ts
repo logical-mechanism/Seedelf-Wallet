@@ -124,6 +124,7 @@ import {
   chainWindow,
   chainRetryMs,
   checkBoxes,
+  CLASSIC,
   evaluable,
   mostBootstrap,
   MAX_MIX_BOXES,
@@ -1736,13 +1737,14 @@ export class SessionService {
 
   /**
    * What spare ADA at a session's account pays for through Lovejoin at the
-   * set depth (`price`): its boxes, at most what one chain takes
-   * (chainBoxes: MAX_CHAIN_MIXES, and what one deposit makes), their mixes
-   * (WebAssembly's MIX_FEE_ESTIMATE each) and about what bringing them back
-   * takes. `pool`: also as Lovejoin's pool has room for now (room, a read
-   * kept five minutes), `of` the boxes the ADA pays for when that's fewer,
-   * and `skipped`, why it has none. `fixed`: a swap's approved depth and
-   * wait, rather than Settings' now.
+   * set depth (`price`): its boxes in the 5 ₳ pool a return's ADA goes into
+   * (adaPool, chunk 44), at most what one chain takes (chainBoxes:
+   * MAX_CHAIN_MIXES, and what one deposit makes), their mixes (WebAssembly's
+   * MIX_FEE_ESTIMATE each) and about what bringing them back takes. None
+   * while no such pool is shown, and `skipped` says so. `pool`: also as that
+   * pool has room for now (room, a read kept five minutes), `of` the boxes
+   * the ADA pays for when that's fewer, and `skipped`, why it has none.
+   * `fixed`: a swap's approved depth and wait, rather than Settings' now.
    *
    * Four boxes a mix as approved, or as Settings has it (chunk 34's D3), or
    * `width`; and three where four can't take what three would, as its
@@ -1753,19 +1755,30 @@ export class SessionService {
   private async priced(network: NetworkName, pool: boolean, fixed?: AutoRecord["lovejoin"], width?: LovejoinWidth) {
     const lovejoin = this.deps.lovejoin!;
     const asked: LovejoinWidth = width ?? (fixed ? (fixed.width ?? 3) : (await lovejoin.settings()).width);
-    const room = pool ? await lovejoin.room(network) : undefined;
+    // As discovery last kept the pools, asking nobody: priced as the user types too.
+    const ada = await lovejoin.adaPool(network);
+    const room = pool && ada ? await lovejoin.room(network, ada.id) : undefined;
     const at = async (w: LovejoinWidth) => {
-      // What each box more takes, and what the chain takes besides: the deposit and its change.
+      // What each box more takes, and what the chain takes besides: the deposit and its change. With no 5 ₳ pool,
+      // priced as the classic pool's, for no box.
       const [one, two] = await Promise.all([
-        lovejoin.funding(network, 1, false, fixed?.depth, undefined, w),
-        lovejoin.funding(network, 2, false, fixed?.depth, undefined, w),
+        lovejoin.funding(network, 1, false, fixed?.depth, ada, w),
+        lovejoin.funding(network, 2, false, fixed?.depth, ada, w),
       ]);
       const perBox = BigInt(two.lovelace) - BigInt(one.lovelace);
       const besides = BigInt(one.lovelace) - perBox;
-      const fits = !room ? Infinity : poolShort(network, room, one.depth, w) ? 0 : Math.floor(room.free / (mixesPerBox(one.depth, w) * (w - 1)));
+      const fits = !ada
+        ? 0
+        : !room
+          ? Infinity
+          : poolShort(network, room, one.depth, w)
+            ? 0
+            : Math.floor(room.free / (mixesPerBox(one.depth, w) * (w - 1)));
       const affordable = (spare: bigint) => (spare > besides ? Number((spare - besides) / perBox) : 0);
+      // One deposit into a pool on the new scripts makes MAX_TOKEN_DEPOSIT_BOXES at most, as the chain holds it (fanOut).
+      const most = Math.min(chainBoxes(one.depth, w), MAX_TOKEN_DEPOSIT_BOXES);
       const price = (spare: bigint) => {
-        const pays = Math.min(affordable(spare), chainBoxes(one.depth, w));
+        const pays = Math.min(affordable(spare), most);
         const boxes = Math.min(pays, fits);
         return {
           boxes,
@@ -1775,7 +1788,7 @@ export class SessionService {
           ...(boxes < pays ? { of: pays } : {}),
         };
       };
-      const leg = (spare: bigint) => ({ pays: affordable(spare), fits: Math.min(affordable(spare), chainBoxes(one.depth, w), fits), room: fits });
+      const leg = (spare: bigint) => ({ pays: affordable(spare), fits: Math.min(affordable(spare), most, fits), room: fits });
       return { one, price, leg };
     };
     const three = await at(3);
@@ -1786,7 +1799,7 @@ export class SessionService {
       if (way.width === 4) return { ...four.price(spare), width: 4 as const };
       return { ...three.price(spare), ...(way.fellBack ? { fellBack: way.fellBack } : {}) };
     };
-    const skipped = room && poolShort(network, room, three.one.depth);
+    const skipped = !ada ? t("sess.skip.warn.noAdaPool") : room && poolShort(network, room, three.one.depth);
     return { price, at: { 3: three, 4: four }, skipped, depth: three.one.depth, delay: fixed?.delay ?? three.one.delay, asked };
   }
 
@@ -4478,8 +4491,9 @@ export class SessionService {
             // A swap's, as deep as it was approved (independent review L21);
             // a Bootstrap's is 0 (a seed's was), so its chain is the deposit alone.
             record?.mix?.seed || record?.mix?.bootstrap ? 0 : record?.auto?.lovejoin?.depth,
-            // The pool its mix was funded for: a token pool's token went with its ADA.
-            record?.mix?.pool,
+            // The pool its mix was funded for: a token pool's token went with its ADA; the classic pool's by its name, so
+            // a 1.7 session's is refused there, retired since (chunk 44). None: a return's, into the 5 ₳ pool.
+            record?.mix ? (record.mix.pool ?? CLASSIC) : undefined,
             // Its width, a return's tokens' pools (chunk 34's 34e), and its collateral's, which a funding may have
             // paid for (tailReserve).
             {
@@ -4531,7 +4545,7 @@ export class SessionService {
             ...(chain.ways ? { ways: chain.ways } : {}),
             ...(chain.width ? { width: chain.width } : {}),
             ...(chain.fellBack ? { fellBack: chain.fellBack } : {}),
-            ...(chain.values && chain.ways?.length ? { values: chain.values } : {}),
+            ...(chain.values ? { values: chain.values } : {}),
             // The deposit, which the review shows: `txHash` above is the return,
             // the last of the chain, which spends what nothing has sent yet.
             entry: chain.txs[0]!.txHash,
@@ -4682,7 +4696,9 @@ export class SessionService {
     // A box three a mix: four falls back to three where it costs more than the spare pays (34e's review, 6).
     const lovejoin = this.deps.lovejoin!;
     const spare = spareOf(rows);
-    if (spare >= BigInt((await lovejoin.funding(network, 1, false, undefined, undefined, 3)).lovelace)) return true;
+    // A box of the 5 ₳ pool a return's ADA goes into (adaPool, chunk 44), while one is shown.
+    const ada = await lovejoin.adaPool(network);
+    if (ada && spare >= BigInt((await lovejoin.funding(network, 1, false, undefined, ada, 3)).lovelace)) return true;
     // Or a box of a token the session's own UTxOs (or its swap's fill) hold, in a pool of it its return may use, which
     // its spare ADA pays for (chunk 34's 34e, for 34f): its box's ADA and its mixes, as acrossOf counts them (wayOf:
     // an approved swap's token in its approved pool only). The pools as discovery kept them, asking nobody.

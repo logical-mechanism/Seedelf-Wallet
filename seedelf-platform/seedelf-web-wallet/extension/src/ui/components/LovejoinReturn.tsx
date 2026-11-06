@@ -52,7 +52,8 @@ export const mixesPerBox = (depth: number, width = 3) => (width ** depth - 1) / 
 /**
  * What the wallet plans a mix at, as WebAssembly prices a mix's funding and
  * a swap's way back (seedelf-core's MIX_FEE_ESTIMATE: 0.95 ₳, above the
- * 0.877 ₳ one measured on preprod and about 0.82 ₳ on mainnet). Settings
+ * 0.877 ₳ one measured on preprod, about 0.82 ₳ on mainnet and 0.837 ₳ on
+ * Lovejoin v2's scripts). Settings
  * prices each depth at it too, so the Lovejoin page, its reviews and
  * Settings give one figure (chunk 23's second review, LJ-3): Settings said
  * "about 3.5 ₳" where the page said "about 3.8 ₳" for the same mixes. What
@@ -62,7 +63,7 @@ const MIX_FEE_ESTIMATE = 950_000;
 
 /**
  * And a mix four boxes wide (chunk 34's D3; seedelf-core's MIX_FEE_ESTIMATE_FOUR): 1.35 ₳, above the 1.214 ₳ one
- * measured on mainnet's classic pool and 1.227 ₳ on a token pool.
+ * measured on mainnet's classic pool, 1.227 ₳ on a token pool and 1.230 ₳ on v2's scripts (chunk 44).
  */
 const MIX_FEE_ESTIMATE_FOUR = 1_350_000;
 
@@ -73,7 +74,7 @@ export const mixFeeEstimate = (width = 3) => (width === 4 ? MIX_FEE_ESTIMATE_FOU
 export const mixFeesText = (mixes: number, width = 3): string => formatAda(String(mixes * mixFeeEstimate(width)));
 
 /**
- * About what one 10 ₳ box costs on a session's way back at `depth`: its
+ * About what one box costs on a session's way back at `depth`: its
  * mixes, and bringing it back (BOX_BACK_ESTIMATE), in lovelace. What the
  * connector says a private session's return through Lovejoin adds (blind
  * test §9.8, T16: "adds Lovejoin's fees" gave no figure).
@@ -164,9 +165,9 @@ export function delayText(delay: string): string {
 }
 
 /**
- * What a return puts through Lovejoin, in words: "3 boxes of 10 ₳" into the classic pool, as it said before; across
- * pools (chunk 34's 34e), each pool's, "2 boxes of 10 ₳, 1 box of 100 NIGHT + 4.5 ₳". A pool the summary didn't
- * value is named by its boxes alone.
+ * What a return puts through Lovejoin, in words: "3 boxes of 5 ₳" into the 5 ₳ pool (chunk 44), "3 boxes of 10 ₳" into
+ * the classic pool, as it said before; across pools (chunk 34's 34e), each pool's, "2 boxes of 5 ₳, 1 box of 100 NIGHT
+ * + 4.5 ₳". A pool the summary didn't value is named by its boxes alone.
  */
 export function partsText(network: NetworkName, l: NonNullable<SessionBackSummary["lovejoin"]>): string {
   const boxOf = (pool?: string) => (pool === undefined ? CLASSIC_BOX : l.values?.[pool]);
@@ -374,15 +375,17 @@ export function LovejoinSwitch({
   const tr = useT();
   if (!back.lovejoin && through) return null;
   // A return whose boxes are all a token pool's mixes no spare ADA (the token legs are paid first, and its ADA may pay
-  // for none of the classic pool's): it says its tokens go into their pools instead (1.6.0's release review, UI-12).
+  // for none of the ADA pool's): it says its tokens go into their pools instead (1.6.0's release review, UI-12). The
+  // ADA's pool is the classic pool's, named by none, or the 5 ₳ pool, whose box its values say holds no token (chunk 44).
   const l = back.lovejoin;
-  const classic = !l || (l.parts?.length ? l.parts.some((p) => p.pool === undefined && p.boxes > 0) : l.pool === undefined);
+  const adaPool = (pool?: string) => pool === undefined || (!!l?.values?.[pool] && !l.values[pool]!.token);
+  const ada = !l || (l.parts?.length ? l.parts.some((p) => adaPool(p.pool) && p.boxes > 0) : adaPool(l.pool));
   return (
     <div className="setting-row" data-testid="lovejoin-way">
       <span className="stack-tight">
         <span id="lovejoin-way-label">{tr("swaps.lovejoin.label")}</span>
         <span className="note" id="lovejoin-way-note">
-          {tr(!through ? "swaps.lovejoin.privacy.off" : classic ? "swaps.lovejoin.privacy.on" : "swaps.lovejoin.privacy.onTokens")}
+          {tr(!through ? "swaps.lovejoin.privacy.off" : ada ? "swaps.lovejoin.privacy.on" : "swaps.lovejoin.privacy.onTokens")}
         </span>
       </span>
       <button
