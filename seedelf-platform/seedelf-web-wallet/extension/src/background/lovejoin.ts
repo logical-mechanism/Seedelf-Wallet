@@ -806,9 +806,9 @@ function outRefOf(collateral: KoiosUtxo | undefined) {
  * What a chain's request names for its collateral's tail (`lovejoin::CollateralTail`): the 5 ₳ pool and its rows, and
  * whether the session was funded for it.
  */
-function collateralAsked(c: Pick<ChainCall, "collateralPool" | "collateralReserve">) {
+function collateralAsked(c: Pick<ChainCall, "collateralPool" | "collateralReserve">, rows?: KoiosUtxo[]) {
   return {
-    ...(c.collateralPool?.pool.ref ? { collateralPool: c.collateralPool.pool.ref, collateralBoxes: c.collateralPool.rows } : {}),
+    ...(c.collateralPool?.pool.ref ? { collateralPool: c.collateralPool.pool.ref, collateralBoxes: rows ?? c.collateralPool.rows } : {}),
     ...(c.collateralReserve ? { collateralReserve: true } : {}),
   };
 }
@@ -3552,7 +3552,7 @@ export class LovejoinService {
       // built before is being built again), nor a box the network didn't know.
       const split = read && !avoid.size ? read : await this.split(network, owner, avoid, into);
       read = undefined;
-      return this.fanOut(network, split, c, countAt);
+      return this.fanOut(network, split, c, countAt, avoid);
     });
     // What a box holds there too, for the review to name its boxes (the 5 ₳ pool's, chunk 44).
     const named = { ...valuesOf([into]), ...values };
@@ -3564,7 +3564,13 @@ export class LovejoinService {
    * where asked and four takes as many boxes as three would (chunk 34's D3), three otherwise, and three again when
    * four didn't build or the network's check refused it. `countAt`: what the spare ADA pays for at a width.
    */
-  private async fanOut(network: NetworkName, split: Split, c: ChainCall, countAt: (w: LovejoinWidth) => Promise<number>): Promise<LovejoinChain> {
+  private async fanOut(
+    network: NetworkName,
+    split: Split,
+    c: ChainCall,
+    countAt: (w: LovejoinWidth) => Promise<number>,
+    avoid: Set<string>,
+  ): Promise<LovejoinChain> {
     const { owner, index, rows, collateral, params, merge, depth, again, own, publicToo, pool, asked } = c;
     // A seed (depth 0) makes no mixes, so it draws nothing from the pool and
     // the floor doesn't apply: this is where a chain is really built, and
@@ -3630,7 +3636,7 @@ export class LovejoinService {
         own,
         ...(w !== 3 ? { width: w } : {}),
         ...(pool.ref ? { poolRef: pool.ref } : {}),
-        ...collateralAsked(c),
+        ...collateralAsked(c, this.tailRows(c, avoid, c.collateralPool?.pool.id === pool.id ? split : undefined)),
       };
       const built = await this.deps.wallet.withKeys(
         (keys) =>
@@ -3834,7 +3840,7 @@ export class LovejoinService {
           legs: legs.map((l, i) => ({ ...(l.pool.ref ? { poolRef: l.pool.ref } : {}), pool: this.real(l.split), most: fits[i] })),
           fills: returns.fills ?? [],
           ...(w !== 3 ? { width: w } : {}),
-          ...collateralAsked(c),
+          ...collateralAsked(c, this.tailRows(c, avoid, c.collateralPool ? splits.get(c.collateralPool.pool.id) : undefined)),
         };
         const built = await this.deps.wallet.withKeys(
           (keys) =>
@@ -3914,6 +3920,18 @@ export class LovejoinService {
         return { tokens, ada: adaSplit, values };
       }
     });
+  }
+
+  /**
+   * The rows of chain call `c`'s collateral's pool a try of its build draws that mix's two boxes from (collateralAsked):
+   * this try's own read of that pool, `read`, where it has one (the chain mixes there too); else the rows collateralPool
+   * read, less what the tries before found taken (`avoid`). The rows read once, before the chain, were handed to every
+   * try: a box another chain reserved since was drawn again each time, until the build gave up, since the return's ADA,
+   * the collateral and the mixes from either side share the 5 ₳ pool (chunk 44).
+   */
+  private tailRows(c: ChainCall, avoid: Set<string>, read?: Split): KoiosUtxo[] | undefined {
+    if (!c.collateralPool) return undefined;
+    return read ? this.real(read) : c.collateralPool.rows.filter((u) => !avoid.has(outpoint(u)));
   }
 
   /** Each leg's boxes for a return across pools (WebAssembly's plan across pools), in `legs`' order, `width` a mix. */
