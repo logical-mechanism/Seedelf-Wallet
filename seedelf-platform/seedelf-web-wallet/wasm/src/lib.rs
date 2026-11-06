@@ -943,6 +943,10 @@ pub mod api {
         pub collateral_pool: Option<crate::lovejoin::PoolRef>,
         #[serde(default)]
         pub collateral_boxes: Vec<UtxoResponse>,
+        /// What sits in that pool's `mix_logic` reward account: the
+        /// collateral's mix takes it, and the return after brings it back.
+        #[serde(default)]
+        pub rewards: crate::lovejoin::RewardsIn,
     }
 
     /// A signed return, ready to submit, and what it moves.
@@ -1416,6 +1420,7 @@ pub mod api {
         // when it's asked for and the session's own ADA pays for it; the
         // return then sweeps what that leaves. Otherwise the return as it
         // was, the collateral back with the rest.
+        let mut rewards = request.rewards.read()?;
         let tail = request.collateral_pool.as_ref().and_then(|pool| {
             crate::lovejoin::direct_tail(
                 network_flag,
@@ -1424,6 +1429,7 @@ pub mod api {
                 pool,
                 &request.collateral_boxes,
                 &request.utxos,
+                &mut rewards,
             )
             .ok()
         });
@@ -5960,6 +5966,16 @@ pub fn lovejoin_owned(key: &SeedelfKey, request: &str) -> Result<String, JsError
 #[wasm_bindgen(js_name = lovejoinVerifyPool)]
 pub fn lovejoin_verify_pool(request: &str) -> Result<String, JsError> {
     to_json(&lovejoin::verify_pool(from_json(request)?).map_err(js_error)?)
+}
+
+/// The classic pool's `mix_logic` and its reward account, or those of the
+/// token pool `poolRef` names (`lovejoin::MixLogicRequest` →
+/// `lovejoin::MixLogicView`): what the worker reads the balance of before it
+/// builds there (chunk 43).
+#[wasm_bindgen(js_name = lovejoinMixLogic)]
+pub fn lovejoin_mix_logic(request: &str) -> Result<String, JsError> {
+    let named: lovejoin::PoolNamed = from_json(request)?;
+    to_json(&lovejoin::mix_logic(from_json(request)?, named.pool_ref.as_ref()).map_err(js_error)?)
 }
 
 /// A candidate at Lovejoin's holder, its cheap offline checks alone

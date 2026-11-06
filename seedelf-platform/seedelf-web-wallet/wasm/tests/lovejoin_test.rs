@@ -189,6 +189,7 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -267,6 +268,7 @@ fn a_chains_return_merges_into_the_funding_change() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -382,6 +384,7 @@ fn a_bootstrap_with_no_collateral_deposits_and_sweeps_back() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         };
         let result = lovejoin::chain(&accounts(), sk, request(0))
             .unwrap_or_else(|e| panic!("{boxes} boxes, funded {lovelace}: {e}"));
@@ -479,6 +482,7 @@ fn a_chains_return_leaves_out_what_would_overflow_a_token() {
                 collateral_pool: None,
                 collateral_boxes: vec![],
                 collateral_reserve: false,
+                rewards: Default::default(),
             },
         )
         .unwrap()
@@ -537,6 +541,7 @@ fn a_utxo_with_a_reference_script_pays_no_mix_and_comes_back_swept() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -586,6 +591,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -644,6 +650,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             params: params(),
             pool: rows,
             box_ref: None,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -707,6 +714,7 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap_err();
@@ -793,6 +801,7 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
                 pool: pool(&protocol),
                 depth: 1,
                 boxes: 2,
+                rewards: Default::default(),
             },
         )
         .unwrap()
@@ -862,6 +871,7 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
             pool: pool(&protocol),
             depth: 1,
             boxes: 2,
+            rewards: Default::default(),
         },
     )
     .unwrap_err();
@@ -994,6 +1004,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -1067,6 +1078,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             collateral_pool: None,
             collateral_boxes: vec![],
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap_err();
@@ -1098,6 +1110,7 @@ fn the_public_account_mixes_its_own_boxes_again_signed_by_the_keys_it_spends() {
                 pool,
                 depth: 1,
                 boxes: 2,
+                rewards: Default::default(),
             },
         )
     };
@@ -1306,6 +1319,7 @@ fn a_pool_too_small_for_a_sessions_chain_skips_lovejoin() {
         collateral_pool: None,
         collateral_boxes: vec![],
         collateral_reserve: false,
+        rewards: Default::default(),
     };
     let result =
         lovejoin::chain(&accounts(), sk, request(rows.clone(), false, holdings())).unwrap();
@@ -1354,6 +1368,7 @@ fn a_pool_too_small_for_a_sessions_chain_skips_lovejoin() {
             pool: rows[..1].to_vec(),
             depth: 1,
             boxes: 1,
+            rewards: Default::default(),
         },
     )
     .unwrap_err();
@@ -1596,6 +1611,7 @@ fn a_chains_collateral_is_mixed_once_on_its_way_into_the_5_ada_pool() {
         collateral_pool: Some(ada_pool_ref(5_000_000)),
         collateral_boxes: rows.clone(),
         collateral_reserve: false,
+        rewards: Default::default(),
     };
     // Even with the funding's change to merge into: the collateral a merge puts up is in the box.
     for merge in [vec![funding_change(sk)], vec![]] {
@@ -1663,6 +1679,7 @@ fn a_direct_return_mixes_the_collateral_once_on_its_way_into_the_5_ada_pool() {
                 own: vec![],
                 collateral_pool: Some(ada_pool_ref(5_000_000)),
                 collateral_boxes: others.clone(),
+                rewards: Default::default(),
             },
         )
         .unwrap();
@@ -1699,6 +1716,7 @@ fn the_collateral_comes_back_with_the_rest_where_its_mix_cant_be_built() {
                 own: vec![],
                 collateral_pool: Some(ada_pool_ref(lovelace)),
                 collateral_boxes: boxes,
+                rewards: Default::default(),
             },
         )
         .unwrap()
@@ -1774,6 +1792,7 @@ fn the_collateral_comes_back_with_the_rest_where_its_mix_cant_be_built() {
             collateral_pool: Some(ada_pool_ref(5_000_000)),
             collateral_boxes: strangers(0xa3, 2),
             collateral_reserve: false,
+            rewards: Default::default(),
         },
     )
     .unwrap();
@@ -1807,6 +1826,7 @@ fn the_collateral_never_draws_a_box_its_chain_drew() {
         collateral_pool: Some(ada_pool_ref(5_000_000)),
         collateral_boxes: others,
         collateral_reserve: false,
+        rewards: Default::default(),
     };
     let chain = |others| {
         lovejoin::chain_in(
@@ -1870,6 +1890,7 @@ fn a_session_funded_for_its_collateral_counts_its_boxes_after_the_reserve() {
         collateral_pool: Some(ada_pool_ref(5_000_000)),
         collateral_boxes: strangers(0xa4, 2),
         collateral_reserve: reserved,
+        rewards: Default::default(),
     };
     // One box, and the reserve pays for the collateral's mix and the sweep after it.
     let result = lovejoin::chain(&accounts(), sk, request(true)).unwrap();
@@ -1927,6 +1948,7 @@ fn the_collateral_mix_is_built_again_from_what_the_chain_left() {
         pool_ref: ada_pool_ref(5_000_000),
         pool: rows.clone(),
         own: vec![],
+        rewards: Default::default(),
     };
     let result = lovejoin::collateral_mix(&accounts(), sk, request(&boxed)).unwrap();
     let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
@@ -2005,6 +2027,7 @@ fn a_direct_returns_collateral_tail_is_paid_by_its_reserve_alone() {
                     own: vec![],
                     collateral_pool: Some(ada_pool_ref(5_000_000)),
                     collateral_boxes: others.clone(),
+                    rewards: Default::default(),
                 },
             )
             .unwrap()
@@ -2046,4 +2069,276 @@ fn a_direct_returns_collateral_tail_is_paid_by_its_reserve_alone() {
             .unwrap_or_else(|| panic!("no tail for a swap's direct return at {byte}"));
         the_tail(&tail.txs[0], &tail.txs[1], &tail.tail, &others, sk);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The reward balance (chunk 43): what sits in each pool's mix_logic account
+// ---------------------------------------------------------------------------
+
+/// What a transaction withdraws: each reward account in hex, and its lovelace.
+fn withdrawn(tx_cbor: &str) -> Vec<(String, u64)> {
+    let bytes = hex::decode(tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    tx.as_conway()
+        .unwrap()
+        .transaction_body
+        .withdrawals
+        .as_ref()
+        .map(|w| {
+            w.iter()
+                .map(|(a, l)| (hex::encode(a.as_slice()), *l))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `protocol`'s `mix_logic` reward account in hex, and `lovelace` from it.
+fn from_account(protocol: &Protocol, lovelace: u64) -> Vec<(String, u64)> {
+    vec![(
+        hex::encode(seedelf_core::withdraw_zero::reward_account(
+            &protocol.mix_logic_hash,
+            true,
+        )),
+        lovelace,
+    )]
+}
+
+/// A request's `rewards`, from `(pool, lovelace)` pairs.
+fn rewards(balances: &[(&Protocol, u64)]) -> lovejoin::RewardsIn {
+    let map: serde_json::Map<String, Value> = balances
+        .iter()
+        .map(|(p, l)| (hex::encode(p.mix_logic_hash), json!(l.to_string())))
+        .collect();
+    serde_json::from_value(Value::Object(map)).unwrap()
+}
+
+#[test]
+fn a_chains_first_mix_in_each_pool_takes_its_balance_and_the_return_brings_it_back() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(8181u64);
+    let others = strangers(0xa3, 3);
+    let request = |rewards: lovejoin::RewardsIn| ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: holdings(),
+        collateral: Some(collateral()),
+        pool: pool(&protocol),
+        depth: 1,
+        boxes: Some(1),
+        merge: vec![],
+        again: false,
+        own: vec![],
+        collateral_pool: Some(ada_pool_ref(5_000_000)),
+        collateral_boxes: others.clone(),
+        collateral_reserve: false,
+        rewards,
+    };
+    let plain = lovejoin::chain(&accounts(), sk, request(Default::default())).unwrap();
+    let lucky = lovejoin::chain(
+        &accounts(),
+        sk,
+        request(rewards(&[(&protocol, 500_000_000), (&five(), 3_000_000)])),
+    )
+    .unwrap();
+    let kinds: Vec<&str> = lucky.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(kinds, vec!["deposit", "mix", "deposit", "mix", "back"]);
+    // The chain's mix takes the classic pool's, the tail's mix the 5 ₳ pool's.
+    assert!(withdrawn(&lucky.txs[0].tx_cbor).is_empty());
+    assert_eq!(
+        withdrawn(&lucky.txs[1].tx_cbor),
+        from_account(&protocol, 500_000_000)
+    );
+    assert_eq!(
+        withdrawn(&lucky.txs[3].tx_cbor),
+        from_account(&five(), 3_000_000)
+    );
+    for t in &plain.txs[1..4] {
+        if t.kind == "mix" {
+            assert_eq!(withdrawn(&t.tx_cbor)[0].1, 0);
+        }
+    }
+    let tail = lucky
+        .collateral_tail
+        .clone()
+        .expect("the collateral's tail");
+    let mixed = the_tail(&lucky.txs[2], &lucky.txs[3], &tail, &others, sk);
+    // The return sweeps it all into Seedelf, and `returned` counts it: what
+    // went in and came out is the same but for what was taken.
+    let seedelf = swept_after(&lucky.txs[4].tx_cbor, &mixed);
+    assert_eq!(seedelf, lucky.returned.parse::<u64>().unwrap());
+    let total = |r: &lovejoin::ChainResult| {
+        r.returned.parse::<u64>().unwrap() + r.fees.parse::<u64>().unwrap()
+    };
+    assert_eq!(total(&lucky), total(&plain) + 503_000_000);
+}
+
+#[test]
+fn a_tail_in_the_chains_own_pool_takes_nothing_once_the_chain_took_it() {
+    let five = five();
+    let sk = Scalar::from(8282u64);
+    // Strangers' boxes for the chain's two draws and the tail's two.
+    let others = strangers(0xa4, 4);
+    let request = ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: holdings(),
+        collateral: Some(collateral()),
+        pool: others.clone(),
+        depth: 1,
+        boxes: Some(1),
+        merge: vec![],
+        again: false,
+        own: vec![],
+        collateral_pool: Some(ada_pool_ref(5_000_000)),
+        collateral_boxes: others.clone(),
+        collateral_reserve: false,
+        rewards: rewards(&[(&five, 3_000_000)]),
+    };
+    let result =
+        lovejoin::chain_in(&accounts(), sk, request, Some(&ada_pool_ref(5_000_000))).unwrap();
+    let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(kinds, vec!["deposit", "mix", "deposit", "mix", "back"]);
+    assert_eq!(
+        withdrawn(&result.txs[1].tx_cbor),
+        from_account(&five, 3_000_000)
+    );
+    assert_eq!(withdrawn(&result.txs[3].tx_cbor), from_account(&five, 0));
+}
+
+#[test]
+fn a_public_chain_leaves_the_balance_it_took_in_the_account() {
+    let protocol = Protocol::of(true).unwrap();
+    let public = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let sk = Scalar::from(2468u64);
+    let build = |rewards: lovejoin::RewardsIn| {
+        lovejoin::chain_from_account(
+            &public,
+            sk,
+            AccountChainRequest {
+                network: "preprod".into(),
+                params: params(),
+                utxos: vec![
+                    public_utxo(0x51, Role::Receive, 1, 15_000_000),
+                    public_utxo(0x52, Role::Change, 0, 12_000_000),
+                ],
+                collateral: Some(public_utxo(0x55, Role::Receive, 0, 5_000_000)),
+                pool: pool(&protocol),
+                depth: 1,
+                boxes: 2,
+                rewards,
+            },
+        )
+        .unwrap()
+    };
+    let plain = build(Default::default());
+    let lucky = build(rewards(&[(&protocol, 500_000_000)]));
+    // Two mixes: the first takes it, the second withdraws 0.
+    assert_eq!(
+        withdrawn(&lucky.txs[1].tx_cbor),
+        from_account(&protocol, 500_000_000)
+    );
+    assert_eq!(withdrawn(&lucky.txs[2].tx_cbor), from_account(&protocol, 0));
+    let total = |r: &lovejoin::ChainResult| {
+        r.returned.parse::<u64>().unwrap() + r.fees.parse::<u64>().unwrap()
+    };
+    assert_eq!(total(&lucky), total(&plain) + 500_000_000);
+}
+
+#[test]
+fn a_box_comes_back_with_the_pools_balance_in_its_register() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(9393u64);
+    let mut rows = our_box_rows(sk, 1, &protocol);
+    rows.extend(pool(&protocol));
+    let built = lovejoin::withdraw(
+        sk,
+        WithdrawRequest {
+            network: "preprod".into(),
+            params: params(),
+            pool: rows,
+            box_ref: None,
+            rewards: rewards(&[(&protocol, 500_000_000)]),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawn(&built.tx_cbor),
+        from_account(&protocol, 500_000_000)
+    );
+    let fee: u64 = built.fee.parse().unwrap();
+    assert_eq!(
+        built.lovelace.parse::<u64>().unwrap(),
+        10_000_000 + 500_000_000 - fee
+    );
+}
+
+#[test]
+fn a_reward_balance_is_read_in_words_or_refused() {
+    let read = |v: Value| {
+        serde_json::from_value::<lovejoin::RewardsIn>(v)
+            .unwrap()
+            .read()
+    };
+    let hash = hex::encode([0x42; 28]);
+    // None, or 0, is what every request built before.
+    assert_eq!(
+        read(json!({})).unwrap(),
+        seedelf_core::lovejoin::Rewards::none()
+    );
+    assert_eq!(
+        read(json!({ hash.clone(): "0" })).unwrap(),
+        seedelf_core::lovejoin::Rewards::none()
+    );
+    let err = read(json!({ "abcd": "1" })).unwrap_err().to_string();
+    assert!(err.contains("isn't a script's hash"), "{err}");
+    for amount in ["-1", "1.5", "18446744073709551616", ""] {
+        let err = read(json!({ hash.clone(): amount }))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("isn't a whole number of lovelace"),
+            "{amount}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_pools_mix_logic_and_its_reward_account_are_named() {
+    let classic = lovejoin::mix_logic(
+        lovejoin::MixLogicRequest {
+            network: "preprod".into(),
+        },
+        None,
+    )
+    .unwrap();
+    let protocol = Protocol::of(true).unwrap();
+    assert_eq!(classic.hash, hex::encode(protocol.mix_logic_hash));
+    let account = Address::from_bech32(&classic.stake).unwrap();
+    assert!(classic.stake.starts_with("stake_test1"));
+    assert_eq!(
+        account.to_vec(),
+        seedelf_core::withdraw_zero::reward_account(&protocol.mix_logic_hash, true)
+    );
+    let pool = lovejoin::mix_logic(
+        lovejoin::MixLogicRequest {
+            network: "preprod".into(),
+        },
+        Some(&ada_pool_ref(5_000_000)),
+    )
+    .unwrap();
+    assert_eq!(pool.hash, hex::encode(five().mix_logic_hash));
+    let mainnet = lovejoin::mix_logic(
+        lovejoin::MixLogicRequest {
+            network: "mainnet".into(),
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        mainnet.hash,
+        hex::encode(Protocol::of(false).unwrap().mix_logic_hash)
+    );
+    assert!(mainnet.stake.starts_with("stake1"));
 }

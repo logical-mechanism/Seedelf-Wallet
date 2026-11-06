@@ -2,7 +2,7 @@
 
 Branch `web-wallet/lovejoin-reward-balance`, from `main`.
 
-**Status: ⬜ not started.** Planned 2026-11-04, to be built later. A small chunk: the wallet's Lovejoin transactions withdraw whatever sits in `mix_logic`'s reward account, where today they always withdraw 0.
+**Status: 🚧 in progress, for 1.8.1.** Planned 2026-11-04; the owner picked it for 1.8.1 on 2026-11-06. Steps 1 and 2 are built (*Built so far*, below). A small chunk: the wallet's Lovejoin transactions withdraw whatever sits in `mix_logic`'s reward account, where today they always withdraw 0.
 
 - **Every Mix and every Owner withdrawal the wallet builds withdraws exactly 0 from `mix_logic`'s script reward account** ([withdraw_zero.rs](../../../seedelf-core/src/withdraw_zero.rs)`:96`). `mix_logic` is a withdraw-zero validator: that withdrawal is what runs it, once a transaction.
 - **The ledger takes a withdrawal only of the account's whole balance** ([staking.rs](../../../seedelf-core/src/staking.rs)`:16-17`), and refuses anything else as `WithdrawalsNotInRewards`, which [koios.ts](../../extension/src/background/koios.ts)`:701` words today.
@@ -11,16 +11,30 @@ Branch `web-wallet/lovejoin-reward-balance`, from `main`.
 
 | Step | Status |
 |---|---|
-| 1 · Core: the amount, and where it goes | ⬜ |
-| 2 · WebAssembly: the requests carry it | ⬜ |
+| 1 · Core: the amount, and where it goes | ✅ |
+| 2 · WebAssembly: the requests carry it | ✅ |
 | 3 · The worker: the read, Send's read, the refusal | ⬜ |
-| 4 · Tests, and a live run on preprod | ⬜ |
+| 4 · Tests, and a live run on preprod | 🚧 core's and WebAssembly's done |
+| 5 · The guard: the wallet never pays into `mix_logic`'s account | ⬜ |
 
 ## What the owner decided (2026-11-04)
 
 - **It isn't a security issue, and nothing is at risk:** "Like we literalyl have it so empty datums just become free money."
 - **The wallet's builder handles it,** so that "whoever is the lucky winner gets that 500 going to their Seedelf or something": "making our mix logic in the wallet account for this".
 - **Planned now, built later,** as this chunk.
+
+**And on 2026-11-06,** picking it for 1.8.1: "We want this case to be rare and if it happens default to lucky winner such that everything just continues on as normal." Also: "make sure that the wallet at least does not allow a user to set that stake key for anything" (Step 5).
+
+## Built so far
+
+**Steps 1 and 2, 2026-11-06,** on this branch. Core's suite and the WebAssembly crate's pass, with clippy clean. Where the build departs from the plan below:
+
+- **A `Rewards` hands a balance over only once a transaction is built** (`balance` to read it, `taken` once built), so a build that fails takes nothing. A chain that fails part-way keeps what its earlier mixes took, so the public account's chain, which tries again with one more UTxO (`chain_from_account_at`), starts each try from a copy. `Rewards::of` drops a balance of 0.
+- **Every builder takes `&mut Rewards` as its last argument:** `mix`, `mix_giveme`, the three withdraws, `chain`, `chain_from`, `chain_across`, `again`, `again_at`, `collateral_tail` and `collateral_mix`. The tests pass `&mut Rewards::none()`, and the two way-back probes (`way_back`, `usable`) do too.
+- **`withdraw_paid`: the balance counts toward the register's minimum,** so the account makes up only what the boxes and the balance still fall short of. Its change is as before unless the box can't pay its way back, which is when `withdraw_paid` is used: then the balance covers the top-up.
+- **`Mix`, `Withdraw` and `ChainTx` carry `taken`.** The WebAssembly results add no field: `returned` and a withdraw's `lovelace` count the balance, and the worker can read what its own transactions withdraw from the bytes it holds (`txWithdrawals`, as `withdrawingOf` does).
+- **The requests' field is `rewards`, `{ <mix_logic hash>: <lovelace, a decimal string> }`** (`RewardsIn`), on `ChainRequest`, `CollateralMixRequest`, `AccountChainRequest`, the three withdraws' and `api::SessionReturnRequest`. A hash that isn't 28 bytes, or an amount a u64 doesn't hold, is refused in words.
+- **The export is `lovejoinMixLogic`:** `{ network, poolRef }` in, the classic pool without a `poolRef`, `{ hash, stake }` out. wasm/README.md names it and every request's `rewards`.
 
 ## Why the wallet can take it
 
@@ -79,6 +93,21 @@ Branch `web-wallet/lovejoin-reward-balance`, from `main`.
   - and in [sessions.ts](../../extension/src/background/sessions.ts), a direct return (`buildSessionReturn`, `:4560`) whose collateral goes into the 5 ₳ pool.
 - **What the wallet's own transactions on their way take counts as taken.** Koios and the data layer report a balance one of them withdraws until its block, and the ledger takes only one. So the next build in that pool leaves it out, as for the account's own rewards (`withdrawingOf`, [incoming.ts](../../extension/src/background/incoming.ts)`:176`, used at [account.ts](../../extension/src/background/account.ts)`:184-193`). The worker holds those bytes: a chain being sent, a withdraw kept as sent.
 - **No screen passes it:** the UI's requests stay as they are.
+
+## Step 5 · The guard
+
+The owner, 2026-11-06: "the wallet at least does not allow a user to set that stake key for anything."
+
+- **How money gets there.** `mix_logic`'s publish handler accepts only `RegisterCredential`: at the classic pool's `cb5a5a3` and at v2's `29573c5`, `mix_logic.ak` ("Delegation, redelegation, and governance certs are rejected by the same default"). So its credential can't be delegated, and no staking rewards ever arrive. What does arrive is named by someone's transaction, with no witness of `mix_logic`'s:
+  - a stake pool's registration naming the account as its reward account: its deposit back at retirement, and the pool's own rewards;
+  - a proposal naming it as its deposit's return address;
+  - a treasury withdrawal paying it.
+- **The wallet's own transactions name none of these.** Only a site's transaction can, through the dApp signer, public or private.
+- **Proposed:** the signer refuses a transaction that names a known pool's `mix_logic` reward account in any of the three, in its own words, as it refuses a session's stake key (`dapp.sessionStakeKey`, [dapp.ts](../../extension/src/background/dapp.ts)).
+  - **WebAssembly** ([cip30.rs](../../wasm/src/cip30.rs)): the summary drops a script's reward account today (`Cert::credential`, `Proposal::credential` and `recipients` are key hashes only). It gains the script hashes those three name.
+  - **The worker:** the known pools' `mix_logic` hashes, the classic pool's (`lovejoinMixLogic`) and every found pool's (`PoolView.mixLogicHash`, kept under `seedelf.lovejoinPools.<network>`). One among the script hashes is refused, before the user is asked.
+  - **A key of its own,** read through a function, in en, es and ja.
+- **Not covered:** a pool no device has found yet, and an address whose stake part is `mix_logic`'s. That address puts nothing in the account (its stake can't be delegated), so it's left alone unless the owner wants it refused too.
 
 ## Where the balance comes from
 
