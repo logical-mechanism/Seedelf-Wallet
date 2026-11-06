@@ -11,8 +11,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import type { KoiosUtxo } from "../src/background/koios";
-import { CHAIN_CUT } from "../src/background/lovejoin";
+import { CHAIN_CUT, type PoolRef } from "../src/background/lovejoin";
 import { busyFor, loadTestWasm, testBalances, vectors } from "./fakes";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, ownDatum } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -58,31 +59,41 @@ function cutChain(t: T, extra: object = {}) {
   };
 }
 
-async function wallet(): Promise<T> {
-  const t = testBalances();
+/** A wallet reading the classic pool, and `pools` as discovery hands them (each listing its boxes) where given. */
+async function wallet(pools?: PoolRef[]): Promise<T> {
+  const t = testBalances(pools ? { pools } : undefined);
   await t.wallet.create(PHRASE, PASSWORD);
-  t.koios.addedToAccounts.push(...POOL);
+  t.koios.addedToAccounts.push(...POOL, ...(pools?.includes(ADA_POOL) ? ADA_ROWS : []));
   return t;
 }
 
 describe("a stopped chain on the Lovejoin page and Home", SLOW, () => {
   it("is shown while boxes it didn't mix wait, and goes once they were all mixed again, while its record stays", async () => {
-    const t = await wallet();
-    const boxes = [await ownedBox(t, DEPOSIT, 0), await ownedBox(t, DEPOSIT, 1)];
+    // In the 5 ₳ pool, where the boxes it didn't mix wait for Mix my boxes again: the classic pool's, retired, come back
+    // mixed or not (chunk 44).
+    const t = await wallet([ADA_POOL]);
+    const boxes = await Promise.all([0, 1].map(async (i) => adaBox(DEPOSIT, await ownDatum(t.wallet), t.clock.now, 5, i)));
     t.koios.addedToAccounts.push(...boxes);
-    await t.store.set("lovejoin.preprod", { due: [], chains: [cutChain(t)] });
+    const leaves = [{ txHash: "a8".repeat(32), txIndex: 0, pool: ADA }, { txHash: "a9".repeat(32), txIndex: 0, pool: ADA }];
+    await t.store.set("lovejoin.preprod", { due: [], chains: [cutChain(t, { leaves, pools: { [ADA]: 2 } })] });
+    const ada = (status: Awaited<ReturnType<T["lovejoin"]["status"]>>) => status.pools!.find((p) => p.id === ADA)!;
+    // Home's figures: the 5 ₳ pool's row, none once the wallet has nothing there.
+    const home = async () => {
+      const held = await t.lovejoin.held("preprod");
+      return { notMixed: held.pools?.find((p) => p.id === ADA)?.notMixed ?? 0, stopped: held.stopped };
+    };
 
     let status = await t.lovejoin.status("preprod");
-    expect(status.notMixed).toHaveLength(2);
+    expect(ada(status).notMixed).toHaveLength(2);
     expect(status.chains).toEqual([expect.objectContaining({ stopped: CHAIN_CUT(), sent: 1, total: 3 })]);
-    expect(await t.lovejoin.held("preprod")).toMatchObject({ notMixed: 2, stopped: 1 });
+    expect(await home()).toEqual({ notMixed: 2, stopped: 1 });
 
     // Mix my boxes again spent both: the pool no longer lists them as the wallet's.
     t.koios.addedToAccounts.splice(t.koios.addedToAccounts.indexOf(boxes[0]!), 2);
     status = await t.lovejoin.status("preprod");
-    expect(status.notMixed).toEqual([]);
+    expect(ada(status).notMixed).toEqual([]);
     expect(status.chains).toEqual([]);
-    expect(await t.lovejoin.held("preprod")).toMatchObject({ notMixed: 0, stopped: 0 });
+    expect(await home()).toEqual({ notMixed: 0, stopped: 0 });
     // The record itself lives out its hours: the rules that read it still have it.
     const kept = (await t.store.get<{ chains: Array<{ id: string; left?: number }> }>("lovejoin.preprod"))!;
     expect(kept.chains).toEqual([expect.objectContaining({ id: "a9".repeat(32), left: 0, found: true })]);

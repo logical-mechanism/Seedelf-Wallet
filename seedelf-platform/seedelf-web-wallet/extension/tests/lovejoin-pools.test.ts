@@ -790,19 +790,20 @@ describe("what the Lovejoin hub reads of each pool (chunk 34's 34f)", SLOW, () =
 
   it("tells a pool's page of its own boxes alone when none can come back (34f's review, 6)", async () => {
     const t = await wallet();
-    const lj = pooled(t);
+    const lj = pooled(t, () => [ADA_POOL, TOKEN_POOL]);
     // The token pool's box is held by a Bootstrap, where its deposit put it (a Bootstrap holds nothing in its place
-    // before its deposit is in: 1.6.0's release review, 316#0); the classic pool's isn't mixed yet: Koios says a
-    // deposit made it (its input sits at a key's address, not the pool's), as after a restore.
-    const deposited = await classicBox(t, "c1", 5);
+    // before its deposit is in: 1.6.0's release review, 316#0); the 5 ₳ pool's isn't mixed yet: Koios says a deposit
+    // made it (its input sits at a key's address, not the pool's), as after a restore. Not the classic pool's, which,
+    // retired, holds none (chunk 44).
+    const deposited = await fiveBox(t, "c1", 5);
     t.koios.txSpends.set("c1".repeat(32), [{ payment_addr: { bech32: TOKEN_ADDRESS.replace("addr_test1w", "addr_test1v"), cred: "ab".repeat(28) } }]);
     const deposit = "b10".padEnd(64, "0");
-    t.koios.addedToAccounts.push(...POOL, deposited, { ...(await tokenBox(t, "f1")), tx_hash: deposit }, ...(await strangers(t)));
+    t.koios.addedToAccounts.push(...POOL, ...ADA_ROWS, deposited, { ...(await tokenBox(t, "f1")), tx_hash: deposit }, ...(await strangers(t)));
     await sentChain(lj, "b1", { pools: { [TOKEN]: 1 }, leaves: [{ txHash: deposit, txIndex: 0, pool: TOKEN }], bootstrap: true });
     const status = await lj.status("preprod");
-    expect(status.notMixed).toEqual([{ txHash: "c1".repeat(32), txIndex: 0 }]);
+    expect(status.pools!.find((p) => p.id === ADA)!.notMixed).toEqual([{ txHash: "c1".repeat(32), txIndex: 0, pool: ADA }]);
     await unlockedAnHourAgo(t);
-    // The token pool's page: none of its boxes comes back now, said as its own, never the classic pool's unmixed one:
+    // The token pool's page: none of its boxes comes back now, said as its own, never the 5 ₳ pool's unmixed one:
     // a Bootstrap holds its only box, which "none of your boxes" denied (1.6.0's release review, UI-5).
     await expect(lj.withdrawNow("preprod", undefined, false, false, TOKEN)).rejects.toThrow(t_("lj.bootstrapHolds"));
   });

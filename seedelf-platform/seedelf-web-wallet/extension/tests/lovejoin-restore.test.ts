@@ -11,8 +11,9 @@
 //   Koios can't say        held, and asked again at a later pool read
 // A wallet in its steady state asks Koios nothing new. The classic pool,
 // retired, mixes none again (chunk 44): a test that mixes the boxes again, or
-// would, finds them in v2's 5 ₳ pool; the others keep the classic pool's, whose
-// boxes still come back.
+// would, finds them in v2's 5 ₳ pool. So does every test of a box held: the
+// classic pool holds none but a chain's still being sent, withdraw being all
+// it does, and its boxes come back mixed or not.
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -35,7 +36,7 @@ import { account, AGREES, atSession, CHAINS, HOUR, PASSWORD, POOL, publicFunded,
 import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, loadTestWasm, sessionSwap, testBalances, withdrawPreprod } from "./fakes";
-import { ADA, ADA_ADDRESS, ADA_POOL, ADA_ROWS, ADA_VIEW, adaBox, ownDatum, retiredAlready } from "./v2-pools";
+import { ADA, ADA_ADDRESS, ADA_POOL, ADA_ROWS, ADA_VIEW, adaBox, ownDatum } from "./v2-pools";
 
 const MIX_BOX = NETWORKS.preprod.lovejoin!.mixBox;
 const hash = (h: string) => (h.length === 64 ? h : h.repeat(32));
@@ -274,16 +275,17 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
 
   it("holds a box whose transaction Koios doesn't know, and asks of it alone again", async () => {
     const { t } = await withSession("40000000");
+    // In the 5 ₳ pool: the classic pool, retired, holds no box while Koios can't say (chunk 44).
     const [M, N] = [hash("b5"), hash("c5")];
-    t.koios.addedToAccounts.push(await ownedBox(t, M), await ownedBox(t, N));
-    t.koios.txSpends.set(M, mix());
-    const first = await t.lovejoin.status("preprod");
-    expect(first.unsure).toEqual([{ txHash: N, txIndex: 0 }]);
-    expect(first.notMixed).toEqual([{ txHash: N, txIndex: 0 }]);
+    t.koios.addedToAccounts.push(await adaOwned(t, M), await adaOwned(t, N));
+    t.koios.txSpends.set(M, adaMix());
+    const first = adaOf(await t.lovejoin.status("preprod"));
+    expect(first.unsure).toEqual([inAda(N)]);
+    expect(first.notMixed).toEqual([inAda(N)]);
     expect(first.due).toHaveLength(1);
     // Koios catches up: only the one it didn't know is asked of.
-    t.koios.txSpends.set(N, mix());
-    const second = await t.lovejoin.status("preprod");
+    t.koios.txSpends.set(N, adaMix());
+    const second = adaOf(await t.lovejoin.status("preprod"));
     expect(second.notMixed).toEqual([]);
     expect(second.due).toHaveLength(2);
     expect(txInfoAsked(t)).toEqual([[M, N].sort(), [N]]);
@@ -342,8 +344,9 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
 
   it("keeps nothing Koios said when the wallet locks while it answers, and asks again once it's unlocked", async () => {
     const { t } = await withSession("40000000");
+    // In the 5 ₳ pool, where a deposit's box is held: the classic pool's comes back mixed or not (chunk 44).
     const S = hash("c9");
-    t.koios.addedToAccounts.push(await ownedBox(t, S));
+    t.koios.addedToAccounts.push(await adaOwned(t, S));
     t.koios.txSpends.set(S, sessionDeposit());
     const fetch = t.koios.fetch;
     let lockFirst = true;
@@ -357,8 +360,8 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     await expect(t.lovejoin.status("preprod")).rejects.toThrow();
     await t.wallet.unlock(PASSWORD);
     expect(await origins(t)).toBeUndefined();
-    const status = await t.lovejoin.status("preprod");
-    expect(status.notMixed).toEqual([{ txHash: S, txIndex: 0 }]);
+    const status = adaOf(await t.lovejoin.status("preprod"));
+    expect(status.notMixed).toEqual([inAda(S)]);
     expect(status.due).toEqual([]);
     expect(txInfoAsked(t)).toEqual([[S], [S]]);
   });
@@ -507,19 +510,20 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
 
   it("looks up a box no record accounts for while a chain of the wallet's is being sent, as after a restore a swap's return went in first", async () => {
     const t = await publicFunded();
-    // A box the public account's deposit made, before the wallet was restored.
+    // A box the public account's deposit made, before the wallet was restored: in the 5 ₳ pool, where such a box is
+    // held for Mix my boxes again (the classic pool's comes back mixed or not, chunk 44).
     const P = hash("bc");
-    t.koios.addedToAccounts.push(await ownedBox(t, P));
+    t.koios.addedToAccounts.push(await adaOwned(t, P));
     t.koios.txSpends.set(P, await accountDeposit(t));
     // A swap's return goes through Lovejoin before the tile ever opened: its deposit is in, and its two boxes' due times set.
     const key = "seedelf.lovejoin.test";
-    const D = await sendingChain(t, key, "c");
-    const status = await t.lovejoin.status("preprod");
+    const D = await sendingChain(t, key, "c", { ada: true });
+    const status = adaOf(await t.lovejoin.status("preprod"));
     expect(txInfoAsked(t)).toEqual([[P]]);
     // The account's, and not mixed yet: the private balance never pays to mix it unless asked (privacy review §2.10).
-    expect(status.fromPublic).toEqual([{ txHash: P, txIndex: 0 }]);
-    expect(status.notMixed).toEqual([{ txHash: P, txIndex: 0 }]);
-    expect(status.boxes).toEqual(expect.arrayContaining([{ txHash: D, txIndex: 0 }]));
+    expect(status.fromPublic).toEqual([inAda(P)]);
+    expect(status.notMixed).toEqual([inAda(P)]);
+    expect(status.boxes).toEqual(expect.arrayContaining([inAda(D)]));
     expect(status.due).toHaveLength(2);
   });
 
@@ -761,10 +765,12 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
 
   it("keeps what Koios said of the transactions it answered for when a later request of the same read fails", async () => {
     const { t } = await withSession("40000000");
+    // In the 5 ₳ pool, where a box Koios hasn't answered for is held: the classic pool's comes back all the same
+    // (chunk 44).
     const txs = Array.from({ length: TXS_PER_REQUEST + 1 }, (_, i) => (0x40 + i).toString(16).padStart(64, "0"));
     for (const tx of txs) {
-      t.koios.addedToAccounts.push(await ownedBox(t, tx));
-      t.koios.txSpends.set(tx, mix());
+      t.koios.addedToAccounts.push(await adaOwned(t, tx));
+      t.koios.txSpends.set(tx, adaMix());
     }
     // The request of the one left over after the first twenty fails.
     const fetch = t.koios.fetch;
@@ -775,15 +781,15 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
       }
       return fetch(url, init);
     };
-    const first = await t.lovejoin.status("preprod");
+    const first = adaOf(await t.lovejoin.status("preprod"));
     expect(Object.keys((await origins(t))!)).toHaveLength(TXS_PER_REQUEST);
     const [left] = Object.keys((await asking(t))!);
-    expect(first.unsure).toEqual([{ txHash: left, txIndex: 0 }]);
+    expect(first.unsure).toEqual([inAda(left!)]);
     expect(first.due).toHaveLength(TXS_PER_REQUEST);
     // Koios answers at the next read: only that one is asked of.
     down = false;
     const asked = txInfoAsked(t).length;
-    const second = await t.lovejoin.status("preprod");
+    const second = adaOf(await t.lovejoin.status("preprod"));
     expect(txInfoAsked(t).slice(asked)).toEqual([[left]]);
     expect(second.unsure).toBeUndefined();
     expect(second.due).toHaveLength(TXS_PER_REQUEST + 1);
@@ -791,15 +797,16 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
 
   it("says a box a deposit made, found after a restore, as Koios said it: never the user's deposit, nor a stopped chain's", async () => {
     const { t } = await withSession("40000000");
+    // In the 5 ₳ pool, where a deposit's box waits for Mix my boxes again: the classic pool's comes back (chunk 44).
     const S = hash("95");
-    t.koios.addedToAccounts.push(await ownedBox(t, S));
+    t.koios.addedToAccounts.push(await adaOwned(t, S));
     // Whose deposit it was, and why no mix followed it, the wallet can't know: someone else's may pay to its register.
     t.koios.txSpends.set(S, sessionDeposit());
-    const status = await t.lovejoin.status("preprod");
-    expect(status.deposits).toEqual([{ txHash: S, txIndex: 0 }]);
+    const status = adaOf(await t.lovejoin.status("preprod"));
+    expect(status.deposits).toEqual([inAda(S)]);
     expect(status.notMixed).toEqual(status.deposits);
     const lovejoin = witnessed(t);
-    await expect(lovejoin.withdrawNow("preprod", { txHash: S, txIndex: 0 })).rejects.toThrow(
+    await expect(lovejoin.withdrawNow("preprod", inAda(S))).rejects.toThrow(
       "That box wasn't mixed: the server says a deposit put it in. Brought back now, it shows where it went in. Mix again first, or bring it back anyway.",
     );
     const page = text(createElement(NotMixed, { count: 1, deposits: 1, busy: false, onAnyway: () => undefined }));
@@ -819,15 +826,17 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
   it("still says a recorded chain's box not mixed yet is its chain's, stopped", async () => {
     const { t } = await withSession("40000000");
     const D = hash("96");
-    // A session's return, cut after its deposit.
+    // A session's return, cut after its deposit: into the 5 ₳ pool, where its box waits for Mix my boxes again (a
+    // retired pool's comes back, chunk 44).
     const cut = {
       id: hash("97"),
       session: 0,
       progress: "seedelf.lovejoin.test",
       deposit: D,
       mixes: [hash("97")],
-      leaves: [{ txHash: hash("97"), txIndex: 0 }],
+      leaves: [inAda(hash("97"))],
       boxes: 1,
+      pools: { [ADA]: 1 },
       total: 2,
       sent: 1,
       at: t.clock.now - 2 * HOUR,
@@ -835,12 +844,12 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
       stopped: "The wallet locked, or the browser closed, while its chain was being sent.",
       ended: t.clock.now - 2 * HOUR,
     };
-    t.koios.addedToAccounts.push(await ownedBox(t, D));
+    t.koios.addedToAccounts.push(await adaOwned(t, D));
     await t.store.set("lovejoin.preprod", { due: [], chains: [cut] });
-    const status = await t.lovejoin.status("preprod");
-    expect(status.notMixed).toEqual([{ txHash: D, txIndex: 0 }]);
+    const status = adaOf(await t.lovejoin.status("preprod"));
+    expect(status.notMixed).toEqual([inAda(D)]);
     expect(status.deposits).toBeUndefined();
-    await expect(witnessed(t).withdrawNow("preprod", { txHash: D, txIndex: 0 })).rejects.toThrow(
+    await expect(witnessed(t).withdrawNow("preprod", inAda(D))).rejects.toThrow(
       "That box wasn't mixed: its chain stopped first.",
     );
     expect(anywayWarning(status)).toContain("Its chain stopped before mixing it. Brought back now, anyone can tie your deposit to your private balance.");
@@ -927,28 +936,27 @@ describe("taking a box no record accounts for (independent review M14)", CHAINS,
 
   it("never brings back by itself a box a deposit made that a chain's dropped last mix left its due time to, and asks what made it first", async () => {
     const { t } = await withSession("40000000");
-    // The classic pool's boxes, past the first run on 1.8.0, which brought back all a wallet had there (retireOnce,
-    // chunk 44): those 1.7 put in since come back on their own schedule, as any pool's do.
-    await retiredAlready(t.store);
+    // In the 5 ₳ pool, where a deposit's box is held: the classic pool's comes back mixed or not (chunk 44).
     const P = hash("c8");
-    t.koios.addedToAccounts.push(await ownedBox(t, P));
+    t.koios.addedToAccounts.push(await adaOwned(t, P));
     t.koios.txSpends.set(P, await accountDeposit(t));
     // The chain's first mix is in, and a node dropped its last after it was all sent: what that mix spends stays
     // spent by it for hours, its box never shows, and its due time is left over, as many as the boxes that can come
     // back. The pool read asks nothing.
-    const { mixes } = await sentChain(t, "8", [0]);
+    const { mixes } = await sentChain(t, "8", [0], { ada: true });
     const lovejoin = witnessed(t);
     const back = await runsFor(t, lovejoin, 16);
     expect(back).not.toContain(`${P}#0`);
     // The chain's mixed box came back; P was asked of once, as it was about to go, and is held from then.
     expect(back).toEqual([`${mixes[0]}#0`]);
     expect(txInfoAsked(t)).toEqual([[P]]);
-    const status = await t.lovejoin.status("preprod");
-    expect(status.notMixed).toContainEqual({ txHash: P, txIndex: 0 });
-    expect(status.fromPublic).toEqual([{ txHash: P, txIndex: 0 }]);
+    const status = adaOf(await t.lovejoin.status("preprod"));
+    expect(status.notMixed).toContainEqual(inAda(P));
+    expect(status.fromPublic).toEqual([inAda(P)]);
     await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow("weren't mixed yet");
-    // Nor is it mixed again there: the classic pool, retired, mixes none (chunk 44).
-    await expect(t.lovejoin.againBoxes("preprod", true)).rejects.toThrow("This pool runs Lovejoin's retired scripts");
+    // Nor does the private balance pay to mix it again, being the account's (privacy review §2.10): Mix my boxes again
+    // takes the chain's own box alone, the one its dropped mix spent.
+    expect(await t.lovejoin.againBoxes("preprod", false, ADA)).toEqual({ boxes: 1, owned: 1 });
     expect(txInfoAsked(t)).toEqual([[P]]);
   });
 
@@ -1045,23 +1053,21 @@ describe("taking a box no record accounts for (independent review M14)", CHAINS,
 
   it("asks, before a box no record accounts for comes back by itself, what made that box alone, and waits while Koios can't say", async () => {
     const { t } = await withSession("40000000");
+    // In the 5 ₳ pool, where a box waits while Koios can't say what made it: the classic pool's comes back (chunk 44).
     const [B, C] = [hash("ba"), hash("ca")];
-    t.koios.addedToAccounts.push(await ownedBox(t, B), await ownedBox(t, C));
-    await t.store.set("lovejoin.preprod", { due: [t.clock.now + HOUR, t.clock.now + 30 * HOUR], chains: [] });
-    // The classic pool's boxes, past the first run on 1.8.0, which brought back all a wallet had there (retireOnce,
-    // chunk 44): those 1.7 put in since come back on their own schedule, as any pool's do.
-    await retiredAlready(t.store);
+    t.koios.addedToAccounts.push(await adaOwned(t, B), await adaOwned(t, C));
+    await t.store.set("lovejoin.preprod", adaSchedule([t.clock.now + HOUR, t.clock.now + 30 * HOUR]));
     const koios = flakyTxInfo(t);
     const lovejoin = witnessed(t);
     // Koios can't say: nothing comes back, and nothing is kept for the pool reads.
     expect(await runsFor(t, lovejoin, 6)).toEqual([]);
     expect(koios.asked).toBeGreaterThan(0);
     expect(await asking(t)).toBeUndefined();
-    expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))?.due).toHaveLength(2);
+    expect(await adaDue(t)).toHaveLength(2);
     // It answers: the box about to go comes back, asked of alone.
     koios.on = false;
-    t.koios.txSpends.set(B, mix());
-    t.koios.txSpends.set(C, mix());
+    t.koios.txSpends.set(B, adaMix());
+    t.koios.txSpends.set(C, adaMix());
     expect(await runsFor(t, lovejoin, 6)).toEqual([`${B}#0`]);
     expect(txInfoAsked(t)).toEqual([[B]]);
     // Known now: Bring one back now asks only of the other.
@@ -1071,29 +1077,30 @@ describe("taking a box no record accounts for (independent review M14)", CHAINS,
   });
 
   it("has the pool read itself ask what made a box no record accounts for while a chain's deposit isn't listed yet, or its mix isn't in yet: the chain's due times wait for its boxes as Koios lists them", async () => {
-    // Its deposit sent, and not listed yet.
+    // In the 5 ₳ pool, where the account's box is held: the classic pool's comes back mixed or not (chunk 44). Its
+    // deposit sent, and not listed yet.
     const { t } = await withSession("40000000");
     const P = hash("bd");
-    t.koios.addedToAccounts.push(await ownedBox(t, P));
+    t.koios.addedToAccounts.push(await adaOwned(t, P));
     t.koios.txSpends.set(P, await accountDeposit(t));
-    await sendingChain(t, "seedelf.lovejoin.test", "d", { listed: false });
-    const status = await t.lovejoin.status("preprod");
+    await sendingChain(t, "seedelf.lovejoin.test", "d", { listed: false, ada: true });
+    const status = adaOf(await t.lovejoin.status("preprod"));
     expect(txInfoAsked(t)).toEqual([[P]]);
-    expect(status.fromPublic).toEqual([{ txHash: P, txIndex: 0 }]);
-    expect(status.notMixed).toEqual([{ txHash: P, txIndex: 0 }]);
+    expect(status.fromPublic).toEqual([inAda(P)]);
+    expect(status.notMixed).toEqual([inAda(P)]);
 
     // Its deposit in, its first mix too (D#1's box is at A#0), and its second sent and not in yet: D#0 is still
     // listed, and spent by it.
     const { t: u } = await withSession("40000000");
     const Q = hash("be");
-    u.koios.addedToAccounts.push(await ownedBox(u, Q));
+    u.koios.addedToAccounts.push(await adaOwned(u, Q));
     u.koios.txSpends.set(Q, await accountDeposit(u));
-    const D = await sendingChain(u, "seedelf.lovejoin.test", "e");
+    const D = await sendingChain(u, "seedelf.lovejoin.test", "e", { ada: true });
     const A = hash("ae");
     u.koios.spent.add(`${D}#1`);
-    u.koios.addedToAccounts.push(await ownedBox(u, A));
+    u.koios.addedToAccounts.push(await adaOwned(u, A));
     await u.wallet.withKeys(() => u.session.set(SESSION_SPENT, { [`${D}#0`]: u.clock.now }));
-    expect((await u.lovejoin.status("preprod")).fromPublic).toEqual([{ txHash: Q, txIndex: 0 }]);
+    expect(adaOf(await u.lovejoin.status("preprod")).fromPublic).toEqual([inAda(Q)]);
     expect(txInfoAsked(u)).toEqual([[Q]]);
   });
 
