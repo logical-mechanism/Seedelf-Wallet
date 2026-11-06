@@ -36,7 +36,7 @@ import { NetworkChoice, PreferencesService } from "../src/background/preferences
 import { NftImageService } from "../src/background/nft-image";
 import { PriceService } from "../src/background/prices";
 import { SendService } from "../src/background/send";
-import { LovejoinService } from "../src/background/lovejoin";
+import { LovejoinService, type PoolRef } from "../src/background/lovejoin";
 import { LovejoinLaunchService } from "../src/background/lovejoin-launch";
 import { SessionService } from "../src/background/sessions";
 import { StakingService } from "../src/background/staking";
@@ -679,7 +679,11 @@ export function fakeMinswap(): FakeMinswap {
 }
 
 /** A wallet plus the balance, move-in, mint, transfer, withdraw, send and pending services over the fake Koios and giveme.my. */
-export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) => Promise<void> }) {
+/**
+ * `pools`: the pools discovery hands Lovejoin (chunk 34's 34c), none by default: the classic pool alone, retired since
+ * chunk 44, so the sessions below come back directly. A test that mixes gives v2's 5 ₳ pool (v2-pools.ts ADA_POOL).
+ */
+export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) => Promise<void>; pools?: PoolRef[] }) {
   const t = testWallet();
   const koios = fakeKoios(options);
   const collateral = fakeCollateral();
@@ -726,11 +730,13 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   });
   // Lovejoin on its own: the default sessions above come back plainly, as
   // their tests expect; lovejoin.test.ts wires one in.
+  const pools = options?.pools;
   const lovejoin = new LovejoinService({
     ...deps,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     store,
     preferences,
+    ...(pools ? { pools: async () => pools } : {}),
   });
   // Starting a pool: no pool shown, unless a test gives its own discovery.
   const launch = new LovejoinLaunchService({
