@@ -5316,7 +5316,9 @@ export class SessionService {
       await this.deps.lovejoin?.chainEnded(network, id, why, undefined, e instanceof ChainGone).catch(() => undefined);
       await this.dropPending(network, index);
       await this.deps.lovejoin?.release(network, chainOwner(index)).catch(() => undefined);
-      throw e;
+      // Handed on in Lovejoin's words too, its type kept: Send, Bring everything back and the runner show what's thrown
+      // (1.8.1's release review, worker#1).
+      throw e instanceof RewardsChangedError ? new RewardsChangedError(REWARDS_MOVED(), e.trouble, e.failure) : e;
     }
     if (!done) return;
     await this.deps.lovejoin?.chainEnded(network, id);

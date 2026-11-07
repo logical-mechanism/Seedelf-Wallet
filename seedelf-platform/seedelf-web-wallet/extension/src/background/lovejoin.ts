@@ -595,7 +595,10 @@ export const STALE_POOL_TRIES = 2;
 /**
  * The inputs Ogmios's answer says it doesn't know (`txhash#index`): its
  * error 3117, or 3110 for a redeemer on one. Undefined when it says
- * nothing of the kind; empty when it doesn't name them.
+ * nothing of the kind; empty when it doesn't name them. Ogmios names an
+ * evaluation's unknown input only in a 3004's reason, never read here:
+ * read, it reached tailWitness, unstale and Mix again together, which wait
+ * for a rework (1.8.1's release review, r2-worker#1, r2-worker#2, r2-tests#1).
  */
 export function unknownInputs(answer: unknown): string[] | undefined {
   type Failure = { code?: unknown; data?: unknown };
@@ -901,6 +904,15 @@ function collateralAsked(c: Pick<ChainCall, "collateralPool" | "collateralReserv
 function balancesOf(reads: readonly RewardRead[] | undefined, txs: LovejoinChain["txs"]): { balances?: RewardRead[] } {
   const named = readsFor(reads ?? [], txs);
   return named.length ? { balances: named } : {};
+}
+
+/**
+ * What a chain's `balances` take, all told, which its change brings into the public account: a review of a mix from it
+ * counts that in its "after" (LovejoinPublicSummary `taken`; 1.8.1's release review, readers#1). None when they take none.
+ */
+function takenOf(balances: readonly RewardRead[] | undefined): { taken?: string } {
+  const taken = (balances ?? []).reduce((sum, r) => sum + BigInt(r.lovelace), 0n);
+  return taken > 0n ? { taken: taken.toString() } : {};
 }
 
 /**
@@ -1627,6 +1639,11 @@ export interface LovejoinDeps extends ScriptSpendDeps {
    * (Schedule `copies`; round two's review, R2-4).
    */
   copiesRead?: (network: NetworkName, read: PoolRef[]) => Promise<void>;
+  /**
+   * Every pool discovery keeps on `network`, each copy among them, read or not (lovejoin-pools.ts' `everyKept`): what a
+   * site's transaction never pays into (mixLogicHashes). No request. None: the pools the wallet reads alone.
+   */
+  everyKept?: (network: NetworkName) => Promise<PoolRef[]>;
   /** Looks for pools launched since (lovejoin-pools.ts' `look`): the Lovejoin page, as it opens. */
   lookForPools?: (network: NetworkName) => Promise<void>;
   /**
@@ -3823,7 +3840,10 @@ export class LovejoinService {
         ...(w !== 3 ? { width: w } : {}),
         ...(pool.ref ? { poolRef: pool.ref } : {}),
         ...collateralAsked(c, this.tailRows(c, avoid, c.collateralPool?.pool.id === pool.id ? split : undefined)),
-        ...rewardsField(await this.rewardsOf(network, c, [pool, c.collateralPool?.pool])),
+        // Its first mix in each pool takes what sits in that pool's reward account (chunk 43). A Bootstrap's (depth 0) is
+        // its deposit alone, which runs no script, and reads none, as from the public account (1.8.1's release review,
+        // worker#5).
+        ...(depth > 0 ? rewardsField(await this.rewardsOf(network, c, [pool, c.collateralPool?.pool])) : {}),
       };
       const built = await this.deps.wallet.withKeys(
         (keys) =>
@@ -4592,12 +4612,19 @@ export class LovejoinService {
   }
 
   /**
-   * The `mix_logic` hash of every pool the wallet reads on `network`, the classic pool's and the retired ones' too,
-   * asking nobody (readSet): a site's transaction that pays into one's reward account is never signed (dapp.ts). Money
-   * there stops every mix and way back in that pool until someone takes it, and anyone may (the owner, 2026-11-06).
+   * The `mix_logic` hash of every pool the wallet knows on `network`, asking nobody: the classic pool's, and every pool
+   * discovery keeps, the retired ones and every copy among them, read or not (everyKept). A site's transaction that
+   * pays into one's reward account is never signed (dapp.ts). Money there stops every mix and way back in that pool
+   * until someone takes it, and anyone may (the owner, 2026-11-06). The copies sealed as holding the wallet's boxes are
+   * among those kept, so they never change the answer a site hears (1.8.1's release review, guard#1 and v-guard#1).
    */
   async mixLogicHashes(network: NetworkName): Promise<Set<string>> {
     const pools = await this.readSet(network, true);
+    // Discovery's record failing is no pool gone: the pools the wallet reads are refused still. A trap isn't swallowed.
+    for (const ref of (await this.deps.everyKept?.(network).catch(unlessTrap(undefined))) ?? []) {
+      const pool = this.verifiedPool(network, ref);
+      if (pool) pools.push(pool);
+    }
     return new Set(pools.map((p) => this.mixLogicOf(network, p).hash));
   }
 
@@ -4890,6 +4917,8 @@ export class LovejoinService {
     });
     const last = chain.txs.at(-1)!;
     const token = into.token && { ...into.token, quantity: (BigInt(into.token.quantity) * BigInt(chain.boxes)).toString() };
+    // What it withdraws from its pool's reward account: read again at Send, and what it takes counted on its review.
+    const withdrawn = balancesOf(reads, chain.txs);
     const summary: LovejoinPublicSummary = {
       network,
       ...(bootstrap ? { bootstrap: true } : {}),
@@ -4904,6 +4933,7 @@ export class LovejoinService {
       txs: chain.txs.length,
       fees: chain.fees,
       change: chain.returned,
+      ...takenOf(withdrawn.balances),
       ...(chain.width ? { width: chain.width } : {}),
       ...(chain.fellBack ? { fellBack: chain.fellBack } : {}),
     };
@@ -4913,7 +4943,7 @@ export class LovejoinService {
       leaves: chain.leaves.map(inThe(into.id)),
       builtAt: now(),
       account: chain.account,
-      ...balancesOf(reads, chain.txs),
+      ...withdrawn,
     };
     await this.keep(network, kept, chain.reserved);
     return summary;
@@ -5066,6 +5096,7 @@ export class LovejoinService {
       return way.fellBack ? { ...built, fellBack: way.fellBack } : built;
     });
     const last = chain.txs.at(-1)!;
+    const withdrawn = balancesOf(reads, chain.txs);
     const summary: PublicAgain = {
       network,
       ...(into.id !== CLASSIC ? { pool: into.id } : {}),
@@ -5078,6 +5109,7 @@ export class LovejoinService {
       txs: chain.txs.length,
       fees: chain.fees,
       change: chain.returned,
+      ...takenOf(withdrawn.balances),
       again: true,
       owned,
       ...(chain.width ? { width: chain.width, ...three } : {}),
@@ -5085,7 +5117,7 @@ export class LovejoinService {
     };
     await this.keep(
       network,
-      { ...summary, chain: chain.txs, leaves: chain.leaves.map(inThe(into.id)), builtAt: now(), account, ...balancesOf(reads, chain.txs) },
+      { ...summary, chain: chain.txs, leaves: chain.leaves.map(inThe(into.id)), builtAt: now(), account, ...withdrawn },
       chain.reserved,
     );
     return summary;
@@ -5408,7 +5440,10 @@ export class LovejoinService {
       // (runs.ts never stops what was started while it went on) (final review F2).
       if (maybe) await this.deps.alarm?.start().catch(() => undefined);
       await save().catch(() => undefined);
-      throw unsure !== undefined ? new Error(sending.stopped) : e;
+      if (unsure !== undefined) throw new Error(sending.stopped);
+      // Send and the runner show what's thrown: refused for its pool's reward balance, that's Lovejoin's words too,
+      // never staking's, with its type kept (1.8.1's release review, worker#1).
+      throw e instanceof RewardsChangedError ? new RewardsChangedError(REWARDS_MOVED(), e.trouble, e.failure) : e;
     }
   }
 

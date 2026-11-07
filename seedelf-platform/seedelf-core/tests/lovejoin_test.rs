@@ -1157,6 +1157,20 @@ fn a_mix_takes_only_its_own_pools_balance() {
     assert_eq!(Rewards::of([(protocol.mix_logic_hash, 0)]), Rewards::none());
 }
 
+/// A pool named twice holds the last balance given for it, a 0 too: the
+/// worker's reads come as a map of hex, where one hash in upper and in lower
+/// case is two keys (1.8.1's release review, core#2).
+#[test]
+fn a_pool_named_twice_holds_the_last_balance_given() {
+    let protocol = Protocol::of(true).unwrap();
+    let h = protocol.mix_logic_hash;
+    let of = |balances: &[u64]| Rewards::of(balances.iter().map(|l| (h, *l)));
+    assert_eq!(of(&[5, 7]), holding(&protocol, 7));
+    assert_eq!(of(&[7, 5]), holding(&protocol, 5));
+    assert_eq!(of(&[0, 5]), holding(&protocol, 5));
+    assert_eq!(of(&[5, 0]), Rewards::none());
+}
+
 #[test]
 fn a_build_that_fails_takes_nothing() {
     let protocol = Protocol::of(true).unwrap();
@@ -1319,7 +1333,10 @@ fn a_chains_first_mix_takes_the_balance_and_its_change_carries_it() {
     .unwrap();
     assert!(again.txs.iter().all(|t| t.taken == 0));
 
-    // Mixing again with a balance there: its first mix takes it.
+    // Mixing again with a balance there: its first mix takes it, out of the
+    // caller's `Rewards`, which a session's collateral tail is built on next
+    // (1.8.1's release review, mutants#2).
+    let mut rewards = holding(&protocol, WINDFALL);
     let again = lovejoin::again(
         &params(),
         &protocol,
@@ -1327,7 +1344,7 @@ fn a_chains_first_mix_takes_the_balance_and_its_change_carries_it() {
         &chain.leaves,
         1,
         &all_pool_boxes(&protocol),
-        &mut holding(&protocol, WINDFALL),
+        &mut rewards,
     )
     .unwrap();
     assert_eq!(again.txs[0].taken, WINDFALL);
@@ -1335,6 +1352,7 @@ fn a_chains_first_mix_takes_the_balance_and_its_change_carries_it() {
         again.change.lovelace,
         20_000_000 + WINDFALL - again.txs[0].fee
     );
+    assert_eq!(rewards, Rewards::none());
 }
 
 #[test]

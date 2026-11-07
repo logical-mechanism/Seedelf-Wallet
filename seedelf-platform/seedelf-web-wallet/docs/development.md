@@ -142,7 +142,7 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - Lovejoin in v2's 5 ₳ pool (preprod's head start bundles it, `47bece42…`), once a second wallet, from another recovery phrase, has put boxes in it to mix with: a pool holding the tester's own boxes alone has nobody to mix with, since a wallet's own boxes never count. Then a Lovejoin mix from each side, and **Bring one back now**; Public activity names the public account's deposit *Into Lovejoin* and its mixes *Lovejoin mix*;
    - in that pool too: with **Four boxes a mix** on (Settings), a mix whose review says four, or why three; a Bootstrap (*Help start the pool*, under Mix) from each side, the private one's review reading *For returning the rest* 1.5 ₳ at today's parameters, then **Bring one back** and **Bring them all back**; and **Start a pool**'s review. Send a start only to test a change to it: every pool started shows to every preprod wallet, and its ADA never comes back. The other pools in the head start (MIN's two, 5 ₳ and 7 tADA, all on 8131b1d's scripts) and the classic pool are retired, and take no mix;
    - a private swap whose return goes through v2's 5 ₳ pool: with two other people's boxes free in it, the return first puts the session's 5 ₳ collateral in and mixes it once (Settings' *Mix a session's 5 ₳ collateral*, on by default), and that mix waits for giveme.my. A swap into a token with a pool shown (*What you get, on the way back* naming the pool, the tokens back through it), and every other token pool's item here, waits for a v2 token pool on preprod: every token pool there today is retired;
-   - boxes in the retired pools (put some in with a 1.7.2 build first: a 1.8.0 build puts none there), on the update and on a restore: at the profile's first unlock on 1.8.0, and in a fresh profile once the restored phrase opens Lovejoin's page, the hub lists those pools withdraw-only, their pages' Review and Mix my boxes again off, with the reason, and the boxes come back one right after another, by themselves, Settings saying *Bringing every box in the retired pools back*, with Stop. With `www.giveme.my` blocked, that run stops by itself after three runs that sent nothing, and its **Try again** asks "Bring the retired pools' boxes back now?";
+   - boxes in the retired pools (put some in with a 1.7.2 build first: a 1.8.x build puts none there), on the update and on a restore: at the profile's first unlock on 1.8.0 or later, and in a fresh profile once the restored phrase opens Lovejoin's page, the hub lists those pools withdraw-only, their pages' Review and Mix my boxes again off, with the reason, and the boxes come back one right after another, by themselves, Settings saying *Bringing every box in the retired pools back*, with Stop. With `www.giveme.my` blocked, that run stops by itself after three runs that sent nothing, and its **Try again** asks "Bring the retired pools' boxes back now?";
    - with `www.giveme.my` blocked once that collateral's deposit lands, an hour on, **Bring the rest back now** and its line on the swap's page, a site's (whose press opens its return's review) and the mix's card: the chain reads "You chose not to wait…", the 5 ₳ box stays unmixed, and **Mix my boxes again** moves it once unblocked;
    - **Bring every box back now** (Settings), and a pool's own, on its page;
    - **Max** on Send privately and on Make public from more than 20 UTxOs: the review's *Transactions* says how many it goes as, its **Transaction details** steps through each ("Transaction 1 of N"), as a Lovejoin mix's review funded in parts does, and Home follows each to the last;
@@ -179,7 +179,7 @@ cargo test --workspace --locked
 cargo test --release --locked -p seedelf-wasm --test payment_parts_shapes_test -- --ignored
 cd seedelf-web-wallet/extension
 npm ci
-release_version=1.8.0
+release_version=1.8.1
 npm version "$release_version" --no-git-tag-version
 npm run tokens
 npm run dreps
@@ -276,7 +276,7 @@ The package to upload is:
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-With `package.json` at 1.8.0, that file is `extension/release/seedelf-wallet-1.8.0-mainnet.zip`.
+With `package.json` at 1.8.1, that file is `extension/release/seedelf-wallet-1.8.1-mainnet.zip`.
 
 `npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it.
 

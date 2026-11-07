@@ -290,8 +290,11 @@ export interface DappDeps extends AccountDeps {
   store: PrivateStore;
   /** Private sessions: a site connected to one reads and signs its account. */
   sessions: SessionService;
-  /** Lovejoin's pools the wallet knows: a transaction that pays into one's `mix_logic` reward account is refused. */
-  lovejoin?: Pick<LovejoinService, "mixLogicHashes">;
+  /**
+   * Lovejoin's pools the wallet knows: a transaction that pays into one's `mix_logic` reward account is refused.
+   * Required: a connector wired without it would sign one (1.8.1's release review, mutants#9).
+   */
+  lovejoin: Pick<LovejoinService, "mixLogicHashes">;
   /** The public accounts the wallet knows (accounts.ts): a session's signing prompt matches every one (`ties`). */
   knownAccounts?: () => Promise<number[]>;
   /** How often a private session's funding is looked for (tests: at once). */
@@ -2093,7 +2096,7 @@ export class DappService {
     // Nor one that pays into a Lovejoin pool's `mix_logic` reward account, as a stake pool's, a proposal's deposit or a
     // treasury withdrawal: money there stops every mix and way back in that pool until someone takes it, and anyone
     // may. Whoever signs, the wallet never sets that account for anything (the owner, 2026-11-06; chunk 43).
-    if (summary.paidScripts?.length && this.deps.lovejoin) {
+    if (summary.paidScripts?.length) {
       const pools = await this.deps.lovejoin.mixLogicHashes(network);
       if (summary.paidScripts.some((h) => pools.has(h))) {
         throw refuse(TxSignError.ProofGeneration, (lng) => t("dapp.lovejoinRewards", { lng }));

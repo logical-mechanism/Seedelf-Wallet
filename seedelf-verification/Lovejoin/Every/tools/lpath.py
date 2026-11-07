@@ -1,7 +1,8 @@
-import sys
+import re, sys
 def lean(s):
     s = s.lstrip('@')
-    xs = [c for c in s]
+    # a step is a digit, or (n) for n >= 10, as pseudo.py prints them (scope.py's P)
+    xs = [x.strip('()') for x in re.findall(r'\(\d+\)|\d', s)]
     out, line = [], []
     for i, c in enumerate(xs):
         line.append(c)

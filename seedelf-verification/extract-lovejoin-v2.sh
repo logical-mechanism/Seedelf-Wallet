@@ -8,10 +8,13 @@
 # launch Lovejoin's own KATs use (test_fixtures.ak: the NFT policy abab…, `lovejoin`)
 # and checks that hash too. Last, mix_box's template, unapplied, for the theorems that hold
 # for every L: applied to the classic pool's mix_logic hash it must be the classic pool's
-# mix_box, c145c10f…, as it sits on chain. And one_shot_mint's: applied to the mainnet
-# 5 ₳ pool's seed it must be that pool's NFT policy, dc6abe3b…. And fee_contract's: at that
-# pool's policy it must be that pool's fee_contract, 20aae476…. mix_logic's own template too,
-# unapplied (7fb45b75…), for the theorems that hold for every v2 launch.
+# mix_box, c145c10f…, as it sits on chain. And one_shot_mint's: applied to the seed of
+# mainnet's first 5 ₳ pool (8131b1d's, retired since 1.8.0) it must be that pool's NFT
+# policy, dc6abe3b…. And fee_contract's: at that pool's policy it must be that pool's
+# fee_contract, 20aae476…. mix_logic's own template too, unapplied (7fb45b75…), for the
+# theorems that hold for every v2 launch. The live v2 pool, fcb3f5ec…, is these templates
+# applied: the wallet's WebAssembly tests derive it from them
+# (seedelf-platform/seedelf-web-wallet/wasm/tests/lovejoin_proven_bytes_test.rs).
 #   Lovejoin/V2/Scripts/mix_logic.hex             one CBOR layer, as the ledger hashes it
 #   Lovejoin/Template/Scripts/mix_logic.hex       the same, unapplied
 #   Lovejoin/Template/Scripts/mix_box.hex         the same, unapplied
@@ -60,7 +63,8 @@ UNAPPLIED = {
 APPLIED_MIX_LOGIC = "60294352f5eaeb0ca3e0f3de623707fee54c0fdd66b343f3203fcbd7"
 # The classic pool's mix_box on chain (seedelf-core's lovejoin::Protocol::of, mainnet).
 CLASSIC_MIX_BOX = "c145c10ff4bcaef7f5a4dbb3fcbfddca4b6c7b08191b0690b12f1fad"
-# The mainnet 5 ₳ pool's NFT policy (extension/src/lovejoin-pools.json), seed d4c72bc2…#0.
+# Mainnet's first 5 ₳ pool's NFT policy, seed d4c72bc2…#0: 8131b1d's, retired since 1.8.0
+# (extension/src/lovejoin-pools.json's first mainnet pool; the live v2 pool is the second).
 POOL5_POLICY = "dc6abe3b0b184e09d11cfa918f7b57cde9ea1f61c49700894d3fe117"
 POOL5_FEE = "20aae4761e1b54e852fa7067aa0e51eee2d991346c6c9579373c330d"
 
@@ -86,10 +90,10 @@ classic = scripts(f"{out}/mix_box_classic.json")["mix_box"][0]
 print(f"mix_box: the template at the classic L {classic} {'ok' if classic == CLASSIC_MIX_BOX else 'expected ' + CLASSIC_MIX_BOX}")
 ok &= classic == CLASSIC_MIX_BOX
 pool5 = scripts(f"{out}/one_shot_mint_pool5.json")["one_shot_mint"][0]
-print(f"one_shot_mint: the template at the 5 ₳ pool's seed {pool5} {'ok' if pool5 == POOL5_POLICY else 'expected ' + POOL5_POLICY}")
+print(f"one_shot_mint: the template at the retired 5 ₳ pool's seed {pool5} {'ok' if pool5 == POOL5_POLICY else 'expected ' + POOL5_POLICY}")
 ok &= pool5 == POOL5_POLICY
 fee5 = scripts(f"{out}/fee_contract_pool5.json")["fee_contract"][0]
-print(f"fee_contract: the template at the 5 ₳ pool's policy {fee5} {'ok' if fee5 == POOL5_FEE else 'expected ' + POOL5_FEE}")
+print(f"fee_contract: the template at the retired 5 ₳ pool's policy {fee5} {'ok' if fee5 == POOL5_FEE else 'expected ' + POOL5_FEE}")
 ok &= fee5 == POOL5_FEE
 if ok:
     open("Lovejoin/V2/Scripts/mix_logic.hex", "w").write(code.hex())

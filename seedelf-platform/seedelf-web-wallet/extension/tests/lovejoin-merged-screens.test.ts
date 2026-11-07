@@ -271,6 +271,16 @@ describe("Lovejoin's public reviews say what the public account holds after (R9)
     expect(review(summary)).not.toContain("Public account after");
   });
 
+  it("with what its first mix takes of its pool's reward balance, which its change brings in (1.8.1's release review, readers#1)", () => {
+    // 100 ₳ on Home, two 10 ₳ boxes and 6.852214 ₳ of fees leaving, and the 500 ₳ a retired stake pool's deposit left there.
+    const taking = { ...summary, taken: "500000000" };
+    expect(review(taking, "100000000")).toContain("Total leaving your public account 26.852214 ₳ Public account after 573.147786 ₳");
+    // Mixing its own boxes again: the fees alone leave, and the same comes in.
+    expect(review({ ...taking, again: true }, "100000000")).toContain("Public account after 593.147786 ₳");
+    // No figure handed down: no after line, as before.
+    expect(review(taking)).not.toContain("Public account after");
+  });
+
   it("on a pool's start paid from the public account, as from the private balance", () => {
     const { LaunchTotals } = LaunchScreen;
     const start = { from: "public" as const, locked: { reference: "0", mixBox: "0", mixLogic: "0", deposit: "0", total: "23110000" }, fee: "480000" };

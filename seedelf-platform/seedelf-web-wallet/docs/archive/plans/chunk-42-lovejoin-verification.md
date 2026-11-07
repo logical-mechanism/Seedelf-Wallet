@@ -2,6 +2,8 @@
 
 Branch `lovejoin-verification`, from `verification` at `63cdb465`. It stayed local until the fix was public: the xor32 fix merged into Lovejoin's `main` as `29573c5` (PRs #165 and #166, 2026-11-05), and the branch went to `main` after it. The owner, 2026-11-03: "A lot of the seedelf web wallet depends on lovejoin working as well. Trickier and if something is found wrong then it would be bad for us to push it into this branch so maybe a local only branch until we prove it good?"
 
+**Status: ✅ done.** Archived in 1.8.1's release review, with what its PRs did at the end. What we claim from it, and where the claim stops, is [CLAIMS.md](../../../../../seedelf-verification/CLAIMS.md); its rule for a property that comes back Falsified is in [seedelf-verification's README](../../../../../seedelf-verification/README.md).
+
 The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the same pinned forks (chunk 41). The README's rules for writing a property hold here.
 
 | Step | Status |
@@ -14,15 +16,15 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 | 6 · fee_contract and one_shot_mint | ✅ on their templates, for every pool (step 8): `OneShotMint` (5) and `FeeContract` (5) (2026-11-03) |
 | 7 · The token-pool templates | ✅ on v2 instead (step 8): the Mix for any token pool at n = 2 to 4. 8131b1d's only mainnet pool (5 ₳) is empty |
 | 8 · v2: the templates with xor32's fix | ✅ (2026-11-03, PlutusCoreBlaster 68c5399), 230 theorems. On the test launch: `MixChallenges` (1), `MixOutputs` (4), `MixDatums` (3), `Owner` (1), the Mix iff at n = 2 (7) and n = 3 (13), and the templates for every pool (mix_box 29, one_shot_mint 5, fee_contract 5): 68. On mix_logic's template, so for every pool: the Mix for any ADA or token pool at n = 2 to 4 (82), what it must pay (66), and Owner withdrawals of 1 to 4 boxes (`OwnAny*`, 14) |
-| 9 · The wallet on v2 alone | ⬜ waits on step 8 and a v2 launch |
-| 10 · Every transaction (the owner's bar, 2026-11-04) | In part. Seedelf ✅ all three scripts (2026-11-05): the wallet with none to 128 signatories, always_false, the policy in every context, and kernel-checked covers (seedelf-verification's README). v2 ✅: every script's other purposes, mix_logic's publish and reference_holder, 17 (`./check.sh lovejoin-any-tx`); mix_box's spend (`BoxPurposesAll.every_context_iff`); mix_logic's Owner and Mix withdrawals and one_shot_mint's launch, kernel-checked, any list length ([chunk 45](chunk-45-lovejoin-every-tx.md), `./check.sh lovejoin-every`) |
+| 9 · The wallet on v2 alone | ✅ 1.8.0, with [chunk 44](chunk-44-lovejoin-v2.md) (#363, #364); mainnet's v2 5 ₳ pool (`fcb3f5ec…`) is live |
+| 10 · Every transaction (the owner's bar, 2026-11-04) | ✅ Seedelf, all three scripts (2026-11-05): the wallet with none to 128 signatories, always_false, the policy in every context, and kernel-checked covers (seedelf-verification's README). v2 ✅: every script's other purposes, mix_logic's publish and reference_holder, 17 (`./check.sh lovejoin-any-tx`); mix_box's spend (`BoxPurposesAll.every_context_iff`); mix_logic's Owner and Mix withdrawals and one_shot_mint's launch, kernel-checked, any list length ([chunk 45](chunk-45-lovejoin-every-tx.md), `./check.sh lovejoin-every`) |
 
 ### Next session, in order
 
 1. ✅ **The PR** (2026-11-05): Lovejoin #165 into `dev` and #166 into `main`, `29573c5`. The owner: the old pools hold 3 UTxOs and their users were told to leave, so the disclosure is fine. Lovejoin's E2E job fails at installing Chromium on the runner's Ubuntu 26.04, which the owner accepts (Lovejoin's front end isn't worked on).
-2. **Publishing the proofs** (2026-11-05): the aliases on the public PlutusCoreBlaster fork (`opaque-xor` 68c5399, `opaque-slice` 96261cc), both pins on GitHub, and this branch into `main`, so the Seedelf work can branch from it.
-3. **Then the v2 launch** (the new 5 ₳ pool): the template theorems already hold for it.
-4. **Then step 9**, the wallet on v2 alone (1.8.0).
+2. ✅ **Publishing the proofs** (2026-11-05, #362): the aliases on the public PlutusCoreBlaster fork (`opaque-xor` 68c5399, `opaque-slice` 96261cc), both pins on GitHub, and this branch into `main`, so the Seedelf work can branch from it.
+3. ✅ **Then the v2 launch** (the new 5 ₳ pool, `fcb3f5ec…`): the template theorems already hold for it.
+4. ✅ **Then step 9**, the wallet on v2 alone (1.8.0).
 
 **Every transaction (2026-11-04):** the same properties, with every field a script doesn't read left as any `Data` (Seedelf's `AnyTx.lean`, and `AnyTxCover`'s `rfl`s for every V3 spend).
 - `./check.sh seedelf-any-tx`: 10 `ok`, 59 ✅, the longest run 1446 steps (a key missed among three signatories), at most 540 MB.
@@ -40,19 +42,13 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
   - mix_box is spend only, and one_shot_mint mint only.
   - reference_holder fails on every context.
   - The first build failed on two `open` lines that named `#import_uplc` programs by namespace; those names are global (step 8's second build).
-- **Not lifted: the Mix, Owner withdrawals and mix_box's spend.** A safety classifier stopped Claude's generator for them, so Claude sessions don't write them: they're the owner's. `Lovejoin/AnyTx/Common.lean`, written before the stop, is unused, untracked and outside `check.sh`.
+- **The Mix, Owner withdrawals and mix_box's spend, lifted since:** mix_box's spend by `BoxPurposesAll.every_context_iff`, and mix_logic's Owner and Mix withdrawals by chunk 45, kernel-checked in every transaction. What that lets us claim is [CLAIMS.md](../../../../../seedelf-verification/CLAIMS.md).
 
 **What a Mix must pay, for every pool (2026-11-03, 68c5399):** `./check.sh lovejoin-v2-outputs` 24 `ok`, 66 theorems, the slowest module 61 s at 704 MB (`MixTok4Outputs`), the most memory 816 MB (`MixTok4Datums`). Each `…OutSteps`: `honest` halts after the general Mix's own KAT count (11497, 19204 and 29007 for ADA at n = 2 to 4; 11798, 19505 and 29308 for tokens), and each of the eight changed outputs errors, long before the proofs are read.
 
-**What the claim can say (2026-11-03):** the wallet's on-chain contracts, Seedelf's and Lovejoin v2's, are formally verified on their compiled bytes. Its limits:
-- **Blaster's proofs are Z3's:** each theorem is SMT-verified (`blasterProven`), not a Lean proof term.
-- **The crypto is opaque:** the scripts check exactly the right equations, not that the equations are hard to forge.
-- **Up to 4 boxes:** Mixes and withdrawals of up to 4 boxes (3 for the classic pool's withdrawals).
-- **Transaction layouts (2026-11-04):**
-  - In every transaction: all three of Seedelf's scripts (the wallet's Register spends with up to 128 signatories, past the chain's 125; the policy's one-line rule over the opaque slice), and v2's other purposes and reference_holder.
-  - For every value, but only in their scenarios' layouts: the Mix, Owner withdrawals and mix_box's spend.
-- **For Lovejoin, from 1.8.0:** the classic pool's Mix isn't verified (step 5), and the wallet mixes there until 1.8.0 moves it to v2.
-- **The wallet's own code isn't covered.** `V2/MixOutputs` and `V2/MixDatums` hold at the test launch with two boxes alone, and the general Mix's scenario fixes every box out as it should be, so it couldn't say what a wrong one does. `gen-lovejoin-mix-outputs.py` takes them to mix_logic's template, for the six families of the general Mix (ADA and token pools, n = 2 to 4), with the pool's parameters, every box's points and every proof field symbolic. It's walk_outputs, so a Mix fails if:
+**What the claim can say:** [CLAIMS.md](../../../../../seedelf-verification/CLAIMS.md), with where it stops. This plan's draft of 2026-11-03 limited it to Mixes and withdrawals of up to 4 boxes and to the scenarios' layouts; chunk 45's kernel-checked theorems lift both.
+
+**The wallet's own code isn't covered, but what a wrong Mix does is, for every pool (2026-11-03):** `V2/MixOutputs` and `V2/MixDatums` hold at the test launch with two boxes alone, and the general Mix's scenario fixes every box out as it should be, so it couldn't say what a wrong one does. `gen-lovejoin-mix-outputs.py` takes them to mix_logic's template, for the six families of the general Mix (ADA and token pools, n = 2 to 4), with the pool's parameters, every box's points and every proof field symbolic. It's walk_outputs, so a Mix fails if:
 - one of its first n outputs is anywhere but mix_box, or has a stake credential or a reference script (`…Outputs`);
 - one holds other than exactly the box value (its lovelace, or a token pool's token quantity), or holds any other token beside it;
 - it has fewer than n outputs, or a later output is another box at mix_box;
@@ -92,7 +88,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 **Step 4's first build (2026-11-03)** failed on a name. `toData` is a class method, `IsData.toData`, so `open CardanoLedgerApi.IsData.Class (toData)` can't name it. Fixed by opening `(IsData)`. The second build was ✅.
 
-**Where everything is, for a new session:**
+**Where everything was** (chunk 41's plan has where upstream stands since):
 - The chunk 41 forks are under `../blaster-forks/`. The package pins the fork's `opaque-xor`, 68c5399: `seedelf` 1e38b23, with the #71 and #72 review rounds, plus the xor alias. `Slice/` pins `opaque-slice`, 96261cc, the same plus the slice alias.
 - v2's sources are Lovejoin's `main` at `29573c5`. On `main` the fix is the cherry-pick `ecc0313` of the owner's `5cc3631`, and every template builds byte for byte the same (`extract-lovejoin-v2.sh`, 2026-11-05).
 - The open upstream PRs are Lean-blaster #455 and PlutusCoreBlaster #71, #72 and #73 (chunk 41).
@@ -110,15 +106,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 
 ## When a property comes back Falsified
 
-- **First, run the counterexample concretely**, with Aiken's evaluator on the deployed bytes, as `concrete/` does.
-- **If Aiken agrees, it may be a flaw in a live pool.**
-  - Stop, and tell the owner only.
-  - Nothing that hints at it gets pushed or posted: no fork branch, no upstream comment, no PR text.
-  - The owner decides on disclosure; Lovejoin has its own `SECURITY.md`.
-  - The pool's scripts are frozen, so a fix is a new pool beside it.
-- **If Aiken disagrees, it's a gap in our spec or in the tools,** as WalletRegister's operand order was in chunk 41. Fix that, the same way.
-- **Tool fixes that say nothing about Lovejoin can go public,** for example #27's `serialise_data` alias on our forks and upstream. A fix that a finding motivated waits with the finding.
-- **This branch merges into `verification`** (public) only when the owner says the results are good to publish.
+The rule is in [seedelf-verification's README](../../../../../seedelf-verification/README.md) (*When a Lovejoin property comes back Falsified*). This branch merged into `main` with the owner's word, as #362.
 
 ## Targets
 
@@ -215,7 +203,7 @@ The work goes in `seedelf-verification/Lovejoin/`, beside `Seedelf/`, on the sam
 - **Proved on 68c5399, on mix_logic's template:** what that Mix must pay, for the same families (`V2/Mix*Out*`, `…Outputs`, `…Datums`, 66, by `gen-lovejoin-mix-outputs.py`): `MixOutputs` and `MixDatums` for every pool at n = 2 to 4.
 - **Not covered:** a Mix of more than 4 boxes (validate_mix takes up to 255, the wallet makes 3 or 4) and Owner withdrawals of more than 4 boxes (3 on the classic pool). Each is the same check repeated per box, but no theorem says so for every n.
 
-## Step 9 · The wallet on v2 alone ⬜
+## Step 9 · The wallet on v2 alone ✅ (1.8.0, chunk 44)
 
 The owner, 2026-11-03: "if we did fix this and its formally verified then we could update lovejoin to only use this new contract since I think we almost already cleared out the old pools".
 
@@ -244,3 +232,10 @@ The owner, 2026-11-03: "if we did fix this and its formally verified then we cou
     4. N = 4 and token pools later, since the new pool is an ADA pool.
   - **2026-11-03, tokens and N = 4 now:** "Just get it done now so we dont have to make any new contract changes down the line." All four are proved (210 ✅).
   - **2026-11-03, the cost:** `precompute_statements` stays as it is. "So at N=4 which is the chain limit for a while if not forever, can be proven to be safe then we are good to go."
+
+## What its PRs did
+
+- **#362** (`lovejoin-verification`, into `main`, merged as `c15603d5` on 2026-11-05): steps 1 to 8 and step 10's first parts (Seedelf's three scripts in every transaction, v2's other purposes and mix_box's spend), on the verification branch it was cut from (chunks 40 and 41), with the audit, and the pins on GitHub (`97e168bf`).
+- **#363 and #364** (chunk 44): step 9, the wallet on v2 alone, in 1.8.0.
+- **#368** (chunk 45, `d190f717`): step 10's last part, mix_logic's withdrawals and one_shot_mint's launch in every transaction, and CLAIMS.md.
+- **1.8.1's release review** archived this file, its limits now CLAIMS.md's and its rule for a Falsified property in seedelf-verification's README.

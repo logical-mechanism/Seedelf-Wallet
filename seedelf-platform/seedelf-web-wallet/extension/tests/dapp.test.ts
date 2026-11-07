@@ -38,6 +38,11 @@ const account = (words: number) =>
 const THEIRS = account(15).preprod.receive_0 as string;
 const OWN = account(12).preprod.receive_0 as string;
 const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
+/**
+ * Tests that read a site's transactions in WebAssembly many times over, several sites' or a session's: within a second
+ * of Vitest's 5 s with four workers on two CPUs (1.8.1's release review, r2-tests#2).
+ */
+const SLOW = { timeout: 30_000 };
 
 let sessions = 0;
 const site = (origin = "https://app.example.com"): DappSession => ({ id: `s${++sessions}`, origin, title: "Example" });
@@ -80,20 +85,23 @@ const coin = (n: bigint) => (n < 0x100000000n ? `1a${n.toString(16).padStart(8, 
 /**
  * A site's transaction, built by hand: it spends `inputs` (`txhash#index`),
  * puts up `collateral`, pays `pays` (base addresses in CIP-30's hex; 4 ₳ to
- * someone else unless given), and carries `certificates` and `withdrawals`
- * (CBOR, hex). Its fee is 0.17 ₳. Nothing balances it: the wallet only reads it.
+ * someone else unless given), and carries `certificates`, `withdrawals` and
+ * `proposals` (CBOR, hex). Its fee is 0.17 ₳. Nothing balances it: the wallet
+ * only reads it.
  */
 function siteTx({
   inputs,
   collateral = [],
   certificates = [],
   withdrawals,
+  proposals = [],
   pays = [{ address: loadTestWasm().cip30Address(THEIRS), lovelace: 4_000_000n }],
 }: {
   inputs: string[];
   collateral?: string[];
   certificates?: string[];
   withdrawals?: string;
+  proposals?: string[];
   pays?: Array<{ address: string; lovelace: bigint }>;
 }) {
   const outputs = `8${pays.length}${pays.map((p) => `825839${p.address}${coin(p.lovelace)}`).join("")}`;
@@ -101,8 +109,21 @@ function siteTx({
   if (certificates.length) fields.push(`048${certificates.length}${certificates.join("")}`);
   if (withdrawals) fields.push(`05${withdrawals}`);
   if (collateral.length) fields.push(`0d${outpoints(collateral)}`);
+  if (proposals.length) fields.push(`148${proposals.length}${proposals.join("")}`);
   return `84a${fields.length}${fields.join("")}a0f5f6`;
 }
+
+/** A stake pool's registration naming `reward` (29 bytes, hex) as its reward account: its deposit comes back there. */
+const registersPool = (reward: string) =>
+  `8a03581c${"77".repeat(28)}5820${"88".repeat(32)}001a0a21fe80d81e820001581d${reward}81581c${"99".repeat(28)}80f6`;
+
+/** A proposal whose 1,000 ₳ deposit goes back to `reward` (29 bytes, hex): an Info action, unless `action` is given. */
+const proposes = (reward: string, action = "8106") =>
+  `841a3b9aca00581d${reward}${action}826b${hex("https://x.y")}5820${"33".repeat(32)}`;
+
+/** A treasury withdrawal paying 5 ₳ to each of `to` (29 bytes each, hex), in a definite map or an indefinite one. */
+const withdrawsTreasury = (to: string[], indefinite = false) =>
+  `8302${indefinite ? "bf" : `a${to.length}`}${to.map((r) => `581d${r}1a004c4b40`).join("")}${indefinite ? "ff" : ""}f6`;
 
 /** A stake address's key hash, from its CIP-30 bytes. */
 const stakeKeyHash = (reward: string) => loadTestWasm().cip30Address(reward).slice(2);
@@ -129,7 +150,7 @@ async function built(t: Awaited<ReturnType<typeof on>>, to = THEIRS) {
   return { summary, tx: kept!.txCbor };
 }
 
-describe("the dApp connector", () => {
+describe("the dApp connector", SLOW, () => {
   it("is off until the user turns it on", async () => {
     const t = testBalances();
     await t.wallet.create(account(12).phrase, PASSWORD);
@@ -541,6 +562,7 @@ describe("the dApp connector", () => {
       } as typeof wasm,
       store: t.store,
       sessions: t.sessions,
+      lovejoin: t.lovejoin,
       network: () => "preprod",
       window: t.dappWindow,
       changed: () => undefined,
@@ -594,15 +616,22 @@ describe("the dApp connector", () => {
     await t.balances.get("preprod");
     const [own] = (await t.coins.lists("preprod")).cardano;
     const input = `${own!.txHash}#${own!.index}`;
-    // A stake pool's registration naming `reward` (29 bytes, hex) as its reward account: its deposit comes back there.
-    const pool = (reward: string) =>
-      `8a03581c${"77".repeat(28)}5820${"88".repeat(32)}001a0a21fe80d81e820001581d${reward}81581c${"99".repeat(28)}80f6`;
-    const mixLogic = (JSON.parse(loadTestWasm().lovejoinMixLogic(JSON.stringify({ network: "preprod" }))) as { hash: string }).hash;
+    const mixLogic = `f0${(JSON.parse(loadTestWasm().lovejoinMixLogic(JSON.stringify({ network: "preprod" }))) as { hash: string }).hash}`;
     const refused = { failure: { code: TxSignError.ProofGeneration, info: tr("dapp.lovejoinRewards") } };
-    await expect(t.dapp.call(s, "signTx", [siteTx({ inputs: [input], certificates: [pool(`f0${mixLogic}`)] }), true])).rejects.toMatchObject(refused);
+    // As a stake pool's reward account, a proposal's deposit back, and a treasury withdrawal's payee, in a definite map
+    // and in an indefinite one (1.8.1's release review, guard#3).
+    const stranger = `e0${"cd".repeat(28)}`;
+    for (const tx of [
+      siteTx({ inputs: [input], certificates: [registersPool(mixLogic)] }),
+      siteTx({ inputs: [input], proposals: [proposes(mixLogic)] }),
+      siteTx({ inputs: [input], proposals: [proposes(stranger, withdrawsTreasury([stranger, mixLogic]))] }),
+      siteTx({ inputs: [input], proposals: [proposes(stranger, withdrawsTreasury([mixLogic], true))] }),
+    ]) {
+      await expect(t.dapp.call(s, "signTx", [tx, true])).rejects.toMatchObject(refused);
+    }
     expect(t.dapp.approvals()).toEqual([]);
     // Another script's reward account is the user's to sign for, as ever: asked.
-    const signing = t.dapp.call(s, "signTx", [siteTx({ inputs: [input], certificates: [pool(`f0${"ab".repeat(28)}`)] }), true]);
+    const signing = t.dapp.call(s, "signTx", [siteTx({ inputs: [input], certificates: [registersPool(`f0${"ab".repeat(28)}`)] }), true]);
     await until(() => t.dapp.approvals().length === 1);
     await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
     await signing.catch(() => undefined);
@@ -792,6 +821,7 @@ describe("the dApp connector", () => {
       } as typeof wasm,
       store: t.store,
       sessions: t.sessions,
+      lovejoin: t.lovejoin,
       network: () => "preprod",
       window: t.dappWindow,
       changed: () => undefined,
@@ -1069,6 +1099,7 @@ describe("the dApp connector", () => {
       ...t.deps,
       store: t.store,
       sessions: t.sessions,
+      lovejoin: t.lovejoin,
       network: () => "preprod",
       window: t.dappWindow,
       changed: () => undefined,
@@ -1109,7 +1140,7 @@ describe("the dApp connector", () => {
   });
 });
 
-describe("private CIP-30: a site connected to a private session", () => {
+describe("private CIP-30: a site connected to a private session", SLOW, () => {
   type T = Awaited<ReturnType<typeof on>>;
 
   /** A UTxO at session 0's account, as Koios lists it. */
@@ -1154,6 +1185,7 @@ describe("private CIP-30: a site connected to a private session", () => {
       ...t.deps,
       store: t.store,
       sessions,
+      lovejoin: t.lovejoin,
       fundingPollMs: 1,
       network: () => "preprod",
       window: t.dappWindow,
@@ -1483,6 +1515,26 @@ describe("private CIP-30: a site connected to a private session", () => {
     await until(() => t.dapp.approvals().length === 1);
     await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
     await expect(voting).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+  });
+
+  it("won't sign a site's transaction that pays into a Lovejoin pool's reward account either (chunk 43; 1.8.1's release review, guard#3)", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const { s } = await connectedPrivately(t, dapp);
+    const input = `${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`;
+    const mixLogic = `f0${(JSON.parse(t.deps.wasm.lovejoinMixLogic(JSON.stringify({ network: "preprod" }))) as { hash: string }).hash}`;
+    // As a stake pool's reward account, and as a proposal's deposit back: refused before the user is asked.
+    for (const tx of [siteTx({ inputs: [input], certificates: [registersPool(mixLogic)] }), siteTx({ inputs: [input], proposals: [proposes(mixLogic)] })]) {
+      await expect(dapp.call(s, "signTx", [tx, true])).rejects.toMatchObject({
+        failure: { code: TxSignError.ProofGeneration, info: tr("dapp.lovejoinRewards") },
+      });
+    }
+    expect(dapp.approvals()).toEqual([]);
+    // Another script's is the user's to sign for: asked.
+    const signing = dapp.call(s, "signTx", [siteTx({ inputs: [input], certificates: [registersPool(`f0${"ab".repeat(28)}`)] }), true]);
+    await until(() => dapp.approvals().length === 1);
+    await dapp.answer(dapp.approvals()[0]!.id, false);
+    await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
   });
 
   it("keeps the request waiting when the funding isn't sent, and its unfunded session can be closed from the dApps page", async () => {

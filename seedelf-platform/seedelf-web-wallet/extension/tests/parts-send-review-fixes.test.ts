@@ -610,7 +610,7 @@ describe("a payment in parts' guards no test pinned (1.6.0's review)", SLOW, () 
       minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
       alarm: { start: async () => undefined },
     });
-    const dapp = new DappService({ ...deps, sessions, fundingPollMs: 1, network: () => "preprod", window: t.dappWindow, changed: () => undefined });
+    const dapp = new DappService({ ...deps, sessions, lovejoin: t.lovejoin, fundingPollMs: 1, network: () => "preprod", window: t.dappWindow, changed: () => undefined });
     const site: DappSession = { id: "review", origin: "https://app.example.com", title: "Example" };
     void dapp.call(site, "enable", []).catch(() => undefined);
     await until(() => dapp.approvals().length === 1);

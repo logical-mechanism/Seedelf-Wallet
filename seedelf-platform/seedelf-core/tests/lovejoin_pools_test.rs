@@ -15,9 +15,11 @@ use pallas_addresses::{
 use pallas_codec::minicbor;
 use pallas_crypto::hash::Hash;
 use pallas_primitives::Fragment;
-use pallas_primitives::conway::{BigInt, PlutusData, TransactionOutput, Value};
-use pallas_traverse::MultiEraTx;
-use pallas_txbuilder::{Output, ScriptKind};
+use pallas_primitives::conway::{
+    BigInt, PlutusData, RedeemerTag, ScriptRef, TransactionOutput, Value,
+};
+use pallas_traverse::{Era, MultiEraOutput, MultiEraTx};
+use pallas_txbuilder::{BuiltTransaction, Output, ScriptKind};
 use rand_core::OsRng;
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build::{self, Budgets};
@@ -30,8 +32,9 @@ use seedelf_core::lovejoin::{
 };
 use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
-use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{ProtocolParameters, Ratio, UtxoResponse};
 use serde_json::Value as Json;
+use std::collections::BTreeMap;
 
 fn json(text: &str) -> Json {
     serde_json::from_str(text).unwrap()
@@ -839,12 +842,27 @@ fn session(flag: bool) -> Address {
     Address::from_bytes(&raw).unwrap()
 }
 
+/// Another key's base address beside [`session`]'s: the public account's
+/// UTxOs can sit at several keys, and each key signs what spends or puts up
+/// one of them.
+fn other_key(flag: bool) -> Address {
+    let mut raw = vec![if flag { 0x00 } else { 0x01 }];
+    raw.extend([0x61; 28]);
+    raw.extend([0x52; 28]);
+    Address::from_bytes(&raw).unwrap()
+}
+
 fn coin(flag: bool, first: u8, lovelace: u64) -> Coin {
+    coin_at(&session(flag), first, lovelace)
+}
+
+/// A UTxO of ADA alone at `address`.
+fn coin_at(address: &Address, first: u8, lovelace: u64) -> Coin {
     Coin {
         utxo: Resolved {
             tx_hash: [first; 32],
             index: 0,
-            output: Output::new(session(flag), lovelace)
+            output: Output::new(address.clone(), lovelace)
                 .build_babbage_raw()
                 .unwrap()
                 .encode_fragment()
@@ -1100,12 +1118,91 @@ fn a_box_worth_less_than_the_fee_cant_pay_its_way_back() {
     assert_eq!(back.lovelace, pool.denom + 20_000_000 - back.fee);
 }
 
+/// A withdraw refused once it has read the pool's balance takes none of it:
+/// `withdraw_private_in` tries the private balance's UTxOs in turn with one
+/// `Rewards`, so the UTxO that pays takes it (1.8.1's release review,
+/// mutants#1). A balance too small to make up the output leaves each refusal
+/// as it was.
+#[test]
+fn a_withdraw_refused_after_it_read_the_balance_takes_none() {
+    let sk = Scalar::from(777u64);
+    let owner = Register::create(sk).unwrap();
+    let pool = lj_pool();
+    let boxes = vec![made_up_box(&pool, Some(&sk), 0x30)];
+    let dear = ProtocolParameters {
+        min_fee_b: pool.denom + 1_000_000,
+        ..params()
+    };
+    let mut rewards = Rewards::of([(pool.mix_logic_hash, 1)]);
+    let err = lovejoin::withdraw(
+        &dear,
+        &pool,
+        &boxes,
+        &sk,
+        owner.clone().rerandomize().unwrap(),
+        &mut rewards,
+    )
+    .unwrap_err();
+    assert!(
+        err.downcast_ref::<lovejoin::CantPayBack>().is_some(),
+        "{err}"
+    );
+    assert_eq!(rewards.balance(&pool), 1);
+    let err = lovejoin::withdraw_private(
+        &dear,
+        &pool,
+        &boxes,
+        &sk,
+        owner.clone().rerandomize().unwrap(),
+        &seedelf_payer(sk, 0xf2, 1_000_000),
+        &mut rewards,
+    )
+    .unwrap_err();
+    assert!(
+        err.downcast_ref::<lovejoin::PrivateTooSmall>().is_some(),
+        "{err}"
+    );
+    assert_eq!(rewards.balance(&pool), 1);
+    // The next UTxO pays, and takes it.
+    let back = lovejoin::withdraw_private(
+        &dear,
+        &pool,
+        &boxes,
+        &sk,
+        owner.rerandomize().unwrap(),
+        &seedelf_payer(sk, 0xf3, 20_000_000),
+        &mut rewards,
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawals(&back.tx.tx_bytes.0),
+        vec![(
+            seedelf_core::withdraw_zero::reward_account(&pool.mix_logic_hash, true),
+            1
+        )]
+    );
+    assert_eq!(back.taken, 1);
+    assert_eq!(rewards, Rewards::none());
+}
+
 /// One of `sk`'s Seedelf UTxOs, ADA alone, and what spends it beside a
 /// withdraw: its proof bound to a one-time key's hash.
 fn seedelf_payer(sk: Scalar, first: u8, lovelace: u64) -> lovejoin::SeedelfPayer {
+    seedelf_payer_on(true, sk, first, lovelace)
+}
+
+/// [`seedelf_payer`] on preprod (`true`) or mainnet.
+fn seedelf_payer_on(
+    network_flag: bool,
+    sk: Scalar,
+    first: u8,
+    lovelace: u64,
+) -> lovejoin::SeedelfPayer {
     let config =
-        seedelf_core::constants::get_config(seedelf_core::constants::VARIANT, true).unwrap();
-    let to = seedelf_core::address::wallet_contract(true, config.contract.wallet_contract_hash);
+        seedelf_core::constants::get_config(seedelf_core::constants::VARIANT, network_flag)
+            .unwrap();
+    let to =
+        seedelf_core::address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
     let register = Register::create(sk).unwrap().rerandomize().unwrap();
     let signer = [0x5e; 28];
     let (z, g_r) =
@@ -1376,6 +1473,572 @@ fn a_token_pools_reward_balance_goes_to_the_change_or_the_register() {
     for out in &mix.outputs {
         assert!(PoolBox::from_resolved(out.utxo.clone(), &pool).is_some());
     }
+    assert_eq!(rewards, Rewards::none());
+}
+
+// ---------------------------------------------------------------------------
+// A reward balance on Lovejoin v2, every kind, and the classic kinds left
+// out before (1.8.1's release review, core#1 and money#1)
+// ---------------------------------------------------------------------------
+
+/// A v2 pool from the WebAssembly crate's fixtures, verified as the wallet
+/// verifies one (as `lovejoin_width_test.rs`'s `token_v2_protocol` is): v2's
+/// scripts, the set every pool the wallet launches runs, mainnet's 5 ₳ pool
+/// among them.
+fn v2_pool(doc: &str) -> Protocol {
+    let doc = json(doc);
+    let row = |v: &Json| serde_json::from_value::<UtxoResponse>(v.clone()).unwrap();
+    let reference = eval::resolve_row(&row(&doc["reference"])).unwrap();
+    let scripts: Vec<Resolved> = doc["scripts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            let bytes = hex::decode(s["reference_script"]["bytes"].as_str().unwrap()).unwrap();
+            eval::resolve_reference(&row(s), 3, &bytes).unwrap()
+        })
+        .collect();
+    let seed: [u8; 32] = hex::decode(doc["seed"]["txHash"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let pool = lovejoin::verify_pool(
+        true,
+        &reference,
+        (seed, doc["seed"]["txIndex"].as_u64().unwrap()),
+        &scripts,
+    )
+    .unwrap();
+    assert_eq!(pool.version, Version::V2);
+    pool
+}
+
+/// v2's pool of 5 ₳ boxes of ADA, where a session's collateral goes.
+fn v2_ada() -> Protocol {
+    v2_pool(include_str!(
+        "../../seedelf-web-wallet/wasm/tests/fixtures/lovejoin-v2-ada-pool-preprod.json"
+    ))
+}
+
+/// v2's token pool: 2 ₳ and 10^16 LJTEST a box.
+fn v2_token() -> Protocol {
+    v2_pool(include_str!(
+        "../../seedelf-web-wallet/wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json"
+    ))
+}
+
+/// Each output's ADA, in order.
+fn coins_out(tx: &[u8]) -> Vec<u64> {
+    let tx = MultiEraTx::decode(tx).unwrap();
+    tx.outputs().iter().map(|o| o.value().coin()).collect()
+}
+
+/// What a transaction's collateral return holds.
+fn collateral_back(tx: &[u8]) -> u64 {
+    let tx = MultiEraTx::decode(tx).unwrap();
+    tx.collateral_return().unwrap().value().coin()
+}
+
+/// The UTxO `known` holds at `hash#index`: what a transaction spends or reads.
+fn known_at<'a>(known: &'a [Resolved], hash: &[u8; 32], index: u64) -> &'a Resolved {
+    known
+        .iter()
+        .find(|r| r.tx_hash == *hash && r.index == index)
+        .unwrap_or_else(|| panic!("{}#{index} isn't known", hex::encode(hash)))
+}
+
+/// The ledger's balance, read from the bytes: the inputs (each found in
+/// `known`) and the withdrawals hold what the outputs and the fee do, ADA and
+/// every token alike.
+fn balances(tx: &[u8], known: &[Resolved]) {
+    let decoded = MultiEraTx::decode(tx).unwrap();
+    // Each asset by policy and name, ADA under none.
+    let mut net: BTreeMap<(Vec<u8>, Vec<u8>), i128> = BTreeMap::new();
+    let mut count = |output: &MultiEraOutput, sign: i128| {
+        let value = output.value();
+        *net.entry(Default::default()).or_default() += sign * i128::from(value.coin());
+        for policy in value.assets() {
+            for asset in policy.assets() {
+                *net.entry((policy.policy().to_vec(), asset.name().to_vec()))
+                    .or_default() += sign * i128::from(asset.output_coin().unwrap());
+            }
+        }
+    };
+    for input in decoded.inputs() {
+        let spent = known_at(known, input.hash(), input.index());
+        count(
+            &MultiEraOutput::decode(Era::Conway, &spent.output).unwrap(),
+            1,
+        );
+    }
+    for output in decoded.outputs() {
+        count(&output, -1);
+    }
+    let withdrawn: u64 = withdrawals(tx).iter().map(|(_, l)| l).sum();
+    *net.entry(Default::default()).or_default() +=
+        i128::from(withdrawn) - i128::from(decoded.fee().unwrap());
+    assert!(
+        net.values().all(|n| *n == 0),
+        "the ledger's balance: {net:?}"
+    );
+}
+
+/// The script a reference output carries: its size, as the ledger counts it
+/// for the reference-script fee. 0 for none.
+fn script_size(output: &[u8]) -> u64 {
+    let TransactionOutput::PostAlonzo(output) = minicbor::decode(output).unwrap() else {
+        return 0;
+    };
+    match output.script_ref.map(|s| s.0) {
+        Some(ScriptRef::PlutusV1Script(s)) => s.as_ref().len() as u64,
+        Some(ScriptRef::PlutusV2Script(s)) => s.as_ref().len() as u64,
+        Some(ScriptRef::PlutusV3Script(s)) => s.as_ref().len() as u64,
+        _ => 0,
+    }
+}
+
+/// The ledger's minimum fee for `tx` once `signers` keys sign it, worked out
+/// apart from the builder: its size, its declared budgets at the prices as
+/// exact rationals (one ceiling over the total), and 15 lovelace a byte of
+/// every reference script it spends or reads, found in `known`. Both
+/// networks' prices.
+fn ledger_minimum_fee(
+    params: &ProtocolParameters,
+    tx: &BuiltTransaction,
+    signers: usize,
+    known: &[Resolved],
+) -> u64 {
+    assert_eq!((params.min_fee_a, params.min_fee_b), (44, 155_381));
+    assert_eq!((params.price_mem, params.price_step), (0.0577, 0.0000721));
+    assert_eq!(params.min_fee_ref_script_cost_per_byte, Ratio::whole(15));
+    let mut signed = tx.clone();
+    for _ in 0..signers {
+        signed = signed.sign(build::fake_signer()).unwrap();
+    }
+    let size = signed.tx_bytes.0.len() as u64;
+    let decoded = MultiEraTx::decode(&tx.tx_bytes.0).unwrap();
+    let (mem, steps) = decoded
+        .redeemers()
+        .iter()
+        .fold((0u128, 0u128), |(m, s), r| {
+            (m + r.ex_units().mem as u128, s + r.ex_units().steps as u128)
+        });
+    let units = (577 * mem * 1_000 + 721 * steps).div_ceil(10_000_000) as u64;
+    let scripts: u64 = decoded
+        .inputs()
+        .iter()
+        .chain(decoded.reference_inputs().iter())
+        .map(|i| script_size(&known_at(known, i.hash(), i.index()).output))
+        .sum();
+    44 * size + 155_381 + units + 15 * scripts
+}
+
+/// Measured again as the ledger will run it, `tx` uses no more than each of
+/// its redeemers declares: a take can't leave a budget short.
+fn declares_what_it_uses(params: &ProtocolParameters, tx: &[u8], known: &[Resolved], flag: bool) {
+    let answer = eval::evaluate(tx, known, &params.cost_model_v3, flag).unwrap();
+    let measured = Budgets::from_ogmios(&answer).unwrap();
+    for r in MultiEraTx::decode(tx).unwrap().redeemers() {
+        let declared = r.ex_units();
+        let used = match r.tag() {
+            RedeemerTag::Spend => measured.spend(r.index() as u64),
+            RedeemerTag::Reward => measured.withdraw(r.index() as u64),
+            other => panic!("{other:?}"),
+        }
+        .unwrap();
+        assert!(
+            declared.mem >= used.mem && declared.steps >= used.steps,
+            "{:?} {}: declared {declared:?}, used {used:?}",
+            r.tag(),
+            r.index()
+        );
+    }
+}
+
+/// Every kind of transaction the wallet builds in `pool`, with `take` in its
+/// `mix_logic` account: a deposit, a mix under the payer's collateral and
+/// under giveme.my's, and a withdraw paid by the box, by an account and by a
+/// private UTxO. Each balances and pays the ledger's minimum fee, and each but
+/// the deposit, which runs no script, takes it all into the user's own output
+/// and declares what it uses. The public account can pay with two keys, its
+/// UTxOs and its collateral at two addresses: the deposit, the mix under its
+/// collateral and its paid withdraw pay for both signatures (1.8.1's
+/// round-two review, r2-rust#1).
+fn every_kind_takes(pool: &Protocol, take: u64) {
+    let flag = pool.network_flag;
+    let params = if flag { params() } else { mainnet_params() };
+    let account = vec![(
+        seedelf_core::withdraw_zero::reward_account(&pool.mix_logic_hash, flag),
+        take,
+    )];
+    let holding = || Rewards::of([(pool.mix_logic_hash, take)]);
+    let what = format!("{:?}, {take} taken", pool.version);
+    // A session pays with its one key; the public account can pay with two,
+    // its fee's UTxO at one and its collateral at the other.
+    let one_key = payer(flag, 20_000_000);
+    let two_keys = Payer {
+        collateral: Some(coin_at(&other_key(flag), 0xcd, 5_000_000)),
+        signers: 2,
+        ..one_key.clone()
+    };
+
+    // A deposit from UTxOs at two keys, a token pool's token from the first.
+    // It runs no script, so it withdraws nothing.
+    let inputs = [
+        if pool.token.is_some() {
+            token_holding(pool, 0x44, 40_000_000, 1, None)
+        } else {
+            Holding::from(&coin(flag, 0x44, 40_000_000))
+        },
+        Holding::from(&coin_at(&other_key(flag), 0x45, 3_000_000)),
+    ];
+    let deposit = lovejoin::deposit_from(
+        &params,
+        pool,
+        &inputs,
+        &[Register::create(Scalar::from(42u64))
+            .unwrap()
+            .rerandomize()
+            .unwrap()],
+        &session(flag),
+        2,
+    )
+    .unwrap();
+    let tx = &deposit.tx.tx_bytes.0;
+    let mut known: Vec<Resolved> = inputs.iter().map(|h| h.utxo.clone()).collect();
+    known.extend(pool.references.iter().cloned());
+    assert!(withdrawals(tx).is_empty(), "{what}");
+    balances(tx, &known);
+    let needed = ledger_minimum_fee(&params, &deposit.tx, 2, &known);
+    assert!(
+        deposit.fee >= needed && deposit.fee - needed < 1_000,
+        "{what}: a deposit's fee {} for {needed}",
+        deposit.fee
+    );
+
+    let boxes: Vec<PoolBox> = (0..3)
+        .map(|i| made_up_box(pool, None, 0x20 + 0x10 * i))
+        .collect();
+    let mut known: Vec<Resolved> = boxes.iter().map(|b| b.utxo.clone()).collect();
+    known.push(one_key.fee.utxo.clone());
+    known.push(one_key.collateral.clone().unwrap().utxo);
+    known.push(two_keys.collateral.clone().unwrap().utxo);
+    known.extend(pool.references.iter().cloned());
+    // Under the payer's collateral, one key signing or two, and under
+    // giveme.my's, whose key signs beside the session's.
+    for (giveme, paying, signers) in [
+        (false, &one_key, 1),
+        (false, &two_keys, 2),
+        (true, &one_key, 2),
+    ] {
+        let mut rewards = holding();
+        let mix = if giveme {
+            lovejoin::mix_giveme(&params, pool, &boxes, paying, &mut rewards)
+        } else {
+            lovejoin::mix(&params, pool, &boxes, paying, &mut rewards)
+        }
+        .unwrap();
+        let tx = &mix.tx.tx_bytes.0;
+        assert_eq!(withdrawals(tx), account, "{what}");
+        assert_eq!((mix.taken, rewards), (take, Rewards::none()), "{what}");
+        balances(tx, &known);
+        // Every box exactly a box of the pool's, and the change holds the take.
+        for out in &eval::resolve_outputs(tx).unwrap()[..3] {
+            assert!(
+                PoolBox::from_resolved(out.clone(), pool).is_some(),
+                "{what}"
+            );
+        }
+        assert_eq!(coins_out(tx)[3], 20_000_000 + take - mix.fee, "{what}");
+        assert_eq!(mix.change.lovelace, coins_out(tx)[3]);
+        // The collateral's return reads the fee alone.
+        let back = if giveme {
+            assert_eq!(mix.fee % 2, 0);
+            5_000_000 - mix.fee * 3 / 2
+        } else {
+            5_000_000 - (mix.fee * 3 / 2 + 1)
+        };
+        assert_eq!(collateral_back(tx), back, "{what}");
+        let needed = ledger_minimum_fee(&params, &mix.tx, signers, &known);
+        assert!(
+            mix.fee >= needed && mix.fee - needed < 1_000,
+            "{what}, giveme.my's collateral {giveme}, {signers} signing: fee {} for {needed}",
+            mix.fee
+        );
+        declares_what_it_uses(&params, tx, &known, flag);
+    }
+
+    // The wallet's box back into a register.
+    let sk = Scalar::from(31_415u64);
+    let owner = Register::create(sk).unwrap();
+    let ours = vec![made_up_box(pool, Some(&sk), 0x60)];
+    let mut known: Vec<Resolved> = ours.iter().map(|b| b.utxo.clone()).collect();
+    known.extend(pool.references.iter().cloned());
+
+    // Paid by the box, under giveme.my's collateral.
+    let mut rewards = holding();
+    let back = lovejoin::withdraw(
+        &params,
+        pool,
+        &ours,
+        &sk,
+        owner.clone().rerandomize().unwrap(),
+        &mut rewards,
+    )
+    .unwrap();
+    let tx = &back.tx.tx_bytes.0;
+    assert_eq!(withdrawals(tx), account, "{what}");
+    assert_eq!((back.taken, rewards), (take, Rewards::none()), "{what}");
+    assert_eq!(back.lovelace, pool.denom + take - back.fee, "{what}");
+    assert_eq!(coins_out(tx), vec![back.lovelace]);
+    balances(tx, &known);
+    assert_eq!(collateral_back(tx), 5_000_000 - back.fee * 3 / 2, "{what}");
+    let needed = ledger_minimum_fee(&params, &back.tx, 1, &known);
+    assert!(
+        back.fee >= needed && back.fee - needed < 6_000,
+        "{what}: a withdraw's fee {} for {needed}",
+        back.fee
+    );
+    declares_what_it_uses(&params, tx, &known, flag);
+
+    // Paid by an account, under its own collateral, one key signing or two:
+    // the take counts toward the register's least, so the account makes up
+    // only what's still short.
+    let mut paid_known = known.clone();
+    paid_known.push(one_key.fee.utxo.clone());
+    paid_known.push(one_key.collateral.clone().unwrap().utxo);
+    paid_known.push(two_keys.collateral.clone().unwrap().utxo);
+    for (paying, signers) in [(&one_key, 1), (&two_keys, 2)] {
+        let mut rewards = holding();
+        let paid = lovejoin::withdraw_paid(
+            &params,
+            pool,
+            &ours,
+            &sk,
+            owner.clone().rerandomize().unwrap(),
+            paying,
+            &mut rewards,
+        )
+        .unwrap();
+        let tx = &paid.tx.tx_bytes.0;
+        assert_eq!(withdrawals(tx), account, "{what}");
+        assert_eq!((paid.taken, rewards), (take, Rewards::none()), "{what}");
+        assert!(
+            paid.lovelace >= pool.denom + take,
+            "{what}: the register holds the box and the take"
+        );
+        let topped = paid.lovelace - (pool.denom + take);
+        let change = 20_000_000 - paid.fee - topped;
+        assert_eq!(coins_out(tx), vec![paid.lovelace, change], "{what}");
+        assert_eq!(paid.change.unwrap().lovelace, change);
+        balances(tx, &paid_known);
+        assert_eq!(collateral_back(tx), 5_000_000 - (paid.fee * 3 / 2 + 1));
+        let needed = ledger_minimum_fee(&params, &paid.tx, signers, &paid_known);
+        assert!(
+            paid.fee >= needed && paid.fee - needed < 6_000,
+            "{what}, {signers} signing: a paid withdraw's fee {} for {needed}",
+            paid.fee
+        );
+        declares_what_it_uses(&params, tx, &paid_known, flag);
+    }
+
+    // Paid by a private UTxO, under giveme.my's collateral: the wallet
+    // contract's script is read too.
+    let seedelf = seedelf_payer_on(flag, sk, 0xf2, 20_000_000);
+    let mut private_known = known.clone();
+    private_known.push(seedelf.coin.utxo.clone());
+    private_known.extend(eval::seedelf_references(flag).unwrap());
+    let mut rewards = holding();
+    let private = lovejoin::withdraw_private(
+        &params,
+        pool,
+        &ours,
+        &sk,
+        owner.rerandomize().unwrap(),
+        &seedelf,
+        &mut rewards,
+    )
+    .unwrap();
+    let tx = &private.tx.tx_bytes.0;
+    assert_eq!(withdrawals(tx), account, "{what}");
+    assert_eq!((private.taken, rewards), (take, Rewards::none()), "{what}");
+    assert_eq!(
+        private.lovelace,
+        pool.denom + 20_000_000 + take - private.fee,
+        "{what}"
+    );
+    assert_eq!(coins_out(tx), vec![private.lovelace]);
+    balances(tx, &private_known);
+    assert_eq!(collateral_back(tx), 5_000_000 - private.fee * 3 / 2);
+    let needed = ledger_minimum_fee(&params, &private.tx, 2, &private_known);
+    assert!(
+        private.fee >= needed && private.fee - needed < 6_000,
+        "{what}: a private withdraw's fee {} for {needed}",
+        private.fee
+    );
+    declares_what_it_uses(&params, tx, &private_known, flag);
+}
+
+/// v2 is the set every pool the wallet launches runs (chunk 44), and the only
+/// one that takes new boxes: every kind takes a balance there, on both of its
+/// fixtures' pools. 24 lovelace is one byte more than none, and 5,000 ₳ is
+/// past what 32 bits hold.
+#[test]
+fn v2_pools_take_a_reward_balance_in_every_kind_and_pay_the_ledgers_fee() {
+    for pool in [v2_ada(), v2_token()] {
+        for take in [24, 500_000_000, 5_000_000_000] {
+            every_kind_takes(&pool, take);
+        }
+    }
+}
+
+/// The classic pools too: mainnet's giveme.my mix and its paid ways back, and
+/// preprod's paid ways back, never ran with a balance before.
+#[test]
+fn the_classic_pools_take_a_reward_balance_in_every_kind_too() {
+    for network_flag in [true, false] {
+        every_kind_takes(&Protocol::of(network_flag).unwrap(), 500_000_000);
+    }
+}
+
+/// Each transaction of `chain`, in order, balanced from the bytes of what's
+/// known before it: its funding, the pools' boxes, and every output before
+/// it, so each mix's change is the next one's input as the ledger sees it.
+/// What each withdraws.
+fn each_balances(chain: &lovejoin::Chain, mut known: Vec<Resolved>) -> Vec<u64> {
+    chain
+        .txs
+        .iter()
+        .map(|t| {
+            let tx = &t.tx.tx_bytes.0;
+            balances(tx, &known);
+            known.extend(eval::resolve_outputs(tx).unwrap());
+            withdrawals(tx).iter().map(|(_, l)| l).sum()
+        })
+        .collect()
+}
+
+#[test]
+fn every_chain_transaction_balances_with_a_take() {
+    let params = params();
+    let base = Register::create(Scalar::from(42u64)).unwrap();
+    let funding = |coins: &[Coin]| lovejoin::Funding {
+        coins: coins.to_vec(),
+        collateral: Some(coin(true, 0xcc, 5_000_000)),
+        address: session(true),
+        deposit_signers: 1,
+        mix_signers: 1,
+    };
+
+    // One box two waves deep, in the classic pool and in v2's 5 ₳ pool: the
+    // first of its four mixes takes it, and the last change carries it.
+    for pool in [Protocol::of(true).unwrap(), v2_ada()] {
+        let others: Vec<PoolBox> = (0..8).map(|i| made_up_box(&pool, None, 0x70 + i)).collect();
+        let coins = [coin(true, 0x44, 40_000_000)];
+        let mut rewards = Rewards::of([(pool.mix_logic_hash, 500_000_000)]);
+        let chain = lovejoin::chain(
+            &params,
+            &pool,
+            &funding(&coins),
+            &[base.clone().rerandomize().unwrap()],
+            2,
+            &others,
+            &mut rewards,
+        )
+        .unwrap();
+        let mut known: Vec<Resolved> = coins.iter().map(|c| c.utxo.clone()).collect();
+        known.extend(others.iter().map(|b| b.utxo.clone()));
+        assert_eq!(each_balances(&chain, known), vec![0, 500_000_000, 0, 0, 0]);
+        let fees: u64 = chain.txs.iter().map(|t| t.fee).sum();
+        assert_eq!(
+            chain.change.lovelace,
+            40_000_000 - pool.denom - fees + 500_000_000
+        );
+        let last = &chain.txs.last().unwrap().tx.tx_bytes.0;
+        assert_eq!(coins_out(last)[3], chain.change.lovelace);
+        assert_eq!(rewards, Rewards::none());
+    }
+
+    // Across v2's token pool and its 5 ₳ pool, each with its own balance:
+    // each pool's first mix takes its own.
+    let (token, ada) = (v2_token(), v2_ada());
+    let in_token = [base.clone().rerandomize().unwrap()];
+    let in_ada = [base.clone().rerandomize().unwrap()];
+    let token_others: Vec<PoolBox> = (0..8)
+        .map(|i| made_up_box(&token, None, 0x50 + i))
+        .collect();
+    let ada_others: Vec<PoolBox> = (0..8).map(|i| made_up_box(&ada, None, 0x58 + i)).collect();
+    let legs = [
+        lovejoin::Leg {
+            protocol: &token,
+            owners: &in_token,
+            pool: &token_others,
+        },
+        lovejoin::Leg {
+            protocol: &ada,
+            owners: &in_ada,
+            pool: &ada_others,
+        },
+    ];
+    let tokens = [token_holding(&token, 0x10, 3_000_000, 1, None)];
+    let coins = [coin(true, 0x11, 40_000_000)];
+    let mut rewards = Rewards::of([
+        (token.mix_logic_hash, 5_000_000_000),
+        (ada.mix_logic_hash, 3_000_000),
+    ]);
+    let chain = lovejoin::chain_across(
+        &params,
+        &funding(&coins),
+        &tokens,
+        &legs,
+        2,
+        3,
+        &mut rewards,
+    )
+    .unwrap();
+    let mut known: Vec<Resolved> = coins.iter().map(|c| c.utxo.clone()).collect();
+    known.extend(tokens.iter().map(|h| h.utxo.clone()));
+    known.extend(
+        token_others
+            .iter()
+            .chain(&ada_others)
+            .map(|b| b.utxo.clone()),
+    );
+    assert_eq!(
+        each_balances(&chain, known),
+        vec![0, 5_000_000_000, 0, 0, 0, 3_000_000, 0, 0, 0]
+    );
+    assert_eq!(rewards, Rewards::none());
+
+    // A session's collateral into v2's 5 ₳ pool: its deposit takes nothing,
+    // and its mix, under giveme.my's collateral, takes the balance into its
+    // change.
+    let coins = [coin(true, 0x22, 5_000_000), coin(true, 0x45, 2_500_000)];
+    let others: Vec<PoolBox> = (0..3).map(|i| made_up_box(&ada, None, 0x78 + i)).collect();
+    let mut rewards = Rewards::of([(ada.mix_logic_hash, 500_000_000)]);
+    let tail = lovejoin::collateral_tail(
+        &params,
+        &ada,
+        &coins,
+        &base.rerandomize().unwrap(),
+        &others,
+        &session(true),
+        1,
+        &mut rewards,
+    )
+    .unwrap();
+    let mut known: Vec<Resolved> = coins.iter().map(|c| c.utxo.clone()).collect();
+    known.extend(others.iter().map(|b| b.utxo.clone()));
+    let deposit = &tail.deposit.tx.tx_bytes.0;
+    balances(deposit, &known);
+    assert!(withdrawals(deposit).is_empty());
+    known.extend(eval::resolve_outputs(deposit).unwrap());
+    balances(&tail.mix.tx.tx_bytes.0, &known);
+    assert_eq!(tail.mix.taken, 500_000_000);
+    assert_eq!(
+        tail.mix.change.lovelace,
+        tail.deposit.change.lovelace + 500_000_000 - tail.mix.fee
+    );
     assert_eq!(rewards, Rewards::none());
 }
 

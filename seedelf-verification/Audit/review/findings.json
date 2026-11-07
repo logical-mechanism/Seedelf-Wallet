@@ -183,6 +183,7 @@
       "build-evidence/hex-not-a-lake-input"
     ],
     "severity_note": "Both sources rated high: the build would silently keep reporting ✅ for bytes no longer in the repository, a check that could stop meaning anything. Nothing is stale today.",
+    "status": "Open (found again by 1.8.1's release review): findings.md had it closed by a lakefile change (input_dir + needs) that never landed. Until it does, after any extract run: rm -f .lake/build/lib/lean/{Seedelf,Lovejoin,Lovejoin/V2,Lovejoin/Template}/Scripts.{olean,trace} Slice/.lake/build/lib/lean/Slice/Scripts.{olean,trace} (README, Running it).",
     "verdicts": [
       {
         "lens": "evidence",

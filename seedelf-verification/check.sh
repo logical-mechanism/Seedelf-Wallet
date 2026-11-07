@@ -16,13 +16,15 @@
 #   ./check.sh lovejoin-v2-outputs   what that Mix must pay, for the same pools and n
 #   ./check.sh lovejoin-owner        Owner withdrawals of several boxes, v2 and the classic pool
 #   ./check.sh lovejoin-any-tx       v2 scenario families with arbitrary uninspected fields
-#   ./check.sh lovejoin-every        v2's mix_logic and one_shot_mint in every transaction (16G, 30m)
+#   ./check.sh lovejoin-every        v2's mix_logic and one_shot_mint in every transaction, after what
+#                                    they import (16G, 30m)
 #   ./check.sh audit-quick           an audit family (Audit/audit-*.txt), then Audit/count.py
-#   ./check.sh Seedelf.PolicyMint    some modules
+#   ./check.sh Seedelf.PolicyMint    some modules (naming a Lovejoin.Every one gives the whole run
+#                                    16G, 30m)
 #   CAP=12G LIMIT=20m ./check.sh     other limits
 cd "$(dirname "$0")" || exit 1
-# lovejoin-every's modules need more than the default cap: Collect peaks near 13 GB.
-[ "${1:-}" = lovejoin-every ] && { CAP=${CAP:-16G}; LIMIT=${LIMIT:-30m}; }
+# lovejoin-every's modules need more than the default cap, named alone too: Collect peaks near 13 GB.
+for a in "$@"; do case $a in lovejoin-every|Lovejoin.Every.*) CAP=${CAP:-16G}; LIMIT=${LIMIT:-30m} ;; esac; done
 CAP=${CAP:-8G}
 LIMIT=${LIMIT:-10m}
 mods=("$@")
@@ -143,8 +145,26 @@ any_tx_v2=(Lovejoin.Template.AnyTxPurposes Lovejoin.AnyTx.FeePurpose Lovejoin.An
 # v2 in every transaction, kernel-checked (chunk 45): the compiled code read back as Lean over Data,
 # no fixed list length and no step limit. mix_logic's withdrawals and one_shot_mint's launch, the
 # typed theorems over every V3 context, then their restatement in the Aiken source's terms
-# (Readable*, Lovejoin/Every/).
-every=(Lovejoin.Every.Base Lovejoin.Every.Lookup Lovejoin.Every.Carrier Lovejoin.Every.Collect
+# (Readable*, Lovejoin/Every/). First the 51 modules they import from outside Lovejoin/Every/, in
+# import order, so each scope builds its own module alone: one building several at once can pass 16 GB.
+every_imports=(Seedelf.LinesAllCek Lovejoin.AnyTx.CekCase Lovejoin.Template.Scripts
+  Lovejoin.AnyTx.BoxSearch Lovejoin.Scripts Seedelf.Scenario Lovejoin.Box Lovejoin.Logic
+  Lovejoin.Template.Launch Seedelf.Scripts Seedelf.AnyTx Lovejoin.Template.AnyTxPurposes
+  Lovejoin.AnyTx.PurposesKernel Lovejoin.AnyTx.LogicPublishKernel Lovejoin.AnyTx.LogicLength
+  Seedelf.Wallet Seedelf.Policy Seedelf.Steps Seedelf.AnyTxSteps Lovejoin.AnyTx.Common
+  Lovejoin.AnyTx.BoxAll Lovejoin.AnyTx.WithdrawSearch Lovejoin.AnyTx.BoxGateAll
+  Lovejoin.AnyTx.BoxMalformed Lovejoin.AnyTx.BoxMalformedShapes Lovejoin.AnyTx.BoxInlineAll
+  Lovejoin.AnyTx.BoxComplete Seedelf.AnyTxCover Lovejoin.AnyTx.BoxCover Lovejoin.AnyTx.LogicInputRefs
+  Lovejoin.AnyTx.LogicReferenceFilter Lovejoin.AnyTx.LogicPolicyLookup Lovejoin.AnyTx.LogicNameLookup
+  Lovejoin.AnyTx.LogicCarrierPredicate Lovejoin.AnyTx.LogicCarrierFilterExact
+  Lovejoin.AnyTx.LogicCarrierVariable Lovejoin.AnyTx.LogicAbsentName Lovejoin.AnyTx.LogicAbsentNameAfter
+  Lovejoin.AnyTx.LogicAbsentPolicy Lovejoin.AnyTx.LogicAbsentPolicyAfter
+  Lovejoin.AnyTx.LogicCarrierCover Lovejoin.AnyTx.LogicOwnerParse Lovejoin.AnyTx.LogicMixParse
+  Lovejoin.AnyTx.LogicProofBoundary Lovejoin.AnyTx.LogicOwnerMalformed Lovejoin.AnyTx.LogicNoReference
+  Lovejoin.AnyTx.LogicNoReferenceMany Lovejoin.AnyTx.LogicOwnerNoCarrier
+  Lovejoin.AnyTx.LogicCarrierCoverSafety Lovejoin.AnyTx.LogicLedgerValueCover
+  Lovejoin.AnyTx.LogicLedgerCarrier)
+every=("${every_imports[@]}" Lovejoin.Every.Base Lovejoin.Every.Lookup Lovejoin.Every.Carrier Lovejoin.Every.Collect
   Lovejoin.Every.Shared Lovejoin.Every.Owner Lovejoin.Every.Main Lovejoin.Every.Fold Lovejoin.Every.Value
   Lovejoin.Every.Walk Lovejoin.Every.MixPred Lovejoin.Every.Mix Lovejoin.Every.Withdraw Lovejoin.Every.Typed
   Lovejoin.Every.Mint Lovejoin.Every.MintSpec Lovejoin.Every.MintConds Lovejoin.Every.MintCheck
