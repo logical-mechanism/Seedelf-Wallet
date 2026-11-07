@@ -2109,6 +2109,16 @@ fn a_transaction_names_every_script_reward_account_it_pays_into() {
         serde_json::json!([hex::encode([5; 28]), hex::encode([6; 28])])
     );
 
+    // A proposal's deposit returned to a script, with no treasury withdrawal
+    // naming it too, is named on its own (1.8.1's release review, mutants#4).
+    let (tx, rows) = proposing(vec![proposal(
+        reward_bytes(0xf0, Hash::new([6; 28])),
+        100_000_000_000,
+        conway::GovAction::Information,
+    )]);
+    let summary = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
+    assert_eq!(summary.paid_scripts, vec![hex::encode([6; 28])]);
+
     // A key's are named where they always were, never here.
     let (tx, rows) = proposing(vec![proposal(
         reward_bytes(0xe0, their_stake()),

@@ -1572,6 +1572,27 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
     expect(sent).toEqual(expect.arrayContaining([deposit.txHash, mix.txHash, back.txHash]));
   });
 
+  it("stops at its mix, as it did, when Ogmios's own answer says it doesn't know the box, which another wallet's mix may have drawn", async () => {
+    const { t, sessions } = await setUp(ONE_BOX);
+    const review = await sessions.backBuild("preprod", 0);
+    const mix = (await steps(t)).at(-2)!;
+    await sessions.backSubmit("preprod", review.txHash);
+    t.koios.confirmations = 1;
+    const box = review.collateralTail!.box;
+    t.koios.spent.add(`${box.txHash}#${box.txIndex}`);
+    // Ogmios names an input it can't find in a 3004's reason alone (seedelf-core's recorded unknown_inputs.json), which
+    // the wallet doesn't read: a box gone stops the chain there, never asked again for a day as a backend behind, the
+    // return held behind it (1.8.1's release review, r2-worker#1).
+    const recorded = readFileSync(new URL("../../../seedelf-core/tests/fixtures/ogmios/unknown_inputs.json", import.meta.url), "utf8");
+    const gone = JSON.parse(recorded.replaceAll(`${"a1".repeat(32)}#0`, `${box.txHash}#${box.txIndex}`)) as unknown;
+    t.koios.evaluation = (body: unknown) => (JSON.stringify(body).includes(mix.txCbor) ? gone : AGREES);
+    await sessions.runAll("preprod");
+    expect(t.collateral.asked).toEqual([]);
+    const stopped = (await schedule(t)).chains.at(-1)! as TailRecord & { stopped?: string };
+    expect(stopped.stopped).toBe(tr("lj.stalePool"));
+    expect(stopped.ended).toBeDefined();
+  });
+
   it("lets a box of any pool come back while its mix waits, a day at most (1.6.0's release review, x-scenarios-lj#1)", async () => {
     const { t, five, lj, sessions } = await setUp(ONE_BOX);
     const review = await sessions.backBuild("preprod", 0);

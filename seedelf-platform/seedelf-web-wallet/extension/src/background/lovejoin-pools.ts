@@ -355,6 +355,15 @@ export class PoolDiscovery {
     return new Map((await this.kept(network)).pools.map((p) => [p.id, p.launch.tx]));
   }
 
+  /**
+   * Every pool kept on `network`, the head start's and the device's, each copy among them, read or not: the same for
+   * every device with the same history, so it never says which holds the wallet's boxes (lovejoin.ts mixLogicHashes;
+   * 1.8.1's release review, guard#1 and v-guard#1). No request.
+   */
+  async everyKept(network: NetworkName): Promise<PoolRef[]> {
+    return (await this.kept(network)).pools.map((p) => p.ref);
+  }
+
   /** `work`, once every write of `network`'s record before it is done. */
   private serially<T>(network: NetworkName, work: () => Promise<T>): Promise<T> {
     const run = (this.writing.get(network) ?? Promise.resolve()).catch(() => undefined).then(work);
@@ -630,11 +639,11 @@ export class PoolDiscovery {
  * over, each copy named one (`{ copy }`, apart from its PoolRef, which goes to WebAssembly as it is): at a pool read
  * after the data layer's list, asking nobody otherwise. And the copies a pool read reads once, and that it read them
  * (MERGED-1; which held the wallet's boxes the service keeps sealed, R2-4). And the look an ask makes that found no
- * 5 ₳ pool (lookSoon; 1.8.0's release review, O1).
+ * 5 ₳ pool (lookSoon; 1.8.0's release review, O1). And every pool it keeps, for the connector's refusal (everyKept).
  */
 export function serviceDeps(
   discovery: PoolDiscovery,
-): Required<Pick<LovejoinDeps, "pools" | "known" | "copies" | "copiesRead" | "lookSoon">> {
+): Required<Pick<LovejoinDeps, "pools" | "known" | "copies" | "copiesRead" | "lookSoon" | "everyKept">> {
   const handed = async (network: NetworkName) => (await discovery.known(network)).map((p) => (p.copy ? { copy: p.ref } : p.ref));
   return {
     // The data layer's list failing is no pool gone: what was found before is read. A trap isn't swallowed.
@@ -653,6 +662,7 @@ export function serviceDeps(
         read.map((r) => refOf(r.reference)),
       ),
     lookSoon: (network) => discovery.lookSoon(network),
+    everyKept: (network) => discovery.everyKept(network),
   };
 }
 

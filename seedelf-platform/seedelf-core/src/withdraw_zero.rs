@@ -5,7 +5,8 @@
 //!
 //! The amount is 0 nearly always, and whatever the account holds otherwise:
 //! the ledger takes a withdrawal only of an account's whole balance
-//! (`WithdrawalsNotInRewards`), and anyone can put money in one with no
+//! (`WithdrawalsNotInRewards`; from protocol version 11,
+//! `ConwayIncompleteWithdrawals`), and anyone can put money in one with no
 //! witness of the script's, as a retired stake pool's deposit that names it
 //! does (chunk 43). The script never reads the amount.
 //!

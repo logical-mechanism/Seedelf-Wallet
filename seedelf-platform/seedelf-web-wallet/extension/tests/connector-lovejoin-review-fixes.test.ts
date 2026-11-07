@@ -307,7 +307,7 @@ describe("1.8.0's release review: the connect window's card says the spare ADA i
 
   /** A site asks to connect: the approval the window shows, and that its build asked Koios nothing. Declined after. */
   async function approvalOf(t: T, sessions: SessionService): Promise<Extract<DappApproval, { kind: "connect" }>> {
-    const dapp = new DappService({ ...t.deps, store: t.store, sessions, network: () => t.networkChoice.get(), window: t.dappWindow, changed: () => undefined });
+    const dapp = new DappService({ ...t.deps, store: t.store, sessions, lovejoin: t.lovejoin, network: () => t.networkChoice.get(), window: t.dappWindow, changed: () => undefined });
     const from = t.koios.calls.length;
     const origin = `https://site${++sites}.example`;
     const asking = dapp.call({ id: `page${sites}`, origin, title: "Example" }, "enable", []).catch(() => undefined);

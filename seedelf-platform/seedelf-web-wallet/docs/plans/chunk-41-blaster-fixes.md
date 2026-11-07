@@ -8,7 +8,7 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 |---|---|
 | 0 · Forks, clones, runner | ✅ |
 | 1 · Datatype parameter names | 🚧 issue [#454](https://github.com/input-output-hk/Lean-blaster/issues/454), PR [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) open (2026-11-03); fix `6526c4b` + test `25c0ee0`, the test passes (four Valid, one Expected Falsified) |
-| 2 · `ByteStringToInteger` alias | 🚧 PR [PlutusCoreBlaster #71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71) open (2026-11-03); fix `3dd76d7` + `28910c6`, test `cfa8c53` passes (one Valid, two Expected Falsified); review round 1 `f411ef6` (four Valid, three Expected Falsified, a `#guard`); after #72 merged, `main` merged in (`b330749`) and the review's `State` equalities (`c60039c`, same results) |
+| 2 · `ByteStringToInteger` alias | ✅ PR [PlutusCoreBlaster #71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71) merged 2026-11-05 (`6b4260a`), opened 2026-11-03; fix `3dd76d7` + `28910c6`, test `cfa8c53` passes (one Valid, two Expected Falsified); review round 1 `f411ef6` (four Valid, three Expected Falsified, a `#guard`); after #72 merged, `main` merged in (`b330749`) and the review's `State` equalities (`c60039c`, same results) |
 | 3 · `Fin` in `Fq1` | ✅ [PlutusCoreBlaster #72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72) merged 2026-11-03 by mpetruska (squash `0c0c1b8`, the same tree as `89d8c6d`); opened after no reply on [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29#issuecomment-6597217930) (the owner: "seems like that pr just died"); fix `ae0a7cd` + test `f146c10` pass; review round 1 `89d8c6d` |
 | 4 · WalletRegister | ✅ Valid in the script's own order (2026-11-03, 737 MB with the rebuild), in `check.sh`'s default list, README and chunk 40 updated |
 | 5 · Operand order (Fix 4) | 🚧 PR [PlutusCoreBlaster #73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) open (2026-11-03), fix + test `b60ff2a` pass (three Falsified before, three Valid after), rebased onto round 1 as `b01509a`; after #72 merged, rebased onto `main` as `5c048b0` (the same tree, so no rerun) |
@@ -16,9 +16,9 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 ### Next session, in order
 
 0. **Review round 1, 2026-11-03: answered, waiting on mpetruska.** Replies and the round's state are in `../blaster-forks/posts/review-round-1-replies.md`.
-   - **#71 (changes requested):** the alias returns a `Nat` and the builtin applies `.ofNat`; the goals are also stated over `cekExecuteProgram`; a `#guard` checks `#0102` is 258 (`f411ef6`).
+   - **#71 (merged 2026-11-05, `6b4260a`):** the alias returns a `Nat` and the builtin applies `.ofNat`; the goals are also stated over `cekExecuteProgram`; a `#guard` checks `#0102` is 258 (`f411ef6`).
      - We kept the `haltsWithInteger`/`haltsWithBool` matches. The `State` equality the review suggested fails on `Fin` on `main`, and passes with #72 underneath (local-only `local/state-equality`, `346fe6a`). Done once #72 merged: `main` merged into #71 (`b330749`), the equalities in `c60039c` (four Valid, three Expected Falsified), replied on both threads.
-     - **Open:** their main point is re-modelling `ByteString` as `ByteArray`. We agreed, asked for an issue to follow, and asked whether they'd take #71 as a stopgap like #27. If not, close #71 and keep the alias on our fork.
+     - **Open:** their main point is re-modelling `ByteString` as `ByteArray`. We agreed and asked for an issue to follow; none was open on 2026-11-07.
    - **#72 ("Nice work! Just a minor request"):** the short doc comment and `private mk ::` (`89d8c6d`). `G1.lean`'s `ToExpr Fq1` now builds through `Fq1.ofNat`, since `Fq1.mk` is private. #73 is rebased onto it (`b01509a`, force-pushed).
    - **Checked (the owner's runs):** every fork test passes on its own branch. `./check.sh` on the new pin matched the baseline: nine `ok`, WalletRegister Valid, PolicyBurn and PolicyMint on `BitVec` alone.
    - **GitHub won't let us re-request a review:** the API refuses non-collaborators. The replies notify the reviewer instead.
@@ -82,7 +82,7 @@ Chunk 40's [baseline](chunk-40-verification-upstream.md#the-baseline-2026-11-02-
 
 - **Claude:** the forks and pushes to them, the edits and tests, local commits, PR and comment texts, and the owner's command blocks (each names its host, with no placeholders and no `set -e`).
 - **The owner:** every post to IOG's repos (issues, PRs, comments) and every build, pasting the output back. On 2026-11-02 the permission classifier let Claude fork and push to the owner's own forks, but refused `gh issue create` on input-output-hk ("External System Writes"), as it refused Claude's `lake build` and `check.sh`. The owner can instead add a permission rule for those commands; until then they run them.
-- **The owner monitors** the issues and PRs for comments. Open since 2026-11-03: Lean-blaster #455 (its CI waits on a maintainer's approval), and PlutusCoreBlaster #71 and #73. #72 merged 2026-11-03.
+- **The owner monitors** the issues and PRs for comments. Open since 2026-11-03: Lean-blaster #455 (its CI waits on a maintainer's approval), and PlutusCoreBlaster #73. #72 merged 2026-11-03, #71 2026-11-05.
 
 ## Step 0 · Setup ✅
 
@@ -262,6 +262,21 @@ gh pr view 29 -R input-output-hk/PlutusCoreBlaster --json state,isDraft,updatedA
 ```
 
 On 2026-11-02, both greps matched (lines 928 and 39), #335, #334 and #29 were open drafts, and #155 was open.
+
+**Checked 2026-11-06** (from chunk 45's plan; the decisions are still the owner's):
+
+- **PlutusCoreBlaster:**
+  - **#71 merged 2026-11-05** (`6b4260a`), so ByteStringToInteger is opaque upstream.
+  - **#72 merged.**
+  - **#73** (operand order) is mergeable and waiting on review.
+  - **#27** (`serialise_data`, Luivatra's draft) has been silent since July.
+  - **Our pin's library** (`68c5399`) differs from upstream `main` only by #73, #27 and the xor alias. The xor alias was never PR'd, and its commit `96a36cb` conflicts with `main` until rebased. `Slice/`'s alias (`96261cc`) was never PR'd either.
+- **Lean-blaster #455** shows CONFLICTING since #155 moved it to `main`. The local rebase `42caa53` (on `1fe209e`) merges cleanly into today's `main` (`983f10f`), which still has the bug. It needs the owner's force-push plus `blaster-forks/posts/lean-blaster-455-retarget-comment.md`.
+- **#153** has no reply to our 2026-11-05 comment.
+- **Offered to the owner, no answer yet:**
+  - the posts (the #455 push and comment, a #73 nudge, PRs for the xor and slice aliases, a #27 comment);
+  - re-pinning PlutusCoreBlaster to upstream `main` plus the three open patches, with the owner running the suite once;
+  - Lean-blaster to `main` once #455 merges.
 
 ## The owner's decisions
 

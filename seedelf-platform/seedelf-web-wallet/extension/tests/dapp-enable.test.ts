@@ -269,6 +269,7 @@ describe("a declined site's wait, across workers, and where it's listed", () => 
       ...t.deps,
       store: t.store,
       sessions: t.sessions,
+      lovejoin: t.lovejoin,
       network: () => t.networkChoice.get(),
       window: t.dappWindow,
       changed: () => undefined,

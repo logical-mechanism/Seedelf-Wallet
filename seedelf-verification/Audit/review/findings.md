@@ -88,7 +88,7 @@ The bytes are in fact right: they are alpha-equal to the proven classic outside 
 
 After any re-extraction (the Lovejoin PR changes the xor32 fix, a v2 launch's parameters, any contract edit), the new .hex lands and concrete/*.sh evaluates the new .flat, but every olean stays up to date and check.sh prints the old ✅ and 'ok' for bytes no longer there. Readers would take those ✅ to be about the hash-checked .hex in the repo. A clean clone is unaffected; the owner's incremental builds are.
 
-**Closed by:** a lakefile change (input_dir + needs), at the final full re-run: it rebuilds everything once
+**Open** (found again by 1.8.1's release review): the lakefile change meant to close it (input_dir + needs, at the final full re-run, since it rebuilds everything once) never landed. Until it does, after any extract run, delete the Scripts modules' builds by hand, as README's *Running it* says: `rm -f .lake/build/lib/lean/{Seedelf,Lovejoin,Lovejoin/V2,Lovejoin/Template}/Scripts.{olean,trace} Slice/.lake/build/lib/lean/Slice/Scripts.{olean,trace}`
 
 ## The concrete runs that keep the failure-only theorems from being vacuous are printed, never checked: a scenario that stopped passing would leave every ✅ on it green
 

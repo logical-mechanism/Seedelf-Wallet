@@ -5,7 +5,9 @@
 
 use blstrs::Scalar;
 use pallas_addresses::Address;
+use pallas_codec::minicbor;
 use pallas_crypto::key::ed25519::SecretKey;
+use pallas_primitives::conway::{ScriptRef, TransactionOutput};
 use pallas_traverse::MultiEraTx;
 use rand_core::OsRng;
 use seedelf_core::eval::{self, Resolved};
@@ -739,6 +741,78 @@ fn public_utxo(tx: u8, role: Role, index: u32, lovelace: u64) -> api::PathedUtxo
     }
 }
 
+/// The script a reference output carries: its size, as the ledger counts it
+/// for the reference-script fee. 0 for none.
+fn script_size(output: &[u8]) -> u64 {
+    let TransactionOutput::PostAlonzo(output) = minicbor::decode(output).unwrap() else {
+        return 0;
+    };
+    match output.script_ref.map(|s| s.0) {
+        Some(ScriptRef::PlutusV1Script(s)) => s.as_ref().len() as u64,
+        Some(ScriptRef::PlutusV2Script(s)) => s.as_ref().len() as u64,
+        Some(ScriptRef::PlutusV3Script(s)) => s.as_ref().len() as u64,
+        _ => 0,
+    }
+}
+
+/// Each of `txs`, signed as the wallet sends it, pays the ledger's minimum
+/// fee, worked out from its own bytes: its size with every signature in it,
+/// its redeemers' budgets at preprod's prices as exact rationals (one ceiling
+/// over the total), and 15 lovelace a byte of every reference script it spends
+/// or reads. Who signs is in the bytes, so no count of keys comes from the
+/// code (1.8.1's round-two review, r2-rust#1). What each spends or reads is
+/// among `rows`, `protocol`'s references and the outputs of those before it.
+fn each_pays_the_ledgers_minimum<'a>(
+    txs: impl IntoIterator<Item = &'a String>,
+    rows: &[UtxoResponse],
+    protocol: &Protocol,
+) {
+    let p = seedelf_koios::koios::ProtocolParameters::from_koios(&params()).unwrap();
+    assert_eq!((p.min_fee_a, p.min_fee_b), (44, 155_381));
+    assert_eq!((p.price_mem, p.price_step), (0.0577, 0.0000721));
+    assert_eq!(
+        p.min_fee_ref_script_cost_per_byte,
+        seedelf_koios::koios::Ratio::whole(15)
+    );
+    // A row the wallet never spends, as one carrying a reference script,
+    // stays unknown.
+    let mut known: Vec<Resolved> = rows
+        .iter()
+        .filter_map(|r| eval::resolve_row(r).ok())
+        .collect();
+    known.extend(protocol.references.iter().cloned());
+    for cbor in txs {
+        let signed = hex::decode(cbor).unwrap();
+        let tx = MultiEraTx::decode(&signed).unwrap();
+        let (mem, steps) = tx.redeemers().iter().fold((0u128, 0u128), |(m, s), r| {
+            (m + r.ex_units().mem as u128, s + r.ex_units().steps as u128)
+        });
+        let units = (577 * mem * 1_000 + 721 * steps).div_ceil(10_000_000) as u64;
+        let scripts: u64 = tx
+            .inputs()
+            .iter()
+            .chain(tx.reference_inputs().iter())
+            .map(|i| {
+                let utxo = known
+                    .iter()
+                    .find(|r| r.tx_hash == **i.hash() && r.index == i.index())
+                    .unwrap_or_else(|| {
+                        panic!("{}#{} isn't known", hex::encode(i.hash()), i.index())
+                    });
+                script_size(&utxo.output)
+            })
+            .sum();
+        let needed = 44 * signed.len() as u64 + 155_381 + units + 15 * scripts;
+        let fee = tx.fee().unwrap();
+        assert!(
+            fee >= needed,
+            "{} signing: fee {fee} for {needed}",
+            tx.vkey_witnesses().len()
+        );
+        known.extend(eval::resolve_outputs(&signed).unwrap());
+    }
+}
+
 #[test]
 fn the_tile_funds_exactly_the_boxes_asked_for() {
     let funded = lovejoin::funding(FundingRequest {
@@ -775,6 +849,21 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
     let public = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
     let sk = Scalar::from(2468u64);
     let key = |role: Role, index: u32| public.key_hash(role, index).unwrap();
+    // Two boxes at depth 1 take 23.4 ₳: the two largest ADA-only UTxOs, under
+    // two keys; the small one and the token one stay.
+    let utxos = vec![
+        public_utxo(0x51, Role::Receive, 1, 15_000_000),
+        public_utxo(0x52, Role::Change, 0, 12_000_000),
+        public_utxo(0x53, Role::Receive, 2, 3_000_000),
+        // The largest, but carrying a reference script: never a coin.
+        api::PathedUtxo {
+            utxo: UtxoResponse {
+                reference_script: recorded_script(),
+                ..public_utxo(0x54, Role::Receive, 3, 50_000_000).utxo
+            },
+            ..public_utxo(0x54, Role::Receive, 3, 50_000_000)
+        },
+    ];
     let build = |collateral: api::PathedUtxo| {
         lovejoin::chain_from_account(
             &public,
@@ -782,21 +871,7 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
             AccountChainRequest {
                 network: "preprod".into(),
                 params: params(),
-                // Two boxes at depth 1 take 23.4 ₳: the two largest ADA-only
-                // UTxOs, under two keys; the small one and the token one stay.
-                utxos: vec![
-                    public_utxo(0x51, Role::Receive, 1, 15_000_000),
-                    public_utxo(0x52, Role::Change, 0, 12_000_000),
-                    public_utxo(0x53, Role::Receive, 2, 3_000_000),
-                    // The largest, but carrying a reference script: never a coin.
-                    api::PathedUtxo {
-                        utxo: UtxoResponse {
-                            reference_script: recorded_script(),
-                            ..public_utxo(0x54, Role::Receive, 3, 50_000_000).utxo
-                        },
-                        ..public_utxo(0x54, Role::Receive, 3, 50_000_000)
-                    },
-                ],
+                utxos: utxos.clone(),
                 collateral: Some(collateral),
                 pool: pool(&protocol),
                 depth: 1,
@@ -806,6 +881,12 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
         )
         .unwrap()
     };
+    // What a chain spends: the account's UTxOs and the pool's boxes.
+    let rows: Vec<UtxoResponse> = utxos
+        .iter()
+        .map(|p| p.utxo.clone())
+        .chain(pool(&protocol))
+        .collect();
     let signers = |t: &lovejoin::ChainTxOut| -> Vec<pallas_crypto::hash::Hash<28>> {
         let bytes = hex::decode(&t.tx_cbor).unwrap();
         let tx = MultiEraTx::decode(&bytes).unwrap();
@@ -842,6 +923,8 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
     let deposit = MultiEraTx::decode(&deposit_bytes).unwrap();
     assert!(spends(&deposit, [0x51; 32], 0) && spends(&deposit, [0x52; 32], 0));
     assert!(!spends(&deposit, [0x53; 32], 0));
+    // Each fee pays for the keys that signed: the deposit's two, each mix's one.
+    each_pays_the_ledgers_minimum(result.txs.iter().map(|t| &t.tx_cbor), &rows, &protocol);
 
     // The collateral elsewhere: its key signs each mix too, and each fee pays for both.
     let result = build(public_utxo(0x5d, Role::Receive, 7, 5_000_000));
@@ -850,13 +933,8 @@ fn the_public_account_mixes_straight_in_signed_by_the_keys_it_spends() {
             signers(mix),
             sorted(vec![key(Role::Receive, 0), key(Role::Receive, 7)])
         );
-        let bytes = hex::decode(&mix.tx_cbor).unwrap();
-        let fee: u64 = mix.fee.parse().unwrap();
-        assert!(
-            fee >= 44 * bytes.len() as u64 + 155_381,
-            "the fee covers the signed size"
-        );
     }
+    each_pays_the_ledgers_minimum(result.txs.iter().map(|t| &t.tx_cbor), &rows, &protocol);
     assert!(result.returned.parse::<u64>().unwrap() > 1_000_000);
 
     // Too little ADA says so.
@@ -1131,14 +1209,11 @@ fn the_public_account_mixes_its_own_boxes_again_signed_by_the_keys_it_spends() {
     };
 
     // The largest ADA-only UTxO pays, at 0/4; the smaller one stays.
-    let result = build(
-        vec![
-            public_utxo(0x61, Role::Receive, 4, funded + 1_000_000),
-            public_utxo(0x62, Role::Change, 0, 3_000_000),
-        ],
-        every.clone(),
-    )
-    .unwrap();
+    let utxos = vec![
+        public_utxo(0x61, Role::Receive, 4, funded + 1_000_000),
+        public_utxo(0x62, Role::Change, 0, 3_000_000),
+    ];
+    let result = build(utxos.clone(), every.clone()).unwrap();
     let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
     assert_eq!(
         kinds,
@@ -1181,13 +1256,13 @@ fn the_public_account_mixes_its_own_boxes_again_signed_by_the_keys_it_spends() {
     for tx in &txs {
         assert!(!spends(tx, [0x62; 32], 0) && !spends(tx, [0x5d; 32], 0));
     }
-    for (mix, bytes) in result.txs.iter().zip(&bytes) {
-        let fee: u64 = mix.fee.parse().unwrap();
-        assert!(
-            fee >= 44 * bytes.len() as u64 + 155_381,
-            "the fee covers the signed size"
-        );
-    }
+    // Each fee pays for both keys that signed it.
+    let rows: Vec<UtxoResponse> = utxos
+        .iter()
+        .map(|p| p.utxo.clone())
+        .chain(every.clone())
+        .collect();
+    each_pays_the_ledgers_minimum(result.txs.iter().map(|t| &t.tx_cbor), &rows, &protocol);
     assert!(result.returned.parse::<u64>().unwrap() > 1_000_000);
 
     // No one UTxO pays for it, though two together would: it says so.
@@ -1214,6 +1289,63 @@ fn the_public_account_mixes_its_own_boxes_again_signed_by_the_keys_it_spends() {
         err.to_string().contains("None of this wallet's boxes"),
         "{err}"
     );
+}
+
+/// Mix again's first mix is signed by the paying UTxO's key and the
+/// collateral's, each after it by the change's (0/0) and the collateral's, and
+/// every one is priced on the most of those. They differ when the collateral
+/// sits at 0/0, or the paying UTxO at the collateral's key: each fee still
+/// pays for the keys that sign it (1.8.1's round-two review, r2-rust#1).
+#[test]
+fn mixing_again_pays_for_the_keys_that_sign_each_mix() {
+    let protocol = Protocol::of(true).unwrap();
+    let public = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let sk = Scalar::from(2468u64);
+    let mut every = pool(&protocol);
+    every.extend(our_box_rows(sk, 2, &protocol));
+    let funded = seedelf_core::lovejoin::again_funding(2, 1);
+    // Where the paying UTxO and the collateral sit (0/n), and how many keys
+    // sign each mix.
+    for (paying_at, collateral_at, signing) in [(4, 0, [2, 1]), (7, 7, [1, 2])] {
+        let utxos = vec![public_utxo(
+            0x61,
+            Role::Receive,
+            paying_at,
+            funded + 1_000_000,
+        )];
+        let result = lovejoin::again_from_account(
+            &public,
+            sk,
+            AccountChainRequest {
+                network: "preprod".into(),
+                params: params(),
+                utxos: utxos.clone(),
+                collateral: Some(public_utxo(0x5d, Role::Receive, collateral_at, 5_000_000)),
+                pool: every.clone(),
+                depth: 1,
+                boxes: 2,
+                rewards: Default::default(),
+            },
+        )
+        .unwrap();
+        let witnesses: Vec<usize> = result
+            .txs
+            .iter()
+            .map(|t| {
+                MultiEraTx::decode(&hex::decode(&t.tx_cbor).unwrap())
+                    .unwrap()
+                    .vkey_witnesses()
+                    .len()
+            })
+            .collect();
+        assert_eq!(witnesses, signing);
+        let rows: Vec<UtxoResponse> = utxos
+            .iter()
+            .map(|p| p.utxo.clone())
+            .chain(every.clone())
+            .collect();
+        each_pays_the_ledgers_minimum(result.txs.iter().map(|t| &t.tx_cbor), &rows, &protocol);
+    }
 }
 
 #[test]
@@ -2207,6 +2339,166 @@ fn a_tail_in_the_chains_own_pool_takes_nothing_once_the_chain_took_it() {
     assert_eq!(withdrawn(&result.txs[3].tx_cbor), from_account(&five, 0));
 }
 
+/// Across pools too: each pool's first mix takes its own balance, and the
+/// collateral's tail, in a pool the chain mixed in, takes none, since the
+/// chain and its tail share one `Rewards` (1.8.1's release review,
+/// mutants#3).
+#[test]
+fn a_chain_across_pools_takes_each_pools_balance_once() {
+    let protocol = Protocol::of(true).unwrap();
+    let five = five();
+    let sk = Scalar::from(8383u64);
+    // Strangers' boxes for the 5 ₳ leg's draw and the tail's.
+    let others = strangers(0xa8, 4);
+    let request = ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: holdings(),
+        collateral: Some(collateral()),
+        pool: vec![],
+        depth: 1,
+        boxes: None,
+        merge: vec![],
+        again: false,
+        own: vec![],
+        collateral_pool: Some(ada_pool_ref(5_000_000)),
+        collateral_boxes: others.clone(),
+        collateral_reserve: false,
+        rewards: rewards(&[(&protocol, 500_000_000), (&five, 3_000_000)]),
+    };
+    let across = lovejoin::Across {
+        legs: vec![
+            lovejoin::LegRequest {
+                pool_ref: None,
+                pool: pool(&protocol),
+                most: Some(1),
+            },
+            lovejoin::LegRequest {
+                pool_ref: Some(ada_pool_ref(5_000_000)),
+                pool: others,
+                most: Some(1),
+            },
+        ],
+        fills: vec![],
+        params: Some(params()),
+    };
+    let result = lovejoin::chain_across_pools(&accounts(), sk, request, &across, 3).unwrap();
+    let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        vec!["deposit", "mix", "mix", "deposit", "mix", "back"]
+    );
+    assert_eq!(result.legs, vec![1, 1]);
+    assert_eq!(
+        withdrawn(&result.txs[1].tx_cbor),
+        from_account(&protocol, 500_000_000)
+    );
+    assert_eq!(
+        withdrawn(&result.txs[2].tx_cbor),
+        from_account(&five, 3_000_000)
+    );
+    assert!(result.txs[4].tail && result.txs[4].giveme);
+    assert_eq!(withdrawn(&result.txs[4].tx_cbor), from_account(&five, 0));
+}
+
+/// A direct return's tail takes the 5 ₳ pool's balance into its mix's change,
+/// and the return sweeps it into the private balance (1.8.1's release
+/// review, money#2).
+#[test]
+fn a_direct_returns_tail_takes_the_balance_and_the_return_brings_it_back() {
+    let five = five();
+    let sk = Scalar::from(6464u64);
+    let at = session();
+    let others = strangers(0xa9, 2);
+    let back = |rewards: lovejoin::RewardsIn| {
+        api::session_return(
+            &accounts(),
+            sk,
+            api::SessionReturnRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 0,
+                utxos: vec![
+                    row(1, 0, &at, 20_000_000, &[]),
+                    row(2, 1, &at, 5_000_000, &[]),
+                ],
+                merge: vec![],
+                own: vec![],
+                collateral_pool: Some(ada_pool_ref(5_000_000)),
+                collateral_boxes: others.clone(),
+                rewards,
+            },
+        )
+        .unwrap()
+    };
+    let fees = |r: &api::SessionReturnResult| {
+        r.fee.parse::<u64>().unwrap() + r.tail.as_ref().unwrap().tail.fee.parse::<u64>().unwrap()
+    };
+    let plain = back(Default::default());
+    let lucky = back(rewards(&[(&five, 500_000_000)]));
+    let tail = lucky.tail.as_ref().expect("the collateral's tail");
+    let mixed = the_tail(&tail.txs[0], &tail.txs[1], &tail.tail, &others, sk);
+    assert!(withdrawn(&tail.txs[0].tx_cbor).is_empty());
+    assert_eq!(
+        withdrawn(&tail.txs[1].tx_cbor),
+        from_account(&five, 500_000_000)
+    );
+    let seedelf = swept_after(&lucky.tx_cbor, &mixed);
+    assert_eq!(seedelf, 20_000_000 + 500_000_000 - fees(&lucky));
+    assert_eq!(lucky.lovelace, seedelf.to_string());
+    let total = |r: &api::SessionReturnResult| r.lovelace.parse::<u64>().unwrap() + fees(r);
+    assert_eq!(total(&lucky), total(&plain) + 500_000_000);
+}
+
+/// The collateral's mix built again takes the balance too, and the return
+/// after it sweeps it (1.8.1's release review, money#2).
+#[test]
+fn the_collateral_mix_built_again_takes_the_balance_and_its_return_brings_it_back() {
+    let five = five();
+    let sk = Scalar::from(9696u64);
+    let at = session();
+    let boxed = our_box_rows(sk, 1, &five).remove(0);
+    let mut rows = strangers(0xaa, 3);
+    rows.push(boxed.clone());
+    let build = |rewards: lovejoin::RewardsIn| {
+        lovejoin::collateral_mix(
+            &accounts(),
+            sk,
+            lovejoin::CollateralMixRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 0,
+                utxos: vec![row(0x31, 1, &at, 3_000_000, &[])],
+                boxed: OutRef {
+                    tx_hash: boxed.tx_hash.clone(),
+                    tx_index: boxed.tx_index,
+                },
+                pool_ref: ada_pool_ref(5_000_000),
+                pool: rows.clone(),
+                own: vec![],
+                rewards,
+            },
+        )
+        .unwrap()
+    };
+    let plain = build(Default::default());
+    let lucky = build(rewards(&[(&five, 500_000_000)]));
+    assert_eq!(
+        withdrawn(&lucky.txs[0].tx_cbor),
+        from_account(&five, 500_000_000)
+    );
+    let mixed = hex::decode(&lucky.txs[0].tx_cbor).unwrap();
+    let seedelf = swept_after(&lucky.txs[1].tx_cbor, &mixed);
+    assert_eq!(seedelf, lucky.returned.parse::<u64>().unwrap());
+    let fees: u64 = lucky.fees.parse().unwrap();
+    assert_eq!(seedelf, 3_000_000 + 500_000_000 - fees);
+    let total = |r: &lovejoin::ChainResult| {
+        r.returned.parse::<u64>().unwrap() + r.fees.parse::<u64>().unwrap()
+    };
+    assert_eq!(total(&lucky), total(&plain) + 500_000_000);
+}
+
 #[test]
 fn a_public_chain_leaves_the_balance_it_took_in_the_account() {
     let protocol = Protocol::of(true).unwrap();
@@ -2246,6 +2538,49 @@ fn a_public_chain_leaves_the_balance_it_took_in_the_account() {
     assert_eq!(total(&lucky), total(&plain) + 500_000_000);
 }
 
+/// Mixing the wallet's boxes again from the public account: its first mix
+/// takes the balance, and the change that stays in the account carries it
+/// (1.8.1's release review, mutants#3).
+#[test]
+fn mixing_again_from_the_public_account_leaves_the_balance_it_took_there() {
+    let protocol = Protocol::of(true).unwrap();
+    let public = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let sk = Scalar::from(2468u64);
+    let mut every = pool(&protocol);
+    every.extend(our_box_rows(sk, 2, &protocol));
+    let funded = seedelf_core::lovejoin::again_funding(2, 1);
+    let build = |rewards: lovejoin::RewardsIn| {
+        lovejoin::again_from_account(
+            &public,
+            sk,
+            AccountChainRequest {
+                network: "preprod".into(),
+                params: params(),
+                utxos: vec![public_utxo(0x61, Role::Receive, 4, funded + 1_000_000)],
+                collateral: Some(public_utxo(0x5d, Role::Receive, 7, 5_000_000)),
+                pool: every.clone(),
+                depth: 1,
+                boxes: 2,
+                rewards,
+            },
+        )
+        .unwrap()
+    };
+    let plain = build(Default::default());
+    let lucky = build(rewards(&[(&protocol, 500_000_000)]));
+    let kinds: Vec<&str> = lucky.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(kinds, vec!["mix", "mix"]);
+    assert_eq!(
+        withdrawn(&lucky.txs[0].tx_cbor),
+        from_account(&protocol, 500_000_000)
+    );
+    assert_eq!(withdrawn(&lucky.txs[1].tx_cbor), from_account(&protocol, 0));
+    let total = |r: &lovejoin::ChainResult| {
+        r.returned.parse::<u64>().unwrap() + r.fees.parse::<u64>().unwrap()
+    };
+    assert_eq!(total(&lucky), total(&plain) + 500_000_000);
+}
+
 #[test]
 fn a_box_comes_back_with_the_pools_balance_in_its_register() {
     let protocol = Protocol::of(true).unwrap();
@@ -2271,6 +2606,76 @@ fn a_box_comes_back_with_the_pools_balance_in_its_register() {
     assert_eq!(
         built.lovelace.parse::<u64>().unwrap(),
         10_000_000 + 500_000_000 - fee
+    );
+}
+
+/// A box brought back paid by the public account, or by the private balance:
+/// its register takes the pool's balance either way (1.8.1's release review,
+/// mutants#3).
+#[test]
+fn a_box_brought_back_paid_takes_the_pools_balance_into_its_register() {
+    let protocol = Protocol::of(true).unwrap();
+    let public = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let sk = Scalar::from(9494u64);
+    let mut rows = our_box_rows(sk, 1, &protocol);
+    rows.extend(pool(&protocol));
+
+    let paying = public_utxo(0x71, Role::Receive, 2, 12_000_000);
+    let paid = lovejoin::withdraw_paid_in(
+        &public,
+        sk,
+        lovejoin::WithdrawPaidRequest {
+            network: "preprod".into(),
+            params: params(),
+            pool: rows.clone(),
+            box_ref: None,
+            utxos: vec![paying.clone()],
+            collateral: public_utxo(0x7c, Role::Receive, 0, 5_000_000),
+            rewards: rewards(&[(&protocol, 500_000_000)]),
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawn(&paid.tx_cbor),
+        from_account(&protocol, 500_000_000)
+    );
+    // The box's 10 ₳ and the balance, with nothing to make up: the account
+    // pays the fee alone.
+    assert_eq!(paid.lovelace, (10_000_000 + 500_000_000).to_string());
+    assert_eq!(paid.paid, paid.fee);
+    // Signed by the paying UTxO's key and the collateral's, its fee pays for
+    // both.
+    let signed = hex::decode(&paid.tx_cbor).unwrap();
+    assert_eq!(
+        MultiEraTx::decode(&signed).unwrap().vkey_witnesses().len(),
+        2
+    );
+    let mut spent = rows.clone();
+    spent.push(paying.utxo);
+    each_pays_the_ledgers_minimum([&paid.tx_cbor], &spent, &protocol);
+
+    let private = lovejoin::withdraw_private_in(
+        sk,
+        lovejoin::WithdrawPrivateRequest {
+            network: "preprod".into(),
+            params: params(),
+            pool: rows,
+            box_ref: None,
+            utxos: vec![funding_change(sk)],
+            rewards: rewards(&[(&protocol, 500_000_000)]),
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawn(&private.tx_cbor),
+        from_account(&protocol, 500_000_000)
+    );
+    let fee: u64 = private.fee.parse().unwrap();
+    assert_eq!(
+        private.lovelace.parse::<u64>().unwrap(),
+        10_000_000 + 12_000_000 + 500_000_000 - fee
     );
 }
 

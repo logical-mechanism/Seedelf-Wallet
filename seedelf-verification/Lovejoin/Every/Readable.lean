@@ -300,6 +300,14 @@ theorem one_shot_mint_accepts_iff_valid (seedTx : ByteString) (seedIx : Integer)
 
 end Lovejoin.Every.Readable
 
+/-- info: 'Lovejoin.Every.Readable.mix_logic_accepts_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Lovejoin.Every.Readable.mix_logic_accepts_iff
+
+/-- info: 'Lovejoin.Every.Readable.one_shot_mint_accepts_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Lovejoin.Every.Readable.one_shot_mint_accepts_iff
+
 /-- info: 'Lovejoin.Every.Readable.mix_logic_accepts_iff_valid' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms Lovejoin.Every.Readable.mix_logic_accepts_iff_valid

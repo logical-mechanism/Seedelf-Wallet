@@ -96,7 +96,7 @@ import {
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
-import { homeBalance, TotalRows } from "../components/ReviewTotals";
+import { AfterRow, homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { SendButton } from "../components/SendButton";
 import { refusalOf, SessionRefusedFoot, unsentWhyText, type Refusal } from "../components/SessionRefused";
@@ -4003,6 +4003,15 @@ const publicLeaving = (summary: LovejoinPublicSummary, box: BoxValue) =>
   (summary.again ? 0n : BigInt(summary.boxes) * BigInt(box.lovelace)) + BigInt(summary.fees);
 
 /**
+ * The public account once a chain from it lands: Home's figure, `before`, less what leaves (publicLeaving), and more
+ * what its first mix takes of its pool's reward balance, which its change brings in (`taken`, chunk 43). Without it,
+ * the after was short by all of that, where a return's Back now counts it (1.8.1's release review, readers#1). No line
+ * of its own names it (backlog.md, chunk 43's call 1).
+ */
+const publicAfter = (summary: LovejoinPublicSummary, box: BoxValue, before: string) =>
+  BigInt(before) - publicLeaving(summary, box) + BigInt(summary.taken ?? "0");
+
+/**
  * The token pool's token a mix from the public account takes from it too, by its amount and name: its deposit's,
  * none mixing again. Said in the total, as the row above names it (1.6.0's preprod rehearsal, R3).
  */
@@ -4038,7 +4047,8 @@ export function PublicReview({
         <Row label={tr("lovejoin.mixedLabel")} value={mixedValue(summary)} />
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <TotalRows side="public" leaving={publicLeaving(summary, box)} before={before} named={publicToken(network, summary)} />
+        <TotalRows side="public" leaving={publicLeaving(summary, box)} named={publicToken(network, summary)} />
+        {before !== undefined && <AfterRow side="public" lovelace={publicAfter(summary, box, before)} />}
         {!cantComeBack && <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} stack />}
       </ReviewRows>
       <WidthNote fellBack={summary.fellBack} />
@@ -4104,7 +4114,8 @@ function PublicAgainReview({
         <Row label={tr("lovejoin.mixedLabel")} value={mixedValue(summary)} />
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <TotalRows side="public" leaving={publicLeaving(summary, box)} before={before} />
+        <TotalRows side="public" leaving={publicLeaving(summary, box)} />
+        {before !== undefined && <AfterRow side="public" lovelace={publicAfter(summary, box, before)} />}
         {!cantComeBack && <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} stack />}
       </ReviewRows>
       <WidthNote fellBack={summary.fellBack} />

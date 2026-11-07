@@ -77,6 +77,7 @@ function services(t: T, { stopped }: { stopped?: OnStopped } = {}) {
     ...spends,
     preferences: t.preferences,
     sessions,
+    lovejoin: t.lovejoin,
     fundingPollMs: 1,
     network: () => "preprod",
     window: t.dappWindow,

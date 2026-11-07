@@ -625,12 +625,21 @@ export const KOIOS_LIMIT = new RateLimit(undefined, undefined, undefined, undefi
 export class SpentInputError extends KoiosError {}
 
 /**
- * The network refused a withdrawal for not taking a reward account's whole balance (`WithdrawalsNotInRewards`), in
- * staking's words: the account changed since the transaction was built. A Lovejoin transaction withdraws only from
- * its pool's `mix_logic` account, so there it means that balance moved (chunk 43): Lovejoin tells it by this type and
- * says it in its own words.
+ * The network refused a withdrawal for not taking a reward account's whole balance, or for an account that isn't
+ * registered (WITHDRAWAL_REFUSED): the account changed since the transaction was built. In staking's words from a key's
+ * account, the public account's own; in the network's from a script's (submitTx). A Lovejoin transaction withdraws
+ * only from its pool's `mix_logic` account, so there it means that balance moved (chunk 43): Lovejoin tells it by this
+ * type and says it in its own words.
  */
 export class RewardsChangedError extends KoiosError {}
+
+/**
+ * The ledger's names for that refusal. Conway's CERTS said `WithdrawalsNotInRewardsCERTS` for both up to protocol
+ * version 10. From 11, which both networks run, LEDGER says `ConwayIncompleteWithdrawals` (not the whole balance) or
+ * `ConwayWithdrawalsMissingAccounts` (no such account): cardano-ledger-conway 1.21's
+ * hardforkConwayMoveWithdrawalsAndDRepChecksToLedgerRule. 1.24 drops the old name (1.8.1's release review, readers#4).
+ */
+const WITHDRAWAL_REFUSED = /WithdrawalsNotInRewards|IncompleteWithdrawals|WithdrawalsMissingAccounts/;
 
 /**
  * Koios didn't answer a submit (a timeout, a lost connection), asked the
@@ -706,8 +715,12 @@ function koiosTrouble(status: number, path: string): string {
  * must take exactly the balance.
  */
 function stakingRefusal(text: string): string | undefined {
-  if (text.includes("WithdrawalsNotInRewards")) {
+  if (/WithdrawalsNotInRewards|IncompleteWithdrawals/.test(text)) {
     return t("koios.staking.rewardsChanged");
+  }
+  // The stake key went since Review. Before NotDelegatedToDRep, which LEDGER says of such a key's account too.
+  if (text.includes("WithdrawalsMissingAccounts")) {
+    return t("koios.staking.changed");
   }
   if (text.includes("NotDelegatedToDRep")) {
     return t("koios.staking.notDelegated");
@@ -718,7 +731,10 @@ function stakingRefusal(text: string): string | undefined {
   if (text.includes("DelegateeDRepNotRegistered")) {
     return t("koios.staking.drepGone");
   }
-  if (/StakeKey(Not)?Registered|IncorrectDeposit|NonZeroRewardAccountBalance/.test(text)) {
+  // DELEG's for a key (not) registered, its deposit or refund, or its balance, in protocol version 11's names too
+  // (cardano-ledger-conway 1.21 on, and 1.24's for a key registered); never GOV's ProposalDepositIncorrect (a site's
+  // proposal), which isn't the account's.
+  if (/StakeKey(Not)?Registered|AccountAlreadyRegistered|IncorrectDeposit|(Deposit|Refund)IncorrectDELEG|NonZero(Reward)?AccountBalance/.test(text)) {
     return t("koios.staking.changed");
   }
   return undefined;
@@ -1229,8 +1245,15 @@ export class Koios {
         t("koios.spentInput"),
       );
     }
+    // A withdrawal refused is staking's to word only from a key's account, the public account's own. From a script's (a
+    // Danogo pool's withdraw-zero, Lovejoin's `mix_logic`), it's said as the network says it, of the same type. Each
+    // names its account's credential, KeyHashObj or ScriptHashObj, at protocol version 10 and 11 alike (1.8.1's release
+    // review, r2-screens#1).
+    if (WITHDRAWAL_REFUSED.test(text) && !text.includes("KeyHashObj")) {
+      throw new RewardsChangedError(t("koios.rejected", { why: text.slice(0, 500) }));
+    }
     const staking = stakingRefusal(text);
-    if (staking) throw text.includes("WithdrawalsNotInRewards") ? new RewardsChangedError(staking) : new KoiosError(staking);
+    if (staking) throw WITHDRAWAL_REFUSED.test(text) ? new RewardsChangedError(staking) : new KoiosError(staking);
     // The public account's transactions are valid for two hours from this device's clock (account.ts).
     if (text.includes("OutsideValidityIntervalUTxO")) {
       throw new KoiosError(

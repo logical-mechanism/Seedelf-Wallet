@@ -595,9 +595,12 @@ impl Rewards {
         Rewards::default()
     }
 
-    /// Each pool's balance, by its `mix_logic` hash.
+    /// Each pool's balance, by its `mix_logic` hash. A hash given twice holds
+    /// the last balance given for it, a 0 too.
     pub fn of(balances: impl IntoIterator<Item = ([u8; 28], u64)>) -> Self {
-        Rewards(balances.into_iter().filter(|(_, l)| *l > 0).collect())
+        let mut balances: BTreeMap<[u8; 28], u64> = balances.into_iter().collect();
+        balances.retain(|_, l| *l > 0);
+        Rewards(balances)
     }
 
     /// What `protocol`'s account still holds for the next transaction there.
@@ -1223,8 +1226,9 @@ fn mix_with(
 pub struct Withdraw {
     pub tx: BuiltTransaction,
     pub fee: u64,
-    /// What the register holds: the boxes' ADA and what was taken from
-    /// `mix_logic`'s reward account, less the fee where the boxes pay it.
+    /// What the register holds: the boxes' ADA, a private payer's UTxO or an
+    /// account's top-up, and what was taken from `mix_logic`'s reward
+    /// account, less the fee where the boxes or the private UTxO pay it.
     pub lovelace: u64,
     pub register: Register,
     /// A token pool's token, and how much of it the register holds.
@@ -1306,10 +1310,11 @@ pub fn withdraw(
 }
 
 /// [`withdraw`] with the fee paid by `payer`, a key account, which puts up
-/// its own collateral too: the boxes come back whole, and if their ADA is
-/// less than the Seedelf output needs, the account makes up the rest. For a
-/// box that can't pay its own way back ([`CantPayBack`]), as a token pool's
-/// can't once the ledger's price of a byte passes what its box value covers.
+/// its own collateral too: the boxes come back whole, and if their ADA and
+/// the balance taken are less than the Seedelf output needs, the account
+/// makes up the rest. For a box that can't pay its own way back
+/// ([`CantPayBack`]), as a token pool's can't once the ledger's price of a
+/// byte passes what its box value covers.
 /// The account's input and change are in the same transaction as the box,
 /// so it ties the box to the account: the caller says so before it's signed.
 pub fn withdraw_paid(

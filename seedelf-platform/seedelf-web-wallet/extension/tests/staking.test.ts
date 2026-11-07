@@ -771,11 +771,23 @@ describe("staking transactions", () => {
     await expect(t.staking.build("preprod", { kind: "withdraw" })).rejects.toThrow("voting power");
     await expect(t.staking.build("preprod", { kind: "stop" })).rejects.toThrow("voting power");
 
-    // An epoch paid more between Review and Send: the ledger refuses the old amount.
+    // An epoch paid more between Review and Send: the ledger refuses the old amount, naming the account, a key's.
     t.koios.stakes.set(info.stake_address, info);
     const withdraw = await t.staking.build("preprod", { kind: "withdraw" });
-    t.koios.rejectSubmit = '{"contents":{"contents":{"contents":{"era":"ShelleyBasedEraConway","error":["ConwayWdrlNotDelegatedToDRep","WithdrawalsNotInRewardsCERTS"]}}}}';
+    const notInRewards = `ConwayCertsFailure (WithdrawalsNotInRewardsCERTS (fromList [(RewardAccount {raNetwork = Testnet, raCredential = KeyHashObj (KeyHash {unKeyHash = \\"${"5e".repeat(28)}\\"})},Coin 1500000)]))`;
+    t.koios.rejectSubmit = `{"contents":{"contents":{"contents":{"era":"ShelleyBasedEraConway","error":["ConwayWdrlNotDelegatedToDRep","${notInRewards}"]}}}}`;
     await expect(t.staking.submit("preprod", withdraw.txHash)).rejects.toThrow("changed since you reviewed");
+    // The same from protocol version 11, which both networks run, in LEDGER's name, as cardano-submit-api hands it on.
+    const short = `ConwayIncompleteWithdrawals (NonEmptyMap (fromList [(AccountAddress {aaNetworkId = Testnet, aaId = AccountId {unAccountId = KeyHashObj (KeyHash {unKeyHash = \\"${"5e".repeat(28)}\\"})}},Mismatch (RelEQ) {supplied: Coin 1500000, expected: Coin 2100000})]))`;
+    t.koios.rejectSubmit = `{"contents":{"contents":{"contents":{"era":"ShelleyBasedEraConway","error":["${short}"],"kind":"ShelleyTxValidationError"},"tag":"TxValidationErrorInCardanoMode"},"tag":"TxCmdTxSubmitValidationError"},"tag":"TxSubmitFail"}`;
+    const again = await t.staking.build("preprod", { kind: "withdraw" });
+    await expect(t.staking.submit("preprod", again.txHash)).rejects.toThrow("rewards changed since you reviewed");
+    // Stop staking reviewed with no rewards withdraws none: an epoch that pays some before Send is DELEG's to refuse.
+    t.koios.stakes.set(info.stake_address, { ...info, rewards_available: "0" });
+    const stop = await t.staking.build("preprod", { kind: "stop" });
+    t.koios.rejectSubmit = '{"contents":{"contents":{"contents":{"era":"ShelleyBasedEraConway","error":["ConwayCertsFailure (CertFailure (DelegFailure (StakeKeyHasNonZeroAccountBalanceDELEG (Coin 1500000))))"],"kind":"ShelleyTxValidationError"},"tag":"TxValidationErrorInCardanoMode"},"tag":"TxCmdTxSubmitValidationError"},"tag":"TxSubmitFail"}';
+    await expect(t.staking.submit("preprod", stop.txHash)).rejects.toThrow("staking changed since you reviewed");
+    t.koios.stakes.set(info.stake_address, info);
 
     t.koios.rejectSubmit = '{"error":["ConwayDelegFailure (DelegateeStakePoolNotRegisteredDELEG (KeyHash {}))"]}';
     const moved = await t.staking.build("preprod", { kind: "delegate", pool: TPREP });

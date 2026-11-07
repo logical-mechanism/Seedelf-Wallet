@@ -2257,6 +2257,11 @@ export interface LovejoinPublicSummary {
   fees: string;
   /** What stays in the public account after the last mix. */
   change: string;
+  /**
+   * What its first mix takes of its pool's `mix_logic` reward balance (chunk 43), which `change` brings into the
+   * account: its review's "after" counts it (1.8.1's release review, readers#1). None when it takes nothing.
+   */
+  taken?: string;
   /** Its own boxes a mix from it put in, mixed again: no deposit (privacy review §2.10). */
   again?: boolean;
   /** Mixing again: how many of the account's boxes are in the pool (`boxes` is how many go this time). */

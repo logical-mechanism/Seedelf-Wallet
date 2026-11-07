@@ -1,7 +1,8 @@
 # Lovejoin transaction coverage
 
 These modules extend the existing v2 template scenarios. Run `./check.sh lovejoin-any-tx`;
-the new modules are also imported by `Lovejoin.lean`. A Blaster `Valid` is an SMT result,
+its modules are also imported by `Lovejoin.lean` (the `Lovejoin/Every/` ones below aren't: run
+`./check.sh lovejoin-every`). A Blaster `Valid` is an SMT result,
 not a kernel proof term. The CEK controls are concrete checks, not a substitute for the
 symbolic results. The template and its extracted bytes must still match the launch under
 review, and transaction validity and execution budgets are ledger assumptions.
@@ -66,7 +67,7 @@ A mint passes by `launchOk`:
   and `token_sane`.
 
 Every other purpose errors. Run `./check.sh lovejoin-every` (16 GB, 30 min per module by
-default).
+default). How these proofs are built, and how to change one: [`Lovejoin/Every/README.md`](../Every/README.md).
 
 Those two are the results to cite: their hypotheses are value rules the ledger enforces. The
 `_valid` forms take the ledger model's whole `validScriptContext` instead, which is stricter than
@@ -100,10 +101,12 @@ What the restatement makes visible:
   the program's ordered searches into the ledger's `valueOf` (`ReadableBase.lean`). Nothing
   else about the transaction is assumed.
 
-The same limits as above apply: IOG's CEK model; the crypto builtins, `serialise_data`,
-`byteStringToInteger` and `xorByteString` opaque (the last two through our PlutusCoreBlaster
-fork's aliases), so a result holds for any interpretation of them, which says what the bytes
-check, not that the crypto is hard to break; eventual CEK success, not execution budgets.
+The same limits as above apply: IOG's CEK model, on our fork; the crypto builtins,
+`serialise_data`, `byteStringToInteger` and `xorByteString` opaque (`serialise_data` and
+`xorByteString` through our PlutusCoreBlaster fork's aliases, `byteStringToInteger` upstream's
+too), so a result holds for any interpretation of them, which says what the bytes check, not
+that the crypto is hard to break; eventual CEK success, not execution budgets. The rest of
+where the claim stops is in [CLAIMS.md](../../CLAIMS.md).
 
 ## Withdrawal-handler progress
 
@@ -255,6 +258,10 @@ the withdrawal and mix_logic itself to accept the corresponding proof and output
 
 ## Owner verifier progress
 
+The complete results above supersede this section too: `mix_logic_accepts_iff` is the
+whole validator, Owner and Mix, and `one_shot_mint_accepts_iff` the whole launch, with no
+list bound. What follows stays as independent cross-checks.
+
 `LogicOwnerBoundaryPartial` joins the compiled Owner count gates, transaction hash,
 and pairwise Schnorr verifier for arbitrary-length aligned lists at an internal
 execution boundary. A true result there requires at least one box, the same number
@@ -286,23 +293,24 @@ remain bounded to the stated layouts.
 
 ## Remaining safety work
 
-The earlier Mix and Owner families fix input/reference/output layouts, even where their
-values and cryptographic fields are symbolic. `OwnerOne` and the expanded Owner families lift the output data and input
-references for the layouts listed above; these still do not cover all transactions.
-In particular, general proofs for the other scripts are still needed for arbitrary-length
-and interleaved input, reference-input, output, withdrawal and redeemer lists; malformed or duplicate entries
-as permitted by the ledger; fee and pool script interactions outside the three-box
-composition above; and transaction
-sizes outside the existing bounded Mix and Owner families. The existing audit suites add
-more layouts but their own status and assumptions need checking before relying on them.
-No claim of complete contract safety or cryptographic unforgeability follows from these
-scenario proofs.
+For mix_box, mix_logic, one_shot_mint and reference_holder, the complete results above
+leave no transaction layout to cover: the scenario families here, with their fixed input,
+reference and output layouts, stay as cross-checks. fee_contract has no such result, only
+its rejected purposes (`FeePurpose`, `PurposesKernel`) and fixed layouts (`FeeMix`,
+`FeeSpend` and `FeeRecovery` here, more in `Template/` and `Audit/`), and it's out of the
+claim: no Seedelf transaction uses it. The audit suites add more layouts, but their own
+status and assumptions need checking before relying on them. These proofs say what each
+script checks, not that the cryptography can't be broken, within the limits
+[CLAIMS.md](../../CLAIMS.md) states.
 
 ## Additional transaction matrix to verify
 
-These are test or proof targets, not results. Some have narrower counterparts in the
-existing `V2/` and `Audit/` modules; the purpose here is to vary their surrounding
-transaction and ordering, then check the results against those modules' actual hypotheses.
+These were test or proof targets, not results. Whether mix_box, mix_logic and one_shot_mint
+accept, in any transaction the ledger can form, is now the complete results above, so the
+rows stay as cross-check targets, and the *Fee shard* rows as fee_contract's, which is out
+of the claim. Some have narrower counterparts in the existing `V2/` and `Audit/` modules;
+the purpose here is to vary their surrounding transaction and ordering, then check the
+results against those modules' actual hypotheses.
 
 - **Input search:** no inputs; spent reference first, middle, last, or absent; many unrelated
   key and script inputs; unrelated inputs after the box; different output indices under the

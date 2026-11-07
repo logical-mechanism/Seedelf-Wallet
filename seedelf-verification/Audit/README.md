@@ -1,6 +1,6 @@
 # The audit
 
-A review of the proofs in `Seedelf/` and `Lovejoin/` (2026-11-03): whether each ✅ is real, and what the proofs leave out. The mutant scripts are negative controls: never deploy them.
+A review of the proofs in `Seedelf/` and `Lovejoin/` as they stood on 2026-11-03, the scenario families: whether each ✅ is real, and what the proofs leave out. The every-transaction modules came after it (Seedelf's `*AnyTx*`, `Signers/`, `LinesAll` and `Shapes` modules, `Slice/`, `Lovejoin/AnyTx/` and `Lovejoin/Every/`), and none of them is in it. The mutant scripts are negative controls: never deploy them.
 
 ## What's here
 

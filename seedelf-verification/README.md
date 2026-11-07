@@ -4,7 +4,7 @@ Formal verification of the deployed contracts' bytes, with IOG's [Blaster](https
 
 [CLAIMS.md](CLAIMS.md) says, in a page, what all this lets us claim and where it stops.
 
-Lovejoin's proofs are here too, in `Lovejoin/`: its classic mainnet pool, and v2, the token-pool templates with xor32's two length checks (Lovejoin `main` `29573c5`, PRs #165 and #166). [Chunk 42](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-42-lovejoin-verification.md) says what they cover and what they leave out. `Audit/` is a review of every proof here ([its README](Audit/README.md)).
+Lovejoin's proofs are here too, in `Lovejoin/`: its classic mainnet pool, and v2, the token-pool templates with xor32's two length checks (Lovejoin `main` `29573c5`, PRs #165 and #166). [CLAIMS.md](CLAIMS.md) and [Lovejoin/AnyTx/README.md](Lovejoin/AnyTx/README.md) say what they cover and what they leave out; [chunk 42](../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-42-lovejoin-verification.md) is the record. `Audit/` is a review of the proofs as they stood on 2026-11-03, before the every-transaction modules ([its README](Audit/README.md)).
 
 ## Running it
 
@@ -22,23 +22,33 @@ Needs [elan](https://github.com/leanprover/elan) (it installs the Lean that `lea
 ./concrete/wallet_register.sh
 ```
 
+**After an extract run, delete the Scripts modules' builds.** Lake doesn't track the `.hex` files `#import_uplc` reads, so a changed script rebuilds nothing and `check.sh` replays the old results as `ok` (the audit's `script-hex-not-lake-inputs`, still open):
+
+```bash
+rm -f .lake/build/lib/lean/{Seedelf,Lovejoin,Lovejoin/V2,Lovejoin/Template}/Scripts.{olean,trace} Slice/.lake/build/lib/lean/Slice/Scripts.{olean,trace}
+```
+
 **Lake pins two of our forks** in `lakefile.lean`, above CardanoLedgerApiBlaster's own requirements, until upstream merges the fixes (chunk 41):
 
 - [logicalmechanism/Lean-blaster](https://github.com/logicalmechanism/Lean-blaster) `25c0ee0`: beta `46c8479` plus the fix for [#454](https://github.com/input-output-hk/Lean-blaster/issues/454).
-- [logicalmechanism/PlutusCoreBlaster](https://github.com/logicalmechanism/PlutusCoreBlaster) `68c5399`, its `opaque-xor` branch: the `seedelf` branch (`main` `1c23de8` plus an `opaque` `ByteStringToInteger`, `Fq1.t` as a `Nat`, and the BLS12-381 builtins' operands in order, with the #71 and #72 review rounds), plus an `opaque` `XorByteString` for Lovejoin's xor32.
+- [logicalmechanism/PlutusCoreBlaster](https://github.com/logicalmechanism/PlutusCoreBlaster) `68c5399`, its `opaque-xor` branch: the `seedelf` branch (`main` `1c23de8` plus an `opaque` `ByteStringToInteger`, `Fq1.t` as a `Nat`, the BLS12-381 builtins' operands in order and #27's `opaque` `serialise_data`, with the #71 and #72 review rounds), plus an `opaque` `XorByteString` for Lovejoin's xor32.
 
-As each fix lands upstream, its `require` comes out.
+As each fix lands upstream, its `require` comes out. #71 and #72 have merged since; the operand order (#73), `serialise_data` and xor haven't.
 
 **`Slice/` is a package of its own,** with the same pins but one: the fork's `opaque-slice` (`96261cc`), which is the main package's pin plus an `opaque` `SliceByteString` (see *What a ✅ is worth*). So the alias changes no other proof.
 
-**Never build bare** (`lake build`). `check.sh` builds each module in its own memory-capped scope (8 GB, `CAP=` to change), which the kernel kills past the cap. One preparation step over a fully symbolic transaction took 52 GB before it was killed by hand. The first build fetches and compiles the dependencies and takes a while.
+**Never build bare** (`lake build`). `check.sh` builds each module in its own memory-capped scope (8 GB and 10 minutes; `lovejoin-every` and its modules 16 GB and 30 minutes; `CAP=` and `LIMIT=` to change), which the kernel kills past the cap. One preparation step over a fully symbolic transaction took 52 GB before it was killed by hand. The first build fetches and compiles the dependencies and takes a while.
 
 To check the standard Lovejoin and Seedelf proof suites, including the separate Slice
 package, from this directory:
 
 ```bash
-./check.sh lovejoin && ./check.sh lovejoin-v2 && ./check.sh lovejoin-any-tx && ./check.sh seedelf-slice && ./check.sh
+./check.sh lovejoin && ./check.sh lovejoin-v2 && ./check.sh lovejoin-any-tx && ./check.sh lovejoin-every && ./check.sh seedelf-slice && ./check.sh
 ```
+
+`lovejoin-every` builds the 51 modules its theorems import from elsewhere first, then its own 25, at
+16 GB and 30 minutes a module. `./check.sh` goes last: PolicyBurn and PolicyMint fail on `BitVec`
+(*Not proved*), so it ends nonzero, and nothing after it would run.
 
 The runner uses `systemd-run --user` for its memory caps and returns a nonzero status
 if any module fails. It checks Lake builds; some Blaster checks can still be reported as
@@ -65,7 +75,7 @@ On the bytes of `94bca9c0…` (wallet), `84967d91…` (policy) and `6777ba4d…`
 | `Slice/`'s `Rule` | **The policy's rule** for one line: it passes iff the first input's index is a byte, the line is the policy's own, and it burns one token whose first four bytes are 5eed0e1f, or mints one token named as `token_name.generate` names the first input and the tag. Every run returns unit or reaches `Error`. Every value symbolic, every unread field any `Data` | 258, put together in 2 |
 | `PolicyShapes` | Every V3 context with an input and a mint the ledger accepts is one of the policy's scenarios. Kernel-checked | 15 |
 
-**Lovejoin v2,** kernel-checked in every transaction ([`Lovejoin/AnyTx/README.md`](Lovejoin/AnyTx/README.md)): mix_box (`BoxPurposesAll.every_context_iff`), reference_holder (`reference_holder_every_context_errors`), mix_logic (`Lovejoin.Every.Readable.mix_logic_accepts_iff`: both withdrawals, the Owner and the Mix, and its publish) and one_shot_mint (`Lovejoin.Every.Readable.one_shot_mint_accepts_iff`: the launch). Each is an iff over every typed V3 context, any list length, no step limit, Lean's own axioms alone. mix_logic's and one_shot_mint's are stated in the Aiken source's terms (`validate_owner`, `walk_outputs`, `verify_pre`, `datum_sane`, …), each proved equal to what the bytes do. fee_contract is out of scope: no Seedelf transaction uses it.
+**Lovejoin v2,** kernel-checked in every transaction ([`Lovejoin/AnyTx/README.md`](Lovejoin/AnyTx/README.md)): mix_box (`BoxPurposesAll.every_context_iff`), reference_holder (`reference_holder_every_context_errors`), mix_logic (`Lovejoin.Every.Readable.mix_logic_accepts_iff`: both withdrawals, the Owner and the Mix, and its publish) and one_shot_mint (`Lovejoin.Every.Readable.one_shot_mint_accepts_iff`: the launch). Each characterizes its script in every typed V3 context, any list length, no step limit, Lean's own axioms alone: reference_holder errors in all of them, mix_box's is an iff with no hypothesis, and mix_logic's and one_shot_mint's are iffs under the ledger's value rules, mix_logic's on the reference inputs' values and one_shot_mint's on the mint and the outputs' (CLAIMS.md, *Where it stops*). mix_logic's and one_shot_mint's are stated in the Aiken source's terms (`validate_owner`, `walk_outputs`, `verify_pre`, `datum_sane`, …), each proved equal to what the bytes do. fee_contract is out of scope: no Seedelf transaction uses it.
 
 So, for every transaction:
 - always_false never passes.
@@ -87,7 +97,7 @@ The scenarios they grew from fix the fields their script never reads (an empty t
 What a ✅ is worth:
 
 - **Z3's word, or Lean's kernel.** Blaster closes a goal with `axiom blasterProven : ∀ {α}, α` once Z3 finds no counterexample (proof reconstruction is a TODO upstream), hence the `declaration uses 'blasterProven'` warnings. The kernel-checked modules use no Z3: `AnyTxCover`, `PolicyAnyTx`'s `rfl`s, `AnyTxShapes`, `PolicyShapes` and the `LinesAll` ones. Their `#print axioms` lists Lean's own alone, and the `LinesAll` theorems hold with no step limit and over every Lean string.
-- **IOG's model of the machine.** PlutusCoreBlaster's CEK machine and builtins are tested against the Plutus conformance suite, not proved equal to the node's. We run our fork of it (see *Running it*); its three changes don't change what any script evaluates to. It runs the post-Conway V3 builtin semantics (`defaultFunSemanticsVariantE`). The crypto builtins (BLS12-381, the hashes) are `opaque`, and so is `ByteStringToInteger` through our PlutusCoreBlaster fork, and `SliceByteString` in `Slice/`. A property holds for any interpretation of them, so it says what the bytes check, not that the check is hard to fool. Where a spec decodes a scalar (`scalarOf`) or slices (`policyAccepts`), it calls the same alias the builtin runs.
+- **IOG's model of the machine.** PlutusCoreBlaster's CEK machine and builtins are working toward conformance with the node's, its README says: a conformance suite run apart from its CI, leaving out what it doesn't implement yet. They aren't proved equal to the node's, and that suite never runs the flat decoder that reads each script's bytes (the audit checked its reading of all 13 scripts against Aiken's once: `Audit.Checks.FlatDecodeCheck`). We run our fork of it (see *Running it*); its changes don't change what any script evaluates to. It runs the post-Conway V3 builtin semantics (`defaultFunSemanticsVariantE`). The crypto builtins (BLS12-381, the hashes) are `opaque`, and so is `ByteStringToInteger` (#71's alias, on our PlutusCoreBlaster fork and upstream since), and `SliceByteString` in `Slice/`. A property holds for any interpretation of them, so it says what the bytes check, not that the check is hard to fool. Where a spec decodes a scalar (`scalarOf`) or slices (`policyAccepts`), it calls the same alias the builtin runs.
 - **Strings over the solver's alphabet.** Blaster gives a `String` the SMT string sort, whose characters are `0x0`–`0x2FFFF` where Lean's are scalar values up to `0x10FFFF` ([Lean-blaster #389](https://github.com/input-output-hk/Lean-blaster/issues/389), which shows it proving `False`). A `ByteString` is a `String` of characters `0`–`255`, inside both, so a theorem over bytestrings covers every bytestring; it says nothing about strings with characters above `0x2FFFF`, which no script sees.
 - **Every transaction, by layout.** Each Blaster module fixes only what its script walks or takes apart:
   - the wallet's signatories (one module a count, none to 128) and the shapes of its redeemer and datum;
@@ -134,7 +144,20 @@ What a run teaches the hard way:
 6. **Read a result through a match, never a whole `State`.** `prop … = State.Halt (…)` makes Blaster declare the CEK datatype, constants and all. Match on the halted value, as `isSuccessful` does.
 7. **A spec over opaque builtins must call them exactly as the script does:** the same function, the same arguments, in the same order. Commutativity is lost on the solver. `Steps.lean`'s concrete check of the spec (`schnorrAccepts` on a real proof) catches a wrong spec, but not a wrong order.
 
+## When a Lovejoin property comes back Falsified
+
+Chunk 42's rule, for every Lovejoin proof:
+
+- **First, run the counterexample concretely,** with Aiken's evaluator on the deployed bytes, as `concrete/` does.
+- **If Aiken agrees, it may be a flaw in a live pool.**
+  - Stop, and tell the owner only.
+  - Nothing that hints at it gets pushed or posted: no fork branch, no upstream comment, no PR text.
+  - The owner decides on disclosure; Lovejoin has its own `SECURITY.md`.
+  - The pool's scripts are frozen, so a fix is a new pool beside it.
+- **If Aiken disagrees, it's a gap in our spec or in the tools,** as WalletRegister's operand order was in chunk 41. Fix that, the same way.
+- **Tool fixes that say nothing about Lovejoin can go public,** for example #27's `serialise_data` alias on our forks and upstream. A fix that a finding motivated waits with the finding.
+
 ## Next
 
-- **Lovejoin.** Every script in scope is characterized in every transaction, in the Aiken source's terms (above; the record is [chunk 45](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-45-lovejoin-every-tx.md)). An outside read of the readable statements against the source would check what no proof can: that they say what Lovejoin means.
-- **Get the fixes upstream,** so the forks can go: four PRs from our forks ([chunk 41](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-41-blaster-fixes.md)), and the comments in `Upstream/drafts/` (the owner posts them). `BitVec` itself, which blocks the policy's success directions, is Lean-blaster #153's.
+- **Lovejoin.** Every script in scope is characterized in every transaction, mix_logic's and one_shot_mint's in the Aiken source's terms (above; the record is [chunk 45](../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-45-lovejoin-every-tx.md)). An outside read of the readable statements against the source would check what no proof can: that they say what Lovejoin means.
+- **Get the fixes upstream,** so the forks can go ([chunk 41](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-41-blaster-fixes.md), *Where upstream stands*): of our four PRs, #71 and #72 have merged, and Lean-blaster #455 and PlutusCoreBlaster #73 are open; the xor and slice aliases were never offered, and #27 (`serialise_data`) is still a draft. The comments in `Upstream/drafts/` are the owner's to post. `BitVec` itself, which blocks the policy's success directions, is Lean-blaster #153's.

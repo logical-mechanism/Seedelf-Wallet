@@ -67,6 +67,7 @@ function privately(t: T) {
     ...t.deps,
     store: t.store,
     sessions,
+    lovejoin: t.lovejoin,
     fundingPollMs: 1,
     network: () => "preprod",
     window: t.dappWindow,

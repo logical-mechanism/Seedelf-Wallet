@@ -10,12 +10,15 @@ def lean(p):
         else: cur += tok
     out.append(cur)
     return "[" + "\n    ".join(out) + "]"
+def steps(s):
+    # a step is a digit, or (n) for n >= 10, as pseudo.py prints them (scope.py's P)
+    return [x.strip("()") for x in re.findall(r"\(\d+\)|\d", s)]
 def rep(m):
     n = int(m.group(1)); suf = m.group(2) or ""
-    p = re.search(r"@([0-9]+)", lines[n-1]).group(1)
+    p = steps(re.search(r"@([0-9()]+)", lines[n-1]).group(1))
     if suf.startswith("-"):
         k = int(suf[1:]); p = p[:-k]; suf = ""
-    return lean(p + suf.lstrip("+"))
+    return lean(p + steps(suf))
 s = open(src).read()
 s = re.sub(r"PATH\((\d+)(?:,\s*([+-]\d+))?\)", rep, s)
 open(dst, "w").write(s)

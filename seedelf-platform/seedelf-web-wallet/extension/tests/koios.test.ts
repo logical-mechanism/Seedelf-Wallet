@@ -33,6 +33,22 @@ function scripted(responses: Array<Response | Error>) {
 
 const rows = (n: number, from = 0) => Array.from({ length: n }, (_, i) => ({ tx_hash: `${from + i}`, tx_index: 0 }));
 
+/**
+ * cardano-submit-api's 400 for a ledger refusal (TxSubmitFail, TxCmdTxSubmitValidationError), each failure as
+ * cardano-ledger-conway 1.23 (node 11.1) `show`s it.
+ */
+const submitFail = (...errors: string[]) =>
+  JSON.stringify({
+    contents: {
+      contents: { contents: { era: "ShelleyBasedEraConway", error: errors, kind: "ShelleyTxValidationError" }, tag: "TxValidationErrorInCardanoMode" },
+      tag: "TxCmdTxSubmitValidationError",
+    },
+    tag: "TxSubmitFail",
+  });
+
+/** A preprod reward account as that refusal names it, by its credential. */
+const account = (credential: string) => `AccountAddress {aaNetworkId = Testnet, aaId = AccountId {unAccountId = ${credential}}}`;
+
 describe("Koios client", () => {
   it("asks for extended UTxOs by payment credential, in a fixed order", async () => {
     const { koios, calls } = scripted([Response.json(rows(2))]);
@@ -362,16 +378,65 @@ describe("Koios client: transactions", () => {
 
   it("explains the ledger's staking refusals", async () => {
     const refused = (error: string) => scripted([new Response(error, { status: 400 })]).koios.submitTx(new Uint8Array([1]));
-    await expect(refused("WithdrawalsNotInRewardsCERTS")).rejects.toThrow("rewards changed since you reviewed");
+    // To protocol version 10, CERTS names each withdrawal it refuses by its account: here a key's, the public account's.
+    const notInRewards = (credential: string) =>
+      `ConwayCertsFailure (WithdrawalsNotInRewardsCERTS (fromList [(RewardAccount {raNetwork = Testnet, raCredential = ${credential}},Coin 1500000)]))`;
+    const own = notInRewards(`KeyHashObj (KeyHash {unKeyHash = "${"5e".repeat(28)}"})`);
+    await expect(refused(own)).rejects.toThrow("rewards changed since you reviewed");
     await expect(refused("ConwayWdrlNotDelegatedToDRep")).rejects.toThrow("voting power is delegated");
     await expect(refused("DelegateeDRepNotRegisteredDELEG")).rejects.toThrow("DRep isn't registered any more");
     await expect(refused("StakeKeyNotRegisteredDELEG")).rejects.toThrow("staking changed since you reviewed");
     await expect(refused("SomethingElse")).rejects.toThrow("The network rejected the transaction: SomethingElse");
     // A withdrawal that doesn't take the account's whole balance has a type of its own, in staking's words still:
     // Lovejoin tells it by that, never by its text (chunk 43). The other staking refusals don't.
-    await expect(refused("WithdrawalsNotInRewardsCERTS")).rejects.toBeInstanceOf(RewardsChangedError);
-    await expect(refused("WithdrawalsNotInRewardsCERTS")).rejects.toBeInstanceOf(KoiosError);
+    await expect(refused(own)).rejects.toBeInstanceOf(RewardsChangedError);
+    await expect(refused(own)).rejects.toBeInstanceOf(KoiosError);
     await expect(refused("ConwayWdrlNotDelegatedToDRep")).rejects.not.toBeInstanceOf(RewardsChangedError);
+    // A script's account is no one's staking (Lovejoin's mix_logic, a Danogo pool's): the network's own words, with the
+    // type (1.8.1's release review, r2-screens#1).
+    const script = notInRewards(`ScriptHashObj (ScriptHash "${"7a".repeat(28)}")`);
+    await expect(refused(script)).rejects.toThrow(`The network rejected the transaction: ${script}`);
+    await expect(refused(script)).rejects.toBeInstanceOf(RewardsChangedError);
+  });
+
+  it("explains them in the names of protocol version 11, which both networks run, as cardano-submit-api hands them on", async () => {
+    const refused = (...errors: string[]) => scripted([new Response(submitFail(...errors), { status: 400 })]).koios.submitTx(new Uint8Array([1]));
+    // From there LEDGER refuses a withdrawal, not CERTS: not the whole balance, or no such account (cardano-ledger-conway
+    // 1.21's hardforkConwayMoveWithdrawalsAndDRepChecksToLedgerRule). A missing key's account isn't delegated either.
+    const own = account(`KeyHashObj (KeyHash {unKeyHash = "${"5e".repeat(28)}"})`);
+    const short = (to: string) => `ConwayIncompleteWithdrawals (NonEmptyMap (fromList [(${to},Mismatch (RelEQ) {supplied: Coin 1500000, expected: Coin 2100000})]))`;
+    const mixLogic = account(`ScriptHashObj (ScriptHash "${"7a".repeat(28)}")`);
+    const missing = `ConwayWithdrawalsMissingAccounts (Withdrawals {unWithdrawals = fromList [(${own},Coin 1500000)]})`;
+    const undelegated = `ConwayWdrlNotDelegatedToDRep (KeyHash {unKeyHash = "${"5e".repeat(28)}"} :| [])`;
+    for (const errors of [[short(own)], [undelegated, short(own)]]) {
+      await expect(refused(...errors)).rejects.toThrow("rewards changed since you reviewed");
+      await expect(refused(...errors)).rejects.toBeInstanceOf(RewardsChangedError);
+    }
+    // A script's account is no one's staking: the network's own words, still of the type Lovejoin words it by
+    // (1.8.1's release review, r2-screens#1).
+    for (const errors of [[short(mixLogic)], [`ConwayWithdrawalsMissingAccounts (Withdrawals {unWithdrawals = fromList [(${mixLogic},Coin 0)]})`]]) {
+      await expect(refused(...errors)).rejects.toThrow("The network rejected the transaction: {");
+      await expect(refused(...errors)).rejects.toBeInstanceOf(RewardsChangedError);
+    }
+    await expect(refused(undelegated, missing)).rejects.toThrow("staking changed since you reviewed");
+    await expect(refused(undelegated, missing)).rejects.toBeInstanceOf(RewardsChangedError);
+    // DELEG's names from cardano-ledger-conway 1.21 and protocol version 11, and 1.24's for a key registered already.
+    for (const deleg of [
+      "StakeKeyHasNonZeroAccountBalanceDELEG (Coin 1500000)",
+      "DepositIncorrectDELEG (Mismatch (RelEQ) {supplied: Coin 2000000, expected: Coin 3000000})",
+      "RefundIncorrectDELEG (Mismatch (RelEQ) {supplied: Coin 2000000, expected: Coin 3000000})",
+      `DelegAccountAlreadyRegistered (AccountAlreadyRegistered (KeyHashObj (KeyHash {unKeyHash = "${"5e".repeat(28)}"})))`,
+    ]) {
+      await expect(refused(`ConwayCertsFailure (CertFailure (DelegFailure (${deleg})))`)).rejects.toThrow("staking changed since you reviewed");
+      await expect(refused(`ConwayCertsFailure (CertFailure (DelegFailure (${deleg})))`)).rejects.not.toBeInstanceOf(RewardsChangedError);
+    }
+    // What isn't staking's stays the network's own words: a site's proposal, a DRep's refund.
+    for (const other of [
+      "ConwayGovFailure (ProposalDepositIncorrect (Mismatch (RelEQ) {supplied: Coin 50000000000, expected: Coin 100000000000}))",
+      "ConwayCertsFailure (CertFailure (GovCertFailure (ConwayDRepIncorrectRefund (Mismatch (RelEQ) {supplied: Coin 500000000, expected: Coin 600000000}))))",
+    ]) {
+      await expect(refused(other)).rejects.toThrow("The network rejected the transaction: {");
+    }
   });
 
   it("explains a transaction past its time, or a device clock far off, and a fee too small", async () => {

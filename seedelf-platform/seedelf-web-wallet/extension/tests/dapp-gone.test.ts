@@ -102,6 +102,7 @@ describe("a site's page that goes away while its request waits", () => {
       ...t.deps,
       store: t.store,
       sessions,
+      lovejoin: t.lovejoin,
       fundingPollMs: 1,
       network: () => "preprod",
       window: t.dappWindow,

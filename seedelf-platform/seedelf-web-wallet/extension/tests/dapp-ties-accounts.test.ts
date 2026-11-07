@@ -37,6 +37,11 @@ const account = (words: number) =>
   vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === words)!;
 const THEIRS = account(15).preprod.receive_0 as string;
 const SESSION_INPUT = `${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`;
+/**
+ * A test that prompts more than once, each prompt reading every public account and the transaction in WebAssembly:
+ * within a second of Vitest's 5 s with four workers on two CPUs (1.8.1's release review, r2-tests#2).
+ */
+const SLOW = { timeout: 30_000 };
 
 let pages = 0;
 const site = (origin = "https://app.example.com"): DappSession => ({ id: `tiesacct${++pages}`, origin, title: "Example" });
@@ -131,6 +136,7 @@ function privately(t: T, knownAccounts: () => Promise<number[]> = t.deps.knownAc
     knownAccounts,
     store: t.store,
     sessions,
+    lovejoin: t.lovejoin,
     fundingPollMs: 1,
     network: () => "preprod",
     window: t.dappWindow,
@@ -181,7 +187,7 @@ async function farKeysOf(t: T, index: number) {
   });
 }
 
-describe("a private session's signing prompt, with several public accounts", () => {
+describe("a private session's signing prompt, with several public accounts", SLOW, () => {
   it("names a public account it pays whichever is on screen, the dApp account among them", async () => {
     const t = await on();
     const dapp = privately(t);

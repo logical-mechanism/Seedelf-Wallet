@@ -654,6 +654,32 @@ describe("a swap against the pools, on its page (chunk 24)", () => {
     expect(text(createElement(SwapRow, { session: view as SessionView, onOpen: () => undefined }))).toContain("Swapping");
   });
 
+  it("says a refusal for a Danogo script's reward account in the network's words, never staking's (1.8.1's release review, r2-screens#1)", async () => {
+    // Its zero withdrawal from Danogo's script refused, as that account holds money (a retired stake pool's deposit, say):
+    // protocol version 11's LEDGER, as cardano-submit-api hands it on. The user's staking never changed.
+    const short = `ConwayIncompleteWithdrawals (NonEmptyMap (fromList [(AccountAddress {aaNetworkId = Testnet, aaId = AccountId {unAccountId = ScriptHashObj (ScriptHash "${POOL}")}},Mismatch (RelEQ) {supplied: Coin 0, expected: Coin 500000000})]))`;
+    const t = await unlocked();
+    const sessions = signing(t);
+    t.minswap.estimate = { ...minswapEstimate.estimate, aggregator_fee: MINSWAP_FEE.toString() };
+    await started(sessions);
+    funded(t);
+    others(t);
+    t.minswap.swapCbor = directTx();
+    t.koios.rejectSubmit = JSON.stringify({
+      contents: {
+        contents: { contents: { era: "ShelleyBasedEraConway", error: [short], kind: "ShelleyTxValidationError" }, tag: "TxValidationErrorInCardanoMode" },
+        tag: "TxCmdTxSubmitValidationError",
+      },
+      tag: "TxSubmitFail",
+    });
+    const view = await sessions.advance("preprod", 0);
+    expect(view.auto?.retry?.error).toMatch(/^The network rejected the transaction: \{.*ConwayIncompleteWithdrawals/);
+    const page = text(
+      createElement(Session, { session: view, reading: false, onRefresh: () => undefined, onBack: () => undefined, onChanged: () => undefined }),
+    );
+    expect(page).not.toMatch(/staking rewards|review it again/i);
+  });
+
   it("says so in the plan before it's started, when the route is Danogo's", () => {
     const pools = text(createElement(Plan, { lovejoin: false, adaOut: false, pools: true }));
     expect(pools).toContain("Swapped against the DEX's pools");
