@@ -37,10 +37,78 @@ context. `PurposesKernel` additionally proves that mix_logic, one_shot_mint and
 fee_contract reject their unsupported purposes, with arbitrary transaction fields
 and purpose payloads. `LogicPublishKernel.publish_iff_registration` characterizes
 mix_logic publishing over arbitrary raw certificate data: only constructor-zero
-certificates pass. Its withdrawal handler and the other supported handlers still
-need general proofs.
+certificates pass. Its withdrawal handler and one_shot_mint's mint handler are
+characterized in `Lovejoin/Every/` (below).
+
+## Complete mix_logic and one_shot_mint behavior (`Lovejoin/Every/`)
+
+`Lovejoin.Every.Readable.mix_logic_accepts_iff` characterizes the compiled `mix_logic`
+template, at any pool NFT policy and the name `lovejoin` (the one every v2 launch mints), for
+every typed V3 `ScriptContext` whose reference inputs' values the ledger accepts: it returns unit exactly when `mixLogicAccepts` holds, in the Aiken
+source's terms.
+
+- A withdrawal passes by `withdrawOk`. The redeemer is an `Owner` or a `Mix`, and
+  `read_reference_datum` finds the reference datum. An Owner then needs `validate_owner`
+  (`validateOwner`): at least one box, and each box's proof passes schnorr.ak's `verify`
+  against `ctx`. A Mix needs `validate_mix` (`validateMix`): at least two boxes and as many
+  proofs, then `walk_outputs` (`walkOutputs`), then at most 255 boxes, then each box's proof
+  passes sigma_or.ak's `verify_pre` (`verifyPre`).
+- A certificate passes exactly when it is a `RegisterCredential`.
+- Every other purpose errors.
+
+`Lovejoin.Every.Readable.one_shot_mint_accepts_iff` does the same for `one_shot_mint`, at any
+seed and reference holder, for every context whose mint and output values the ledger accepts.
+A mint passes by `launchOk`:
+- exactly one token under the policy;
+- the first output that passes `output_at_reference_holder` (the holder's script, no stake
+  credential, no reference script, one of the token) has an inline `ReferenceDatum`;
+- the seed is spent, the name is `lovejoin`, the quantity 1, and the datum passes `datum_sane`
+  and `token_sane`.
+
+Every other purpose errors. Run `./check.sh lovejoin-every` (16 GB, 30 min per module by
+default).
+
+Those two are the results to cite: their hypotheses are value rules the ledger enforces. The
+`_valid` forms take the ledger model's whole `validScriptContext` instead, which is stricter than
+the ledger. Its `isBalanced` has no term for deposits, refunds or withdrawals, so it rejects
+every real `RegisterCredential` (a deposit) and every Owner or Mix that withdraws a non-zero
+reward balance; the `_valid` forms say nothing about those.
+
+These are kernel-checked, with no list-length bound and no step limit: the guarded axiom checks
+permit only `propext`, `Classical.choice` and `Quot.sound`. The method differs from the
+Blaster families above, in two layers:
+- **The bytes.** Each region of the compiled code is read back as a Lean function over raw
+  `Data`, `none` for the script's error, in the compiled evaluation order. One CEK theorem per
+  region says the program computes it, both directions at once; loops are by induction over
+  their lists. `Lovejoin.Every.every_context_iff` and `mint_every_context_iff` put them
+  together as `withdrawResult` and `launchResult`: what the bytes do, written as Lean.
+- **The source's terms.** `Readable*.lean` restates those functions over the ledger's typed
+  `TxInfo`, one Aiken function at a time (`readReferenceDatum`,
+  `collectWellFormedMixInputs`, `validateOwner`, `RefDatum.boxValue`, `outputAtScript`,
+  `walkOutputs`, `verifyPre`, `validateMix`, `launchOk`, `datumSane`), and proves each equal
+  to the raw function on `IsData.toData` of the typed value. `walkOutputs_eq` reads
+  `walk_outputs` whole: at least `n` outputs, each of the first `n` a box out, none after them
+  passing `output_at_script`.
+
+What the restatement makes visible:
+- **Recompressed points.** The compiled code stores a Mix statement's points compressed, so
+  each branch's equations use `uncompress(compress(A'))`, not `A'` (`branchHolds`). No crypto
+  fact is assumed to remove it.
+- **`box_value`'s edges, as the bytes have them.** No ADA entry at `box_lovelace = 0`, and no
+  token at `token_quantity = 0`. one_shot_mint's `datum_sane` rules both out at launch.
+- **The ledger's own rules, as hypotheses where they're used.** Sorted values and maps turn
+  the program's ordered searches into the ledger's `valueOf` (`ReadableBase.lean`). Nothing
+  else about the transaction is assumed.
+
+The same limits as above apply: IOG's CEK model; the crypto builtins, `serialise_data`,
+`byteStringToInteger` and `xorByteString` opaque (the last two through our PlutusCoreBlaster
+fork's aliases), so a result holds for any interpretation of them, which says what the bytes
+check, not that the crypto is hard to break; eventual CEK success, not execution budgets.
 
 ## Withdrawal-handler progress
+
+The complete results above supersede this section's partial ones, which stay as
+independent cross-checks.
 
 `LogicLength.length_all` proves the compiled list-length loop for arbitrary data
 lists. `LogicInputRefs.ledger_refs` proves that the Owner input-reference traversal

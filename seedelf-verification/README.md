@@ -2,6 +2,8 @@
 
 Formal verification of the deployed contracts' bytes, with IOG's [Blaster](https://github.com/input-output-hk/Lean-blaster): Lean 4 with Z3 behind it, over [PlutusCoreBlaster](https://github.com/input-output-hk/PlutusCoreBlaster)'s model of UPLC and the CEK machine, and [CardanoLedgerApiBlaster](https://github.com/input-output-hk/CardanoLedgerApiBlaster)'s ledger types. The proofs are about the scripts on chain, not their Aiken source: variant 1, the bytes commit `5b82530`'s `seedelf-contracts/contracts/` holds, which `extract.sh` checks against the on-chain hashes.
 
+[CLAIMS.md](CLAIMS.md) says, in a page, what all this lets us claim and where it stops.
+
 Lovejoin's proofs are here too, in `Lovejoin/`: its classic mainnet pool, and v2, the token-pool templates with xor32's two length checks (Lovejoin `main` `29573c5`, PRs #165 and #166). [Chunk 42](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-42-lovejoin-verification.md) says what they cover and what they leave out. `Audit/` is a review of every proof here ([its README](Audit/README.md)).
 
 ## Running it
@@ -62,6 +64,8 @@ On the bytes of `94bca9c0…` (wallet), `84967d91…` (policy) and `6777ba4d…`
 | `PolicyLinesAnyTx`, `…FourAnyTx`, `…FiveAnyTx` | The same by Blaster, as a cross-check: no lines, and 2 to 5 lines in every arrangement over policies | 31 |
 | `Slice/`'s `Rule` | **The policy's rule** for one line: it passes iff the first input's index is a byte, the line is the policy's own, and it burns one token whose first four bytes are 5eed0e1f, or mints one token named as `token_name.generate` names the first input and the tag. Every run returns unit or reaches `Error`. Every value symbolic, every unread field any `Data` | 258, put together in 2 |
 | `PolicyShapes` | Every V3 context with an input and a mint the ledger accepts is one of the policy's scenarios. Kernel-checked | 15 |
+
+**Lovejoin v2,** kernel-checked in every transaction ([`Lovejoin/AnyTx/README.md`](Lovejoin/AnyTx/README.md)): mix_box (`BoxPurposesAll.every_context_iff`), reference_holder (`reference_holder_every_context_errors`), mix_logic (`Lovejoin.Every.Readable.mix_logic_accepts_iff`: both withdrawals, the Owner and the Mix, and its publish) and one_shot_mint (`Lovejoin.Every.Readable.one_shot_mint_accepts_iff`: the launch). Each is an iff over every typed V3 context, any list length, no step limit, Lean's own axioms alone. mix_logic's and one_shot_mint's are stated in the Aiken source's terms (`validate_owner`, `walk_outputs`, `verify_pre`, `datum_sane`, …), each proved equal to what the bytes do. fee_contract is out of scope: no Seedelf transaction uses it.
 
 So, for every transaction:
 - always_false never passes.
@@ -132,5 +136,5 @@ What a run teaches the hard way:
 
 ## Next
 
-- **Lovejoin.** What's left is in [chunk 42](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-42-lovejoin-verification.md).
+- **Lovejoin.** Every script in scope is characterized in every transaction, in the Aiken source's terms (above; the record is [chunk 45](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-45-lovejoin-every-tx.md)). An outside read of the readable statements against the source would check what no proof can: that they say what Lovejoin means.
 - **Get the fixes upstream,** so the forks can go: four PRs from our forks ([chunk 41](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-41-blaster-fixes.md)), and the comments in `Upstream/drafts/` (the owner posts them). `BitVec` itself, which blocks the policy's success directions, is Lean-blaster #153's.

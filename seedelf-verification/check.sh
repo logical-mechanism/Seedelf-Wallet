@@ -16,10 +16,13 @@
 #   ./check.sh lovejoin-v2-outputs   what that Mix must pay, for the same pools and n
 #   ./check.sh lovejoin-owner        Owner withdrawals of several boxes, v2 and the classic pool
 #   ./check.sh lovejoin-any-tx       v2 scenario families with arbitrary uninspected fields
+#   ./check.sh lovejoin-every        v2's mix_logic and one_shot_mint in every transaction (16G, 30m)
 #   ./check.sh audit-quick           an audit family (Audit/audit-*.txt), then Audit/count.py
 #   ./check.sh Seedelf.PolicyMint    some modules
 #   CAP=12G LIMIT=20m ./check.sh     other limits
 cd "$(dirname "$0")" || exit 1
+# lovejoin-every's modules need more than the default cap: Collect peaks near 13 GB.
+[ "${1:-}" = lovejoin-every ] && { CAP=${CAP:-16G}; LIMIT=${LIMIT:-30m}; }
 CAP=${CAP:-8G}
 LIMIT=${LIMIT:-10m}
 mods=("$@")
@@ -137,6 +140,17 @@ any_tx_v2=(Lovejoin.Template.AnyTxPurposes Lovejoin.AnyTx.FeePurpose Lovejoin.An
   Lovejoin.AnyTx.FeeSpend Lovejoin.AnyTx.FeeRecovery Lovejoin.AnyTx.FeeControls Lovejoin.AnyTx.Launch Lovejoin.AnyTx.LaunchControls
   Lovejoin.AnyTx.OwnerIff Lovejoin.AnyTx.MixIff Lovejoin.AnyTx.FeeMix Lovejoin.AnyTx.FeeMixControls)
 [ "${mods[0]}" = lovejoin-any-tx ] && mods=("${any_tx_v2[@]}")
+# v2 in every transaction, kernel-checked (chunk 45): the compiled code read back as Lean over Data,
+# no fixed list length and no step limit. mix_logic's withdrawals and one_shot_mint's launch, the
+# typed theorems over every V3 context, then their restatement in the Aiken source's terms
+# (Readable*, Lovejoin/Every/).
+every=(Lovejoin.Every.Base Lovejoin.Every.Lookup Lovejoin.Every.Carrier Lovejoin.Every.Collect
+  Lovejoin.Every.Shared Lovejoin.Every.Owner Lovejoin.Every.Main Lovejoin.Every.Fold Lovejoin.Every.Value
+  Lovejoin.Every.Walk Lovejoin.Every.MixPred Lovejoin.Every.Mix Lovejoin.Every.Withdraw Lovejoin.Every.Typed
+  Lovejoin.Every.Mint Lovejoin.Every.MintSpec Lovejoin.Every.MintConds Lovejoin.Every.MintCheck
+  Lovejoin.Every.MintRoot Lovejoin.Every.MintTyped Lovejoin.Every.ReadableBase Lovejoin.Every.ReadableOwner
+  Lovejoin.Every.ReadableMix Lovejoin.Every.ReadableLaunch Lovejoin.Every.Readable)
+[ "${mods[0]}" = lovejoin-every ] && mods=("${every[@]}")
 # The audit (Audit/): each family's modules, cheapest first, one per line in Audit/<family>.txt.
 case ${mods[0]} in audit-*) [ -f "Audit/${mods[0]}.txt" ] &&
   mapfile -t mods < <(grep -v -e '^#' -e '^[[:space:]]*$' "Audit/${mods[0]}.txt") ;; esac
