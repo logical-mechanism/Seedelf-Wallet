@@ -15,7 +15,7 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
 | Patch | In our pin | Its way upstream | State |
 |---|---|---|---|
 | #454, a datatype's parameter names | Blaster `25c0ee0` | Lean-blaster [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) | Open. CONFLICTING since #155 moved it to `main`, whose line 928 still has the bug. Rebased locally (step 1) |
-| The BLS12-381 operands in order | PlutusCore `68c5399` | PlutusCoreBlaster [#73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) | Open and mergeable, with no review since 2026-11-03 |
+| The BLS12-381 operands in order | PlutusCore `68c5399` | PlutusCoreBlaster [#73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) | Merged 2026-11-08 (`8f76ba5`) |
 | `encodeDataOpaque` (#27's `serialise_data`) | `68c5399` | [#77](https://github.com/input-output-hk/PlutusCoreBlaster/pull/77) instead; #27 is a draft, silent since July | — |
 | `xorByteStringOpaque` | `68c5399` | #77 instead; never offered | — |
 | `sliceByteStringOpaque` | `Slice/`'s `96261cc` | #77 instead; never offered | — |
@@ -65,16 +65,20 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
      - **Seedelf:** every module `ok` but four, each fixed in the scratch copy:
        - `PolicyLinesAll`, and `LinesAllAnyMint` through its import. `cek_rfl`'s `whnf` at default transparency stopped at #77's `@[irreducible]` `instByteViewString`: an unsolved `Decidable.rec` on the minted name's equality. Under `withTransparency .all` (`whnf` and `isDefEq`) both pass, and their theorems still depend only on `propext`, `Classical.choice` and `Quot.sound`.
        - `PolicyBurn` and `PolicyMint`, the README's *Not proved* success theorems. On `main` they fail on `BitVec`. On #77 without `Spec` they come back Falsified, since the primitives are uninterpreted. With a `PlutusCore.Bytes.Spec →` premise, all four are ✅ Valid, in about 2 s each.
-     - **⚠️ The four under `Spec` have no working control.** `Seedelf/Pr77SpecControls.lean` holds `Spec → False`, a burn off #0 failing, a burn off #256 succeeding, and the mint judged by #1's name. All four come back Undetermined at 60 s. So nothing shows that `Spec`'s SMT encoding is satisfiable, and a contradictory encoding would make every goal under it Valid. Don't claim these four until a control comes back Falsified. Asked on #77.
+     - **The four under `Spec`: no Falsified control, but the encoding has a model.** `Seedelf/Pr77SpecControls.lean` holds `Spec → False`, a burn off #0 failing, a burn off #256 succeeding, and the mint judged by #1's name. All four come back Undetermined at 60 s, since a Falsified needs Z3 to build a model of `Spec`'s quantifiers.
+       - mpetruska's answer (2026-11-08): `PlutusCore.Bytes.spec` proves `Spec` in the kernel. That settles Lean's side, not Blaster's translation.
+       - The translation (2026-11-08): `Seedelf/Pr77SpecModel.smt2` in the scratch worktree takes `uncons`, `cpStr` and `byteStr` as the real functions on SMT strings, alphabet `0x0`–`0x2FFFF`. Z3 finds every conjunct holds of that interpretation (each negation `unsat`, a false sanity fact `sat`). Blaster writes each byte literal as one code point (`Term.lean`, `strLitSmt`).
+       - So a Valid under `Spec` isn't vacuous, and these four stand with the other Blaster results. The limit: the `.smt2` is our transcription of `Spec`, not Blaster's dump of it.
    - **Blaster reports Undetermined as a warning, even under `solve-result: 1`,** so `check.sh` says `ok` for it. The main tree's logs on 2026-11-08: 1,466 Valid, 239 Expected Falsified, 0 Undetermined. ✅ `check.sh` now fails such a module as `UNDETERM` ([#372](https://github.com/logical-mechanism/Seedelf-Wallet/pull/372)).
    - **The migration, for step 4 (Seedelf):**
      - `scalarOf`;
      - the three slices in `Slice/Common.lean` and two in `Controls.lean`;
      - `cek_rfl`'s transparency;
-     - `Spec` on the four success theorems, once a control works;
+     - `Spec` on the four success theorems, discharged with `PlutusCore.Bytes.spec`;
      - optionally `Index0`–`Index3`'s 256 theorems as one (`Pr77AnyIndex`, with its controls).
    - **Not yet tried:** Lovejoin, whose proofs need the `encodeData` and xor aliases moved first.
-   - **The follow-up** for #77 is `../blaster-forks/posts/plutuscoreblaster-77-followup.md`. The owner posts it.
+   - **The follow-up:** the owner added it to the first comment with `--edit-last` (2026-11-08). A short reply to mpetruska is `../blaster-forks/posts/plutuscoreblaster-77-reply-spec.md`; the owner's call.
+   - **Our slip:** the follow-up suggested documenting the seal, which #77's README and `Bytes.lean`'s header already do (`attribute [local semireducible] PlutusCore.Bytes.instByteViewString`, `with_unfolding_all`, `decide +kernel`). Either beats our `.all`-in-a-tactic at migration if it's simpler.
    - **The tools.** A local PlutusCoreBlaster branch, push-guarded as `local/455-test-only` is: #77's head, plus #73. The two share no file but `Tests/Basic.lean`'s imports. None of our aliases.
    - **Our side,** on a branch from `main`:
      - Each alias call becomes the builtin's definition.
@@ -84,7 +88,7 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
      - Keep each under the cap: the definitions may cost Blaster more than the opaque terms did.
    - **Check first:** whether Lovejoin's kernel-checked proofs (chunk 45) lean on the aliases being opaque. A proof that rewrote over an uninterpreted xor or encodeData may need the definition's lemmas instead.
    - **If WalletRegister or the policy's rule doesn't prove on #77:** say so on #77 with the minimal case, and keep our aliases.
-3. ⬜ **#73.** If it's still unreviewed once #77's discussion settles, the owner posts one nudge, noting that it's independent of #77.
+3. ✅ **#73** merged 2026-11-08 (`8f76ba5`), approved by mpetruska: "Nice catch, thank you!". No nudge needed.
 4. ⬜ **Off the forks, as each fix lands.**
    - **#455 on `main`:** `require Blaster` from IOG at that `main` commit, in both lakefiles, then `lake update Blaster` alone.
    - **#73 and #77 on `main`:** `require PlutusCore` from IOG at that commit, in both lakefiles, with step 2's migration merged.
