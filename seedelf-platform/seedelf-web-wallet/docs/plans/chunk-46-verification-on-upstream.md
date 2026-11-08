@@ -42,7 +42,8 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
    - the comment and the PR body in `../blaster-forks/posts/` say so.
 
    The owner runs the check: the test should fail on the test-only branch and pass with the fix.
-   - **The first run (2026-11-07), under Z3 5.3.1,** failed on both branches in the same way, on `smt.case_split_relevant_first`, before the bug: it showed nothing. Rerun it with Z3's nightly first on `PATH`. Then the owner force-pushes, PATCHes the body and posts the comment (the classifier refused Claude's force-push in chunk 41). The fork's `seedelf` branch keeps `25c0ee0`, which our pins use.
+   - **The first run (2026-11-07), under Z3 5.3.1,** failed on both branches in the same way, on `smt.case_split_relevant_first`, before the bug: it showed nothing. Rerun it with Z3's nightly first on `PATH`.
+   - **The rerun (2026-11-07), Z3 nightly 5.4.0 `ff86ba7`:** the test-only branch failed with #454's five errors (unknown sorts `@ε` and `@β`, `@isInt (@PUnit)`), and the fix gave four Valid and one Expected Falsified, in 29 s at 451 MB. Ready for the force-push and the posts. Then the owner force-pushes, PATCHes the body and posts the comment (the classifier refused Claude's force-push in chunk 41). The fork's `seedelf` branch keeps `25c0ee0`, which our pins use.
 2. ⬜ **Our suite on #77, before it merges.** What we find is worth a comment on #77 either way: it tests a design they're reviewing on real scripts.
    - **The tools.** A local PlutusCoreBlaster branch, push-guarded as `local/455-test-only` is: #77's head, plus #73. The two share no file but `Tests/Basic.lean`'s imports. None of our aliases.
    - **Our side,** on a branch from `main`:
