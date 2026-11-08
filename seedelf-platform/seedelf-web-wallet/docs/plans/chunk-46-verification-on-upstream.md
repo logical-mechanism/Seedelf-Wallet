@@ -59,8 +59,22 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
        - `Slice.Pr77AnyIndexControls`, over the symbolic index: ✅ Expected Falsified, all three. N1 flips the answer, N2 drops the prefix check, and N3 judges the run at `idx` by the rule at `255 - idx`.
      - None of these needed `Spec`. Each property applies the same definitions on both sides, so Blaster proved them with the three primitives uninterpreted.
      - CardanoLedgerApiBlaster `9938562` built unchanged on #77.
-   - **Not yet tried:** the whole `Slice/` package and every Seedelf module on #77, which the owner may run, and Lovejoin, whose proofs need the `encodeData` and xor aliases moved first.
-   - **The comment** for #77 is `../blaster-forks/posts/plutuscoreblaster-77-comment.md`. The owner posts it.
+   - **The comment** (`../blaster-forks/posts/plutuscoreblaster-77-comment.md`): posted by the owner 2026-11-08 ([#77](https://github.com/input-output-hk/PlutusCoreBlaster/pull/77#issuecomment-6718607893)).
+   - **The full run (2026-11-08):**
+     - **`Slice/`:** every module `ok`, with all 256 per-index theorems, the two off-byte ones, the kernel's combination of them (`Rule`) and `Controls`.
+     - **Seedelf:** every module `ok` but four, each fixed in the scratch copy:
+       - `PolicyLinesAll`, and `LinesAllAnyMint` through its import. `cek_rfl`'s `whnf` at default transparency stopped at #77's `@[irreducible]` `instByteViewString`: an unsolved `Decidable.rec` on the minted name's equality. Under `withTransparency .all` (`whnf` and `isDefEq`) both pass, and their theorems still depend only on `propext`, `Classical.choice` and `Quot.sound`.
+       - `PolicyBurn` and `PolicyMint`, the README's *Not proved* success theorems. On `main` they fail on `BitVec`. On #77 without `Spec` they come back Falsified, since the primitives are uninterpreted. With a `PlutusCore.Bytes.Spec →` premise, all four are ✅ Valid, in about 2 s each.
+     - **⚠️ The four under `Spec` have no working control.** `Seedelf/Pr77SpecControls.lean` holds `Spec → False`, a burn off #0 failing, a burn off #256 succeeding, and the mint judged by #1's name. All four come back Undetermined at 60 s. So nothing shows that `Spec`'s SMT encoding is satisfiable, and a contradictory encoding would make every goal under it Valid. Don't claim these four until a control comes back Falsified. Asked on #77.
+   - **Blaster reports Undetermined as a warning, even under `solve-result: 1`,** so `check.sh` says `ok` for it. The main tree's logs on 2026-11-08: 1,466 Valid, 239 Expected Falsified, 0 Undetermined. ⬜ `check.sh` should fail a module whose log says Undetermined.
+   - **The migration, for step 4 (Seedelf):**
+     - `scalarOf`;
+     - the three slices in `Slice/Common.lean` and two in `Controls.lean`;
+     - `cek_rfl`'s transparency;
+     - `Spec` on the four success theorems, once a control works;
+     - optionally `Index0`–`Index3`'s 256 theorems as one (`Pr77AnyIndex`, with its controls).
+   - **Not yet tried:** Lovejoin, whose proofs need the `encodeData` and xor aliases moved first.
+   - **The follow-up** for #77 is `../blaster-forks/posts/plutuscoreblaster-77-followup.md`. The owner posts it.
    - **The tools.** A local PlutusCoreBlaster branch, push-guarded as `local/455-test-only` is: #77's head, plus #73. The two share no file but `Tests/Basic.lean`'s imports. None of our aliases.
    - **Our side,** on a branch from `main`:
      - Each alias call becomes the builtin's definition.
