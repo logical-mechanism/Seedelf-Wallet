@@ -53,7 +53,14 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
    - **First results (2026-11-08), every trace checked for #77's path:**
      - `Seedelf.WalletRegister`: ✅ Valid.
      - `Slice.Pr77Probe`, the policy's rule at index 0 and at 255 over #77's own slice: ✅ Valid both. The module took 395 s at 1,060 MB, with its package's first build.
-     - `Slice.Pr77AnyIndex`, the rule over a symbolic index, which #77's `byteStr` cons might allow: the first run failed on a scratch-file typo (`Integer` not opened), rerunning.
+     - `Slice.Pr77AnyIndex`, the rule over a symbolic index from 0 to 255: ✅ Valid, in 2 s at 277 MB, with no `sorry`. #77's `consByteStringV2` builds the byte with `byteStr`, not `UInt8`, so one theorem can replace `Index0`–`Index3`'s 256.
+     - **Controls,** so none of these is a vacuous Valid:
+       - `Slice.Controls`, its six mutants now over #77's slice: ✅ Expected Falsified, all six.
+       - `Slice.Pr77AnyIndexControls`, over the symbolic index: ✅ Expected Falsified, all three. N1 flips the answer, N2 drops the prefix check, and N3 judges the run at `idx` by the rule at `255 - idx`.
+     - None of these needed `Spec`. Each property applies the same definitions on both sides, so Blaster proved them with the three primitives uninterpreted.
+     - CardanoLedgerApiBlaster `9938562` built unchanged on #77.
+   - **Not yet tried:** the whole `Slice/` package and every Seedelf module on #77, which the owner may run, and Lovejoin, whose proofs need the `encodeData` and xor aliases moved first.
+   - **The comment** for #77 is `../blaster-forks/posts/plutuscoreblaster-77-comment.md`. The owner posts it.
    - **The tools.** A local PlutusCoreBlaster branch, push-guarded as `local/455-test-only` is: #77's head, plus #73. The two share no file but `Tests/Basic.lean`'s imports. None of our aliases.
    - **Our side,** on a branch from `main`:
      - Each alias call becomes the builtin's definition.
