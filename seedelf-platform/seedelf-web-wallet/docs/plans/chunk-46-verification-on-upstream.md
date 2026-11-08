@@ -45,7 +45,15 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
    - **The first run (2026-11-07), under Z3 5.3.1,** failed on both branches in the same way, on `smt.case_split_relevant_first`, before the bug: it showed nothing. Rerun it with Z3's nightly first on `PATH`.
    - **The rerun (2026-11-07), Z3 nightly 5.4.0 `ff86ba7`:** the test-only branch failed with #454's five errors (unknown sorts `@ε` and `@β`, `@isInt (@PUnit)`), and the fix gave four Valid and one Expected Falsified, in 29 s at 451 MB.
    - **Posted (2026-11-08):** the owner force-pushed (head `e540263`), PATCHed the body and commented. #455 shows MERGEABLE, waiting on its reviewers. Then the owner force-pushes, PATCHes the body and posts the comment (the classifier refused Claude's force-push in chunk 41). The fork's `seedelf` branch keeps `25c0ee0`, which our pins use.
-2. ⬜ **Our suite on #77, before it merges.** What we find is worth a comment on #77 either way: it tests a design they're reviewing on real scripts.
+2. 🚧 **Our suite on #77, before it merges.** What we find is worth a comment on #77 either way: it tests a design they're reviewing on real scripts.
+   - **Set up (2026-11-08), nothing pushed:**
+     - The tools: `../blaster-forks/PlutusCoreBlaster-pr77`, branch `local/pr77-test`. That's #77's head `4aa6e2a` with #73 merged in (`cae98df`), push-guarded.
+     - Our proofs: `../Seedelf-Wallet-pr77`, a worktree of `main` on its own push-guarded `local/pr77-test`. Both of its lakefiles require that PlutusCoreBlaster by path, and Blaster stays on `25c0ee0`, under Z3 5.3.1.
+     - The changes: `scalarOf` calls `PlutusCore.Bitwise.byteStringToInteger`, and `Slice/`'s three slices call `sliceByteString`. No alias is left in either package.
+   - **First results (2026-11-08), every trace checked for #77's path:**
+     - `Seedelf.WalletRegister`: ✅ Valid.
+     - `Slice.Pr77Probe`, the policy's rule at index 0 and at 255 over #77's own slice: ✅ Valid both. The module took 395 s at 1,060 MB, with its package's first build.
+     - `Slice.Pr77AnyIndex`, the rule over a symbolic index, which #77's `byteStr` cons might allow: the first run failed on a scratch-file typo (`Integer` not opened), rerunning.
    - **The tools.** A local PlutusCoreBlaster branch, push-guarded as `local/455-test-only` is: #77's head, plus #73. The two share no file but `Tests/Basic.lean`'s imports. None of our aliases.
    - **Our side,** on a branch from `main`:
      - Each alias call becomes the builtin's definition.
