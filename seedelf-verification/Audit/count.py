@@ -11,8 +11,8 @@ What a module expects comes from its own source, comments and strings stripped:
 
 A module is ok only when its trace is newer than its source, has no error, no "❌" and no
 "Undetermined" line, and holds exactly the expected counts. Blaster logs Undetermined as a
-warning only (Blaster/Smt/Env.lean:70), so check.sh's "ok" can't tell it from Falsified; this
-can. Lake writes no trace for a failed build: read check.sh's console output for those."""
+warning only (Blaster/Smt/Env.lean:70): check.sh reports such a module as UNDETERM, not ok,
+and this also checks the counts. Lake writes no trace for a failed build: read check.sh's console output for those."""
 import json, os, re, sys
 
 SV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

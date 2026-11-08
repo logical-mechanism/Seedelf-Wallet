@@ -2,7 +2,9 @@
 # Build one module at a time, each in a memory-capped scope: past the cap the
 # kernel kills that build (and everything it started), never the desktop.
 # Every module runs, cheapest first; the summary says how each went and the
-# most memory its scope used.
+# most memory its scope used. A module that builds but logs a Blaster check as
+# "Undetermined" is UNDETERM, not ok: Blaster logs that as a warning only, so the
+# build passes, but the check proved nothing (a timeout, or no model found).
 #   ./check.sh                       every Seedelf module (Slice/ is its own: seedelf-slice)
 #   ./check.sh seedelf-any-tx        Seedelf's properties in every transaction (Seedelf/AnyTx.lean)
 #   ./check.sh seedelf-signers       the wallet's core property with 4 to 128 signatories
@@ -182,6 +184,7 @@ case ${mods[0]} in audit-*) [ -f "Audit/${mods[0]}.txt" ] &&
 # The same ExceptParams file in its own package, against Lean-blaster main.
 [ "${mods[0]}" = upstream-main ] && { cd Upstream/blaster-main || exit 1; mods=(BlasterMain.ExceptParams); }
 peakf=$(mktemp)
+outf=$(mktemp)
 summary=()
 check_failed=0
 for m in "${mods[@]}"; do
@@ -193,20 +196,25 @@ for m in "${mods[@]}"; do
     bash -c 'timeout "$1" lake build "$2"; rc=$?
       cat "/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.peak" > "$3" 2>/dev/null
       exit $rc' _ "$LIMIT" "$m" "$peakf" 2>&1 \
-    | grep -v -E 'Replayed|CekMachine.lean:309|Successfully decoded|^trace: \.> LEAN_PATH'
+    | grep -v -E 'Replayed|CekMachine.lean:309|Successfully decoded|^trace: \.> LEAN_PATH' \
+    | tee "$outf"
   rc=${PIPESTATUS[0]}
-  [ "$rc" -eq 0 ] || check_failed=1
+  # Replayed logs print their warnings too, so an up-to-date module is caught as well.
+  undet=$(grep -cE '^warning: .*Undetermined' "$outf")
+  [ "$rc" -eq 0 ] && [ "$undet" -gt 0 ] && rc=undetermined
+  [ "$rc" = 0 ] || check_failed=1
   took=$((SECONDS - start))s
   peak=$(cat "$peakf")
   [ -n "$peak" ] && peak=", peak $((peak / 1048576)) MB"
   case $rc in
     0) summary+=("ok        $m ($took$peak)") ;;
+    undetermined) summary+=("UNDETERM  $m ($undet Undetermined, $took$peak)") ;;
     124) summary+=("TIMEOUT   $m (past $LIMIT$peak)") ;;
     137) summary+=("KILLED    $m (over $CAP, $took)") ;;
     *) summary+=("FAILED    $m (exit $rc, $took$peak)") ;;
   esac
 done
-rm -f "$peakf"
+rm -f "$peakf" "$outf"
 echo
 echo "== summary"
 printf '%s\n' "${summary[@]}"
