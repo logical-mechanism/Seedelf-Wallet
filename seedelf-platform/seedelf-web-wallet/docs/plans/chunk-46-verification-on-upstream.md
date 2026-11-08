@@ -2,7 +2,7 @@
 
 This plan came in on branch `web-wallet/verification-on-upstream`. Once the work starts, it happens in `seedelf-verification/`, on a branch of its own from `main`, and in the fork clones in `../blaster-forks/`, as in [chunk 41](../archive/plans/chunk-41-blaster-fixes.md).
 
-**Status: ⬜ planned 2026-11-07, step 1 waiting on the owner.** The owner: "a chunk about how we want to get this working in the main repo".
+**Status: 🚧 step 1 done 2026-11-08; step 2 next.** The owner: "a chunk about how we want to get this working in the main repo".
 
 Every theorem today is proved over our forks of Lean-blaster and PlutusCoreBlaster ([lakefile.lean](../../../../seedelf-verification/lakefile.lean), and `Slice/lakefile.lean`). **Done means:** both lakefiles require both tools from `input-output-hk`, and every theorem still proves. Any theorem that doesn't goes in the README's *Not proved*, with its reason.
 
@@ -36,14 +36,15 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
 
 ## Steps
 
-1. 🚧 **#455 back to mergeable.** Rebased in `../blaster-forks/Lean-blaster` (2026-11-07) onto `main` `983f10f`:
+1. ✅ **#455 back to mergeable.** Rebased in `../blaster-forks/Lean-blaster` (2026-11-07) onto `main` `983f10f`:
    - the fix is `a1a2ccf` and the test `e540263`, on `fix/datatype-param-names`;
    - `local/455-test-only` is the test alone on `983f10f` (`a0e68dd`, push-guarded);
    - the comment and the PR body in `../blaster-forks/posts/` say so.
 
    The owner runs the check: the test should fail on the test-only branch and pass with the fix.
    - **The first run (2026-11-07), under Z3 5.3.1,** failed on both branches in the same way, on `smt.case_split_relevant_first`, before the bug: it showed nothing. Rerun it with Z3's nightly first on `PATH`.
-   - **The rerun (2026-11-07), Z3 nightly 5.4.0 `ff86ba7`:** the test-only branch failed with #454's five errors (unknown sorts `@ε` and `@β`, `@isInt (@PUnit)`), and the fix gave four Valid and one Expected Falsified, in 29 s at 451 MB. Ready for the force-push and the posts. Then the owner force-pushes, PATCHes the body and posts the comment (the classifier refused Claude's force-push in chunk 41). The fork's `seedelf` branch keeps `25c0ee0`, which our pins use.
+   - **The rerun (2026-11-07), Z3 nightly 5.4.0 `ff86ba7`:** the test-only branch failed with #454's five errors (unknown sorts `@ε` and `@β`, `@isInt (@PUnit)`), and the fix gave four Valid and one Expected Falsified, in 29 s at 451 MB.
+   - **Posted (2026-11-08):** the owner force-pushed (head `e540263`), PATCHed the body and commented. #455 shows MERGEABLE, waiting on its reviewers. Then the owner force-pushes, PATCHes the body and posts the comment (the classifier refused Claude's force-push in chunk 41). The fork's `seedelf` branch keeps `25c0ee0`, which our pins use.
 2. ⬜ **Our suite on #77, before it merges.** What we find is worth a comment on #77 either way: it tests a design they're reviewing on real scripts.
    - **The tools.** A local PlutusCoreBlaster branch, push-guarded as `local/455-test-only` is: #77's head, plus #73. The two share no file but `Tests/Basic.lean`'s imports. None of our aliases.
    - **Our side,** on a branch from `main`:
