@@ -2,7 +2,9 @@
 
 Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 40 waits for upstream to fix three gaps in IOG's tools. This chunk fixes them in our own forks of Lean-blaster and PlutusCoreBlaster instead, offers each fix upstream as a small PR, and pins the forks until the PRs merge, so WalletRegister can be tried without waiting.
 
-**Status: 🚧 in progress, started 2026-11-02 at the owner's call:** "Do proper forks of those repos, make those changes and get the prs going. I would monitor it and see if anyone comments on the work you did." Why: "being able to use oh we are formally verification and the first privacy wallet can be big marketing wins." (A claim stays true to what's proved: until WalletRegister lands, that's the 29 properties, not the wallet's spend check.)
+**Archived 2026-11-07: its *Done means* is met.** WalletRegister is proved and in `check.sh`'s default list. #71 and #72 merged, and #455 and #73 are open with our pins recorded. Taking the forks out as the fixes land is [chunk 46](../../plans/chunk-46-verification-on-upstream.md). What it did is [*Where it ended*](#where-it-ended); below is the plan as it stood.
+
+**Status on 2026-11-03: 🚧 in progress, started 2026-11-02 at the owner's call:** "Do proper forks of those repos, make those changes and get the prs going. I would monitor it and see if anyone comments on the work you did." Why: "being able to use oh we are formally verification and the first privacy wallet can be big marketing wins." (A claim stays true to what's proved: until WalletRegister lands, that's the 29 properties, not the wallet's spend check.)
 
 | Step | Status |
 |---|---|
@@ -34,7 +36,7 @@ Branch `verification`, as [chunk 40](chunk-40-verification-upstream.md). Chunk 4
 2. ✅ **The Lean-blaster PR is [#455](https://github.com/input-output-hk/Lean-blaster/pull/455)**, opened by the owner on 2026-11-03 into `beta-lambda-cache-optimization`, at `25c0ee0`.
 3. ✅ **The Fix 2 PR is [PlutusCoreBlaster #71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71)**, opened by Claude on 2026-11-03 at the owner's word ("go ahead with the Prs"), into `main`, at `cfa8c53`. Its text says the wallet's property now proves on our forks.
 4. ✅ **Fix 3 is [#72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72) and Fix 4 is [#73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73)**, opened by Claude on 2026-11-03. #29 had no reply to our question (the owner: "if 29 is just idle then we may want to kind of just do it … seems like that pr just died"). #72 says we asked first and will close in #29's favour if #29 lands. #73 is stacked on it: its diff is `b60ff2a` alone once #72 merges.
-5. **The #153 and #68 comments are ready, with the PR numbers in** ([#153](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md), now about the policy's slicing, with #71 as the wallet's way around; [#68](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md), pointing at #455). The owner posts them, or says the word.
+5. **The #153 and #68 comments are ready, with the PR numbers in** ([#153](../../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md), now about the policy's slicing, with #71 as the wallet's way around; [#68](../../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md), pointing at #455). The owner posts them, or says the word.
 6. **WalletRegister, from step 1's result,** as Step 4 below says. If a PR's branch changes in review, rebuild `seedelf` and re-pin.
 
 ### Fix 4 · Operand order of the BLS12-381 builtins (PlutusCoreBlaster), found 2026-11-03 ✅ on the fork
@@ -98,7 +100,7 @@ Chunk 40's [baseline](chunk-40-verification-upstream.md#the-baseline-2026-11-02-
 
 ## Using the forks before the PRs merge
 
-- **A `require` of our own** in [lakefile.lean](../../../../seedelf-verification/lakefile.lean), above the CardanoLedgerApi one, at the fork's commit:
+- **A `require` of our own** in [lakefile.lean](../../../../../seedelf-verification/lakefile.lean), above the CardanoLedgerApi one, at the fork's commit:
   ```lean
   -- Chunk 41: our forks until upstream merges the fixes. Remove each when it lands.
   require Blaster from git "https://github.com/logicalmechanism/Lean-blaster" @ "<commit>"
@@ -124,7 +126,7 @@ Done: the one-line change, `6526c4b` on `fix/datatype-param-names`, pushed to th
   - In `Blaster/Smt/Translate/Quantifier.lean:928` (`genIndParams`), `Optimize.forallTelescope (← hashcons indVal.type)` becomes `Optimize.forallTelescope indVal.type`. That's main's form (main `a16614e`, line 946).
   - Leave line 948 alone (`createCtorDeclaration`'s `hashcons recRule.rhs`). A rule's right-hand side names the type's own constructors, so two types' rules are never alpha-equivalent. That comes from reading the code, not from a run: say so in the PR.
 - **The test.** `Tests/FixedIssues/IssueN.lean`, where N is the issue's number, so the issue is filed first.
-  - It's [ExceptParams.lean](../../../../seedelf-verification/Upstream/ExceptParams.lean)'s cases in `namespace Tests.IssueN`.
+  - It's [ExceptParams.lean](../../../../../seedelf-verification/Upstream/ExceptParams.lean)'s cases in `namespace Tests.IssueN`.
   - Give it the house header (*Issue*, *Diagnosis*, *Modifications*, as `Issue348.lean` has), and write each Falsified case as `#blaster (gen-cex: 0) (solve-result: 1)`.
   - Add `import Tests.FixedIssues.IssueN` at the end of `Tests/FixedIssues.lean`.
 - **Checking it here:**
@@ -133,7 +135,7 @@ Done: the one-line change, `6526c4b` on `fix/datatype-param-names`, pushed to th
   - `./check.sh` should match the baseline exactly: eight `ok`, and PolicyBurn and PolicyMint `FAILED` on `BitVec` alone.
   - Blaster's whole suite runs in the fork's CI.
 - **The PR.**
-  - The owner files [the issue draft](../../../../seedelf-verification/Upstream/drafts/lean-blaster-datatype-param-names.md), then the PR into `beta-lambda-cache-optimization`, saying "Fixes #N".
+  - The owner files [the issue draft](../../../../../seedelf-verification/Upstream/drafts/lean-blaster-datatype-param-names.md), then the PR into `beta-lambda-cache-optimization`, saying "Fixes #N".
   - Claude writes the PR text in `Upstream/drafts/lean-blaster-genindparams-pr.md`, on the repo's template. It says:
     - the one line, which is main's form;
     - the regression test, and the link to the fork's CI run;
@@ -141,7 +143,7 @@ Done: the one-line change, `6526c4b` on `fix/datatype-param-names`, pushed to th
     - that [#335](https://github.com/input-output-hk/Lean-blaster/pull/335) would fix this as a side effect, with no test, so this PR can land first or close in its favour;
     - that [#155](https://github.com/input-output-hk/Lean-blaster/pull/155) would otherwise carry the bug to `main`.
   - Small fix PRs into beta have merged the same day they were opened (#288, #349, #369).
-  - After that, the [#68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md) gets the issue's number and the PR's, in chunk 40's filing order.
+  - After that, the [#68 comment](../../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md) gets the issue's number and the PR's, in chunk 40's filing order.
 - **If upstream says no, or fixes it another way:**
   - If they fix it in #335 or their own commit, take theirs. Remove our require once the fix is on beta, and check `Upstream.ExceptParams` again. Close our PR with thanks.
   - If #155 merges first, retarget the PR to `main`. The line is the same.
@@ -156,7 +158,7 @@ Done: `ae0a7cd` on `fix/fq1-nat`, pushed to the fork, with `Co-authored-by` for 
 - `Upstream/Fq1Fin.lean` has its Valid case, `fq1_eq_of_t_eq`.
 - Waiting: the owner's build and #29's answer, then the PR.
 
-- **The repro first: [Upstream/Fq1Fin.lean](../../../../seedelf-verification/Upstream/Fq1Fin.lean),** already in `check.sh`'s `upstream` list. Run on 2026-11-02: the point cases fail on `Fin`, and the control passes.
+- **The repro first: [Upstream/Fq1Fin.lean](../../../../../seedelf-verification/Upstream/Fq1Fin.lean),** already in `check.sh`'s `upstream` list. Run on 2026-11-02: the point cases fail on `Fin`, and the control passes.
   - It has a control (`blake2b_224`), symbolic points, and `bls12_381_G1_uncompress` of a symbolic bytestring. Each expects Falsified.
   - Run `./check.sh Upstream.Fq1Fin` first. The point cases should fail on `Fin`, and the control should pass. If they fail on anything else, record it before fixing anything.
   - Add one Valid case beside them, such as `∀ (x y : Fq1), x.t = y.t → x = y`, so a pass isn't only the solver finding a model.
@@ -204,7 +206,7 @@ Done: `3dd76d7` on `feat/opaque-bytestring-to-integer`, pushed to the fork: the 
   - Never make `itobs_be_loop` itself opaque: `Lemmas.lean:14–70` unfold it, and `Tests/Bitwise/Tests.lean` proves it with `rfl`.
 - **The PR's test:** a `#blaster` file over a UPLC program that applies `ByteStringToInteger` to a symbolic bytestring, with one Valid case and one Falsified, imported from `Tests/Basic.lean`.
 - **Our side:**
-  - [Wallet.lean](../../../../seedelf-verification/Seedelf/Wallet.lean)'s `scalarOf` calls the alias, `byteStringToIntegerOpaque true b.data`, by whatever name upstream merges.
+  - [Wallet.lean](../../../../../seedelf-verification/Seedelf/Wallet.lean)'s `scalarOf` calls the alias, `byteStringToIntegerOpaque true b.data`, by whatever name upstream merges.
   - `Upstream/ByteStrings` stays as it is: it calls `PlutusCore.Bitwise` directly.
   - The README's *What a ✅ is worth* says the conversion is opaque too, through a fork-only alias until it merges.
 - **Checking it here:**
@@ -212,7 +214,7 @@ Done: `3dd76d7` on `feat/opaque-bytestring-to-integer`, pushed to the fork: the 
   - Pin the fork. Then `./check.sh upstream` should say `ok Upstream.Bstoi`, with `Upstream.ByteStrings` unchanged (four ❌).
   - `./check.sh` should match the baseline. PolicyBurn and PolicyMint still fail, on slicing.
 - **The PR.**
-  - The owner files [the PlutusCoreBlaster issue](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md), with its last line changed to point at the PR, then the PR into `main`.
+  - The owner files [the PlutusCoreBlaster issue](../../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md), with its last line changed to point at the PR, then the PR into `main`.
   - Expect discussion: #27 has had no review since July, and the precedents that merged, #30 and #67, were rewrites with kernel lemmas.
   - The text says:
     - it's #27's pattern, one file plus a test;
@@ -245,7 +247,7 @@ Done: `3dd76d7` on `feat/opaque-bytestring-to-integer`, pushed to the fork: the 
 - **WalletRegister is proved,** it's in `check.sh`'s default list, and the README's tables are updated.
 - **Each fix is merged upstream,** or its PR is open and our pin on the fork is recorded here and in the README.
 - **As each fix merges,** its require comes out, the owner runs `lake update`, and the baseline is re-run. From there, chunk 40's *How to tell each is fixed* applies.
-- **Then this file moves to the archive,** as the [plans README](README.md) says.
+- **Then this file moves to the archive,** as the [plans README](../../plans/README.md) says.
 
 ## Where upstream stands
 
@@ -284,3 +286,22 @@ On 2026-11-02, both greps matched (lines 928 and 39), #335, #334 and #29 were op
 - **2026-11-02, this chunk:** "check if fixing these bugs in our own forks, potentially for their own pr, is easy enough … If we can solve it then it would be worth getting an agent to work writing a chunk for that too."
 - **2026-11-02, the start:** "That does seem doable though … Do proper forks of those repos, make those changes and get the prs going. I would monitor it and see if anyone comments on the work you did." Why: "being able to use oh we are formally verification and the first privacy wallet can be big marketing wins."
 - **2026-11-02, where:** forks on the personal `logicalmechanism` account, not the org ("isnt look good for the optics"); the work in a folder in the parent.
+
+## Where it ended
+
+- **Its PR.** The work reached `main` in **#362** (`c15603d5`, 2026-11-05), through chunk 42's branch, which was cut from `verification`.
+- **The fixes, on 2026-11-07:**
+
+  | Fix | Upstream | State |
+  |---|---|---|
+  | 1 · Datatype parameter names | Lean-blaster [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) | Open. CONFLICTING since #155 moved it to `main`, whose line 928 still has the bug. Rebased locally onto `main` `983f10f` for the owner's check and force-push ([chunk 46](../../plans/chunk-46-verification-on-upstream.md), step 1) |
+  | 2 · `ByteStringToInteger` alias | PlutusCoreBlaster [#71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71) | Merged `6b4260a` (2026-11-05). [#77](https://github.com/input-output-hk/PlutusCoreBlaster/pull/77) would replace it with the definition |
+  | 3 · `Fq1.t` a `Nat` | PlutusCoreBlaster [#72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72) | Merged `0c0c1b8` (2026-11-03) |
+  | 4 · BLS12-381 operand order | PlutusCoreBlaster [#73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) | Open and mergeable, with no review since 2026-11-03 |
+
+- **The pins at the end:**
+  - Blaster: `25c0ee0`, kept on the fork's `seedelf` branch.
+  - PlutusCore: `68c5399`, the fork's `opaque-xor`. That's #71's and #72's review rounds, #73, #27's `serialise_data` and the xor alias.
+  - `Slice/`'s PlutusCore: `96261cc`, the fork's `opaque-slice`.
+  - The pin table above still names `c7d8741`, the `verification` branch's.
+- **Carried to chunk 46:** the two open PRs, taking out each require as its fix lands, the aliases that were never offered (#77 would make them redundant), and #71's review point on modelling `ByteString` (#77 is its answer).

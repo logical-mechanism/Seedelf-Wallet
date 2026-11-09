@@ -1,19 +1,21 @@
 # Chunk 40 · Verification, once upstream is fixed
 
-Branch `verification`, from `main`, pushed to origin, with no PR on purpose (the owner, 2026-11-02). It isn't a `web-wallet/…` branch because the work lives in [seedelf-verification/](../../../../seedelf-verification/README.md), not in the wallet.
+Branch `verification`, from `main`, pushed to origin, with no PR on purpose (the owner, 2026-11-02). It isn't a `web-wallet/…` branch because the work lives in [seedelf-verification/](../../../../../seedelf-verification/README.md), not in the wallet.
 
-**Status: ✅ the wallet's core property is proved (2026-11-03), on our forks.** [Chunk 41](chunk-41-blaster-fixes.md) fixed the three gaps this file waited on, and a fourth that only showed once they were fixed: the BLS12-381 builtins' operand order. It fixed them in forks of IOG's tools, which `lakefile.lean` pins, and `WalletRegister` is ✅ Valid in the script's own order. What stays here: the policy's success directions, which wait on `BitVec` (Lean-blaster #153), and, as each upstream PR lands, re-running against upstream with this file's *How to tell each is fixed*. Before chunk 41 this file read ⛔, in the owner's words: "I would want these upstream bugs fixed then work everything out before we continue on."
+**Archived 2026-11-07.** What it did is [*Where it ended*](#where-it-ended). What it left open, the proofs off our forks and onto IOG's own tools, is [chunk 46](../../plans/chunk-46-verification-on-upstream.md). Below is the plan as it stood. Where it says the policy's success directions are parked, they were proved since, over `Slice/`'s alias.
+
+**Status on 2026-11-03: ✅ the wallet's core property is proved, on our forks.** [Chunk 41](chunk-41-blaster-fixes.md) fixed the three gaps this file waited on, and a fourth that only showed once they were fixed: the BLS12-381 builtins' operand order. It fixed them in forks of IOG's tools, which `lakefile.lean` pins, and `WalletRegister` is ✅ Valid in the script's own order. What stays here: the policy's success directions, which wait on `BitVec` (Lean-blaster #153), and, as each upstream PR lands, re-running against upstream with this file's *How to tell each is fixed*. Before chunk 41 this file read ⛔, in the owner's words: "I would want these upstream bugs fixed then work everything out before we continue on."
 
 **What the owner asked (2026-11-02):** "a verification folder and branch that we can work on further because it would be interesting to do this for lovejoin as well." On the wallet's property: "proving the wallet part of things is verified is huge."
 
 ## What's done ✅
 
 - **29 theorems** about variant 1's deployed bytes: wallet `94bca9c0…`, policy `84967d91…`, always_false `6777ba4d…`. They're proved with IOG's Blaster, which is Lean 4 and Z3 5.3.1 over PlutusCoreBlaster's model of UPLC.
-  - The [README](../../../../seedelf-verification/README.md)'s table lists them: always_false always fails; the wallet is spend-only and never locks a UTxO whose datum isn't a Register; the policy refuses other amounts, other policies' lines, and burns off a first input at #256 or -1.
+  - The [README](../../../../../seedelf-verification/README.md)'s table lists them: always_false always fails; the wallet is spend-only and never locks a UTxO whose datum isn't a Register; the policy refuses other amounts, other policies' lines, and burns off a first input at #256 or -1.
   - Its *What a ✅ is worth* says what a proof means: Z3's word, IOG's model, opaque crypto builtins, scenarios, bounded runs.
 - **WalletRegister, the 30th** (2026-11-03, [chunk 41](chunk-41-blaster-fixes.md)): a Register UTxO moves iff the Schnorr check holds and `vkh` signed, over our forks.
 - **The blockers, isolated.** `./check.sh upstream` runs a minimal case of each, beside controls that pass. `./check.sh upstream-main` runs the `Except` case against Lean-blaster main.
-- **Four upstream drafts** in [Upstream/drafts/](../../../../seedelf-verification/Upstream/drafts/). None is filed: the owner files them.
+- **Four upstream drafts** in [Upstream/drafts/](../../../../../seedelf-verification/Upstream/drafts/). None is filed: the owner files them.
 - **One finding** on the deployed policy ([below](#found-along-the-way)).
 - **Commits:** `83ae8c2c` (the proofs, `check.sh`, `extract.sh`, the root CLAUDE.md line), `70e798a9` (the reproductions and the drafts), `47f8e21f` (the #68 comment's pointer).
 
@@ -24,7 +26,7 @@ Branch `verification`, from `main`, pushed to origin, with no PR on purpose (the
    - On that branch, `genIndParams` in `Blaster/Smt/Translate/Quantifier.lean` telescopes `(← hashcons indVal.type)`. So a datatype takes the parameter names of an earlier alpha-equivalent type.
    - Any goal with both `Except` and `Prod` fails, in either order ("unknown sort '@ε'"). PlutusCoreBlaster's goals translate `Data × Data` before a BLS12-381 builtin's `Except String _`.
    - Lean-blaster main at `a16614e` telescopes `indVal.type` and passes the same file.
-   - Draft: [lean-blaster-datatype-param-names.md](../../../../seedelf-verification/Upstream/drafts/lean-blaster-datatype-param-names.md).
+   - Draft: [lean-blaster-datatype-param-names.md](../../../../../seedelf-verification/Upstream/drafts/lean-blaster-datatype-param-names.md).
    - **It's already out there:** PlutusCoreBlaster `main` pins Blaster `bc03bb4`, which has the line, and its [#68](https://github.com/input-output-hk/PlutusCoreBlaster/pull/68) moves the pin to `8816f72`, which has it too. Lean-blaster [#155](https://github.com/input-output-hk/Lean-blaster/pull/155) (beta → `main`, under review on 2026-11-02) would bring it to `main`.
    - The line came in with `bafdd4f` (2025-12-04, the hash-consing squash). Draft [#335](https://github.com/input-output-hk/Lean-blaster/pull/335) would fix it as a side effect, but has no test for it and was idle from 2026-10-18.
 2. ⛔ **`BitVec` through `Char`.**
@@ -32,15 +34,15 @@ Branch `verification`, from `main`, pushed to origin, with no PR on purpose (the
    - `byteStringToInteger` folds `Char.toNat`, and `sliceByteString` is `take`/`drop` on the chars. Over a symbolic bytestring, either fails with "Inductive datatype with instance parameters not supported: `BitVec`".
    - The upstream issues are Lean-blaster [#153](https://github.com/input-output-hk/Lean-blaster/issues/153), [#69](https://github.com/input-output-hk/Lean-blaster/issues/69) and [#67](https://github.com/input-output-hk/Lean-blaster/issues/67). On 2026-07-29 a maintainer said BitVec/Fin support would come "very soon".
    - The stopgap's precedent is PlutusCoreBlaster [#27](https://github.com/input-output-hk/PlutusCoreBlaster/pull/27), an `opaque` alias for `serialiseData`. It was still open on 2026-11-02.
-   - Drafts: [the #153 comment](../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md), [the PlutusCoreBlaster issue](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md), and [the #68 comment](../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md). The #68 comment needs the number of bug 1's issue once that's filed.
+   - Drafts: [the #153 comment](../../../../../seedelf-verification/Upstream/drafts/lean-blaster-153-comment.md), [the PlutusCoreBlaster issue](../../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-bytestring-builtins.md), and [the #68 comment](../../../../../seedelf-verification/Upstream/drafts/plutuscoreblaster-68-comment.md). The #68 comment needs the number of bug 1's issue once that's filed.
    - The "very soon" work looks like branch `feat/indexed-types` (RSoulatIOHK, last touched 2026-06-21, never a PR), which leaves out `Char` and `toNat`, the two things `byteStringToInteger` needs.
-3. ⛔ **`Fin` in a BLS12-381 coordinate.** `Fq1.t : Fin fieldPrime` (`Cryptograph/BLS12_381/Basic.lean`), and `Fin n` is an indexed type: the same throw, waiting behind 1 and 2 for anything holding a symbolic G1 point. Confirmed by a run on 2026-11-02: [Upstream/Fq1Fin](../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s point cases fail with "Inductive datatype with instance parameters not supported: `Fin", its control passes. PlutusCoreBlaster draft [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29) (BLS axiomatization, idle since 2026-09-21) changes it to `Nat` and adds BLS12-381 axioms and an ownership-verification example: read it before WalletRegister.
+3. ⛔ **`Fin` in a BLS12-381 coordinate.** `Fq1.t : Fin fieldPrime` (`Cryptograph/BLS12_381/Basic.lean`), and `Fin n` is an indexed type: the same throw, waiting behind 1 and 2 for anything holding a symbolic G1 point. Confirmed by a run on 2026-11-02: [Upstream/Fq1Fin](../../../../../seedelf-verification/Upstream/Fq1Fin.lean)'s point cases fail with "Inductive datatype with instance parameters not supported: `Fin", its control passes. PlutusCoreBlaster draft [#29](https://github.com/input-output-hk/PlutusCoreBlaster/pull/29) (BLS axiomatization, idle since 2026-09-21) changes it to `Nat` and adds BLS12-381 axioms and an ownership-verification example: read it before WalletRegister.
 
 What they block:
 
 | Property | Needs |
 |---|---|
-| **A Register UTxO moves iff the Schnorr check holds and `vkh` signed** ([WalletRegister](../../../../seedelf-verification/Seedelf/WalletRegister.lean), left out of `check.sh`'s list): the wallet's core property | 1, 2 and 3 |
+| **A Register UTxO moves iff the Schnorr check holds and `vkh` signed** ([WalletRegister](../../../../../seedelf-verification/Seedelf/WalletRegister.lean), left out of `check.sh`'s list): the wallet's core property | 1, 2 and 3 |
 | Burns of 5eed0e1f tokens succeed (`burn_at_0`, `burn_at_255` in `PolicyBurn`). A mint passes for exactly the name `generate` gives (`mint_at_0_iff`, `mint_at_255_iff` in `PolicyMint`), then for any input | 2 |
 
 Until then, the wallet's Schnorr path rests on the Aiken tests, `seedelf-crypto`'s proptests and seedelf-core's recorded-transaction evaluations.
@@ -63,7 +65,7 @@ The owner's runs gave these results. Compare against them after a bump.
 
 On 2026-11-02 every pin was its upstream's head: Lean-blaster beta `46c8479` and main `a16614e`, PlutusCoreBlaster main `1c23de8`, CardanoLedgerApiBlaster main `9938562`.
 
-CardanoLedgerApiBlaster requires Blaster and PlutusCore by branch (`beta-lambda-cache-optimization` and `main`). So only our [lake-manifest.json](../../../../seedelf-verification/lake-manifest.json) pins those two, and a fix on either branch reaches us through `lake update` alone.
+CardanoLedgerApiBlaster requires Blaster and PlutusCore by branch (`beta-lambda-cache-optimization` and `main`). So only our [lake-manifest.json](../../../../../seedelf-verification/lake-manifest.json) pins those two, and a fix on either branch reaches us through `lake update` alone.
 
 Any session can run these reads. None of them builds anything:
 
@@ -85,7 +87,7 @@ gh pr view 27 -R input-output-hk/PlutusCoreBlaster
 - **Bug 2, fixed by `BitVec` support in Lean-blaster (#153):** `ok Upstream.ByteStrings`. Its four ❌ turn ✅, and the two `#blaster` cases show as Expected Falsified. This unblocks everything in the table above.
 - **Bug 2, fixed by `opaque` aliases in PlutusCoreBlaster (the stopgap):** the `BitVec` errors go away, but less gets unblocked, and the reproduction may not show it.
   - **Only properties that use the function the same way on both sides can be proved,** because the function is uninterpreted.
-    - WalletRegister qualifies once `scalarOf` ([Wallet.lean](../../../../seedelf-verification/Seedelf/Wallet.lean)) calls the same alias the builtin runs.
+    - WalletRegister qualifies once `scalarOf` ([Wallet.lean](../../../../../seedelf-verification/Seedelf/Wallet.lean)) calls the same alias the builtin runs.
     - Mint names qualify if `nameWith` and `seedelfName` call the slice alias.
   - **Burns succeeding, and names over any input, need slicing's meaning,** for example "the first 4 bytes of `5eed0e1f ‖ rest`". Only `BitVec` support gives that, or a slice defined on SMT `str.substr` (point 2 of the PlutusCoreBlaster draft).
     - Under an alias, `slice_known_prefix` and `slice_length` come back Falsified instead of failing on `BitVec`. That's expected, not a regression.
@@ -98,7 +100,7 @@ The owner runs every build and pastes the output back ([Practicalities](#practic
 1. ⬜ **Read upstream** with the commands above, and compare with this file's baseline.
 2. ⬜ **Bump the pins.**
    - The owner runs `lake update` in `seedelf-verification/`. It moves Blaster and PlutusCore to their branches' heads in `lake-manifest.json`.
-   - If CardanoLedgerApiBlaster has moved too, put its new commit in [lakefile.lean](../../../../seedelf-verification/lakefile.lean) first.
+   - If CardanoLedgerApiBlaster has moved too, put its new commit in [lakefile.lean](../../../../../seedelf-verification/lakefile.lean) first.
    - Some fixes land where CardanoLedgerApiBlaster doesn't pull from: a fix branch, or main while it stays on beta. Pull one in with a `require` of our own in `lakefile.lean`, at that commit. Lake prefers the root package's own requirement to an inherited one.
    - Record the new revisions here and in the README.
 3. ⬜ **Match the toolchain and Z3.**
@@ -120,13 +122,13 @@ The owner runs every build and pastes the output back ([Practicalities](#practic
       - Then make the input id and the tag symbolic, so the mint's naming holds for any input. That's where [the open question](#the-open-question) comes back.
    3. ⬜ **A symbolic first-input index.** It once hit `BitVec`, but that came from the slicing, not from `consByteString`'s byte ([refuted](#refuted-dont-repeat-these)). So retry `PolicyBurn` with the index symbolic: burns should succeed for every index from 0 to 255 and fail for every index from 256.
    4. ⬜ **Lovejoin**, in a `Lovejoin/` beside `Seedelf/`, with its own `Scripts.lean` and an `extract.sh` step that checks its hashes.
-      - **Its bytes are in seedelf-core.** The token-pool templates are pinned in [templates.rs](../../../seedelf-core/src/lovejoin/templates.rs), before their parameters (Lovejoin `8131b1d`, Aiken v1.1.24). The classic pool's scripts are bundled whole in [references.rs](../../../seedelf-core/src/references.rs): `LOVEJOIN_*_MIX_BOX` and `LOVEJOIN_*_MIX_LOGIC`, which `Protocol::of` reads.
+      - **Its bytes are in seedelf-core.** The token-pool templates are pinned in [templates.rs](../../../../seedelf-core/src/lovejoin/templates.rs), before their parameters (Lovejoin `8131b1d`, Aiken v1.1.24). The classic pool's scripts are bundled whole in [references.rs](../../../../seedelf-core/src/references.rs): `LOVEJOIN_*_MIX_BOX` and `LOVEJOIN_*_MIX_LOGIC`, which `Protocol::of` reads.
       - **Before writing its properties,** check which builtins its scripts reach over the inputs a property would leave symbolic. The BLS12-381 builtins and bytestring slicing meet the same two bugs.
-6. **As each one lands,** update the README's *What's proved* and *Not proved* tables with it. When the chunk is done, this file moves to the archive, as the [plans README](README.md) says.
+6. **As each one lands,** update the README's *What's proved* and *Not proved* tables with it. When the chunk is done, this file moves to the archive, as the [plans README](../../plans/README.md) says.
 
 ## Meanwhile
 
-- ❓ **A Rust proptest of the Schnorr path, through the deployed bytes.** It would run seedelf-crypto's proofs through the wallet script with seedelf-core's `uplc` evaluator ([eval.rs](../../../seedelf-core/src/eval.rs)): random keys and registers, where valid proofs pass and tampered ones fail.
+- ❓ **A Rust proptest of the Schnorr path, through the deployed bytes.** It would run seedelf-crypto's proofs through the wallet script with seedelf-core's `uplc` evaluator ([eval.rs](../../../../seedelf-core/src/eval.rs)): random keys and registers, where valid proofs pass and tampered ones fail.
   - It needs nothing from upstream, and it samples what WalletRegister would prove.
   - Offered on 2026-11-02 and not started: the owner's call.
 - **The owner files the drafts, publicly; Claude doesn't.** The order:
@@ -148,14 +150,14 @@ The owner runs every build and pastes the output back ([Practicalities](#practic
 - **The owner runs every build.**
   - On 2026-11-02 the permission classifier refused Claude's `lake build`, its `check.sh`, and its download of Z3. The owner ran each one and pasted the output.
   - Claude reads and writes the files, and writes the command blocks. A block for the owner names its host and has no placeholders and no `set -e`.
-- **Never build bare.** Every build goes through [check.sh](../../../../seedelf-verification/check.sh).
+- **Never build bare.** Every build goes through [check.sh](../../../../../seedelf-verification/check.sh).
   - It builds each module in its own scope, capped at 8 GB (`CAP=`) and 10 minutes (`LIMIT=`), and its summary gives each module's peak memory.
   - One preparation step over a fully symbolic transaction took 52 GB before it was killed by hand.
   - A module killed at the cap loses all its messages, including the ✅ that came before.
 - **Z3 5.3.1 or later.** With an older Z3, every proof that reaches the solver fails with `unknown tactic recfun-finder`, while the goals Blaster's optimizer closes still pass, so it looks half-working. PlutusCoreBlaster's README still says 4.15.2, which is wrong for this Blaster.
 - **The proofs are about the deployed bytes.**
   - `extract.sh` re-derives the script hex from `5b82530` and checks it against the on-chain hashes.
-  - Variant 1 is frozen ([seedelf-contracts/README.md](../../../../seedelf-contracts/README.md)). The contracts' current source and `hashes/` are a later revision that was never deployed: never verify them as if they were.
+  - Variant 1 is frozen ([seedelf-contracts/README.md](../../../../../seedelf-contracts/README.md)). The contracts' current source and `hashes/` are a later revision that was never deployed: never verify them as if they were.
 - **Writing a property:** follow the README's five rules.
   - Measure steps first: Blaster's machine counts about twice the cost model's steps.
   - Failure is `isUnsuccessful`, never `¬ isSuccessful`.
@@ -194,3 +196,15 @@ The owner runs every build and pastes the output back ([Practicalities](#practic
 ## Fixing it ourselves
 
 The 2026-11-02 investigation found it within reach, about 3-5 days: bug 1 is one line plus a test; 3 is #29's `Fq1` change; 2 takes an `opaque` stopgap for `byteStringToInteger` (real `BitVec`/`Char` support is upstream's design work, weeks to months). The plan for doing it is [chunk 41](chunk-41-blaster-fixes.md).
+
+## Where it ended
+
+- **Its branch.** `verification` is wholly in `main`. Chunk 42's `lovejoin-verification` was cut from it and merged as **#362** (`c15603d5`, 2026-11-05), carrying this chunk's commits (`83ae8c2c`, `70e798a9`, `47f8e21f`) and chunk 41's. `verification` itself never had a PR.
+- **Its steps:**
+  - 5.1, WalletRegister: ✅ ([chunk 41](chunk-41-blaster-fixes.md)), and every Seedelf script in every transaction since (#362).
+  - 5.2, the policy's success directions: ✅ over `Slice/`'s `opaque` slice alias (#362). Over PlutusCoreBlaster's own slice, `PolicyBurn` and `PolicyMint` still fail on `BitVec`: the README's one *Not proved* row, and [chunk 46](../../plans/chunk-46-verification-on-upstream.md)'s.
+  - 5.3, a symbolic first-input index: done the other way. Each index from 0 to 255 is its own theorem, with two more off a byte, put together in the kernel (#362). A symbolic index still breaks `#prep_uplc` (README, *Found along the way*).
+  - 5.4, Lovejoin: chunks 42 and 45 (#362, #368).
+- **The drafts.** #454 was filed. The #153 comment was posted 2026-11-05, with no reply by 2026-11-07. The PlutusCoreBlaster bytestring issue was overtaken by #71, merged. The #68 comment was never posted.
+- **Carried to chunk 46:** re-running against upstream as each fix lands (*How to tell each is fixed*), the Rust proptest of the Schnorr path (❓, the owner's call), and the open question, still not isolated.
+- **Stays as decided:** the burn at #256, with no fix requested.
