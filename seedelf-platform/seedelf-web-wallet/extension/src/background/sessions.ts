@@ -873,13 +873,16 @@ export function quotesTheAsk(ask: SwapAsk, est: Estimate): boolean {
  * usual, for the build that follows (`avoid`): a route that puts a DEX
  * where the session's check can't follow it (`outOfPlace`: any DEX in a
  * path of more than one leg, Danogo beside anything else) is asked for
- * again without that DEX, rather than refused (chunk 24). An estimate for
- * anything but `ask` is refused (`quotesTheAsk`), wherever it's asked for:
- * a quote, Review it myself, and the runner's order, which tries again later.
+ * again without that DEX, rather than refused (chunk 24), and so is one
+ * through a DEX the wallet doesn't check on `network` (`uncheckedProtocols`):
+ * Minswap adds DEXes the wallet can't name in advance, and any of them winning
+ * a route shouldn't cost the swap its quote. An estimate for anything but
+ * `ask` is refused (`quotesTheAsk`), wherever it's asked for: a quote, Review
+ * it myself, and the runner's order, which tries again later.
  */
-export async function routeOf(minswap: Minswap, ask: SwapAsk): Promise<{ est: Estimate; avoid: string[] }> {
+export async function routeOf(minswap: Minswap, ask: SwapAsk, network: NetworkName): Promise<{ est: Estimate; avoid: string[] }> {
   const first = await minswap.estimate(ask);
-  const avoid = outOfPlace(first);
+  const avoid = [...new Set([...outOfPlace(first), ...uncheckedProtocols(network, first)])];
   const est = avoid.length ? await minswap.estimate(ask, avoid) : first;
   if (!quotesTheAsk(ask, est)) throw new Error(t("sess.otherQuote"));
   return { est, avoid };
@@ -1572,16 +1575,16 @@ export class SessionService {
 
   /**
    * Minswap's quote for `ask`, whether the token it gets is verified, and
-   * what its return through Lovejoin is expected to take. A route through a
-   * DEX whose orders the wallet can't check (minswap.ts MAINNET_PROTOCOLS) is
-   * refused here, before anything is funded (final review sessions-4), and so
-   * is one that, asked again, still puts a DEX where the session's check
-   * can't follow it (`outOfPlace`), in words of its own: its DEXes are ones
-   * the wallet checks (release review C34).
+   * what its return through Lovejoin is expected to take. A route that, asked
+   * again (`routeOf`), still goes through a DEX whose orders the wallet can't
+   * check (minswap.ts MAINNET_PROTOCOLS) is refused here, before anything is
+   * funded (final review sessions-4), and so is one that still puts a DEX
+   * where the session's check can't follow it (`outOfPlace`), in words of its
+   * own: its DEXes are ones the wallet checks (release review C34).
    */
   async quote(network: NetworkName, ask: SwapAsk): Promise<SwapQuote> {
     const checked = checkAsk(ask);
-    const { est } = await routeOf(this.deps.minswap(network), checked);
+    const { est } = await routeOf(this.deps.minswap(network), checked, network);
     const unchecked = uncheckedProtocols(network, est);
     if (unchecked.length) {
       throw new Error(t("sess.routesThrough", { protocols: unchecked.join(t("histories.list.and")) }));
@@ -3179,7 +3182,7 @@ export class SessionService {
     }
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
-    const { est, avoid } = await routeOf(minswap, ask);
+    const { est, avoid } = await routeOf(minswap, ask, network);
     // Its route now, as the runner's order checks it (independent review M17, release review C34).
     const unchecked = uncheckedProtocols(network, est);
     if (unchecked.length) {
@@ -4120,7 +4123,7 @@ export class SessionService {
     const approved = s.auto!.approved;
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
-    const { est, avoid } = await routeOf(minswap, ask);
+    const { est, avoid } = await routeOf(minswap, ask, network);
     // Routed afresh: never through a DEX whose orders the wallet can't check, whatever the quote went
     // through, nor where the session's check can't follow it. It pauses, as the quote would have refused it
     // (independent review M17, release review C34).

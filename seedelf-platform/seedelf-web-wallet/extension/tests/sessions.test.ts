@@ -245,7 +245,7 @@ describe("a swap's quote", () => {
       amount: "10000000",
       token_in: "lovelace",
       token_out: MIN,
-      exclude_protocols: ["ChakraBondingCurve", "OpenDjedV1"],
+      exclude_protocols: ["OpenDjedV1"],
     });
     // Selling a token: the session carries it, and ADA for the costs.
     const selling = await t.sessions.quote("preprod", { ...ASK, tokenIn: MIN, tokenOut: "lovelace", amount: "500" });
@@ -338,7 +338,7 @@ describe("a swap's quote", () => {
   });
 
   it("leaves Splash out of routing on preprod, where Minswap builds its orders with a mainnet address", () => {
-    expect(excludedProtocols("preprod")).toEqual([...DIRECT_PROTOCOLS, "Splash", "SplashStable"]);
+    expect(excludedProtocols("preprod")).toEqual([...DIRECT_PROTOCOLS, "Splash", "SplashStable", "SundaeSwapV4"]);
   });
 
   it("leaves out of mainnet's routing the DEXes whose orders the check refuses, and won't quote a route through one it can't check (final review sessions-4)", async () => {
@@ -350,6 +350,7 @@ describe("a swap's quote", () => {
       "MuesliSwap",
       "SplashStable",
       "SundaeSwapStable",
+      "SundaeSwapV4",
       "CswapV1",
       "WingRidersStableV1",
     ]);
