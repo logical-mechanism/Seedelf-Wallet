@@ -58,15 +58,15 @@ pub async fn run() {
     if cli.command.is_some() {
         display_blue("Checking For Existing Seedelf Wallet");
         match setup::check_and_prepare_seedelf() {
-            Ok(None) => {
-                let wallet_name: String = setup::prompt_wallet_name();
-                let password: String = setup::is_valid_password();
-                if let Err(err) = setup::create_wallet(wallet_name.clone(), password) {
+            Ok(None) => match setup::create_wallet_interactive() {
+                Ok(wallet_name) => {
+                    display_yellow(format!("Wallet Created: {wallet_name}").as_str())
+                }
+                Err(err) => {
                     eprintln!("Error: {err:#}");
                     return;
                 }
-                display_yellow(format!("Wallet Created: {wallet_name}").as_str());
-            }
+            },
             Ok(Some(wallet_name)) => display_cyan(format!("Found Wallet: {wallet_name}").as_str()),
             Err(err) => {
                 eprintln!("Error: {err:#}");
