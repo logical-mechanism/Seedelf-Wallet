@@ -56,11 +56,22 @@ describe("a mainnet swap's route (independent review M17)", () => {
     expect(new Set(left).size).toBe(left.length);
   });
 
-  it("knows every DEX Minswap's live API named on 2026-09-27, WingRidersStableV1 included", () => {
-    // Its 400 answer to an unknown name allowed 19 constants. WingRidersStableV1, left off at first, stayed routable.
+  it("knows the 19 DEXes Minswap's live API took on 2026-11-09, WingRidersStableV1 included", () => {
+    // Its 400 answer to an unknown name allowed 23 constants, without naming them. WingRidersStableV1, left off at
+    // first, stayed routable.
     expect(MINSWAP_PROTOCOLS).toContain("WingRidersStableV1");
     expect(new Set(MINSWAP_PROTOCOLS).size).toBe(19);
     expect(MAINNET_PROTOCOLS).not.toContain("WingRidersStableV1");
+  });
+
+  it("never sends ChakraBondingCurve: Minswap stopped taking the name, and one name it refuses fails every quote", () => {
+    for (const network of ["preprod", "mainnet"] as const) expect(excludedProtocols(network)).not.toContain("ChakraBondingCurve");
+    expect(MINSWAP_PROTOCOLS).not.toContain("ChakraBondingCurve");
+  });
+
+  it("leaves SundaeSwap V4 out on both networks until the wallet reads its orders (chunk 47)", () => {
+    for (const network of ["preprod", "mainnet"] as const) expect(excludedProtocols(network)).toContain("SundaeSwapV4");
+    expect(MAINNET_PROTOCOLS).not.toContain("SundaeSwapV4");
   });
 
   it("pauses a funded swap whose fresh route goes through a DEX the wallet can't check, and places it once the route is back", async () => {
@@ -90,6 +101,53 @@ describe("a mainnet swap's route (independent review M17)", () => {
     } finally {
       rule.mainnet = false;
     }
+  });
+});
+
+describe("a route through a DEX the wallet doesn't know (2026-11-09)", () => {
+  /** Minswap's answer, as its router's: through `dex` until it's asked to leave that out, then through MinswapV2. */
+  const routesThrough = (t: Awaited<ReturnType<typeof unlocked>>, dex: string) =>
+    Object.defineProperty(t.minswap, "estimate", {
+      get: () => {
+        const { body } = t.minswap.calls.at(-1)!;
+        return via((body.exclude_protocols ?? body.estimate.exclude_protocols).includes(dex) ? "MinswapV2" : dex);
+      },
+    });
+
+  it("is asked for again without it on mainnet, and quoted, so a DEX Minswap adds doesn't cost the swap its quote", async () => {
+    const t = await unlocked();
+    routesThrough(t, "SomeNewDex");
+    await expect(t.sessions.quote("mainnet", selling)).resolves.toMatchObject({ route: ["MinswapV2"] });
+    const asked = t.minswap.calls.filter((c) => c.path === "estimate");
+    expect(asked).toHaveLength(2);
+    expect(asked[0]!.body.exclude_protocols).not.toContain("SomeNewDex");
+    expect(asked[1]!.body.exclude_protocols).toContain("SomeNewDex");
+  });
+
+  it("is left out of the runner's build too, so the order goes through the route that was checked", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    rule.mainnet = true;
+    try {
+      await started(sessions);
+      funded(t);
+      routesThrough(t, "CswapV1");
+      const view = await sessions.advance("preprod", 0, true);
+      expect(view.auto!.paused).toBeUndefined();
+      const built = t.minswap.calls.filter((c) => c.path === "build-tx");
+      expect(built).toHaveLength(1);
+      expect(built[0]!.body.estimate.exclude_protocols).toContain("CswapV1");
+      expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+    } finally {
+      rule.mainnet = false;
+    }
+  });
+
+  it("isn't asked for again on preprod, where only the check stands", async () => {
+    const t = await unlocked();
+    t.minswap.estimate = via("CswapV1");
+    await expect(t.sessions.quote("preprod", selling)).resolves.toMatchObject({ route: ["CswapV1"] });
+    expect(t.minswap.calls.filter((c) => c.path === "estimate")).toHaveLength(1);
   });
 });
 

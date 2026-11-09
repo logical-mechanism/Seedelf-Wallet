@@ -120,13 +120,17 @@ const RAW_TX = /\s*\|\s*RawTx:\s*([0-9a-f]+)\.?\s*$/i;
  * DEXes that swap straight against their pools in the same transaction,
  * rather than taking an order for a batcher to fill: the transaction spends
  * the pools' UTxOs, runs their scripts, and brings someone else's collateral.
- * Routing leaves these out: a bonding curve and Djed's minting. Danogo's
- * (DanogoCLMMV1, seen doing it on preprod, 2026-09-25) is routed since
- * chunk 24, whose checks read its swaps (DANOGO_POOL, sessions.ts
- * `directSpends`). The session's check stays: any other DEX that does it
- * pauses the swap.
+ * Routing leaves out Djed's minting. Danogo's (DanogoCLMMV1, seen doing it
+ * on preprod, 2026-09-25) is routed since chunk 24, whose checks read its
+ * swaps (DANOGO_POOL, sessions.ts `directSpends`). The session's check stays:
+ * any other DEX that does it pauses the swap.
+ *
+ * ChakraBondingCurve was here until Minswap's API stopped taking the name, on
+ * both networks, though its documentation still lists it (seen 2026-11-09).
+ * One name it refuses fails the whole request, so every swap's quote failed
+ * while the wallet sent it. Never name a DEX here without trying it live.
  */
-export const DIRECT_PROTOCOLS = ["ChakraBondingCurve", "OpenDjedV1"];
+export const DIRECT_PROTOCOLS = ["OpenDjedV1"];
 
 /**
  * On preprod, Minswap builds Splash's orders with Splash's mainnet order
@@ -134,6 +138,14 @@ export const DIRECT_PROTOCOLS = ["ChakraBondingCurve", "OpenDjedV1"];
  * output on another network. Mainnet's are fine.
  */
 const PREPROD_BROKEN = ["Splash", "SplashStable"];
+
+/**
+ * DEXes left out of preprod's routing too, as preprod has no list of the
+ * DEXes it may go through (`uncheckedProtocols`): a swap through one would be
+ * funded before the session's check paused it. SundaeSwap V4 is on Minswap's
+ * routes, and the wallet can't read its orders or cancel one yet (chunk 47).
+ */
+const NOT_READ_YET = ["SundaeSwapV4"];
 
 /**
  * The DEXes a mainnet swap goes through: those whose orders the wallet can
@@ -153,8 +165,9 @@ const PREPROD_BROKEN = ["Splash", "SplashStable"];
  * - Splash and Spectrum: both are Splash's limit order as Minswap builds them;
  * - DanogoCLMMV1: no order, a swap against its pools (DANOGO_POOL), read by
  *   what it spends, pays and gives back (chunk 24). Only on its own.
- * A route through any other is refused before it's funded (quote), rather
- * than pause once it is.
+ * A route through any other is asked for again without it (sessions.ts
+ * `routeOf`), and refused before it's funded (quote) if it still goes through
+ * one, rather than pause once it is.
  */
 export const MAINNET_PROTOCOLS: readonly string[] = [
   "Minswap",
@@ -261,12 +274,14 @@ export function outOfPlace(est: Pick<Estimate, "paths">): string[] {
 }
 
 /**
- * Every DEX Minswap's aggregator routes through, by the names its
- * `exclude_protocols` takes: any other, and it refuses the whole request.
- * Checked against the live API, not only its published list: an unknown
- * name's 400 answer names one allowed constant per DEX, 19 on 2026-09-27,
- * and each of these is taken (independent review M17). A DEX Minswap adds
- * after that isn't here, and routing can go through it (excludedProtocols).
+ * Every DEX Minswap's aggregator routes through that the wallet knows, by
+ * the names its `exclude_protocols` takes: any other, and it refuses the
+ * whole request. Checked against the live API, not only its published list,
+ * which still has a name the API refuses (DIRECT_PROTOCOLS): an unknown
+ * name's 400 answer counts one allowed constant per DEX, 19 on 2026-09-27
+ * and 23 on 2026-11-09, without naming them (independent review M17). So
+ * routing can go through a DEX that isn't here (excludedProtocols), and
+ * `routeOf` asks again without it.
  */
 export const MINSWAP_PROTOCOLS: readonly string[] = [
   "MinswapV2",
@@ -277,6 +292,7 @@ export const MINSWAP_PROTOCOLS: readonly string[] = [
   "SundaeSwapV3",
   "SundaeSwap",
   "SundaeSwapStable",
+  "SundaeSwapV4",
   "VyFinance",
   "CswapV1",
   "WingRidersV2",
@@ -285,7 +301,6 @@ export const MINSWAP_PROTOCOLS: readonly string[] = [
   "WingRidersStableV1",
   "Spectrum",
   "SplashStable",
-  "ChakraBondingCurve",
   "OpenDjedV1",
   "DanogoCLMMV1",
 ];
@@ -303,7 +318,7 @@ export const MINSWAP_PROTOCOLS: readonly string[] = [
  * receivers and its minimum are (sessions.ts checkOrder).
  */
 export function excludedProtocols(network: "preprod" | "mainnet"): string[] {
-  if (network === "preprod") return [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN];
+  if (network === "preprod") return [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN, ...NOT_READ_YET];
   const unchecked = MINSWAP_PROTOCOLS.filter((p) => !MAINNET_PROTOCOLS.includes(p));
   return [...new Set([...DIRECT_PROTOCOLS, ...MAINNET_REFUSED, ...unchecked])];
 }

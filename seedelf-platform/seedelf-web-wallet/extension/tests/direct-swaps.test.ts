@@ -609,8 +609,8 @@ describe("Danogo routed (chunk 24)", () => {
     expect(DIRECT_PROTOCOLS).not.toContain("DanogoCLMMV1");
     expect(excludedProtocols("mainnet")).not.toContain("DanogoCLMMV1");
     expect(excludedProtocols("preprod")).not.toContain("DanogoCLMMV1");
-    // A bonding curve and Djed's minting still aren't.
-    expect(excludedProtocols("mainnet")).toEqual(expect.arrayContaining(["ChakraBondingCurve", "OpenDjedV1"]));
+    // Djed's minting still isn't.
+    expect(excludedProtocols("mainnet")).toEqual(expect.arrayContaining(["OpenDjedV1"]));
 
     const t = await unlocked();
     t.minswap.estimate = { ...minswapEstimate.estimate, paths: [[{ ...leg, protocol: "DanogoCLMMV1" }], [{ ...leg, protocol: "DanogoCLMMV1" }]] };
