@@ -13,7 +13,7 @@ use rpassword::read_password;
 use seedelf_crypto::schnorr::random_scalar;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -119,56 +119,82 @@ pub(crate) fn check_and_prepare_seedelf() -> Result<Option<String>> {
     }
 }
 
-/// Prompt the user to enter a wallet name
-pub(crate) fn prompt_wallet_name() -> String {
-    let mut wallet_name: String = String::new();
-    println!("{}", "\nEnter A Wallet Name:".bright_purple());
-    io::stdout().flush().unwrap();
-    io::stdin()
-        .read_line(&mut wallet_name)
-        .expect("Failed to read wallet name");
-    let final_name: String = wallet_name
-        .split_whitespace() // breaks on any whitespace sequence
-        .collect::<Vec<_>>() // collect the pieces
-        .join("_");
-    if final_name.is_empty() {
-        println!("{}", "Wallet Must Not Have Empty Name.".red());
-        return prompt_wallet_name();
-    }
-    final_name
+/// How many rounds of wallet creation's password prompt run before it gives up.
+///
+/// The prompt can't see the end of its input: rpassword returns an empty
+/// password there, just as it does for a bare Enter, so the retries need a
+/// limit. It's far more failed tries than anyone makes by hand.
+const MAX_PASSWORD_ATTEMPTS: u32 = 32;
+
+/// Ask for a name and a password, write the new wallet and return its name.
+pub(crate) fn create_wallet_interactive() -> Result<String> {
+    let wallet_name: String = prompt_wallet_name(&mut io::stdin().lock())?;
+    let password: String = is_valid_password(|| {
+        enter_password().map_err(|e| anyhow!("Failed to read password: {e}"))
+    })?;
+    create_wallet(wallet_name.clone(), password)?;
+    Ok(wallet_name)
 }
 
-fn enter_password() -> String {
+/// Prompt the user to enter a wallet name. A blank line asks again; the end of
+/// the input is an error, since no more lines can come.
+fn prompt_wallet_name(input: &mut impl BufRead) -> Result<String> {
+    loop {
+        let mut wallet_name: String = String::new();
+        println!("{}", "\nEnter A Wallet Name:".bright_purple());
+        io::stdout().flush()?;
+        let bytes_read: usize = input
+            .read_line(&mut wallet_name)
+            .map_err(|e| anyhow!("Failed to read wallet name: {e}"))?;
+        if bytes_read == 0 {
+            bail!("Input Ended Before A Wallet Name Was Given");
+        }
+        let final_name: String = wallet_name
+            .split_whitespace() // breaks on any whitespace sequence
+            .collect::<Vec<_>>() // collect the pieces
+            .join("_");
+        if !final_name.is_empty() {
+            return Ok(final_name);
+        }
+        println!("{}", "Wallet Must Not Have Empty Name.".red());
+    }
+}
+
+fn enter_password() -> io::Result<String> {
     println!(
         "{}",
         "\nEnter A Password To Encrypt The Wallet:".bright_purple()
     );
-    let password: String = read_password().expect("Failed to read password");
-    password
+    read_password()
 }
 
-pub(crate) fn is_valid_password() -> String {
-    let password: String = enter_password();
-    if !password_complexity_check(password.clone()) {
-        println!(
-            "{}",
-            "Passwords Must Contain The Following:\n
+/// Take passwords from `next_password` until one passes the complexity check
+/// and is confirmed by the one after it, or [`MAX_PASSWORD_ATTEMPTS`] rounds
+/// have failed.
+fn is_valid_password(mut next_password: impl FnMut() -> Result<String>) -> Result<String> {
+    for _ in 0..MAX_PASSWORD_ATTEMPTS {
+        let password: String = next_password()?;
+        if !password_complexity_check(password.clone()) {
+            println!(
+                "{}",
+                "Passwords Must Contain The Following:\n
                   Minimum Length: At Least 14 Characters.
                   Uppercase Letter: Requires At Least One Uppercase Character.
                   Lowercase Letter: Requires At Least One Lowercase Character.
                   Number: Requires At Least One Digit.
                   Special Character: Requires At Least One Special Symbol.\n"
-                .red()
-        );
-        return is_valid_password();
-    }
-    let password_copy: String = enter_password();
+                    .red()
+            );
+            continue;
+        }
+        let password_copy: String = next_password()?;
 
-    if password != password_copy {
+        if password == password_copy {
+            return Ok(password);
+        }
         println!("{}", "Passwords Do Not Match; Try Again!".red());
-        return is_valid_password();
     }
-    password
+    bail!("Too Many Failed Password Attempts; No Wallet Was Created")
 }
 
 /// Create a wallet file and save a random private key
@@ -302,7 +328,7 @@ pub(crate) fn unlock_wallet_interactive() -> Scalar {
         return scalar;
     }
     loop {
-        let password: String = enter_password();
+        let password: String = enter_password().expect("Failed to read password");
 
         match load_wallet(password) {
             Ok(scalar) => break scalar,
@@ -346,7 +372,110 @@ fn password_complexity_check(password: String) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::password_complexity_check;
+    use super::{
+        MAX_PASSWORD_ATTEMPTS, is_valid_password, password_complexity_check, prompt_wallet_name,
+    };
+    use anyhow::{Result, anyhow};
+    use std::cell::Cell;
+    use std::io::Cursor;
+
+    const GOOD: &str = "i@G37xzM@qcgk3g";
+    const OTHER_GOOD: &str = "i@G37xzM@qcgk3h";
+
+    fn wallet_name_from(input: &str) -> Result<String> {
+        prompt_wallet_name(&mut Cursor::new(input.to_string()))
+    }
+
+    /// The password prompt given exactly these answers, in order.
+    fn password_from(answers: &[&str]) -> Result<String> {
+        let mut answers = answers.iter();
+        is_valid_password(|| {
+            answers
+                .next()
+                .map(|a| a.to_string())
+                .ok_or_else(|| anyhow!("asked for more answers than the test has"))
+        })
+    }
+
+    #[test]
+    fn wallet_name_joins_its_words() {
+        assert_eq!(
+            wallet_name_from("my  test wallet\n").unwrap(),
+            "my_test_wallet"
+        );
+    }
+
+    #[test]
+    fn wallet_name_without_a_final_newline_is_a_name() {
+        assert_eq!(wallet_name_from("wallet").unwrap(), "wallet");
+    }
+
+    #[test]
+    fn blank_wallet_names_ask_again() {
+        assert_eq!(wallet_name_from("\n   \nwallet\n").unwrap(), "wallet");
+    }
+
+    #[test]
+    fn many_blank_wallet_names_do_not_overflow_the_stack() {
+        let input = format!("{}wallet\n", "\n".repeat(100_000));
+        assert_eq!(wallet_name_from(&input).unwrap(), "wallet");
+    }
+
+    #[test]
+    fn wallet_name_stops_at_the_end_of_the_input() {
+        assert!(wallet_name_from("").is_err());
+        assert!(wallet_name_from("\n\n").is_err());
+    }
+
+    #[test]
+    fn password_confirmed_is_returned() {
+        assert_eq!(password_from(&[GOOD, GOOD]).unwrap(), GOOD);
+    }
+
+    #[test]
+    fn password_failing_the_complexity_check_asks_again() {
+        assert_eq!(password_from(&["short", GOOD, GOOD]).unwrap(), GOOD);
+    }
+
+    #[test]
+    fn password_not_confirmed_asks_again_from_the_start() {
+        assert_eq!(
+            password_from(&[GOOD, OTHER_GOOD, OTHER_GOOD, OTHER_GOOD]).unwrap(),
+            OTHER_GOOD
+        );
+    }
+
+    #[test]
+    fn password_read_error_stops_the_prompt() {
+        assert!(password_from(&[]).is_err());
+    }
+
+    #[test]
+    fn password_gives_up_when_the_input_only_reads_empty() {
+        let asked = Cell::new(0);
+        let result = is_valid_password(|| {
+            asked.set(asked.get() + 1);
+            Ok(String::new())
+        });
+        assert!(result.is_err());
+        assert_eq!(asked.get(), MAX_PASSWORD_ATTEMPTS);
+    }
+
+    #[test]
+    fn password_gives_up_when_confirmations_never_match() {
+        let asked = Cell::new(0);
+        let result = is_valid_password(|| {
+            asked.set(asked.get() + 1);
+            Ok(if asked.get() % 2 == 1 {
+                GOOD
+            } else {
+                OTHER_GOOD
+            }
+            .to_string())
+        });
+        assert!(result.is_err());
+        assert_eq!(asked.get(), 2 * MAX_PASSWORD_ATTEMPTS);
+    }
 
     #[test]
     fn test_short_password() {
