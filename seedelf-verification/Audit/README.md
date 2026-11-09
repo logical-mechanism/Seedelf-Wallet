@@ -17,7 +17,7 @@ A review of the proofs in `Seedelf/` and `Lovejoin/` as they stood on 2026-11-03
   - The medium findings.
 - `Checks/`: evaluation-only checks, such as the flat decoder against Aiken's text, the Steps runs as `#guard`s, and every theorem's axioms.
 - `diag/`: Blaster's SMT queries for proved theorems, dumped and replayed through Z3 (`bash Audit/diag/run-diag.sh quick`). It checks Lean-blaster #194: a contradictory background would make a ✅ vacuous. Where a Mix theorem's premises time out, they're replayed again with the boxes in collapsed, as some controls are (below). A replay that settles nothing is flagged INCONCLUSIVE, never counted clean.
-- `count.py`: reads each module's last build log and compares it with what its source expects. Blaster logs a check that comes back Undetermined as a warning only, so check.sh's `ok` can't tell it from a pass, but this can.
+- `count.py`: reads each module's last build log and compares it with what its source expects. Blaster logs a check that comes back Undetermined as a warning only. check.sh reports such a module as `UNDETERM`, not `ok`; this also checks each module's counts.
 
 ## Running it
 

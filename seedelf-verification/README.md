@@ -160,4 +160,7 @@ Chunk 42's rule, for every Lovejoin proof:
 ## Next
 
 - **Lovejoin.** Every script in scope is characterized in every transaction, mix_logic's and one_shot_mint's in the Aiken source's terms (above; the record is [chunk 45](../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-45-lovejoin-every-tx.md)). An outside read of the readable statements against the source would check what no proof can: that they say what Lovejoin means.
-- **Get the fixes upstream,** so the forks can go ([chunk 41](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-41-blaster-fixes.md), *Where upstream stands*): of our four PRs, #71 and #72 have merged, and Lean-blaster #455 and PlutusCoreBlaster #73 are open; the xor and slice aliases were never offered, and #27 (`serialise_data`) is still a draft. The comments in `Upstream/drafts/` are the owner's to post. `BitVec` itself, which blocks the policy's success directions, is Lean-blaster #153's.
+- **Get the fixes upstream, so the forks can go.** The plan is [chunk 46](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-46-verification-on-upstream.md); chunks 40 and 41 are its archived record.
+  - Of our four PRs, #71 and #72 have merged, and Lean-blaster #455 and PlutusCoreBlaster #73 are open.
+  - PlutusCoreBlaster #77 (mpetruska's, open) defines the byte builtins so Blaster can read them. It would make our `serialise_data`, xor and slice aliases redundant, and remove #71's.
+  - `BitVec` itself is Lean-blaster #153's. Without #77, it still blocks the policy's success directions over the real slice.
