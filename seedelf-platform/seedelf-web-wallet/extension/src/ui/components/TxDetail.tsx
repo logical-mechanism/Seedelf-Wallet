@@ -346,7 +346,7 @@ export function TxDetailBody({
       <Section
         title={tr("tx.spends", { count: d.inputs.length })}
         id={`${testId}-inputs`}
-        hint={tr("tx.privacy.inputsHint")}
+        hint={tr(site ? "tx.privacy.inputsHintSite" : "tx.privacy.inputsHint")}
       >
         <Outpoints list={d.inputs} testId={`${testId}-input-list`} />
       </Section>
@@ -631,7 +631,12 @@ export function TxDetailBody({
           {d.requiredSigners.length > 0 && (
             <ReviewRows testId={`${testId}-signers`}>
               {d.requiredSigners.map((hash, i) => (
-                <Row key={i} label={tr("tx.mustBeSignedBy")} value={shortHex(hash, 10, 6)} title={hash} />
+                <Row
+                  key={i}
+                  label={tr(d.yourSigners?.includes(hash) ? "tx.mustBeSignedByYou" : "tx.mustBeSignedBy")}
+                  value={shortHex(hash, 10, 6)}
+                  title={hash}
+                />
               ))}
             </ReviewRows>
           )}

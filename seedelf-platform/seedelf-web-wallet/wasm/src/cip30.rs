@@ -15,7 +15,7 @@ use pallas_addresses::{
 };
 use pallas_codec::minicbor::{self, Encoder};
 use pallas_codec::utils::Nullable;
-use pallas_crypto::hash::Hash;
+use pallas_crypto::hash::{Hash, Hasher};
 use pallas_primitives::{Fragment, Metadatum, StakeCredential, conway};
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
@@ -151,6 +151,15 @@ impl Amount {
             self.add_token(p.clone(), n.clone(), *q)?;
         }
         Ok(())
+    }
+
+    /// For a figure that's only shown: past a u64 it stays huge, where `add` would refuse the transaction.
+    fn add_saturating(&mut self, other: &Amount) {
+        self.lovelace = self.lovelace.saturating_add(other.lovelace);
+        for (k, q) in &other.tokens {
+            let held = self.tokens.entry(k.clone()).or_default();
+            *held = held.saturating_add(*q);
+        }
     }
 
     fn of_row(row: &KoiosRow) -> Result<Amount> {
@@ -921,6 +930,19 @@ pub struct TxSummary {
     /// `recipients`. The extension refuses one that's a Lovejoin pool's
     /// `mix_logic`, where money is anyone's to take (chunk 43).
     pub paid_scripts: Vec<String>,
+    /// The contract UTxOs it spends, as far as they were found, and what they hold, whoever's they are. Not in the
+    /// totals above, which are the account's: an order or a listing is the contract's until it's released.
+    pub contract_inputs: usize,
+    pub contract_lovelace: String,
+    pub contract_tokens: Vec<Token>,
+    /// Of what they hold, what doesn't reach the account (`released_from_contracts`).
+    pub released_lovelace: String,
+    pub released_tokens: Vec<Token>,
+    /// One of the account's keys is what a contract here can be asking for: a required signer, named by a contract
+    /// UTxO's datum, or a contract input that can only be a native script's.
+    pub key_releases: bool,
+    /// A contract UTxO's datum names one of the account's keys: it's likely the user's own order or listing.
+    pub names_key: bool,
     /// Signatures it needs from keys that aren't the account's.
     pub others_sign: usize,
     /// The account's signatures are all it needs, as far as the wallet can tell.
@@ -1049,6 +1071,70 @@ fn stake_hash(cred: &StakeCredential) -> Option<&Hash<28>> {
     }
 }
 
+/// Whether a UTxO sits at a script's address.
+fn at_script(row: &KoiosRow) -> bool {
+    matches!(Address::from_bech32(&row.address), Ok(Address::Shelley(s)) if s.payment().is_script())
+}
+
+/// Whether a contract UTxO's datum names one of the account's keys: its 28-byte hash anywhere in the datum's bytes, in
+/// whatever shape the contract keeps its owner (a canceller, a listing's seller, an owner's address). The datum is the
+/// row's own, or for one kept by hash the one the transaction carries under that hash. Says which UTxO is likely the
+/// user's, not what the contract does with it.
+fn datum_names_key(row: &KoiosRow, carried: &HashMap<String, Vec<u8>>, keys: &Keys) -> bool {
+    let inline = row
+        .inline_datum
+        .as_ref()
+        .and_then(|d| hex::decode(&d.bytes).ok());
+    let bytes = inline.as_deref().or_else(|| {
+        carried
+            .get(&row.datum_hash.as_ref()?.to_lowercase())
+            .map(Vec::as_slice)
+    });
+    bytes.is_some_and(|b| {
+        b.windows(28)
+            .any(|w| <[u8; 28]>::try_from(w).is_ok_and(|h| keys.of_hash(&Hash::new(h)).is_some()))
+    })
+}
+
+/// The most of a fee that's taken as one when working out what leaves a contract: well over what the largest
+/// transaction costs. A fee can be set to anything, and a contract's money burned that way is still gone.
+const MOST_FEE_ALLOWED: u64 = 10_000_000;
+
+/// What the contract UTxOs hold that doesn't reach the account. Each asset on its own, so ADA paid back can't stand for
+/// a token taken. Only what the account comes out ahead counts as reaching it, and the fee comes off as far as the
+/// account didn't pay it. Money that stays at the same contract counts as gone: a listing can stay where it is under a
+/// new owner's datum. An account that spends more than it gets is credited nothing: ADA is fungible, so its own
+/// spending can't be told from the contract's money, and allowing for it would let a site hide the one in the other.
+fn released_from_contracts(
+    contract: &Amount,
+    put_in: &Amount,
+    returned: &Amount,
+    fee: u64,
+) -> Amount {
+    let came_in = returned.lovelace.saturating_sub(put_in.lovelace);
+    let went_out = put_in.lovelace.saturating_sub(returned.lovelace);
+    let tokens = contract
+        .tokens
+        .iter()
+        .filter_map(|(k, q)| {
+            let back = returned
+                .tokens
+                .get(k)
+                .unwrap_or(&0)
+                .saturating_sub(*put_in.tokens.get(k).unwrap_or(&0));
+            let gone = q.saturating_sub(back);
+            (gone > 0).then(|| (k.clone(), gone))
+        })
+        .collect();
+    Amount {
+        lovelace: contract
+            .lovelace
+            .saturating_sub(came_in)
+            .saturating_sub(fee.min(MOST_FEE_ALLOWED).saturating_sub(went_out)),
+        tokens,
+    }
+}
+
 fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> {
     let flag = network_flag(&request.network)?;
     let network = address_network(flag);
@@ -1139,8 +1225,33 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         })
     };
 
+    // The datums the transaction carries, by hash: a contract UTxO keeping its datum by hash has it here. `tx` has
+    // lost the bytes they were written in, which the hash is of. Unreadable this way, there's only less to say: a
+    // reading of who a UTxO likely belongs to is never a reason to refuse.
+    let carried: HashMap<String, Vec<u8>> = conway::MintedTx::decode_fragment(&bytes)
+        .map(|minted| {
+            minted
+                .transaction_witness_set
+                .plutus_data
+                .iter()
+                .flat_map(|set| set.iter())
+                .map(|d| {
+                    (
+                        hex::encode(Hasher::<256>::hash(d.raw_cbor()).as_ref()),
+                        d.raw_cbor().to_vec(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let mut spent = Amount::default();
     let mut own_inputs = 0usize;
+    // The contract UTxOs it spends, whoever's they are: a script's rules decide, and may ask only for one of the
+    // account's keys, as an order's cancel or a listing's withdrawal does (a bounty report against 1.8.1).
+    let mut contract_held = Amount::default();
+    let mut contract_inputs = 0usize;
+    let mut names_key = false;
     for input in body.inputs.iter() {
         let key = (hex::encode(input.transaction_id), input.index);
         match found.get(&key) {
@@ -1150,6 +1261,13 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                     signers.insert(signer);
                     spent.add(&Amount::of_row(row)?)?;
                     own_inputs += 1;
+                } else if at_script(row) {
+                    // What it holds is only shown: never a reason to refuse what the wallet signed before.
+                    if let Ok(held) = Amount::of_row(row) {
+                        contract_held.add_saturating(&held);
+                    }
+                    contract_inputs += 1;
+                    names_key |= datum_names_key(row, &carried, &keys);
                 }
             }
             None => unknown.push(format!("{}#{}", key.0, key.1)),
@@ -1705,6 +1823,19 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         ..spent.clone()
     };
     let (net, net_tokens) = difference(&put_in, &returned);
+    let released = released_from_contracts(&contract_held, &put_in, &returned, body.fee);
+    // A required signer is what a Plutus script can see. A datum that names the account's key covers a contract that
+    // takes the owner's own input being spent as its proof, which needs no required signer. And a contract input in a
+    // body with no script data hash can only be a native script's, which takes the witness alone: Plutus needs the
+    // hash, and the body is what's signed. The witness set isn't, so a site can leave a native script out of what it
+    // shows the wallet and add it after, and nothing here reads one.
+    let key_releases = names_key
+        || body
+            .required_signers
+            .iter()
+            .flat_map(|s| s.iter())
+            .any(|h| keys.of_hash(h).is_some())
+        || (contract_inputs > 0 && body.script_data_hash.is_none());
     others_sign += foreign_keys.len();
     let complete = others_sign == 0 && unknown.is_empty();
     let summary = TxSummary {
@@ -1740,6 +1871,13 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             paid_scripts.dedup();
             paid_scripts
         },
+        contract_inputs,
+        contract_lovelace: contract_held.lovelace.to_string(),
+        contract_tokens: contract_held.tokens_out(),
+        released_lovelace: released.lovelace.to_string(),
+        released_tokens: released.tokens_out(),
+        key_releases,
+        names_key,
         others_sign,
         complete,
     };

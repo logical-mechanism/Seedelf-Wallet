@@ -48,7 +48,7 @@ import { refusalOf, SessionRefusedFoot, type Refusal } from "../components/Sessi
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
-import { certificateLine, certifiedLine, paidTo, proposalLine, signingTies, stakedLine, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
+import { certificateLine, certifiedLine, paidTo, proposalLine, releasesContractFunds, signingTies, stakedLine, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
 import { adaText, formatAda, formatQuantity, shortHex, slotText, unlocked } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts, usePreferences } from "../preferences";
@@ -119,6 +119,11 @@ export function DappApprovals() {
   // Each request starts with an empty box.
   const currentId = current?.id;
   useEffect(() => setPassword(""), [currentId]);
+  // Contract money the account's key helps release and that doesn't reach it: Sign waits for the user's own yes. Held by
+  // the request it was given for, so a yes can never carry over to the next one.
+  const mustAck = current?.kind === "sign-tx" && releasesContractFunds(current.summary);
+  const [ackFor, setAckFor] = useState<string>();
+  const ack = ackFor !== undefined && ackFor === currentId;
   // Another request in front of the user: what was declined before it isn't the news any more.
   useEffect(() => {
     if (currentId) setDeclined(undefined);
@@ -146,7 +151,7 @@ export function DappApprovals() {
     approve: boolean,
     extra: { password?: string; fund?: { txHash: string }; governance?: boolean } = {},
   ): Promise<Answered> {
-    if (!current || busy || held || (approve && needsPassword && !password)) return false;
+    if (!current || busy || held || (approve && needsPassword && !password) || (approve && mustAck && !ack)) return false;
     answered.current = current.id;
     setBusy(true);
     setError(undefined);
@@ -281,6 +286,21 @@ export function DappApprovals() {
       footSticky={false}
       foot={
         <>
+          {/* Over the buttons it unlocks, as the password is. Off to begin with, and for each request. */}
+          {mustAck && (
+            <div className="setting-row" data-testid="dapp-contract-ack">
+              <span id="dapp-contract-ack-label">{tr("dappUi.warn.contractAck")}</span>
+              <button
+                type="button"
+                role="switch"
+                className="switch"
+                aria-checked={ack}
+                aria-labelledby="dapp-contract-ack-label"
+                onClick={() => setAckFor(ack ? undefined : currentId)}
+                disabled={busy || held}
+              />
+            </div>
+          )}
           {/* In the foot, over the buttons it unlocks: in the body, under a foot kept in view, it started below the
               fold and Sign looked broken (chunk 23's review, CW-1). Never focused first: the request is read before
               the password is typed. */}
@@ -295,7 +315,7 @@ export function DappApprovals() {
               type={needsPassword ? "submit" : "button"}
               className="primary"
               onClick={needsPassword ? undefined : () => answer(true)}
-              disabled={busy || held || (needsPassword && !password)}
+              disabled={busy || held || (needsPassword && !password) || (mustAck && !ack)}
             >
               {busy ? "…" : action}
             </button>
@@ -1016,7 +1036,7 @@ export function SignTx({
   };
   // Tokens named like ADA or a listed token that aren't: each is shown by its fingerprint, and said here too.
   const lookalikes = new Map<string, string>();
-  for (const t of [...s.netTokens, ...s.paid.flatMap((p) => p.tokens), ...s.mint]) {
+  for (const t of [...s.netTokens, ...s.paid.flatMap((p) => p.tokens), ...s.mint, ...(s.releasedTokens ?? [])]) {
     const posesAs = tokenText(network, t).posesAs;
     if (posesAs) lookalikes.set(`${t.policyId}.${t.assetName}`, posesAs);
   }
@@ -1042,8 +1062,21 @@ export function SignTx({
   const validFrom =
     s.validFrom !== null && slotStart(network, s.validFrom) > Date.now() ? slotText(network, s.validFrom) : undefined;
 
+  const releases = releasesContractFunds(s);
+  const releasedAda = BigInt(s.releasedLovelace ?? "0");
+
   const notes: ReactNode[] = [];
   if (s.scripts) notes.push(tr("dappUi.note.scripts"));
+  // Every contract UTxO it spends, when the warning above doesn't: the shapes the wallet can't tie to the account's
+  // key (a position released by a token the account holds) have this to go on.
+  if (s.contractInputs && !releases) {
+    notes.push(
+      tr(s.contractTokens?.length ? "dappUi.note.contractInputsTokens" : "dappUi.note.contractInputs", {
+        count: s.contractInputs,
+        ada: formatAda(s.contractLovelace ?? "0"),
+      }),
+    );
+  }
   if (s.referenceInputs) notes.push(tr("dappUi.note.reads", { count: s.referenceInputs }));
   if (s.votes && s.votes > (s.ownVotes ?? 0)) notes.push(tr("dappUi.note.votes", { count: s.votes - (s.ownVotes ?? 0) }));
   if (s.donation) notes.push(tr("dappUi.note.donates", { ada: formatAda(s.donation) }));
@@ -1069,6 +1102,24 @@ export function SignTx({
             amount={amount(t)}
           />
         ))}
+        {/* Not the account's by the ledger, so not in the total, and the total alone would read as nothing leaving. */}
+        {releases && releasedAda > 0n && (
+          <Row
+            label={tr("dappUi.warn.contractRow")}
+            value={`${formatAda(s.releasedLovelace!)} ₳`}
+            strong
+            testId="dapp-contract-released"
+          />
+        )}
+        {releases &&
+          (s.releasedTokens ?? []).map((t) => (
+            <TokenAmountRow
+              key={`released.${t.policyId}.${t.assetName}`}
+              label={tr("dappUi.warn.contractRow")}
+              token={t}
+              amount={amount(t)}
+            />
+          ))}
         {/* Rewards and a deposit back are the account's money too: counted above, and said so. */}
         {staking > 0n && (
           <Row label={tr("dappUi.fromStaking")} value={tr("dappUi.included", { ada: formatAda(s.stakingLovelace) })} />
@@ -1084,6 +1135,13 @@ export function SignTx({
         <Row label={tr("dappUi.expires")} value={expires ?? tr("dappUi.expiresNever")} />
         <Row label={tr("dappUi.signsWith")} value={signers} />
       </ReviewRows>
+
+      {/* Right under the figures, before who it pays: what makes the rest of this window read differently. */}
+      {releases && (
+        <Callout tone="warn" testId="dapp-contract-release">
+          {tr(s.namesKey ? "dappUi.warn.contractYours" : "dappUi.warn.contractMaybe")}
+        </Callout>
+      )}
 
       {s.paid.length > 0 && (
         <section className="section" aria-labelledby="dapp-paid-title">

@@ -26,6 +26,7 @@ import {
   Site,
 } from "../src/ui/screens/DappApprovals";
 import { DeclinedSites, Disconnected, SiteRows } from "../src/ui/screens/ConnectedSites";
+import { releasesContractFunds } from "../src/ui/dapp";
 import { assetFingerprint } from "../src/ui/tokens";
 
 const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
@@ -78,6 +79,77 @@ const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, 
 
 afterEach(async () => {
   await i18n.changeLanguage("en");
+});
+
+// A site can spend an order or a listing with the owner's key as a required signer and pay it anywhere, every row true
+// of the account while the money leaves (a bounty report against 1.8.1).
+describe("a contract UTxO the account's key releases", () => {
+  const token = { policyId: STRANGER, assetName: hex("FOO"), quantity: "1" };
+  const taken: Partial<DappTxSummary> = {
+    netLovelace: "0",
+    spentLovelace: "0",
+    ownInputs: 0,
+    paid: [{ address: ADDRESS, lovelace: "49800000", tokens: [token], datum: null, script: false, seedelf: null, ownPaymentKey: false }],
+    scripts: true,
+    contractInputs: 1,
+    contractLovelace: "50000000",
+    contractTokens: [token],
+    releasedLovelace: "49800000",
+    releasedTokens: [token],
+    keyReleases: true,
+    namesKey: true,
+  };
+
+  it("says what leaves under the total, and that it's the user's own, before who it pays", () => {
+    const html = render(summary(taken));
+    const page = text(html);
+    expect(page).toContain("Total coming into your public account 0 ₳");
+    expect(page).toContain("Leaves a contract, not to you 49.8 ₳");
+    expect(page).toContain("Your signature releases your own order or listing from a contract. It doesn't come back to you.");
+    expect(html.indexOf('data-testid="dapp-contract-release"')).toBeLessThan(html.indexOf('data-testid="dapp-paid"'));
+    expect(releasesContractFunds(summary(taken))).toBe(true);
+  });
+
+  it("says less when no datum names the account's key", () => {
+    const page = text(render(summary({ ...taken, namesKey: false })));
+    expect(page).toContain("Your signature helps release funds from a contract. If any are yours, they don't come back to you.");
+    expect(page).not.toContain("your own order or listing");
+  });
+
+  it("warns of a token taken with the ADA paid back, and shows no empty ADA row", () => {
+    const html = render(summary({ ...taken, releasedLovelace: "0" }));
+    expect(html).toContain('data-testid="dapp-contract-release"');
+    expect(html).not.toContain('data-testid="dapp-contract-released"');
+    expect(releasesContractFunds(summary({ ...taken, releasedLovelace: "0" }))).toBe(true);
+  });
+
+  it("says nothing of it for an honest cancel, whose money reaches the account", () => {
+    const honest = summary({ ...taken, netLovelace: "49800000", paid: [], releasedLovelace: "0", releasedTokens: [] });
+    const html = render(honest);
+    expect(html).not.toContain('data-testid="dapp-contract-release"');
+    expect(releasesContractFunds(honest)).toBe(false);
+    expect(text(html)).toContain("It spends 1 contract UTxO holding 50 ₳ and tokens.");
+  });
+
+  it("only notes a contract the account's key isn't asked for", () => {
+    const pool = summary({ ...taken, keyReleases: false, namesKey: false, contractInputs: 2, contractTokens: [] });
+    const html = render(pool);
+    expect(html).not.toContain('data-testid="dapp-contract-release"');
+    expect(releasesContractFunds(pool)).toBe(false);
+    expect(text(html)).toContain("It spends 2 contract UTxOs holding 50 ₳.");
+  });
+
+  it("has nothing to say with no contract UTxO, and of a summary from before these fields", () => {
+    const page = text(render(summary({})));
+    expect(page).not.toContain("contract UTxO");
+    expect(releasesContractFunds(summary({}))).toBe(false);
+  });
+
+  it("marks a lookalike token it releases, as every other row does", () => {
+    const fake = { policyId: STRANGER, assetName: hex("₳"), quantity: "5" };
+    const html = render(summary({ ...taken, paid: [], releasedTokens: [fake] }));
+    expect(html).toContain('data-testid="dapp-lookalike"');
+  });
 });
 
 describe("a site's signing prompt", () => {

@@ -26,6 +26,15 @@ export function stakingComesBack(s: Pick<DappTxSummary, "returnedLovelace" | "st
 }
 
 /**
+ * Whether the account's key helps release contract money that doesn't reach it. The window says so at its top, and Sign
+ * waits for the user's own yes: every row of such a transaction can be true of the account while an order or a listing
+ * under its key leaves (a bounty report against 1.8.1). An honest cancel pays the account, and never comes here.
+ */
+export function releasesContractFunds(s: DappTxSummary): boolean {
+  return !!s.keyReleases && (BigInt(s.releasedLovelace ?? "0") > 0n || (s.releasedTokens?.length ?? 0) > 0);
+}
+
+/**
  * What an output pays, under its address: another of the wallet's own accounts by its name (independent review M12),
  * when its payment key is theirs (`yours`; never its stake key alone, C01).
  */
