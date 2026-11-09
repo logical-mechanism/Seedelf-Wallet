@@ -227,6 +227,7 @@ fn the_table_reads_and_its_carried_scripts_are_what_they_say() {
         Protocol::MinswapStable,
         Protocol::SundaeSwap,
         Protocol::SundaeSwapV3,
+        Protocol::SundaeSwapV4,
         Protocol::WingRiders,
         Protocol::WingRidersV2,
         Protocol::WingRidersStableV2,
@@ -234,6 +235,13 @@ fn the_table_reads_and_its_carried_scripts_are_what_they_say() {
     ] {
         assert!(mainnet.contains(&p), "{p:?}");
     }
+    // Preprod has no SundaeSwap V4 to pin: its order would be read as no order at all.
+    assert!(
+        !orders::table(true)
+            .unwrap()
+            .iter()
+            .any(|e| e.protocol == Protocol::SundaeSwapV4)
+    );
 }
 
 #[test]
@@ -691,6 +699,16 @@ fn fields(d: &mut PlutusData) -> &mut Vec<PlutusData> {
     }
 }
 
+/// A Plutus list's items, to edit.
+fn items(d: &mut PlutusData) -> &mut Vec<PlutusData> {
+    let PlutusData::Array(list) = d else {
+        panic!("not a list")
+    };
+    match list {
+        MaybeIndefArray::Def(v) | MaybeIndefArray::Indef(v) => v,
+    }
+}
+
 /// Another key, nobody's.
 const OTHER: [u8; 28] = [0xee; 28];
 
@@ -1118,6 +1136,67 @@ fn an_order_is_the_sessions_only_when_its_canceller_and_every_payee_are() {
                     "destination another's",
                     edit(&|d| fields(d)[3] = constr(0, vec![other_address(), constr(0, vec![])])),
                     Expect::NotOurs,
+                ));
+            }
+            Protocol::SundaeSwapV4 => {
+                variants.push((
+                    "owner another's",
+                    edit(&|d| fields(d)[0] = constr(0, vec![bytes(&OTHER)])),
+                    Expect::NotOurs,
+                ));
+                variants.push((
+                    "destination another's",
+                    edit(&|d| fields(d)[1] = constr(0, vec![other_address(), constr(1, vec![])])),
+                    Expect::NotOurs,
+                ));
+                // A chained first leg: it pays the next order, naming that order's datum.
+                variants.push((
+                    "a datum for the destination",
+                    edit(&|d| {
+                        let destination = &mut fields(d)[1];
+                        fields(destination)[1] = constr(0, vec![constr(0, vec![bytes(&OTHER)])]);
+                    }),
+                    Expect::Unread,
+                ));
+                variants.push((
+                    "destination Self",
+                    edit(&|d| fields(d)[1] = constr(1, vec![])),
+                    Expect::Unread,
+                ));
+                // Every MultisigScript but one key's Signature.
+                for script in 1..=6 {
+                    variants.push((
+                        "owner not one key",
+                        edit(&|d| {
+                            fields(d)[0] = constr(script, vec![bytes(s.session.stake.as_ref())])
+                        }),
+                        Expect::Unread,
+                    ));
+                }
+                // A module that isn't a basic order's could leave the rest of the order at the script.
+                variants.push((
+                    "another order module",
+                    edit(&|d| {
+                        let first = &mut items(&mut fields(d)[5])[0];
+                        items(first)[0] = bytes(&OTHER);
+                    }),
+                    Expect::Unread,
+                ));
+                variants.push((
+                    "no fee constraint",
+                    edit(&|d| {
+                        items(&mut fields(d)[5]).pop();
+                    }),
+                    Expect::Unread,
+                ));
+                variants.push((
+                    "a third constraint",
+                    edit(&|d| {
+                        let constraints = items(&mut fields(d)[5]);
+                        let extra = constraints[0].clone();
+                        constraints.push(extra);
+                    }),
+                    Expect::Unread,
                 ));
             }
             Protocol::WingRiders => {
@@ -1620,6 +1699,7 @@ const SCRIPT_REFUSED: &str = "The DEX's order script refused the wallet's cancel
 #[test]
 fn an_order_its_own_cancel_cant_spend_is_found_before_the_swap_is_signed() {
     type Edit = fn(&mut PlutusData);
+    // SundaeSwap V4 isn't here: its cancel reads the owner alone, so nothing else in the datum can stop it.
     let malformed: [(&str, &str, Edit, &str); 6] = [
         (
             "SundaeSwapV3",
@@ -1711,6 +1791,39 @@ fn an_order_its_own_cancel_cant_spend_is_found_before_the_swap_is_signed() {
             "{protocol}: {why}"
         );
     }
+}
+
+/// One fill rests on a SundaeSwap V4 order's modules, not its budget: other
+/// builders' orders with a 3 ₳ budget (2026-11-09) also filled once, 174 fills
+/// with no order left behind. So a budget apart from the cap reads, and cancels.
+#[test]
+fn a_sundae_v4_order_is_taken_whatever_its_service_budget() {
+    let s = Setup::of(&fixture("SundaeSwapV4", "mainnet"));
+    let mut d = PlutusData::decode_fragment(&s.datum).unwrap();
+    fields(&mut d)[2] = int(3_000_000);
+    let datum = d.encode_fragment().unwrap();
+    assert!(s.session.owns(&orders::read(s.protocol, &datum).unwrap()));
+    let tx = swap_placing(&s.address, &s.order, &datum, true, None);
+    assert_eq!(check_swap(&s, &tx, &[1], &s.references)[0].why, None);
+}
+
+/// The real order and its real cancel: Minswap built it, its owner's stake key
+/// cancelled it, and the wallet's cancel spends it the same way.
+#[test]
+fn the_sundae_v4_order_minswap_built_is_cancelled_with_its_stake_key() {
+    let f = fixture("SundaeSwapV4", "mainnet");
+    let b = build(&f);
+    assert!(b.cancel.stake_signs);
+    assert_eq!(
+        hex::encode(b.session.stake),
+        "903ac01dddc4355a0826601d32fd1cf351a25a111c85cb334625a703"
+    );
+    let tx = MultiEraTx::decode(&b.cancel.tx.tx_bytes.0).unwrap();
+    assert_eq!(tokens_out(&tx), 400_000);
+    assert_eq!(
+        tx.redeemers()[0].data().encode_fragment().unwrap(),
+        [0xd8, 0x79, 0x80]
+    );
 }
 
 /// What isn't an order the swap places can't be checked, and isn't passed:

@@ -350,7 +350,6 @@ describe("a swap's quote", () => {
       "MuesliSwap",
       "SplashStable",
       "SundaeSwapStable",
-      "SundaeSwapV4",
       "CswapV1",
       "WingRidersStableV1",
     ]);

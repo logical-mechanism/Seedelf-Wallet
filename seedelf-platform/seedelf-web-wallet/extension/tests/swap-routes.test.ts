@@ -69,9 +69,10 @@ describe("a mainnet swap's route (independent review M17)", () => {
     expect(MINSWAP_PROTOCOLS).not.toContain("ChakraBondingCurve");
   });
 
-  it("leaves SundaeSwap V4 out on both networks until the wallet reads its orders (chunk 47)", () => {
-    for (const network of ["preprod", "mainnet"] as const) expect(excludedProtocols(network)).toContain("SundaeSwapV4");
-    expect(MAINNET_PROTOCOLS).not.toContain("SundaeSwapV4");
+  it("routes through SundaeSwap V4 on mainnet, whose orders the wallet reads and cancels, and leaves it out of preprod, which has no V4 to pin (chunk 47)", () => {
+    expect(MAINNET_PROTOCOLS).toContain("SundaeSwapV4");
+    expect(excludedProtocols("mainnet")).not.toContain("SundaeSwapV4");
+    expect(excludedProtocols("preprod")).toContain("SundaeSwapV4");
   });
 
   it("pauses a funded swap whose fresh route goes through a DEX the wallet can't check, and places it once the route is back", async () => {
