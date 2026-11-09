@@ -5830,6 +5830,54 @@ test.describe("the dApp connector", () => {
     expect((await signing).error?.code).toBe(2);
   });
 
+  test("a site's request that releases a contract UTxO under the account's key says so, and Sign waits for the user's yes (a bounty report against 1.8.1)", async ({
+    context,
+    koios,
+  }) => {
+    const { dapp } = await siteOnAccount1(context, koios);
+    const [address] = (await cip30(dapp, "getUsedAddresses")).value as string[];
+    const held = koiosPreprod.contract_utxos[0] as { tx_hash: string; tx_index: number };
+    expect(held.tx_index).toBeLessThan(24);
+    const outpoint = `825820${held.tx_hash}${held.tx_index.toString(16).padStart(2, "0")}`;
+    // A site's transaction, by hand: the contract UTxO to someone else's key, with the account's key a required signer.
+    const to = `00${"ab".repeat(28)}${"cd".repeat(28)}`;
+    const tx = `84a40081${outpoint}0181825839${to}1a001e8480021a000298100e81581c${address!.slice(2, 58)}a0f5f6`;
+    const yes = { name: "I expect this to leave the contract" };
+
+    const opened = connectorWindow(context);
+    const signing = cip30(dapp, "signTx", tx, false);
+    const sign = await opened;
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    await expect(sign.getByTestId("dapp-tx-net")).toContainText("Leaves a contract, not to you");
+    await expect(sign.getByTestId("dapp-contract-release")).toHaveText(
+      "Your signature helps release funds from a contract. If any are yours, they don't come back to you.",
+    );
+    await snap(sign, "dapp-sign-tx-contract-release");
+    // The password alone doesn't reach Sign, by the button or by Enter in its box.
+    const button = sign.getByRole("button", { name: "Sign", exact: true });
+    await sign.getByLabel("Your password, to sign").fill(PASSWORD);
+    await expect(sign.getByRole("switch", yes)).toHaveAttribute("aria-checked", "false");
+    await expect(button).toBeDisabled();
+    await sign.getByLabel("Your password, to sign").press("Enter");
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    await sign.getByRole("switch", yes).click();
+    await expect(button).toBeEnabled();
+    const done = sign.waitForEvent("close");
+    await button.click();
+    expect((await signing).value).toMatch(/^a100/);
+    await done;
+
+    // A yes is for one request: the next starts over.
+    const again = connectorWindow(context);
+    const second = cip30(dapp, "signTx", tx, false);
+    const next = await again;
+    await expect(next.getByRole("switch", yes)).toHaveAttribute("aria-checked", "false");
+    await next.getByLabel("Your password, to sign").fill(PASSWORD);
+    await expect(next.getByRole("button", { name: "Sign", exact: true })).toBeDisabled();
+    await next.getByRole("button", { name: "Decline" }).click();
+    expect((await second).error?.code).toBe(2);
+  });
+
   test("a site's prompt says a proposal's deposit goes to a stake key that isn't yours, with its whole address (chunk 39)", async ({
     context,
     koios,

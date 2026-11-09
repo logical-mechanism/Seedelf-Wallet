@@ -148,6 +148,34 @@ describe("the transaction view", () => {
     expect(t.koios.calls.length).toBe(before);
   });
 
+  it("marks a required signer that's one of the wallet's keys, and no one else's (a bounty report against 1.8.1)", async () => {
+    const t = await unlocked();
+    const net = t.deps.wasm.Network.Preprod;
+    const stakeHash = (bech32: string) => t.deps.wasm.cip30Address(bech32).slice(2);
+    const [payment, stake, session] = await t.wallet.withKeys((k) => [
+      k.cardano.paymentKeyHash(0, 0),
+      stakeHash(k.cardano.stakeAddress(net)),
+      k.oneTime.keyHash(0).toLowerCase(),
+    ]);
+    const second = await t.wallet.withAccount(1, (k) => k.cardano.paymentKeyHash(0, 0));
+    const stranger = "44".repeat(28);
+    const signers = [payment, stake, session, second, stranger].map((h) => `581c${h}`).join("");
+    const cbor = `84a4` + `0081825820${"11".repeat(32)}00` + `0180` + `021a00029810` + `0e85${signers}` + `a0f5f6`;
+    const before = t.koios.calls.length;
+    const { detail } = await txView(
+      { ...deps(t), knownAccounts: async () => [0, 1], sessionIndices: async () => [0] },
+      "preprod",
+      "ab".repeat(32),
+      () => cbor,
+    );
+    expect(detail.requiredSigners).toHaveLength(5);
+    expect([...detail.yourSigners!].sort()).toEqual([payment, stake, session, second].sort());
+    // Not knowing Account 2 or the session, the wallet doesn't guess.
+    const alone = await txView(deps(t), "preprod", "ab".repeat(32), () => cbor);
+    expect([...alone.detail.yourSigners!].sort()).toEqual([payment, stake].sort());
+    expect(t.koios.calls.length).toBe(before);
+  });
+
   it("marks a private payment's change into the private balance, and not the Seedelf it pays (blind test §9.9)", async () => {
     const t = await unlocked();
     t.koios.evaluation = transferPreprod.evaluation;

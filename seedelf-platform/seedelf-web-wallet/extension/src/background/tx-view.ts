@@ -255,7 +255,10 @@ async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): P
     const key = stakeKey(wasm, address);
     if (key) rewards.push([r, key]);
   }
-  if (!outputs.length && !rewards.length) return;
+  if (!outputs.length && !rewards.length && !d.requiredSigners.length) return;
+  // A required signer that's one of the wallet's keys: it's what a contract's cancel asks for (a bounty report against 1.8.1).
+  const yourSigners: string[] = [];
+  if (d.requiredSigners.length) d.yourSigners = yourSigners;
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const [indices, known] = await Promise.all([
     deps.sessionIndices?.(network).catch(() => []) ?? [],
@@ -274,12 +277,15 @@ async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): P
         o.yours = { kind: seedelf ? "seedelf" : "private" };
       }
     }
-    if (rewards.length) {
+    if (rewards.length || d.requiredSigners.length) {
       const stake = stakeKey(wasm, keys.cardano.stakeAddress(net));
       const sessionStakes = new Map(indices.map((index) => [stakeKey(wasm, keys.oneTime.rewardAddress(net, index)), index]));
       for (const [r, key] of rewards) {
         if (key === stake) r.yours = { kind: "account", account: keys.account };
         else if (sessionStakes.has(key)) r.yours = { kind: "session", index: sessionStakes.get(key)! };
+      }
+      for (const hash of d.requiredSigners) {
+        if (account.has(hash) || sessions.has(hash) || hash === stake || sessionStakes.has(hash)) yourSigners.push(hash);
       }
     }
     return keys.account;
@@ -287,12 +293,14 @@ async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): P
   for (const index of known) {
     const rest = outputs.filter((o) => !o.yours && paymentKey(o.address));
     const restRewards = rewards.filter(([r]) => !r.yours);
-    if (!rest.length && !restRewards.length) return;
+    const restSigners = d.requiredSigners.filter((h) => !yourSigners.includes(h));
+    if (!rest.length && !restRewards.length && !restSigners.length) return;
     if (index === active) continue;
     const theirs = await wallet.withAccount(index, (keys) => ({
-      payment: rest.length ? accountKeys(keys.cardano) : undefined,
+      payment: rest.length || restSigners.length ? accountKeys(keys.cardano) : undefined,
       stake: stakeKey(wasm, keys.cardano.stakeAddress(net)),
     }));
+    for (const h of restSigners) if (theirs.payment?.has(h) || h === theirs.stake) yourSigners.push(h);
     for (const o of rest) if (theirs.payment?.has(paymentKey(o.address)!)) o.yours = { kind: "account", account: index };
     for (const [r, key] of restRewards) if (key === theirs.stake) r.yours = { kind: "account", account: index };
   }

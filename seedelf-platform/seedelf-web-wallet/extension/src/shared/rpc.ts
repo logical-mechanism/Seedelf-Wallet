@@ -1153,6 +1153,20 @@ export interface DappTxSummary {
    * return, a treasury withdrawal's. One that's a Lovejoin pool's `mix_logic` is refused (chunk 43).
    */
   paidScripts?: string[];
+  /**
+   * The contract UTxOs it spends, as far as they were found, and what they hold, whoever's they are. Not in the totals,
+   * which are the account's: an order or a listing is the contract's until it's released (a bounty report against 1.8.1).
+   */
+  contractInputs?: number;
+  contractLovelace?: string;
+  contractTokens?: DappToken[];
+  /** Of what they hold, what doesn't reach the account, each asset on its own (WebAssembly's `released_from_contracts`). */
+  releasedLovelace?: string;
+  releasedTokens?: DappToken[];
+  /** One of the account's keys is what a contract here can be asking for: a required signer, named by a datum, or a native script's input. */
+  keyReleases?: boolean;
+  /** A contract UTxO's datum names one of the account's keys: it's likely the user's own order or listing. */
+  namesKey?: boolean;
   othersSign: number;
   complete: boolean;
 }
@@ -1437,6 +1451,8 @@ export interface TxDetail {
   votes: TxVote[];
   proposals: TxProposal[];
   requiredSigners: string[];
+  /** Of `requiredSigners`, those that are one of the wallet's keys, as the worker found them (`markYours`). */
+  yourSigners?: string[];
   scriptDataHash: string | null;
   auxiliaryDataHash: string | null;
   /**

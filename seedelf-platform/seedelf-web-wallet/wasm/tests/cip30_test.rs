@@ -2128,3 +2128,312 @@ fn a_transaction_names_every_script_reward_account_it_pays_into() {
     let summary = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
     assert!(summary.paid_scripts.is_empty());
 }
+
+// A contract UTxO the account's key releases (a bounty report against 1.8.1): a site can spend an order or a listing
+// with the owner's key as a required signer, and pay it anywhere. The total is the account's alone, so what leaves the
+// contract is said on its own.
+
+const TX_SITE: &str = "3333333333333333333333333333333333333333333333333333333333333333";
+
+fn order_script() -> Address {
+    seedelf_core::address::wallet_contract(true, [0x77; 28])
+}
+
+fn key_00() -> Hash<28> {
+    account().key_hash(Role::Receive, 0).unwrap()
+}
+
+fn out_with_token(address: &Address, lovelace: u64) -> conway::TransactionOutput {
+    let policy: Hash<28> = Hash::new(hex::decode(POLICY).unwrap().try_into().unwrap());
+    let names = NonEmptyKeyValuePairs::try_from(vec![(
+        Bytes::from(hex::decode("74657374").unwrap()),
+        pallas_primitives::PositiveCoin::try_from(1u64).unwrap(),
+    )])
+    .unwrap();
+    let assets = NonEmptyKeyValuePairs::try_from(vec![(policy, names)]).unwrap();
+    conway::PseudoTransactionOutput::PostAlonzo(conway::PostAlonzoTransactionOutput {
+        address: Bytes::from(address.to_vec()),
+        value: conway::Value::Multiasset(lovelace, assets),
+        datum_option: None,
+        script_ref: None,
+    })
+}
+
+fn contract_row(tx: &str, index: u64) -> KoiosRow {
+    row(
+        tx,
+        index,
+        &order_script(),
+        50_000_000,
+        &[(POLICY, "74657374", 1)],
+    )
+}
+
+fn site_collateral() -> KoiosRow {
+    row(TX_SITE, 7, &theirs(), 5_000_000, &[])
+}
+
+/// `outputs` paid from contract UTxO `TX_B#0`, the account's key `0/0` a required signer, the site's collateral up.
+fn releasing(outputs: Vec<conway::TransactionOutput>, inputs: Vec<KoiosRow>) -> cip30::TxSummary {
+    let mut b = body(
+        inputs
+            .iter()
+            .map(|r| input(&r.tx_hash, r.tx_index))
+            .collect(),
+        outputs,
+    );
+    b.required_signers = NonEmptySet::try_from(vec![key_00()]).ok();
+    b.collateral = NonEmptySet::try_from(vec![input(TX_SITE, 7)]).ok();
+    let mut rows = inputs;
+    rows.push(site_collateral());
+    cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap()
+}
+
+#[test]
+fn what_the_accounts_key_releases_from_a_contract_is_said() {
+    let s = releasing(
+        vec![out_with_token(&theirs(), 49_800_000)],
+        vec![contract_row(TX_B, 0)],
+    );
+    // The account's own total stays the account's.
+    assert_eq!(s.net_lovelace, "0");
+    assert!(s.net_tokens.is_empty());
+    assert_eq!(s.contract_inputs, 1);
+    assert_eq!(s.contract_lovelace, "50000000");
+    assert_eq!(s.contract_tokens.len(), 1);
+    assert!(s.key_releases);
+    // The fee came out of it too: what's left is what the attacker gets.
+    assert_eq!(s.released_lovelace, "49800000");
+    assert_eq!(s.released_tokens.len(), 1);
+    assert_eq!(s.released_tokens[0].quantity, "1");
+}
+
+#[test]
+fn an_honest_cancel_releases_nothing_away_from_the_account() {
+    let s = releasing(
+        vec![out_with_token(&ours(Role::Receive, 0), 49_800_000)],
+        vec![contract_row(TX_B, 0)],
+    );
+    assert!(s.key_releases);
+    assert_eq!(s.released_lovelace, "0");
+    assert!(s.released_tokens.is_empty());
+}
+
+#[test]
+fn ada_paid_back_doesnt_hide_a_token_taken() {
+    let s = releasing(
+        vec![
+            out(&ours(Role::Receive, 0), 49_800_000, None),
+            out_with_token(&theirs(), 2_000_000),
+        ],
+        vec![contract_row(TX_B, 0)],
+    );
+    assert_eq!(s.released_lovelace, "0");
+    assert_eq!(s.released_tokens.len(), 1);
+}
+
+#[test]
+fn paying_the_same_contract_still_counts_as_released() {
+    // A listing kept at its contract under a new owner's datum: the money stays there, and is no longer the user's.
+    let s = releasing(
+        vec![out_with_token(&order_script(), 49_800_000)],
+        vec![contract_row(TX_B, 0)],
+    );
+    assert_eq!(s.released_lovelace, "49800000");
+    assert_eq!(s.released_tokens.len(), 1);
+}
+
+#[test]
+fn every_contract_utxo_in_the_transaction_is_counted() {
+    let s = releasing(
+        vec![out(&theirs(), 149_800_000, None)],
+        vec![
+            row(TX_B, 0, &order_script(), 50_000_000, &[]),
+            row(TX_B, 1, &order_script(), 50_000_000, &[]),
+            row(TX_B, 2, &order_script(), 50_000_000, &[]),
+        ],
+    );
+    assert_eq!(s.contract_inputs, 3);
+    assert_eq!(s.released_lovelace, "149800000");
+}
+
+#[test]
+fn the_fee_is_taken_off_only_when_the_contract_paid_it() {
+    let mut b = body(
+        vec![input(TX_A, 1), input(TX_B, 0)],
+        vec![
+            out(&theirs(), 50_000_000, None),
+            out(&ours(Role::Receive, 0), 4_800_000, None),
+        ],
+    );
+    b.required_signers = NonEmptySet::try_from(vec![key_00()]).ok();
+    let rows = vec![
+        row(TX_A, 1, &ours(Role::Receive, 0), 5_000_000, &[]),
+        row(TX_B, 0, &order_script(), 50_000_000, &[]),
+    ];
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, false)).unwrap();
+    assert_eq!(s.released_lovelace, "50000000");
+}
+
+#[test]
+fn a_stake_key_required_signer_releases_too() {
+    let mut b = body(vec![input(TX_B, 0)], vec![out(&theirs(), 49_800_000, None)]);
+    b.required_signers =
+        NonEmptySet::try_from(vec![account().key_hash(Role::Staking, 0).unwrap()]).ok();
+    let rows = vec![row(TX_B, 0, &order_script(), 50_000_000, &[])];
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    assert_eq!(s.signs, vec!["stake"]);
+    assert!(s.key_releases);
+    assert_eq!(s.released_lovelace, "49800000");
+}
+
+#[test]
+fn a_contract_the_accounts_key_isnt_asked_for_is_only_counted() {
+    let (_, mut rows) = swap();
+    rows.push(row(TX_B, 1, &order_script(), 3_000_000, &[]));
+    let mut b = body(
+        vec![input(TX_A, 1), input(TX_B, 1)],
+        vec![out(&theirs(), 6_800_000, None)],
+    );
+    b.required_signers = NonEmptySet::try_from(vec![Hash::new([9; 28])]).ok();
+    // A Plutus script runs here: the body's script data hash says so.
+    b.script_data_hash = Some(Hash::new([1; 32]));
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    assert_eq!(s.contract_inputs, 1);
+    assert_eq!(s.contract_lovelace, "3000000");
+    assert!(!s.key_releases);
+}
+
+#[test]
+fn a_transaction_with_no_contract_utxo_has_none_to_say() {
+    let (tx, rows) = swap();
+    let s = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
+    assert_eq!(s.contract_inputs, 0);
+    assert_eq!(s.released_lovelace, "0");
+    assert!(!s.key_releases);
+    assert!(!s.names_key);
+}
+
+fn datum_naming(hash: Hash<28>) -> String {
+    format!("d8799f581c{}ff", hex::encode(hash))
+}
+
+#[test]
+fn a_datum_naming_the_accounts_key_says_the_utxo_is_its() {
+    let mut named = contract_row(TX_B, 0);
+    named.inline_datum = Some(cip30::InlineDatum {
+        bytes: datum_naming(key_00()),
+    });
+    let s = releasing(vec![out(&theirs(), 49_800_000, None)], vec![named]);
+    assert!(s.names_key);
+
+    let mut other = contract_row(TX_B, 0);
+    other.inline_datum = Some(cip30::InlineDatum {
+        bytes: datum_naming(Hash::new([9; 28])),
+    });
+    let s = releasing(vec![out(&theirs(), 49_800_000, None)], vec![other]);
+    assert!(!s.names_key);
+}
+
+#[test]
+fn a_datum_naming_the_accounts_key_counts_with_no_required_signer() {
+    // A contract can take the owner's own input being spent as its proof, which puts no key in required_signers.
+    let mut named = contract_row(TX_B, 0);
+    named.inline_datum = Some(cip30::InlineDatum {
+        bytes: datum_naming(key_00()),
+    });
+    let b = body(
+        vec![input(TX_A, 1), input(TX_B, 0)],
+        vec![out_with_token(&theirs(), 51_800_000)],
+    );
+    let rows = vec![row(TX_A, 1, &ours(Role::Receive, 0), 2_000_000, &[]), named];
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, false)).unwrap();
+    assert!(s.key_releases);
+    assert!(s.names_key);
+    assert_eq!(s.released_tokens.len(), 1);
+}
+
+#[test]
+fn a_stake_key_in_the_datum_names_it_too() {
+    let mut named = contract_row(TX_B, 0);
+    named.inline_datum = Some(cip30::InlineDatum {
+        bytes: datum_naming(account().key_hash(Role::Staking, 0).unwrap()),
+    });
+    assert!(releasing(vec![out(&theirs(), 49_800_000, None)], vec![named]).names_key);
+}
+
+/// A contract UTxO keeping its datum by hash: the transaction carries the datum, and only that hash's counts.
+fn by_hash(datum: &str, row_hash: Option<String>) -> bool {
+    let data = PlutusData::decode_fragment(&hex::decode(datum).unwrap()).unwrap();
+    let hash = pallas_crypto::hash::Hasher::<256>::hash(&data.encode_fragment().unwrap());
+    let mut held = contract_row(TX_B, 0);
+    held.datum_hash = Some(row_hash.unwrap_or_else(|| hex::encode(hash)));
+    let mut b = body(vec![input(TX_B, 0)], vec![out(&theirs(), 49_800_000, None)]);
+    b.required_signers = NonEmptySet::try_from(vec![key_00()]).ok();
+    let mut tx = conway::Tx::decode_fragment(&hex::decode(tx_hex(b)).unwrap()).unwrap();
+    tx.transaction_witness_set.plutus_data = NonEmptySet::try_from(vec![data]).ok();
+    let cbor = hex::encode(tx.encode_fragment().unwrap());
+    cip30::inspect_tx(&account(), &request(cbor, vec![held], true))
+        .unwrap()
+        .names_key
+}
+
+#[test]
+fn a_datum_kept_by_hash_is_read_from_the_transaction() {
+    assert!(by_hash(&datum_naming(key_00()), None));
+    assert!(!by_hash(&datum_naming(Hash::new([9; 28])), None));
+    // A datum the transaction carries for something else says nothing of this UTxO.
+    assert!(!by_hash(&datum_naming(key_00()), Some("ab".repeat(32))));
+}
+
+/// A contract UTxO and a small input of `0/0`'s so that key signs, with no required signer and nothing in the witness
+/// set: a site adds its witnesses after, since only the body is signed.
+fn no_witnesses(script_data_hash: Option<Hash<32>>) -> cip30::TxSummary {
+    let mut b = body(
+        vec![input(TX_A, 1), input(TX_B, 0)],
+        vec![out(&theirs(), 51_800_000, None)],
+    );
+    b.script_data_hash = script_data_hash;
+    let rows = vec![
+        row(TX_A, 1, &ours(Role::Receive, 0), 2_000_000, &[]),
+        row(TX_B, 0, &order_script(), 50_000_000, &[]),
+    ];
+    cip30::inspect_tx(&account(), &request(tx_hex(b), rows, false)).unwrap()
+}
+
+#[test]
+fn a_contract_input_with_no_script_data_hash_can_only_be_a_native_scripts() {
+    // Plutus needs the hash, so this is a native script, which the witness alone satisfies, shown to the wallet or not.
+    let s = no_witnesses(None);
+    assert!(s.key_releases);
+    assert_eq!(s.released_lovelace, "50000000");
+    // With the hash, a script runs that can't see the key without a required signer.
+    assert!(!no_witnesses(Some(Hash::new([1; 32]))).key_releases);
+}
+
+#[test]
+fn a_fee_far_over_any_real_one_isnt_allowed_for() {
+    // The ledger puts no limit on a fee: the contract's money burned this way is still gone.
+    let mut b = body(vec![input(TX_B, 0)], vec![]);
+    b.required_signers = NonEmptySet::try_from(vec![key_00()]).ok();
+    b.fee = 500_000_000;
+    let rows = vec![row(TX_B, 0, &order_script(), 500_000_000, &[])];
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    assert_eq!(s.released_lovelace, "490000000");
+}
+
+#[test]
+fn what_a_contract_utxo_holds_is_never_a_reason_to_refuse() {
+    // Two UTxOs of one token past a u64, and a row whose value can't be read: figures that are only shown.
+    let huge = (POLICY, "74657374", u64::MAX);
+    let mut unreadable = row(TX_B, 2, &order_script(), 1, &[]);
+    unreadable.value = "not a number".into();
+    let rows = vec![
+        row(TX_B, 0, &order_script(), 2_000_000, &[huge]),
+        row(TX_B, 1, &order_script(), 2_000_000, &[huge]),
+        unreadable,
+    ];
+    let s = releasing(vec![out(&theirs(), 3_800_000, None)], rows);
+    assert_eq!(s.contract_inputs, 3);
+    assert_eq!(s.contract_tokens[0].quantity, u64::MAX.to_string());
+}

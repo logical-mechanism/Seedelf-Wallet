@@ -78,6 +78,30 @@ describe("the transaction view's page", () => {
     expect(page).toContain(`${detail.inputs[0]!.txHash.slice(0, 12)}`);
   });
 
+  it("says a site's inputs were looked up, and marks a required signer that's the user's (a bounty report against 1.8.1)", () => {
+    const mine = "aa".repeat(28);
+    const marked: TxDetail = {
+      ...read(transferPreprod.final.txCbor),
+      requiredSigners: [mine, "bb".repeat(28)],
+      yourSigners: [mine],
+    };
+    const html = (site: boolean) =>
+      renderToStaticMarkup(
+        createElement(
+          NetworkContext.Provider,
+          { value: "preprod" },
+          createElement(TxDetailBody, { detail: marked, network: "preprod", testId: "tx", site }),
+        ),
+      ).replace(/&#x27;/g, "'");
+    // The wallet asked a data source about a site's inputs to read its request: the wallet's own builds ask nobody.
+    expect(html(true)).toContain("The wallet looked up the ones it doesn't hold");
+    expect(html(true)).not.toContain("the wallet asks nobody");
+    expect(html(false)).toContain("the wallet asks nobody");
+    const page = text(createElement(TxDetailBody, { detail: marked, network: "preprod", testId: "tx" }));
+    expect(page.match(/Must be signed by you/g)).toHaveLength(1);
+    expect(page.match(/Must be signed by(?! you)/g)).toHaveLength(1);
+  });
+
   it("marks the user's own outputs, where the worker found them, by account when there's more than one (blind test §9.9)", () => {
     const detail = read(transferPreprod.final.txCbor);
     const [first, second] = detail.outputs;
