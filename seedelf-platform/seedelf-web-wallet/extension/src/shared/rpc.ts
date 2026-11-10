@@ -1165,7 +1165,7 @@ export interface DappTxSummary {
   releasedTokens?: DappToken[];
   /** One of the account's keys is what a contract here can be asking for: a required signer, named by a datum, or a native script's input. */
   keyReleases?: boolean;
-  /** A contract UTxO's datum names one of the account's keys: it's likely the user's own order or listing. */
+  /** A contract UTxO's datum names one of the account's keys, in whatever role: it may be the user's own (an order, a listing, a position), or not. */
   namesKey?: boolean;
   othersSign: number;
   complete: boolean;

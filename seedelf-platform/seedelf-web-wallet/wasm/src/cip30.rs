@@ -941,7 +941,8 @@ pub struct TxSummary {
     /// One of the account's keys is what a contract here can be asking for: a required signer, named by a contract
     /// UTxO's datum, or a contract input that can only be a native script's.
     pub key_releases: bool,
-    /// A contract UTxO's datum names one of the account's keys: it's likely the user's own order or listing.
+    /// A contract UTxO's datum names one of the account's keys, in whatever role: it may be the user's own (an order, a
+    /// listing, a position), or not.
     pub names_key: bool,
     /// Signatures it needs from keys that aren't the account's.
     pub others_sign: usize,
@@ -1077,9 +1078,9 @@ fn at_script(row: &KoiosRow) -> bool {
 }
 
 /// Whether a contract UTxO's datum names one of the account's keys: its 28-byte hash anywhere in the datum's bytes, in
-/// whatever shape the contract keeps its owner (a canceller, a listing's seller, an owner's address). The datum is the
-/// row's own, or for one kept by hash the one the transaction carries under that hash. Says which UTxO is likely the
-/// user's, not what the contract does with it.
+/// whatever role the contract gives it (an owner, a canceller, a seller, a payee). The datum is the row's own, or for
+/// one kept by hash the one the transaction carries under that hash. It says the key is named, not whose the UTxO is
+/// or what the contract does with it.
 fn datum_names_key(row: &KoiosRow, carried: &HashMap<String, Vec<u8>>, keys: &Keys) -> bool {
     let inline = row
         .inline_datum
@@ -1824,11 +1825,12 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     };
     let (net, net_tokens) = difference(&put_in, &returned);
     let released = released_from_contracts(&contract_held, &put_in, &returned, body.fee);
-    // A required signer is what a Plutus script can see. A datum that names the account's key covers a contract that
-    // takes the owner's own input being spent as its proof, which needs no required signer. And a contract input in a
-    // body with no script data hash can only be a native script's, which takes the witness alone: Plutus needs the
-    // hash, and the body is what's signed. The witness set isn't, so a site can leave a native script out of what it
-    // shows the wallet and add it after, and nothing here reads one.
+    // A required signer is how a Plutus script sees a signature. A datum that names the account's key covers a contract
+    // that takes another proof of the owner, which needs no required signer: the owner's own input being spent, or a
+    // withdrawal, a certificate or a vote of the owner's key (1.9.0's release review, critic#1). And a contract input
+    // in a body with no script data hash can only be a native script's, which takes the witness alone: Plutus needs
+    // the hash, and the body is what's signed. The witness set isn't, so a site can leave a native script out of what
+    // it shows the wallet and add it after, and nothing here reads one.
     let key_releases = names_key
         || body
             .required_signers

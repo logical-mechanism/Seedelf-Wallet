@@ -2,7 +2,7 @@
 
 This plan came in on branch `web-wallet/verification-on-upstream`. Once the work starts, it happens in `seedelf-verification/`, on a branch of its own from `main`, and in the fork clones in `../blaster-forks/`, as in [chunk 41](../archive/plans/chunk-41-blaster-fixes.md).
 
-**Status: 🚧 step 1 done 2026-11-08; step 2 next.** The owner: "a chunk about how we want to get this working in the main repo".
+**Status: 🚧 steps 1 and 3 done 2026-11-08; step 2 in progress.** The owner: "a chunk about how we want to get this working in the main repo".
 
 Every theorem today is proved over our forks of Lean-blaster and PlutusCoreBlaster ([lakefile.lean](../../../../seedelf-verification/lakefile.lean), and `Slice/lakefile.lean`). **Done means:** both lakefiles require both tools from `input-output-hk`, and every theorem still proves. Any theorem that doesn't goes in the README's *Not proved*, with its reason.
 
@@ -14,7 +14,7 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
 
 | Patch | In our pin | Its way upstream | State |
 |---|---|---|---|
-| #454, a datatype's parameter names | Blaster `25c0ee0` | Lean-blaster [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) | Open. CONFLICTING since #155 moved it to `main`, whose line 928 still has the bug. Rebased locally (step 1) |
+| #454, a datatype's parameter names | Blaster `25c0ee0` | Lean-blaster [#455](https://github.com/input-output-hk/Lean-blaster/pull/455) | Open, and MERGEABLE since the rebase was force-pushed on 2026-11-08 (step 1), waiting on its reviewers. `main`'s line 928 still has the bug |
 | The BLS12-381 operands in order | PlutusCore `68c5399` | PlutusCoreBlaster [#73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73) | Merged 2026-11-08 (`8f76ba5`) |
 | `encodeDataOpaque` (#27's `serialise_data`) | `68c5399` | [#77](https://github.com/input-output-hk/PlutusCoreBlaster/pull/77) instead; #27 is a draft, silent since July | — |
 | `xorByteStringOpaque` | `68c5399` | #77 instead; never offered | — |
@@ -44,7 +44,7 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
    The owner runs the check: the test should fail on the test-only branch and pass with the fix.
    - **The first run (2026-11-07), under Z3 5.3.1,** failed on both branches in the same way, on `smt.case_split_relevant_first`, before the bug: it showed nothing. Rerun it with Z3's nightly first on `PATH`.
    - **The rerun (2026-11-07), Z3 nightly 5.4.0 `ff86ba7`:** the test-only branch failed with #454's five errors (unknown sorts `@ε` and `@β`, `@isInt (@PUnit)`), and the fix gave four Valid and one Expected Falsified, in 29 s at 451 MB.
-   - **Posted (2026-11-08):** the owner force-pushed (head `e540263`), PATCHed the body and commented. #455 shows MERGEABLE, waiting on its reviewers. Then the owner force-pushes, PATCHes the body and posts the comment (the classifier refused Claude's force-push in chunk 41). The fork's `seedelf` branch keeps `25c0ee0`, which our pins use.
+   - **Posted (2026-11-08):** the owner force-pushed (head `e540263`), PATCHed the body and commented. #455 shows MERGEABLE, waiting on its reviewers. The fork's `seedelf` branch keeps `25c0ee0`, which our pins use.
 2. 🚧 **Our suite on #77, before it merges.** What we find is worth a comment on #77 either way: it tests a design they're reviewing on real scripts.
    - **Set up (2026-11-08), nothing pushed:**
      - The tools: `../blaster-forks/PlutusCoreBlaster-pr77`, branch `local/pr77-test`. That's #77's head `4aa6e2a` with #73 merged in (`cae98df`), push-guarded.

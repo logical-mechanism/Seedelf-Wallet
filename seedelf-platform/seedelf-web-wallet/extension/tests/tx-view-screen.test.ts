@@ -7,15 +7,42 @@ import { readFileSync } from "node:fs";
 
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { TxDetail, TxPlutus } from "../src/shared/rpc";
+import type { DappTxSummary, SessionTxReview, SessionView, TxDetail, TxPlutus } from "../src/shared/rpc";
 import { plutusJson } from "../src/ui/components/PlutusTree";
 import { TxDetailBody, TxDetailModal, addressWords, certificateWords, redeemerWords } from "../src/ui/components/TxDetail";
 import { proposalWords } from "../src/ui/format";
 import { AccountsContext } from "../src/ui/accounts";
 import { NetworkContext } from "../src/ui/network";
+import { SessionTxReviewScreen } from "../src/ui/screens/Swaps";
 import { loadTestWasm, transferPreprod } from "./fakes";
+
+/**
+ * Transaction details opened on a review's own page, as a press opens it: Vitest has no DOM, so no press and no effect
+ * run here. With `opened.view` set, the view's button starts open and its read starts with that answer (TxDetail.tsx
+ * TxDetailButton, TxDetailModal), over the house's `vi.mock("react")` seam cut down (screens-wiring-review-fixes.test.ts).
+ * Unset, every state starts as the page starts it.
+ */
+const opened = vi.hoisted(() => ({ view: undefined as { of: string; view: unknown } | undefined }));
+vi.mock("react", async (original) => {
+  const react = await original<typeof import("react")>();
+  /** The component a state is asked for by: the frame after the seam's own. */
+  const caller = () => {
+    const frames = (new Error().stack ?? "").split("\n");
+    const at = frames.findIndex((f) => f.includes("openedState"));
+    return /at (?:[\w$]+\.)*([\w$]+)/.exec(frames[at + 1] ?? "")?.[1] ?? "";
+  };
+  return {
+    ...react,
+    useState: function openedState(initial?: unknown) {
+      const by = opened.view ? caller() : "";
+      if (by === "TxDetailButton") return react.useState(true);
+      if (by === "TxDetailModal" && initial === undefined) return react.useState(opened.view);
+      return react.useState(initial);
+    },
+  };
+});
 
 /** The transactions the Rust tests read, with cardano-cli's reading of each. */
 const recorded = JSON.parse(
@@ -93,13 +120,28 @@ describe("the transaction view's page", () => {
           createElement(TxDetailBody, { detail: marked, network: "preprod", testId: "tx", site }),
         ),
       ).replace(/&#x27;/g, "'");
-    // The wallet asked a data source about a site's inputs to read its request: the wallet's own builds ask nobody.
+    // The wallet asked a data source about a site's inputs to read its request. Its own builds look up no input by
+    // outpoint (a Lovejoin pool is read whole, which names none), bar a session's cancel and its swap against a DEX's
+    // pools (`lookedUp`, below: 1.9.0's release review, cross#1), and a Lovejoin mix spending a box whose making it
+    // asked Koios about, which doesn't say so yet (1.9.0's review of its fixes, r2-views#1).
     expect(html(true)).toContain("The wallet looked up the ones it doesn't hold");
     expect(html(true)).not.toContain("the wallet asks nobody");
     expect(html(false)).toContain("the wallet asks nobody");
     const page = text(createElement(TxDetailBody, { detail: marked, network: "preprod", testId: "tx" }));
     expect(page.match(/Must be signed by you/g)).toHaveLength(1);
     expect(page.match(/Must be signed by(?! you)/g)).toHaveLength(1);
+  });
+
+  it("says the wallet looked up its own review's inputs where it did, in its own words for the signatures (1.9.0's release review, cross#1)", () => {
+    const signed: TxDetail = { ...read(cborOf("payment")), signatures: [{ publicKey: "ab".repeat(32), keyHash: "cd".repeat(28) }] };
+    const body = createElement(TxDetailBody, { detail: signed, network: "preprod", testId: "tx", lookedUp: true });
+    const html = renderToStaticMarkup(createElement(NetworkContext.Provider, { value: "preprod" }, body)).replace(/&#x27;/g, "'");
+    expect(html).toContain("The wallet looked up the ones it doesn't hold");
+    expect(html).not.toContain("the wallet asks nobody");
+    // The wallet prepared it and sends it, unlike a site's.
+    const page = text(body);
+    expect(page).toContain("Signatures 1, made while preparing it: not sent until you confirm");
+    expect(page).not.toContain("press Sign");
   });
 
   it("marks the user's own outputs, where the worker found them, by account when there's more than one (blind test §9.9)", () => {
@@ -697,5 +739,90 @@ describe("a payment's transactions, one after another in the view (1.6.0's relea
       expect(page).not.toContain("Transaction 1 of");
       expect(page).toContain(`data-value="${hashes[0]}"`);
     }
+  });
+});
+
+describe("Review it myself's Transaction details, on what the wallet looked up for it (1.9.0's release review, cross#1)", () => {
+  /** What WebAssembly read of the review's transaction (inspectSessionTx): only what the review's page reads. */
+  const SUMMARY: DappTxSummary = {
+    txHash: "c3".repeat(32),
+    fee: "600000",
+    netLovelace: "0",
+    netTokens: [],
+    spentLovelace: "0",
+    returnedLovelace: "0",
+    stakingLovelace: "0",
+    ownInputs: 1,
+    paid: [],
+    ownOutputs: [],
+    mint: [],
+    certificates: [],
+    withdrawals: [],
+    collateral: null,
+    scripts: true,
+    referenceInputs: 0,
+    votes: 0,
+    proposals: [],
+    donation: null,
+    note: null,
+    metadata: false,
+    validFrom: null,
+    validUntil: null,
+    signs: ["0/0"],
+    unknownInputs: [],
+    othersSign: 0,
+    complete: true,
+  };
+  /** A private session from before swaps ran themselves, as a cancel's review is for. */
+  const SESSION: SessionView = {
+    index: 0,
+    network: "preprod",
+    address: "addr_test1",
+    createdAt: 0,
+    stage: "open",
+    txs: [],
+    holding: null,
+  };
+  const review = (kind: SessionTxReview["kind"], over: Partial<SessionTxReview> = {}): SessionTxReview => ({
+    network: "preprod",
+    index: 0,
+    kind,
+    txHash: SUMMARY.txHash,
+    summary: SUMMARY,
+    ...over,
+  });
+
+  /** The inputs hint of the review's Transaction details, open on a transaction. */
+  function inputsHint(r: SessionTxReview): string | undefined {
+    opened.view = { of: r.txHash, view: { detail: read(transferPreprod.final.txCbor), cbor: transferPreprod.final.txCbor } };
+    try {
+      const page = createElement(SessionTxReviewScreen, {
+        review: r,
+        s: SESSION,
+        busy: false,
+        onBack: () => undefined,
+        onSend: () => undefined,
+      });
+      const html = renderToStaticMarkup(createElement(NetworkContext.Provider, { value: "preprod" }, page));
+      return /title="([^"]*)"[^>]*data-testid="session-tx-detail-inputs-hint"/.exec(html)?.[1]?.replace(/&#x27;/g, "'");
+    } finally {
+      opened.view = undefined;
+    }
+  }
+
+  it("a cancel's: the wallet looked up the orders it spends, which the session doesn't hold", () => {
+    const hint = inputsHint(review("cancel", { orders: 1 }));
+    expect(hint).toContain("The wallet looked up the ones it doesn't hold");
+    expect(hint).not.toContain("the wallet asks nobody");
+  });
+
+  it("a swap against a DEX's pools: the wallet looked up the pool and the collateral it spends", () => {
+    const hint = inputsHint(review("swap", { againstPools: true }));
+    expect(hint).toContain("The wallet looked up the ones it doesn't hold");
+    expect(hint).not.toContain("the wallet asks nobody");
+  });
+
+  it("an order's: it spends only what the session holds, and the wallet asks nobody", () => {
+    expect(inputsHint(review("swap"))).toContain("the wallet asks nobody");
   });
 });

@@ -279,6 +279,9 @@ const MINSWAP_REASON: Record<MinswapTrouble, RetryReason> = {
   silent: "minswap-silent",
   "funding-unseen": "funding-unseen",
   "build-failed": "minswap-build-failed",
+  // routeOf's, which keeps its first answer on either: anywhere else, a refusal like any other, in Minswap's words.
+  "name-refused": "other",
+  "no-route": "other",
 };
 const KOIOS_REASON: Record<KoiosTrouble, RetryReason> = { "rate-limited": "koios-rate-limited", silent: "koios-silent" };
 
@@ -876,14 +879,26 @@ export function quotesTheAsk(ask: SwapAsk, est: Estimate): boolean {
  * again without that DEX, rather than refused (chunk 24), and so is one
  * through a DEX the wallet doesn't check on `network` (`uncheckedProtocols`):
  * Minswap adds DEXes the wallet can't name in advance, and any of them winning
- * a route shouldn't cost the swap its quote. An estimate for anything but
- * `ask` is refused (`quotesTheAsk`), wherever it's asked for: a quote, Review
- * it myself, and the runner's order, which tries again later.
+ * a route shouldn't cost the swap its quote. Refused that second ask, for a
+ * name its validator won't take or with no route left (MinswapTrouble), the
+ * first answer stands: it goes through what `avoid` names, so the quote and
+ * Review it myself refuse it, and the runner pauses, in the wallet's words
+ * rather than Minswap's (1.9.0's release review, routes#1). A limit, silence
+ * or an outage still throws, and the runner tries again. An estimate for
+ * anything but `ask` is refused (`quotesTheAsk`), wherever it's asked for: a
+ * quote, Review it myself, and the runner's order, which tries again later.
  */
 export async function routeOf(minswap: Minswap, ask: SwapAsk, network: NetworkName): Promise<{ est: Estimate; avoid: string[] }> {
   const first = await minswap.estimate(ask);
   const avoid = [...new Set([...outOfPlace(first), ...uncheckedProtocols(network, first)])];
-  const est = avoid.length ? await minswap.estimate(ask, avoid) : first;
+  let est = first;
+  if (avoid.length) {
+    try {
+      est = await minswap.estimate(ask, avoid);
+    } catch (e) {
+      if (!(e instanceof MinswapError && (e.trouble === "name-refused" || e.trouble === "no-route"))) throw e;
+    }
+  }
   if (!quotesTheAsk(ask, est)) throw new Error(t("sess.otherQuote"));
   return { est, avoid };
 }

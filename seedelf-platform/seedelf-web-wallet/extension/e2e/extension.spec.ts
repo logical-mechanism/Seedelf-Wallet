@@ -5842,39 +5842,69 @@ test.describe("the dApp connector", () => {
     // A site's transaction, by hand: the contract UTxO to someone else's key, with the account's key a required signer.
     const to = `00${"ab".repeat(28)}${"cd".repeat(28)}`;
     const tx = `84a40081${outpoint}0181825839${to}1a001e8480021a000298100e81581c${address!.slice(2, 58)}a0f5f6`;
-    const yes = { name: "I expect this to leave the contract" };
 
     const opened = connectorWindow(context);
     const signing = cip30(dapp, "signTx", tx, false);
     const sign = await opened;
+    const yes = sign.getByRole("switch", { name: "I expect this not to come back to me" });
+    const password = sign.getByLabel("Your password, to sign");
+    const button = sign.getByRole("button", { name: "Sign", exact: true });
+    const decline = sign.getByRole("button", { name: "Decline" });
     await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
-    await expect(sign.getByTestId("dapp-tx-net")).toContainText("Leaves a contract, not to you");
+    await expect(sign.getByTestId("dapp-tx-net")).toContainText("From a contract, not to you");
     await expect(sign.getByTestId("dapp-contract-release")).toHaveText(
       "Your signature helps release funds from a contract. If any are yours, they don't come back to you.",
     );
     await snap(sign, "dapp-sign-tx-contract-release");
+    // A second request waits behind it in this window, where a yes could carry over: the step that opened it in a
+    // window of its own couldn't fail (1.9.0's release review, mutants#3). No window opens for it.
+    const later: Page[] = [];
+    context.on("page", (p) => later.push(p));
+    let secondAnswered = false;
+    const second = cip30(dapp, "signTx", tx, false).finally(() => {
+      secondAnswered = true;
+    });
+    await expect(sign.getByTestId("dapp-queue")).toContainText("1 of 2 waiting");
+
     // The password alone doesn't reach Sign, by the button or by Enter in its box.
-    const button = sign.getByRole("button", { name: "Sign", exact: true });
-    await sign.getByLabel("Your password, to sign").fill(PASSWORD);
-    await expect(sign.getByRole("switch", yes)).toHaveAttribute("aria-checked", "false");
+    await password.fill(PASSWORD);
+    await expect(yes).toHaveAttribute("aria-checked", "false");
     await expect(button).toBeDisabled();
-    await sign.getByLabel("Your password, to sign").press("Enter");
+    await password.press("Enter");
     await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
-    await sign.getByRole("switch", yes).click();
+    await yes.click();
     await expect(button).toBeEnabled();
-    const done = sign.waitForEvent("close");
     await button.click();
     expect((await signing).value).toMatch(/^a100/);
-    await done;
 
-    // A yes is for one request: the next starts over.
-    const again = connectorWindow(context);
-    const second = cip30(dapp, "signTx", tx, false);
-    const next = await again;
-    await expect(next.getByRole("switch", yes)).toHaveAttribute("aria-checked", "false");
-    await next.getByLabel("Your password, to sign").fill(PASSWORD);
-    await expect(next.getByRole("button", { name: "Sign", exact: true })).toBeDisabled();
-    await next.getByRole("button", { name: "Decline" }).click();
+    // A yes is for one request: the next, in its place, starts over.
+    await expect(sign.getByTestId("dapp-changed")).toHaveText("The next request.");
+    // Held with the buttons: a click meant for the request before can't turn this one's on.
+    await expect(yes).toBeDisabled();
+    await expect(sign.getByTestId("dapp-queue")).toHaveCount(0);
+    await expect(sign.getByTestId("dapp-contract-release")).toBeVisible();
+    expect(await yes.getAttribute("aria-checked")).toBe("false");
+    await expect(password).toHaveValue("");
+    await password.fill(PASSWORD);
+    // Past the window's hold, Sign still waits for this request's own yes, and Enter signs nothing.
+    await expect(decline).toBeEnabled();
+    await expect(yes).toHaveAttribute("aria-checked", "false");
+    await expect(button).toBeDisabled();
+    await password.press("Enter");
+    // Enter can't submit while Sign is disabled (the browser's rule): the form's own submit reaches the window's guard.
+    await sign.locator("form").evaluate((f) => (f as HTMLFormElement).requestSubmit());
+    await sign.waitForTimeout(1_000);
+    expect(secondAnswered).toBe(false);
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    expect(later.filter((p) => p.url().includes("view=dapp"))).toHaveLength(0);
+    // Its own yes lets Sign answer. Declined here.
+    await yes.click();
+    await expect(yes).toHaveAttribute("aria-checked", "true");
+    await expect(button).toBeEnabled();
+    // Decline never waits for it: someone talked into a "cancel" answers no.
+    await yes.click();
+    await expect(button).toBeDisabled();
+    await decline.click();
     expect((await second).error?.code).toBe(2);
   });
 

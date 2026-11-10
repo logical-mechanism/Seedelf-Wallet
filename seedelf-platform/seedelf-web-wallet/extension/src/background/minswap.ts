@@ -79,10 +79,17 @@ export interface SwapToken {
  * What went wrong at Minswap, for a page that says it in a few words (a
  * swap's retry line): it asked the wallet to slow down, didn't answer,
  * hasn't seen the funding yet, or built a swap that failed when it ran it.
- * Told where Minswap's answer is read, so the page never reads the message,
- * which is in the user's language.
+ * And, for sessions.ts `routeOf`'s second ask, it won't take a DEX's name,
+ * or has no route left once one is left out. Told where Minswap's answer is
+ * read, so the page never reads the message, which is in the user's language.
  */
-export type MinswapTrouble = "rate-limited" | "silent" | "funding-unseen" | "build-failed";
+export type MinswapTrouble =
+  | "rate-limited"
+  | "silent"
+  | "funding-unseen"
+  | "build-failed"
+  | "name-refused"
+  | "no-route";
 
 export class MinswapError extends Error {
   constructor(
@@ -108,6 +115,17 @@ const FUNDING_UNSEEN = /no wallet utxos|insufficient balance/i;
  * anything to sign.
  */
 const BUILD_FAILED = /error evaluating tx/i;
+
+/**
+ * Minswap's own words, with a 400, for a request naming a DEX its validator
+ * doesn't take (as it stopped taking ChakraBondingCurve, 2026-11-09): routeOf
+ * asks again without DEXes Minswap's own route named, and nothing says its
+ * validator takes those names (1.9.0's release review, routes#1).
+ */
+const NAME_REFUSED = /exclude_protocols\/\d+ must be equal to constant/;
+
+/** Minswap's own words, with a 404, when what it's asked to leave out leaves it no route (seen 2026-11-09). */
+const NO_ROUTE = /^quote not found\.?$/i;
 
 /**
  * How such a refusal ends: the whole transaction Minswap built, a few KB of
@@ -408,10 +426,19 @@ export class Minswap {
     const { why, cbor } = refusalOf(text);
     throw new MinswapError(
       t("minswap.refused", { status: response.status, why }),
-      FUNDING_UNSEEN.test(why) ? "funding-unseen" : BUILD_FAILED.test(why) ? "build-failed" : undefined,
+      troubleOf(response.status, why),
       cbor,
     );
   }
+}
+
+/** What a refusal with `status` and Minswap's words `why` says went wrong, where the wallet acts on it: none else. */
+function troubleOf(status: number, why: string): MinswapTrouble | undefined {
+  if (FUNDING_UNSEEN.test(why)) return "funding-unseen";
+  if (BUILD_FAILED.test(why)) return "build-failed";
+  if (status === 400 && NAME_REFUSED.test(why)) return "name-refused";
+  if (status === 404 && NO_ROUTE.test(why)) return "no-route";
+  return undefined;
 }
 
 /**

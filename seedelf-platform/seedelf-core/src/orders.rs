@@ -20,7 +20,9 @@
 //! transaction carries it instead. What each cancel needs was read from real
 //! owner cancels on chain, and each DEX's source or bytecode, on 2026-10-07:
 //! no validity interval, withdrawal or mint; the canceller's key a required
-//! signer; Splash's refund first and exact.
+//! signer; Splash's refund first and exact. SundaeSwap V4's were read on
+//! 2026-11-09 from Sundae's SDK and one real owner cancel: its validators are
+//! unpublished.
 
 use std::collections::{BTreeMap, BTreeSet};
 

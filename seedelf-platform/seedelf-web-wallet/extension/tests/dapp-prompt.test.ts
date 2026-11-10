@@ -7,6 +7,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { criticalKeys } from "../scripts/i18n-critical.mjs";
 import { i18n } from "../src/i18n/core";
 import { epochStart, type NetworkName, slotStart } from "../src/networks";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
@@ -100,12 +101,18 @@ describe("a contract UTxO the account's key releases", () => {
     namesKey: true,
   };
 
-  it("says what leaves under the total, and that it's the user's own, before who it pays", () => {
+  it("says what comes from a contract, not to the user, under the total, and that the contract names the key, before who it pays", () => {
     const html = render(summary(taken));
     const page = text(html);
     expect(page).toContain("Total coming into your public account 0 ₳");
-    expect(page).toContain("Leaves a contract, not to you 49.8 ₳");
-    expect(page).toContain("Your signature releases your own order or listing from a contract. It doesn't come back to you.");
+    expect(page).toContain("From a contract, not to you 49.8 ₳");
+    expect(page).toContain(
+      "Your signature releases funds from a contract that names you. They may be yours, but they don't come back to you.",
+    );
+    // Only what's worked out: money that stays at the same contract counts, so a position's top-up or a listing's
+    // reprice reads the same, and a key in the datum says nothing of whose it is (1.9.0's release review, M1).
+    expect(page).not.toContain("Leaves a contract");
+    expect(page).not.toContain("your own order or listing");
     expect(html.indexOf('data-testid="dapp-contract-release"')).toBeLessThan(html.indexOf('data-testid="dapp-paid"'));
     expect(releasesContractFunds(summary(taken))).toBe(true);
   });
@@ -113,7 +120,7 @@ describe("a contract UTxO the account's key releases", () => {
   it("says less when no datum names the account's key", () => {
     const page = text(render(summary({ ...taken, namesKey: false })));
     expect(page).toContain("Your signature helps release funds from a contract. If any are yours, they don't come back to you.");
-    expect(page).not.toContain("your own order or listing");
+    expect(page).not.toContain("names you");
   });
 
   it("warns of a token taken with the ADA paid back, and shows no empty ADA row", () => {
@@ -137,6 +144,48 @@ describe("a contract UTxO the account's key releases", () => {
     expect(html).not.toContain('data-testid="dapp-contract-release"');
     expect(releasesContractFunds(pool)).toBe(false);
     expect(text(html)).toContain("It spends 2 contract UTxOs holding 50 ₳.");
+  });
+
+  it("keeps each note's ₳ by its number, in every language (1.9.0's release review, i18n#5)", async () => {
+    const honest = summary({ ...taken, netLovelace: "49800000", paid: [], releasedLovelace: "0", releasedTokens: [] });
+    const pool = summary({ ...taken, keyReleases: false, namesKey: false, contractTokens: [] });
+    for (const language of ["en", "es", "ja"]) {
+      await i18n.changeLanguage(language);
+      for (const s of [honest, pool]) {
+        const notes = /data-testid="dapp-notes".*?<\/ul>/.exec(render(s))?.[0] ?? "";
+        expect(notes, language).toContain("50 ₳");
+        expect(notes, language).not.toContain("50 ₳");
+      }
+    }
+    // Every plural form, not only the one a single contract UTxO renders (1.9.0's review of its fixes, r2-tests#1).
+    for (const language of ["en", "es", "ja"]) {
+      const values: Record<string, string> = JSON.parse(
+        readFileSync(new URL(`../src/i18n/translations/${language}.json`, import.meta.url), "utf8"),
+      );
+      const forms = Object.keys(values).filter((k) => k.startsWith("dappUi.note.warn.contractInputs"));
+      expect(forms.length, language).toBe(language === "es" ? 6 : language === "en" ? 4 : 2);
+      for (const k of forms) expect(values[k], `${language} ${k}`).toContain("{{ada}}\u00a0₳");
+    }
+  });
+
+  it("holds the notes, the row, the switch and both callouts to a back-translation (1.9.0's release review, L11)", () => {
+    // The notes are all there is in the limits the docs name, so their words are checked as a warning's are.
+    const en: Record<string, string> = JSON.parse(
+      readFileSync(new URL("../src/i18n/translations/en.json", import.meta.url), "utf8"),
+    );
+    const critical = criticalKeys(Object.keys(en));
+    for (const key of [
+      "dappUi.note.warn.contractInputs",
+      "dappUi.note.warn.contractInputsTokens",
+      "dappUi.warn.contractRow",
+      "dappUi.warn.contractAck",
+      "dappUi.warn.contractYours",
+      "dappUi.warn.contractMaybe",
+      "dappUi.warn.unknownInputs",
+      "dappUi.warn.unknownInputsKeyReleases",
+    ]) {
+      expect(critical, key).toContain(key);
+    }
   });
 
   it("has nothing to say with no contract UTxO, and of a summary from before these fields", () => {
@@ -279,6 +328,39 @@ describe("a site's signing prompt", () => {
     expect(unknown(2)).toBe(
       "ウォレットが見つけられなかった UTxO を 2 件使用するため、その内容は表示できません。ここで署名するのはあなたのステーク鍵だけです。",
     );
+  });
+
+  it("never says only the stake key signs when that key is what a contract here may ask for (1.9.0's release review, L3)", async () => {
+    // A contract input the wallet couldn't find, the stake key a required signer: "Only your stake key signs here" read
+    // as reassurance, when that key is what releases it.
+    const signing = (n: number, keyReleases?: boolean) =>
+      render(
+        summary({ signs: ["stake"], ownInputs: 0, unknownInputs: new Array<string>(n).fill(`${"cd".repeat(32)}#0`), complete: false, keyReleases }),
+        "preprod",
+        { partial: true },
+      );
+    const unknown = (n: number, keyReleases?: boolean) =>
+      /data-testid="dapp-unknown"[^>]*>.*?<div class="callout__body">(.*?)<\/div>/.exec(signing(n, keyReleases))?.[1]?.replace(/&#x27;/g, "'");
+    expect(unknown(1, true)).toBe("It spends 1 UTxO the wallet couldn't find, so what it holds can't be shown.");
+    expect(unknown(2, true)).toBe("It spends 2 UTxOs the wallet couldn't find, so what they hold can't be shown.");
+    // Without it, the sentence stays.
+    expect(unknown(1, false)).toBe(
+      "It spends 1 UTxO the wallet couldn't find, so what it holds can't be shown. Only your stake key signs here.",
+    );
+    // In every language, the same first sentence alone.
+    for (const language of ["es", "ja"]) {
+      await i18n.changeLanguage(language);
+      for (const n of [1, 2, 1_000_000]) {
+        const alone = unknown(n, true)!;
+        expect(alone, `${language} ${n}`).toMatch(/[.。]$/);
+        expect(unknown(n, false)!.startsWith(alone), `${language} ${n}`).toBe(true);
+        expect(unknown(n, false)!.length, `${language} ${n}`).toBeGreaterThan(alone.length + 4);
+      }
+    }
+    await i18n.changeLanguage("es");
+    expect(unknown(1, true)).not.toContain("clave de stake");
+    await i18n.changeLanguage("ja");
+    expect(unknown(2, true)).not.toContain("ステーク鍵");
   });
 
   it("names the account that signs when the wallet has more than one, and only then (chunk 23's second review, CW-5)", () => {

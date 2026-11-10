@@ -1071,7 +1071,7 @@ export function SignTx({
   // key (a position released by a token the account holds) have this to go on.
   if (s.contractInputs && !releases) {
     notes.push(
-      tr(s.contractTokens?.length ? "dappUi.note.contractInputsTokens" : "dappUi.note.contractInputs", {
+      tr(s.contractTokens?.length ? "dappUi.note.warn.contractInputsTokens" : "dappUi.note.warn.contractInputs", {
         count: s.contractInputs,
         ada: formatAda(s.contractLovelace ?? "0"),
       }),
@@ -1300,7 +1300,12 @@ export function SignTx({
       )}
       {s.unknownInputs.length > 0 && (
         <Callout tone="warn" testId="dapp-unknown">
-          {tr("dappUi.warn.unknownInputs", { count: s.unknownInputs.length })}
+          {/* Not "only your stake key signs here" where keyReleases says one of the account's keys may be what a
+              contract asks for (1.9.0's release review, L3). A withdrawal's or a certificate's proof sets none, so the
+              line stays there (1.9.0's review of its fixes, r2-window#3). */}
+          {tr(s.keyReleases ? "dappUi.warn.unknownInputsKeyReleases" : "dappUi.warn.unknownInputs", {
+            count: s.unknownInputs.length,
+          })}
         </Callout>
       )}
 

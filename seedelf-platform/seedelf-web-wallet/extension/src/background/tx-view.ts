@@ -224,6 +224,11 @@ function accountKeys(cardano: Wasm.CardanoAccount, found: readonly string[] = []
   return keys;
 }
 
+/** An account's DRep key hash (CIP-105's `3/0`), as dapp.ts `publicKeys` derives it. */
+function drepKey(cardano: Wasm.CardanoAccount): string {
+  return (JSON.parse(cardano.drepOf()) as { hash: string }).hash;
+}
+
 /** Whether `register` is the user's: the Seedelf key's discrete log of it (balances.ts `ownedUtxos`). */
 function ownRegister(wasm: typeof Wasm, keys: Keys, register: TxRegister): boolean {
   const r = new wasm.Register(register.generator, register.publicValue);
@@ -284,8 +289,14 @@ async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): P
         if (key === stake) r.yours = { kind: "account", account: keys.account };
         else if (sessionStakes.has(key)) r.yours = { kind: "session", index: sessionStakes.get(key)! };
       }
+      // The DRep key is the user's too, whatever a site was granted, though the sign window counts it as the user's
+      // only with governance (1.9.0's release review, dapp-ui#3, and its review of its fixes, r2-docs#1). A session
+      // has none.
+      const drep = d.requiredSigners.length ? drepKey(keys.cardano) : undefined;
       for (const hash of d.requiredSigners) {
-        if (account.has(hash) || sessions.has(hash) || hash === stake || sessionStakes.has(hash)) yourSigners.push(hash);
+        if (account.has(hash) || sessions.has(hash) || hash === stake || hash === drep || sessionStakes.has(hash)) {
+          yourSigners.push(hash);
+        }
       }
     }
     return keys.account;
@@ -299,8 +310,9 @@ async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): P
     const theirs = await wallet.withAccount(index, (keys) => ({
       payment: rest.length || restSigners.length ? accountKeys(keys.cardano) : undefined,
       stake: stakeKey(wasm, keys.cardano.stakeAddress(net)),
+      drep: restSigners.length ? drepKey(keys.cardano) : undefined,
     }));
-    for (const h of restSigners) if (theirs.payment?.has(h) || h === theirs.stake) yourSigners.push(h);
+    for (const h of restSigners) if (theirs.payment?.has(h) || h === theirs.stake || h === theirs.drep) yourSigners.push(h);
     for (const o of rest) if (theirs.payment?.has(paymentKey(o.address)!)) o.yours = { kind: "account", account: index };
     for (const [r, key] of restRewards) if (key === theirs.stake) r.yours = { kind: "account", account: index };
   }
