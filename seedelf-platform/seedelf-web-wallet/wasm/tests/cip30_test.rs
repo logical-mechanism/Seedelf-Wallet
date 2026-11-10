@@ -8,7 +8,7 @@ use pallas_addresses::{
 };
 use pallas_codec::minicbor;
 use pallas_codec::utils::{Bytes, CborWrap, NonEmptyKeyValuePairs, NonEmptySet, Nullable, Set};
-use pallas_crypto::hash::Hash;
+use pallas_crypto::hash::{Hash, Hasher};
 use pallas_crypto::key::ed25519::{PublicKey, Signature};
 use pallas_primitives::{Fragment, PlutusData, StakeCredential, TransactionInput, conway};
 use seedelf_core::build;
@@ -2296,7 +2296,7 @@ fn a_contract_the_accounts_key_isnt_asked_for_is_only_counted() {
         vec![out(&theirs(), 6_800_000, None)],
     );
     b.required_signers = NonEmptySet::try_from(vec![Hash::new([9; 28])]).ok();
-    // A Plutus script runs here: the body's script data hash says so.
+    // A script data hash, as a Plutus script's spend has: the native-script term doesn't hold.
     b.script_data_hash = Some(Hash::new([1; 32]));
     let s = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
     assert_eq!(s.contract_inputs, 1);
@@ -2407,7 +2407,9 @@ fn a_contract_input_with_no_script_data_hash_can_only_be_a_native_scripts() {
     let s = no_witnesses(None);
     assert!(s.key_releases);
     assert_eq!(s.released_lovelace, "50000000");
-    // With the hash, a script runs that can't see the key without a required signer.
+    // With a script data hash, a native script's input can't be told from a Plutus script's: a datum in the witness set
+    // alone gives a body one, with no Plutus (1.9.0's release review, cip30-rust#2). Only a required signer or a datum
+    // naming the key says the key releases it then.
     assert!(!no_witnesses(Some(Hash::new([1; 32]))).key_releases);
 }
 
@@ -2436,4 +2438,236 @@ fn what_a_contract_utxo_holds_is_never_a_reason_to_refuse() {
     let s = releasing(vec![out(&theirs(), 3_800_000, None)], rows);
     assert_eq!(s.contract_inputs, 3);
     assert_eq!(s.contract_tokens[0].quantity, u64::MAX.to_string());
+}
+
+/// The bounty report's own shape: a Plutus order's cancel asks for the account's key, and its body has a script data
+/// hash, so the native-script term can't hold and the required signer alone says the key releases the order (1.9.0's
+/// release review, mutants#1).
+#[test]
+fn a_required_signer_releases_under_a_script_data_hash_too() {
+    let mut b = body(
+        vec![input(TX_B, 0)],
+        vec![out_with_token(&theirs(), 49_800_000)],
+    );
+    b.required_signers = NonEmptySet::try_from(vec![key_00()]).ok();
+    b.script_data_hash = Some(Hash::new([1; 32]));
+    b.collateral = NonEmptySet::try_from(vec![input(TX_SITE, 7)]).ok();
+    let rows = vec![contract_row(TX_B, 0), site_collateral()];
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    assert!(!s.names_key);
+    assert!(s.key_releases);
+    assert_eq!(s.released_lovelace, "49800000");
+    assert_eq!(s.released_tokens.len(), 1);
+}
+
+/// A datum naming the account's key says the key releases the UTxO beside a script data hash too, with no required
+/// signer (1.9.0's release review, mutants#1).
+#[test]
+fn a_datum_naming_the_accounts_key_counts_under_a_script_data_hash_too() {
+    let mut named = contract_row(TX_B, 0);
+    named.inline_datum = Some(cip30::InlineDatum {
+        bytes: datum_naming(key_00()),
+    });
+    let mut b = body(
+        vec![input(TX_A, 1), input(TX_B, 0)],
+        vec![out_with_token(&theirs(), 51_800_000)],
+    );
+    b.script_data_hash = Some(Hash::new([1; 32]));
+    let rows = vec![row(TX_A, 1, &ours(Role::Receive, 0), 2_000_000, &[]), named];
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, false)).unwrap();
+    assert!(s.names_key);
+    assert!(s.key_releases);
+    assert_eq!(s.released_lovelace, "50000000");
+    assert_eq!(s.released_tokens.len(), 1);
+}
+
+/// The account's own token of the kind a contract UTxO holds, passed through, never stands for the contract's: the
+/// order's ADA paid to the account and its token to the site still read as releasing the token (1.9.0's release
+/// review, mutants#2).
+#[test]
+fn the_accounts_own_token_of_a_kind_doesnt_hide_the_contracts_taken() {
+    let mut b = body(
+        vec![input(TX_A, 0), input(TX_B, 0), input(TX_SITE, 3)],
+        vec![
+            out_with_token(&ours(Role::Receive, 0), 54_800_000),
+            out_with_token(&theirs(), 2_000_000),
+        ],
+    );
+    b.required_signers = NonEmptySet::try_from(vec![key_00()]).ok();
+    b.script_data_hash = Some(Hash::new([1; 32]));
+    let rows = vec![
+        row(
+            TX_A,
+            0,
+            &ours(Role::Receive, 0),
+            5_000_000,
+            &[(POLICY, "74657374", 1)],
+        ),
+        contract_row(TX_B, 0),
+        row(TX_SITE, 3, &theirs(), 2_000_000, &[]),
+    ];
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    // The account's own total shows nothing taken: it's 49.8 ₳ ahead, and its token came back.
+    assert_eq!(s.net_lovelace, "49800000");
+    assert!(s.net_tokens.is_empty());
+    assert!(s.key_releases);
+    assert_eq!(s.released_lovelace, "0");
+    assert_eq!(s.released_tokens.len(), 1);
+    assert_eq!(s.released_tokens[0].quantity, "1");
+}
+
+/// A counterparty's key input in a trade both sign is theirs to sign for, not a contract's UTxO: the account's
+/// signature releases nothing of it (1.9.0's release review, mutants#5).
+#[test]
+fn a_counterpartys_key_input_isnt_a_contract_utxo() {
+    // The account sells them its token for 2.8 ₳, in a body with no script data hash.
+    let b = body(
+        vec![input(TX_A, 1), input(TX_B, 0)],
+        vec![
+            out_with_token(&theirs(), 2_000_000),
+            out(&ours(Role::Receive, 0), 4_800_000, None),
+        ],
+    );
+    let rows = vec![
+        row(
+            TX_A,
+            1,
+            &ours(Role::Receive, 0),
+            2_000_000,
+            &[(POLICY, "74657374", 1)],
+        ),
+        row(TX_B, 0, &theirs(), 5_000_000, &[]),
+    ];
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    assert_eq!(s.others_sign, 1);
+    assert_eq!(s.contract_inputs, 0);
+    assert_eq!(s.contract_lovelace, "0");
+    assert!(!s.key_releases);
+    assert_eq!(s.released_lovelace, "0");
+}
+
+/// An input the wallet can't find, the stake key the required signer: the stake key signs over it (a payment or DRep
+/// key's signature is refused there), so the summary says the account's key releases something it can't count, which
+/// the sign window goes by (1.9.0's release review, cip30-rust#7).
+#[test]
+fn a_stake_key_releasing_an_input_the_wallet_cant_find_is_said() {
+    let mut b = body(vec![input(TX_B, 0)], vec![out(&theirs(), 49_800_000, None)]);
+    b.required_signers =
+        NonEmptySet::try_from(vec![account().key_hash(Role::Staking, 0).unwrap()]).ok();
+    b.script_data_hash = Some(Hash::new([1; 32]));
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), vec![], true)).unwrap();
+    assert_eq!(s.unknown_inputs, vec![format!("{TX_B}#0")]);
+    assert_eq!(s.signs, vec!["stake"]);
+    assert_eq!(s.contract_inputs, 0);
+    assert!(s.key_releases);
+    assert_eq!(s.released_lovelace, "0");
+}
+
+/// With governance granted, the DRep key as a required signer releases a contract's UTxO as the account's other keys
+/// do (1.9.0's release review, cip30-rust#7).
+#[test]
+fn a_drep_key_required_signer_releases_too() {
+    let mut b = body(vec![input(TX_B, 0)], vec![out(&theirs(), 49_800_000, None)]);
+    b.required_signers = NonEmptySet::try_from(vec![drep_hash()]).ok();
+    b.script_data_hash = Some(Hash::new([1; 32]));
+    let rows = vec![row(TX_B, 0, &order_script(), 50_000_000, &[])];
+    let mut r = request(tx_hex(b), rows, true);
+    r.governance = true;
+    let s = cip30::inspect_tx(&account(), &r).unwrap();
+    assert_eq!(s.signs, vec!["drep"]);
+    assert!(s.key_releases);
+    assert_eq!(s.released_lovelace, "49800000");
+}
+
+/// A datum the transaction carries is hashed as it's written, not as Pallas would write it again: a builder's
+/// non-minimal integer still matches the UTxO's datum hash, the datums in a tagged set or a plain list (1.9.0's
+/// release review, cip30-rust#7).
+#[test]
+fn a_carried_datum_is_hashed_as_written_in_a_set_or_a_list() {
+    // 1 written in five bytes: Pallas reads it as 1, and would write it in one.
+    let datum = hex::decode(format!("d8799f581c{}1a00000001ff", hex::encode(key_00()))).unwrap();
+    let rewritten = PlutusData::decode_fragment(&datum)
+        .unwrap()
+        .encode_fragment()
+        .unwrap();
+    assert_ne!(rewritten, datum);
+    let hash = hex::encode(Hasher::<256>::hash(&datum));
+    for tagged in [true, false] {
+        let mut held = contract_row(TX_B, 0);
+        held.datum_hash = Some(hash.clone());
+        let mut b = body(vec![input(TX_B, 0)], vec![out(&theirs(), 49_800_000, None)]);
+        b.script_data_hash = Some(Hash::new([1; 32]));
+        // [body, {4: [datum]}, true, null], written by hand: Pallas would write the datum again.
+        let mut tx = vec![0x84];
+        tx.extend(b.encode_fragment().unwrap());
+        tx.extend([0xa1, 0x04]);
+        if tagged {
+            tx.extend([0xd9, 0x01, 0x02]);
+        }
+        tx.push(0x81);
+        tx.extend(&datum);
+        tx.extend([0xf5, 0xf6]);
+        let s = cip30::inspect_tx(&account(), &request(hex::encode(tx), vec![held], true)).unwrap();
+        assert!(s.names_key, "tagged {tagged}");
+        assert!(s.key_releases, "tagged {tagged}");
+    }
+}
+
+/// Minswap V1's real owner cancel on mainnet (seedelf-core's `cancel_integrity.json`), and its order as Koios lists it
+/// (`order_cancels.json`), which keeps its datum by hash: the cancel carries the datum, its bytes as the builder wrote
+/// them hashing to the order's datum hash. Read for this account, not the owner, the order is a contract UTxO and no
+/// more. With the account's key in the owner's place in that datum, as its own order's would be, the carried datum
+/// says so, and the refund, still paid to the original owner, reads as released (1.9.0's release review,
+/// cip30-rust#7).
+#[test]
+fn a_real_v1_cancel_carries_its_orders_datum() {
+    let integrity: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/cancel_integrity.json"
+    ))
+    .unwrap();
+    let cancels: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/order_cancels.json"
+    ))
+    .unwrap();
+    let fixture = cancels
+        .iter()
+        .find(|f| f["protocol"] == "Minswap" && f["network"] == "mainnet")
+        .unwrap();
+    assert_eq!(fixture["cancel"], integrity["v1"]["tx_hash"]);
+    let cbor = integrity["v1"]["cbor"].as_str().unwrap();
+    let order: KoiosRow = serde_json::from_value(fixture["order"].clone()).unwrap();
+    let datum = fixture["datum"].as_str().unwrap();
+    assert_eq!(cbor.matches(datum).count(), 1, "the datum, carried");
+    let hash_of = |d: &str| hex::encode(Hasher::<256>::hash(&hex::decode(d).unwrap()));
+    assert_eq!(order.datum_hash, Some(hash_of(datum)));
+    let read = |tx: &str, order: KoiosRow| {
+        let mut r = request(tx.into(), vec![order], true);
+        r.network = "mainnet".into();
+        cip30::inspect_tx(&account(), &r).unwrap()
+    };
+
+    let s = read(cbor, order.clone());
+    assert!(s.scripts);
+    assert_eq!(s.contract_inputs, 1);
+    assert_eq!(s.contract_lovelace, "4000000");
+    assert_eq!(s.unknown_inputs.len(), 1, "its collateral");
+    assert!(!s.names_key);
+    assert!(!s.key_releases, "the owner's key is the required signer");
+
+    let owner = seedelf_core::orders::read(
+        seedelf_core::orders::Protocol::Minswap,
+        &hex::decode(datum).unwrap(),
+    )
+    .unwrap()
+    .signer;
+    let named = datum.replace(&hex::encode(owner), &hex::encode(key_00()));
+    let mut ours_now = order;
+    ours_now.datum_hash = Some(hash_of(&named));
+    let s = read(&cbor.replace(datum, &named), ours_now);
+    assert!(s.names_key);
+    assert!(s.key_releases);
+    let fee: u64 = s.fee.parse().unwrap();
+    assert_eq!(s.released_lovelace, (4_000_000 - fee).to_string());
+    assert_eq!(s.released_tokens.len(), 1);
+    assert_eq!(s.released_tokens[0].quantity, "600000");
 }

@@ -167,23 +167,26 @@ async function seeded(network: Network, swapCbor: string) {
     ...atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value),
     address: bech32(network === "mainnet" ? "addr" : "addr_test", bytes(SESSION[network])),
   } as KoiosUtxo);
-  if (network === "mainnet") {
-    for (const f of FIXTURES.filter((x) => x.network === "mainnet" && x.reference)) {
-      t.koios.addedToAccounts.push({
-        stake_address: null,
-        payment_cred: "00".repeat(28),
-        epoch_no: 300,
-        block_height: 4_000_000,
-        block_time: 1_700_000_000,
-        inline_datum: null,
-        datum_hash: null,
-        asset_list: [],
-        ...f.reference!,
-      } as KoiosUtxo);
-    }
-  }
+  if (network === "mainnet") mainnetReferences(t);
   t.minswap.swapCbor = swapCbor;
   return { t, sessions };
+}
+
+/** The mainnet order scripts' reference UTxOs, where Koios's `utxo_info` finds them, as preprod's are (fakes.ts). */
+function mainnetReferences(t: T) {
+  for (const f of FIXTURES.filter((x) => x.network === "mainnet" && x.reference)) {
+    t.koios.addedToAccounts.push({
+      stake_address: null,
+      payment_cred: "00".repeat(28),
+      epoch_no: 300,
+      block_height: 4_000_000,
+      block_time: 1_700_000_000,
+      inline_datum: null,
+      datum_hash: null,
+      asset_list: [],
+      ...f.reference!,
+    } as KoiosUtxo);
+  }
 }
 
 /** What the runner makes of `order`, placed by session 0 on `network`. */
@@ -332,6 +335,120 @@ describe("the real orders a swap places", () => {
     expect(t.koios.submitted).toHaveLength(1);
     // Its script read from its reference UTxO, as Koios lists it; a Plutus V1 one's is in the wallet.
     if (order.reference) expect(askedAbout(t, order.reference)).toBe(1);
+  });
+});
+
+describe("a SundaeSwap V4 order on mainnet: Stop, the restore scan, and its fill (1.9.0's release review, routes#3)", () => {
+  // The real V4 order made out to session 0: at V4's script under the session's own staking part, owned by its stake
+  // key, its datum inline, its script read from V4's reference UTxO (chunk 47).
+  const V4 = realOrder(REAL.find((r) => r.protocol === "SundaeSwapV4")!);
+  const V4_SCRIPT = V4.address.slice(2, 58);
+  const ACCOUNT = bech32("addr", bytes(SESSION.mainnet));
+  const SWAP = txIdOf(bytes(swapPlacing(V4, "mainnet")));
+
+  /** The V4 order, output 0 of the swap, as Koios lists it. */
+  const orderRow = () =>
+    ({
+      ...atSession(SWAP, 0, "14000000"),
+      address: bech32("addr", bytes(V4.address)),
+      payment_cred: V4_SCRIPT,
+      inline_datum: { bytes: V4.datum, value: null },
+    }) as KoiosUtxo;
+  /** The swap's change at the session's account. */
+  const changeRow = () => ({ ...atSession(SWAP, 1, (FUNDED - 14_000_000n - FEE).toString()), address: ACCOUNT }) as KoiosUtxo;
+  /** What another transaction, `txHash`, paid the session's account: a fill, say. */
+  const paidIn = (txHash: string, value: string, tokens: Array<[string, string]>) =>
+    ({ ...atSession(txHash, 0, value, tokens), address: ACCOUNT }) as KoiosUtxo;
+
+  /** Session 0's swap placed by the runner, then landed: the funding spent, the order and the change listed. */
+  async function placedAndLanded() {
+    const { t, sessions } = await seeded("mainnet", swapPlacing(V4, "mainnet"));
+    let view = await sessions.advance("mainnet", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
+    t.koios.addedToAccounts.push(changeRow(), orderRow());
+    view = await sessions.advance("mainnet", 0, true);
+    expect(view.auto!.paused).toBeUndefined();
+    // Open, under the session's own staking part: neither the fill nor the session's own money.
+    expect(view.auto!.filled).toBeFalsy();
+    return { t, sessions };
+  }
+
+  it("is cancelled by Stop with V4's reference, signed by the session's payment and stake keys, paying the session alone", async () => {
+    const { t, sessions } = await placedAndLanded();
+    const wasm = wasmOf(sessions);
+    const build = wasm.buildOrderCancel!;
+    const built: Array<{ references: Array<{ tx_hash: string; tx_index: number }> }> = [];
+    wasm.buildOrderCancel = ((request: string) => {
+      built.push(JSON.parse(request));
+      return build(request as never);
+    }) as never;
+    const sign = wasm.signSessionTx!;
+    const witnesses: string[] = [];
+    wasm.signSessionTx = ((keys: never, request: string) => {
+      const signed = sign(keys, request as never);
+      witnesses.push((JSON.parse(signed) as { witnessSet: string }).witnessSet);
+      return signed;
+    }) as never;
+    const orders = await sessions.orders("mainnet", 0);
+    expect(orders.map((o) => [o.protocol, o.txIn])).toEqual([["SundaeSwapV4", `${SWAP}#0`]]);
+    // The user's review of the cancel: the order's owner, the session's own stake key, signs it too.
+    expect((await sessions.cancelBuild("mainnet", 0)).summary.signs).toEqual(["0/0", "stake"]);
+    const view = await sessions.stop("mainnet", 0);
+    expect(view.auto!.paused).toBeUndefined();
+    expect(view.auto!.retry).toBeUndefined();
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+    // V4's script read from its reference UTxO; two vkey witnesses (a set, tagged 258, of two); all of it back to the
+    // session's own address.
+    expect(built.at(-1)!.references.map((r) => `${r.tx_hash}#${r.tx_index}`)).toEqual([V4.reference]);
+    expect(witnesses.at(-1)).toMatch(/^a100(d90102)?82/);
+    const outs = builtOutputs(t.koios.submitted.at(-1)!);
+    expect(outs.length).toBeGreaterThan(0);
+    expect(outs.every((o) => o.address === SESSION.mainnet)).toBe(true);
+  });
+
+  it("is found by the restore scan through the swap its key signed, and its cancel is signed by both keys", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    mainnetReferences(t);
+    const stake = await t.wallet.withKeys((keys) => keys.oneTime.rewardAddress(loadTestWasm().Network.Mainnet, 0));
+    t.koios.usedStakes.add(stake);
+    t.koios.accountTxs.set(stake, [
+      { tx_hash: SWAP, block_height: 5_000_100, block_time: 1_700_000_000 + 5_000_100 },
+      { tx_hash: sessionSwap.utxo.tx_hash, block_height: 5_000_000, block_time: 1_700_000_000 + 5_000_000 },
+    ]);
+    // The swap spent the funding at the session's key, and paid the order at V4's script and the change back.
+    const { tx_hash, tx_index } = sessionSwap.utxo;
+    t.koios.txSpends.set(SWAP, [{ payment_addr: { bech32: ACCOUNT, cred: PAYMENT }, tx_hash, tx_index }]);
+    t.koios.txOutputs.set(SWAP, [
+      { payment_addr: { bech32: bech32("addr", bytes(V4.address)), cred: V4_SCRIPT }, tx_index: 0 },
+      { payment_addr: { bech32: ACCOUNT, cred: PAYMENT }, tx_index: 1 },
+    ]);
+    t.koios.addedToAccounts.push(orderRow());
+    expect(await sessions.scan("mainnet")).toEqual({ used: 1, found: [0] });
+    const book = await t.store.get<{ sessions: Array<{ txs: Array<Record<string, unknown>> }> }>("sessions.mainnet");
+    expect(book!.sessions[0]!.txs.at(-1)).toMatchObject({ kind: "swap", txHash: SWAP, orders: [`${SWAP}#0`] });
+    expect((await sessions.orders("mainnet", 0)).map((o) => o.protocol)).toEqual(["SundaeSwapV4"]);
+    // Its change at the account pays the cancel's fee and is its collateral.
+    t.koios.addedToAccounts.push(changeRow());
+    const review = await sessions.cancelBuild("mainnet", 0);
+    expect(review).toMatchObject({ kind: "cancel", index: 0, orders: 1 });
+    expect(review.summary.signs).toEqual(["0/0", "stake"]);
+    await sessions.txSubmit("mainnet", review.txHash, "cancel");
+    const sent = await t.store.get<{ sessions: Array<{ txs: Array<Record<string, unknown>> }> }>("sessions.mainnet");
+    expect(sent!.sessions[0]!.txs.at(-1)).toMatchObject({ kind: "cancel", txHash: review.txHash });
+  });
+
+  it("is noticed filled once it's spent and the token comes to the session, and the session comes back", async () => {
+    const { t, sessions } = await placedAndLanded();
+    // A batcher fills it: the order is spent, and the token comes to the session's address with no datum.
+    t.koios.spent.add(`${SWAP}#0`);
+    t.koios.addedToAccounts.push(paidIn("f1".repeat(32), "2000000", [[ASK.tokenOut, "906594100"]]));
+    const view = await sessions.advance("mainnet", 0, true);
+    expect(view.auto!.paused).toBeUndefined();
+    expect(view.auto!.filled).toBe(true);
+    expect(view.auto!.refunded).toBeFalsy();
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
   });
 });
 

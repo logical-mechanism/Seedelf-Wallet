@@ -42,12 +42,14 @@ import { tokenDecimals, tokenText } from "../tokens";
  * every review's, a site's waiting for a signature, and each of a chain's
  * through Lovejoin being sent. `label` names it where "Transaction details"
  * doesn't read right. `site`: the site built it and sends it, and the wallet
- * only adds its signature (the connector's sign window). `parts`: a payment
- * too large for one transaction, as its review's summary lists them, `txHash`
- * the first's; the view steps through every one (1.7.0). `onOpen`: the page
- * opens the view itself (TxDetailModal), where a list that can go while it's
- * open would take a view of its own with it (the Lovejoin page's chains, 1.3.0's
- * release review, C28).
+ * only adds its signature (the connector's sign window). `lookedUp`: the
+ * wallet built it, and looked up the inputs it doesn't hold to read it (a
+ * session's cancel, its swap against a DEX's pools); `site` implies it.
+ * `parts`: a payment too large for one transaction, as its review's summary
+ * lists them, `txHash` the first's; the view steps through every one (1.7.0).
+ * `onOpen`: the page opens the view itself (TxDetailModal), where a list that
+ * can go while it's open would take a view of its own with it (the Lovejoin
+ * page's chains, 1.3.0's release review, C28).
  */
 export function TxDetailButton({
   txHash,
@@ -55,6 +57,7 @@ export function TxDetailButton({
   label,
   testId = "tx-detail",
   site = false,
+  lookedUp = false,
   onOpen,
 }: {
   txHash: string;
@@ -62,6 +65,7 @@ export function TxDetailButton({
   label?: string;
   testId?: string;
   site?: boolean;
+  lookedUp?: boolean;
   onOpen?: () => void;
 }) {
   const tr = useT();
@@ -77,7 +81,15 @@ export function TxDetailButton({
       {/* By the transaction: a review built again in place under the open view is a new one (each build signs with a
           new one-time key), and its view starts afresh, on its first (1.7.0's release review, pr335#0). */}
       {open && (
-        <TxDetailModal key={txHash} txHash={txHash} parts={parts?.map((p) => p.txHash)} testId={testId} site={site} onClose={() => setOpen(false)} />
+        <TxDetailModal
+          key={txHash}
+          txHash={txHash}
+          parts={parts?.map((p) => p.txHash)}
+          testId={testId}
+          site={site}
+          lookedUp={lookedUp}
+          onClose={() => setOpen(false)}
+        />
       )}
     </>
   );
@@ -111,12 +123,14 @@ export function TxDetailModal({
   parts,
   testId,
   site = false,
+  lookedUp = false,
   onClose,
 }: {
   txHash: string;
   parts?: readonly string[];
   testId: string;
   site?: boolean;
+  lookedUp?: boolean;
   onClose: () => void;
 }) {
   const tr = useT();
@@ -214,7 +228,14 @@ export function TxDetailModal({
             />
             <div id={`${testId}-panel-${tab}`} role="tabpanel" aria-labelledby={`${testId}-tab-${tab}`} className="stack">
               {tab === "transaction" ? (
-                <TxDetailBody detail={view.detail} network={network} testId={testId} site={site} chain={view.chain === true} />
+                <TxDetailBody
+                  detail={view.detail}
+                  network={network}
+                  testId={testId}
+                  site={site}
+                  lookedUp={lookedUp}
+                  chain={view.chain === true}
+                />
               ) : (
                 <Raw cbor={view.cbor} testId={testId} />
               )}
@@ -305,6 +326,7 @@ export function TxDetailBody({
   network,
   testId,
   site = false,
+  lookedUp = false,
   chain = false,
 }: {
   detail: Detail;
@@ -312,6 +334,12 @@ export function TxDetailBody({
   testId: string;
   /** A site's transaction, in the connector's sign window: the wallet neither prepared it nor sends it. */
   site?: boolean;
+  /**
+   * The wallet's own, for which it looked up the inputs it doesn't hold (a session's cancel spends orders, a swap
+   * against a DEX's pools a pool): the inputs hint says so, as a site's does, and nothing else changes (1.9.0's
+   * release review, cross#1).
+   */
+  lookedUp?: boolean;
   /**
    * One of a chain through Lovejoin being sent, or stopped partway (the worker
    * found it there, TxView `chain`): its Send was pressed, or a mix's own run
@@ -346,7 +374,7 @@ export function TxDetailBody({
       <Section
         title={tr("tx.spends", { count: d.inputs.length })}
         id={`${testId}-inputs`}
-        hint={tr(site ? "tx.privacy.inputsHintSite" : "tx.privacy.inputsHint")}
+        hint={tr(site || lookedUp ? "tx.privacy.inputsHintSite" : "tx.privacy.inputsHint")}
       >
         <Outpoints list={d.inputs} testId={`${testId}-input-list`} />
       </Section>

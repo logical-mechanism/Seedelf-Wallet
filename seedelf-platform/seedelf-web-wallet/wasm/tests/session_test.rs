@@ -11,10 +11,11 @@ use pallas_primitives::{Fragment, PlutusData, TransactionInput, conway};
 use pallas_traverse::MultiEraTx;
 use seedelf_core::address::wallet_contract;
 use seedelf_core::constants::{MAINNET_STAKE_HASH, PREPROD_STAKE_HASH, VARIANT, get_config};
+use seedelf_core::orders::{self, Cancel, Credential, OrderToCancel, Session};
 use seedelf_crypto::cardano::{CardanoAccount, ONE_TIME_ACCOUNT, Role};
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::random_scalar;
-use seedelf_koios::koios::UtxoResponse;
+use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
 use seedelf_wasm::api::{self, SessionReturnRequest};
 use seedelf_wasm::cip30::{self, DataRequest, KeyPath, KoiosRow, TxRequest};
 use serde_json::{Value, json};
@@ -1041,6 +1042,133 @@ fn a_real_aggregator_swap_is_read_signed_and_assembled_byte_for_byte() {
         cip30::attach_witnesses(tx_cbor, "a0").is_err(),
         "nothing to add"
     );
+}
+
+/// A UTxO of seedelf-core's DEX order fixtures, as Koios lists it.
+fn fixture_utxo(u: &Value) -> UtxoResponse {
+    let address = Address::from_bech32(u["address"].as_str().unwrap()).unwrap();
+    let payment_cred = match &address {
+        Address::Shelley(s) => hex::encode(s.payment().as_hash()),
+        _ => String::new(),
+    };
+    serde_json::from_value(json!({
+        "tx_hash": u["tx_hash"],
+        "tx_index": u["tx_index"],
+        "address": u["address"],
+        "value": u["value"],
+        "stake_address": null,
+        "payment_cred": payment_cred,
+        "epoch_no": 0,
+        "block_height": 0,
+        "block_time": 0,
+        "datum_hash": u.get("datum_hash").cloned().unwrap_or(Value::Null),
+        "inline_datum": u.get("inline_datum").cloned().unwrap_or(Value::Null),
+        "reference_script": u.get("reference_script").cloned().unwrap_or(Value::Null),
+        "asset_list": u.get("asset_list").cloned().unwrap_or(json!([])),
+        "is_spent": false,
+    }))
+    .unwrap()
+}
+
+/// Each DEX's real mainnet order (seedelf-core's `order_cancels.json`) made out to session 3, cancelled by the
+/// wallet's own builder, and read by the connector with the session's keys, as a site on the session has it read:
+/// the session's key releases the order (a required signer, and named in its datum), and nothing of it leaves the
+/// session, so the sign window shows no warning and no switch (1.9.0's release review, cross#3).
+#[test]
+fn a_sessions_own_cancel_releases_nothing_away_from_it() {
+    let accounts = accounts();
+    let index = 3;
+    let session = Session {
+        payment: accounts.key_hash(Role::Receive, index).unwrap(),
+        stake: accounts.key_hash(Role::Staking, index).unwrap(),
+    };
+    let address = api::one_time_address(&accounts, false, index).unwrap();
+    let rows: Value = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/epoch_params_mainnet.json"
+    ))
+    .unwrap();
+    let row = if rows.is_array() { &rows[0] } else { &rows };
+    let params = ProtocolParameters::from_koios(row).unwrap();
+    let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/order_cancels.json"
+    ))
+    .unwrap();
+    let koios_row = |u: &UtxoResponse| -> KoiosRow {
+        serde_json::from_value(serde_json::to_value(u).unwrap()).unwrap()
+    };
+    let mut seen = 0;
+    for f in fixtures
+        .iter()
+        .filter(|f| f["network"] == "mainnet" && f["stuck"] != true)
+    {
+        let protocol: orders::Protocol = serde_json::from_value(f["protocol"].clone()).unwrap();
+        // The datum made out to the session: its owner's keys swapped for the session's, byte for byte.
+        let text = f["datum"].as_str().unwrap();
+        let read = orders::read(protocol, &hex::decode(text).unwrap()).unwrap();
+        let (payment, stake) = match (read.pays[0].payment, read.pays[0].stake) {
+            (Credential::Key(payment), Some(Credential::Key(stake))) => (payment, stake),
+            _ => panic!("{protocol:?}'s order doesn't pay a base address of keys"),
+        };
+        let text = text
+            .replace(&hex::encode(payment), &hex::encode(session.payment))
+            .replace(&hex::encode(stake), &hex::encode(session.stake));
+        let datum = hex::decode(&text).unwrap();
+        let mut order = fixture_utxo(&f["order"]);
+        match &mut order.inline_datum {
+            Some(inline) => inline.bytes = text,
+            None => order.datum_hash = Some(hex::encode(Hasher::<256>::hash(&datum))),
+        }
+        let references: Vec<UtxoResponse> = f["reference"]
+            .as_object()
+            .map(|_| vec![fixture_utxo(&f["reference"])])
+            .unwrap_or_default();
+        let funds = vec![utxo(0xaa, 0, &address, 10_000_000, &[])];
+        let collateral = utxo(0xbb, 0, &address, 5_000_000, &[]);
+        let cancel = orders::cancel_orders(&Cancel {
+            params: &params,
+            network_flag: false,
+            session,
+            address: &address,
+            orders: &[OrderToCancel {
+                utxo: order.clone(),
+                datum,
+            }],
+            funds: &funds,
+            collateral: &collateral,
+            references: &references,
+        })
+        .unwrap_or_else(|e| panic!("{protocol:?}: {e:#}"));
+        let mut inputs = vec![koios_row(&order)];
+        inputs.extend(funds.iter().map(koios_row));
+        inputs.push(koios_row(&collateral));
+        let request = TxRequest {
+            network: "mainnet".into(),
+            tx_cbor: hex::encode(&cancel.tx.tx_bytes.0),
+            keys: vec![KeyPath { role: 0, index }],
+            inputs,
+            partial_sign: false,
+            stake_index: index,
+            stake_deposit: None,
+            governance: false,
+        };
+        let s = cip30::inspect_tx(&accounts, &request)
+            .unwrap_or_else(|e| panic!("{protocol:?}: {e:#}"));
+        assert!(s.complete, "{protocol:?}");
+        assert_eq!(
+            s.signs.contains(&"stake".to_string()),
+            protocol.signs_with_stake(),
+            "{protocol:?}"
+        );
+        assert_eq!(s.contract_inputs, 1, "{protocol:?}");
+        assert_eq!(s.contract_lovelace, order.value, "{protocol:?}");
+        assert!(s.key_releases && s.names_key, "{protocol:?}");
+        // Everything comes back to the session: nothing of the order reads as released.
+        assert!(s.paid.is_empty(), "{protocol:?}");
+        assert_eq!(s.released_lovelace, "0", "{protocol:?}");
+        assert!(s.released_tokens.is_empty(), "{protocol:?}");
+        seen += 1;
+    }
+    assert!(seen >= 11, "{seen} cancels");
 }
 
 /// Writes the extension's fixture for a session's swap (`extension/tests/

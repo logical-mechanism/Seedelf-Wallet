@@ -152,15 +152,21 @@ describe("the transaction view", () => {
     const t = await unlocked();
     const net = t.deps.wasm.Network.Preprod;
     const stakeHash = (bech32: string) => t.deps.wasm.cip30Address(bech32).slice(2);
-    const [payment, stake, session] = await t.wallet.withKeys((k) => [
+    // The stake keys too, a session's and Account 2's: a contract's cancel can ask for either (1.9.0's release
+    // review, dapp-ui#4).
+    const [payment, stake, session, sessionStake] = await t.wallet.withKeys((k) => [
       k.cardano.paymentKeyHash(0, 0),
       stakeHash(k.cardano.stakeAddress(net)),
       k.oneTime.keyHash(0).toLowerCase(),
+      stakeHash(k.oneTime.rewardAddress(net, 0)),
     ]);
-    const second = await t.wallet.withAccount(1, (k) => k.cardano.paymentKeyHash(0, 0));
+    const [second, secondStake] = await t.wallet.withAccount(1, (k) => [
+      k.cardano.paymentKeyHash(0, 0),
+      stakeHash(k.cardano.stakeAddress(net)),
+    ]);
     const stranger = "44".repeat(28);
-    const signers = [payment, stake, session, second, stranger].map((h) => `581c${h}`).join("");
-    const cbor = `84a4` + `0081825820${"11".repeat(32)}00` + `0180` + `021a00029810` + `0e85${signers}` + `a0f5f6`;
+    const signers = [payment, stake, session, sessionStake, second, secondStake, stranger].map((h) => `581c${h}`).join("");
+    const cbor = `84a4` + `0081825820${"11".repeat(32)}00` + `0180` + `021a00029810` + `0e87${signers}` + `a0f5f6`;
     const before = t.koios.calls.length;
     const { detail } = await txView(
       { ...deps(t), knownAccounts: async () => [0, 1], sessionIndices: async () => [0] },
@@ -168,11 +174,33 @@ describe("the transaction view", () => {
       "ab".repeat(32),
       () => cbor,
     );
-    expect(detail.requiredSigners).toHaveLength(5);
-    expect([...detail.yourSigners!].sort()).toEqual([payment, stake, session, second].sort());
+    expect(detail.requiredSigners).toHaveLength(7);
+    expect([...detail.yourSigners!].sort()).toEqual([payment, stake, session, sessionStake, second, secondStake].sort());
     // Not knowing Account 2 or the session, the wallet doesn't guess.
     const alone = await txView(deps(t), "preprod", "ab".repeat(32), () => cbor);
     expect([...alone.detail.yourSigners!].sort()).toEqual([payment, stake].sort());
+    expect(t.koios.calls.length).toBe(before);
+  });
+
+  it("marks each account's DRep key as the user's, as the sign window says it is (1.9.0's release review, dapp-ui#3)", async () => {
+    const t = await unlocked();
+    const drepOf = (k: { cardano: { drepOf(): string } }) => (JSON.parse(k.cardano.drepOf()) as { hash: string }).hash;
+    const drep = await t.wallet.withKeys(drepOf);
+    const second = await t.wallet.withAccount(1, drepOf);
+    const stranger = "44".repeat(28);
+    const signers = [drep, second, stranger].map((h) => `581c${h}`).join("");
+    const cbor = `84a4` + `0081825820${"11".repeat(32)}00` + `0180` + `021a00029810` + `0e83${signers}` + `a0f5f6`;
+    const before = t.koios.calls.length;
+    const { detail } = await txView(
+      { ...deps(t), knownAccounts: async () => [0, 1] },
+      "preprod",
+      "ab".repeat(32),
+      () => cbor,
+    );
+    expect([...detail.yourSigners!].sort()).toEqual([drep, second].sort());
+    // Not knowing Account 2, the wallet doesn't guess.
+    const alone = await txView(deps(t), "preprod", "ab".repeat(32), () => cbor);
+    expect(alone.detail.yourSigners).toEqual([drep]);
     expect(t.koios.calls.length).toBe(before);
   });
 

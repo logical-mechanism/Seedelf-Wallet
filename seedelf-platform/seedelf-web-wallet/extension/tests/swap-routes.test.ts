@@ -3,9 +3,20 @@
 // through, and every other DEX Minswap offers left out.
 import { describe, expect, it, vi } from "vitest";
 
-import { DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, MINSWAP_PROTOCOLS } from "../src/background/minswap";
-import { minswapEstimate } from "./fakes";
-import { MIN, funded, signing, started, unlocked } from "./swap-session";
+import type { KoiosUtxo } from "../src/background/koios";
+import {
+  DIRECT_PROTOCOLS,
+  excludedProtocols,
+  MAINNET_PROTOCOLS,
+  Minswap,
+  MinswapError,
+  MINSWAP_PROTOCOLS,
+  type Estimate,
+} from "../src/background/minswap";
+import { bech32 } from "./fixtures/bech32";
+import { bytes, ORDER_DATUM, ORDER_SCRIPT, SESSION_ADDRESS, swapTx } from "./fixtures/swap-tx";
+import { minswapEstimate, sessionSwap } from "./fakes";
+import { ASK, atSession, MIN, funded, signing, started, unlocked, type T } from "./swap-session";
 
 // The fixtures are preprod's: the runner's route check reads a route as mainnet's while `rule.mainnet` is set.
 const rule = vi.hoisted(() => ({ mainnet: false }));
@@ -150,6 +161,68 @@ describe("a route through a DEX the wallet doesn't know (2026-11-09)", () => {
     await expect(t.sessions.quote("preprod", selling)).resolves.toMatchObject({ route: ["CswapV1"] });
     expect(t.minswap.calls.filter((c) => c.path === "estimate")).toHaveLength(1);
   });
+
+  /** Session 0's address on mainnet (hex): its own payment key and stake key. */
+  const MAINNET_SESSION = `01${SESSION_ADDRESS.slice(2)}`;
+
+  /**
+   * Session 0 on mainnet, its funding confirmed and its swap not placed yet: the fakes serve any network, and the book
+   * is a store key per network (order-cancel-check.test.ts). Minswap builds its Minswap V1 order there, at the same
+   * script as preprod's.
+   */
+  async function fundedOnMainnet(t: T) {
+    const now = t.clock.now;
+    await t.store.set("sessions.mainnet", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [{ kind: "out", txHash: sessionSwap.utxo.tx_hash, at: now, confirmed: true }],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } } },
+        },
+      ],
+    });
+    t.koios.confirmations = 1;
+    t.koios.addedToAccounts.push({
+      ...atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value),
+      address: bech32("addr", bytes(MAINNET_SESSION)),
+    } as KoiosUtxo);
+    t.minswap.swapCbor = swapTx({
+      outputs: [
+        [`11${ORDER_SCRIPT}${SESSION_ADDRESS.slice(58)}`, 14_000_000, ORDER_DATUM],
+        [MAINNET_SESSION, 131_585_414],
+      ],
+    });
+  }
+
+  it("is asked for again on mainnet by Review it myself and the runner's order too, and built without it (1.9.0's release review, mutants#4)", async () => {
+    // routeOf is given the session's own network at each: asked as preprod, neither would ask again.
+    const t = await unlocked();
+    const sessions = signing(t);
+    await fundedOnMainnet(t);
+    routesThrough(t, "SomeNewDex");
+    const leftOut = (body: any): string[] => body.exclude_protocols ?? body.estimate.exclude_protocols;
+    const asked = () => t.minswap.calls.map((c) => [c.path, leftOut(c.body).includes("SomeNewDex")]);
+    await expect(sessions.swapBuild("mainnet", 0)).resolves.toMatchObject({ kind: "swap" });
+    expect(asked()).toEqual([
+      ["estimate", false],
+      ["estimate", true],
+      ["build-tx", true],
+    ]);
+    t.minswap.calls.length = 0;
+    const view = await sessions.advance("mainnet", 0, true);
+    expect(view.auto!.paused).toBeUndefined();
+    expect(view.auto!.retry).toBeUndefined();
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+    expect(asked()).toEqual([
+      ["estimate", false],
+      ["estimate", true],
+      ["build-tx", true],
+    ]);
+  });
 });
 
 describe("a route of more than one leg (chunk 24)", () => {
@@ -209,5 +282,209 @@ describe("a route of more than one leg (chunk 24)", () => {
     await expect(t.sessions.quote("preprod", selling)).rejects.toThrow(
       "Minswap routes this swap through MinswapV2 and CswapV1 in a way the wallet's check can't follow",
     );
+  });
+});
+
+describe("a second ask Minswap refuses (1.9.0's release review, routes#1)", () => {
+  /** Minswap's live answer to a DEX name its validator doesn't take (2026-11-09): 23 names allowed, then anyOf's. */
+  const nameRefused = (at: number) =>
+    Response.json(
+      {
+        statusCode: 400,
+        code: "FST_ERR_VALIDATION",
+        error: "Bad Request",
+        message: [
+          ...Array<string>(23).fill(`body/exclude_protocols/${at} must be equal to constant`),
+          `body/exclude_protocols/${at} must match a schema in anyOf`,
+        ].join(", "),
+      },
+      { status: 400 },
+    );
+  /** Minswap's live answer when what's left out leaves it no route (2026-11-09). */
+  const noRoute = () => Response.json({ error: "QuoteNotFoundError", message: "Quote not found." }, { status: 404 });
+
+  /**
+   * Minswap's router: `route` until it's asked to leave `dex` out; then `refused`'s answer (told where `dex` is in
+   * that list), or, where it gives none, a route around it through MinswapV2.
+   */
+  function leavingOut(t: T, dex: string, route: Pick<Estimate, "paths">, refused: (at: number) => Response | undefined) {
+    const answer = t.minswap.fetch;
+    t.minswap.fetch = async (url, init) => {
+      const body = init.body ? JSON.parse(String(init.body)) : {};
+      const left: string[] = body.exclude_protocols ?? body.estimate?.exclude_protocols ?? [];
+      const refusal = left.includes(dex) ? refused(left.indexOf(dex)) : undefined;
+      if (refusal) {
+        t.minswap.calls.push({ path: new URL(url).pathname.split("/").pop()!, body });
+        return refusal;
+      }
+      const now = left.includes(dex) ? via("MinswapV2") : route;
+      t.minswap.estimate = { ...minswapEstimate.estimate, paths: now.paths };
+      return answer(url, init);
+    };
+  }
+  const paths = (t: T) => t.minswap.calls.map((c) => c.path);
+
+  it("tells these two refusals by Minswap's own words and status, and nothing else", async () => {
+    const troubleOf = (status: number, said: object) => {
+      const minswap = new Minswap("https://minswap.test/aggregator", async () => Response.json(said, { status }));
+      return minswap.estimate(selling, ["SomeNewDex"]).then(
+        () => "answered",
+        (e: unknown) => (e instanceof MinswapError ? e.trouble : "not Minswap's"),
+      );
+    };
+    const constant = { message: "body/exclude_protocols/1 must be equal to constant" };
+    const notFound = { error: "QuoteNotFoundError", message: "Quote not found." };
+    expect(await troubleOf(400, await nameRefused(1).json())).toBe("name-refused");
+    expect(await troubleOf(404, await noRoute().json())).toBe("no-route");
+    // The same words under another status, and another 404, are any other refusal.
+    expect(await troubleOf(500, constant)).toBeUndefined();
+    expect(await troubleOf(500, notFound)).toBeUndefined();
+    expect(await troubleOf(404, { message: "Route not found" })).toBeUndefined();
+  });
+
+  // A DEX the wallet doesn't check, on mainnet: one whose name Minswap's validator won't take (as it stopped taking
+  // ChakraBondingCurve's), and one it takes with nothing else to route through.
+  const unchecked = [
+    { dex: "ChakraBondingCurve", refused: nameRefused },
+    { dex: "SomeNewDex", refused: noRoute },
+  ];
+
+  it.each(unchecked)("keeps the first answer through $dex, so the quote is refused in the wallet's words, not Minswap's", async ({ dex, refused }) => {
+    const t = await unlocked();
+    leavingOut(t, dex, via(dex), refused);
+    await expect(t.sessions.quote("mainnet", selling)).rejects.toThrow(
+      `Minswap routes this swap through ${dex}, which the wallet can't check yet, so it won't swap this way. Try another amount or pair.`,
+    );
+    expect(paths(t)).toEqual(["estimate", "estimate"]);
+  });
+
+  it.each(unchecked)("pauses a funded swap through $dex in those words, as Review it myself refuses it: neither builds, and Stop brings it back", async ({ dex, refused }) => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    rule.mainnet = true;
+    try {
+      await started(sessions);
+      funded(t);
+      leavingOut(t, dex, via(dex), refused);
+      let view = await sessions.advance("preprod", 0, true);
+      const detail = `Minswap now routes it through ${dex}, whose orders the wallet can't check yet.`;
+      expect(view.auto!.paused).toMatchObject({ why: "refused", detail });
+      expect(view.auto!.retry).toBeUndefined();
+      await expect(sessions.swapBuild("preprod", 0)).rejects.toThrow(
+        `Minswap now routes this swap through ${dex}, which the wallet can't check yet, so it won't swap this way. Try again later, or Stop to bring it back.`,
+      );
+      expect(paths(t)).not.toContain("build-tx");
+      expect(t.koios.submitted).toHaveLength(1);
+      view = await sessions.stop("preprod", 0);
+      expect(view.txs.map((x) => x.kind)).toEqual(["out", "back"]);
+    } finally {
+      rule.mainnet = false;
+    }
+  });
+
+  // Asked again for a route the session's check can't follow (outOfPlace): a path of two legs, or Danogo beside another
+  // DEX. The first answer stands for these too, refused in the words for its way, on either network: nothing is built
+  // through a leg the session couldn't check or cancel.
+  const legs = { paths: [[{ ...leg, protocol: "MinswapV2" }, { ...leg, protocol: "SundaeSwapV3" }]] };
+  const outOfPlace = [
+    { shape: "a path of two legs", dex: "SundaeSwapV3", route: legs, named: "MinswapV2 and SundaeSwapV3" },
+    { shape: "Danogo beside another DEX", dex: "DanogoCLMMV1", route: via("DanogoCLMMV1", "MinswapV2"), named: "DanogoCLMMV1" },
+  ].flatMap((c) => [
+    { ...c, why: "no route", refused: noRoute },
+    { ...c, why: "a name", refused: nameRefused },
+  ]);
+
+  it.each(outOfPlace)("keeps the first answer as $shape ($why refused), so the quote is refused for its way, on either network", async ({ dex, route, named, refused }) => {
+    for (const network of ["preprod", "mainnet"] as const) {
+      const t = await unlocked();
+      leavingOut(t, dex, route, refused);
+      const quoted = t.sessions.quote(network, selling);
+      await expect(quoted, network).rejects.toThrow(
+        `Minswap routes this swap through ${named} in a way the wallet's check can't follow, so it won't swap this way. Try another amount or pair.`,
+      );
+      expect(paths(t), network).toEqual(["estimate", "estimate"]);
+    }
+  });
+
+  it.each(outOfPlace)("pauses a funded swap Minswap routes as $shape ($why refused) in those words, as Review it myself refuses it: nothing is built", async ({ dex, route, named, refused }) => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    leavingOut(t, dex, route, refused);
+    const view = await sessions.advance("preprod", 0, true);
+    const detail = `Minswap now routes it through ${named} in a way the wallet's check can't follow.`;
+    expect(view.auto!.paused).toMatchObject({ why: "refused", detail });
+    expect(view.auto!.retry).toBeUndefined();
+    await expect(sessions.swapBuild("preprod", 0)).rejects.toThrow(
+      `Minswap now routes this swap through ${named} in a way the wallet's check can't follow, so it won't swap this way. Try again later, or Stop to bring it back.`,
+    );
+    // Only the funding went: no order through a leg the session's check never read.
+    expect(paths(t)).not.toContain("build-tx");
+    expect(t.koios.submitted).toHaveLength(1);
+  });
+
+  it("still throws on a limit or an outage, as any ask does: the quote fails, and the runner tries again, then places the swap once Minswap answers", async () => {
+    for (const [refusal, said] of [
+      [() => new Response("", { status: 429 }), "Minswap is limiting requests from your connection. Wait a minute and try again."],
+      [() => new Response("upstream down", { status: 503 }), "Minswap refused it (503): upstream down"],
+    ] as const) {
+      const t = await unlocked();
+      leavingOut(t, "SomeNewDex", via("SomeNewDex"), refusal);
+      await expect(t.sessions.quote("mainnet", selling)).rejects.toThrow(said);
+    }
+    const t = await unlocked();
+    const sessions = signing(t);
+    rule.mainnet = true;
+    try {
+      await started(sessions);
+      funded(t);
+      let refusal: (() => Response) | undefined = () => new Response("", { status: 429 });
+      leavingOut(t, "CswapV1", via("CswapV1"), () => refusal?.());
+      let view = await sessions.advance("preprod", 0, true);
+      expect(view.auto!.paused).toBeUndefined();
+      expect(view.auto!.retry).toMatchObject({ reason: "minswap-rate-limited" });
+      refusal = () => new Response("upstream down", { status: 503 });
+      view = await sessions.advance("preprod", 0, true);
+      expect(view.auto!.paused).toBeUndefined();
+      expect(view.auto!.retry).toMatchObject({ reason: "other", error: "Minswap refused it (503): upstream down" });
+      expect(paths(t)).not.toContain("build-tx");
+      refusal = undefined;
+      view = await sessions.advance("preprod", 0, true);
+      expect(view.auto!.paused).toBeUndefined();
+      expect(view.auto!.retry).toBeUndefined();
+      expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+    } finally {
+      rule.mainnet = false;
+    }
+    // Two quotes and a runner's three steps, each unlocking a wallet: room on a loaded runner (1.9.0's review of its
+    // fixes, r2-tests#3).
+  }, 20_000);
+
+  // Anywhere but routeOf's second ask, either refusal is like any other. A first ask refused (a name on the wallet's
+  // own list, as ChakraBondingCurve was on 2026-11-09, or a pair with no route left) is retried in Minswap's words,
+  // never paused (1.9.0's review of its fixes, r2-tests#2).
+  it.each([
+    { why: "a name on the wallet's own list", refused: () => nameRefused(0), said: "Minswap refused it (400): body/exclude_protocols/0 must be equal to constant" },
+    { why: "no route", refused: noRoute, said: "Minswap refused it (404): Quote not found." },
+  ])("retries a funded swap whose first ask is refused for $why, in Minswap's words", async ({ refused, said }) => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    const answer = t.minswap.fetch;
+    t.minswap.fetch = async (url, init) => {
+      if (!new URL(url).pathname.endsWith("/estimate")) return answer(url, init);
+      t.minswap.calls.push({ path: "estimate", body: init.body ? JSON.parse(String(init.body)) : {} });
+      return refused();
+    };
+    const before = t.minswap.calls.length;
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.paused).toBeUndefined();
+    expect(view.auto!.retry).toMatchObject({ reason: "other" });
+    expect(view.auto!.retry!.error).toContain(said);
+    // The first ask alone: nothing asked again, nothing built, only the funding sent.
+    expect(paths(t).slice(before)).toEqual(["estimate"]);
+    expect(t.koios.submitted).toHaveLength(1);
   });
 });

@@ -2,9 +2,11 @@
 //! DEX's real order, from mainnet or preprod, cancelled through its real
 //! script in the wallet's evaluator; and the script refusing the same cancel
 //! without the canceller's signature. The fixtures were read from chain on
-//! 2026-10-07 (`tests/fixtures/order_cancels.json`): an order spent by a real
-//! owner cancel, its datum, and the reference UTxO its script is read from;
-//! and the owner's stuck preprod SundaeSwap V3 order.
+//! 2026-10-07 (`tests/fixtures/order_cancels.json`), SundaeSwap V4's on
+//! 2026-11-09: an order spent by a real owner cancel, its datum, and the
+//! reference UTxO its script is read from; and the owner's stuck preprod
+//! SundaeSwap V3 order. V4's validators are unpublished, so what its cancel
+//! needs rests on Sundae's SDK and that one real cancel.
 
 use pallas_addresses::{
     Address, Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
@@ -1179,6 +1181,24 @@ fn an_order_is_the_sessions_only_when_its_canceller_and_every_payee_are() {
                     edit(&|d| {
                         let first = &mut items(&mut fields(d)[5])[0];
                         items(first)[0] = bytes(&OTHER);
+                    }),
+                    Expect::Unread,
+                ));
+                // The second module is held to fee_constraint's hash too, and each entry to [module, data] (1.9.0's
+                // release review, mutants#6).
+                variants.push((
+                    "another second module",
+                    edit(&|d| {
+                        let second = &mut items(&mut fields(d)[5])[1];
+                        items(second)[0] = bytes(&OTHER);
+                    }),
+                    Expect::Unread,
+                ));
+                variants.push((
+                    "a constraint of three items",
+                    edit(&|d| {
+                        let first = &mut items(&mut fields(d)[5])[0];
+                        items(first).push(int(0));
                     }),
                     Expect::Unread,
                 ));

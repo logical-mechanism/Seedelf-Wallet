@@ -2690,7 +2690,10 @@ export function SessionTxReviewScreen({
           <Row label={tr("swaps.tx.collateralAtRisk")} value={`${formatAda(collateral.atRisk)}\u00a0₳`} />
         )}
       </ReviewRows>
-      <TxDetailButton txHash={review.txHash} testId="session-tx-detail" />
+      {/* What it spends that the session doesn't hold, the wallet looked up to read it: a cancel's orders, and the
+          pool and the collateral of a swap against a DEX's pools (sessions.ts inspect; 1.9.0's release review,
+          cross#1). An order's spends only the session's own. */}
+      <TxDetailButton txHash={review.txHash} testId="session-tx-detail" lookedUp={review.kind === "cancel" || pools} />
       {review.summary.note && (
         <p className="note">{tr("swaps.tx.minswapNote", { note: review.summary.note.join("") })}</p>
       )}
