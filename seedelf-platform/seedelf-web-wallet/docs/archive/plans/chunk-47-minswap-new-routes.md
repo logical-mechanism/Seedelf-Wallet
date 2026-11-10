@@ -1,6 +1,6 @@
 # Chunk 47 · Minswap's new routes: SundaeSwap V4, and Dano first
 
-**Status: Part A ✅ built for 1.9.0. Part B ⛔ not built, its gate unmet ([backlog.md](../../backlog.md)).** The owner, 2026-11-09: "write a chunk for the 1.9.0 work for the new stuff", after Minswap announced three additions to its aggregator, then "lets get this setup right and do it right now". Their standing call from 2026-10-07 was to add SundaeSwap V4 "only when Minswap's router handles it": it does now.
+**Status: Part A ✅ built for 1.9.0. Part B ⬜ not built, its gate answered on chain after Part A's PR opened ([backlog.md](../../backlog.md)).** The owner, 2026-11-09: "write a chunk for the 1.9.0 work for the new stuff", after Minswap announced three additions to its aggregator, then "lets get this setup right and do it right now". Their standing call from 2026-10-07 was to add SundaeSwap V4 "only when Minswap's router handles it": it does now.
 
 Branch `web-wallet/minswap-new-routes` from `main`. [What was built](#what-was-built) is at the end.
 
@@ -54,12 +54,17 @@ V4's cancel reads the owner alone: an extra datum field and a budget written as 
 ### What's known
 
 - `allow_multi_hops` is `false` on every request, and it's tested. `DIRECT_CHECKED` keeps Danogo alone, because "an order beside it would be filled later, under a minimum the check never reads".
-- Ordinary multi-hop stays refused: a later leg's order is placed by a batcher, or owned by Minswap's key. **Dano first may differ, since its order is in the transaction the session signs.** That isn't verified: no Dano-first route has been seen yet. With multi-hop allowed on 2026-11-09, 5,000 ₳ → MIN and → SUNDAE came back single-leg, and through neither Dano.
+- Ordinary multi-hop stays refused: a later leg's order is placed by a batcher, or owned by Minswap's key. **Dano first differs, since its order is in the transaction the session signs:** step 1 saw it on chain. With multi-hop allowed on 2026-11-09, 5,000 ₳ → MIN and → SUNDAE came back single-leg, and through neither Dano.
 - Multi-hop can pay: 200k MIN → iUSD quoted 766 against 379 direct (2026-10-06), though that wasn't a Dano route.
 
 ### Steps
 
-1. ⛔ **The gate: see one.** Find a Dano-first route, with `allow_multi_hops: true` over Danogo's pairs, and read a `build-tx` of it, unsigned. Who owns the order? It must be the session's key, or Stop can't bring it back and **Part B stops there**: say so in the backlog. Does it pay the session, and what's its minimum? **Not seen, 2026-11-09:** six more quotes (USDCx → ADA and SNEK, USDM → ADA and NIGHT, USDA → MIN, ADA → USDCx) came back single-leg, through MinswapV2 twice, or through Danogo twice. None was Dano and then another DEX. So nothing below was built.
+1. ✅ **The gate: see one.** Who owns the order? It must be the session's key, or Stop can't bring it back and Part B stops there. Does it pay the session? **Quotes didn't show one, 2026-11-09:** six more (USDCx → ADA and SNEK, USDM → ADA and NIGHT, USDA → MIN, ADA → USDCx) came back single-leg, through MinswapV2 twice, or through Danogo twice. **The chain did, the same day, after Part A's PR opened.** Of the 500 latest transactions at Danogo's pools (14 hours), 27 were Minswap's, with a Danogo swap and an order:
+   - **4 were Dano first.** Each such order was owned by the sender's own key (the payment key on MinswapV2, the stake key on V3), paid the sender with no datum, and had Minswap's collateral, as today's Danogo swaps do. `read` already takes that shape, so Stop could cancel it, bringing back the middle token.
+   - **23 were side by side:** the same token into Danogo and into an ordinary order. `outOfPlace` refuses this too, and a Stop leaves no middle token.
+   - Other orders in those 27 pay a script with a datum, ordinary chained legs, and stay refused.
+
+   Two of the four pairs, quoted again with multi-hop allowed, came back direct (ADA → HOSKY through VyFinance, STRIKE → ADA through SundaeSwapV3), so Dano first only wins sometimes. Still unseen: a `build-tx` of one, unsigned, and what its minimum is. Nothing below was built.
 2. ⬜ **Ask for it.** A second `estimate` per quote, multi-hop allowed, taken only when it's exactly `[DanogoCLMMV1, X]`, X is a DEX the wallet reads, and it beats the direct route by the margin of question 2.
 3. ⬜ **Let the shape through.** `outOfPlace` allows that one shape and nothing else.
 4. ⬜ **Check it** (`inspect`). `directSpends` holds. `checkDirect` says "No order" today, and needs the order's outputs. `checkProceeds` doesn't apply, as the proceeds go into the order, so the wallet must **read the order's minimum** itself: new per DEX. Start with one X, whichever step 1 shows most.
@@ -82,9 +87,10 @@ V4's cancel reads the owner alone: an extra datum field and a budget written as 
 
 ## For the owner
 
-1. ✅ **A before B?** Yes, and A alone for 1.9.0: B's gate is unmet.
-2. ⬜ **How much better must Dano first be?** Open until a route is seen. It costs a second order's fee and the risk of holding the middle token if the order doesn't fill. The suggestion was at least 1% better than direct, and more for small amounts.
+1. ✅ **A before B?** Yes, and A alone in 1.9.0: B's gate was answered only after A's PR opened, and what's left of B isn't quick.
+2. ⬜ **How much better must Dano first be?** Open, if B is built. It costs a second order's fee and the risk of holding the middle token if the order doesn't fill. The suggestion was at least 1% better than direct, and more for small amounts.
 3. ✅ **Is V4 worth it yet?** The owner, 2026-11-09: do it now, in 1.9.0. It's in use on stablecoin pairs, and Sundae's list has no V4 ADA pool, so most of the wallet's pairs won't route through it today. Its audit's result is unpublished, where V3 had a published one.
+4. ⬜ **Build B at all, and which shape first?** Side by side was about six times as common in step 1's sample, and leaves no middle token to hold.
 
 ## What was built
 

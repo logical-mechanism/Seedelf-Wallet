@@ -107,7 +107,7 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 
 - ⬜ **More of Minswap's routes** (chunk 24): SundaeSwapStable, VyFinance, CswapV1.
 - ⬜ **Multi-hop routes**, off since chunk 24: a later leg's order is one the session can neither check nor cancel.
-- ⬜ **Dano first, then an order** (chunk 47's Part B, unbuilt): waits for a built route whose order the session owns. None seen on 2026-11-09: eight multi-hop quotes over Danogo's pairs, single legs or Danogo twice. [The plan](archive/plans/chunk-47-minswap-new-routes.md#part-b--dano-first-then-an-order) has what it would take.
+- ⬜ **Dano first, then an order** (chunk 47's Part B, unbuilt): real, and its order is one the session owns. Of 27 Minswap transactions with a Danogo swap and an order on 2026-11-09, 4 were Dano first, each order the sender's own, and 23 were side by side, which leaves no middle token: look at that shape first. [The plan](archive/plans/chunk-47-minswap-new-routes.md#part-b--dano-first-then-an-order) has what it would take.
 - ⬜ **A DEX name Minswap stops taking fails every swap's quote** (ChakraBondingCurve, 2026-11-09). Its 400 gives the name's index, so a retry without that name would survive the next one. `WingRidersStableV1` is already off its documentation, though the API still takes it.
 - ⬜ **Splash, very low priority:** a partial fill has never run live, and a remnant no cancel can spend would hold its swap's return (1.3.0's release review, C02).
 - ⬜ **A timed partial return after a swap's cancel** (independent review L16), once a live check shows a cancel works from a small reserve.
