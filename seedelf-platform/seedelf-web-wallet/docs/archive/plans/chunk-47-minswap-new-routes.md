@@ -1,16 +1,16 @@
 # Chunk 47 · Minswap's new routes: SundaeSwap V4, and Dano first
 
-**Status: ⬜ not started.** Planned for 1.9.0. The owner, 2026-11-09: "write a chunk for the 1.9.0 work for the new stuff", after Minswap announced three additions to its aggregator. Their standing call from 2026-10-07 was to add SundaeSwap V4 "only when Minswap's router handles it": it does now.
+**Status: Part A ✅ built for 1.9.0. Part B ⛔ not built, its gate unmet ([backlog.md](../../backlog.md)).** The owner, 2026-11-09: "write a chunk for the 1.9.0 work for the new stuff", after Minswap announced three additions to its aggregator, then "lets get this setup right and do it right now". Their standing call from 2026-10-07 was to add SundaeSwap V4 "only when Minswap's router handles it": it does now.
 
-Branch `web-wallet/minswap-new-routes` from `main`. Parts A and B are independent and can land as separate PRs.
+Branch `web-wallet/minswap-new-routes` from `main`. [What was built](#what-was-built) is at the end.
 
 ## What Minswap added
 
 | Addition | What it is to the wallet |
 |---|---|
-| SundaeSwap V4 in the aggregator, and cancelling V4 orders from Minswap | **Part A.** The route needs the wallet to read and cancel V4's orders itself. Minswap's cancel is never used: Stop builds every cancel itself ([chunk 24](../archive/plans/chunk-24-dapp-additions.md)) |
+| SundaeSwap V4 in the aggregator, and cancelling V4 orders from Minswap | **Part A.** The route needs the wallet to read and cancel V4's orders itself. Minswap's cancel is never used: Stop builds every cancel itself ([chunk 24](chunk-24-dapp-additions.md)) |
 | A route swaps on Dano first, then places the next hop as an order on another DEX, in one transaction | **Part B.** The wallet asks for direct routes only, and `outOfPlace` refuses a Danogo swap beside anything else |
-| Dano trades on Minswap's Orders page | **Nothing.** That's Minswap's site. The wallet finds its orders on chain and never asks Minswap for an account's orders ([keys-and-accounts.md](../keys-and-accounts.md)) |
+| Dano trades on Minswap's Orders page | **Nothing.** That's Minswap's site. The wallet finds its orders on chain and never asks Minswap for an account's orders ([keys-and-accounts.md](../../keys-and-accounts.md)) |
 
 **Where it starts from.** The PR that added this plan stopped sending `ChakraBondingCurve`, whose refusal failed every quote, and left `SundaeSwapV4` out of routing on both networks (`excludedProtocols`, `NOT_READ_YET` in `minswap.ts`). `routeOf` now asks once more without a DEX the wallet doesn't check. So V4 stays out until Part A puts it in.
 
@@ -37,13 +37,15 @@ Two traps. Excluding every DEX but V4 doesn't isolate it: Minswap's own pools ca
 
 ### Steps
 
-1. ⬜ **Pin it.** Add V4 to `seedelf-core`'s `orders.json` with the reference above, re-checked on chain, and preprod's if there is one. `excludedProtocols("preprod")` keeps the name where there's none.
-2. ⬜ **Read it** (`orders.rs`). A `Protocol::SundaeSwapV4`, with the `Constr 0 []` cancel and `signs_with_stake`. Owner is `Signature` of the key, destination `Fixed` with `None`. Any other `MultisigScript`, `Self`, or a `Some` datum reads as not the session's. The chained first leg above must be refused here.
-3. ⬜ **Decide what "one fill" rests on.** Refuse an order unless `service_budget` equals `max_per_execution`, if a real fill or the script's behaviour confirms that means one execution. If it doesn't, partial fills become work of their own: the runner has never seen one live (backlog, Splash).
-4. ⬜ **Route it.** `SundaeSwapV4` onto `MAINNET_PROTOCOLS`, off `NOT_READ_YET` where read. `checkOrder`'s staking rule already takes the session's own part, so V3's Minswap exception isn't needed. A session without its own stake key is already refused.
-5. ⬜ **Check what's automatic.** `checkOrderCancels` running V4's script; `liveOrders` and the restore scan finding one through `orders.json`; `withinFunding` with V4's budget held in the order.
-6. ⬜ **Test on real orders.** Rust and Vitest fixtures from a real Minswap-built V4 order, as for every routed DEX: the single-order form accepted, the chained form and an owner of another key refused, its cancel run through the script.
-7. ⬜ **Live, for free.** On preprod with the dev wallet if V4 is there. On mainnet the dry-run cancel is the check, and the first real swaps are the live one: never a test spend on the owner's list.
+1. ✅ **Pin it.** In `orders.json`, the reference re-checked on chain 2026-11-09. Preprod has none to pin: two stray transactions at Sundae's test deployment's script, last in September, and no reference UTxO. `excludedProtocols("preprod")` keeps the name out (`PREPROD_NOT_PINNED`).
+2. ✅ **Read it** (`orders.rs`). `Protocol::SundaeSwapV4`, with the `Constr 0 []` cancel and `signs_with_stake`. Owner is `Signature` of the key, destination `Fixed` with `None`. Any other `MultisigScript`, `Self` or a `Some` datum doesn't read, so the chained first leg is refused here.
+3. ✅ **Decide what "one fill" rests on: the order's modules, not its budget.** The reader takes only `basic_order.withdraw` then `fee_constraint.withdraw`, by hash. The SDK says a basic order "settles single-shot". Of the last 350 transactions at the script, 174 were fills and none left an order behind, 33 of those with a budget of 3 ₳ against a 1.28 ₳ cap, so equal budgets would have refused good orders. One order in the sample named another module (`35a9eebb…`): that form doesn't read.
+4. ✅ **Route it.** On `MAINNET_PROTOCOLS`. `checkOrder`'s staking rule took the session's own part already, and a session without its own stake key is already refused.
+5. ✅ **Check what's automatic.** All of it, through the table. `checkOrderCancels` runs V4's script. `liveOrders` and the restore scan go by `orders.json`, and the data layer names no order script. `withinFunding` holds: Minswap quotes V4 at a 1.28 ₳ fee and a 2 ₳ deposit, the 3.28 ₳ a real order holds (USDCx → USDr, 2026-11-09).
+6. ✅ **Test on real orders.** The one owner cancel in the sample was of an order Minswap built (`8dc9ee14…`), now in `order_cancels.json`, so every test over the fixtures runs it: Rust's, and Vitest's through the real runner. Variants for another owner or destination, a chained leg, `Self`, every other `MultisigScript`, another module, a missing or third constraint.
+7. ⛔ **Live, for free.** Preprod can't: it has no V4. On mainnet the dry-run cancel is the check, and the first real swaps are the live one: never a test spend on the owner's list.
+
+V4's cancel reads the owner alone: an extra datum field and a budget written as bytes both still cancelled, so nothing else in the datum can stop one.
 
 **Done means:** a mainnet quote can route through V4 on its own, and Stop brings back any V4 order the session placed.
 
@@ -57,7 +59,7 @@ Two traps. Excluding every DEX but V4 doesn't isolate it: Minswap's own pools ca
 
 ### Steps
 
-1. ⬜ **The gate: see one.** Find a Dano-first route, with `allow_multi_hops: true` over Danogo's pairs, and read a `build-tx` of it, unsigned. Who owns the order? It must be the session's key, or Stop can't bring it back and **Part B stops there**: say so in the backlog. Does it pay the session, and what's its minimum?
+1. ⛔ **The gate: see one.** Find a Dano-first route, with `allow_multi_hops: true` over Danogo's pairs, and read a `build-tx` of it, unsigned. Who owns the order? It must be the session's key, or Stop can't bring it back and **Part B stops there**: say so in the backlog. Does it pay the session, and what's its minimum? **Not seen, 2026-11-09:** six more quotes (USDCx → ADA and SNEK, USDM → ADA and NIGHT, USDA → MIN, ADA → USDCx) came back single-leg, through MinswapV2 twice, or through Danogo twice. None was Dano and then another DEX. So nothing below was built.
 2. ⬜ **Ask for it.** A second `estimate` per quote, multi-hop allowed, taken only when it's exactly `[DanogoCLMMV1, X]`, X is a DEX the wallet reads, and it beats the direct route by the margin of question 2.
 3. ⬜ **Let the shape through.** `outOfPlace` allows that one shape and nothing else.
 4. ⬜ **Check it** (`inspect`). `directSpends` holds. `checkDirect` says "No order" today, and needs the order's outputs. `checkProceeds` doesn't apply, as the proceeds go into the order, so the wallet must **read the order's minimum** itself: new per DEX. Start with one X, whichever step 1 shows most.
@@ -80,6 +82,12 @@ Two traps. Excluding every DEX but V4 doesn't isolate it: Minswap's own pools ca
 
 ## For the owner
 
-1. ❓ **A before B?** My recommendation: yes. A is small now that Minswap's orders are seen to be single-shot and under the sender's stake, and B's gate may close it.
-2. ❓ **How much better must Dano first be?** It costs a second order's fee and the risk of holding the middle token if the order doesn't fill. My suggestion: at least 1% better than direct, and more for small amounts.
-3. ❓ **Is V4 worth it yet?** Seen in use on stablecoin pairs. Sundae's list has no V4 ADA pool, so most of the wallet's pairs wouldn't route through it today. The audit's result is unpublished, and V3 had a published audit. Waiting costs nothing: the wallet routes around V4 meanwhile.
+1. ✅ **A before B?** Yes, and A alone for 1.9.0: B's gate is unmet.
+2. ⬜ **How much better must Dano first be?** Open until a route is seen. It costs a second order's fee and the risk of holding the middle token if the order doesn't fill. The suggestion was at least 1% better than direct, and more for small amounts.
+3. ✅ **Is V4 worth it yet?** The owner, 2026-11-09: do it now, in 1.9.0. It's in use on stablecoin pairs, and Sundae's list has no V4 ADA pool, so most of the wallet's pairs won't route through it today. Its audit's result is unpublished, where V3 had a published one.
+
+## What was built
+
+Part A, in the PR that archived this plan, for 1.9.0: V4 pinned, read, routed and tested on mainnet, off preprod. Rust's order tests went from 24 to 26 with V4's real order running through every test over the fixtures, and Vitest's real-order list gained it, through the runner.
+
+Left open: V4's first live mainnet swap and Stop (no test spend asked of the owner), and Part B (backlog).

@@ -58,6 +58,7 @@ const REAL: Array<{ protocol: string; network: Network; stuck?: boolean; owner: 
   { protocol: "SundaeSwap", network: "mainnet", owner: ["7157fb9f28de4564c30e95eb503936c495962cb1f2b96d13d52e3dfc", "08d650ab629adf6f462d42d25d4d1bb830d17e718c6c2c44456ab5c5"] },
   { protocol: "SundaeSwapV3", network: "mainnet", owner: ["4cc36281257821200785dcd964b46267c0705330fed566b8fa45eb5b", "eff6864f55f7a70ac1d6010a5902c6497a07c7b04874f2ad2c993d7f"] },
   { protocol: "SundaeSwapStable", network: "mainnet", owner: ["51ba85e8ef9d13a9193a6a2629ec4e9d3fc6041c4e2d78c5b6b532e3", "603015bf589dc558b2fc1df7f125cb43a4f9d90222cb426562ceda7d"] },
+  { protocol: "SundaeSwapV4", network: "mainnet", owner: ["511097cf4b8c496f06a7f39825e92c1be91b79762568a5e23372658b", "903ac01dddc4355a0826601d32fd1cf351a25a111c85cb334625a703"] },
   { protocol: "WingRiders", network: "mainnet", owner: ["ae465d0af465442a8bb86e2965eb192d3b310bda2fb090e9967a1275", "aef5ca9fc479fb7cc981df9d1ad6ed5065592fcde305b93d8a7c674d"] },
   { protocol: "WingRidersV2", network: "mainnet", owner: ["bb9a9ef5d661d8f3340df1cc00a3fdfa907abd2986b6b9a9340037bc", "caf7e18d89dd3c2efae7c6362fc25577ae3c3007630c8b9c6102db08"] },
   { protocol: "WingRidersStableV2", network: "mainnet", owner: ["8a6550ab2f014123c8cd0d021e23dfbbc5b6279bfa2c5e130910f3c2", "1af7b97baf428cba146425910b7ac5d1ef155cabd71662644b44abdf"] },

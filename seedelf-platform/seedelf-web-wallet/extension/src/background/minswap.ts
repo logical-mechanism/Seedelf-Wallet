@@ -143,9 +143,10 @@ const PREPROD_BROKEN = ["Splash", "SplashStable"];
  * DEXes left out of preprod's routing too, as preprod has no list of the
  * DEXes it may go through (`uncheckedProtocols`): a swap through one would be
  * funded before the session's check paused it. SundaeSwap V4 is on Minswap's
- * routes, and the wallet can't read its orders or cancel one yet (chunk 47).
+ * routes, and preprod has no V4 order script to pin: two stray transactions,
+ * and no reference UTxO (chunk 47, 2026-11-09).
  */
-const NOT_READ_YET = ["SundaeSwapV4"];
+const PREPROD_NOT_PINNED = ["SundaeSwapV4"];
 
 /**
  * The DEXes a mainnet swap goes through: those whose orders the wallet can
@@ -161,6 +162,8 @@ const NOT_READ_YET = ["SundaeSwapV4"];
  * - SundaeSwap (V1) and SundaeSwapV3, the latter owned by the session's own
  *   stake key, which signs its cancel too, and only as a path of its own
  *   (outOfPlace);
+ * - SundaeSwapV4, the same, under the session's own staking part, and only as
+ *   a basic order, which fills once (seedelf-core orders.rs, chunk 47);
  * - WingRiders, WingRidersV2 and WingRidersStableV2;
  * - Splash and Spectrum: both are Splash's limit order as Minswap builds them;
  * - DanogoCLMMV1: no order, a swap against its pools (DANOGO_POOL), read by
@@ -175,6 +178,7 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
   "MinswapStable",
   "SundaeSwap",
   "SundaeSwapV3",
+  "SundaeSwapV4",
   "WingRiders",
   "WingRidersV2",
   "WingRidersStableV2",
@@ -318,7 +322,7 @@ export const MINSWAP_PROTOCOLS: readonly string[] = [
  * receivers and its minimum are (sessions.ts checkOrder).
  */
 export function excludedProtocols(network: "preprod" | "mainnet"): string[] {
-  if (network === "preprod") return [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN, ...NOT_READ_YET];
+  if (network === "preprod") return [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN, ...PREPROD_NOT_PINNED];
   const unchecked = MINSWAP_PROTOCOLS.filter((p) => !MAINNET_PROTOCOLS.includes(p));
   return [...new Set([...DIRECT_PROTOCOLS, ...MAINNET_REFUSED, ...unchecked])];
 }

@@ -1,5 +1,5 @@
 {
-  "note": "The DEX order scripts whose orders a session cancels itself (orders.rs), by network: Minswap's protocol name, the order script's hash, its Plutus version, and where the script is read from: a reference UTxO (each checked on chain on 2026-10-07: unspent, holding a script of this hash, of `referenceSize` bytes) or `inline`, bundled below (a Plutus V1 script, checked by hash). See seedelf-web-wallet/docs/archive/plans/chunk-24-dapp-additions.md, Step 3.",
+  "note": "The DEX order scripts whose orders a session cancels itself (orders.rs), by network: Minswap's protocol name, the order script's hash, its Plutus version, and where the script is read from: a reference UTxO (each checked on chain when pinned, on 2026-10-07 and SundaeSwapV4's on 2026-11-09: unspent, holding a script of this hash, of `referenceSize` bytes) or `inline`, bundled below (a Plutus V1 script, checked by hash). See seedelf-web-wallet/docs/archive/plans/chunk-24-dapp-additions.md, Step 3.",
   "orders": {
     "mainnet": [
       {
@@ -119,6 +119,13 @@
         "plutus": 3,
         "reference": "309c5db1dff1dfa17ff89ac9e6d5d0eea4a006b15646bab54ab9260d55675797#0",
         "referenceSize": 2380
+      },
+      {
+        "protocol": "SundaeSwapV4",
+        "script": "07eb2fb09d9dd6603870ce6f84c8f8506249152173ddf0c77f1f07ec",
+        "plutus": 3,
+        "reference": "c1ecddd68eaa61a3fb4c7af2fac6388d7c8fe0065da359943bdfb976e0f4be9a#0",
+        "referenceSize": 3128
       },
       {
         "protocol": "SundaeSwap",

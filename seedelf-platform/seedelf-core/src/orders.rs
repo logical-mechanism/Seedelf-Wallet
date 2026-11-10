@@ -63,6 +63,7 @@ pub enum Protocol {
     SundaeSwap,
     SundaeSwapV3,
     SundaeSwapStable,
+    SundaeSwapV4,
     WingRiders,
     WingRidersV2,
     WingRidersStableV2,
@@ -71,18 +72,22 @@ pub enum Protocol {
 
 impl Protocol {
     /// The spend redeemer that cancels its order: `Constr 1 []` everywhere
-    /// but Splash, whose `action: Bool` cancels on `False`, `Constr 0 []`.
+    /// but Splash, whose `action: Bool` cancels on `False`, and SundaeSwap
+    /// V4, whose `Cancel` is its first action: both `Constr 0 []`.
     fn cancel_redeemer(self) -> Vec<u8> {
         match self {
-            Protocol::Splash => vec![0xd8, 0x79, 0x80],
+            Protocol::Splash | Protocol::SundaeSwapV4 => vec![0xd8, 0x79, 0x80],
             _ => vec![0xd8, 0x7a, 0x80],
         }
     }
 
     /// Whether its order's owner is the session's stake key, not its payment
-    /// key: SundaeSwap V3's and Stableswaps', as Minswap builds them.
+    /// key: SundaeSwap V3's, V4's and Stableswaps', as Minswap builds them.
     pub fn signs_with_stake(self) -> bool {
-        matches!(self, Protocol::SundaeSwapV3 | Protocol::SundaeSwapStable)
+        matches!(
+            self,
+            Protocol::SundaeSwapV3 | Protocol::SundaeSwapStable | Protocol::SundaeSwapV4
+        )
     }
 
     /// Whether its order must be cancelled in a transaction of its own:
@@ -100,6 +105,7 @@ impl Protocol {
             Protocol::SundaeSwap => "SundaeSwap",
             Protocol::SundaeSwapV3 => "SundaeSwapV3",
             Protocol::SundaeSwapStable => "SundaeSwapStable",
+            Protocol::SundaeSwapV4 => "SundaeSwapV4",
             Protocol::WingRiders => "WingRiders",
             Protocol::WingRidersV2 => "WingRidersV2",
             Protocol::WingRidersStableV2 => "WingRidersStableV2",
@@ -390,6 +396,35 @@ fn is_byte_list(d: &PlutusData) -> bool {
     matches!(d, PlutusData::Array(items) if items.iter().all(is_bytes))
 }
 
+/// The modules a SundaeSwap V4 order must name to fill at most once, on
+/// mainnet, the one network V4 is pinned on: `basic_order.withdraw`, then
+/// `fee_constraint.withdraw`, which every order Minswap built names (read
+/// from chain 2026-11-09). A basic order settles whole in one execution; any
+/// other module may leave the rest of an order at the script, where the
+/// runner wouldn't look ([`read`]).
+const SUNDAE_V4_ONE_FILL: [&str; 2] = [
+    "30f1fac08a15ef84ea6a5aa04989b1c2ceeb3b437f2c3103df5aca68",
+    "267eabb980be6699144e85b24283659838b0746e0fd2f08be1423e70",
+];
+
+/// Whether `d`, a SundaeSwap V4 order's `[(module, data), ..]`, is exactly
+/// [`SUNDAE_V4_ONE_FILL`], in order.
+fn fills_once(d: &PlutusData) -> bool {
+    let PlutusData::Array(constraints) = d else {
+        return false;
+    };
+    constraints.len() == SUNDAE_V4_ONE_FILL.len()
+        && constraints
+            .iter()
+            .zip(SUNDAE_V4_ONE_FILL)
+            .all(|(pair, module)| match pair {
+                PlutusData::Array(pair) if pair.len() == 2 => {
+                    key(&pair[0]).is_some_and(|h| hex::encode(h) == module)
+                }
+                _ => false,
+            })
+}
+
 /// Reads `protocol`'s order datum: who cancels it, and whom it pays.
 ///
 /// Anyone can pay an order's address an output with any datum (the web
@@ -460,6 +495,22 @@ pub fn read(protocol: Protocol, datum: &[u8]) -> Result<OrderRead> {
                 let (0, []) = constr(datum)? else {
                     return None;
                 };
+                Some((key(owner)?, vec![address(to)?]))
+            }
+            // [owner, destination, service budget, most per execution, config token,
+            // constraints, extension]: owner = Signature(key), destination = Fixed
+            // { address, None }. A chained first leg names the next order's datum (Some),
+            // and `Self` no address: neither reads, nor does any owner but one key.
+            Protocol::SundaeSwapV4 => {
+                let (0, [owner]) = constr(fields.first()?)? else {
+                    return None;
+                };
+                let (0, [to, datum]) = constr(fields.get(1)?)? else {
+                    return None;
+                };
+                if option(datum)?.is_some() || !fills_once(fields.get(5)?) {
+                    return None;
+                }
                 Some((key(owner)?, vec![address(to)?]))
             }
             // [[beneficiary, owner key, deadline, pair], action].

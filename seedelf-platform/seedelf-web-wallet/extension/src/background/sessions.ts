@@ -16,8 +16,8 @@
 // cancel  after Stop, an order that isn't filled is cancelled by the
 //         wallet's own cancel (WebAssembly's buildOrderCancel, chunk 24),
 //         read the same way and signed by the session's key, and by its
-//         stake key too for a SundaeSwap V3 order; the refund comes back to
-//         the account.
+//         stake key too for a SundaeSwap V3 or V4 order; the refund comes back
+//         to the account.
 // back    everything at the account moves into the private balance under
 //         fresh registers (the CLI's external sweep), signed by the key.
 //
@@ -4383,7 +4383,7 @@ export class SessionService {
       // What WebAssembly won't read (an output on another network, say) won't read any better later: pause.
       throw new Refused(clauseOf(message), kind);
     }
-    // A cancel of a SundaeSwap V3 or Stableswaps order needs its owner's signature too: the session's own stake
+    // A cancel of a SundaeSwap V3, V4 or Stableswaps order needs its owner's signature too: the session's own stake
     // key (chunk 24), as the spent order itself says.
     const ownStake = s.ownStake === true;
     const { address: bech32 } = (await this.accounts(network, [s])).get(index)!;
@@ -6621,7 +6621,7 @@ function dexOrder(
  * - an order: an output at a DEX order script the wallet can cancel at
  *   (`read`, WebAssembly's `readDexOrder` over seedelf-core's `orders.json`,
  *   chunk 24 Step 3): cancelled by the session's own key (its stake key's
- *   for SundaeSwap V3 and Stableswaps, which a session from before each had
+ *   for SundaeSwap V3, V4 and Stableswaps, which a session from before each had
  *   its own, `ownStake`, hasn't got), paying the session's address alone, in
  *   a form its script can spend, and under the session's staking part or
  *   none (a V3 order Minswap builds, under Minswap's there: SUNDAE_V3). One
@@ -6827,7 +6827,7 @@ function withinNet(summary: DappTxSummary, fund: SwapQuote["fund"], ask: Pick<Sw
  * already, and its zero withdrawals: `direct`, from directSpends), minting,
  * a spend the wallet can't see, or a gift to the treasury, which no output
  * shows and withinFunding wouldn't count.
- * `stakeSigns`: a cancel of a SundaeSwap V3 order, which the session's stake
+ * `stakeSigns`: a cancel of a SundaeSwap V3 or V4 order, which the session's stake
  * key signs too, as the order's owner (chunk 24); then both sign, or it's
  * refused, as the cancel couldn't work without it. With certificates,
  * withdrawals and votes refused, its signature only meets a required signer.
