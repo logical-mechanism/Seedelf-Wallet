@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(/**/.env)",
+      "Read(/**/.env.local)",
+      "Read(/**/.env.*.local)",
+      "Read(/**/.env.mainnet)",
+      "Read(/**/.env.preprod)",
+      "Read(/**/.env.sancho)",
+      "Read(/**/.env.production)",
+      "Read(/**/*.skey)",
+      "Read(~/.ssh/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.cargo/credentials.toml)",
+      "Read(~/.cargo/credentials)",
+      "Read(~/.npmrc)",
+      "Read(~/.pgpass)",
+      "Read(~/.netrc)",
+      "Read(~/.git-credentials)",
+      "Read(~/.docker/config.json)",
+      "Edit(/.claude/settings.json)",
+      "Edit(/.claude/settings.local.json)",
+      "Edit(/.claude/hooks/**)",
+      "Edit(/.claude/triage.json)",
+      "Edit(/.claude/triage.sh)",
+      "Edit(~/.claude/settings.json)",
+      "Edit(~/.claude/settings.local.json)",
+      "Edit(~/.ssh/**)",
+      "Edit(~/.gnupg/**)",
+      "Edit(~/.bashrc)",
+      "Edit(~/.bash_profile)",
+      "Edit(~/.profile)",
+      "Edit(~/.zshrc)",
+      "Edit(~/.zshenv)",
+      "Edit(~/.zprofile)",
+      "Edit(~/.config/autostart/**)",
+      "Edit(~/.config/systemd/**)",
+      "Edit(/**/.git/hooks/**)",
+      "Edit(/**/.git/config)",
+      "Bash(ssh *)",
+      "Bash(scp *)",
+      "Bash(sftp *)",
+      "Bash(sudo *)",
+      "Bash(crontab *)",
+      "Bash(gh auth *)",
+      "Bash(gh secret *)",
+      "Bash(gh ssh-key *)",
+      "Bash(gh gpg-key *)",
+      "Bash(gh gist *)",
+      "Bash(cargo publish *)",
+      "Bash(cargo login *)",
+      "Bash(cargo owner *)",
+      "Bash(cargo yank *)",
+      "Bash(npm publish *)",
+      "Bash(npm login *)",
+      "Bash(npm adduser *)",
+      "Bash(npm token *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-bash.sh\"",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ]
+  }
+}
