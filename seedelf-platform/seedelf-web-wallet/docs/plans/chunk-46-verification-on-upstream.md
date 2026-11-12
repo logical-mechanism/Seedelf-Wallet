@@ -34,6 +34,19 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
   - So moving our pins to `main` moves Z3 too. Until then, `~/.local/bin/z3` stays 5.3.1 for our current pins. A test against `main` puts the nightly first on `PATH` in a subshell: Blaster runs the first `z3` on the `PATH` (`Blaster/Smt/Env.lean:82`).
 - **CardanoLedgerApiBlaster hasn't moved** since 2026-10-02 (`9938562`). It still requires Blaster from `beta-lambda-cache-optimization` (`0bc1ace`). So our own `require Blaster` stays even after #455 lands, pointing at IOG's `main` instead of the fork.
 
+## The upstream check of 2026-11-12
+
+- **PlutusCoreBlaster #78 (merged 2026-11-09) changes what `isUnsuccessful` means.** `cekExecuteProgram` now runs `runSteps`, which ends a run cut off by the step limit in `BudgetExhausted`, and `isUnsuccessful` holds for that as well as for `Error`.
+  - Our pin runs `runStepsPreservingState`, where such a run is neither success nor failure.
+  - On IOG's `main`, every failure theorem would hold at too small a step limit (342 files state failure that way), and so would every returns-unit-or-error theorem. Nothing breaks while we pin by commit.
+  - **Before the move:** state rejection with `isErrorState` (unchanged by #78), in the generators too. `LinesAllCek`'s `exec_*` lemmas and Lovejoin's `LogicOwnerEntry` must follow `cekExecuteProgram` onto `runSteps`.
+  - An issue draft is `../blaster-forks/posts/plutuscoreblaster-78-isunsuccessful-issue.md`. Posting it is the owner's call.
+- **Z3 5.4.0 is released** (5.4.1 since). Lean-blaster `main` requires 5.4.0 (#464), and both IOG CIs use the release, so no nightly is needed.
+- **CardanoLedgerApiBlaster `main` (#25) and PlutusCoreBlaster `main` (#78) now require Lean-blaster at `main`,** no longer the beta.
+- **Lean-blaster #471 makes `blasterProven` private.** `#print axioms` names it `_private.Blaster.Command.Tactic.0.Blaster.Tactic.blasterProven`, so `Audit/Checks/PrintAxioms` and `Audit/count.py` need that on the move.
+- **#455 conflicted again** (an import line beside #471's test). It was rebased onto `0df4a46` and checked under Z3 5.4.0: it fails without the fix, and gives four Valid and one Expected Falsified with it. The owner pushed it and commented on 2026-11-12, and it's MERGEABLE.
+- **Still open:** #77, PlutusCoreBlaster #80 (a CEK runner API change), #75 (an opaque `encodeData`, overlapping #77), and Lean-blaster #463 (a hang from #155, which we could hit on `main`).
+
 ## Steps
 
 1. ✅ **#455 back to mergeable.** Rebased in `../blaster-forks/Lean-blaster` (2026-11-07) onto `main` `983f10f`:

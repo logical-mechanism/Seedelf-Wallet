@@ -10,6 +10,8 @@
 #   ./check.sh seedelf-signers       the wallet's core property with 4 to 128 signatories
 #   ./check.sh seedelf-policy-any-tx the policy in every transaction, where it needs no slice
 #   ./check.sh seedelf-slice         the policy's one-line rule, over an opaque slice (Slice/)
+#   ./check.sh seedelf-every         all three Seedelf scripts in every transaction, kernel-checked,
+#                                    after what they import (16G, 30m)
 #   ./check.sh upstream              the upstream reproductions (Upstream/)
 #   ./check.sh upstream-main         ExceptParams against Lean-blaster main
 #   ./check.sh lovejoin              Lovejoin's classic pool (chunk 42)
@@ -26,7 +28,9 @@
 #   CAP=12G LIMIT=20m ./check.sh     other limits
 cd "$(dirname "$0")" || exit 1
 # lovejoin-every's modules need more than the default cap, named alone too: Collect peaks near 13 GB.
-for a in "$@"; do case $a in lovejoin-every|Lovejoin.Every.*) CAP=${CAP:-16G}; LIMIT=${LIMIT:-30m} ;; esac; done
+# So do seedelf-every's whole-program roots: Root peaks near 9 GB, Mint near 10.
+for a in "$@"; do case $a in lovejoin-every|Lovejoin.Every.*|seedelf-every|Seedelf.Every.*)
+  CAP=${CAP:-16G}; LIMIT=${LIMIT:-30m} ;; esac; done
 CAP=${CAP:-8G}
 LIMIT=${LIMIT:-10m}
 mods=("$@")
@@ -48,6 +52,15 @@ policy_any_tx=(Seedelf.PolicyAnyTx Seedelf.PolicyAnyTxSteps Seedelf.PolicyPurpos
   Seedelf.WalletPurpose Seedelf.WalletNoLock Seedelf.WalletRegister "${any_tx[@]}" "${policy_any_tx[@]}"
   "${signers[@]}" Seedelf.PolicyAmount Seedelf.PolicyForeign Seedelf.PolicyBurn Seedelf.PolicyMint)
 [ "${mods[0]}" = seedelf-any-tx ] && mods=("${any_tx[@]}")
+# All three Seedelf scripts in every transaction, kernel-checked (chunk 48, Seedelf/Every/): the
+# modules they import from elsewhere first, in import order, so each scope builds one module.
+seedelf_every=(Seedelf.Scripts Seedelf.Scenario Seedelf.Wallet Seedelf.Policy Seedelf.Steps Seedelf.AnyTx
+  Seedelf.AnyTxCover Seedelf.AnyTxSteps Seedelf.PolicyAnyTx Seedelf.LinesAllCek Lovejoin.AnyTx.CekCase
+  Seedelf.LinesAllLoops Seedelf.PolicyLinesAll Seedelf.LinesAllAnyMint
+  Seedelf.Every.Base Seedelf.Every.AlwaysFalse Seedelf.Every.Scalar Seedelf.Every.Prove Seedelf.Every.Signers
+  Seedelf.Every.Register Seedelf.Every.Datum Seedelf.Every.Root Seedelf.Every.Typed
+  Seedelf.Every.PolicyBase Seedelf.Every.Burn Seedelf.Every.Mint Seedelf.Every.PolicyRoot Seedelf.Every.PolicyTyped)
+[ "${mods[0]}" = seedelf-every ] && mods=("${seedelf_every[@]}")
 [ "${mods[0]}" = seedelf-signers ] && mods=("${signers[@]}")
 [ "${mods[0]}" = seedelf-policy-any-tx ] && mods=("${policy_any_tx[@]}")
 [ "${mods[0]}" = upstream ] && mods=(Upstream.ExceptParams Upstream.ByteStrings Upstream.Fq1Fin Upstream.SlicePrograms
