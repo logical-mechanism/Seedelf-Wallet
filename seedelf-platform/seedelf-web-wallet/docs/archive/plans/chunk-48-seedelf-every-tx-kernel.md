@@ -1,8 +1,8 @@
 # Chunk 48 · Seedelf in every transaction, in the kernel
 
-Branch `web-wallet/seedelf-every-tx` from `main` (`14b24e59`), worktree `../Seedelf-Wallet-chunk48`. The work is in `seedelf-verification/Seedelf/Every/`. Its [README](../../../../seedelf-verification/Seedelf/Every/README.md) has the method's differences from chunk 45, the modules and the pitfalls.
+Branch `web-wallet/seedelf-every-tx` from `main` (`14b24e59`), worktree `../Seedelf-Wallet-chunk48`. The work is in `seedelf-verification/Seedelf/Every/`. Its [README](../../../../../seedelf-verification/Seedelf/Every/README.md) has the method's differences from chunk 45, the modules and the pitfalls.
 
-**Status: ✅ built 2026-11-12, all three scripts. ❓ the PR and the calls below are the owner's.**
+**Status: ✅ done 2026-11-12, all three scripts, in PR #381.** What it left open is [chunk 49](../../plans/chunk-49-no-locked-funds.md)'s steps 4 to 6.
 
 ## The owner's call
 
@@ -22,7 +22,7 @@ Chunk 45's method on Seedelf's three deployed scripts. Each spec is the compiled
 
 `./check.sh seedelf-every` builds the 14 modules after their 14 imports. A clean build of the 14 takes about four and a half minutes, with peaks of 9.5 GB (`Mint`) and 8.8 GB (`Root`), so they run at 16 GB and 30 minutes, like `lovejoin-every`.
 
-**What it changes in the claims** ([CLAIMS.md](../../../../seedelf-verification/CLAIMS.md), the [README](../../../../seedelf-verification/README.md)):
+**What it changes in the claims** ([CLAIMS.md](../../../../../seedelf-verification/CLAIMS.md), the [README](../../../../../seedelf-verification/README.md)):
 - **Every Seedelf claim is now the kernel's.** The Blaster modules stay as a cross-check, by another route.
 - **No 128-signatory bound,** and no ledger hypothesis for the policy.
 - **The README's last *Not proved* row** (the policy's rule over the real slice) is proved in the kernel, without `BitVec`.
@@ -30,12 +30,16 @@ Chunk 45's method on Seedelf's three deployed scripts. Each spec is the compiled
 
 ## Open, the owner's calls
 
-1. ❓ **The PR** into `main`. Docs PRs get a light pass, but this one is proofs: one reviewer for the statements against the sources, and the owner runs `./check.sh seedelf-every` on a clean tree.
-2. ❓ **The Blaster Seedelf modules:** keep them as a cross-check (the default here), or retire the heaviest. `Signers/` is 125 modules and 250 theorems, which `wallet_accepts_iff` now covers.
-3. ❓ **An outside read of `walletAccepts`, `schnorrProve` and `policyAccepts`** against `wallet.ak`, `schnorr.ak`, `seedelf.ak` and `token_name.ak`. That checks what no proof can: that they say what Seedelf means.
-4. ⬜ **`schnorrProve` against `Seedelf.V1.schnorrAccepts`,** the Blaster modules' spec, isn't proved. The kernel can't unfold `schnorrAccepts`: its `match` starts on `scalarOf z`, which it reduces down to deciding `n < q`. Reordering `schnorrAccepts`' match, decompressions first, would make it provable, but every Blaster wallet module would then need re-running.
-5. ⬜ **When we move to IOG's PlutusCoreBlaster `main`,** these proofs need `LinesAllCek`'s program lemmas to follow #78's `runSteps` (chunk 46). The statements stay the same.
+Moved to [chunk 49](../../plans/chunk-49-no-locked-funds.md): the outside read of the readable statements (step 4), `schnorrProve` against `schnorrAccepts` (step 5), and whether to keep the Blaster Seedelf modules (step 6). #78's migration is chunk 46's.
 
 ## Next it opens
 
-- **No locked Register UTxOs** (item 2 of the 2026-11-12 list). With `wallet_accepts_iff`, an honest owner's spend reduces to one algebraic fact about `schnorrProve`. Taking the group laws of the opaque BLS12-381 builtins as hypotheses, an honest proof makes g^z = g_r · u^c hold, and a re-randomized `(g^d, u^d)` stays spendable with the same key. A Rust proptest through the deployed bytes would tie seedelf-crypto's prover to it.
+No locked Register UTxOs (completeness in the kernel, and a Rust proptest through the deployed bytes) is [chunk 49](../../plans/chunk-49-no-locked-funds.md)'s steps 2 and 3.
+
+## Record
+
+PR #381 (`web-wallet/seedelf-every-tx`):
+- 3b2e14d8, the wallet;
+- ab379990, always_false and the policy;
+- 04b57c4a, the docs: CLAIMS.md, the README, `check.sh seedelf-every`, and chunk 46's upstream check of 2026-11-12;
+- then chunk 49's plan, with this file moved here.

@@ -1,6 +1,6 @@
 # Seedelf in every transaction, kernel-checked
 
-Kernel-checked proofs of exactly when each of Seedelf's three deployed scripts accepts, in every transaction: no Blaster, no step limit, any number of signatories, any mint, any inputs. They rest on Lean's own axioms alone (`propext`, `Classical.choice`, `Quot.sound`), and the `#guard_msgs` checks in `Typed`, `PolicyTyped` and `AlwaysFalse` fail the build otherwise. What they let us claim is in [CLAIMS.md](../../CLAIMS.md). How the work went, and the owner's calls, are in [chunk 48](../../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-48-seedelf-every-tx-kernel.md).
+Kernel-checked proofs of exactly when each of Seedelf's three deployed scripts accepts, in every transaction: no Blaster, no step limit, any number of signatories, any mint, any inputs. They rest on Lean's own axioms alone (`propext`, `Classical.choice`, `Quot.sound`), and the `#guard_msgs` checks in `Typed`, `PolicyTyped` and `AlwaysFalse` fail the build otherwise. What they let us claim is in [CLAIMS.md](../../CLAIMS.md). How the work went, and the owner's calls, are in [chunk 48](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-48-seedelf-every-tx-kernel.md).
 
 The method is chunk 45's for Lovejoin, so read [Lovejoin/Every/README.md](../../Lovejoin/Every/README.md) first: the spec is the compiled code read back as Lean over `Data`, and there's one `Ev` theorem per region, with induction for each loop. This page has what's different here.
 
