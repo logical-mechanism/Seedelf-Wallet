@@ -26,3 +26,6 @@ import Seedelf.PolicyLinesFiveAnyTx
 import Seedelf.PolicyLinesAll
 import Seedelf.LinesAllAnyMint
 import Seedelf.PolicyShapes
+import Seedelf.Every.Typed
+import Seedelf.Every.AlwaysFalse
+import Seedelf.Every.PolicyTyped
