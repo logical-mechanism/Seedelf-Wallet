@@ -2,7 +2,7 @@
 
 This plan came in on branch `web-wallet/verification-on-upstream`. Once the work starts, it happens in `seedelf-verification/`, on a branch of its own from `main`, and in the fork clones in `../blaster-forks/`, as in [chunk 41](../archive/plans/chunk-41-blaster-fixes.md).
 
-**Status: 🚧 steps 1 and 3 done 2026-11-08; step 2 in progress.** The owner: "a chunk about how we want to get this working in the main repo".
+**Status: 🚧 steps 1 and 3 done 2026-11-08; step 2 in progress: on #77 both kernel families pass, and so does Blaster's Lovejoin but the Mix over a symbolic pool, which times out (2026-11-13).** The owner: "a chunk about how we want to get this working in the main repo".
 
 Every theorem today is proved over our forks of Lean-blaster and PlutusCoreBlaster ([lakefile.lean](../../../../seedelf-verification/lakefile.lean), and `Slice/lakefile.lean`). **Done means:** both lakefiles require both tools from `input-output-hk`, and every theorem still proves. Any theorem that doesn't goes in the README's *Not proved*, with its reason.
 
@@ -83,15 +83,40 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
        - The translation (2026-11-08): `Seedelf/Pr77SpecModel.smt2` in the scratch worktree takes `uncons`, `cpStr` and `byteStr` as the real functions on SMT strings, alphabet `0x0`–`0x2FFFF`. Z3 finds every conjunct holds of that interpretation (each negation `unsat`, a false sanity fact `sat`). Blaster writes each byte literal as one code point (`Term.lean`, `strLitSmt`).
        - So a Valid under `Spec` isn't vacuous, and these four stand with the other Blaster results. The limit: the `.smt2` is our transcription of `Spec`, not Blaster's dump of it.
    - **Blaster reports Undetermined as a warning, even under `solve-result: 1`,** so `check.sh` says `ok` for it. The main tree's logs on 2026-11-08: 1,466 Valid, 239 Expected Falsified, 0 Undetermined. ✅ `check.sh` now fails such a module as `UNDETERM` ([#372](https://github.com/logical-mechanism/Seedelf-Wallet/pull/372)).
-   - **The migration, for step 4 (Seedelf):**
-     - `scalarOf`;
+   - **The kernel families on #77 (2026-11-13),** with the scratch worktree fast-forwarded to `main` `4e5ee500`, so chunk 48's `Seedelf/Every/` is in:
+     - A script moved every alias call left (`Lovejoin/`, `Seedelf/Every/`, `Audit/`, `gen-lovejoin-owner.py`) onto #77's definitions:
+       - `.ofNat (byteStringToIntegerOpaque e s)` became `PlutusCore.Bitwise.byteStringToInteger e s`, which is `.ofNat` of a `Nat` on #77 too;
+       - `xorByteStringOpaque` became `PlutusCore.Bitwise.xorByteString`;
+       - `encodeDataOpaque` became `PlutusCore.Cbor.encodeData`.
+     - ✅ **`seedelf-every`: 28 `ok`. `lovejoin-every`: 76 `ok`.** No `sorry`, the headline theorems' axiom guards hold (Lean's three), and the peaks are `main`'s (Collect 12.8 GB, Mint 9.5 GB).
+     - It took three changes:
+       - **`Lovejoin.Every.Walk`:** `ev_go` computed the real `encodeData` of a literal `Constr xt [B a, B b]` into its CBOR, where the alias stayed folded, so the proof's `cases hx : encodeData …` no longer matched. `attribute [local irreducible] PlutusCore.Cbor.encodeData` keeps it folded for the tactics. The kernel ignores the attribute, and the theorems state the real definition.
+       - **`Seedelf.Every.PolicyTyped`:** #77's `consByteStringV2` writes the name's byte with `byteStr`, and our `seedelfName` keeps `UInt8`. #77's own `consByteStringV2_eq_cons` bridges them (one `rw`, and its import).
+       - **`Seedelf.PolicyLinesAll`:** `attribute [local semireducible] PlutusCore.Bytes.instByteViewString`, #77's route, replaces 11-08's `.all` in `cek_rfl`. `.all` also unfolded the `encodeData` that `Walk` needs folded. So `cek_rfl` stays as on `main`.
+     - **The "check first" below, answered:** the kernel proofs lean on an alias being opaque in one place, `Walk`'s literal `Constr`. `Owner`'s `cases` on `encodeData` of a symbolic list, `Fold`'s xor and `Shared`'s `byteStringToInteger` against `q` passed unchanged.
+   - **The migration, for step 4:**
+     - `scalarOf`, and the alias calls the script moves;
      - the three slices in `Slice/Common.lean` and two in `Controls.lean`;
-     - `cek_rfl`'s transparency;
+     - the seal opened in `PolicyLinesAll`, `encodeData` kept folded in `Walk`, and `seedelfName_eq`'s bridge;
      - `Spec` on the four success theorems, discharged with `PlutusCore.Bytes.spec`;
+     - `Spec` on every Mix challenge and success theorem, and `LogicOwnerScalar`'s spare `exact` dropped;
      - optionally `Index0`–`Index3`'s 256 theorems as one (`Pr77AnyIndex`, with its controls).
-   - **Not yet tried:** Lovejoin, whose proofs need the `encodeData` and xor aliases moved first.
+   - **The Blaster Lovejoin families on #77 (2026-11-13),** same worktree:
+     - **`lovejoin` (classic):** 25 `ok`.
+     - **`lovejoin-any-tx`, all but the Mix:** every module `ok` after two slips, both ours. `LogicOwnerScalar`'s last `exact` found no goal, since on #77 the `simp` before it closes it. The script wrote `LogicOwnerHash`'s qualified `…Data.encodeDataOpaque` as `…Data.PlutusCore.Cbor.encodeData`.
+     - **`lovejoin-v2`:** 84 `ok`, among them every output, datum and owner module (`OwnAny1`–`4`). The 31 Mix modules failed, each on its challenge theorem (the xor of the `c`s) or its success theorem. Every branch theorem stayed ✅ Valid.
+       - Without `Spec`, n = 2's came back ❌ Falsified, on "bytes" above 255 (`\u{113}`): the primitives were uninterpreted. The rest stopped at Blaster's 540 s.
+       - **Fixed pools:** with `PlutusCore.Bytes.Spec →` on those theorems, all of `Mix{First,Second,Passes}` and `Mix3{First,Second,Third,Passes}` are ✅ Valid, in 6–9 s each.
+       - **Symbolic pools** (`MixAny*`, `MixTok*`: M, bl and the token are variables): still past 540 s with `Spec`, at about 2.8 GB. Tried: `MixAnyFirst`, `MixAnySecond`, `MixAnyPasses`, `MixTok2Box1`. The challenge hashes the outputs' datums, so the real CBOR of a datum with symbolic fields reaches the solver. With the alias, the spec and the script shared one folded `encodeData`.
+     - **`lovejoin-any-tx`'s Mix:** 27 modules past 10 m: every Mix (2 to 4 boxes, ADA and token), their controls, `MixIff` and `FeeMix`. Their pools are symbolic too. A killed build prints no verdicts, so which theorems stall isn't known.
+     - **Not yet tried:** the audit.
+   - **So on #77 as it stands, Blaster's Mix over a symbolic pool doesn't prove.** CLAIMS.md's Lovejoin claim is the kernel's (`Lovejoin.Every`), which passes, so what's lost is a Blaster cross-check family, not a claim. Ways on, the owner's call:
+     - ask on #77 for a way to keep `encodeData` uninterpreted in a goal, sealed like the byte primitives or by a Blaster option;
+     - prove in Lean the CBOR facts the challenge needs and give them as premises, as `Spec` is;
+     - retire those modules for the kernel's every-transaction proof, which covers every pool;
+     - stay on the fork for them until one of these lands.
    - **The follow-up:** the owner added it to the first comment with `--edit-last` (2026-11-08). A short reply to mpetruska is `../blaster-forks/posts/plutuscoreblaster-77-reply-spec.md`; the owner's call.
-   - **Our slip:** the follow-up suggested documenting the seal, which #77's README and `Bytes.lean`'s header already do (`attribute [local semireducible] PlutusCore.Bytes.instByteViewString`, `with_unfolding_all`, `decide +kernel`). Either beats our `.all`-in-a-tactic at migration if it's simpler.
+   - **Our slip:** the follow-up suggested documenting the seal, which #77's README and `Bytes.lean`'s header already do (`attribute [local semireducible] PlutusCore.Bytes.instByteViewString`, `with_unfolding_all`, `decide +kernel`). The first of these replaced our `.all`-in-a-tactic on 2026-11-13.
    - **The tools.** A local PlutusCoreBlaster branch, push-guarded as `local/455-test-only` is: #77's head, plus #73. The two share no file but `Tests/Basic.lean`'s imports. None of our aliases.
    - **Our side,** on a branch from `main`:
      - Each alias call becomes the builtin's definition.
