@@ -4800,46 +4800,64 @@ mod parts_of_any_shape {
 
     #[test]
     fn a_carry_no_later_part_spends_counts_as_its_parts_change() {
-        // 1.9.1's release review, chain-rust#1 and ts-parts#1: a chain's last part, over the carry and what's left,
-        // spends as few of them as pay, so here it left the first part's carry of about 1.5 ₳ unspent. That carry is
-        // change, an output of ADA alone to the wallet's own key, but no part's figure counted it, and the funding's
-        // privacy note named 2.09 ₳ of private change tied to the one-time account where 3.59 ₳ was. A move-in's 12
-        // bundles of 20 tokens at their least and 3 ₳ more, all 240 tokens funded.
+        // 1.9.1's release review, chain-rust#1, critic#3 and ts-parts#1: a chain's last part, over the carry and what's
+        // left, spends as few of them as pay, so it can leave the first part's carry unspent. That carry is change, an
+        // output of ADA alone to the wallet's own key, but no part's figure counted it: a funding's privacy note named
+        // 2.09 ₳ of private change tied to the one-time account where 3.59 ₳ was, in the first shape here.
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
-        let (mut utxos, all) = bundles(12, 20);
-        utxos.push(utxo(500, 3_000_000, &[]));
-        let parts = api::build_withdraw_parts(sk, funding(utxos.clone(), all)).unwrap();
         let spends = |p: &api::WithdrawResult, c: &UtxoResponse| {
             p.inputs
                 .iter()
                 .any(|i| i.tx_hash == c.tx_hash && i.tx_index == c.tx_index)
         };
-        for (n, p) in parts.iter().enumerate() {
-            if let Some(c) = &p.carry {
-                assert!(
-                    parts[n + 1..].iter().any(|q| spends(q, c)),
-                    "part {n} carries what no later part spends"
-                );
+        let check = |utxos: &[UtxoResponse], parts: &[api::WithdrawResult], case: &str| {
+            for (n, p) in parts.iter().enumerate() {
+                if let Some(c) = &p.carry {
+                    assert!(
+                        parts[n + 1..].iter().any(|q| spends(q, c)),
+                        "{case}: part {n} carries what no later part spends"
+                    );
+                }
             }
-        }
-        // So what the parts spend of the Seedelf balance is what they pay, their fees and the change they count.
-        let held: u64 = utxos
-            .iter()
-            .filter(|u| parts.iter().any(|p| spends(p, u)))
-            .map(|u| u.value.parse::<u64>().unwrap())
-            .sum();
-        let counted: u64 = parts
-            .iter()
-            .map(|p| {
-                p.payments
-                    .iter()
-                    .map(|q| q.lovelace.parse::<u64>().unwrap())
-                    .sum::<u64>()
-                    + p.fee.total.parse::<u64>().unwrap()
-                    + p.change_lovelace.parse::<u64>().unwrap()
+            // So what the parts spend of the Seedelf balance is what they pay, their fees and the change they count.
+            let held: u64 = utxos
+                .iter()
+                .filter(|u| parts.iter().any(|p| spends(p, u)))
+                .map(|u| u.value.parse::<u64>().unwrap())
+                .sum();
+            let counted: u64 = parts
+                .iter()
+                .map(|p| {
+                    p.payments
+                        .iter()
+                        .map(|q| q.lovelace.parse::<u64>().unwrap())
+                        .sum::<u64>()
+                        + p.fee.total.parse::<u64>().unwrap()
+                        + p.change_lovelace.parse::<u64>().unwrap()
+                })
+                .sum();
+            assert_eq!(held, counted, "{case}");
+        };
+        // A move-in's 12 bundles of 20 tokens at their least and 3 ₳ more, all 240 tokens funded.
+        let (mut utxos, all) = bundles(12, 20);
+        utxos.push(utxo(500, 3_000_000, &[]));
+        let parts = api::build_withdraw_parts(sk, funding(utxos.clone(), all)).unwrap();
+        check(&utxos, &parts, "a move-in's bundles, funded");
+        // 22 tokens, 2 of each: each held most by a bundle of it and 7 others at their least, and 2 of each by one more
+        // UTxO at its least. Funded, it left a carry of 2.17 ₳; withdrawn, one of 7.18 ₳.
+        let sold: Vec<TokenAmount> = (0..22).map(|i| token(i, 2)).collect();
+        let mut utxos: Vec<UtxoResponse> = (0..22)
+            .map(|i| {
+                let mut held = vec![token(i, 5_000)];
+                held.extend((0..7).map(|j| token(20_000 + i * 100 + j, 3)));
+                utxo(i + 1, 0, &held)
             })
-            .sum();
-        assert_eq!(held, counted);
+            .collect();
+        utxos.push(utxo(900, 0, &sold));
+        let parts = api::build_withdraw_parts(sk, funding(utxos.clone(), sold.clone())).unwrap();
+        check(&utxos, &parts, "22 bundles of 8, funded");
+        let parts = api::build_withdraw_parts(sk, withdraw(utxos.clone(), Some(0), sold)).unwrap();
+        check(&utxos, &parts, "22 bundles of 8, withdrawn");
     }
 
     #[test]

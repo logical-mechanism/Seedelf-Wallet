@@ -4314,7 +4314,9 @@ pub mod api {
             tokens = less(&tokens, &share);
             rest = without(&rest, inputs_of(&part));
             parts.push(part);
-            // Paid in full by the carries: what the last carried stays in the Seedelf balance, as change does.
+            // Paid in full by the carries: what the last carried stays in the Seedelf balance, as change does
+            // (`carry_kept` counts it so). Only a session's funding gets here: its amount is picked on guessed budgets,
+            // with no measured retry, while its carry is measured (`chain_end_tests`).
             if tokens.is_empty() && owed == 0 {
                 return Ok(parts);
             }
