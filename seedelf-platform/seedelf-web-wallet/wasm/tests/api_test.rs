@@ -4390,6 +4390,120 @@ mod parts_of_any_shape {
         }
     }
 
+    /// A part's payment: its lovelace and tokens.
+    type Paid = (u64, Vec<TokenAmount>);
+
+    /// That an amount's parts end once it's paid: none after those before it sent every token asked and `asked`
+    /// lovelace.
+    fn none_after_paid(paid: &[Paid], asked: u64, tokens: &[TokenAmount]) {
+        for n in 1..paid.len() {
+            let lovelace: u64 = paid[..n].iter().map(|(l, _)| l).sum();
+            assert!(
+                lovelace < asked || sent(paid[..n].iter().flat_map(|(_, t)| t)) != every(tokens),
+                "part {n} pays after the payment was all paid"
+            );
+        }
+    }
+
+    fn assets(tokens: &[TokenAmount]) -> Assets {
+        tokens.iter().fold(Assets::new(), |all, t| {
+            all.add(
+                Asset::new(
+                    t.policy_id.clone(),
+                    t.asset_name.clone(),
+                    t.quantity.parse().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        })
+    }
+
+    #[test]
+    fn a_chain_ends_with_the_part_that_sends_the_last_of_the_tokens() {
+        // Bounty report, 2026-11-14: a chain's part that sent the last of the tokens carried its ADA forward as
+        // every part but the last does, and the chain went on to one more part, an output of ADA alone to the
+        // recipient (its least, about 1 ₳) and a fee, neither asked for; the review called the total the least the
+        // tokens need. Here each token sent is held most by a bundle of 20 at its least, which parts that each pay
+        // their own fee take first and can't pay a fee with, and a little of each by the UTxO holding the ADA,
+        // which a chain takes first: its first part sends them all (from 10 tokens; fewer go in one transaction).
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let pp = ProtocolParameters::from_koios(&params()).unwrap();
+        let to = pallas_addresses::Address::from_bech32(&theirs()).unwrap();
+        for n in [10u64, 30] {
+            let sold: Vec<TokenAmount> = (0..n).map(|i| token(i, 2)).collect();
+            let mut utxos: Vec<UtxoResponse> = (0..n)
+                .map(|i| {
+                    let mut held = vec![token(i, 5_000)];
+                    held.extend((0..19).map(|j| token(20_000 + i * 100 + j, 3)));
+                    utxo(i + 1, 0, &held)
+                })
+                .collect();
+            utxos.push(utxo(900, 300_000_000, &sold));
+            for to_seedelf in [true, false] {
+                let least = |tokens: &[TokenAmount]| {
+                    if to_seedelf {
+                        seedelf_core::build::minimum_seedelf_payment(&pp, &assets(tokens)).unwrap()
+                    } else {
+                        seedelf_core::build::minimum_address_payment(&pp, &to, &assets(tokens))
+                            .unwrap()
+                    }
+                };
+                // Nothing but the tokens; a lovelace past their least, short of what an output of ADA alone holds;
+                // and more than that.
+                for asked in [0, least(&sold) + 1, least(&sold) + 20_000_000] {
+                    let case = format!("{n} tokens, to a Seedelf {to_seedelf}, asked {asked}");
+                    let (paid, built): (Vec<Paid>, Vec<(String, Vec<api::OutRef>)>) = if to_seedelf
+                    {
+                        api::build_transfer_parts(
+                            sk,
+                            transfer(utxos.clone(), Some(asked), sold.clone()),
+                        )
+                        .unwrap()
+                        .into_iter()
+                        .map(|p| {
+                            let pay = &p.payments[0];
+                            (
+                                (pay.lovelace.parse().unwrap(), pay.tokens.clone()),
+                                (p.tx_cbor, p.inputs),
+                            )
+                        })
+                        .unzip()
+                    } else {
+                        api::build_withdraw_parts(
+                            sk,
+                            withdraw(utxos.clone(), Some(asked), sold.clone()),
+                        )
+                        .unwrap()
+                        .into_iter()
+                        .map(|p| {
+                            let pay = &p.payments[0];
+                            (
+                                (pay.lovelace.parse().unwrap(), pay.tokens.clone()),
+                                (p.tx_cbor, p.inputs),
+                            )
+                        })
+                        .unzip()
+                    };
+                    sound(&built);
+                    none_after_paid(&paid, asked, &sold);
+                    assert!(
+                        paid.iter().all(|(_, t)| !t.is_empty()),
+                        "{case}: a part of ADA alone"
+                    );
+                    assert_eq!(
+                        sent(paid.iter().flat_map(|(_, t)| t)),
+                        every(&sold),
+                        "{case}"
+                    );
+                    let total: u64 = paid.iter().map(|(l, _)| l).sum();
+                    let leasts: u64 = paid.iter().map(|(_, t)| least(t)).sum();
+                    assert_eq!(total, asked.max(leasts), "{case}: paid what was asked");
+                }
+            }
+        }
+    }
+
     #[test]
     fn parts_that_can_each_pay_their_own_fee_stay_apart() {
         // Chains only where needed (the owner, 2026-10-21): a part waits for the one before to be on chain, so where
