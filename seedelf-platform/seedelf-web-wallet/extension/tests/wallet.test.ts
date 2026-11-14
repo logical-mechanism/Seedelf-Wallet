@@ -41,8 +41,13 @@ describe("wallet", () => {
     const record = (await local.get<{ version: number; blob: string }>(VAULT_KEY))!;
     expect(record.version).toBe(1);
     expect(atob(record.blob).startsWith("SBV1")).toBe(true);
-    // The vault holds entropy, never the words.
-    expect(JSON.stringify([...local.data])).not.toContain(phrase.split(" ")[0]);
+    // The vault holds entropy, never the words: no two side by side, however they'd be listed. One word alone can
+    // turn up by chance: "seed" and "vault" are in the key's name, and a short word in the blob's base64.
+    const stored = JSON.stringify([...local.data]);
+    const words = phrase.split(" ");
+    for (let i = 1; i < words.length; i++) {
+      expect(stored).not.toMatch(new RegExp(`${words[i - 1]}\\W*${words[i]}`));
+    }
     expect(await session.get(SESSION_ENTROPY)).toBeTypeOf("string");
 
     const account = await wallet.account("preprod");
