@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Every box looks the same</title>
+<link rel="stylesheet" href="../../../shared.css" />
+<link rel="stylesheet" href="pool.css" />
+<style>
+  .ada { left: 72px; top: 470px; width: 310px; }
+  .split { position: absolute; left: 436px; top: 412px; width: 150px; font-size: 22px; font-weight: 600; color: var(--muted); text-align: center; }
+  .thepool { left: 680px; top: 316px; width: 848px; height: 470px; }
+  .b.key::after {
+    content: ""; position: absolute; right: -7px; top: -7px; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 3px var(--bg);
+  }
+  .legend { position: absolute; left: 708px; top: 806px; display: flex; align-items: center; gap: 12px; font-size: 24px; font-weight: 600; color: var(--muted); }
+  .legend i { width: 14px; height: 14px; border-radius: 50%; background: var(--teal); }
+</style>
+</head>
+<body>
+  <header>
+    <p class="kicker">1 · In it goes</p>
+    <h1>Every box looks the same</h1>
+    <p class="sub">Your ADA goes in as equal 5 ₳ boxes, each in disguise</p>
+  </header>
+  <img class="wordmark" src="../../../../extension/public/brand/wordmark-on-dark.png" alt="" />
+
+  <div class="card private ada">
+    <div class="icon"><img src="../../../../extension/public/brand/emblem.png" alt="" /></div>
+    <div><h2>Your ADA</h2><p>From either side, or a dApp session's spare</p></div>
+  </div>
+
+  <p class="split">Split into equal boxes</p>
+  <div class="b yours" style="left: 474px; top: 488px">5 ₳</div>
+  <div class="b yours" style="left: 474px; top: 538px">5 ₳</div>
+  <div class="b yours" style="left: 474px; top: 588px">5 ₳</div>
+
+  <div class="pool thepool" id="pool">
+    <div class="head">
+      <h2>Lovejoin</h2><span>the 5 ₳ pool</span>
+    </div>
+  </div>
+
+  <svg class="flow" viewBox="0 0 1600 900" aria-hidden="true">
+    <defs>
+      <marker id="head" viewBox="0 0 10 10" refX="7" refY="5" markerUnits="userSpaceOnUse"
+              markerWidth="22" markerHeight="22" orient="auto-start-reverse">
+        <path d="M1,1 L9,5 L1,9" style="fill:none; stroke:#00c4bc; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round" />
+      </marker>
+    </defs>
+    <path class="line" d="M 390 550 L 460 550" marker-end="url(#head)" />
+    <path class="line" d="M 560 550 L 668 550" marker-end="url(#head)" />
+  </svg>
+
+  <p class="legend"><i></i>Only your key can show which boxes are yours</p>
+
+  <script>
+    {
+      // Eight across, five down, every box 5 ₳; three are yours, marked only for you.
+      const pool = document.getElementById("pool");
+      const cols = 8, rows = 5, w = 72, h = 42, gx = 26, gy = 24;
+      const x0 = (848 - (cols * w + (cols - 1) * gx)) / 2, y0 = 100;
+      const yours = new Set(["1,2", "5,0", "6,4"]);
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const b = document.createElement("div");
+          b.className = yours.has(`${c},${r}`) ? "b mixed key" : "b mixed";
+          b.textContent = "5 ₳";
+          b.style.left = `${x0 + c * (w + gx)}px`;
+          b.style.top = `${y0 + r * (h + gy)}px`;
+          pool.append(b);
+        }
+      }
+    }
+  </script>
+</body>
+</html>

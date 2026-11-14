@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Three ways to grow the pool</title>
+<link rel="stylesheet" href="../../../shared.css" />
+<link rel="stylesheet" href="pool.css" />
+<style>
+  .way {
+    position: absolute; top: 330px; width: 464px; height: 470px;
+    padding: 34px 34px 0;
+    border: 2px solid var(--border-strong); border-radius: 24px; background: var(--surface);
+  }
+  .way.star { border-color: var(--amber); background: var(--amber-soft); }
+  .way .num {
+    width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--teal); color: var(--navy); font-size: 24px; font-weight: 800;
+  }
+  .way.star .num { background: var(--amber); }
+  .way h2 { margin-top: 24px; font-size: 38px; font-weight: 800; letter-spacing: -0.015em; }
+  .way.star h2 { color: var(--amber); }
+  .way p { margin-top: 14px; font-size: 25px; font-weight: 550; line-height: 1.4; color: var(--muted); }
+  .way .pic { position: absolute; left: 34px; right: 34px; bottom: 34px; height: 60px; }
+  .way .pic .b { top: 9px; }
+  .chip {
+    position: absolute; top: 12px; height: 38px; padding: 0 16px; display: grid; place-items: center;
+    border-radius: 19px; font-size: 20px; font-weight: 700;
+  }
+  .chip.priv { border: 2px solid var(--teal); color: var(--teal); background: var(--teal-soft); }
+  .chip.pub { border: 2px solid var(--border-strong); color: var(--text); }
+  .arrow { position: absolute; top: 20px; font-size: 26px; font-weight: 700; color: var(--muted); }
+  .b.key::after {
+    content: ""; position: absolute; right: -7px; top: -7px; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 3px #2a2416;
+  }
+  .foot { position: absolute; left: 72px; top: 830px; font-size: 26px; font-weight: 600; color: var(--muted); }
+</style>
+</head>
+<body>
+  <header>
+    <p class="kicker">Make it bigger</p>
+    <h1>Three ways to grow the pool</h1>
+    <p class="sub">All of them in Seedelf Wallet</p>
+  </header>
+  <img class="wordmark" src="../../../../extension/public/brand/wordmark-on-dark.png" alt="" />
+
+  <div class="way" style="left: 72px">
+    <div class="num">1</div>
+    <h2>Just use it</h2>
+    <p>Private dApp sessions send their spare ADA through the pool, by default.</p>
+    <div class="pic">
+      <svg style="position: absolute; left: 0; top: 4px" width="52" height="52" viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="3" stroke-linejoin="round">
+        <rect x="6" y="6" width="15" height="15" rx="3" /><rect x="27" y="6" width="15" height="15" rx="3" />
+        <rect x="6" y="27" width="15" height="15" rx="3" /><rect x="27" y="27" width="15" height="15" rx="3" />
+      </svg>
+      <span class="arrow" style="left: 76px">→</span>
+      <div class="b mixed" style="left: 124px"></div>
+      <div class="b mixed" style="left: 208px"></div>
+      <div class="b mixed" style="left: 292px"></div>
+    </div>
+  </div>
+
+  <div class="way" style="left: 568px">
+    <div class="num">2</div>
+    <h2>Mix</h2>
+    <p>From the Lovejoin tile, from your private balance or your public account.</p>
+    <div class="pic">
+      <span class="chip priv" style="left: 0">Private</span>
+      <span class="chip pub" style="left: 116px">Public</span>
+      <span class="arrow" style="left: 222px">→</span>
+      <div class="b mixed" style="left: 270px"></div>
+    </div>
+  </div>
+
+  <div class="way star" style="left: 1064px">
+    <div class="num">3</div>
+    <h2>Bootstrap</h2>
+    <p>Put boxes in as cover for others. They stay yours, and come back when you say.</p>
+    <div class="pic">
+      <div class="b mixed key" style="left: 0"></div>
+      <div class="b mixed" style="left: 84px"></div>
+      <div class="b mixed key" style="left: 168px"></div>
+      <div class="b mixed" style="left: 252px"></div>
+      <div class="b mixed key" style="left: 336px"></div>
+    </div>
+  </div>
+</body>
+</html>

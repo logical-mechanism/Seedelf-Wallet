@@ -12,6 +12,7 @@ Images for posts about Seedelf Wallet, drawn in HTML so they can be edited, rend
 
 **Threads:**
 - [x/private-contracts/](x/private-contracts/thread.md): smart contracts used privately, through a one-time account and back through Lovejoin.
+- [x/lovejoin-pool/](x/lovejoin-pool/thread.md) (a draft): how Lovejoin mixes inside Seedelf, and three ways to grow its pool.
 
 ## Rendering
 

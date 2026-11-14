@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Hide in the crowd</title>
+<link rel="stylesheet" href="../../../shared.css" />
+<link rel="stylesheet" href="pool.css" />
+<style>
+  .field { position: absolute; left: 72px; top: 300px; width: 1456px; height: 420px; }
+  .find { position: absolute; right: 72px; top: 776px; font-size: 26px; font-weight: 700; color: var(--teal); }
+  .find::before { content: ""; position: absolute; left: 207px; top: -70px; width: 3px; height: 62px; background: var(--teal); border-radius: 2px; }
+  .points { position: absolute; left: 72px; right: 72px; top: 780px; grid-template-columns: auto auto auto; justify-content: start; column-gap: 72px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Hide in the crowd</h1>
+    <p class="sub">Lovejoin, the mixer that lives inside Seedelf</p>
+  </header>
+  <img class="wordmark" src="../../../../extension/public/brand/wordmark-on-dark.png" alt="" />
+
+  <div class="pool field" id="field"></div>
+
+  <ul class="points">
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>No operator</span>
+    </li>
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>No custodian</span>
+    </li>
+    <li>
+      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="rgb(0 196 188 / 0.18)" /><path d="M9 15.5 L13.5 20 L21.5 11" fill="none" stroke="#00c4bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>Just a contract, and a crowd</span>
+    </li>
+  </ul>
+
+  <p class="find">Only you can tell which one is yours</p>
+
+  <script>
+    {
+      // A field of equal boxes, one of them yours: 16 across, 6 down.
+      const field = document.getElementById("field");
+      const cols = 16, rows = 6, w = 72, h = 42, gx = 16, gy = 20;
+      const x0 = (1456 - (cols * w + (cols - 1) * gx)) / 2, y0 = 54;
+      const yours = [13, 5];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const b = document.createElement("div");
+          b.className = c === yours[0] && r === yours[1] ? "b yours" : "b mixed";
+          b.style.left = `${x0 + c * (w + gx)}px`;
+          b.style.top = `${y0 + r * (h + gy)}px`;
+          field.append(b);
+        }
+      }
+    }
+  </script>
+</body>
+</html>

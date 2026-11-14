@@ -1,0 +1,27 @@
+/* What this thread's images share beyond media/shared.css: Lovejoin's boxes. */
+
+/* A box: every one the same size. Yours is teal only where you're the one looking. */
+.b {
+  position: absolute; width: 72px; height: 42px;
+  display: grid; place-items: center;
+  border-radius: 10px; border: 2px solid var(--border-strong); background: rgb(255 255 255 / 0.06);
+  font-size: 18px; font-weight: 700; color: var(--muted);
+}
+.b.yours { border-color: var(--teal); background: var(--teal-soft); color: var(--teal); }
+.b.mixed { border-color: rgb(245 178 0 / 0.55); background: rgb(245 178 0 / 0.1); color: var(--amber); }
+.b.ghost { border-style: dashed; border-color: rgb(255 255 255 / 0.16); background: transparent; }
+
+/* A pool: Lovejoin's amber panel. */
+.pool {
+  position: absolute;
+  border: 2px solid var(--amber); border-radius: 24px; background: var(--amber-soft);
+}
+.pool .head { position: absolute; left: 26px; top: 22px; display: flex; align-items: center; gap: 14px; }
+.pool .head svg { width: 40px; height: 40px; }
+.pool .head h2 { font-size: 30px; font-weight: 700; color: var(--amber); }
+.pool .head span { font-size: 22px; font-weight: 500; color: var(--muted); }
+
+.amber { color: var(--amber); }
+.teal { color: var(--teal); }
+.note { position: absolute; font-size: 24px; font-weight: 550; line-height: 1.35; color: var(--muted); }
+.note b { color: var(--text); font-weight: 700; }

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Four in, four out</title>
+<link rel="stylesheet" href="../../../shared.css" />
+<link rel="stylesheet" href="pool.css" />
+<style>
+  .who { position: absolute; left: 72px; font-size: 22px; font-weight: 650; color: var(--muted); }
+  .who.you { color: var(--teal); }
+  .mix {
+    position: absolute; width: 88px; height: 88px; border-radius: 50%;
+    display: grid; place-items: center;
+    border: 3px solid var(--amber); background: #1d1b14;
+    font-size: 22px; font-weight: 800; color: var(--amber);
+  }
+  .b.sm { width: 64px; height: 26px; border-radius: 7px; }
+  .plus { position: absolute; width: 160px; text-align: center; font-size: 22px; font-weight: 600; color: var(--muted); }
+  .wave { position: absolute; top: 288px; width: 200px; text-align: center; font-size: 24px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--amber); }
+  .which { position: absolute; left: 1166px; top: 430px; width: 362px; }
+  .which .q { font-size: 120px; font-weight: 800; line-height: 1; color: var(--amber); }
+  .which p { margin-top: 12px; font-size: 32px; font-weight: 700; line-height: 1.25; }
+  .which p + p { font-size: 24px; font-weight: 550; color: var(--muted); }
+</style>
+</head>
+<body>
+  <header>
+    <p class="kicker">2 · The mix</p>
+    <h1>Four in, four out</h1>
+    <p class="sub">Your box and three strangers', re-disguised together</p>
+  </header>
+  <img class="wordmark" src="../../../../extension/public/brand/wordmark-on-dark.png" alt="" />
+
+  <p class="wave" style="left: 326px">Wave 1</p>
+  <p class="wave" style="left: 726px">Wave 2</p>
+
+  <!-- In: yours and three strangers'. -->
+  <p class="who" style="top: 484px">Stranger</p>
+  <p class="who you" style="top: 544px">Yours</p>
+  <p class="who" style="top: 604px">Stranger</p>
+  <p class="who" style="top: 664px">Stranger</p>
+  <div class="b" style="left: 196px; top: 478px"></div>
+  <div class="b yours" style="left: 196px; top: 538px"></div>
+  <div class="b" style="left: 196px; top: 598px"></div>
+  <div class="b" style="left: 196px; top: 658px"></div>
+
+  <svg class="flow" viewBox="0 0 1600 900" aria-hidden="true">
+    <g fill="none" stroke-width="3" stroke-linecap="round">
+      <!-- Into wave 1 -->
+      <path d="M 270 499 C 330 499, 330 589, 382 589" stroke="rgb(155 163 177 / 0.45)" />
+      <path d="M 270 559 C 330 559, 330 589, 382 589" stroke="#00c4bc" />
+      <path d="M 270 619 C 330 619, 330 589, 382 589" stroke="rgb(155 163 177 / 0.45)" />
+      <path d="M 270 679 C 330 679, 330 589, 382 589" stroke="rgb(155 163 177 / 0.45)" />
+      <!-- Out of wave 1, into the four wave 2 mixes -->
+      <g stroke="rgb(245 178 0 / 0.6)">
+        <path d="M 470 589 C 520 589, 520 379, 560 379" />
+        <path d="M 470 589 C 520 589, 520 519, 560 519" />
+        <path d="M 470 589 C 520 589, 520 659, 560 659" />
+        <path d="M 470 589 C 520 589, 520 799, 560 799" />
+        <path d="M 634 379 L 782 379" /><path d="M 634 519 L 782 519" />
+        <path d="M 634 659 L 782 659" /><path d="M 634 799 L 782 799" />
+      </g>
+      <!-- Out of wave 2: sixteen -->
+      <g stroke="rgb(245 178 0 / 0.6)" id="fans"></g>
+      <!-- The bracket round the sixteen -->
+      <path d="M 1092 312 C 1112 312, 1112 322, 1112 338 L 1112 840 C 1112 856, 1112 866, 1092 866" stroke="rgb(255 255 255 / 0.3)" />
+    </g>
+  </svg>
+
+  <div class="mix" style="left: 382px; top: 545px">Mix</div>
+
+  <div class="b mixed" style="left: 562px; top: 358px"></div>
+  <div class="b mixed" style="left: 562px; top: 498px"></div>
+  <div class="b mixed" style="left: 562px; top: 638px"></div>
+  <div class="b mixed" style="left: 562px; top: 778px"></div>
+
+  <div class="mix" style="left: 782px; top: 335px">Mix</div>
+  <div class="mix" style="left: 782px; top: 475px">Mix</div>
+  <div class="mix" style="left: 782px; top: 615px">Mix</div>
+  <div class="mix" style="left: 782px; top: 755px">Mix</div>
+  <p class="plus" style="left: 746px; top: 427px">+ 3 strangers</p>
+  <p class="plus" style="left: 746px; top: 567px">+ 3 strangers</p>
+  <p class="plus" style="left: 746px; top: 707px">+ 3 strangers</p>
+  <p class="plus" style="left: 746px; top: 847px">+ 3 strangers</p>
+
+  <div class="which">
+    <div class="q">?</div>
+    <p>Yours could be any of these sixteen</p>
+    <p>Strangers picked at random, every time</p>
+  </div>
+
+  <script>
+    {
+      // Each wave 2 mix fans out to four boxes, 32 px apart around its centre.
+      const fans = document.getElementById("fans");
+      for (const c of [379, 519, 659, 799]) {
+        for (const d of [-48, -16, 16, 48]) {
+          const y = c + d;
+          const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          p.setAttribute("d", `M 870 ${c} C 930 ${c}, 930 ${y}, 1010 ${y}`);
+          fans.append(p);
+          const b = document.createElement("div");
+          b.className = "b sm mixed";
+          b.style.left = "1012px";
+          b.style.top = `${y - 13}px`;
+          document.body.append(b);
+        }
+      }
+    }
+  </script>
+</body>
+</html>
