@@ -704,10 +704,11 @@ fn check_parts(
     {
         problems.push(format!("paid {paid_lovelace} < asked {w}"));
     }
-    // Nor more than they must: what was asked, or the leasts of the parts that send tokens, whichever is more; with no
-    // token sent, an output of ADA alone's least, which an ask of nothing is raised to. Each part of a token past the
-    // second paid one least too many (1.9.1's release review, shapes#1, the token boxes here), and a part of ADA alone
-    // after the tokens can pay more than was still owed (the bounty report against 1.9.0).
+    // Nor more than they must: what was asked, or the leasts of the parts that send tokens as the plan split them,
+    // whichever is more; with no token sent, an output of ADA alone's least, which an ask of nothing is raised to. Each
+    // part of a token past the second paid one least too many (1.9.1's release review, shapes#1: the token boxes
+    // here). The bounty report's part of ADA alone after the tokens is #384's api test's: no shape here reaches it. A
+    // session's funding, none here, would count its collateral, paid to the same address, as paid.
     if max_tokens.is_none()
         && let Some(w) = want_lovelace
     {
@@ -729,18 +730,21 @@ fn check_parts(
             }
             .unwrap()
         };
-        let leasts: u64 = if shares.iter().all(BTreeMap::is_empty) {
-            least(&BTreeMap::new())
+        let (leasts, what) = if shares.iter().all(BTreeMap::is_empty) {
+            (least(&BTreeMap::new()), "an output's least")
         } else {
-            shares
-                .iter()
-                .filter(|share| !share.is_empty())
-                .map(least)
-                .sum()
+            (
+                shares
+                    .iter()
+                    .filter(|share| !share.is_empty())
+                    .map(least)
+                    .sum(),
+                "the token parts' leasts",
+            )
         };
         if paid_lovelace > w.max(leasts) {
             problems.push(format!(
-                "paid {paid_lovelace} > asked {w} and the token parts' leasts {leasts}"
+                "paid {paid_lovelace} > asked {w} and {what} {leasts}"
             ));
         }
     }

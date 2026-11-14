@@ -4505,6 +4505,10 @@ mod parts_of_any_shape {
                         .map(|(_, t)| least(t))
                         .sum();
                     assert_eq!(total, asked.max(leasts), "{case}: paid what was asked");
+                    // And the plan: one transaction, paying the tokens' least where that's more than was asked (1.9.1's
+                    // review of its fixes, r2-tests#3: the bound above grows with the plan's own split).
+                    assert_eq!(paid.len(), 1, "{case}: one part");
+                    assert_eq!(total, asked.max(least(&sold)), "{case}: one part's least");
                 }
             }
         }
@@ -4818,6 +4822,19 @@ mod parts_of_any_shape {
                         "{case}: part {n} carries what no later part spends"
                     );
                 }
+                // Every output back into the Seedelf balance is change but a carry a later part spends (1.9.1's
+                // review of its fixes, r2-planner#2: a kept carry's output went uncounted, and no test saw it).
+                let back = MultiEraTx::decode(&hex::decode(&p.tx_cbor).unwrap())
+                    .unwrap()
+                    .outputs()
+                    .iter()
+                    .filter(|o| o.address().unwrap().to_bech32().unwrap() != theirs())
+                    .count();
+                assert_eq!(
+                    p.change_outputs,
+                    back - usize::from(p.carry.is_some()),
+                    "{case}: part {n}'s change outputs"
+                );
             }
             // So what the parts spend of the Seedelf balance is what they pay, their fees and the change they count.
             let held: u64 = utxos

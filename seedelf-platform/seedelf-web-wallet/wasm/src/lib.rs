@@ -4345,8 +4345,9 @@ pub mod api {
     /// much for each part past the second, and the review showed that total (1.9.1's release review, shapes#1: 90
     /// Lovejoin boxes of a token and 50 ₳ paid 54.88 ₳). Planned again, each part leaves the leasts of the parts of
     /// tokens after it, as the first plan made them. What a part spends doesn't turn on what it pays, so the parts
-    /// are the same; the second plan goes where it takes less from the Seedelf balance, in no more parts and no more
-    /// carries. `sent`: a part's payment (its lovelace and tokens) and all it takes, every payment and its fee.
+    /// are the same, but where a part's smaller payment would leave change under an output's least: it's short there,
+    /// and the second plan chains or is refused (1.9.1's review of its fixes, r2-planner#1). The second plan goes
+    /// where it takes less from the Seedelf balance, in no more parts and no more carries; otherwise the first. `sent`: a part's payment (its lovelace and tokens) and all it takes, every payment and its fee.
     fn reserving<R>(
         plan: impl Fn(&[u64], anyhow::Error) -> Result<Vec<R>>,
         too_many: anyhow::Error,
@@ -5246,7 +5247,8 @@ pub mod api {
         }
 
         /// A funding's chain from `{owed: least(T), tokens: [T], rest: [H]}`, H holding T alone and `extra` past its
-        /// least, the one-time account's 5 ₳ collateral beside: what `build_withdraw_parts` gives `chained`.
+        /// least: a chain from a part after the first, which paid the one-time account's collateral (`first` false),
+        /// as `build_withdraw_parts` gives it to `chained`.
         fn chain_from(extra: u64) -> Result<Vec<WithdrawResult>> {
             let sk = seedelf_crypto::derivation::seedelf_key_v1(PHRASE, 0)?;
             let params = fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone();
@@ -5347,6 +5349,16 @@ pub mod api {
             // token's least and keeps the rest. Where the amount is short and the carry builds, that part is the
             // carry, and the chain ends there: going on, it paid an output of ADA alone to the one-time account and a
             // fee, or was refused, short.
+            // The scan brackets the window, short below it and an amount above it, so fees or leasts that move the
+            // window past its ends read so, not as a closed window (1.9.1's review of its fixes, r2-tests#4).
+            assert!(
+                chain_from(1_200_000).is_err(),
+                "the scan no longer starts short: fees or leasts moved the window"
+            );
+            assert!(
+                chain_from(1_240_000).is_ok_and(|p| p.len() == 1 && p[0].carry.is_none()),
+                "the scan no longer ends on an amount: fees or leasts moved the window"
+            );
             let (mut went, mut on_carry) = (false, 0);
             for extra in (1_200_000..1_240_000).step_by(2_000) {
                 let Ok(parts) = chain_from(extra) else {

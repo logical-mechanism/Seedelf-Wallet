@@ -124,7 +124,8 @@ describe("wallet", () => {
     clock.now += 4000;
     expect(await wallet.unlock(PASSWORD)).toEqual({ unlocked: true });
     expect(await local.get(UNLOCK_FAILURES)).toBeUndefined();
-  });
+    // Five Argon2id opens and seals: slow on a busy machine (1.9.1's review of its fixes, r2-extension#1).
+  }, 20_000);
 
   it("uses Lace's back-off schedule", () => {
     expect([0, 1, 2, 3, 4, 6, 7, 8, 20].map(unlockBackoffMs)).toEqual([
@@ -302,22 +303,26 @@ describe("wallet", () => {
     const { wallet, local } = testWallet();
     const v = cardano.find((v) => v.phrase.split(" ").length === 12)!;
     await wallet.create(v.phrase, PASSWORD);
-    const before = await local.get<{ blob: string; createdAt: number }>(VAULT_KEY);
+    const before = (await local.get<VaultRecord>(VAULT_KEY))!;
+    // A vault from before the privacy review kept when it was made, in the clear: a change drops it (vault.ts). The
+    // check compared two undefined (1.9.1's review of its fixes, r2-tests#5).
+    await local.set(VAULT_KEY, { ...before, createdAt: 1_700_000_000_000 });
 
     await expect(wallet.changePassword(PASSWORD, "short")).rejects.toThrow("at least 12");
     await expect(wallet.changePassword("not the password", "a new long passphrase")).rejects.toThrow("Wrong password");
     await local.remove(UNLOCK_FAILURES);
     await wallet.changePassword(PASSWORD, "a new long passphrase");
-    const after = await local.get<{ blob: string; createdAt: number }>(VAULT_KEY);
-    expect(after!.blob).not.toBe(before!.blob);
-    expect(after!.createdAt).toBe(before!.createdAt);
+    const after = (await local.get<VaultRecord>(VAULT_KEY))!;
+    expect(after.blob).not.toBe(before.blob);
+    expect(after.createdAt).toBeUndefined();
 
     await wallet.lock();
     expect(await wallet.unlock(PASSWORD)).toMatchObject({ unlocked: false, wrongPassword: true });
     await local.remove(UNLOCK_FAILURES);
     expect(await wallet.unlock("a new long passphrase")).toEqual({ unlocked: true });
     expect(await wallet.revealPhrase("a new long passphrase")).toEqual(v.phrase.split(" "));
-  });
+    // Seven Argon2id seals and opens: slow on a busy machine (r2-tests#5: 5 s ran out on two CPUs).
+  }, 30_000);
 
   it("reset deletes the vault", async () => {
     const { wallet, local, session } = testWallet();
