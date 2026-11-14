@@ -4240,6 +4240,11 @@ pub mod api {
     /// each, what's left is tried beside its carry as the last, which pays what's still owed (`amount`). `first`:
     /// the chain starts at the payment's first part, which pays a funding's collateral too; `room`: how many parts it
     /// may be. Short when the ADA it starts with can't carry it to the end.
+    ///
+    /// The part that sends the last of the tokens is the last, paying what's still owed, as [`in_parts`]' does; it
+    /// carries only where it can't pay that, and the chain ends there once nothing is owed. A chain went on after
+    /// its carries had paid it all: one more part, an output of ADA alone to the recipient, its least (about 1 ₳)
+    /// and a fee for nothing, which the review added to the least the tokens need (bounty report, 2026-11-14).
     #[allow(clippy::too_many_arguments)]
     fn chained<R>(
         from: &Owed,
@@ -4272,19 +4277,42 @@ pub mod api {
                     Err(e) => return Err(e),
                 }
             }
-            let (part, share) = fit_part(
+            // Whether the part is the last: it sends the last of the tokens (no `more` after it), and pays what's
+            // still owed beside them, its change staying.
+            let ((part, last), share) = fit_part(
                 &rest,
                 &tokens,
                 Some(Fill::Lean),
                 forward.as_ref(),
                 worth,
-                |picks, share, _| carry(picks, share, starts),
+                |picks, share, more| {
+                    if !more {
+                        match amount(
+                            picks.clone(),
+                            owed.max(least(&share)?),
+                            share.clone(),
+                            starts,
+                        ) {
+                            Err(e) if build::is_short(&e) => {}
+                            exactly => return exactly.map(|part| (part, true)),
+                        }
+                    }
+                    carry(picks, share, starts).map(|part| (part, false))
+                },
             )?;
+            if last {
+                parts.push(part);
+                return Ok(parts);
+            }
             forward = Some(next_of(&part, &forward, inputs_of, carried)?);
             owed = owed.saturating_sub(paid_of(&part)?);
             tokens = less(&tokens, &share);
             rest = without(&rest, inputs_of(&part));
             parts.push(part);
+            // Paid in full by the carries: what the last carried stays in the Seedelf balance, as change does.
+            if tokens.is_empty() && owed == 0 {
+                return Ok(parts);
+            }
         }
         bail!("A chain of parts would be more transactions than one payment goes out as")
     }

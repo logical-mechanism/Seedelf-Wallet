@@ -644,7 +644,16 @@ fn check_parts(
     let mut known: Vec<UtxoResponse> = utxos.to_vec();
     let mut made_before: Vec<UtxoResponse> = Vec::new();
     let mut chained = 0;
-    for (cbor, l) in &cbors {
+    for (n, (cbor, l)) in cbors.iter().enumerate() {
+        // An amount's parts end once it's paid: a part after that pays what wasn't asked for (a chain went on
+        // after its last part of tokens had paid it all, and sent an output of ADA alone besides).
+        if max_tokens.is_none()
+            && n > 0
+            && &paid == want_tokens
+            && want_lovelace.is_some_and(|w| paid_lovelace >= w)
+        {
+            problems.push(format!("part {n} pays after the payment was all paid"));
+        }
         let part = inspect(cbor, &known, sk, to_address);
         problems.extend(part.problems.iter().cloned());
         let mut carried = 0;
