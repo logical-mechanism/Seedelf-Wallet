@@ -4,7 +4,7 @@
 import type * as Wasm from "@seedelf/wasm";
 import { describe, expect, it, vi } from "vitest";
 
-import { VAULT_KEY } from "../src/background/vault";
+import { openVault, VAULT_KEY, type VaultRecord } from "../src/background/vault";
 import {
   AUTO_LOCK_MS,
   CLOCK_STEP_TOLERANCE_MS,
@@ -38,22 +38,23 @@ describe("wallet", () => {
 
     expect(await wallet.state()).toBe("unlocked");
     expect(events).toEqual({ changed: 1, alarm: "started" });
-    const record = (await local.get<{ version: number; blob: string }>(VAULT_KEY))!;
+    const record = (await local.get<VaultRecord>(VAULT_KEY))!;
     expect(record.version).toBe(1);
     expect(atob(record.blob).startsWith("SBV1")).toBe(true);
-    // The vault holds entropy, never the words: no two side by side, however they'd be listed. One word alone can
-    // turn up by chance: "seed" and "vault" are in the key's name, and a short word in the blob's base64.
-    const stored = JSON.stringify([...local.data]);
-    const words = phrase.split(" ");
-    for (let i = 1; i < words.length; i++) {
-      expect(stored).not.toMatch(new RegExp(`${words[i - 1]}\\W*${words[i]}`));
-    }
+    // The vault holds entropy, never the words: its record is all local storage holds, and it opens to the phrase's
+    // entropy. A search of the stored text for the words failed by chance ("seed", "vault" and "version" are words of
+    // the list, and the record's own text holds the last two side by side) and missed words stored out of order
+    // (1.9.1's release review, ts-parts#3).
+    expect([...local.data.keys()]).toEqual([VAULT_KEY]);
+    expect(Object.keys(record).sort()).toEqual(["blob", "version"]);
+    expect(await openVault(record, PASSWORD)).toEqual(loadTestWasm().phraseToEntropy(phrase));
     expect(await session.get(SESSION_ENTROPY)).toBeTypeOf("string");
 
     const account = await wallet.account("preprod");
     expect(account.receiveAddress).toMatch(/^addr_test1q/);
     expect(account.stakeAddress).toMatch(/^stake_test1u/);
-  });
+    // An Argon2id seal and an open: slow on a busy machine.
+  }, 20_000);
 
   it("restores the vector phrases to their Lace-matching addresses and Seedelf keys", async () => {
     for (const v of cardano) {

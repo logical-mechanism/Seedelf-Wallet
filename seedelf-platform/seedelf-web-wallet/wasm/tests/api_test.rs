@@ -4497,7 +4497,13 @@ mod parts_of_any_shape {
                         "{case}"
                     );
                     let total: u64 = paid.iter().map(|(l, _)| l).sum();
-                    let leasts: u64 = paid.iter().map(|(_, t)| least(t)).sum();
+                    // The leasts of the parts that send tokens: a part of ADA alone's own least would count what it
+                    // overpays on both sides (1.9.1's release review, tests#4).
+                    let leasts: u64 = paid
+                        .iter()
+                        .filter(|(_, t)| !t.is_empty())
+                        .map(|(_, t)| least(t))
+                        .sum();
                     assert_eq!(total, asked.max(leasts), "{case}: paid what was asked");
                 }
             }
@@ -4708,6 +4714,172 @@ mod parts_of_any_shape {
         );
         assert_eq!(collaterals(&parts)[0], 1);
         assert_eq!(collaterals(&parts).iter().sum::<usize>(), 1);
+    }
+
+    #[test]
+    fn an_amount_whose_token_takes_three_parts_or_more_pays_what_was_asked() {
+        // 1.9.1's release review, shapes#1: a part that could pay more than was owed left the parts after it one
+        // output's least, but the token still owed went in two parts or more, each paying its own least, so each part
+        // past the second paid one least too many: 90 Lovejoin boxes of a token (4.5 ₳ and 100 of it each) and 50 ₳
+        // went as five parts paying 54.88 ₳, and the review showed that. Now each part leaves the leasts of the parts
+        // after it.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let pp = ProtocolParameters::from_koios(&params()).unwrap();
+        let to = pallas_addresses::Address::from_bech32(&theirs()).unwrap();
+        let min = token(0, 100);
+        for boxes in [61u64, 90] {
+            let utxos: Vec<UtxoResponse> = (1..=boxes)
+                .map(|i| UtxoResponse {
+                    value: "4500000".into(),
+                    ..utxo(i, 0, std::slice::from_ref(&min))
+                })
+                .collect();
+            let all = vec![TokenAmount {
+                quantity: (100 * boxes).to_string(),
+                ..min.clone()
+            }];
+            for to_seedelf in [true, false] {
+                let paid: Vec<(u64, Vec<TokenAmount>)> = if to_seedelf {
+                    api::build_transfer_parts(
+                        sk,
+                        transfer(utxos.clone(), Some(50_000_000), all.clone()),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.payments[0].lovelace.parse().unwrap(),
+                            p.payments[0].tokens.clone(),
+                        )
+                    })
+                    .collect()
+                } else {
+                    api::build_withdraw_parts(
+                        sk,
+                        withdraw(utxos.clone(), Some(50_000_000), all.clone()),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.payments[0].lovelace.parse().unwrap(),
+                            p.payments[0].tokens.clone(),
+                        )
+                    })
+                    .collect()
+                };
+                let least = |tokens: &[TokenAmount]| {
+                    if to_seedelf {
+                        seedelf_core::build::minimum_seedelf_payment(&pp, &assets(tokens)).unwrap()
+                    } else {
+                        seedelf_core::build::minimum_address_payment(&pp, &to, &assets(tokens))
+                            .unwrap()
+                    }
+                };
+                let case = format!("{boxes} boxes, to a Seedelf {to_seedelf}");
+                assert!(paid.len() >= 3, "{case}: {} parts", paid.len());
+                assert_eq!(
+                    sent(paid.iter().flat_map(|(_, t)| t)),
+                    every(&all),
+                    "{case}"
+                );
+                let leasts: u64 = paid
+                    .iter()
+                    .filter(|(_, t)| !t.is_empty())
+                    .map(|(_, t)| least(t))
+                    .sum();
+                let total: u64 = paid.iter().map(|(l, _)| l).sum();
+                assert_eq!(
+                    total,
+                    50_000_000u64.max(leasts),
+                    "{case}: paid what was asked"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_carry_no_later_part_spends_counts_as_its_parts_change() {
+        // 1.9.1's release review, chain-rust#1 and ts-parts#1: a chain's last part, over the carry and what's left,
+        // spends as few of them as pay, so here it left the first part's carry of about 1.5 ₳ unspent. That carry is
+        // change, an output of ADA alone to the wallet's own key, but no part's figure counted it, and the funding's
+        // privacy note named 2.09 ₳ of private change tied to the one-time account where 3.59 ₳ was. A move-in's 12
+        // bundles of 20 tokens at their least and 3 ₳ more, all 240 tokens funded.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, all) = bundles(12, 20);
+        utxos.push(utxo(500, 3_000_000, &[]));
+        let parts = api::build_withdraw_parts(sk, funding(utxos.clone(), all)).unwrap();
+        let spends = |p: &api::WithdrawResult, c: &UtxoResponse| {
+            p.inputs
+                .iter()
+                .any(|i| i.tx_hash == c.tx_hash && i.tx_index == c.tx_index)
+        };
+        for (n, p) in parts.iter().enumerate() {
+            if let Some(c) = &p.carry {
+                assert!(
+                    parts[n + 1..].iter().any(|q| spends(q, c)),
+                    "part {n} carries what no later part spends"
+                );
+            }
+        }
+        // So what the parts spend of the Seedelf balance is what they pay, their fees and the change they count.
+        let held: u64 = utxos
+            .iter()
+            .filter(|u| parts.iter().any(|p| spends(p, u)))
+            .map(|u| u.value.parse::<u64>().unwrap())
+            .sum();
+        let counted: u64 = parts
+            .iter()
+            .map(|p| {
+                p.payments
+                    .iter()
+                    .map(|q| q.lovelace.parse::<u64>().unwrap())
+                    .sum::<u64>()
+                    + p.fee.total.parse::<u64>().unwrap()
+                    + p.change_lovelace.parse::<u64>().unwrap()
+            })
+            .sum();
+        assert_eq!(held, counted);
+    }
+
+    #[test]
+    fn a_funding_whose_chain_ends_at_its_first_part_pays_the_accounts_collateral() {
+        // The bounty report's shape as a session's funding: the chain's first part sends every token and, since
+        // #384, is its last (`chained`'s amount-first, told `starts`), so it pays the one-time account's collateral
+        // beside them, once. No test reached that part (1.9.1's release review, tests#2).
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let sold: Vec<TokenAmount> = (0..10).map(|i| token(i, 2)).collect();
+        let mut utxos: Vec<UtxoResponse> = (0..10)
+            .map(|i| {
+                let mut held = vec![token(i, 5_000)];
+                held.extend((0..19).map(|j| token(20_000 + i * 100 + j, 3)));
+                utxo(i + 1, 0, &held)
+            })
+            .collect();
+        utxos.push(utxo(900, 300_000_000, &sold));
+        let parts = api::build_withdraw_parts(sk, funding(utxos, sold)).unwrap();
+        assert_eq!(collaterals(&parts), vec![1]);
+    }
+
+    #[test]
+    fn an_amount_the_balance_cant_pay_is_refused_never_paid_in_part() {
+        // A chain with no tokens left to send carries at every part, each paying the recipient an output of ADA alone
+        // at its least, and ends only once what's owed is paid (`chained`'s `owed == 0`), never because no token is
+        // left: 150 ₳ asked here of about 117 ₳ the balance can spend, which a chain that stopped at its first carry
+        // "paid" with 1.46 ₳ to a Seedelf, 0.98 ₳ to an address. Only the ignored parts suite guarded it (1.9.1's
+        // release review, tests#3).
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let mut utxos: Vec<UtxoResponse> = (0..25)
+            .map(|i| {
+                let held: Vec<TokenAmount> =
+                    (0..30).map(|j| token(1_000 + i * 100 + j, 7)).collect();
+                utxo(i + 1, 500_000, &held)
+            })
+            .collect();
+        utxos.extend(ada(500, 5, 20_000_000));
+        let asked = Some(150_000_000);
+        assert!(api::build_transfer_parts(sk, transfer(utxos.clone(), asked, vec![])).is_err());
+        assert!(api::build_withdraw_parts(sk, withdraw(utxos, asked, vec![])).is_err());
     }
 
     #[test]

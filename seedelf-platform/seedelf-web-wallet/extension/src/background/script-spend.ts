@@ -501,8 +501,12 @@ export function whole<P extends PartBuilt>(parts: P[], read?: { classes: Classes
     const had = tokens.get(key);
     tokens.set(key, had ? { ...had, quantity: (BigInt(had.quantity) + BigInt(token.quantity)).toString() } : token);
   }
-  // The least they carry, added up, so the review says when that's all they pay; none where a part is Max's.
-  const minimum = parts.every((p) => p.payments[0]!.minimum !== null) ? sum((p) => p.payments[0]!.minimum!) : null;
+  // The least they carry, added up, so the review says when that's all they pay; none where a part is Max's, or sends
+  // no token: a part of ADA alone's least is an output's, not the tokens', and the review would call it theirs (the
+  // bounty report against 1.9.0; 1.9.1's release review, ts-parts#2).
+  const minimum = parts.every((p) => p.payments[0]!.minimum !== null && p.payments[0]!.tokens.length > 0)
+    ? sum((p) => p.payments[0]!.minimum!)
+    : null;
   return {
     ...first!,
     max: parts.every((p) => p.max),

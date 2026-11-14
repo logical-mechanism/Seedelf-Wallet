@@ -644,6 +644,8 @@ fn check_parts(
     let mut known: Vec<UtxoResponse> = utxos.to_vec();
     let mut made_before: Vec<UtxoResponse> = Vec::new();
     let mut chained = 0;
+    // The tokens each part sends, for the least its payment needs.
+    let mut shares: Vec<BTreeMap<Tok, u128>> = Vec::new();
     for (n, (cbor, l)) in cbors.iter().enumerate() {
         // An amount's parts end once it's paid: a part after that pays what wasn't asked for (a chain went on
         // after its last part of tokens had paid it all, and sent an output of ADA alone besides).
@@ -685,6 +687,7 @@ fn check_parts(
         known.extend(part.made.iter().cloned());
         made_before = part.made.clone();
         paid_lovelace += part.paid_lovelace;
+        shares.push(part.paid.clone());
         for (t, q) in part.paid {
             *paid.entry(t).or_default() += q;
         }
@@ -700,6 +703,46 @@ fn check_parts(
         && paid_lovelace < w
     {
         problems.push(format!("paid {paid_lovelace} < asked {w}"));
+    }
+    // Nor more than they must: what was asked, or the leasts of the parts that send tokens, whichever is more; with no
+    // token sent, an output of ADA alone's least, which an ask of nothing is raised to. Each part of a token past the
+    // second paid one least too many (1.9.1's release review, shapes#1, the token boxes here), and a part of ADA alone
+    // after the tokens can pay more than was still owed (the bounty report against 1.9.0).
+    if max_tokens.is_none()
+        && let Some(w) = want_lovelace
+    {
+        let pp = ProtocolParameters::from_koios(&params()).unwrap();
+        let least = |share: &BTreeMap<Tok, u128>| {
+            let mut assets = Assets::new();
+            for ((p, n), q) in share {
+                assets = assets
+                    .add(Asset::new(p.clone(), n.clone(), *q as u64).unwrap())
+                    .unwrap();
+            }
+            match to_address {
+                Some(a) => build::minimum_address_payment(
+                    &pp,
+                    &pallas_addresses::Address::from_bech32(a).unwrap(),
+                    &assets,
+                ),
+                None => build::minimum_seedelf_payment(&pp, &assets),
+            }
+            .unwrap()
+        };
+        let leasts: u64 = if shares.iter().all(BTreeMap::is_empty) {
+            least(&BTreeMap::new())
+        } else {
+            shares
+                .iter()
+                .filter(|share| !share.is_empty())
+                .map(least)
+                .sum()
+        };
+        if paid_lovelace > w.max(leasts) {
+            problems.push(format!(
+                "paid {paid_lovelace} > asked {w} and the token parts' leasts {leasts}"
+            ));
+        }
     }
     match max_tokens {
         None => {

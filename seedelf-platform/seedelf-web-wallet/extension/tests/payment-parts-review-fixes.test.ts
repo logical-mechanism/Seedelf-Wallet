@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
 import { Koios, type KoiosUtxo } from "../src/background/koios";
-import { partKey, type Kept } from "../src/background/script-spend";
+import { partKey, type Kept, type PartBuilt, whole } from "../src/background/script-spend";
 import { SESSION_TRANSFER, TransferService } from "../src/background/transfer";
 import { SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
 import { historiesNote, type HistoryClass } from "../src/shared/histories";
@@ -178,5 +178,34 @@ describe("Max in parts (1.6.0 review: max-kept-tokens-overcount)", SLOW, () => {
     const summary = await transfer.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
     expect(summary.parts?.length).toBeGreaterThan(1);
     expect(summary).toMatchObject({ max: true, changeTokens: 1 });
+  });
+});
+
+describe("the least a review in parts names (1.9.1's release review, ts-parts#2)", () => {
+  const MIN = { policyId: "ab".repeat(28), assetName: "01", quantity: "10" };
+  const part = (txHash: string, lovelace: string, tokens: Array<typeof MIN>): PartBuilt => ({
+    txHash,
+    max: false,
+    payments: [{ lovelace, minimum: lovelace, tokens }],
+    fee: { size: "200000", compute: "500000", scriptReference: "100000", total: "800000" },
+    changeLovelace: "0",
+    changeTokens: 0,
+    changeOutputs: 0,
+    changeMinimum: "1000000",
+    inputs: [{ txHash: txHash.replace(/./g, "1"), txIndex: 0 }],
+    left: 0,
+    classesMixed: [],
+  });
+
+  it("is none where a part sends no token: an output of ADA alone's least isn't the tokens'", () => {
+    // The bounty report's plan against 1.9.0: a part of the tokens at their least, then one of ADA alone at its own,
+    // whose review called the two added up the least the network accepts with these tokens.
+    const plan = [part("aa".repeat(32), "2413000", [MIN]), part("bb".repeat(32), "1457000", [])];
+    expect(whole(plan).payments[0]!.minimum).toBeNull();
+  });
+
+  it("adds up the parts' leasts where every part sends tokens", () => {
+    const plan = [part("aa".repeat(32), "2413000", [MIN]), part("bb".repeat(32), "2413000", [{ ...MIN, assetName: "02" }])];
+    expect(whole(plan).payments[0]!.minimum).toBe("4826000");
   });
 });
