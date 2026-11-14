@@ -705,9 +705,10 @@ fn check_parts(
         problems.push(format!("paid {paid_lovelace} < asked {w}"));
     }
     // Nor more than they must: what was asked, or the leasts of the parts that send tokens as the plan split them,
-    // whichever is more; with no token sent, an output of ADA alone's least, which an ask of nothing is raised to. Each
-    // part of a token past the second paid one least too many (1.9.1's release review, shapes#1: the token boxes
-    // here). The bounty report's part of ADA alone after the tokens is #384's api test's: no shape here reaches it. A
+    // whichever is more; with no token sent, an output of ADA alone's least, which an ask of nothing is raised to. A
+    // part that could pay more than was owed left the parts of a token after it one least, so each of them past the
+    // first paid one least too many (1.9.1's release review, shapes#1: the token boxes here, one least over at 600‰).
+    // The bounty report's part of ADA alone after the tokens is #384's api test's: no shape here reaches it. A
     // session's funding, none here, would count its collateral, paid to the same address, as paid.
     if max_tokens.is_none()
         && let Some(w) = want_lovelace

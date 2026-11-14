@@ -4341,13 +4341,15 @@ pub mod api {
     /// A payment's parts by [`in_parts`] (`plan`, given what each part leaves the parts after it), planned again where
     /// they pay more than was asked and than their tokens' leasts. A part that can pay more than is owed leaves the
     /// parts of tokens after it what one output of the tokens still owed needs; where those went in two parts or more,
-    /// each paid its own least on top, so an amount whose tokens took three parts or more paid one output's least too
-    /// much for each part past the second, and the review showed that total (1.9.1's release review, shapes#1: 90
-    /// Lovejoin boxes of a token and 50 ₳ paid 54.88 ₳). Planned again, each part leaves the leasts of the parts of
-    /// tokens after it, as the first plan made them. What a part spends doesn't turn on what it pays, so the parts
-    /// are the same, but where a part's smaller payment would leave change under an output's least: it's short there,
-    /// and the second plan chains or is refused (1.9.1's review of its fixes, r2-planner#1). The second plan goes
-    /// where it takes less from the Seedelf balance, in no more parts and no more carries; otherwise the first. `sent`: a part's payment (its lovelace and tokens) and all it takes, every payment and its fee.
+    /// the first of them paid that least and each after it one least too much, and the review showed that total
+    /// (1.9.1's release review, shapes#1: 90 Lovejoin boxes of a token and 50 ₳ paid 54.88 ₳). Planned again, each
+    /// part leaves the leasts of the parts of tokens after it, as the first plan made them. What a part spends doesn't
+    /// turn on what it pays, so the parts are the same, but where a part's smaller payment would leave its change
+    /// under an output's least: it's short there, and the second plan splits the tokens otherwise, chains, or is
+    /// refused (1.9.1's review of its fixes, r2-planner#1; the last look, last#1). The second plan goes where it takes
+    /// less from the Seedelf balance, in no more parts and no more carries; otherwise the first, which only that
+    /// guard keeps from chaining (last#3). `sent`: a part's payment (its lovelace and tokens) and all it takes, every
+    /// payment and its fee.
     fn reserving<R>(
         plan: impl Fn(&[u64], anyhow::Error) -> Result<Vec<R>>,
         too_many: anyhow::Error,
@@ -5375,7 +5377,7 @@ pub mod api {
             }
             assert!(
                 on_carry > 0,
-                "no funding here ends on its carry: the window this test reaches closed"
+                "no funding here ends on its carry: the window closed, or a chain its carries paid no longer ends there"
             );
         }
     }

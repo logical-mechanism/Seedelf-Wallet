@@ -4724,9 +4724,9 @@ mod parts_of_any_shape {
     fn an_amount_whose_token_takes_three_parts_or_more_pays_what_was_asked() {
         // 1.9.1's release review, shapes#1: a part that could pay more than was owed left the parts after it one
         // output's least, but the token still owed went in two parts or more, each paying its own least, so each part
-        // past the second paid one least too many: 90 Lovejoin boxes of a token (4.5 ₳ and 100 of it each) and 50 ₳
-        // went as five parts paying 54.88 ₳, and the review showed that. Now each part leaves the leasts of the parts
-        // after it.
+        // past the second paid one least too many: 90 Lovejoin boxes of this token (4.5 ₳ and 100 of it each) and
+        // 50 ₳ went as five parts paying 55.28 ₳, and the review showed that. Now each part leaves the leasts of the
+        // parts after it.
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let pp = ProtocolParameters::from_koios(&params()).unwrap();
         let to = pallas_addresses::Address::from_bech32(&theirs()).unwrap();
@@ -4800,6 +4800,51 @@ mod parts_of_any_shape {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_second_plan_goes_only_in_no_more_parts_or_carries() {
+        // 1.9.1's last look, last#3: where a part's smaller payment would leave its change under an output's least
+        // (r2-planner#1's windows), `reserving`'s second plan chains or splits into one more part, and only its guard,
+        // no more parts and no more carries, keeps the payment as the first plan made it. No test reached the guard.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let min = token(0, 100);
+        let boxes = |n: u64| -> Vec<UtxoResponse> {
+            (1..=n)
+                .map(|i| UtxoResponse {
+                    value: "4500000".into(),
+                    ..utxo(i, 0, std::slice::from_ref(&min))
+                })
+                .collect()
+        };
+        let all = |n: u64| {
+            vec![TokenAmount {
+                quantity: (100 * n).to_string(),
+                ..min.clone()
+            }]
+        };
+        // 90 boxes and 95 ₳ to a Seedelf, in a window: no part waits on another, and it pays at least what was asked.
+        let parts =
+            api::build_transfer_parts(sk, transfer(boxes(90), Some(95_000_000), all(90))).unwrap();
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        assert!(
+            carries(&built).iter().all(Vec::is_empty),
+            "90 boxes and 95 ₳: a part waits on another"
+        );
+        let total: u64 = parts
+            .iter()
+            .map(|p| p.payments[0].lovelace.parse::<u64>().unwrap())
+            .sum();
+        assert!(total >= 95_000_000, "90 boxes and 95 ₳: paid {total}");
+        // 100 boxes and one 10 ₳ UTxO of ADA alone, at 95 ₳: the second plan would be a sixth part.
+        let mut utxos = boxes(100);
+        utxos.push(utxo(5_000, 10_000_000, &[]));
+        let parts =
+            api::build_transfer_parts(sk, transfer(utxos, Some(95_000_000), all(100))).unwrap();
+        assert_eq!(parts.len(), 5, "100 boxes and a UTxO of ADA alone at 95 ₳");
     }
 
     #[test]
