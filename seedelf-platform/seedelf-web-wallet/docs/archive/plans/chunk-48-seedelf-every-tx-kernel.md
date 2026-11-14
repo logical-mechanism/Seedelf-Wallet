@@ -38,8 +38,8 @@ No locked Register UTxOs (completeness in the kernel, and a Rust proptest throug
 
 ## Record
 
-PR #381 (`web-wallet/seedelf-every-tx`):
+PR #381 (`web-wallet/seedelf-every-tx`, into `main`, merged as `4e5ee500`):
 - 3b2e14d8, the wallet;
 - ab379990, always_false and the policy;
 - 04b57c4a, the docs: CLAIMS.md, the README, `check.sh seedelf-every`, and chunk 46's upstream check of 2026-11-12;
-- then chunk 49's plan, with this file moved here.
+- 363acdf3, chunk 49's plan, with this file moved here.

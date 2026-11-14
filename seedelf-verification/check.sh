@@ -5,7 +5,8 @@
 # most memory its scope used. A module that builds but logs a Blaster check as
 # "Undetermined" is UNDETERM, not ok: Blaster logs that as a warning only, so the
 # build passes, but the check proved nothing (a timeout, or no model found).
-#   ./check.sh                       every Seedelf module (Slice/ is its own: seedelf-slice)
+#   ./check.sh                       every Seedelf module but the kernel's (seedelf-every) and Slice/'s
+#                                    (seedelf-slice)
 #   ./check.sh seedelf-any-tx        Seedelf's properties in every transaction (Seedelf/AnyTx.lean)
 #   ./check.sh seedelf-signers       the wallet's core property with 4 to 128 signatories
 #   ./check.sh seedelf-policy-any-tx the policy in every transaction, where it needs no slice
@@ -23,8 +24,8 @@
 #   ./check.sh lovejoin-every        v2's mix_logic and one_shot_mint in every transaction, after what
 #                                    they import (16G, 30m)
 #   ./check.sh audit-quick           an audit family (Audit/audit-*.txt), then Audit/count.py
-#   ./check.sh Seedelf.PolicyMint    some modules (naming a Lovejoin.Every one gives the whole run
-#                                    16G, 30m)
+#   ./check.sh Seedelf.PolicyMint    some modules (naming a Lovejoin.Every or Seedelf.Every one gives
+#                                    the whole run 16G, 30m)
 #   CAP=12G LIMIT=20m ./check.sh     other limits
 cd "$(dirname "$0")" || exit 1
 # lovejoin-every's modules need more than the default cap, named alone too: Collect peaks near 13 GB.

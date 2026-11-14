@@ -4,7 +4,7 @@
 import type * as Wasm from "@seedelf/wasm";
 import { describe, expect, it, vi } from "vitest";
 
-import { VAULT_KEY } from "../src/background/vault";
+import { openVault, VAULT_KEY, type VaultRecord } from "../src/background/vault";
 import {
   AUTO_LOCK_MS,
   CLOCK_STEP_TOLERANCE_MS,
@@ -38,22 +38,23 @@ describe("wallet", () => {
 
     expect(await wallet.state()).toBe("unlocked");
     expect(events).toEqual({ changed: 1, alarm: "started" });
-    const record = (await local.get<{ version: number; blob: string }>(VAULT_KEY))!;
+    const record = (await local.get<VaultRecord>(VAULT_KEY))!;
     expect(record.version).toBe(1);
     expect(atob(record.blob).startsWith("SBV1")).toBe(true);
-    // The vault holds entropy, never the words: no two side by side, however they'd be listed. One word alone can
-    // turn up by chance: "seed" and "vault" are in the key's name, and a short word in the blob's base64.
-    const stored = JSON.stringify([...local.data]);
-    const words = phrase.split(" ");
-    for (let i = 1; i < words.length; i++) {
-      expect(stored).not.toMatch(new RegExp(`${words[i - 1]}\\W*${words[i]}`));
-    }
+    // The vault holds entropy, never the words: its record is all local storage holds, and it opens to the phrase's
+    // entropy. A search of the stored text for the words failed by chance ("seed", "vault" and "version" are words of
+    // the list, and the record's own text holds the last two side by side) and missed words stored out of order
+    // (1.9.1's release review, ts-parts#3).
+    expect([...local.data.keys()]).toEqual([VAULT_KEY]);
+    expect(Object.keys(record).sort()).toEqual(["blob", "version"]);
+    expect(await openVault(record, PASSWORD)).toEqual(loadTestWasm().phraseToEntropy(phrase));
     expect(await session.get(SESSION_ENTROPY)).toBeTypeOf("string");
 
     const account = await wallet.account("preprod");
     expect(account.receiveAddress).toMatch(/^addr_test1q/);
     expect(account.stakeAddress).toMatch(/^stake_test1u/);
-  });
+    // An Argon2id seal and an open: slow on a busy machine.
+  }, 20_000);
 
   it("restores the vector phrases to their Lace-matching addresses and Seedelf keys", async () => {
     for (const v of cardano) {
@@ -123,7 +124,8 @@ describe("wallet", () => {
     clock.now += 4000;
     expect(await wallet.unlock(PASSWORD)).toEqual({ unlocked: true });
     expect(await local.get(UNLOCK_FAILURES)).toBeUndefined();
-  });
+    // Five Argon2id opens and seals: slow on a busy machine (1.9.1's review of its fixes, r2-extension#1).
+  }, 20_000);
 
   it("uses Lace's back-off schedule", () => {
     expect([0, 1, 2, 3, 4, 6, 7, 8, 20].map(unlockBackoffMs)).toEqual([
@@ -301,22 +303,26 @@ describe("wallet", () => {
     const { wallet, local } = testWallet();
     const v = cardano.find((v) => v.phrase.split(" ").length === 12)!;
     await wallet.create(v.phrase, PASSWORD);
-    const before = await local.get<{ blob: string; createdAt: number }>(VAULT_KEY);
+    const before = (await local.get<VaultRecord>(VAULT_KEY))!;
+    // A vault from before the privacy review kept when it was made, in the clear: a change drops it (vault.ts). The
+    // check compared two undefined (1.9.1's review of its fixes, r2-tests#5).
+    await local.set(VAULT_KEY, { ...before, createdAt: 1_700_000_000_000 });
 
     await expect(wallet.changePassword(PASSWORD, "short")).rejects.toThrow("at least 12");
     await expect(wallet.changePassword("not the password", "a new long passphrase")).rejects.toThrow("Wrong password");
     await local.remove(UNLOCK_FAILURES);
     await wallet.changePassword(PASSWORD, "a new long passphrase");
-    const after = await local.get<{ blob: string; createdAt: number }>(VAULT_KEY);
-    expect(after!.blob).not.toBe(before!.blob);
-    expect(after!.createdAt).toBe(before!.createdAt);
+    const after = (await local.get<VaultRecord>(VAULT_KEY))!;
+    expect(after.blob).not.toBe(before.blob);
+    expect(after.createdAt).toBeUndefined();
 
     await wallet.lock();
     expect(await wallet.unlock(PASSWORD)).toMatchObject({ unlocked: false, wrongPassword: true });
     await local.remove(UNLOCK_FAILURES);
     expect(await wallet.unlock("a new long passphrase")).toEqual({ unlocked: true });
     expect(await wallet.revealPhrase("a new long passphrase")).toEqual(v.phrase.split(" "));
-  });
+    // Seven Argon2id seals and opens: slow on a busy machine (r2-tests#5: 5 s ran out on two CPUs).
+  }, 30_000);
 
   it("reset deletes the vault", async () => {
     const { wallet, local, session } = testWallet();

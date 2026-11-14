@@ -4109,6 +4109,9 @@ pub mod api {
     /// the payment: a session's funding's collateral for its one-time account, an output of its own (`paid_of` counts
     /// the payment alone). Without `chain`, parts that each pay their own fee or nothing: whether they go is all
     /// [`by_history_first`] asks of some orders, and the search for a chain is most of a refusal's time.
+    ///
+    /// `reserve`, by part: the least the parts of tokens after it need, which a part that can pay more than is owed
+    /// leaves them, where it's more than one output of the tokens still owed needs ([`reserving`]).
     #[allow(clippy::too_many_arguments)]
     fn in_parts<R>(
         too_many: anyhow::Error,
@@ -4116,6 +4119,7 @@ pub mod api {
         mut owed: u64,
         mut tokens: Vec<TokenAmount>,
         beside: u64,
+        reserve: &[u64],
         least: impl Fn(&[TokenAmount]) -> Result<u64>,
         worth: &Worth,
         chain: bool,
@@ -4135,6 +4139,7 @@ pub mod api {
                 return Err(too_many);
             }
             let first = parts.is_empty();
+            let reserved = reserve.get(parts.len()).copied().unwrap_or(0);
             before.push(Owed {
                 lovelace: owed,
                 tokens: tokens.clone(),
@@ -4155,7 +4160,7 @@ pub mod api {
                             exactly => return exactly,
                         }
                     }
-                    let keep = least(&later)?;
+                    let keep = least(&later)?.max(reserved);
                     if paid.saturating_add(keep) <= owed {
                         return Ok(all);
                     }
@@ -4309,7 +4314,9 @@ pub mod api {
             tokens = less(&tokens, &share);
             rest = without(&rest, inputs_of(&part));
             parts.push(part);
-            // Paid in full by the carries: what the last carried stays in the Seedelf balance, as change does.
+            // Paid in full by the carries: what the last carried stays in the Seedelf balance, as change does
+            // (`carry_kept` counts it so). Only a session's funding gets here: its amount is picked on guessed budgets,
+            // with no measured retry, while its carry is measured (`chain_end_tests`).
             if tokens.is_empty() && owed == 0 {
                 return Ok(parts);
             }
@@ -4329,6 +4336,110 @@ pub mod api {
             bail!("A part of the chain spends nothing new");
         }
         carried(part).ok_or_else(|| anyhow!("A part of the chain carries nothing forward"))
+    }
+
+    /// A payment's parts by [`in_parts`] (`plan`, given what each part leaves the parts after it), planned again where
+    /// they pay more than was asked and than their tokens' leasts. A part that can pay more than is owed leaves the
+    /// parts of tokens after it what one output of the tokens still owed needs; where those went in two parts or more,
+    /// the first of them paid that least and each after it one least too much, and the review showed that total
+    /// (1.9.1's release review, shapes#1: 90 Lovejoin boxes of a token and 50 ₳ paid 54.88 ₳). Planned again, each
+    /// part leaves the leasts of the parts of tokens after it, as the first plan made them. What a part spends doesn't
+    /// turn on what it pays, so the parts are the same, but where a part's smaller payment would leave its change
+    /// under an output's least: it's short there, and the second plan splits the tokens otherwise, chains, or is
+    /// refused (1.9.1's review of its fixes, r2-planner#1; the last look, last#1). The second plan goes where it takes
+    /// less from the Seedelf balance, in no more parts and no more carries; otherwise the first, which only that
+    /// guard keeps from chaining (last#3). `sent`: a part's payment (its lovelace and tokens) and all it takes, every
+    /// payment and its fee.
+    fn reserving<R>(
+        plan: impl Fn(&[u64], anyhow::Error) -> Result<Vec<R>>,
+        too_many: anyhow::Error,
+        owed: u64,
+        least: impl Fn(&[TokenAmount]) -> Result<u64>,
+        sent: impl Fn(&R) -> Result<(u64, &[TokenAmount], u64)>,
+        carries: impl Fn(&R) -> bool,
+    ) -> Result<Vec<R>> {
+        let message = too_many.to_string();
+        let first = plan(&[], too_many)?;
+        let mut paid = 0u64;
+        let mut leasts = Vec::with_capacity(first.len());
+        for part in &first {
+            let (lovelace, tokens, _) = sent(part)?;
+            paid = paid
+                .checked_add(lovelace)
+                .ok_or_else(|| anyhow!("The parts pay more than all the ADA there is"))?;
+            leasts.push(if tokens.is_empty() { 0 } else { least(tokens)? });
+        }
+        if paid <= owed.max(leasts.iter().sum()) {
+            return Ok(first);
+        }
+        let reserve: Vec<u64> = (0..leasts.len())
+            .map(|n| leasts[n + 1..].iter().sum())
+            .collect();
+        let takes = |parts: &[R]| {
+            parts.iter().try_fold(0u64, |all, part| {
+                let (_, _, takes) = sent(part)?;
+                all.checked_add(takes)
+                    .ok_or_else(|| anyhow!("The parts pay more than all the ADA there is"))
+            })
+        };
+        let chains = |parts: &[R]| parts.iter().filter(|p| carries(p)).count();
+        Ok(match plan(&reserve, anyhow!("{message}")) {
+            Ok(again)
+                if again.len() <= first.len()
+                    && chains(&again) <= chains(&first)
+                    && takes(&again)? < takes(&first)? =>
+            {
+                again
+            }
+            _ => first,
+        })
+    }
+
+    /// What a part takes from the Seedelf balance: every payment it makes, and its fee ([`reserving`]).
+    fn taken<'a>(fee: &str, paid: impl IntoIterator<Item = &'a str>) -> Result<u64> {
+        paid.into_iter()
+            .try_fold(lovelace_of(fee)?, |all, lovelace| {
+                all.checked_add(lovelace_of(lovelace)?)
+                    .ok_or_else(|| anyhow!("The parts pay more than all the ADA there is"))
+            })
+    }
+
+    /// A payment's parts, each carry no later part spends kept as change. A chain's last part, over the carry and
+    /// what's left, spends as few of them as pay, so it can leave the carry; and [`chained`] ends a chain its carries
+    /// paid in full on a part that carries. Such a carry is an output of ADA alone to a fresh re-randomization of the
+    /// wallet's own key, as change is, so its part counts it as change, and no part waits on it ([`by_history_first`]
+    /// reads a plan with no carry as no chain). Left out, the review's change didn't count it, and a session
+    /// funding's privacy note named less private change tied to the one-time account than there was, or none (1.9.1's
+    /// release review, chain-rust#1 and ts-parts#1).
+    fn carry_kept<R>(
+        mut parts: Vec<R>,
+        inputs_of: impl Fn(&R) -> &[OutRef],
+        fields: impl Fn(&mut R) -> (&mut Option<UtxoResponse>, &mut String, &mut usize),
+    ) -> Result<Vec<R>> {
+        for n in 0..parts.len() {
+            let Some((part, later)) = parts[n..].split_first_mut() else {
+                break;
+            };
+            let (carry, change_lovelace, change_outputs) = fields(part);
+            let Some(kept) = carry.as_ref() else {
+                continue;
+            };
+            let spent = later.iter().any(|p| {
+                inputs_of(p)
+                    .iter()
+                    .any(|i| i.tx_hash == kept.tx_hash && i.tx_index == kept.tx_index)
+            });
+            if spent {
+                continue;
+            }
+            *change_lovelace = lovelace_of(change_lovelace)?
+                .checked_add(lovelace_of(&kept.value)?)
+                .ok_or_else(|| anyhow!("The change is more than all the ADA there is"))?
+                .to_string();
+            *change_outputs += 1;
+            *carry = None;
+        }
+        Ok(parts)
     }
 
     /// Max in parts: every UTxO, [`MAX_PARTS`] transactions at most, each the most of what it spends (`part`, given
@@ -4544,23 +4655,50 @@ pub mod api {
         };
         let owed = lovelace_of(pay.lovelace.as_deref().unwrap_or("0"))?.max(least(&pay.tokens)?);
         let plan = |utxos: &[UtxoResponse], worth: &Worth, chain: bool, too_many: anyhow::Error| {
-            in_parts(
+            let parts = |reserve: &[u64], too_many: anyhow::Error| {
+                in_parts(
+                    too_many,
+                    utxos,
+                    owed,
+                    pay.tokens.clone(),
+                    0,
+                    reserve,
+                    least,
+                    worth,
+                    chain,
+                    |r: &TransferResult| &r.inputs,
+                    |r| lovelace_of(&r.payments[0].lovelace),
+                    |r| r.carry.clone(),
+                    |picks, share, _| with(picks, None, share, false),
+                    |from, lovelace, tokens, _| with(from, Some(lovelace), tokens, false),
+                    // Carried forward: its tokens with their least ADA (an amount of 0 is raised to it).
+                    |picks, share, _| with(picks, Some(0), share, true),
+                )
+            };
+            reserving(
+                parts,
                 too_many,
-                utxos,
                 owed,
-                pay.tokens.clone(),
-                0,
                 least,
-                worth,
-                chain,
-                |r: &TransferResult| &r.inputs,
-                |r| lovelace_of(&r.payments[0].lovelace),
-                |r| r.carry.clone(),
-                |picks, share, _| with(picks, None, share, false),
-                |from, lovelace, tokens, _| with(from, Some(lovelace), tokens, false),
-                // Carried forward: its tokens with their least ADA (an amount of 0 is raised to it).
-                |picks, share, _| with(picks, Some(0), share, true),
+                |r: &TransferResult| {
+                    let all = r.payments.iter().map(|p| p.lovelace.as_str());
+                    Ok((
+                        lovelace_of(&r.payments[0].lovelace)?,
+                        &r.payments[0].tokens[..],
+                        taken(&r.fee.total, all)?,
+                    ))
+                },
+                |r: &TransferResult| r.carry.is_some(),
             )
+            .and_then(|parts| {
+                carry_kept(
+                    parts,
+                    |r: &TransferResult| &r.inputs,
+                    |r: &mut TransferResult| {
+                        (&mut r.carry, &mut r.change_lovelace, &mut r.change_outputs)
+                    },
+                )
+            })
         };
         let apart = Worth::apart(
             &chain,
@@ -4679,25 +4817,52 @@ pub mod api {
         // the Seedelf balance with the least ADA it needs (`most`): Everything would pay those too, which weren't asked
         // for.
         let plan = |utxos: &[UtxoResponse], worth: &Worth, chain: bool, too_many: anyhow::Error| {
-            in_parts(
+            let parts = |reserve: &[u64], too_many: anyhow::Error| {
+                in_parts(
+                    too_many,
+                    utxos,
+                    owed,
+                    pay.tokens.clone(),
+                    beside,
+                    reserve,
+                    least,
+                    worth,
+                    chain,
+                    |r: &WithdrawResult| &r.inputs,
+                    |r| lovelace_of(&r.payments[0].lovelace),
+                    |r| r.carry.clone(),
+                    |picks, share, first| with(picks, None, share, true, first, false),
+                    |from, lovelace, tokens, first| {
+                        with(from, Some(lovelace), tokens, false, first, false)
+                    },
+                    // Carried forward: its tokens with their least ADA (an amount of 0 is raised to it).
+                    |picks, share, first| with(picks, Some(0), share, false, first, true),
+                )
+            };
+            reserving(
+                parts,
                 too_many,
-                utxos,
                 owed,
-                pay.tokens.clone(),
-                beside,
                 least,
-                worth,
-                chain,
-                |r: &WithdrawResult| &r.inputs,
-                |r| lovelace_of(&r.payments[0].lovelace),
-                |r| r.carry.clone(),
-                |picks, share, first| with(picks, None, share, true, first, false),
-                |from, lovelace, tokens, first| {
-                    with(from, Some(lovelace), tokens, false, first, false)
+                |r: &WithdrawResult| {
+                    let all = r.payments.iter().map(|p| p.lovelace.as_str());
+                    Ok((
+                        lovelace_of(&r.payments[0].lovelace)?,
+                        &r.payments[0].tokens[..],
+                        taken(&r.fee.total, all)?,
+                    ))
                 },
-                // Carried forward: its tokens with their least ADA (an amount of 0 is raised to it).
-                |picks, share, first| with(picks, Some(0), share, false, first, true),
+                |r: &WithdrawResult| r.carry.is_some(),
             )
+            .and_then(|parts| {
+                carry_kept(
+                    parts,
+                    |r: &WithdrawResult| &r.inputs,
+                    |r: &mut WithdrawResult| {
+                        (&mut r.carry, &mut r.change_lovelace, &mut r.change_outputs)
+                    },
+                )
+            })
         };
         let apart = Worth::apart(
             &chain,
@@ -5052,6 +5217,169 @@ pub mod api {
             g_r_hex,
             vkh_hex,
         )
+    }
+
+    /// [`chained`]'s end after a carry that paid it all (#384), which only a session's funding reaches: its amount is
+    /// picked by the guessed budgets with no measured fallback ([`build_withdraw`]), while a carry is measured, so
+    /// between the two fees the amount is short and the carry builds. No test reached it (1.9.1's release review,
+    /// chain-rust#2). `chained` is the crate's own, so its test is here.
+    #[cfg(test)]
+    mod chain_end_tests {
+        use super::*;
+
+        const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        fn fixture(path: &str) -> serde_json::Value {
+            let path = format!("{}/{path}", env!("CARGO_MANIFEST_DIR"));
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        }
+
+        fn theirs() -> String {
+            fixture("../../seedelf-crypto/tests/vectors/cardano_account.json")["vectors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| {
+                    v["account"] == 0 && v["phrase"].as_str().unwrap().split(' ').count() == 15
+                })
+                .unwrap()["preprod"]["receive_0"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+
+        /// A funding's chain from `{owed: least(T), tokens: [T], rest: [H]}`, H holding T alone and `extra` past its
+        /// least: a chain from a part after the first, which paid the one-time account's collateral (`first` false),
+        /// as `build_withdraw_parts` gives it to `chained`.
+        fn chain_from(extra: u64) -> Result<Vec<WithdrawResult>> {
+            let sk = seedelf_crypto::derivation::seedelf_key_v1(PHRASE, 0)?;
+            let params = fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone();
+            let chain = chain_of("preprod", &params)?;
+            let base: UtxoResponse = serde_json::from_value(
+                fixture("../extension/tests/fixtures/owned-utxos.json")["owned_utxos"][0].clone(),
+            )?;
+            let t = TokenAmount {
+                policy_id: format!("{:056x}", 0xabc0_0000u64),
+                asset_name: format!("{:064x}", 0x1000u64),
+                quantity: "100".into(),
+            };
+            let least_h = seedelf_core::transaction::wallet_minimum_lovelace_with_assets(
+                &chain.params,
+                assets_of(std::slice::from_ref(&t))?,
+            )?;
+            let h = UtxoResponse {
+                tx_hash: format!("{:064x}", 1),
+                value: (least_h + extra).to_string(),
+                asset_list: Some(vec![seedelf_koios::koios::Asset {
+                    decimals: 0,
+                    quantity: t.quantity.clone(),
+                    policy_id: t.policy_id.clone(),
+                    asset_name: t.asset_name.clone(),
+                    fingerprint: String::new(),
+                }]),
+                ..base
+            };
+            let request = WithdrawRequest {
+                network: "preprod".into(),
+                params,
+                utxos: vec![h.clone()],
+                payments: vec![
+                    WithdrawPayment {
+                        to: theirs(),
+                        lovelace: Some("0".into()),
+                        tokens: vec![t.clone()],
+                    },
+                    WithdrawPayment {
+                        to: theirs(),
+                        lovelace: Some("5000000".into()),
+                        tokens: vec![],
+                    },
+                ],
+                classes: Default::default(),
+                funding: Some(Funding::default()),
+                most: false,
+                carry: false,
+                seed: None,
+                evaluation: None,
+            };
+            let with = |utxos: Vec<UtxoResponse>,
+                        lovelace: Option<u64>,
+                        tokens: Vec<TokenAmount>,
+                        first: bool,
+                        carry: bool| {
+                let mut sub = request.clone();
+                sub.utxos = utxos;
+                sub.carry = carry;
+                let beside = if first { &request.payments[1..] } else { &[] };
+                sub.payments = std::iter::once(WithdrawPayment {
+                    lovelace: lovelace.map(|l| l.to_string()),
+                    tokens,
+                    ..request.payments[0].clone()
+                })
+                .chain(beside.iter().cloned())
+                .collect();
+                build_withdraw(sk, sub)
+            };
+            let to = payable_address(chain.network_flag, &theirs())?;
+            let least = |tokens: &[TokenAmount]| {
+                build::minimum_address_payment(&chain.params, &to, &assets_of(tokens)?)
+            };
+            let from = Owed {
+                lovelace: least(std::slice::from_ref(&t))?,
+                tokens: vec![t],
+                rest: vec![h],
+            };
+            chained(
+                &from,
+                false,
+                MAX_PARTS - 2,
+                &least,
+                &Worth::of(&chain, &request.utxos, None),
+                &|r: &WithdrawResult| &r.inputs[..],
+                &|r: &WithdrawResult| lovelace_of(&r.payments[0].lovelace),
+                &|r: &WithdrawResult| r.carry.clone(),
+                &mut |from, lovelace, tokens, first| {
+                    with(from, Some(lovelace), tokens, first, false)
+                },
+                &mut |picks, share, first| with(picks, Some(0), share, first, true),
+            )
+        }
+
+        #[test]
+        fn a_chain_its_carries_paid_ends_on_the_last_carry() {
+            // Stepping H's ADA past its least: below a point the funding is short; above it, one part pays exactly the
+            // token's least and keeps the rest. Where the amount is short and the carry builds, that part is the
+            // carry, and the chain ends there: going on, it paid an output of ADA alone to the one-time account and a
+            // fee, or was refused, short.
+            // The scan brackets the window, short below it and an amount above it, so fees or leasts that move the
+            // window past its ends read so, not as a closed window (1.9.1's review of its fixes, r2-tests#4).
+            assert!(
+                chain_from(1_200_000).is_err(),
+                "the scan no longer starts short: fees or leasts moved the window"
+            );
+            assert!(
+                chain_from(1_240_000).is_ok_and(|p| p.len() == 1 && p[0].carry.is_none()),
+                "the scan no longer ends on an amount: fees or leasts moved the window"
+            );
+            let (mut went, mut on_carry) = (false, 0);
+            for extra in (1_200_000..1_240_000).step_by(2_000) {
+                let Ok(parts) = chain_from(extra) else {
+                    assert!(
+                        !went,
+                        "{extra} past H's least is short, past where less went"
+                    );
+                    continue;
+                };
+                went = true;
+                assert_eq!(parts.len(), 1, "{extra} past H's least");
+                assert_eq!(parts[0].payments[0].tokens.len(), 1);
+                on_carry += usize::from(parts[0].carry.is_some());
+            }
+            assert!(
+                on_carry > 0,
+                "no funding here ends on its carry: the window closed, or a chain its carries paid no longer ends there"
+            );
+        }
     }
 
     /// [`built_or_without_strangers`] with a stand-in for the build: a
