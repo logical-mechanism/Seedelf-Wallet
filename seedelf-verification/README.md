@@ -4,7 +4,7 @@ Formal verification of the deployed contracts' bytes, with IOG's [Blaster](https
 
 [CLAIMS.md](CLAIMS.md) says, in a page, what all this lets us claim and where it stops.
 
-**All three Seedelf scripts are also proved in Lean's kernel, with no Blaster** ([`Seedelf/Every/`](Seedelf/Every/README.md), chunk 48). For every typed V3 context, each accepts exactly when its Aiken source says it does, with no step limit, any number of signatories and any mint. The Blaster modules below stay as a cross-check, by another route, of the same properties.
+**All three Seedelf scripts are also proved in Lean's kernel, with no Blaster** ([`Seedelf/Every/`](Seedelf/Every/README.md), chunk 48). For every typed V3 context, each accepts exactly when its statement in its Aiken source's terms holds (`walletAccepts`, `policyAccepts`; always_false never does), with no step limit, any number of signatories and any mint. That those statements say what the source says is a reading, not a proof (*Next*). The Blaster modules below stay as a cross-check, by another route, of the same properties.
 
 Lovejoin's proofs are here too, in `Lovejoin/`: its classic mainnet pool, and v2, the token-pool templates with xor32's two length checks (Lovejoin `main` `29573c5`, PRs #165 and #166). [CLAIMS.md](CLAIMS.md) and [Lovejoin/AnyTx/README.md](Lovejoin/AnyTx/README.md) say what they cover and what they leave out; [chunk 42](../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-42-lovejoin-verification.md) is the record. `Audit/` is a review of the proofs as they stood on 2026-11-03, before the every-transaction modules ([its README](Audit/README.md)).
 
@@ -36,11 +36,11 @@ rm -f .lake/build/lib/lean/{Seedelf,Lovejoin,Lovejoin/V2,Lovejoin/Template}/Scri
 - [logicalmechanism/Lean-blaster](https://github.com/logicalmechanism/Lean-blaster) `25c0ee0`: beta `46c8479` plus the fix for [#454](https://github.com/input-output-hk/Lean-blaster/issues/454).
 - [logicalmechanism/PlutusCoreBlaster](https://github.com/logicalmechanism/PlutusCoreBlaster) `68c5399`, its `opaque-xor` branch: the `seedelf` branch (`main` `1c23de8` plus an `opaque` `ByteStringToInteger`, `Fq1.t` as a `Nat`, the BLS12-381 builtins' operands in order and #27's `opaque` `serialise_data`, with the #71 and #72 review rounds), plus an `opaque` `XorByteString` for Lovejoin's xor32.
 
-As each fix lands upstream, its `require` comes out. #71 and #72 have merged since; the operand order (#73), `serialise_data` and xor haven't.
+As each fix lands upstream, its `require` comes out. #71, #72 and the operand order (#73) have merged since; `serialise_data` and xor haven't.
 
 **`Slice/` is a package of its own,** with the same pins but one: the fork's `opaque-slice` (`96261cc`), which is the main package's pin plus an `opaque` `SliceByteString` (see *What a ✅ is worth*). So the alias changes no other proof.
 
-**Never build bare** (`lake build`). `check.sh` builds each module in its own memory-capped scope (8 GB and 10 minutes; `lovejoin-every` and its modules 16 GB and 30 minutes; `CAP=` and `LIMIT=` to change), which the kernel kills past the cap. One preparation step over a fully symbolic transaction took 52 GB before it was killed by hand. The first build fetches and compiles the dependencies and takes a while.
+**Never build bare** (`lake build`). `check.sh` builds each module in its own memory-capped scope (8 GB and 10 minutes; `lovejoin-every`, `seedelf-every` and their modules 16 GB and 30 minutes; `CAP=` and `LIMIT=` to change), which the kernel kills past the cap. One preparation step over a fully symbolic transaction took 52 GB before it was killed by hand. The first build fetches and compiles the dependencies and takes a while.
 
 To check the standard Lovejoin and Seedelf proof suites, including the separate Slice
 package, from this directory:
@@ -54,8 +54,8 @@ package, from this directory:
 (*Not proved*), so it ends nonzero, and nothing after it would run.
 
 The runner uses `systemd-run --user` for its memory caps and returns a nonzero status
-if any module fails. It checks Lake builds; some Blaster checks can still be reported as
-undetermined warnings, so review the output. This command excludes the separate audit
+if any module fails. It checks Lake builds, and a module that builds but logs a Blaster check
+as Undetermined fails too (`UNDETERM`). This command excludes the separate audit
 and upstream reproductions. For the longer audit and its warning counts, see
 [`Audit/README.md`](Audit/README.md).
 
@@ -96,7 +96,7 @@ On the bytes of `94bca9c0…` (wallet), `84967d91…` (policy) and `6777ba4d…`
 
 So, for every transaction:
 - always_false never passes.
-- The wallet passes only a spend, and a redeemer that isn't a proof fails. With a proof, a UTxO whose datum isn't a Register moves. A Register UTxO moves exactly when the Schnorr check holds and `vkh` is among the signatories, for up to 128 of them, where a 16,384-byte transaction holds at most 125: each needs its 30-byte hash and a 101-byte witness.
+- The wallet passes only a spend, and a redeemer that isn't a proof fails. With a proof, a UTxO whose datum isn't a Register moves. A Register UTxO moves exactly when the Schnorr check holds and `vkh` is among the signatories, however many (Blaster's cross-check stops at 128, where a 16,384-byte transaction holds at most 125: each needs its 30-byte hash and a 101-byte witness).
 - The policy passes only a mint whose redeemer is a bytestring and whose mint is exactly one line, by its rule above.
 
 The scenarios they grew from fix the fields their script never reads (an empty transaction from `Scenario.lean`). The modules above restate each of them in every transaction. `PolicyBurn` and `PolicyMint` fail on `BitVec` (see *Not proved*); `Slice/` proves their success directions over the slice alias instead.
@@ -114,7 +114,7 @@ The scenarios they grew from fix the fields their script never reads (an empty t
 What a ✅ is worth:
 
 - **Z3's word, or Lean's kernel.** Blaster closes a goal with `axiom blasterProven : ∀ {α}, α` once Z3 finds no counterexample (proof reconstruction is a TODO upstream), hence the `declaration uses 'blasterProven'` warnings. The kernel-checked modules use no Z3: `Seedelf/Every/` (every Seedelf script, every transaction), `AnyTxCover`, `PolicyAnyTx`'s `rfl`s, `AnyTxShapes`, `PolicyShapes` and the `LinesAll` ones. Their `#print axioms` lists Lean's own alone, and the `LinesAll` theorems hold with no step limit and over every Lean string.
-- **IOG's model of the machine.** PlutusCoreBlaster's CEK machine and builtins are working toward conformance with the node's, its README says: a conformance suite run apart from its CI, leaving out what it doesn't implement yet. They aren't proved equal to the node's, and that suite never runs the flat decoder that reads each script's bytes (the audit checked its reading of all 13 scripts against Aiken's once: `Audit.Checks.FlatDecodeCheck`). We run our fork of it (see *Running it*); its changes don't change what any script evaluates to. It runs the post-Conway V3 builtin semantics (`defaultFunSemanticsVariantE`). The crypto builtins (BLS12-381, the hashes) are `opaque`, and so is `ByteStringToInteger` (#71's alias, on our PlutusCoreBlaster fork and upstream since), and `SliceByteString` in `Slice/`. A property holds for any interpretation of them, so it says what the bytes check, not that the check is hard to fool. Where a spec decodes a scalar (`scalarOf`) or slices (`policyAccepts`), it calls the same alias the builtin runs.
+- **IOG's model of the machine.** PlutusCoreBlaster's CEK machine and builtins are working toward conformance with the node's, its README says: a conformance suite run apart from its CI, leaving out what it doesn't implement yet. They aren't proved equal to the node's, and that suite never runs the flat decoder that reads each script's bytes (the audit checked its reading of all 13 scripts against Aiken's once: `Audit.Checks.FlatDecodeCheck`). We run our fork of it (see *Running it*); its changes don't change what any script evaluates to. It runs the post-Conway V3 builtin semantics (`defaultFunSemanticsVariantE`). The crypto builtins (BLS12-381, the hashes) are `opaque`, and so is `ByteStringToInteger` (#71's alias, on our PlutusCoreBlaster fork and upstream since), and `SliceByteString` in `Slice/`. A property holds for any interpretation of them, so it says what the bytes check, not that the check is hard to fool. Where a spec decodes a scalar (`scalarOf`) or slices (`Slice/`'s `policyAccepts`), it calls the same alias the builtin runs; the kernel's `policyAccepts` (`Seedelf/Every/`) runs the real slice.
 - **Strings over the solver's alphabet.** Blaster gives a `String` the SMT string sort, whose characters are `0x0`–`0x2FFFF` where Lean's are scalar values up to `0x10FFFF` ([Lean-blaster #389](https://github.com/input-output-hk/Lean-blaster/issues/389), which shows it proving `False`). A `ByteString` is a `String` of characters `0`–`255`, inside both, so a theorem over bytestrings covers every bytestring; it says nothing about strings with characters above `0x2FFFF`, which no script sees.
 - **Every transaction, by layout.** Each Blaster module fixes only what its script walks or takes apart:
   - the wallet's signatories (one module a count, none to 128) and the shapes of its redeemer and datum;
