@@ -139,7 +139,7 @@ Each patch our pins carry beyond IOG's `main`, and how it gets there:
 
 ## Carried from chunks 40 and 41
 
-- ❓ **A Rust proptest of the Schnorr path through the deployed bytes** (chunk 40, offered 2026-11-02). It would run seedelf-crypto's proofs through the wallet script with seedelf-core's `uplc` evaluator: valid proofs pass, tampered ones fail. It needs nothing from upstream. The owner's call.
+- **A Rust proptest of the Schnorr path through the deployed bytes** (chunk 40's offer): moved to [chunk 49](chunk-49-no-locked-funds.md)'s step 3.
 - ⬜ **Two minimal reproductions, for upstream** (README, *Found along the way*):
   - a symbolic first-input index breaks `#prep_uplc`, with a `sorryAx` in the prop;
   - a symbolic `ByteString` token name took the policy past 8 GB.
