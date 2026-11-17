@@ -1,6 +1,6 @@
 # Seedelf Wallet
 
-Seedelf Wallet is a Cardano wallet for Chrome with private payments built in, made by Logical Mechanism. It's for anyone on Cardano who wants a full wallet, for staking, voting and dApps, with a private balance beside it, and no terminal.
+Seedelf Wallet is a Cardano wallet for Chrome with private payments built in. It's for anyone on Cardano who wants a full wallet, for staking, voting and dApps, with a private balance beside it, and no terminal.
 
 **Get it** from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp), or build it from this repository and load it into Chrome yourself ([extension/README.md](extension/README.md#build-and-load-in-chrome)). It's free.
 
@@ -61,7 +61,7 @@ Every screen, and what it does, is in [extension/README.md](extension/README.md#
 
 **Lovejoin, the mixer**
 
-Lovejoin is a mixer on Cardano, also made by Logical Mechanism, with contracts of its own, apart from Seedelf's. Each of its pools holds boxes of one value: an amount of ADA alone, or a set amount of one token plus some ADA. A mix spends your boxes together with other people's, so what comes out is harder to tie to what went in.
+Lovejoin is a mixer on Cardano, with contracts of its own, apart from Seedelf's. Each of its pools holds boxes of one value: an amount of ADA alone, or a set amount of one token plus some ADA. A mix spends your boxes together with other people's, so what comes out is harder to tie to what went in.
 
 - **A private session's return goes through it by default:** the spare ADA comes back through Lovejoin's pool of 5 ₳ boxes, so what comes back is harder to tie to the session, and its tokens through their own pool where one is shown. The session's 5 ₳ collateral is mixed once too, where a 5 ₳ pool holds enough other people's boxes and enough of the session's ADA is left to pay for it. Settings switches turn each off, and any box can be brought back directly.
 - **The Lovejoin tile** mixes ADA or a pool's token from either side. **Help start the pool** puts boxes in for others to mix with, and they stay until you bring them back. **Four boxes a mix,** in place of three, is a Settings option. **Bring every box back now** brings every box back at once, which ties them together.

@@ -1,6 +1,6 @@
 # Security Policy
 
-How to report a security vulnerability in Seedelf, and the bug bounty a report may earn. Seedelf is a stealth wallet for Cardano, built by Logical Mechanism. This repository holds its contracts, the `seedelf-cli`, the Seedelf Wallet for Chrome and the wallet's data layer (see the [README](./README.md)).
+How to report a security vulnerability in Seedelf, and the bug bounty a report may earn. Seedelf is a stealth wallet for Cardano. This repository holds its contracts, the `seedelf-cli`, the Seedelf Wallet for Chrome and the wallet's data layer (see the [README](./README.md)).
 
 ## Reporting a Vulnerability
 

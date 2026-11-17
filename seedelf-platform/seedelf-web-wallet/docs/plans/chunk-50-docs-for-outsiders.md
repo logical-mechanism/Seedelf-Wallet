@@ -137,6 +137,7 @@ Four more, asked 2026-11-17 once the blind reads were in:
 - **Q8 · Seedelf's own audit status stays unstated.** The docs add no line on it. AUDIT.md says what it reviewed and that it isn't version 1.
 - **Q9 · The privacy policy's line 77 is reworded now,** with a dated *Changes* entry: "We don't collect … any data" sat badly beside our two services receiving what the page lists. Merging publishes it.
 - **Q10 · The CLI README's links are absolute GitHub URLs,** so they work on its crates.io page, from the next CLI publish.
+- **Q11 · No doc says who makes or maintains Seedelf** (the owner, reading the pushed branch): "made by Logical Mechanism" is redundant on Logical Mechanism's own GitHub and its own store listing. The lines the rewrite added are out, the store texts' "we're Logical Mechanism" in all three languages too. Who runs a service that sees your data stays, since that's a privacy fact: giveme.my and the data layer are Logical Mechanism's.
 
 ### 2. ✅ The inventory
 
@@ -155,7 +156,7 @@ Each rewrite agent read its files whole and made its per-line table before it ed
 | seedelf-web-wallet/README.md | Chunk tags in *Scope*; the root CLAUDE.md for versioning; an Earn/RealFi note; release, backlog and plans process; Remove's default wrong (on main too) | *Reference: Lace* and *Decisions* to development.md (Q4) |
 | extension/README.md, brand/, media/ | "move-in" in the user half; Lovejoin history; no install link; Remove's default wrong; maintainer notes in brand/ and media/ | brand/'s and media/'s notes under *For contributors* |
 | docs/privacy.md | The older names; the owner's dated rule; about 50 chunk citations; version history; "no UTxO of yours" in a private spend (false); the principle stated without its qualifier | The declined proposals to backlog.md's *Declined* (Q1); code names to *For contributors* |
-| docs/store/README.md (the texts) | "pay anyone privately"; "can't be linked" stated as absolute; contract history in the Lovejoin bullet; "we" never named | None. The notes around the texts stay the maintainer's |
+| docs/store/README.md (the texts) | "pay anyone privately"; "can't be linked" stated as absolute; contract history in the Lovejoin bullet | None. The notes around the texts stay the maintainer's |
 | docs/store/privacy-policy.md | Unchanged: its blind read goes to the owner | None |
 | docs/releases.md | Chunks and "the gate" in *What it carried*; "the owner has it"; the records below the table | *Recording a release* and the records to plans/release-records.md (Q6) |
 | seedelf-data/README.md | Opened on chunk 26; dated checks, Koios cross-checks, planner timings, build history; no working request | NOTES.md (Q3); the VPS meter's gotcha to deploy/README.md |

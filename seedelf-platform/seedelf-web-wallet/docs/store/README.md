@@ -63,7 +63,7 @@ What you can do:
 What it doesn't hide:
 • Amounts, tokens, timing and which transactions spend which outputs are public, as with any Cardano wallet.
 • Making money private, and making it public again, link your public account to what you move. Each screen says what it links, and the wallet warns you before a step ties your accounts together.
-• The server the wallet reads Cardano through sends every transaction, and giveme.my, the collateral service we run (we're Logical Mechanism, who make this wallet), sees every private one, both from your IP address. So they can tie your private payments and Lovejoin boxes to your public account: Seedelf and Lovejoin hide them from people reading the chain, not from the services that carry them.
+• The server the wallet reads Cardano through sends every transaction, and giveme.my, the collateral service we run, sees every private one, both from your IP address. So they can tie your private payments and Lovejoin boxes to your public account: Seedelf and Lovejoin hide them from people reading the chain, not from the services that carry them.
 • A Lovejoin box hides only among other people's boxes from the same pool that come back into a Seedelf around the same time: one of up to 9 at the default depth, and fewer while few people use that pool.
 • Privacy grows with the number of people who use Seedelf and Lovejoin, and today there are few.
 
@@ -151,7 +151,7 @@ Lo que puedes hacer:
 Lo que no oculta:
 • Las cantidades, los tokens, el momento de cada transacción y qué transacciones gastan qué salidas son públicos, como con cualquier billetera de Cardano.
 • Hacer privado el dinero y volver a hacerlo público vinculan tu cuenta pública con lo que mueves. Cada pantalla dice qué vincula, y la billetera te avisa antes de que un paso vincule tus cuentas entre sí.
-• El servidor a través del cual la billetera lee Cardano envía cada transacción, y giveme.my, el servicio de colateral que gestionamos nosotros (somos Logical Mechanism, quienes hacemos esta billetera), ve cada transacción privada. Ambos las reciben desde tu dirección IP, así que pueden vincular tus pagos privados y tus cajas de Lovejoin con tu cuenta pública: Seedelf y Lovejoin los ocultan de quienes leen la cadena, no de los servicios que los transmiten.
+• El servidor a través del cual la billetera lee Cardano envía cada transacción, y giveme.my, el servicio de colateral que gestionamos nosotros, ve cada transacción privada. Ambos las reciben desde tu dirección IP, así que pueden vincular tus pagos privados y tus cajas de Lovejoin con tu cuenta pública: Seedelf y Lovejoin los ocultan de quienes leen la cadena, no de los servicios que los transmiten.
 • Una caja de Lovejoin solo se oculta entre las cajas ajenas del mismo pool que vuelven a un Seedelf más o menos al mismo tiempo: es una de hasta 9 con la profundidad predeterminada, y una entre menos cajas mientras poca gente use ese pool.
 • La privacidad crece con el número de personas que usan Seedelf y Lovejoin, y hoy son pocas.
 
@@ -215,7 +215,7 @@ Seedelf は、お金の持ち主を隠します。Seedelf への支払いは 1 �
 隠さないもの:
 • 金額、トークン、タイミング、どのトランザクションがどの出力を使うかは、ほかの Cardano ウォレットと同じく公開されています。
 • お金をプライベートにするときも、再び公開するときも、移すお金と公開アカウントが結び付きます。各画面に何が結び付くかが表示され、ある操作でアカウント同士が結び付く前には、ウォレットが警告します。
-• ウォレットが Cardano のデータの読み取りに使うサーバーはあなたのトランザクションをすべて送信し、私たち（このウォレットを作っている Logical Mechanism）が運営するコラテラルサービスの giveme.my はプライベートなトランザクションをすべて見ます。どちらのサービスも、それらをあなたの IP アドレスから受け取ります。そのため、これらのサービスは、プライベートな支払いや Lovejoin のボックスを公開アカウントと結び付けられます。Seedelf と Lovejoin がそれらを隠すのはチェーンを読む人からであって、それらを運ぶサービスからではありません。
+• ウォレットが Cardano のデータの読み取りに使うサーバーはあなたのトランザクションをすべて送信し、私たちが運営するコラテラルサービスの giveme.my はプライベートなトランザクションをすべて見ます。どちらのサービスも、それらをあなたの IP アドレスから受け取ります。そのため、これらのサービスは、プライベートな支払いや Lovejoin のボックスを公開アカウントと結び付けられます。Seedelf と Lovejoin がそれらを隠すのはチェーンを読む人からであって、それらを運ぶサービスからではありません。
 • Lovejoin のボックスが紛れ込める相手は、同じプールから同じころに Seedelf へ戻ってくるほかの人のボックスだけです。既定の深さでは最大 9 件のうちの 1 件になり、そのプールを使う人が少ないうちは、9 件より少なくなります。
 • プライバシーは、Seedelf と Lovejoin を使う人が増えるほど高まります。現在、使っている人はわずかです。
 

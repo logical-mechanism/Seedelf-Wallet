@@ -1,6 +1,6 @@
 # Seedelf brand assets
 
-[Seedelf Wallet](../README.md) is a Cardano wallet for Chrome with private payments built in, made by Logical Mechanism. This folder holds its logo set at full size: the emblem, the wordmark and the Chrome Web Store icon. The extension ships smaller copies made from these, in [`extension/public/`](../extension/public/).
+[Seedelf Wallet](../README.md) is a Cardano wallet for Chrome with private payments built in. This folder holds its logo set at full size: the emblem, the wordmark and the Chrome Web Store icon. The extension ships smaller copies made from these, in [`extension/public/`](../extension/public/).
 
 | File | What it is | Used for |
 |---|---|---|

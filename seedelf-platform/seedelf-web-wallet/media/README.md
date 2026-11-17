@@ -1,6 +1,6 @@
 # Media
 
-[Seedelf Wallet](../README.md) is a Cardano wallet for Chrome with private payments built in, made by Logical Mechanism. This folder holds the images for posts about it, drawn in HTML so they can be edited, rendered again, reused and translated.
+[Seedelf Wallet](../README.md) is a Cardano wallet for Chrome with private payments built in. This folder holds the images for posts about it, drawn in HTML so they can be edited, rendered again, reused and translated.
 
 Paths below are relative to this folder, and the commands start from the repository's root.
 

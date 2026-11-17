@@ -1,6 +1,6 @@
 # Seedelf Wallet: the extension
 
-Seedelf Wallet is a Cardano wallet for Chrome with private payments built in, made by Logical Mechanism ([its README](../README.md) says what it is and who it's for). **Install it** from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp), or build it from this folder ([below](#build-and-load-in-chrome)).
+Seedelf Wallet is a Cardano wallet for Chrome with private payments built in ([its README](../README.md) says what it is and who it's for). **Install it** from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp), or build it from this folder ([below](#build-and-load-in-chrome)).
 
 This folder is its Chrome (MV3) extension: React + TypeScript + Vite, with the Rust core loaded as WebAssembly in the service worker. The top half of this page is every screen and what it does; the bottom half is how to build, load and test it.
 

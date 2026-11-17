@@ -1,6 +1,6 @@
 # Seedelf - A Cardano Stealth Wallet
 
-**Seedelf** is a stealth wallet for Cardano: it hides the receiver and the spender of the funds inside it. It's for Cardano users who want to be paid, and to pay, without those payments being tied to them. Logical Mechanism builds and maintains it.
+**Seedelf** is a stealth wallet for Cardano: it hides the receiver and the spender of the funds inside it. It's for Cardano users who want to be paid, and to pay, without those payments being tied to them.
 
 Seedelf is a smart contract. Each payment goes into it under a fresh datum that looks random from the outside. A spend proves knowledge of the owner's secret key with a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation, instead of a signature from a known key. It should be computationally infeasible to deduce the intended receiver or spender of UTxOs inside this wallet. The amounts and tokens stay visible (see [Wallet Limitations](#wallet-limitations)).
 
