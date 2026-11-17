@@ -1,121 +1,127 @@
-# Seedelf Web Wallet
+# Seedelf Wallet
 
-A Cardano wallet for Chrome, with private payments built in: Seedelf, the Cardano stealth wallet.
+Seedelf Wallet is a Cardano wallet for Chrome with private payments built in, made by Logical Mechanism. It's for anyone on Cardano who wants a full wallet, for staking, voting and dApps, with a private balance beside it, and no terminal.
 
-**Install it** from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp).
+**Get it** from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp), or build it from this repository and load it into Chrome yourself ([extension/README.md](extension/README.md#build-and-load-in-chrome)). It's free.
 
-> **Status:** version 1.x, the web wallet's own version line, kept apart from the Rust workspace's 0.x (see the root [CLAUDE.md](../../CLAUDE.md#release--versioning)). Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), what's being built in [docs/plans/](docs/plans/), what could come next in [docs/backlog.md](docs/backlog.md), and every release in [docs/releases.md](docs/releases.md). To try it in Chrome, see [extension/README.md](extension/README.md).
+It runs on Cardano mainnet. Preprod, Cardano's test network, is on the welcome screen and in Settings, for trying the wallet with test ADA that has no value.
 
 ## What it is
 
-Seedelf is where money moves privately on Cardano. The web wallet is for people who will never use a terminal. It's one wallet on Cardano, with one recovery phrase and one password, and two sides, **Public** and **Private**:
+One wallet on Cardano, with one recovery phrase and one password, and two sides, **Public** and **Private**:
 
-- **The public account** (the Cardano account): a full Cardano wallet. Receive, send, stake with a pool, spend the rewards, and delegate your vote, as in Lace or Eternl. For a restored Lace or Yoroi phrase, it's the same account. You don't need a second wallet.
-- **The private balance** (Seedelf's): make money private, pay anyone's Seedelf, and make it public again to any address, with no UTxO saying who owns it.
+- **The public account** (the Cardano account) is a full Cardano wallet. Receive, send, stake with a pool, spend the rewards, and delegate your vote, as in Lace or Eternl. Restore a Lace or Yoroi phrase and it's the same account, so you don't need a second wallet.
+- **The private balance** is Seedelf's, a stealth wallet on Cardano. Make money private, pay anyone's Seedelf (the name a private balance is paid by), and make it public again to any address, with no UTxO saying who owns it.
 
-Private money can't be staked, by design:
+**How the private side works.** Money in the private balance sits at the Seedelf wallet contract. Each UTxO there is locked to a fresh re-randomization of its owner's key, so the UTxO doesn't say whose it is, and it's spent with a Schnorr proof that only your recovery phrase can make. To be paid privately, you mint a **Seedelf**: a name token, starting `5eed0e1f`, that anyone can look up to pay you. The [root README](../../README.md) has the protocol and its maths.
+
+**Private money can't be staked,** by design:
 
 - Seedelf funds sit at a script address with no staking part, so they earn no rewards and carry no voting weight.
 - A per-user staking key would link all of a user's Seedelfs together.
 
 So money that sits stays staked in the public account, and is made private when it should move privately.
 
-## Scope
+## What it does
 
-**The core wallet**
+Every screen, and what it does, is in [extension/README.md](extension/README.md#screens).
 
-- Create or restore a wallet from a recovery phrase, then lock it with a password.
-- See your balance: your Seedelfs and the funds they hold.
-- **Public account** (the Cardano account): the wallet's normal, non-private side: a standard Cardano account that any wallet or exchange can pay. For a restored Lace or Yoroi phrase, it's that wallet's first account.
-- **Make private** (a move-in): move funds from the public account into your private balance.
-- **Send** (public): pay any addresses or Seedelfs from the public account, in the open, as any Cardano wallet does.
-- **Several public accounts** (chunk 18): the recovery phrase's Cardano accounts, one at a time, with a picker as Home's Public heading ("Public account 2 ▾") and names of your own. Each has its own addresses, staking and collateral; the private balance is one for the whole phrase, and each account's money made private is its own history: a private payment avoids spending two accounts' money together, and when it can't, or with Max, its review names the accounts it ties together.
-- **Staking** (chunk 13): stake the public account with one pool, from a browser of every live pool, each with its return on stake over its last 18 epochs (chunk 37). Rewards are spent along with anything the account pays, or withdrawn by hand. Stop staking returns the 2 ₳ deposit. **Delegation history** lists every change to the stake key (chunk 36).
-- **Voting delegation** (chunk 13): Always abstain, Always no confidence, or a DRep, searched by name in a list that ships with the wallet, or by its ID. Conway pays out no rewards until the vote is delegated, and the wallet says so.
-- **Be your own DRep** (chunk 21): register the public account as a DRep, with its own vote behind it, and vote Yes, No or Abstain on the live governance actions, in the wallet's own screens. A profile only if you want one: the wallet writes the file, you publish it, and the wallet never fetches it. Retiring returns the 500 ₳ deposit. A DRep is public and tied to the account, and the screens say so. Governance sites such as GovTool work too, through CIP-95 in the dApp connector, once you allow it for that site.
-- **Create a Seedelf:** mint your named Seedelf so others can pay you. Minting links the Seedelf to whatever paid for it, so by default the public account pays for it, before any money is made private (see [privacy.md](docs/privacy.md#known-links)).
-- **Send** (private, a transfer): send funds privately from your private balance to any Seedelfs, by their full names.
-- **Make public** (a withdrawal): send funds from your private balance to any Cardano addresses, or remove a Seedelf.
+**The wallet**
 
-**Also in v1: dApps, privately** ([architecture.md](docs/architecture.md#dapp-connector), [flows.md](docs/flows.md#contract-round-trip)). All four are built:
+- **Create** a wallet (a new 24-word phrase) or **restore** one from 12, 15 or 24 words, then lock it with a password.
+- **See your balances,** on Home's two tabs: what the public account holds, and what the private balance holds with its Seedelfs. Tokens and NFTs are listed with a search; an NFT's image shows only when you ask for it.
+- **Several public accounts:** the recovery phrase's Cardano accounts, one at a time, with a picker as Home's Public heading ("Public account 2 ▾") and names of your own. Each has its own addresses, staking and collateral. The private balance is one for the whole phrase, and each account's money made private keeps its own history: a private payment avoids spending two accounts' money together, and when it can't, or when you send everything (Max), its review names the accounts it ties together.
+- **Transaction details:** every review, and the connector's sign window, opens the transaction itself, decoded from the bytes about to be signed: inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata, with a tab for the raw bytes. It asks nobody anything: no lookup, no explorer link, a copy button instead.
+- **Also:** Contacts, a UTxOs screen on each side where a UTxO can be locked out of every payment, Activity on each side (saved as CSV if you want), hiding the balances, the lock time, a check of a written copy of the recovery phrase, and ADA's value in a currency on mainnet.
+- **Three languages:** English, Spanish and Japanese, every one bundled, so choosing one asks nobody anything.
 
-1. **The connector** (chunk 15): sites connect over CIP-30, as with Lace. It's off until you turn it on in Settings, and nothing is added to any page until then.
-2. **Private sessions** (chunks 15 and 15b): move funds out of Seedelf into a one-time account, use a dApp with that account, and bring what comes back into Seedelf. The first is a swap through Minswap's aggregator, which runs by itself after one approval.
-3. **A dApp browser in the wallet** (chunk 15b): Home's **dApps**, where dApps run in private sessions. Minswap is the first.
-4. **Private CIP-30** (chunk 15c): any site can connect to a private session instead of the public account, chosen in the connect window. Its session is managed under the dApps page's **Sites**.
+**The public account**
 
-**Also in v1: Lovejoin** ([architecture.md](docs/architecture.md#lovejoin)). The mixer in the wallet: the spare ADA a private session brings back goes through Lovejoin, 5 ₳ boxes on chain since 1.8.0, so what comes back is harder to tie to the session. A Settings switch turns it off, any box can be brought back directly, and the Lovejoin tile mixes from either side. It has had no third-party audit, only its makers' own review, and the wallet says so wherever Lovejoin is chosen. On mainnet it mixes only once Lovejoin's pool holds 30 boxes that aren't yours.
+- **Send:** pay up to 20 addresses, ADA Handles (`$name`s) or Seedelfs at once, in the open, as any Cardano wallet does, with an optional note on chain (CIP-20), which is public.
+- **Make private:** move ADA and tokens from the public account into your private balance.
+- **Staking:** stake with one pool, chosen from every live pool, each with its return on stake over its last 18 epochs. Rewards are spent along with anything the account pays, or withdrawn by hand. **Stop staking** returns the 2 ₳ deposit. **Rewards history** and **Delegation history** list what the stake key was paid and every change to it.
+- **Voting delegation:** Always abstain, Always no confidence, or a DRep, searched by name in a list that ships with the wallet, or by its ID. Cardano keeps staking rewards locked until the vote is delegated, and the wallet says so.
+- **Be your own DRep:** register the public account as a DRep, with its own vote behind it, and vote Yes, No or Abstain on the live governance actions, in the wallet's own screens. A profile only if you want one: the wallet writes the file, you publish it, and the wallet never fetches it. Retiring returns the 500 ₳ deposit. A DRep is public and tied to the account, and the screens say so. Governance sites such as GovTool work too, through CIP-95 in the dApp connector, once you allow it for that site.
+- **Collateral:** the public account's 5 ₳ collateral, which Cardano asks of a transaction that runs a script, such as a dApp's, and takes only if the script fails. It's set in Settings, and reclaimed there.
 
-**Also in v1** (chunk 12): Contacts, the public account's collateral in Settings, and a UTxOs screen on each side where a UTxO can be locked out of every payment.
+**The private balance**
 
-**Also in v1** (chunk 14, from what Lace and Eternl have): the public account's staking changes in its Activity, a note on a public send, hiding the balances, the lock time, a check of the written recovery phrase, Activity saved as CSV, and ADA's value in a currency on mainnet. What each of them tells anyone is in [privacy.md](docs/privacy.md#known-links).
+- **Create a Seedelf:** mint your Seedelf, with an optional tag of your own (public, and anyone can choose the same one), so others can pay you. Minting ties the Seedelf to whatever paid for it, so by default the public account pays for it, before any money is made private. Paying from the private balance instead is a stealth mint, which hides the payer only when that balance came from other people's payments.
+- **Send:** pay up to 20 Seedelfs privately, by their full names.
+- **Make public:** pay up to 20 Cardano addresses or ADA Handles from the private balance.
+- **Remove a Seedelf:** burn it and free the ADA it held, into the public account or the private balance. By default the ADA goes back to the side that paid for the Seedelf; when the wallet doesn't know which did (after a restore, or in another browser), you choose.
+- **Large payments:** a payment too large for one transaction goes as several, one after another, and the review says how many.
 
-**After v1: the transaction view** ([flows.md](docs/flows.md#read-the-transaction-every-review-and-the-connectors-window)). Every review, and the connector's sign window, opens **Transaction details**: the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata — decoded from the CBOR that is about to be signed, with a tab for the raw bytes. It asks nobody anything: no lookup, no explorer link, a copy button instead.
+**dApps, privately**
 
-**After v1: several public accounts, three languages, and NFT images.** Several accounts are above (chunk 18). The wallet reads in English, Spanish and Japanese, every language bundled, so choosing one asks nobody anything ([the translation glossary](docs/i18n/glossary.md)). And an NFT's image shows when you ask for it in its details, one NFT at a time: your browser fetches it from IPFS through Blockfrost's gateway, nothing of ours in between, and the details say first who sees what, more strongly for an NFT in your private balance ([privacy.md](docs/privacy.md#known-links)).
+1. **The connector:** sites connect over CIP-30, Cardano's standard for a site to talk to a wallet, as with Lace. It's off until you turn it on in Settings, and nothing is added to any page until then.
+2. **Private sessions:** a new one-time account, funded from your private balance, uses a dApp, and what comes back goes into the private balance. A swap runs this way through Minswap's aggregator, which routes across Cardano's DEXes, and after one approval it runs by itself.
+3. **dApps in the wallet:** Home's **dApps** page, with Minswap's swaps, which run in private sessions, and Lovejoin, the mixer (below).
+4. **Private CIP-30:** any site can connect to a private session instead of the public account, chosen in the connect window. Its session is managed under the dApps page's **Sites**.
 
-**After v1: Lovejoin's other pools, and payments in parts** (chunk 34; [architecture.md](docs/architecture.md#lovejoin), [flows.md](docs/flows.md#mix-through-lovejoin-the-dapps-page)). Beside the classic pool of 10 ₳ boxes, Lovejoin has pools of one token each, or of ADA at another amount, and anyone can start one from the wallet (**Start a pool**, about 23 ₳ that never comes back); the wallet shows the earliest genuine pool of each box value on each version of Lovejoin's scripts, and since 1.8.0 lists one on the older scripts only while you have boxes there. A private session's tokens come back through their pool by default where one is shown, as its ADA does, and its 5 ₳ collateral is mixed once in a pool of 5 ₳ boxes where one holds enough other people's boxes and enough of the session's ADA is left to pay for it, which a Settings switch turns off. A **Bootstrap** puts boxes into a pool for others to mix with, and they stay until you bring them back. **Four boxes a mix** is a Settings option, and **Bring every box back now** brings every box back at once, which ties them together. And a payment from the private balance too large for one transaction goes as several, one after another.
+**Lovejoin, the mixer**
 
-**After v1: Lovejoin v2** (chunk 44, 1.8.0; [architecture.md](docs/architecture.md#lovejoin), [privacy.md](docs/privacy.md#known-links)). The wallet mixes only in pools on Lovejoin v2's scripts, whose `mix_logic` checks both lengths in xor32, the bytes [seedelf-verification](../../seedelf-verification/) proves. A private session's spare ADA and its 5 ₳ collateral go into v2's pool of 5 ₳ boxes, found and used once one exists, and come back directly while there's none, or while it holds fewer than 30 boxes that aren't yours on mainnet. The older pools, the classic one and those on Lovejoin's first token-pool scripts, are withdraw-only: the first unlock on 1.8.0 or later brings every box of yours in them back, one right after another, which ties them together.
+Lovejoin is a mixer on Cardano, also made by Logical Mechanism, with contracts of its own, apart from Seedelf's. Each of its pools holds boxes of one value: an amount of ADA alone, or a set amount of one token plus some ADA. A mix spends your boxes together with other people's, so what comes out is harder to tie to what went in.
 
-**Next:** what users ask for, and Midnight beside the private and public sides, which is being planned ([chunk 38](docs/plans/chunk-38-midnight.md)). What's being built is in [docs/plans/](docs/plans/); the candidates, the open calls and what's declined are in [docs/backlog.md](docs/backlog.md).
+- **A private session's return goes through it by default:** the spare ADA comes back through Lovejoin's pool of 5 ₳ boxes, so what comes back is harder to tie to the session, and its tokens through their own pool where one is shown. The session's 5 ₳ collateral is mixed once too, where a 5 ₳ pool holds enough other people's boxes and enough of the session's ADA is left to pay for it. Settings switches turn each off, and any box can be brought back directly.
+- **The Lovejoin tile** mixes ADA or a pool's token from either side. **Help start the pool** puts boxes in for others to mix with, and they stay until you bring them back. **Four boxes a mix,** in place of three, is a Settings option. **Bring every box back now** brings every box back at once, which ties them together.
+- **Anyone can start a pool** from the wallet (**Start a pool**), of a token on the wallet's list, or of ADA at any amount but 10 ₳. About 23 ₳ of what it costs never comes back.
+- **On mainnet a pool mixes only once it holds 30 boxes that aren't yours.** While there's no such pool, a session's return comes back directly.
+- **The Lovejoin v2 contracts the wallet mixes with are formally verified,** on the compiled templates every v2 pool applies. The older pools it only brings boxes back from aren't covered: [what's proved, and where it stops](../../seedelf-verification/CLAIMS.md).
+- **Some older pools take no new boxes,** the classic pool of 10 ₳ boxes among them. If you have boxes in one, the wallet lists that pool and brings them back by itself, one right after another, which ties them together.
+- **Lovejoin has had no third-party audit,** only its makers' own review, and the wallet says so wherever Lovejoin is chosen.
 
-**Not planned:** several pools per account (one pool per account is the model, and several accounts spread stake across pools anyway), folders or an account centre, a Seedelf key per account (one private balance for the whole phrase), reading several accounts at once or a total across them (either would link them), a notification centre (a private payment can't be found while the wallet is locked, so it would mostly repeat Activity), `web+cardano` payment links (CIP-13, a phone feature), Earn / RealFi USDr staking and CIP-99 claims (likely AML/KYC), chains other than Cardano and Midnight, mobile. **Hardware wallets can't be done at all:** the Seedelf key is derived from the recovery phrase's seed, and a hardware wallet's whole purpose is that the seed never leaves it — so a device could hold the public account and never the private balance. And nothing that reports on you or ties you to an identity: no analytics, no AML/KYC, no on-ramp. We add features only if there's demand ([the reasons](docs/backlog.md#declined)).
+**Not planned**
+
+- Several pools per account: one pool per account is the model, and several accounts spread stake across pools anyway.
+- Folders or an account centre, or a Seedelf key per account: one private balance for the whole phrase.
+- Reading several accounts at once, or a total across them: either would link them.
+- A notification centre: a private payment can't be found while the wallet is locked, so it would mostly repeat Activity.
+- `web+cardano` payment links (CIP-13), a phone feature.
+- Other chains than Cardano, and mobile. Midnight, a privacy blockchain beside Cardano, is the one other chain whose support is being planned.
+- **Hardware wallets can't be done at all:** the Seedelf key is derived from the recovery phrase's seed, and a hardware wallet's whole purpose is that the seed never leaves it. So a device could hold the public account and never the private balance.
+- Nothing that reports on you or ties you to an identity: no analytics, and no identity checks (AML/KYC), so no on-ramp, and no yield products or token claims that would need them.
+
+New features come from what users ask for.
+
+## What it costs
+
+- **The wallet is free.**
+- **Every transaction pays Cardano's network fee,** which its review shows before you send.
+- **A Seedelf holds a little ADA** while it exists. Removing it frees that ADA.
+- **Staking** takes Cardano's 2 ₳ deposit, back when you stop. **Being a DRep** takes a 500 ₳ deposit, back when you retire.
+- **The public account's collateral** is 5 ₳ of your own, set aside until you reclaim it.
+- **A swap** shows what it costs before you approve it: the network fees, the DEX's fee and Minswap's, and what comes back.
+- **Lovejoin:** each mix and each box brought back pays its network fee. Starting a pool costs about 23 ₳ that never comes back.
+
+## Limits
+
+- **Amounts, tokens and timing are public.** Seedelf hides who owns a UTxO and who spends it, from people reading the chain. It doesn't hide how much moves, or when.
+- **Paying a Seedelf takes Seedelf Wallet or the seedelf-cli,** Seedelf's command-line wallet. Someone using another wallet pays your public account's address instead, in the open.
+- **Some links can't be avoided,** and the wallet says so where they happen. Making money private ties the public account to it. A Seedelf is tied to whatever paid for it. A private session's one-time account is public: anyone can follow its money, and money you made private leads back to your public account. [docs/privacy.md](docs/privacy.md) is the wallet's privacy model: what's hidden, what isn't, and [the known links](docs/privacy.md#known-links).
+- **The services the wallet talks to see your IP address,** and can group what one address does, though the chain can't.
+  - On mainnet it reads Cardano through Logical Mechanism's own server first, and through Koios, a public Cardano API, for any part that server can't answer. Settings → Network switches to Koios alone. Preprod always reads Koios.
+  - Spends from the private balance also go to giveme.my, Logical Mechanism's collateral service. It puts up the collateral such a spend needs, the same for everyone, so your own collateral never tags your private spends.
+  - CoinGecko is asked ADA's price on mainnet, unless the currency is set to none. Minswap sees a swap, and Blockfrost's IPFS gateway an NFT image you ask to see.
+  - There's no analytics and no telemetry. The [privacy policy](docs/store/privacy-policy.md) says what the wallet handles and every service it talks to.
+- **The protocol has known attacks,** such as watching whose collateral a transaction uses, or tracking IP addresses: the root README's [Wallet Limitations](../../README.md#wallet-limitations).
+- **Lovejoin has had no third-party audit,** and hardware wallets can't hold the private balance (above).
 
 ## Relationship to the CLI
 
-The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much like cardano-cli wallets and browser wallets are:
+Seedelf Wallet and the [seedelf-cli](../README.md), Seedelf's command-line wallet, are separate products, much like cardano-cli wallets and browser wallets are:
 
-- **Different secrets.** The web wallet is built from a recovery phrase. The CLI uses a random key stored in `$HOME/.seedelf`.
+- **Different secrets.** Seedelf Wallet is built from a recovery phrase. The CLI uses a random key stored in `$HOME/.seedelf`.
 - **No import or migration** in either direction. CLI users stay CLI users.
 - **What they share:**
   - the on-chain contracts ([seedelf-contracts](../../seedelf-contracts/))
   - the cryptography ([seedelf-crypto](../seedelf-crypto/)) and the transaction building ([seedelf-core](../seedelf-core/)), compiled to WebAssembly for the extension
 
-## Design docs
+## Releases
 
-| Doc | Covers |
-|---|---|
-| [architecture.md](docs/architecture.md) | How the extension is structured, crypto in WebAssembly, chain data, storage, and what we borrow from Lace |
-| [keys-and-accounts.md](docs/keys-and-accounts.md) | One phrase and two key trees, the kinds of account, password encryption |
-| [flows.md](docs/flows.md) | Onboarding, receive, move in, create, transfer, withdraw, staking, being your own DRep, contract round trip |
-| [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
-| [lovejoin-mix-width.md](docs/lovejoin-mix-width.md) | Why a Lovejoin mix takes three boxes by default: each width's measured cost on both networks and on the token pools, why four is an option and not the default, and what would make four comfortable |
-| [development.md](docs/development.md) | The branching rule and where plans live, running it in Chrome, test funds, the testing layers, the rules for a change to the screens, the release checklist, sharing with testers |
-| [store/](docs/store/README.md) | The Chrome Web Store listing: its text, images and privacy policy |
-| [i18n/glossary.md](docs/i18n/glossary.md) | The translations: the words fixed in every language, and how each Spanish and Japanese string is recorded |
-| [plans/](docs/plans/README.md) | How the work happens: a chunk's number, branch and plan, how it lands, and how a release is cut; and the plans being built now |
-| [backlog.md](docs/backlog.md) | What could become a chunk, one line each; the owner's open calls; and what's declined, and why |
-| [releases.md](docs/releases.md) | Every release: what it carried, the commit its zip was built from, and the zip's SHA-256 |
-| [archive/](docs/archive/plans/README.md) | The record, not maintained: every finished plan and review (chunk 23's usability review and blind test among them), and the two roadmaps the wallet was built from, [v1's](docs/archive/roadmap.md) and [what came after](docs/archive/post-release-roadmap.md) |
+Seedelf Wallet's versions are their own line, from 1.0.0, apart from the CLI's 0.x.
 
-## Reference: Lace
-
-IOG's [Lace](https://github.com/input-output-hk/lace) wallet (Apache-2.0) is our reference for browser-extension and Cardano patterns. We take patterns and a few individual files. We don't take its framework, its UI stack or its branding.
-
-Clone it locally for reading. `seedelf-platform/_reference/` is gitignored.
-
-```bash
-git clone https://github.com/input-output-hk/lace seedelf-platform/_reference/lace
-git -C seedelf-platform/_reference/lace checkout e431933
-```
-
-Every Lace path in these docs is relative to that checkout. `e431933` is where Lace's extension is at 2.4.2, the version the docs measure against; SecretBox ([extension/src/background/secret-box/](extension/src/background/secret-box/README.md)) was adapted from the `lace-extension@2.4.0` tag, three commits earlier, and its files are the same at both.
-
-## Decisions
-
-- **Networks:** mainnet and preprod in every build, mainnet by default; `VITE_ENABLE_MAINNET=false` makes a preprod-only build for tests. See [architecture.md](docs/architecture.md#networks).
-- **Seedelf key derivation:** domain-tagged HKDF over the BIP39 seed. It is permanent once shipped. See [keys-and-accounts.md](docs/keys-and-accounts.md#seedelf-key-derivation).
-- **UI:** the same app in a full tab (the default) or Chrome's side panel, the user's choice in Settings, as in Lace. No popup. See [architecture.md](docs/architecture.md#ui).
-- **Look:** the Seedelf logo set lives in [brand/](brand/). The UI's colours come from it. Images for posts about the wallet, drawn in the same look, are in [media/](media/).
-- **Staying unlocked:** Chrome stops the extension's background worker after about 30 seconds idle, which clears its memory.
-  - The unlocked key is kept in `chrome.storage.session` (memory-only, cleared when the browser closes).
-  - So the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every restart.
-  - See [architecture.md](docs/architecture.md#service-worker).
-- **Cardano accounts:** CIP-1852 accounts, one at a time (chunk 18). The wallet finds the ones the phrase has used, in order, stopping at the first never used, and asks about one at a time on purpose. The Seedelf key stays on account 0, so there is one private balance for the whole phrase. See [keys-and-accounts.md](docs/keys-and-accounts.md#the-cardano-account).
-- **One-time accounts:** a reserved account index that real wallets never reach. Each session's base address has its own payment and stake keys, shared with no other session. See [privacy.md](docs/privacy.md#known-links).
-- **Transaction building:** the CLI's Rust (Pallas) builders, separated from network calls and compiled to WebAssembly. See [architecture.md](docs/architecture.md#transaction-building).
-- **UI stack:** React + TypeScript + Vite, with plain CSS.
+[docs/releases.md](docs/releases.md) lists every version uploaded to the Chrome Web Store: what it changed, the commit its package was built from, the package's SHA-256, and its git tag (`web-wallet/<version>`) where it has one. The package builds reproducibly, so you can build that commit yourself, with the same clang and an official Node build, and compare ([docs/releases.md](docs/releases.md) says what's pinned and what isn't).
 
 ## Community
 
@@ -123,3 +129,17 @@ Every Lace path in these docs is relative to that checkout. `e431933` is where L
 - **Questions and discussion:** the Seedelf Discord.
 - **Security vulnerabilities:** by email only, never an issue or a ticket: see [SECURITY.md](../../SECURITY.md).
 - **Anything else:** support@logicalmechanism.io.
+
+## For contributors
+
+- [extension/README.md](extension/README.md#build-and-load-in-chrome): building, loading and testing the extension, and where its code lives.
+- [docs/development.md](docs/development.md): branching, running it in Chrome, test funds, the testing layers, the rules for a change to the screens, the release steps, and the decisions the wallet is built on.
+- [docs/architecture.md](docs/architecture.md): how the extension is structured: the WebAssembly, chain data, storage, the service worker, the dApp connector and Lovejoin.
+- [docs/keys-and-accounts.md](docs/keys-and-accounts.md): one phrase and two key trees, the kinds of account, and the password encryption.
+- [docs/flows.md](docs/flows.md): each flow, step by step.
+- [docs/lovejoin-mix-width.md](docs/lovejoin-mix-width.md): why a Lovejoin mix takes three boxes by default, and four is an option.
+- [wasm/README.md](wasm/README.md): the WebAssembly bindings over the Rust crates.
+- [docs/i18n/glossary.md](docs/i18n/glossary.md): the translations: the words fixed in every language, and how each string is recorded.
+- [docs/store/](docs/store/README.md): the Chrome Web Store listing's text, images and privacy policy.
+- [brand/](brand/README.md) and [media/](media/README.md): the logo set, and the images for posts about the wallet.
+- [docs/backlog.md](docs/backlog.md): what the maintainers might build next, and what's declined and why.

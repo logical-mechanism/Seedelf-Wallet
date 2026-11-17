@@ -202,6 +202,15 @@ The owner's calls. Don't propose these again without something new.
 - **Earn / RealFi USDr staking, and CIP-99 claims.** Likely AML/KYC, which doesn't fit Seedelf.
 - **No chain but Cardano and Midnight, and no mobile, for now.** Midnight is chunk 38.
 - **Nothing that reports on the user or ties them to an identity:** analytics, AML/KYC, an on-ramp (the owner, 2026-10-02).
+- **A longer default Lovejoin wait** ([privacy review](archive/plans/privacy-review.md) §3.5, 2026-09-27). It stays 1 to 6 hours, with 2 to 12 and 6 to 24 in Settings: a longer one holds the money longer in an unaudited contract, and gains little while the pools are quiet.
+- **The currency off by default** (privacy review §3.8). It stays US dollars, the one default that asks a third party, CoinGecko, for a convenience, which learns only that someone at the IP address uses it; *Nothing* in Settings asks no one.
+- **Balances hidden by default** (privacy review §3.9). Hide balances stays off, a tap on Home's eye: it changes only what's drawn, never what's read.
+- **A switch or a confirmation before money with different histories is spent together** (privacy review §4.2). Selection keeps them apart where it can, merges only when nothing else pays, and says in the review what it merged: best effort, asking nothing.
+- **A setting for which new sites start on** (privacy review §4.3). Not needed: the connect window preselects neither the public account nor a private session, and Connect waits for a choice.
+- **Refusing a payment between your own public accounts** (the owner, 2026-10-02). People do move money between their own accounts, and the wallet can't prevent these links, only show them: Send names the account and says the payment ties the two.
+- **Turning Chrome's Translate off** (`notranslate`; the owner, 2026-10-06, release review C22). It stays on, and privacy.md and the privacy policy say it sends the page's text to Google: the wallet speaks English, Spanish and Japanese, and using one of them avoids it.
+- **Decoy requests when the wallet asks Koios what made a Lovejoin box** ([independent review](archive/plans/independent-review.md) M14). The cost, Koios learning which boxes are this wallet's, is accepted, and privacy.md and the policy say it.
+- **A Koios API key** (2026-09-25). The public tier needs none, and a key would tie every request to whoever registered it.
 
 ### Why hardware wallets can't cover Seedelf
 

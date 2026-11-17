@@ -1,6 +1,6 @@
 # Chunk 50 · Docs for someone who has never heard of Seedelf
 
-**Status: ⬜ not started.** Written 2026-11-14 on `web-wallet/doc-audience-plan`, from `main` at `45a0b3bb`.
+**Status: 🟡 in progress** on `web-wallet/doc-audience`, from `main` at `cb83f18e`. Written 2026-11-14 on `web-wallet/doc-audience-plan`, from `main` at `45a0b3bb`.
 
 The owner, after reading some of the READMEs: they "read more like you are talking to me who knows what is going on and not to the audience that does not know what is going on. Like referencing chunks or commits, successes or failures, or even just talking about finding bugs". And: "Our documentation should be written for this outside user trying to find out what its all about, not reading a story about your adventure". Many of the docs are working files for the sessions, and that's fine. This chunk is about the ones a stranger reads.
 
@@ -120,17 +120,51 @@ The working sessions read these too, so they keep more:
 
 ## Steps
 
-### 1. ⬜ The owner's calls
+### 1. ✅ The owner's calls
 
-Ask Q1–Q5 at the start, in one set of questions. Record each answer here, with the date.
+Asked 2026-11-17, with a sixth the inventory raised. The answers:
 
-### 2. ⬜ The inventory
+- **Q1 · privacy.md is outward.** The owner's dated calls and the five declined proposals move to [backlog.md](../backlog.md)'s *Declined*. The rules and the known links stay, stated as facts.
+- **Q2 · Dated calls are dropped everywhere,** contributor docs included. The rule and its reason stay; git and the archive hold who called it and when. The CLAUDE.md files and the working files keep theirs.
+- **Q3 · seedelf-data's README is split.** It keeps what the API serves, its routes, how to run it, what it reads, and its limits. A new `seedelf-data/NOTES.md` takes the Koios cross-checks, the planner measurements, and why each decision was made.
+- **Q4 · The web wallet README's *Reference: Lace* and *Decisions* both move to [development.md](../development.md).** The front page keeps what a user needs.
+- **Q5 · releases.md's *What it carried* says what changed for the user,** with the PR numbers kept as links. Chunk numbers and "the gate" go. 1.1.0's commit and hash read "not recorded".
+- **Q6 · releases.md's *Recording a release* and its per-release *Records* move,** unedited, to a new [release-records.md](release-records.md) beside the plans, a working file. releases.md keeps the table and how to verify a zip, and links the records as the maintainers'.
+
+Four more, asked 2026-11-17 once the blind reads were in:
+
+- **Q7 · The package's summary is fixed in this PR,** so the PR runs the full suite. `SUMMARY` in extension/src/manifest.ts said "pay anyone privately", but only a Seedelf can be paid privately. It now says "pay anyone's Seedelf privately", in the three languages, back-translated blind, and store/README.md's copies match. It ships with the next zip.
+- **Q8 · Seedelf's own audit status stays unstated.** The docs add no line on it. AUDIT.md says what it reviewed and that it isn't version 1.
+- **Q9 · The privacy policy's line 77 is reworded now,** with a dated *Changes* entry: "We don't collect … any data" sat badly beside our two services receiving what the page lists. Merging publishes it.
+- **Q10 · The CLI README's links are absolute GitHub URLs,** so they work on its crates.io page, from the next CLI publish.
+
+### 2. ✅ The inventory
 
 - **Read every outward file,** not only grep it. A grep finds the chunk, PR, date and owner markers. Narration ("this took", "turned out", "the fix") takes reading.
 - **"Session" is a product word** (a private session), not a marker.
 - **Record a short table per file here:** the line, what's wrong with it, and where a fact a maintainer still needs moves to.
 
-### 3. ⬜ Rewrite the outward docs
+Each rewrite agent read its files whole and made its per-line table before it edited, in its handoff. What they found, per file, and where the maintainers' facts went:
+
+| File | What was wrong | Where facts moved |
+|---|---|---|
+| README.md | Little: an insider aside on the web wallet's internals, "the later, undeployed build", a backlog pointer; no opener for a stranger; a 33-byte example token name | Nowhere: restated at the root's level, with a pointer to privacy.md |
+| SECURITY.md, RELEASE.md | No opener; RELEASE.md had no way to check a release, and lesson-sounding lines | RELEASE.md gained *Checking a release* (the files, the key's fingerprint, the commands) |
+| seedelf-contracts/README.md, AUDIT.md, happy-path-scripts/README.md | Rename and toolchain history; no way to check version 1; AUDIT.md's scope didn't say it isn't version 1; the happy path's order burned the Seedelf later steps needed, and it left out a fourth wallet | The contracts README gained *Checking version 1*; contributor rules under *For contributors* |
+| seedelf-platform/README.md, the four crate READMEs | `welcome` said to create the wallet (the first run does); `util migrate` "isn't built yet"; collateral and `--utxo`/`--asset` overstated; past-bug phrasing in the crates | None |
+| seedelf-web-wallet/README.md | Chunk tags in *Scope*; the root CLAUDE.md for versioning; an Earn/RealFi note; release, backlog and plans process; Remove's default wrong (on main too) | *Reference: Lace* and *Decisions* to development.md (Q4) |
+| extension/README.md, brand/, media/ | "move-in" in the user half; Lovejoin history; no install link; Remove's default wrong; maintainer notes in brand/ and media/ | brand/'s and media/'s notes under *For contributors* |
+| docs/privacy.md | The older names; the owner's dated rule; about 50 chunk citations; version history; "no UTxO of yours" in a private spend (false); the principle stated without its qualifier | The declined proposals to backlog.md's *Declined* (Q1); code names to *For contributors* |
+| docs/store/README.md (the texts) | "pay anyone privately"; "can't be linked" stated as absolute; contract history in the Lovejoin bullet; "we" never named | None. The notes around the texts stay the maintainer's |
+| docs/store/privacy-policy.md | Unchanged: its blind read goes to the owner | None |
+| docs/releases.md | Chunks and "the gate" in *What it carried*; "the owner has it"; the records below the table | *Recording a release* and the records to plans/release-records.md (Q6) |
+| seedelf-data/README.md | Opened on chunk 26; dated checks, Koios cross-checks, planner timings, build history; no working request | NOTES.md (Q3); the VPS meter's gotcha to deploy/README.md |
+| seedelf-verification/README.md, CLAIMS.md, Audit/README.md | Chunk records, bare PR numbers, review state, "tell the owner only"; the opening claimed every Lovejoin script Seedelf uses (the retired pools' aren't proved); PR #455 read as merged; a missing pin | *Found along the way* and *Writing a property* under *For contributors* (Lean comments cite them); plan links to the modules' *Plans and records*; the Falsified rule to Lovejoin/AnyTx/README.md |
+| Contributor docs (Step 4) | Chunk labels, the owner's dated calls, fix history | Nothing dropped; review IDs that code cites stay |
+
+### 3. ✅ Rewrite the outward docs
+
+Done by agents 1–6 below, in one working tree, each owning its files. A shared brief held the rules and asked for a handoff per agent: its inventory, its changes, the facts it fixed against the code, the moves other owners had to make, and its questions. Facts the agents fixed against the code, among others: the first run of any command creates the CLI's wallet, not `welcome`; `/health` also answers 503 past the month's traffic ceiling; the data layer's connections are the private index's 2 and the tip's 1; the verification README lacked CardanoLedgerApiBlaster's pin.
 
 - **One agent per group, each owning its files,** with no overlaps (chunk 22's way):
   1. the root README, SECURITY.md, RELEASE.md, and the contracts' READMEs and AUDIT.md;
@@ -142,19 +176,27 @@ Ask Q1–Q5 at the start, in one set of questions. Record each answer here, with
 - **Facts are checked against the code,** never against another doc.
 - **Every link still resolves, anchors included,** and a file other docs link to keeps its path. Settings links store/privacy-policy.md by its GitHub URL, so that path never moves.
 
-### 4. ⬜ The contributor docs, a light pass
+### 4. ✅ The contributor docs, a light pass
+
+Run beside Step 3: agent 7 took architecture.md, agent 8 flows.md, keys-and-accounts.md, lovejoin-mix-width.md and the glossary, and agents 2, 3, 5 and 6 the contributor files in their areas. Every heading stayed. The review IDs code cites stay (about 260 in architecture.md, 250 in flows.md), so flows.md is still dense.
 
 - Feature names in place of chunk numbers; the narration and the history out.
 - Rules, reasons, invariants and gotchas stay.
 - **wasm/README.md's export table keeps its shape:** `readme_test.rs` reads it.
 
-### 5. ⬜ The blind read
+### 5. ✅ The blind read
+
+- **Round 1:** 20 fresh Explore readers, one a file (the four crate READMEs together). Each owner sorted its list by one rule: notes and history go, a term gets the smallest definition that lets a reader follow, a promise points at its proof or is softened, and nothing is added that the repository can't source.
+- **Round 2:** 14 fresh readers on the files that changed most. Their lists held no internal notes bar a few history phrasings, which went; what's left is terms the docs define on purpose and promises the owner may want backed.
+- **The cross-file reader** found 27 problems where areas meet, every one fixed. Among them: the verification README claimed every Lovejoin script Seedelf uses, but the retired pools' aren't proved; Remove's default was wrong in two READMEs (on main too); privacy.md said no UTxO of yours is in a private spend; and the store text grew "one of many" and dropped that new boxes go only into the earliest v2 pool.
 
 - **For each outward doc, a fresh Explore agent** is given only that file and this: "You have never heard of this project. What is it, what would you do with it, and what in this file couldn't you follow?" It lists every term, reference and aside it couldn't place.
 - **Fix, and read again** until the list holds only terms the doc defines on purpose.
 - **Then one more fresh reader goes through the whole diff,** across files. Chunk 22 found that where areas meet is where they break.
 
-### 6. ⬜ Checks
+### 6. ✅ Checks
+
+All four ran on the final tree. The link script read every tracked Markdown file (1,574 relative links on main, none broken there or here). The marker grep's only hits left are the owner of a UTxO and the pinned upstream PRs a verifier follows. `readme_test` passes. The cross-file reader checked for claims that grew, and those it found are fixed.
 
 - **Relative links and anchors:** a short script, kept in the scratchpad, over every changed file.
 - **No markers left in an outward file:** `grep -nE 'chunk ?[0-9]|the owner|Claude|PR #|\bO[0-9]+\b'`. Justify each hit that's left.

@@ -1,14 +1,32 @@
 # **seedelf-cli**
 
-The `seedelf-cli` is a Rust implementation of the Seedelf stealth wallet protocol. It uses [Cardano Collateral Provider](https://giveme.my/), [Koios](https://www.koios.rest/), and [Pallas](https://github.com/txpipe/pallas). The wallet is primarily terminal-based but uses a static HTML web interface for CIP30 interactions when required.
+`seedelf-cli` is a command-line wallet for Seedelf, a stealth wallet on Cardano. The ADA and tokens it holds sit at one smart contract, under registers (pairs of public curve points) that look random to everyone else. Anyone can pay you there, and only your secret key can prove which UTxOs are yours, so the chain doesn't show who received a payment or who spent it. It's for Cardano users who are at home in a terminal.
 
 **Note: Wallet Is Currently In Beta**
 
+Looking for a wallet in the browser instead? The [Seedelf Wallet](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/README.md) is a Cardano wallet for Chrome with Seedelf built in. It's a separate product from the CLI, with its own keys: neither can open the other's wallet.
+
+## How It Works
+
+- **A Seedelf is your name in the contract.** It's a token whose name starts with `5eed0e1f`, held in a UTxO under a register of yours: two points on the BLS12-381 curve, a generator and a public value. You give a payer its name: the 64-character hex string `balance` prints.
+- **Every payment gets a fresh register.** The payer's wallet reads your Seedelf's register and re-randomizes it. The new register is still yours to spend, and it looks random to everyone else, as long as the elliptic-curve Decisional Diffie-Hellman problem is hard.
+- **Spending takes a proof, not your signature.** For each UTxO it spends, the CLI proves that it knows the secret key behind the register without revealing the key (a Schnorr proof), and the contract checks the proof. The transaction is signed by a one-time key made for it.
+- **The collateral is shared.** Every Cardano script spend puts up collateral: a UTxO the network keeps if a script fails. Collateral sits at an address, so your own would show who spent. For spends from your Seedelf balance, the CLI uses the collateral [giveme.my](https://giveme.my/) puts up, the same for every user. Logical Mechanism, who maintain Seedelf, run giveme.my, and it signs that collateral for each such spend. `create` and `util extract` put up the browser wallet's own 5 ADA instead.
+- **Your balance is every UTxO your key can spend.** The CLI finds them by testing each register at the contract against your key. It reads the chain through [Koios](https://www.koios.rest/), and submits its own spends there.
+
+The root [README](https://github.com/logical-mechanism/Seedelf-Wallet#what-is-a-stealth-wallet) explains the protocol and its proofs.
+
 ## Installation
 
-Precompiled binaries are available for Linux, Windows, and macOS. These may be found in the [latest release](https://github.com/logical-mechanism/Seedelf-Wallet/releases/latest). Each archive comes with a detached GPG signature (`.asc`); verify it against the [release key](../util/pubkeys/seedelfwallet.asc) before running the binary.
+Precompiled binaries are available for x86-64 Linux, Windows, and macOS. These may be found in the [latest release](https://github.com/logical-mechanism/Seedelf-Wallet/releases/latest). Each archive comes with a detached GPG signature (`.asc`); verify it against the [release key](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/util/pubkeys/seedelfwallet.asc), `util/pubkeys/seedelfwallet.asc` in this repository, before running the binary. Check the key's fingerprint first: `759F 3952 BE14 AF01 AFEE 5861 A1A0 A20E 21B9 9053` (release@logicalmechanism.io).
 
-Looking for a wallet in the browser instead? The [Seedelf Wallet](seedelf-web-wallet/README.md) is a Cardano wallet for Chrome with Seedelf built in. It's a separate product from the CLI, on its own version line.
+```bash
+gpg --show-keys seedelfwallet.asc   # check the fingerprint
+gpg --import seedelfwallet.asc
+gpg --verify seedelf-cli-linux.tar.gz.asc seedelf-cli-linux.tar.gz
+```
+
+The archives are `seedelf-cli-linux.tar.gz`, `seedelf-cli-macos.tar.gz` and `seedelf-cli-windows.zip`. The release's `hashes.txt` lists the SHA-256 of each archive and each binary, and it's signed the same way.
 
 If you have [rust installed](https://www.rust-lang.org/tools/install), then the `seedelf-cli` may be installed directly from [crates.io](https://crates.io/crates/seedelf-cli).
 
@@ -20,7 +38,7 @@ cargo install seedelf-cli
 
 ### Building From Source
 
-First, clone the repo and enter the cli subfolder.
+First, clone the repo and enter the Rust workspace's folder. Its `rust-toolchain.toml` pins the Rust version it builds with.
 ```bash
 git clone https://github.com/logical-mechanism/Seedelf-Wallet
 cd Seedelf-Wallet/seedelf-platform
@@ -34,7 +52,7 @@ seedelf-cli help
 
 Building for release:
 ```bash
-cargo build --release --bin seedelf-cli 
+cargo build --release --bin seedelf-cli
 ./target/release/seedelf-cli help
 ```
 
@@ -75,15 +93,17 @@ Options:
   -V, --version            Print version
 ```
 
+`--preprod` uses Cardano's pre-production test network instead of mainnet. `--variant` picks the version of the contracts. There's one, variant 1, which is the default.
+
 ### Basic Usage
 
-Get started with the wallet using the `welcome` command.
+The first command you run sets up the wallet. `welcome` is a good first one, since it only prints a short introduction.
 
 ```bash
 seedelf-cli welcome
 ```
 
-This command will generate an encrypted secret key for the wallet. The `welcome` command will prompt the user for a password and a name for the secret key file. The wallet will use this secret key for all spending-related actions. The user must keep the secret key safe and secure. **Keep this file safe!** The wallet stores the encrypted secret key file on the local machine inside the home directory under the `$HOME/.seedelf` folder. 
+The CLI asks for a name for the wallet file, then a password: at least 14 characters, with an uppercase letter, a lowercase letter, a digit and a special character. It makes a random secret key and saves it as `$HOME/.seedelf/<name>.wallet`, encrypted with AES-256-GCM under a key that Argon2id derives from the password (`seedelf-cli/src/setup.rs`). Every command that needs the key asks for the password. **Keep this file safe!** There's no recovery phrase, so back up the file and keep its password. The CLI uses the one wallet file in that folder, so the folder must hold exactly one. The root README's [Wallet File Storage](https://github.com/logical-mechanism/Seedelf-Wallet#wallet-file-storage) describes it.
 
 The following action will create a Seedelf token with the `create` command.
 
@@ -91,23 +111,50 @@ The following action will create a Seedelf token with the `create` command.
 seedelf-cli create [OPTIONS] --address <ADDRESS>
 ```
 
-The available `[OPTIONS]` may be viewed with the `--help` parameter. The `<ADDRESS>` parameter in the `create` command is the address paying for the Seedelf token mint transaction. This address must come from a CIP30-enabled wallet. It must also hold a UTxO of exactly 5 ADA with no tokens, which the mint puts up as collateral; `create` refuses to build the transaction without one. The `create` command will use a local web server to generate a website at [http://127.0.0.1:44203/](http://127.0.0.1:44203/). The website will ask the user to select a wallet from the dropdown in the top right corner. The website will prompt the user to enable the wallet and sign the transaction. The `Transaction CBOR` section shows the CBOR of the transaction.
+The `<ADDRESS>` parameter in the `create` command is the address paying for the Seedelf token mint transaction. This address must come from a browser wallet that supports CIP-30, the standard that lets a web page ask a Cardano browser wallet to sign. It must also hold a UTxO of exactly 5 ADA with no tokens, which the mint puts up as collateral; `create` refuses to build the transaction without one. Sending exactly 5 ADA from that wallet to that same address makes one. The optional `--label` is a personal tag in plain text: the token's name keeps its first 15 bytes, in hex. The `create` command will use a local web server to serve a page at [http://127.0.0.1:44203/](http://127.0.0.1:44203/). Select your wallet from the dropdown in the top right corner. The page asks the wallet to sign the transaction, and the wallet submits it. The `Transaction CBOR` section shows the CBOR of the transaction. Stop the server with Ctrl-C when it's done.
 
-At this point, the wallet may receive funds from other CIP30 wallets or Seedelfs. Users may fund their own Seedelf and others by using the `fund` command.
+At this point, the wallet may receive funds from other CIP-30 wallets or Seedelfs. Users may fund their own Seedelf and others by using the `fund` command.
 
 ```bash
 seedelf-cli fund [OPTIONS] --address <ADDRESS> --seedelf <SEEDELF>
 ```
 
-The available `[OPTIONS]` may be viewed with the `--help` parameter. The `<ADDRESS>` parameter used in the `fund` command is the address supplying the value and paying for the transaction. The `<SEEDELF>` parameter is the Seedelf receiving the funds. The `fund` command is similar to the `create` command, as it generates a local website for CIP30 interactions.
+The `<ADDRESS>` parameter used in the `fund` command is the address supplying the value and paying for the transaction. The `<SEEDELF>` parameter is the Seedelf receiving the funds, by its full token name in hex. `--lovelace` and `--asset` say what's sent; give at least one. The `fund` command is similar to the `create` command, as it serves a local page for the browser wallet to sign.
 
-The user may send funds to another Seedelf address using the `transfer` command and back to a CIP30 wallet using the `sweep` command.
+From your balance, `transfer` pays other Seedelfs, and `sweep` pays a key address or an ADA Handle's address (an ADA Handle is a `$name` that points to a Cardano address). These spend through the contract: the CLI proves, signs and submits them itself, with no browser wallet.
 
 Use `seedelf-cli help` to view all available commands and the `--help` option to see more information about a specific command.
 
+### Commands
+
+| Command | What it does | Flags |
+|---|---|---|
+| `welcome` | Prints a short introduction. | |
+| `balance` | Your Seedelfs and your balance. | |
+| `create` | Mints a new Seedelf, paid by an address of a browser wallet, which signs it. | `-a, --address`, `-l, --label` |
+| `fund` | An address pays a Seedelf, yours or anyone's. The browser wallet signs it. | `-a, --address`, `-s, --seedelf`, `-l, --lovelace`, `--asset` |
+| `transfer` | Your balance pays one or more Seedelfs. | `-s, --seedelfs`, `-l, --lovelaces`, `--asset`, `--utxo` |
+| `sweep` | Your balance pays an address. | `-a, --address` or `--ada-handle`; `-l, --lovelace` and `--asset`, or `--all`; `--utxo` |
+| `remove` | Burns one of your Seedelfs and sends the ADA it held to an address. | `-s, --seedelf`, `-a, --address` |
+| `util expose-key` | Prints your secret key. Use with caution. | |
+| `util base` | Prints your base register: the one your key makes before any re-randomization, which every register of yours comes from. | |
+| `util find` | Lists every Seedelf whose token name contains `--label`, matched against the name in hex (so give the label in hex, as the name holds it), or every Seedelf without it. | `-l, --label` |
+| `util age` | How old a Seedelf is. | `-s, --seedelf` |
+| `util statistics` | Statistics about the Seedelf protocol. | |
+| `util history` | Your spends and receipts. | `--spend-only`, `--receive-only` |
+| `util mint` | Mints a new Seedelf paid from your balance, with no browser wallet. With `--generator` and `--public-value`, the Seedelf goes under that register instead of yours: a Seedelf made for someone else, from a register of theirs (`util base` prints one). | `-l, --label`, `-g, --generator`, `-p, --public-value`, `--utxo` |
+| `util extract` | Sends a UTxO at the contract that has no datum to an address. A payment sent to the contract without a datum has no register, so the contract lets anyone spend it. The address pays the fee and needs a 5 ADA collateral UTxO, and its browser wallet signs. | `-u, --utxo`, `-a, --address` |
+| `util migrate` | Refuses every `--from-variant`: there's no variant before 1, the only one. | `--from-variant` |
+| `external balance` | The external wallet's address and balance (see below). | |
+| `external sweep` | Sends everything at the external wallet into your balance. | |
+
+- **Amounts:** `--lovelace` (`--lovelaces` for `transfer`) is in lovelace: 1 ADA is 1,000,000. `--asset` is `<policy_id>.<token_name>=<amount>`, both in hex. For `fund` and `sweep`, repeat it, or comma-separate several tokens in one; `transfer` takes one per Seedelf, below.
+- **Several Seedelfs at once:** `transfer` takes `-s` once for each Seedelf, `-l` once for each, in the same order, and `--asset` once for each if any has tokens, comma-separating that Seedelf's tokens (`--asset ""` for one that has none).
+- **`--utxo`** for `transfer`, `sweep` and `util mint` is `<tx_hash>#<index>`, repeatable: the UTxOs to spend, in place of the CLI's own pick. It picks only among the 20 UTxOs a spend draws on (see Limits), and skips any other without a word; `sweep --all` ignores it. `util extract`'s `-u, --utxo` is the one UTxO it extracts.
+
 ### dApp Interactions: The Sweep-Fund Flow
 
-We suggest the following flow to interact with dApps. This flow has the best user experience and uses the already existing tech stack on Cardano. The idea is to use a new CIP30 wallet, which is completely disconnected from the user's existing wallets and is DApp-enabled. The user will sweep funds from Seedelf into that new wallet. The user can interact with the desired dApp. The resulting funds after interaction may fund your Seedelf. For simplicity, Seedelf provides an external wallet that may receive funds without invoking the contract. The `external sweep` command can return the funds to the contract. The user may send funds with the `fund` command.
+The CLI doesn't connect to dApps. The suggested way to use one goes through a new CIP-30 wallet that the dApp accepts, completely disconnected from your existing wallets. Sweep funds from Seedelf into that new wallet, and use the dApp from it. The funds that come back may then fund your Seedelf, with the `fund` command. For simplicity, Seedelf also provides an external wallet that may receive funds without invoking the contract: a key address made from your Seedelf key. It's an ordinary address, so what it holds is public, and so is every payment to it. The `external sweep` command returns what it holds to the contract.
 
 #### Example: Purchase Tokens with 25 ADA From A Dex On Mainnet
 
@@ -126,7 +173,7 @@ seedelf-cli sweep --address <NEW_WALLET_ADDRESS> --lovelace 25000000
 seedelf-cli external sweep
 ```
 
-The user may view the external wallet address with the `external balance` command.
+The `external balance` command shows the external wallet's address.
 
 ```bash
 seedelf-cli external balance
@@ -134,8 +181,19 @@ seedelf-cli external balance
 
 The benefit of the external wallet method is that it can be used to accumulate many UTxOs that can later be sent into the wallet.
 
-Privacy is preserved with this method because the new wallet address is funded directly from Seedelf, removing all linkability as ownership can only be assumed and not proven. Funding a seedelf from the new wallet is private as the new wallet is anonymous, and the contract does not link the UTxO to the seedelf. Privacy preservation is maintained when using the external address as long as the linkability of the original wallet and the external wallet is never connected or created. The flow `Seedelf -> New Wallet -> dAPP -> New Wallet -> Seedelf` and `Seedelf -> New Wallet -> dAPP -> New Wallet -> External Wallet -> Seedelf` will be private.
+This keeps the dApp apart from your Seedelf. The new wallet is funded from the contract, where a UTxO's owner can only be assumed, never proven, so the chain doesn't show which Seedelf funded it. Funding a Seedelf from the new wallet doesn't show which Seedelf it pays either: the payment goes to the contract under a fresh register, and the Seedelf's own UTxO isn't touched. The external wallet keeps this as long as nothing ever ties it to your original wallet. So in both flows, `Seedelf -> New Wallet -> dApp -> New Wallet -> Seedelf` and `Seedelf -> New Wallet -> dApp -> New Wallet -> External Wallet -> Seedelf`, the chain doesn't show whose Seedelf is at either end. What can still tie them together, such as your IP address and the amounts, is under Limits below.
+
+## Limits
+
+- **Amounts aren't hidden.** Seedelf hides who owns a UTxO, not what it holds, and it mixes nothing.
+- **Your first Seedelf is tied to the wallet that paid for it.** `create` and `fund` are paid by a browser wallet, in the open. `util mint` makes a new Seedelf from your balance with no such tie, and `remove` can then burn the first.
+- **The services see your IP address.** Koios reads the chain and submits your Seedelf spends, giveme.my puts up their collateral, and most commands ask `api.github.com` for the latest version (the update check). Koios and giveme.my can group your spends as one person's by that address. A spend can't go out while giveme.my doesn't answer.
+- **Change can tie spends together.** A spend's change comes back to you, so the spend that later uses it can be assumed to be yours too.
+- **The CLI trusts Koios.** It runs no node. Koios can't spend your funds, since a spend needs your key's proof, but a Koios that lied could hide UTxOs, or report a wrong register for a Seedelf or a wrong address for an ADA Handle, and so redirect a payment.
+- **A spend draws on at most 20 of your UTxOs,** the first 20 the CLI finds that hold no Seedelf. `sweep --all` sends what those hold; run it again for the rest.
+
+The root README's [Wallet Limitations](https://github.com/logical-mechanism/Seedelf-Wallet#wallet-limitations) has the known attacks in full.
 
 ## Contact
 
-For support and bugs, open a [GitHub issue](https://github.com/logical-mechanism/Seedelf-Wallet/issues) or a support ticket in the [Seedelf Discord](https://discord.gg/r8VwV2jGBy). For questions, suggestions, or concerns, please reach out to support@logicalmechanism.io. Security vulnerabilities go by email only: see [SECURITY.md](../SECURITY.md).
+For support and bugs, open a [GitHub issue](https://github.com/logical-mechanism/Seedelf-Wallet/issues) or a support ticket in the [Seedelf Discord](https://discord.gg/r8VwV2jGBy). For questions, suggestions, or concerns, please reach out to support@logicalmechanism.io. Security vulnerabilities go by email only: see [SECURITY.md](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/SECURITY.md).

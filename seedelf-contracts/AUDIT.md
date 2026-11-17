@@ -1,6 +1,12 @@
 # Seedelf Smart Contract Security Audit
 
-**Scope:** Aiken on-chain contracts in [seedelf-contracts/](.) at commit of `aiken.toml` v0.4.10 (Aiken v1.1.19, Plutus v3, stdlib v3.0.0).
+A security review of Seedelf's Aiken contracts: its findings, rated by severity, and its recommendations.
+
+**Scope:** Aiken on-chain contracts in [seedelf-contracts/](.), as the source stood at commit `e350a0aa`, with package version 0.4.10 in `aiken.toml` (Aiken v1.1.19, Plutus v3, stdlib v3.0.0). The source has changed since only in formatting; `aiken.toml` now pins Aiken v1.1.24 and stdlib v4.0.0.
+
+**Not the deployed contracts.** What's on chain is version 1, an earlier revision: commit `5b82530`, built with Aiken v1.1.9 and stdlib v2.2.0. This review doesn't cover version 1's bytes. [README.md](README.md#deployed-contracts-version-1) has version 1's hashes and reference UTxOs.
+
+**Terms.** Seedelf is a stealth wallet for Cardano; the repository's [README](../README.md) explains the protocol. A `Register` is the wallet contract's datum: a `generator` $g$ and a `public_value` $u = g^x$, both compressed BLS12-381 G1 points, where $x$ is the owner's secret. A spend's redeemer is a `Proof`: `g_r_b` is $g^r$ for a secret nonce $r$, `z_b` is $z = r + c \cdot x$, and `vkh` is the hash of the one-time key (the review calls it a one-time pad) that must sign the transaction. $c$ is the Fiat-Shamir challenge, a hash of $g$, $g^r$, $u$ and `vkh`. A Seedelf token is the minting policy's `5eed0e1f`-prefixed NFT that locates a user's root Register, the one payers re-randomize. `seedelf-crypto` and `seedelf-core` are the Rust crates that build registers, proofs and transactions for the CLI and the Seedelf Wallet.
 
 **Files audited:**
 - [validators/wallet.ak](validators/wallet.ak)
@@ -61,13 +67,13 @@ This is aligned with the hyperstructure philosophy: any register that survives t
 - **Identity `g`:** same — trivial proofs always succeed.
 - **Torsion (non-prime-order) points:** decompress succeeds, but `g^z ≠ g^r · u^c` because the Schnorr relation only holds in the prime-order subgroup. UTxO becomes dead.
 
-These are not contract bugs — the validator cannot distinguish "user wants their funds locked" from "user made a mistake". The off-chain wallet must enforce `is_torsion_free()` and non-identity before constructing a register. CLAUDE.md already states this. Keep it prominent in user-facing docs.
+These are not contract bugs — the validator cannot distinguish "user wants their funds locked" from "user made a mistake". The off-chain wallet must enforce `is_torsion_free()` and non-identity before constructing a register. The repository's [README](../README.md#wallet-limitations) states this under *Wallet Limitations*. Keep it prominent in user-facing docs.
 
 ### 1.3 Replay / rollback analysis
 
 The Fiat-Shamir challenge binds `vkh`, and the tx must carry a signature by that `vkh`. On rollback:
 
-- The mempool-visible proof `(z_b, g_r_b, vkh)` is reusable only inside a tx whose body hash an existing `vkh`-signature already covers. Cardano signatures commit to the full tx body, so an attacker cannot repackage the witness onto a new tx body without the `vkh` secret key.
+- The mempool-visible proof `(z_b, g_r_b, vkh)` is reusable only inside a tx whose body an existing `vkh` signature already covers, that is, the same tx. Cardano signatures commit to the full tx body, so an attacker cannot repackage the witness onto a new tx body without the `vkh` secret key.
 - The legitimate user, upon rollback, generates a **fresh** `vkh`, a fresh `r`, hence a fresh `c`, hence a fresh `z`. The old proof can never co-spend the same UTxO under a different body.
 
 Conclusion: one-time-pad design is sound, conditional on `vkh` actually being fresh per attempt. This is an **off-chain invariant**: reusing a `vkh` across two spend attempts does not break security (the tx-body signature still differs), but it reduces privacy hygiene. Recommend keeping the "one-time" wording in the off-chain code comments as a hard rule.
@@ -91,7 +97,7 @@ The challenge is 224 bits. The standard target for Schnorr Fiat-Shamir is 128-bi
 - **Discrete-log extractor soundness** still inherits BLS12-381 G1's ~128-bit classical security, so the practical posture is unchanged.
 - **Grinding (adaptive proof-of-knowledge attacks)** are bounded by ~2¹¹² — still well out of reach, but below the common target.
 
-Recommendation (non-blocking): if a future validator rev is ever spun up, consider `blake2b_256` for a clean 128-bit margin. Note that the off-chain prover in `seedelf-crypto` must match exactly; do not change unilaterally. Previous commits (`e930657`) chose 224-bit intentionally for cost — this is a deliberate, documented trade-off, not a defect.
+Recommendation (non-blocking): if a future validator rev is ever spun up, consider `blake2b_256` for a clean 128-bit margin. Note that the off-chain prover in `seedelf-crypto` must match exactly; do not change unilaterally. 224 bits was chosen intentionally for cost (a comment in `lib/schnorr.ak`, removed in commit `e930657`, gave the reason: to avoid costly arithmetic modulo the field prime) — this is a deliberate, documented trade-off, not a defect.
 
 ### 2.2 [Info] No explicit subgroup check on input points
 
@@ -125,11 +131,11 @@ expect [(pid, tkn, amt)]: List<(PolicyId, AssetName, Int)> = mint |> assets.flat
 
 `mint` is the whole-tx multi-asset value. This pattern forces the entire tx to have exactly **one** minted/burned asset line. Consequences:
 
-- Cannot mint two seedelf NFTs in one tx.
-- Cannot mint a seedelf NFT and a user token (e.g. for fund-send) in the same tx.
+- Cannot mint two Seedelf NFTs in one tx.
+- Cannot mint a Seedelf NFT and a user token (e.g. for fund-send) in the same tx.
 - Cannot mint-and-burn simultaneously.
 
-This is safe (over-restrictive rather than permissive) but is a **composability cost** worth surfacing. If batch-minting many seedelfs is ever desired, this check must be rewritten to filter by `policy_id` first, then validate each row.
+This is safe (over-restrictive rather than permissive) but is a **composability cost** worth surfacing. If batch-minting many Seedelfs is ever desired, this check must be rewritten to filter by `policy_id` first, then validate each row.
 
 ### 3.2 [Info] Burn branch only checks prefix
 
@@ -180,7 +186,7 @@ Each validator accepts a `Data` parameter that is unused in logic but baked in a
 
 ### 6.3 Toolchain pinning
 
-`aiken.toml` pins compiler `v1.1.19`, Plutus `v3`, and stdlib `v3.0.0`. Good. Any stdlib upgrade should re-run the full test suite and **diff the resulting script hashes** against `hashes/` before release, because a stdlib change could silently alter generated UPLC.
+At `e350a0aa`, the reviewed snapshot, `aiken.toml` pinned compiler `v1.1.19`, Plutus `v3`, and stdlib `v3.0.0`. Good. Any stdlib upgrade should re-run the full test suite and **diff the resulting script hashes** against `hashes/` before release, because a stdlib change could silently alter generated UPLC.
 
 ### 6.4 No on-chain randomness / oracle dependency
 
@@ -196,9 +202,9 @@ The datum (`Register`) is chosen by the *sender* of a UTxO, not the recipient. A
 
 1. **Keep off-chain point validation strict.** `is_torsion_free` + non-identity checks on both `generator` and `public_value` must be unconditional in `seedelf-crypto` / `seedelf-core` before publishing a register. A single lapse produces dead UTxOs with no on-chain recourse.
 2. **Add expect-fail unit tests** in `lib/schnorr.ak` for identity-point attempts (§2.5). Cheap insurance against future refactors.
-3. **Document the "one mint per tx" restriction** of `seedelf.ak` in user-facing docs (§3.1). If batch-mint is ever a product requirement, plan a v2 policy rather than patching in place.
+3. **Document the "one mint per tx" restriction** of `seedelf.ak` in user-facing docs (§3.1). If batch-mint is ever a product requirement, plan a new version of the policy rather than patching in place.
 4. **Guardrail the CLI** against sending assets to the `always_false` address beyond the minimum reference-script min-UTxO (§5).
-5. **Consider blake2b_256 for Fiat-Shamir** in a future validator version if 128-bit soundness is a marketing/audit requirement (§2.1). Current 224-bit choice is a deliberate cost trade-off.
+5. **Consider blake2b_256 for Fiat-Shamir** in a future validator version if 128-bit soundness is ever required (§2.1). Current 224-bit choice is a deliberate cost trade-off.
 6. **Add a stdlib-upgrade checklist** to the release process: rebuild, re-test, diff `hashes/` (§6.3).
 
 ---

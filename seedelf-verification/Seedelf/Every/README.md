@@ -1,8 +1,8 @@
 # Seedelf in every transaction, kernel-checked
 
-Kernel-checked proofs of exactly when each of Seedelf's three deployed scripts accepts, in every transaction: no Blaster, no step limit, any number of signatories, any mint, any inputs. They rest on Lean's own axioms alone (`propext`, `Classical.choice`, `Quot.sound`), and the `#guard_msgs` checks in `Typed`, `PolicyTyped` and `AlwaysFalse` fail the build otherwise. What they let us claim is in [CLAIMS.md](../../CLAIMS.md). How the work went, and the owner's calls, are in [chunk 48](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-48-seedelf-every-tx-kernel.md).
+Kernel-checked proofs of exactly when each of Seedelf's three deployed scripts accepts, in every transaction: no Blaster, no step limit, any number of signatories, any mint, any inputs. They rest on Lean's own axioms alone (`propext`, `Classical.choice`, `Quot.sound`), and the `#guard_msgs` checks in `Typed`, `PolicyTyped` and `AlwaysFalse` fail the build otherwise. What they let us claim is in [CLAIMS.md](../../CLAIMS.md). The record of how they were built is in the archive: [chunk 48](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-48-seedelf-every-tx-kernel.md).
 
-The method is chunk 45's for Lovejoin, so read [Lovejoin/Every/README.md](../../Lovejoin/Every/README.md) first: the spec is the compiled code read back as Lean over `Data`, and there's one `Ev` theorem per region, with induction for each loop. This page has what's different here.
+The method is Lovejoin/Every's, so read [Lovejoin/Every/README.md](../../Lovejoin/Every/README.md) first: the spec is the compiled code read back as Lean over `Data`, and there's one `Ev` theorem per region, with induction for each loop. This page has what's different here.
 
 ## Building
 
@@ -38,7 +38,7 @@ These are on top of Lovejoin's.
   - **simp's match reduction.** `simp only [f]`, where `f` matches on `proveOpt …` or `scalarOf …`, reduces the discriminant. So `registerOpt` is `afterProve info vkh (proveOpt …)`, and the proof rewrites `proveOpt …` with its cased value first.
   - **Unification.** A CEK step tries `some ?f =?= Option.map f (proveOpt …)` and reduces `proveOpt`. So `proveOpt` is `irreducible` once `prove_ev` is proved; `simp only [proveOpt]` still unfolds it by its equation.
   - **The kernel, on a match whose first discriminant is `scalarOf z`.** Unfolding `Seedelf.V1.schnorrAccepts` alone (by `unfold` or `delta`) fails the kernel check. That's why the readable `schnorrProve` matches on the three decompressions first, as Lovejoin's `schnorrVerifies` does, and why nothing here is stated over `schnorrAccepts`.
-  - **Bridging to the source's terms.** First `generalize bigEndian z = zi`: a free integer stops every reduction (`proveOpt_true_iff`, as chunk 45's `ownerPred_typed` does).
+  - **Bridging to the source's terms.** First `generalize bigEndian z = zi`: a free integer stops every reduction (`proveOpt_true_iff`, as Lovejoin/Every's `ownerPred_typed` does).
 - **The spec's specials are the program's own tests**, as Bool `if`s (`scalarData`, `proveOpt`). Case on each test, then pass an `ap_lessThan` or `ap_lessThanEquals` fact, so the machine never decides one.
 - **No `try` catches a max-recursion error:** it's a runtime exception. A closing `all_goals try (… w_go …; done)` that reaches the goal a region lemma is meant for runs into the region with no lemma, and then decides `n < q`. Give that goal its own bullet.
 - **Test a tag before splitting its fields,** as the program does. A spec that matched the redeemer's three fields before its tag needed 281 field shapes for the wrong-tag branch, and ran past 16 GB.
@@ -53,3 +53,9 @@ These are on top of Lovejoin's.
 ## Paths
 
 `Base.lean`'s `regAt` is the Register check's delay. The other wallet paths are suffixes of it: the decode, the check and the loop. `Datum.lean`'s `datumAt` is where `Some(d)` is bound. The policy's `burnBody` and `mintBody` are the xor's two arguments. Generate any new path with `Lovejoin/Every/tools/` from `pseudo.py`'s printout, never by hand.
+
+## Plans and records
+
+- **What's planned next for these proofs:** no locked Register UTxOs, the `.hex` files as Lake inputs, and an outside read of the statements, in [chunk 49's plan](../../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-49-no-locked-funds.md).
+- **Moving every proof off the forks** onto IOG's own Lean-blaster and PlutusCoreBlaster, with the upstream changes that affect it: [chunk 46's plan](../../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-46-verification-on-upstream.md). Each `require` in `lakefile.lean` moves to `input-output-hk` once nothing on its fork is needed. The PlutusCoreBlaster pin is the fork's `opaque-xor` branch, and `Slice/`'s its `opaque-slice`.
+- **The records:** the forks and the upstream fixes in [chunk 41](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-41-blaster-fixes.md), and these proofs in [chunk 48](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-48-seedelf-every-tx-kernel.md).
