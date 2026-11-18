@@ -1,4 +1,4 @@
-use crate::commands::fee;
+use crate::commands::{fee, rows};
 use crate::setup;
 use crate::web_server;
 use anyhow::{Context, Result, bail};
@@ -73,7 +73,10 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
     // never spend one here.
     all_utxos.retain(|utxo| utxo.reference_script.is_none());
     // Anyone can pay the address too: what would push a token's total past
-    // what one output holds stays out of the selection (chunk 51).
+    // what one output holds stays out of the selection (chunk 51), and core
+    // is handed no more kinds of token than one transaction could carry
+    // (l3cli#3).
+    let all_utxos = rows::for_select(all_utxos, &Assets::new(), &Assets::new())?;
     let (all_utxos, _) = utxos::fitting(&all_utxos, &Assets::new(), |_| false)?;
 
     // lovelace goal here should account for the estimated fee

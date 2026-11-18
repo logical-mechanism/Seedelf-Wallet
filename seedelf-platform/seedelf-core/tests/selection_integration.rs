@@ -269,11 +269,10 @@ fn fund_takes_ada_alone_before_another_holder_of_the_token_sent() {
     }
 }
 
-/// With two tokens sent, only the holders each needs lead (as a script spend
-/// picks them, build.rs `holding`): the one holding most of A, then B's. A
-/// second holder of A, with 40 other tokens, stays put, where taking every
-/// holder until both were found spent it and put its 41 tokens in the change
-/// (chunk 51, r2cli#2).
+/// With two tokens sent, only the holders each needs lead: A's that brings
+/// most, then B's. A second holder of A, with 40 other tokens, stays put,
+/// where taking every holder until both were found spent it and put its 41
+/// tokens in the change (chunk 51, r2cli#2).
 #[test]
 fn fund_of_two_tokens_takes_only_the_holders_it_needs() {
     const B: &str = "33333333333333333333333333333333333333333333333333333333";
@@ -300,4 +299,107 @@ fn fund_of_two_tokens_takes_only_the_holders_it_needs() {
         "A's holder, B's, then ADA alone"
     );
     assert_pays(&params, &picked, 50_000_000, &sent);
+}
+
+/// `count` one-of tokens, each of a policy of its own made from `first`.
+fn nfts(first: u8, count: u8) -> Vec<(String, String, u64)> {
+    (0..count)
+        .map(|i| (hex::encode([first + i; 28]), "01".to_string(), 1))
+        .collect()
+}
+
+/// A UTxO holding `held` of the token being sent beside `others`.
+fn holder(byte: u8, lovelace: u64, held: u64, others: &[(String, String, u64)]) -> UtxoResponse {
+    let mut tokens: Vec<(&str, &str, u64)> = vec![(PID, "aa", held)];
+    tokens.extend(others.iter().map(|(p, n, q)| (p.as_str(), n.as_str(), *q)));
+    token_utxo(byte, lovelace, &tokens)
+}
+
+/// `--asset <PID>.aa=100`.
+fn hundred_sent() -> Assets {
+    Assets::new()
+        .add(Asset::new(PID.to_string(), "aa".to_string(), 100).unwrap())
+        .unwrap()
+}
+
+/// `fund`'s own steps over `address` (fund.rs: no pure 5 ₳ UTxO, nothing
+/// that overflows), then select for `goal`.
+fn fund_picks(address: Vec<UtxoResponse>, goal: u64, sent: &Assets) -> Vec<UtxoResponse> {
+    let usable = utxos::collect_address_utxos(address).unwrap();
+    let (usable, _) = utxos::fitting(&usable, &Assets::new(), |_| false).unwrap();
+    utxos::select(&fixture_params(), usable, goal, sent.clone()).unwrap()
+}
+
+/// Of those holding the token sent, the one that brings most leads: its ADA
+/// less what the change of its other tokens needs (chunk 51, l3money#1). By
+/// how much of the token each held, U1's 150 T beside 40 of the user's NFTs,
+/// on 2 ₳, led U2's 100 T on 50 ₳: its 41 kinds put the change's floor at
+/// 22 ₳, so `fund -l 45 ₳` was refused, where U2 pays alone, and `-l 10 ₳`
+/// spent both.
+#[test]
+fn fund_takes_the_holder_of_the_token_sent_that_brings_most() {
+    let address = vec![
+        holder(0x01, 2_000_000, 150, &nfts(0x40, 40)),
+        holder(0x02, 50_000_000, 100, &[]),
+    ];
+    for goal in [45_000_000, 10_000_000] {
+        let picked = fund_picks(address.clone(), goal, &hundred_sent());
+        assert_eq!(
+            labels(&picked),
+            ["U2"],
+            "U2 pays alone, for {goal} lovelace"
+        );
+        assert_pays(&fixture_params(), &picked, goal, &hundred_sent());
+    }
+}
+
+/// Anyone can pay the payer's address a UTxO holding more of the token sent
+/// than the user's own holder, with a pile of other tokens beside it, on
+/// little ADA. It led, and its pile put the change's floor past all the
+/// address held, or went to change on the user's ADA. It comes last now, as
+/// one that brings less than nothing (chunk 51, l3cli#2 and l3money#1).
+#[test]
+fn a_strangers_bigger_holder_of_the_token_sent_comes_last() {
+    // l3cli#2's: the user's U1, 10 ₳ and 5,000 SNEK, and U2, 3 ₳ alone; the
+    // stranger's S, 10,000 SNEK and 100 tokens of its own at about its least.
+    const SNEK: &str = "279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f";
+    let snek = hex::encode("SNEK");
+    let mut s_tokens: Vec<(&str, &str, u64)> = vec![(SNEK, snek.as_str(), 10_000)];
+    let names: Vec<String> = (0..100u16).map(|i| hex::encode(i.to_be_bytes())).collect();
+    let junk = "cd".repeat(28);
+    s_tokens.extend(names.iter().map(|n| (junk.as_str(), n.as_str(), 1)));
+    let snek_sent: Assets = Assets::new()
+        .add(Asset::new(SNEK.to_string(), snek.clone(), 100).unwrap())
+        .unwrap();
+    let goal = wallet_minimum_lovelace_with_assets(&fixture_params(), snek_sent.clone()).unwrap();
+    let address = vec![
+        token_utxo(0x01, 10_000_000, &[(SNEK, snek.as_str(), 5_000)]),
+        ada_utxo(0x02, 3_000_000),
+        token_utxo(0x09, 3_017_000, &s_tokens),
+    ];
+    let picked = fund_picks(address, goal, &snek_sent);
+    assert_eq!(labels(&picked), ["U1"], "the user's holder pays");
+    assert_pays(&fixture_params(), &picked, goal, &snek_sent);
+
+    // l3money#1's: the user's U1, 20 ₳ and 100 T, and U3, 100 ₳ alone; the
+    // stranger's 1.5 ₳ with 60 NFTs and as much T, its hash ground below
+    // U1's, or one more T.
+    for (case, stranger) in [
+        (
+            "as much T, listed first",
+            holder(0x00, 1_500_000, 100, &nfts(0x40, 60)),
+        ),
+        ("one more T", holder(0x09, 1_500_000, 101, &nfts(0x40, 60))),
+    ] {
+        let address = vec![
+            stranger,
+            holder(0x01, 20_000_000, 100, &[]),
+            ada_utxo(0x03, 100_000_000),
+        ];
+        for (goal, expected) in [(100_000_000, vec!["U1", "U3"]), (10_000_000, vec!["U1"])] {
+            let picked = fund_picks(address.clone(), goal, &hundred_sent());
+            assert_eq!(labels(&picked), expected, "{case}, for {goal} lovelace");
+            assert_pays(&fixture_params(), &picked, goal, &hundred_sent());
+        }
+    }
 }

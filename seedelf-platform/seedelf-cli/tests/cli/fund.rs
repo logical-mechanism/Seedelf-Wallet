@@ -9,6 +9,51 @@ use seedelf_crypto::register::Register;
 
 use crate::harness::*;
 
+/// A stranger's piles of tokens at the payer's address don't slow `fund`:
+/// core adds up the tokens of all it's handed in time that grows with the
+/// square of the kinds, and `fund`, as `create` and `util extract`, handed it
+/// every UTxO there (chunk 51, l3cli#3's sibling). With 40 piles of 1,000
+/// tokens beside the user's 100 ₳, the fund must be built within 60 s.
+#[tokio::test]
+#[serial]
+async fn a_strangers_piles_at_the_payers_address_dont_slow_fund() {
+    let mut scenario = Scenario::start().await;
+    scenario
+        .mount_credential_utxos(vec![seedelf_utxo(
+            scenario.scalar,
+            1,
+            1_500_000,
+            SAMPLE_SEEDELF,
+        )])
+        .await;
+    let payer = external_address_bech32();
+    let mut rows: Vec<_> = (0..40u16)
+        .map(|n| address_utxo(&payer, 100 + u64::from(n), 19_000_000, &big_pile(n)))
+        .collect();
+    rows.push(address_utxo(&payer, 2, 100_000_000, &[]));
+    scenario.mount_address_utxos(rows).await;
+    scenario.arm_web_capture();
+
+    within(std::time::Duration::from_secs(60), move || async move {
+        run(
+            FundArgs {
+                address: payer,
+                seedelf: SAMPLE_SEEDELF.to_string(),
+                lovelace: Some(10_000_000),
+                assets: vec![],
+            },
+            PREPROD,
+            VARIANT,
+        )
+        .await
+        .map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .expect("the fund is built");
+    let tx = decode_tx(&scenario.captured_cbor());
+    assert_eq!(tx.inputs, vec![(tx_hash(2), 0)], "paid from the 100 ₳");
+}
+
 /// Funding a seedelf must conserve value, place the funded output (with the
 /// seedelf's re-randomized `Register`) at the wallet contract, and return
 /// change to the paying address.

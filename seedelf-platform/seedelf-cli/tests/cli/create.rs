@@ -200,6 +200,25 @@ fn payer_utxos() -> Vec<UtxoResponse> {
     ]
 }
 
+/// A stranger's piles of tokens at the payer's address don't slow `create`,
+/// which handed core every UTxO there, to add up their tokens in time that
+/// grows with the square of the kinds (chunk 51, l3cli#3's sibling): with 40
+/// piles of 1,000 there, the Seedelf is built within 60 s.
+#[tokio::test]
+#[serial]
+async fn a_strangers_piles_at_the_payers_address_dont_slow_create() {
+    let tx = within(std::time::Duration::from_secs(60), || {
+        let payer = external_address_bech32();
+        let mut utxos = payer_utxos();
+        utxos.extend(
+            (0..40u16).map(|n| address_utxo(&payer, 100 + u64::from(n), 19_000_000, &big_pile(n))),
+        );
+        create_with(utxos, None)
+    })
+    .await;
+    assert_eq!(tx.inputs, vec![(tx_hash(2), 0)], "paid from the 10 ₳");
+}
+
 /// A UTxO holding a reference script is never spent: it would cost Conway's
 /// reference-script fee, and the script may be deployed there on purpose.
 #[tokio::test]
