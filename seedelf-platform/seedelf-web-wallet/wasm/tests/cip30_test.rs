@@ -3144,6 +3144,48 @@ fn a_datum_names_the_accounts_key_however_its_bytes_are_spelled() {
     assert!(!s.names_key && !s.key_releases);
 }
 
+/// The key in chunks beside a field nested past the 128 levels the wallet's decoders stop at, one the contract needn't
+/// read: the node reads the datum as `Constr 0 [B key, [[[…]]]]`, so it names the key all the same (chunk 51, r3a#1's
+/// class, class#2's review).
+#[test]
+fn a_datum_names_the_accounts_key_beside_a_field_nested_past_the_depth_limit() {
+    let mut b = body(
+        vec![input(TX_A, 1), input(TX_B, 0)],
+        vec![out_with_token(&theirs(), 51_800_000)],
+    );
+    b.script_data_hash = Some(Hash::new([1; 32]));
+    let own = row(TX_A, 1, &ours(Role::Receive, 0), 2_000_000, &[]);
+    let k = hex::encode(key_00());
+    let (first, second) = k.split_at(28);
+    let deep = format!("{}80", "81".repeat(130));
+    let mut inline = contract_row(TX_B, 0);
+    inline.inline_datum = Some(cip30::InlineDatum {
+        bytes: format!("d8799f5f4e{first}4e{second}ff{deep}ff"),
+    });
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), vec![own, inline], false)).unwrap();
+    assert!(s.names_key && s.key_releases);
+}
+
+/// A contract UTxO keeping its datum by hash, which the transaction leaves out. The contract reads that datum and the
+/// wallet can't: the witness set isn't signed, so a site can add it after the signature. The account's key may then be
+/// what releases the UTxO, and the window says so in its hedged words (chunk 51, r3a#1's class, class#2's review).
+#[test]
+fn a_datum_kept_by_hash_and_left_out_may_name_the_accounts_key() {
+    let datum = format!("d8799f581c{}ff", hex::encode(key_00()));
+    let mut b = body(
+        vec![input(TX_A, 1), input(TX_B, 0)],
+        vec![out_with_token(&theirs(), 51_800_000)],
+    );
+    b.script_data_hash = Some(Hash::new([1; 32]));
+    let own = row(TX_A, 1, &ours(Role::Receive, 0), 2_000_000, &[]);
+    let mut held = contract_row(TX_B, 0);
+    held.datum_hash = Some(hex::encode(Hasher::<256>::hash(
+        &hex::decode(&datum).unwrap(),
+    )));
+    let s = cip30::inspect_tx(&account(), &request(tx_hex(b), vec![own, held], false)).unwrap();
+    assert!(!s.names_key && s.key_releases);
+}
+
 /// The account's own token of the kind a contract UTxO holds, passed through, never stands for the contract's: the
 /// order's ADA paid to the account and its token to the site still read as releasing the token (1.9.0's release
 /// review, mutants#2).

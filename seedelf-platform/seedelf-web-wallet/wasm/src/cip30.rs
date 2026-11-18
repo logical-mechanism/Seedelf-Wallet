@@ -19,7 +19,7 @@ use pallas_crypto::hash::{Hash, Hasher};
 use pallas_primitives::{Fragment, Metadatum, PlutusData, StakeCredential, conway};
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
-use seedelf_core::cbor::{MAX_DEPTH, check_nesting, within_depth};
+use seedelf_core::cbor::check_nesting;
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::staking::{drep_id, pool_id};
 use seedelf_crypto::cardano::{CardanoAccount, Role};
@@ -785,7 +785,8 @@ pub struct TxSummary {
     pub released_lovelace: String,
     pub released_tokens: Vec<Token>,
     /// One of the account's keys is what a contract here can be asking for: a required signer, named by a contract
-    /// UTxO's datum, or a contract input that can only be a native script's.
+    /// UTxO's datum, a contract UTxO whose datum, kept by hash, the transaction leaves out, or a contract input that can
+    /// only be a native script's.
     pub key_releases: bool,
     /// A contract UTxO's datum names one of the account's keys, in whatever role: it may be the user's own (an order, a
     /// listing, a position), or not.
@@ -982,7 +983,8 @@ fn at_script(row: &KoiosRow) -> bool {
 /// carries under that hash. It says the key is named, not whose the UTxO is or what the contract does with it.
 ///
 /// Whoever writes a datum chooses how its bytes are spelled, and the contract reads it as data: a key in chunks is the
-/// same key to it (chunk 51, r3a#1's class).
+/// same key to it (chunk 51, r3a#1's class). The search of the raw bytes can also match where two byte strings meet,
+/// which only says it more often.
 fn datum_names_key(row: &KoiosRow, carried: &HashMap<String, Vec<u8>>, keys: &Keys) -> bool {
     let inline = row
         .inline_datum
@@ -1001,12 +1003,10 @@ fn datum_names_key(row: &KoiosRow, carried: &HashMap<String, Vec<u8>>, keys: &Ke
 }
 
 /// Whether `test` holds for a byte string's value in `datum`, its chunks joined: each byte string on its own, never
-/// joined to the next. Only for one well-formed item held to [`MAX_DEPTH`], read token by token, never by a recursive
-/// decoder, as seedelf-koios's `register_of_datum` reads a register.
+/// joined to the next. Read token by token in one flat loop, never by a recursive decoder, so it needs no depth limit:
+/// the node takes a datum nested past the 128 levels the wallet's decoders stop at, and a field no contract reads can be
+/// that deep beside a key that is read.
 fn any_byte_value(datum: &[u8], test: impl Fn(&[u8]) -> bool) -> bool {
-    if !within_depth(datum, MAX_DEPTH) {
-        return false;
-    }
     let mut d = Decoder::new(datum);
     while d.position() < datum.len() {
         let read = match d.datatype() {
@@ -1029,6 +1029,17 @@ fn any_byte_value(datum: &[u8], test: impl Fn(&[u8]) -> bool) -> bool {
         }
     }
     false
+}
+
+/// Whether a contract UTxO keeps its datum by hash and the transaction doesn't carry it. A Plutus spend needs that
+/// datum, and the witness set isn't what's signed: a site can leave the datum out of what it shows the wallet and add it
+/// after the signature, so what it names can't be read here.
+fn datum_left_out(row: &KoiosRow, carried: &HashMap<String, Vec<u8>>) -> bool {
+    row.inline_datum.is_none()
+        && row
+            .datum_hash
+            .as_ref()
+            .is_some_and(|h| !carried.contains_key(&h.to_lowercase()))
 }
 
 /// A byte string's value at `d`'s position: its bytes, or its chunks' joined.
@@ -1202,6 +1213,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     let mut contract_held = Amount::default();
     let mut contract_inputs = 0usize;
     let mut names_key = false;
+    let mut datum_unseen = false;
     for input in body.inputs.iter() {
         let key = (hex::encode(input.transaction_id), input.index);
         match found.get(&key) {
@@ -1218,6 +1230,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                     }
                     contract_inputs += 1;
                     names_key |= datum_names_key(row, &carried, &keys);
+                    datum_unseen |= datum_left_out(row, &carried);
                 }
             }
             None => unknown.push(format!("{}#{}", key.0, key.1)),
@@ -1802,8 +1815,10 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     // withdrawal, a certificate or a vote of the owner's key (1.9.0's release review, critic#1). And a contract input
     // in a body with no script data hash can only be a native script's, which takes the witness alone: Plutus needs
     // the hash, and the body is what's signed. The witness set isn't, so a site can leave a native script out of what
-    // it shows the wallet and add it after, and nothing here reads one.
+    // it shows the wallet and add it after, and nothing here reads one. A datum kept by hash that the transaction
+    // leaves out is the same: the contract reads it, the wallet can't, so it may be what names the account's key.
     let key_releases = names_key
+        || datum_unseen
         || body
             .required_signers
             .iter()
