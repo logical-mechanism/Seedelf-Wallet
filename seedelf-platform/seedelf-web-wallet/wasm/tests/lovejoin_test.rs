@@ -2468,6 +2468,140 @@ fn the_collateral_mix_is_built_again_from_what_the_chain_left() {
     assert!(err.to_string().contains("isn't this wallet's"), "{err}");
 }
 
+/// The session's payment key under a stake key of a stranger's choosing: an
+/// address anyone can pay, which the session's key spends.
+fn staked_by_a_stranger() -> String {
+    let pallas_addresses::Address::Shelley(ours) = Address::from_bech32(&session()).unwrap() else {
+        unreachable!("the session's base address")
+    };
+    pallas_addresses::Address::Shelley(pallas_addresses::ShelleyAddress::new(
+        ours.network(),
+        ours.payment().clone(),
+        pallas_addresses::ShelleyDelegationPart::Key(pallas_crypto::hash::Hash::new([0x5a; 28])),
+    ))
+    .to_bech32()
+    .unwrap()
+}
+
+/// Where a transaction's change goes: each output's address that isn't a script's.
+fn change_addresses(tx_cbor: &str) -> Vec<String> {
+    let bytes = hex::decode(tx_cbor).unwrap();
+    MultiEraTx::decode(&bytes)
+        .unwrap()
+        .outputs()
+        .iter()
+        .map(|o| Address::from_bytes(&o.address().unwrap().to_vec()).unwrap())
+        .filter(|a| !a.has_script())
+        .map(|a| a.to_bech32().unwrap())
+        .collect()
+}
+
+/// Chunk 51 (W1b's note, the part of lead#1 its verifier confirmed): a direct
+/// return's tail sends its deposit's change and its mix's change where a
+/// chain's change goes (`holdings_of`): the collateral's address, else one the
+/// session's own transactions paid, never first a stranger's. Anyone can pay
+/// the session's key under a stake key of their own, and a stranger's 5 ₳
+/// there, listed first, was taken as the collateral, both changes sitting
+/// under the stranger's stake key until the return swept them. The session's
+/// own 5 ₳ (its funding's) is the collateral now, and its address comes before
+/// that of a site's transaction the session's key signed, which a site may pay
+/// under a stake key of its own.
+#[test]
+fn a_direct_returns_tail_keeps_its_change_at_the_sessions_own_address() {
+    let sk = Scalar::from(51_001u64);
+    let at = session();
+    let stranger = row(0xef, 0, &staked_by_a_stranger(), 5_000_000, &[]);
+    // The funding paid the account its amount and its 5 ₳ collateral.
+    let (funding, site) = (0x11u8, 0x22u8);
+    let cases = [
+        (
+            "its own 5 ₳ behind a stranger's and a site's",
+            vec![
+                stranger.clone(),
+                row(site, 0, &staked_by_a_stranger(), 20_000_000, &[]),
+                row(funding, 1, &at, 5_000_000, &[]),
+            ],
+        ),
+        (
+            "no 5 ₳ of its own",
+            vec![stranger.clone(), row(funding, 0, &at, 20_000_000, &[])],
+        ),
+    ];
+    for (case, utxos) in cases {
+        let result = api::session_return(
+            &accounts(),
+            sk,
+            api::SessionReturnRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 0,
+                utxos,
+                merge: vec![],
+                own: vec![hex::encode([funding; 32]), hex::encode([site; 32])],
+                collateral_pool: Some(ada_pool_ref(5_000_000)),
+                collateral_boxes: strangers(0xa8, 2),
+                rewards: Default::default(),
+            },
+        )
+        .unwrap();
+        let tail = result.tail.as_ref().expect("the collateral's tail");
+        assert_eq!(
+            [
+                change_addresses(&tail.txs[0].tx_cbor),
+                change_addresses(&tail.txs[1].tx_cbor)
+            ],
+            [vec![at.clone()], vec![at.clone()]],
+            "{case}: the deposit's change, then the mix's"
+        );
+    }
+}
+
+/// The same for the collateral's mix built again: its change goes to a UTxO
+/// under the session's key that its own transactions paid, not to wherever the
+/// UTxO paying its fee sits, which can be a stranger's larger one under the
+/// session's key, nor to another key's.
+#[test]
+fn the_collateral_mix_built_again_keeps_its_change_at_the_sessions_own_address() {
+    let sk = Scalar::from(9_696u64);
+    let at = session();
+    let elsewhere = CardanoAccount::from_phrase(PHRASE, 0)
+        .unwrap()
+        .base_address(true, Role::Receive, 0)
+        .unwrap()
+        .to_bech32()
+        .unwrap();
+    let boxed = our_box_rows(sk, 1, &five()).remove(0);
+    let mut rows = strangers(0xa9, 3);
+    rows.push(boxed.clone());
+    // The tail's deposit is on chain: its change at the account, the session's own transaction's.
+    let deposit = 0x31u8;
+    let result = lovejoin::collateral_mix(
+        &accounts(),
+        sk,
+        lovejoin::CollateralMixRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 0,
+            utxos: vec![
+                row(deposit, 0, &elsewhere, 3_000_000, &[]),
+                row(deposit, 1, &at, 3_000_000, &[]),
+                row(0xef, 0, &staked_by_a_stranger(), 9_000_000, &[]),
+            ],
+            boxed: OutRef {
+                tx_hash: boxed.tx_hash.clone(),
+                tx_index: boxed.tx_index,
+            },
+            pool_ref: ada_pool_ref(5_000_000),
+            pool: rows,
+            own: vec![hex::encode([deposit; 32])],
+            rewards: Default::default(),
+        },
+    )
+    .unwrap();
+    assert_eq!(result.txs[0].kind, "mix");
+    assert_eq!(change_addresses(&result.txs[0].tx_cbor), vec![at]);
+}
+
 /// A direct return's collateral tail with nothing else at the account to pay
 /// for it (a site's session whose site spent all but the reserve) is built
 /// from `direct_tail_reserve` alone, at today's price of a byte and a dearer

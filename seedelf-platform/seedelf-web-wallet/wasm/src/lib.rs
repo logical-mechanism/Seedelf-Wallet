@@ -1429,6 +1429,7 @@ pub mod api {
                 pool,
                 &request.collateral_boxes,
                 &request.utxos,
+                &request.own,
                 &mut rewards,
             )
             .ok()

@@ -576,7 +576,9 @@ fn a_scripts_stake_certificate_needs_no_one_elses_signature() {
         Bytes::from(bytes)
     };
     let pool = Hash::new([7; 28]);
-    let cases: Vec<(&str, Vec<C>, Vec<(Bytes, u64)>, bool)> = vec![
+    // Its name, its certificates, its withdrawals, and whether it's complete.
+    type Case = (&'static str, Vec<C>, Vec<(Bytes, u64)>, bool);
+    let cases: Vec<Case> = vec![
         (
             "a script's zero withdrawal",
             vec![],
