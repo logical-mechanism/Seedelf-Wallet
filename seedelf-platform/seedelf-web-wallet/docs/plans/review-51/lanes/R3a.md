@@ -1,0 +1,133 @@
+# Lane R3a
+
+Returned by the workflow's agent `a2dc197565bcbccd2`, written here by the lead from its structured answer.
+
+## Findings (2)
+
+### r3a#1 · high · A stranger's mix can write the user's box datum as constructor 0's tag-102 form, which the contract accepts and the wallet no longer sees as a box
+
+- **Where:** `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:387`
+- **Who:** stranger · **Since:** 354ddccb (chunk 16, 2026-09-25), in every release since Lovejoin shipped (first tag web-wallet/1.6.0). The Seedelf register reader learned the tag-102 form in 01f89534 (launch review H4, 2026-09-26), and the box reader was never brought in line. · **Confidence:** traced
+
+**Scenario:**
+
+A Seedelf Wallet user's 5 ₳ box sits in the v2 5 ₳ pool. It could be a return's leaf due in 1 to 6 hours, or a box a Bootstrap holds. A stranger builds a Lovejoin Mix of that box and two other boxes; a mix needs no owner's key, only the re-randomizing scalars the mixer picks. The stranger pays the fee, about 0.84 ₳, and writes each output's inline datum in Plutus's general constructor form, `d8 66 82 00 9f 58 30 <a'> 58 30 <b'> ff`, instead of `d8 79 9f 58 30 <a'> 58 30 <b'> ff`. Both spell Constr 0 [a', b']. mix_logic passes the mix. At the next pool read, Koios lists the user's moved box with those bytes. `PoolBox::from_row` drops it, so the wasm's `owned` lists it neither as the wallet's nor as a box to draw. Effects: the user's Lovejoin total drops by 5 ₳; the box never comes back by itself; Bring one back and Bring every box back can't find it ('This wallet has no box in Lovejoin's pool'); and no Seedelf wallet ever mixes it again, which would rewrite its datum. The 5 ₳ stays on chain under the user's key, with no way out in the wallet, on every device and after a restore. The stranger can do this to every box in a pool, the classic pool's 10 ₳ boxes and the token pools' too, for about 0.28 ₳ a box (three a mix) or 0.31 ₳ (four a mix). The same mixes also take those boxes out of the pool's visible count (`others`), so the stranger can push a pool under the wallet's floor, and returns then come back directly.
+
+**Evidence:**
+
+1. mod.rs:384-389 `parse_mix_datum`: `let PlutusData::Constr(constr) = PlutusData::decode_fragment(datum).ok()? ...; if constr.tag != 121 || constr.any_constructor.is_some() { return None; }`.
+2. Pallas 0.35.1 src/plutus_data.rs:332-338 decodes tag 102 as `Constr { tag: 102, any_constructor: Some(d.decode_with(ctx)?), fields }`, so `102([0, [a, b]])` reaches the check above and is refused. BoundedBytes (plutus_data.rs:446-454) takes chunked bytes, so tag 102 is the one spelling the wallet refuses.
+3. mod.rs:414-427 `PoolBox::from_row` uses `parse_mix_datum(...)?`, so the row gives None.
+4. wasm/src/lovejoin.rs:2605-2612 `owned_in` is `request.pool.iter().filter_map(|row| PoolBox::from_row(row, &protocol)).partition(|b| b.is_owned(&sk))`: the box is in neither `boxes` nor `other_boxes`. `our_box` (lovejoin.rs:2656-2673), which every withdraw uses, filters the same way. extension/src/background/lovejoin.ts:7517-7524 `ownership` (called by `splitAll`, 7492-7509) is the worker's only list of the wallet's boxes, and it is `lovejoinOwned`.
+5. The contract reads the abstract Data, not the encoding. Lovejoin 29573c5 validators/mix_logic.ak `walk_outputs`: `expect InlineDatum(inline_data) = output.datum; let mix_datum = decode_mix_datum_strict(inline_data)`, and the ctx is `datums_acc |> bytearray.concat(builtin.serialise_data(inline_data))`. lib/lovejoin/mixbox.ak `decode_mix_datum_strict`: `expect mix_datum: MixDatum = inline_data`. `serialise_data` re-encodes the Data canonically (tag 121, indefinite fields), so the ctx and every sigma-OR proof are the same whichever spelling the transaction carries. Plutus data's CDDL takes `#6.102([uint, [* plutus_data]])` for any constructor, 0 included. The ledger keeps an inline datum's original bytes, and Koios's `inline_datum.bytes` returns them.
+6. The box stays an ordinary box on chain. mix_box and the Owner branch read Data (`try_decode_well_formed_data`, `collect_well_formed_mix_inputs`), so the user's key can still withdraw it with a tool that reads it.
+7. The classic pool is the same. Lovejoin cb5a5a3 lib/lovejoin/mixbox.ak:101-102 `expect mix_datum: MixDatum = inline_data`, and its mix_logic hashes `serialise_data(output.datum)`.
+8. The same rule for Seedelf registers already accepts this form. seedelf-koios/src/koios.rs:354-370 `register_of_datum` takes 'constructor 0's general form `102([0, fields])`'. chunk-16-lovejoin.md:22 says a box's datum 'has the same shape and encoding as a Register. So the scan the wallet already runs finds its boxes anywhere in the pool, after other people's mixes too'.
+9. No test builds a box row whose datum is in tag-102 form. `the_box_datum_is_canonical_and_reads_back` (lovejoin_test.rs) checks only the wallet's own encoding. The only tag-102 vector (lovejoin_vectors_test.rs:151-157) is for `ReferenceDatum::decode`.
+
+**Fix:**
+
+Make `parse_mix_datum` accept constructor 0 in every CBOR form the ledger decodes, as the contract's `try_decode_well_formed_data` does on Data: tag 121 with no `any_constructor`, or tag 102 with `any_constructor == Some(0)`. Simplest: read the box datum with `seedelf_koios::koios::register_of_datum`. A box datum has the same shape; that reader already handles tag 102, reads token by token so the depth check isn't needed, and takes chunked bytes. Then keep the `a != b` and point checks. Check whether Plutus's `decodeConstrExtended` also takes the tag-102 pair as an indefinite list, `102([_ 0, fields])`; if it does, both readers should take it.
+Family:
+- `register_of_datum` (koios.rs:361), the same rule for Seedelf registers; there the payer writes the datum.
+- `ReferenceDatum::decode` (pool.rs:158) refuses tag 102 on purpose, pinned by the vectors' 'constructor 0 as tag 102'. It only hides a launcher's pool and never a user's box, so it can stay.
+- The data layer's own reading of box rows for its crowd (seedelf-data/api/src/lovejoin/, outside the chunk) should be checked for the same strictness.
+Test (verifier): a core test with a row at `Protocol::of(true).mix_box_address()`, value = denom, payment_cred = the mix_box hash, and inline_datum.bytes = `d8 66 82 00 9f 58 30 <a> 58 30 <b> ff` where b = sk·a. Assert that `PoolBox::from_row` is Some and `is_owned(&sk)`; it is None today. For the on-chain half, rewrite the box outputs of a `lovejoin::mix` built as in `a_mix_of_pool_boxes_passes_mix_logic` into that form and show `eval::evaluate` still passes mix_logic.
+
+**Known check:**
+
+Searched backlog.md, docs/archive/plans/*.md, privacy.md, architecture.md and docs/plans/ for 'tag 102', '102 [', 'any_constructor', 'non-canonical', 'canonical form', 'parse_mix_datum', "box's datum", 'MixDatum' and 'mix datum'. Only two hits, both about a launcher's pool datum, not a box: chunk-34-token-pools.md:621 (the data layer's reference-datum decoder takes 'no tag 102') and lovejoin_vectors_test.rs's 'constructor 0 as tag 102' for ReferenceDatum::decode. Grepped the core, wasm and extension tests for d866 / 0xd8, 0x66 / Tag::new(102): no box-datum test. launch-review.md H4 widened only register reading. Not in chunk 46 or 49, the audit's open findings, or SECURITY.md's out-of-scope list: the data source reports the chain truthfully here, and a stranger chooses the bytes.
+
+### r3a#2 · nit · again_affordable divides by zero at depth 0, where its _in sibling guards it; mixes_per_box_at traps on an unchecked width or depth
+
+- **Where:** `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:2177`
+- **Who:** nobody · **Since:** fbbdbfed (chunk 16, 2026-09-25); the guarded _in variants came in b9c35f06 (chunk 34's 34e) · **Confidence:** traced
+
+**Scenario:**
+
+`again_affordable(spare, 0)` computes `per_box_again(0)` = `mixes_per_box(0)` × 0.95 ₳ = 0, then divides by it: a panic, which is a trap in WebAssembly. `again_affordable_in` (mod.rs:1957-1963) returns 0 when `per == 0`. `mixes_per_box_at` (mod.rs:1767-1769) divides by `width - 1` and computes `width.pow(depth)` unchecked: width 0 or 1, or a depth past 20 (3 wide) or 15 (4 wide) on wasm32, traps. No production caller reaches these. Only tests call `again_affordable`. Every binding checks width (`check_width`) and every one but `plan_at` checks depth (`check_depth`). `plan_at`'s depth comes from the worker's own preference.
+
+**Evidence:**
+
+mod.rs:2176-2178 `pub fn again_affordable(spare: u64, depth: u32) -> usize { (spare.saturating_sub(DEPOSIT_RESERVE) / per_box_again(depth)) as usize }`; mod.rs:1926-1928 `per_box_again(depth) = mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE`; `mixes_per_box(0)` = (3^0 − 1)/2 = 0. mod.rs:1958-1961 `again_affordable_in`: `if per == 0 { return 0; }`. Callers of `again_affordable(`: none outside tests (grep over seedelf-core/src, the wasm src and seedelf-cli/src). wasm/src/lovejoin.rs:1199-1229 `plan_at` passes `request.depth` to `again_affordable_in`/`boxes_affordable_in`/`mixes_per_box_at` with no `check_depth`.
+
+**Fix:**
+
+Give `again_affordable` the same `per == 0` guard as `again_affordable_in`, or drop the classic helpers that only tests use. Have `mixes_per_box_at` use `checked_pow` and refuse a width under 2 in words. In the wasm, call `check_depth` in `plan_at` as `funding_at` and the chain bindings do.
+
+**Known check:**
+
+Searched the archived reviews and backlog for 'again_affordable', 'mixes_per_box', 'division by zero', 'divide by zero' and 'width.pow'. Only chunk-16's plan line on again_funding/again_affordable and chunk-34's description of mixes_per_box_at, with no item on either trap.
+
+## Guards (31)
+
+| Where | What it stops | Test |
+|---|---|---|
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:415` | Taking a pool row that isn't exactly the box value at mix_box: a box holding more could be mixed by anyone, who would take the excess. | lovejoin_pools_test.rs a_box_value_checks_values_exactly, a_token_box_is_read_from_a_row_and_its_bytes_alike |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:381` | Decoding a stranger's datum nested too deeply, which would overflow the WebAssembly stack (trap), before reading a box's {a, b}. | lovejoin_vectors_test.rs (depth-walk vectors) |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:453` | Drawing or withdrawing a box whose points aren't in G1's subgroup, or are the identity: no mix or withdraw of it can pass. | none found |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:479` | A token-holding UTxO paying a mix or withdraw whose change carries ADA alone. | none found |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:333` | A token pool's deposit reads its reference UTxO, so the ledger refuses boxes paid into a pool that isn't on chain, which would otherwise be locked for good (317-wallet#0). It also refuses a reference that carries a script. | lovejoin_pools_test.rs a_token_pools_deposit_reads_its_reference_utxo; wasm lovejoin_flows_test.rs:459 |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:732` | A box locked under an identity or invalid register. | none found |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:760` | Wrapped sums of the inputs' ADA and the boxes' ADA (a pool datum's box_lovelace), which built a deposit that can't balance (314-core#1). | lovejoin_planner_test.rs a_pools_box_ada_past_what_a_sum_holds_is_refused_in_words_never_wrapped |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:808` | A deposit's ADA change under its least; the typed shortfall lets the caller pick another UTxO (MONEY-5). | wasm lovejoin_flows_test.rs:826 (MONEY-5) |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:985` | A mix of fewer than two boxes, which the contract refuses, or one spending a box twice. | lovejoin_test.rs a_mix_needs_two_boxes_and_a_payer_who_can_pay (two boxes); duplicate: none found |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1056` | A wrapped payer-plus-reward-balance sum. | lovejoin_test.rs a_reward_balance_past_what_a_u64_holds_is_refused_in_words |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1068` | A mix change under its least, or past the payer's ADA. | lovejoin_test.rs a_mix_never_leaves_change_under_an_outputs_least |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1105` | An own-collateral return that leaves less than ceil(1.5 x fee) (InsufficientCollateral). | lovejoin_test.rs collateral_is_enough helper in the mix tests |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1181` | An odd fee under giveme.my's collateral, whose return 5 ₳ - 3/2 x fee would fall half a lovelace short. | lovejoin_test.rs a_mix_under_givemes_collateral_passes_mix_logic (under_givemes_collateral) |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1167` | A mix over the ledger's per-transaction computation. | lovejoin_width_test.rs:907 |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1175` | A mix fee over 10 ₳ from wrong parameters. | lovejoin_test.rs a_mix_never_pays_a_fee_over_the_limit |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1212` | Handing over a pool's reward balance before a build succeeds (also at :1721 for withdraws). | lovejoin_test.rs a_build_that_fails_takes_nothing; lovejoin_pools_test.rs a_withdraw_refused_after_it_read_the_balance_takes_none |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1433` | Boxes coming back under an identity or invalid destination register. | none found |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1439` | Building a withdraw of a box the wallet's key doesn't own. | lovejoin_test.rs someone_elses_box_is_not_withdrawn |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1516` | A wrapped sum of a private payer's ADA with the boxes and the balance (1.7.0). | lovejoin_pools_test.rs a_private_payer_holding_more_ada_than_there_is_is_refused_in_words |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1559` | withdraw_paid's account change under its least. | lovejoin_pools_test.rs a_box_too_poor_to_come_back_says_so_and_an_account_can_pay |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1582` | withdraw_paid's own-collateral return short of 1.5 x fee. | none found |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1686` | Returning a withdraw whose declared budgets are under what its own proof measured. | none found specifically (every withdraw test passes through it) |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1699` | A register output under its minimum, typed as CantPayBack or PrivateTooSmall so a payer can be chosen. | lovejoin_pools_test.rs a_box_worth_less_than_the_fee_cant_pay_its_way_back, a_box_too_poor_to_come_back_is_paid_for_from_the_private_balance |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1740` | Sending a withdraw whose fee never settled. | none found |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1913` | Funding or per-box sums past a u64, refused in words (MORE_THAN_THERE_IS, 314-core#1). | lovejoin_planner_test.rs a_pools_box_ada_past_what_a_sum_holds_is_refused_in_words_never_wrapped |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:2309` | A chain that mixes with no collateral. | lovejoin_test.rs a_seed_is_the_deposit_alone_and_needs_no_pool_and_no_collateral |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:2529` | A fan-out drawing more pool boxes than exist (PoolShort), and a depth outside 0 to 3. | lovejoin_test.rs a_chain_needs_enough_pool_boxes; depth bound: none found |
+| `seedelf-platform/seedelf-core/src/lovejoin/mod.rs:1759` | A mix width other than 3 or 4 (also keeps mixes_per_box_at's width - 1 from 0). | none found for the refusal |
+| `seedelf-platform/seedelf-core/src/lovejoin/value.rs:108` | An output of 0 of a token, which Pallas panics on: a trap (MONEY-2). | lovejoin_box_value_test.rs:203; wasm lovejoin_flows_test.rs:800 |
+| `seedelf-platform/seedelf-core/src/lovejoin/value.rs:124` | A token total for n boxes past 2^64 - 1, wrapping a deposit's or withdraw's token amount. | wasm lovejoin-pools.test.mjs (the message) |
+| `seedelf-platform/seedelf-core/src/lovejoin/box_value.rs:193` | A token pool of Q = 0 reaching Pallas in the box-value search (MONEY-2). | lovejoin_box_value_test.rs:203 |
+
+## Checked and holds
+
+- BoxValue::cbor() matches mix_logic's serialise_data(value.box_value(datum)) byte for byte for ADA and token pools. Maps are definite, ADA's empty policy and name come first (the empty bytestring sorts first), and integers take their shortest form. An empty token name encodes as 40 on both sides.
+- mix_datum is serialise_data's canonical form (tag 121, indefinite fields), so the mix ctx hashes exactly what mix_logic hashes from the outputs.
+- A mix's outputs 0..n-1 are exactly the box value at the stake-less mix_box address, each with an inline {a, b}, and the change comes last and is never at mix_box, as walk_outputs requires. The proofs follow the boxes in ledger order, and the payer's key coin isn't counted among the mix inputs.
+- perm is a bijection and each input gets its own nonzero y, so every box goes to exactly one output. moved_to and fan_out's ours_next track the wallet's box through each wave, and the leaves are one per tree.
+- A mix declares exactly the budgets its draft measured, with no margin. This is safe: the redeemer is fixed before staging, mix_logic's Mix branch and mix_box cost the same whatever the fee, change or ExUnits are, and the finished transaction is measured again.
+- mix_giveme's fee is always even (MIX_DRAFT_FEE is even and each round takes even(needed)), so giveme.my's return 5 ₳ - 3/2 x fee is whole and meets the ledger's 150% exactly. The own-collateral return c - (3/2 x fee + 1) covers ceil(1.5 x fee) for odd fees too.
+- withdraw_with doesn't call check_fee, but every withdraw path's collateral caps its fee at about 3.33 ₳: giveme.my's 5 ₳ - 3/2 x fee, or the account's c - 3/2 x fee - 1.
+- Value balance traced: a mix (boxes + fee coin + taken = boxes + change + fee); a withdraw paid by its boxes, by an account (topped up to the register's minimum, the account paying fee + topped), or by a private UTxO; and a deposit with token change at exactly its minimum.
+- Rewards: a balance is handed over only after a build succeeds. One Rewards through chain_across, fan_out, again_at and collateral_mix gives each pool's balance to its first mix only. What's taken lands in the user's own output (the change or the register), and checked_add refuses a balance past a u64. way_back and pool.rs's measured probe use Rewards::none, so a pool's verdict never moves with a windfall.
+- owner_context hashes the body's outputs and its inputs sorted as TxInfo has them, leaving out the collateral return and reference inputs, as the Owner branch does. A proof made on the unproven draft stays valid in the final transaction, since the witness-zero patch changes only witnesses and the script data hash.
+- withdraw_with returns only a transaction whose declared budgets (1% over) cover that transaction's own measure, priced on what it declares.
+- fresh_for's count equals exactly what fan_out pops (trees x (w^d - 1)/(w - 1) x (w - 1)), so its expect can't fire. collateral_mix and again_at leave the wallet's boxes out of the draws, the wasm's draws exclude every owned box, and chains across pools refuse one pool twice.
+- parse_mix_datum and points() accept only what the contract treats as a well-formed box with uncompressible points, so the wallet never draws a box that makes its own mix fail. (r3a#1 is the opposite gap: too strict.)
+- PoolBox::from_row accepts a box at mix_box with a stake part (it checks the payment credential), as mix_logic's input_at_script counts one. Mixing such a box is valid, and its output drops the stake part.
+- plan_across: n <= left/per, so `left -= n x per` can't underflow. Token boxes are bounded by held/Q, and kept tokens are separated only for legs with boxes.
+- bootstrap_most: `most` is the worker's constant (mostBootstrap), so the owners vec stays bounded, and fits() is monotone (the deposit's change falls as boxes grow).
+- direct_tail_reserve at 44/155,381/4,310: 177,381 + max(1,978,370, 2,606,780) = 2,784,161, rounded up to 2.8 ₳ as documented. bootstrap_back_reserve: 1,033,057, rounded up to 1.1 ₳, then raised to its 1.5 ₳ floor.
+- least_box_lovelace's bisection keeps at(low) failing and at(high) passing. Every 0.01 ₳ step from 1 to 20 ₳ encodes the lovelace in 5 bytes, so the way back is monotone there.
+- way_back's probe gives a withdraw the same size as a real V2 pool's: mix_box and mix_logic take fixed-size hashes as parameters, so their sizes don't depend on the seed.
+- deposit_across: the inputs' ADA and the boxes' ADA are checked sums, tokens are merged and separated with checks, the token change carries exactly its minimum, each token pool's reference is read once, and a reference carrying a script is refused.
+- The withdraw's ctx binds the outputs and the input references, so a copy of one of the wallet's boxes can't reuse a proof (F-4). A withdraw seen in the mempool can only be re-sent with the same value flows.
+
+## Notes
+
+- withdraw_with multiplies `protocol.denom * sorted.len() as u64` unchecked (mod.rs:1453), against seedelf-platform/CLAUDE.md's rule for values from a datum. It's unreachable today: every caller withdraws one box, and a box on chain can't hold more than the supply. `checked_mul` would match deposit_across's.
+- withdraw_with dedups its boxes silently (mod.rs:1438), where mix_with refuses a duplicate (mod.rs:991-994). Callers pass one box, so it's harmless.
+- mix_with's fee loop (mod.rs:1172-1184) builds with the fifth round's fee unchecked if it never settles, where withdraw_with refuses ('did not settle'). Only CBOR length jumps (the change crossing 2^32 lovelace) move `needed`, so it settles by the third round. No scenario, but a bail would match the withdraw.
+- On r3a#1's family: register_of_datum (seedelf-koios/src/koios.rs:361) takes 102([0, fields]) only with a definite pair. If Plutus's decodeConstrExtended also takes the indefinite pair 102([_ 0, fields]), a payer could hide their own payment to a Seedelf that way (their own money: low). I didn't read seedelf-data, which the brief says not to touch, so whether its crowd counts a tag-102 box, and whether it serves a row's raw datum bytes as Koios does, is for whoever owns it.
+- A stranger can copy one of the wallet's box datums (a, b) into a new exact-value box (b = x·a still holds). The wallet treats it as its own and brings it back: free money for the user, and the same tag the stranger gets by paying a Seedelf directly. privacy.md's 'box of unknown origin' covers the lookup. A hostile mixer can also mix a copy with its original into one output (both sigma-OR proofs hold with the same y) and take the copy's value back. That is their own money, with no loss to the user.
+- Several money guards in these files have no test that pins them (see guards: is_payable for deposit owners and the withdraw destination, the mix's duplicate-box refusal, Coin::from_row's token refusal, withdraw_paid's collateral cover, 'did not settle', fresh_for's depth bound, check_width). The T1 lens may want to revert those first.
+
+## Coverage
+
+Read in full: seedelf-core/src/lovejoin/mod.rs (2,605 lines), value.rs (131) and box_value.rs (403).\n\nFollowed out of them, read in the relevant parts:\n- build.rs: the fee helpers (30-175), Budget/Budgets/even/collateral_output (1090-1340), change_outputs and minimum_change (417-473)\n- withdraw_zero.rs and eval.rs, whole\n- transaction.rs: collateral_input, computation_fee, calculate_min_required_utxo\n- address.rs: wallet_contract, collateral_address, dummy_base_address\n- pool.rs: ReferenceDatum decode and encode, verify_pool, pool_of, usable/comes_back/measured (120-260, 360-645)\n- seedelf-crypto lovejoin.rs: point_from_bytes, prove_schnorr, prove_sigma_or headers\n- seedelf-koios koios.rs: register_of_datum, InlineDatum, UtxoResponse\n- Pallas 0.35.1 plutus_data.rs: Constr and BoundedBytes decoding\n- Lovejoin 29573c5, in full: mix_logic.ak, mix_box.ak, mixbox.ak, value.ak, reference.ak, types.ak, one_shot_mint.ak. The classic cb5a5a3 by grep only (mixbox and mix_logic datum handling).\n- The wasm crate's lovejoin.rs: owned_in, our_box, withdraw_in, plan_at, check_depth, the rerandomize sites and the draws filter. The worker's lovejoin.ts: ownership/splitAll and privateBootstrapMost.\n- The core Lovejoin test files' names, the vectors test and selected assertions.\n- backlog.md's Lovejoin section, chunk-43's plan, the 1.6.0 review and post-release-roadmap leftovers, the launch review's H4, and privacy.md's Lovejoin section.\n\nNot read: launch.rs and templates.rs (R3b's lane), the rest of pool.rs, the wasm's other Lovejoin bindings and their request plumbing (W3), and seedelf-data (not to be touched).\n\nNothing was run. Both findings are traced; r3a#1's on-chain half rests on the Lovejoin source and Plutus data's CDDL, and a verifier's eval test would confirm it.

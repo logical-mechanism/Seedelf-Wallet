@@ -1,0 +1,273 @@
+{
+ "findings": [
+  {
+   "id": "r4#1",
+   "severity": "high",
+   "title": "A stranger freezes any CLI external wallet: `external sweep` (and `external balance`) total every UTxO there, and three junk rows overflow the token sum forever",
+   "file": "seedelf-platform/seedelf-cli/src/commands/external/sweep.rs",
+   "line": 40,
+   "scenario": "A CLI user follows the README's sweep-fund flow and sends DEX proceeds (say 300 ₳ plus tokens) to their external wallet. A stranger lists every CLI external address from their one shared stake credential (dapp_address puts MAINNET_STAKE_HASH in every user's), mints a junk token and sends this address three outputs of 2^63 − 1 of it (or 2^64 − 2 and 2), about 3.5–5 ₳ of minimum ADA, as in launch review H6. From then on every `seedelf-cli external sweep` stops with 'Error: Can't Merge Assets' before building, and `external balance` fails the same way, so the 300 ₳ can't leave the address through the CLI. No other CLI command spends that address, and its key is derived from the scalar (an ed25519 key seeded with ed25519_pub(scalar)) that nothing prints: recovery needs custom code. A stranger can do this to every CLI external wallet for about 5 ₳ each. The same holds with many token UTxOs (the all-or-nothing sweep goes over 16 KiB) or over 200 KiB of reference scripts, at a higher cost.",
+   "who": "stranger",
+   "since": "The sweep has always taken every row; the overflow became a hard error in 2d4a7e77 (0.5.0, checked Asset::add). In 0.7.0, the latest CLI tag; HEAD's CLI code is 0.7.0's.",
+   "evidence": "seedelf-cli/src/commands/external/sweep.rs:34 `let all_utxos: Vec<UtxoResponse> = utxos::get_address_utxos(&addr_bech32, network_flag).await?;` then :40 `build::external_sweep(&params, &all_utxos, &Register::create(scalar)?, &wallet_addr, signer)`. This passes every row, with no fitting and no size cap. seedelf-core/src/build.rs:564 `let (total, tokens) = assets_of(utxos.to_vec())?;` → utxos.rs:340-342 `found_assets.merge(utxo_assets.clone()).context(\"Can't Merge Assets\")?` → assets.rs:316 → assets.rs:64-67 `.checked_add(other.amount).ok_or_else(|| anyhow!(\"Asset addition overflow\"))`. external/balance.rs:38 makes the same `utxos::assets_of(all_utxos.clone())?` call. external/mod.rs prints `Error: {err}`. The web wallet's session return calls the same builder, but only with wasm's plan_return list, which fits (wasm/src/lib.rs:1506 `build::external_sweep(params, &plan.taken, ...)`). The H6 fix f446cb27 ('leave out UTxOs whose tokens would total past a u64') touched no CLI file (git show --stat). The external key is seedelf-crypto/src/convert.rs:23-27 (SecretKey::from(ed25519::keypair(scalar_be).public)), and util expose-key prints only the BLS scalar. address.rs:130-158 dapp_address uses MAINNET_STAKE_HASH (constants.rs:145) as every user's stake part. tests/cli/external_sweep.rs has only `external_sweep_mixed_utxos_is_sound` and `external_sweep_pure_ada_is_sound`. A verifier can show it in seedelf-core/tests/r51_r4_1.rs: build::external_sweep over three key-address rows each holding quantity 9223372036854775807 of one token returns Err containing 'Can't Merge Assets'.",
+   "confidence": "traced",
+   "fix": "Build the CLI's external sweep from the rows that fit: run `utxos::fitting(&all_utxos, &Assets::new(), |_| false)` before build::external_sweep, as the web wallet's plan_return does. Also bound the sweep by tx size and reference-script bytes (take fewer on TooLarge), and print how many rows stayed. `external balance` should total tokens in u128, or over the fitted rows, and say what it left out. External_sweep could also fit internally, which is harmless on wasm's already-planned list. Same class elsewhere: balance.rs:39 and sweep --all's remainder (r4#2), the CLI's other totals over rows a stranger can add to.",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "backlog.md (its CLI section has only the sweep 21+ tokens default line); launch-review.md H6, fixed in f446cb27 for the web wallet's session return, Max send, move-in and withdraw, with no CLI file changed; independent-review, review-1.9.0/1.9.1; rg 'external sweep|external_sweep|overflow|assets_of|2\\^63' over docs/ and both READMEs: nothing for the CLI's external sweep."
+  },
+  {
+   "id": "r4#2",
+   "severity": "medium",
+   "title": "A stranger's three junk UTxOs under the user's register break `balance` for good (and `sweep --all` while they're among its 20)",
+   "file": "seedelf-platform/seedelf-cli/src/commands/balance.rs",
+   "line": 39,
+   "scenario": "A stranger pays three outputs of 2^63 − 1 of one junk token (about 5 ₳) under fresh re-randomizations of any of the user's Seedelf registers, which are on chain beside each Seedelf token. From then on, `seedelf-cli balance` prints the Seedelfs and then 'Error: Can't Merge Assets: … Asset addition overflow' on every run. It shows no UTxO list and no balance, so the user can't see what they hold, or even which UTxOs are the junk. `sweep --all` fails the same way whenever two of the junk rows are among the 20 owned rows it takes, and by Koios's row order they get there sooner or later, so 'run it again for the rest' never moves. transfer and sweep -l still pay, because core's selection fits rows. Money isn't lost, but the CLI's only view of the private balance is gone until a code change.",
+   "who": "stranger",
+   "since": "2d4a7e77 (0.5.0) made the overflow an error (before that the u64 add wrapped); in 0.7.0.",
+   "evidence": "balance.rs:36-37 calls `utxos::collect_all_wallet_utxos(scalar, ..., every_utxo)?`, which takes every owned row without a Seedelf (utxos.rs:32-53; a re-randomization of the user's register counts as owned). Then balance.rs:39 `let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone())?;` errors (utxos.rs:340-342 → assets.rs:316 → assets.rs:64-67). The UTxO list and balance print only after that, at :41 onward. sweep.rs:287-288 `collect_wallet_utxos` (the first 20, unfitted) → :295 `build::sweep_all(&chain, &owned_utxos, ...)` → ScriptSpend::new (build.rs:1536) takes them as given → spend.draft() → estimate → settle → remainder build.rs:2093 `let (total, mut tokens) = assets_of(spent)?;` errors. The transfer and sweep -l paths go through select_script_inputs, which fits first (build.rs:2556 `fitting(&evaluable, &Assets::new(), holds_needed)`). Launch review H3 already called 'one such UTxO would break every CLI balance' unacceptable for a bad register; this is the token-total form of the same thing.",
+   "confidence": "traced",
+   "fix": "For balance, total tokens in u128 for display (no output is built from it), or total over fitted rows and say how many were left out, and print the UTxO list before totalling. For sweep --all, hand sweep_all the rows utxos::fitting takes from its 20 (or pick them with max_inputs_by, which fits) and say what stayed. This is the same class as r4#1; fix them together.",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "launch-review.md H3 (bad points fixed as Ok(false) so CLI scans don't abort) and H6 (token totals, web-wallet paths only, f446cb27); platform README Limits (the 20-UTxO cap is documented, this isn't); backlog CLI section; rg 'balance.*CLI|CLI.*balance|assets_of' over docs/archive/plans."
+  },
+  {
+   "id": "r4#4",
+   "severity": "medium",
+   "title": "A submit the CLI can't confirm (30 s timeout, 5xx, unreadable 2xx) is reported as a plain failure, and re-running the command pays again",
+   "file": "seedelf-platform/seedelf-cli/src/commands/spend.rs",
+   "line": 91,
+   "scenario": "`seedelf-cli transfer -s <seedelf> -l 500000000`. Koios relays the signed transaction but answers after 30 s, or with a 502/504 from its gateway. The CLI prints 'Error: Failed to submit transaction: … operation timed out' (or 'Koios rejected the transaction: … 504'), with no transaction id and no hint that it may have gone out. The user runs the same command again a minute later. The first transfer has landed, so Koios's rows no longer hold its inputs; the CLI picks other UTxOs and pays the 500 ₳ a second time. The same applies to sweep -l and util mint (a second Seedelf). External sweep and remove don't double-pay, because a retry finds nothing left to spend.",
+   "who": "user",
+   "since": "unknown (the CLI has always submitted with `?`); the 10 s/30 s client timeouts came in 2d4a7e77 (0.5.0); in 0.7.0",
+   "evidence": "seedelf-koios/src/koios.rs:17-19 sets `.connect_timeout(10 s).timeout(30 s)`. koios.rs:547-561 submit_tx attaches `.context(\"Failed to submit transaction\")` to any send error, timeouts included, `.context(\"Koios rejected the transaction\")` to any non-2xx, 5xx included, and 'Failed to parse submit_tx response' to an unreadable 2xx. spend.rs:91 `let response = submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await?;` returns the error as is. The signed CBOR was printed at :86-89, but no tx id is printed before a success. lib.rs:88-90 `eprintln!(\"Error: {err:#}\")`. external/sweep.rs:61 is the same. Re-running transfer rebuilds from get_credential_utxos (transfer.rs:98-102), Koios's current rows. The web wallet's version of this was launch review #10, graded Medium ('A submit Koios didn't answer is treated as not sent, and the retry … pays twice') and fixed in the worker with a maybe-sent state (independent review M1, L2). Nothing like it exists in the CLI.",
+   "confidence": "traced",
+   "fix": "When a submit error isn't a definite refusal (a send or timeout error, a 5xx, an unreadable 2xx), print the transaction's id (build::tx_id of the signed bytes) with its Cardanoscan link, and say the transaction may have gone out and should be checked before the command runs again. Optionally poll Koios tx_status a few times first. Apply this to both CLI submit callers, spend.rs:91 and external/sweep.rs:61. A 4xx with Koios's rejection body stays a plain failure.",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "launch-review.md #10 and #11 (maybe sent, web wallet), independent-review M1, M3, M11 and L2 (web wallet), backlog line 60 (Lovejoin resend); rg 'maybe sent|may have gone|timed out' over docs/: nothing for the CLI."
+  },
+  {
+   "id": "r4#3",
+   "severity": "low",
+   "title": "The signing page finds the witness set by searching the tx hex for the first `a105` (or `a0f5f6`) at any nibble, so create/fund/extract fail when their body happens to contain it",
+   "file": "seedelf-platform/seedelf-cli/static/index.js",
+   "line": 49,
+   "scenario": "About 1 address in 600 has 57 bytes whose hex contains `a105` somewhere. A user funding from such an address runs `fund -a <it> -s <seedelf> -l 50000000` and signs in their CIP-30 wallet. index.js finds `a105` in the change output's address, takes the redeemer branch, writes `a2` plus the wallet's witnesses into the body at that spot, and submitTx fails with 'Sign and Submit Tx Failure'. That happens on every run of create, fund and extract from that address. Beyond fixed addresses, the random parts of each run (the re-randomized datum's 96 bytes, input hashes, the script data hash, the token name) contain it about once in 100–200 runs. extract's body is deterministic, so a given UTxO and address fail on every retry. No money is lost, since the splice changes the body and the signature no longer matches, but the user signs for nothing and the CLI can't fund, create or extract from that address.",
+   "who": "user",
+   "since": "6efa9d7f / e54c3d9e (2024-12-09), before 0.2.0; in 0.7.0",
+   "evidence": "index.js:44 `const sig_part = await wallet.signTx(injectedData.message);`. :49 `if (injectedData.message.indexOf(\"a105\") === -1) {`, then :50 `complete_tx = injectedData.message.replace(\"a0f5f6\", sig_part + \"f5f6\")`. The else branch: :53 `sig = \"a2\" + sig_part.slice(2);`, :54 `const redeemer_part = injectedData.message.slice(injectedData.message.indexOf(\"a105\"));`, :55 `complete_tx = injectedData.message.replace(redeemer_part, sig) + redeemer_part.slice(2);`. indexOf works on the hex string, so it matches at odd offsets too, e.g. bytes 0a 10 5f. Pallas writes the witness set last: redeemers as `a1 05 81 84 …`, or `a0` when empty, followed by `f5 f6` (pallas-txbuilder 0.35.1 conway.rs:232-270). The policy id, reference UTxOs and contract hash contain no `a105`, so the risk comes from per-user and per-run bytes. P(contains a105) ≈ length/65,536: ~0.17% for a 114-hex address; ~0.6% for a one-input fund (address + 192-hex datum + 64-hex input hash); ~0.9% for create. No test touches index.js. A verifier can copy lines 49-56 into a Vitest and feed it a CBOR hex whose body carries `a105` in an address: the result differs from the body plus merged witnesses plus f5f6.",
+   "confidence": "traced",
+   "fix": "Find the witness set by position, never by search. web_server.rs has the unsigned bytes: it can decode the 4-element array with minicbor (as build::tx_id does for the body) and inject the witness set's hex offset and entry count. index.js then builds `message.slice(0, at)` + a map header for the summed entry count + the wallet's entries + the existing ones + `f5f6`. Alternatively the page POSTs the wallet's witness set to the local server and Rust splices it byte for byte, as cip30::attach_witnesses does; that needs a per-run token against cross-site POSTs. Remove both the `a105` and the `a0f5f6` searches.",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "rg 'a105|a0f5f6|splice|44203|signing site|web_server' over every *.md (the only hit is architecture.md's unrelated Minswap attachWitnesses); backlog CLI section; tests/cli has no page test."
+  },
+  {
+   "id": "r4#5",
+   "severity": "low",
+   "title": "The signing page has no tie to the run that served it: a still-open tab or an earlier run's server signs the earlier transaction, and nothing shows which Seedelf it pays",
+   "file": "seedelf-platform/seedelf-cli/src/web_server.rs",
+   "line": 97,
+   "scenario": "A user runs `fund -a <addr> -s <Seedelf A> -l 100000000` and opens the page, then sees A is the wrong contact before picking a wallet. They press Ctrl-C and run `fund … -s <Seedelf B> -l 100000000`, then go back to the tab still open. Within 5 minutes that tab's own JS is still waiting for a wallet, and picking one signs and submits A's transaction straight through the CIP-30 wallet. A second variant: the first fund still runs in another terminal, so the second prints 'Starting Web Server At: http://127.0.0.1:44203/' and then panics 'error binding to 127.0.0.1:44203', and the page at that URL is the first run's. The CIP-30 wallet shows 100 ₳ to the contract address under an opaque datum either way; the page shows only CBOR. The 100 ₳ goes to A.",
+   "who": "user",
+   "since": "94d7229e (2024-12-03), the signing site's first version; in 0.7.0",
+   "evidence": "seedelf-display/src/display.rs:9-13 prints the URL before anything binds. web_server.rs:56 uses fixed 127.0.0.1:44203 with no per-run path. :97-100 `warp::serve(routes).bind_with_graceful_shutdown(addr, shutdown)`, and warp 0.3.7 server.rs:96-101 `panic!(\"error binding to {}: {}\", addr, e)` when the port is taken. index.js holds the tx in the page (:8-19) and polls up to `maxAttempts = 3000` × 100 ms (:77, :99). signTx and submitTx (:44, :59) go to the wallet and never back to the server. fund prints only the fee and CBOR (fund.rs:279-285). The fund output's datum is a fresh re-randomization (fund.rs:161), so no CIP-30 wallet can name the Seedelf.",
+   "confidence": "traced",
+   "fix": "Bind before printing the URL: use try_bind_with_graceful_shutdown, and on failure say another signing page is running and stop rather than panicking after the URL. Serve each run under a fresh random path (http://127.0.0.1:44203/<token>/), so an earlier server or tab can't stand in for this run. Have the page re-fetch its tx before signing and refuse when it changed ('this page is from an earlier run: reload'). Show the tx id, and for fund the Seedelf and amount, on the page and in the terminal.",
+   "needs_owner": true,
+   "owner_why": "The page-side check adds a refusal: it won't sign an earlier run's transaction, which the ledger would take. The bind-first and per-run-path parts need no call.",
+   "known_check": "rg '44203|signing site|stale|Address already in use' over docs/ and READMEs; README's create and fund text says only to open the page and stop with Ctrl-C; backlog CLI section."
+  },
+  {
+   "id": "r4#6",
+   "severity": "low",
+   "title": "The signing server answers any Host header, so a DNS-rebinding page can read the unsigned transaction while it runs",
+   "file": "seedelf-platform/seedelf-cli/src/web_server.rs",
+   "line": 58,
+   "scenario": "While `create`, `fund` or `extract` serves its page, a site the user has open in Firefox, which has no local-network protection, rebinds its own name to 127.0.0.1 and fetches http://<its name>:44203/. warp serves the page for any Host, so the site, same-origin with itself, reads the unsigned transaction: the paying address and its UTxOs, the amount, and for create the new Seedelf's name and register. It gets these before they're on chain, and even if the user never signs. That ties the browser visitor to the address and the Seedelf. It can also show the genuine page under its own origin. The impact is small: what it reads goes public on submit, and a dApp the user connected already knows the address. Recent Chrome blocks this.",
+   "who": "site",
+   "since": "94d7229e (2024-12-03); in 0.7.0",
+   "evidence": "web_server.rs:58 `warp::path::end().map(move || { … })` and :78-91 add three more GET routes. No filter checks Host or Origin, and no X-Frame-Options, CSP or Cache-Control header is set. :64-66 inject the tx CBOR into the HTML for every request. No route accepts input or changes state, so there's nothing to CSRF (checked_ok).",
+   "confidence": "traced",
+   "fix": "Reject any request whose Host isn't 127.0.0.1:44203 or localhost:44203 (a warp::header filter and'd onto every route); that ends DNS rebinding. Add `X-Frame-Options: DENY` (or CSP frame-ancestors 'none') and `Cache-Control: no-store` to the page.",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "rg 'rebind|Host header|44203|origin check' over every *.md; SECURITY.md's out-of-scope list (a site isn't malware)."
+  },
+  {
+   "id": "r4#7",
+   "severity": "low",
+   "title": "`util extract` refuses a datum-less UTxO at the contract's staked address form, which the contract lets anyone spend",
+   "file": "seedelf-platform/seedelf-cli/src/commands/util/extract.rs",
+   "line": 65,
+   "scenario": "A user once paid the Seedelf contract from a CIP-30 wallet without a datum, using addr1z… (the wallet script hash with the LOGIC stake key), the address CLIs before 0.5.0 paid into. `seedelf-cli util extract -u <that UTxO> -a <their address>` stops with 'UTxO not in wallet'. The deployed contract returns True for a missing datum, whatever the delegation part, so the user can't rescue it with the CLI's documented rescue tool, while anyone using another tool can take it. Whether such a UTxO exists: list credential_utxos for 94bca9c0… and filter for the base form with no datum.",
+   "who": "user",
+   "since": "2c67e94c (0.5.0), when wallet_contract became the enterprise form; in 0.7.0",
+   "evidence": "extract.rs:63-69: `let utxo_addr = Address::from_bech32(&utxo.address)…; if utxo_addr != address::wallet_contract(network_flag, config.contract.wallet_contract_hash) { bail!(\"UTxO not in wallet\"); }`. address.rs:73-85 wallet_contract has ShelleyDelegationPart::Null. 2c67e94c's message: 'Existing UTxOs at the older staked base address remain spendable'. The contract at 5b82530 (validators/wallet.ak) has `None -> True` and `if register is Register … else True`. The README's util extract row: 'Sends a UTxO at the contract that has no datum to an address.'",
+   "confidence": "traced",
+   "fix": "Compare the payment credential, not the whole address: accept any Shelley address on this network whose payment part is Script(wallet_contract_hash), as get_credential_utxos finds them. Optionally also take an inline datum that isn't a Register, which the contract makes anyone's too; that part changes the README row's 'no datum'.",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "rg 'staked base|base form|enterprise form|not in wallet|util extract' over docs/, the backlog and both READMEs; 2c67e94c; backlog CLI section."
+  },
+  {
+   "id": "r4#8",
+   "severity": "low",
+   "title": "`util mint -g -p` writes the given register as the Seedelf's datum unchanged, so Seedelfs minted for one person from their `util base` register are visibly the same person's",
+   "file": "seedelf-platform/seedelf-cli/src/commands/util/mint.rs",
+   "line": 76,
+   "scenario": "Alice gives Bob and Carol her `util base` register, as the README says to. Each mints her a Seedelf with `util mint -g <g> -p <u>`. Both Seedelf UTxOs carry the identical datum, and its generator is the standard G1 generator, so anyone scanning the contract can see both Seedelfs (and any later one minted the same way) belong to one person. Seedelfs from `create`, or from `util mint` without -g/-p, get a fresh re-randomization each and never show this.",
+   "who": "user",
+   "since": "unknown (the -g/-p path; its is_valid check since 97d8dfed, 2025-06-27); in 0.7.0",
+   "evidence": "mint.rs:72 `owner.clone().rerandomize()?` for the user's own. :76-83 `let new_register: Register = Register::new(args.generator…, args.public_value…); if !new_register.is_valid()? { bail!(…) } new_register` is used as given. build.rs mint_from's doc says the register 'is used as given: pass a fresh re-randomization'. The README's util mint row: 'under the register they give you (theirs from util base)'. util base prints Register::create(scalar), i.e. (G1 generator, g^sk) (base.rs).",
+   "confidence": "traced",
+   "fix": "Re-randomize the given register before minting (`new_register.rerandomize()?`), as create and util mint without -g/-p do. It stays the recipient's (same scalar on both points), and no two mints share a datum. The README row changes with it.",
+   "needs_owner": true,
+   "owner_why": "It changes a privacy default (what util mint -g -p writes on chain), toward the more private option, which the owner's rule favors, and the README's wording changes with it.",
+   "known_check": "rg -- '--generator|public-value|base register|someone else's register' over docs/: only chunk-08's design table noting the CLI can mint to someone else's register; README util mint and util base rows."
+  },
+  {
+   "id": "r4#9",
+   "severity": "nit",
+   "title": "The escaping comment claims serde_json stops angle brackets from injecting HTML; it doesn't (unreachable: every caller passes hex)",
+   "file": "seedelf-platform/seedelf-cli/src/web_server.rs",
+   "line": 62,
+   "scenario": "serde_json::to_string escapes only quotes, backslashes and control characters. A message holding `</script><script>…` would close the JSON block and run as HTML in the 127.0.0.1:44203 origin, which holds the user's CIP-30 grant. Every caller passes `hex::encode(...)` today (create.rs:260, fund.rs:277, extract.rs:285), so nothing reaches it, but a future caller trusting the comment would be exposed.",
+   "who": "nobody",
+   "since": "87889ec0 (2026-05-20, 0.5.0)",
+   "evidence": "web_server.rs:62-63: '// Escape the message via serde_json so embedded quotes, backslashes, // or angle brackets can't break out of the JSON literal or inject HTML.' At :64 `serde_json::to_string(&message)`, and :65-66 drops the result into the `<script type=application/json>` block of index.html:12-14.",
+   "confidence": "traced",
+   "fix": "Correct the comment, or make it true by also escaping `<`, `>` and `&` as <, > and & in the injected JSON (or by refusing a non-hex message).",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "rg 'angle brackets|serde_json' over the archived reviews; none."
+  }
+ ],
+ "guards": [
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/fund.rs",
+   "line": 118,
+   "stops": "Funding a Seedelf whose register has an identity or torsion point, where anyone could take the payment or it would lock",
+   "test": "seedelf-cli/tests/cli/fund.rs:122 fund_refuses_a_seedelf_whose_public_value_is_the_identity"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/fund.rs",
+   "line": 132,
+   "stops": "Spending a CIP-30 UTxO holding a reference script, which may be a deployment and has an unpriced fee (also create.rs:74, extract.rs:128)",
+   "test": "seedelf-cli/tests/cli/fund.rs:75, cli/create.rs:111, cli/extract.rs:102"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/create.rs",
+   "line": 326,
+   "stops": "A collateral holding tokens, whose ADA-only collateral return would make the transaction invalid (also extract.rs:102)",
+   "test": "seedelf-cli/tests/cli/create.rs:140, cli/extract.rs:167"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/create.rs",
+   "line": 339,
+   "stops": "Building a script transaction with no collateral, which the node refuses (also extract.rs:120)",
+   "test": "seedelf-cli/tests/cli/create.rs:160, cli/extract.rs:185"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/create.rs",
+   "line": 221,
+   "stops": "A fee short of Conway's reference-script fee for the policy and spent inputs (also extract.rs:238, which includes a script on the extracted UTxO)",
+   "test": "seedelf-cli/tests/cli/create.rs:126, cli/extract.rs:119, cli/extract.rs:136"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/create.rs",
+   "line": 226,
+   "stops": "An odd fee, whose 3/2 × fee collateral would fall under the ledger's 150% (also extract.rs:248, through fee::total_with_even_rounding → build::even)",
+   "test": "seedelf-core/tests/mint_test.rs:915 collateral_return_and_even_rounding (core's even); none in the CLI"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/fund.rs",
+   "line": 246,
+   "stops": "A change or output wrapping below zero when the fee and minimums exceed what's selected (checked_lovelace; also fund.rs:184, 189, 206, 250, 268; create.rs:106, 133, 230, 242; extract.rs:172, 257)",
+   "test": "seedelf-core/tests/proptest_core.rs:50 (the function itself); none at the CLI's call sites"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/transaction.rs",
+   "line": 130,
+   "stops": "Naming a Seedelf after output #256 or later, which the policy's one-byte push can't match",
+   "test": "seedelf-core/tests/transaction_test.rs:150"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/util/extract.rs",
+   "line": 60,
+   "stops": "Extracting a datum'd, spent or non-contract UTxO (lines 60-72)",
+   "test": "seedelf-cli/tests/cli/extract.rs:16 (the accepted case only); the refusals are untested"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/remove.rs",
+   "line": 66,
+   "stops": "Proving a Seedelf the key doesn't own before the contract refuses it",
+   "test": "seedelf-cli/tests/cli/remove.rs:15 (the accepted case only)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/sweep.rs",
+   "line": 276,
+   "stops": "Paying a script, stake or other-network address, where an output with no datum could lock (also remove.rs:45, via build::is_payable_address)",
+   "test": "seedelf-core/tests/mint_test.rs:2501-2510"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/util/mint.rs",
+   "line": 80,
+   "stops": "Minting a Seedelf under a register with invalid points; core's mint_from also refuses the identity through is_payable",
+   "test": "seedelf-core/tests/mint_test.rs:803 (invalid points); no test found for the identity on a mint"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/static/index.js",
+   "line": 27,
+   "stops": "Signing with a wallet on the other network than the one the CLI built for",
+   "test": "none found"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/spend.rs",
+   "line": 70,
+   "stops": "Rollback replay: every proof is bound to a fresh one-time key's hash, and that key signs",
+   "test": "none found in the CLI (core and crypto own the proof tests)"
+  }
+ ],
+ "checked_ok": [
+  "The secret key file uses Argon2id v0x13 with pinned m=19456 KiB, t=2, p=1 and a 32-byte key (OWASP minimum, the web wallet's values). The salt is 16 random bytes from OsRng, fresh for each wallet, fed in as its B64 string the same way at create and load.",
+  "AES-256-GCM uses a 96-bit OsRng nonce, and each derived key encrypts exactly once (fresh salt for each wallet file), so no nonce is reused. Tampering with the salt or nonce only makes decryption fail.",
+  "A decrypt failure says 'wrong password?' and echoes nothing. The plaintext JSON, key bytes and repr are Zeroizing/ZeroizeOnDrop. The wallet file is chmod 0600 and `.seedelf` 0700 at creation (window noted).",
+  "Nothing prints the scalar except `util expose-key`, which is explicit and warned. `util base` prints only public points, `external balance` only key hashes, and spend paths only public CBOR, fees and tx hashes.",
+  "Wallet creation's prompts are bounded: blank names loop without recursion and stop at end of input, and the password has MAX_PASSWORD_ATTEMPTS = 32 (the #374 fix holds).",
+  "The signing server binds 127.0.0.1 only and serves four fixed GET routes. No route accepts input or changes state, so a site has nothing to CSRF.",
+  "Every caller injects hex (`hex::encode` at create.rs:260, fund.rs:277, extract.rs:285) and the network string is fixed, so the page can't be injected. index.js writes only through textContent (CBOR, errors, wallet names), so a wallet's name or error can't inject HTML.",
+  "The signing page loads nothing from third parties: same-origin JS, CSS without url/@import/fonts, local favicon.",
+  "A site can't make anything sign: the server holds no keys, and every signature is the CIP-30 wallet's own prompt, after the page checks the network id.",
+  "create's token name matches the deployed policy's generate(): prefix + label cut to 15 bytes + the index byte + the txid, cut to 32 bytes, named after the smallest input by (txid, index) as the ledger sorts them. The mint redeemer carries the same 15-byte label, and an index above 255 is refused.",
+  "create's collateral is an exactly-5-ADA, token-free UTxO left out of the inputs, with a return of 5 ADA − 3/2·fee and an even fee, so the collateral covers 150%. extract does the same through fee::collateral_output, back to the same address.",
+  "create and extract each have one redeemer, so reading /result/0 or the first budget is right; spend.rs's Seedelf spends match budgets by purpose and index (Budgets::from_ogmios).",
+  "create's, extract's and fund's finished transactions are no larger than their fake-signed drafts: placeholder ex-units encode longer, and Pallas tags the vkey set 258 as Conway wallets do. The size fee isn't short, except fund's 2^32 change edge in notes.",
+  "fund checks is_payable on the target's register and pays a fresh re-randomization. It finds the Seedelf by exact name under the deployed policy, at any address with the contract's payment credential. Change returns every unsent token, 20 to an output, and it never spends reference-script UTxOs.",
+  "extract prices the contract and any reference script on the extracted UTxO and the address's spent UTxOs (MAX_REFERENCE_SCRIPT_BYTES enforced), and refuses a datum'd, spent or non-contract UTxO before building.",
+  "transfer, sweep, remove and util mint build through core's builders. Selection fits rows (`fitting`) and checks is_payable and is_payable_address, and spend.rs binds every proof to a fresh OsRng one-time key, which signs. remove checks ownership before proving.",
+  "util mint with -g/-p is refused on an identity register by core's mint_from (is_payable), though the CLI itself only checks is_valid.",
+  "sweep with --ada-handle passes the resolved address through is_payable_address, so a handle held at the contract or any script is refused.",
+  "The update check compares semver, and a GitHub failure only warns. Web wallet tags get no GitHub Release (none in docs or workflows), so releases/latest stays the CLI's.",
+  "seedelf_label's hex_to_ascii maps ESC, CR, LF, TAB and every non-graphic byte to '.', so a stranger's label can't inject terminal escapes.",
+  "An unsupported --variant is refused, and every address argument is checked for network and script part before the wallet unlocks.",
+  "Koios's honest rows can't overflow the CLI's lovelace sums: assets_of uses checked_add, and statistics' plain += is bounded by the ADA supply."
+ ],
+ "notes": [
+  "External wallets share one stake key. dapp_address (seedelf-core/src/address.rs:130-158) gives every CLI user's external address MAINNET_STAKE_HASH (constants.rs:145) as its stake part. One stake credential therefore lists every CLI external wallet, which is how r4#1 finds its targets. Explorers group them all as one wallet, and the stake and rewards of what sits there belong to that key, not the user. The README's external-wallet paragraph mentions none of this; `external balance` prints the hash. For the owner and D1.",
+  "Unlock never stops asking (setup.rs:330-339). That's by design for typos. But rpassword 7.5.4 returns Ok(\"\") at /dev/tty's end of input (its read loop breaks on UnexpectedEof), so a hung-up terminal under nohup spins Argon2 (19 MiB) and prints 'Please Try Again' until killed. A corrupt wallet file also loops with that message. Creation got MAX_PASSWORD_ATTEMPTS in #374; unlock didn't. Only the user's own environment reaches it.",
+  "Wallet file mode: fs::write then chmod 0600 (setup.rs:248-250) leaves a brief window at the umask's mode. An existing .seedelf, such as one made before restrict_permissions, is never tightened (setup.rs:105-109). The file is Argon2id + AES-GCM, so a local reader gains only offline guessing. Creating the file with OpenOptions mode 0o600, and checking the folder on each run, closes both.",
+  "The update check has no timeout (seedelf-display/src/version_control.rs:29 `Client::new()`), unlike seedelf-koios's 10 s connect / 30 s total. A stalled connection to api.github.com blocks every command before it starts. Its IP exposure is already in the README's Limits.",
+  "fund never spends an exactly-5-ADA, token-free UTxO (utxos.rs:153 via fund.rs:128), though fund puts up no collateral. An address holding only such UTxOs gets 'Not Enough Lovelace/Tokens'. A small refusal of a valid payment.",
+  "fund prices once. The change is staged with tmp_fee 200,000 (fund.rs:159) and finished with the real fee (~170k), so a change just under 2^32 lovelace (4,294.967296 ₳, within ~30k) gains 4 bytes. The fee then falls ~176 lovelace short (the +1 at fund.rs:232 doesn't cover it): the transaction is refused at submit, with no loss. create and extract finish with a larger fee than they drafted, so their change only shrinks.",
+  "is_payable_address and is_not_a_script refuse a key-payment address with a script stake part, because pallas-addresses' has_script includes the delegation part. That affects sweep, remove, create, fund, extract, and core's withdraw for the web wallet. chunk-10-withdraw.md chose this ('no script in the payment or the delegation part'); the owner's 2026-10-19 rule (refuse only what the ledger refuses) came later. Core's (R2), a call for the owner.",
+  "Display nits. seedelf_label (display.rs:109-121) shows bytes 4..19 of the name, so a label shorter than 15 bytes prints with whatever index and txid bytes happen to be printable appended. util age unwraps Koios's answer (age.rs:75) and panics on an error. util history reads only the enterprise contract address (history.rs:35), so it misses what CLIs before 0.5.0 paid to the staked form. balance scans the whole contract twice (display::all_seedelfs, then get_credential_utxos), which costs Koios budget.",
+  "create's change (create.rs:228-236) carries every picked token in one output, where fund splits them 20 to an output. That matters only when selection takes token UTxOs, and then a value over 5,000 bytes is refused at submit, with no loss.",
+  "Core's blind selection, the CLI's path through select_script_inputs, returns at the first error that isn't NotEnough. A TooLarge from a stranger's token-heavy UTxO therefore stops a CLI transfer instead of trying without that UTxO; --utxo is the way around it. For R2.",
+  "Settled and not reported: the 20-UTxO cap, --utxo picking only among those 20, and sweep --all's 20 (README Limits); util find matching in hex (README); the update check's IP (README); sweep's default for 21+ tokens (backlog CLI section); the ADA Handle stale-holder report (2026-11-16).",
+  "r4#1 and r4#2 are the CLI's members of launch review H6's class. f446cb27 fixed the web wallet's paths only. A verifier can reproduce both against core's public API (build::external_sweep; utxos::assets_of over owned rows; build::sweep_all(...).estimate()) with three rows of 9223372036854775807 of one token."
+ ],
+ "coverage": "Read in full:\n- seedelf-cli/src: main.rs, lib.rs, setup.rs, web_server.rs.\n- commands/: mod, create, fund, fee, spend, transfer, sweep, remove, balance, welcome.\n- commands/util/: mod, expose_key, base, statistics, migrate, find, age, history, mint, extract.\n- commands/external/: mod, balance, sweep.\n- static/: index.html, index.js.\n- seedelf-display/src: lib, display, version_control, text_coloring.\n\nSkimmed: static/index.css (searched for external loads: none). favicon.ico is binary.\n\nFollowed out of the lane:\n- seedelf-core, in full: utxos.rs, transaction.rs, address.rs, data_structures.rs, constants.rs.\n- seedelf-core, in part: assets.rs (Asset/Assets add, merge, parse); build.rs (fee helpers, even, collateral, Budgets::from_ogmios, ScriptSpend::new, proven, draft, estimate and remainder, select_script_inputs, the transfer/sweep/remove/mint/external_sweep builders, is_payable, is_payable_address).\n- seedelf-koios koios.rs: client timeouts, credential_utxos, address_utxos, utxo_info, ada_handle_address, asset_history, address_transactions, evaluate, witness and submit, extract_bytes_with_logging.\n- seedelf-crypto convert.rs.\n- wasm lib.rs's session_return (only to confirm it fits rows).\n- The contracts at 5b82530: wallet.ak, seedelf.ak, token_name.ak.\n- Dependency sources: rpassword 7.5.4 (read_password from /dev/tty, behavior at EOF); warp 0.3.7 (bind panics on a taken port); pallas-txbuilder 0.35.1 (sign, witness-set build); pallas-codec 0.35.1 (Set and NonEmptySet tag 258); pallas-addresses 0.35.1 (has_script, Display).\n- The CLI tests' names, plus the core tests that pin its guards.\n\nNot reached:\n- tests/cli/harness.rs internals.\n- seedelf-crypto's register and schnorr (R1).\n- core's ScriptSpend settle and stage beyond the token total (R2).\n\nRan only reads and git (log, show, blame-by-log); no tests, builds or network."
+}

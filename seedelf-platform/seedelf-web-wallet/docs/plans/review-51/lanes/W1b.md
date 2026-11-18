@@ -1,0 +1,132 @@
+# Lane W1b
+
+Returned by the workflow's agent `a001dbac0cc52d96f`, written here by the lead from its structured answer.
+
+## Findings (2)
+
+### w1b#1 · low · Send, Make public and Remove refuse any address with a script in it, though the ledger accepts them, including key addresses whose stake part is a script
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:3266`
+- **Who:** user · **Since:** 6daafe6f (2026-09-23, before 1.0.0; chunk 10's withdraw) · **Confidence:** traced
+- **Needs the owner:** This removes or softens a refusal that flows.md:398 states ('Only a normal address on this network is accepted: not a script'). Chunk 10 chose it 'as in the CLI' before the owner's 2026-10-19 rule. The wallet contract's own address is the one case where a missing datum lets anyone take the money. The core predicate is shared with the CLI.
+
+**Scenario:**
+
+Three kinds of address are refused. In each case the user pastes the address, or an ADA Handle that resolves to it, into the public account's Send, into Make public, or as a removal's destination. (1) A base address with a key payment part and a script stake part (`addr1y…` on mainnet, `addr_test1y…` on preprod). (2) A native-script multisig address (`addr1w…`). (3) A Byron address, which `from_bech32` can't read, so the user is told it 'isn't a Cardano address'. For (1) and (2), `payable_address` calls `build::is_payable_address`, which calls `is_not_a_script`, which uses `Address::has_script`. That is true when either part is a script, so the wallet refuses with 'Payments go to a normal mainnet address: not a script, stake or other network's address' (the worker shows it as `worker.address.script`). The ledger accepts all three outputs. The stake-script address can't lock anything: its payment key spends it like any key address, so the reason chunk 10 gave ('the output carries no datum') doesn't apply to it. The only way to pay these addresses is to restore the phrase in another wallet.
+
+**Evidence:**
+
+lib.rs:3263-3272 `pub fn payable_address(network_flag: bool, to: &str) -> Result<Address> { let addr = Address::from_bech32(to.trim())...; if !build::is_payable_address(&addr, network_flag) { bail!("Payments go to a normal {network} address: not a script, stake or other network's address") }`. seedelf-core/src/build.rs:3280-3284 `matches!(addr, Address::Shelley(_)) && is_not_a_script(addr.clone()) && is_on_correct_network(addr.clone(), network_flag)`. seedelf-core/src/address.rs:63-65 `!Address::has_script(&addr)`. ~/.cargo/registry/src/*/pallas-addresses-0.35.1/src/lib.rs:519-521 `self.payment().is_script() || self.delegation().is_script()`. The same predicate is reached from lib.rs:1644 (SendTo::read, public Send), 3389 and 3422 (withdrawal_of and amounts_of, Make public), 4798 (parts), 5028 (a removal's `to`) and 6731 (`checkPayableAddress`), and in core from build.rs:787 (`account_send_many` → `check_payable`), 1670 (`pay_rest`) and 3286 (`check_address`). extension/src/background/destination.ts:84-98 turns any WebAssembly refusal other than 'not bech32' into `worker.address.script`. Tests pin only the wallet contract, mainnet and stake cases: wasm/tests/api_test.rs:706-711 and 2823-2827. The owner's rule is COMMON.md:63.
+
+**Fix:**
+
+Refuse only what the ledger refuses: a stake address, the other network, or text that isn't an address. Never refuse a key payment part whose stake part is a script. For a script payment part, give a warning instead of a refusal. Keep one case visible: Seedelf Wallet's own contract address with no datum, which anyone can take (wallet.ak at 5b82530: `None -> True`); whether that is refused or warned about is the owner's call. The class is every gate built on `is_payable_address`: `payable_address` and `checkPayableAddress` here, and in core `account_send_many`'s `check_payable`, `check_address` (the sweep builders) and `pay_rest`'s `RestTo::Address`. The CLI's `sweep` shares the same predicate. Reading Byron (base58) addresses would need a parser beside `from_bech32`.
+
+**Known check:**
+
+Searched backlog.md (all of it, including Declined) and docs/archive/plans for 'script address', 'is_payable_address', 'payable_address', 'checkPayable', 'has_script', 'script stake' and 'Byron'. Chunk-10-withdraw.md:36,45,123 records the refusal as chunk 10's design, and flows.md:398 and architecture.md:112 describe it. There is no Declined, Not-fixed or open-call entry for it. The 2026-10-19 rule (COMMON.md:63, the owner's no-paternalistic-guards note) came after it.
+
+### w1b#2 · low · Removing a Seedelf moves the other tokens in its UTxO, but neither the review nor the Seedelf list shows them
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:5074`
+- **Who:** stranger · **Since:** b84b87bc (2026-09-23, before 1.0.0) · **Confidence:** traced
+
+**Scenario:**
+
+Anyone who has paid one of the user's Seedelfs knows a register the user owns: it is the datum of that payment. The deployed policy is open (seedelf.ak at 5b82530 checks only the token name built from the first input), so that person can mint a Seedelf into the wallet contract under that register, holding 2 ₳ and 100 junk tokens. The wallet lists it as one of the user's Seedelfs, showing its ADA only. The private balance's tokens sum only spendable UTxOs, which leave Seedelf holders out, so the 100 tokens appear nowhere. The user presses Remove, to the public account. `remove_spend` checks only that the register is owned and that the UTxO holds exactly one Seedelf; other policies' tokens are allowed. `build::remove(...).change_to(0/0)` therefore pays the 100 tokens to account 0/0 along with the ADA. `RemoveResult` has no tokens field, and the review shows only 'To your public account: 1.75 ₳' and the fee. The user signs a transaction that moves 100 tokens the review never named; only Transaction details shows them. Removing into the private balance brings them, unannounced, into a private UTxO's change. No ADA is lost and the destination is the user's own, which is why this is graded low and not as a high 'signs other than it shows'.
+
+**Evidence:**
+
+lib.rs:4997-5010: `RemoveResult` has `name`, `to`, `lovelace`, `fee` and `inputs`, and no tokens. lib.rs:5019-5024: `remove_spend` checks `owned` and then `build::seedelf_in(&chain, utxo)?`. seedelf-core/src/build.rs:3550-3567: `seedelf_in` filters to the Seedelf policy only (`[one] if one.quantity == "1"`), so other tokens pass. build.rs:3574-3588: `remove` spends the UTxO, and everything else goes to the change. lib.rs:5027-5028: `spend.change_to(&payable_address(...))`. lib.rs:5074: `lovelace: built.change_lovelace.to_string()`, the only amount returned (built.change_tokens is dropped). extension/src/background/withdraw.ts:174-188: `to: keys.cardano.receiveAddress(net, 0)`. shared/rpc.ts:872-882: `RemoveSummary` has `lovelace` only. ui/screens/RemoveSeedelf.tsx:259-260: the review rows are the amount and the fee. background/balances.ts:403-422: `SeedelfInfo` gets `lovelace: utxo.value` only, and the balance's `tokens` come from `sumValue(spendableOwned(...))`, which leaves Seedelf UTxOs out (balances.ts:474-476). The open policy is `git show 5b82530:seedelf-contracts/validators/seedelf.ak`, mint branch.
+
+**Fix:**
+
+Return the change's tokens in `RemoveResult` (`built.change_tokens`, as `SessionReturnResult.tokens` and `WithdrawResult`'s Max payment already do), list them on Remove's review, and give `SeedelfInfo` the UTxO's other tokens so the Seedelf row shows them. The class is every result whose change goes to a place the user picks: `RemoveResult` is the one that drops the tokens. `MintResult`, `AccountMintResult` and `LaunchResult` return change to the payer's own side and report a token count, and `LaunchResult` spends ADA-only UTxOs. A verifier's test: a wasm/tests case that adds a foreign token to `owned()[0]`, which holds one Seedelf, runs `api::build_remove` with `to = Some(own address)`, and asserts that the decoded transaction pays that token to `to` while the result carries no token.
+
+**Known check:**
+
+Searched backlog.md, docs/archive/plans (every review, chunk-10, chunk-40), flows.md, privacy.md and architecture.md for remove/token, 'seedelf_in', 'exactly one Seedelf', and a stranger's or gifted Seedelf. The only related item is chunk-40-verification-upstream.md:179-185 (a burn fails when the first input is output #256 or later: the owner asked for no fix), which is different and settled. Chunk-10 records 'exactly one Seedelf token' as the check.
+
+## Guards (21)
+
+| Where | What it stops | Test |
+|---|---|---|
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:310` | check_paths: signing for or spending a public-account UTxO whose address doesn't carry the payment key its role/index derives, on this network. It stops a wrong path, a stranger's row, and the other network. | wasm/tests/api_test.rs:257, :374, :723, :1279 ('is not under the account's payment key') |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:333` | sign_with_paths: signs only with the keys of the inputs spent, and the collateral where a caller adds it. A spent input with no path refuses rather than skipping its key. | none found by name (the README says the native tests check that the signers are exactly the inputs' payment keys) |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:196` | lovelace_of: refuses an amount over 45 billion ADA, so a request's amount can't overflow a sum | wasm/tests/api_test.rs:262 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:206` | assets_of: refuses a token amount of 0 or one that isn't a number | none found |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:274` | account_amount: raises a move-in's or send's amount to the least its outputs need, so an output can't fall below its minimum | per wasm/README.md, the native tests check that a short amount goes up to its minimum (not traced to a line) |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:1410` | session_return: every row must carry session `index`'s payment key, so a return never signs for another key's UTxO | wasm/tests/session_test.rs:602 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:1280` | plan_return: takes a stranger's token UTxO only when its own ADA pays the deposit and bytes its tokens add, plus a margin (H1); a stranger's UTxO too large for one transaction waits or stays (H2) | wasm/tests/return_cost_test.rs:160, :195, :247, :287 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:1336` | built_or_without_strangers / ReturnPlan::without_strangers: a build that fails drops the strangers' rows, never the session's own; when only strangers' rows are taken, they are dropped one at a time | lib.rs return_plan_tests (5422-5474) |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:1366` | merged_return: the funding change a return merges into must be this wallet's (check_spendable), and there are at most MAX_MERGE of them | session_test.rs:366 ('isn't this wallet's'); none found for MAX_MERGE |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:989` | session_collateral: never chooses a row the evaluator refuses (a reference script or a deep datum) as a merged return's collateral (L20) | none found by name |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:807` | build_order_cancel: a cancel's funds and collateral must carry the session's payment key | none found |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:2316` | check_spendable: a Seedelf spend pays only with UTxOs this key owns (identity registers aren't owned), never one holding a Seedelf, and never one the evaluator refuses | wasm/tests/api_test.rs:1045, :1053, :1894, :2833; transfer.test.mjs:64 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:2999` | recipient_register: a Seedelf payment goes to the wallet contract UTxO that holds that Seedelf, under its register datum; core's is_payable refuses an identity or torsion register | wasm/tests/api_test.rs:1873, :1876, :2006, :2010 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:3048` | transfer_plan: a Seedelf payment's lovelace is raised to the minimum its outputs need | per wasm/README.md, the native tests check that a short transfer amount goes up to its minimum (not traced to a line) |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:3266` | payable_address: no payment to a stake address, the other network, or the wallet contract with no datum (which anyone could take); it also refuses every script part (w1b#1) | wasm/tests/api_test.rs:706-711, :2823-2827, :2867; move-in.test.mjs:88 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:3642` | holding_enough: an amount larger than all the ADA the UTxOs hold is refused at once, before parts are planned | wasm/tests/api_test.rs:1834, :1849, :2376-2388 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:5021` | remove_spend: removes only a Seedelf under a register this key owns, from a UTxO holding exactly one Seedelf | wasm/tests/api_test.rs:2840-2861 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:5111` | is_own_address: the payment key alone decides; an address that only carries the account's stake key is never called the account's own (#359) | wasm/tests/api_test.rs:2900, :2920, :2973 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:5179` | sign_with_collateral_key: the one-time key signs only a transaction that names it as a required signer, and only after giveme.my's signature over the transaction id verifies | wasm/tests/api_test.rs:1022, :1034 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:1543` | check_recipients: zero or more than 20 recipients are refused | wasm/tests/api_test.rs:678, :1753 |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs:6453` | inspect_session_tx, sign_session_tx, session_data_signer and sign_session_data force governance off, so the one-time accounts' DRep key never signs for a session | none found |
+
+## Checked and holds
+
+- The public-account flows (move_in, account_send, stake, drep_transaction, finish_account_mint, build_launch_from_account) check every pathed UTxO's payment key on this network. They sign once per distinct path of the inputs actually spent, plus the collateral. The stake key signs only for a certificate or withdrawal and the DRep key only for DRep certificates or votes (sign_staking, Staking::stake_signs/drep_signs).
+- plan_return holds for strangers (H1/H2). The session's own and ADA-only rows go first, own first. A stranger's token UTxO is taken only when its own ADA pays the deposit and bytes it adds plus 0.05 ₳, and the plan's chunking matches deposit_outputs (token_chunks / split by 20).
+- A stranger can't make a return's first row unbuildable. One key input is 40 bytes, a reference script on a UTxO is at most about 16 KB (it had to fit a 16 KiB transaction), and a large script needs a large min-UTxO, which pays for its reference-script fee many times over.
+- The size estimate overcounts the real transaction, so a plan of only the session's own rows doesn't build past 16 KiB: inputs are counted at 40 bytes (the real cost is about 37), outputs are measured on the same stand-in as the minimum plus 4 bytes of slack, and the overhead is 500 or 2,000 bytes against about 160 and under 1,000 measured.
+- A merged return's execution cost doesn't grow with how many account rows it takes. The deployed wallet.ak (5b82530) checks the Schnorr proof and `list.has(extra_signatories, vkh)` and never walks the inputs or outputs, so many account inputs can't push it over the budget.
+- planned_return's figures can't underflow. The merged path needs a collateral of at least 2 ₳ of ADA alone among the taken rows, against a fee of about 0.3-0.5 ₳, and the sweep path's fee is bounded by external_sweep's checked_lovelace. `lovelace` is the taken rows' total less this transaction's fee, as documented.
+- A stranger's token quantities that would overflow merging into the plan are left out as 'tokens' (Draft::with returns None on a merge Err), not propagated as an error. For honest rows, plan_return's `?`s can't fail.
+- move_in's and account_send's figures come from the build (paid, tokens, change). Paid.tokens echoes the request, which equals what is paid, because account_payment refuses any ask above what is held and sums duplicates the same way for the check and the payment.
+- The Max figures for transfer and withdraw come from the finished spend (rest_lovelace, or change_lovelace for sweep_all). build_transfer's measured_or_more fallback can't build Max as a 0-lovelace transfer_from: Max errors come from max_inputs, which the fallback repeats with the same tokens and then returns the original shortfall.
+- No Seedelf payment goes to an identity or torsion register: payment_outputs, check_register and pay_rest's check_register all check is_payable. Register::is_owned returns false for identity points, so a stranger's (identity, identity) UTxO is never spendable input. Paying the wallet's own Seedelf is flagged with to_self.
+- The account-paid mint re-randomizes the Seedelf register between draft and finish. The datum's size, the selection and the token name stay the same, so the budgets measured on the draft still apply. A wrong budget would only make the node refuse the transaction; a tx with isValid=true that fails phase 2 is rejected (ValidationTagMismatch), and its collateral isn't taken.
+- Phrase and entropy exports take their input by value and wipe it (Zeroizing). Derivation error texts name a word's position, never the word. generatePhrase uses OsRng with 32 bytes of entropy.
+- one_time_key is HKDF-SHA-256 of sk with a fresh 32-byte seed per build (new_seed uses OsRng), and its intermediates are zeroized. The seed can safely wait in JavaScript: it is worthless without the Seedelf key.
+- read_dex_order treats only script-payment headers (1, 3, 5, 7) as orders and looks the script up per network. build_order_cancel and check_order_cancels hold no keys; their signature comes later from signSessionTx with the session's path.
+- The session bindings force governance off. The one-time account is a separate type (WasmOneTimeAccounts), so the public account's keys can't be handed to a session's signer, and the reverse holds too.
+- drep_transaction's own_vote compares Koios's `delegated_drep` with me.id() in the same CIP-129 form the worker compares (staking.ts:542). An unknown DRep deposit refuses Retire rather than guessing 0.
+- holding_enough and Holdings::spare use plain u64 sums of rows' lovelace. Honest rows can't pass a u64 (all ADA is 4.5e16), and seedelf-platform/CLAUDE.md names these two as the exceptions only a lying index (out of scope) can reach.
+- slot_at refuses a non-finite or negative time. drep_profile trims the name and limits it by characters (CIP-119). check_label allows only printable ASCII, at most 15 bytes.
+- is_own_address and carries_stake_key: a stranger's payment key under the account's stake key is never 'own' (#359 holds). An address whose payment part is the account's stake key hash is read as anyone's, which is known (backlog own#2).
+- build_launch_from_account signs the inputs and the collateral (pathed). Registering mix_logic's script credential needs no signature, and the pool is re-verified from the finished bytes before it is returned.
+
+## Notes
+
+- For W3 and the X2/X3 lenses: lovejoin.rs:435-438 `direct_tail` chooses 'the session's collateral' as the FIRST row of `request.utxos` that is exactly 5 ₳ of ADA alone (fits_collateral), whoever's it is. It then uses that row's address as the change address of the tail's deposit and mix (lovejoin.rs:454-455, 474). A stranger can send exactly 5 ₳ to base(session payment key, stranger's stake key) at an address the funding's shape reveals (privacy.md:357). If that row comes first in the worker's row order, which is untested and depends on Koios or the data layer (a stranger could grind a small tx hash if rows are sorted by hash), two things happen. First, the stranger's 5 ₳ is mixed and becomes the user's box, while the session's own 5 ₳ is spent as a fee payer and comes back directly under the session's history: the link privacy.md:429 says the collateral's mix avoids. Second, the tail's change sits under the stranger's stake key until the return sweeps it. No money is lost, and the stranger pays 5 ₳ each time. Holdings (lovejoin.rs:1057-1065) applies the opposite rule ('never first a stranger's'), and session_collateral (lib.rs:985) is a third rule for the same thing: it admits datum-carrying 5 ₳ rows that fits_collateral refuses. Passing the session's recorded collateral, as holdings_of takes an OutRef, would make them one rule.
+- Defence in depth: CardanoAccount.fromPhrase and fromEntropy (lib.rs:5846, 5857) accept account 24301' (ONE_TIME_ACCOUNT); only TypeScript's isAccountIndex keeps it from being a public account. wallet.withAccount(index) is called with indexes from tx-view.ts:310, destination.ts:131, lovejoin.ts:6246 and 6328, dapp.ts:1311 (`view.account ?? 0`) and balances.ts:365. E4a should confirm that each of those indexes is bounded. A WebAssembly refusal of 0x5EED in WasmCardanoAccount would close it.
+- seedelf-platform/CLAUDE.md names holding_enough and Holdings::spare as the u64 sums of rows' lovelace that only a lying index can wrap. Worth::apart's per-history `total` (lib.rs:3772, `rows.iter().map(|u| Self::adds(chain, u)).sum()`, only compared with `owed`) is a third such sum in seedelf-wasm, and the doc doesn't name it. It is out of scope today (a trusted source), but by the doc's own rule it would be u128. This is W1a's range: recorded for the owner, not reported.
+- plan_return's STRANGER_MARGIN comment says that 'a merged return's scripts read every input and output'. The deployed wallet.ak doesn't walk them, so the margin is safely generous; only the comment overstates.
+- isValidRegister, registerToDatum, createProof, verifyProof and rerandomize are exported but called only by tests (wasm/tests/smoke.test.mjs and extension/tests), never by the extension's src. isValidRegister accepts identity points (CLAUDE.md: use is_payable). A future caller that gates a payment on it would pay an identity register.
+- Paying the Seedelf contract's own address with no datum is the one destination where the payment-address refusal (w1b#1) protects against anyone taking the money (wallet.ak: `None -> True`). Whatever the owner decides for script addresses in general, that case should stay visible.
+- session_return (lib.rs:1453-1458) swallows the tail attempt's error and retries without the tail. The rewards map is consumed by direct_tail even when the tail is then dropped; that's harmless, because a return without the tail runs no mix_logic.
+- The draft and finish forms of the Seedelf spends (draft_mint/finish_mint, draft_transfer/finish_transfer, draft_withdraw/finish_withdraw, draft_remove/finish_remove) have no wasm_bindgen export. They are used only by native tests: dead to the extension (nit).
+
+## Coverage
+
+Read in full, line by line:
+- seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs lines 1-3300 (orientation types, account flows, staking/DRep, DEX order bindings, session return with plan_return/ReturnPlan/built_or_without_strangers/merged_return/planned_return, histories and classes, mint, launch, account mint, transfer). Also lines 3300-3640 for context, which overlap W1a (WithdrawRequest, withdrawal_of, amounts_of, carried_payment, withdraw_spend, build_withdraw, LeftWhy, holding_enough).
+- lib.rs lines 4600-6883: the end of build_transfer_parts, build_withdraw_parts, withdraw_result, remove, is_own_address/carries_stake_key, the signing functions, the tests (chain_end_tests, return_plan_tests, dex_order_tests), and every wasm_bindgen export including the Register, SeedelfKey, CardanoAccount and OneTimeAccounts classes and the cip30, decode and lovejoin wrappers.
+
+Skimmed: lib.rs 3640-3905 (quantity_of, token_group, Worth, by_history_first, same_order, the start of Room).
+
+Not read: lib.rs 3905-4600 (fit_part, in_parts, chained, next_of, reserving, taken, carry_kept, max_in_parts, max_chained). These are W1a's; I left them out on purpose.
+
+Followed out of my lines:
+- seedelf-core build.rs: account_payment, build_account_payment, external_sweep, deposit_outputs, token_chunks, minimum_deposit, payment_outputs, transfer_most, pay_rest, carry, is_short, is_payable_address/check_payable, seedelf_in, remove, ScriptSpend::with_account.
+- seedelf-core staking.rs: Staking::withdraw, of, drep, and the signer predicates. utxos.rs: assets_of. eval.rs: refusal and unreadable_datum. address.rs: is_not_a_script and dapp_address.
+- seedelf-crypto register.rs (is_owned, is_valid) and derivation.rs (parse_phrase errors, generate_phrase). pallas-addresses 0.35.1 has_script.
+- wasm/src/cip30.rs: KeyPath, KoiosRow, TxRequest, keys_of, own_address, sign_tx, utxo_cbor.
+- wasm/src/lovejoin.rs: Holdings, spare, holdings_of, direct_tail, DirectTail, CollateralTail::build, fits_collateral.
+- The deployed wallet.ak and seedelf.ak at 5b82530.
+- TypeScript callers: destination.ts (checkPayable, ownAccount); sessions.ts (buildBack, the own list, cancelOf, fundingChange, MAX_MERGE, TOO_LITTLE); withdraw.ts (buildRemove); balances.ts (seedelfSide, spendableOwned); wallet.ts (derive, withAccount); preferences.ts and accounts.ts (isAccountIndex); script-spend.ts (spendable); staking.ts (stakeInfoOf); RemoveSeedelf.tsx; rpc.ts (RemoveSummary, SeedelfInfo).
+- wasm/tests/return_cost_test.rs lines 1-330, and grep hits in api_test.rs.
+
+Settled lists checked: all of backlog.md, independent-review.md in full, and targeted searches across docs/archive/plans.
+
+Not done: I ran no tests and built nothing. The guards' test pins come from grep hits; I didn't trace each test's assertions.
