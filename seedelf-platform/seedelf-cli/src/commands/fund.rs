@@ -134,8 +134,12 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     // what one output holds stays out of the selection (chunk 51), and core
     // is handed no more kinds of token than one transaction could carry
     // (l3cli#3).
-    let every_non_collatreal_utxo =
-        rows::for_select(every_non_collatreal_utxo, &selected_tokens, &Assets::new())?;
+    let every_non_collatreal_utxo = rows::for_select(
+        &params,
+        every_non_collatreal_utxo,
+        &selected_tokens,
+        &Assets::new(),
+    )?;
     let (every_non_collatreal_utxo, _) =
         utxos::fitting(&every_non_collatreal_utxo, &Assets::new(), |_| false)?;
     let usable_utxos: Vec<UtxoResponse> = utxos::select(

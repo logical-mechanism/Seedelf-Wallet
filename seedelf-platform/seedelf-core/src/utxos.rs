@@ -273,6 +273,42 @@ fn holders_of(
     Ok(picked)
 }
 
+/// The order [`select`] takes `utxos` in, and how many of them, at the front,
+/// it takes for the `tokens` being sent. That's the order a script spend
+/// takes them in when nothing is known of their histories (build.rs
+/// `select_script_inputs`): the fewest holding the tokens, those that bring
+/// most first ([`holders_of`]), then those with no tokens, then every other
+/// token UTxO, each of these two groups the most lovelace first. Koios
+/// reports a token-less outpoint as either `Some(vec![])` or `None`; both
+/// group together. A caller that hands [`select`] only some of the UTxOs
+/// keeps those it takes first (chunk 51, l4cli#2).
+pub fn select_order(
+    params: &ProtocolParameters,
+    utxos: Vec<UtxoResponse>,
+    tokens: &Assets,
+) -> Result<(Vec<UtxoResponse>, usize)> {
+    // Pre-parse the values once and bail on any malformed entry. An earlier
+    // version used `Result::into_iter().cmp(...)`, which silently treated
+    // parse failures as `Equal` and could break the largest-first invariant
+    // the selector depends on.
+    let held: Vec<(u64, Assets)> = utxos
+        .iter()
+        .map(|u| -> Result<_> {
+            let v = string_to_u64(u.value.clone()).context("Invalid UTxO Value")?;
+            Ok((v, assets_of(vec![u.clone()])?.1))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let front: Vec<usize> = holders_of(params, &held, tokens)?;
+    let mut rest: Vec<usize> = (0..held.len()).filter(|i| !front.contains(i)).collect();
+    rest.sort_by_key(|&i| (!held[i].1.is_empty(), Reverse(held[i].0)));
+    let ordered: Vec<UtxoResponse> = front
+        .iter()
+        .chain(&rest)
+        .map(|&i| utxos[i].clone())
+        .collect();
+    Ok((ordered, front.len()))
+}
+
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
 // use largest first algo but account for change
 pub fn select(
@@ -298,38 +334,15 @@ fn do_select(
     // all the found assets
     let mut found_assets: Assets = Assets::new();
 
-    // The order to take them in, as a script spend takes them when nothing is
-    // known of their histories (build.rs `select_script_inputs`): the fewest
-    // holding the tokens being sent, those that bring most first
-    // ([`holders_of`]), then those with no tokens, then every other token
-    // UTxO, each of these groups the most lovelace first. Koios reports a token-less outpoint as either `Some(vec![])` or
-    // `None`; both must group together. The loop below takes a UTxO holding
-    // none of the tokens only once they're all found, and never comes back to
-    // one it passed, so the tokens' holders go first: an address whose ADA
-    // sat in such a UTxO, sorted ahead of a smaller one holding the token,
-    // found nothing (chunk 51, r2b#2). Only the holders needed lead: another,
-    // taken for its ADA ahead of ADA alone, put its other tokens in the
-    // change, whose floor could pass all the address held (r2cli#2).
-    //
-    // Pre-parse the values once and bail on any malformed entry. An earlier
-    // version used `Result::into_iter().cmp(...)`, which silently treated
-    // parse failures as `Equal` and could break the largest-first invariant
-    // the selector below depends on.
-    let held: Vec<(u64, Assets)> = utxos
-        .iter()
-        .map(|u| -> Result<_> {
-            let v = string_to_u64(u.value.clone()).context("Invalid UTxO Value")?;
-            Ok((v, assets_of(vec![u.clone()])?.1))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let front: Vec<usize> = holders_of(params, &held, &tokens)?;
-    let mut rest: Vec<usize> = (0..held.len()).filter(|i| !front.contains(i)).collect();
-    rest.sort_by_key(|&i| (!held[i].1.is_empty(), Reverse(held[i].0)));
-    let utxos: Vec<UtxoResponse> = front
-        .into_iter()
-        .chain(rest)
-        .map(|i| utxos[i].clone())
-        .collect();
+    // The order to take them in ([`select_order`]). The loop below takes a
+    // UTxO holding none of the tokens only once they're all found, and never
+    // comes back to one it passed, so the tokens' holders go first: an
+    // address whose ADA sat in such a UTxO, sorted ahead of a smaller one
+    // holding the token, found nothing (chunk 51, r2b#2). Only the holders
+    // needed lead: another, taken for its ADA ahead of ADA alone, put its
+    // other tokens in the change, whose floor could pass all the address held
+    // (r2cli#2).
+    let (utxos, _) = select_order(params, utxos, &tokens)?;
 
     for utxo in utxos.clone() {
         // the value from koios is the lovelace

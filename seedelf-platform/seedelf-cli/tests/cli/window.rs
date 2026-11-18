@@ -31,7 +31,6 @@ use wiremock::{Mock, Request, Respond, ResponseTemplate};
 use seedelf_cli::commands::sweep::{self, SweepArgs};
 use seedelf_cli::commands::transfer::{self, TransforArgs};
 use seedelf_cli::commands::util::mint::{self, MintArgs};
-use seedelf_core::assets::{Asset as CoreAsset, Assets};
 use seedelf_core::build::{minimum_address_payment, minimum_deposit};
 use seedelf_core::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_koios::koios::UtxoResponse;
@@ -97,15 +96,6 @@ fn hash_of(seed: &str) -> String {
 /// `seed`'s hash, its first characters made `prefix`: a hash a payer ground.
 fn ground(prefix: &str, seed: &str) -> String {
     format!("{prefix}{}", &hash_of(seed)[prefix.len()..])
-}
-
-fn as_assets(tokens: &[TokenAmount]) -> Assets {
-    tokens
-        .iter()
-        .fold(Assets::new(), |all, (policy, name, qty)| {
-            all.add(CoreAsset::new(policy.clone(), name.clone(), *qty).expect("asset"))
-                .expect("assets")
-        })
 }
 
 /// The contract's UTxOs, in the order they were added, and the user's own
@@ -370,13 +360,83 @@ async fn a_strangers_piles_at_the_lowest_hashes_never_hold_back_the_users_own_ad
     );
 }
 
-/// One of the user's NFTs.
-fn nft(n: u8) -> TokenAmount {
-    (
-        format!("{:02x}", 0xa0 + n).repeat(28),
-        hex::encode("nft"),
-        1,
-    )
+/// The kinds of token core is handed go first to the holders of a token sent
+/// that the spend must take, as core picks them, then to the rest by what
+/// each brings (chunk 51, l4cli#1). Every holder came first, so a stranger's
+/// four piles, each one SNEK beside a thousand junk tokens at its least
+/// (76 ₳), took all 4,000 kinds and left out the user's 300 ₳:
+/// `transfer --asset` and `sweep -l --asset` of 100 of the user's 1,000 SNEK
+/// were refused. Paid 1 ₳ more each, to rank above the user's holder (398 ₳),
+/// they left that out too, and the refusal said the balance held only 4 SNEK.
+#[tokio::test]
+#[serial]
+async fn a_strangers_piles_holding_the_token_sent_dont_crowd_out_the_users() {
+    const FIFTY_ADA: u64 = 50_000_000;
+    let params = recorded_params();
+    let mut wrong = Vec::new();
+    for (case, holder_nfts, above_the_holder) in [
+        ("piles at their least", 0u8, false),
+        ("piles paid to rank above the user's holder", 3, true),
+    ] {
+        for command in ["transfer", "sweep"] {
+            let mut scenario = Scenario::start().await;
+            let scalar = scenario.scalar;
+            // The user's 1,000 SNEK on 2 ₳, beside `holder_nfts` NFTs, and
+            // 300 ₳ beside one.
+            let mut holder = vec![snek(1_000)];
+            holder.extend((2..2 + holder_nfts).map(nft));
+            let mut rows = vec![
+                seedelf_utxo(scalar, 1, 1_500_000, SAMPLE_SEEDELF),
+                wallet_utxo(scalar, 2, 2_000_000, &holder),
+                wallet_utxo(scalar, 3, 300_000_000, &[nft(1)]),
+            ];
+            for (i, pile) in four_snek_piles().into_iter().enumerate() {
+                let tokens = as_assets(&pile);
+                let lovelace = if above_the_holder {
+                    minimum_deposit(&params, &tokens).expect("deposit") + 1_000_000
+                } else {
+                    wallet_minimum_lovelace_with_assets(&params, tokens).expect("least")
+                };
+                rows.push(wallet_utxo(scalar, 101 + i as u64, lovelace, &pile));
+            }
+            scenario.mount_credential_utxos(rows).await;
+            scenario.mount_evaluate(20).await;
+            scenario.mount_collateral().await;
+            scenario.mount_submit().await;
+
+            let result = if command == "transfer" {
+                transfer::run(
+                    TransforArgs {
+                        seedelfs: vec![SAMPLE_SEEDELF.to_string()],
+                        lovelaces: Some(vec![FIFTY_ADA]),
+                        assets: vec![snek_spec(100)],
+                        utxos: None,
+                    },
+                    PREPROD,
+                    VARIANT,
+                )
+                .await
+            } else {
+                let mut args = sweep_args(Some(FIFTY_ADA), false, None);
+                args.assets = vec![snek_spec(100)];
+                sweep::run(args, PREPROD, VARIANT).await
+            };
+            if let Err(e) = result {
+                wrong.push(format!("{command}, {case}: {e:#}"));
+                continue;
+            }
+            let tx = decode_tx(&scenario.submitted_cbor().await);
+            assert_sound_transaction(&tx, &scenario, &protocol_params().await);
+            if !(tx.inputs.contains(&(tx_hash(2), 0)) && tx.inputs.contains(&(tx_hash(3), 0))) {
+                wrong.push(format!("{command}, {case}: spent {:?}", tx.inputs));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "the user's SNEK and their 300 ₳ pay:\n{}",
+        wrong.join("\n")
+    );
 }
 
 /// The UTxOs a spend draws on are those that bring most, whatever each
@@ -524,31 +584,66 @@ async fn a_token_sent_is_found_past_the_first_20() {
 }
 
 /// A UTxO the spend would never take takes no place among the 20 (the
-/// owner's list, §7 (2)): 20 of a stranger's UTxOs holding a reference script,
-/// each with more ADA than any of the user's, at the lowest hashes, can't
-/// hold back a transfer, a sweep or a mint.
+/// owner's list, §7 (2)): 20 of a stranger's UTxOs, each bringing more than
+/// any of the user's, can't hold back a transfer, a sweep or a mint, whether
+/// they hold a reference script, or 2^63 − 1 of one token, of which no output
+/// holds more than two UTxOs' (core's fitting leaves the rest out). Counted
+/// before that, those took 20 places, kept two, and the user's 25 receipts of
+/// 2 ₳ had none (chunk 51, l4cli#3).
 #[tokio::test]
 #[serial]
 async fn utxos_a_spend_never_takes_hold_no_place_among_the_20() {
-    for command in [Command::TransferTen, Command::SweepTen, Command::Mint] {
+    let params = recorded_params();
+    for (case, command) in ["reference scripts", "tokens past a u64"]
+        .into_iter()
+        .flat_map(|case| {
+            [Command::TransferTen, Command::SweepTen, Command::Mint].map(|command| (case, command))
+        })
+    {
         let mut scenario = Scenario::start().await;
-        let contract = the_contract(scenario.scalar, "ffff", 30);
-        // The piles out, the reference scripts in.
-        let mut rows: Vec<UtxoResponse> = contract
-            .rows
-            .into_iter()
-            .filter(|u| u.tx_hash != contract.strangers_hash)
-            .collect();
-        let hash = ground("0000", "the stranger's reference scripts");
-        for i in 0..20u64 {
-            let mut row =
-                with_reference_script(wallet_utxo(scenario.scalar, 0, 150_000_000, &[]), 100);
-            row.tx_hash = hash.clone();
-            row.tx_index = i;
-            rows.push(row);
-        }
+        let scalar = scenario.scalar;
+        let (rows, users, hash) = if case == "reference scripts" {
+            let contract = the_contract(scalar, "ffff", 30);
+            // The piles out, the reference scripts in.
+            let mut rows: Vec<UtxoResponse> = contract
+                .rows
+                .into_iter()
+                .filter(|u| u.tx_hash != contract.strangers_hash)
+                .collect();
+            let hash = ground("0000", "the stranger's reference scripts");
+            for i in 0..20u64 {
+                let mut row = with_reference_script(wallet_utxo(scalar, 0, 150_000_000, &[]), 100);
+                row.tx_hash = hash.clone();
+                row.tx_index = i;
+                rows.push(row);
+            }
+            (rows, contract.users, hash)
+        } else {
+            // The user's Seedelf and 25 receipts of 2 ₳; the stranger's 20,
+            // each 2^63 − 1 of one token on its deposit and 2.1 ₳ more.
+            let junk_deposit = minimum_deposit(&params, &as_assets(&[junk()])).expect("deposit");
+            let mut rows = vec![seedelf_utxo(scalar, 1, 1_500_000, SAMPLE_SEEDELF)];
+            let users: Vec<UtxoResponse> = (0..25u64)
+                .map(|i| wallet_utxo(scalar, 200 + i, 2_000_000, &[]))
+                .collect();
+            rows.extend(users.iter().cloned());
+            let hash = ground("0000", "the stranger's tokens past a u64");
+            for i in 0..20u64 {
+                let mut row = wallet_utxo(scalar, 0, junk_deposit + 2_100_000, &[junk()]);
+                row.tx_hash = hash.clone();
+                row.tx_index = i;
+                rows.push(row);
+            }
+            let users = users
+                .iter()
+                .map(|u| (u.tx_hash.clone(), u.tx_index))
+                .collect();
+            (rows, users, hash)
+        };
         mount_in_koios_order(&mut scenario, rows).await;
-        scenario.mount_evaluate_mint(20).await;
+        // The receipts pay 10 ₳ with little to spare, so the scripts are
+        // measured as Ogmios measures them.
+        scenario.mount_evaluate_as_measured(20).await;
         scenario.mount_collateral().await;
         scenario.mount_submit().await;
 
@@ -583,13 +678,13 @@ async fn utxos_a_spend_never_takes_hold_no_place_among_the_20() {
                 .await
             }
         };
-        result.unwrap_or_else(|e| panic!("{command:?}: {e:#}"));
+        result.unwrap_or_else(|e| panic!("{command:?}, {case}: {e:#}"));
         let tx = decode_tx(&scenario.submitted_cbor().await);
         assert_sound_transaction(&tx, &scenario, &protocol_params().await);
         assert!(
             tx.inputs.iter().all(|(spent, _)| *spent != hash)
-                && tx.inputs.iter().any(|input| contract.users.contains(input)),
-            "{command:?} pays from the user's own UTxOs: {:?}",
+                && tx.inputs.iter().any(|input| users.contains(input)),
+            "{command:?}, {case}: pays from the user's own UTxOs: {:?}",
             tx.inputs
         );
     }

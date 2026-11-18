@@ -9,6 +9,93 @@ use seedelf_crypto::register::Register;
 
 use crate::harness::*;
 
+/// What `fund` hands core's selection puts first the holders of the token
+/// sent that the selection takes, then the rest in the selection's own
+/// order, within the kinds of token core adds up (chunk 51, l4cli#2). It put
+/// every holder first, by lovelace, so a stranger's four piles at the payer's
+/// address, each one SNEK beside a thousand junk tokens at its least (74 ₳),
+/// took all 4,000 kinds: the user's ADA beside their 10 NFTs (A), or their own
+/// SNEK beside 3 NFTs (B), was left out, and `fund --asset` was refused.
+#[tokio::test]
+#[serial]
+async fn a_strangers_piles_holding_the_token_sent_dont_crowd_out_the_payers_own() {
+    let payer = external_address_bech32();
+    let params = recorded_params();
+    let layouts = [
+        (
+            "A",
+            vec![
+                address_utxo(&payer, 2, 2_000_000, &[snek(1_000)]),
+                address_utxo(
+                    &payer,
+                    3,
+                    500_000_000,
+                    &(1..=10).map(nft).collect::<Vec<_>>(),
+                ),
+            ],
+            vec![(tx_hash(2), 0), (tx_hash(3), 0)],
+        ),
+        (
+            "B",
+            vec![
+                address_utxo(&payer, 2, 2_000_000, &[snek(1_000), nft(1), nft(2), nft(3)]),
+                address_utxo(&payer, 4, 500_000_000, &[]),
+            ],
+            vec![(tx_hash(2), 0), (tx_hash(4), 0)],
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (layout, mut rows, expected) in layouts {
+        for (i, pile) in four_snek_piles().into_iter().enumerate() {
+            let least = seedelf_core::transaction::address_minimum_lovelace_with_assets(
+                &params,
+                &payer,
+                as_assets(&pile),
+            )
+            .expect("least");
+            rows.push(address_utxo(&payer, 101 + i as u64, least, &pile));
+        }
+        let mut scenario = Scenario::start().await;
+        scenario
+            .mount_credential_utxos(vec![seedelf_utxo(
+                scenario.scalar,
+                1,
+                1_500_000,
+                SAMPLE_SEEDELF,
+            )])
+            .await;
+        scenario.mount_address_utxos(rows).await;
+        scenario.arm_web_capture();
+        let funded = run(
+            FundArgs {
+                address: payer.clone(),
+                seedelf: SAMPLE_SEEDELF.to_string(),
+                lovelace: Some(10_000_000),
+                assets: vec![snek_spec(100)],
+            },
+            PREPROD,
+            VARIANT,
+        )
+        .await;
+        if let Err(e) = funded {
+            wrong.push(format!("{layout}: {e:#}"));
+            continue;
+        }
+        let tx = decode_tx(&scenario.captured_cbor());
+        assert_sound_transaction(&tx, &scenario, &protocol_params().await);
+        let mut inputs = tx.inputs.clone();
+        inputs.sort();
+        if inputs != expected {
+            wrong.push(format!("{layout}: spent {inputs:?}"));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "the user's SNEK and their ADA pay:\n{}",
+        wrong.join("\n")
+    );
+}
+
 /// A stranger's piles of tokens at the payer's address don't slow `fund`:
 /// core adds up the tokens of all it's handed in time that grows with the
 /// square of the kinds, and `fund`, as `create` and `util extract`, handed it
