@@ -55,6 +55,14 @@ For the lead, if a session ends or the machine reboots mid-run. `/tmp` is a tmpf
 - **Running:** the blind back-translation of the 23 new or newly critical keys (`wf_54efc85f-173`), then the extension's checks; the review of the merged fixes, nine lenses (`wf_b7ca6d1a-a0f`).
 - **Still to do:** that review's verification and its fix round; the last look; e2e on both builds, `e2e:data`, `LIVE_KOIOS`; the live preprod runs; `./check.sh`, `seedelf-every` and `lovejoin-every` (Lean changed); FINDINGS.md and the record; merge the fix branch into this one.
 
+## Where it stood, 2026-11-18 (night)
+
+- **Back-translation** of the round's 23 critical keys done and committed on the fix branch (`02f73991`): every es value held, one ja value was reworded.
+- **The extension's checks** on the fix branch: the preprod-only build's Vitest failed nine of the round's new tests (they assumed a mainnet build). Fixed and committed (`04616cf6`). The rest of the run (e2e on both builds, `e2e:data`, `LIVE_KOIOS`) was still going.
+- **FINDINGS.md** is generated: `python3 -I tools/findings.py .` from `data/` (with `data/status.json`, the lead's overrides, and `data/fixed-in.json`, the commits naming each finding) and [owner-calls.md](owner-calls.md), the owner's list, written by hand. It prints any finding it can't place; there should be none.
+- **The critic's two unchecked claims** are now checked ([verify/lead/weak-claims.md](verify/lead/weak-claims.md)): Conway's decoder refuses duplicate keys, and nothing traps under the 128-level guard.
+- **Open for round two** (FINDINGS.md lists them): the T1l guards G7b never got, G4's sessions guards t1i#6, t1i#7 and t1l#14, gap-g6#2 and x1b#2; then whatever the review of the merged fixes (`wf_b7ca6d1a-a0f`) confirms.
+
 ## Next
 
 1. The lanes' answers into `lanes/`, one file each, and a first merge into `FINDINGS.md`.

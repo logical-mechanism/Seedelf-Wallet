@@ -1,0 +1,207 @@
+{
+ "_doc": "The lead's overrides for FINDINGS.md: what a commit message can't say. status: moot (no test can fail without the guard), unreachable, covered (another finding's test pins it), open (round two), owner (owner-calls.md), unverified.",
+ "t1c#3": {
+  "status": "moot",
+  "note": "check_token's refusal has value.rs's own words for Q = 0, which runs whenever it's left out; the pair is pinned, and value.rs's layer got its own test (t1c#4)"
+ },
+ "t1c#9": {
+  "status": "covered",
+  "note": "x2#1's test pins the new spends_as_mix_box call; its network half got its own test"
+ },
+ "t1c#16": {
+  "status": "unreachable",
+  "note": "the fee settles by the third round (only CBOR length jumps move it, by 176 lovelace, inside the 5,000 tolerance)"
+ },
+ "t1e#8": {
+  "status": "moot",
+  "note": "a carry's spend is built over exactly the UTxOs it's given and never estimated at guessed budgets, so the guarded arm is never reached for one"
+ },
+ "t1e#12": {
+  "status": "covered",
+  "note": "the same guard as t1a#8, tested in core"
+ },
+ "t1a#12": {
+  "status": "covered",
+  "note": "already pinned by an earlier round's test"
+ },
+ "t1i#3": {
+  "status": "covered",
+  "note": "t1j#1's test (sw.ts)"
+ },
+ "t1i#9": {
+  "status": "covered",
+  "note": "t1k#3's tests (contract-scan.test.ts, private-index.test.ts)"
+ },
+ "t1i#10": {
+  "status": "covered",
+  "note": "t1j#12's test (handlers.test.ts)"
+ },
+ "t1i#11": {
+  "status": "covered",
+  "note": "the worker's half is pinned; the window's half (declineAll's skip) is unreachable until e3b#3's fix"
+ },
+ "t1i#14": {
+  "status": "covered",
+  "note": "e3b#2's test (screens-wiring-review-fixes.test.ts)"
+ },
+ "t1i#18": {
+  "status": "unreachable",
+  "note": "governed() is false for any site on a session, and no flow puts governance on a session site's record"
+ },
+ "t1k#5": {
+  "status": "covered",
+  "note": "tested, except its parts (e) and (f): (e) is redundant behind the clauses before it, (f) dead behind :7056 with the real WebAssembly"
+ },
+ "w2#3": {
+  "status": "unverified",
+  "note": "its trace verifier was stopped by the model's safeguards; not re-run"
+ },
+ "t1i#6": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1i#7": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#1": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#2": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#3": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#5": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#6": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#7": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#8": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#9": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#10": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#11": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#12": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#14": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#15": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#16": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#17": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#18": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#19": {
+  "status": "open",
+  "note": "round two"
+ },
+ "t1l#23": {
+  "status": "open",
+  "note": "round two"
+ },
+ "gap-g6#2": {
+  "status": "open",
+  "note": "round two"
+ },
+ "x1b#2": {
+  "status": "open",
+  "note": "round two"
+ },
+ "d1#5": {
+  "status": "fixed",
+  "commits": [
+   "10a06db6"
+  ],
+  "note": "privacy.md says the phrase has no Copy button and a paste empties the clipboard, not that it can't be copied"
+ },
+ "e3a#4": {
+  "status": "fixed",
+  "commits": [
+   "d9e015fb"
+  ],
+  "note": "the manifest's name is Seedelf Wallet"
+ },
+ "e3b#5": {
+  "status": "fixed",
+  "commits": [
+   "d9e015fb"
+  ],
+  "note": "a sent funding's link uses the network it went on"
+ },
+ "v2#1": {
+  "status": "fixed",
+  "commits": [
+   "40883a55"
+  ],
+  "note": ""
+ },
+ "v2#2": {
+  "status": "fixed",
+  "commits": [
+   "40883a55"
+  ],
+  "note": ""
+ },
+ "v3#3": {
+  "status": "fixed",
+  "commits": [
+   "40883a55"
+  ],
+  "note": "tally.py's and count.py's docstrings"
+ },
+ "v4a#2": {
+  "status": "fixed",
+  "commits": [
+   "40883a55"
+  ],
+  "note": ""
+ },
+ "v4b#2": {
+  "status": "fixed",
+  "commits": [
+   "40883a55"
+  ],
+  "note": ""
+ },
+ "d1#7": {
+  "status": "owner",
+  "note": "the published policy's words: G8 left it for the owner"
+ }
+}
