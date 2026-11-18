@@ -47,6 +47,14 @@ For the lead, if a session ends or the machine reboots mid-run. `/tmp` is a tmpf
 - **On the fix branch** (`web-wallet/whole-review-fixes`, `../Seedelf-Wallet-chunk51-fixes`), committed by group: G1 core, G2 the CLI, G3 the WebAssembly, G6 keys and chain reads (`git log f87c3e77..HEAD`). Uncommitted there: G4's and G5's work (they share lovejoin.ts) and every fixer's edits to the shared files (the translations, `docs/i18n/*.json`, `rpc.ts`, `DappApprovals.tsx`, architecture.md, flows.md, privacy.md).
 - **Still to run:** G7 the screens, G8 docs, G9 CI, G10 the proofs; the WebAssembly rebuild and every check; the blind back-translation of the new critical strings (`dappUi.warn.deadRegister`, `dappUi.warn.hiddenChars`, and whatever G5 and G7 add); the review of the merged fixes; the last look; the live preprod runs; `FINDINGS.md` and the record.
 
+## Where it stood, 2026-11-18 (evening)
+
+- **Every fixer's work is committed** on the fix branch (`git -C ../Seedelf-Wallet-chunk51-fixes log --oneline f87c3e77..HEAD`), the last at `10a06db6`. The owner's findings' 18 verifier tests are out of the fix tree (copies in the review tree and in their `verify/` records).
+- **The WebAssembly** was rebuilt from that branch in a scratch worktree, `../Seedelf-Wallet-wasmbuild` (detached, its own target), and its package swapped into the fix tree; remove that worktree when done.
+- **Rust checks on the fix branch** (`c8003eda`): fmt and both clippy runs clean; 933 tests (12 ignored); the parts suite 0 with problems, 108 refused, 0 Max.
+- **Running:** the blind back-translation of the 23 new or newly critical keys (`wf_54efc85f-173`), then the extension's checks; the review of the merged fixes, nine lenses (`wf_b7ca6d1a-a0f`).
+- **Still to do:** that review's verification and its fix round; the last look; e2e on both builds, `e2e:data`, `LIVE_KOIOS`; the live preprod runs; `./check.sh`, `seedelf-every` and `lovejoin-every` (Lean changed); FINDINGS.md and the record; merge the fix branch into this one.
+
 ## Next
 
 1. The lanes' answers into `lanes/`, one file each, and a first merge into `FINDINGS.md`.
