@@ -130,6 +130,10 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     // reference-script fee, and the script may be deployed there on purpose:
     // never spend one here.
     every_non_collatreal_utxo.retain(|utxo| utxo.reference_script.is_none());
+    // Anyone can pay the address too: what would push a token's total past
+    // what one output holds stays out of the selection (chunk 51).
+    let (every_non_collatreal_utxo, _) =
+        utxos::fitting(&every_non_collatreal_utxo, &Assets::new(), |_| false)?;
     let usable_utxos: Vec<UtxoResponse> = utxos::select(
         &params,
         every_non_collatreal_utxo,

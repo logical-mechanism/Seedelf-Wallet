@@ -156,3 +156,61 @@ async fn fund_refuses_a_seedelf_whose_public_value_is_the_identity() {
         "{refused}"
     );
 }
+
+/// Anyone can pay the funding address too: three UTxOs of 2^63 − 1 of one
+/// token there stopped `fund` whenever its selection reached all three
+/// (chunk 51). It leaves the third out and pays from the rest.
+#[tokio::test]
+#[serial]
+async fn fund_goes_when_a_strangers_tokens_at_the_address_total_past_a_u64() {
+    let mut scenario = Scenario::start().await;
+    let bought = ("bb".repeat(28), hex::encode("BOUGHT"), 1);
+
+    scenario
+        .mount_credential_utxos(vec![seedelf_utxo(
+            scenario.scalar,
+            9,
+            1_500_000,
+            SAMPLE_SEEDELF,
+        )])
+        .await;
+    let payer = external_address_bech32();
+    let mut rows = vec![address_utxo(&payer, 1, 2_000_000, &[])];
+    rows.extend((2..=4).map(|n| address_utxo(&payer, n, 5_000_000, &[junk()])));
+    rows.push(address_utxo(
+        &payer,
+        5,
+        4_000_000,
+        std::slice::from_ref(&bought),
+    ));
+    scenario.mount_address_utxos(rows).await;
+    scenario.arm_web_capture();
+
+    run(
+        FundArgs {
+            address: payer,
+            seedelf: SAMPLE_SEEDELF.to_string(),
+            lovelace: Some(12_000_000),
+            assets: vec![],
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect("fund should pay from what fits");
+
+    let params = protocol_params().await;
+    let tx = decode_tx(&scenario.captured_cbor());
+    assert_sound_transaction(&tx, &scenario, &params);
+    let mut inputs = tx.inputs.clone();
+    inputs.sort();
+    assert_eq!(
+        inputs,
+        vec![
+            (tx_hash(1), 0),
+            (tx_hash(2), 0),
+            (tx_hash(3), 0),
+            (tx_hash(5), 0)
+        ]
+    );
+}

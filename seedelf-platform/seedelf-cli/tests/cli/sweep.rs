@@ -98,3 +98,136 @@ async fn sweep_partial_returns_change_to_wallet() {
         "change to wallet"
     );
 }
+
+/// Runs `sweep --all` to the external address over the owned `rows`, Ogmios
+/// measuring up to `measured` inputs, and returns the transaction it
+/// submitted, checked sound, every output paying the address.
+async fn sweep_all_of(
+    rows: impl FnOnce(blstrs::Scalar) -> Vec<seedelf_koios::koios::UtxoResponse>,
+    measured: usize,
+) -> DecodedTx {
+    let mut scenario = Scenario::start().await;
+    scenario.mount_credential_utxos(rows(scenario.scalar)).await;
+    scenario.mount_evaluate(measured).await;
+    scenario.mount_collateral().await;
+    scenario.mount_submit().await;
+
+    run(
+        sweep_args(external_address_bech32(), None, true),
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect("sweep --all should send what it can");
+
+    let params = protocol_params().await;
+    let cbor = scenario.submitted_cbor().await;
+    assert!(
+        cbor.len() / 2 <= 16_384,
+        "the sweep is {} bytes, over the network's limit",
+        cbor.len() / 2
+    );
+    let tx = decode_tx(&cbor);
+    assert_sound_transaction(&tx, &scenario, &params);
+    assert!(
+        tx.outputs.iter().all(|o| o.address == external_address()),
+        "sweep --all sends everything it spends to the address"
+    );
+    tx
+}
+
+fn sorted_inputs(tx: &DecodedTx) -> Vec<(String, u64)> {
+    let mut inputs = tx.inputs.clone();
+    inputs.sort();
+    inputs
+}
+
+/// A stranger pays three UTxOs of 2^63 − 1 of one token under
+/// re-randomizations of the user's register (chunk 51, r4#2). Together
+/// they're past what one output holds, so `sweep --all` stopped whenever all
+/// three were among the 20 it took. It leaves the third out, and still takes
+/// 20 it can spend together; the rest wait for the next run.
+#[tokio::test]
+#[serial]
+async fn sweep_all_goes_when_a_strangers_tokens_total_past_a_u64() {
+    let bought = ("bb".repeat(28), hex::encode("BOUGHT"), 1_000);
+    let tx = sweep_all_of(
+        |scalar| {
+            let mut rows: Vec<_> = (1..=3)
+                .map(|n| wallet_utxo(scalar, n, 1_500_000, &[junk()]))
+                .collect();
+            rows.push(wallet_utxo(
+                scalar,
+                10,
+                5_000_000,
+                std::slice::from_ref(&bought),
+            ));
+            rows.extend((11..=29).map(|n| wallet_utxo(scalar, n, 5_000_000, &[])));
+            rows
+        },
+        20,
+    )
+    .await;
+
+    let mut expected = vec![(tx_hash(1), 0), (tx_hash(2), 0)];
+    expected.extend((10..=27).map(|n| (tx_hash(n), 0)));
+    assert_eq!(
+        sorted_inputs(&tx),
+        expected,
+        "the first 20 it can spend together: the third junk UTxO stays"
+    );
+    let swept = |token: &TokenAmount| -> u64 {
+        tx.outputs
+            .iter()
+            .filter_map(|o| o.assets.get(&(token.0.clone(), token.1.clone())))
+            .sum()
+    };
+    assert_eq!(swept(&junk()), 2 * (i64::MAX as u64));
+    assert_eq!(swept(&bought), 1_000);
+}
+
+/// UTxOs whose tokens' outputs (20 tokens to an output) pass 16 KiB together
+/// can't stop `sweep --all`: it sends as many as fit, and leaves the rest.
+#[tokio::test]
+#[serial]
+async fn sweep_all_takes_what_one_transaction_holds() {
+    let tx = sweep_all_of(
+        |scalar| {
+            vec![
+                wallet_utxo(scalar, 1, 50_000_000, &[]),
+                wallet_utxo(scalar, 2, 40_000_000, &pile(0x10, 700)),
+                wallet_utxo(scalar, 3, 40_000_000, &pile(0x20, 700)),
+                wallet_utxo(scalar, 4, 40_000_000, &pile(0x30, 700)),
+            ]
+        },
+        4,
+    )
+    .await;
+
+    assert_eq!(
+        sorted_inputs(&tx),
+        vec![(tx_hash(1), 0), (tx_hash(2), 0), (tx_hash(3), 0)]
+    );
+}
+
+/// A stranger's pile of tokens under the user's register, holding too little
+/// ADA for the outputs `sweep --all` splits it into (600 tokens need about 41
+/// ADA at the address here, and came with 12), can't stop the sweep of the
+/// rest, whose ADA can't make up the difference: it stays.
+#[tokio::test]
+#[serial]
+async fn sweep_all_leaves_tokens_the_rest_cant_carry() {
+    let tx = sweep_all_of(
+        |scalar| {
+            vec![
+                wallet_utxo(scalar, 1, 10_000_000, &[]),
+                wallet_utxo(scalar, 2, 12_000_000, &pile(0x40, 600)),
+            ]
+        },
+        2,
+    )
+    .await;
+
+    assert_eq!(tx.inputs, vec![(tx_hash(1), 0)]);
+    assert!(tx.outputs.iter().all(|o| o.assets.is_empty()));
+}

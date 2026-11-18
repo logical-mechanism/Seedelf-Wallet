@@ -1,4 +1,5 @@
-//! Offline mock-Koios integration tests for every transaction-building command.
+//! Offline mock-Koios integration tests for every transaction-building command,
+//! and the balance views.
 //!
 //! Each test drives a real `command::run(...)` against a local mock Koios
 //! server, captures the transaction the command tried to submit, decodes it
@@ -7,6 +8,7 @@
 
 mod harness;
 
+mod balance;
 mod create;
 mod external_sweep;
 mod extract;

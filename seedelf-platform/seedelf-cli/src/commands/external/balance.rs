@@ -1,3 +1,4 @@
+use crate::commands::rows;
 use crate::setup;
 use anyhow::Result;
 use blstrs::Scalar;
@@ -9,7 +10,7 @@ use seedelf_crypto::convert;
 use seedelf_display::display;
 use seedelf_koios::koios::UtxoResponse;
 
-pub(crate) async fn run(network_flag: bool) -> Result<()> {
+pub async fn run(network_flag: bool) -> Result<()> {
     display::is_there_an_update().await;
     display::preprod_text(network_flag);
     display::block_number_and_time(network_flag).await;
@@ -35,28 +36,19 @@ pub(crate) async fn run(network_flag: bool) -> Result<()> {
     println!("\nAddress: {}", addr_bech32.bright_blue());
 
     let all_utxos: Vec<UtxoResponse> = utxos::get_address_utxos(&addr_bech32, network_flag).await?;
-    let (total_lovelace, tokens) = utxos::assets_of(all_utxos.clone())?;
-
     println!(
         "\nWallet Has {} UTxOs",
         all_utxos.len().to_string().bright_yellow()
     );
+
+    // Anyone can pay this address, so a token's total can pass a u64
+    // (chunk 51, r4#1): it's shown in u128, and nothing is built from it.
+    let totals = rows::totals(&all_utxos)?;
     println!(
         "\nBalance: {} ₳",
-        format!("{:.6}", total_lovelace as f64 / 1_000_000.0).bright_yellow()
+        format!("{:.6}", totals.lovelace as f64 / 1_000_000.0).bright_yellow()
     );
-
-    if !tokens.items.is_empty() {
-        println!("{}", "\nTokens:\n".bright_magenta());
-        for asset in tokens.items.clone() {
-            println!(
-                "{} {}.{}",
-                asset.amount.to_string().white(),
-                hex::encode(asset.policy_id.as_ref()).white(),
-                hex::encode(asset.token_name).white()
-            );
-        }
-    }
+    rows::print_tokens(&totals);
 
     Ok(())
 }
