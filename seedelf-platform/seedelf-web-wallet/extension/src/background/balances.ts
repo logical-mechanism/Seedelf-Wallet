@@ -517,8 +517,12 @@ function spendableOwned(owned: KoiosUtxo[], policyId: string): KoiosUtxo[] {
   return owned.filter((utxo) => !seedelfTokenOf(utxo, policyId) && !utxo.reference_script);
 }
 
-/** Each token's decimals as Koios gave them in `utxos`, by `policy.asset`: what a transaction's outputs don't carry. */
-function decimalsOf(utxos: KoiosUtxo[], tokens: TokenAmount[] = []): Map<string, number> {
+/**
+ * Each token's decimals as Koios gave them in `utxos`, by `policy.asset`, where they aren't 0: what a transaction's
+ * outputs don't carry, nor WebAssembly's token lists. A review built from those gives its tokens these (withdraw.ts
+ * `buildRemove`), for a token off the wallet's list, which the screens otherwise show in raw units.
+ */
+export function decimalsOf(utxos: KoiosUtxo[], tokens: TokenAmount[] = []): Map<string, number> {
   const found = new Map<string, number>();
   for (const x of tokens) if (x.decimals) found.set(`${x.policyId}.${x.assetName}`, x.decimals);
   for (const u of utxos) {
