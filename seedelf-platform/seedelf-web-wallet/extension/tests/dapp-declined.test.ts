@@ -185,6 +185,35 @@ describe("approving a site's request", () => {
     expect(await signing).toEqual({ code: APIError.Refused, info: OFF });
   });
 
+  // Chunk 51, t1i#1: the page asked for goes away as the password is checked, its request with it. Without answer()'s
+  // look for it after the check, the queue's last request was taken out and signed in its place: another page's, which
+  // the user never pressed Sign on. No test failed without it.
+  it("signs nothing, another page's request least of all, when the page asked for goes away as the password is checked", async () => {
+    const t = await on();
+    const first = await connected(t);
+    // A second page of the same site, connected with it.
+    const second = site(first.origin);
+    const asked = waitingMessage(t, first);
+    await until(() => t.dapp.approvals().length === 1);
+    let settled = false;
+    const other = waitingMessage(t, second).finally(() => (settled = true));
+    await until(() => t.dapp.approvals().length === 2);
+    const [a, b] = t.dapp.approvals();
+    const check = t.wallet.checkPassword.bind(t.wallet);
+    t.wallet.checkPassword = async (password: string) => {
+      t.dapp.gone(first);
+      await check(password);
+    };
+    expect(await t.dapp.answer(a!.id, true, PASSWORD)).toEqual({ error: "The site stopped waiting for this." });
+    expect(await asked).toMatchObject({ code: APIError.Refused, info: "The page went away." });
+    // The other page's request is still the user's to answer: waiting, unsigned.
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false);
+    expect(t.dapp.approvals().map((w) => w.id)).toEqual([b!.id]);
+    await t.dapp.answer(b!.id, false);
+    expect(await other).toMatchObject({ code: DataSignError.UserDeclined });
+  });
+
   it("signs nothing a Lovejoin chain started meanwhile needs, or that the user locked meanwhile", async () => {
     const t = await on();
     const s = await connected(t);

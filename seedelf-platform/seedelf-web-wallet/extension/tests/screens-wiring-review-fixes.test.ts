@@ -1018,6 +1018,95 @@ describe("which transaction a session's return review opens (chunk 51, x1b#1)", 
   });
 });
 
+// Chunk 51, t1i#13: a private session's funding the network or giveme.my refused is used up (its session was
+// recorded before it was sent): its review offers building it again, never Send. The form's own submit, Enter in the
+// password box, mustn't send it again either. No test failed without the check; the worker refuses a second send all
+// the same (sessions.ts refuseStarted).
+describe("a private session's funding, refused, never sent again from its review (chunk 51, t1i#13)", () => {
+  const address = "addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz";
+  const funding = {
+    network: "preprod",
+    txHash: TX,
+    index: 0,
+    address,
+    payments: [
+      { address, lovelace: "24000000", tokens: [] },
+      { address, lovelace: "5000000", tokens: [] },
+    ],
+    max: false,
+    fee: { size: "200000", compute: "30000", scriptReference: "0", total: "230000" },
+    changeLovelace: "0",
+    changeTokens: 0,
+    changeOutputs: 0,
+    changeMinimum: "0",
+    inputs: 1,
+    left: 0,
+  };
+  /** The funding's review, refused or not, with its form submitted (Enter): what it asked the window to send. */
+  function submitted(refused: boolean): unknown[] {
+    seam.reset();
+    const sends: unknown[] = [];
+    // The review: the state after the amount's and its tokens', both empty; the refusal, after its building and password.
+    seed(["", {}], funding);
+    if (refused) seed([false, ""], { kind: "again", detail: "giveme.my refused the collateral" });
+    on(
+      (name, props) => name === "Screen" && props.review === true,
+      (props) => (props.onSubmit as (e: { preventDefault(): void }) => void)({ preventDefault: noop }),
+    );
+    render(
+      createElement(ConnectRequest, {
+        approval: { kind: "connect", id: "a1", origin: "https://example.org", title: "Example", password: false },
+        busy: false,
+        held: false,
+        onError: noop,
+        onAnswer: async (...args: unknown[]) => {
+          sends.push(args);
+          return false;
+        },
+      } as never),
+    );
+    return sends;
+  }
+
+  it("sends nothing on the form's submit while the refusal shows; without one, it sends the funding reviewed", () => {
+    expect(submitted(true)).toEqual([]);
+    expect(submitted(false)).toEqual([[true, { fund: { txHash: TX } }]]);
+  });
+});
+
+// Chunk 51, t1i#15: a site session's top-up form states and caps the amount at the spendable side Home hands it; no
+// test failed without the cap (the worker refuses the build anyway, NotEnoughPrivate, after the press).
+describe("a site session's top-up, held to the spendable private balance (chunk 51, t1i#15)", () => {
+  const seedelf = { lovelace: "80000000", tokens: [], utxos: 2, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+  /** The top-up form with `amount` typed: the session's page opened on it, and the first state that starts empty. */
+  function form(amount: string): string {
+    seam.reset();
+    seedInitial("main", "top-up");
+    seam.seeds.push({ after: [], initial: "", value: amount });
+    return render(
+      createElement(SiteSession, {
+        session: { index: 0, stage: "open", site: { origin: "https://example.org" }, txs: [], createdAt: NOW },
+        seedelf,
+        reading: false,
+        onRefresh: noop,
+        onBack: noop,
+        onPending: noop,
+        onDisconnected: noop,
+      } as never),
+    );
+  }
+
+  it("says the amount is more than the spendable side and keeps Review off, and lets one that fits through", () => {
+    const note = words(t("sites.topUp.tooMuch", { held: formatAda("80000000") }));
+    const over = form("100");
+    expect(words(over)).toContain(note);
+    expect(over).toMatch(/<button type="submit" class="primary" disabled="">/);
+    const fits = form("30");
+    expect(words(fits)).not.toContain(note);
+    expect(fits).toMatch(/<button type="submit" class="primary">/);
+  });
+});
+
 describe("Transaction details' stepper, through a payment's parts (1.7.0's release review: pr335#0, pr335#3, x-mut-ts#6)", () => {
   const [first, second] = ["a1".repeat(32), "b2".repeat(32)];
   /** What the worker hands back for transaction `txHash`: its body is made as nothing here, so only its id is read. */

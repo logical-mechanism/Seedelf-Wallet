@@ -442,6 +442,29 @@ describe("the dApp connector", SLOW, () => {
     expect(t.dapp.approvals()).toEqual([]);
   });
 
+  // Chunk 51, t1i#4: CIP-30's rule. A transaction the wallet can sign only in part, the account's input beside someone
+  // else's, is refused unasked unless the site asked for a partial signature; no test failed without the check, every
+  // partial case passing `true`.
+  it("refuses unasked a transaction it can sign only in part, unless the site asks for that (partialSign)", async () => {
+    const t = await on();
+    const s = await connected(t);
+    await t.balances.get("preprod");
+    const [own] = (await t.coins.lists("preprod")).cardano;
+    // The other recorded account's UTxO: found through Koios, someone else's key's to sign.
+    const theirs = Object.entries(koiosPreprod.accounts).find(([stake]) => stake !== account(12).preprod.stake)![1].account_utxos[0]!;
+    const tx = siteTx({ inputs: [`${own!.txHash}#${own!.index}`, `${theirs.tx_hash}#${theirs.tx_index}`] });
+    let refused: unknown;
+    void t.dapp.call(s, "signTx", [tx, false]).catch((e: { failure?: unknown }) => (refused = e.failure ?? e));
+    await until(() => refused !== undefined || t.dapp.approvals().length > 0);
+    expect(t.dapp.approvals(), "put in front of the user").toEqual([]);
+    expect(refused).toMatchObject({ code: TxSignError.ProofGeneration, info: expect.stringContaining("signatures the wallet can't give") });
+    const signing = t.dapp.call(s, "signTx", [tx, true]);
+    await until(() => t.dapp.approvals().length === 1);
+    expect(t.dapp.approvals()[0]).toMatchObject({ kind: "sign-tx", partial: true, summary: { complete: false } });
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+    await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+  });
+
   it("reads a transaction built on one it signed, or on the wallet's own Send, before either is on chain", async () => {
     const t = await on();
     const s = await connected(t);
@@ -1582,6 +1605,28 @@ describe("private CIP-30: a site connected to a private session", SLOW, () => {
     await until(() => dapp.approvals().length === 1);
     await dapp.answer(dapp.approvals()[0]!.id, false);
     await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
+  });
+
+  // Chunk 51, t1i#11: once its private session is funded, no answer reaches a site's connect: a decline would tell the
+  // site no and leave its funded account waiting for Bring it back, and an approve without the funding would connect it
+  // to the public account. No test failed without the check.
+  it("refuses any answer to a connect whose private session is funded already, and keeps it waiting for the money", async () => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const s = site();
+    const enabling = dapp.call(s, "enable", []);
+    await until(() => dapp.approvals().length === 1);
+    const connect = dapp.approvals()[0]!;
+    const out = await dapp.privateBuild(connect.id, "15000000", []);
+    expect(await dapp.answer(connect.id, true, PASSWORD, { txHash: out.txHash })).toEqual({});
+    for (const approve of [false, true]) {
+      expect(await dapp.answer(connect.id, approve, PASSWORD), `approve: ${approve}`).toEqual({ error: "Its private session is funded already." });
+    }
+    expect(dapp.approvals()).toMatchObject([{ id: connect.id, kind: "connect", funding: { index: 0, txHash: out.txHash } }]);
+    // Its money lands: the site connects to its session, as it would have.
+    t.koios.addedToAccounts.push(atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value), atSession(out.txHash, 1, "5000000"));
+    expect(await enabling).toBe(true);
+    expect(await dapp.sites()).toEqual([{ origin: s.origin, connectedAt: expect.any(Number), title: "Example", session: 0 }]);
   });
 
   it("keeps the request waiting when the funding isn't sent, and its unfunded session can be closed from the dApps page", async () => {

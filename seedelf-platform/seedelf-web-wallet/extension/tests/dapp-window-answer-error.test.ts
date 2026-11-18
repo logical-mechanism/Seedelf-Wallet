@@ -417,3 +417,67 @@ describe("an approved request whose approval fails once the worker took it out o
     expect(alertOf(win.html())).toBeUndefined();
   }, 60_000);
 });
+
+// Chunk 51, t1i#12: the window's answer() refuses while an answer is on its way, while the buttons hold for a request
+// that took another's place, and without the password. The buttons are off then too, but Enter in the password box, or
+// a press that lands before the next draw, reaches answer() itself. No test failed without those three.
+describe("the window's answer, refused while busy, while held, and without the password (chunk 51, t1i#12)", () => {
+  const answers = () => harness.asked.filter((type) => type === "dapp-answer").length;
+
+  it("answers a request once, however many presses land while its answer is on its way", async () => {
+    const { t, x, forA } = await twoSites();
+    void t.dapp.call(x, "signTx", [siteTx([forA]), false]).catch(() => undefined);
+    await until(() => t.dapp.approvals().length === 1);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const win = openWindow(t);
+    await win.settle();
+    win.sign();
+    await win.settle();
+    // Drawn again while its answer is on its way: pressed again.
+    win.sign();
+    await win.settle();
+    expect(answers()).toBe(1);
+    win.deliver();
+    await win.settle();
+  }, 60_000);
+
+  it("answers nothing while its buttons hold for a request that took another's place, and answers once they're free", async () => {
+    const { t, x, y, forA, forB } = await twoSites();
+    void t.dapp.call(x, "signTx", [siteTx([forA]), false]).catch(() => undefined);
+    await until(() => t.dapp.approvals().length === 1);
+    void t.dapp.call(y, "signTx", [siteTx([forB]), false]).catch(() => undefined);
+    await until(() => t.dapp.approvals().length === 2);
+    const [, b] = t.dapp.approvals();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const win = openWindow(t);
+    await win.settle();
+    // X's page goes away: Y's request takes its place, its buttons held a moment (HOLD_MS).
+    t.dapp.gone(x);
+    win.tell();
+    await win.settle();
+    expect(win.shown()).toBe(b!.id);
+    win.sign();
+    await win.settle();
+    expect(answers()).toBe(0);
+    vi.advanceTimersByTime(1_000);
+    await win.settle();
+    win.sign();
+    await win.settle();
+    expect(answers()).toBe(1);
+    win.deliver();
+    await win.settle();
+  }, 60_000);
+
+  it("answers nothing without the password, the form's own submit (Enter) included", async () => {
+    const { t, x, forA } = await twoSites();
+    await t.preferences.set({ dappPassword: true });
+    void t.dapp.call(x, "signTx", [siteTx([forA]), false]).catch(() => undefined);
+    await until(() => t.dapp.approvals().length === 1);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const win = openWindow(t);
+    await win.settle();
+    (win.props().onSubmit as (e: { preventDefault(): void }) => void)({ preventDefault: () => undefined });
+    await win.settle();
+    expect(answers()).toBe(0);
+  }, 60_000);
+});

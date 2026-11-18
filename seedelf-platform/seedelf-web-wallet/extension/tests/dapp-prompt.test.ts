@@ -126,6 +126,21 @@ describe("a contract UTxO the account's key releases", () => {
     expect(page).not.toContain("names you");
   });
 
+  // Chunk 51, t1i#2: every case above releases a token beside the ADA, so a check of the tokens alone passed them all.
+  // The 1.8.1 bounty report's shape is ADA alone: an order's 49.8 ₳ under the account's key, paid to someone else.
+  it("warns of ADA alone taken from a contract the key releases, and waits for the user's yes", () => {
+    const ada: Partial<DappTxSummary> = {
+      ...taken,
+      paid: [{ address: ADDRESS, lovelace: "49800000", tokens: [], datum: null, script: false, seedelf: null, ownPaymentKey: false }],
+      contractTokens: [],
+      releasedTokens: [],
+    };
+    expect(releasesContractFunds(summary(ada))).toBe(true);
+    const html = render(summary(ada));
+    expect(html).toContain('data-testid="dapp-contract-release"');
+    expect(text(html)).toContain("From a contract, not to you 49.8 ₳");
+  });
+
   it("warns of a token taken with the ADA paid back, and shows no empty ADA row", () => {
     const html = render(summary({ ...taken, releasedLovelace: "0" }));
     expect(html).toContain('data-testid="dapp-contract-release"');
