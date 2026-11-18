@@ -43,13 +43,10 @@ pub fn totals(rows: &[UtxoResponse]) -> Result<Totals> {
     let mut tokens: Vec<Token> = Vec::new();
     let mut seen: BTreeMap<(String, String), usize> = BTreeMap::new();
     for row in rows {
-        let unreadable = || format!("UTxO {}#{} can't be read", row.tx_hash, row.tx_index);
-        lovelace += u128::from(string_to_u64(row.value.clone()).with_context(unreadable)?);
+        let value = string_to_u64(row.value.clone()).with_context(|| unreadable(row))?;
+        lovelace += u128::from(value);
         for token in row.asset_list.iter().flatten() {
-            let quantity = string_to_u64(token.quantity.clone()).with_context(unreadable)?;
-            let asset = Asset::new(token.policy_id.clone(), token.asset_name.clone(), quantity)
-                .with_context(unreadable)?;
-            let key = (hex::encode(asset.policy_id), hex::encode(&asset.token_name));
+            let (key, quantity) = token_of(row, token)?;
             let at = *seen.entry(key.clone()).or_insert_with(|| {
                 tokens.push(Token {
                     policy_id: key.0,
@@ -62,6 +59,25 @@ pub fn totals(rows: &[UtxoResponse]) -> Result<Totals> {
         }
     }
     Ok(Totals { lovelace, tokens })
+}
+
+fn unreadable(row: &UtxoResponse) -> String {
+    format!("UTxO {}#{} can't be read", row.tx_hash, row.tx_index)
+}
+
+/// One of `row`'s tokens, as its policy and name in lowercase hex, and its
+/// amount.
+fn token_of(
+    row: &UtxoResponse,
+    token: &seedelf_koios::koios::Asset,
+) -> Result<((String, String), u64)> {
+    let quantity = string_to_u64(token.quantity.clone()).with_context(|| unreadable(row))?;
+    let asset = Asset::new(token.policy_id.clone(), token.asset_name.clone(), quantity)
+        .with_context(|| unreadable(row))?;
+    Ok((
+        (hex::encode(asset.policy_id), hex::encode(&asset.token_name)),
+        quantity,
+    ))
 }
 
 /// Prints the tokens of `totals`, if any. One that totals more than one
@@ -98,42 +114,80 @@ pub(crate) enum Stay {
     Tokens,
     /// No transaction can hold it, even alone.
     TooLarge,
-    /// Its tokens need more ADA in their outputs than it holds, and the rest's
-    /// ADA can't make up the difference.
+    /// Its tokens need more ADA in their outputs than it holds, and the
+    /// transaction couldn't be built with it in: of the UTxOs tried, it
+    /// brought the least ([`most_that_fit`]).
     Short,
     /// It holds a reference script the CLI can't measure, so spending it can't
     /// be priced.
     Unpriced,
 }
 
-/// What a sweep can spend of `rows` in one transaction, before it's built, in
-/// the order given; the rest goes to `stayed`. Left out: a reference script it
-/// can't measure; more of a token than one output can hold with the rest's
-/// ([`utxos::fitting`]); reference scripts past what one transaction may use,
-/// with the `script_bytes` it reads anyway; and anything past `at_most`.
+/// More kinds of token than one transaction can carry, with room to spare.
+/// Each takes at least 3 bytes in an output: an amount, and a name of a byte
+/// or more (one a policy may go without). Every 20 take an output of over 60
+/// bytes more, so 16 KiB holds about 2,500. A sweep that would take more is
+/// too large anyway, and adding them up costs time for nothing: core's token
+/// sums grow with the square of the kinds, and anyone can send thousands.
+const MOST_KINDS: usize = 4_000;
+
+/// What a sweep can spend of `rows` in one transaction, before it's built:
+/// the first that can go together, in the order given; the rest goes to
+/// `stayed`. Left out: a reference script it can't measure; more of a token
+/// than one output can hold with the rest's; reference scripts past what one
+/// transaction may use, with the `script_bytes` it reads anyway; more kinds of
+/// token than one transaction carries ([`MOST_KINDS`]); and anything past
+/// `at_most`. The tokens are added up once, in a sorted map.
 pub(crate) fn sweepable(
     rows: Vec<UtxoResponse>,
     script_bytes: u64,
     at_most: usize,
     stayed: &mut Vec<(UtxoResponse, Stay)>,
 ) -> Result<Vec<UtxoResponse>> {
-    let (priced, unpriced): (Vec<_>, Vec<_>) = rows
-        .into_iter()
-        .partition(|u| utxos::reference_script_size(u).is_ok());
-    stayed.extend(unpriced.into_iter().map(|u| (u, Stay::Unpriced)));
-    let (fits, past) = utxos::fitting(&priced, &Assets::new(), |_| false)?;
-    stayed.extend(past.into_iter().map(|u| (u, Stay::Tokens)));
+    let mut total: BTreeMap<(String, String), u64> = BTreeMap::new();
     let mut bytes = script_bytes;
     let mut taken = Vec::new();
-    for utxo in fits {
-        let size = utxos::reference_script_size(&utxo)?;
+    for utxo in rows {
+        let Ok(size) = utxos::reference_script_size(&utxo) else {
+            stayed.push((utxo, Stay::Unpriced));
+            continue;
+        };
         if taken.len() == at_most || bytes.saturating_add(size) > build::MAX_REFERENCE_SCRIPT_BYTES
         {
             stayed.push((utxo, Stay::Later));
-        } else {
-            bytes += size;
-            taken.push(utxo);
+            continue;
         }
+        // Its tokens with the rest's, unless one would pass a u64.
+        let mut sums: BTreeMap<(String, String), u64> = BTreeMap::new();
+        let mut fits = true;
+        for token in utxo.asset_list.iter().flatten() {
+            let (key, quantity) = token_of(&utxo, token)?;
+            let before = match sums.get(&key) {
+                Some(sum) => *sum,
+                None => total.get(&key).copied().unwrap_or(0),
+            };
+            match before.checked_add(quantity) {
+                Some(sum) => {
+                    sums.insert(key, sum);
+                }
+                None => {
+                    fits = false;
+                    break;
+                }
+            }
+        }
+        if !fits {
+            stayed.push((utxo, Stay::Tokens));
+            continue;
+        }
+        let kinds = sums.keys().filter(|key| !total.contains_key(*key)).count();
+        if total.len() + kinds > MOST_KINDS {
+            stayed.push((utxo, Stay::Later));
+            continue;
+        }
+        total.extend(sums);
+        bytes += size;
+        taken.push(utxo);
     }
     Ok(taken)
 }
@@ -178,9 +232,12 @@ pub(crate) fn by_worth(
 /// - Over the network's size ([`TooLarge`]), it tries fewer, as far over as
 ///   the build reads. A UTxO no transaction holds even alone stays, so it
 ///   never holds back the ones after it.
-/// - A build that fails otherwise, when some of the UTxOs it tried hold tokens
-///   that need more ADA in their outputs than they hold (`needs`), is tried
-///   without them: the rest's ADA couldn't make up the difference.
+/// - A build that fails otherwise, when some of the UTxOs it tried bring less
+///   ADA than their own tokens' outputs need (`needs`), is tried again without
+///   the one of them that brings least, then the next, until it builds. So a
+///   token UTxO received with a key address's least ADA, short of its deposit
+///   by the register's bytes, still goes whenever the rest can carry it. Those
+///   left are said only once the rest goes.
 /// - Any other failure is returned as it is.
 pub(crate) fn most_that_fit<T>(
     mut rows: Vec<UtxoResponse>,
@@ -188,6 +245,7 @@ pub(crate) fn most_that_fit<T>(
     stayed: &mut Vec<(UtxoResponse, Stay)>,
     mut build: impl FnMut(&[UtxoResponse]) -> Result<T>,
 ) -> Result<T> {
+    let mut short: Vec<UtxoResponse> = Vec::new();
     let mut n = rows.len();
     loop {
         let error = match build(&rows[..n]) {
@@ -198,6 +256,7 @@ pub(crate) fn most_that_fit<T>(
                     continue;
                 }
                 stayed.extend(rows.drain(n..).map(|u| (u, Stay::Later)));
+                stayed.extend(short.drain(..).map(|u| (u, Stay::Short)));
                 return Ok(built);
             }
             Err(e) => e,
@@ -209,18 +268,17 @@ pub(crate) fn most_that_fit<T>(
             }
             Some(_) => stayed.push((rows.remove(0), Stay::TooLarge)),
             None => {
-                let mut short = Vec::new();
+                let mut least: Option<(usize, i128)> = None;
                 for (i, row) in rows[..n].iter().enumerate() {
-                    if worth(row, needs)? < 0 {
-                        short.push(i);
+                    let brings = worth(row, needs)?;
+                    if brings < 0 && least.is_none_or(|(_, so_far)| brings <= so_far) {
+                        least = Some((i, brings));
                     }
                 }
-                if short.is_empty() {
+                let Some((i, _)) = least else {
                     return Err(error);
-                }
-                for i in short.into_iter().rev() {
-                    stayed.push((rows.remove(i), Stay::Short));
-                }
+                };
+                short.push(rows.remove(i));
             }
         }
         if rows.is_empty() {
@@ -253,7 +311,8 @@ pub(crate) fn print_stayed(stayed: &[(UtxoResponse, Stay)], command: &str) {
         (Stay::TooLarge, "Too large for any transaction".to_string()),
         (
             Stay::Short,
-            "Tokens needing more ADA than they bring, which the rest can't make up".to_string(),
+            "Tokens needing more ADA than they bring, more than this transaction can make up"
+                .to_string(),
         ),
         (
             Stay::Unpriced,
