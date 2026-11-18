@@ -449,9 +449,9 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## gap-G10 (4 findings, 9 guards)
 
-- `gap-g10#1` low (stranger): A name padded with wide spaces before one last letter passes the lookalike and shared-name checks, and the one-line lists cut it to the name it copies `tokens.ts:116`
-- `gap-g10#2` low (stranger): Activity cuts a counterparty's address to its first 3 to 10 characters and its last 6, and the last 6 are a bech32 checksum anyone can solve for `Activity.tsx:415`
-- `gap-g10#3` low (stranger): The Add tokens picker cuts a lookalike token's warning to "Calls itself SNEK, not on the…" in grey; Home's list shows it whole in amber (H-9), and the swap's picker cuts its mark too `TokenAmounts.tsx:269`
+- `gap-g10#1` low (stranger): A name padded with wide spaces before one last letter passes the lookalike and shared-name checks, and the one-line lists cut it to the name it copies `tokens.ts:116` · verified **confirmed, low**
+- `gap-g10#2` low (stranger): Activity cuts a counterparty's address to its first 3 to 10 characters and its last 6, and the last 6 are a bech32 checksum anyone can solve for `Activity.tsx:415` · verified **partly, low**
+- `gap-g10#3` low (stranger): The Add tokens picker cuts a lookalike token's warning to "Calls itself SNEK, not on the…" in grey; Home's list shows it whole in amber (H-9), and the swap's picker cuts its mark too `TokenAmounts.tsx:269` · verified **confirmed, low**
 - `gap-g10#4` nit (user): Amount boxes on the forms clip their own figures at the side panel's width: a token's box after Max, the swap's two amounts, Send's "Max, up to …" `styles.css:3449`
 
 *Coverage:* Read in full: ui/styles.css (all 4,179 lines; every text-overflow, overflow: hidden, white-space: nowrap or pre, max-width and max-height rule listed by script and checked; there is no line-clamp) and ui/format.ts (all 479 lines). Every place a truncating class sits in components/ and screens/ (found by grep) was read in context: - token-row__label, __amount and __sub; - list__name and list__value; - middle-ellipsis; - review__row--id; - account-picker; - amount and its size classes; - menu-row__sub and menu-row__figure; - modal__title; - swap-card__amount, swap-token and swap-token__name; - amount-box__shown; - pool-name and pool-tile__name; - activity__sub-lead and activity__more; - note-part, chip, swap-tag and timeline__link.  Components read in full: ReviewRows, MiddleEllipsis, TokenAmounts (picker and box), TokenList (TokenRow, TokenDetails, TokenAmountText), RadioCards, AccountRec…
@@ -487,15 +487,15 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## gap-G6 (2 findings, 19 guards)
 
-- `gap-g6#1` low (nobody): Kept verdicts carry no version of the rule that made them, so a fix to what counts as the wallet's never reaches rows and boxes an older release already judged `contract-scan.ts:264`
-- `gap-g6#2` low (user): After a restore, what made a box is kept with only the accounts then known, so a custom account's (index 24 or more) deposit boxes read as the private balance's for good `lovejoin.ts:6324`
+- `gap-g6#1` low (nobody): Kept verdicts carry no version of the rule that made them, so a fix to what counts as the wallet's never reaches rows and boxes an older release already judged `contract-scan.ts:264` · verified **confirmed, low**
+- `gap-g6#2` low (user): After a restore, what made a box is kept with only the accounts then known, so a custom account's (index 24 or more) deposit boxes read as the private balance's for good `lovejoin.ts:6324` · verified **confirmed, low**
 
 *Coverage:* Method: for every chrome.storage.local record (sealed or not), I extracted its types at each tag (web-wallet/1.6.0, 1.7.0, 1.7.1, 1.7.2, 1.8.0, 1.8.1, 1.9.0, 1.9.1) and diffed them against HEAD. I diffed the record-bearing modules tag to tag (lovejoin.ts, sessions.ts, spent.ts, pending.ts, parts.ts, dapp.ts, lovejoin-pools.ts), and handlers.ts, minswap.ts, rpc.ts and core orders.rs since 1.6.0. I mapped sessions.ts's changed hunks since 1.6.0 to their methods and read the record readers among them. For ChainRecord, Withdrawing, SessionRecord, AutoRecord and PRIVATE_RECORDS I also compared 1.0.0, 1.2.0, 1.3.0, 1.4.0 and 1.5.0. I compared every release's local-key writes against reset's list, the bundled pools' head start and token list at every tag, and the history of registerOf, ownedUtxos, register.rs and accountKeys.  Read in full: private-store.ts, vault.ts, storage.ts, storage-access…
 
 ## gap-G7 (4 findings, 11 guards)
 
-- `gap-g7#1` low (stranger): A DRep that names itself Always abstain (or Always no confidence, Not delegated, Your own DRep) reads as that choice on the vote review's main row, and in Activity and Delegations afterwards `format.ts:438`
-- `gap-g7#2` low (user): The wallet's own DRep list ignores CIP-119's doNotList, which the wallet's profile form turns on by default, so a user's DRep that asked directories not to list it is listed by name in every Seedelf Wallet `dreps.mjs:96`
+- `gap-g7#1` low (stranger): A DRep that names itself Always abstain (or Always no confidence, Not delegated, Your own DRep) reads as that choice on the vote review's main row, and in Activity and Delegations afterwards `format.ts:438` · verified **confirmed, low**
+- `gap-g7#2` low (user): The wallet's own DRep list ignores CIP-119's doNotList, which the wallet's profile form turns on by default, so a user's DRep that asked directories not to list it is listed by name in every Seedelf Wallet `dreps.mjs:96` · verified **confirmed, low**
 - `gap-g7#3` nit (stranger): Activity and Delegations show the bundled DRep names without plainName, which Voting applies to the same entries; the generator keeps bidi and zero-width characters `activity.ts:119`
 - `gap-g7#4` nit (nobody): networks.ts's lovejoin.mixCost is read by nothing, and its doc still says it's for the settings' words `networks.ts:20`
 
@@ -503,21 +503,21 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## gap-G8 (9 findings, 15 guards)
 
-- `gap-g8#1` low (user): Create Seedelf refuses any tag with a character outside printable ASCII (an accent, kana), though the deployed policy takes any bytes and keeps the first 15 `label.ts:10`
-- `gap-g8#2` low (user): Public Send refuses the user's own Seedelf, alone or among other recipients, though the ledger takes it and core and WebAssembly build it `send.ts:179`
-- `gap-g8#3` low (user): Send's note is cut to 64 characters and core refuses more, though CIP-20's message holds as many 64-byte lines as fit, which core already splits into `note.rs:49`
-- `gap-g8#4` low (user): A payment pays at most 20 recipients, on either side, though the ledger takes as many outputs as fit 16 KiB, which core already checks `recipients.ts:7`
-- `gap-g8#5` low (site): signTx and submitTx refuse a site's transaction whose outer array or body map is written indefinite-length, which the ledger and the WebAssembly decoder both take `cbor.ts:123`
-- `gap-g8#6` low (user): A pool's start refuses a box value between the box's own minimum and S0d's least (3.45 ₳ for ADA), though one_shot_mint takes any box over its fee cap, and the wallet shows and mixes into such pools others launch `lovejoin-launch.ts:258`
-- `gap-g8#7` low (user): Swaps refuse a slippage outside 0.1% to 20%, though the order is valid at any minimum and the form already warns from 5% `sessions.ts:836`
-- `gap-g8#8` low (user): A swap into a token that's neither on the wallet's list nor verified by Minswap is refused outright, though the DEX's contracts and the order take any token: a warning would do `sessions.ts:1919`
-- `gap-g8#9` low (user): A Seedelf mint from the public account fails outright when its largest ADA-only UTxO is past output #255, though a mint whose first input has a smaller index is one the policy takes `build.rs:3898`
+- `gap-g8#1` low (user): Create Seedelf refuses any tag with a character outside printable ASCII (an accent, kana), though the deployed policy takes any bytes and keeps the first 15 `label.ts:10` · verified **confirmed, low**
+- `gap-g8#2` low (user): Public Send refuses the user's own Seedelf, alone or among other recipients, though the ledger takes it and core and WebAssembly build it `send.ts:179` · verified **confirmed, low**
+- `gap-g8#3` low (user): Send's note is cut to 64 characters and core refuses more, though CIP-20's message holds as many 64-byte lines as fit, which core already splits into `note.rs:49` · verified **confirmed, low**
+- `gap-g8#4` low (user): A payment pays at most 20 recipients, on either side, though the ledger takes as many outputs as fit 16 KiB, which core already checks `recipients.ts:7` · verified **confirmed, low**
+- `gap-g8#5` low (site): signTx and submitTx refuse a site's transaction whose outer array or body map is written indefinite-length, which the ledger and the WebAssembly decoder both take `cbor.ts:123` · verified **partly, low**
+- `gap-g8#6` low (user): A pool's start refuses a box value between the box's own minimum and S0d's least (3.45 ₳ for ADA), though one_shot_mint takes any box over its fee cap, and the wallet shows and mixes into such pools others launch `lovejoin-launch.ts:258` · verified **partly, low**
+- `gap-g8#7` low (user): Swaps refuse a slippage outside 0.1% to 20%, though the order is valid at any minimum and the form already warns from 5% `sessions.ts:836` · verified **confirmed, low**
+- `gap-g8#8` low (user): A swap into a token that's neither on the wallet's list nor verified by Minswap is refused outright, though the DEX's contracts and the order take any token: a warning would do `sessions.ts:1919` · verified **confirmed, low**
+- `gap-g8#9` low (user): A Seedelf mint from the public account fails outright when its largest ADA-only UTxO is past output #255, though a mint whose first input has a smaller index is one the policy takes `build.rs:3898` · verified **known, low**
 
 *Coverage:* **Read in full, line by line:** - extension: background/destination.ts, contacts.ts, send.ts, mint.ts, cbor.ts; shared/label.ts, handles.ts, recipients.ts; ui/screens/CreateSeedelf.tsx. - seedelf-core/src/note.rs. - build.rs, around its refusals: 1-1300, 1500-2340, 2530-2980 and 3040-3922. Not read there: 1300-1500 (budgets and Chain) and 2340-2530 (Histories' ranks).  **Read by refusal, every one found by grep, each with its context read:** - wasm: every bail! in lib.rs (49), cip30.rs (~35) and lovejoin.rs (~20). Read in full around them: lib.rs 170-510, 600-720, 790-830, 1520-1700, 1870-2010, 2060-2145, 2300-2345, 2790-2830, 2965-3075, 3255-3440 and 5010-5030; cip30.rs 280-395, 672-700, 1136-1380, 1490-1525, 1600-1720, 1780-1830, 1940-2110 and 2284-2345; lovejoin.rs 2040-2060, 2190-2310 and 2953-2965. - extension background: every `throw` line listed by grep across the folder (477), wi…
 
 ## gap-G9 (2 findings, 14 guards)
 
-- `gap-g9#1` medium (user): With the phrase open in a second profile, every private transaction made there reads here as a payment received, so this profile's session fundings take the other profile's session money first, tie the two sessions on chain and say nothing `activity.ts:445`
-- `gap-g9#2` low (user): Lovejoin's way-back rules are per profile: with the phrase unlocked in two, each brings back the other's boxes on its own schedule, right after the other's sends and withdraws, oldest first, and over the other's chains `lovejoin.ts:6852`
+- `gap-g9#1` medium (user): With the phrase open in a second profile, every private transaction made there reads here as a payment received, so this profile's session fundings take the other profile's session money first, tie the two sessions on chain and say nothing `activity.ts:445` · verified **confirmed, low**
+- `gap-g9#2` low (user): Lovejoin's way-back rules are per profile: with the phrase unlocked in two, each brings back the other's boxes on its own schedule, right after the other's sends and withdraws, oldest first, and over the other's chains `lovejoin.ts:6852` · verified **confirmed, low**
 
 *Coverage:* Read in full, every line: background/spent.ts (248), runs.ts (105), pending.ts (1068) and docs/privacy.md (501).  lovejoin.ts (8048), read line by line: - 1-4850: the header, timing constants, pumpChain, the types and sealed schedule, every helper to withinDepth, the class fields, readSet, progress, onChain, watchOf, poolsOf, listing, poolRows, ours, plan, fits, room(s), againBoxes, funding, chain, fanOut, acrossOf, planAcross, usableNow, takesNewBoxes, adaPool, retireOnce, collateralPool, tailOf, tailChain, tailWitness, unstale, rewards, reserve and its helpers, crossCheck. - 5132-5884: publicSubmit, publicStart, pumpPublic, pumpPublicNow, schedule, scheduleFound, draw, recordChain, chainSent, chainEnded, restBack, the marks, publicUnsettledNow, lookFor, keptMaybe, keepOnReset, adoptKept. - 5884-6420: cuts, chainsSending, sortOut, found, made, lookUp, madeBy, inputsOf, accountKeys, keys…
