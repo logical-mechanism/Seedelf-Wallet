@@ -115,6 +115,7 @@ What the proofs leave out. The model's own limits (the machine, the decoder, the
 
 - **Lovejoin's fee_contract.** No Seedelf transaction uses it. It has only its rejected purposes and some fixed layouts here ([Lovejoin/AnyTx/README.md](Lovejoin/AnyTx/README.md)), no characterization.
 - **The retired Lovejoin pools' scripts,** which the Seedelf Wallet still uses to bring boxes back from those pools. The classic mainnet pool's scripts have scenario proofs here (`./check.sh lovejoin`), outside the claim. The first token pools (Lovejoin `8131b1d`) run a mix_logic other than v2's, and nothing here proves it.
+- **How the wallet reads the chain.** The proofs start from the context the ledger hands a script, where every datum is already decoded `Data`. A datum's bytes never reach a script, so no theorem here tells two spellings of one datum apart. Which UTxOs and boxes the wallet counts as its own, read from those bytes, rests on its own code and tests (chunk 51, r3a#1).
 
 ### Not proved yet
 
