@@ -7,8 +7,10 @@
 // of each chain, those the last balance reading found (privacy review §2.17),
 // and up to 500 on each chain when it carries the account's own stake key.
 // One that only carries the stake key is `staked`, not the account's: anyone
-// can pair their own payment key with it (the 2026-11-02 bounty report).
-// Nothing is asked of anyone for it.
+// can pair their own payment key with it (the 2026-11-02 bounty report). One
+// of its payment keys under a stake part none of its accounts' is the
+// account's, `stakeElsewhere`: its stake works for someone else meanwhile
+// (chunk 51, x1a#1). Nothing is asked of anyone for it.
 
 import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
@@ -62,11 +64,12 @@ export async function resolveDestination(
     address = found;
   }
   checkPayable(wasm, network, address);
-  const { own, account, staked } = await ownAccount(deps, network, address);
+  const { own, account, staked, stakeElsewhere } = await ownAccount(deps, network, address);
   const mine = {
     own,
     ...(account !== undefined ? { ownAccount: account } : {}),
     ...(staked !== undefined ? { staked } : {}),
+    ...(stakeElsewhere ? { stakeElsewhere } : {}),
   };
   return handle ? { address, handle, ...mine } : { address, ...mine };
 }
@@ -108,12 +111,20 @@ export function checkPayable(wasm: typeof Wasm, network: NetworkName, address: s
  * came back (the 2026-11-02 bounty report). Such an address is `staked`, by
  * the account whose stake key it carries, for the screens to say it isn't
  * the user's.
+ *
+ * And the other way round: one of the account's payment keys under a stake
+ * part that's none of the accounts' stake keys (someone else's, a pointer, or
+ * none) is the account's, as the balance counts it, but `stakeElsewhere`:
+ * while the money's there, its stake earns and votes for whoever holds that
+ * part, or nobody. Anyone can pair the account's receive key with their own
+ * stake key, and Send called it "your own public account: it comes back"
+ * alone (chunk 51, x1a#1).
  */
 export async function ownAccount(
   deps: DestinationDeps,
   network: NetworkName,
   address: string,
-): Promise<{ own: boolean; account?: number; staked?: number }> {
+): Promise<{ own: boolean; account?: number; staked?: number; stakeElsewhere?: true }> {
   const { wallet } = deps;
   const active = await wallet.withKeys(async (keys) => {
     const found = await deps.session?.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
@@ -123,18 +134,24 @@ export async function ownAccount(
       staked: keys.cardano.carriesStakeKey(address),
     };
   });
-  if (active.own) return { own: true, account: active.index };
+  // Whose payment key it is, and whose stake key it carries, among the accounts the wallet knows: the active one's
+  // first, and the others only while one of the two isn't known yet.
+  let own = active.own ? active.index : undefined;
   let staked = active.staked ? active.index : undefined;
-  const known = (await deps.knownAccounts?.().catch(() => [])) ?? [];
-  for (const index of known) {
-    if (index === active.index) continue;
-    const other = await wallet.withAccount(index, (keys) => ({
-      own: keys.cardano.isOwnAddress(address, []),
-      staked: keys.cardano.carriesStakeKey(address),
-    }));
-    if (other.own) return { own: true, account: index };
-    if (other.staked) staked ??= index;
+  if (own === undefined || staked === undefined) {
+    const known = (await deps.knownAccounts?.().catch(() => [])) ?? [];
+    for (const index of known) {
+      if (index === active.index) continue;
+      const other = await wallet.withAccount(index, (keys) => ({
+        own: keys.cardano.isOwnAddress(address, []),
+        staked: keys.cardano.carriesStakeKey(address),
+      }));
+      if (other.own) own ??= index;
+      if (other.staked) staked ??= index;
+      if (own !== undefined && staked !== undefined) break;
+    }
   }
+  if (own !== undefined) return { own: true, account: own, ...(staked === undefined ? { stakeElsewhere: true as const } : {}) };
   return staked === undefined ? { own: false } : { own: false, staked };
 }
 

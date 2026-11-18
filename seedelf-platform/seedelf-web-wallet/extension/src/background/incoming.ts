@@ -232,7 +232,7 @@ export function rewardAccountHex(wasm: typeof Wasm, stake: string | undefined): 
  * a key's or a script's; none for a reward or Byron address, or one that can't
  * be read.
  */
-function paymentOf(wasm: typeof Wasm, address: string): { hash: string; script: boolean } | undefined {
+export function paymentOf(wasm: typeof Wasm, address: string): { hash: string; script: boolean } | undefined {
   let hex: string;
   try {
     hex = wasm.cip30Address(address);

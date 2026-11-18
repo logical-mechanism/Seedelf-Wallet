@@ -14,6 +14,7 @@ import { WalletLocked } from "../src/background/wallet";
 import { assetFingerprint } from "../src/shared/fingerprint";
 import { NETWORKS } from "../src/networks";
 import { fakeIndex, indexRowOf, SLOT_TIME, stableSlot } from "./fake-index";
+import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -333,5 +334,31 @@ describe("a private index row as Koios's", () => {
       inline_datum: null,
       asset_list: [],
     });
+  });
+});
+
+// Chunk 51, x2#2, on the private index: its rows are matched by the contract's 28 bytes too, and a row at the KEY
+// address with them, under one of the user's registers, is nobody's to spend. It's neither owned nor any Seedelf's
+// place (balances.ts `atContract`), on this path as on Koios's.
+describe("the private index's row at a KEY address with the contract's hash", () => {
+  it("is neither the wallet's nor a Seedelf's place", async () => {
+    const { index, deps } = await onIndex();
+    const ours = ownedUtxos.find((u) => u.inline_datum?.bytes)!;
+    const scriptAddress = Buffer.from(bech32Bytes(ours.address)).toString("hex");
+    expect(scriptAddress).toBe(`70${CONTRACT}`);
+    // The same 28 bytes as a key's, enterprise, on preprod as the fixture's rows are: header 0x60.
+    const keyAddress = preprodAddress(CONTRACT);
+    const name = `5eed0e1f${"66".repeat(8)}`;
+    const planted = {
+      ...ours,
+      tx_hash: "c4".repeat(32),
+      tx_index: 0,
+      address: keyAddress,
+      asset_list: [{ policy_id: "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255", asset_name: name, quantity: "1", decimals: 0, fingerprint: "" }],
+    };
+    index.contract.push({ row: indexRowOf(planted, index.tip - 100_000) });
+    const view = await readContractView(deps, "mainnet");
+    expect(view.owned.map(outpoint).sort()).toEqual(OURS);
+    expect(view.seedelfs[name]).toBeUndefined();
   });
 });

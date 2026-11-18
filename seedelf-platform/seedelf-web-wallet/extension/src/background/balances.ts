@@ -1,7 +1,9 @@
 // Balances: read the chain through Koios and work out what this wallet owns.
 //
 // Seedelf side: every UTxO in the wallet contract, kept when the register in
-// its datum is ours (g^x == u, checked in WebAssembly). The contract is read
+// its datum is ours (g^x == u, checked in WebAssembly), and only at the
+// contract's script: asked by its hash, Koios lists the KEY address with the
+// same 28 bytes too, which no one can spend (`atContract`). The contract is read
 // in full only when due, otherwise from the last block seen (contract-scan.ts). This is what the CLI's
 // `balance` does, and UTxOs holding a seedelf are listed as seedelfs rather
 // than counted in the balance, also as in the CLI.
@@ -58,7 +60,7 @@ import {
   type ReadingUtxos,
 } from "./coin-control";
 import { keptContractView, readContractView } from "./contract-scan";
-import { incomingOf, lessSpent, rewardAccountHex } from "./incoming";
+import { incomingOf, lessSpent, paymentOf, rewardAccountHex } from "./incoming";
 import type { Koios, KoiosUtxo } from "./koios";
 import { mintedBy, paidByOf, type MintedBy } from "./minted-by";
 import type { PrivateIndex } from "./private-index";
@@ -354,7 +356,7 @@ export class BalanceService {
           stake: rewardAccountHex(wasm, addresses?.stake),
           rewards: BigInt(b.cardano.staking.rewards),
           contract,
-          ours: (utxos) => ownedUtxos(wasm, keys, utxos),
+          ours: (utxos) => ownedUtxos(wasm, keys, utxos, contract),
           // The reading's own tokens too: a coin spent since took its token out of the lists, and its change has it.
           decimals: decimalsOf([...(account ?? []).map((p) => p.utxo), ...(owned ?? [])], [...b.cardano.tokens, ...b.seedelf.tokens]),
         });
@@ -521,9 +523,22 @@ function decimalsOf(utxos: KoiosUtxo[], tokens: TokenAmount[] = []): Map<string,
   return found;
 }
 
-/** The wallet-contract UTxOs whose register is ours (g^x == u, checked in WebAssembly). */
-export function ownedUtxos(wasm: typeof Wasm, keys: Keys, utxos: KoiosUtxo[]): KoiosUtxo[] {
+/**
+ * Whether `utxo` is at the wallet contract: its address's payment part the contract's SCRIPT. Koios lists a
+ * credential's UTxOs by its 28 bytes, a key's and a script's alike, so asked for the contract's it lists one paid to the
+ * KEY address with the same 28 bytes too. No key can spend that, and the wallet's evaluator refuses a spend that takes
+ * it: under one of the user's registers it was counted in the private balance, and Max failed (chunk 51, x2#2; core's
+ * `PoolBox::from_row` keeps a Lovejoin box to the same rule, `Protocol::spends_as_mix_box`).
+ */
+export function atContract(wasm: typeof Wasm, utxo: Pick<KoiosUtxo, "address">, contract: ContractConfig = CONTRACT_V1): boolean {
+  const payment = paymentOf(wasm, utxo.address);
+  return !!payment?.script && payment.hash.toLowerCase() === contract.walletContractHash;
+}
+
+/** The wallet-contract UTxOs whose register is ours (g^x == u, checked in WebAssembly), at the contract (`atContract`). */
+export function ownedUtxos(wasm: typeof Wasm, keys: Keys, utxos: KoiosUtxo[], contract: ContractConfig = CONTRACT_V1): KoiosUtxo[] {
   return utxos.filter((utxo) => {
+    if (!atContract(wasm, utxo, contract)) return false;
     const hex = registerOf(utxo);
     if (!hex) return false;
     const register = new wasm.Register(hex.generator, hex.publicValue);

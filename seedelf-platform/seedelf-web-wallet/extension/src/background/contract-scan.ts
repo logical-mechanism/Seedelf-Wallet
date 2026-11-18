@@ -38,7 +38,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import { CONTRACT_V1, ownedUtxos, type ContractConfig } from "./balances";
+import { atContract, CONTRACT_V1, ownedUtxos, type ContractConfig } from "./balances";
 import { registerOf, seedelfTokenOf, type RegisterHex } from "./chain";
 import type { Koios, KoiosUtxo } from "./koios";
 import { noteCursor } from "./feed";
@@ -146,7 +146,9 @@ async function readKoiosView(deps: ScanDeps, network: NetworkName, { full = fals
   // Read outside the wallet's queue, so it never holds up a lock.
   const koios = deps.koios(network);
   const read = () => koios.credentialUtxos([contract.walletContractHash], after);
-  const rows = await readFresh(spent, read, (r) => r, deps.sleep);
+  // The contract's own rows: Koios lists a KEY address with the contract's 28 bytes beside them, which isn't the
+  // contract's, nor any Seedelf's place (`atContract`, chunk 51, x2#2).
+  const rows = (await readFresh(spent, read, (r) => r, deps.sleep)).filter((u) => atContract(wasm, u, contract));
 
   // Which rows are ours: a batch at a time, each its own turn in the queue,
   // with the worker's other events let in between.
@@ -157,7 +159,7 @@ async function readKoiosView(deps: ScanDeps, network: NetworkName, { full = fals
     mine.push(
       ...(await wallet.withKeys((keys) => {
         same(keys);
-        return ownedUtxos(wasm, keys, batch);
+        return ownedUtxos(wasm, keys, batch, contract);
       })),
     );
   }
@@ -248,7 +250,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
       const batch = rows.slice(i, i + OWNED_BATCH).map((r) => utxoOf(r, contract.walletContractHash, network));
       for (const u of await wallet.withKeys((keys) => {
         same(keys);
-        return ownedUtxos(wasm, keys, batch);
+        return ownedUtxos(wasm, keys, batch, contract);
       })) {
         mine.add(outpoint(u));
       }
@@ -332,7 +334,9 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     const seedelfs: Record<string, Locator> = {};
     for (const { name, row } of named.names) {
       const at = utxoOf(row, contract.walletContractHash, network);
-      if (seedelfTokenOf(at, contract.seedelfPolicyId) === name && !spent.has(outpoint(at))) seedelfs[name] = locatorOf(at);
+      if (seedelfTokenOf(at, contract.seedelfPolicyId) === name && atContract(wasm, at, contract) && !spent.has(outpoint(at))) {
+        seedelfs[name] = locatorOf(at);
+      }
     }
     // This wallet's own, where the feed just put them: `names` may be from another block than `since`, and one of ours
     // that moved between the two would read as another's for this reading, and Remove couldn't build (26b's review).
