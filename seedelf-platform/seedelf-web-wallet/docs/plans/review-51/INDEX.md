@@ -524,6 +524,6 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## lead (1 findings, 0 guards)
 
-- `lead#1` medium (stranger): A session's collateral tail takes the first 5 ₳ that fits the collateral rule, whoever's it is, so a stranger's plain 5 ₳ listed first is boxed and the session's own collateral comes back unmixed `lovejoin.rs:0`
+- `lead#1` medium (stranger): A session's collateral tail takes the first 5 ₳ that fits the collateral rule, whoever's it is, so a stranger's plain 5 ₳ listed first is boxed and the session's own collateral comes back unmixed `lovejoin.rs:0` · verified **refuted, nit**
 
 *Coverage:* One lead, not a lane.
