@@ -11,9 +11,9 @@ T1's findings are guards that no test pinned: a T1 agent reverted each in a copy
 | critical |  |  |  |  |  |  |  |  |  | 0 |
 | high | 3 |  |  |  |  |  |  |  |  | 3 |
 | medium | 3 | 4 |  |  |  |  |  |  | 1 | 8 |
-| low | 248 | 37 | 9 | 2 | 2 |  |  | 1 | 7 | 306 |
-| nit | 39 | 1 |  |  |  |  | 1 |  | 2 | 43 |
-| **All** | **293** | **42** | **9** | **2** | **2** | **0** | **1** | **1** | **10** | **360** |
+| low | 248 | 38 | 9 | 2 | 2 |  |  | 1 | 13 | 327 |
+| nit | 39 | 1 |  |  |  |  | 1 |  | 3 | 45 |
+| **All** | **293** | **43** | **9** | **2** | **2** | **0** | **1** | **1** | **17** | **383** |
 
 *fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for the second fix round. *merged*: the same as another finding, which carries it.
 
@@ -62,6 +62,7 @@ Each of these refuses something the ledger and the contracts take. Most were chu
 - **gap-g9#1** (medium→low) `activity.ts:445`. With the phrase open in a second profile, every private transaction made there reads here as a payment received, and this profile's fundings take that money first. *Recommend:* yes on mainnet: an arrival made by a transaction that spent one of the wallet's own rows is the phrase's own spend elsewhere, classed as unknown, never received. On Koios-only reads, say it in privacy.md.
 - **gap-g1#2** (low, site) `dapp.ts:2644`. A site's payment from the user's own account or session into the user's Seedelf is classed Received. *Recommend:* note those outputs in the Seedelf history as made private from that account or session. It keeps a new record, so the privacy policy gets a dated Changes entry in the same PR.
 - **x1a#2** (low, site) `cip30.rs:1386`. The sign window says a site's payment into a Seedelf hides whose it is without checking the register. *Recommend:* check it against the kept view, with no request, and warn when the register is already on chain. Without a kept view, don't claim it. privacy.md:336 changes with it.
+- **l3sign#1** (low, site) `tx-view.ts:332`, from the last look. A site's payment under the user's register whose output carries a reference script reads as a plain Seedelf payment in the sign window, with no warning, and Transaction details says "Yours, in your private balance". But the balance leaves such a row out, and no web-wallet spend takes it: the evaluator can't run with a reference script. It's older than 1.6.0. *Recommend:* r2sign#1's class: a payment is called a Seedelf's only where the wallet reads it. Give such an output its own reading and a short warning in the UTxOs page's words ("Seedelf Wallet can't spend it yet"), and the same in Transaction details, pinned in the register-spellings vectors. New critical strings, so a back-translation.
 - **e9a#4** (low) `Activity.tsx:126`. Public activity's Save as CSV note says the file holds nothing the chain doesn't, but its rows name the user's own Make private and Make public. *Recommend:* write those rows in the public file as the chain reads them (sent to or received from the contract), so the note stays true.
 - **e4a#1's residue.** The fix ties each reading to its phrase. Receipts of another phrase that the old Remove-and-restore race already sealed into this profile's history stay in Activity until a Remove and restore. *Recommend:* leave them; this was a narrow race, and Remove and restore clears it.
 - **Each failed Send burns a session index** (E2a's note, via the critic). Twenty to thirty-nine turned-away Sends in a row, during a giveme.my outage say, hide every later session from a restore's scan, and their money from the wallet. *Recommend:* take the next index only once a funding is sent, or widen the restore's gap past the most indices one profile can burn. Worth a chunk of its own.
@@ -317,4 +318,4 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 
 ## Merged into another finding
 
-`e3b#1` → `e3a#3`, `e5#1` → `r2a#1`, `e6#2` → `e4a#1`, `e8a#1` → `w3#1`, `e8b#6` → `e9a#1`, `r1#2` → `r4#4`, `r2b#1` → `r2a#1`, `r2still#1` → `r2sign#2`, `r2verif#6` → `r2docs#3`, `w1b#1` → `r2a#1`
+`e3b#1` → `e3a#3`, `e5#1` → `r2a#1`, `e6#2` → `e4a#1`, `e8a#1` → `w3#1`, `e8b#6` → `e9a#1`, `l3money#1` → `l3cli#2`, `l3money#2` → `l3cli#1`, `l3money#3` → `l3cli#3`, `l3screens#3` → `l3still#2`, `l3still#1` → `l3screens#1`, `l3still#3` → `l3screens#2`, `l3tests#1` → `l3screens#1`, `r1#2` → `r4#4`, `r2b#1` → `r2a#1`, `r2still#1` → `r2sign#2`, `r2verif#6` → `r2docs#3`, `w1b#1` → `r2a#1`

@@ -24,5 +24,24 @@
  ],
  "r2docs#3": [
   "r2verif#6"
+ ],
+ "l3cli#1": [
+  "l3money#2"
+ ],
+ "l3cli#2": [
+  "l3money#1"
+ ],
+ "l3cli#3": [
+  "l3money#3"
+ ],
+ "l3screens#1": [
+  "l3still#1",
+  "l3tests#1"
+ ],
+ "l3still#2": [
+  "l3screens#3"
+ ],
+ "l3screens#2": [
+  "l3still#3"
  ]
 }
