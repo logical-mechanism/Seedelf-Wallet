@@ -1,0 +1,491 @@
+# Lane T1j
+
+Returned by the workflow's agent `a14a57ad9bca99234`, written here by the lead from its structured answer.
+
+## Findings (14)
+
+### t1j#1 · low · The connector serving a port from an iframe, another extension, a non-tab page or a plain-http page: no test fails without it
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:364`
+- **Who:** site · **Since:** fe8b7748 (2026-09-24, the public dApp connector), before web-wallet/1.0.0 · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+dappSession (sw.ts:363-369) gives a DAPP_PORT a session only for this extension's content script (sender.id), in a tab, in the top frame (frameId 0), on https or on http at localhost/127.0.0.1 (line 367). Delete any one of those and every test still passes. tests/worker-language.test.ts is the only test that loads sw.ts, and it connects only the accepted shape (a top-frame https tab). Today Chrome's registration is the first layer (connector.ts:45-49: matches DAPP_ORIGINS, allFrames: false), so no iframe or http page gets the bridge and this check is the second. If a registration change let one through, no test would fail. No harm reachable today.
+
+**Evidence:**
+
+Four mutants, each alone in a copy, each run against tests/worker-language.test.ts. Every time: Test Files 1 passed, Tests 3 passed.
+(a) sw.ts:364 `sender.frameId !== 0 || ` deleted.
+(b) sw.ts:364 `sender?.id !== chrome.runtime.id || ` deleted.
+(c) sw.ts:364 `!sender.tab || ` deleted, with sw.ts:368 `sender.tab.title` changed to `sender.tab?.title`.
+(d) sw.ts:367 `if (url.protocol !== "https:" && !local) return undefined;` deleted.
+grep: only tests/worker-language.test.ts imports ../src/background/sw. Its call() helper (worker-language.test.ts:79-90) builds one sender: our id, an https origin, frameId 0, a tab.
+
+**Fix:**
+
+In worker-language.test.ts's harness (the real sw.ts over a fake Chrome), connect DAPP_PORT ports with frameId 1, with id "anotherextension", with no tab, and with origin "http://app.example". Assert each is disconnected and posts nothing. Also assert that "http://localhost:5173" and an https top frame are answered.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/ for dappSession, frameId, worker-language: no hits. E4b's guards list says 'none found for the refusals'.
+
+### t1j#2 · low · A site hearing the worker's own error text, in the user's language, instead of SITE_TRAPPED in English: no test fails without it
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:427`
+- **Who:** site · **Since:** 4279db80 (2026-10-06, the 1.2.0 release review's fixes) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+answerSite (dapp.ts:2720-2726) rethrows anything that isn't a trap. DappService.run lets Koios's and the wallet's own errors through, for example a connected site's getUtxos while Koios is down. So sw.ts:427 is where a non-DappError becomes {code: InternalError, info: SITE_TRAPPED('en')}. Pass the error's own message instead and every test passes. A connected site would then hear, say, Koios's Spanish words, which tell it the wallet's language. The 1.2.0 release review closed that.
+
+**Evidence:**
+
+Mutant: sw.ts:427 `info: SITE_TRAPPED("en")` changed to `info: e instanceof Error ? e.message : String(e)`.
+Ran tests/worker-language.test.ts and tests/dapp-site-english.test.ts: Test Files 2 passed, Tests 8 passed.
+dapp-site-english drives DappService directly, never sw.ts. worker-language's site calls meet only DappErrors (unknown method, connector off, not connected).
+
+**Fix:**
+
+In worker-language.test.ts's harness, give a site call a non-DappError. For example, have the mocked loadWasm reject with a plain Error (getContext fails), or fail the fake fetch under a connected site's getUtxos with the wallet in Japanese. Assert the answer is exactly {code: APIError.InternalError, info: SITE_TRAPPED('en')}.
+
+**Known check:**
+
+Searched backlog.md and archive/ for SITE_TRAPPED and couldNotAnswer: no hits. E4b found no test for sw.ts's own mapping.
+
+### t1j#3 · low · Site requests asked on the network the wallet just left still answered after Settings' switch: no test fails without handlers.ts:405
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:405`
+- **Who:** site · **Since:** 5b8f61ff (2026-09-27, one build with both networks) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+Settings' network-set writes the network, then calls dapp.networkChanged() (handlers.ts:405). That declines a site's waiting connect or signature asked on the old network. Delete the call and every test passes. handlers.test.ts drives network-set but asserts nothing about sites, and dapp.test.ts calls networkChanged() directly. In Chrome, sw.ts:346's storage.local.onChanged listener declines them again a moment later. No test drives that either, so both layers can go without a test failing.
+
+**Evidence:**
+
+Mutant: handlers.ts:405 `await ctx.dapp.networkChanged();` deleted.
+Passed: handlers.test.ts -t 'switches networks in a mainnet build', -t 'keeps a wallet from before the switch', and the whole file (21).
+dapp.test.ts -t network: one test failed, :368 'refuses a signature whose last look read the old account or network as Settings moved it…', with 'Test timed out in 30000ms'. The same test also timed out unmutated (control run, load average ~90). dapp.test.ts never imports handlers.ts or calls handle(), so that failure isn't this mutant's.
+
+**Fix:**
+
+In handlers.test.ts, as :245-251 does for dappAccount: stub ctx.dapp.networkChanged with a spy, ask network-set, and assert the spy was called once, after the network was written. Or, with a real DappService: a site's waiting signTx on preprod is declined by network-set to mainnet.
+
+**Known check:**
+
+Searched backlog.md and archive/ for networkChanged and network-set. Only review-1.7.1.md:26 (pr351#1, the fix this guards); no record of a missing test.
+
+### t1j#4 · low · A site's 5-byte transaction hanging the worker's CBOR reader: no test fails without cbor.ts:33's length-bytes bound
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/cbor.ts:33`
+- **Who:** site · **Since:** 58820241 (2026-09-25, the crypto review) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+head() checks that a length's own bytes are present (cbor.ts:33: `if (p + size > b.length) throw tooShort();`). Without it, a site's signTx or submitTx argument 84a1009f58 sends the reader into an endless loop: the worker hangs on 5 bytes. Those bytes are a body whose inputs are an indefinite list holding a byte string whose one-byte length is cut off. skip() returns NaN, and the indefinite list's `while (b[q] !== 0xff)` never ends. cbor.test.ts's cut list has no cut length inside an indefinite container, so nothing fails.
+
+**Evidence:**
+
+Mutant: cbor.ts:33 deleted. tests/cbor.test.ts: all 5 passed.
+Probe, in the copy only (never TREE): `import { nestsWithin, txInputs } from "../src/background/cbor"; const bytes = (hex: string) => Uint8Array.from(hex.match(/../g)!, (h) => Number.parseInt(h, 16)); it("t1j probe: refuses 84a1009f58 rather than loop", () => { expect(() => txInputs(bytes("84a1009f58"))).toThrow(); expect(nestsWithin(bytes("84a1009f58"))).toBe(false); });`
+Unmutated: 1 passed. Mutated: `timeout 2m npx vitest run` exited 124 after 120 s, never finishing.
+Trace: head(b,4) reads 0x58 (major 2, info 24, size 1); p = 6 > length 5, so n = b[5] = undefined. Line 40's `undefined > …` is false. skip returns 6 + undefined = NaN. head(b, NaN) reads major 0 and returns p = NaN, so q stays NaN for ever.
+
+**Fix:**
+
+Add 84a1009f58 (and 84a1009f59ff, a cut two-byte length) to cbor.test.ts's `cut` list, which runs txId and txInputs and expects a throw; nestsWithin should be false for both. Class: give every bound in head() (lines 26, 32, 33, 40) its own cut case inside an indefinite container.
+
+**Known check:**
+
+Searched backlog.md and archive/ for tooShort, cbor.ts and 'end too soon': no record. E5 named cbor.ts:40 and :61, both caught; line 33 is the same guard's other bound.
+
+### t1j#5 · low · A stranger's 5 ₳ UTxO that also holds a token picked as the account's collateral: no test fails without isCollateralShaped's token check
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/coin-control.ts:184`
+- **Who:** stranger · **Since:** 97d7cdd7 (2026-09-24, chunk 12's coin control) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+A stranger sends the account 5 ₳ plus a junk token, and it's older than the account's own pure 5 ₳ UTxO, or the only 5 ₳ one. Remove isCollateralShaped's `&& !u.asset_list?.length` and every test passes. Then:
+- collateralOf (coin-control.ts:205) picks the tokened UTxO as the wallet's collateral and keeps it, token and all, out of payments;
+- the Collateral page offers it (:377) and use() accepts it (:391);
+- getCollateral hands it to sites, and the ledger refuses their transactions that have no collateral return output (net collateral must be ADA only).
+
+**Evidence:**
+
+Mutant: coin-control.ts:184 `BigInt(u.value) === COLLATERAL_LOVELACE && !u.asset_list?.length` changed to `BigInt(u.value) === COLLATERAL_LOVELACE`.
+Passed: coin-control.test.ts whole (17), balances.test.ts (12), accounts-switch-reading.test.ts (5), pending-activity.test.ts (4), dapp-account-coins.test.ts (1), dapp-chain-collateral.test.ts (1).
+The lane's own guard, use()'s check at :391, is caught by coin-control.test.ts 'can be reclaimed, and set again from a 5 ₳ UTxO with no transaction', but that test offers no tokened 5 ₳ UTxO.
+
+**Fix:**
+
+In coin-control.test.ts, give an account an oldest 5 ₳ UTxO that also holds a token, plus a newer pure 5 ₳ one: the collateral is the pure one, by 'wallet'. With the tokened one alone: no collateral and no candidate. use() on the tokened one throws worker.coins.exactlyFive.
+
+**Known check:**
+
+Searched backlog.md and archive/ for isCollateralShaped and 'exactly 5': no record. E5's note on isCollateralShaped is about a reference script or a datum, a different shape.
+
+### t1j#6 · low · The wallet staying unlocked on a WebAssembly instance that trapped under one of its pages' requests: no test fails without sw.ts:382
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:382`
+- **Who:** stranger · **Since:** c586ac35 (2026-09-27, UI requests go only to the worker) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+A trap leaves the WebAssembly instance broken for good, so answerUi (sw.ts:375-386) locks the wallet and drops the keys when one happens under a page's request. Replace the catch with a plain rethrow and every test passes: no test sends a UI request through sw.ts that traps. The wallet would stay unlocked on the broken instance until something else trapped, the launch review's #17 class. handlers.ts:48-52 and runs.ts have their own tests (run-traps-review-fixes.test.ts); this path has none.
+
+**Evidence:**
+
+Mutant: sw.ts:382-384 (`if (!isTrap(e)) throw e; await ctx.wallet.trapped(); throw new WalletLocked(WASM_BROKEN());`) changed to `throw e;`.
+Passed: tests/run-traps-review-fixes.test.ts (14), which drives runs.ts, sessions and lovejoin, never sw.ts; and tests/worker-language.test.ts (3).
+
+**Fix:**
+
+In worker-language.test.ts's harness, make a WebAssembly call the request reaches throw a WebAssembly.RuntimeError (for example by wrapping held.wasm's checkPayableAddress), and ask on a UI port. Assert the reply is WASM_BROKEN as WalletLocked, and that status then reads locked with lockedBy set.
+
+**Known check:**
+
+Searched backlog.md and archive/ for answerUi: post-release-roadmap.md:39 and :400 cite it as the model for unawaited(); no test of its own is recorded.
+
+### t1j#7 · low · A payment in parts going in part when a later kept part is missing or another review's: no test fails without laterParts' check
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:585`
+- **Who:** user · **Since:** fc8561c7 (2026-10-25, 1.6.0's review, fix round 1) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+Two windows review payments in parts under the same keys at once, and keepParts' writes interleave: A writes part 0, B writes parts 0 and 1, then A writes part 1. Or session storage fills up mid-write. At Send on B, laterParts (script-spend.ts:585) refuses before anything goes. Without it, part 0 is signed and sent, the next part is refused only as it goes, and the payment goes in part. The named test never reaches the check: its second review overwrites part 0 too, so script-spend.ts:388 refuses first. It asserts only `.rejects.toThrow()` and that nothing was submitted.
+
+**Evidence:**
+
+Mutants:
+(a) script-spend.ts:585 `kept.every((k, i) => k !== undefined && k.txHash === hashes[i + 1] && k.network === network)` changed to `kept.every((k) => k !== undefined)`.
+(b) the same condition changed to `false`.
+Passed for both: parts-send-review-fixes.test.ts -t 'kept parts are another review' (the named test, :571) and -t 'review in parts'; payment-parts.test.ts (5); payment-parts-review-fixes.test.ts (7); payment-parts-chain.test.ts (5). (a) also passed sessions-review-fixes.test.ts (25) and session-funding-parts.test.ts (7).
+sessions-review-fixes.test.ts:654-662 replaces only part 1, but it goes through sessions.ts fundingRecords, which checks before script-spend's send.
+
+**Fix:**
+
+Do for Send what sessions-review-fixes.test.ts:654-662 does for a funding. Build a withdraw or transfer in parts and overwrite only partKey(key, 1) with { ...part1, txHash: 'ee'.repeat(32) }; in a second case, remove it. Send must reject with StaleReviewError ("isn't ready to send") and koios.submitted stay empty.
+
+**Known check:**
+
+chunk-34-token-pools.md:1084 says 'The 15 untested guards each have a test now, shown to fail with its guard removed', yet this guard's test (parts-send-review-fixes.test.ts:570-580, under 'a payment in parts' guards no test pinned') passes with the check removed. Searched backlog.md and archive/ for laterParts and 'kept parts': nothing else.
+
+### t1j#8 · low · A second payment written ahead beside one that may still go through, when both pass settleMaybeSent: no test fails without writeAhead's check
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:599`
+- **Who:** user · **Since:** a58abe62 (2026-09-27) for line 599; 565c464a (2026-10-22, the 1.6.0 branch review) for line 617 · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+Two pages press Send on two reviews at the same moment. Both pass settleMaybeSent before either writes ahead, and writeAhead's turn takes the first. For the second, line 599 returns before anything is written, and line 617 throws MaybeSentWait.
+- Without 617: writeAhead hands the second the first's record as a resend (again: true), and the second's bytes go to Koios while the first may still go through. That double send is what writeAhead exists to stop.
+- Without 599 alone: the second is still refused, but only after rememberSpent holds its inputs as spent for 2 h and its kept copy gets sentCbor. A later Send of it then counts as 'again' and skips the 10-minute and settle checks.
+maybe-sent.test.ts's named test checks exactly those effects, but settleMaybeSent refuses its second Send first, so writeAhead is never reached.
+
+**Evidence:**
+
+Mutants, each alone:
+(a) pending.ts:599 `if (unsettled(was) && was.txHash !== s.txHash) return { was };` deleted.
+(b) pending.ts:617 `if (was.txHash !== s.txHash) throw new MaybeSentWait();` deleted.
+Passed for both: maybe-sent.test.ts -t 'keeps the one on its way when a payment is sent beside it' and the whole file (23); sessions-sent-twice.test.ts (4); submit-answer.test.ts (5); settle-across-lock.test.ts (4); write-ahead.test.ts (15).
+
+**Fix:**
+
+Call submitWatched (pending.ts) for two different Sending records at once, or hold the first submit inside its writeAhead turn until after the second's settleMaybeSent. Assert: the second rejects with MaybeSentWait, Koios receives only the first, the spent set holds only the first's inputs, and the second's kept copy has no sentCbor.
+
+**Known check:**
+
+Searched backlog.md and archive/ for MaybeSentWait, writeAhead and money-submit-1. chunk-34-token-pools.md mentions MaybeSentWait for parts only; no record of this gap.
+
+### t1j#9 · low · A new payment checked against one that may still go through only after giveme.my was asked: no test fails without settleMaybeSent at Send
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:397`
+- **Who:** user · **Since:** 4aa33dc8 (2026-09-27, launch review #10) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+Send (script-spend.ts:397) and Make private's Send (move-in.ts:145) settle a maybe-sent payment first, and refuse while it may still go through. Delete either call and every test passes, because writeAhead (pending.ts:599/617) refuses the same payment later, in the same words. Two things change:
+- a private spend asks giveme.my for a collateral witness and signs before the refusal, so giveme.my sees a transaction that is never sent;
+- a payment beside one that has landed but isn't settled yet is refused, where the settle would have let it go.
+
+**Evidence:**
+
+Mutants, each alone: script-spend.ts:397 `await settleMaybeSent(deps, network);` deleted; move-in.ts:145 `await settleMaybeSent(this.deps, network);` deleted.
+Passed for script-spend's: maybe-sent.test.ts -t 'stops new payments until it lands' and the whole file (23), transfer.test.ts (18), mempool-watch.test.ts (13), settle-across-lock.test.ts (4), submit-answer.test.ts (5), unlock-resend.test.ts (5), sessions-sent-twice.test.ts (4).
+Passed for move-in's: move-in.test.ts -t 'refuses to send anything but the reviewed transaction' and the whole file (11), maybe-sent.test.ts (23), settle-across-lock, submit-answer, unlock-resend.
+
+**Fix:**
+
+For a private spend (a transfer) beside a maybe-sent payment, assert giveme.my is never asked (t.collateral's requests stay at 0) and Koios gets nothing. Then, once the first has landed (t.koios.confirmations = 1) but before anything settled it, the second's Send goes. The same for move-in's submit. Class: both callers, script-spend.ts:397 and move-in.ts:145.
+
+**Known check:**
+
+Searched backlog.md and archive/ for settleMaybeSent: no hits.
+
+### t1j#10 · low · A payment sent although its maybe-sent copy couldn't be sealed: no test fails without writeAhead's seal check
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:621`
+- **Who:** user · **Since:** 2f7a1d82 (2026-09-27, a payment is watched as maybe sent before it goes to Koios) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+writeAhead seals the maybe-sent record into local storage before Koios is asked, and refuses the send if sealing fails (pending.ts:621-628: undoAhead, then rethrow). Sealing fails when local storage is full (a quota error), or when a lock comes as it's sealed. Swallow that failure and every test passes. The payment then goes out with no sealed copy, and a lock before it settles wipes the session watch. After the unlock nothing says it may still go through, and the user can review and pay again while the first can still land.
+
+**Evidence:**
+
+Mutant: pending.ts:626-627 `await undoAhead(deps, s, ahead).catch(() => undefined); throw e;` changed to `void e;`.
+Passed: write-ahead.test.ts (15), maybe-sent.test.ts (23), mempool-watch.test.ts (13), transfer.test.ts (18), send.test.ts (12), settle-across-lock.test.ts (4), submit-answer.test.ts (5), unlock-resend.test.ts (5), sessions-sent-twice.test.ts (4).
+No test makes store.set or sealedAs fail during a submit. grep finds only private-index.test.ts:236 and chain-record.test.ts:14, which fail the store for other records.
+
+**Fix:**
+
+In write-ahead.test.ts, make t.deps.store.set throw 'Resource::kQuotaBytes quota exceeded' (and, separately, WalletLocked) just before Send. Send must reject; koios.submitted stays empty; the watch and the spent set are as before; Send's kept copy has no sentCbor.
+
+**Known check:**
+
+Searched backlog.md and archive/ for sealedAs, 'be sealed' and 'Not sealed': no hits. E5 listed this guard's test as none found.
+
+### t1j#11 · low · A payment in parts whose later part spends what another chain being sent reserves going in part: no test fails without the later parts' reservation check
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:438`
+- **Who:** user · **Since:** fc8561c7 (2026-10-25, 1.6.0's review, fix round 1) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+A payment in parts is reviewed. Before Send, a Lovejoin return chain (or another payment's waiting parts) starts and reserves a UTxO that only a later part spends. At Send, refuseReserved for the later parts (script-spend.ts:438) refuses the whole payment before anything goes. Without it, the first part goes and the later one collides with the chain; only one of them can land, so the payment goes in part. The kept spend's own check (the call at :436) is pinned; this one isn't.
+
+**Evidence:**
+
+Mutant: script-spend.ts:438 `if (later.length) await refuseReserved(deps, network, later.map((k) => k.txCbor), what, PARTS_RESERVED + txHash);` deleted.
+Passed: script-spend-reserved.test.ts (5), parts-send-review-fixes.test.ts -t reserved (2), session-funding-parts.test.ts (7), payment-parts-chain.test.ts (5).
+The lane's guard itself, refuseReserved (its early return at :640), is caught by script-spend-reserved.test.ts 'is refused once a return's chain being sent spends what it does, and nothing is submitted'.
+
+**Fix:**
+
+In script-spend-reserved.test.ts, build a withdraw in parts, then record a chain being sent (as the file does for a return) whose inputs include one that only part 2 spends. Send must reject with the chain-conflict words and submit nothing.
+
+**Known check:**
+
+Searched backlog.md and archive/ for refuseReserved and 'later part'. Only review-1.9.1.md:30/48, about carries, a different matter; no record.
+
+### t1j#12 · low · Switching public accounts while a payment Koios didn't answer may still go through: no test fails without account-use's maybe-sent half
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:380`
+- **Who:** user · **Since:** fc8561c7 (2026-10-25, the line as it stands; 1.6.0's review, fix round 1) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+account-use refuses a switch in two cases:
+- `open.length`: atStake lists a maybe-sent payment or a maybe-sent public mix;
+- `mixing`: a public mix chain is being sent.
+Its only test (lovejoin-planner.test.ts:2230) has a mix chain being sent, so only `mixing` refuses there. Drop `open.length ||` and every test passes. A user whose Send Koios didn't answer can then switch accounts, and the watch loses its account halfway, as the comment at handlers.ts:372-377 warns.
+
+**Evidence:**
+
+Mutant: handlers.ts:380 `if (open.length || mixing.some(Boolean))` changed to `if (mixing.some(Boolean))`.
+Passed: lovejoin-planner.test.ts -t 'still refuses a switch while a mix from the public account is being sent' and -t switch (6), handlers.test.ts (21), lovejoin-accounts.test.ts (5), accounts.test.ts (21), remove-wallet.test.ts (13).
+That lovejoin-planner test does catch the other half (`mixing.some(Boolean)` dropped) and the whole check deleted.
+
+**Fix:**
+
+Make a Send on account 0 that Koios didn't answer (maybe sent); handle({ type: 'account-use', index: 1 }) must reject with SWITCH_AT_STAKE() and accounts.active() stay 0. Then the same for a maybe-sent public mix (lovejoin.publicMaybe).
+
+**Known check:**
+
+Searched backlog.md and archive/ for SWITCH_AT_STAKE and account-use: no hits. E4b's note on account-use failing open on an unreadable network is a different path.
+
+### t1j#13 · low · Two background runs at once, the alarm's and the unlock's, sending two withdraws seconds apart: no test fails without sw.ts's one-run-at-a-time guard
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:113`
+- **Who:** user · **Since:** ae8c2f33 (2026-09-27, launch review #37's fix) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+runSessions (sw.ts:112-130) lets one run go at a time, and runs once more if one was asked for meanwhile. It's the fix for launch review #37: two overlapping runs could send two withdraws seconds apart. Say a user unlocks while the alarm's run pumps a chain (up to a block). Without the guard, the two runs overlap. Without its while loop, the run asked for meanwhile (the unlock's) never happens. Every test passes either way.
+
+**Evidence:**
+
+Mutants, each alone:
+(a) sw.ts:113-116 `if (running) { asked = { unlock: unlock || !!asked?.unlock }; return running; }` deleted.
+(b) sw.ts:120-124 `while (asked) { … await runSessionsNow(ctx, next.unlock); }` deleted.
+tests/worker-language.test.ts, the only test that loads sw.ts: 3 passed each time. Its fake chrome.alarms.onAlarm drops the listener.
+
+**Fix:**
+
+In worker-language.test.ts's harness, keep the onAlarm listener. Fire SESSIONS_ALARM while the first run is held on a gated Koios read, then fire it again. Assert the runs never overlap (count concurrent entries into a fake endpoint) and that one more run follows the first.
+
+**Known check:**
+
+launch-review.md:262 (#37) is the bug this fixed, and privacy-review.md:511 describes the unlock's run; neither records a test. Searched for runSessions and 'one run at a time': nothing else.
+
+### t1j#14 · low · A payment to no one or to more than 20, refused only by WebAssembly in English after every destination was resolved: no test fails without checkRecipients
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/shared/recipients.ts:11`
+- **Who:** user · **Since:** 0d8ef10e (2026-10-02) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+checkRecipients is the first line of Send, Make public and the Seedelf transfer (send.ts:66, withdraw.ts:84, transfer.ts:86). Delete either of its checks and every test passes. WebAssembly's check_recipients (wasm/src/lib.rs:1539-1546) refuses the same counts, and its English words contain the substrings the tests look for ('someone to pay', 'at most 20 recipients'). What changes: with 21 recipients, each $handle is looked up on Koios and the account or contract is read before the refusal, and a Spanish or Japanese wallet shows English. The form caps recipients, so only a request past the UI reaches this.
+
+**Evidence:**
+
+Mutants, each alone: recipients.ts:11 `if (count === 0) throw new Error(t("shared.recipients.none"));` deleted; recipients.ts:12 `if (count > MAX_RECIPIENTS) throw new Error(t("shared.recipients.tooMany", …));` deleted.
+Passed for both: send.test.ts -t 'explains what stops a payment' and the whole file (12), transfer.test.ts -t 'explains what stops a transfer' and the whole file (18), withdraw.test.ts (14), i18n-assembly.test.ts (17).
+send.test.ts:184 expects toThrow('at most 20 recipients'); send.test.ts:185 and transfer.test.ts:159 expect toThrow('someone to pay'). WebAssembly's words contain both. E5 placed the check at recipients.ts:43, but the file has 13 lines.
+
+**Fix:**
+
+With i18n in Spanish: send.build with [] and with 21 payments rejects with t('shared.recipients.none') and t('shared.recipients.tooMany') in Spanish, and t.koios.fetch is never called (no handle lookup, no account read).
+
+**Known check:**
+
+Searched backlog.md and archive/ for checkRecipients and MAX_RECIPIENTS: no hits.
+
+## Guards (68)
+
+| Where | What it stops | Test |
+|---|---|---|
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/ui-port.ts:28` | A content script's port (a site's page) on the UI port: the sender.url check | tests/worker.test.ts 'are served only to the extension's own pages, one reply each' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/ui-port.ts:28` | Another extension's port on the UI port: the sender.id check | none (redundant: the URL check alone refuses every sender this refuses; see notes) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:364` | A connector port from an iframe, another extension or a non-tab context (three mutants) | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:367` | A connector port from an origin that is neither https nor http on localhost | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:427` | A non-DappError's own words reaching a site, in place of SITE_TRAPPED in English | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:113` | Two background runs at once | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:120` | A run asked for during another never happening | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:382` | The wallet staying unlocked after a trap under a page's request | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:259` | Remove wallet under something at stake, without force | tests/remove-wallet.test.ts 'lists a payment that may still go through, and removes the wallet only at a second yes' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:380` | An account switch while a public mix chain is being sent (the whole check, and its mixing half) | tests/lovejoin-planner.test.ts 'still refuses a switch while a mix from the public account is being sent, its watch following that account (gap-1#0)' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:380` | An account switch while a payment or public mix may still go through (the open.length half) | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:149` | Another phrase's kept maybe-sent payment surviving a restore (pending.adoptKept) | tests/remove-wallet.test.ts 'is deleted when a wallet of another phrase is made, which can't open it'. restore-scan.test.ts 'counts as under way from before the wallet exists…' also fails, incidentally. |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:151` | Another phrase's kept maybe-sent public mix surviving a restore (lovejoin.adoptKept) | tests/remove-wallet-mix.test.ts 'is deleted when a wallet of another phrase is made, which can't open it' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:273` | A maybe-sent public mix's record lost across Remove wallet (keepOnReset) | tests/remove-wallet-mix.test.ts 'is listed, and the wallet is removed only at a second yes, its record kept sealed' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:356` | A signature read for the old dApp account going on after Settings changes it | tests/handlers.test.ts 'checks a written phrase, sets preferences, and asks no price on preprod' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:405` | Site requests from the network the wallet left still being answered after network-set | none (a dapp.test.ts timeout that also fails unmutated doesn't count) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:359` | What a site waits for going on after the connector is switched off | tests/dapp-declined.test.ts 'is declined, every site's, when the connector is turned off in Settings, the unlock window's too': the mutant makes it hang to its 60 s timeout; unmutated it passes in 21 s |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts:362` | The switch staying on without Chrome's access to sites | tests/dapp-reach.test.ts 'is asked for once the switch is on and working, and never when it stays off' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:388` | Sending a kept transaction other than the reviewed one (its hash; its network) | tests/transfer.test.ts 'refuses to send anything but the reviewed transaction' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:389` | A sent transaction called stale (refuseSent first) | tests/transfer.test.ts 'says a transfer Koios took was sent already, never that its review is stale, after a lock too' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:394` | Sending a review older than 10 minutes | tests/transfer.test.ts 'refuses to send anything but the reviewed transaction' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:397` | A new payment while one may still go through, settled first | none (writeAhead backs it) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:585` | A payment in parts going in part when a later kept part is missing or another review's (two mutants) | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:616` | A private spend whose input this wallet spent since review | tests/transfer.test.ts 'names giveme.my as who refused, unless the device knows it spent something since (blind test §9.5)' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:617` | Its own earlier Send called stale (refuseSent inside refuseSpentSince) | tests/transfer.test.ts 'never calls a review stale for inputs its own Send spent: says it was sent, so nothing is built twice (cross-area review)' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:429` | Submitting a transaction whose hash changed in signing | tests/mint.test.ts 'refuses to send anything but the reviewed transaction' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:640` | A kept spend taking what a chain being sent will spend (refuseReserved) | tests/script-spend-reserved.test.ts 'is refused once a return's chain being sent spends what it does, and nothing is submitted' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:438` | A later part spending what another chain being sent reserves | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:310` | Seedelf spends taking a UTxO with a reference script, or with a Seedelf token (two mutants) | tests/withdraw.test.ts 'leaves a UTxO carrying a reference script out of the balance and of Max'. For the Seedelf-token half it fails because WebAssembly refuses the build. |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:242` | Seedelf spends taking reserved UTxOs (E5 gave line 237) | tests/script-spend-reserved.test.ts 'are what Max leaves out, and what the private balance waits for, in words of their own' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:507` | The parts' least named where a part sends ADA alone | tests/payment-parts-review-fixes.test.ts 'is none where a part sends no token: an output of ADA alone's least isn't the tokens'' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:599` | A second payment's side effects written ahead beside a maybe-sent one | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:617` | A second payment sent beside a maybe-sent one (MaybeSentWait in writeAhead) | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:621` | Submitting a payment whose maybe-sent copy couldn't be sealed | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:478` | An unanswered submit taken as never sent | tests/maybe-sent.test.ts 'comes back maybe sent, holds its UTxOs back, and stops new payments until it lands' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:485` | 'Spent' after an earlier unanswered try taken as never sent | tests/maybe-sent.test.ts 'comes back maybe sent, holds its UTxOs back, and stops new payments until it lands' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:496` | Koios answering with another transaction id taken as not sent | tests/write-ahead.test.ts 'stays maybe sent, and says so: nothing takes it for one that never went out' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:784` | A public maybe-sent payment let go before the chain's tip passes its slot | tests/maybe-sent.test.ts 'expires with the public account's slot: nothing was sent, and its UTxOs are free again' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:784` | The same, let go before VALID_FOR_MS by age (the age half) | none (no money effect: a tip past the slot means it can't land; see notes) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:794` | A public payment let go at 20 minutes unseen rather than at its slot | tests/maybe-sent.test.ts 'expires with the public account's slot: nothing was sent, and its UTxOs are free again' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:795` | A private payment let go before 20 minutes unseen | tests/mempool-watch.test.ts 'is held past 20 minutes while the chain shows what it spends unspent, and says it may still land' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:796` | A payment let go while it waits in a mempool | tests/mempool-watch.test.ts 'is held past 20 minutes while the chain shows what it spends unspent, and says it may still land' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:797` | A payment put back (restored) let go before it's sent again | tests/mempool-watch.test.ts 'kept through Remove wallet and put back by the same phrase, isn't held for good either' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:942` | A page that missed the answer told its review is stale (sentBefore whole; its sent-txs, watch and history sources at :945, :946, :951) | tests/transfer.test.ts 'says a transfer Koios took was sent already, never that its review is stale, after a lock too' (whole, history). :945 and :946 by 'never calls a review stale for inputs its own Send spent…'. |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:949` | The same, known only from the sealed copy | none (overlapped by the other sources in every tested path; see notes) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/move-in.ts:135` | Sending a move-in other than the reviewed one; refuseSent first (:137); the 10-minute review (:142) | tests/move-in.test.ts 'refuses to send anything but the reviewed transaction' (:135, :142). :137 by 'submits exactly the built transaction, then watches it'. |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/move-in.ts:145` | A move-in sent beside a maybe-sent payment, settled first | none (writeAhead backs it) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/destination.ts:49` | Make public taking a Seedelf's name as an address | tests/send.test.ts 'points your own Seedelf to Move in, and Withdraw's Seedelf to Send' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/destination.ts:84` | Paying the other network's address, a stake address or a script's (checkPayable) | tests/withdraw.test.ts 'refuses what a withdrawal can't pay' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/destination.ts:126` | An address called the active account's own by its stake key alone (the TS side of #359) | tests/own-address.test.ts 'isn't the account's own under someone else's payment key' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/destination.ts:135` | The same for another known account | tests/own-address.test.ts 'says whose stake key it carries, and another account's payment key still makes it that account's' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/send.ts:179` | Send from the account to the user's own Seedelf | tests/send.test.ts 'points your own Seedelf to Move in, and Withdraw's Seedelf to Send' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/send.ts:102` | The collateral recorded on the account active at return rather than the one it was built on | tests/coin-control.test.ts 'is recorded on the account it was built on, and pays, whichever is active when Send returns' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/coin-control.ts:254` | Account spends taking the collateral; and taking a locked UTxO (two mutants; E5 gave line 250) | tests/coin-control.test.ts 'is the oldest pure 5 ₳ UTxO the account holds, kept out of every payment; the other 5 ₳ ones are spent' (collateral). 'are left out of the account's payments, and counted apart' (locked). |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/coin-control.ts:261` | Seedelf spends taking a locked private UTxO | tests/coin-control.test.ts 'are left out of Seedelf spends; a Seedelf's UTxO can't be locked, and everything locked says so' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/coin-control.ts:372` | A second 5 ₳ payment offered within WAIT_MS of the first | tests/coin-control.test.ts 'is made by 5 ₳ paid to the account's own 0/0, waited for, then put up by an account-paid mint' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/coin-control.ts:375` | A second 5 ₳ payment offered past 10 minutes while the first can still land | tests/coin-control.test.ts 'stays on its way past 10 minutes while it can still land, as Home's banner says, and is not set once it can't' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/coin-control.ts:391` | The user's pick of anything but an exactly-5-₳ token-free UTxO as collateral | tests/coin-control.test.ts 'can be reclaimed, and set again from a 5 ₳ UTxO with no transaction' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/coin-control.ts:184` | A 5 ₳ UTxO holding a token picked or offered as collateral (isCollateralShaped's token check) | none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/spent.ts:163` | Building on a lagging backend's first answer (no read again) | tests/spent.test.ts 'never builds on them' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/spent.ts:170` | Building on UTxOs the wallet already spent (unspent) | tests/spent.test.ts 'never builds on them' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/spent.ts:114` | A refused send freeing what another transaction had spent before it | tests/write-ahead.test.ts 'keeps what another transaction had spent of its UTxOs, and when: they're still left out, and still its send' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/spent.ts:113` | A refused send freeing what another transaction spent while Koios was asked | tests/write-ahead.test.ts 'keeps what another transaction spent of its UTxOs while Koios was asked, and when' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/cbor.ts:40` | Reading past the end on a site's bytes: a length or count past what's left | tests/cbor.test.ts 'throws on bytes that end too soon, rather than read past them or loop' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/cbor.ts:33` | A site's cut length bytes sending the reader into an endless loop | none (a probe showed a hang on 84a1009f58) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/cbor.ts:61` | A site's CBOR nested past 128 levels | tests/cbor.test.ts 'refuses CBOR nested deeper than 128 levels, rather than run the worker's stack out' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/shared/recipients.ts:11` | A payment to no one, refused before anything is read | none (WebAssembly's check_recipients refuses it later in matching words) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/shared/recipients.ts:12` | A payment to more than 20, refused before anything is read | none (WebAssembly's check_recipients refuses it later in matching words) |
+
+## Checked and holds
+
+- ui-port.ts:28's sender.url check: worker.test.ts 'are served only to the extension's own pages, one reply each' fails (a content script's port isn't disconnected).
+- handlers.ts:259: remove-wallet.test.ts 'lists a payment that may still go through, and removes the wallet only at a second yes' fails (reset-wallet resolves).
+- handlers.ts:380, whole and its mixing half: lovejoin-planner.test.ts 'still refuses a switch while a mix from the public account is being sent…' fails (the switch resolves).
+- handlers.ts:149: remove-wallet.test.ts 'is deleted when a wallet of another phrase is made, which can't open it' fails (the other phrase's sealed record stays).
+- handlers.ts:151: remove-wallet-mix.test.ts 'is deleted when a wallet of another phrase is made, which can't open it' fails.
+- handlers.ts:273: remove-wallet-mix.test.ts 'is listed, and the wallet is removed only at a second yes, its record kept sealed' fails.
+- handlers.ts:356: handlers.test.ts 'checks a written phrase, sets preferences, and asks no price on preprod' fails ([] instead of [1]).
+- handlers.ts:359: dapp-declined.test.ts 'is declined, every site's, when the connector is turned off in Settings, the unlock window's too' hangs to its timeout; unmutated it passes in 21 s.
+- handlers.ts:362: dapp-reach.test.ts 'is asked for once the switch is on and working, and never when it stays off' fails (reach called twice).
+- script-spend.ts:388, both the hash and the network halves: transfer.test.ts 'refuses to send anything but the reviewed transaction' fails.
+- script-spend.ts:389 (refuseSent first): transfer.test.ts 'says a transfer Koios took was sent already, never that its review is stale, after a lock too' fails.
+- script-spend.ts:394 (10-minute review): transfer.test.ts 'refuses to send anything but the reviewed transaction' fails.
+- script-spend.ts:616 (spent since review): transfer.test.ts 'names giveme.my as who refused, unless the device knows it spent something since' fails.
+- script-spend.ts:617 (refuseSent inside refuseSpentSince): transfer.test.ts 'never calls a review stale for inputs its own Send spent…' fails.
+- script-spend.ts:429 (hash changed in signing): mint.test.ts 'refuses to send anything but the reviewed transaction' fails.
+- script-spend.ts:640 (refuseReserved): script-spend-reserved.test.ts 'is refused once a return's chain being sent spends what it does, and nothing is submitted' fails.
+- script-spend.ts:310, both halves: withdraw.test.ts 'leaves a UTxO carrying a reference script out of the balance and of Max' fails. The Seedelf-token half fails because WebAssembly refuses the build.
+- script-spend.ts:242 (reserved UTxOs out of Seedelf spends): script-spend-reserved.test.ts 'are what Max leaves out, and what the private balance waits for, in words of their own' fails.
+- script-spend.ts:507: payment-parts-review-fixes.test.ts 'is none where a part sends no token…' fails ('3870000' instead of null).
+- pending.ts:478 and :485: maybe-sent.test.ts 'comes back maybe sent, holds its UTxOs back, and stops new payments until it lands' fails for each.
+- pending.ts:496: write-ahead.test.ts 'stays maybe sent, and says so: nothing takes it for one that never went out' fails.
+- pending.ts:784 (the chain tip) and :794 (the public clause): maybe-sent.test.ts 'expires with the public account's slot…' fails.
+- pending.ts:795 and :796: mempool-watch.test.ts 'is held past 20 minutes while the chain shows what it spends unspent…' fails.
+- pending.ts:797: mempool-watch.test.ts 'kept through Remove wallet and put back by the same phrase, isn't held for good either' fails.
+- pending.ts:942 (sentBefore whole) and its history source (:951): transfer.test.ts 'says a transfer Koios took was sent already…' fails.
+- pending.ts:945 and :946 (sentBefore's sent-txs and watch sources): transfer.test.ts 'never calls a review stale for inputs its own Send spent…' fails.
+- move-in.ts:135 and :142: move-in.test.ts 'refuses to send anything but the reviewed transaction' fails.
+- move-in.ts:137: move-in.test.ts 'submits exactly the built transaction, then watches it' fails.
+- destination.ts:49: send.test.ts 'points your own Seedelf to Move in, and Withdraw's Seedelf to Send' fails (the address words instead).
+- destination.ts:84 (checkPayable): withdraw.test.ts 'refuses what a withdrawal can't pay' fails.
+- destination.ts:126 and :135 (the TS side of #359): own-address.test.ts 'isn't the account's own under someone else's payment key' and 'says whose stake key it carries…' fail.
+- send.ts:179: send.test.ts 'points your own Seedelf to Move in…' fails (the build resolves).
+- send.ts:102: coin-control.test.ts 'is recorded on the account it was built on, and pays, whichever is active when Send returns' fails.
+- coin-control.ts:254, both halves: 'is the oldest pure 5 ₳ UTxO the account holds, kept out of every payment…' fails (collateral) and 'are left out of the account's payments, and counted apart' fails (locked).
+- coin-control.ts:261: 'are left out of Seedelf spends; a Seedelf's UTxO can't be locked…' fails.
+- coin-control.ts:372: 'is made by 5 ₳ paid to the account's own 0/0, waited for, then put up by an account-paid mint' fails (it reads late).
+- coin-control.ts:375: 'stays on its way past 10 minutes while it can still land…' fails (state none).
+- coin-control.ts:391: 'can be reclaimed, and set again from a 5 ₳ UTxO with no transaction' fails.
+- spent.ts:163 and :170: spent.test.ts 'never builds on them' fails (1 read instead of 4; the build resolves).
+- spent.ts:114: write-ahead.test.ts 'keeps what another transaction had spent of its UTxOs, and when…' fails.
+- spent.ts:113: write-ahead.test.ts 'keeps what another transaction spent of its UTxOs while Koios was asked, and when' fails.
+- cbor.ts:40: cbor.test.ts 'throws on bytes that end too soon…' fails (84a1005bffffffffffffffff doesn't throw).
+- cbor.ts:61: cbor.test.ts 'refuses CBOR nested deeper than 128 levels…' fails (a stack overflow instead of the refusal).
+
+## Notes
+
+- Method. Each guard was reverted alone in a copy, then put back from a pristine snapshot of extension/src taken at the start, because fixers were editing TREE meanwhile. Each copy was checked byte for byte against the snapshot at the end. Tests ran one file per Vitest call under `timeout 10m` and a 6 GB cap, with --bail=1 and --testTimeout=60000: the named test first (via -t), then the whole file, then related files, stopping at the first failure. The machine's load average was 45-97 throughout. A first combined run of 27 named files at default timeouts had 7 load failures in 4 files, for example restore-scan.test.ts 'sends one 5 ₳ where another window built a second while the first was sent'. So I judged each catch by its failure message, and ran a control wherever the catch was a timeout.
+- For the owner: dapp.test.ts:368 'refuses a signature whose last look read the old account or network as Settings moved it…' has its own 30 s timeout and fails unmutated under heavy load.
+- For the owner (the errata rule): chunk-34-token-pools.md:1084 says 'The 15 untested guards each have a test now, shown to fail with its guard removed'. At least one doesn't hold. parts-send-review-fixes.test.ts:571 ('a payment in parts' guards no test pinned') passes with laterParts' check (script-spend.ts:585) removed entirely. Its second review overwrites part 0 too, so script-spend.ts:388 refuses first (t1j#7).
+- Mutual backups. settleMaybeSent (script-spend.ts:397, move-in.ts:145) and writeAhead's check (pending.ts:599/617) each pass every test when removed alone. maybe-sent.test.ts's 'keeps the one on its way…' pins only the two together (t1j#8, t1j#9).
+- The rule I used for findings: a sub-check with its own reachable effect and no other layer under test became a finding (cbor.ts:33, coin-control.ts:184, script-spend.ts:438, the open.length half of handlers.ts:380). Redundant layers became notes. Three survivors are notes, not findings: (1) ui-port.ts:28's sender.id half: Chrome sets sender.url to the sender's own origin, so the URL check refuses everything the id check does. (2) pending.ts:784's `age > VALID_FOR_MS`: a chain tip past the slot plus margin already means the payment can't land, so the age only delays. (3) pending.ts:949, sentBefore's sealed-copy source: the sent-txs, watch and history sources cover it in every tested path. It is the only source between a lock and the watch's restore, and a test there could pin it.
+- The lanes' named tests don't always catch their own guards. The ones that do:
+- handlers.ts:359: dapp-declined.test.ts:113, not dapp-reach.test.ts:118 (which stubs connectorOff as a no-op) or dapp-enable.test.ts:355 (which sets the preference directly).
+- handlers.ts:149: remove-wallet.test.ts:167, not mempool-watch.test.ts:172 (which calls pending.adoptKept directly). restore-scan.test.ts:955 also fails, but only because it hooks adoptKept as a probe. remove-wallet's 'watched again when the same phrase is restored' passes without the call, since pending() restores from the sealed copy itself.
+- script-spend.ts:242: script-spend-reserved.test.ts:118, not coin-control's.
+- coin-control.ts:372: coin-control.test.ts:80, not :151.
+- spent.ts:113: write-ahead.test.ts:266, not :251.
+- move-in.ts:137: 'submits exactly the built transaction', not the named test.
+- handlers.ts:405: E4b's handlers.test.ts:275-298 asserts nothing about sites.
+- Rust behind WebAssembly, not mutated: the copy has TREE's prebuilt wasm/pkg. Four TS guards here have a Rust check behind them, so only their TS side was mutated:
+- destination.ts:126/135 → api::is_own_address and carries_stake_key (the real #359 rule);
+- checkPayable → is_payable_address;
+- recipients.ts → check_recipients;
+- script-spend.ts:310 → the 'holds a Seedelf; a Seedelf spend never pays with one' refusal, which is what failed the Seedelf-token mutant's test.
+- Line drift in the lanes' guard lines: E5's recipients.ts:43 doesn't exist (the file has 13 lines; the checks are at 11-12). E5's coin-control.ts:250/259/362 are function heads (the checks are at 254, 261, 372 and 375). script-spend.ts:237/581/608/629 are a set's or a function's first line (the checks are at 242, 585, 616-617 and 640).
+- handlers.ts:405 has a second layer in Chrome: sw.ts:346's storage.local.onChanged listener also calls dapp.networkChanged(). No test drives that either.
+
+## Coverage
+
+Every guard was tried: 42 guards from E4b's (12) and E5's (30) lists, with no duplicates between the lanes. That took 80 mutants, splitting a guard into its sub-checks where it has several. On top of that: a follow-up for handlers.ts:149, a second pass of the 9 survivors over 19 more test files, two unmutated control runs of the timed-out catches, and one probe test (cbor 84a1009f58) in a copy only. Every mutant ran in copies under ~/.cache/seedelf-review-51/T1j (four copies in all), never in TREE. I added no test to TREE. The copies and T1j-target (unused: these lanes have no Rust guard) are removed. Not tried: nothing on the lists. Not mutated: the Rust behind WebAssembly that backs four of the TS guards, since the copy has the prebuilt wasm/pkg (listed in notes). The first runner's lane outputs and every mutant's JSON report and log are in SCRATCH/r51/work/T1j/ (logs/, logs2/, results*.jsonl, a tmpfs).

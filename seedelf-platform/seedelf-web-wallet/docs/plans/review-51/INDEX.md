@@ -294,6 +294,111 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 *Coverage:* Every guard in both lists was tried: R2b's 28 and R4's 14, with R2b#26 and R4#7 (transaction.rs:130) merged, so 41 distinct guards. That took 61 mutants. Multi-site guards got one mutant per site, multi-condition guards one per condition, and two faithful variants were added for spend.rs (a fixed key; another 28-byte hash). 3 prepared panicking variants (M16p, M19p, M20p) were not run, because their wrapping versions were caught. Crates run per mutant: seedelf-core (named test, then all 356), seedelf-wasm native (305) for core guards, and seedelf-cli (46) for CLI guards and for core guards the CLI calls. Not run: the extension's Vitest (it reaches Rust only through the prebuilt wasm/pkg; WebAssembly wasn't rebuilt, per the brief), the CLI's 4 ignored live Koios tests, Playwright, and the parts suite. No guard left untried.
 
+## T1d (9 findings, 61 guards)
+
+- `t1d#1` low (user): An account launch whose collateral can't come back as an output: no test fails without the refusal `launch.rs:503`
+- `t1d#2` low (stranger): A cancel's collateral holding a token or a datum: no test fails without the refusal `orders.rs:736`
+- `t1d#3` low (nobody): A cancel built on a datum other than the one its order holds: no test fails without the check `orders.rs:762`
+- `t1d#4` low (stranger): A cancel spending a session row that holds a datum or a script: no test fails without the refusal `orders.rs:894`
+- `t1d#5` low (nobody): A reference holding two lovejoin NFTs, or its policy's one token under another name: no test fails without the check `pool.rs:318`
+- `t1d#6` low (pool-launcher): A v2 pool whose datum names another mix_logic: no test fails without the L check `pool.rs:415`
+- `t1d#7` low (nobody): A finished launch that isn't the pool meant: no test fails without launched_pool's checks `launch.rs:699`
+- `t1d#8` low (nobody): The bundled order table's load checks: no test fails without them, and as written none can `orders.rs:225`
+- `t1d#9` low (user): A cancel declaring less than its finished bytes measure: no test fails without the check `orders.rs:1102`
+
+*Coverage:* I tried all 30 of R3b's guards (none repeats), as 84 mutants, each of a different check. 78 of them ran one at a time in my copy of seedelf-platform. Each ran its named test file first, then, if nothing failed, the whole seedelf-core crate (--lib --tests: 31 targets, 356 tests, 6 ignored). The exception is the last 11 orders.rs mutants, which ran --lib plus orders_test only (28 tests), since nothing else in the crate reaches orders.rs. Five more were never run apart, as their results are implied: g21's token and datum parts and g22's three arms, because removing each whole check failed nothing. g1de (the NFT's name and quantity together) ran only in the combined wasm runs. 27 checks that failed no seedelf-core test (the survivors and the equivalent ones) also ran in two combined runs of seedelf-wasm's native suite (305 tests); in the second, 305 passed. 9 probe tests (the tests a fix wou…
+
+## T1f (12 findings, 41 guards)
+
+- `t1f#1` low (site): A withdrawal on the other network, which would tie a stake-key certificate to it: no test fails without it `cip30.rs:1641`
+- `t1f#2` low (pool-launcher): A launch's unreadable datum beside a script at the holder making the whole pool unreadable: no test fails without it `lovejoin.rs:195`
+- `t1f#3` low (site): Overflowing ADA and token sums wrapping instead of being refused: no test fails without the checks `cip30.rs:137`
+- `t1f#4` low (site): Collateral at risk counted with the site's collateral as if it were the account's: no test fails without the own-only sum `cip30.rs:1321`
+- `t1f#5` low (stranger): A stranger's 5 ₳ UTxO with a datum, a token, a reference script or another value taken as the session's collateral for its mix: no test fails without fits_collateral's checks `lovejoin.rs:286`
+- `t1f#6` low (stranger): Chain change sent to a stranger's row's address (the session's key under the stranger's stake key): no test fails without the own-row preference `lovejoin.rs:1059`
+- `t1f#7` low (nobody): The session's collateral put into a pool that isn't 5 ₳ boxes of ADA: no test fails without collateral_protocol's check `lovejoin.rs:340`
+- `t1f#8` low (nobody): A row not under the session's payment key built into a chain's deposit: no test fails without holdings_of's key check `lovejoin.rs:1025`
+- `t1f#9` low (user): A token total past u64 wrapping the count of token boxes: no test fails without the u128 sum `lovejoin.rs:950`
+- `t1f#10` low (pool-launcher): A public mix's ADA need plus the token change's least ADA wrapping: no test fails without the checked_add `lovejoin.rs:2273`
+- `t1f#11` low (nobody): The public account's collateral spent by a public mix's deposit, its Mix again or a paid withdraw: no test fails without not_collateral `lovejoin.rs:2209`
+- `t1f#12` low (nobody): A chain across pools naming one ADA pool twice, or two pools of one token: no test fails without either check alone `lovejoin.rs:1247`
+
+*Coverage:* I tried every guard in W2 (23 entries, cip30.rs and decode.rs) and W3 (18 entries, wasm lovejoin.rs and extension lovejoin.ts). The two lanes share no guard, so there were no duplicates to merge; 41 guards in all. Several were split into sub-mutants, one per condition: at_risk ×2, owner ×2, own_address ×3, old dereg ×2, unfound inputs ×2, net ×4, checked sums ×3, raw_map/raw_vkeys ×2, fits_collateral ×4, draws ×2, not_collateral ×3, min(ours.len()) ×2, withdraw_private_in ×5 (one in core), protocols_of ×2, reward balance ×2, verify_pool ×3 (two in core), retired pool ×9.  Order: the guards with no named test first (cip30.rs:137, 1321's mixed case, 1641; lovejoin.rs:286, 1025, 1039, 1059, 950, 2273, 2209, 1620, 2898, 3028, 1247, 239; lovejoin.ts:4232). Then the site and stranger inputs, then the rest.  Tests run per mutant: - cip30 mutants: every native binary that reaches cip30 (cip30_te…
+
+## T1g (14 findings, 68 guards)
+
+- `t1g#1` low (user): A due box that a reviewed or sending chain has reserved, withdrawn by the due run: no test fails without it `lovejoin.ts:6876`
+- `t1g#2` low (nobody): A withdraw whose signed hash differs from the reviewed build, sent anyway: no test fails without the hash check `lovejoin.ts:7643`
+- `t1g#3` low (pool-launcher): A copy of the 5 ₳ pool taken as a return's ADA and collateral pool: no test fails without adaPoolOf's copy check `lovejoin.ts:702`
+- `t1g#4` low (user): A token pool named on the review taken even though it can't take a box now: no test fails without acrossOf's 'works' check `lovejoin.ts:3974`
+- `t1g#5` low (pool-launcher): A data-layer pool of an unlisted token (or a 10 ₳ ADA pool) kept: no test fails without verified()'s listedValue check `lovejoin-pools.ts:530`
+- `t1g#6` low (user): A pool's bare private start spending UTxOs its review never showed: no test fails without the 'only' filter `lovejoin-launch.ts:337`
+- `t1g#7` low (user): withdrawDueNow's early return while a chain is mixing: no test fails without it `lovejoin.ts:6796`
+- `t1g#8` low (nobody): giveme.my's coin put up for a collateral mix the network measures higher: no test fails without tailWitness's budget check `lovejoin.ts:4546`
+- `t1g#9` low (user): A session chain keeps its reservation after the network's check refused it: no test fails without the unreserve (both copies) `lovejoin.ts:3865`
+- `t1g#10` low (user): A return across pools reserving its boxes only after the network's check: no test fails `lovejoin.ts:4098`
+- `t1g#11` low (nobody): Only the first leg's first mix measured in a return across pools: no test fails without crossCheck's per-leg indexes `lovejoin.ts:4808`
+- `t1g#12` low (user): An ADA pool start at the classic pool's 10 ₳: no test fails without the worker's own refusal `lovejoin-launch.ts:237`
+- `t1g#13` low (user): A token start of more than one output holds (over 2^64−1 a box): no test fails without the worker's cap `lovejoin-launch.ts:235`
+- `t1g#14` low (user): Mix again's boxes paid by an account switched to during its build: no test fails without the account check `lovejoin.ts:5082`
+
+*Coverage:* Tried every guard in E1a's and E1b's lists, after merging the duplicates (a1/b13, a4/b18, a5/b22, a6/b24, a7/b25, and a9 with b14). That is 37 guards and 71 mutants, run in the order asked: no named test first, then a stranger's or site's input, then the rest. Every mutant ran against its lane-named tests where the lane named any. Every survivor then ran against each test where the fire marker showed its guard acting; for M01, M02, M03, M09, M14, M62 and M68, against every test that reaches the line as well. Not fire-checked: 43 of the 192 reaching test files, which reach the modules only through handlers, sessions, sw or dapp and never call a Lovejoin flow (accounts*, dapp-*, governance, swap-*, wallet, worker and similar). Their runs could miss a firing, but none of them calls a Lovejoin flow. Two runs were cut short. M24's extra reach-set run (65 tests) was stopped after 15 minutes un…
+
+## T1h (12 findings, 50 guards)
+
+- `t1h#1` low (site): A runner-signed session transaction carrying a governance proposal, a certificate, a vote or a non-direct withdrawal: no test fails without it `sessions.ts:6867`
+- `t1h#2` low (site): A fee-sized output carrying the session's tokens taken as Minswap's fee: no test fails without it `sessions.ts:6697`
+- `t1h#3` low (site): An order swap paying out more of a token than was funded: no test fails without it `sessions.ts:6581`
+- `t1h#4` low (site): A second fee-sized output taken as Minswap's fee: no test fails without it `sessions.ts:6697`
+- `t1h#5` low (site): A session transaction that mints or burns: no test fails without it `sessions.ts:6870`
+- `t1h#6` low (stranger): A stranger's exactly-5-ADA UTxO carrying tokens put up as a chain's collateral: no test fails without it `sessions.ts:1053`
+- `t1h#7` low (stranger): A stranger's 5 ADA with a datum by hash put up as a chain's collateral: no test fails without it `sessions.ts:1053`
+- `t1h#8` low (user): A second 'Mix my boxes again' sent while one may still spend the same boxes: no test fails without the Send-time check `sessions.ts:2322`
+- `t1h#9` low (user): A top-up review older than BUILT_TTL_MS recorded before Send refuses it: no test fails without it `sessions.ts:2406`
+- `t1h#10` low (nobody): A funding or top-up that Koios answered with another transaction's id marked never sent: no test fails without markUnsent's maybe-sent exception `sessions.ts:3030`
+- `t1h#11` low (nobody): A swap signed when WebAssembly answers its cancel dry run for fewer orders than asked: no test fails without the length check `sessions.ts:4288`
+- `t1h#12` low (nobody): A session swap or cancel sent whose signed bytes don't hash to the transaction inspected: no test fails without either check `sessions.ts:4477`
+
+*Coverage:* All 50 unique guards in E2a's and E2b's lists were tried: E2a's 25 and E2b's 26, with E2a#11 and E2b#19 merged. Every sub-check a lane named by line or clause is a mutant of its own, 140 in all, each in a copy, never in TREE. Every mutant has a verdict: 127 caught and 13 not caught. The 13 fall under 9 lane guards: E2a#8, E2a#11/E2b#19, E2a#19, E2a#22, E2b#0, E2b#1, E2b#6, E2b#8 and E2b#11. They are reported as 12 findings, since both signAndSend checks are one. No guard was left untried. Run scope: phase 1 ran a03 and a22 against their named or candidate files. Every other mutant ran against the tests the probes show its guard firing in, out of the 194 test files whose imports reach the four guarded modules. All 194 ran once with probes. The unreached ones were confirmed by a combined run over their named files. a11h also ran its one reaching file whole without -t. The whole suite wasn'…
+
+## T1j (14 findings, 68 guards)
+
+- `t1j#1` low (site): The connector serving a port from an iframe, another extension, a non-tab page or a plain-http page: no test fails without it `sw.ts:364`
+- `t1j#2` low (site): A site hearing the worker's own error text, in the user's language, instead of SITE_TRAPPED in English: no test fails without it `sw.ts:427`
+- `t1j#3` low (site): Site requests asked on the network the wallet just left still answered after Settings' switch: no test fails without handlers.ts:405 `handlers.ts:405`
+- `t1j#4` low (site): A site's 5-byte transaction hanging the worker's CBOR reader: no test fails without cbor.ts:33's length-bytes bound `cbor.ts:33`
+- `t1j#5` low (stranger): A stranger's 5 ₳ UTxO that also holds a token picked as the account's collateral: no test fails without isCollateralShaped's token check `coin-control.ts:184`
+- `t1j#6` low (stranger): The wallet staying unlocked on a WebAssembly instance that trapped under one of its pages' requests: no test fails without sw.ts:382 `sw.ts:382`
+- `t1j#7` low (user): A payment in parts going in part when a later kept part is missing or another review's: no test fails without laterParts' check `script-spend.ts:585`
+- `t1j#8` low (user): A second payment written ahead beside one that may still go through, when both pass settleMaybeSent: no test fails without writeAhead's check `pending.ts:599`
+- `t1j#9` low (user): A new payment checked against one that may still go through only after giveme.my was asked: no test fails without settleMaybeSent at Send `script-spend.ts:397`
+- `t1j#10` low (user): A payment sent although its maybe-sent copy couldn't be sealed: no test fails without writeAhead's seal check `pending.ts:621`
+- `t1j#11` low (user): A payment in parts whose later part spends what another chain being sent reserves going in part: no test fails without the later parts' reservation check `script-spend.ts:438`
+- `t1j#12` low (user): Switching public accounts while a payment Koios didn't answer may still go through: no test fails without account-use's maybe-sent half `handlers.ts:380`
+- `t1j#13` low (user): Two background runs at once, the alarm's and the unlock's, sending two withdraws seconds apart: no test fails without sw.ts's one-run-at-a-time guard `sw.ts:113`
+- `t1j#14` low (user): A payment to no one or to more than 20, refused only by WebAssembly in English after every destination was resolved: no test fails without checkRecipients `recipients.ts:11`
+
+*Coverage:* Every guard was tried: 42 guards from E4b's (12) and E5's (30) lists, with no duplicates between the lanes. That took 80 mutants, splitting a guard into its sub-checks where it has several. On top of that: a follow-up for handlers.ts:149, a second pass of the 9 survivors over 19 more test files, two unmutated control runs of the timed-out catches, and one probe test (cbor 84a1009f58) in a copy only. Every mutant ran in copies under ~/.cache/seedelf-review-51/T1j (four copies in all), never in TREE. I added no test to TREE. The copies and T1j-target (unused: these lanes have no Rust guard) are removed. Not tried: nothing on the lists. Not mutated: the Rust behind WebAssembly that backs four of the TS guards, since the copy has the prebuilt wasm/pkg (listed in notes). The first runner's lane outputs and every mutant's JSON report and log are in SCRATCH/r51/work/T1j/ (logs/, logs2/, results…
+
+## T1k (14 findings, 53 guards)
+
+- `t1k#1` low (stranger): A stranger's datum that realigns into a register (a field that isn't a 48-byte byte string): no test fails without registerOf's length or type check `chain.ts:49`
+- `t1k#2` low (user): A Seedelf name located at a row without that token, or at one this wallet has just spent: no test fails without the names loop's two checks `contract-scan.ts:335`
+- `t1k#3` low (user): A contract read whose keys change between batches kept as one wallet's: no test fails without `same`'s check `contract-scan.ts:137`
+- `t1k#4` low (user): A watch reading the feed from a cursor newer than its transaction's first try: no test fails without cover's choice of cursor `feed.ts:143`
+- `t1k#5` low (stranger): A session swap or cancel carrying certificates, withdrawals, votes, proposals, mints, a missing witness or unknown inputs: no test fails without refuseOddities' refusals of them `sessions.ts:6867`
+- `t1k#6` low (stranger): Minswap's order build with a second fee output, or a fee output carrying a token: no test fails without checkOrder's one-ADA-only-fee rule `sessions.ts:6697`
+- `t1k#7` low (stranger): Minswap's order build paying out more of a token than was funded, or a token that wasn't: no test fails without withinFunding's token limit `sessions.ts:6581`
+- `t1k#8` low (stranger): A token Minswap lists by its exact ID but marks unverified, treated as verified: no test fails without the is_verified check `sessions.ts:1902`
+- `t1k#9` low (user): Review offered on the swap form when the private balance can't fund the quote, the amount is more than what's held, or the token is unverified: no test fails without Swaps.tsx's ready gate `Swaps.tsx:761`
+- `t1k#10` low (user): A staking review's 'Public account after' off by the fee, the deposit, the refund or the rewards: no test fails without its sum `Staking.tsx:1021`
+- `t1k#11` low (user): Stop staking offered while the rewards are locked: no test fails without the button's locked gate `Staking.tsx:645`
+- `t1k#12` low (user): Staking with a retired pool offered: no test fails without the pool page's retired check `Pools.tsx:356`
+- `t1k#13` low (user): A DRep retirement built without Koios's deposit: no Vitest test fails without the worker's check `staking.ts:523`
+- `t1k#14` low (nobody): A transaction Minswap built that the wallet can't read (not 4 items, no outputs, an output without a value, an inline datum not wrapped in tag 24): no test fails without builtOutputs' refusals `minswap.ts:509`
+
+*Coverage:* Tried all 53 lane guards: E6's 15, E7a's 20 and E7b's 18. None was duplicated across lanes, since the three lanes cover different files. Order followed the brief: first the guards whose test was none or unknown (E6#2, E6#8, E7b#8, #10, #12, #15, #16, #17), then those on a stranger's input (E6#0, #1, #3, #4, #5 and the Minswap checks), then the rest. In all I ran 168 mutants: E6 43, E7a 93, E7b 32. That is 155 Vitest and 13 cargo staking_test, plus 3 crypto and 1 wasm Rust mutants run by hand. On top came 30 wide-pass reruns and 11 demonstration runs. Not tried: the 'reads token by token' performance property of chain.ts:84 (no simple mutant); blstrs's own torsion refusal (third-party code); koios.ts submitTx's TxSubmitConnectionError retry and paged()'s 'nothing new' stop (a hang guard, not the money one); stake()'s own call to check_paths apart from the shared check; refuseSent and late…
+
 ## X1a (3 findings, 16 guards)
 
 - `x1a#1` low (stranger): Send and Make public call the user's payment key under someone else's stake key "your own public account: it comes back", where the sign window says its staking rewards aren't yours `destination.ts:122` · verified **confirmed, low**

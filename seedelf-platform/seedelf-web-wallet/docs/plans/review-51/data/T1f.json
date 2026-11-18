@@ -1,0 +1,477 @@
+{
+ "findings": [
+  {
+   "id": "t1f#1",
+   "severity": "low",
+   "title": "A withdrawal on the other network, which would tie a stake-key certificate to it: no test fails without it",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1641,
+   "scenario": "The wallet is on preprod. A site calls signTx(tx, true). The tx has one input the wallet can't find (the site's own UTxO on mainnet), no outputs, no network id, a StakeDelegation of the account's stake credential to pool P, and a withdrawal of 0 from the account's mainnet reward address. With the check, inspect refuses: 'This transaction withdraws from mainnet, and the wallet is on preprod.' Without it, the withdrawal counts as the account's own (the stake key signs) and as the transaction's network tie (`tied` reads body.withdrawals.is_some(), trusting this check). So the stake key signs: signs ['stake'], net 0, complete false. The site adds its own witness and submits on mainnet, and the user's mainnet stake is delegated to P. A vote delegation or an UnReg works the same. This is chunk 29's hole (one stake key on both networks) reopened through a withdrawal. Every test that reaches cip30 passes without the check.",
+   "who": "site",
+   "since": "fe8b7748 (chunk 15's connector, in 1.0.0; first tagged web-wallet/1.6.0). chunk 29's `tied` (b05d8169) leans on it.",
+   "evidence": "Mutant, in a copy (run as switch R51_MUT=M14). cip30.rs:1641 `if s.network() != network { bail!(\"This transaction withdraws from {other_name}…\") }` became `if false && s.network() != network {…}`.\n\nRun alone, everything passed: cip30_test 73/73, session_test 14/14, read_value_test 2/2, decode_test 37/37, lib 7/7.\n\nA copy-only test, r51_t1f_1.rs (its body is in fix):\n- Original: inspect_tx is Err containing 'withdraws from mainnet', for partial_sign true and false, and sign_tx is Err.\n- With M14: sign_tx(partial_sign true) is Ok and prints `signed by [\"stake\"], net 0 lovelace, certificates 1, complete false`.\n\nWhy the existing test misses it: cip30_test's the_stake_key_never_signs_what_could_be_the_other_networks (:1253-1262) ties its bodies with a withdrawal from stake_account_bytes(), which is stake_address(true), preprod's. It never uses the other network's reward address.",
+   "confidence": "confirmed-by-run",
+   "fix": "Add the test to cip30_test.rs, using its helpers. It ran in the copy: passes on the original, fails with M14:\n\n#[test] fn a_withdrawal_on_the_other_network_never_ties_a_delegation_to_this_one() {\n  let stake = account().key_hash(Role::Staking, 0).unwrap();\n  let mut b = body(vec![input(TX_B, 7)], vec![]);\n  b.certificates = NonEmptySet::try_from(vec![conway::Certificate::StakeDelegation(StakeCredential::AddrKeyhash(stake), Hash::new([7; 28]))]).ok();\n  b.withdrawals = NonEmptyKeyValuePairs::try_from(vec![(Bytes::from(account().stake_address(false).unwrap().to_vec()), 0)]).ok();\n  let rows = vec![row(TX_B, 8, &theirs(), 5_000_000, &[])];\n  for partial_sign in [true, false] {\n    let request = request(tx_hex(b.clone()), rows.clone(), partial_sign);\n    let refused = cip30::inspect_tx(&account(), &request).unwrap_err().to_string();\n    assert!(refused.contains(\"withdraws from mainnet\"), \"{refused}\");\n    assert!(cip30::sign_tx(&account(), &request).is_err());\n  }\n}\n\n`tied` has four sources. Three are pinned already: outputs (1362), network_id (1161) and a found input's network (1201). This one was left.",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for:\n- 'withdraws from'\n- 'WrongNetworkWithdrawal|withdrawal.*network|network.*withdrawal'\n- 'mutant|mutation'\n\nchunk-29-correctness-fixes.md:15 says a zero withdrawal is 'tied to this network by its reward address'. Its test, at :41, uses preprod's reward account only. No record says the other network's withdrawal is untested."
+  },
+  {
+   "id": "t1f#2",
+   "severity": "low",
+   "title": "A launch's unreadable datum beside a script at the holder making the whole pool unreadable: no test fails without it",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 195,
+   "scenario": "A pool-launcher's launch transaction (one_shot_mint checks only the reference output) puts a script output at the holder. It carries the pool's mix_logic as a reference script and an inline datum nested past core's 128 levels (chunk 34's 314-wasm#0 shape, about 37 ₳ to make). Discovery passes every script row of the launch tx in PoolRef.scripts (lovejoin-pools.ts:585), so the row reaches protocol_of. With the skip, the row is no reference: its script is carried inline and the pool verifies. Without it, core's resolve_reference refuses the row ('holds a datum the wallet can't read'), and the `?` fails protocol_of on every call for that pool. The pool is then never verified or shown, and no deposit, mix or withdraw in it builds, so boxes the wallet holds there can't come back through it. The suite passes without the skip.",
+   "who": "pool-launcher",
+   "since": "fc8561c7 (1.6.0's release review, fix round 1, 314-wasm#0; first tagged web-wallet/1.6.0)",
+   "evidence": "Mutant (switch R51_MUT=M40c). lovejoin.rs:195 `if seedelf_core::eval::unreadable_datum(row).is_some() { continue; }` became `if false && …`.\n\nRun alone, everything passed:\n- lovejoin_pools_test 6/6, lovejoin_proven_bytes_test 2/2 (the lane's named tests)\n- lovejoin_test 35/35, lovejoin_across_test 4/4, lovejoin_flows_test 14/14, lovejoin_mainnet_test 8/8\n- lovejoin_v2_fixture_test 5/5, return_cost_test 5/5, lib 7/7\n\napi_test and session_test weren't run for it, because neither can reach protocol_of with a pool. lib.rs's only route into wasm's lovejoin module is direct_tail, behind `collateral_pool: Some` (lib.rs:1429). session_test's 7 session returns pass None, and api_test names none.\n\nA copy-only test, r51_t1f_2.rs (its body is in fix), passes on the original. With M40c: `called Result::unwrap() on an Err value: UTxO e7…e7#0 holds a datum the wallet can't read`.\n\nThe stack overflow 314-wasm#0 hit is now stopped in core: resolve_reference checks unreadable_datum before decoding (eval.rs:110). The wasm skip is what keeps such a pool readable.",
+   "confidence": "confirmed-by-run",
+   "fix": "Add the test to wasm/tests/lovejoin_pools_test.rs, using its derived(), row(), holder() and lj_pool_ref(). It ran in the copy: passes on the original, fails with M40c:\n\n#[test] fn a_launchs_deep_datum_beside_a_script_at_the_holder_leaves_the_pool_readable() {\n  let d = derived();\n  let mut pool = lj_pool_ref(true);\n  pool.scripts.push(row(json!({ \"tx_hash\": \"e7\".repeat(32), \"address\": holder(), \"value\": \"30000000\", \"payment_cred\": hex::encode(templates::REFERENCE_HOLDER_HASH), \"inline_datum\": { \"bytes\": \"81\".repeat(200) + \"00\", \"value\": {} }, \"reference_script\": { \"hash\": hex::encode(d.mix_logic.hash), \"size\": d.mix_logic.cbor.len(), \"type\": \"plutusV3\", \"bytes\": hex::encode(&d.mix_logic.cbor) } })));\n  let view = wasm::verify_pool(VerifyPoolRequest { network: \"preprod\".into(), pool }).unwrap();\n  assert_eq!(view.id, LJ_POLICY);\n  assert_eq!(view.scripts_inline, 0);\n}\n\nIts mix_box twin exists (a_strangers_deep_utxos_at_mix_box_leave_the_pool_readable); the holder's script rows had none.",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'unreadable_datum' (no hits), '314-wasm#0|deep datum|holder.*datum' and 'mutant|mutation'. chunk-34-token-pools.md:928 records the hostile-pool fix (314-wasm#0), and nothing records a test of the skip at the holder."
+  },
+  {
+   "id": "t1f#3",
+   "severity": "low",
+   "title": "Overflowing ADA and token sums wrapping instead of being refused: no test fails without the checks",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 137,
+   "scenario": "A stranger mints a junk token T, 2^63−1 each time, into three outputs at the account's 0/0 (about 4 ₳, most of it the user's). A site's signTx then spends those three own UTxOs and sends all of T to the site in outputs that conserve value. spent's T is 3·(2^63−1), past a u64. With the checks, inspect refuses: 'a token amount overflows'. Without them, the shipped module wraps: seedelf-wasm has no overflow checks in wasm-release (Cargo.toml's comment). spent's T becomes 2^63−3, so the window's net tokens understate what leaves by about 1.8×10^19 of T. The same goes for duplicate multiasset entries in one output, which Pallas keeps and of_value sums, and for ADA in Amount::add and add_staking. The amounts involved are junk, but the figures shown are false, and no test feeds an overflow.",
+   "who": "site",
+   "since": "fe8b7748 for add_token and add (chunk 15, in 1.0.0); 82e81fe4 for add_staking. First tagged web-wallet/1.6.0.",
+   "evidence": "Three mutants, each run alone (switches R51_MUT=M19a, M19b, M19c):\n- M19a, cip30.rs:139-141: `*held = held.checked_add(quantity).ok_or_else(|| anyhow!(\"a token amount overflows\"))?;` became `*held = held.wrapping_add(quantity);`\n- M19b, cip30.rs:146-149: `self.lovelace = self.lovelace.checked_add(other.lovelace).ok_or_else(|| anyhow!(\"an ADA amount overflows\"))?;` became `… = self.lovelace.wrapping_add(other.lovelace);`\n- M19c, cip30.rs:1415-1419: add_staking's `staking.checked_add(lovelace).ok_or_else(…)` became `Ok(staking.wrapping_add(lovelace))`\n\nEach passed cip30_test 73/73, session_test 14/14, read_value_test 2/2, decode_test 37/37 and lib 7/7. Those are every native binary that reaches cip30; the .mjs tests load the unrebuilt pkg.\n\nThe mutants wrap rather than use `+` because wrapping is what the release module does without the check. Under the test profile `+` would only panic if some test overflowed, and none does.",
+   "confidence": "confirmed-by-run",
+   "fix": "Add a test to cip30_test.rs:\n- Three found own rows, row(TX_A, i, &ours(Role::Receive, 0), 2_000_000, &[(POLICY, \"0000\", 9_223_372_036_854_775_807)]) for i in 0..3, spent by a body paying them to theirs(). inspect_tx must be Err containing 'a token amount overflows'.\n- One with own outputs whose ADA totals past u64::MAX must be Err containing 'an ADA amount overflows'.\n- A withdrawal plus an UnReg refund past u64::MAX must be Err the same way.",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'amount overflows', 'add_staking' and 'mutant|mutation': no hits for this. The backlog's cip30-rust#9 (contract_held saturates) is a different sum, kept saturating on purpose."
+  },
+  {
+   "id": "t1f#4",
+   "severity": "low",
+   "title": "Collateral at risk counted with the site's collateral as if it were the account's: no test fails without the own-only sum",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1321,
+   "scenario": "A site's transaction puts up two collateral UTxOs: the account's 5 ₳, and the site's own 10 ₳ (found through Koios). Its collateral return pays 12 ₳ to the account's own address. If the scripts fail, the account loses its 5 ₳ and gets 12 ₳ back, so nothing of the account's is at risk. inspect shows collateral lovelace '5000000' and at_risk '0'. If the site's found row is counted as the account's (put_up summing every found collateral row), the window says '15000000' and at_risk '3000000'. No test has the site's collateral beside the account's, so this mistake passes. The lane noted 'none pins the mixed case', and the run confirms it.",
+   "who": "site",
+   "since": "fe8b7748 (chunk 15, in 1.0.0; first tagged web-wallet/1.6.0)",
+   "evidence": "Mutant (switch R51_MUT=M08b). In the collateral loop at cip30.rs:1286-1291, after `if let Some(signer) = owner(row)? { …put_up.add(&Amount::of_row(row)?)?; own += 1; }`, I added `else { put_up.add(&Amount::of_row(row)?)?; }`.\n\nRun alone, everything passed: cip30_test 73/73, session_test 14/14, read_value_test 2/2, decode_test 37/37, lib 7/7.\n\nThe subtraction half of the same guard is caught. M08a (`at_risk = put_up.lovelace`) fails a_collateral_return_to_someone_else_is_refused (at_risk '4000000' against '300000') and collateral_at_the_stake_keys_own_address_is_the_accounts ('5000000' against '500000').",
+   "confidence": "confirmed-by-run",
+   "fix": "Add a test to cip30_test.rs. Collateral is [input(TX_A,1) of ours, input(TX_B,3) found as row(TX_B,3,&theirs(),10_000_000,&[])], and collateral_return is out(&ours(Role::Receive,0),12_000_000,None). Assert:\n- summary.collateral.lovelace == \"5000000\"\n- own == 1\n- at_risk == \"0\"\n- returned_lovelace == Some(\"12000000\")",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'mixed in', 'site.s collateral' and 'mutant|mutation'. The 'mixed in' hits are Lovejoin's collateral (chunks 34 and 43) and the VPS (chunk 26c), not this sum. W2 itself listed the gap in its guards list."
+  },
+  {
+   "id": "t1f#5",
+   "severity": "low",
+   "title": "A stranger's 5 ₳ UTxO with a datum, a token, a reference script or another value taken as the session's collateral for its mix: no test fails without fits_collateral's checks",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 286,
+   "scenario": "A direct return's tail looks for 'the session's 5 ₳ collateral' among the session's UTxOs with fits_collateral (lovejoin.rs:437). A stranger pays the session's address 5 ₳ with an inline datum: independent review L20's shape, which the worker's collateralFits fixed (10f19f4) and this Rust copy mirrors.\n- Without the datum/script condition, the stranger's row can be taken as the collateral and boxed. The session's own collateral then pays as an ADA-only coin, and its ADA comes back through the change unmixed.\n- Without the token condition, Coin::from_row refuses the row. direct_tail's error becomes no tail (lib.rs:1438 `.ok()`), and the collateral comes back unmixed.\n- Without the value condition, a 6 ₳ UTxO is boxed.\n\nCollateralTail::build's own check (:286) backs the chain's path, where the worker names the collateral. No test feeds a UTxO that doesn't fit to either path.",
+   "who": "stranger",
+   "since": "24c5c62a (a session's collateral mixed into the 5 ₳ pool; first tagged web-wallet/1.6.0)",
+   "evidence": "Four mutants, each run alone. M24a: lovejoin.rs:286 `if !fits_collateral(collateral) { bail!(…) }` became `if false && …`. In fits_collateral (lovejoin.rs:348-353):\n- M24b: `u.asset_list…is_none_or(empty)` became `true`\n- M24c: `u.value.parse::<u64>().ok() == Some(COLLATERAL_LOVELACE)` became `true`\n- M24d: `reference_script.is_none() && inline_datum.is_none() && datum_hash.is_none()` became `true`\n\nEach passed lovejoin_test::the_collateral_comes_back_with_the_rest_where_its_mix_cant_be_built (the lane's test), then the whole lovejoin set: lovejoin_test 35, lovejoin_across_test 4, lovejoin_flows_test 14, lovejoin_mainnet_test 8, lovejoin_pools_test 6, lovejoin_proven_bytes_test 2, lovejoin_v2_fixture_test 5, return_cost_test 5, lib 7.\n\napi_test and session_test can't reach CollateralTail: none of their requests names a collateral pool (session_test's 7 session returns pass `collateral_pool: None`, and api_test has none).",
+   "confidence": "confirmed-by-run",
+   "fix": "Add to lovejoin_test.rs's the_collateral_comes_back_with_the_rest_where_its_mix_cant_be_built:\n- a direct return whose utxos list, before the session's own row(2,1,&at,5_000_000,&[]), a stranger's 5 ₳ row with an inline datum; the tail's deposit must spend [2;32]#1, never the stranger's\n- the same with a 5 ₳ row holding a token, and with a 6 ₳ ADA-only row\n- a chain whose request.collateral names a 10 ₳ row: collateral_tail is None and the row comes back",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'fits_collateral|collateralFits', 'collateral_protocol' and 'mutant|mutation'. independent-review.md:162 L20 (a stranger's 5 ₳ with a deep datum standing as the chain's collateral) was fixed in the worker (10f19f4). chunk-34-token-pools.md:1062 is the box-of-money item. Nothing records a test for the Rust copy."
+  },
+  {
+   "id": "t1f#6",
+   "severity": "low",
+   "title": "Chain change sent to a stranger's row's address (the session's key under the stranger's stake key): no test fails without the own-row preference",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 1059,
+   "scenario": "A Bootstrap's session has no collateral, so `found` is None. Its rows list first a stranger's UTxO at base(session key, stranger's stake key), which holdings_of accepts since it checks only the payment key, then its own funding. With the preference, the chain's change goes to the funding's address. Without it, utxos.first() wins, and the change (the session's spare ADA) sits at an address whose stake rights are the stranger's until the return sweeps it. The comment at :1057 says why the preference exists. Whether the worker lists such a row depends on reading by payment credential, as that comment assumes.",
+   "who": "stranger",
+   "since": "62162483 ('a Bootstrap is funded with no collateral'; first tagged web-wallet/1.6.0)",
+   "evidence": "Mutant (switch R51_MUT=M29). lovejoin.rs:1059-1061 `.or_else(|| utxos.iter().find(|u| own.contains(&u.tx_hash)))` was dropped, so the address is `found.as_ref().or(utxos.first())`.\n\nRun alone, everything passed:\n- lovejoin_test 35, lovejoin_across_test 4, lovejoin_flows_test 14, lovejoin_mainnet_test 8, lovejoin_pools_test 6\n- lovejoin_proven_bytes_test 2, lovejoin_v2_fixture_test 5, return_cost_test 5, lib 7\n- then api_test 92 and session_test 14",
+   "confidence": "confirmed-by-run",
+   "fix": "Add a test to lovejoin_test.rs, beside a_bootstrap_with_no_collateral_deposits_and_sweeps_back. Same request, with a stranger's row at base(session key, another stake key) listed before the funding, and `own` naming the funding's tx. The deposit's change output must pay the funding's address (the session's base address), not the stranger-staked one.",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'holdings_of' (no hits) and 'mutant|mutation'. Nothing records this preference's test."
+  },
+  {
+   "id": "t1f#7",
+   "severity": "low",
+   "title": "The session's collateral put into a pool that isn't 5 ₳ boxes of ADA: no test fails without collateral_protocol's check",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 340,
+   "scenario": "The worker picks the collateral's pool with adaPoolOf (a v2 ADA pool whose box is 5 ₳, not a copy), and this Rust check is the second line behind it. Without it, a request naming a pool of other boxes puts the collateral, topped up from the payers' ADA, into a box of that pool. The lane's test case can't see this. Its pool is 25 ₳ and the session holds 25 ₳, so the deposit can't be paid, and its stranger boxes aren't that pool's. The tail fails for another reason and the 'no tail' assertion still holds.",
+   "who": "nobody",
+   "since": "24c5c62a (first tagged web-wallet/1.6.0)",
+   "evidence": "Mutant (switch R51_MUT=M25). lovejoin.rs:340 `if value.token.is_some() || value.lovelace != build::COLLATERAL_LOVELACE { bail!(…) }` became `if false && (…)`.\n\nRun alone, everything passed:\n- the_collateral_comes_back_with_the_rest_where_its_mix_cant_be_built (named)\n- the whole lovejoin set: lovejoin_test 35, lovejoin_across_test 4, lovejoin_flows_test 14, lovejoin_mainnet_test 8, lovejoin_pools_test 6, lovejoin_proven_bytes_test 2, lovejoin_v2_fixture_test 5, return_cost_test 5, lib 7\n\napi_test and session_test can't reach it (no collateral pool, as in t1f#5).",
+   "confidence": "confirmed-by-run",
+   "fix": "Extend the named test's 'A pool of other boxes isn't the collateral's' case with a pool the session can pay for. Use ada_pool_ref(10_000_000) with two strangers' 10 ₳ boxes of that pool and a 20 ₳ payer. r.tail must still be None, and the collateral must come back with the rest.",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'collateral_protocol' (no hits) and 'mutant|mutation'."
+  },
+  {
+   "id": "t1f#8",
+   "severity": "low",
+   "title": "A row not under the session's payment key built into a chain's deposit: no test fails without holdings_of's key check",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 1025,
+   "scenario": "The worker passes the session's own rows, so nothing reaches this today. Without the check, a row under another key would be taken as a coin or kept, and the chain's deposit would spend an input the session's key can't sign. The chain would build and then be refused at submit, with no money moving.",
+   "who": "nobody",
+   "since": "47b0e34c (a session's whole chain through Lovejoin, chunk 16; first tagged web-wallet/1.6.0)",
+   "evidence": "Mutant (switch R51_MUT=M27). lovejoin.rs:1025 `if payment_key(&row.address) != Some(key) { bail!(\"UTxO {}#{} isn't at session {index}'s account\") }` became `if false && …`.\n\nRun alone, everything passed: the whole lovejoin set (lovejoin_test 35, lovejoin_across_test 4, lovejoin_flows_test 14, lovejoin_mainnet_test 8, lovejoin_pools_test 6, lovejoin_proven_bytes_test 2, lovejoin_v2_fixture_test 5, return_cost_test 5, lib 7), then api_test 92 and session_test 14.",
+   "confidence": "confirmed-by-run",
+   "fix": "Add a test to lovejoin_test.rs: lovejoin::chain (and plan) with one row at another account's address beside the session's own must be Err containing \"isn't at session 0's account\".",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'holdings_of' (no hits) and 'mutant|mutation'."
+  },
+  {
+   "id": "t1f#9",
+   "severity": "low",
+   "title": "A token total past u64 wrapping the count of token boxes: no test fails without the u128 sum",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 950,
+   "scenario": "A session's own UTxOs (its funding, or a fill's) hold the token pool's token in three outputs of 2^63−1 each (one mint holds at most 2^63−1). In u128 the total is about 2.77×10^19, and token_boxes counts boxes from that. In a u64 the shipped module wraps (seedelf-wasm has no overflow checks), and the count falls to a small number or 0. The chain then puts fewer boxes in than the token pays for, or is refused as 'don't pay for a box'.",
+   "who": "user",
+   "since": "84c2775f (chunk 34's 34d, token pools; first tagged web-wallet/1.6.0)",
+   "evidence": "Mutant (switch R51_MUT=M31). lovejoin.rs:950 `held.iter().try_fold(0u128, |sum, (h, _)| held_of(..).map(|q| sum + u128::from(q)))` became `u128::from(held.iter().try_fold(0u64, |sum, (h, _)| held_of(..).map(|q| sum.wrapping_add(q))))`.\n\nRun alone, everything passed: the whole lovejoin set (35/4/14/8/6/2/5/5/7), then api_test 92 and session_test 14.",
+   "confidence": "confirmed-by-run",
+   "fix": "Add a test to lovejoin_flows_test.rs. A token pool whose box takes q of the token, and three of the session's own UTxOs (own names their tx) holding 2^63−1 each. plan's boxes must equal min(ADA-affordable, floor(3·(2^63−1)/q)), not a wrapped count.",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'token_boxes' (no hits) and 'mutant|mutation'. CLAUDE.md's Holdings::spare plain sum is a different, documented case."
+  },
+  {
+   "id": "t1f#10",
+   "severity": "low",
+   "title": "A public mix's ADA need plus the token change's least ADA wrapping: no test fails without the checked_add",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2273,
+   "scenario": "A pool-launcher sets a token pool's box lovelace near u64::MAX in its reference datum. verify_pool checks the scripts, not the value. A public mix into it, with token change, sums needed plus the change's least ADA past a u64. With the check, it's refused (MORE_THAN_THERE_IS). Without it, the shipped module wraps needed to a small figure, and the public account's pick stops early. Core's deposit re-checks the inputs' total, so nothing is lost, but the guard is unpinned.",
+   "who": "pool-launcher",
+   "since": "fc8561c7 (1.6.0's release review, fix round 1; first tagged web-wallet/1.6.0)",
+   "evidence": "Mutant (switch R51_MUT=M32). lovejoin.rs:2273-2275 `needed = needed.checked_add(build::minimum_address_payment(&params, &address, &kept)?).context(lovejoin::MORE_THAN_THERE_IS)?;` became `needed = needed.wrapping_add(build::minimum_address_payment(…)?);`.\n\nRun alone, everything passed: the whole lovejoin set (35/4/14/8/6/2/5/5/7), then api_test 92 and session_test 14.",
+   "confidence": "confirmed-by-run",
+   "fix": "Add a test to lovejoin_flows_test.rs, beside the_public_account_mixes_into_a_token_pool_with_its_token, with a pool whose datum's box lovelace is u64::MAX − 1_000_000. The public chain must be Err containing lovejoin::MORE_THAN_THERE_IS, not a built deposit or another error.",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'MORE_THAN_THERE_IS' (no hits) and 'mutant|mutation'."
+  },
+  {
+   "id": "t1f#11",
+   "severity": "low",
+   "title": "The public account's collateral spent by a public mix's deposit, its Mix again or a paid withdraw: no test fails without not_collateral",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2209,
+   "scenario": "The worker's coin control already keeps the collateral out of `utxos` (account.ts readAccount: `utxos: spendable`, `collateral` apart), so nothing reaches this today. If a caller listed the collateral among utxos and the other ADA fell short, the funding pick would take the 5 ₳ collateral. That happens in the public deposit at :2209/:2283, Mix again's payer at :2493, and the paid withdraw's payer at :2777. The deposit would then spend the UTxO the chain's mixes name as collateral, and they'd be refused at submit after the deposit landed. The existing tests always have enough ADA besides the collateral.",
+   "who": "nobody",
+   "since": "84c2775f for :2209 and :2777 (chunk 34's 34d); 1c054c3b for :2493. First tagged web-wallet/1.6.0.",
+   "evidence": "Three mutants, each run alone:\n- M33a, lovejoin.rs:2209: not_collateral became `|p| true || …`\n- M33b, lovejoin.rs:2493: `.filter(|p| (…) != collateral_ref)` became `.filter(|p| true || …)`\n- M33c, lovejoin.rs:2777: the same change\n\nEach passed the whole lovejoin set (35/4/14/8/6/2/5/5/7), then api_test 92 and session_test 14. That includes the_public_account_mixes_straight_in_signed_by_the_keys_it_spends, the lane's 'likely' test.",
+   "confidence": "confirmed-by-run",
+   "fix": "Add one test per entry point in lovejoin_test.rs: public chain, Mix again from the public account, and paid withdraw. Each request lists the collateral in utxos too, and the other ADA is short of what's needed. Each must be Err with its 'besides the collateral' words, and no built transaction may spend the collateral's outpoint.",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'not_collateral' (no hits) and 'mutant|mutation'."
+  },
+  {
+   "id": "t1f#12",
+   "severity": "low",
+   "title": "A chain across pools naming one ADA pool twice, or two pools of one token: no test fails without either check alone",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 1247,
+   "scenario": "protocols_of refuses a chain whose legs name one pool twice (:1249) or two pools holding one token (:1252). The only test, lovejoin_across_test's 'A token pool named twice' (:270-281), names the same token pool twice, so both checks fire and each masks the other's removal. Two cases go unpinned: the same ADA pool named twice (only the id check refuses it), and two different pools of one token (only the token check refuses it). The legs come from the worker's acrossOf, which builds them from distinct pools, so nothing reaches this today.",
+   "who": "nobody",
+   "since": "b9c35f06 (chunk 34's 34e, the planner; first tagged web-wallet/1.6.0)",
+   "evidence": "Two mutants, each run alone:\n- M38a, lovejoin.rs:1249 `if p.id == q.id {` became `if false && …`\n- M38b, lovejoin.rs:1252 `if p.token.is_some() && …` became `if false && …`\n\nEach passed lovejoin_across_test 4/4, then the whole lovejoin set (35/4/14/8/6/2/5/5/7). api_test and session_test weren't completed for them: M38a's api_test run was stopped part way. Neither binary can reach plan_across_pools or chain_across_pools (traced: lib.rs routes into the wasm lovejoin module only through direct_tail).",
+   "confidence": "confirmed-by-run",
+   "fix": "Extend lovejoin_across_test.rs's case with two more:\n- legs naming the 5 ₳ ADA pool twice (no token): Err containing 'names one Lovejoin pool twice'\n- two different verified pools sharing one token (two seeds): Err containing 'takes a token into one Lovejoin pool'",
+   "needs_owner": false,
+   "known_check": "I searched backlog.md and docs/archive/plans for 'protocols_of|pool twice|one pool twice|named twice' and 'mutant|mutation'. backlog.md:75 is about listing pools twice during a build, a different thing. chunk-34-token-pools.md:744 describes the across rules and records no test of each check alone."
+  }
+ ],
+ "guards": [
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1145,
+   "stops": "A site's transaction over 64 KiB is refused before any decode (M01: cap removed)",
+   "test": "cip30_test a_transaction_far_larger_than_cardano_allows_is_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 680,
+   "stops": "check_nesting refuses CBOR nested past 128 levels (M02: check removed; also covers decode.rs and attach_witnesses)",
+   "test": "cip30_test deeply_nested_data_is_refused_before_it_is_decoded, nesting_inside_a_datums_bytes_counts_too, a_big_numbers_bytes_are_bytes_and_the_check_goes_on_after_them"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1161,
+   "stops": "A body network_id of the other network is refused (M03)",
+   "test": "cip30_test the_other_network_is_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1201,
+   "stops": "An input or collateral row at a Shelley address on the other network is refused (M04)",
+   "test": "cip30_test a_utxo_on_the_other_network_is_never_spent"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1210,
+   "stops": "owner(): a found input or collateral at the stake key's hash (M05a) or the DRep key's (M05b) is the account's",
+   "test": "stake: cip30_test an_input_at_the_stake_keys_own_address_is_the_accounts, collateral_at_the_stake_keys_own_address_is_the_accounts. DRep: an_input_at_the_drep_keys_own_address_is_the_accounts_only_with_governance"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1312,
+   "stops": "With the account's collateral in, a collateral return to someone else is refused (M06)",
+   "test": "cip30_test a_collateral_return_to_someone_else_is_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1301,
+   "stops": "A collateral return on the other network is refused (M07)",
+   "test": "cip30_test a_byron_address_on_the_other_network_is_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1321,
+   "stops": "at_risk = the account's collateral less what returns to it. M08a drops the subtraction; M08b counts the site's found collateral as the account's (the mixed case)",
+   "test": "subtraction: cip30_test a_collateral_return_to_someone_else_is_refused, collateral_at_the_stake_keys_own_address_is_the_accounts. Mixed case: none (t1f#4)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1330,
+   "stops": "A transaction marked to fail with the account's collateral is refused (M09)",
+   "test": "cip30_test collateral_at_the_stake_keys_own_address_is_the_accounts (its marked-to-fail case at :1049)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1362,
+   "stops": "An output on the other network (Byron by its magic) is refused (M10)",
+   "test": "cip30_test a_byron_address_on_the_other_network_is_refused, the_other_network_is_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 503,
+   "stops": "own_address is the account's payment key AND its stake key. M11a: any stake key. M11b: any staking part. M11c: the ownPaymentKey flag dropped",
+   "test": "cip30_test the_accounts_key_under_someone_elses_staking_is_someone_elses_address (all three)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1507,
+   "stops": "A pool registration naming the account's stake key an owner is refused (M12)",
+   "test": "cip30_test a_pool_that_makes_the_accounts_stake_key_its_owner_is_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1619,
+   "stops": "An old deregistration without a known deposit is refused (M13a); with one, its refund is counted (M13b)",
+   "test": "cip30_test an_old_deregistration_of_the_accounts_stake_key_is_refused_without_its_deposit (M13a), an_old_deregistration_with_the_keys_deposit_is_counted_as_conways (M13b)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1641,
+   "stops": "A withdrawal from a reward address on the other network is refused (M14); it is also what lets a withdrawal tie a transaction to this network",
+   "test": "none (t1f#1)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1685,
+   "stops": "A proposal whose deposit returns on the other network is refused (M15)",
+   "test": "cip30_test a_proposal_whose_deposit_goes_back_on_the_other_network_is_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1792,
+   "stops": "A payment key's signature (M16a) or the DRep key's (M16b) over an input the wallet can't find is refused",
+   "test": "cip30_test a_payment_key_never_signs_for_an_input_the_wallet_cant_find (M16a), the_drep_key_never_signs_over_an_input_the_wallet_cant_find (M16b)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1816,
+   "stops": "No signature over a transaction that nothing ties to the wallet's network (M17)",
+   "test": "cip30_test the_stake_key_never_signs_what_could_be_the_other_networks"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1822,
+   "stops": "The net counts staking. M18: whole. M18a: the own withdrawal. M18b: UnReg's refund. M18c: the DRep retirement's refund",
+   "test": "cip30_test rewards_paid_to_someone_else_are_what_the_account_sends (M18, M18a), a_deposit_refund_paid_to_someone_else_is_what_the_account_sends (M18, M18b), retiring_the_accounts_drep_counts_its_deposit_back (M18c)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 137,
+   "stops": "Checked sums: token (M19a), ADA (M19b) and add_staking (M19c) overflow refused, never wrapped",
+   "test": "none (t1f#3)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 387,
+   "stops": "read_value stops at 1,000 policies plus tokens (M20)",
+   "test": "read_value_test an_amount_naming_more_is_refused_as_it_is_read"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 2017,
+   "stops": "raw_map (M21a) and raw_vkeys (M21b) don't size their Vec by a count the bytes chose",
+   "test": "raw_map: cip30_test a_count_the_bytes_cant_hold_is_refused_not_made_room_for (fails with 'capacity overflow'). raw_vkeys: none, an equivalent mutant (see notes)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1958,
+   "stops": "Without partialSign, a transaction needing another's signature isn't signed (M22)",
+   "test": "cip30_test someone_elses_input_needs_partial_signing"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/decode.rs",
+   "line": 628,
+   "stops": "The view refuses a transaction with bytes after its end (M23)",
+   "test": "decode_test hostile_bytes_are_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 286,
+   "stops": "CollateralTail::build boxes only an exact 5 ₳ ADA-only collateral. M24a: build's check. In fits_collateral at :348, M24b: token, M24c: value, M24d: script or datum",
+   "test": "none (t1f#5)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 340,
+   "stops": "The collateral goes only into a verified pool of 5 ₳ ADA-only boxes (M25)",
+   "test": "none (t1f#7)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 369,
+   "stops": "The tail's mix never draws a box the chain spends (M26a) nor one of the wallet's own (M26b)",
+   "test": "lovejoin_test the_collateral_never_draws_a_box_its_chain_drew (M26a), the_collateral_comes_back_with_the_rest_where_its_mix_cant_be_built (M26b)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 1025,
+   "stops": "holdings_of refuses a row not under the session's payment key (M27)",
+   "test": "none (t1f#8)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 1039,
+   "stops": "Only the session's own (or a fill's) token UTxOs go into a deposit (M28)",
+   "test": "lovejoin_across_test a_return_plans_its_token_boxes_first_then_its_ada; lovejoin_flows_test a_mix_session_deposits_its_token_and_brings_back_what_the_boxes_dont_take"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 1059,
+   "stops": "Chain change goes to the collateral's address, else an own row's, never first a stranger's (M29)",
+   "test": "none (t1f#6)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 984,
+   "stops": "A chain that mixes refuses without the session's collateral (M30)",
+   "test": "lovejoin_test a_bootstrap_with_no_collateral_deposits_and_sweeps_back, by its words; core's chain_across still refuses the same chain"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 950,
+   "stops": "Token totals for box counts are summed in u128 (M31)",
+   "test": "none (t1f#9)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2273,
+   "stops": "A public mix's need plus the token change's least ADA is checked_add (M32)",
+   "test": "none (t1f#10)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2209,
+   "stops": "The public account's collateral is never spent by a public deposit (M33a), Mix again's payer at :2493 (M33b), or a paid withdraw's payer at :2777 (M33c)",
+   "test": "none (t1f#11)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 1620,
+   "stops": ".min(ours.len()) bounds &ours[..boxes], in again at :1620 (M34a) and in the public again at :2480 (M34b)",
+   "test": "lovejoin_test and lovejoin_mainnet_test a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit (M34a); lovejoin_test the_public_account_mixes_its_own_boxes_again_signed_by_the_keys_it_spends (M34b). Both fail on the slice panic"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2665,
+   "stops": "A withdraw takes only a box the Seedelf key owns (M35)",
+   "test": "lovejoin_test the_boxes_come_back_one_by_one_through_giveme_my (core's withdraw_with then refuses the stranger's box)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2898,
+   "stops": "withdraw_private_in pays only from an ADA-only (M36a), evaluable (M36d) UTxO whose register the key owns (M36b); a too-small one is passed over (M36c); core takes the reward balance only on success (M36e, in core's withdraw_with)",
+   "test": "lovejoin_flows_test the_private_balance_passes_over_what_cant_pay_and_takes_the_next, none_of_the_private_balance_paying_says_so_in_fixed_words (M36a-d). Core lovejoin_pools_test a_withdraw_refused_after_it_read_the_balance_takes_none, core lovejoin_test a_reward_balance_past_what_a_u64_holds_is_refused_in_words (M36e)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 3028,
+   "stops": "giveme.my's signature is verified against the body hash before it's added (M37)",
+   "test": "lovejoin_test the_boxes_come_back_one_by_one_through_giveme_my"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 1247,
+   "stops": "A chain across pools never names one pool twice (M38a) nor two pools of one token (M38b)",
+   "test": "none (t1f#12; each check is masked by the other in the only test)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 121,
+   "stops": "A reward balance whose hash isn't 28 bytes (M39a) or whose amount isn't a u64 (M39b) is refused",
+   "test": "lovejoin_test a_reward_balance_is_read_in_words_or_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 239,
+   "stops": "A token pool is trusted only once verify_pool checks its NFT policy (M40a, core pool.rs:411) and its datum's script hashes (M40b, core pool.rs:414-419); script rows with unreadable datums are skipped first (M40c, :195)",
+   "test": "M40a: wasm lovejoin_pools_test a_pool_without_its_launchs_seed_isnt_trusted, and core lovejoin_pools_test verify_pool_refuses_what_isnt_a_genuine_token_pool. M40b: core's verify_pool_refuses_what_isnt_a_genuine_token_pool only. M40c: none (t1f#2)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 4232,
+   "stops": "No new box into a retired pool. T1: takesNewBoxes' check. T5: usableNow's (4199). T15: both. T2: isRetired false (691). T3: adaPoolOf's (702). T4: tailChain's (4478). T6: publicBuild's (4857). T7: publicAgainBuild's (5015). T8: chain's again (3691)",
+   "test": "T1: lovejoin-retired 'refuses a mix, a Bootstrap and mixing again in the classic pool…', 'comes back directly from a 1.7 mix session…'; lovejoin-retire-review-fixes 'brings a 1.7 Mix my boxes again session back directly…'. T5: 'says so on its status…'. T15: 5 tests. T3: 5 tests incl. 'mixes its collateral in v2's 5 ₳ pool alone, never 1.7's'. T4: 'ends a 1.7 collateral's mix left to build in 1.7's 5 ₳ pool…'. T6, T7: 'is refused before anything is read…ask Koios nothing'. T8: 'brings a 1.7 Mix my boxes again session back directly…'. T2: 41 tests"
+  }
+ ],
+ "checked_ok": [
+  "cip30.rs:1145 (size cap): a_transaction_far_larger_than_cardano_allows_is_refused fails, unwrap_err on an Ok summary of the 78 KB tx.",
+  "cip30.rs:680 (nesting): all three named tests fail; the deep data decodes to an Ok summary instead of the nesting refusal.",
+  "cip30.rs:1161 (network_id): the_other_network_is_refused fails at :1092 (is_err).",
+  "cip30.rs:1201 (row network): a_utxo_on_the_other_network_is_never_spent fails (Ok, net −1,000 ₳).",
+  "cip30.rs:1210 (owner by stake key): an_input_at_the_stake_keys_own_address_is_the_accounts (own_inputs 0, 'enterprise') and collateral_at_the_stake_keys_own_address_is_the_accounts both fail; by DRep key, an_input_at_the_drep_keys_own_address_is_the_accounts_only_with_governance fails.",
+  "cip30.rs:1312 (collateral return to someone else): a_collateral_return_to_someone_else_is_refused fails (Ok).",
+  "cip30.rs:1301 (collateral return network): a_byron_address_on_the_other_network_is_refused fails. It asserts the network refusal's own words, including a return to the account's keys on mainnet.",
+  "cip30.rs:1321 (at_risk's subtraction): a_collateral_return_to_someone_else_is_refused ('4000000' against '300000') and collateral_at_the_stake_keys_own_address_is_the_accounts ('5000000' against '500000') fail.",
+  "cip30.rs:1330 (marked to fail): collateral_at_the_stake_keys_own_address_is_the_accounts fails at :1049 (sign_tx no longer refuses).",
+  "cip30.rs:1362 (output network): a_byron_address_on_the_other_network_is_refused and the_other_network_is_refused fail.",
+  "cip30.rs:503 (own_address): the_accounts_key_under_someone_elses_staking_is_someone_elses_address fails for any stake key, for any staking part, and for the ownPaymentKey flag dropped.",
+  "cip30.rs:1507 (pool owner): a_pool_that_makes_the_accounts_stake_key_its_owner_is_refused fails (Ok).",
+  "cip30.rs:1619: without the refusal, an_old_deregistration_of_the_accounts_stake_key_is_refused_without_its_deposit fails; without the refund, an_old_deregistration_with_the_keys_deposit_is_counted_as_conways fails (net '-200000').",
+  "cip30.rs:1685 (proposal network): a_proposal_whose_deposit_goes_back_on_the_other_network_is_refused fails.",
+  "cip30.rs:1792 (unfound inputs): a_payment_key_never_signs_for_an_input_the_wallet_cant_find fails for the payment key; the_drep_key_never_signs_over_an_input_the_wallet_cant_find fails for the DRep key.",
+  "cip30.rs:1816 (tied): the_stake_key_never_signs_what_could_be_the_other_networks fails.",
+  "cip30.rs:1822 (staking in the net): rewards_paid_to_someone_else_are_what_the_account_sends ('1,000.2 ₳ leave'), a_deposit_refund_paid_to_someone_else_is_what_the_account_sends and retiring_the_accounts_drep_counts_its_deposit_back each fail for their part.",
+  "cip30.rs:387 (read_value cap): read_value_test an_amount_naming_more_is_refused_as_it_is_read fails.",
+  "cip30.rs:2017 (raw_map): a_count_the_bytes_cant_hold_is_refused_not_made_room_for fails with 'capacity overflow'.",
+  "cip30.rs:1958 (partialSign): someone_elses_input_needs_partial_signing fails (signed).",
+  "decode.rs:628 (trailing bytes): decode_test hostile_bytes_are_refused fails ('bytes after the end was read as a transaction'). Pallas's decode_fragment accepts the trailing byte, so this check is load-bearing.",
+  "lovejoin.rs:369 (draws): without avoid, the_collateral_never_draws_a_box_its_chain_drew fails; with own boxes drawn, the_collateral_comes_back_with_the_rest_where_its_mix_cant_be_built fails at :1857.",
+  "lovejoin.rs:1039 (own token UTxOs only): lovejoin_across_test a_return_plans_its_token_boxes_first_then_its_ada (legs[0] 3, expected 0) and lovejoin_flows_test a_mix_session_deposits_its_token_and_brings_back_what_the_boxes_dont_take (boxes 2, expected 1) fail.",
+  "lovejoin.rs:984 (mixes_collateral): a_bootstrap_with_no_collateral_deposits_and_sweeps_back fails on the refusal's words. core's chain_across still refuses ('A chain that mixes needs collateral'), so the behaviour holds in two places.",
+  "lovejoin.rs:1620 and :2480 (.min(ours.len())): a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit (lovejoin_test and lovejoin_mainnet_test) and the_public_account_mixes_its_own_boxes_again_signed_by_the_keys_it_spends fail on 'range end index 2 out of range for slice of length 0', the trap the guard prevents.",
+  "lovejoin.rs:2665 (our_box): the_boxes_come_back_one_by_one_through_giveme_my fails; core's withdraw_with refuses 'A box to withdraw isn't this wallet's'.",
+  "lovejoin.rs:2898 (withdraw_private_in): token payer, unevaluable payer, anyone's register, and too-small not passed over each fail lovejoin_flows_test's the_private_balance_passes_over_what_cant_pay_and_takes_the_next (and, but for the unevaluable one, none_of_the_private_balance_paying_says_so_in_fixed_words). The balance taken before success (core) fails core's a_withdraw_refused_after_it_read_the_balance_takes_none and a_reward_balance_past_what_a_u64_holds_is_refused_in_words.",
+  "lovejoin.rs:3028 (giveme.my check): the_boxes_come_back_one_by_one_through_giveme_my fails at :682; a stranger's signature is accepted.",
+  "lovejoin.rs:121 (reward balance): a_reward_balance_is_read_in_words_or_refused fails for a short hash and for an amount past u64.",
+  "lovejoin.rs:239 (verify_pool): the NFT policy check fails wasm's a_pool_without_its_launchs_seed_isnt_trusted and core's verify_pool_refuses_what_isnt_a_genuine_token_pool. The datum's script-hash check fails only core's verify_pool_refuses_what_isnt_a_genuine_token_pool.",
+  "lovejoin.ts retired pools: every one of the 9 mutants fails at least one test in lovejoin-retired.test.ts or lovejoin-retire-review-fixes.test.ts. The failures are assertion failures (a pool chosen, a refusal's words, a status), not timeouts. The copy's lovejoin.ts was restored to pristine after each."
+ ],
+ "notes": [
+  "How the runs worked:\n- Every Rust mutant was compiled once into the copy, each behind its own switch `crate::r51(\"<id>\")` that reads R51_MUT and is off by default.\n- A control run with every switch off matched the clean baseline exactly: 14 binaries, same counts.\n- Each mutant then ran alone (R51_MUT=<id>); the evidence quotes each change as the plain code edit.\n- The checked-sum mutants use wrapping_add, which is what the shipped module does: seedelf-wasm has no overflow checks in wasm-release. Tests run in the dev profile.\n- TypeScript mutants were applied to the copy's lovejoin.ts from a pristine backup, run through Vitest, and restored after each run.\n- 76 mutants in all: 35 in cip30.rs and decode.rs, 29 in wasm lovejoin.rs, 3 in seedelf-core, 9 in lovejoin.ts.",
+  "Lane W3's lovejoin.ts:4232 entry says takesNewBoxes is the only refusal of new boxes into a retired pool. It isn't:\n- usableNow (4199) refuses a retired pool too, which masks takesNewBoxes' own check wherever pool.ref is set.\n- publicBuild (4857) and publicAgainBuild (5015) check isRetired themselves.\n- chain() (3691) sends a retired pool's Mix again to takesNewBoxes.\nAll of these, adaPoolOf and tailChain are pinned by the retire tests.",
+  "raw_vkeys' Vec::new (cip30.rs:2041) is an equivalent mutant, so no test can or needs to catch it. Both of raw_vkeys' callers pass bytes that raw_item has already skipped whole, so a count can't exceed its bytes. The guard that matters, raw_map's, is caught.",
+  "Masked or doubled guards:\n- protocols_of's two checks: each is masked by the other in the only test (t1f#12).\n- mixes_collateral (lovejoin.rs:984): caught only by its words; core refuses the same chain.\n- our_box (2665): caught because core's withdraw_with checks ownership again.\n- verify_pool's datum script-hash check: pinned only by seedelf-core's test. The wasm tests the lane named don't fail without it.\n- fits_collateral's token condition: Coin::from_row refuses a token row anyway, so without it the tail is dropped (`.ok()`) rather than built wrong.",
+  "For the owner: the stack overflow behind 314-wasm#0 (a hostile pool's deep datum at the holder) is now stopped in core: eval::resolve_reference checks unreadable_datum before decoding. The skip at lovejoin.rs:195 is what keeps such a pool readable instead of refused; t1f#2 pins it. Discovery takes a pool's script rows only from its launch transaction (lovejoin-pools.ts:509 and :585), so only the pool-launcher can plant one.",
+  "For the Lovejoin/privacy lanes, a doubt I traced but didn't run: direct_tail (lovejoin.rs:434-437) takes the FIRST session UTxO that fits_collateral accepts. It doesn't use the session's named collateral, as the chain's path does. A stranger's plain 5 ₳ ADA-only UTxO, listed before the session's own collateral, would be boxed in its place. The session's collateral would then pay as a coin and its ADA come back through the change, unmixed. That's a privacy downgrade a stranger buys for 5 ₳ (which becomes the user's). It's worth checking against independent review L20 and the worker's collateralFits.",
+  "Two copy-only tests, written as fix suggestions and not in TREE, ran in the copy. Both pass on the original and fail under their mutant:\n- r51_t1f_1.rs, for t1f#1. With M14 on it prints `signed by [\"stake\"], net 0 lovelace, certificates 1, complete false`.\n- r51_t1f_2.rs, for t1f#2. With M40c on: Err 'UTxO e7…#0 holds a datum the wallet can't read'.\nTheir bodies, rewritten against cip30_test.rs's and lovejoin_pools_test.rs's own helpers, are in each finding's fix. The copy and both files are deleted.",
+  "Not run, on purpose:\n- the .mjs wasm tests (they load the tree's unrebuilt wasm/pkg, so no Rust mutant reaches them)\n- other verifiers' r51_* tests in TREE\n- seedelf-verification (only four .hex data files were copied, so lovejoin_proven_bytes_test compiles)\nOther agents were running full suites at the same time (load average about 96 on 12 cores), so api_test took 3-4 minutes a run. I stopped the second follow-up queue (api_test and session_test for M38a, M38b, M40c, M24a, M24b) and didn't start one for M24c, M24d and M25. Neither binary can reach that code: lib.rs reaches the wasm lovejoin module only through direct_tail, behind collateral_pool: Some, and their requests never set it.",
+  "Cleanup done: $HOME/.cache/seedelf-review-51/T1f and $HOME/.cache/seedelf-review-51/T1f-target are removed. TREE has no tracked changes from this lane. The scratch run logs under SCRATCH/r51/work/T1f/runs are on tmpfs."
+ ],
+ "coverage": "I tried every guard in W2 (23 entries, cip30.rs and decode.rs) and W3 (18 entries, wasm lovejoin.rs and extension lovejoin.ts). The two lanes share no guard, so there were no duplicates to merge; 41 guards in all. Several were split into sub-mutants, one per condition: at_risk ×2, owner ×2, own_address ×3, old dereg ×2, unfound inputs ×2, net ×4, checked sums ×3, raw_map/raw_vkeys ×2, fits_collateral ×4, draws ×2, not_collateral ×3, min(ours.len()) ×2, withdraw_private_in ×5 (one in core), protocols_of ×2, reward balance ×2, verify_pool ×3 (two in core), retired pool ×9.\n\nOrder: the guards with no named test first (cip30.rs:137, 1321's mixed case, 1641; lovejoin.rs:286, 1025, 1039, 1059, 950, 2273, 2209, 1620, 2898, 3028, 1247, 239; lovejoin.ts:4232). Then the site and stranger inputs, then the rest.\n\nTests run per mutant:\n- cip30 mutants: every native binary that reaches cip30 (cip30_test, session_test, read_value_test, decode_test, lib), named tests first.\n- wasm lovejoin mutants: lovejoin_test, lovejoin_across_test, lovejoin_flows_test, lovejoin_mainnet_test, lovejoin_pools_test, lovejoin_proven_bytes_test, lovejoin_v2_fixture_test, return_cost_test and lib. For M27, M29, M31, M32 and M33a-c, also api_test and session_test.\n- core mutants: core's own lovejoin tests (lovejoin_test, lovejoin_pools_test, lovejoin_mainnet_test, lovejoin_planner_test, lovejoin_launch_test, lovejoin_vectors_test, lovejoin_box_value_test, lib) plus the wasm lovejoin set.\n- TypeScript mutants: Vitest on lovejoin-retired.test.ts, lovejoin-round2-retire.test.ts and lovejoin-retire-review-fixes.test.ts.\n\nNot done:\n- api_test and session_test for M24a-d, M25, M38a/b and M40c. They're stopped or not started; both binaries can't reach that code (traced).\n- Any Rust guard through the extension's WebAssembly (.mjs tests on the unrebuilt pkg), per the task.\n- core's lovejoin_width_test and lovejoin_live_test (live Koios, ignored).\n\nEvery guard was tried, and none was left out for time."
+}

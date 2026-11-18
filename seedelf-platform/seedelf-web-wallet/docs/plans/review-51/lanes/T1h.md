@@ -1,0 +1,359 @@
+# Lane T1h
+
+Returned by the workflow's agent `a49401205cf7ba523`, written here by the lead from its structured answer.
+
+## Findings (12)
+
+### t1h#1 · low · A runner-signed session transaction carrying a governance proposal, a certificate, a vote or a non-direct withdrawal: no test fails without it
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6867`
+- **Who:** site · **Since:** e7d411ee (chunk 15b, 2026-09-24, before the first web-wallet tag); its proposals clause became `s.proposals.length` in ce53ba62 (web-wallet/1.7.2) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+refuseOddities' staking/governance clause is all that stops the runner signing such a transaction. A swap Minswap's aggregator builds, or a cancel, could carry a proposal procedure, whose deposit takes no signature and goes back later to a reward address the builder picks (shared/rpc.ts `proposals`), or a witness-free certificate. withinFunding counts only outputs paid to others plus the fee, never a deposit, so a large session's order swap could put part of its funding into a proposal deposit (100,000 ADA on mainnet), with the order made smaller to match. The clause is there. But in all 194 test files that reach sessions.ts, no session transaction has certificates, withdrawals off the direct path, votes or proposals, so deleting the clause passes every test. who: Minswap's aggregator, a third party handing the session a transaction to sign; `site` is the nearest of the five actors.
+
+**Evidence:**
+
+Change (sessions.ts:6867): `if (s.certificates.length || (s.withdrawals.length && !allow.direct) || s.votes || s.proposals.length) {` -> `if (false) {`. Probe pass in a separate copy: the condition wrapped in a logging call that returns its value unchanged, then all 194 test files whose imports reach sessions.ts/parts.ts/collateral.ts/runs.ts run once (2,493 passed, 4 skipped, 0 failed). The probe never logged true in any test. Combined mutant (this one plus 10 other unreached mutants of sessions.ts, applied at once) over the union of their named test files (18 files): 430 passed, and 6 timed out under load (load average 60-85). Those 6 were re-run under the same mutant with their limits raised, and all passed. withinFunding (sessions.ts:6571-6583) sums only `paid` and `fee`.
+
+**Fix:**
+
+Add a case to sessions.test.ts beside 'pauses rather than sign a swap that gives ADA to the treasury'. Its swapTx fixture gets a proposal procedure, and in other runs a stake registration certificate, a vote, or a withdrawal on the order path. Expect `paused` {why: 'refused'} with sess.refuse.warn.staking's words, and t.koios.submitted at length 1 (the funding only). Add one for the wallet's own cancel (of = 'cancel') too.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for refuseOddities, sess.refuse.warn.staking, 'no test', unpinned and proposals. refuseOddities appears only as design in chunk-15b-swap-runner.md and chunk-24-dapp-additions.md. review-1.7.2.md's proposal items concern a site's sign window, not this check. No test gap is recorded for it.
+
+### t1h#2 · low · A fee-sized output carrying the session's tokens taken as Minswap's fee: no test fails without it
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6697`
+- **Who:** site · **Since:** by web-wallet/1.6.0 (line last changed in ab5695a3, 2026-09-27, 'Minswap's fee may go to a contract') · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+In checkOrder, the one output that may be Minswap's fee must be ADA alone (`!o.tokens`). Without that, in a swap selling a token, Minswap's transaction could add an output to any address holding no more ADA than the quoted aggregator fee plus some of the session's tokens. checkOrder would take it as the fee, and withinFunding bounds only the total tokens paid out to the funded amount, a check no test pins either (t1h#3). So tokens meant for the order could go to that output instead. No test builds a fee-sized output that carries tokens.
+
+**Evidence:**
+
+Change (sessions.ts:6697): `if (!fee && !o.tokens && o.lovelace <= aggregatorFee) {` -> `if (!fee && o.lovelace <= aggregatorFee) {`. Probe: `!o.tokens` wrapped (evaluated only once no fee has been taken). In the 194 related test files it was never false, so no fee candidate in any test carries tokens. Solo mutant run on sessions.test.ts, the lane's named file: 60 passed and 1 timed out at its own 30 s limit. That test, 'pauses rather than sign a swap that pays anyone but the session, an order made out to it, and Minswap's quoted fee', was re-run under the mutant with its limit raised to 600 s, and it passed.
+
+**Fix:**
+
+In sessions.test.ts 'pauses rather than sign a swap that pays anyone but the session…', add a swapTx whose extra output holds 1,000,000 lovelace (the quoted fee) plus some of the MIN token. Expect 'it pays an address that isn't this session's.' and nothing signed.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for checkOrder, aggregatorFee, 'fee carrying tokens', 'no test' and unpinned. chunk-47-minswap-new-routes.md mentions withinFunding only as automatic. Nothing records this gap.
+
+### t1h#3 · low · An order swap paying out more of a token than was funded: no test fails without it
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6581`
+- **Who:** site · **Since:** by web-wallet/1.6.0 (line last changed in 5f7348bf, 2026-10-04, wording); withinFunding since e7d411ee (chunk 15b) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+withinFunding's token half refuses an order swap whose outputs to others (orders plus fee) carry more of a token than the approval funded, or any token that wasn't funded. Leftovers of an earlier fill sitting at the account would be the user's own. Its ADA half is pinned ('pauses rather than sign a swap that pays out more than was funded for it'). No test reaches the token half: every order swap in the tests is funded in ADA or pays out exactly the funded token.
+
+**Evidence:**
+
+Change (sessions.ts:6581): `if (!funded || quantity > BigInt(funded.quantity)) throw new Refused(t("sess.refuse.warn.moreTokens"));` -> `` (deleted). Probe: that condition was never true in any of the 194 related test files. Combined-mutant run as in t1h#1: 430 passed, and the 6 load timeouts passed on re-run.
+
+**Fix:**
+
+Add a sessions.test.ts case for a token-in session (ask.tokenIn = MIN). Minswap's swapCbor places an order carrying more MIN than quote.fund.tokens. In a second variant, its order output carries a token the funding doesn't have. Expect paused {why: 'refused'} with sess.refuse.warn.moreTokens's words, and only the funding submitted.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for withinFunding, moreTokens, 'more of a token' and 'no test'. withinFunding appears in chunk-15b and chunk-47 as design. No test gap is recorded.
+
+### t1h#4 · low · A second fee-sized output taken as Minswap's fee: no test fails without it
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6697`
+- **Who:** site · **Since:** by web-wallet/1.6.0 (line last changed in ab5695a3, 2026-09-27) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+checkOrder takes at most one output as Minswap's fee (`!fee`). Without that, Minswap's transaction could pay several outputs to any addresses, each holding up to the quoted aggregator fee, and every one would pass as the fee. withinFunding still caps the ADA paid out at the funding, so the extra fees come out of the funded costs and the session gets less back. No test has two fee-sized outputs.
+
+**Evidence:**
+
+Change (sessions.ts:6697): `if (!fee && !o.tokens && o.lovelace <= aggregatorFee) {` -> `if (!o.tokens && o.lovelace <= aggregatorFee) {`. Probe: `!fee` was never false in any of the 194 related test files, so no second fee candidate came up. Combined-mutant run as in t1h#1: all pass.
+
+**Fix:**
+
+In the same sessions.test.ts test, add swapTx({ outputs: [[ORDER_ADDRESS, …, ORDER_DATUM], [other, 1_000_000], [other2, 1_000_000], [SESSION_ADDRESS, …]] }) with the quoted fee at 1000000. Expect 'it pays an address that isn't this session's.'
+
+**Known check:**
+
+Same search as t1h#2: nothing records it.
+
+### t1h#5 · low · A session transaction that mints or burns: no test fails without it
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6870`
+- **Who:** site · **Since:** e7d411ee (chunk 15b, 2026-09-24) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+refuseOddities alone refuses a swap or cancel whose body mints or burns. withinFunding counts only tokens paid to others, so a burn under a policy anyone may run (an always-succeeding script) could destroy tokens at the session's account without counting as paid. Since no session transaction in the tests has a mint field, deleting the check passes every test.
+
+**Evidence:**
+
+Change (sessions.ts:6870): `if (s.mint.length) throw new Refused(t("sess.refuse.warn.mints"), of);` -> `` (deleted). Probe: `s.mint.length` was never non-zero in any of the 194 related test files. Combined-mutant run as in t1h#1: all pass.
+
+**Fix:**
+
+Add a sessions.test.ts case where Minswap's swapCbor has a mint field (a mint, and in a second run a burn of a token the session holds). Expect paused {why: 'refused'} with sess.refuse.warn.mints's words, and nothing signed.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for sess.refuse.warn.mints, refuseOddities, mint and 'no test': nothing about this check.
+
+### t1h#6 · low · A stranger's exactly-5-ADA UTxO carrying tokens put up as a chain's collateral: no test fails without it
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:1053`
+- **Who:** stranger · **Since:** by web-wallet/1.6.0 (10f19f40, 2026-09-27, 'a return's chain never puts up a stranger's 5 ADA carrying a datum') · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+Anyone can pay a session's one-time account, including exactly 5 ADA plus tokens. The chain takes its funding's own 5 ADA first (sessions.ts:4625), and any fitting UTxO only once that one is gone, for example after a site's transaction or an earlier return spent it. collateralFits' `!u.asset_list?.length` is what keeps the stranger's token-carrying 5 ADA from standing in. No test puts a 5 ADA UTxO with tokens at a session's account, so the clause can go with every test passing. The clause's siblings for a reference script and an inline datum are pinned. What the chain would do with a token-carrying collateral is untested either way.
+
+**Evidence:**
+
+Change (sessions.ts:1053): ` && !u.asset_list?.length` removed from `return BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && …`. Probe: the token test, evaluated only for exactly-5-ADA rows, was never true in any of the 194 related test files. Combined-mutant run over session-collateral.test.ts, lovejoin.test.ts and 16 more: all pass (430, plus the 6 re-run after load timeouts).
+
+**Fix:**
+
+Add a case to session-collateral.test.ts like 'says why when the only 5 ADA there carries a datum'. Spend the session's own 5 ADA (t.koios.spent.add of its outpoint), and unshift a stranger's 5 ADA with an asset_list entry. Expect backBuild's review to have no lovejoin and lovejoinSkipped matching /5 ADA collateral isn't at its account/.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for collateralFits, 'stranger's 5', asset_list and 'no test'. chunk-34-token-pools.md:1062 is about a box of money, not this clause. Not recorded.
+
+### t1h#7 · low · A stranger's 5 ADA with a datum by hash put up as a chain's collateral: no test fails without it
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:1053`
+- **Who:** stranger · **Since:** by web-wallet/1.6.0 (10f19f40, 2026-09-27) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+collateralFits refuses a 5 ADA UTxO with a datum by hash, whose datum the evaluator can't find (its comment, after independent review L20). The test that lists one, session-collateral.test.ts 'never puts up a stranger's 5 ADA carrying a datum, listed first, over the session's own 5 ADA', still holds the session's own funding 5 ADA. The chain prefers that one (sessions.ts:4625), so whether the hashed UTxO fits never changes what is put up. The test asserts only that the return still goes through Lovejoin. Its sibling, 'says why when the only 5 ADA there carries a datum', uses only an inline datum. So the datum-hash clause is reached but never decides anything a test checks.
+
+**Evidence:**
+
+Change (sessions.ts:1053): ` && !u.datum_hash` removed. Probe: the clause was true only in that first session-collateral test, of all 194 related test files. Mutant run with -t on that test: passed. Then the whole file without -t: 4 of 4 passed. Its inline-datum sibling (` && !u.inline_datum` removed) is caught by the same test: 'expected the wallet couldn't build its chain:… to be undefined'.
+
+**Fix:**
+
+In session-collateral.test.ts, add a case where the only 5 ADA left is the stranger's with datum_hash: 'ee'.repeat(32), and the session's own is spent. Expect lovejoinSkipped about the missing 5 ADA collateral. Or assert, in the existing test, that the built chain's collateral input is the session's own outpoint.
+
+**Known check:**
+
+Same search as t1h#6; not recorded.
+
+### t1h#8 · low · A second 'Mix my boxes again' sent while one may still spend the same boxes: no test fails without the Send-time check
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2322`
+- **Who:** user · **Since:** by web-wallet/1.6.0 (line last changed in e90efff5, 2026-10-02) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+againBuild refuses a second again-mix once one is recorded (sessions.ts:2208, pinned by lovejoin.test.ts). Review isn't in the queue, though. One built while the first one's Send is still recording passes that check, and its kept review then replaces the first's. At Send, only mixOutSubmit's own check stops its session being recorded and its funding sent beside a chain that spends the same boxes. Only one of the two chains can take them, and the other session's money waits to come back, with fees. No test builds a second again-mix that overlaps the first's Send.
+
+**Evidence:**
+
+Change (sessions.ts:2322): `if (built.mix.again && book.sessions.some(mixingAgain)) throw new Error(t("sess.mixingAgain"));` -> `` (deleted). Probe: that condition was never true in any of the 194 related test files. Combined-mutant run as in t1h#1 (lovejoin.test.ts included): all pass.
+
+**Fix:**
+
+Add a lovejoin.test.ts case: start mixOutSubmit for mix A and, before it resolves, call againBuild (the A record isn't written yet, so it passes). Then Send B. Expect sess.mixingAgain, no second session in the book, and nothing more submitted.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for mixingAgain, 'Mix my boxes again' and 'no test'. chunk-16-lovejoin.md:449 describes the rule only.
+
+### t1h#9 · low · A top-up review older than BUILT_TTL_MS recorded before Send refuses it: no test fails without it
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2406`
+- **Who:** user · **Since:** by web-wallet/1.6.0 (d423b79a, 2026-10-05) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+topUpSubmit refuses a top-up reviewed more than 10 minutes ago before recording anything. Without that, the top-up would go into the session's record (outRecord, update). Then send()'s own age check (script-spend.ts:393-395) would refuse it, and markUnsent would mark it unsent: a turned-away top-up in the session's record, and possibly the other message. No money moves either way. No test sends a top-up past its review's age.
+
+**Evidence:**
+
+Change (sessions.ts:2406): `if (!again && now() - built.builtAt > BUILT_TTL_MS) {` -> `if (false) {`. Probe: that condition was never true in any of the 194 related test files. Combined-mutant run as in t1h#1 (restore-scan.test.ts and session-top-up-again.test.ts, the lane's named files, included): all pass.
+
+**Fix:**
+
+Add a session-top-up-again.test.ts case: collateralTopUp, clock += BUILT_TTL_MS + 1, topUpSubmit. Expect a StaleReviewError (sess.topUpTooOld), no new entry in the session's txs, and nothing submitted.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for topUpTooOld, BUILT_TTL_MS and 'too old': nothing for this check.
+
+### t1h#10 · low · A funding or top-up that Koios answered with another transaction's id marked never sent: no test fails without markUnsent's maybe-sent exception
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:3030`
+- **Who:** nobody · **Since:** by web-wallet/1.6.0 (d423b79a, 2026-10-05) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+markUnsent keeps a failed funding or top-up 'on its way' when Koios didn't answer it (maybeSent) or a lock cut it off. The lock half is pinned. The maybe-sent half can only fire on one path: submitWatched turns every unanswered submit into a maybe-sent return, never a throw (pending.ts:478), so the only maybe-sent error that reaches markUnsent is otherTxId (pending.ts:496-500), raised when Koios's submit answers with a different transaction's id. Marked unsent, such a funding would show as failed, and Forget could drop a record whose funding may land. No test has Koios answer another id.
+
+**Evidence:**
+
+Change (sessions.ts:3030): `if (maybeSent(e) || e instanceof WalletLocked) return;` -> `if (e instanceof WalletLocked) return;`. Probe: maybeSent(e) was never true here in any of the 194 related test files (the WalletLocked half was, in sessions-sent-twice.test.ts). Every KoiosBusyError is thrown at a submit (koios.ts:1199-1282, data-layer.ts:405-418) or on another id (pending.ts:500, sessions.ts:5614). Combined-mutant run as in t1h#1 (the lane-less guard's 10 candidate files included): all pass. The lock half's mutant is caught by sessions-sent-twice.test.ts 'Send again on a funding that went out never marks a funding Koios took unsent when the wallet locks…'.
+
+**Fix:**
+
+Add a sessions-sent-twice.test.ts case where the fake Koios submitTx returns another transaction's id for a session's funding. Expect the funding to have no `unsent`, the session not to show as failed, and forget to refuse it.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for markUnsent, otherTxId and 'another id': nothing.
+
+### t1h#11 · low · A swap signed when WebAssembly answers its cancel dry run for fewer orders than asked: no test fails without the length check
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:4288`
+- **Who:** nobody · **Since:** 5f7a405a (2026-10-08, the 1.3.0 release review's fixes; before the first web-wallet tag) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+cancelsChecked runs each order's cancel in WebAssembly (checkOrderCancels) before the swap is signed, so Stop can always bring the money back. `checked.length !== orders.length` refuses an answer covering fewer orders than asked: `every` over an empty answer is true. Only a WebAssembly bug could give such an answer, and no test fakes one.
+
+**Evidence:**
+
+Change (sessions.ts:4288): `if (checked.length !== orders.length || !checked.every(cancels)) {` -> `if (!checked.every(cancels)) {`. Probe: the length test was never true in any of the 194 related test files. Combined-mutant run as in t1h#1 (order-cancel-check.test.ts included): all pass. The rest of the check is pinned: without the whole condition, or the fee cap, order-cancel-check.test.ts fails.
+
+**Fix:**
+
+Add an order-cancel-check.test.ts case wrapping deps.wasm.checkOrderCancels to return { orders: [] }. Expect the swap paused with sess.refuse.warn.notCancellable's words, and nothing signed.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for checkOrderCancels and notCancellable. chunk-47 mentions checkOrderCancels as automatic. Nothing about the length check.
+
+### t1h#12 · low · A session swap or cancel sent whose signed bytes don't hash to the transaction inspected: no test fails without either check
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:4477`
+- **Who:** nobody · **Since:** e7d411ee (chunk 15b, 2026-09-24) for 4477; 4481 by web-wallet/1.6.0 (line last changed in e90efff5) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+signAndSend has two checks: that the signer's summary hash (sessions.ts:4477) and the witnessed bytes' id (4481) equal the txHash the checks passed. Together they keep the session's key from sending a transaction other than the one inspected: a kept request that no longer matches its body, or a witness set that changes the body. With the real WebAssembly the hashes always agree, and no test fakes a signer or attachWitnesses that changes the body, so both can be deleted with every test passing.
+
+**Evidence:**
+
+Changes, each its own mutant: (a) sessions.ts:4477 `if (signed.summary.txHash !== built.txHash) throw new Error(t("worker.spend.signingChanged"));` -> `` (deleted); (b) sessions.ts:4481 `if (txId(bytes) !== built.txHash) throw new Error(t("sess.witnessChanged"));` -> `` (deleted). Probes: both conditions were only ever false in the 194 related test files, and no test contains witnessChanged or signingChanged. Combined-mutant run with both deleted, over sessions, swap-runner, direct-swaps, order-cancel-check, sundae-orders, pool-swap-landing and 12 more: all pass (430, plus the 6 load timeouts re-run).
+
+**Fix:**
+
+Add a sessions.test.ts case for each check. One wraps deps.wasm.signSessionTx to return a summary with another txHash. The other wraps attachWitnesses to return other body bytes. Each expects the runner's step to fail with that check's words and t.koios.submitted to hold only the funding.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for signingChanged and witnessChanged: no mentions.
+
+## Guards (50)
+
+| Where | What it stops | Test |
+|---|---|---|
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:1331` | E2a#0 refuseStarted: a second Send of a funding that started a session, one sent whose record has gone, and a review whose index another funding took (stale) | a00h (record holds it, 1338): tests/sessions-sent-twice.test.ts 'Send again on a funding that went out says a swap's session was started already…'; a00s (sent, record gone, 1343) and a00i (index taken, 1344): tests/session-index-taken.test.ts |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6228` | E2a#1 stillUnused: funding a one-time account used since Review (stake or payment key on chain), and moving next past it | tests/session-index.test.ts: whole (6236), payment-key half, next moved (6239), and each call site 2140/2323/3151 deleted, all caught ('isn't sent to an account another browser funded after it was reviewed…', 'isn't sent to an account something was paid to meanwhile…', 'asks about a mix's account too') |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6201` | E2a#2 freshIndex: handing out an index the chain shows used, and asking about next alone first | tests/restore-scan.test.ts, for both mutants: used index handed out (6209), and a window of 20 asked first (6204) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2536` | E2a#3 disconnect while the session's return through Lovejoin is still being sent | tests/sessions.test.ts 'disconnecting a site's session waits for its return's chain through Lovejoin, and doesn't wait for what no return takes' (the lane found none) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2545` | E2a#4 disconnect while a funding, top-up or return may still land (recent, or in the watch) | whole and stillWatched half: tests/session-top-up-again.test.ts; the recent half: tests/sessions.test.ts 'disconnecting a site's session waits for its funding, and its return, to reach the chain…' (the named file passes without it) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2560` | E2a#5 disconnect while the account holds what a return takes | tests/dapp.test.ts 'private CIP-30: a site connected to a private session takes a top-up, and disconnects only once everything's back' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2567` | E2a#6 disconnect on an empty read Koios doesn't back up (ownGone) | tests/dapp.test.ts (same test as E2a#5) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:1551` | E2a#7 Forget of a session not failed (1551), whose funding the watch may still send (1555), or with an unspent output Koios knows (1563) | 1551 and 1555: tests/sessions.test.ts; 1563: tests/session-close.test.ts 'forgetting a swap whose funding never showed won't, once Koios knows its funding landed' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2404` | E2a#8 topUpSubmit: a second top-up, a stale or too-old review, and by hand a 5 ADA while a cancel or another 5 ADA is on its way | sent already (2404) and stale (2405): tests/sessions-sent-twice.test.ts; cancelling (2415) and another on its way (2416): tests/restore-scan.test.ts; too old (2406): none (t1h#9) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2450` | E2a#9 cancelCollateralBuild: 5 ADA for a cancel when it isn't by hand, a cancel is on its way, no order waits, a collateral is there or coming, or the cancel's dry run fails | tests/restore-scan.test.ts, for all six (2450, 2451, 2454, 2456, 2457, 2461) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2478` | E2a#10 backCollateralBuild: 5 ADA for Lovejoin's collateral when it isn't by hand, a cancel is on its way, an order waits, one is there or coming, or no mix wants it | tests/restore-scan.test.ts, for all six (2478, 2479, 2481, 2485, 2487, 2488) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:1052` | E2a#11 = E2b#19 collateralFits: a stranger's 5 ADA carrying tokens, a reference script or a datum taken as the chain's collateral | all four and the reference script: tests/lovejoin.test.ts 'never puts up a stranger's 5 ADA carrying a reference script as the chain's collateral'; inline datum: tests/session-collateral.test.ts; datum hash: none (t1h#7); tokens: none (t1h#6) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:1114` | E2a#12 fundingState: a funding in parts counted funded before every part landed, or a waiting part counted missed | funded early (1133): tests/collateral-reserve-review-fixes.test.ts (fx-promise); waiting part missed (1135): tests/sessions-review-fixes.test.ts (chained-funding-late-clock); the named files never reach either |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:3330` | E2a#13 claimBuildNow: Bring everything back building a return for a session that runs itself, or one whose order is open | runs itself (3330): tests/sessions.test.ts 'bring everything back returns each session that holds something in its own transaction…'; order open (3332): tests/restore-scan.test.ts |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:3277` | E2a#14 backBuildNow: a return while an order of the session's swap is open | tests/sessions.test.ts 'a private session won't sign a swap that spends anything but the session's, or bring a session back with an order…' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:3183` | E2a#15 swapBuild: a second swap beside one sent, or one given up that may have landed | beside one sent (3183): tests/session-resend-spent.test.ts; given up but maybe landed (3196): tests/pool-swap-landing.test.ts |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:1603` | E2a#16 quote: a route through a DEX the wallet can't check, or where the check can't follow it | unchecked DEX (1604): tests/swap-routes.test.ts; out of place (1608): tests/direct-swaps.test.ts 'Danogo routed (chunk 24) is refused in words of its own…' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:863` | E2a#17 quotesTheAsk (applied in routeOf, 902): approving the minimum of an estimate for another amount or other tokens | tests/swap-quote-ask.test.ts, both (the application dropped, and quotesTheAsk always true) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:1919` | E2a#18 outBuild: funding a swap into a token that isn't verified | tests/sessions.test.ts 'a swap's quote is verified only for ADA, a token the wallet lists, or one Minswap verifies by its ID…' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2322` | E2a#19 a second Mix my boxes again while one may spend the same boxes (mixOutSubmit 2322, againBuild 2208) | againBuild (2208): tests/lovejoin.test.ts 'mixing from the tile mixes the wallet's boxes again…'; mixOutSubmit (2322): none (t1h#8) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2818` | E2a#20 scanNow and recoveredRecords: 'nothing found' from a server behind (2818, 2890, 2946), and the phrase pin (2787) | tests/restore-scan.test.ts, for all four |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2950` | E2a#21 recoveredRecords: a stranger's payment, even from their own Seedelf UTxOs, counted as the found session's own | tests/restore-scan.test.ts 'a session funded in parts, found by the restore scan (x-scenarios-sessions#0) keeps a stranger's…' (filter at 2996 dropped) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:3030` | E2a#22 markUnsent: a funding or top-up Koios didn't answer, or a lock cut off, marked never sent | whole and the lock half: tests/sessions-sent-twice.test.ts 'Send again on a funding that went out never marks a funding Koios took unsent when the wallet locks…'; maybe-sent half: none (t1h#10) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/collateral.ts:82` | E2a#23 giveme.my's outage or limit (5xx, 429) said as a refusal, and a new review forced | whole and the 5xx half: tests/lovejoin-planner.test.ts 'a return's 5 ADA collateral mixed once into the 5 ADA pool asks a busy giveme.my again…'; tests/collateral.test.ts 'giveme.my client says why it refused, and when it can't be reached' fails on the whole too (the cache check); the 429 half: tests/collateral.test.ts (the lane found none) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/runs.ts:58` | E2a#24 a WebAssembly trap under the alarm's run left the wallet unlocked on a broken instance | tests/run-traps-review-fixes.test.ts 'a trap under the worker's runs locks the wallet, as a page's request does…', for both (always rethrow, and only trapped() dropped); the lane found none |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6571` | E2b#0 withinFunding: an order swap paying out (fee included) more ADA or tokens than funded | whole, ADA (6578), fee uncounted (6572) and the order's call (4174): tests/sessions.test.ts 'pauses rather than sign a swap that pays out more than was funded for it'; tokens (6581): none (t1h#3) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6659` | E2b#1 checkOrder: an order swap paying anyone but the session, its own cancellable orders under its stake part, and one fee no more than approved | key under another stake, someone else's order, another stake part, fee over quote, a key address, an uncancellable contract, no order: tests/sessions.test.ts 'pauses rather than sign a swap that pays anyone but the session…'; unreadable order: tests/order-cancel-check.test.ts; stake-signed on a shared stake: tests/sundae-orders.test.ts; a second fee and a fee with tokens: none (t1h#4, t1h#2) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6718` | E2b#2 directSpends: a direct swap spending anything but Danogo pools and an owner-signed collateral, the session's own as collateral, or a non-zero withdrawal | tests/direct-swaps.test.ts for own collateral, non-pool spend, unsigned collateral, any and non-zero withdrawal; unknown input (6727): tests/sessions.test.ts 'a private session won't sign a swap that spends anything but the session's…' (it fails on a TypeError) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6771` | E2b#3 checkDirect: the pools' script paid anywhere but where a spent pool was, or twice, a second fee, a fee over the quote | tests/direct-swaps.test.ts, for all five mutants |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6807` | E2b#4 checkProceeds: a direct swap giving the session less than the approved minimum (fee capped at MAX_DIRECT_FEE) | tests/direct-swaps.test.ts, for both (6814; the cap at 6809) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6826` | E2b#5 withinNet: a direct swap's net ADA over the funding, fees past the funded costs, more of a token than funded | tests/direct-swaps.test.ts, for all three |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6850` | E2b#6 refuseOddities: another key, staking or governance, a mint, an unknown input, a treasury donation | other signer, unknown input, incomplete (6858): tests/direct-swaps.test.ts; keys (6862): tests/sundae-orders.test.ts; treasury (6871): tests/sessions.test.ts 'gives ADA to the treasury'; staking/governance (6867) and mint (6870): none (t1h#1, t1h#5) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:4195` | E2b#7 cancel: Stop's own cancel paying anything out, or a fee over MAX_CANCEL_FEE | tests/sessions.test.ts 'cancels an order with the wallet's own cancel, everything back for a small fee, and pauses rather than sign one with a large fee', for both |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:4288` | E2b#8 cancelsChecked: signing a swap whose order no wallet-built cancel can spend within MAX_CANCEL_FEE | whole and the fee cap (4287): tests/order-cancel-check.test.ts; one answer per order: none (t1h#11) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:4158` | E2b#9 order: a fresh quote under the approved minimum (PriceMoved), and the slippage kept after a dip | PriceMoved: tests/session-resend-spent.test.ts (paused {why: 'price'}); the dip's slippage (4163): tests/sessions.test.ts 'pauses when the price moved past what was approved, and orders at least that…' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:4156` | E2b#10 order: a swap approved against Danogo's pools placed as an order (before and after build-tx) | tests/direct-swaps.test.ts, for both (4156, 4172) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:4477` | E2b#11 signAndSend: submitting a signed swap or cancel whose hash differs from the one inspected | none, for both checks (4477, 4481): t1h#12 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:3764` | E2b#12 act: swapping or mixing a funding in parts that's short of a part | tests/sessions-review-fixes.test.ts 'a waiting part's clock starts as the part goes…' (paused {why: 'short'}) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:3795` | E2b#13 act: closing a session before Koios shows its own outputs spent, while a replaced copy may land, or while an order may pay it | ownGone (3795): tests/session-close.test.ts; mayStillLand (3794): tests/sessions.test.ts; ordersOpen (3797): tests/splash-remnant.test.ts |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:5150` | E2b#14 refuseParts: a return spending what a payment's waiting parts will spend | tests/parts-send-review-fixes.test.ts 'refuses, sending none of it, a return through Lovejoin reviewed before the payment's Send…' (by wording: reserve() still refuses) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:5181` | E2b#15 sendChain: a reviewed chain whose inputs another wallet transaction spent since | tests/return-chain-scope.test.ts 'isn't sent when a transaction sent since its review spent what it spends…' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:5043` | E2b#16 fundingChange: a return merging a funding change a waiting part or another chain will spend | tests/parts-send-review-fixes.test.ts (the build throws 'Lovejoin's pool changed…' instead of the parts refusal) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6109` | E2b#17 partsMayGo: a waiting part going after Stop, a return, a close, a failure, or the record gone | tests/sessions-review-fixes.test.ts 'a funding's waiting part, asked before it goes, doesn't go once…', for the whole condition and each clause (closedAt, stopping, failed, returning, record gone); the named file never makes it refuse |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:5571` | E2b#18 sendRecorded: a session tx Koios didn't answer, or a resend refused as spent, taken for never sent | tests/session-resend-spent.test.ts 'a site's session's return sent again after Koios didn't answer stays maybe sent when the network refuses it as spent…', for both |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts:448` | E2b#20 step: a waiting part going without the session's leave (mayGo) or while another payment may still go through | tests/parts-send-review-fixes.test.ts, for both (mayGo at 448, settleMaybeSent at 454) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts:220` | E2b#21 splitParts: another build taking what the waiting parts spend (their reservation) | tests/parts-send-review-fixes.test.ts 'frees what a stopped worker's Send held once the first never shows' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts:503` | E2b#22 pumpParts: two pumps sending one part twice | tests/parts-send-review-fixes.test.ts 'runs one pump at a time: Home's poll while the alarm's run sends a part stops nothing' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts:632` | E2b#23 sendParts: Send pressed again on a maybe-sent first part re-sending parts the pump holds | tests/parts-send-review-fixes.test.ts 'sends only the first again once the rest wait, and says how many went…' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts:475` | E2b#24 step: a part that went being stopped as refused, or a refused one counted as went | tests/parts-send-review-fixes.test.ts, for both directions ('counts a part a stopped worker sent…'; 'lists nothing, and asks no second yes, once the parts stopped') |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts:441` | E2b#25 step: waiting parts going for ever after a parent that never shows | tests/parts-send-review-fixes.test.ts 'says a chain whose later part never showed went in part…' (the named payment-parts-chain.test.ts reaches it too; caught first in this file) |
+
+## Checked and holds
+
+- E2a#0 refuseStarted, all three checks: tests/sessions-sent-twice.test.ts (record holds it: wanted 'started already', got 'That payment isn't ready to send') and tests/session-index-taken.test.ts (sent with its record gone; index taken: not a StaleReviewError)
+- E2a#1 stillUnused, the whole check, its payment-key half, the move of next past a used index, and each of its three call sites: tests/session-index.test.ts
+- E2a#2 freshIndex, a used index handed out and a window of 20 asked first: tests/restore-scan.test.ts ('That one-time account was used meanwhile…'; 'expected [[…(20)]] to deeply equal [Array(1)]')
+- E2a#3 disconnect during a chain being sent: tests/sessions.test.ts (wanted 'still being sent', got 'The session's account still holds…'). The lane had found no test
+- E2a#4 disconnect while something may still land: tests/session-top-up-again.test.ts for the whole and the watch half; the recent half by tests/sessions.test.ts
+- E2a#5 and E2a#6 disconnect while the account holds something, and on an empty read Koios doesn't back up: tests/dapp.test.ts 'private CIP-30: a site connected to a private session takes a top-up, and disconnects only once everything's back'
+- E2a#7 Forget, all three checks: tests/sessions.test.ts (1551, 1555) and tests/session-close.test.ts (1563)
+- E2a#8 topUpSubmit, four of five checks: sent already and stale by tests/sessions-sent-twice.test.ts; cancelling and another 5 ADA on its way by tests/restore-scan.test.ts. Too old is t1h#9
+- E2a#9 cancelCollateralBuild and E2a#10 backCollateralBuild, all twelve checks: tests/restore-scan.test.ts
+- E2a#11/E2b#19 collateralFits, the whole check and its reference-script clause: tests/lovejoin.test.ts 'never puts up a stranger's 5 ADA carrying a reference script…'; inline datum: tests/session-collateral.test.ts. Datum hash and tokens are t1h#7 and t1h#6
+- E2a#12 fundingState, both cases: tests/collateral-reserve-review-fixes.test.ts and tests/sessions-review-fixes.test.ts
+- E2a#13 claimBuildNow: tests/sessions.test.ts (runs itself) and tests/restore-scan.test.ts (order open); E2a#14 backBuildNow: tests/sessions.test.ts
+- E2a#15 swapBuild: tests/session-resend-spent.test.ts (beside one sent) and tests/pool-swap-landing.test.ts (given up, maybe landed)
+- E2a#16 quote's route refusals: tests/swap-routes.test.ts and tests/direct-swaps.test.ts; E2a#17 quotesTheAsk, its use in routeOf and its body: tests/swap-quote-ask.test.ts
+- E2a#18 outBuild's verified-token check: tests/sessions.test.ts; E2a#19 againBuild's check: tests/lovejoin.test.ts (mixOutSubmit's is t1h#8)
+- E2a#20 the restore scan's server-behind checks and phrase pin, and E2a#21 a stranger's payment counted own: tests/restore-scan.test.ts
+- E2a#22 markUnsent, the whole exception and its lock half: tests/sessions-sent-twice.test.ts 'never marks a funding Koios took unsent when the wallet locks…' (the maybe-sent half is t1h#10)
+- E2a#23 giveme.my busy: tests/collateral.test.ts 'giveme.my client says why it refused, and when it can't be reached' (expected 'giveme' to be 'givemeBusy') and tests/lovejoin-planner.test.ts (a busy giveme.my asked again). The lane had found no test
+- E2a#24 the trap lock under the alarm's run: tests/run-traps-review-fixes.test.ts 'locks the wallet, as a page's request does…' (trapped not called; the trap escapes). The lane had found no test
+- E2b#0 withinFunding, ADA, fee and the order's call: tests/sessions.test.ts 'pauses rather than sign a swap that pays out more than was funded for it' (the token half is t1h#3)
+- E2b#1 checkOrder, nine of eleven checks: tests/sessions.test.ts 'pays anyone but the session…', tests/order-cancel-check.test.ts and tests/sundae-orders.test.ts. No order at all was caught once a load timeout was lifted ('expected undefined to be it places no order.' at sessions.test.ts:1273)
+- E2b#2 to E2b#5, directSpends, checkDirect, checkProceeds and withinNet, all sixteen mutants: tests/direct-swaps.test.ts (unknown input by tests/sessions.test.ts)
+- E2b#6 refuseOddities, other signer, keys and treasury: tests/direct-swaps.test.ts, tests/sundae-orders.test.ts and tests/sessions.test.ts
+- E2b#7 cancel, pays out and fee cap: tests/sessions.test.ts; E2b#8 cancelsChecked, whole and fee cap: tests/order-cancel-check.test.ts
+- E2b#9 PriceMoved: tests/session-resend-spent.test.ts; the dip's slippage: tests/sessions.test.ts (build-tx min_amount_out); E2b#10 againstPools, both: tests/direct-swaps.test.ts
+- E2b#12 act short of a part: tests/sessions-review-fixes.test.ts; E2b#13 act's three closing holds: tests/session-close.test.ts, tests/sessions.test.ts and tests/splash-remnant.test.ts
+- E2b#14 refuseParts and E2b#16 fundingChange: tests/parts-send-review-fixes.test.ts (by wording, see notes); E2b#15 sendChain spent since: tests/return-chain-scope.test.ts
+- E2b#17 partsMayGo, the whole condition and each of its five clauses: tests/sessions-review-fixes.test.ts; E2b#18 sendRecorded, both: tests/session-resend-spent.test.ts
+- E2b#20 to E2b#25 in parts.ts, all eight mutants: tests/parts-send-review-fixes.test.ts
+
+## Notes
+
+- Method. Each sub-check is its own mutant: 140 mutants over the 50 unique guards (E2a#11 = E2b#19). Phase 1 on the named tests was too slow under the machine's load (average 40-85 from every T1 lane), so after two runs (a03, a22) the work switched to probes. In a separate copy, every guard's condition was wrapped in a logging call that returns its value unchanged. All 194 test files whose import graph reaches sessions.ts, parts.ts, collateral.ts or runs.ts then ran once: 2,493 passed, 4 skipped, 0 failed, so the probes changed nothing. Each mutant then ran against the tests where its guard fires (named files first, -t and --bail=1). 127 were caught. The 12 that no test reaches were confirmed by one combined run of all of them over the union of their named files, plus b01ft alone. a11h, reached but never decisive, also ran its file whole.
+- Load noise, handled in the copies only: the per-test default timeout was raised to 30 s (from Vitest's 5 s), and failures that were timeouts alone never counted as caught. Three tests that set their own limits (sessions.test.ts:1277 30 s, lovejoin.test.ts:895 120 s, dapp.test.ts:368 30 s) timed out under load and were re-run under the same mutant with those limits raised. That turned b01n from a timeout into a catch, and confirmed the combined run and b01ft as passing.
+- The lanes' 'none found' guards: E2a#3 is pinned by sessions.test.ts, E2a#23 by collateral.test.ts and lovejoin-planner.test.ts, and E2a#24 by run-traps-review-fixes.test.ts. E2a#22's lock half is pinned by sessions-sent-twice.test.ts; its maybe-sent half (t1h#10) and E2b#11 (t1h#12) aren't.
+- Named tests that never reach their guard, per the probes: sessions-refused.test.ts (named for E2a#0) imports only a type from shared/rpc and never loads sessions.ts. payment-forms.test.ts likewise touches no guarded module. session-index.test.ts never has freshIndex meet a used index (E2a#2 is pinned by restore-scan.test.ts). site-funding-seen.test.ts and parts-send-review-fixes.test.ts never reach fundingState's two cases (E2a#12). parts-send-review-fixes.test.ts never makes partsMayGo refuse (E2b#17). restore-scan.test.ts and session-top-up-again.test.ts never reach topUpSubmit's sent-already or stale checks (E2a#8). sessions.test.ts never reaches act's ownGone and ordersOpen holds (E2b#13), refuseOddities' other-key and keys checks (E2b#6), or checkOrder's unreadable and stake-signed checks (E2b#1). Each is pinned elsewhere, as listed in guards. E2a#4's recent half is reached by the named session-top-up-again.test.ts, which passes without it; sessions.test.ts pins it.
+- Caught only by wording: removing these still leaves the transaction refused, by a later check or a crash, and the test fails only because the reason differs. checkOrder's b01k, b01f, b01a and b01c (another clause, or withinFunding, refuses the same transaction); refuseParts b14 and fundingChange b16 (reserve() still refuses, as 'Lovejoin's pool changed'); directSpends' unknown input b02u and topUpSubmit's stale check a08r (a TypeError instead of the refusal). A rewording that kept the tests' strings in step would hide their removal.
+- For the owner: the most consequential gap is t1h#1. withinFunding never counts a deposit, so for a swap that runs itself, refuseOddities' proposal/certificate clause alone keeps Minswap's build from moving part of a large funding into a governance proposal deposit returned to a reward address of the builder's choosing. The clause is present; only its test is missing. The token side of an order swap's check (t1h#2, t1h#3) is similarly untested end to end.
+- Not in E2a's or E2b's lists, so not tried: order()'s own route refusals (sessions.ts:4146-4151), swapBuild's (3203-3207), and sendChain's chain-on-its-way check (5174).
+- Nothing was written into TREE. TREE's one modified tracked file, review-51/INDEX.md, isn't mine. The copies (mutant, probe, combined) were removed. No Rust was built: none of these guards is in Rust. Vitest wrote its results cache into the shared node_modules/.vite, as the brief's symlink setup does for every T1 lane.
+
+## Coverage
+
+All 50 unique guards in E2a's and E2b's lists were tried: E2a's 25 and E2b's 26, with E2a#11 and E2b#19 merged. Every sub-check a lane named by line or clause is a mutant of its own, 140 in all, each in a copy, never in TREE. Every mutant has a verdict: 127 caught and 13 not caught. The 13 fall under 9 lane guards: E2a#8, E2a#11/E2b#19, E2a#19, E2a#22, E2b#0, E2b#1, E2b#6, E2b#8 and E2b#11. They are reported as 12 findings, since both signAndSend checks are one. No guard was left untried. Run scope: phase 1 ran a03 and a22 against their named or candidate files. Every other mutant ran against the tests the probes show its guard firing in, out of the 194 test files whose imports reach the four guarded modules. All 194 ran once with probes. The unreached ones were confirmed by a combined run over their named files. a11h also ran its one reaching file whole without -t. The whole suite wasn't run per mutant: tests the probes show never reaching a guard can't see its mutant. Load timeouts were re-run with raised limits, as the notes describe. Not tried: Rust and WebAssembly guards (none in these lists), and the route checks outside the lanes' lines.
