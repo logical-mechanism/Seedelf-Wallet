@@ -200,3 +200,104 @@ fn fund_takes_ada_from_a_token_utxo_sorted_ahead_of_the_one_holding_the_token() 
         );
     }
 }
+
+/// The names of `picked`, by the byte their hashes are made of.
+fn labels(picked: &[UtxoResponse]) -> Vec<String> {
+    picked
+        .iter()
+        .map(|u| format!("U{}", u8::from_str_radix(&u.tx_hash[..2], 16).unwrap()))
+        .collect()
+}
+
+/// What select promises when it picks: the tokens, the goal, and a change
+/// output at its minimum.
+fn assert_pays(params: &ProtocolParameters, picked: &[UtxoResponse], goal: u64, sent: &Assets) {
+    let (total, found) = utxos::assets_of(picked.to_vec()).unwrap();
+    assert!(
+        found.contains(sent.clone()),
+        "the pick holds the tokens sent"
+    );
+    let change = found.separate(sent.clone()).unwrap();
+    let change_minimum = wallet_minimum_lovelace_with_assets(params, change).unwrap();
+    assert!(
+        total >= goal + change_minimum,
+        "picked {total} lovelace, short of the goal {goal} and the change's {change_minimum}"
+    );
+}
+
+/// Those holding the token sent lead only until they hold all of it (chunk
+/// 51, r2cli#2). After them came every other holder, so one holding 1 of it,
+/// 60 other tokens and 9.4 ₳ was taken for its ADA ahead of 100 ₳ of ADA
+/// alone. Its 61 tokens went to the change, whose floor (4 outputs' worth at
+/// 20 tokens each, 41.6 ₳) took the goal past the 129.4 ₳ the address holds:
+/// `fund` said "Not Enough Lovelace/Tokens" for a payment U1 and U3 make, and
+/// spent the holder needlessly for a smaller one.
+#[test]
+fn fund_takes_ada_alone_before_another_holder_of_the_token_sent() {
+    let params = fixture_params();
+    // U1: 20 ₳ and the 100 T sent. U2: 9.4 ₳, 1 T and 60 NFTs of 60
+    // policies. U3: 100 ₳ alone.
+    let policies: Vec<String> = (0..60u8).map(|i| hex::encode([0x40 + i; 28])).collect();
+    let mut u2_tokens: Vec<(&str, &str, u64)> = vec![(PID, "aa", 1)];
+    u2_tokens.extend(policies.iter().map(|p| (p.as_str(), "01", 1)));
+    let address = vec![
+        token_utxo(0x01, 20_000_000, &[(PID, "aa", 100)]),
+        token_utxo(0x02, 9_400_000, &u2_tokens),
+        ada_utxo(0x03, 100_000_000),
+    ];
+    // fund.rs: no pure 5 ₳ UTxO, no reference script, nothing overflows.
+    let usable = utxos::collect_address_utxos(address).unwrap();
+    let (usable, left) = utxos::fitting(&usable, &Assets::new(), |_| false).unwrap();
+    assert_eq!(
+        (usable.len(), left.len()),
+        (3, 0),
+        "fund hands select all three"
+    );
+    let sent: Assets = Assets::new()
+        .add(Asset::new(PID.to_string(), "aa".to_string(), 100).unwrap())
+        .unwrap();
+
+    // `fund -l 100000000 --asset <PID>.aa=100`, and the same with -l 50000000.
+    for goal in [100_000_000, 50_000_000] {
+        let picked = utxos::select(&params, usable.clone(), goal, sent.clone()).unwrap();
+        assert_eq!(
+            labels(&picked),
+            ["U1", "U3"],
+            "the token's holder, then ADA alone, for {goal} lovelace"
+        );
+        assert_pays(&params, &picked, goal, &sent);
+    }
+}
+
+/// With two tokens sent, only the holders each needs lead (as a script spend
+/// picks them, build.rs `holding`): the one holding most of A, then B's. A
+/// second holder of A, with 40 other tokens, stays put, where taking every
+/// holder until both were found spent it and put its 41 tokens in the change
+/// (chunk 51, r2cli#2).
+#[test]
+fn fund_of_two_tokens_takes_only_the_holders_it_needs() {
+    const B: &str = "33333333333333333333333333333333333333333333333333333333";
+    let params = fixture_params();
+    let policies: Vec<String> = (0..40u8).map(|i| hex::encode([0x40 + i; 28])).collect();
+    let mut second_tokens: Vec<(&str, &str, u64)> = vec![(PID, "aa", 5)];
+    second_tokens.extend(policies.iter().map(|p| (p.as_str(), "01", 1)));
+    let address = vec![
+        token_utxo(0x01, 30_000_000, &[(PID, "aa", 10)]),
+        token_utxo(0x02, 20_000_000, &second_tokens),
+        token_utxo(0x03, 2_000_000, &[(B, "bb", 10)]),
+        ada_utxo(0x04, 100_000_000),
+    ];
+    let sent: Assets = Assets::new()
+        .add(Asset::new(PID.to_string(), "aa".to_string(), 10).unwrap())
+        .unwrap()
+        .add(Asset::new(B.to_string(), "bb".to_string(), 10).unwrap())
+        .unwrap();
+
+    let picked = utxos::select(&params, address, 50_000_000, sent.clone()).unwrap();
+    assert_eq!(
+        labels(&picked),
+        ["U1", "U3", "U4"],
+        "A's holder, B's, then ADA alone"
+    );
+    assert_pays(&params, &picked, 50_000_000, &sent);
+}
