@@ -142,7 +142,7 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     // what one output holds, with the extracted UTxO's, stays out of the
     // selection (chunk 51), and core is handed no more kinds of token than
     // one transaction could carry, with the extracted UTxO's (l3cli#3).
-    let all_utxos = rows::for_select(all_utxos, &Assets::new(), &empty_utxo_tokens)?;
+    let all_utxos = rows::for_select(&params, all_utxos, &Assets::new(), &empty_utxo_tokens)?;
     let (all_utxos, _) = utxos::fitting(&all_utxos, &empty_utxo_tokens, |_| false)?;
     let usable_utxos: Vec<UtxoResponse> =
         utxos::select(&params, all_utxos, minimum_lovelace, Assets::new())?;

@@ -248,6 +248,59 @@ pub fn junk() -> TokenAmount {
     ("cc".repeat(28), hex::encode("JUNK"), i64::MAX as u64)
 }
 
+/// `tokens` as core holds them.
+pub fn as_assets(tokens: &[TokenAmount]) -> Assets {
+    tokens
+        .iter()
+        .fold(Assets::new(), |all, (policy, name, qty)| {
+            all.add(CoreAsset::new(policy.clone(), name.clone(), *qty).expect("asset"))
+                .expect("assets")
+        })
+}
+
+/// One of the user's NFTs.
+pub fn nft(n: u8) -> TokenAmount {
+    (
+        format!("{:02x}", 0xa0 + n).repeat(28),
+        hex::encode("nft"),
+        1,
+    )
+}
+
+/// A fungible token anyone can buy, and so put in a pile of their own.
+pub const SNEK: &str = "279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f";
+
+/// `quantity` of [`SNEK`].
+pub fn snek(quantity: u64) -> TokenAmount {
+    (SNEK.to_string(), hex::encode("SNEK"), quantity)
+}
+
+/// `--asset` for `quantity` of [`SNEK`].
+pub fn snek_spec(quantity: u64) -> String {
+    format!("{SNEK}.{}={quantity}", hex::encode("SNEK"))
+}
+
+/// A stranger's four piles, the kinds of token core is handed at most
+/// (rows.rs `MOST_KINDS`, 4,000) between them: each one SNEK beside a
+/// thousand one-of tokens of a policy of its own, the first 999 (chunk 51,
+/// l4cli#1).
+pub fn four_snek_piles() -> Vec<Vec<TokenAmount>> {
+    [(1u16, 999u16), (2, 1_000), (3, 1_000), (4, 1_000)]
+        .into_iter()
+        .map(|(n, junk)| {
+            let mut pile = vec![snek(1)];
+            pile.extend((0..junk).map(|i| {
+                (
+                    format!("{:04x}", 0xf000 + n).repeat(14),
+                    hex::encode(i.to_be_bytes()),
+                    1,
+                )
+            }));
+            pile
+        })
+        .collect()
+}
+
 /// A stranger's big pile, the `n`th: 1,000 one-of tokens under a policy of
 /// its own, with two-byte names, about 19 ₳ at the ledger's least. Core adds
 /// up tokens in time that grows with the square of the kinds (chunk 51,
@@ -519,17 +572,33 @@ impl Scenario {
     /// Mount Ogmios `evaluateTransaction` for a mint: one budget per spent
     /// input, plus the seedelf policy's, as Ogmios labels them.
     pub async fn mount_evaluate_mint(&self, spends: usize) {
+        self.mount_evaluate_with(spends, (250_000_000, 800_000), (90_000_000, 300_000))
+            .await;
+    }
+
+    /// [`Scenario::mount_evaluate_mint`] at what Ogmios measured on preprod
+    /// (seedelf-core build.rs `SPEND_BUDGET_GUESS`, `MINT_BUDGET_GUESS`), for
+    /// spends that pay with little to spare: the usual 800,000 memory a spend
+    /// is about ten times the real, and past the guess a spend is picked by.
+    pub async fn mount_evaluate_as_measured(&self, spends: usize) {
+        self.mount_evaluate_with(spends, (337_845_799, 76_043), (21_396_182, 72_836))
+            .await;
+    }
+
+    /// Ogmios `evaluateTransaction` answering `spend`'s `(cpu, memory)` for
+    /// each of `spends` spends, and `mint`'s for the seedelf policy.
+    async fn mount_evaluate_with(&self, spends: usize, spend: (u64, u64), mint: (u64, u64)) {
         let mut budgets: Vec<Value> = (0..spends)
             .map(|i| {
                 json!({
                     "validator": {"index": i, "purpose": "spend"},
-                    "budget": {"cpu": 250_000_000u64, "memory": 800_000u64}
+                    "budget": {"cpu": spend.0, "memory": spend.1}
                 })
             })
             .collect();
         budgets.push(json!({
             "validator": {"index": 0, "purpose": "mint"},
-            "budget": {"cpu": 90_000_000u64, "memory": 300_000u64}
+            "budget": {"cpu": mint.0, "memory": mint.1}
         }));
         Mock::given(method("POST"))
             .and(path("/api/v1/ogmios"))
