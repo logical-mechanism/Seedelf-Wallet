@@ -13,7 +13,7 @@ One wallet on Cardano, with one recovery phrase and one password, and two sides,
 - **The public account** (the Cardano account) is a full Cardano wallet. Receive, send, stake with a pool, spend the rewards, and delegate your vote, as in Lace or Eternl. Restore a Lace or Yoroi phrase and it's the same account, so you don't need a second wallet.
 - **The private balance** is Seedelf, a stealth wallet on Cardano, where no UTxO says who owns it. Make money private, pay anyone's Seedelf, and make money public again to any address.
 
-**How the private side works.** Money in the private balance sits at the Seedelf wallet contract. Each UTxO there is locked to a fresh re-randomization of its owner's key, so the UTxO doesn't say whose it is, and it's spent with a Schnorr proof that only the key from your recovery phrase can make. To be paid privately, you mint a **Seedelf**, an NFT whose name starts `5eed0e1f`. It works like an ADA Handle for the private balance: anyone with its name can pay you. The [root README](../../README.md) has the protocol and its maths.
+**How the private side works.** To be paid privately, you mint a **Seedelf**, an NFT whose name starts `5eed0e1f`. It works like an ADA Handle for the private balance: anyone using Seedelf Wallet, or Seedelf's command-line wallet, can pay you by its name. The money itself sits at the Seedelf wallet contract. Each UTxO there is locked to a fresh re-randomization of its owner's key, so the UTxO doesn't say whose it is, and it's spent with a Schnorr proof that only the key from your recovery phrase can make. The [root README](../../README.md) has the protocol and its maths.
 
 **Private money can't be staked,** by design:
 
@@ -65,7 +65,7 @@ Lovejoin is a mixer on Cardano, with its own contracts. A mix spends your boxes,
 
 - **A private session's return goes through it by default,** once a pool holds enough other people's boxes (30 on mainnet); until then it comes back directly. Settings turns it off.
 - **The Lovejoin tile** mixes ADA, or a token that has a pool, from either side, and anyone can start a new pool.
-- **The v2 contracts it mixes with are [formally verified](../../seedelf-verification/CLAIMS.md),** but Lovejoin has had no third-party audit, and the wallet says so wherever Lovejoin is chosen.
+- **The v2 contracts it mixes with are [formally verified](../../seedelf-verification/CLAIMS.md):** proofs say exactly when each one accepts a transaction, not how well a mix hides you. Lovejoin has had no third-party audit, and the wallet says so wherever Lovejoin is chosen.
 
 [extension/README.md](extension/README.md#screens) has the rest.
 
@@ -96,7 +96,7 @@ New features come from what users ask for.
 - **Amounts, tokens and timing are public.** Seedelf hides who owns a UTxO and who spends it, from people reading the chain. It doesn't hide how much moves, or when.
 - **Paying a Seedelf takes Seedelf Wallet or the seedelf-cli,** Seedelf's command-line wallet. Someone using another wallet pays your public account's address instead, in the open.
 - **Some links can't be avoided,** and the wallet says so where they happen. Making money private ties it to the public account it came from. A Seedelf is tied to whatever paid for it. A private session's one-time account is public: anyone can follow its money back into your private balance and, if you made that money private yourself, on to your public account. [docs/privacy.md](docs/privacy.md) is the wallet's privacy model: what's hidden, what isn't, and [the known links](docs/privacy.md#known-links).
-- **The services the wallet talks to see your IP address,** and can group what one address does, though the chain can't.
+- **The services the wallet talks to see your IP address,** and can group what one address does, though the chain can't. So the server that sends your transactions, and the collateral service that sees every private spend, can tie your private payments to your public account.
   - On mainnet it reads Cardano through its own server first, and through Koios, a public Cardano API, for any part that server can't answer. Settings → Network switches to Koios alone. Preprod always reads Koios.
   - Spends from the private balance also go to giveme.my, a collateral service. It puts up the collateral such a spend needs, the same for everyone, so no collateral of yours ties your private spends to you.
   - CoinGecko is asked ADA's price on mainnet, unless the currency is set to none. Minswap sees a swap, and Blockfrost's IPFS gateway an NFT image you ask to see.

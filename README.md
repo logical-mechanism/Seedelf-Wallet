@@ -2,7 +2,7 @@
 
 **Seedelf** is a stealth wallet for Cardano: it hides the receiver and the spender of the funds inside it. It's for Cardano users who want to send and receive payments without each one pointing back to their address.
 
-Seedelf is a smart contract. Each payment goes into it under a fresh datum that looks random from the outside. A spend proves knowledge of the owner's secret key with a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation, instead of a signature from a known key. It should be computationally infeasible to deduce the intended receiver or spender of UTxOs inside this wallet. The amounts and tokens stay visible (see [Wallet Limitations](#wallet-limitations)).
+Seedelf is a smart contract. Each payment goes into it under a fresh datum that looks random from the outside. A spend proves knowledge of the owner's secret key with a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation, instead of a signature from a known key. It should be computationally infeasible to deduce the intended receiver or spender of UTxOs inside this wallet. The amounts, tokens and timing stay visible, and payments can still be linked through the transaction graph and the services a wallet talks to (see [Wallet Limitations](#wallet-limitations)).
 
 ## Using Seedelf
 
@@ -168,7 +168,7 @@ There exist multiple attacks that are known to break the privacy of this wallet.
 - **A $d$ value that isn't destroyed after the transaction.** The $d$ value is toxic waste in this context. If the $d$ values are known for some users, it becomes trivial to invert their Registers into the original form, losing all privacy.
 - **Tainted collateral UTxOs.** On Cardano, a transaction that runs a script must carry a collateral UTxO, which pays block producers for validating a transaction whose script fails. The collateral UTxO has to be associated with a payment credential, so by definition it isn't anonymous, and its ownership is known the entire time. An outside user can watch the collateral UTxOs in transactions to reveal a user's actions.
 
-Privacy is preserved if $d$ is large and destroyed after use, and the collateral UTxO is shared (see [Defeating The Collateral Problem](#defeating-the-collateral-problem)).
+These three attacks are avoided if $d$ is large and destroyed after use, and the collateral UTxO is shared (see [Defeating The Collateral Problem](#defeating-the-collateral-problem)). That keeps who owns and who spends a UTxO hidden on chain. It doesn't stop the IP tracking and the implicit tracking methods below.
 
 #### De-Anonymizing Via IP Tracking
 
@@ -176,7 +176,7 @@ The CLI communicates with `koios.rest`, a third-party API, and `giveme.my`, a co
 
 The [Seedelf Wallet](./seedelf-platform/seedelf-web-wallet/README.md) for Chrome talks to the same two services, and to CoinGecko (prices), Minswap (swaps) and Blockfrost's IPFS gateway (NFT images) for the features that need them; its [privacy.md](./seedelf-platform/seedelf-web-wallet/docs/privacy.md) says who learns what.
 
-On mainnet the Seedelf Wallet reads and submits through its own server first, `mainnet.seedelf.logicalmechanism.io` ([seedelf-data](./seedelf-data/README.md)), and through Koios for any part that server can't answer. That server sees your IP address and what Koios would: your public account and the transactions you send, never which Seedelf UTxOs are yours until you spend them. Its proxy and API log no IP address and no request path, and it keeps IP addresses only in memory, to limit requests. The transactions it receives reach the network through its own Cardano node. Settings → Network → *Read Cardano through Koios only* turns it off, so the wallet reads through Koios alone; on preprod, Cardano's test network, it always does.
+On mainnet the Seedelf Wallet reads and submits through its own server first, `mainnet.seedelf.logicalmechanism.io` ([seedelf-data](./seedelf-data/README.md)), and through Koios for any part that server can't answer. That server sees your IP address and what Koios would: your public account and the transactions you send, never which Seedelf UTxOs are yours until you spend them. Its proxy and API log no IP address and no request path, and it keeps IP addresses only in memory, to limit requests: that's its published policy, which no user can check from outside. The transactions it receives reach the network through its own Cardano node. Settings → Network → *Read Cardano through Koios only* turns it off, so the wallet reads through Koios alone; on preprod, Cardano's test network, it always does.
 
 Neither the CLI nor the Seedelf Wallet has Tor built in. `koios.rest` does not support Tor access. `giveme.my` does support Tor access, but the CLI doesn't use it. For maximum privacy when engaging in sensitive activity, consider routing traffic through a trusted VPN that doesn't log activity, not using a personal device, or using an unidentifiable IP.
 
@@ -188,7 +188,7 @@ The design of the wallet contract opens users to a troll attack: Alice pays Bob'
 
 ### Implicit Tracking Methods
 
-The [De-Anonymizing Attacks](#de-anonymizing-attacks) above track a user directly, and they are not feasible as long as the privacy-preserving techniques there are followed. However, implicit tracking methods (ITMs) exist even under the assumption of privacy preservation.
+The [De-Anonymizing Attacks](#de-anonymizing-attacks) above track a user directly, and they are not feasible as long as the privacy-preserving techniques there are followed. However, implicit tracking methods (ITMs) work even then.
 
 The first ITM is entering the wallet for the first time, as an ordinary Cardano wallet (a CIP-30 wallet for the CLI, the public account in the Seedelf Wallet) has to pay to mint the original Seedelf. This requirement means that an outside wallet, $\omega$, is now linked to a Seedelf, $\sigma$. The receivability and spendability of $\sigma$ remain hidden. Still, this linking will taint $\omega$ as a wallet that has interacted with the Seedelf protocol and is attempting to be stealthy. After funding $\sigma$, the user may use the CLI's `util mint` command to do a stealth Seedelf mint, paid from Seedelf funds, producing $\sigma^{'}$ (in the Seedelf Wallet, that's creating a Seedelf paid from the private balance). $\sigma^{'}$ has no link to $\omega$ only if the funds that paid for it came from other people's payments: funds the user moved in from $\omega$ lead back to it through the transaction graph. The original $\sigma$ may be removed after $\sigma^{'}$ is minted.
 
@@ -232,7 +232,7 @@ Because of how the wallet works, no data source can spend a user's funds: that t
 - **show a wrong balance,** by hiding UTxOs, or by inventing UTxOs that carry a user's registers, until the chain refuses a transaction built on them.
 - **stop Seedelf working,** by withholding the data it needs. The Chrome wallet then falls back to Koios, part by part.
 
-So as long as the services it reads are honest, and one of them answers, Seedelf should be safe to use.
+So where your payments go, and what your balance shows, are only as right as what the data sources report. They also see your IP address and the transactions you send (see [De-Anonymizing Via IP Tracking](#de-anonymizing-via-ip-tracking)).
 
 ## Happy Path Test Scripts
 
