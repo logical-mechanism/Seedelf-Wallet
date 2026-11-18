@@ -582,6 +582,16 @@ interface SessionRecord {
    * it says how the session's own came back (chunk 51, e2b#2).
    */
   lovejoinSkipped?: string;
+  /**
+   * The return whose sending wrote `lovejoinSkipped`: its last transaction's
+   * hash, the return itself (a chain's, its collateral's mix before it, or
+   * one that came back directly). Against the swap's own return, its first,
+   * that reason is its own or a later one's, a late leg's: the page can't
+   * tell its collateral's mix alone and then the return directly from a
+   * chain of one box (chunk 51, l4worker#1). None on a record from before:
+   * the reason is the swap's own return's.
+   */
+  lovejoinSkippedBy?: string;
   /** What's at its account that no return takes (SessionView's). It doesn't hold the session open. */
   leftBehind?: LeftBehindUtxo[];
   /**
@@ -5309,7 +5319,10 @@ export class SessionService {
     const skipped = built.strangers ? undefined : built.lovejoinSkipped;
     const pending = await this.sendRecorded(network, built.index, "back", built.txHash, hexBytes(built.txCbor), kept, {
       after: (s) => {
-        if (skipped && !s.mix) s.lovejoinSkipped = skipped;
+        if (!skipped || s.mix) return;
+        s.lovejoinSkipped = skipped;
+        // And which return it is (l4worker#1).
+        s.lovejoinSkippedBy = built.txHash;
       },
       summary: { index: built.index, lovelace: built.lovelace, tokens: built.tokens, fee: built.fee },
     });
@@ -5419,17 +5432,26 @@ export class SessionService {
     // Nor what a payment's parts still to go will spend, before its chain or the session's record is touched: reserve()
     // below refuses it too, but as the pool having changed (refuseParts).
     await this.refuseParts(network, txs!);
-    let was: Pick<SessionRecord, "chain" | "lovejoinSkipped"> = {};
+    let was: Pick<SessionRecord, "chain" | "lovejoinSkipped" | "lovejoinSkippedBy"> = {};
     await this.update(network, built.index, (s) => {
-      was = { ...(s.chain ? { chain: s.chain } : {}), ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}) };
+      was = {
+        ...(s.chain ? { chain: s.chain } : {}),
+        ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}),
+        ...(s.lovejoinSkippedBy ? { lovejoinSkippedBy: s.lovejoinSkippedBy } : {}),
+      };
       // A collateral's mix built again goes on with the chain that stopped short of it, which went in (chainSoFar).
       const from = tailOf?.resumes && s.chain ? (s.chain.from ?? s.chain.at) : undefined;
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now(), ...(from !== undefined ? { from } : {}) };
       // A return of strangers' alone, after the session's own, leaves the word on how that came back as it is (e2b#2).
       if (strangers) return;
       delete s.lovejoinSkipped;
-      // A return that comes back directly, its collateral's mix before it: why Lovejoin was left out, as sendBack says.
-      if (summary.lovejoinSkipped && !s.mix) s.lovejoinSkipped = summary.lovejoinSkipped;
+      delete s.lovejoinSkippedBy;
+      // A return that comes back directly, its collateral's mix before it: why Lovejoin was left out, as sendBack says,
+      // and that it's this return's, its last transaction (l4worker#1).
+      if (summary.lovejoinSkipped && !s.mix) {
+        s.lovejoinSkipped = summary.lovejoinSkipped;
+        s.lovejoinSkippedBy = built.txHash;
+      }
     });
     const lovejoin = this.deps.lovejoin;
     const start = async () => {
@@ -5487,6 +5509,7 @@ export class SessionService {
         if (s.chain?.last !== record.txs.at(-1)!.txHash) return;
         delete s.chain;
         delete s.lovejoinSkipped;
+        delete s.lovejoinSkippedBy;
         Object.assign(s, was);
       }).catch(() => undefined);
       throw e;
@@ -6129,7 +6152,7 @@ export class SessionService {
       ...(s.site ? { site: s.site } : {}),
       ...(s.mix ? { mix: s.mix } : {}),
       ...(s.chain ? { chain: chainView(s.chain, txs) } : {}),
-      ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}),
+      ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped, ...(s.lovejoinSkippedBy ? { lovejoinSkippedBy: s.lovejoinSkippedBy } : {}) } : {}),
       ...leftBehindView(s, utxos),
       // A funding turned away never went out: only then does the page say it never reached the chain, and why,
       // when that's known (chunk 23's second review, DX-5).

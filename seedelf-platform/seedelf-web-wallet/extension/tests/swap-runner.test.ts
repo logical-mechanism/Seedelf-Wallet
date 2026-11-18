@@ -13,7 +13,9 @@ import { bodyOutpoints } from "../src/background/cbor";
 import { builtOutputs } from "../src/background/minswap";
 import { txIdOf } from "./fixtures/cbor";
 import { READ_EVERY_MS, slippageKeeping } from "../src/background/sessions";
+import { t as tr } from "../src/i18n";
 import { lovejoinOf } from "./chain-fixtures";
+import { loadTestWasm } from "./fakes";
 import {
   ASK,
   atSession,
@@ -1099,6 +1101,94 @@ describe("a swap whose every order a run just read spent (chunk 51, l3screens#1,
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
     expect(view.auto!.spent).toBeUndefined();
     expect(t.koios.submitted.length).toBeGreaterThan(0);
+  });
+});
+
+// Chunk 51, l4worker#1: a swap's own return can be three transactions, its 5 ₳ collateral's deposit and mix, then the
+// return itself directly, its spare ADA too little for a box, and the session's reason says so (lovejoinSkipped). Once
+// anything came back after it, a stranger's 2 ₳ say, the page read that reason as a later part's, and the swap as come
+// back through Lovejoin: the view can't tell that return from a chain of one box. The worker keeps which return the
+// reason is (`lovejoinSkippedBy`), and the page reads it off that.
+describe("a swap's own return that left Lovejoin out, and a return after it (chunk 51, l4worker#1)", () => {
+  /** Ogmios's answer when the network measures no more than a transaction declares. */
+  const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
+  const STRANGER = "c9".repeat(32);
+  type Kept = { txs: Array<{ kind: string; txHash: string }>; lovejoinSkipped?: string; lovejoinSkippedBy?: string };
+  const kept = async (t: T) => (await t.store.get<{ sessions: Kept[] }>("sessions.preprod"))!.sessions[0]!;
+
+  it("keeps the reason on the swap's own, its collateral's mix alone gone in, when a stranger's return comes after it", { timeout: 300_000 }, async () => {
+    const t = await unlocked();
+    t.koios.evaluation = AGREES;
+    t.koios.confirmations = 1;
+    const now = t.clock.now;
+    const out = "ab".repeat(32);
+    const fill = "aa".repeat(32);
+    const done = (kind: string, txHash: string, extra = {}) => ({ kind, txHash, at: now, confirmed: true, ...extra });
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [done("out", out), done("swap", SWAP_TX, { orders: [`${SWAP_TX}#0`] })],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: {
+            approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } },
+            direct: false,
+            lovejoin: { depth: 1, delay: "1-6", box: "5000000" },
+          },
+        },
+      ],
+    });
+    // Filled: the proceeds (2 ₳ and the MIN), the swap's change of 3 ₳, too little for a 5 ₳ box, and its 5 ₳ collateral.
+    t.koios.addedToAccounts.push(
+      orderRow(SWAP_TX, 0),
+      atSession(fill, 0, "2000000", [[MIN, "906594100"]]),
+      atSession(SWAP_TX, 1, "3000000"),
+      atSession(out, 1, "5000000"),
+      ...ADA_ROWS,
+    );
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    // Settings as they are by default: its collateral goes into the 5 ₳ pool. giveme.my's witness of that mix stood in.
+    const wasm = loadTestWasm();
+    const lovejoin = lovejoinOf(t, {
+      wasm: {
+        ...wasm,
+        finishLovejoinWithdraw: (request: string) => {
+          const { txCbor } = JSON.parse(request) as { txCbor: string };
+          return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+        },
+      } as typeof wasm,
+    });
+    const sessions = signing(t, { lovejoin, sleep: async () => undefined });
+    await pastSpent(t, sessions);
+    // The rest of its chain, each transaction once the one before is in.
+    for (let i = 0; i < 8 && (await kept(t)).txs.at(-1)!.kind !== "back"; i++) {
+      t.clock.now += 4 * 60_000;
+      await sessions.advance("preprod", 0, true);
+    }
+    let s = await kept(t);
+    expect(s.txs.map((x) => x.kind)).toEqual(["out", "swap", "deposit", "mix", "back"]);
+    const own = s.txs.at(-1)!.txHash;
+    expect(s).toMatchObject({ lovejoinSkipped: tr("sess.skip.warn.noBox"), lovejoinSkippedBy: own });
+
+    // It lands. Before the runner's next look would close the session, a stranger pays its account 2 ₳, in a block a
+    // minute after that return went: a return of its own brings it back, and says nothing of how the swap's came back.
+    t.koios.spent.add(`${fill}#0`).add(`${SWAP_TX}#1`).add(`${out}#1`);
+    t.clock.now += 60_000;
+    t.koios.addedToAccounts.push({ ...atSession(STRANGER, 0, "2000000"), block_time: Math.floor(t.clock.now / 1000) });
+    t.clock.now += 60_000;
+    await sessions.advance("preprod", 0, true);
+    s = await kept(t);
+    expect(s.txs.filter((x) => x.kind === "back")).toHaveLength(2);
+    t.koios.spent.add(`${STRANGER}#0`);
+    t.clock.now += 60_000;
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.stage).toBe("closed");
+    // The reason is the swap's own return's, as its view says: the page reads that return as come back directly.
+    expect(view).toMatchObject({ lovejoinSkipped: tr("sess.skip.warn.noBox"), lovejoinSkippedBy: own });
+    expect(view.txs.find((x) => x.kind === "back")!.txHash).toBe(own);
   });
 });
 

@@ -977,7 +977,13 @@ describe("a split route's leg paid between the runner's two listings of the acco
 // from its own listings; and what landed before the first return went is never a stranger's, whatever no listing held
 // then (chunk 51, r2still#2).
 describe("a split route's leg that both of the runner's listings miss (chunk 51, r2still#2)", { timeout: 600_000 }, () => {
-  type Book = { closedAt?: number; lovejoinSkipped?: string; auto?: { spentSeen?: number }; txs: Array<{ kind: string; txHash: string; replaced?: boolean }> };
+  type Book = {
+    closedAt?: number;
+    lovejoinSkipped?: string;
+    lovejoinSkippedBy?: string;
+    auto?: { spentSeen?: number };
+    txs: Array<{ kind: string; txHash: string; replaced?: boolean }>;
+  };
   /** Leg 2's fill, 20 ₳: in the block utxo_info's backend has, and the listings' backend not yet. */
   const LATE = `${"bb".repeat(32)}#0`;
 
@@ -1120,9 +1126,10 @@ describe("a split route's leg that both of the runner's listings miss (chunk 51,
     expect(later.map((x) => x.kind)).toEqual(["back"]);
     expect(later[0]!.txHash).toBe(txIdOf(lateTx!));
     expect(s.closedAt).toBeDefined();
-    // The swap's own money came back without Lovejoin: its page says so, and why.
+    // The swap's own money came back without Lovejoin: its page says so, and why, as that later return's, never the
+    // first's, which went through Lovejoin (lovejoinSkippedBy; chunk 51, l4worker#1).
     expect(s.lovejoinSkipped).toBe(tr("sess.skip.warn.noCollateral"));
-    expect(view.lovejoinSkipped).toBe(s.lovejoinSkipped);
+    expect(view).toMatchObject({ lovejoinSkipped: s.lovejoinSkipped, lovejoinSkippedBy: later[0]!.txHash });
   });
 });
 

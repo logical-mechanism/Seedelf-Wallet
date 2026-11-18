@@ -147,6 +147,12 @@ describe("a swap's page once its order is filled, and once it's over (chunk 23's
       .trim();
   const stop = />Stop<\/button>/;
   const MIN = { policyId: TUSDM.slice(0, 56), assetName: TUSDM.slice(56), quantity: "4200000" };
+  /** The timeline's third step, the order's fill: its title and the line under it. */
+  const third = (markup: string) => {
+    const step = [...markup.matchAll(/<li class="timeline__step[^"]*"[^>]*>([\s\S]*?)<\/li>/g)][2]?.[1] ?? "";
+    const plain = (x?: string) => x?.replaceAll("&#x27;", "'");
+    return { title: plain(/<span class="timeline__title">(.*?)<\/span>/.exec(step)?.[1]), sub: plain(/<p class="timeline__sub">(.*?)<\/p>/.exec(step)?.[1]) };
+  };
 
   it("offers Stop until the order is filled, and not while everything comes back", () => {
     expect(html(swapSession())).toMatch(stop);
@@ -182,6 +188,15 @@ describe("a swap's page once its order is filled, and once it's over (chunk 23's
     expect(nowLine(stopping)).toBe(COMING_BACK);
     expect(nowLine({ ...stopping, auto: { ...stopping.auto, orderOpen: 0 } })).toBe(COMING_BACK);
     expect(row(stopping)).toContain("Coming back");
+    // Its timeline's third step never says Cancelled meanwhile: no cancel goes, and the order may have filled. It
+    // names the step as the plan does, its outcome told by the next run (chunk 51, l4worker#2).
+    const filledStep = { title: "Filled", sub: "By a DEX, usually within a few blocks" };
+    expect(third(html(stopping))).toEqual(filledStep);
+    expect(third(html({ ...stopping, auto: { ...stopping.auto, orderOpen: 0 } }))).toEqual(filledStep);
+    expect(third(html(noted))).toEqual(filledStep);
+    // Its cancel sent: cancelled, as before.
+    const cancel = { kind: "cancel" as const, txHash: "ca".repeat(32), at: 0, confirmed: true };
+    expect(third(html({ ...stopping, txs: [...stopping.txs, cancel] })).title).toBe("Cancelled");
     // Before every order reads spent: as before.
     const filling = { ...noted, auto: { ...noted.auto!, spent: undefined } };
     expect(nowLine(filling)).toBe("Waiting for the order to fill. Then it all comes back by itself; Stop cancels it.");
@@ -593,6 +608,8 @@ describe("a finished swap's last step names its own return, whatever came back a
       txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("mix", "e2"), tx("mix", "e3"), tx("deposit", "d2"), tx("mix", "e4"), tx("back", "b1"), tx("back", "b2")],
       chain: { total: 7, sent: 7, confirmed: 7, cut: false },
       lovejoinSkipped: why,
+      // The return that wrote it, as the worker says (chunk 51, l4worker#1): the late leg's.
+      lovejoinSkippedBy: "b2".repeat(32),
     });
     expect(backStep(late)).toBe("What goes into Lovejoin boxes comes back later, each box by itself; the rest at once, under fresh registers");
     expect(stepLinks(late).at(-1)).toBe("b1".repeat(32));
@@ -610,6 +627,32 @@ describe("a finished swap's last step names its own return, whatever came back a
     });
     expect(backStep(tail)).toBe("Directly: Lovejoin was left out");
     expect(page(tail)).toContain(`Lovejoin was left out of its return: ${why}.`);
+  });
+
+  it("says the swap's own reason as its own, its collateral's mix alone gone in, once a stranger's return comes after it (chunk 51, l4worker#1)", () => {
+    // The default with Lovejoin on and too little spare ADA for a box: the collateral's deposit and mix, then the return
+    // directly, with its own reason. A stranger's 2 ₳ comes back after it, and writes none. The view can't tell that
+    // first return from a one-box chain (deposit, mix, back): the worker says which return wrote the reason.
+    const why = "its spare ADA is too little for a box";
+    const tail = done({
+      txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("back", "b1"), tx("back", "b2")],
+      chain: { total: 3, sent: 3, confirmed: 3, cut: false },
+      lovejoinSkipped: why,
+      lovejoinSkippedBy: "b1".repeat(32),
+    });
+    expect(backStep(tail)).toBe("Directly: Lovejoin was left out");
+    expect(page(tail)).toContain(`Lovejoin was left out of its return: ${why}. So it comes back directly, tied to the session on chain.`);
+    expect(page(tail)).not.toContain("a later return");
+    expect(stepLinks(tail).at(-1)).toBe("b1".repeat(32));
+    // A record from before the worker said which return wrote it: the reason is the swap's own return's, as it always
+    // was, a late leg's too.
+    const before = done({
+      txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("mix", "e2"), tx("back", "b1"), tx("back", "b2")],
+      chain: { total: 4, sent: 4, confirmed: 4, cut: false },
+      lovejoinSkipped: why,
+    });
+    expect(backStep(before)).toBe("Directly: Lovejoin was left out");
+    expect(page(before)).toContain(`Lovejoin was left out of its return: ${why}.`);
   });
 
   it("says what it always did where nothing came back after it, or only directly: its own chain cut short, or all sent", () => {

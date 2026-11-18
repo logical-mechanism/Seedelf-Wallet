@@ -3143,16 +3143,16 @@ const ownReturnAt = (s: SessionView) => s.txs.findIndex((x) => x.kind === "back"
 const mixed = (x: SessionTx) => x.kind === "deposit" || x.kind === "mix";
 
 /**
- * Whether the session's reason for leaving Lovejoin out is a later return's, not the swap's own: its own went through
- * Lovejoin, and a return came back after it, which wrote the reason as it came back directly, such as a late leg's fill
- * that no listing held until the first had gone (chunk 51, l3screens#2). Where the swap's own came back directly, or
- * nothing came back after it (its collateral's mix alone, say, its boxes left out), the reason is its own. The view
- * doesn't say which return wrote it: a reason of the swap's own, its collateral's mix alone gone in, read as a later
- * part's once a stranger's return comes after it (a stranger's writes none, KeptBack `strangers`).
+ * Whether the session's reason for leaving Lovejoin out is a later return's, not the swap's own: the return that wrote
+ * it (`lovejoinSkippedBy`, as the worker records it) isn't the swap's own, its first, such as a late leg's fill that no
+ * listing held until the first had gone and that came back directly (chunk 51, l3screens#2). Read off the return
+ * itself, as the view can't tell the swap's own of its collateral's mix alone and then the return directly, its own
+ * reason with it, from a chain of one box: read off what went before, that reason was called a later part's once a
+ * stranger's return came after it (l4worker#1). A record from before the worker kept which, the swap's own.
  */
 function laterSkip(s: SessionView): boolean {
-  const own = ownReturnAt(s);
-  return !!s.lovejoinSkipped && own >= 0 && s.txs.slice(0, own).some(mixed) && s.txs.slice(own + 1).some((x) => x.kind === "back");
+  const own = s.txs[ownReturnAt(s)];
+  return !!s.lovejoinSkipped && s.lovejoinSkippedBy !== undefined && !!own && s.lovejoinSkippedBy !== own.txHash;
 }
 
 /**
@@ -3177,7 +3177,9 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   // Nor a swap against a DEX's pools that went out before Stop took effect: it has no order to cancel, and lands as
   // it is, filled in itself, or not at all (chunk 24; the 1.3.0 release review, C24). One that never lands isn't
   // shown, and reads as stopped before any.
-  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded && !auto.againstPools);
+  // Nor every order read spent, its fill or refund told by the next run: no cancel goes, and the step is named as the
+  // plan names it till then (chunk 51, l4worker#2).
+  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded && !auto.againstPools && !auto.spent);
   // Unless its cancel was refused: the order is still open at the DEX, its funds with it (release review C15).
   // Stopping, the cancel is all the runner builds that can be refused (subOf).
   const cancelRefused = cancelled && !tx("cancel") && auto.paused?.why === "refused";

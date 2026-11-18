@@ -1963,6 +1963,15 @@ export interface SessionView {
    */
   lovejoinSkipped?: string;
   /**
+   * Which return that reason is: the hash of its last transaction, the
+   * return itself (as `txs` lists it, kind "back"). The swap's own return's
+   * when it's the first "back" of `txs`, a later return's (a late leg's)
+   * otherwise: its collateral's mix alone and then the return directly reads
+   * as a chain of one box (chunk 51, l4worker#1). Only beside
+   * `lovejoinSkipped`; none on a record from before: the swap's own.
+   */
+  lovejoinSkippedBy?: string;
+  /**
    * What's at its account that no return takes, as the last reading found
    * it: it stays there, and doesn't hold the session open. `holding` leaves
    * it out.
