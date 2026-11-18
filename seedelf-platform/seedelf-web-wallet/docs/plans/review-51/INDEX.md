@@ -521,3 +521,9 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 - `gap-g9#2` low (user): Lovejoin's way-back rules are per profile: with the phrase unlocked in two, each brings back the other's boxes on its own schedule, right after the other's sends and withdraws, oldest first, and over the other's chains `lovejoin.ts:6852` · verified **confirmed, low**
 
 *Coverage:* Read in full, every line: background/spent.ts (248), runs.ts (105), pending.ts (1068) and docs/privacy.md (501).  lovejoin.ts (8048), read line by line: - 1-4850: the header, timing constants, pumpChain, the types and sealed schedule, every helper to withinDepth, the class fields, readSet, progress, onChain, watchOf, poolsOf, listing, poolRows, ours, plan, fits, room(s), againBoxes, funding, chain, fanOut, acrossOf, planAcross, usableNow, takesNewBoxes, adaPool, retireOnce, collateralPool, tailOf, tailChain, tailWitness, unstale, rewards, reserve and its helpers, crossCheck. - 5132-5884: publicSubmit, publicStart, pumpPublic, pumpPublicNow, schedule, scheduleFound, draw, recordChain, chainSent, chainEnded, restBack, the marks, publicUnsettledNow, lookFor, keptMaybe, keepOnReset, adoptKept. - 5884-6420: cuts, chainsSending, sortOut, found, made, lookUp, madeBy, inputsOf, accountKeys, keys…
+
+## lead (1 findings, 0 guards)
+
+- `lead#1` medium (stranger): A session's collateral tail takes the first 5 ₳ that fits the collateral rule, whoever's it is, so a stranger's plain 5 ₳ listed first is boxed and the session's own collateral comes back unmixed `lovejoin.rs:0`
+
+*Coverage:* One lead, not a lane.
