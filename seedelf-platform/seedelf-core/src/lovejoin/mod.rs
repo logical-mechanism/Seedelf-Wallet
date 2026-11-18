@@ -400,11 +400,18 @@ pub fn mix_datum(a: &[u8; 48], b: &[u8; 48]) -> Vec<u8> {
 /// the wallet's own, and the general form `102([0, fields])`. mix_logic reads a
 /// box's datum as data, never as bytes, so whoever builds a mix of this wallet's
 /// box chooses which one its output carries. Both are read (chunk 51, r3a#1).
+///
+/// The general form's pair is exactly two items, as the node reads it: Pallas
+/// reads a pair's head but not its length, so the pairs are written definite
+/// first ([`cbor::definite_pairs`]), which refuses any other. The spellings the
+/// node reads as a box are `tests/fixtures/lovejoin-box-spellings.json`'s,
+/// which seedelf-data's `is_mix_datum` is held to as well (r3a#1's class).
 fn parse_mix_datum(datum: &[u8]) -> Option<([u8; 48], [u8; 48])> {
     if !cbor::within_depth(datum, cbor::MAX_DEPTH) {
         return None;
     }
-    let PlutusData::Constr(constr) = PlutusData::decode_fragment(datum).ok()? else {
+    let datum = cbor::definite_pairs(datum)?;
+    let PlutusData::Constr(constr) = PlutusData::decode_fragment(&datum).ok()? else {
         return None;
     };
     if !matches!(
@@ -2797,6 +2804,45 @@ mod tests {
         assert!(
             matches!(&refused, Err(e) if e.to_string().contains("did not settle")),
             "{refused:?}"
+        );
+    }
+
+    /// Chunk 51, r3a#1's class: the box reader on its own takes exactly the
+    /// spellings the node reads as `Constr 0 [a, b]`
+    /// (`tests/fixtures/lovejoin-box-spellings.json`, cardano-cli's
+    /// verdicts), as seedelf-data's `is_mix_datum` does. `PoolBox::from_row`
+    /// refuses a general form's pair of three anyway, as it resolves the row
+    /// (`eval::refusal`), but Pallas reads one as a pair of two:
+    /// `Constr::decode` reads the pair's head but not its length, and
+    /// `decode_fragment` leaves whatever comes after.
+    #[test]
+    fn the_box_reader_takes_exactly_the_spellings_the_node_reads_as_a_box() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/lovejoin-box-spellings.json"
+        ))
+        .unwrap();
+        let point = |key: &str| -> [u8; 48] {
+            hex::decode(fixture[key].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap()
+        };
+        let the_box = (point("a"), point("b"));
+        let wrong: Vec<String> = fixture["spellings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| {
+                let datum = hex::decode(s["hex"].as_str().unwrap()).unwrap();
+                parse_mix_datum(&datum) != (s["node"] == "constr0_ab").then_some(the_box)
+            })
+            .map(|s| format!("{} (the node's {})", s["name"], s["node"]))
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} read otherwise: {}",
+            wrong.len(),
+            wrong.join(", ")
         );
     }
 }

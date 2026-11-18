@@ -87,7 +87,7 @@ Refresh it the way the wallet refreshes its token list: the script, a commit, a 
 
 ## Lovejoin's token pools
 
-The code is `api/src/lovejoin/`. **Its checks are a copy of the wallet's:** this workspace can't depend on `seedelf-core`, which keeps its own copy, so the two are held to one set of vectors. A change to either copy's rules changes the other's in the same PR.
+The code is `api/src/lovejoin/`. **Its checks are a copy of the wallet's:** this workspace can't depend on `seedelf-core`, which keeps its own copy, so the two are held to one set of vectors ([below](#held-together-with-the-wallet)), and a box's datum to the node's own reading of it. A change to either copy's rules changes the other's in the same PR.
 
 **Where each part of the rule is:** the datum's shape and its depth walk in `datum.rs`; the two template sets in `templates.rs`, applied by hand in `flat.rs`, with no Pallas, uplc or blst; the shown rule in `standard.rs`; the crowd in `crowd.rs`; the holder's reads in `discovery.rs` and `db.rs`.
 
@@ -107,6 +107,7 @@ The code is `api/src/lovejoin/`. **Its checks are a copy of the wallet's:** this
 ### Held together with the wallet
 
 - `seedelf-platform/seedelf-core/tests/fixtures/lovejoin-pool-vectors.json`, which `seedelf-core`'s `lovejoin_vectors_test.rs` writes from its own derive, datum decoder and `cbor::within_depth`: ten seeds' four script hashes on each set (`v2` holds v2's), 32 datum encodings with what each reads as, and 28 script rows' datums with whether each is within the 128 levels (`scriptRowDatums`), which `datum.rs`' `within_depth` is held to.
+- `seedelf-platform/seedelf-core/tests/fixtures/lovejoin-box-spellings.json`: a box's datum spelled 252 ways, each with what the node reads it as (cardano-cli, offline; `record-box-spellings.py` beside it records it again, only for a deliberate change). `datum.rs`' `is_mix_datum` takes exactly the spellings the node reads as a box, as `seedelf-core`'s `PoolBox::from_row` does.
 - `seedelf-platform/seedelf-web-wallet/extension/tests/fixtures/lovejoin-shown.json`: the earliest-of-each-value scenarios, which the wallet's `lovejoin-pools.ts` is tested against too.
 
 ## The public routes

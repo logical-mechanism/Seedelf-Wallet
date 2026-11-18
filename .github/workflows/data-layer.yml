@@ -8,10 +8,11 @@ on:
       - "seedelf-data/**"
       - ".github/workflows/data-layer.yml"
       # Every file beside it that its build reads (include_str!). What the token pools' checks read (web wallet
-      # chunk 34's 34c): the wallet's token list, built in, and the vectors and scenarios its copy of the rules is
-      # held to.
+      # chunk 34's 34c): the wallet's token list, built in, and the vectors, the node's box spellings (chunk 51,
+      # r3a#1's class) and the scenarios its copy of the rules is held to.
       - "seedelf-platform/seedelf-web-wallet/extension/src/tokens/list.json"
       - "seedelf-platform/seedelf-core/tests/fixtures/lovejoin-pool-vectors.json"
+      - "seedelf-platform/seedelf-core/tests/fixtures/lovejoin-box-spellings.json"
       - "seedelf-platform/seedelf-web-wallet/extension/tests/fixtures/lovejoin-shown.json"
       # What its constants are held to (api/src/constants.rs): the contract hash and the policy in seedelf-core's,
       # and Lovejoin's mainnet mix box in the wallet's (1.6.0's release review, x-release#8).

@@ -722,6 +722,56 @@ fn a_box_in_constructor_0s_general_form_is_still_the_wallets() {
     }
 }
 
+/// Chunk 51, r3a#1's class: one set of box spellings. A box's datum spelled 252
+/// ways, each with what the node reads it as (`fixtures/lovejoin-box-spellings.json`,
+/// cardano-cli's verdicts): a row is a box in exactly the spellings the node
+/// reads as `Constr 0 [a, b]`, and in no other, on either network. seedelf-data's
+/// crowd is held to the same file (`is_mix_datum`), so the wallet and the data
+/// layer take the same boxes: the node's.
+#[test]
+fn a_box_is_read_in_exactly_the_spellings_the_node_reads_as_one() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/lovejoin-box-spellings.json")).unwrap();
+    let point = |key: &str| -> [u8; 48] {
+        hex::decode(fixture[key].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap()
+    };
+    let (a, b) = (point("a"), point("b"));
+    let spellings = fixture["spellings"].as_array().unwrap();
+    // The wallet's own spelling comes first: a box the key 2 owns (a = G1's generator, b = 2G).
+    let ours = hex::encode(lovejoin::mix_datum(&a, &b));
+    assert_eq!(spellings[0]["hex"], ours);
+    assert_eq!(spellings[0]["node"], "constr0_ab");
+    let mut wrong = Vec::new();
+    for (network, protocol) in [
+        ("preprod", Protocol::of(true).unwrap()),
+        ("mainnet", Protocol::of(false).unwrap()),
+    ] {
+        for s in spellings {
+            let datum = hex::decode(s["hex"].as_str().unwrap()).unwrap();
+            let read = PoolBox::from_row(&box_row(&protocol, &datum), &protocol)
+                .map(|found| (found.a, found.b, found.is_owned(&Scalar::from(2u64))));
+            if read != (s["node"] == "constr0_ab").then_some((a, b, true)) {
+                let how = if read.is_some() { "read" } else { "not read" };
+                wrong.push(format!(
+                    "{} ({network}, the node's {}): {how} as a box",
+                    s["name"], s["node"]
+                ));
+            }
+        }
+    }
+    // Not vacuous: boxes, and spellings that aren't one, both.
+    assert!(spellings.iter().any(|s| s["node"] != "constr0_ab"));
+    assert!(
+        wrong.is_empty(),
+        "{} of the node's verdicts read otherwise:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
 /// Chunk 51, x2#1: Koios lists a credential's UTxOs by its 28 bytes, a key's and a
 /// script's alike, so a stranger's 5 ₳ at the KEY address whose hash is
 /// mix_box's script hash comes back with the pool's own rows. No mix can spend

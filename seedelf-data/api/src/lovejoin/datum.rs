@@ -12,7 +12,9 @@
 //! general form, `102([0, fields])`. A reference datum written so isn't read,
 //! as core reads none: only its pool's own launch writes it, so it hides that
 //! pool alone. A box's datum is read in either ([`is_mix_datum`]): whoever
-//! builds a mix writes its boxes (chunk 51, r3a#1).
+//! builds a mix writes its boxes (chunk 51, r3a#1). It and core's box reader
+//! are held to the node's own verdicts on a box's spellings,
+//! `lovejoin-box-spellings.json` beside the vectors.
 
 /// A token pool's token: its policy, its name (at most 32 bytes), and how many a box holds, Q.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -275,6 +277,8 @@ fn box_fields(datum: &[u8]) -> Option<Vec<Item>> {
 /// chain: in either of constructor 0's spellings (`box_fields`), its
 /// fields' list definite or not, each point whole or in chunks, every head of
 /// any width, since whoever builds a mix writes its boxes (chunk 51, r3a#1).
+/// Exactly the spellings the node reads as a box: both readers are held to
+/// its verdicts (seedelf-core's `tests/fixtures/lovejoin-box-spellings.json`).
 /// Whether they're points of G1 is the wallet's to check: this crate has no
 /// curve.
 pub fn is_mix_datum(datum: &[u8]) -> bool {
@@ -568,6 +572,48 @@ mod tests {
             "{} datums read as a box that isn't one, such as\n{}",
             taken.len(),
             taken[..taken.len().min(3)].join("\n")
+        );
+    }
+
+    /// Chunk 51, r3a#1's class: one set of box spellings. A box's datum
+    /// spelled 252 ways, each with what the node reads it as (seedelf-core's
+    /// `tests/fixtures/lovejoin-box-spellings.json`, cardano-cli's verdicts):
+    /// the crowd counts a box in exactly the spellings the node reads as
+    /// `Constr 0 [a, b]`, reading its `a` and `b`, and in no other, as
+    /// seedelf-core's `PoolBox::from_row` reads one. The spellings above are
+    /// this module's own; these are the node's.
+    #[test]
+    fn a_box_is_read_in_exactly_the_spellings_the_node_reads_as_one() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../seedelf-platform/seedelf-core/tests/fixtures/lovejoin-box-spellings.json"
+        ))
+        .unwrap();
+        let the_box = Some((
+            bytes(fixture["a"].as_str().unwrap()),
+            bytes(fixture["b"].as_str().unwrap()),
+        ));
+        let points = |datum: &[u8]| match box_fields(datum).as_deref() {
+            Some([Item::Bytes(a), Item::Bytes(b)]) => Some((a.clone(), b.clone())),
+            _ => None,
+        };
+        let spellings = fixture["spellings"].as_array().unwrap();
+        let wrong: Vec<String> = spellings
+            .iter()
+            .filter(|s| {
+                let datum = bytes(s["hex"].as_str().unwrap());
+                let node = s["node"] == "constr0_ab";
+                is_mix_datum(&datum) != node || (node && points(&datum) != the_box)
+            })
+            .map(|s| format!("{} (the node's {})", s["name"], s["node"]))
+            .collect();
+        // Not vacuous: boxes, and spellings that aren't one.
+        assert!(spellings.iter().any(|s| s["node"] == "constr0_ab"));
+        assert!(spellings.iter().any(|s| s["node"] != "constr0_ab"));
+        assert!(
+            wrong.is_empty(),
+            "{} read otherwise: {}",
+            wrong.len(),
+            wrong.join(", ")
         );
     }
 
