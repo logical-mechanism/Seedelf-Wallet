@@ -44,8 +44,8 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 ## R4 (9 findings, 14 guards)
 
 - `r4#1` high (stranger): A stranger freezes any CLI external wallet: `external sweep` (and `external balance`) total every UTxO there, and three junk rows overflow the token sum forever `sweep.rs:40` · verified **confirmed, high**
-- `r4#2` medium (stranger): A stranger's three junk UTxOs under the user's register break `balance` for good (and `sweep --all` while they're among its 20) `balance.rs:39` · verified **confirmed, low**
-- `r4#4` medium (user): A submit the CLI can't confirm (30 s timeout, 5xx, unreadable 2xx) is reported as a plain failure, and re-running the command pays again `spend.rs:91` · verified **confirmed, low**
+- `r4#2` medium (stranger): A stranger's three junk UTxOs under the user's register break `balance` for good (and `sweep --all` while they're among its 20) `balance.rs:39` · verified **confirmed, medium**
+- `r4#4` medium (user): A submit the CLI can't confirm (30 s timeout, 5xx, unreadable 2xx) is reported as a plain failure, and re-running the command pays again `spend.rs:91` · verified **confirmed, medium**
 - `r4#3` low (user): The signing page finds the witness set by searching the tx hex for the first `a105` (or `a0f5f6`) at any nibble, so create/fund/extract fail when their body happens to contain it `index.js:49` · verified **confirmed, low**
 - `r4#5` low (user): The signing page has no tie to the run that served it: a still-open tab or an earlier run's server signs the earlier transaction, and nothing shows which Seedelf it pays `web_server.rs:97` · verified **confirmed, low**
 - `r4#6` low (site): The signing server answers any Host header, so a DNS-rebinding page can read the unsigned transaction while it runs `web_server.rs:58` · verified **confirmed, low**
@@ -87,7 +87,7 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## E1a (1 findings, 15 guards)
 
-- `e1a#1` medium (stranger): A stranger's deposit under the wallet's register is taken for the wallet's own unmixed box, and Mix my boxes again takes it first, tying the mix session and its private funding to that register `lovejoin.ts:3819` · verified **confirmed, low**
+- `e1a#1` medium (stranger): A stranger's deposit under the wallet's register is taken for the wallet's own unmixed box, and Mix my boxes again takes it first, tying the mix session and its private funding to that register `lovejoin.ts:3819` · verified **confirmed, medium**
 
 *Coverage:* Read in full, every line: lovejoin.ts lines 1-4000, lovejoin-pools.ts (all 687 lines) and lovejoin-rewards.ts (122 lines). Calls followed into lovejoin.ts past 4000 and read: 4010-4310 (the rest of acrossOf, tailRows, planAcross, usableNow, takesNewBoxes, adaPool, retiredIds, the start of retireOnce); 4590-4850 (unstale, mixLogicHashes, rewardsIn/readRewards/rewardsOf/rewardsMoved, reserve/unreserve/release/holdOnly/reserving/inTurn, crossCheck); 5450-5730 (schedule, scheduleFound, draw, recordChain, chainSent, chainEnded, restBack, chainMarked); 5884-6510 (cuts, chainsSending/chainsMixing, sortOut, found, made, lookUp, madeBy, inputsOf, accountKeys, keysOf, reservedBoxes, status, chains); 6751-7212 (returning, withdrawDue(Now), unlockDraws, withdrawNow(Now), bringAllBack, stopBringingAllBack); 7466-8048 (split, splitAll, real, ownership, withdrawOne, dropWithdrawing, neverWent, dropRefu…
 
@@ -151,7 +151,7 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## E6 (2 findings, 15 guards)
 
-- `e6#1` medium (stranger): A stranger can plant a Seedelf so Remove preselects the public account and says it 'links nothing new' `minted-by.ts:124` · verified **confirmed, low**
+- `e6#1` medium (stranger): A stranger can plant a Seedelf so Remove preselects the public account and says it 'links nothing new' `minted-by.ts:124` · verified **confirmed, medium**
 - `e6#2` low (user): A balance reading that spans Remove wallet plus a restore is kept as the new wallet's and uses up its first-reading mark `balances.ts:392` · merged into e4a#1
 
 *Coverage:* Read every line of the lane's 13 files (5,767 lines): koios.ts, data-layer.ts, chain.ts, balances.ts, activity.ts, feed.ts, incoming.ts, private-index.ts, contract-scan.ts, minted-by.ts, nft-image.ts, prices.ts, contacts.ts.  Read the parts that matter in the code they call or feed: - seedelf-crypto register.rs (is_owned, is_valid, rerandomize) and blstrs 0.7.1 G1Affine::from_compressed - seedelf-koios register_of_datum and point_bytes - the deployed seedelf.ak at 5b82530 - wallet.ts: Keys, withKeys, withAccount, load/derive on account switch, open - accounts.ts WIPED_ON_SWITCH; account.ts readAccountUtxos and readAccount - handlers.ts: create/restore/reset-wallet - sessions.ts scanNow's pin - RemoveSeedelf.tsx's default and notes, with their en.json strings - NftImage.tsx's rendering; ui/format.ts formatQuantity - governance.ts ownDrepId; lovejoin.ts mixBoxes; staking.ts delegationHisto…

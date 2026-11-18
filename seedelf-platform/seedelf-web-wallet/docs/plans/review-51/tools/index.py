@@ -9,7 +9,7 @@ data = os.path.join(folder, "data")
 lanes = {}
 for f in sorted(glob.glob(os.path.join(data, "*.json"))):
     name = os.path.basename(f)[:-5]
-    if name.startswith("verify"):
+    if name.startswith("verify") or name.startswith("severity"):
         continue
     lanes[name] = json.load(open(f))
 verdicts = {}
@@ -26,6 +26,11 @@ for f in sorted(glob.glob(os.path.join(data, "verify-*.json"))):
         else:
             v = None
         verdicts[r["id"]] = v
+ties = os.path.join(data, "severity-tiebreaks.json")
+if os.path.exists(ties):
+    for t in json.load(open(ties)):
+        if verdicts.get(t["id"]):
+            verdicts[t["id"]] = dict(verdicts[t["id"]], severity=t["severity"])
 merges = json.load(open(os.path.join(folder, "merges.json"))) if os.path.exists(os.path.join(folder, "merges.json")) else {}
 dup_of = {d: k for k, ds in merges.items() for d in ds}
 
