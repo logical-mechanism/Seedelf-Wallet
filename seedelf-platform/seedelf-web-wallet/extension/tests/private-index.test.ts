@@ -361,4 +361,34 @@ describe("the private index's row at a KEY address with the contract's hash", ()
     expect(view.owned.map(outpoint).sort()).toEqual(OURS);
     expect(view.seedelfs[name]).toBeUndefined();
   });
+
+  // Chunk 51, gap-g6#1: the sealed record keeps the index's verdicts, and settled rows are never checked again. One
+  // sealed by 1.9.1 holding such a row as ours kept it for good after the update (nobody can spend it, so it never goes
+  // through a spend): the balance counted it and Max failed. A record sealed under an older rule is read again from a
+  // snapshot, and every verdict in it made again by today's: a row kept as ours, and one checked as not.
+  it("sealed as ours by an older release, is judged again by today's rule after the update", async () => {
+    const { t, index, deps, record } = await onIndex();
+    await readContractView(deps, "mainnet");
+    const sealed = (await t.deps.store.get<Record<string, unknown> & { rows: IndexRow[] }>("contract.mainnet"))!;
+    const ours = ownedUtxos.find((u) => u.inline_datum?.bytes)!;
+    // The stranger's row of x2#2, long settled: at the KEY address with the contract's 28 bytes, under the user's
+    // register, and listed by the index as unspent for good.
+    const planted = indexRowOf({ ...ours, tx_hash: "c5".repeat(32), tx_index: 0, address: preprodAddress(CONTRACT) }, index.tip - 100_000);
+    index.contract.push({ row: planted });
+    // A payment of the user's in the last few blocks, above the cursor: kept as checked, not ours.
+    const paid = { ...indexRowOf(ownedUtxos[0]!, index.tip - 50), ref: `${"b1".repeat(32)}#0` };
+    index.contract.push({ row: paid });
+    // As 1.9.1 sealed them, under the rule it had then (v 1): the first among its rows as ours, the second as not.
+    await t.deps.store.set("contract.mainnet", { ...sealed, v: 1, rows: [...sealed.rows, planted], checked: { [paid.ref]: false } });
+
+    index.calls.length = 0;
+    const view = await readContractView(deps, "mainnet");
+    expect(view.owned.map(outpoint), "the planted row, after the update").not.toContain(planted.ref);
+    expect(view.owned.map(outpoint), "the user's payment, after the update").toContain(paid.ref);
+    // One snapshot, as at a restore, and a record sealed again under today's rule, without the planted row.
+    expect(index.calls).toContain("contract/snapshot");
+    const again = await t.deps.store.get<{ v: number; rows: IndexRow[] }>("contract.mainnet");
+    expect(again?.v).not.toBe(1);
+    expect((await record())?.rows.map((r) => r.ref)).not.toContain(planted.ref);
+  });
 });

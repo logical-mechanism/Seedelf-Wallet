@@ -188,12 +188,25 @@ async function readKoiosView(deps: ScanDeps, network: NetworkName, { full = fals
 }
 
 /**
+ * The rule `Settled`'s verdicts were made under: which rows are this wallet's
+ * (balances.ts `ownedUtxos`). Settled rows are never checked again, so a
+ * record sealed under another is read again from a snapshot, the request every
+ * wallet makes at a restore, and every row judged again by today's rule. Bumped
+ * with every release that changes it: 2 since chunk 51's x2#2, where a row at
+ * the KEY address carrying the contract's 28 bytes stopped being the wallet's,
+ * which 1.9.1 could seal as ours for good, nobody able to spend it away
+ * (gap-g6#1).
+ */
+const SETTLED_RULE = 2;
+
+/**
  * What the private index's feed has settled for this wallet, sealed
  * (`contract.<network>`): the stable cursor, this wallet's rows unspent as of
  * it, as the index gave them, and the newer rows already checked.
  */
 interface Settled {
-  v: 1;
+  /** The rule its verdicts were made under (`SETTLED_RULE`). */
+  v: number;
   /** Whose: a hash of the Seedelf key's base register. A record another wallet's read wrote is never taken for this one's. */
   owner: string;
   cursor: string;
@@ -263,7 +276,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     if (e instanceof UnreadableRecordError) return undefined;
     throw e;
   });
-  let settled = kept?.v === 1 && kept.owner === owner ? kept : undefined;
+  let settled = kept?.v === SETTLED_RULE && kept.owner === owner ? kept : undefined;
   let since: IndexSince | undefined;
   try {
     since = settled && (await index.since(settled.cursor, { kept: true }));
@@ -276,7 +289,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     const snapshot = await index.snapshot();
     const mine = await ours(snapshot.rows);
     settled = {
-      v: 1,
+      v: SETTLED_RULE,
       owner,
       cursor: snapshot.cursor,
       got: deps.now(),
@@ -310,7 +323,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
   ]);
   const above = changes.created.filter((r) => r.created.slot > cursor);
   const next: Settled = {
-    v: 1,
+    v: SETTLED_RULE,
     owner,
     cursor: changes.cursor,
     got: changes.cursor === settled.cursor ? (settled.got ?? had) : had,
