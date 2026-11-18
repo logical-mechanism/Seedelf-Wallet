@@ -16,7 +16,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-const seam = vi.hoisted(() => ({ initials: [] as unknown[], summary: undefined as unknown, seeded: false }));
+// `after`: the render's first states, before the review's summary, by their initial values. Collateral's, in order:
+// useT's redraw (0) and the status.
+const seam = vi.hoisted(() => ({ initials: [] as unknown[], after: [0, undefined] as unknown[], summary: undefined as unknown, seeded: false }));
 vi.mock("react", async (original) => {
   const react = await original<typeof import("react")>();
   return {
@@ -24,8 +26,8 @@ vi.mock("react", async (original) => {
     useState: (initial?: unknown) => {
       const before = seam.initials;
       seam.initials = [...before, initial];
-      // Collateral's first states, in order: useT's redraw (0), the status, then the review's summary.
-      const isSummary = before.length === 2 && before[0] === 0 && before[1] === undefined && initial === undefined;
+      const isSummary =
+        before.length === seam.after.length && seam.after.every((want, i) => Object.is(before[i], want)) && initial === undefined;
       if (isSummary && seam.summary !== undefined && !seam.seeded) {
         seam.seeded = true;
         return react.useState(seam.summary);
@@ -41,8 +43,9 @@ const { DEFAULT_PREFERENCES } = await import("../src/shared/preferences");
 const { NetworkContext } = await import("../src/ui/network");
 const { PreferencesContext } = await import("../src/ui/preferences");
 const { Collateral } = await import("../src/ui/screens/Collateral");
+const { CreateSeedelf } = await import("../src/ui/screens/CreateSeedelf");
 const { formatAda } = await import("../src/ui/format");
-const { loadTestWasm, stakingPreprod, testBalances, vectors } = await import("./fakes");
+const { accountMintPreprod, loadTestWasm, stakingPreprod, testBalances, vectors } = await import("./fakes");
 
 const PASSWORD = "correct horse battery";
 const phrase12 = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
@@ -72,7 +75,9 @@ describe("Set collateral's review (chunk 51, e8b#2)", () => {
 
     // The review of that payment, as the page shows it once Set collateral has built it.
     seam.initials = [];
+    seam.after = [0, undefined];
     seam.summary = summary;
+    seam.seeded = false;
     const html = renderToStaticMarkup(
       createElement(
         NetworkContext.Provider,
@@ -92,6 +97,44 @@ describe("Set collateral's review (chunk 51, e8b#2)", () => {
     // did it (RewardsSetting).
     expect(review).toContain(formatAda(stake.rewards_available));
     expect(html).toContain('data-testid="review-rewards"');
+    expect(html).toContain('data-testid="rewards-setting"');
+  });
+});
+
+// The same rule's sibling, which no test held (chunk 51, r2tests#3): Create a Seedelf paid from the account withdraws
+// the rewards too, and its review says so, with the setting that does it.
+describe("Create a Seedelf's review, paid from the account (chunk 51, e8b#2's sibling)", () => {
+  it("says the staking rewards its payment withdraws, and which setting does it", async () => {
+    const w = testBalances();
+    await w.wallet.create(phrase12.phrase, PASSWORD);
+    w.koios.evaluation = accountMintPreprod.evaluation;
+    const balances = await w.balances.get("preprod");
+    // Built as the page builds it, from the account: the whole reward balance withdrawn into its change.
+    const summary = await w.mint.build("preprod", "first", "account");
+    expect(summary.withdrawal).toBe("57475311");
+
+    // Create's first states, in order: useT's redraw (0), what pays ("account" here), the tag typed (""), then the
+    // review's summary.
+    seam.initials = [];
+    seam.after = [0, "account", ""];
+    seam.summary = summary;
+    seam.seeded = false;
+    const html = renderToStaticMarkup(
+      createElement(
+        NetworkContext.Provider,
+        { value: "preprod" },
+        createElement(
+          PreferencesContext.Provider,
+          { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+          createElement(CreateSeedelf, { balances, onCancel: noop, onSent: noop }),
+        ),
+      ),
+    );
+    expect(seam.seeded, "Create's states moved: its review's summary wasn't the render's fourth useState").toBe(true);
+    expect(words(html)).toContain(words(t("mint.review.title")));
+    // The 57.475311 ₳ it withdraws (RewardsRow), and the setting that did it (RewardsSetting).
+    expect(html).toContain('data-testid="review-rewards"');
+    expect(words(html)).toContain(formatAda(summary.withdrawal!));
     expect(html).toContain('data-testid="rewards-setting"');
   });
 });

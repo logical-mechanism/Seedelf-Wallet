@@ -27,14 +27,16 @@ const seam = vi.hoisted(() => {
       ? !!initial && typeof initial === "object" && !Array.isArray(initial) && !Object.keys(initial).length
       : Object.is(initial, want);
   const state = {
-    seeds: [] as Array<{ after: unknown[]; value: unknown; used?: true }>,
+    /** A seed lands on a state that starts empty, or one that starts as `initial` where it says one. */
+    seeds: [] as Array<{ after: unknown[]; initial?: unknown; value: unknown; used?: true }>,
     initials: [] as unknown[],
     /** What useState starts with: `initial`, or the seed whose run of initial values precedes this call. */
     seeded(initial: unknown): unknown {
       const before = state.initials;
       state.initials = [...before, initial];
       for (const seed of state.seeds) {
-        if (seed.used || before.length < seed.after.length || initial !== undefined) continue;
+        if (seed.used || before.length < seed.after.length) continue;
+        if ("initial" in seed ? !matches(initial, seed.initial) : initial !== undefined) continue;
         const run = before.slice(before.length - seed.after.length);
         if (!seed.after.every((want, i) => matches(run[i], want))) continue;
         seed.used = true;
@@ -258,6 +260,38 @@ describe("each of several recipients so paid (chunk 51, x1a#1)", () => {
     expect(page).toContain(t("send.warn.stakeElsewhereNth", { number: 2 }));
     expect(page).not.toContain(t("send.warn.stakeElsewhereNth", { number: 1 }));
     expect(page).not.toContain(t("send.warn.stakeElsewhere"));
+  });
+});
+
+describe("Send's and Make public's forms, once the To field reads such an address (chunk 51, r2tests#2)", () => {
+  it("say its stake part isn't the user's, under their own account's note, and nothing of it for the Receive address", async () => {
+    const tb = testBalances();
+    await tb.wallet.create(v.phrase, PASSWORD);
+    const key = loadTestWasm().CardanoAccount.fromPhrase(v.phrase, 0).paymentKeyHash(0, 0);
+    const { receiveAddress } = await tb.wallet.account("preprod");
+    const planted = preprodAddress(key, STRANGERS_STAKE);
+    // The worker's answer for each, as the To field asks it.
+    const read = async (to: string) => ({ state: "read", destination: await tb.withdraw.resolve("preprod", to) });
+    /** The form with its To field read so: the page's reads, by draft (the first is 0), start as that read. */
+    const form = (screen: "send" | "withdraw", to: string, destination: unknown) => {
+      seam.reset();
+      seam.seeds.push({ after: [], initial: {}, value: { 0: { to, read: destination } } });
+      return render(
+        screen === "send"
+          ? createElement(CardanoSend, { cardano, to, onCancel: noop, onSent: noop })
+          : createElement(Withdraw, { seedelf, to, onCancel: noop, onSent: noop }),
+      );
+    };
+    for (const screen of ["send", "withdraw"] as const) {
+      const strangers = form(screen, planted, await read(planted));
+      expect(has(strangers, `${screen}-own`), screen).toBe(true);
+      expect(has(strangers, `${screen}-stake-elsewhere`), screen).toBe(true);
+      expect(words(strangers), screen).toContain(t("send.warn.stakeElsewhere"));
+      // The control: the Receive address is the account's own, its stake part too.
+      const own = form(screen, receiveAddress, await read(receiveAddress));
+      expect(has(own, `${screen}-own`), screen).toBe(true);
+      expect(has(own, `${screen}-stake-elsewhere`), screen).toBe(false);
+    }
   });
 });
 
