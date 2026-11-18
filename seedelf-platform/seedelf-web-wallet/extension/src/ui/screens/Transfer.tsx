@@ -353,7 +353,7 @@ export function Transfer({
               </AdaInput>
               {!list.several && tooMuch && (
                 <p className="field-note" data-testid="transfer-too-much">
-                  {t("transfer.tooMuch", { amount: shown.ada(seedelf.lovelace) })}
+                  {t("withdraw.tooMuch", { amount: shown.ada(seedelf.lovelace), available })}
                 </p>
               )}
             </div>

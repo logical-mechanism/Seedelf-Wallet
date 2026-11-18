@@ -2852,7 +2852,6 @@
   "transfer.route.private": "Pagar desde tu saldo privado",
   "transfer.route.public": "Pagar desde tu cuenta pública",
   "transfer.routes": "Formas de pagar esta dirección",
-  "transfer.tooMuch": "Eso es más que los {{amount}} ₳ de tu saldo privado.",
   "transfer.warn.ownSeedelf": "Este Seedelf es tuyo: el pago vuelve a ti, menos la comisión.",
   "transfer.warn.toSelf": "Este Seedelf es tuyo: el pago vuelve a tu saldo privado, menos la comisión.",
   "transfer.warn.toSelfSeveral": "El Seedelf del destinatario {{number}} es tuyo: ese pago vuelve a tu saldo privado, menos la comisión.",

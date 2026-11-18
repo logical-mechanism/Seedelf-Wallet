@@ -2281,7 +2281,6 @@
   "transfer.route.private": "machine",
   "transfer.route.public": "machine",
   "transfer.routes": "machine",
-  "transfer.tooMuch": "machine",
   "transfer.warn.ownSeedelf": "machine",
   "transfer.warn.toSelf": "machine",
   "transfer.warn.toSelfSeveral": "machine",

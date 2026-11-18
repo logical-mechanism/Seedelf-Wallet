@@ -2700,7 +2700,6 @@
   "transfer.route.private": "Pay from your private balance",
   "transfer.route.public": "Pay from your public account",
   "transfer.routes": "Ways to pay this address",
-  "transfer.tooMuch": "That's more than the {{amount}} ₳ in your private balance.",
   "transfer.warn.ownSeedelf": "This Seedelf is yours: the payment comes back to you, less the fee.",
   "transfer.warn.toSelf": "This Seedelf is yours: it comes back to your private balance, less the fee.",
   "transfer.warn.toSelfSeveral": "Recipient {{number}}'s Seedelf is yours: that payment comes back to your private balance, less the fee.",

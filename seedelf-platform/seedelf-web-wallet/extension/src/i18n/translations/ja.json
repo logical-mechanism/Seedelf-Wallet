@@ -2548,7 +2548,6 @@
   "transfer.route.private": "プライベート残高から支払う",
   "transfer.route.public": "公開アカウントから支払う",
   "transfer.routes": "このアドレスへの支払い方法",
-  "transfer.tooMuch": "それはプライベート残高の {{amount}} ₳ より多い金額です。",
   "transfer.warn.ownSeedelf": "この Seedelf はあなたのものです。支払いは手数料を引いてあなたに戻ります。",
   "transfer.warn.toSelf": "この Seedelf はあなたのものです。手数料を引いてプライベート残高へ戻ります。",
   "transfer.warn.toSelfSeveral": "宛先 {{number}} の Seedelf はあなたのものです。その支払いは手数料を引いてプライベート残高へ戻ります。",
