@@ -1,0 +1,152 @@
+# Lane X1b
+
+Returned by the workflow's agent `a29af9629ee2dd2d4`, written here by the lead from its structured answer.
+
+## Findings (2)
+
+### x1b#1 · low · A site session's Bring it back review through Lovejoin opens Transaction details on the chain's last transaction, unnamed, not the deposit
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/ui/screens/SiteSessions.tsx:299`
+- **Who:** user · **Since:** c406d69c (chunk 17's transaction view, 2026-10-01 17:36). 6bd936f4 (2026-10-01 22:06) moved Swaps, ClaimAll and the public mix to `entry` but left this screen. It is in every tag from web-wallet/1.6.0 and unchanged at web-wallet/1.9.1 (git show web-wallet/1.9.1:…/SiteSessions.tsx line 299). · **Confidence:** traced
+
+**Scenario:**
+
+Setup: a private site session holds about 40 ₳. Settings' Lovejoin return is on, which is the default, and v2's 5 ₳ pool is shown and over its floor. The user opens the site's session page and presses Bring it back.
+
+The worker builds and keeps the whole chain: the deposit, about 8 mixes, then the return that merges into the funding's change. The review's rows describe it: 'Through Lovejoin: 6 boxes of 5 ₳', the mixes and 'Network fees'.
+
+The wrong outcome: the review's button reads plain 'Transaction details' and opens `back.txHash`, the chain's last transaction. Its inputs are outputs of mixes nothing has sent yet. The deposit, where the session's UTxOs leave its account into the pool, can't be opened from this review at all.
+
+The other chain reviews open the deposit and name it 'The deposit's transaction': the same return reviewed from a swap's page, Bring everything back, and a public mix. flows.md:273 and the `entry` field's own doc say every chain review does this. No figure is wrong and nothing is sent differently. The one transaction offered as the one to read is the one the 6bd936f4 fix called a lie.
+
+**Evidence:**
+
+- SiteSessions.tsx:299: `<TxDetailButton txHash={back.txHash} testId="site-back-tx" />`. It passes no `label`.
+- Swaps.tsx:2328-2331, the same return reviewed from a swap's page: `<TxDetailButton txHash={back.lovejoin?.entry ?? back.txHash} label={back.lovejoin && entryLabel(back.lovejoin)} testId="session-back-tx" />`.
+- ClaimAll.tsx:419-426: `where one goes through Lovejoin, the one shown is its chain's first, not the return it ends with` and `txHash={r.lovejoin?.entry ?? r.txHash}`.
+- Lovejoin.tsx:3139, a public mix: `txHash={review.summary.entry} label={entryLabel(review.summary)}`.
+- sessions.ts:4694 `const back = chain.txs[chain.txs.length - 1]!`. The summary's `txHash: back.txHash` is the return. :4726 `entry: chain.txs[0]!.txHash`.
+- rpc.ts:2108-2112, SessionBackSummary.lovejoin.entry: '`txHash` is the return, the last of the chain; this is the one the review shows, where the session's money goes in.'
+- tx-view.ts cborOf (330-347) matches the kept SESSION_BACK record's top-level txHash/txCbor, the last transaction, so the view decodes that one.
+- flows.md:273: 'A chain's review shows the transaction the money goes in through … The one it opens is the first — the deposit — not the last … whose inputs are outputs nothing has sent yet … The button says which one it is, since "Transaction details" is a lie where there are ten of them.'
+- Commit 6bd936f4's message: 'It offered the last: the return … Anyone who checked those outpoints against the chain would find nothing there. It offers the first now.' Its diff doesn't touch SiteSessions.tsx, which existed since b134a737 (2026-09-25).
+- flows.md:486-496 says a site's Bring it back review 'opens with a switch, Bring it back through Lovejoin, on when Lovejoin takes the return'. buildBack takes a site session through lovejoin.chain with wayOf's `returns` (sessions.ts:4653-4673, 6424), so this path is the default one.
+- The only callers of session-back-build are SiteSessions.tsx:233 and Swaps.tsx:2214, and of session-claim-build ClaimAll.tsx:89/109 (grep). This screen is the one member of the class left.
+- grep for site-back-tx in tests/ and e2e/ finds nothing, so no test pins which transaction it opens.
+
+**Fix:**
+
+Make it as Swaps.tsx:2328-2331 does: `<TxDetailButton txHash={back.lovejoin?.entry ?? back.txHash} label={back.lovejoin && entryLabel(back.lovejoin)} testId="site-back-tx" />`, importing entryLabel from TxDetail. The class is every review of a kept chain (a SessionBackSummary with `lovejoin`): Swaps, ClaimAll and Lovejoin's public review already do this, so this is the last one. A screens test can render the site's back review with `lovejoin.entry` set and assert that the button opens `entry` and reads 'The deposit's transaction'.
+
+**Known check:**
+
+- backlog.md's 'Transaction details' lines (Danogo collateral, other accounts' keys, the dApp account's keys, lookedUp, treasury recipients, the arrow focus, Leios): none is about which transaction a chain review opens.
+- archive/plans/*.md for 'SiteSessions', 'entry', "deposit's transaction", "chain's first", 'first, not the return': only 6bd936f4's rule, as flows.md:273 records it.
+- tests/ and e2e/ for 'site-back-tx': nothing.
+
+### x1b#2 · nit · withdraw.ts says a shortfall's `most` is one transaction, but WebAssembly builds it in parts, up to 25
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/withdraw.ts:104`
+- **Who:** nobody · **Since:** 1cd50dba (2026-10-20 20:07), which routed `most` through max_in_parts and left 39f588a0's comment (11:49 the same day) as it was · **Confidence:** traced
+
+**Scenario:**
+
+withdraw.ts:103-104 says 'A shortfall's `most` is one transaction, as it was.' It isn't. `most()` (withdraw.ts:114) asks buildWithdrawParts for `most: true` with one payment whose lovelace is null. lib.rs:4764-4789 sends that through max_in_parts: every UTxO, up to MAX_PARTS transactions. whole() then sums the parts.
+
+So Make public's 'can pay up to about X ₳' is a figure across parts, which is right, since an amount goes in parts too. The comment describes 39f588a0's build_withdraw_parts ('Never a session's funding, nor `most`'), which 1cd50dba replaced the same day.
+
+The risk is a future fix. One that trusted the comment and made `most` one transaction would understate the figure badly: with 100 private UTxOs of 5 ₳, one transaction's most is about 99.5 ₳, where the parts pay about 498.6 ₳.
+
+**Evidence:**
+
+- withdraw.ts:103-104 has the comment.
+- withdraw.ts:114: `const most = async () => whole(await measured({ ...request, most: true, payments: [{ ...request.payments[0]!, lovelace: null }] }));`.
+- lib.rs:4764-4789: `if let [only] = request.payments.as_slice() && only.lovelace.is_none() && !funding { … let most = request.most; let tokens = if most { only.tokens.clone() } else { Vec::new() }; return max_in_parts(…) }`.
+- `git show 39f588a0 -- wasm/src/lib.rs` shows the earlier rule: `/// Everything (Max) every UTxO. Never a session's funding, nor `most` (a shortfall's measure)` and `if request.funding.is_some() || request.most {` (one transaction).
+- 1cd50dba introduced `let most = request.most;` in the max_in_parts branch (git log -S).
+- transfer.ts:121-126 describes its own `most` correctly ('Max's, built again on the same UTxOs … every part of it').
+
+**Fix:**
+
+Reword the comment, for example: 'A shortfall's `most` goes in parts, as Max does (lib.rs build_withdraw_parts → max_in_parts), so the most it says is what an amount in parts can pay.'
+
+**Known check:**
+
+backlog.md, review-1.6.0.md and review-1.7.0.md for 'shortfall', '`most`' and 'one transaction': nothing about this comment.
+
+## Guards (14)
+
+| Where | What it stops | Test |
+|---|---|---|
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:388` | Sending a kept private spend that isn't the reviewed one: a txHash or network mismatch, or another window's review under the same key | tests/send.test.ts and tests/sessions-sent-twice.test.ts reach the StaleReviewError path (grep, not run) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:429` | giveme.my's witness, or the one-time key's signing, producing a body other than the reviewed one (signed.txHash must equal the reviewed hash) | none found (grep for signingChanged in tests/) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:394` | Sending a private review older than 10 minutes (BUILT_TTL_MS); waiting parts are exempt by design | none found by name |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:585` | A payment in parts whose later part kept under its key isn't the reviewed one (another review overwrote it): the whole payment is refused before any part goes | tests/parts-send-review-fixes.test.ts (grep, not run) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:616` | A kept spend, or any of its later parts, spending what another of the wallet's transactions spent since the review | tests/submit-inputs-spent.test.ts and tests/parts-send-review-fixes.test.ts (grep, not run) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/script-spend.ts:639` | A kept spend taking what a chain through Lovejoin, or a payment's waiting parts, sent since will spend | tests/parts-send-review-fixes.test.ts:762 'doesn't send a waiting part that spends what another chain of the wallet's reserved since' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:5182` | Sending a kept return chain (reviewed by hand) whose transactions spend what was spent since: nothing of it goes, and it is never rebuilt at Send | none found by name |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:2318` | A mix session's funding Send sending a kept build other than the reviewed one (txHash, network), or one older than the TTL (2321) | none found by name |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts:3747` | A tile Mix's (or Mix again's) chain built by the runner taking more boxes than the funding paid for (`boxes ?? plan.boxes`) | none found by name |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts:3917` | A swap's auto-return putting a token into a pool its approval didn't name, such as one launched after the approval (`returns.only` sends it back directly) | tests/lovejoin-planner.test.ts:330/339 (`only: true`, `most`) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:6421` | A swap's auto-return making more boxes of a token than its approval showed (`most: approved.tokenBoxes`) | tests/lovejoin-planner.test.ts:339 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/ui/App.tsx:282` | A private review built on one account or network being sent from a page after a switch: every screen remounts on network:active | none found by name |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts:7601` | A box's paid way back spending a private UTxO that is locked, or reserved by a chain or waiting parts (it reads through readContract) | none found by name |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/withdraw.ts:137` | A Make public review naming a destination other than the one paid: each WASM payment, in request order, is labelled with the worker's own resolved destination by index, the same one the request paid | none found by name |
+
+## Checked and holds
+
+- Every private Send checks two things: the kept transaction is the reviewed one (txHash and network, script-spend.ts:388), and the signed hash equals the reviewed hash (:429). So Transaction details at review is the body giveme.my witnesses and the one-time key signs.
+- Send privately's and Make public's review rows come from the worker's built summary, not the form: To, the whole name or address, the amount, tokens, fee, Max, parts, histories, MaxLeftNote and LeftOutNote. WASM returns payments in request order, and withdraw.ts:137 labels each with the worker's own resolved destination.
+- e7a#1's class (a review rendering live form state beside its build) on the private side is limited. These all render every money figure from the build: Send privately, Make public, Create a Seedelf, Remove, the Lovejoin Mix, Mix again and Bootstrap reviews (their source is captured at call), the connector's private funding, the top-up, and both return reviews. The one live input is the 'asked' figure fed to amountText and MinimumNote (Transfer.tsx:193/260, Withdraw.tsx:179/239), which only changes whether 'raised to the least' is said.
+- A payment in parts: the review's fee, Transactions row, summed payments[0] and tokens come from whole() over the same parts keepParts keeps. summary.txHash is the first part's, which Send names. reviewParts' `waits` matches splitParts' goNow for the planner's shapes, where every part after the first chained one spends a carry.
+- A session funding in parts (mix, site, swap): buildFunding's summary is whole() of the parts it keeps, plus the first part's collateral (sessions.ts:3108-3109). So FundingTotals, DappApprovals' and Swaps' 'Total leaving' (Σ payments + fee) are the parts' sum, and 'For the site' and 'For the boxes' subtract exactly the reserves the first payment carries.
+- Remove: the review's 'Back to your …' figure is the one input's change (lib.rs:5070). `to` is the active account's 0/0 at build (withdraw.ts:179) or a fresh register. A switch of account or network remounts every screen (App.tsx:282), so a Remove review built on account 1 can't be sent after a switch to account 2.
+- Stealth mint: the review's Seedelf name and locked ADA come from core's SeedelfMint in the same proven build that's kept (lib.rs:2406-2468). The fee and change are from that finished transaction.
+- The deployed policy (5b82530 seedelf.ak, token_name.ak) mints amount 1 under a name made from the first input's id and index. The recipient lookup keys by the Seedelf policy, so view.seedelfs[name] can't be a stranger's second copy of a name.
+- A swap's auto-return follows its approval: through Lovejoin or direct (auto.direct), the approved depth and width, the approved token pools only (lovejoin.ts:3917) and at most the approved token boxes (sessions.ts:6419-6422).
+- A tile Mix's and Mix again's runner-built chain mixes at most the funded boxes (lovejoin.ts:3747, 3806). Mix again re-picks which boxes at build but never more of them, and the pool and width are kept on the record.
+- A by-hand return (site or swap) sends exactly the kept chain: sendChain uses built.chain, refuses another chain on its way, and refuses inputs spent since (sessions.ts:5174-5183). Nothing is rebuilt between review and Send.
+- Bring every box back pays a stuck pool's box from the private balance (lovejoin.ts:7394), and its question says so ('Where it can't, your private balance pays, tying the UTxO …'). The private payer is read through readContract, so it's never locked or reserved (lovejoin.ts:7601).
+- Make public's and Send privately's shortfall 'most' is built in parts (lib.rs:4764-4789 → max_in_parts) and summed by whole(), so 'can pay up to about X ₳' matches what an amount in parts can pay (only the comment is stale: x1b#2).
+- A site funding's collateral reserve sits in the site's UTxO by design. Its review says the collateral is mixed only if enough is left (siteOutBuild's collateralMix 'ifLeft', sessions.ts:2069-2075).
+- seedelfLabel shows only printable ASCII (chain.ts:214-223), and every private review also shows the whole Seedelf name.
+
+## Notes
+
+- e7a#1, new fact on its class: on the private side the only screens that render live form state beside a build are Swaps (e7a#1) and ClaimAll (e8b#3, the chosen set captured before the rebuild). Every other private review listed in checked_ok renders from the build, so the fix sweep needs only those two plus the 'asked' wording in Transfer and Withdraw.
+- E8b's note on a single return's review counting the collateral tail's fee twice ('Network fees' already includes it, and the CollateralTailRow repeats it) is in both SiteSessions.tsx:283-290 and Swaps.tsx:2310-2317. Nothing new to add.
+- w3#1: the box's wait (chainDelay from Settings at build, sessions.ts:4695) is already in its fix and in its verifier's note (architecture.md documents it for non-swaps). No new fact.
+- For the owner (wording): with several accounts, Remove's review says 'Back to your public account' without naming which. TotalRows names the paying account on public reviews, but the receiving side isn't named here. App.tsx:282's remount closes the switch race, so this is only the label.
+- Cosmetic, for E6/E9b: seedelfLabel (chain.ts:214-223) reads up to 15 bytes past the prefix while they're printable. A Seedelf with a short tag whose first input's output index is 32 or more shows that byte, and any printable txid bytes after it, as part of its tag. The whole name is always shown beside it.
+- Design, not a finding: a stealth mint paid by one 'made private' history gets no HistoriesNote on its review (one class, account 0). Only the form's callout says that moved-in money leads back to the account (privacy review §2.3, independent review D1).
+- By design and said: a launch's Send may send the start without the cert-0 deposit when the credential is registered already (LovejoinLaunch.tsx:243-246, 'at most'). That is a different transaction from the one Transaction details showed, differing by the certificate and 2 ₳ of change.
+
+## Coverage
+
+Read in full:
+- extension/src/background: transfer.ts, withdraw.ts, mint.ts, script-spend.ts (all 644 lines).
+- extension/src/ui/screens: Transfer.tsx, Withdraw.tsx, RemoveSeedelf.tsx, CreateSeedelf.tsx.
+- extension/src/ui/components: ReviewTotals.tsx, LovejoinReturn.tsx (all 578 lines), HistoriesNote.tsx.
+
+Read in part:
+- parts.ts 1-260: the header, reviewParts, splitParts, letGo's head.
+- sessions.ts: siteOutBuild 2031-2080; mixOutBuild, againBuild, mixFunding and mixOutSubmit 2155-2345; buildFunding and outSubmit's head 3000-3150; buildBack's chain call and summary 4577-4760; sendChain 5170-5250; wayOf, pricedClassic and fillsOf 6412-6447.
+- lovejoin.ts: againBoxes 3476-3580; chain and fanOut 3642-3900; unstale 4598-4612; bringAllBackNow's loop 7340-7420; grep-level reads of withdrawOne 7542-7700.
+- wasm lib.rs: classes_mixed 2221; the stealth mint 2396-2475; withdrawal_of, amounts_of, carried_payment and withdraw_spend 3383-3560; build_withdraw_parts 4730-4885; withdraw_result and the Remove binding 4885-5090.
+- ui/screens: ClaimAll.tsx 1-435; SiteSessions.tsx 205-330 and 547-662; DappApprovals.tsx 560-830; Lovejoin.tsx 1088-1300, 2860-3200 and 3837-3992; LovejoinLaunch.tsx 150-260; Swaps.tsx 2270-2340.
+- Elsewhere in the extension: rpc.ts 1698-1795 and 2080-2130; tx-view.ts (outline and cborOf); contract-scan.ts readContractView; accounts.ts WIPED_ON_SWITCH; App.tsx's key; short.ts privateShortOf; chain.ts seedelfLabel.
+- The deployed seedelf.ak and token_name.ak at 5b82530.
+- Docs and git: flows.md 1-138 and 325-422, plus grep hits; git log and show for 6bd936f4, c406d69c, 39f588a0 and 1cd50dba.
+
+Lane outputs used:
+- checked_ok and notes from data/*.json for E5, E8b, W1a, W1b, E8a, W3, E2a, E2b, E7a, E1a, E1b, R2a, R3a, R3b and E3b.
+- The full text of w3#1 and e7a#1, and verify/w1b-2.md.
+
+Not reached:
+- minswap.ts, orders.rs and the swap approval's body: the runner's order, cancel and checkOrder path is E7a's, taken on its checked_ok.
+- sessions.ts' runner (step, act, order, cancel, pump).
+- wasm lovejoin.rs and core lovejoin/: W3's and R3a's, taken on their checked_ok.
+- core build.rs internals of transfer_apart, sweep_many_apart, sweep_most and mint_apart.
+- parts.ts past 260 (the pump), BringAllBack.tsx beyond its question, Lovejoin.tsx's public reviews (X1a's side), and the Swaps Stop dialog (e7a#2).
+
+Nothing was run: no tests, builds or network calls.

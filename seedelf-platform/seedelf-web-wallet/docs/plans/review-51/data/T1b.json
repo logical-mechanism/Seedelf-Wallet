@@ -1,0 +1,500 @@
+{
+ "findings": [
+  {
+   "id": "t1b#1",
+   "severity": "low",
+   "title": "A note patched after signing: no test fails without it",
+   "file": "seedelf-platform/seedelf-core/src/note.rs",
+   "line": 83,
+   "scenario": "With note.rs:83's check gone, Note::patch on a signed transaction rewrites the body (new auxiliary data hash, new tx hash) under signatures made over the old body, which the node refuses. Today Patches::apply (build.rs:235) runs inside settle before anything is signed, so nothing reaches it. The gap is that a reorder would pass every test.",
+   "who": "nobody",
+   "since": "2185c4b3 (2026-09-24), the guard and its test; the test has never isolated it",
+   "evidence": "Mutant, copy only: seedelf-core/src/note.rs:83 `if built.signatures.is_some() {` -> `if false && built.signatures.is_some() {`. Runs in the copy (own CARGO_TARGET_DIR, MemoryMax=6G, -j 3, --locked): `cargo test -p seedelf-core --test note_test` 4 passed, 0 failed; `-p seedelf-core` 356 passed, 0 failed (32 binaries); `-p seedelf-wasm` (native tests, which link core from source) 305 passed, 0 failed. Each stage's log shows `Compiling seedelf-core`. The only test that patches a signed transaction (note_test.rs:211-212) signs one that already holds the note, so the metadata check at :88 refuses it first. The CLI never calls Note::patch.",
+   "confidence": "confirmed-by-run",
+   "fix": "In note_test.rs, sign a transaction that has no metadata yet (`send(&Staking::none(), None).tx.sign(fake_signer())`) and assert `note.patch(signed)` fails with \"A transaction is patched before it's signed, not after\". Its siblings are pinned already: staking.rs:457 (staking_test.rs:766) and withdraw_zero.rs:96 (withdraw_zero_test.rs:155).",
+   "needs_owner": false,
+   "known_check": "grep -i in docs/backlog.md and docs/archive/plans/ for \"patched before it\", \"after signing\", \"note.patch\": only chunk-13's line that BuiltTransaction::sign signs the patched hash; nothing records this gap. R2b's guards list said \"None isolating it\"."
+  },
+  {
+   "id": "t1b#2",
+   "severity": "low",
+   "title": "Overwriting another account's withdrawal in the withdraw-zero patch: no test fails without it",
+   "file": "seedelf-platform/seedelf-core/src/withdraw_zero.rs",
+   "line": 108,
+   "scenario": "With :108 gone, WithdrawZero::patch on a transaction that already withdraws from another reward account replaces body.withdrawals with mix_logic's alone. The other account's withdrawal silently drops out of a body that was balanced with it, and the Reward redeemer's index 0 is right only because one entry is left. Only Lovejoin's mix and withdraw builders call the patch today (lovejoin/mod.rs:1123, :1611), on transactions they build with no withdrawal, so nothing reaches it.",
+   "who": "nobody",
+   "since": "4bcf0964 (2026-09-25, chunk 16)",
+   "evidence": "Mutant: withdraw_zero.rs:108 `if others {` -> `if false && others {`. `cargo test -p seedelf-core --test withdraw_zero_test` 6 passed, 0 failed; `-p seedelf-core` 356 passed, 0 failed; `-p seedelf-wasm` (native) 305 passed, 0 failed. Every test patches a transaction with no withdrawal, or one carrying mix_logic's own.",
+   "confidence": "confirmed-by-run",
+   "fix": "In withdraw_zero_test.rs: decode built(), set transaction_body.withdrawals to another account (`reward_account(&[1u8; 28], true)`, 5 lovelace), re-encode it into the BuiltTransaction, and assert patch fails with \"already withdraws from another account\". Keep the existing case that mix_logic's own withdrawal is replaced on a re-patch.",
+   "needs_owner": false,
+   "known_check": "grep -i in backlog.md and archive/plans/ for \"withdraws from another account\", \"withdraw_zero\": chunk-16 and chunk-43 only describe the patch; no entry records the gap. R2b's guards list said \"none found\"."
+  },
+  {
+   "id": "t1b#3",
+   "severity": "low",
+   "title": "A script data hash recomputed without the witness datums: no test fails without the refusal",
+   "file": "seedelf-platform/seedelf-core/src/withdraw_zero.rs",
+   "line": 114,
+   "scenario": "With :114 gone, patching a transaction that carries witness datums recomputes `script_data_hash(&redeemers, None, cost_model)` with the datums left out. The body's hash then disagrees with the witness set and the node refuses the transaction (PPViewHashesDontMatch). Lovejoin's builders add no witness datums today, so nothing reaches it.",
+   "who": "nobody",
+   "since": "4bcf0964 (2026-09-25, chunk 16)",
+   "evidence": "Mutant: withdraw_zero.rs:114 `if witness.plutus_data.is_some() {` -> `if false && witness.plutus_data.is_some() {`. withdraw_zero_test 6 passed, 0 failed; seedelf-core 356 passed, 0 failed; seedelf-wasm (native) 305 passed, 0 failed. No test builds a transaction with a witness datum before patching.",
+   "confidence": "confirmed-by-run",
+   "fix": "Build the fixture with a witness datum (StagingTransaction's datum, plus language_view) and assert patch fails with \"witness datums\". If the patch ever learns to hash datums, the test becomes: the hash covers them.",
+   "needs_owner": false,
+   "known_check": "grep -i \"witness datums\" in backlog.md and archive/plans/: only chunk-24's Pallas note on hashing witness datums as a list, a different issue. R2b's guards list said \"none found\"."
+  },
+  {
+   "id": "t1b#4",
+   "severity": "low",
+   "title": "Map-form redeemers rewritten as a list: no test fails without the refusal",
+   "file": "seedelf-platform/seedelf-core/src/withdraw_zero.rs",
+   "line": 120,
+   "scenario": "With :120's refusal replaced by a conversion of the map's entries to a list, a transaction whose redeemers are a map is re-encoded with list redeemers and its script data hash recomputed over the list's bytes, so the witness set no longer matches what any earlier hash or measure saw. pallas_txbuilder's build_conway_raw writes list redeemers, so nothing reaches it today.",
+   "who": "nobody",
+   "since": "4bcf0964 (2026-09-25, chunk 16)",
+   "evidence": "Mutant: withdraw_zero.rs:120-122 `Some(Redeemers::Map(_)) => { bail!(...) }` -> `Some(Redeemers::Map(map)) => map.iter().map(|(k, v)| Redeemer { tag: k.tag, index: k.index, data: v.data.clone(), ex_units: v.ex_units }).collect(),` (it compiled). withdraw_zero_test 6 passed, 0 failed; seedelf-core 356 passed, 0 failed; seedelf-wasm (native) 305 passed, 0 failed.",
+   "confidence": "confirmed-by-run",
+   "fix": "Decode built(), set `transaction_witness_set.redeemer = Some(Redeemers::Map(..))` with one entry, re-encode, and assert patch fails with \"redeemers are a map\".",
+   "needs_owner": false,
+   "known_check": "grep -i \"redeemers are a map\", \"Redeemers::Map\" in backlog.md and archive/plans/: none. R2b's guards list said \"none found\"."
+  },
+  {
+   "id": "t1b#5",
+   "severity": "low",
+   "title": "An odd fee whose 3/2 × fee collateral falls under the ledger's 150%: no CLI test fails without the even rounding",
+   "file": "seedelf-platform/seedelf-cli/src/commands/create.rs",
+   "line": 226,
+   "scenario": "Without the rounding, `create` and `util extract` total an odd fee about half the time. The collateral return is 5 ADA − ⌊3/2 × fee⌋ (create.rs:242; build::collateral_output for extract), so the collateral put up is ⌊1.5 × fee⌋. That is half a lovelace under the ledger's 150%, and the node refuses the transaction (InsufficientCollateral). With the guard, the fee is rounded up to even first.",
+   "who": "user",
+   "since": "97be888f (2026-09-23), fee.rs's total_with_even_rounding",
+   "evidence": "Mutant, covering both call sites (create.rs:226, extract.rs:248): seedelf-cli/src/commands/fee.rs:16 `seedelf_core::build::even(tx_fee + compute_fee + script_reference_fee)` -> `tx_fee + compute_fee + script_reference_fee`. `cargo test -p seedelf-cli`: 46 passed, 0 failed (no other crate depends on the CLI). tests/cli/extract.rs:160 asserts `back.lovelace == 5_000_000 - tx.fee * 3 / 2`, which re-derives the code's own formula and holds for an odd fee too. No test asserts the fee is even or that the collateral covers 150%. Core's `even` is pinned by mint_test.rs:915, which never runs the CLI.",
+   "confidence": "confirmed-by-run",
+   "fix": "In tests/cli/create.rs and extract.rs, assert `tx.fee % 2 == 0` and `2 * (5_000_000 - collateral_return) >= 3 * tx.fee`. Pick the mock evaluation's budget (mount_evaluate, mount_evaluate_mint) or mount_reference_script_price so that the unrounded sum is odd, or run both parities.",
+   "needs_owner": false,
+   "known_check": "grep -i \"even_rounding\", \"total_with_even\", \"150\" in backlog.md and archive/plans/: none. R4's guards list said \"none in the CLI\"."
+  },
+  {
+   "id": "t1b#6",
+   "severity": "low",
+   "title": "A change or output wrapping below zero at the CLI's checked_lovelace calls: no test fails without them",
+   "file": "seedelf-platform/seedelf-cli/src/commands/fund.rs",
+   "line": 246,
+   "scenario": "With every CLI call of checked_lovelace replaced by wrapping subtraction, a fee or minimum larger than what was selected wraps to an output of about 1.8e19 lovelace, which the node refuses, instead of the words \"insufficient lovelace\". There are 12 calls: fund.rs:184, 189, 206, 246, 250, 268; create.rs:106, 133, 230, 242; extract.rs:172, 257. Reaching one needs a fee above the change floor (about 1 ADA) that `utxos::select` adds on top of the amount (utxos.rs:288-290), so there's no realistic reach today: the guard is defensive.",
+   "who": "user",
+   "since": "93f1a581 (2026-05-21)",
+   "evidence": "Mutant C07a: fund.rs:246 `seedelf_core::transaction::checked_lovelace(lovelace_amount, &[lovelace, tx_fee])?;` -> `lovelace_amount.wrapping_sub(lovelace).wrapping_sub(tx_fee);` gave seedelf-cli 46 passed, 0 failed. Mutant C07b: all 12 calls -> `wrapping_lovelace(` (a local `Ok(deductions.iter().fold(available, |r, d| r.wrapping_sub(*d)))`) in fund ×6, create ×4, extract ×2: seedelf-cli 46 passed, 0 failed. The function itself is pinned: transaction.rs:93's mutant fails proptest_core (checked_lovelace_matches_sequential_checked_sub, checked_lovelace_result_never_exceeds_available).",
+   "confidence": "confirmed-by-run",
+   "fix": "One CLI test per command that prices the fee past what was selected and asserts the command fails with \"insufficient lovelace\" and submits nothing. For create and util extract, use mount_reference_script_price with a large per-byte price; fund needs a raised min_fee_a in its params fixture.",
+   "needs_owner": false,
+   "known_check": "grep -i \"checked_lovelace\", \"insufficient lovelace\" in backlog.md and archive/plans/: none. R4's guards list said \"none at the CLI's call sites\"."
+  },
+  {
+   "id": "t1b#7",
+   "severity": "low",
+   "title": "Extracting a datum'd, a foreign or a spent UTxO: no test fails without util extract's refusals",
+   "file": "seedelf-platform/seedelf-cli/src/commands/util/extract.rs",
+   "line": 60,
+   "scenario": "With :60, :65 or :70 gone, `util extract` goes on to build and evaluate a spend of a UTxO that has a datum (say a Seedelf's own UTxO, whose empty proof the contract refuses), sits at another address, or is already spent. Koios's evaluation or the node refuses it later, in less clear words. No money moves.",
+   "who": "user",
+   "since": "2d4a7e77 (2026-05-20)",
+   "evidence": "Three mutants, each `cargo test -p seedelf-cli` 46 passed, 0 failed: (a) extract.rs:60 `if utxo.inline_datum.is_some() {` -> `if false && ...`; (b) extract.rs:65 `if utxo_addr != address::wallet_contract(..)` -> `if false && utxo_addr != ...`; (c) extract.rs:70 `if utxo.is_spent {` -> `if false && utxo.is_spent {`. tests/cli/extract.rs tests the accepted case (:16) and the collateral and reference-script cases, never these three refusals.",
+   "confidence": "confirmed-by-run",
+   "fix": "Three CLI tests that mount utxo_info with (a) the empty-datum UTxO given an inline datum, (b) the UTxO at external_address(), (c) is_spent: true. Each asserts its error (\"UTxO has datum\", \"UTxO not in wallet\", \"UTxO is spent\") and that nothing was evaluated or submitted. r4#7 (extract.rs:65 refuses the contract's staked form) should land with (b) plus an accepted staked-form case.",
+   "needs_owner": false,
+   "known_check": "grep -i \"UTxO has datum\", \"not in wallet\", \"is spent\" in backlog.md and archive/plans/: no entry about these refusals' tests. R4's guards list said \"the refusals are untested\"."
+  },
+  {
+   "id": "t1b#8",
+   "severity": "low",
+   "title": "Removing a Seedelf the key doesn't own: no test fails without the refusal",
+   "file": "seedelf-platform/seedelf-cli/src/commands/remove.rs",
+   "line": 68,
+   "scenario": "With :68 gone, `remove` builds and proves a burn of a Seedelf that sits under another key's register. The proof fails the wallet contract, so Ogmios's evaluation refuses the spend with a script error instead of \"Seedelf … isn't this wallet's\". No money moves.",
+   "who": "user",
+   "since": "6daafe6f (2026-09-23)",
+   "evidence": "Mutant: remove.rs:68 `if !owned {` -> `if false && !owned {` (the lane's :66 is where `owned` is computed). `cargo test -p seedelf-cli` 46 passed, 0 failed. tests/cli/remove.rs has only the accepted case (:15).",
+   "confidence": "confirmed-by-run",
+   "fix": "A CLI remove test whose Seedelf UTxO sits under `seedelf_utxo(other_scalar, ..)`. It asserts the error \"isn't this wallet's\" and that nothing is evaluated or submitted.",
+   "needs_owner": false,
+   "known_check": "grep -i \"isn't this wallet\" in backlog.md and archive/plans/: none. R4's guards list said \"the accepted case only\"."
+  },
+  {
+   "id": "t1b#9",
+   "severity": "low",
+   "title": "Paying a script, stake or other-network address from remove (and sweep): no test fails without the CLI's check",
+   "file": "seedelf-platform/seedelf-cli/src/commands/remove.rs",
+   "line": 45,
+   "scenario": "For `remove`, core never checks the change address: ScriptSpend::change_to (build.rs:1654) stores it, and change_outputs (build.rs:417) pays it unchecked. With remove.rs:45 gone, `remove --address <script address>` (the wallet contract's own address, say) sends the burned Seedelf UTxO's ADA there with no datum, which locks it at most scripts. For `sweep`, core re-checks in address_payment (build.rs:3324, which sweep and sweep_from reach) and sweep_all (:3545), so the gap at sweep.rs:139 does no harm.",
+   "who": "user",
+   "since": "6daafe6f (2026-09-23)",
+   "evidence": "Mutant C10b: remove.rs:45 `if !build::is_payable_address(&addr, network_flag) {` -> `if false && ...`: seedelf-cli 46 passed, 0 failed. Mutant C10a: sweep.rs:139, the same change (the lane's sweep.rs:276 is :139 at cd764fba): 46 passed, 0 failed. Core's is_payable_address is pinned: mint_test.rs:2501 fails with each of its three conditions dropped. The other callers of change_to check first: wasm lib.rs:5028 through payable_address, core sweep_all :3545.",
+   "confidence": "confirmed-by-run",
+   "fix": "CLI tests for remove and sweep with --address set to a script address (wallet_address_bech32()), a stake address and a mainnet address on preprod. Each fails with \"Supplied Address Is Incorrect\" and submits nothing. Optionally check inside change_to too: every caller already checks first, so that refuses nothing new.",
+   "needs_owner": false,
+   "known_check": "grep -i \"Supplied Address Is Incorrect\", \"is_payable_address\" in backlog.md and archive/plans/: only chunk-10's description of is_payable_address. R4's guards list cited core's mint_test.rs:2501, which pins the function, not these call sites."
+  },
+  {
+   "id": "t1b#10",
+   "severity": "low",
+   "title": "Minting a Seedelf under an invalid or identity register: no test fails without util mint's check or the identity half of mint_from's",
+   "file": "seedelf-platform/seedelf-cli/src/commands/util/mint.rs",
+   "line": 80,
+   "scenario": "`util mint -g -p` takes the register's points from the user. The CLI checks only is_valid (on the curve, in the subgroup), which passes the identity. Core's mint_from (build.rs:3047) refuses the identity through is_payable. With that identity half gone, a mint under (g, identity) puts the Seedelf, and anything later paid to it, where anyone can spend it (u = g^0); under (identity, u) it's locked for good. No test fails. With mint.rs:80 gone, core still refuses off-subgroup points (mint_test.rs:803), so that half does no harm.",
+   "who": "user",
+   "since": "1cf7491f (2026-09-23) for build.rs:3047; 97be888f (2026-09-23) for mint.rs:80",
+   "evidence": "Mutant C11a: util/mint.rs:80 `if !new_register.is_valid()? {` -> `if false && ...`: seedelf-cli 46 passed, 0 failed. Mutant C11b: build.rs:3047 `if !is_payable(seedelf) {` -> `if !seedelf.is_valid().unwrap_or(false) {`: `--test mint_test` 40 passed, seedelf-core 356 passed, seedelf-wasm (native) 305 passed, seedelf-cli 46 passed, none failed.",
+   "confidence": "confirmed-by-run",
+   "fix": "In core's mint_test, assert `build::mint_from(chain, inputs, \"\", &Register::new(g, identity), ..)` and `Register::new(identity, identity)` both fail with \"isn't made of valid points\". The account mint has the same check (build.rs:3876) and needs the same test. Add a CLI util mint test with -g/-p off the subgroup asserting \"Provided Register Is Invalid\". r4#8's fix (util mint -g -p writes the register unchanged) should keep these.",
+   "needs_owner": false,
+   "known_check": "grep -i \"Provided Register Is Invalid\", \"mint_from\", \"identity\" in backlog.md and archive/plans/: chunk-09 mentions mint_from as a template, nothing about this test. R4's guards list said \"no test found for the identity on a mint\"."
+  },
+  {
+   "id": "t1b#11",
+   "severity": "low",
+   "title": "Signing with a wallet on the other network: no test fails without the signing page's check",
+   "file": "seedelf-platform/seedelf-cli/static/index.js",
+   "line": 27,
+   "scenario": "Without the getNetworkId check (index.js:27-38), the CLI's signing page at 127.0.0.1:44203 asks a wallet on the other network to sign what the CLI built (built for preprod, a mainnet wallet, or the reverse) and submits it to that wallet's network. That network refuses it for its addresses, and the user gets the wallet's error instead of \"switch to the … network\". No money moves.",
+   "who": "user",
+   "since": "af57f3b7 (2025-03-08)",
+   "evidence": "Mutant: index.js:27 `const network_int = await wallet.getNetworkId();` -> `const network_int = injectedNetwork.network === \"preprod.\" ? 0 : 1;`. `cargo test -p seedelf-cli` (the crate that embeds static/) 46 passed, 0 failed. No committed test loads seedelf-cli/static/: grep over seedelf-cli/tests, extension/tests and extension/e2e finds only chunk 51's untracked r51-r4-3.test.ts.",
+   "confidence": "confirmed-by-run",
+   "fix": "A Vitest test that runs index.js in node:vm against a fake CIP-30 wallet (the harness of the verifiers' r51-r4-3.test.ts). Serve the page for preprod with getNetworkId -> 1, and for mainnet with -> 0, and assert the status asks to switch and that signTx and submitTx are never called.",
+   "needs_owner": false,
+   "known_check": "grep -i \"getNetworkId\", \"index.js\", \"static/index.js\" in backlog.md and archive/plans/: only the blind usability test's description of a site calling getNetworkId. R4's guards list said \"none found\"."
+  },
+  {
+   "id": "t1b#12",
+   "severity": "low",
+   "title": "A one-time key that isn't fresh, or proofs not bound to its hash: no CLI test fails without them",
+   "file": "seedelf-platform/seedelf-cli/src/commands/spend.rs",
+   "line": 26,
+   "scenario": "The deployed wallet contract accepts a proof whose vkh is among the transaction's signers (5b82530 wallet.ak:48, `list.has(transaction.extra_signatories, proof.vkh)`), so a fresh, secret one-time key is the whole defence against replay. With spend.rs:26 using a fixed key, every CLI spend is signed by a key anyone can derive from the source. Anyone who sees a pending or rolled-back spend can copy its proofs into a transaction paying themselves and sign it. With spend.rs:43 proving over another 28-byte hash, the contract refuses every spend. No CLI test fails in either case: the harness never checks signers or proofs.",
+   "who": "stranger",
+   "since": "6daafe6f (2026-09-23)",
+   "evidence": "Mutant C13a: spend.rs:26 `let secret = SecretKey::new(OsRng);` -> `let secret = SecretKey::from([7u8; 32]);`: seedelf-cli 46 passed, 0 failed. Mutant C13c: spend.rs:43 `create_proof(register.clone(), scalar, vkh.to_string())` -> `create_proof(register.clone(), scalar, { let _ = vkh; \"00\".repeat(28) })`: 46 passed, 0 failed. Mutant C13b (an empty vkh) fails six CLI tests (remove_burns_token_and_returns_ada, sweep_partial_returns_change_to_wallet, sweep_all_drains_wallet_to_address, transfer_returns_token_change, transfer_single_recipient_is_sound, mint_creates_one_seedelf_and_conserves_value), but only at create_proof's length check (\"vkh must be a 28-byte blake2b-224 key hash, got 0 bytes\"). The harness's assert_sound_transaction checks value, minimums and datums only. The lane's line 70 is blank; the key is made at :26, bound at :43, and signs at :78.",
+   "confidence": "confirmed-by-run",
+   "fix": "In the CLI harness, decode the submitted spend and assert three things. Its required signer is the hash of its own vkey witness's key (beside the collateral's). Each Seedelf input's redeemer carries that vkh, and its proof verifies (`seedelf_crypto::schnorr::prove(generator, public_value, z, g_r, vkh)`). Two spends run in one process name different required signers.",
+   "needs_owner": false,
+   "known_check": "grep -i \"OneTimeKey\", \"one-time key\" in backlog.md and archive/plans/: the hits are about the web wallet's signer display (1.9.0 cross#2) and hardware wallets, not this test. R4's guards list said \"none found in the CLI\"."
+  }
+ ],
+ "guards": [
+  {
+   "file": "seedelf-platform/seedelf-core/src/note.rs",
+   "line": 83,
+   "stops": "A note patched after signing (R2b#0)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/note.rs",
+   "line": 88,
+   "stops": "Overwriting existing metadata or its hash (R2b#1)",
+   "test": "note_test.rs a_note_and_a_reward_withdrawal_go_together (:208, the second patch no longer errs)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/staking.rs",
+   "line": 457,
+   "stops": "Certificates, withdrawals or votes patched after signing (R2b#2)",
+   "test": "staking_test.rs a_patch_happens_before_signing_and_nothing_to_patch_changes_nothing (:766 \"never after signing\")"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/staking.rs",
+   "line": 463,
+   "stops": "A second patch overwriting certificates, withdrawals or votes (R2b#3)",
+   "test": "staking_test.rs a_patch_happens_before_signing_and_nothing_to_patch_changes_nothing (:764 \"only once\")"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/staking.rs",
+   "line": 211,
+   "stops": "A withdrawal Conway refuses, the vote not delegated (R2b#4)",
+   "test": "staking_test.rs refuses_what_the_ledger_would (:411-416, RewardsLocked)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/staking.rs",
+   "line": 309,
+   "stops": "A DRep retirement with a guessed refund of 0 (R2b#5)",
+   "test": "staking_test.rs a_drep_refuses_what_the_ledger_would (:1020; the closure's unwrap_err at :998 panics)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/staking.rs",
+   "line": 330,
+   "stops": "Two votes on one governance action (R2b#6)",
+   "test": "staking_test.rs a_drep_refuses_what_the_ledger_would (:1021-1027; panics at :998)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/staking.rs",
+   "line": 447,
+   "stops": "A deposit larger than inputs + rewards + refund underflowing (R2b#7; the lane's :443 is the fn; mutated to wrapping_sub)",
+   "test": "staking_test.rs every_drep_transaction_builds_soundly (:1126 \"Not enough ADA\"); the lane's named test at :552 stays green"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/withdraw_zero.rs",
+   "line": 96,
+   "stops": "A withdraw-zero patched after signing (R2b#8)",
+   "test": "withdraw_zero_test.rs a_signed_transaction_is_not_patched (:161)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/withdraw_zero.rs",
+   "line": 108,
+   "stops": "Overwriting another account's withdrawal (R2b#9)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/withdraw_zero.rs",
+   "line": 114,
+   "stops": "A script data hash recomputed without the witness datums (R2b#10)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/withdraw_zero.rs",
+   "line": 120,
+   "stops": "Map-form redeemers rewritten as a list (R2b#11)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/withdraw_zero.rs",
+   "line": 135,
+   "stops": "A stale script data hash after the Reward redeemer changes (R2b#12)",
+   "test": "withdraw_zero_test.rs a_patch_adds_the_withdrawal_and_its_redeemer (:113, hash mismatch)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/eval.rs",
+   "line": 63,
+   "stops": "Measuring a row whose reference script isn't carried over (R2b#13)",
+   "test": "mint_test.rs withdraw::never_picks_a_utxo_the_wallets_evaluator_cant_take (:2342)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/eval.rs",
+   "line": 82,
+   "stops": "A datum nested too deep reaching the decoders (R2b#14)",
+   "test": "cbor_test.rs the_evaluator_is_never_handed_a_datum_too_deep_to_read (:117), a_reference_scripts_row_is_never_resolved_under_a_datum_too_deep_to_read (:146)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/eval.rs",
+   "line": 157,
+   "stops": "A token listed twice past a u64 (R2b#15; mutated to wrapping_add)",
+   "test": "eval_test.rs a_row_naming_a_token_past_what_an_output_holds_is_refused_in_words (:253)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/cbor.rs",
+   "line": 102,
+   "stops": "Untrusted CBOR deeper than MAX_DEPTH (R2b#16)",
+   "test": "cbor_test.rs: 7 tests fail incl. far_too_deep_is_refused_without_recursing and every_kind_of_nesting_counts_to_the_limit; the binary aborts (SIGABRT)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/cbor.rs",
+   "line": 113,
+   "stops": "Trailing bytes after one item passing as readable (R2b#17)",
+   "test": "cbor_test.rs only_one_whole_item_passes (:92)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/assets.rs",
+   "line": 68,
+   "stops": "A token total wrapping past a u64 (R2b#18; mutated to wrapping_add)",
+   "test": "utxos_test.rs fitting_leaves_out_what_would_push_a_token_past_a_u64 (:342), fitting_takes_ada_only_then_its_own_then_the_most_lovelace (:389)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/assets.rs",
+   "line": 93,
+   "stops": "A token amount underflowing in sub/separate (R2b#19; mutated to wrapping_sub)",
+   "test": "assets_test stays green; caught in core by lovejoin_planner_test.rs a_deposit_across_pools_puts_each_box_in_its_own_pool (:780), lovejoin_pools_test.rs a_token_deposit_takes_q_a_box_and_keeps_the_rest_apart (:2135), mint_test.rs transfer::max_pays_one_seedelf_everything_but_the_fee_and_what_kept_tokens_need (:1893)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/assets.rs",
+   "line": 240,
+   "stops": "Subtracting an absent token inserting a phantom amount (R2b#20; mutated to push it)",
+   "test": "assets_test.rs separate_absent_token_errors (:258)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/assets.rs",
+   "line": 156,
+   "stops": "A zero-quantity token in a CLI ask (R2b#21)",
+   "test": "assets_test.rs asset_parse_rejects_zero_amount (:198)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/utxos.rs",
+   "line": 423,
+   "stops": "Token totals past a u64 in one transaction (R2b#22)",
+   "test": "utxos_test.rs fitting_leaves_out_what_would_push_a_token_past_a_u64 (:346), fitting_takes_ada_only_then_its_own_then_the_most_lovelace (:389)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/utxos.rs",
+   "line": 363,
+   "stops": "An unmeasurable reference script priced as 0 bytes (R2b#23; two mutants: unmeasurable -> 0, and the filter alone dropped)",
+   "test": "utxos_test.rs a_reference_script_that_cant_be_measured_is_never_taken_for_none (:447), both mutants"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/utxos.rs",
+   "line": 44,
+   "stops": "An undecodable register stopping the scan or counted as owned, also :124 (R2b#24; four mutants: `?` and unwrap_or(true) at each line)",
+   "test": "utxos_test.rs wallet_scans_skip_a_register_whose_points_dont_decompress (:561-564), all four"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/transaction.rs",
+   "line": 93,
+   "stops": "Change wrapping when deductions exceed the selected lovelace (R2b#25; mutated to wrapping_sub)",
+   "test": "proptest_core.rs checked_lovelace_matches_sequential_checked_sub (:61), checked_lovelace_result_never_exceeds_available (:76)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/transaction.rs",
+   "line": 130,
+   "stops": "A Seedelf named after output #256 or later (R2b#26 = R4#7, merged)",
+   "test": "transaction_test.rs token_name_refuses_an_index_past_one_byte (:150)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/build.rs",
+   "line": 3280,
+   "stops": "Paying a script, other-network, or non-Shelley address (R2b#27; each of its three conditions dropped in turn)",
+   "test": "mint_test.rs withdraw::refuses_what_would_lose_money (:2501), all three"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/fund.rs",
+   "line": 118,
+   "stops": "Funding a Seedelf whose register has an identity or torsion point (R4#0)",
+   "test": "tests/cli/fund.rs fund_refuses_a_seedelf_whose_public_value_is_the_identity (:153)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/fund.rs",
+   "line": 132,
+   "stops": "Spending a UTxO holding a reference script, also create.rs:74 and extract.rs:128 (R4#1; each site its own mutant)",
+   "test": "fund_never_spends_a_utxo_holding_a_reference_script (fund.rs:114); create_never_spends_a_utxo_holding_a_reference_script (create.rs:119); extract_never_spends_an_address_utxo_holding_a_reference_script (extract.rs:112)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/create.rs",
+   "line": 326,
+   "stops": "A collateral holding tokens, also extract.rs:102 (R4#2)",
+   "test": "create_never_puts_up_a_collateral_holding_a_token (:150), create_refuses_without_a_collateral (:184); extract_never_puts_up_a_collateral_holding_a_token (:177), extract_refuses_without_a_collateral (:212)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/create.rs",
+   "line": 339,
+   "stops": "A script transaction with no collateral, also extract.rs:120 (R4#3)",
+   "test": "create_refuses_without_a_collateral (create.rs:184); extract_refuses_without_a_collateral (extract.rs:212)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/create.rs",
+   "line": 221,
+   "stops": "A fee short of the reference-script fee, also extract.rs:238 and :237 (R4#4; create's fee to 0, extract's fee to 0, the extracted UTxO's script left out)",
+   "test": "create_prices_the_policy_at_the_networks_reference_script_price (create.rs:130, 0 vs 51,900); extract_prices_the_contract_at_the_networks_reference_script_price (:126, 0 vs 62,900); extract_prices_a_reference_script_on_the_utxo_it_extracts (:148, 0 vs 7,800)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/create.rs",
+   "line": 223,
+   "stops": "R4#4's spent-inputs term in create's fee (mutant C05b: the term dropped)",
+   "test": "none, but masked: create.rs:74 drops every reference-script UTxO from the selection, so the term is always 0; dropping both is caught by create_never_spends_a_utxo_holding_a_reference_script"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/fee.rs",
+   "line": 16,
+   "stops": "An odd fee under the ledger's 150% collateral, for create.rs:226 and extract.rs:248 (R4#5)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/fund.rs",
+   "line": 246,
+   "stops": "Change or output wrapping below zero, at the 12 CLI calls of checked_lovelace (R4#6; one site, then all 12)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/util/extract.rs",
+   "line": 60,
+   "stops": "Extracting a datum'd (:60), foreign (:65) or spent (:70) UTxO (R4#8; three mutants)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/remove.rs",
+   "line": 68,
+   "stops": "Proving a Seedelf the key doesn't own (R4#9; the lane's :66)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/remove.rs",
+   "line": 45,
+   "stops": "Remove's leftover ADA paid to a script, stake or other-network address (R4#10); core doesn't re-check change_to",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/sweep.rs",
+   "line": 139,
+   "stops": "A sweep paying a script, stake or other-network address (R4#10; the lane said :276); core re-checks",
+   "test": "none at the CLI; core's own check is pinned by mint_test.rs:2501"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/util/mint.rs",
+   "line": 80,
+   "stops": "util mint under a register with invalid points (R4#11); core's mint_from re-refuses",
+   "test": "none at the CLI; core's refusal of invalid points is pinned by mint_test.rs:803"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/build.rs",
+   "line": 3047,
+   "stops": "A mint under an identity register: mint_from's is_payable beyond is_valid (R4#11's second half)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/static/index.js",
+   "line": 27,
+   "stops": "Signing with a wallet on the other network (R4#12)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/spend.rs",
+   "line": 26,
+   "stops": "Rollback or mempool replay: a fresh, secret one-time key (R4#13; mutated to a fixed key)",
+   "test": "none"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/spend.rs",
+   "line": 43,
+   "stops": "Proofs bound to the one-time key's hash (R4#13; proved over another 28-byte hash)",
+   "test": "none. An empty vkh is caught by six CLI spend tests, but only through create_proof's length check"
+  }
+ ],
+ "checked_ok": [
+  "R2b#1 note.rs:88 (metadata already set): caught by note_test.rs a_note_and_a_reward_withdrawal_go_together (:208).",
+  "R2b#2 staking.rs:457 (patched after signing): caught by staking_test.rs a_patch_happens_before_signing_and_nothing_to_patch_changes_nothing (:766).",
+  "R2b#3 staking.rs:463 (a second patch): caught by the same test (:764 \"only once\").",
+  "R2b#4 staking.rs:211 (withdrawal with the vote not delegated): caught by staking_test.rs refuses_what_the_ledger_would (:411-416).",
+  "R2b#5 staking.rs:309 (retirement with an unknown deposit) and R2b#6 staking.rs:330 (two votes on one action): caught by staking_test.rs a_drep_refuses_what_the_ledger_would (:1020 and :1021-1027).",
+  "R2b#7 staking.rs:447 (net's checked_sub, as wrapping_sub): caught by staking_test.rs every_drep_transaction_builds_soundly (:1126). The lane's named test (:552) stays green.",
+  "R2b#8 withdraw_zero.rs:96 (patched after signing): caught by withdraw_zero_test.rs a_signed_transaction_is_not_patched (:161).",
+  "R2b#12 withdraw_zero.rs:135 (script data hash not recomputed): caught by withdraw_zero_test.rs a_patch_adds_the_withdrawal_and_its_redeemer (:113).",
+  "R2b#13 eval.rs:63 (a reference-script row measured): caught by mint_test.rs withdraw::never_picks_a_utxo_the_wallets_evaluator_cant_take (:2342).",
+  "R2b#14 eval.rs:82 (a deep datum): caught by cbor_test.rs the_evaluator_is_never_handed_a_datum_too_deep_to_read (:117) and a_reference_scripts_row_is_never_resolved_under_a_datum_too_deep_to_read (:146).",
+  "R2b#15 eval.rs:157 (a token listed twice, wrapping): caught by eval_test.rs a_row_naming_a_token_past_what_an_output_holds_is_refused_in_words (:253).",
+  "R2b#16 cbor.rs:102 (depth cap): caught by cbor_test.rs (seven tests fail and the binary aborts with SIGABRT).",
+  "R2b#17 cbor.rs:113 (trailing bytes): caught by cbor_test.rs only_one_whole_item_passes (:92).",
+  "R2b#18 assets.rs:68 (add, wrapping): caught by utxos_test.rs fitting_leaves_out_what_would_push_a_token_past_a_u64 (:342) and fitting_takes_ada_only_then_its_own_then_the_most_lovelace (:389).",
+  "R2b#19 assets.rs:93 (sub, wrapping): not by assets_test, but by lovejoin_planner_test (:780), lovejoin_pools_test (:2135) and mint_test transfer::max_pays_one_seedelf_everything_but_the_fee_and_what_kept_tokens_need (:1893).",
+  "R2b#20 assets.rs:240 (phantom insert): caught by assets_test.rs separate_absent_token_errors (:258).",
+  "R2b#21 assets.rs:156 (zero amount): caught by assets_test.rs asset_parse_rejects_zero_amount (:198).",
+  "R2b#22 utxos.rs:423 (fitting takes everything): caught by utxos_test.rs fitting_leaves_out_what_would_push_a_token_past_a_u64 (:346) and :389.",
+  "R2b#23 utxos.rs:363 (unmeasurable script as 0; the filter alone dropped): both caught by utxos_test.rs a_reference_script_that_cant_be_measured_is_never_taken_for_none (:447).",
+  "R2b#24 utxos.rs:44 and :124 (an error stops the scan, or counts as owned; four mutants): all caught by utxos_test.rs wallet_scans_skip_a_register_whose_points_dont_decompress (:561-564).",
+  "R2b#25 transaction.rs:93 (checked_lovelace itself, wrapping): caught by proptest_core.rs checked_lovelace_matches_sequential_checked_sub (:61) and checked_lovelace_result_never_exceeds_available (:76).",
+  "R2b#26 = R4#7 transaction.rs:130 (index past one byte): caught by transaction_test.rs token_name_refuses_an_index_past_one_byte (:150).",
+  "R2b#27 build.rs:3280 (script part, network, Shelley-only: each dropped in turn): all caught by mint_test.rs withdraw::refuses_what_would_lose_money (:2501).",
+  "R4#0 fund.rs:118 (identity register): caught by tests/cli/fund.rs fund_refuses_a_seedelf_whose_public_value_is_the_identity (:153).",
+  "R4#1 fund.rs:132, create.rs:74, extract.rs:128 (reference-script UTxOs spent): each caught by its never_spends test (fund.rs:114, create.rs:119, extract.rs:112).",
+  "R4#2 create.rs:326, extract.rs:102 (a token-holding collateral): caught by create_never_puts_up_a_collateral_holding_a_token (:150) and create_refuses_without_a_collateral (:184); extract's pair (:177, :212).",
+  "R4#3 create.rs:339, extract.rs:120 (no collateral): caught by create_refuses_without_a_collateral (:184) and extract_refuses_without_a_collateral (:212).",
+  "R4#4 create.rs:221, extract.rs:238 and :237 (reference-script fee): caught by create_prices_the_policy_at_the_networks_reference_script_price (:130), extract_prices_the_contract_at_the_networks_reference_script_price (:126) and extract_prices_a_reference_script_on_the_utxo_it_extracts (:148).",
+  "Baseline in the copy before any mutant, all green: seedelf-core 356, seedelf-cli 46, seedelf-wasm native 305 (BASELINE.md's 790 also counts crypto, koios and display)."
+ ],
+ "notes": [
+  "Method: each mutant was applied to a copy of seedelf-platform/ only (rsync from TREE), checked first to match TREE exactly, and restored by copying TREE's file back and comparing bytes. TREE was never written: `git diff --name-only` under core and the CLI shows 0 files. Each run used `systemd-run --user --scope -q -p MemoryMax=6G -p MemorySwapMax=0 timeout 30m nice -n 10 cargo test -j 3 --locked --no-fail-fast`, with CARGO_TARGET_DIR under ~/.cache/seedelf-review-51/T1b-target. Both the copy and the target are removed.",
+  "The verifiers' 34 untracked r51_* / r51-* tests in TREE were moved out of the copy before any run, so every result above is the committed suite's.",
+  "Stages ran in order and stopped at the first stage with a failing test: the named test, then the crate, then for core guards the WebAssembly crate's native tests (they link core from source). So a caught guard lists only the failing tests of its first failing stage; other tests may catch it too. CLI mutants ran against all of seedelf-cli, since no other crate depends on it. Its 4 #[ignore] live Koios tests weren't run.",
+  "The extension's Vitest suite reaches the Rust guards only through the prebuilt wasm/pkg, so no core mutant could reach it without rebuilding WebAssembly, which wasn't done per the brief. The native seedelf-wasm tests stood in.",
+  "Arithmetic guards were mutated to wrapping arithmetic, what a build without overflow checks would do. All of them were caught (eval.rs:157, assets.rs:68, assets.rs:93, staking.rs:447, transaction.rs:93), so the panicking variants I had prepared weren't needed.",
+  "Line corrections at cd764fba: R4#10's sweep.rs:276 is sweep.rs:139. R4#9's check is remove.rs:68 (:66 computes `owned`). R4#13's spend.rs:70 is blank: the key is made at :26, the proofs are bound at :43 and the key signs at :78. R2b#7's checked_sub is staking.rs:447 (:443 is the fn).",
+  "create.rs:223's spent-inputs term in the reference-script fee (C05b) fails no test, but it can't matter: create.rs:74 drops every reference-script UTxO from the selection first, so the term is always 0. It's belt and braces, not a gap. Removing both is caught by create_never_spends_a_utxo_holding_a_reference_script.",
+  "Where a lane finding's fix would meet these tests: r2b#1 (is_payable_address refuses a script stake part): if fixed, keep a script-payment-part address in mint_test.rs:2501's list, the only test that catches build.rs:3282's mutant. r4#7 (extract.rs:65 and the staked form) should land with t1b#7's foreign-address test. r4#8 (util mint -g -p) should keep t1b#10's tests. r4#3's verifier harness (r51-r4-3.test.ts) is also the harness t1b#11's test needs.",
+  "t1b#12's stakes: with a fixed CLI key, a mempool front-run would also work, not just a rollback replay. Everything else about the proof is pinned by core and crypto. A CLI test that verifies the submitted proofs and signer with seedelf_crypto::schnorr::prove would cover C13a and C13c at once.",
+  "assets_test has no direct case for Asset::sub's underflow (R2b#19). It's caught only through three builder tests' error paths; a one-line assets_test case would make it cheap to see (a nit)."
+ ],
+ "coverage": "Every guard in both lists was tried: R2b's 28 and R4's 14, with R2b#26 and R4#7 (transaction.rs:130) merged, so 41 distinct guards. That took 61 mutants. Multi-site guards got one mutant per site, multi-condition guards one per condition, and two faithful variants were added for spend.rs (a fixed key; another 28-byte hash). 3 prepared panicking variants (M16p, M19p, M20p) were not run, because their wrapping versions were caught. Crates run per mutant: seedelf-core (named test, then all 356), seedelf-wasm native (305) for core guards, and seedelf-cli (46) for CLI guards and for core guards the CLI calls. Not run: the extension's Vitest (it reaches Rust only through the prebuilt wasm/pkg; WebAssembly wasn't rebuilt, per the brief), the CLI's 4 ignored live Koios tests, Playwright, and the parts suite. No guard left untried."
+}

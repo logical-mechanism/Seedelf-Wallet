@@ -276,3 +276,55 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 - `v5#3` nit (nobody): CLAIMS.md puts 'an input in every transaction' among Lovejoin's assumed ledger rules, but none of Lovejoin's theorems uses it `CLAIMS.md:31`
 
 *Coverage:* Read in full: seedelf-verification/CLAIMS.md, README.md, Seedelf/Every/README.md, Lovejoin/Every/README.md, Lovejoin/AnyTx/README.md and Audit/README.md; the root README.md; the wallet README. Also read in full: check.sh, lakefile.lean, both lake-manifest.json files, Seedelf.lean, and the cited theorem files: Seedelf/Every/Typed.lean, PolicyTyped.lean and AlwaysFalse.lean; Lovejoin/Every/Readable.lean, Typed.lean and MintTyped.lean; Lovejoin/AnyTx/BoxPurposesAll.lean, BoxSemantics.lean, PurposesKernel.lean and LogicPublishKernel.lean. Plus Lovejoin/Template/Scripts.lean, Lovejoin/Scripts.lean, Seedelf/Scripts.lean, extract.sh, extract-lovejoin.sh, Audit/Checks/FlatDecodeCheck.lean, the wasm crate's lovejoin_proven_bytes_test.rs, and templates.rs's first 240 lines. Diffed CLAIMS.md and README.md from chunk 48 (363acdf3) to HEAD, and traced each changed wording to its commit. Skimmed: Poli…
+
+## T1b (12 findings, 45 guards)
+
+- `t1b#1` low (nobody): A note patched after signing: no test fails without it `note.rs:83`
+- `t1b#2` low (nobody): Overwriting another account's withdrawal in the withdraw-zero patch: no test fails without it `withdraw_zero.rs:108`
+- `t1b#3` low (nobody): A script data hash recomputed without the witness datums: no test fails without the refusal `withdraw_zero.rs:114`
+- `t1b#4` low (nobody): Map-form redeemers rewritten as a list: no test fails without the refusal `withdraw_zero.rs:120`
+- `t1b#5` low (user): An odd fee whose 3/2 × fee collateral falls under the ledger's 150%: no CLI test fails without the even rounding `create.rs:226`
+- `t1b#6` low (user): A change or output wrapping below zero at the CLI's checked_lovelace calls: no test fails without them `fund.rs:246`
+- `t1b#7` low (user): Extracting a datum'd, a foreign or a spent UTxO: no test fails without util extract's refusals `extract.rs:60`
+- `t1b#8` low (user): Removing a Seedelf the key doesn't own: no test fails without the refusal `remove.rs:68`
+- `t1b#9` low (user): Paying a script, stake or other-network address from remove (and sweep): no test fails without the CLI's check `remove.rs:45`
+- `t1b#10` low (user): Minting a Seedelf under an invalid or identity register: no test fails without util mint's check or the identity half of mint_from's `mint.rs:80`
+- `t1b#11` low (user): Signing with a wallet on the other network: no test fails without the signing page's check `index.js:27`
+- `t1b#12` low (stranger): A one-time key that isn't fresh, or proofs not bound to its hash: no CLI test fails without them `spend.rs:26`
+
+*Coverage:* Every guard in both lists was tried: R2b's 28 and R4's 14, with R2b#26 and R4#7 (transaction.rs:130) merged, so 41 distinct guards. That took 61 mutants. Multi-site guards got one mutant per site, multi-condition guards one per condition, and two faithful variants were added for spend.rs (a fixed key; another 28-byte hash). 3 prepared panicking variants (M16p, M19p, M20p) were not run, because their wrapping versions were caught. Crates run per mutant: seedelf-core (named test, then all 356), seedelf-wasm native (305) for core guards, and seedelf-cli (46) for CLI guards and for core guards the CLI calls. Not run: the extension's Vitest (it reaches Rust only through the prebuilt wasm/pkg; WebAssembly wasn't rebuilt, per the brief), the CLI's 4 ignored live Koios tests, Playwright, and the parts suite. No guard left untried.
+
+## X1a (3 findings, 16 guards)
+
+- `x1a#1` low (stranger): Send and Make public call the user's payment key under someone else's stake key "your own public account: it comes back", where the sign window says its staking rewards aren't yours `destination.ts:122`
+- `x1a#2` low (site): The sign window says a site's payment into a Seedelf hides whose it is without checking its register: a register written as found shows on chain whose it is `cip30.rs:1386`
+- `x1a#3` low (site): The sign window leaves out "It carries metadata" whenever a note is shown, so a site's other metadata beside a CIP-20 note is never mentioned `DappApprovals.tsx:1083`
+
+*Coverage:* Read in full: ui/screens/CardanoSend.tsx, MoveIn.tsx, CreateSeedelf.tsx and Collateral.tsx; background/send.ts, move-in.ts, mint.ts, destination.ts, tx-view.ts and account.ts; ui/dapp.ts; components/ReviewTotals.tsx, ReviewRows.tsx and PaidRows.tsx; seedelf-core/src/note.rs.  Read in the parts named: - DappApprovals.tsx 998-1378 (SignTx, SignData); - dapp.ts 1960-2520 (stakeDeposit, readTx, signTx, waitingCbor, ties, publicKeys, remember, the head of signData); - cip30.rs 1-540, 690-2008 and 2150-2384: types, Amount, keys, inspect, sign_tx, signData; - wasm lib.rs:   - 60-620: move_in, check_paths, sign_with_paths, withdrawing, sign_staking;   - 1536-2100: SendRequest/account_send, stake, drep_transaction;   - 2725-2925: account mint;   - 5085-5180: is_own_address, carries_stake_key; - core build.rs 90-490 (settle, Patches, outputs, minimums), 580-1100 (Payee, account builders, account_p…
+
+## X1b (2 findings, 14 guards)
+
+- `x1b#1` low (user): A site session's Bring it back review through Lovejoin opens Transaction details on the chain's last transaction, unnamed, not the deposit `SiteSessions.tsx:299`
+- `x1b#2` nit (nobody): withdraw.ts says a shortfall's `most` is one transaction, but WebAssembly builds it in parts, up to 25 `withdraw.ts:104`
+
+*Coverage:* Read in full: - extension/src/background: transfer.ts, withdraw.ts, mint.ts, script-spend.ts (all 644 lines). - extension/src/ui/screens: Transfer.tsx, Withdraw.tsx, RemoveSeedelf.tsx, CreateSeedelf.tsx. - extension/src/ui/components: ReviewTotals.tsx, LovejoinReturn.tsx (all 578 lines), HistoriesNote.tsx.  Read in part: - parts.ts 1-260: the header, reviewParts, splitParts, letGo's head. - sessions.ts: siteOutBuild 2031-2080; mixOutBuild, againBuild, mixFunding and mixOutSubmit 2155-2345; buildFunding and outSubmit's head 3000-3150; buildBack's chain call and summary 4577-4760; sendChain 5170-5250; wayOf, pricedClassic and fillsOf 6412-6447. - lovejoin.ts: againBoxes 3476-3580; chain and fanOut 3642-3900; unstale 4598-4612; bringAllBackNow's loop 7340-7420; grep-level reads of withdrawOne 7542-7700. - wasm lib.rs: classes_mixed 2221; the stealth mint 2396-2475; withdrawal_of, amounts_of…
+
+## X2 (2 findings, 14 guards)
+
+- `x2#1` medium (stranger): A stranger's 5 ₳ at a KEY address whose hash is a pool's mix_box script hash counts as a pool box: it counts toward the floor, gets drawn, and every chain that draws it fails, so returns come back directly `mod.rs:416`
+- `x2#2` low (stranger): A UTxO at a KEY address whose hash is the Seedelf contract's, under the user's register, counts in the private balance, and any spend that takes it fails: Max always fails for wallets of up to 20 private UTxOs `balances.ts:489`
+
+*Coverage:* Read in full: the brief (COMMON.md), INDEX.md, LANES.md, RESUME.md and BASELINE.md, R3a's full report and r3a-1's verification. I also read E6's checked list and notes, the notes of W1b, W2, W3, E1a and E1b, and W2's w2#2.  Code read for the traces: - seedelf-core: lovejoin/mod.rs 330-520, 920-1170 and 2282-2605; eval.rs 1-200 and 290-380; utxos.rs 1-130 and 315-432; build.rs 2530-2880 (select_script_inputs, one_more, grow, apart); lovejoin/value.rs is_row and is_value; orders.rs 1275-1300. - seedelf-koios: koios.rs 354-372. - wasm: lovejoin.rs 355-500 and 2580-2680; lib.rs 960-1010, 1160-1215, 2290-2360, 2995-3017, 4033-4081 and 4458-4553. - extension, in full: contract-scan.ts, chain.ts, shared/seedelf-name.ts. - extension, in part: balances.ts 80-90, 250-265 and 478-506; private-index.ts 1-80 and 370-413; koios.ts 780-940; lovejoin.ts 3220-3350, 3642-3700, 6227-6356, 6778-6960 and 751…
+
+## X3 (1 findings, 13 guards)
+
+- `x3#1` low (site): The sign window's register reader takes only tag 121, so a site's valid Seedelf payment spelled in constructor 0's general form (tag 102) reads 'without a register: anyone can take' and 'Your private balance isn't in it' `cip30.rs:1011`
+
+*Coverage:* Read in full: extension background/chain.ts, destination.ts, short.ts, minted-by.ts, account.ts; shared/recipients.ts, seedelf-name.ts, histories.ts, preferences.ts; seedelf-core address.rs, constants.rs, transaction.rs, cbor.rs.  Read in the parts this lens needed: - seedelf-koios koios.rs: InlineDatum, ReferenceScript, UtxoResponse, extract_bytes_with_logging, register_of_datum, point_bytes, TxInfoOutput. - wasm cip30.rs: network_flag, network_of, keys_of, own_address, has_payment_key, MAX_TX_BYTES, MAX_NESTING, output_parts, register_datum, datum_names_key, released_from_contracts, inspect's output loop. - wasm decode.rs: register_detail, output_detail. - wasm lib.rs: LeftOut and left_out; lovelace_of and MAX_SUPPLY_LOVELACE; payment_key_of; MAX_MERGE and session_collateral; NOTHING_PAYS; plan_return; built_or_without_strangers; merged_return; session_return; planned_return; MAX_RECIP…
+
+## X4 (2 findings, 16 guards)
+
+- `x4#1` low (user): A due box's withdraw reads the five-minute quiet rule before its Koios reads and giveme.my, never again before its submit, so a send that starts in between is followed seconds later `lovejoin.ts:6901`
+- `x4#2` low (user): The sessions runner checks the unlock's wait once, before a step's Minswap and Koios calls: a lock and unlock during them sends the step seconds after the unlock `sessions.ts:3807`
+
+*Coverage:* Read in full: background/pending.ts, spent.ts, sent-txs.ts, wallet.ts, runs.ts, collateral.ts, dapp-window.ts, account.ts, storage.ts and private-store.ts's record lists. Read in the parts that cross time: sessions.ts (reset, runAll, settleReturns, markCut, step, act, waits, advance, order, cancel's head, signAndSend, sendRecorded, submit, disconnect, the session-key constants); lovejoin.ts (header and timing constants 1-40 and 1685-1760, withdrawDue/withdrawDueNow 6760-6960, withdrawOne 7540-7760, settleWithdrawing/resends 7820-7912, keepOnReset/adoptKept/cuts/chainsSending, keptMaybe/keptUnsettled, rewardsIn/readRewards, made, publicReady/checked/keep, pumpPublicNow's send loop 5290-5345); dapp.ts (stateChanged, closeWindow, windowClosed, networkChanged, ask, unlocked, fundPrivate, watchFunding, holder/funded, submitTx/send/sentFor/keepSent/settle); handlers.ts (create/restore/reset-wa…
