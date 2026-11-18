@@ -934,3 +934,88 @@ pub fn not_payable_addresses() -> Vec<String> {
             .expect("mainnet bech32"),
     ]
 }
+
+// ----------------------------------------------------------------------------
+// a run in a child process, read as a user reads the terminal
+// ----------------------------------------------------------------------------
+
+/// Set in a child process to the name of the test it runs ([`run_child`]).
+pub const CHILD: &str = "SEEDELF_TEST_CHILD";
+
+/// Whether this process is the child [`run_child`] started to run `test`. A
+/// child test does nothing in any other run.
+pub fn is_child(test: &str) -> bool {
+    std::env::var(CHILD).is_ok_and(|name| name == test)
+}
+
+/// Runs this test binary's test `test` in a child process, stopped after
+/// `within`: what it printed to stdout and to stderr, colours stripped. What
+/// a command prints, a test in its own process can't read.
+pub fn run_child(test: &str, within: std::time::Duration) -> (String, String) {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(std::env::current_exe().expect("the test binary"))
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(CHILD, test)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("start {test}: {e}"));
+    let mut out = child.stdout.take().expect("stdout");
+    let mut err = child.stderr.take().expect("stderr");
+    let out_reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = out.read_to_string(&mut s);
+        s
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = err.read_to_string(&mut s);
+        s
+    });
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        if child.try_wait().expect("wait for the child").is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    (
+        strip_ansi(&out_reader.join().expect("stdout reader")),
+        strip_ansi(&err_reader.join().expect("stderr reader")),
+    )
+}
+
+/// What follows `prefix` on the first line of `text` that starts with it.
+pub fn line_after(text: &str, prefix: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find_map(|l| l.strip_prefix(prefix).map(|rest| rest.trim().to_string()))
+}
+
+/// `s` without its terminal colour codes.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            for n in chars.by_ref() {
+                if n.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}

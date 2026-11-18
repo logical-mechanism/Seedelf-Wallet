@@ -1,3 +1,4 @@
+use crate::commands::rows;
 use crate::commands::spend::{self, OneTimeKey};
 use crate::setup;
 use anyhow::{Result, anyhow, bail};
@@ -5,7 +6,7 @@ use blstrs::Scalar;
 use clap::Args;
 use seedelf_core::assets::Assets;
 use seedelf_core::build::{self, Chain, Payment};
-use seedelf_core::constants::get_config;
+use seedelf_core::constants::{MAXIMUM_WALLET_UTXOS, get_config};
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_display::display;
@@ -99,7 +100,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         utxos::get_credential_utxos(chain.config.contract.wallet_contract_hash, network_flag)
             .await?;
     let owned_utxos: Vec<UtxoResponse> =
-        utxos::collect_wallet_utxos(scalar, contract, every_utxo.clone())?;
+        utxos::collect_all_wallet_utxos(scalar, contract, every_utxo.clone())?;
 
     // each recipient's register, found with their seedelf
     let payments: Vec<Payment> = args
@@ -121,9 +122,24 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
 
     let key = OneTimeKey::new();
     let spend: build::ScriptSpend = match args.utxos {
-        None => build::transfer(&chain, &owned_utxos, &payments, &owner, key.hash)?,
+        None => {
+            // the 20 a transfer picks among: never Koios's order, which a
+            // payer picks (chunk 51, r2cli#1)
+            let needed = payments
+                .iter()
+                .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
+            let deposit = |tokens: &Assets| build::minimum_deposit(&chain.params, tokens);
+            let window = rows::window(
+                owned_utxos,
+                &needed,
+                &deposit,
+                MAXIMUM_WALLET_UTXOS as usize,
+            )?;
+            build::transfer(&chain, &window, &payments, &owner, key.hash)?
+        }
         Some(selected) => {
-            // assumes the utxos hold the correct tokens else it will error downstream
+            // assumes the utxos hold the correct tokens else it will error
+            // downstream; any owned UTxO, in the window or not (r2cli#1)
             let usable_utxos: Vec<UtxoResponse> =
                 utxos::filter_utxos(owned_utxos, utxos::parse_tx_utxos(selected)?);
             if usable_utxos.is_empty() {

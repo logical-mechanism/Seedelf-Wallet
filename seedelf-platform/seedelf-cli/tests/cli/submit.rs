@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use serial_test::serial;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 use seedelf_cli::commands::transfer::{TransforArgs, run};
 use seedelf_crypto::schnorr::random_scalar;
@@ -101,6 +101,91 @@ async fn a_submit_koios_never_confirmed_names_the_transaction_it_sent() {
             "{case}: printed {printed:?}, for transaction {sent_id}"
         );
     }
+}
+
+/// Koios's submit, saying on stdout the id of what it was handed as it takes
+/// it, then answering with that id: what the CLI printed before then can be
+/// told from what it printed after.
+struct SaysWhatItHas;
+
+impl Respond for SaysWhatItHas {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let id = hex::encode(seedelf_core::build::tx_id(&request.body).expect("a transaction"));
+        println!("KOIOS HAS: {id}");
+        ResponseTemplate::new(202).set_body_json(json!(id))
+    }
+}
+
+/// The run [`the_id_is_printed_before_koios_has_the_transaction`] reads, as
+/// its child process: a `transfer` of 500 ₳ whose submit Koios takes and
+/// answers. Does nothing in the parent.
+#[tokio::test]
+#[serial]
+async fn a_transfer_in_a_child_process() {
+    if !is_child("submit::a_transfer_in_a_child_process") {
+        return;
+    }
+    let mut scenario = Scenario::start().await;
+    scenario
+        .mount_credential_utxos(vec![
+            wallet_utxo(scenario.scalar, 1, 600_000_000, &[]),
+            wallet_utxo(scenario.scalar, 2, 600_000_000, &[]),
+            seedelf_utxo(random_scalar(), 3, 1_500_000, SAMPLE_SEEDELF),
+        ])
+        .await;
+    scenario.mount_evaluate(1).await;
+    scenario.mount_collateral().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/submittx"))
+        .respond_with(SaysWhatItHas)
+        .mount(&scenario.server)
+        .await;
+    let sent = run(
+        TransforArgs {
+            seedelfs: vec![SAMPLE_SEEDELF.to_string()],
+            lovelaces: Some(vec![500_000_000]),
+            assets: vec![],
+            utxos: None,
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await;
+    match sent {
+        Ok(()) => println!("OUTCOME: sent"),
+        Err(e) => println!("OUTCOME: error: {e:#}"),
+    }
+}
+
+/// A run stopped while its submit waits (Ctrl-C: Koios may take its 30 s)
+/// still leaves the id to look up before running again, since the CLI prints
+/// it before it hands the transaction to Koios. No test failed without that
+/// line: the error names the id too, but only once Koios answers or the wait
+/// ends (chunk 51, r4#4; r2tests#8).
+#[test]
+#[serial]
+fn the_id_is_printed_before_koios_has_the_transaction() {
+    let (stdout, stderr) = run_child(
+        "submit::a_transfer_in_a_child_process",
+        Duration::from_secs(120),
+    );
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let at = |prefix: &str| {
+        lines.iter().enumerate().find_map(|(i, line)| {
+            line.strip_prefix(prefix)
+                .map(|rest| (i, rest.trim().to_string()))
+        })
+    };
+    let (handed_at, handed) = at("KOIOS HAS: ")
+        .unwrap_or_else(|| panic!("precondition: the transfer reached Koios\n{stdout}\n{stderr}"));
+    let printed = at("Tx Hash: ");
+    assert!(
+        printed
+            .as_ref()
+            .is_some_and(|(at, id)| *at < handed_at && *id == handed),
+        "the id of the transaction Koios was handed, {handed}, is printed before it's handed \
+         (printed: {printed:?}):\n{stdout}"
+    );
 }
 
 /// `submit_tx` once, with `answer` mounted for this call alone: what it says.
