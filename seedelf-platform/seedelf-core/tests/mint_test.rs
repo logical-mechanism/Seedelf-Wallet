@@ -1416,6 +1416,37 @@ mod account {
         // The same UTxO mints under a register of the user's own.
         assert!(mint(&p.seedelf).is_ok());
     }
+
+    /// Chunk 51 (t1d#1's sibling, the account launch's): the collateral an
+    /// account-paid mint puts up must come back as an output after 3/2 of
+    /// the fee. One too small is refused in words, where the node would refuse
+    /// the signed mint.
+    #[test]
+    fn a_collateral_too_small_to_come_back_is_never_put_up() {
+        let p = payer();
+        let mint = |lovelace: u64| {
+            let collateral = at(&p, 0x75, 0, lovelace, &[]);
+            build::account_mint(
+                &p.chain,
+                &[at(&p, 0x76, 0, 9_000_000, &[])],
+                Some(&collateral),
+                "",
+                &p.seedelf,
+                &p.change,
+                &Staking::none(),
+                None,
+            )
+            .map(|_| ())
+        };
+        assert!(mint(5_000_000).is_ok());
+        for lovelace in [1_000_000, 1_200_000] {
+            let refused = mint(lovelace);
+            assert!(
+                matches!(&refused, Err(e) if e.to_string().contains("too small to put up as collateral")),
+                "{lovelace}: {refused:?}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

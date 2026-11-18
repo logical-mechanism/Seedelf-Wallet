@@ -24,7 +24,9 @@ use seedelf_core::eval;
 use seedelf_core::orders::{
     self, Cancel, Credential, OrderToCancel, Protocol, Session, cancel_orders, read_order,
 };
-use seedelf_koios::koios::{InlineDatum, ProtocolParameters, ReferenceScript, UtxoResponse};
+use seedelf_koios::koios::{
+    Asset as KoiosAsset, InlineDatum, ProtocolParameters, ReferenceScript, UtxoResponse,
+};
 use serde_json::{Value, json};
 
 fn params(preprod: bool) -> ProtocolParameters {
@@ -1976,5 +1978,126 @@ fn a_swap_nested_too_deep_is_refused_by_the_cancel_check_itself() {
         .unwrap();
     if let Err(panic) = run.join() {
         std::panic::resume_unwind(panic);
+    }
+}
+
+/// `row` holding `what` besides its ADA: anyone can send the session's
+/// address a UTxO like it.
+fn with_extra(row: &UtxoResponse, what: &str) -> UtxoResponse {
+    let mut row = row.clone();
+    match what {
+        "a token" => {
+            row.asset_list = Some(vec![KoiosAsset {
+                decimals: 0,
+                quantity: "7".to_string(),
+                policy_id: "c0".repeat(28),
+                asset_name: String::new(),
+                fingerprint: String::new(),
+            }])
+        }
+        "an inline datum" => {
+            row.inline_datum = Some(InlineDatum {
+                bytes: "d87980".to_string(),
+                value: Value::Null,
+            })
+        }
+        "a datum hash" => row.datum_hash = Some(hex::encode([0x5d; 32])),
+        "a reference script" => row.reference_script = Some(Default::default()),
+        _ => panic!("{what}"),
+    }
+    row
+}
+
+/// Chunk 51, t1d#2: a cancel's collateral holds ADA alone. Its return is
+/// written as ADA alone, so a token on it would go missing, which the ledger
+/// refuses after the session signed; the worker puts up only ADA alone, and
+/// this backs it.
+#[test]
+fn a_cancels_collateral_holding_a_token_or_a_datum_is_refused() {
+    let s = Setup::of(&fixture("MinswapV2", "mainnet"));
+    let funds = vec![own(&s.address, 0xaa, 10_000_000)];
+    let plain = own(&s.address, 0xbb, SESSION_COLLATERAL);
+    assert!(s.cancel(&[s.order()], &funds, &plain).is_ok());
+    for what in ["a token", "an inline datum", "a datum hash"] {
+        let refused = s
+            .cancel(&[s.order()], &funds, &with_extra(&plain, what))
+            .map(|c| c.fee);
+        assert!(
+            matches!(&refused, Err(e) if format!("{e:#}").contains("must hold ADA alone")),
+            "{what}: {refused:?}"
+        );
+    }
+}
+
+/// `datum` in other bytes: the same data, its fields' list definite where it
+/// was indefinite, or the other way round.
+fn rewritten(datum: &[u8]) -> Vec<u8> {
+    let mut data = PlutusData::decode_fragment(datum).unwrap();
+    let PlutusData::Constr(c) = &mut data else {
+        panic!("not a constructor");
+    };
+    c.fields = match &c.fields {
+        MaybeIndefArray::Def(v) => MaybeIndefArray::Indef(v.clone()),
+        MaybeIndefArray::Indef(v) => MaybeIndefArray::Def(v.clone()),
+    };
+    let bytes = data.encode_fragment().unwrap();
+    assert_ne!(bytes, datum);
+    bytes
+}
+
+/// Chunk 51, t1d#3: a cancel is built only on the datum its order holds, in
+/// its bytes: inline, or the bytes its hash names. Who owns the order is read
+/// from those bytes, so other bytes of the same data would decide it on what
+/// the order's script never sees.
+#[test]
+fn a_cancel_is_built_only_on_the_datum_its_order_holds() {
+    let refused_as = |s: &Setup, order: OrderToCancel, words: &str| {
+        let funds = vec![own(&s.address, 0xaa, 10_000_000)];
+        let collateral = own(&s.address, 0xbb, SESSION_COLLATERAL);
+        let refused = s.cancel(&[order], &funds, &collateral).map(|c| c.fee);
+        assert!(
+            matches!(&refused, Err(e) if format!("{e:#}").contains(words)),
+            "{words}: {refused:?}"
+        );
+    };
+    let v2 = Setup::of(&fixture("MinswapV2", "mainnet"));
+    let inline = OrderToCancel {
+        utxo: v2.order.clone(),
+        datum: rewritten(&v2.datum),
+    };
+    refused_as(&v2, inline, "isn't the one it holds");
+    let v1 = Setup::of(&fixture("Minswap", "mainnet"));
+    assert!(v1.order.datum_hash.is_some());
+    let by_hash = OrderToCancel {
+        utxo: v1.order.clone(),
+        datum: rewritten(&v1.datum),
+    };
+    refused_as(&v1, by_hash, "isn't the one its hash names");
+    let mut bare = v2.order.clone();
+    bare.inline_datum = None;
+    bare.datum_hash = None;
+    let none = OrderToCancel {
+        utxo: bare,
+        datum: v2.datum.clone(),
+    };
+    refused_as(&v2, none, "holds no datum");
+}
+
+/// Chunk 51, t1d#4: a cancel never spends a session row holding a datum or a
+/// script, which a stranger can send the session's address; the worker passes
+/// only rows of ADA alone, and this backs it.
+#[test]
+fn a_cancel_never_spends_a_session_row_holding_a_datum_or_a_script() {
+    let s = Setup::of(&fixture("MinswapV2", "mainnet"));
+    let collateral = own(&s.address, 0xbb, SESSION_COLLATERAL);
+    let fund = own(&s.address, 0xaa, 10_000_000);
+    for what in ["an inline datum", "a datum hash", "a reference script"] {
+        let refused = s
+            .cancel(&[s.order()], &[with_extra(&fund, what)], &collateral)
+            .map(|c| c.fee);
+        assert!(
+            matches!(&refused, Err(e) if format!("{e:#}").contains("holds a datum or a script")),
+            "{what}: {refused:?}"
+        );
     }
 }
