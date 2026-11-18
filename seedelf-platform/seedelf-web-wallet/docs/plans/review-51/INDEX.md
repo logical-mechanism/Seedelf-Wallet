@@ -1,0 +1,248 @@
+# Chunk 51 · Every lane finding, one line each
+
+Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* gives the verifiers' (the lower of trace and impact, or the tiebreak's). A finding merged into another names it. Full text: `lanes/<lane>.md`; verdicts: `verify/<id>.md`.
+
+## R1 (4 findings, 17 guards)
+
+- `r1#1` low (user): The CLI reads the wallet contract with offset paging and no fixed order, so a page can skip or repeat a UTxO `koios.rs:252` · verified **partly, low**
+- `r1#2` low (user): CLI submit: a timeout or 5xx after Koios forwarded the transaction reads as failed or rejected, so running the command again can pay twice `koios.rs:559` · verified **confirmed, medium** · merged into r4#4
+- `r1#3` nit (nobody): schnorr::prove (exported as verifyProof, never called) panics on a z over 32 bytes, so it doesn't decide as the deployed validator does `schnorr.rs:198`
+- `r1#4` nit (nobody): hashing::sha3_256's doc says bad hex hashes an empty array and never fails; it returns an error `hashing.rs:75`
+
+*Coverage:* Read in full, every line: - seedelf-crypto/src: lib.rs, convert.rs, hashing.rs, schnorr.rs, register.rs, derivation.rs, cardano.rs, lovejoin.rs. - seedelf-koios/src: lib.rs, koios.rs (all 1,152 lines). - Both Cargo.toml files and both READMEs.  Tests: - Read: schnorr_test.rs, register_test.rs, proptest_crypto.rs, rows_test.rs, params_test.rs. - Lovejoin_test.rs: read lines 1-126 and the list of test names. - cardano_test.rs and derivation_test.rs: only the test names and their asserts on guards. - hashing_test.rs, convert_test.rs and the vector JSON files: not read beyond their sizes.  Compared against, read only: - The deployed 5b82530 lib/schnorr.ak and validators/wallet.ak. - Aiken stdlib v2.2.0 scalar.new and from_bytearray_big_endian, from a local package copy. - Lovejoin 29573c5 lib/lovejoin/{schnorr,dhtuple,sigma_or,bls,hash}.ak, plus mix_logic.ak's verify call sites and ctx lines…
+
+## R2a (3 findings, 29 guards)
+
+- `r2a#3` medium (stranger): A stranger's many-token UTxO costs several times its ADA once re-made as change 20 tokens an output, and history-aware selection takes it ahead of money that pays without it `build.rs:353` · verified **confirmed, medium**
+- `r2a#2` low (stranger): apart ends the search at the first order grown whole that's short, so it refuses payments a subset pays and the CLI's order would make `build.rs:2843` · verified **confirmed, low**
+- `r2a#1` low (user): is_payable_address refuses a key-payment address whose stake part is a script, and the screen calls it a script's address `build.rs:3280` · verified **confirmed, low**
+
+*Coverage:* Read in full, line by line: - seedelf-platform/seedelf-core/src/build.rs, all 3,922 lines (identical to web-wallet/1.9.1); - seedelf-core's transaction.rs, utxos.rs, assets.rs, address.rs, data_structures.rs and constants.rs.  Read where build.rs calls them: - staking.rs: the Staking methods none, withdraw, of, drep, is_empty, registers_scripts_alone, signers, deposit, deposit_at, refund, net and patch, plus is_scripts and vote_delegation; - eval.rs lines 1-330: refusal, unreadable_datum, resolve_row, resolve, resolve_outputs, seedelf_references, evaluate_with's resolving; - lovejoin::shuffle; - seedelf-crypto: register.rs's is_valid, rerandomize and is_owned; schnorr.rs's z encoding; - pallas-txbuilder 0.35.1's conway.rs (input sorting, redeemer indexes, output encoding) and pallas-addresses 0.35.1's has_script.  Followed out of build.rs: - WebAssembly lib.rs: move_in (532-583), merged_…
+
+## R2b (4 findings, 28 guards)
+
+- `r2b#1` low (user): A key address whose stake part is a script is refused as "a script's address", though the ledger takes it and only its key can spend it `build.rs:3282` · merged into r2a#1
+- `r2b#2` low (user): CLI `fund` says "Not Enough Lovelace/Tokens" when its ADA sits in token UTxOs larger than the one holding the token being sent `utxos.rs:258` · verified **confirmed, low**
+- `r2b#3` nit (nobody): A failing certifying script would be labelled "propose": uplc 1.1.23 names a Cert redeemer "Publish", which `ogmios_purpose` doesn't map `eval.rs:378`
+- `r2b#4` nit (nobody): `asset_id_to_asset` is dead code that panics on a short or non-ASCII id `assets.rs:367`
+
+*Coverage:* Read in full, every line: transaction.rs, eval.rs, cbor.rs, note.rs, staking.rs, withdraw_zero.rs, utxos.rs, assets.rs, address.rs, constants.rs, data_structures.rs, lib.rs. references.rs: read its structure and the script-ref headers (sizes 629/519); the frozen hex bodies were skimmed, not decoded. Followed values into: build.rs (linear_fee, reference_script_fee, settle, Patches::apply, signed_size, built_with, tx_id, account_payment and build_account_payment, deposit_outputs, change_outputs, minimum_deposit/seedelf/address payments, payment_outputs, is_payable_address/check_payable, ScriptSpend::with_staking, with_account's at_signer, measure_locally, measuring_draft, the head of settle, account_mint, mint_from); lovejoin/mod.rs's mix and withdraw stage and measure loops (the WithdrawZero callers); wasm lib.rs (payable_address, assets_of, picked_of, withdrawing, sign_staking, shared_st…
+
+## R3a (2 findings, 31 guards)
+
+- `r3a#1` high (stranger): A stranger's mix can write the user's box datum as constructor 0's tag-102 form, which the contract accepts and the wallet no longer sees as a box `mod.rs:387` · verified **confirmed, high**
+- `r3a#2` nit (nobody): again_affordable divides by zero at depth 0, where its _in sibling guards it; mixes_per_box_at traps on an unchecked width or depth `mod.rs:2177`
+
+*Coverage:* Read in full: seedelf-core/src/lovejoin/mod.rs (2,605 lines), value.rs (131) and box_value.rs (403).\n\nFollowed out of them, read in the relevant parts:\n- build.rs: the fee helpers (30-175), Budget/Budgets/even/collateral_output (1090-1340), change_outputs and minimum_change (417-473)\n- withdraw_zero.rs and eval.rs, whole\n- transaction.rs: collateral_input, computation_fee, calculate_min_required_utxo\n- address.rs: wallet_contract, collateral_address, dummy_base_address\n- pool.rs: ReferenceDatum decode and encode, verify_pool, pool_of, usable/comes_back/measured (120-260, 360-645)\n- seedelf-crypto lovejoin.rs: point_from_bytes, prove_schnorr, prove_sigma_or headers\n- seedelf-koios koios.rs: register_of_datum, InlineDatum, UtxoResponse\n- Pallas 0.35.1 plutus_data.rs: Constr and BoundedBytes decoding\n- Lovejoin 29573c5, in full: mix_logic.ak, mix_box.ak, mixbox.ak, value.ak, refe…
+
+## R3b (1 findings, 30 guards)
+
+- `r3b#1` low (nobody): check_cancels decodes Minswap's swap with no nesting check of its own; it is safe today only because inspect runs check_nesting first `orders.rs:1232` · verified **confirmed, low**
+
+*Coverage:* Read in full: seedelf-core/src/lovejoin/pool.rs (645 lines), launch.rs (796), orders.rs (1518), and templates.rs' code (lines 1-230); its hex constants were skimmed, frozen. orders.json was decoded entry by entry; the V1 scripts' hashes and every referenceSize were recomputed. Followed out of the lane: lovejoin/mod.rs 1-640 (Protocol, Version, mix_box_address, deposit_reference, reference_script_size, PoolBox, Rewards). In the wasm crate: lovejoin.rs protocol_of and PoolView (150-320, 660-700); lib.rs' launch builders (2470-2780), order bindings (640-940), check_spendable (2300-2345) and inspect_session_tx; cip30.rs check_nesting and inspect (575-690, 1139-1150). In the extension: sessions.ts cancel, cancelOf, cancelsChecked, referenceRows and inspect (4150-4440), plainAda and collateralFits, and lovejoin.ts isRetired. Lovejoin 29573c5's one_shot_mint.ak, reference_holder.ak, reference.a…
+
+## R4 (9 findings, 14 guards)
+
+- `r4#1` high (stranger): A stranger freezes any CLI external wallet: `external sweep` (and `external balance`) total every UTxO there, and three junk rows overflow the token sum forever `sweep.rs:40` · verified **confirmed, high**
+- `r4#2` medium (stranger): A stranger's three junk UTxOs under the user's register break `balance` for good (and `sweep --all` while they're among its 20) `balance.rs:39` · verified **confirmed, low**
+- `r4#4` medium (user): A submit the CLI can't confirm (30 s timeout, 5xx, unreadable 2xx) is reported as a plain failure, and re-running the command pays again `spend.rs:91` · verified **confirmed, low**
+- `r4#3` low (user): The signing page finds the witness set by searching the tx hex for the first `a105` (or `a0f5f6`) at any nibble, so create/fund/extract fail when their body happens to contain it `index.js:49` · verified **confirmed, low**
+- `r4#5` low (user): The signing page has no tie to the run that served it: a still-open tab or an earlier run's server signs the earlier transaction, and nothing shows which Seedelf it pays `web_server.rs:97` · verified **confirmed, low**
+- `r4#6` low (site): The signing server answers any Host header, so a DNS-rebinding page can read the unsigned transaction while it runs `web_server.rs:58` · verified **confirmed, low**
+- `r4#7` low (user): `util extract` refuses a datum-less UTxO at the contract's staked address form, which the contract lets anyone spend `extract.rs:65` · verified **confirmed, low**
+- `r4#8` low (user): `util mint -g -p` writes the given register as the Seedelf's datum unchanged, so Seedelfs minted for one person from their `util base` register are visibly the same person's `mint.rs:76` · verified **confirmed, low**
+- `r4#9` nit (nobody): The escaping comment claims serde_json stops angle brackets from injecting HTML; it doesn't (unreachable: every caller passes hex) `web_server.rs:62`
+
+*Coverage:* Read in full: - seedelf-cli/src: main.rs, lib.rs, setup.rs, web_server.rs. - commands/: mod, create, fund, fee, spend, transfer, sweep, remove, balance, welcome. - commands/util/: mod, expose_key, base, statistics, migrate, find, age, history, mint, extract. - commands/external/: mod, balance, sweep. - static/: index.html, index.js. - seedelf-display/src: lib, display, version_control, text_coloring.  Skimmed: static/index.css (searched for external loads: none). favicon.ico is binary.  Followed out of the lane: - seedelf-core, in full: utxos.rs, transaction.rs, address.rs, data_structures.rs, constants.rs. - seedelf-core, in part: assets.rs (Asset/Assets add, merge, parse); build.rs (fee helpers, even, collateral, Budgets::from_ogmios, ScriptSpend::new, proven, draft, estimate and remainder, select_script_inputs, the transfer/sweep/remove/mint/external_sweep builders, is_payable, is_pay…
+
+## W1a (1 findings, 17 guards)
+
+- `w1a#1` low (user): Max in parts never checks the named tokens are held: a quantity above what the spendable UTxOs hold sends a partial Max that leaves the ADA, blaming tokens (or is refused as 'not enough ADA') `lib.rs:4062` · verified **confirmed, low**
+
+*Coverage:* Read in full in seedelf-wasm lib.rs: lines 2880-4975 (TransferRequest through withdraw_result: transfer_plan/spend/result, measured_or_more, withdrawal_of, amounts_of, carried_payment, withdraw_spend, build_withdraw, MAX_PARTS, LeftWhy, without, holds_any, holding_enough, quantity_of, token_group, too_much, Worth, by_history_first, same_order, Room, share_of, less, Fill, fit_part, Owed, in_parts, chained, next_of, reserving, taken, carry_kept, max_in_parts, max_chained, build_transfer_parts, build_withdraw_parts, withdraw_result). Also its helpers (150-250 lovelace_of, assets_of, token_amount; 1537-1546 check_recipients; 1591-1602 Paid; 2080-2440 histories, Carried, classes_mixed, check_spendable, prove/draft/measured, fee_out, out_refs), the bindings that call them (6650-6725) and chain_end_tests (5226-5383). Followed into core: build.rs TooLarge/settle/deposit_outputs/minimum_deposit/N…
+
+## W1b (2 findings, 21 guards)
+
+- `w1b#1` low (user): Send, Make public and Remove refuse any address with a script in it, though the ledger accepts them, including key addresses whose stake part is a script `lib.rs:3266` · merged into r2a#1
+- `w1b#2` low (stranger): Removing a Seedelf moves the other tokens in its UTxO, but neither the review nor the Seedelf list shows them `lib.rs:5074` · verified **confirmed, low**
+
+*Coverage:* Read in full, line by line: - seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs lines 1-3300 (orientation types, account flows, staking/DRep, DEX order bindings, session return with plan_return/ReturnPlan/built_or_without_strangers/merged_return/planned_return, histories and classes, mint, launch, account mint, transfer). Also lines 3300-3640 for context, which overlap W1a (WithdrawRequest, withdrawal_of, amounts_of, carried_payment, withdraw_spend, build_withdraw, LeftWhy, holding_enough). - lib.rs lines 4600-6883: the end of build_transfer_parts, build_withdraw_parts, withdraw_result, remove, is_own_address/carries_stake_key, the signing functions, the tests (chain_end_tests, return_plan_tests, dex_order_tests), and every wasm_bindgen export including the Register, SeedelfKey, CardanoAccount and OneTimeAccounts classes and the cip30, decode and lovejoin wrappers.  Skimmed: lib.rs 364…
+
+## W2 (6 findings, 23 guards)
+
+- `w2#1` low (site): A certificate under a script's stake credential counts as another signer, so partialSign=false is refused and the window says others must sign `cip30.rs:1610` · verified **confirmed, low**
+- `w2#2` low (site): A key address whose key hash equals the Seedelf contract's script hash is labelled Seedelf Wallet's contract, so a burn shows as a Seedelf payment `cip30.rs:1386` · verified **confirmed, low**
+- `w2#3` low (site): Transaction details converts a big number to decimal in quadratic time, so a site's 60 KB bignum freezes the worker for tens of seconds per open `decode.rs:480`
+- `w2#4` low (stranger): getUtxos drops a UTxO's reference script, so a site spending it underpays the Conway fee and the node refuses the signed transaction `cip30.rs:287` · verified **confirmed, low**
+- `w2#5` low (stranger): getBalance fails for every site once a stranger's token total across the account's UTxOs passes a u64 `cip30.rs:348` · verified **confirmed, low**
+- `w2#6` low (site): Byron addresses: a found Byron input fails the whole read, and a Byron payee shows as raw hex `cip30.rs:1191` · verified **confirmed, low**
+
+*Coverage:* Read every line of seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs (2384 lines) and decode.rs (1679 lines).  Followed the values out of them: - wasm/src/lib.rs bindings: inspect/sign for dApps and sessions, attachWitnesses, cip30Utxos, cip30Value, decodeTx, shared_stake_address. - seedelf-core build::tx_id. - Pallas 0.35.1 sources:   - primitives: the conway body (derived map) and PlutusData/BigInt/BoundedBytes decoders.   - codec: CborWrap.   - addresses: as_hash/is_script, to_bech32/from_bech32, Display/FromStr, Byron attributes. - minicbor-derive 0.15.3's map decode, and the preallocation grep across pallas and minicbor. - Extension, read where values cross:   - dapp.ts: resolve, sentOutputs, paysHolder, keptApart, heldForLovejoin, stakeDeposit, readTx, signTx, available, balance, the getBalance dispatch.   - cbor.ts: head, skip, bodyField, bodyOutpoints, certificateKinds, outpo…
+
+## W3 (1 findings, 18 guards)
+
+- `w3#1` low (user): A tile Mix's chain (and Mix my boxes again's) runs at Settings' depth when the runner builds it, not the depth its review showed and its funding paid for `sessions.ts:4667` · verified **confirmed, low**
+
+*Coverage:* Read in full: seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs (all 3,038 lines). Followed into, read in full for the parts used: seedelf-core/src/lovejoin/mod.rs lines 1-2605 (Protocol::of, PoolBox, Coin, Holding, Rewards, deposit_across, mix_with, withdraw_with, the planning functions and reserves, plan_across, bootstrap_most, chain_across, again_at, collateral_tail, collateral_mix, fresh_for, fan_out); lovejoin/value.rs; pool.rs's verify_pool, derived_from and pool_of; eval.rs's refusal, unreadable_datum, resolve_row, resolve_reference and resolve; build.rs's add_witnesses, tx_id and collateral_signature; seedelf-koios InlineDatum, ReferenceScript, UtxoResponse and register_of_datum; seedelf-crypto Register::is_owned; lib.rs's Lovejoin bindings (6060-6445), check_paths, and api's SessionReturnRequest, session_collateral, ReturnPlan, plan_return, built_or_without_strangers, mer…
+
+## E1a (1 findings, 15 guards)
+
+- `e1a#1` medium (stranger): A stranger's deposit under the wallet's register is taken for the wallet's own unmixed box, and Mix my boxes again takes it first, tying the mix session and its private funding to that register `lovejoin.ts:3819`
+
+*Coverage:* Read in full, every line: lovejoin.ts lines 1-4000, lovejoin-pools.ts (all 687 lines) and lovejoin-rewards.ts (122 lines). Calls followed into lovejoin.ts past 4000 and read: 4010-4310 (the rest of acrossOf, tailRows, planAcross, usableNow, takesNewBoxes, adaPool, retiredIds, the start of retireOnce); 4590-4850 (unstale, mixLogicHashes, rewardsIn/readRewards/rewardsOf/rewardsMoved, reserve/unreserve/release/holdOnly/reserving/inTurn, crossCheck); 5450-5730 (schedule, scheduleFound, draw, recordChain, chainSent, chainEnded, restBack, chainMarked); 5884-6510 (cuts, chainsSending/chainsMixing, sortOut, found, made, lookUp, madeBy, inputsOf, accountKeys, keysOf, reservedBoxes, status, chains); 6751-7212 (returning, withdrawDue(Now), unlockDraws, withdrawNow(Now), bringAllBack, stopBringingAllBack); 7466-8048 (split, splitAll, real, ownership, withdrawOne, dropWithdrawing, neverWent, dropRefu…
+
+## E1b (1 findings, 28 guards)
+
+- `e1b#1` low (user): Bring every box back meets a service-wide refusal box by box: a build, an account_info and a giveme.my request for every box, three runs over `lovejoin.ts:7412`
+
+*Coverage:* Read every line: seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts lines 4000-8048, lovejoin-launch.ts (all 460 lines) and lovejoin-rewards.ts (all 122 lines).  Read for context in lovejoin.ts (E1a's half, not reviewed line by line for findings): - the header and constants (1-640); - the types and the sealed schedule (640-1610); - the helpers my half calls (1676-2600: unmixedOf, recorded, knownOf, mixedOf, depositsOf, moreThanDue, unschedule, backOrder, originOf, carriedOf, ripeAt, madeSince, depositAccountOf, moveDue, takeDue, empty, countBack, holderOf, moveOn, squareUp, bootstrapOf, stillIn); - narrower and withinDepth (2600-2811); - the class's fields, readSet, verifiedPool, progress, onChain, watchOf, cantComeBack, listing, poolRows, ours and plan (2811-3410); - acrossOf's head (3899-4000).  Followed out of my paths: - spent.ts reservationOf and reservedSet; s…
+
+## E2a (0 findings, 25 guards)
+
+- none
+
+*Coverage:* Read in full: sessions.ts lines 1-3450, every line, plus connector.ts, collateral.ts and runs.ts in full. I followed the first half's calls into E2b's half and read these in full: stopCost, resume, runAll, settleReturns, markCut, step, act, ordersSpent, placed, ordersOpen, liveOrders, remnantsFrom, order, cancel (3451-4205); bringBack, inspect, review, signAndSend (4324-4495); buildBack through noteLanded and refuseParts (4502-5158), and sendChain's opening checks (5170-5197); sendRecorded and submit (5490-5619); listNow, backWantsCollateral, one, tailHeld, skipCollateralMix and view (5621-5918); and live through serial (5921-6306): freshIndex, stillUnused, fundingRecords, sendFunding, partsStopped, partsMayGo, returning, stillWaiting, outRecord, accounts, book/save/update, atStake, clearMixes, wayOf/pricedClassic/fillsOf (6400-6450). Skimmed or not reached in E2b's half: cancelOf, cance…
+
+## E2b (2 findings, 26 guards)
+
+- `e2b#1` low (stranger): A finished mix's account paid before it closes gets a second chain with the mix's own settings, or the mix is marked "Not mixed" `sessions.ts:1309`
+- `e2b#2` low (stranger): A finished swap's "Received" shows only its last return, and a later return's skip reason replaces the main return's `sessions.ts:5522`
+
+*Coverage:* Read in full: extension/src/background/parts.ts (1-663) and sessions.ts lines 3450-6872: stopCost, resume, runAll, settleReturns, markCut, step, act, noteOrderOpen, waits, ordersSpent, placed, ordersOpen, liveOrders, remnantsFrom, order, cancel, cancelOf, cancelsChecked, referenceRows, bringBack, inspect, review, signAndSend, buildBack, the tail and reserve helpers, collateralWanted, nothingBack, leaveBehind, leftBy, fundingChange, sendBack, noteLanded, refuseParts, sendChain, pump, sendStep, witnessTail, the pending-chain helpers, sendRecorded, submit, listNow, view, the readers, fundingRecords, sendFunding, partsStopped, partsMayGo, returning, stillWaiting, outRecord, accounts, freshIndex, stillUnused, book/save/update, atStake, clearMixes, serial, and every free function after the class. Followed calls into E2a's half, read: sessions.ts 1-1480 (types and helpers: fundingState, short, …
+
+## E3a (4 findings, 20 guards)
+
+- `e3a#1` medium (site): A site on the dApp account can probe another public account's Lovejoin chain: the 'public' reservation isn't per account `dapp.ts:1912`
+- `e3a#3` medium (site): signData shows a site's message with direction overrides and invisible characters raw, so it can read differently from the bytes signed `dapp.ts:2896`
+- `e3a#2` low (stranger): The connector takes the first 5 ₳ without tokens as a session's collateral: a stranger's 5 ₳ with a datum hides a spend of the real one `dapp.ts:2777`
+- `e3a#4` nit (nobody): manifest.ts names the extension with a ternary whose two branches are the same `manifest.ts:59`
+
+*Coverage:* Read in full: src/background/dapp.ts (2949 lines), dapp-window.ts, tx-view.ts, src/content/bridge.ts and page.ts, src/shared/dapp.ts, src/manifest.ts, plus #387's diff to it.  Followed out of them, reading the relevant parts: - sw.ts 330-470 (the dApp port, dappSession, the window/storage/permission listeners). - handlers.ts 330-470 (preferences-set, account-use, network-set, tx-detail, the dapp-* messages). - connector.ts, all of it; ui-port.ts 1-60. - spent.ts: remember/forget, reservedSet, reservationOf. - cbor.ts: head, skip, bodyField, outpoints, certificateKinds, txId. - koios.ts: the error classes and submitTx; data-layer.ts submitTx. - lovejoin.ts: chainOwner/publicOwner/accountOf, reserve, unreserve, release, holdOnly, publicReady, the public mix and Mix again builds, Send's reservation. - sessions.ts: collateralFits, plainAda, accountUtxos, the return's collateral pick. - accou…
+
+## E3b (5 findings, 18 guards)
+
+- `e3b#1` low (site): The sign window shows a site's CIP-8 message and CIP-20 note with direction overrides and invisible characters still active, and the note isn't checked against the body `DappApprovals.tsx:1369` · merged into e3a#3
+- `e3b#2` low (user): The connector's private-session form counts locked private UTxOs as available `DappApprovals.tsx:607`
+- `e3b#3` low (user): While a sent private-session funding waits, every request behind it is hidden: no count, no Decline all, and closing the window declines them unseen `DappApprovals.tsx:626`
+- `e3b#4` low (user): An approved request's failure stays on screen over the next request, right above its Sign `DappApprovals.tsx:169`
+- `e3b#5` nit (user): A sent funding's Cardanoscan link follows the wallet to the other network `DappApprovals.tsx:642`
+
+*Coverage:* Read every line of: ui/dapp.ts, ui/sites.ts, ui/screens/DappApprovals.tsx, SiteSessions.tsx, ConnectedSites.tsx, Dapps.tsx. Followed into, read in the parts that matter: - background/dapp.ts: lines 1-1505 in full; signTx, readTx, ties, publicKeys, remember, signData, submitTx, send and helpers (1755-2949) in full; 1520-1700 (view, read, available, balance) skimmed. - wasm/src/cip30.rs: Amount and difference (110-290), keys_of and own_address (436-520), output_parts and register_datum (960-1066), released_from_contracts and inspect (1100-1892), anchor_url and is_bidi, sign_tx, CIP-8 data_key, data_signer and sign_data (2185-2400). - wasm/src/lib.rs: the session and dApp tx and data bindings. - wasm/src/decode.rs: shown, hidden and metadata_hash_matches. - background/sessions.ts: siteOutBuild, siteOutSubmit, topUpBuild, topUpSubmit, backBuild, backSubmit, claimBuild, disconnect, view() sta…
+
+## E4a (1 findings, 9 guards)
+
+- `e4a#1` low (user): A balance reading begun before Remove wallet finishes under the next phrase's wallet: it's shared with the new wallet's Home, kept as its reading, and its private UTxOs are sealed into the new wallet's history `balances.ts:392`
+
+*Coverage:* Read in full: background/{vault,private-store,storage,storage-access,wallet,accounts,account,preferences,wasm}.ts; background/secret-box/ (README, index, kdf, format, seal, open); shared/{password,preferences,fingerprint}.ts; ui/screens/{Create,Restore,Unlock,Settings}.tsx (all 1,721 lines of Settings); ui/delete-phrase.ts. I followed the values out of them into: handlers.ts lines 1-330 plus atStake and status; sw.ts in full; ui-port.ts; ui/background.ts; App.tsx lines 1-200; components PhraseGrid, PhraseInput, SetPassword and PasswordField; history.ts (head); the sealed maybe-sent helpers and adoptKept in pending.ts; keepOnReset, adoptKept and keptMaybe in lovejoin.ts; reset, book and save in sessions.ts; contract-scan.ts readContractView, readKoiosView and readIndexView; balances.ts get, reading, shared, read and readPrivate; activity.ts arrived, update and cardano; staking.ts readStak…
+
+## E4b (2 findings, 12 guards)
+
+- `e4b#1` low (site): A site can keep the wallet from auto-locking: each connector window it opens counts as user activity when it mounts `App.tsx:94`
+- `e4b#2` low (nobody): `dapp-approvals` answers while locked, with a waiting signature's summary and its ties to the wallet's other accounts and sessions `handlers.ts:433`
+
+*Coverage:* Read in full, every line: shared/rpc.ts (3,323), background/sw.ts (459), background/handlers.ts (655), background/ui-port.ts (69). Also read in full: background/wallet.ts, accounts.ts, runs.ts, storage-access.ts, connector.ts, dapp-window.ts, wasm.ts, content/bridge.ts, content/page.ts, shared/dapp.ts, src/manifest.ts, ui/background.ts, ui/view.ts, shared/open-in.ts, and the built dist/manifest.json (read only). Read in part, where my files call them: dapp.ts (call/run, enable, ask, answer, approvals, stateChanged, closeWindow, windowClosed, networkChanged, dappAccountChanged, connectorOff, gone, sites, forget, disconnectSession, answerSite, failed, notSent, DappError), parts.ts (waitingOn, pumpParts, PartsService), preferences.ts (NetworkChoice, PreferencesService), tx-view.ts (txView), lovejoin.ts (poolChoice, poolNamed, fits, funding's head, publicBuild's head, withdrawDue, publicMayb…
+
+## E5 (2 findings, 30 guards)
+
+- `e5#1` low (user): Send, Make public and Contacts refuse an address with a key payment part and a script stake part, and every Byron address, in words that misdescribe them `destination.ts:97` · merged into r2a#1
+- `e5#2` low (user): A Make public to another of the user's own accounts reads the active account again as it lands, the timing link privacy review §2.9 removed `pending.ts:165`
+
+*Coverage:* Read in full, every line: background/send.ts, transfer.ts, move-in.ts, mint.ts, withdraw.ts, script-spend.ts, destination.ts, coin-control.ts, pending.ts, spent.ts, sent-txs.ts, short.ts, cbor.ts, and shared/recipients.ts, handles.ts, seedelf-name.ts, histories.ts, label.ts. Also read in full: background/account.ts and feed.ts. Followed values into: handlers.ts dispatch (150-240); koios.ts submitTx and its error classes (600-680, 1175-1290); contract-scan.ts' sealed record (170-260, 340-370); balances.ts reading choice (195-240); parts.ts reviewParts, sendParts and the splitParts header; sessions.ts' use of whole() (3080-3110); dapp.ts submit and keepSent (2560-2680); accounts.ts WIPED_ON_SWITCH. In wasm/src/lib.rs: SendRequest/account_send, recipient_register, transfer_plan's head, build_transfer_parts, build_withdraw_parts' head, carry_kept, max_in_parts, max_chained, withdraw_result, …
+
+## E6 (2 findings, 15 guards)
+
+- `e6#1` medium (stranger): A stranger can plant a Seedelf so Remove preselects the public account and says it 'links nothing new' `minted-by.ts:124`
+- `e6#2` low (user): A balance reading that spans Remove wallet plus a restore is kept as the new wallet's and uses up its first-reading mark `balances.ts:392` · merged into e4a#1
+
+*Coverage:* Read every line of the lane's 13 files (5,767 lines): koios.ts, data-layer.ts, chain.ts, balances.ts, activity.ts, feed.ts, incoming.ts, private-index.ts, contract-scan.ts, minted-by.ts, nft-image.ts, prices.ts, contacts.ts.  Read the parts that matter in the code they call or feed: - seedelf-crypto register.rs (is_owned, is_valid, rerandomize) and blstrs 0.7.1 G1Affine::from_compressed - seedelf-koios register_of_datum and point_bytes - the deployed seedelf.ak at 5b82530 - wallet.ts: Keys, withKeys, withAccount, load/derive on account switch, open - accounts.ts WIPED_ON_SWITCH; account.ts readAccountUtxos and readAccount - handlers.ts: create/restore/reset-wallet - sessions.ts scanNow's pin - RemoveSeedelf.tsx's default and notes, with their en.json strings - NftImage.tsx's rendering; ui/format.ts formatQuantity - governance.ts ownDrepId; lovejoin.ts mixBoxes; staking.ts delegationHisto…
+
+## E7a (4 findings, 20 guards)
+
+- `e7a#1` medium (user): A token picked while the swap's review builds is named on the approval, beside the other token's quote, and Start swap runs the swap that was built `Swaps.tsx:926`
+- `e7a#2` low (user): Stop's dialog says the swap comes back directly, less the return's fee, until its cost is read or when the read fails, and Stop then brings it back through Lovejoin as approved `Swaps.tsx:2451`
+- `e7a#3` low (user): A swap funded in parts pauses as 'it spends something that isn't this session's' when Minswap's build spends a part Koios doesn't list yet `sessions.ts:4377`
+- `e7a#4` nit (user): A swap held by its wait after an unlock says it's asking Minswap now `Swaps.tsx:3288`
+
+*Coverage:* Read in full, every line: background/minswap.ts (630), ui/swap.ts (270), ui/screens/Swaps.tsx (3450).  Followed out of them into background/sessions.ts: - 180-1100: constants, AutoRecord, Refused/PriceMoved, checkAsk, slippageKeeping, quotesTheAsk, routeOf, quoteOf, tailUnpaid/keepsReserve, collateralFits, plainAda, fundingOf/fundingState. - 1480-2025: tokens, quote, lovejoinCost, tokenPool/tokenAt read for the values the approval shows, priced skimmed, verified, outBuild. - 3105-3300: outSubmit, swapBuild, orders, cancelBuild, txSubmit. - 3390-3540: advance, stop, stopCost, resume. - 3636-4135: step, act, waits, ordersSpent, placed, liveOrders. - 4135-4495: order, cancel, cancelOf, cancelsChecked, referenceRows, inspect, review, signAndSend. - Also: 4897 throughLovejoin, 5490-5600 sendRecorded, 5825-5920 view, 5936-5960 listing, 6420-6872 autoView, outcomeOf, withinFunding, dexOrderAt, …
+
+## E7b (4 findings, 18 guards)
+
+- `e7b#1` low (user): Delegating again to the pool or DRep Koios names is refused, though the ledger takes it `staking.ts:539`
+- `e7b#2` low (user): A DRep profile's address is refused unless it starts http(s):// or ipfs://, though the ledger takes any address up to 128 bytes `Governance.tsx:165`
+- `e7b#3` nit (nobody): KoiosProposal.expiration's doc says the opposite of how governance.ts reads it `koios.ts:289`
+- `e7b#4` nit (user): Voting's "Inactive since epoch E" and the DRep card's "Active until the end of epoch E" read the same field an epoch apart `Voting.tsx:477`
+
+*Coverage:* Read in full, every line: background/staking.ts (574), background/governance.ts (213), ui/screens/Staking.tsx (1109), Governance.tsx (1047), Voting.tsx (502), Delegations.tsx (198), Rewards.tsx (177), Pools.tsx (420), ui/dreps.ts (47). Followed the values out of them, read in full or the relevant ranges: seedelf-core/src/staking.rs (all 671); seedelf-core/src/build.rs settle_fee/settle/signed_size/Patches/expiring (100-340) and account_staking/account_payment/build_account_payment (780-1072); wasm/src/lib.rs lovelace_of, check_paths, sign_with_paths, withdrawing, stake_key, sign_staking, drep_key, drep_of, drep_profile (180-210, 295-520), and StakingRequest/StakingAction/StakeStateIn/DrepStateIn/StakingResult/pool_id/drep_id/stake/drep_transaction (1700-2080); seedelf-koios ProtocolParameters and from_koios (880-1090); extension background/account.ts (all), script-spend.ts ScriptSpendDep…
+
+## E8a (3 findings, 15 guards)
+
+- `e8a#1` low (user): A mix from the private balance, and Mix my boxes again, build their chain at Settings' depth and wait when the runner builds it, not the reviewed ones `sessions.ts:4667` · merged into w3#1
+- `e8a#3` low (user): Pay from my private balance anyway warns of a tie to 'your public account' when the boxes it takes are another account's `Lovejoin.tsx:3649`
+- `e8a#2` nit (user): A public account's stopped chain on the hub says 'Mix my boxes again mixes the boxes it didn't', and doesn't name which account `Lovejoin.tsx:973`
+
+*Coverage:* Read every line of ui/screens/Lovejoin.tsx (4,125), ui/screens/LovejoinLaunch.tsx (460), ui/components/LovejoinReturn.tsx (578) and ui/components/BringAllBack.tsx (471). Followed the values out: handlers.ts' Lovejoin dispatch; rpc.ts's Lovejoin and session types; ui/lovejoin-pools.ts, ui/swap.ts' estimates and ReviewTotals.tsx in full; lovejoin-launch.ts in full. In lovejoin.ts: funding, plan, fits, room, againBoxes, the mix bounds and constants, widthFor/wayOver/againWay, status, part of sortOut, withdrawDueNow, withdrawNowNow, bringAllBack and part of bringAllBackNow, stopBringingAllBack, progress, rows/shown, chain() and its countAt, hatchOrder, cantComeBack. In sessions.ts: mixOutBuild, againBuild, mixFunding, mixOutSubmit, buildFunding, tailReserve, orWithoutReserve, collateralIntoPool, buildBack's chain call and delay, mixingAgain, resume, fundingState and the view's stage, wayOf. …
+
+## E8b (6 findings, 19 guards)
+
+- `e8b#1` low (stranger): A stranger's 5 ₳ carrying a reference script or an unreadable datum becomes the public account's collateral, public Lovejoin mixes then fail, and the Collateral page can only pick it again `coin-control.ts:184`
+- `e8b#2` low (user): The collateral payment's review doesn't show that it withdraws all the account's staking rewards `Collateral.tsx:194`
+- `e8b#3` low (user): Bring everything back: a session left out while the switch rebuilds is chosen again when the rebuild lands `ClaimAll.tsx:111`
+- `e8b#4` nit (user): Bring everything back's total counts a token once per session, not once per kind `ClaimAll.tsx:259`
+- `e8b#5` nit (user): Make private keeps a refusal on the form after the amount changes and after Back from its review, and Collateral keeps the review's error after Back `MoveIn.tsx:105`
+- `e8b#6` nit (user): A token picked from its details but not spendable (all in locked UTxOs) is dropped silently, and Review waits with no reason `Recipients.tsx:167` · merged into e9a#1
+
+*Coverage:* Read in full: ClaimAll.tsx, Transfer.tsx, Withdraw.tsx, MoveIn.tsx, CreateSeedelf.tsx, RemoveSeedelf.tsx, Collateral.tsx. Followed into the worker, read in full: transfer.ts, withdraw.ts, move-in.ts, mint.ts, send.ts, script-spend.ts, coin-control.ts. Followed in part: sessions.ts (claimBuild/claimBuildNow/claimSubmit, backBuild/backSubmit, buildBack in full, sendBack, pendingChain, collateralFits, tailReserve); parts.ts (reviewParts, sendParts head); pending.ts (refuseSent, settleMaybeSent); account.ts (readAccount, readAccountUtxos); lovejoin.ts (LovejoinChain type, the public mix build's collateral); handlers.ts dispatch. WebAssembly and core, read in part: lib.rs (build_transfer_parts, build_withdraw_parts head, transfer plan/spend/result, carry_kept, max_in_parts, max_chained, remove, MoveInResult/move_in, SendRequest/SendResult/account_send); wasm lovejoin.rs (the public mix's coll…
+
+## E9a (6 findings, 16 guards)
+
+- `e9a#1` low (user): A token's details offer Send or Make private/public for a token with no spendable units, and the form silently drops it, with Review greyed and no reason `Home.tsx:572`
+- `e9a#2` low (user): Transaction details show an unlisted token in raw units, while the review above them and Home scale it by Koios's decimals `TxDetail.tsx:351`
+- `e9a#3` low (stranger): UTxO details call any address under payment key 0/0 'Your receive address, the one Receive shows', whatever its stake part `Utxos.tsx:411`
+- `e9a#4` low (user): Public activity's Save as CSV note says the file holds nothing the chain doesn't, but its rows name the user's own Make private and Make public `Activity.tsx:126`
+- `e9a#5` nit (user): Private activity's CSV includes a private payment still marked Pending, against exported()'s own promise `Activity.tsx:305`
+- `e9a#6` nit (user): Activity's details label a private session's funding or return, and a box back from Lovejoin, as 'Seedelf' `Activity.tsx:428`
+
+*Coverage:* Read in full, every line: screens/{Activity,CardanoSend,Home,Onboarding,Receive,Tokens,Utxos}.tsx and components/{TxDetail,PendingBanner,TxBanner,ReviewRows,ReviewTotals,PaidRows,Recipients,AccountRecipients,Destination,TokenAmounts,TokenList,AmountField,AdaInput,HandleWarning,StakedWarning,HistoriesNote,LeftOut,SessionLeft,SessionRefused,StaleReview,SendButton}.tsx (7,054 lines). Followed, reading the parts that matter: ui/format.ts (formatQuantity, parseQuantity, sanitizeAmount, unlocked, withRewards, spentRewards, formatFiat), ui/tokens.ts (all), ui/activity.ts (all), ui/accounts.tsx, ui/background.ts call, preferences useAmounts, ExplorerLink, QrCode, RefreshRow; the MoveIn/Withdraw/Transfer review token rows; background/send.ts (all), destination.ts (all), activity.ts (sent, withDecimals, cardano, describe, matcher), incoming.ts (incomingOf, summed), balances.ts (get, reading, seede…
+
+## E9b (3 findings, 13 guards)
+
+- `e9b#1` low (stranger): Greek capitals Ν Μ Η Υ, and Cherokee or Lisu letters, slip past the check for tokens named like ADA or a listed token `format.ts:80`
+- `e9b#2` low (nobody): Anti-impersonation warnings in warning colour are left out of the accuracy-critical translation set `i18n-critical.mjs:84`
+- `e9b#3` nit (nobody): PlutusTree's Copy JSON isn't the detailed schema cardano-cli reads: ints are strings, and an unknown tag's constructor is null `PlutusTree.tsx:167`
+
+*Coverage:* Read in full: ui/format.ts, tokens.ts, App.tsx, view.ts, history.ts, activity.ts, background.ts, accounts.tsx, preferences.tsx, lovejoin-pools.ts, nft-images.ts, network.ts, sentence.ts and main.tsx; shared/open-in.ts; i18n/core.ts, index.tsx, i18next.d.ts and translations/index.ts. Also read in full every component not listed for E8a or E9a: MiddleEllipsis, PhraseGrid, PoolAvatar, ActionButton, CopyButton, Callout, NetworkBadge, CopyField, QrCode, GivemeNote, BuildStage, Choice, PasswordField, RefreshRow, Tabs, Clearable, Modal, AccountPicker, RadioCards, ExplorerLink, Splash, NetworkPicker, SetPassword, Hint, LockCountdown, NftImage, Contacts, PlutusTree, PhraseInput and Screen. Icons.tsx was skimmed (static SVG paths only).  Translations: read all 485 critical bases in en, es and ja (the _other or base form, plus every es _one). Mechanical scans with python over all 3,195 keys compare…
+
+## B1 (5 findings, 9 guards)
+
+- `b1#1` low (user): The store zip's third-party notices sort in the builder's locale, so the same commit gives another zip in cs, sk, et, lt and lv `third-party.mjs:225`
+- `b1#2` low (user): build.sh never checks or records which Rust built the module, and the second build shares the first's shell, so the record's "same toolchain" can be false `build.sh:61`
+- `b1#3` low (nobody): release.yml's CLI build jobs hold the GPG release key, its passphrase and a write token beside every crate's build code `release.yml:24`
+- `b1#4` low (nobody): The Windows release job prints the armored GPG secret key into the public Actions log `release.yml:108`
+- `b1#5` low (nobody): Every workflow pins its third-party actions by tag or branch, never by commit, in the jobs that sign the CLI and build the data layer's binary too `release.yml:18`
+
+*Coverage:* Read every line of these files: .github/workflows/web-wallet.yml, release.yml, continuous-integration.yml, data-layer.yml and data-layer-deploy.yml; wasm/build.sh; extension/scripts/package.mjs, third-party.mjs (+.d.mts), tokens.mjs, dreps.mjs, lovejoin-registry.mjs (+.d.mts), i18n-critical.mjs (all 1,327 lines, read for gaps rather than traced key by key) and i18n-critical.d.mts; extension/vite.config.ts, package.json, playwright.config.ts, tsconfig.json and index.html; seedelf-platform/Cargo.toml, rust-toolchain.toml and wasm/Cargo.toml; the .gitignore files in extension/, wasm/ and seedelf-platform/; development.md's release sections in full, plus releases.md and release-records.md' headers; SECURITY.md and RELEASE.md.  Followed out of those paths: src/manifest.ts, networks.ts, env.d.ts, the content scripts' imports, data-layer.ts's DEV path, sw.ts's and App.tsx's uses of the defines,…
+
+## D1 (7 findings, 8 guards)
+
+- `d1#1` low (site): The privacy policy and privacy.md say the CIP-30 entry goes only on https pages, but it also goes on every http://localhost and http://127.0.0.1 page, at any port `privacy-policy.md:79`
+- `d1#2` low (user): privacy.md says every open session's account is read together only from the Swaps screen; the dApps page does it every time it opens, and the policy never says so `privacy.md:369`
+- `d1#3` low (site): A site's payment into the Seedelf contract under a register-shaped datum that can't be spent is shown as 'without a register: anyone can take', when no one can ever take it `privacy.md:336`
+- `d1#4` nit (nobody): The root README's collateral rule has an exception it doesn't name: a session's 5 ₳ collateral mix spends the session's account under giveme.my's collateral `README.md:276`
+- `d1#5` nit (user): privacy.md says the recovery phrase can't be copied, but once revealed it's ordinary selectable text `privacy.md:276`
+- `d1#6` nit (stranger): The root README's troll attack says Bob pays more to spend the UTxO; Seedelf Wallet can't spend it at all `README.md:187`
+- `d1#7` nit (user): The privacy policy's ADA Handle row covers only a withdrawal, but a public Send to a $handle asks the server too `privacy-policy.md:19`
+
+*Coverage:* Read every line of seedelf-platform/seedelf-web-wallet/README.md, docs/privacy.md (502 lines), docs/keys-and-accounts.md, docs/store/privacy-policy.md, SECURITY.md and the root README.md. Read docs/architecture.md lines 1-783. The densest Lovejoin paragraphs (681, 739-757) and the swap-runner paragraphs (642-674) were read through, but only their figures, constants and privacy statements were checked against code, not every behavioural clause. The UI component inventory (477-497) and Lace's table were skimmed. Checked against code: every fetch site, the manifest builder and the built dist/manifest.json, networks.ts, preferences defaults, the reset and wipe paths and every local storage write, private-store padding and kept records, the vault and secret-box KDF, the password and back-off, destination and own-address matching, NFT image ordering, every Ogmios evaluate caller, koiosAlone, t…
+
+## V1 (0 findings, 7 guards)
+
+- none
+
+*Coverage:* I read all of definitions.lean (lines 1-113) and all of wallet.ak, seedelf.ak, schnorr.ak (types, fiat_shamir_heuristic, prove), token_name.ak (seedelf, generate), logic.ak, always_false.ak and aiken.toml. From stdlib v2.2.0: list.has, assets.flatten, dict.foldr, bytearray take/slice/push/concat, scalar new/from_bytearray_big_endian/field_prime, g1 decompress/scale/add/equal, crypto.blake2b_224, and the Transaction and ScriptContext types. From the Lean libraries: ByteString (structure, the Coe from String with no UTF-8, cons, append, slice, consByteStringV2), byteStringToInteger and its Opaque alias, the G1 builtins and the uncompress model, blake2b_224, the encodings of V3 ScriptContext, ScriptInfo, TxInfo, TxInInfo, TxOutRef and TxId, the Option, ByteString and Integer IsData instances, the signatories list, Value and MintValue, and the V2 Datum and Redeemer aliases. I decoded the thr…
+
+## V2 (2 findings, 3 guards)
+
+- `v2#1` nit (nobody): ownerContext's docstring reads as serialising each input reference separately; the source serialises the list once `definitions.lean:445`
+- `v2#2` nit (nobody): ReadableLaunch's module doc reads as if the output search also requires an inline ReferenceDatum `definitions.lean:759`
+
+*Coverage:* I compared every clause of mix_logic.ak (withdraw, publish, else, validate_owner, validate_mix, walk_outputs, collect_well_formed_mix_inputs, pairs_match_and_all), one_shot_mint.ak (mint, token_sane, else) and mix_box.ak (spend, else). That includes the helpers they call in reference.ak, mixbox.ak, value.ak, schnorr.ak, sigma_or.ak, hash.ak and bls.ak, and the stdlib v4.0.0 code behind them: list filter, filter_map, find, any, foldl, reverse, length and map; dict get_or_else, do_get, insert_with, singleton and to_pairs; assets from_asset, from_lovelace, add, quantity_of and tokens; bytearray concat, length and from_int_big_endian; scalar and bitwise from_int; g1 scale, add and equal; pairs.has_key; and the Transaction, Output, Datum, Address, Credential, Certificate and ScriptInfo types. I compared them against every definition in definitions.lean (lines 50-150, 299-458, 528-742, 783-805…

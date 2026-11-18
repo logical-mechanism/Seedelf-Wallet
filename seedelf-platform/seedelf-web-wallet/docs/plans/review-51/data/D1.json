@@ -1,0 +1,208 @@
+{
+ "findings": [
+  {
+   "id": "d1#1",
+   "severity": "low",
+   "title": "The privacy policy and privacy.md say the CIP-30 entry goes only on https pages, but it also goes on every http://localhost and http://127.0.0.1 page, at any port",
+   "file": "seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md",
+   "line": 79,
+   "scenario": "The user turns on Let sites connect. They have a local dev server, or any local app UI, open at http://localhost:3000 (or 127.0.0.1:8384, and so on). That page gets window.cardano.seedelf, so it learns Seedelf Wallet is installed and can ask to connect. The published policy says the entry is added 'to https pages, and nothing else', and that 'every https site you open ... can see that you use Seedelf Wallet'. privacy.md:345 and :348 say the same: 'every https site'. In code the match patterns also cover local http pages, and Chrome's match patterns ignore the port. No money is at risk. The policy is wrong about which pages can detect the wallet.",
+   "who": "site",
+   "since": "fe8b7748 (chunk 15, 2026-09-24), before 1.0.0",
+   "evidence": "extension/src/shared/dapp.ts:15 `export const DAPP_ORIGINS = [\"https://*/*\", \"http://localhost/*\", \"http://127.0.0.1/*\"];`\nbackground/connector.ts:41-45 registerContentScripts(... matches: DAPP_ORIGINS).\nconnector.ts:62-66 offered(): `protocol === \"https:\" || (protocol === \"http:\" && (hostname === \"localhost\" || hostname === \"127.0.0.1\"))`, so reachOpenPages also injects into local tabs that are already open.\nThe built dist/manifest.json has optional_host_permissions ['https://*/*','http://localhost/*','http://127.0.0.1/*'].\nThe existing tests pin this behaviour: tests/dapp-reach.test.ts:80 'puts both scripts in the top frame of each https or localhost page'; tests/manifest.test.ts:29.\nThe docs that leave it out: privacy-policy.md:79 and privacy.md:345/348. The only docs that say it are docs/store/README.md:260 ('localhost is for sites in development') and architecture.md:400/545.",
+   "confidence": "traced",
+   "fix": "Say it in the policy and in privacy.md: 'https pages, and pages served from this computer (localhost, 127.0.0.1)'. Add a dated Changes entry as a correction, as the 8 October one was. Or drop the two http patterns from store builds, keeping them in dev builds where they serve dApps in development. Family: the store README's justification text (store/README.md:269) says 'to add the CIP-30 entry to https pages' too.",
+   "needs_owner": true,
+   "owner_why": "Two choices: correct the published policy (with a Changes entry), or change which pages a store build's connector reaches.",
+   "known_check": "Searched backlog.md and archive/plans for 'localhost'. Only privacy-review.md:490 ('every https page and localhost') and the store permission text mention it. No backlog line, and no Not fixed item."
+  },
+  {
+   "id": "d1#2",
+   "severity": "low",
+   "title": "privacy.md says every open session's account is read together only from the Swaps screen; the dApps page does it every time it opens, and the policy never says so",
+   "file": "seedelf-platform/seedelf-web-wallet/docs/privacy.md",
+   "line": 369,
+   "scenario": "A user has a private session open for a site and another for a mix, and never opens Minswap. They open Home → dApps, to manage Sites or reach Lovejoin. The page reads every live session's one-time account in one credential_utxos request, from the IP address that reads the public account. The server can then tie those sessions to each other. privacy.md:369 says this happens 'only when the Swaps screen reads the chain', and architecture.md:665 says 'only when Minswap's screen reads'. architecture.md:597 has it right. The privacy policy's list of what the Cardano server sees (privacy-policy.md:41) leaves out these grouped session reads. Only the restore scan (:43) says the server can tell one-time accounts are one wallet's. The link itself is admitted in privacy.md, so nothing new is linked, but it happens at a step the docs say doesn't make it.",
+   "who": "user",
+   "since": "5cc61e55 (chunk 15c, 2026-09-25), when the dApps page began reading on open; privacy.md had the same 'only when the Swaps screen' wording at web-wallet/1.9.1 (its line 188)",
+   "evidence": "ui/screens/Dapps.tsx:125-128 `useEffect(() => { if (!open) void load(false).then(() => load(true)); }, [open, load]);` with :114 `call(\"sessions\", { refresh })`. The Refresh buttons are at :242, :261 and :282.\nbackground/sessions.ts:1541 list(network, refresh) → :5621 listNow → :5630-5635 `const creds = live.map((s) => keys.get(s.index)!.keyHash); const listed = await readFresh(spent, () => koios.credentialUtxos(creds), ...)`. That is one request naming every live session: sites', mixes', swaps' and found ones. tx_status of each waiting transaction and utxo_info of their outputs and orders follow.\nSwaps.tsx:445 is the other refresh caller. Lovejoin.tsx, Home.tsx and ConnectedSites.tsx call sessions without refresh (the device's record only).",
+   "confidence": "traced",
+   "fix": "privacy.md:369: 'when the dApps page opens or is refreshed, and when Minswap's screen reads the chain'. Correct architecture.md:665 the same way. Add a line to the policy's list at :41 ('your private sessions' one-time accounts, all together, when you open the dApps page or a swap's screen'), with a dated Changes entry. Or, if the owner prefers, have the dApps page read only the device's record and leave the grouped read to the screens that need holdings.",
+   "needs_owner": true,
+   "owner_why": "The published policy gets a new disclosure and a Changes entry. The alternative changes when the dApps page reads the chain.",
+   "known_check": "Searched backlog.md and archive/plans for 'every open session', 'Swaps screen', 'dApps page reads' and 'Minswap's screen reads'. Only chunk-15-dapp-connector.md:223 ('When the wallet opens, it reads every open session's account in one Koios request') and the commit message of 5cc61e55 mention it. No open item."
+  },
+  {
+   "id": "d1#3",
+   "severity": "low",
+   "title": "A site's payment into the Seedelf contract under a register-shaped datum that can't be spent is shown as 'without a register: anyone can take', when no one can ever take it",
+   "file": "seedelf-platform/seedelf-web-wallet/docs/privacy.md",
+   "line": 336,
+   "scenario": "A site asks the user to sign a transaction that pays 50 ₳ of the account's to Seedelf Wallet's contract. The output's inline datum is Constr 0 with two 48-byte fields, and the public value is a torsion point, an off-curve point, a point of the wrong length, or the generator is the identity. is_payable fails, so the window shows dappUi.warn.noRegister: 'It pays Seedelf Wallet's contract without a register: whatever goes there, anyone can take.' privacy.md:336 describes the same two cases ('or without one (anyone can take it, and the window warns)'). On chain, the deployed validator treats any two-ByteArray Constr 0 as a Register and runs schnorr.prove, where g1.decompress fails or the equation can't be met. So the 50 ₳ is locked for good, not free for anyone. The amount leaving is shown right and the user is warned it isn't theirs. Only the label of who can take it is wrong. Only an identity public value really is 'anyone can take'. A datum held by hash is called 'none' too, whatever it is.",
+   "who": "site",
+   "since": "fe8b7748 (chunk 15, 2026-09-24) for the classification; 7cc3f363 (2026-10-02) for the warning's words",
+   "evidence": "wasm/src/cip30.rs:999-1002 `fn is_register_datum(datum_hex) -> bool { register_datum(datum_hex).is_some_and(|r| build::is_payable(&r)) }`.\ncip30.rs:1385-1393 `Address::Shelley(s) if *s.payment().as_hash() == contract_hash => Some(if inline.as_deref().is_some_and(is_register_datum) {\"register\"} else {\"none\"} ...)`.\nen.json:517 dappUi.warn.noRegister.\nDeployed contract, `git show 5b82530:seedelf-contracts/validators/wallet.ak`: `if register is Register { and { schnorr.prove(register.generator, register.public_value, ...)?, ... } } else { True }`. 5b82530:lib/schnorr.ak prove: `generator |> g1.decompress |> g1.scale(z)` and `public_value |> g1.decompress |> g1.scale(c)`: decompress fails on a bad or non-subgroup point, so the script errors.\nwasm/tests/cip30_test.rs:1374 a_payment_into_seedelf_says_whether_it_has_a_register covers only a payable register against no datum.\nThis is a sibling of w2#2, which is the same block mislabelling a key address that carries the contract's hash.",
+   "confidence": "traced",
+   "fix": "Split 'none' into the case the ledger lets anyone take (no datum, a datum that isn't a Register, or an identity public value) and a third value for a Register-shaped datum is_payable refuses (locked for good), with words of its own (a critical .warn. string, back-translated). Say all three in privacy.md:336. A datum held by hash can't be judged from the body: say so rather than 'anyone can take'. Fix it together with w2#2, in the same match at cip30.rs:1385.",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "Searched backlog.md and archive/plans for 'noRegister', 'without a register', 'is_register_datum' and 'register_datum'. Only flows.md:79, chunk-14 and chunk-15 notes, and W2's lane record (w2#2, a different shape in the same code). Not in the backlog."
+  },
+  {
+   "id": "d1#4",
+   "severity": "nit",
+   "title": "The root README's collateral rule has an exception it doesn't name: a session's 5 ₳ collateral mix spends the session's account under giveme.my's collateral",
+   "file": "README.md",
+   "line": 276,
+   "scenario": "README.md:276 says: 'Where a transaction already names one of the wallet's own key accounts, such as the public account, that account puts up its own collateral instead.' A private session's return through Lovejoin deposits the session's 5 ₳ collateral into a box. The mix of that box is paid from the deposit's change at the session's one-time account, and the session's key signs it. Its collateral is giveme.my's, because the session's own 5 ₳ is inside the box by then. So that transaction names a key account of the wallet and still takes giveme.my's collateral. privacy.md:432 states this correctly, and the root README points readers there.",
+   "who": "nobody",
+   "since": "481ddb1f (chunk 50, 2026-11-17)",
+   "evidence": "seedelf-core/src/lovejoin/mod.rs:943-949 (mix_giveme): 'the mix of a session's own collateral ... The payer still pays the fee and keeps the change, and signs; giveme.my signs after'.\nmod.rs:2410-2418 collateral_tail: 'the rest back to `address` as change, then mixes that box once'.\nprivacy.md:432: 'The session has nothing else left to put up as that mix's collateral, so giveme.my lends its own'.",
+   "confidence": "traced",
+   "fix": "'... that account puts up its own collateral instead, but for the one mix of a private session's 5 ₳ collateral, which giveme.my backs.'",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "Searched backlog and archive for the README's wording and for 'mix_giveme' and 'collateral's mix'. The behaviour is documented in privacy.md and architecture.md; only the root README's general rule omits it."
+  },
+  {
+   "id": "d1#5",
+   "severity": "nit",
+   "title": "privacy.md says the recovery phrase can't be copied, but once revealed it's ordinary selectable text",
+   "file": "seedelf-platform/seedelf-web-wallet/docs/privacy.md",
+   "line": 276,
+   "scenario": "On Create's first step, or Settings → Show recovery phrase, the user presses reveal, selects the grid and presses Ctrl+C. The 24 words go onto the system clipboard, and into its history and any clipboard sync, which this same bullet says the wallet can't reach. The doc says 'The recovery phrase can't be copied.' What's true is that there's no Copy button, and that a paste into the restore field clears the clipboard. Nothing is lost unless the user copies it themselves.",
+   "who": "user",
+   "since": "4fb0ad81 (2026-09-27)",
+   "evidence": "ui/components/PhraseGrid.tsx renders `<span className=\"word__text\">{revealed ? word : \"••••••\"}</span>` in an `<ol>`, with no onCopy handler. A grep for onCopy, 'copy' and clipboardData in ui/ finds only PhraseInput's paste.\nstyles.css:1491-1494 sets `user-select: none` only under `.phrase-reveal--hidden`; there is no page-wide user-select rule.\nThe source of the wording is privacy-review.md:944: 'The phrase: it can't be copied, a paste clears the clipboard'.",
+   "confidence": "traced",
+   "fix": "Reword: 'The recovery phrase has no Copy button, and a phrase pasted into Restore is cleared from the clipboard. Selecting and copying it yourself puts it there like any text.' Blocking selection would be a UI change for the owner to want, not something to add unasked.",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "Searched docs for 'can't be copied' and 'phrase can't'. Only privacy.md:276 and privacy-review.md:944. No backlog line."
+  },
+  {
+   "id": "d1#6",
+   "severity": "nit",
+   "title": "The root README's troll attack says Bob pays more to spend the UTxO; Seedelf Wallet can't spend it at all",
+   "file": "README.md",
+   "line": 187,
+   "scenario": "Alice pays a web-wallet user's Seedelf a UTxO carrying a large reference script, as the README describes. The README says 'Bob pays more than usual to spend it, but less than Alice paid.' That holds for the CLI, which evaluates through Ogmios. In Seedelf Wallet the evaluator refuses any row carrying a reference script. Coin selection and Max never pick it, the private balance doesn't count it, and the UTxOs screen marks it unspendable. So the gift is stranded, and Bob pays nothing and gains nothing. The user's own money isn't affected.",
+   "who": "stranger",
+   "since": "481ddb1f (chunk 50, 2026-11-17)",
+   "evidence": "seedelf-core/src/eval.rs:56-70 refusal(): 'UTxO ... holds a reference script, which the wallet can't evaluate with yet'.\nbuild.rs:2551-2556 select_script_inputs keeps only rows with `crate::eval::refusal(u).is_none()`.\nextension/src/background/balances.ts:470-476 spendableOwned drops `utxo.reference_script`.\nshared/rpc.ts:617-624 `unspendable?: \"script\"`.\nextension/tests/withdraw.test.ts:127 'leaves a UTxO carrying a reference script out of the balance and of Max'.\nThe launch review's #12 (archive/plans/launch-review.md:232) made this the code's rule.",
+   "confidence": "traced",
+   "fix": "Add one sentence: 'In Seedelf Wallet such a UTxO can't be spent yet: it's left out of the private balance, and the UTxOs screen shows it as unspendable.'",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "Searched docs for 'reference script' together with contract, private and troll. launch-review #12 covers the code side; no doc line or backlog item covers the README's claim."
+  },
+  {
+   "id": "d1#7",
+   "severity": "nit",
+   "title": "The privacy policy's ADA Handle row covers only a withdrawal, but a public Send to a $handle asks the server too",
+   "file": "seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md",
+   "line": 19,
+   "scenario": "The user sends 10 ₳ from the public account to $alice. The worker asks the Cardano server who holds $alice (asset_nft_address), at the form and again at Review. The policy's data table lists only 'An ADA Handle you withdraw to'. The README (line 40) offers ADA Handles on the public Send, and privacy.md:257 says 'Make public or Send to `$name` asks the server'. The address goes on chain once sent, so only a lookup the user abandons tells the server something the chain won't.",
+   "who": "user",
+   "since": "40de0c6e (2026-09-24), the row's wording",
+   "evidence": "background/send.ts:32,70 `destinationResolver(this.deps, network)`.\ndestination.ts:41-58 resolveDestination → `koios.assetNftAddress(ADA_HANDLE_POLICY, name)` for a `$name`.\nwithdraw.ts:78/85 is the same path.\nprivacy-policy.md:19 '| An ADA Handle you withdraw to | ... |'.",
+   "confidence": "traced",
+   "fix": "'An ADA Handle you pay, from either side' (Make public, or Send from the public account), keeping the rest of the row.",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "Searched the policy and the archive for 'ADA Handle'. The 7 October entry mentions handles looked up; no line covers the public Send."
+  }
+ ],
+ "guards": [
+  {
+   "file": "seedelf-platform/seedelf-core/src/build.rs",
+   "line": 3107,
+   "stops": "Paying a register no one can spend (points that don't decode, torsion points, an identity generator), or one anyone can (an identity public value). Applied at build.rs:805, :3047, :3227, :3876 and lovejoin/mod.rs:732, :1433.",
+   "test": "seedelf-core/tests/mint_test.rs refuses_what_would_lose_money (two modules, lines 1935 and 2466); utxos_test.rs:507 wallet_scans_skip_an_identity_register"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/build.rs",
+   "line": 1589,
+   "stops": "A merged session return whose proofs are bound to the session's own key, which a connected site can ask to sign (a replay or theft vector)",
+   "test": "merge_test.rs:117 a_sessions_return_merges_into_its_funding_change_under_its_own_collateral asserts the proof's key differs (comment at :136). No test found that triggers the bail itself."
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/build.rs",
+   "line": 99,
+   "stops": "Wrong protocol parameters (a lying or broken data source) making the wallet pay a fee the ledger would take, capped at MAX_FEE 10 ₳",
+   "test": "seedelf-core/tests/build_test.rs:599 a_fee_over_the_limit_is_refused_in_words"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/build.rs",
+   "line": 2551,
+   "stops": "Picking a contract UTxO the evaluator can't take (a reference script, or a datum too deep), which would measure wrong and send a failing spend",
+   "test": "extension/tests/withdraw.test.ts:127 (balance and Max); R2b lists eval-side tests"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/balances.ts",
+   "line": 475,
+   "stops": "The private balance figure counting a reference-script UTxO no spend can take (a figure wrong by real money)",
+   "test": "extension/tests/withdraw.test.ts:127 'leaves a UTxO carrying a reference script out of the balance and of Max'"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs",
+   "line": 5099,
+   "stops": "Calling an address the user's own by its stake key alone, so Send says money comes back when a stranger's payment key holds it",
+   "test": "wasm/tests/api_test.rs:2900, :2920 and :2973 (is_own_address cases)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts",
+   "line": 2093,
+   "stops": "A site on a private session registering or delegating the session's own stake key, whose deposit nothing in the wallet would ever bring back",
+   "test": "none found (searched for sessionStakeKey in extension/tests)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs",
+   "line": 1387,
+   "stops": "Labels a site's payment into the Seedelf contract as a Seedelf payment only when the register is payable. Otherwise it warns, though with the wrong words for a register that can't be spent (d1#3).",
+   "test": "wasm/tests/cip30_test.rs:1374 a_payment_into_seedelf_says_whether_it_has_a_register (a payable register against no datum only)"
+  }
+ ],
+ "checked_ok": [
+  "Every fetch in the extension (koios.ts, collateral.ts, minswap.ts, prices.ts, nft-image.ts, private-index.ts) spreads SERVICE_FETCH {credentials omit, no-referrer, no-store}. The only change is the data layer's POSTs, which use cache 'default' (data-layer.ts:87, koios.ts:1191/1369), as privacy.md:85 and architecture.md:280 say.",
+  "The policy's 'Nothing else' holds: the built dist/manifest.json connect-src is exactly the two Koios hosts, giveme.my, CoinGecko, both Minswap aggregators, mainnet.seedelf.logicalmechanism.io and ipfs.blockfrost.dev. host_permissions are Koios, giveme.my and CoinGecko. There's no XMLHttpRequest, WebSocket, sendBeacon, web_accessible_resources, externally_connectable or static content script.",
+  "The UI's outbound links are only Cardanoscan, GitHub (source, privacy policy, issues for a translation error) and an IPFS governance text, all with rel=noreferrer, matching the policy's link list.",
+  "Defaults match the docs (shared/preferences.ts:175-189): spendRewards on, the connector off, password at Sign on, dappAccount 0, Lovejoin returns and the collateral mix on, depth 2, width 3, delay 1-6 h, Koios-only off, currency usd, lock 15 min. Lock choices are 1/5/15/30/60, delays 1-6/2-12/6-24.",
+  "CoinGecko is asked only from Home and the swap form (Home.tsx:325, Swaps.tsx:708). It's kept 5 minutes in session storage, never on preprod, never with the currency 'Nothing (don't ask for prices)'.",
+  "Remove wallet and Forgot password (wallet.ts:473-479) delete the vault, the failure count, the settings, every sealed record but maybeSent and lovejoinMaybe, and LOCAL_CACHES (staking pools, governance actions, the old price key, the Lovejoin pools lists). They keep the network, the account, the language and openIn. Koios-only is written back (handlers.ts:271-280), and seedelf.sends survives via wipe(). Every chrome.storage.local write in the code is in that list.",
+  "Sealed records are padded to 1 KiB or the next power of two (private-store.ts:83-90). KEPT_ON_RESET is exactly maybeSent and lovejoinMaybe on both networks.",
+  "The vault is {version:1, blob} SBV1 with Argon2id m=19456, t=2, p=1 (secret-box/kdf.ts:18). The password is at least 12 characters, enforced in the worker (wallet.ts:259, :451). The back-off is 1 s doubling to 60 s (wallet.ts:176). Show recovery phrase counts toward and waits like the back-off (wallet.ts:736-750). The Remove wallet phrase is 'delete wallet', folded.",
+  "The proof nonce is hedged as architecture.md says: HMAC-SHA-512 keyed by sk over the tag, g, u, vkh and 32 random bytes (seedelf-crypto/src/schnorr.rs:61-77). The one-time key is HKDF-SHA-256(ikm=x BE, salt seedelf-one-time-key-v1, info=seed, L=32) (wasm/src/lib.rs:2052-2063).",
+  "Restore takes 12, 15 or 24 words (derivation.rs:44). There are 9 Seedelf v1 vectors over 12/15/24 words, and 8 Cardano vectors × 9 values = 72, as keys-and-accounts.md says. The Icarus master key is PBKDF2 at 4096 rounds, 96 bytes (cardano.rs:145-149). ONE_TIME_ACCOUNT is 0x5EED = 24301', refused as a public account (shared/preferences.ts:66-73). The account list caps at 100 (accounts.ts:67).",
+  "Public account discovery asks one account_addresses per account (accounts.ts:268, :297). The restore scan batches 20 stake keys a request (sessions.ts:2798). Its '20 to 39 accounts named past the last used' arithmetic holds.",
+  "Make public's own-address rule: the first 20 keys of each chain, the reading's known keys, and up to the 500th under the account's own stake key, never by stake key alone (wasm lib.rs:5079-5130). Every known account is checked, derived on the device, asking no one (destination.ts:112-138).",
+  "Only NFT images ask the server about a token (asset_info at nft-image.ts:71). A Seedelf's token is never asked about. The gateway grant is checked before Koios. There's no asset_utxos call anywhere, so no recipient token is looked up.",
+  "Only three things send drafts to Ogmios at review: the account-paid mint (mint.ts:89 → script-spend.ts:351), a Lovejoin chain's crossCheck (fanOut, acrossOf, and the public mix's checked), and the collateral mix before giveme.my (lovejoin.ts:4541). A pool's start and the private Bring one back are measured in the wallet, as the policy's 'Two reviews go to it' says.",
+  "When Koios is answering, box origins are asked of Koios alone (lovejoin.ts:6288-6291 koiosAlone). The private index routes are GETs naming no account (private-index.ts:206-286). The Koios-only switch gates both the data-layer client and the private index (data-layer.ts:229, private-index.ts:368).",
+  "A pool's start locks 23-24 ₳ on v2: seedelf-core/tests/lovejoin_launch_test.rs:177 asserts it, which matches 'About 23 ₳'.",
+  "Lovejoin's figures match the code: MAX_CHAIN_MIXES 130 (10×13), and v2 deposits capped at 64 (lovejoin.ts:1836, :3804), giving 32/10/64 boxes, so 160 ₳/50 ₳/320 ₳ at 5 ₳. The pool floor is 30 on mainnet and 0 on preprod. LANDING_MS is 15 min, TAIL_UNLANDED_MS and TAIL_OFFER_MS 1 h, TAIL_KEEP_MS 24 h, QUIET_AFTER_SEND 5 min, spread 5-60 min, unlock draws 2-20 min, BRING_LATE 10 min, REFRESH and POOL_ROOM 5 min, COLLATERAL_TAIL_RESERVE 1.5 ₳, MIX_FEE_ESTIMATE 0.95 ₳.",
+  "The connector's constants match architecture.md: VIEW_MS 30 s, KEEP_SIGNED 32, declined waits 10 s/60 s/5 min with a 10 min reset, 20 waiting with 5 a site, FUNDING_WAIT 20 min (dapp.ts:177-206). Site errors are in English (dapp.ts:2744-2750, lng en). A session's own stake key can't be registered by a site (dapp.ts:2090-2094).",
+  "Lovejoin's retired pools, the 5 ₳ pool and mixing again from the public account only for the active account (MAX_PROBE 24 for origins, lovejoin.ts:6324) are as privacy.md says.",
+  "Nothing typed is spell-checked: index.html has `<body spellcheck=\"false\">`, inherited by every field and dialog under #root.",
+  "The create screen's payer default (CreateSeedelf.tsx:64) flips to the private balance only when the public account holds nothing. That's documented in flows.md:340 (GS-2), so privacy.md's 'by default the public account pays' isn't contradicted where the account can pay.",
+  "Remove a Seedelf chooses nothing when another account paid, or the payer is unknown (RemoveSeedelf.tsx:184-186), as privacy.md:191 says.",
+  "The DRep form has the profile off and doNotList on by default, and own-vote delegation on (Governance.tsx:378-379, :561).",
+  "The deployed contracts (5b82530) behave as the root README says: wallet.ak lets a UTxO with no datum or a non-Register datum go; an identity public value makes g^z = g^r trivially spendable; token_name.ak slices the tag to 15 bytes and pushes one index byte, so the 8+30+2+24 hex layout holds; the challenge is blake2b_224(g || g_r || u || vkh).",
+  "SECURITY.md's PGP fingerprint matches util/pubkeys/support.asc: 8DF2 B3E9 B711 42BF E4F2 DF15 9C67 8E93 1E72 130D, ed25519, 2024-11-24.",
+  "The CLI asks api.github.com for its version from seedelf-display's preamble (display.rs:16, version_control.rs:26), as the root README says.",
+  "The CLAIMS.md table backs the web wallet README's 'v2 contracts it mixes with are formally verified', with the stated limits.",
+  "The built WASM is 3,273,363 bytes, about 1.00 MB at gzip -9, consistent with architecture's 'about 3.2 MB, 982 KB gzipped'."
+ ],
+ "notes": [
+  "For the owner (SECURITY.md): the scope for 'the CLI and the contracts' is the latest x.y.z tag's code (0.7.0). That tag's seedelf-contracts/ source and contracts/ are the undeployed later revision: `git diff 5b82530 0.7.0 -- seedelf-contracts/validators seedelf-contracts/lib` gives 239 insertions and 255 deletions. The deployed variant-1 bytes are in the tag only as seedelf-core's references.rs. A reporter reading SECURITY.md may audit source that isn't on chain. The 'must be fixable in our code' clause also excludes any deployed-contract bug, since variant 1 is frozen. Saying 'the deployed variant 1 (commit 5b82530)' would point reporters at the right source. This is a policy question, not a code claim.",
+  "Not verifiable from here, by the brief's rules (seedelf-data and external services are out of the chunk): the data layer logging neither IP nor path, Cache-Control no-store on every answer, its limits (20,000 / 200,000 / 10,000), and the 503 rules; giveme.my's log practice and 'checks against Koios'.",
+  "ADA's price is 'at most every five minutes' only within one unlock. Lock clears session storage (wallet.ts:702 session.clear()), so an unlock and a Home open inside 5 minutes asks CoinGecko again. Harmless, so a note only.",
+  "privacy.md rule 3 says re-randomization scalars 'exist only inside seedelf-crypto'. That's true of Seedelf's d (register.rs:150). Lovejoin's mix scalars, which are just as toxic to a mix (they undo its permutation), are drawn in seedelf-core (lovejoin/mod.rs:884-899, :997) and dropped without zeroize. They never leave Rust. Wording only; architecture.md lists them apart.",
+  "privacy.md gives two figures for a box's four mixes at depth 2: 'about 3.3 ₳' at :404 (measured, 0.8225 × 4) and '3.8 ₳ as estimated' at :412 (MIX_FEE_ESTIMATE 0.95 × 4). Both are labelled, but a reader may take them as contradicting. The backlog already has the MIX_FEE_ESTIMATE line.",
+  "privacy.md:270's list of what Remove wallet lists first leaves out 'a payment whose parts still wait to go', which the code lists (architecture.md:443, partsWaiting). The doc says less than the code does, so not a finding.",
+  "The root README's 'What's In This Repository' says seedelf-verification proves 'exactly when each deployed script accepts'. CLAIMS.md excludes the retired Lovejoin pools' scripts, which are deployed and still run for withdraws, and fee_contract. In context it reads as Seedelf's three scripts, so a note, not a finding.",
+  "The privacy policy's 'Signing ... CIP-95 ... learns whether your stake key is registered' leaves out that getRegisteredPubStakeKeys hands over the stake public key itself (architecture.md:534). It adds nothing linkable beyond the reward address CIP-30 already gives.",
+  "Other lanes' records were read only to avoid duplicates. d1#3 is a new member of w2#2's family (cip30.rs:1385-1393)."
+ ],
+ "coverage": "Read every line of seedelf-platform/seedelf-web-wallet/README.md, docs/privacy.md (502 lines), docs/keys-and-accounts.md, docs/store/privacy-policy.md, SECURITY.md and the root README.md. Read docs/architecture.md lines 1-783. The densest Lovejoin paragraphs (681, 739-757) and the swap-runner paragraphs (642-674) were read through, but only their figures, constants and privacy statements were checked against code, not every behavioural clause. The UI component inventory (477-497) and Lace's table were skimmed. Checked against code: every fetch site, the manifest builder and the built dist/manifest.json, networks.ts, preferences defaults, the reset and wipe paths and every local storage write, private-store padding and kept records, the vault and secret-box KDF, the password and back-off, destination and own-address matching, NFT image ordering, every Ogmios evaluate caller, koiosAlone, the private index routes, connector registration and offered(), the dApps-page and Swaps session reads (sessions.ts listNow), cip30.rs's Seedelf-payment classification, coin selection's evaluable filter and balances' spendableOwned, the collateral tail builder, Lovejoin constants and the launch-cost test, the deployed contracts at 5b82530 (wallet.ak, seedelf.ak, schnorr.ak, token_name.ak), derivation and Cardano vectors, the one-time key and the proof nonce, and SECURITY.md's key. Not reached or not verifiable: seedelf-data (out of the chunk), giveme.my's and Koios's own behaviour, the Changes entries' historical claims (spot-checked only), every 'the review says so' wording claim (checked about six translation keys, not all), and the CLI-only claims in the root README beyond the version check and is_payable in fund.rs. No tests were run and nothing was built."
+}
