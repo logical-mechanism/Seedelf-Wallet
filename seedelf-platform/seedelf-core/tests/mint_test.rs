@@ -1379,6 +1379,43 @@ mod account {
                 .contains("Seedelf policy")
         );
     }
+
+    /// Chunk 51: an account-paid mint never puts a Seedelf under a register
+    /// with an identity point, as no payment does (`is_payable`). An identity
+    /// public value is `g^0`, so anyone could prove its key and take the
+    /// Seedelf and its ADA; an identity generator locks them for good. Both
+    /// are valid points, so a check of the points alone lets them through.
+    #[test]
+    fn a_register_with_an_identity_point_is_never_minted() {
+        let p = payer();
+        let identity = format!("c0{}", "00".repeat(47));
+        let (g, u) = (p.seedelf.generator.clone(), p.seedelf.public_value.clone());
+        let mint = |register: &Register| {
+            build::account_mint(
+                &p.chain,
+                &[at(&p, 0x74, 0, 9_000_000, &[])],
+                None,
+                "",
+                register,
+                &p.change,
+                &Staking::none(),
+                None,
+            )
+        };
+        for register in [
+            Register::new(identity.clone(), u),
+            Register::new(g, identity.clone()),
+            Register::new(identity.clone(), identity),
+        ] {
+            assert!(register.is_valid().unwrap(), "{register:?}");
+            let refused = mint(&register).err().unwrap_or_else(|| {
+                panic!("minted under {register:?}");
+            });
+            assert!(refused.to_string().contains("register"), "{refused}");
+        }
+        // The same UTxO mints under a register of the user's own.
+        assert!(mint(&p.seedelf).is_ok());
+    }
 }
 
 // ---------------------------------------------------------------------------
