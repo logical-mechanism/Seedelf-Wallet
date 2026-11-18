@@ -1038,6 +1038,11 @@ export interface DappToken {
   policyId: string;
   assetName: string;
   quantity: string;
+  /**
+   * Koios's, where the device knows them, as Transaction details has them (tx-view.ts `heldDecimals`): WebAssembly's
+   * summary carries none (chunk 51, l3sign#2).
+   */
+  decimals?: number;
 }
 
 /**
@@ -1867,6 +1872,12 @@ export interface SessionAuto {
   partly?: boolean;
   /** The order was refunded, none of it filled: what it gave came back (independent review M18). */
   refunded?: boolean;
+  /**
+   * Every order of the swap is spent, by a fill or a refund the runner hasn't told apart yet: a run 15 s on, at most a
+   * minute while the wallet is unlocked, tells which and brings it all back. Nothing is open to cancel meanwhile (chunk
+   * 51, l3screens#1). Never beside `filled` or `refunded`.
+   */
+  spent?: true;
   /**
    * Stopped, but an order of the swap is still open at a DEX, and Koios
    * can't find it yet, so the wallet can't cancel it yet: when the runner

@@ -12,7 +12,8 @@ import { describe, expect, it } from "vitest";
 import { bodyOutpoints } from "../src/background/cbor";
 import { builtOutputs } from "../src/background/minswap";
 import { txIdOf } from "./fixtures/cbor";
-import { slippageKeeping } from "../src/background/sessions";
+import { READ_EVERY_MS, slippageKeeping } from "../src/background/sessions";
+import { lovejoinOf } from "./chain-fixtures";
 import {
   ASK,
   atSession,
@@ -25,6 +26,7 @@ import {
   ORDER,
   ordered,
   orderRow,
+  PASSWORD,
   pastSpent,
   signing,
   started,
@@ -33,6 +35,7 @@ import {
   unlocked,
   type T,
 } from "./swap-session";
+import { ADA_ROWS } from "./v2-pools";
 
 /** An order output at the DEX's contract, not at the session's account: utxo_info knows it, credential_utxos of the session doesn't. */
 function atContract(txHash: string, index: number, value = "14000000") {
@@ -885,10 +888,11 @@ describe("a swap's order found spent (independent review M18)", () => {
     );
     for (const o of orders) t.koios.spent.add(o);
     t.koios.addedToAccounts.push(...arrived);
-    // The run that first reads every order spent only notes it: the next one tells the outcome, and builds the return,
-    // from its own listings (chunk 51, r2still#2).
+    // The run that first reads every order spent only notes it: the next one, READ_EVERY_MS on, tells the outcome, and
+    // builds the return, from its own listings (chunk 51, r2still#2, l3time#2).
     await sessions.advance("preprod", 0, true);
     expect((await bookOf(t)).sessions[0]!.auto).toMatchObject({ spentSeen: t.clock.now });
+    t.clock.now += READ_EVERY_MS;
     // `late` lands as that run looks the orders up: after the account was read.
     const real = t.koios.fetch;
     t.koios.fetch = async (url, init) => {
@@ -977,6 +981,124 @@ describe("a swap's order found spent (independent review M18)", () => {
       atSession("dd".repeat(32), 0, "1500000"),
     ]);
     expect((await bookOf(t)).sessions[0]!.auto!.fills).toEqual(["aa".repeat(32), "dd".repeat(32)]);
+  });
+});
+
+// Chunk 51, l3screens#1 (l3still#1, l3tests#1) and l3time#2: the run that first reads every order of the swap spent
+// only notes it (`auto.spentSeen`), and the outcome is told READ_EVERY_MS on. Meanwhile the page said "Waiting for the
+// order to fill … Stop cancels it." and kept Stop, whose dialog priced a cancel that never comes, and a stopped swap
+// kept its "Order open". The view says every order is spent (`auto.spent`), Stop's price is the return to be told, the
+// order open goes, and an order read open again lets the note go, so a later sighting waits afresh.
+describe("a swap whose every order a run just read spent (chunk 51, l3screens#1, l3time#2)", () => {
+  /** Ogmios's answer when the network measures no more than a transaction declares. */
+  const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
+  const OUT = "ab".repeat(32);
+  const FILL = "aa".repeat(32);
+  /** The test clock's start (fakes.ts testWallet). */
+  const START = 1_800_000_000_000;
+
+  /** Session 0's ADA→MIN swap through Lovejoin, as approved: its order at SWAP_TX#0 spent, its fill at the account. */
+  async function filled(auto: Record<string, unknown> = {}) {
+    const t = await unlocked();
+    t.koios.evaluation = AGREES;
+    t.koios.confirmations = 1;
+    const now = t.clock.now;
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [
+            { kind: "out", txHash: OUT, at: now, confirmed: true },
+            { kind: "swap", txHash: SWAP_TX, at: now, confirmed: true, orders: [`${SWAP_TX}#0`] },
+          ],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: {
+            approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } },
+            direct: false,
+            lovejoin: { depth: 1, delay: "1-6", box: "5000000" },
+            ...auto,
+          },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(
+      orderRow(SWAP_TX, 0),
+      atSession(FILL, 0, "2000000", [[MIN, "906594100"]]),
+      atSession(SWAP_TX, 1, "12000000"),
+      atSession(OUT, 1, "5000000"),
+      ...ADA_ROWS,
+    );
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    const sessions = signing(t, { lovejoin: lovejoinOf(t), sleep: async () => undefined });
+    return { t, sessions };
+  }
+
+  it("says every order is spent, its outcome told next, and prices Stop as the return that comes, never a cancel", async () => {
+    const { t, sessions } = await filled();
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto).toMatchObject({ step: "filling", filled: false, spent: true });
+    expect(t.koios.submitted).toHaveLength(0);
+    // Stop's price from that reading: what comes back once the fill is told, as it is then.
+    const noted = await sessions.stopCost("preprod", 0);
+    const book = await bookOf(t);
+    const { spentSeen: _seen, ...rest } = book.sessions[0]!.auto!;
+    book.sessions[0]!.auto = { ...rest, filled: t.clock.now };
+    await t.store.set("sessions.preprod", book);
+    expect(noted).toEqual(await sessions.stopCost("preprod", 0));
+  });
+
+  it("lets a stopped swap's order open go as it notes every order spent", async () => {
+    const { t, sessions } = await filled({ stopping: true, orderOpen: START - 60_000 });
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto).toMatchObject({ step: "cancelling", stopping: true, spent: true });
+    expect(view.auto!.orderOpen).toBeUndefined();
+    expect((await bookOf(t)).sessions[0]!.auto).not.toHaveProperty("orderOpen");
+    expect(t.koios.submitted).toHaveLength(0);
+  });
+
+  it("notes it afresh where the device's clock went back past the note, rather than wait for that clock to catch up", async () => {
+    const { t, sessions } = await filled();
+    await sessions.advance("preprod", 0, true);
+    // The device's clock is set back an hour, which locks the wallet, and it's unlocked again: the note, an hour ahead
+    // of that clock, is taken again at its time.
+    t.clock.now -= 3_600_000;
+    await t.wallet.unlock(PASSWORD);
+    let view = await sessions.advance("preprod", 0, true);
+    expect((await bookOf(t)).sessions[0]!.auto).toMatchObject({ spentSeen: t.clock.now });
+    expect(view.auto).toMatchObject({ filled: false, spent: true });
+    t.clock.now += READ_EVERY_MS;
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.auto).toMatchObject({ step: "returning", filled: true });
+  });
+
+  it("notes it afresh once an order reads open again: that later sighting waits READ_EVERY_MS of its own", async () => {
+    const { t, sessions } = await filled();
+    await sessions.advance("preprod", 0, true);
+    expect((await bookOf(t)).sessions[0]!.auto).toMatchObject({ spentSeen: t.clock.now });
+    // A backend behind, or a rollback: the order reads open again, and the note goes.
+    t.koios.spent.delete(`${SWAP_TX}#0`);
+    t.clock.now += READ_EVERY_MS;
+    let view = await sessions.advance("preprod", 0, true);
+    expect((await bookOf(t)).sessions[0]!.auto).not.toHaveProperty("spentSeen");
+    expect(view.auto!.spent).toBeUndefined();
+    // Spent again: noted then, nothing told or sent a second on, and told READ_EVERY_MS after that sighting.
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    t.clock.now += 1_000;
+    await sessions.advance("preprod", 0, true);
+    const seen = t.clock.now;
+    expect((await bookOf(t)).sessions[0]!.auto).toMatchObject({ spentSeen: seen });
+    t.clock.now += 1_000;
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.auto).toMatchObject({ filled: false, spent: true });
+    expect(t.koios.submitted).toHaveLength(0);
+    t.clock.now = seen + READ_EVERY_MS;
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.auto).toMatchObject({ step: "returning", filled: true });
+    expect(view.auto!.spent).toBeUndefined();
+    expect(t.koios.submitted.length).toBeGreaterThan(0);
   });
 });
 

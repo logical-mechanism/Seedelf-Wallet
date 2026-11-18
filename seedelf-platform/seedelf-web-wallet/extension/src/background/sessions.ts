@@ -170,7 +170,7 @@ import { readsFor, rewardsField, type RewardRead } from "./lovejoin-rewards";
 import { GIVEME_BEHIND_MS, holdWaiting, partsOf, reviewParts, splitParts, unsplit, type Waiting } from "./parts";
 import { pendingKey } from "./pending";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
-import { CONTRACT_V1, ownedUtxos } from "./balances";
+import { CONTRACT_V1, decimalsOf, ownedUtxos } from "./balances";
 import { forgetContractView, readContractView } from "./contract-scan";
 import { chainStatus, type Feed, type Watching } from "./feed";
 import {
@@ -425,7 +425,8 @@ interface AutoRecord {
   refunded?: number;
   /**
    * When a run first read every order of the swap spent, its outcome not told yet: it's told, and the first return
-   * built, by the next run, from that run's own listings of the account, never from this one's (chunk 51, r2still#2).
+   * built, by a run READ_EVERY_MS on, from that run's own listings of the account, never from this one's; let go once
+   * an order reads open again (chunk 51, r2still#2, l3time#2).
    */
   spentSeen?: number;
   /** When the runner found the funding never reached the chain. */
@@ -977,9 +978,26 @@ function holdingOf(utxos: KoiosUtxo[]): NonNullable<SessionView["holding"]> {
   }
   return {
     lovelace: lovelace.toString(),
-    tokens: [...tokens].map(([id, q]) => ({ ...tokenOf(id), quantity: q.toString() })),
+    // In the units its rows give each (inUnits; chunk 51, l3still#5).
+    tokens: inUnits(
+      [...tokens].map(([id, q]) => ({ ...tokenOf(id), quantity: q.toString() })),
+      decimalsOf(utxos),
+    ),
     utxos: utxos.length,
   };
+}
+
+/**
+ * `tokens` in the units the session's account's rows give them (Koios's decimals; balances.ts decimalsOf): WebAssembly's
+ * token lists carry none, so a token off the wallet's list showed in raw units in a return's review, Bring everything
+ * back, Transaction details under them, the swap's Received, and the session's holding line (chunk 51, l3still#5,
+ * r2sign#3's class). The wallet's list still comes first on screen (ui/tokens.ts tokenDecimals).
+ */
+function inUnits(tokens: TokenQuantity[], decimals: Map<string, number>): TokenQuantity[] {
+  return tokens.map((token) => {
+    const d = token.decimals || decimals.get(`${token.policyId}.${token.assetName}`);
+    return d ? { ...token, decimals: d } : token;
+  });
 }
 
 /** `rows` less what no return takes (the record's `leftBehind`): what can come back, and holds the session open. */
@@ -3508,9 +3526,11 @@ export class SessionService {
     const auto = s.auto!;
     const adaIn = s.swap?.tokenIn === "lovelace";
     // The swap sent last, while nothing of it has come back, filled or refunded: an order Stop cancels, or a swap
-    // against the pools, which lands as it is or not at all.
+    // against the pools, which lands as it is or not at all. Every order read spent, its outcome told by a run
+    // READ_EVERY_MS on (`spentSeen`), it's the return to come, as once told: no cancel goes (chunk 51, l3screens#1).
     const sent = s.txs.filter((t) => t.kind === "swap" && !t.unsent).at(-1);
-    const out = !!sent && !auto.filled && !auto.refunded;
+    const told = !!auto.filled || !!auto.refunded || auto.spentSeen !== undefined;
+    const out = !!sent && !told;
     // Its token's boxes' ADA too, funded beside the swap's, which comes back with it (its fixes' review, 5).
     const funded = auto.filled ? 0n : (adaIn ? BigInt(auto.approved.fund.lovelace) : 0n) + BigInt(auto.lovejoin?.fund ?? "0");
     // As deep and as long as the swap was approved (independent review L21), and as wide: three for a swap from
@@ -3545,7 +3565,7 @@ export class SessionService {
     const cancelled = adaIn
       ? held + BigInt(auto.approved.fund.lovelace) - BigInt(auto.approved.aggregatorFee ?? "0") - SWAP_MARGIN - CANCEL_FEE_ESTIMATE
       : 0n;
-    const counted = auto.filled || auto.refunded ? held : ordered ? (cancelled > 0n ? cancelled : 0n) : held > funded ? held : funded;
+    const counted = told ? held : ordered ? (cancelled > 0n ? cancelled : 0n) : held > funded ? held : funded;
     // Said mixed only where its funding paid that reserve and its return keeps it for that mix whatever the swap out
     // does: not where Stop's cancel of an order of a token gives the token back beside all the ADA (cancel_orders), nor
     // while a swap against the pools may yet land, a token's beside all of it, or not, a token's funding as it was. Mixed
@@ -3942,6 +3962,7 @@ export class SessionService {
     // Its orders still open, from chain: Minswap's list doesn't hold every order (chunk 24, Step 3).
     const orders = await this.liveOrders(network, s, address, true);
     if (orders.length) {
+      s = await this.notSpentAfterAll(network, s);
       s = await this.noteOrderOpen(network, s, false);
       // Waiting for a batcher to fill it, unless the user stopped it: then the wallet cancels it itself.
       if (auto.stopping) await go((u) => this.cancel(network, s, address, rows, orders, u));
@@ -3974,19 +3995,26 @@ export class SessionService {
       // arrived is the fill only once the order itself is spent. Stopped, one Koios
       // can't find yet can't be cancelled yet: the page says what it waits on (independent review L16).
       if (!(await this.ordersSpent(network, s))) {
+        s = await this.notSpentAfterAll(network, s);
         if (auto.stopping) await this.noteOrderOpen(network, s, true);
         return;
       }
       if (!auto.filled && !auto.refunded) {
-        // Every order read spent for the first time: nothing is told apart, nor brought back, in this run. A split
-        // route's legs are paid in different blocks, and both of a run's listings may come from a backend behind the
-        // one utxo_info's answer came from: a leg they both missed came back alone after the first return, directly,
-        // and its outcome and fills were told without it (chunk 51, r2still#2, gap-g4#1's class). The next run's
-        // listings, READ_EVERY_MS on, tell it and build the first return.
-        if (auto.spentSeen === undefined) {
-          await this.update(network, s.index, (r) => {
-            r.auto!.spentSeen = now();
-          });
+        // Every order read spent: nothing is told apart, nor brought back, until READ_EVERY_MS after the run that first
+        // read it so, whatever run comes in between, one the user asks for too (Refresh, Stop, Resume, a sent step's
+        // own). A split route's legs are paid in different blocks, and both of a run's listings may come from a backend
+        // behind the one utxo_info's answer came from: a leg they both missed came back alone after the first return,
+        // directly, and its outcome and fills were told without it (chunk 51, r2still#2, l3time#2, gap-g4#1's class).
+        // Meanwhile no order is open: the page reads it as told (autoView `spent`; l3screens#1). A note ahead of the
+        // device's clock, set back since, is taken again at its time, never waited out.
+        const seen = auto.spentSeen;
+        if (seen === undefined || seen > now() || now() - seen < READ_EVERY_MS) {
+          if (seen === undefined || seen > now()) {
+            s = await this.update(network, s.index, (r) => {
+              r.auto!.spentSeen = now();
+            });
+          }
+          await this.noteOrderOpen(network, s, false);
           return;
         }
         // A fill or a refund, told apart by what arrived (independent review M18), read again now that every
@@ -4035,6 +4063,18 @@ export class SessionService {
     return this.update(network, s.index, (r) => {
       if (open) r.auto!.orderOpen ??= this.deps.now();
       else delete r.auto!.orderOpen;
+    });
+  }
+
+  /**
+   * An order of the swap read open, or not spent, after a run read every one spent (a backend behind that run's, a
+   * rollback): that sighting is let go, so the next one waits READ_EVERY_MS of its own before the outcome is told
+   * (`auto.spentSeen`; chunk 51, l3time#2). It writes only when there was one.
+   */
+  private async notSpentAfterAll(network: NetworkName, s: SessionRecord): Promise<SessionRecord> {
+    if (s.auto?.spentSeen === undefined) return s;
+    return this.update(network, s.index, (r) => {
+      delete r.auto!.spentSeen;
     });
   }
 
@@ -4684,6 +4724,8 @@ export class SessionService {
     const unpriced = held.filter((u) => !measurable(u));
     if (unpriced.length) await this.leaveBehind(network, index, unpriced, "script");
     const rows = held.filter(measurable);
+    // What comes back, in the units these rows give each token: every return below says it so (inUnits; l3still#5).
+    const decimals = decimalsOf(rows);
     if (!rows.length) {
       await this.nothingBack(network, index, held);
       throw new NothingComesBack(t("sess.scriptStays"));
@@ -4719,17 +4761,18 @@ export class SessionService {
     // Only what others paid its account, once a return of its own went: no transaction of the session's made any of it,
     // nor its order's fill (a stranger's, its address on chain since its funding). Sent, it leaves the session's word on
     // how its own came back as it was (KeptBack `strangers`; chunk 51, e2b#2). Never a site's, whose own proceeds a
-    // contract's batcher may pay it. Nor what reached the chain before that return went, though no listing held it
-    // then, so no fill names it: a split route's leg a listing behind missed is the swap's own, and its page says how it
-    // came back (chunk 51, r2still#2). By the block's time against the device's: what landed within a second of the
-    // return reads as before it.
+    // contract's batcher may pay it. Nor what reached the chain before that return was built, though no listing held
+    // it then, so no fill names it: a split route's leg a listing behind missed is the swap's own, and its page says how
+    // it came back (chunk 51, r2still#2). Cut where that return was built, never at its chain's last send, a block or
+    // more on, while a stranger watching the account may pay it (firstReturnBuilt; l3still#2). By the block's time
+    // against the device's: what landed within a second of it reads as before it.
     const fills = new Set(record?.auto?.fills ?? []);
-    const firstBack = record?.txs.find((t) => t.kind === "back" && !t.unsent && !t.replaced);
-    const landedAfter = (u: KoiosUtxo) => typeof u.block_time !== "number" || u.block_time * 1000 > firstBack!.at;
+    const builtAt = record ? firstReturnBuilt(record) : undefined;
+    const landedAfter = (u: KoiosUtxo) => typeof u.block_time !== "number" || u.block_time * 1000 > builtAt!;
     const apart =
       record &&
       !record.site &&
-      firstBack &&
+      builtAt !== undefined &&
       rows.every((u) => !own.includes(u.tx_hash) && !fills.has(u.tx_hash) && landedAfter(u))
         ? { strangers: true as const }
         : {};
@@ -4779,7 +4822,7 @@ export class SessionService {
           txCbor: back.txCbor,
           fee: chain.fees,
           lovelace: chain.returned,
-          tokens: chain.tokens,
+          tokens: inUnits(chain.tokens, decimals),
           depositOutputs: 1,
           inputs: rows.length - chain.leftOut.length,
           merged: 0,
@@ -4887,7 +4930,7 @@ export class SessionService {
           txCbor: back.txCbor,
           fee: chain.fees,
           lovelace: chain.returned,
-          tokens: chain.tokens,
+          tokens: inUnits(chain.tokens, decimals),
           depositOutputs: 1,
           // The chain takes every UTxO at the account, its deposit or its return, but what it leaves out.
           inputs: rows.length - chain.leftOut.length,
@@ -4990,11 +5033,12 @@ export class SessionService {
     await this.leftBy(network, index, rows, result.leftOut);
     const { tail, ...back } = result;
     const said = skipped ? { lovejoinSkipped: skipped } : {};
-    if (!tail || !intoPool) return { ...back, network, index, ...said, ...apart, builtAt: now() };
+    if (!tail || !intoPool) return { ...back, tokens: inUnits(back.tokens, decimals), network, index, ...said, ...apart, builtAt: now() };
     const { txs: _txs, ...made } = tail;
     const balances = readsFor(reads, chainOf(result));
     return {
       ...back,
+      tokens: inUnits(back.tokens, decimals),
       network,
       index,
       fee: (BigInt(back.fee) + BigInt(made.fee)).toString(),
@@ -6720,6 +6764,20 @@ function chainView(chain: NonNullable<SessionRecord["chain"]>, txs: RecordedTx[]
 }
 
 /**
+ * When session `s`'s own first return was built, once one went: the first of its transactions sent, its chain's
+ * deposit (or its collateral's, before it), or the return itself where it came back directly, each recorded as it's
+ * sent, the first at once from its build. Never its chain's last send, which goes a block or more on, each transaction
+ * waiting for the one before (chunk 51, l3still#2). None before a return went.
+ */
+function firstReturnBuilt(s: SessionRecord): number | undefined {
+  const back = s.txs.findIndex((t) => t.kind === "back" && !t.unsent && !t.replaced);
+  if (back < 0) return undefined;
+  let first = back;
+  while (first > 0 && (s.txs[first - 1]!.kind === "deposit" || s.txs[first - 1]!.kind === "mix")) first--;
+  return Math.min(...s.txs.slice(first, back + 1).map((t) => t.at));
+}
+
+/**
  * Where a swap or a mix that runs itself is at, for its timeline. A mix's
  * chain is its return. `txs`: those shown. The least its order asks for,
  * once one is placed: that copy's own (Review it myself, or a fresh quote,
@@ -6748,6 +6806,8 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     filled: !!auto.filled,
     ...(auto.partly ? { partly: true } : {}),
     ...(auto.refunded ? { refunded: true } : {}),
+    // Every order read spent, its outcome told by a run READ_EVERY_MS on: no order is open (chunk 51, l3screens#1).
+    ...(auto.spentSeen !== undefined && !auto.filled && !auto.refunded ? { spent: true as const } : {}),
     // Only while it's still stopping: never on a return, or once it's over (independent review L16).
     ...(auto.orderOpen !== undefined && step === "cancelling" ? { orderOpen: auto.orderOpen } : {}),
     approvedMinOut: auto.approved.minAmountOut,

@@ -14,6 +14,7 @@ import { Collateral } from "../src/background/collateral";
 import { handle, type Context } from "../src/background/handlers";
 import { CHAIN_RESEND_MS, LovejoinService, QUIET_AFTER_SEND_MS, QUIET_PUSH_MS, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { SESSION_SENT_PREFIX } from "../src/background/sent-txs";
+import { pendingKey } from "../src/background/pending";
 import { NetworkChoice } from "../src/background/preferences";
 import { lastSpentAt, SESSION_RESERVED_PREFIX, SESSION_SPENT, spentSet } from "../src/background/spent";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
@@ -510,5 +511,59 @@ describe("a withdraw Koios answers once the wallet is removed and another phrase
     // What made the first phrase's box isn't sealed into the other's record, and nothing is sent.
     expect((await t.store.get<{ origins?: Record<string, unknown> }>("lovejoin.preprod"))?.origins?.["e1".repeat(32)]).toBeUndefined();
     expect(t.koios.submitted).toHaveLength(0);
+  });
+
+  // Chunk 51, l3time#1: Bring one back took its pin only after giveme.my answered, so a Remove and a restore while it
+  // answered pinned the restored phrase: the first phrase's withdraw was kept in that phrase's schedule, sent, and its
+  // box-back entry sealed into its history; and its Home watch was taken under whatever phrase was in. The pin is taken
+  // as it's pressed now, and the watch is the pinned phrase's alone.
+  const bringOneBack = (lovejoin: LovejoinService) =>
+    lovejoin.withdrawNow("preprod", { txHash: "e1".repeat(32), txIndex: 0, pool: ADA }).then(
+      (p) => p.txHash,
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+  const watched = (t: T) => t.wallet.withKeys(() => t.session.get<{ txHash: string }>(pendingKey("preprod")));
+
+  it("Bring one back, giveme.my answering meanwhile: none of it goes, nor into the other phrase's schedule, history or watch", async () => {
+    const { t, lovejoin } = await due();
+    const real = t.collateral.fetch;
+    let listed: AtStake[] | undefined;
+    // What's written into the other phrase's Lovejoin record once it's in: a withdraw kept there, even for a moment.
+    const set = t.store.set.bind(t.store);
+    const kept: unknown[] = [];
+    t.collateral.fetch = async (url, init) => {
+      if (listed === undefined) {
+        listed = await removedForOther(t, lovejoin);
+        t.store.set = (async (key: Parameters<typeof set>[0], value: unknown) => {
+          if (key === "lovejoin.preprod" && (value as { withdrawing?: unknown }).withdrawing) kept.push((value as { withdrawing: unknown }).withdrawing);
+          return set(key, value);
+        }) as typeof t.store.set;
+      }
+      return real(url, init);
+    };
+    const outcome = await bringOneBack(lovejoin);
+    t.collateral.fetch = real;
+    t.store.set = set;
+    expect(listed).toEqual([]);
+    expect((await t.wallet.account("preprod")).receiveAddress).toBe(OTHER.preprod.receive_0);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(kept).toEqual([]);
+    expect((await t.store.get<{ withdrawing?: unknown }>("lovejoin.preprod"))?.withdrawing).toBeUndefined();
+    expect(await history(t)).toEqual([]);
+    expect(await watched(t)).toBeUndefined();
+    expect(outcome).toBe("The wallet is locked.");
+  });
+
+  it("Bring one back, Koios answering its submit meanwhile: the other phrase's Home watches none of it", async () => {
+    const { t, lovejoin } = await due();
+    let listed: AtStake[] | undefined;
+    submitting(t, (taken) => taken!, { meanwhile: async () => void (listed = await removedForOther(t, lovejoin)) });
+    const outcome = await bringOneBack(lovejoin);
+    const sent = txIdOf(t.koios.submitted.at(-1)!);
+    expect(listed).toEqual([]);
+    expect((await t.wallet.account("preprod")).receiveAddress).toBe(OTHER.preprod.receive_0);
+    expect(await history(t)).not.toContain(sent);
+    expect(await watched(t)).toBeUndefined();
+    expect(outcome).toBe("The wallet is locked.");
   });
 });

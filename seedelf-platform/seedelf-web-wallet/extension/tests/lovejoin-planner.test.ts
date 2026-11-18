@@ -35,7 +35,7 @@ import {
 import { LovejoinLaunchService } from "../src/background/lovejoin-launch";
 import { HOLDER, LOVEJOIN_NFT } from "../src/background/lovejoin-pools";
 import { Minswap } from "../src/background/minswap";
-import { SESSION_BACK, SESSION_CHAIN_PREFIX, SessionService, wayOf } from "../src/background/sessions";
+import { READ_EVERY_MS, SESSION_BACK, SESSION_CHAIN_PREFIX, SessionService, wayOf } from "../src/background/sessions";
 import { BUILT_TTL_MS } from "../src/background/script-spend";
 import { SESSION_RESERVED_PREFIX, SESSION_SPENT } from "../src/background/spent";
 import { t as tr } from "../src/i18n";
@@ -937,9 +937,11 @@ describe("a split route's leg paid between the runner's two listings of the acco
     const before = t.koios.submitted.length;
 
     // The runner's runs until it sends the session's first return: a chain through Lovejoin, kept as it's sent, or one
-    // that comes back directly.
+    // that comes back directly. The outcome waits READ_EVERY_MS from the run that first reads every order spent (chunk
+    // 51, l3time#2).
     let first: Uint8Array[] = [];
     for (let run = 0; run < 3 && !first.length; run++) {
+      if (run) t.clock.now += READ_EVERY_MS;
       await sessions.advance("preprod", 0, true);
       const chain = await t.wallet.withKeys(() => t.session.get<{ txs: Array<{ txCbor: string }> }>(`${SESSION_CHAIN_PREFIX}preprod.0`));
       if (chain) first = chain.txs.map((x) => Uint8Array.from(Buffer.from(x.txCbor, "hex")));
@@ -1048,13 +1050,11 @@ describe("a split route's leg that both of the runner's listings miss (chunk 51,
     await sessions.advance("preprod", 0, true);
     expect(t.koios.submitted).toHaveLength(sent);
     expect((await book()).auto?.spentSeen).toBe(t.clock.now);
-    // The listings' backend has caught up by the next run.
+    // The listings' backend has caught up by the next run, READ_EVERY_MS on.
     late();
-    let first: Uint8Array[] = [];
-    for (let run = 0; run < 2 && !first.length; run++) {
-      await sessions.advance("preprod", 0, true);
-      first = await firstReturn();
-    }
+    t.clock.now += READ_EVERY_MS;
+    await sessions.advance("preprod", 0, true);
+    const first = await firstReturn();
     expect(first.length).toBeGreaterThan(0);
     await toTheEnd();
     const s = await book();
@@ -1069,14 +1069,44 @@ describe("a split route's leg that both of the runner's listings miss (chunk 51,
     }).toEqual({ closed: true, firstTakesLate: true, returns: 1, lovejoinSkipped: undefined });
   });
 
+  // Chunk 51, l3time#2: the wait counted runs, not time. A Refresh, Stop, Resume or a sent step's advance a second
+  // after the run that read every order spent is a run the user asks for, which no READ_EVERY_MS spaces: it told the
+  // outcome and built the first return from listings no newer than that run's, and the leg came back alone after it.
+  it("waits READ_EVERY_MS from the run that read every order spent, a run the user asks for too: a Refresh a second on builds nothing", async () => {
+    const { t, sessions, book, firstReturn, toTheEnd, late } = await split();
+    // The alarm's run reads every order spent, its listings a block behind: it notes that, and sends nothing.
+    await sessions.advance("preprod", 0, false);
+    const seen = t.clock.now;
+    expect((await book()).auto?.spentSeen).toBe(seen);
+    // Refresh a second later, the listings' backend still a block behind: nothing is told, nor built.
+    t.clock.now += 1_000;
+    await sessions.advance("preprod", 0, true);
+    expect(await firstReturn()).toEqual([]);
+    expect((await book()).auto).toMatchObject({ spentSeen: seen });
+    expect((await book()).auto).not.toHaveProperty("filled");
+    // That backend has caught up by READ_EVERY_MS on: the first return takes leg 2's fill, and nothing comes after it.
+    late();
+    t.clock.now = seen + READ_EVERY_MS;
+    await sessions.advance("preprod", 0, true);
+    const first = await firstReturn();
+    expect(first.some((tx) => txInputs(tx).includes(LATE))).toBe(true);
+    await toTheEnd();
+    const s = await book();
+    expect({ closed: s.closedAt !== undefined, returns: s.txs.filter((x) => x.kind === "back" && !x.replaced).length, lovejoinSkipped: s.lovejoinSkipped }).toEqual({
+      closed: true,
+      returns: 1,
+      lovejoinSkipped: undefined,
+    });
+  });
+
   it("comes back alone after it, directly, where no listing holds it until then: the swap's own, its page says Lovejoin was left out", async () => {
     const { t, sessions, book, firstReturn, toTheEnd, late } = await split();
-    // The listings miss the leg run after run: the first return goes from what they hold.
-    let first: Uint8Array[] = [];
-    for (let run = 0; run < 3 && !first.length; run++) {
-      await sessions.advance("preprod", 0, true);
-      first = await firstReturn();
-    }
+    // The listings miss the leg run after run: the first return goes from what they hold, READ_EVERY_MS after the run
+    // that read every order spent.
+    await sessions.advance("preprod", 0, true);
+    t.clock.now += READ_EVERY_MS;
+    await sessions.advance("preprod", 0, true);
+    const first = await firstReturn();
     expect(first.length).toBeGreaterThan(0);
     expect(first.some((tx) => txInputs(tx).includes(LATE))).toBe(false);
     // Listed once that's sent: in a block from before it went.

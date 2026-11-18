@@ -147,6 +147,7 @@ import type {
   DappDeclined,
   DappSite,
   DappTie,
+  DappToken,
   DappTxSummary,
   RefusedBy,
   ReplyCode,
@@ -169,6 +170,7 @@ import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
 import { outpoint, rememberSiteSpent, reservations, SPENT_KEEP_MS, spentSet, wait } from "./spent";
+import { heldDecimals } from "./tx-view";
 import {
   phraseOf,
   phrasePin,
@@ -422,6 +424,8 @@ interface Waiting {
    * it with the request.
    */
   txCbor?: string;
+  /** The decimals its window scaled its tokens by (`readTx`), for the transaction view to scale them the same. */
+  decimals?: ReadonlyMap<string, number>;
   /**
    * How it ended, for another page of the same site asking to connect
    * meanwhile (`enable`): answered (undefined), what the site heard, or
@@ -1573,6 +1577,8 @@ export class DappService {
     txCbor?: string,
     /** A public-side signature's dApp account, as its request was read (`Waiting.account`). */
     account?: number,
+    /** The decimals a signature's window scales its tokens by (`Waiting.decimals`). */
+    decimals?: ReadonlyMap<string, number>,
   ): Promise<T> {
     // Its page went away while it was read: nobody would answer it (independent review L31).
     if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
@@ -1594,6 +1600,7 @@ export class DappService {
         declined: failure,
         ...(txCbor === undefined ? {} : { txCbor }),
         ...(account === undefined ? {} : { account }),
+        ...(decimals === undefined ? {} : { decimals }),
       };
       this.waiting.push(entry);
     });
@@ -2091,7 +2098,14 @@ export class DappService {
     collateral: string[],
     partialSign: boolean,
     governance = false,
-  ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean; view: View; rows: KoiosUtxo[] }> {
+  ): Promise<{
+    request: string;
+    summary: DappTxSummary;
+    collateralSpent: boolean;
+    view: View;
+    rows: KoiosUtxo[];
+    decimals: ReadonlyMap<string, number>;
+  }> {
     if (this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) throw refused(BUSY);
     if (this.lastMinute(origin, "unprompted").length >= PER_MINUTE.unprompted) {
       throw refused((lng) => t("dapp.tooManyRefusedSignatures", { lng }));
@@ -2162,7 +2176,18 @@ export class DappService {
     if (summary.metadata && summary.note && this.besideNote(network, (tx as string).trim())) {
       summary = { ...summary, otherMetadata: true };
     }
-    return { request, summary, collateralSpent, view, rows };
+    // Each token in the units Koios gives it, from the rows this reading resolved and those the device keeps, as
+    // Transaction details scales it (tx-view.ts `heldDecimals`, the same map for both): WebAssembly's token lists carry
+    // no decimals, and the window showed a token off the wallet's list in raw units, 10^6 apart from its own view for
+    // one of 6 (chunk 51, l3sign#2). The wallet's list still comes first (ui/tokens.ts `tokenDecimals`). Never in the
+    // way of the window: unread, it shows them as before.
+    const decimals = await this.deps.wallet
+      .withKeys(() => heldDecimals(this.deps, network, rows))
+      .catch((e: unknown): ReadonlyMap<string, number> => {
+        if (isTrap(e)) throw e;
+        return new Map();
+      });
+    return { request, summary: withTokenDecimals(summary, decimals), collateralSpent, view, rows, decimals };
   }
 
   /**
@@ -2224,7 +2249,7 @@ export class DappService {
     }
     // Before anything is read: the dApp account's own chain, as Settings has it now (`sameAccount` refuses a change).
     await this.heldForLovejoin(network, holder, await this.dappAccount(), inputs, collateral);
-    const { request, summary, collateralSpent, view, rows } = await this.readInTurn(session.origin, () =>
+    const { request, summary, collateralSpent, view, rows, decimals } = await this.readInTurn(session.origin, () =>
       this.readTx(session.origin, network, holder, tx, bytes, inputs, collateral, partialSign, governance),
     );
     const { wasm } = this.deps;
@@ -2275,6 +2300,7 @@ export class DappService {
       },
       (tx as string).trim(),
       view.account,
+      decimals,
     );
   }
 
@@ -2286,10 +2312,23 @@ export class DappService {
    * answer.
    */
   waitingCbor(txHash: string): string | undefined {
+    return this.waitingSignature(txHash)?.txCbor;
+  }
+
+  /**
+   * The decimals the window scales a waiting signature's tokens by (`readTx`), by the transaction's hash, for the
+   * transaction view to scale them the same (tx-view.ts `withDecimals`; chunk 51, l3sign#2). Read while unlocked.
+   */
+  waitingDecimals(txHash: string): ReadonlyMap<string, number> | undefined {
+    return this.waitingSignature(txHash)?.decimals;
+  }
+
+  /** The signature a site is waiting for on `txHash`, with its bytes. */
+  private waitingSignature(txHash: string): Waiting | undefined {
     const wanted = txHash.trim().toLowerCase();
     return this.waiting.find(
       (w) => w.txCbor !== undefined && w.approval.kind === "sign-tx" && w.approval.summary.txHash.toLowerCase() === wanted,
-    )?.txCbor;
+    );
   }
 
   /**
@@ -2987,6 +3026,29 @@ function readableText(hex: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * `summary` with every token the window shows or counts in the units `decimals` gives it (tx-view.ts `heldDecimals`),
+ * where it gives one: what it sends or gets, what it pays, its own outputs, what it mints, and a contract's (chunk 51,
+ * l3sign#2).
+ */
+export function withTokenDecimals(summary: DappTxSummary, decimals: ReadonlyMap<string, number>): DappTxSummary {
+  if (!decimals.size) return summary;
+  const scaled = (tokens: DappToken[]) =>
+    tokens.map((x) => {
+      const d = decimals.get(`${x.policyId}.${x.assetName}`);
+      return d ? { ...x, decimals: d } : x;
+    });
+  return {
+    ...summary,
+    netTokens: scaled(summary.netTokens),
+    paid: summary.paid.map((p) => ({ ...p, tokens: scaled(p.tokens) })),
+    ownOutputs: summary.ownOutputs.map((o) => ({ ...o, tokens: scaled(o.tokens) })),
+    mint: scaled(summary.mint),
+    ...(summary.contractTokens ? { contractTokens: scaled(summary.contractTokens) } : {}),
+    ...(summary.releasedTokens ? { releasedTokens: scaled(summary.releasedTokens) } : {}),
+  };
 }
 
 /**

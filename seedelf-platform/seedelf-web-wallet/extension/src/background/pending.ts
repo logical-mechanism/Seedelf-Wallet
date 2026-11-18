@@ -53,7 +53,7 @@ import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetSent, keptAsSent, recentlySent } from "./sent-txs";
 import { forgetSpent, outpoint, rememberSpent, spentAt } from "./spent";
 import type { Area } from "./storage";
-import { noteSend, phrasePin, SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WalletLocked, type Wallet } from "./wallet";
+import { noteSend, phrasePin, SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WalletLocked, type PhrasePin, type Wallet } from "./wallet";
 
 /**
  * chrome.storage.session: the submitted transaction being watched, one per
@@ -406,14 +406,18 @@ function watchedOn(deps: PendingDeps, network: NetworkName): Promise<Watched | u
  * `record` itself, watched as maybe sent already, as it first was.
  * `alongside` runs under the same lock first. A maybe-sent one is sealed;
  * one it takes over from goes on as sent, and isn't any more. Returns what
- * the watch holds after.
+ * the watch holds after. `pin`: the phrase it was sent under (wallet.ts
+ * phrasePin), checked in the same turn as the write: under another phrase by
+ * now, it throws as a lock does, and nothing of it is taken (chunk 51,
+ * r2time#2, l3time#1).
  */
-async function take(deps: PendingDeps, record: Watched, alongside?: () => Promise<void>): Promise<Watched> {
+async function take(deps: PendingDeps, record: Watched, alongside?: () => Promise<void>, pin?: PhrasePin): Promise<Watched> {
   const { wallet, session } = deps;
   const key = pendingKey(record.network);
   return inTurn(deps, record.network, async () => {
     await restoreNow(deps, record.network);
-    const [was, watched] = await wallet.withKeys(async () => {
+    const [was, watched] = await wallet.withKeys(async (keys) => {
+      pin?.(keys);
       await alongside?.();
       const was = await session.get<Watched>(key);
       if (unsettled(was) && (was.txHash !== record.txHash || record.maybeSent)) return [was, was] as const;
@@ -436,7 +440,8 @@ async function take(deps: PendingDeps, record: Watched, alongside?: () => Promis
  * wallet is on one of them, as a Seedelf spend's (paysActive; chunk 51, e5#2's
  * sibling). `watch`: the feed it shows in, and its token pools (lovejoin.ts
  * watchOf): the classic pool's lists no token pool's box (1.6.0's release
- * review, DATA-1). None: the classic pool's, as Lovejoin's own were.
+ * review, DATA-1). None: the classic pool's, as Lovejoin's own were. `pin`:
+ * the phrase it was sent under (take).
  */
 export async function watchSent(
   deps: PendingDeps,
@@ -445,11 +450,12 @@ export async function watchSent(
     toAccount,
     paysAccounts,
     watch,
-  }: { toAccount?: true; paysAccounts?: number[]; watch?: { feed?: Feed; pools?: string[] } } = {},
+    pin,
+  }: { toAccount?: true; paysAccounts?: number[]; watch?: { feed?: Feed; pools?: string[] }; pin?: PhrasePin } = {},
 ): Promise<void> {
   const on = { ...(watch?.feed ? { feed: watch.feed } : {}), ...(watch?.pools?.length ? { pools: watch.pools } : {}) };
   const pays = paysAccounts?.length ? { paysAccounts } : toAccount ? { toAccount } : {};
-  await take(deps, { ...pending, ...pays, ...on });
+  await take(deps, { ...pending, ...pays, ...on }, undefined, pin);
 }
 
 /** The watched transaction as Home is shown it. */
@@ -576,12 +582,17 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
     triedAt: ahead.record.triedAt ?? ahead.record.submittedAt,
   };
   try {
-    // Under another phrase by now, nothing of it is taken or written: it throws as a lock does (`pinned`).
-    if (pinned) await deps.wallet.withKeys(pinned);
-    await take(deps, watched, async () => {
-      await rememberSpent(session, s.network, bytes);
-      await session.remove(s.key);
-    });
+    // Under another phrase by now, nothing of it is taken or written: it throws as a lock does (`pinned`, checked in
+    // the take's own turn).
+    await take(
+      deps,
+      watched,
+      async () => {
+        await rememberSpent(session, s.network, bytes);
+        await session.remove(s.key);
+      },
+      pinned,
+    );
   } catch (e) {
     // Koios took it: what stopped the watch taking it over (a lock, session storage full) leaves it as written
     // ahead, maybe sent and sealed, and it's settled as any such one is. A lock is said; nothing else is thrown,

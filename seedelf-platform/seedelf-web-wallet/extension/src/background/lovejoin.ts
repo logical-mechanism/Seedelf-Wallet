@@ -5207,7 +5207,7 @@ export class LovejoinService {
     const { now } = this.deps;
     // One Send at a time on a network, and never while the last mix from the account is still being sent: its
     // progress stays its own (independent review L30).
-    const { chain, bootstrap, boxes } = await this.inTurn(`public.${network}`, () => this.publicStart(network, txHash));
+    const { chain, bootstrap, boxes, pin } = await this.inTurn(`public.${network}`, () => this.publicStart(network, txHash));
     await this.deps.alarm?.start();
     // The first window now; the Lovejoin page and the alarm send the rest as blocks make room.
     await this.pumpPublic(network, 0);
@@ -5236,19 +5236,21 @@ export class LovejoinService {
         return undefined;
       },
     );
-    await watchSent(this.deps, pending, { watch });
+    // The Send's phrase's watch alone (publicStart's pin; chunk 51, l3time#1).
+    await watchSent(this.deps, pending, { watch, pin });
     if (trap !== undefined) throw trap;
     return pending;
   }
 
   /**
    * Records the mix kept for Send (`txHash`), reserves what it spends, and puts its progress where it's sent from.
-   * Returns what Home's watch names it by, whether it's a Bootstrap, and its boxes: its kept review goes here.
+   * Returns what Home's watch names it by, whether it's a Bootstrap, its boxes, and the phrase it's sent under (`pin`):
+   * its kept review goes here.
    */
   private async publicStart(
     network: NetworkName,
     txHash: string,
-  ): Promise<{ chain: NonNullable<PendingTx["chain"]>; bootstrap: boolean; boxes: number }> {
+  ): Promise<{ chain: NonNullable<PendingTx["chain"]>; bootstrap: boolean; boxes: number; pin: PhrasePin }> {
     const { wallet, session, now } = this.deps;
     // The phrase it's sent under, pinned before Koios is asked (rewardsMoved, settleMaybeSent): the wallet removed and
     // another phrase restored meanwhile, neither its record nor its progress goes into that phrase's, and none of it is
@@ -5315,7 +5317,7 @@ export class LovejoinService {
         throw e;
       }
     }, pin);
-    return { chain: { first: built.chain[0]!.txHash, total: built.chain.length }, bootstrap: !!built.bootstrap, boxes: built.boxes };
+    return { chain: { first: built.chain[0]!.txHash, total: built.chain.length }, bootstrap: !!built.bootstrap, boxes: built.boxes, pin };
   }
 
   /**
@@ -7166,10 +7168,16 @@ export class LovejoinService {
     paid: boolean | "private",
     pool?: string,
   ): Promise<PendingTx> {
-    // The account on screen as it's pressed: the escape hatch's box is picked for it (hatchOrder), and paid from the
-    // public account, it pays and signs, whatever account the wallet is on by the build, and its landing reads that
-    // account again (chunk 51, r2time#1).
-    const pressedOn = paid ? await this.deps.wallet.withKeys((keys) => keys.account) : undefined;
+    // The phrase it's pressed under, pinned before any network wait (its pool reads, giveme.my's witness, Koios's
+    // submit): the wallet removed and another phrase restored meanwhile, none of it is kept, sent, written or watched
+    // under that phrase (chunk 51, l3time#1). And the account on screen as it's pressed: the escape hatch's box is
+    // picked for it (hatchOrder), and paid from the public account, it pays and signs, whatever account the wallet is
+    // on by the build, and its landing reads that account again (r2time#1).
+    const pin = phrasePin();
+    const pressedOn = await this.deps.wallet.withKeys((keys) => {
+      pin(keys);
+      return paid ? keys.account : undefined;
+    });
     if (await this.deps.mixingAgain?.(network)) {
       throw new Error(t("lj.mixingAgain"));
     }
@@ -7278,6 +7286,7 @@ export class LovejoinService {
       ...(held ? { bootstrap: true as const, ...(holder !== undefined ? { holder } : {}) } : {}),
       ...(paid ? { paid } : {}),
       ...(payer !== undefined ? { payer } : {}),
+      pin,
     });
     // Home's banner watches it, as it does every send the user makes; the ones due by themselves stay out of it.
     // One the public account paid for spent the account too: its landing reads that account again (34d's review 9), and
@@ -7286,7 +7295,7 @@ export class LovejoinService {
     // as settleWithdrawing looks for it: on the contract's feed, since the classic pool's never lists a token pool's
     // (1.6.0's release review, DATA-1).
     const watch = read.pool.id !== CLASSIC ? { watch: { feed: "contract" as const } } : {};
-    await watchSent(this.deps, pending, { ...(payer !== undefined ? { paysAccounts: [payer] } : {}), ...watch });
+    await watchSent(this.deps, pending, { ...(payer !== undefined ? { paysAccounts: [payer] } : {}), ...watch, pin });
     return pending;
   }
 
@@ -7728,6 +7737,9 @@ export class LovejoinService {
    * and it isn't sent (SentMeanwhile; chunk 51, x4#1). `payer`: with `paid`
    * true, the public account that pays, read and signed for whatever account
    * the wallet is on by then (chunk 51, r2time#1); none, the active one.
+   * `pin`: the phrase its caller began under, before its own network waits
+   * (Bring one back's, as it's pressed); none, it pins the phrase in as it
+   * starts. Every write it makes is that phrase's alone (chunk 51, l3time#1).
    */
   private async withdrawOne(
     network: NetworkName,
@@ -7744,6 +7756,7 @@ export class LovejoinService {
       bring,
       again,
       quiet,
+      pin: given,
     }: {
       unlocked?: number;
       due?: number | "earliest";
@@ -7757,12 +7770,19 @@ export class LovejoinService {
       /** Built again after its pool's reward balance moved: refused once more, it goes as any refusal. */
       again?: true;
       quiet?: number;
+      pin?: PhrasePin;
     } = {},
   ): Promise<PendingTx> {
     const { wasm, wallet, session, now } = this.deps;
     const koios = this.deps.koios(network);
     const { pool } = read;
     const boxRef = { txHash: box.txHash, txIndex: box.txIndex };
+    // The phrase it's sent under, pinned before its first network wait: what it keeps before the submit, and writes
+    // once Koios answers, goes into that phrase's records alone. The wallet removed and another phrase restored while
+    // giveme.my or Koios answered (a 429's hold and a slow node, a minute and more), the first phrase's withdraw went
+    // into the next one's schedule, history and watch (chunk 51, r2time#2, l3time#1).
+    const pin = given ?? phrasePin();
+    await wallet.withKeys(pin);
     const rewards = rewardsField(await this.rewardsIn(network, [pool]));
     type Built = { txCbor: string; txHash: string; fee: string; lovelace: string; token?: TokenQuantity };
     let built: Built;
@@ -7879,11 +7899,7 @@ export class LovejoinService {
         ...(time !== undefined ? { due: time } : {}),
         ...(bring ? { bring } : {}),
       };
-    });
-    // The phrase it's sent under, pinned in the turn before the submit: what's written once Koios answers goes into that
-    // phrase's records alone. The wallet removed and another phrase restored while Koios answered (a 429's hold and a
-    // slow node, a minute and more), its box-back entry went into that phrase's history for good (chunk 51, r2time#2).
-    const pin = phrasePin();
+    }, pin);
     try {
       await wallet.withKeys((keys) => {
         pin(keys);
@@ -7914,7 +7930,7 @@ export class LovejoinService {
       // again, it's said in Lovejoin's words, and its due time waits for a later run (chunk 43).
       if (e instanceof RewardsChangedError) {
         if (!again) {
-          return this.withdrawOne(network, read, box, { unlocked, due, bootstrap, holder, params: known, paid, payer: pays, bring, again: true, quiet });
+          return this.withdrawOne(network, read, box, { unlocked, due, bootstrap, holder, params: known, paid, payer: pays, bring, again: true, quiet, pin });
         }
         throw new KoiosError(REWARDS_MOVED());
       }

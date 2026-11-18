@@ -458,6 +458,7 @@
   "swaps.stop.privacy.direct",
   "swaps.warn.found",
   "swaps.warn.impact",
+  "swaps.warn.skippedLater",
   "swaps.warn.stoppedLate",
   "swaps.warn.stoppedLatePools",
   "swaps.warn.unverified",

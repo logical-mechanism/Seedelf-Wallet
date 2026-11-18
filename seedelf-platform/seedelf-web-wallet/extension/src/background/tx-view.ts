@@ -39,6 +39,7 @@ import { CONTRACT_V1, decimalsOf } from "./balances";
 import { GAP_LIMIT } from "./chain";
 import { SESSION_ACCOUNT_UTXOS_PREFIX } from "./coin-control";
 import { keptContractView } from "./contract-scan";
+import type { KoiosUtxo } from "./koios";
 import { SESSION_MINT } from "./mint";
 import { SESSION_BUILT } from "./move-in";
 import { SESSION_LOVEJOIN_PUBLIC, SESSION_LOVEJOIN_SENDING } from "./lovejoin";
@@ -77,6 +78,12 @@ export interface TxViewDeps {
    * again" (1.3.0's release review, C28).
    */
   inChain?: (network: NetworkName, txHash: string) => Promise<boolean>;
+  /**
+   * The connector (dapp.ts), for a signature a site is waiting for: the decimals its window scaled the request's tokens
+   * by (`waitingDecimals`), so the view scales them the same (chunk 51, l3sign#2). handlers.ts hands it in with the
+   * rest of the worker's context.
+   */
+  dapp?: { waitingDecimals(txHash: string): ReadonlyMap<string, number> | undefined };
 }
 
 /**
@@ -157,13 +164,14 @@ export async function txView(
         for (const key of keys) {
           const record = await session.get<unknown>(key);
           const cbor = cborOf(record, wanted, network);
-          if (cbor) return { cbor, chain };
+          if (cbor) return { cbor, chain, record };
           // A payment in parts keeps each after the first under its own key, the first naming them all (script-spend.ts
           // keepParts): a review in parts opens every one (1.6.0's release review, 321-parts-worker#5; 1.7.0).
           const part = partOf(record, wanted);
           if (part > 0) {
-            const later = cborOf(await session.get<unknown>(partKey(key, part)), wanted, network);
-            if (later) return { cbor: later, chain };
+            const kept = await session.get<unknown>(partKey(key, part));
+            const later = cborOf(kept, wanted, network);
+            if (later) return { cbor: later, chain, record: kept };
           }
         }
       }
@@ -189,32 +197,55 @@ export async function txView(
   await markYours(deps, network, detail).catch((e: unknown) => {
     if (isTrap(e)) throw e;
   });
-  await withDecimals(deps, network, detail).catch((e: unknown) => {
+  await withDecimals(deps, network, detail, wanted, kept?.record).catch((e: unknown) => {
     if (isTrap(e)) throw e;
   });
   return { detail, cbor, ...(kept?.chain ? { chain: true as const } : {}) };
 }
 
 /**
+ * The decimals Koios gave each token the device knows of, by `policy.asset`, where they aren't 0: in `rows` (what a
+ * site's request spends, as its reading resolved them), in the rows the wallet's transactions are built from as the
+ * device keeps them (the account's, the contract's Seedelf UTxOs too), and in the last reading's tokens, as
+ * balances.ts reads them for what's on its way (`decimalsOf`). The sign window's tokens and Transaction details' both
+ * take theirs from here, so the two can't scale a token apart (chunk 51, e9a#2, r2sign#3, l3sign#2). Call it while
+ * unlocked.
+ */
+export async function heldDecimals(
+  deps: Pick<TxViewDeps, "session">,
+  network: NetworkName,
+  rows: readonly KoiosUtxo[] = [],
+): Promise<Map<string, number>> {
+  const { session } = deps;
+  const reading = await session.get<Balances>(SESSION_BALANCES_PREFIX + network);
+  const account = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
+  const owned = (await keptContractView(session, network))?.owned ?? [];
+  const tokens = [...(reading?.cardano.tokens ?? []), ...(reading?.seedelf.tokens ?? [])];
+  return decimalsOf([...rows, ...account.map((p) => p.utxo), ...owned], tokens);
+}
+
+/**
  * Each token of `d` (an output's, the collateral return's, a mint's) with its decimals from Koios, read on the device,
  * as Activity's are (activity.ts `withDecimals`): the review above the view, and Home, scaled a token off the wallet's
- * list by them, and the view showed it in raw units (chunk 51, e9a#2). From the rows the wallet's transactions are
- * built from, as the device keeps them, and the last reading's tokens, as balances.ts reads them for what's on its way
- * (`decimalsOf`): the reading's side totals alone leave out a Seedelf's UTxO (spendableOwned), and Remove's view showed
- * what sat with it in raw units (r2sign#3). The wallet's list's own decimals still come first (ui/tokens.ts
- * `tokenDecimals`). Locked, or with nothing known, nothing is added.
+ * list by them, and the view showed it in raw units (chunk 51, e9a#2). `heldDecimals`'s, or for a signature a site is
+ * waiting for, those its window scaled it by (l3sign#2); and those the review's own record carries, `kept`, the one
+ * the bytes were found in: its summary's tokens take theirs from the rows it was built from, a session's account's
+ * for its return, which the device keeps no rows of (l3still#5's class). The wallet's list's own decimals still come
+ * first (ui/tokens.ts `tokenDecimals`). Locked, or with nothing known, nothing is added.
  */
-async function withDecimals(deps: TxViewDeps, network: NetworkName, d: TxDetail): Promise<void> {
+async function withDecimals(
+  deps: TxViewDeps,
+  network: NetworkName,
+  d: TxDetail,
+  txHash: string,
+  kept?: unknown,
+): Promise<void> {
   const lists = [...d.outputs.map((o) => o.assets), ...(d.collateralReturn ? [d.collateralReturn.assets] : []), d.mint];
   if (!lists.some((list) => list.length)) return;
-  const { wallet, session } = deps;
-  const known = await wallet.withKeys(async () => {
-    const reading = await session.get<Balances>(SESSION_BALANCES_PREFIX + network);
-    const account = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
-    const owned = (await keptContractView(session, network))?.owned ?? [];
-    const tokens = [...(reading?.cardano.tokens ?? []), ...(reading?.seedelf.tokens ?? [])];
-    return decimalsOf([...account.map((p) => p.utxo), ...owned], tokens);
-  });
+  const held = await deps.wallet.withKeys(
+    async () => deps.dapp?.waitingDecimals(txHash) ?? (await heldDecimals(deps, network)),
+  );
+  const known = new Map([...decimalsIn(kept), ...held]);
   if (!known.size) return;
   for (const list of lists) {
     for (const a of list) {
@@ -222,6 +253,23 @@ async function withDecimals(deps: TxViewDeps, network: NetworkName, d: TxDetail)
       if (decimals !== undefined) a.decimals = decimals;
     }
   }
+}
+
+/**
+ * The decimals a kept record's tokens carry, by `policy.asset`, where they aren't 0: any `{ policyId, assetName,
+ * quantity, decimals }` in it, as a review's summary lists what it pays. A handful of levels deep, as `cborOf` reads.
+ */
+function decimalsIn(kept: unknown, found = new Map<string, number>(), depth = 0): Map<string, number> {
+  if (depth > 8 || !kept || typeof kept !== "object") return found;
+  const record = kept as Record<string, unknown>;
+  const { policyId, assetName, quantity, decimals } = record;
+  if (typeof policyId === "string" && typeof assetName === "string" && typeof quantity === "string") {
+    const shown = typeof decimals === "number" && Number.isInteger(decimals) && decimals > 0;
+    if (shown) found.set(`${policyId}.${assetName}`, decimals);
+    return found;
+  }
+  for (const value of Array.isArray(kept) ? kept : Object.values(record)) decimalsIn(value, found, depth + 1);
+  return found;
 }
 
 /** Where `txHash` is among the parts a payment's first names (`partHashes`, script-spend.ts keepParts): -1 if not. */

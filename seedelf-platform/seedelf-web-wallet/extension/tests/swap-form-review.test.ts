@@ -555,3 +555,39 @@ describe.runIf(__MAINNET_ENABLED__)("a token picked while Review asks Minswap ag
     expect(payloads("swap-quote")).toHaveLength(asked);
   });
 });
+
+// Chunk 51, l3still#4 (r2screens#1's class): the swap form has the private balance's unlocked side, as Home hands it
+// down, and called it what's "in your private balance" with nothing about the lock: 40 ₳ of 100 ₳, 60 ₳ of it locked,
+// read as all of it. It says what's available where something is locked, as Make public says it.
+describe.runIf(__MAINNET_ENABLED__)("the swap form where some of the private balance is locked (chunk 51, l3still#4)", () => {
+  /** The unlocked side Home hands the form: `lovelace` of ADA, beside `locked` of it locked in one UTxO. */
+  const locked = (lovelace: string, lockedLovelace: string) => ({ ...balance(lovelace), locked: { lovelace: lockedLovelace, tokens: [], utxos: 1 } });
+  /** The form's line under the cards, a no-break space as a space. */
+  const line = (tree: El) => (find(tree, (el) => el.props["data-testid"] === "swap-short")?.props.children as string | undefined)?.replaceAll("\u00a0", " ");
+  const heldTitle = (tree: El) => find(tree, (el) => el.props["data-testid"] === "swap-held")?.props.title;
+
+  it("says what's available, never what's in the private balance, where some of it is locked", async () => {
+    props = { ...props, seedelf: locked("40000000", "60000000") };
+    // 50 ₳ typed: more than the 40 ₳ not locked.
+    let tree = await formForAdaToMin("50");
+    expect(line(tree)).toBe("That's more than the 40 ₳ available.");
+    expect(heldTitle(tree)).toBe("Available in your private balance");
+    // 36 ₳ asks 40 ₳ of funding with its costs, beside the 5 ₳ kept aside: short of the 40 ₳ available.
+    typeAmount(tree, "36");
+    tree = draw();
+    tree = await quoteLands();
+    expect(line(tree)).toBe("Not enough ADA: this takes 40 ₳ with its costs, plus 5 ₳ kept aside, which comes back. You have 40 ₳ available.");
+    // The token picker's own list, under the same words.
+    const picker = words(markup(createElement(TokenSelect, { which: "pay", seedelf: locked("40000000", "60000000"), chosen: "lovelace", onPick: () => undefined, onClose: () => undefined })));
+    expect(picker).toContain("Available in your private balance");
+  });
+
+  it("says what's in the private balance where nothing of it is locked, as before", async () => {
+    let tree = await formForAdaToMin("300");
+    expect(line(tree)).toBe("That's more than the 200 ₳ in your private balance.");
+    expect(heldTitle(tree)).toBe("In your private balance");
+    props = { ...props, seedelf: balance("40000000") };
+    tree = await formForAdaToMin("36");
+    expect(line(tree)).toBe("Not enough ADA: this takes 40 ₳ with its costs, plus 5 ₳ kept aside, which comes back. Your private balance has 40 ₳.");
+  });
+});
