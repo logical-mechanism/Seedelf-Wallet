@@ -19,6 +19,12 @@ For the lead, if a session ends or the machine reboots mid-run. `/tmp` is a tmpf
 
 - Batch 1 (R1 to W3's 25 findings): workflow `wf_dddd5fba-e8f`, done; its answers are `data/verify-batch1.json` and `verify/<id>.md`. w2#3's trace verifier was stopped by the model's safeguards and stays unverified.
 - Batch 2 (E1a to E8a's 22 findings): workflow `wf_c0d9bf4e-987`, the same script with new args.
+- Batch 3 (E8b, E9a, E9b and B1's 13 lows): workflow `wf_6919f284-4c9`. D1 gets no refuters (the plan); b1#4 the lead checked against the release logs (`verify/b1-4.md`).
+
+## Step 3, the cross lenses and T1 (started once the platform lanes were in)
+
+- Workflow `wf_a209476a-a2d`: X1a, X1b, X2, X3, X4, and T1a to T1l, each T1 agent reverting its lanes' guards in its own copy under `~/.cache/seedelf-review-51/` (remove those copies if a run was cut short).
+- Then the completeness critic and its gap round, once V3 to V5 are in.
 - The verifiers' own tests are untracked files in this tree, named `r51_*.rs` and `r51-*.test.ts`. Each one's full code is in its `verify/<id>.md`. They go before the final checks, or become a fix's test.
 
 ## The fixes on their own branches (for `main`, never pushed without the owner)

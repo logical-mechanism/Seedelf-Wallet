@@ -246,3 +246,33 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 - `v2#2` nit (nobody): ReadableLaunch's module doc reads as if the output search also requires an inline ReferenceDatum `definitions.lean:759`
 
 *Coverage:* I compared every clause of mix_logic.ak (withdraw, publish, else, validate_owner, validate_mix, walk_outputs, collect_well_formed_mix_inputs, pairs_match_and_all), one_shot_mint.ak (mint, token_sane, else) and mix_box.ak (spend, else). That includes the helpers they call in reference.ak, mixbox.ak, value.ak, schnorr.ak, sigma_or.ak, hash.ak and bls.ak, and the stdlib v4.0.0 code behind them: list filter, filter_map, find, any, foldl, reverse, length and map; dict get_or_else, do_get, insert_with, singleton and to_pairs; assets from_asset, from_lovelace, add, quantity_of and tokens; bytearray concat, length and from_int_big_endian; scalar and bitwise from_int; g1 scale, add and equal; pairs.has_key; and the Transaction, Output, Datum, Address, Credential, Certificate and ScriptInfo types. I compared them against every definition in definitions.lean (lines 50-150, 299-458, 528-742, 783-805…
+
+## V3 (3 findings, 4 guards)
+
+- `v3#1` low (nobody): tally.py and Audit/count.py report a module ok from its last good build's trace after its rebuild fails `tally.py:68`
+- `v3#2` low (nobody): CI skips the proven-bytes test on a PR that changes only the proven .hex files it reads `web-wallet.yml:67`
+- `v3#3` nit (nobody): tally.py's docstring says check.sh's ok can't tell Valid from Undetermined, but since #372 check.sh can `tally.py:10`
+
+*Coverage:* Read in full: extract.sh, extract-lovejoin.sh, extract-lovejoin-v2.sh, the five Scripts.lean modules (Seedelf, Lovejoin, Lovejoin/V2, Lovejoin/Template, Slice/Slice), lakefile.lean, lake-manifest.json, lean-toolchain, Slice/lakefile.lean, Slice/lake-manifest.json, Slice/modules.txt, check.sh, tally.py, Audit/count.py, Audit/run-all.sh, and all nine gen-*.py. I also ran the nine generators in a scratch copy and diffed their output against the tree. The 13 .hex files were not read by eye: each was hashed and compared by script against 5b82530's contracts, references.rs, constants.rs, templates.rs (both sets), Lovejoin c1239fb's artifacts and lovejoin-pools.json. Followed out of my paths:\n- lovejoin_proven_bytes_test.rs (in full);\n- templates.rs (its code in full, its hex by script);\n- Protocol::of in lovejoin/mod.rs;\n- verify_pool's entry in pool.rs;\n- the frozen-template tests in lov…
+
+## V4a (2 findings, 8 guards)
+
+- `v4a#1` low (nobody): The wallet's every-transaction Blaster families have no Falsified control: 307 Valid theorems with nothing that would flag a vacuous Valid `WalletAnyTx.lean:43`
+- `v4a#2` nit (nobody): PolicyLinesAnyTx's header says mints of six lines or more 'aren't proved', though PolicyLinesAll proves every length in the kernel `PolicyLinesAnyTx.lean:22`
+
+*Coverage:* **Read in full:** - Every top-level module in seedelf-verification/Seedelf/ (39 files): the root Seedelf.lean, Scripts, Scenario, Steps, Wallet, Policy, AlwaysFalse, WalletPurpose, WalletNoLock, WalletRegister, PolicyAmount, PolicyForeign, PolicyBurn, PolicyMint, AnyTx, AnyTxCover, AnyTxSteps, AlwaysFalseAnyTx, WalletPurposeAnyTx, WalletNoLockAnyTx, WalletRedeemerAnyTx, WalletAnyTx, WalletAnyTxTwo, WalletAnyTxThree, AnyTxShapes, PolicyAnyTx, PolicyAnyTxSteps, PolicyPurposeAnyTx, PolicyRedeemerAnyTx, PolicyLinesAnyTx, PolicyLinesFourAnyTx, LinesAllCek, LinesAllLoops, PolicyLinesAll, LinesAllAnyMint, PolicyShapes and Signers.lean. In PolicyLinesFiveAnyTx I read the header, guards, theorems and control by eye; its builders and examples were checked by script. - In Signers/: Keys.lean and Control128.lean in full; Signers4, 5, 9 and 128 by eye; all 125 by script, plus a regeneration diff. - I…
+
+## V4b (2 findings, 11 guards)
+
+- `v4b#1` low (nobody): AnyTx's output, reference and launch failure families have no passing control on their own builders `MixOutputControls.lean:124`
+- `v4b#2` nit (nobody): AnyTx README understates the ledger hypotheses of LogicBoxComposition and of the _valid forms `README.md:195`
+
+*Coverage:* Read in full: - All 25 classic top-level Lovejoin/*.lean files: Scripts, Box, Logic, Steps, Owner, ReferenceHolder, MixBox{Purpose,Gate,NoLock}, MixLogicPurpose, OwnClassic1-3 with Boxes, Passes, Spec and Steps. - V2's hand-written files: Scripts, Logic, Steps, Owner, Mix, MixSpec, MixSplit, MixChallenges, MixFirst, MixSecond, MixPasses, MixOutputs, MixDatums, Mix3 with Spec, Steps, First, Second, Third and Passes, MixAny with Spec, First, Second, Passes and Steps, MixAny3 with Spec, Box1, Passes and Steps, MixAnyOut with Outputs, Datums and OutSteps, and MixTok2 with Spec, Passes and Steps. - AnyTx: README.md, Common, CekCase, PurposesKernel, LogicPublishKernel, BoxPurposesAll, BoxSemantics, BoxCover, BoxInlineAll, BoxMalformed, BoxGate, BoxBoundary, BoxSuffix, BoxDatum, BoxControls, BoxAllControls, OwnerOne, OwnerControls, OwnerLayouts, OwnerTwo, Owner3, OwnerOtherInputs, OwnerIff, Own…
+
+## V5 (3 findings, 2 guards)
+
+- `v5#1` low (nobody): CLAIMS.md's Blaster cross-check of the policy reads as covering every mint layout, but Blaster stops at five lines `CLAIMS.md:23`
+- `v5#2` low (nobody): README says the LinesAll kernel theorems list Lean's axioms alone, but nothing guards them, so a sorry there passes check.sh `README.md:86`
+- `v5#3` nit (nobody): CLAIMS.md puts 'an input in every transaction' among Lovejoin's assumed ledger rules, but none of Lovejoin's theorems uses it `CLAIMS.md:31`
+
+*Coverage:* Read in full: seedelf-verification/CLAIMS.md, README.md, Seedelf/Every/README.md, Lovejoin/Every/README.md, Lovejoin/AnyTx/README.md and Audit/README.md; the root README.md; the wallet README. Also read in full: check.sh, lakefile.lean, both lake-manifest.json files, Seedelf.lean, and the cited theorem files: Seedelf/Every/Typed.lean, PolicyTyped.lean and AlwaysFalse.lean; Lovejoin/Every/Readable.lean, Typed.lean and MintTyped.lean; Lovejoin/AnyTx/BoxPurposesAll.lean, BoxSemantics.lean, PurposesKernel.lean and LogicPublishKernel.lean. Plus Lovejoin/Template/Scripts.lean, Lovejoin/Scripts.lean, Seedelf/Scripts.lean, extract.sh, extract-lovejoin.sh, Audit/Checks/FlatDecodeCheck.lean, the wasm crate's lovejoin_proven_bytes_test.rs, and templates.rs's first 240 lines. Diffed CLAIMS.md and README.md from chunk 48 (363acdf3) to HEAD, and traced each changed wording to its commit. Skimmed: Poli…
