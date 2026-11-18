@@ -5,12 +5,12 @@ Each goes to `main` on its own PR once the owner says to push (SECURITY.md voids
 | Branch | Worktree | Commit | Fixes |
 |---|---|---|---|
 | `web-wallet/lovejoin-box-datum-spelling` | `../Seedelf-Wallet-fix-boxdatum` | `e2b31e6f` | r3a#1 (high): a Lovejoin box whose datum a stranger's mix wrote in constructor 0's general form, `102([0, [a, b]])`, is still the wallet's: listed, mixed and brought back |
-| `cli/stranger-rows` | `../Seedelf-Wallet-fix-clirows` | `027fc81b`, and a follow-up | r4#1 (high) and r4#2 (medium): a stranger's UTxOs no longer stop the CLI's sweeps or its balances |
+| `cli/stranger-rows` | `../Seedelf-Wallet-fix-clirows` | `027fc81b`, and `204ef8fb` (the review's medium) | r4#1 (high) and r4#2 (medium): a stranger's UTxOs no longer stop the CLI's sweeps or its balances |
 
 ## Checks
 
 - **The box datum's:** its two tests fail on `main` and pass on the branch (a box in the general form is read, with its pair and fields definite or indefinite; such a box mixes and comes back through the local evaluation of mix_box and mix_logic); the workspace's 792 tests (12 ignored), clippy and fmt; the WebAssembly rebuilt from it; Vitest 3,306 on both builds.
-- **The CLI's:** 14 new tests through the CLI's offline harness, each failing on `main` with its own error and passing on the branch; the workspace's 805 (12 ignored); clippy and fmt.
+- **The CLI's:** 15 new tests through the CLI's offline harness, each failing without its fix and passing on the branch; the workspace's 806 (12 ignored); clippy and fmt.
 
 ## The independent review (2026-11-18)
 
