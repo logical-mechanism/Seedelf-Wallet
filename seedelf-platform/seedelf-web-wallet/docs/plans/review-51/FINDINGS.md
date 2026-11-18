@@ -9,11 +9,11 @@ T1's findings are guards that no test pinned: a T1 agent reverted each in a copy
 | Severity | fixed | owner | covered | moot | unreachable | open | refuted | unverified | merged | All |
 |---|---|---|---|---|---|---|---|---|---|---|
 | critical |  |  |  |  |  |  |  |  |  | 0 |
-| high | 2 |  |  |  |  |  |  |  |  | 3 |
+| high | 3 |  |  |  |  |  |  |  |  | 3 |
 | medium | 3 | 4 |  |  |  |  |  |  | 1 | 8 |
-| low | 224 | 37 | 9 | 2 | 2 |  |  | 1 | 7 | 306 |
-| nit | 32 | 1 |  |  |  |  | 1 |  | 2 | 43 |
-| **All** | **261** | **42** | **9** | **2** | **2** | **0** | **1** | **1** | **10** | **360** |
+| low | 241 | 37 | 9 | 2 | 2 |  |  | 1 | 7 | 306 |
+| nit | 38 | 1 |  |  |  |  | 1 |  | 2 | 43 |
+| **All** | **285** | **42** | **9** | **2** | **2** | **0** | **1** | **1** | **10** | **360** |
 
 *fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for the second fix round. *merged*: the same as another finding, which carries it.
 
@@ -71,7 +71,7 @@ Each of these refuses something the ledger and the contracts take. Most were chu
 - **e3b#3** (low) `DappApprovals.tsx:626`. While a sent private-session funding waits, every request behind it is hidden: no count, no Decline all, and closing the window declines them unseen. *Recommend:* show the queue line and Decline all on the funding's screen. It adds nothing the user must do.
 - **w2#4** (low, stranger) `cip30.rs:287`. getUtxos drops a UTxO's reference script, so a site spending it underpays the Conway fee and the node refuses it. *Recommend:* hand the site the output as it is on chain, its reference script included.
 - **w2#5** (low, stranger) `cip30.rs:348`. getBalance fails for every site once a stranger's token total passes a u64. *Recommend:* cap that token at u64::MAX, CIP-30's own ceiling.
-- **G5's notes.** (1) Once an earlier request's error is hidden, the next request's screen doesn't say it failed: a one-line note would need words. (2) The window reads a transaction's note without checking it against the body's metadata hash: a mismatch line would need words. *Recommend:* (2) yes, a short warning when the note isn't the transaction's; (1) leave it.
+- **G5's notes.** (1) Once an earlier request's error is hidden, the next request's screen doesn't say it failed: a one-line note would need words. (2) The window reads a transaction's note without checking it against the body's metadata hash: a mismatch line would need words. Transaction details, in the same window, already warns; the docs now say so (r2docs#2). *Recommend:* (2) yes, a short warning when the note isn't the transaction's; (1) leave it.
 - **G6's note.** `gone()` doesn't count a page that leaves before answering as a decline, so a site can escape the back-off (L35) by reloading. *Recommend:* count it as a decline.
 
 ### 6. Screens and lists
@@ -87,7 +87,7 @@ Each of these refuses something the ledger and the contracts take. Most were chu
 
 - **r4#8** (low) `mint.rs:76`. `util mint -g -p` writes the given register unchanged, so Seedelfs minted for one person from their `util base` register are visibly theirs. *Recommend:* re-randomize it, as `create` does (the private default). The README row changes with it.
 - **r4#5's last part** (low) `web_server.rs:97`. The fixed part: the server binds first, each run has a path of its own, and the page and terminal show the transaction id. The open part: the page refusing an earlier run's transaction. *Recommend:* leave it. An old page can't reach the new run's path, and what it still signs is the earlier run's own transaction, under its id.
-- **The CLI fixer's notes.** (1) Dusting: when the rest's ADA can carry a stranger's token pile, both sweeps carry it, which puts about 46 ₳ of the user's own ADA into 30 junk outputs (`external sweep`) or about 30 ₳ (`sweep --all`). (2) The 20-UTxO window of `transfer`, `sweep -l` and `util mint` is picked before the refusals, so 20 refused UTxOs leave nothing to spend. (3) `sweep --all` still spends UTxOs holding a reference script, which Ogmios evaluates. (4) `sweep --all` takes the first 20 found, not the largest. *Recommend:* (1) leave such a pile behind, as the web wallet's return does (r2a#3's class). (2) Refuse first, then take the window, so the README's "first 20" stays true. (3) and (4): keep as they are.
+- **The CLI fixer's notes.** (1) Dusting: when the rest's ADA can carry a stranger's token pile, both sweeps carry it, which puts about 46 ₳ of the user's own ADA into 30 junk outputs (`external sweep`) or about 30 ₳ (`sweep --all`); with fewer than 20 better UTxOs, `sweep --all` still carries piles on the user's ADA. (2) and (4), the window's order and what it takes first, are settled by r2cli#1's fix (e6d6a18d): every owned UTxO, the refused ones out, the sent token's holders first, the rest by worth. (3) `sweep --all` still spends UTxOs holding a reference script, which Ogmios evaluates. *Recommend:* (1) leave such a pile behind, as the web wallet's return does (r2a#3's class). (3): keep as it is.
 
 ### 8. Docs and the privacy policy
 
@@ -99,6 +99,7 @@ Each of these refuses something the ledger and the contracts take. Most were chu
 
 - **b1#2** (low) `build.sh:61`. build.sh never checks or records which Rust built the module, and the second build shares the first's shell. *Recommend:* yes to printing `rustc -vV` beside the C compiler, and to running the second build under `env -i`. No refusal is needed, since the record shows any difference.
 - **b1#3** (low) `release.yml:24`. The CLI's build jobs hold the GPG release key, its passphrase and a write token beside every crate's build code. *Recommend:* yes: one sign-and-publish job behind a `release` environment the owner approves, as the data layer's deploy is. Only the owner can make the environment; the workflow change can follow.
+- **The diag scan's LOOK rows** (r2verif#4's fix, `Audit/diag/scan-diag.py`). The scan now exits 1 on any LOOK row, and the scanner flags every query that recurses over Nat as LOOK on purpose, so `run-all.sh` lists diag as failed on every full run, the rows the audit checked by hand included, as `check.sh` lists PolicyBurn and PolicyMint. *Recommend:* an accepted list beside the scan (`Audit/diag/accepted.txt`: each hand-checked row, why, and when), so only a new LOOK fails. Each entry is a claim about a proof, so each is the owner's to approve.
 - **v3#2** (low) `web-wallet.yml:67`. CI skips the proven-bytes test on a PR that changes only the .hex files it reads. *Recommend:* (b): a small job that runs only that test when `seedelf-verification/**/*.hex` changes, so verification PRs stay fast.
 - **G8's notes.** releases.md could say old tags rebuild their zips under `LC_ALL=C.UTF-8`; a `.github/dependabot.yml` would watch the pinned actions; web-wallet.yml's `covered` filter matches only itself, so a PR editing another workflow skips workflows.test.ts until main's run; tokens.mjs and dreps.mjs sort with `localeCompare` and no locale. *Recommend:* the LC_ALL line and the `covered` filter yes; dependabot only if the owner wants the PR traffic; the sort is harmless (a refresh's diff only).
 
@@ -116,6 +117,9 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `x2#1` **medium**: A stranger's 5 ₳ at a KEY address whose hash is a pool's mix_box script hash counts as a pool box: it counts toward the floor, gets drawn, and every chain that draws it fails, so returns come back directly `mod.rs:416` · 506e4ed2, 6aea4fb8, d2a7278d, fcdacc50
 - `r2a#2` **low**: apart ends the search at the first order grown whole that's short, so it refuses payments a subset pays and the CLI's order would make `build.rs:2843` · c1c5b13a
 - `r2b#2` **low**: CLI `fund` says "Not Enough Lovelace/Tokens" when its ADA sits in token UTxOs larger than the one holding the token being sent `utxos.rs:258` · 48a4c977, 82078f10
+- `r2cli#2` **low**: fund's new order takes a second holder of the sent token for its ADA before any ADA-only UTxO: a fund main made is refused, and others spend a token UTxO they don't need `utxos.rs:251` · af022a6f
+- `r2money#2` **low**: ScriptSpend::stage holds the collateral's return to its least at the estimate's guessed fee too, so a merged return whose settled fee leaves that least is newly refused `build.rs:2210` · b3687869
+- `r2tests#5` **low**: r2a#2's error half (failed && !short_whole) is caught by no suite, the ignored parts suite included `build.rs:2874` · b3687869
 - `r3b#1` **low**: check_cancels decodes Minswap's swap with no nesting check of its own; it is safe today only because inspect runs check_nesting first `orders.rs:1232` · c1c5b13a
 - `r2b#3` **nit**: A failing certifying script would be labelled "propose": uplc 1.1.23 names a Cert redeemer "Publish", which `ogmios_purpose` doesn't map `eval.rs:378` · c1c5b13a
 - `r2b#4` **nit**: `asset_id_to_asset` is dead code that panics on a short or non-ASCII id `assets.rs:367` · c1c5b13a
@@ -127,10 +131,12 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 
 ### The CLI
 
+- `r2cli#1` **high**: Twenty of a stranger's token piles, sorted first under Koios's new tx_hash order, take every slot of the 20 UTxOs a CLI spend draws on: sweep --all, sweep, transfer and util mint then fail on every run `sweep.rs:166` · e6d6a18d
 - `r4#1` **high**: A stranger freezes any CLI external wallet: `external sweep` (and `external balance`) total every UTxO there, and three junk rows overflow the token sum forever `sweep.rs:40` · 027fc81b, 204ef8fb, 64379c03, fcb22df7
 - `r4#2` **medium**: A stranger's three junk UTxOs under the user's register break `balance` for good (and `sweep --all` while they're among its 20) `balance.rs:39` · 027fc81b, 64379c03
 - `r4#4` **medium**: A submit the CLI can't confirm (30 s timeout, 5xx, unreadable 2xx) is reported as a plain failure, and re-running the command pays again `spend.rs:91` · 48a4c977, 82078f10
 - `r1#1` **low** (in part, as verified): The CLI reads the wallet contract with offset paging and no fixed order, so a page can skip or repeat a UTxO `koios.rs:252` · 48a4c977, 82078f10
+- `r2tests#8` **low**: The CLI's two new 'Tx Hash' lines (r4#4's id before sending, and the signing page's id in the terminal) have no test `submit.rs:26` · e6d6a18d
 - `r4#3` **low**: The signing page finds the witness set by searching the tx hex for the first `a105` (or `a0f5f6`) at any nibble, so create/fund/extract fail when their body happens to contain it `index.js:49` · 48a4c977, 82078f10
 - `r4#5` **low**: The signing page has no tie to the run that served it: a still-open tab or an earlier run's server signs the earlier transaction, and nothing shows which Seedelf it pays `web_server.rs:97` · 48a4c977, 82078f10
 - `r4#6` **low**: The signing server answers any Host header, so a DNS-rebinding page can read the unsigned transaction while it runs `web_server.rs:58` · 48a4c977, 82078f10
@@ -147,11 +153,13 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 
 ### The WebAssembly
 
+- `r2money#1` **low**: A session's merged return whose only collateral is the 2 ₳ fallback is refused at a heavy fee, and the plain sweep of the same UTxOs, which builds, is never tried `lib.rs:1479` · b3687869
 - `w1b#2` **low**: Removing a Seedelf moves the other tokens in its UTxO, but neither the review nor the Seedelf list shows them `lib.rs:5074` · 36fbb96f
 - `w2#1` **low**: A certificate under a script's stake credential counts as another signer, so partialSign=false is refused and the window says others must sign `cip30.rs:1610` · 36fbb96f
 - `w2#2` **low**: A key address whose key hash equals the Seedelf contract's script hash is labelled Seedelf Wallet's contract, so a burn shows as a Seedelf payment `cip30.rs:1386` · 36fbb96f
 - `w2#6` **low**: Byron addresses: a found Byron input fails the whole read, and a Byron payee shows as raw hex `cip30.rs:1191` · 1cf196c4, 36fbb96f
 - `x3#1` **low**: The sign window's register reader takes only tag 121, so a site's valid Seedelf payment spelled in constructor 0's general form (tag 102) reads 'without a register: anyone can take' and 'Your private balance isn't in it' `cip30.rs:1011` · 36fbb96f
+- `r2tests#10` **nit**: decode_test's big-number test asserts a real-clock bound that adds nothing to the check before it `decode_test.rs:1979` · 81516188
 - Guards now pinned by a test (T1): `t1e#1`, `t1e#2`, `t1e#3`, `t1e#4`, `t1e#5`, `t1e#6`, `t1e#7`, `t1e#9`, `t1e#10`, `t1e#11`, `t1e#13`, `t1e#14`, `t1e#15` · b27f0160
 - Guards now pinned by a test (T1): `t1f#1`, `t1f#2`, `t1f#3`, `t1f#4`, `t1f#5`, `t1f#6`, `t1f#7`, `t1f#8`, `t1f#9`, `t1f#10`, `t1f#11`, `t1f#12` · 3b755369
 
@@ -172,6 +180,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g6#1` **low**: Kept verdicts carry no version of the rule that made them, so a fix to what counts as the wallet's never reaches rows and boxes an older release already judged `contract-scan.ts:264` · 4cbac01e, 506e4ed2
 - `gap-g6#2` **low**: After a restore, what made a box is kept with only the accounts then known, so a custom account's (index 24 or more) deposit boxes read as the private balance's for good `lovejoin.ts:6324` · e66a6a16
 - `r2sign#3` **low**: Remove's new token rows show a token off the wallet's list in raw units: the decimals the Seedelf's UTxO carries never reach the review `withdraw.ts:188` · e4d97bea
+- `r2tests#4` **low**: e4a#1's accounts.ts siblings: the merge's and check()'s phrase pins have no test, though the fixer's report says each sibling fails its own case `accounts.ts:288` · 459d4cf8
 - `w3#1` **low**: A tile Mix's chain (and Mix my boxes again's) runs at Settings' depth when the runner builds it, not the depth its review showed and its funding paid for `sessions.ts:4667` · fdd3b8b2
 - `x1a#1` **low**: Send and Make public call the user's payment key under someone else's stake key "your own public account: it comes back", where the sign window says its staking rewards aren't yours `destination.ts:122` · 10a06db6, 6aea4fb8, 8fd738ff, d9e015fb
 - `x2#2` **low**: A UTxO at a KEY address whose hash is the Seedelf contract's, under the user's register, counts in the private balance, and any spend that takes it fails: Max always fails for wallets of up to 20 private UTxOs `balances.ts:489` · 03cf290e, 343fb772, 4cbac01e, 514c6579, 6aea4fb8
@@ -205,6 +214,8 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g10#2` **low** (in part, as verified): Activity cuts a counterparty's address to its first 3 to 10 characters and its last 6, and the last 6 are a bech32 checksum anyone can solve for `Activity.tsx:415` · 8fd738ff
 - `gap-g10#3` **low**: The Add tokens picker cuts a lookalike token's warning to "Calls itself SNEK, not on the…" in grey; Home's list shows it whole in amber (H-9), and the swap's picker cuts its mark too `TokenAmounts.tsx:269` · 8fd738ff
 - `gap-g2#3` **low**: The Mix and Bootstrap forms count public UTxOs the build refuses (any reference script, a datum too deep to read), so 'What Lovejoin can spend' and the stepper offer boxes Review then refuses `Lovejoin.tsx:410` · 8fd738ff, c8003eda
+- `r2tests#2` **low**: x1a#1/e9a#3's form notes on Send and Make public (stake works elsewhere) have no test; only the reviews' lines are pinned `CardanoSend.tsx:312` · 5ba328e5
+- `r2tests#3` **low**: e8b#2's sibling: Create Seedelf's review line for withdrawn rewards has no test `CreateSeedelf.tsx:150` · 5ba328e5
 - `x1a#3` **low**: The sign window leaves out "It carries metadata" whenever a note is shown, so a site's other metadata beside a CIP-20 note is never mentioned `DappApprovals.tsx:1083` · d9e015fb
 - `x1b#1` **low**: A site session's Bring it back review through Lovejoin opens Transaction details on the chain's last transaction, unnamed, not the deposit `SiteSessions.tsx:299` · d9e015fb
 - `e3b#5` **nit**: A sent funding's Cardanoscan link follows the wallet to the other network `DappApprovals.tsx:642` · d9e015fb
@@ -219,6 +230,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g10#4` **nit**: Amount boxes on the forms clip their own figures at the side panel's width: a token's box after Max, the swap's two amounts, Send's "Max, up to …" `styles.css:3449` · 8fd738ff
 - `gap-g2#4` **nit**: Mix again from my public account's review says 'N boxes your public account put in' where the account has more there, with no 'N of your M' or 'Mix the rest once this is done' `Lovejoin.tsx:4113` · c8003eda
 - `gap-g7#3` **nit**: Activity and Delegations show the bundled DRep names without plainName, which Voting applies to the same entries; the generator keeps bidi and zero-width characters `activity.ts:119` · c8003eda
+- `r2screens#2` **nit**: Review swap's re-ask still overwrites a quote for the token picked meanwhile; after Back the form is stuck on "Getting a quote…" `Swaps.tsx:836` · 7b6881f7
 - `r2screens#3` **nit**: Bring everything back's button reads "Sending…" while its switch rebuilds the returns `ClaimAll.tsx:199` · 2d639df8
 - Guards now pinned by a test (T1): `t1i#2`, `t1i#12`, `t1i#13`, `t1i#15` · 5c5bc3c1, a9b5a3bb
 - Guards now pinned by a test (T1): `t1i#16` · 5c5bc3c1, c8003eda
@@ -228,11 +240,18 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 
 ### The proofs
 
+- `r2tests#6` **low**: v3#1's fix (a failed rebuild never reads as ok) has no committed test: drop tally.py's traceless-import rule and nothing notices `tally.py:113` · ddc17685
+- `r2verif#1` **low**: check.sh's new SORRY verdict depends on PlutusCoreBlaster's sorry sitting at CekMachine.lean:309; on IOG's main it is at 317, so every module reads SORRY and hides real Undetermined results `check.sh:233` · ddc17685
+- `r2verif#2` **low**: check.sh reads #print axioms one line at a time, but Lean breaks a list over 120 columns into one axiom per line, so a native_decide (or a sorryAx listed after propext) reads ok `check.sh:240` · ddc17685
+- `r2verif#3` **low**: A failed rebuild still reads ok when the module that fails is in a dependency package: check.sh removes nothing, and tally.py and count.py count the old builds `check.sh:250` · ddc17685
+- `r2verif#4` **low**: run-all.sh's new failure list can never name `diag` for a LOOK or INCONCLUSIVE replay, because scan-diag.py exits 0 whatever it finds `run-all.sh:28` · ddc17685
+- `r2verif#5` **low**: README's new Controls bullet says each every-transaction family has a control over its own builder, but most builders have none, and Template.AnyTxPurposes has none and isn't listed as an exception `README.md:95` · ddc17685
 - `v3#1` **low**: tally.py and Audit/count.py report a module ok from its last good build's trace after its rebuild fails `tally.py:68` · 40883a55
 - `v4a#1` **low** (in part, as verified): The wallet's every-transaction Blaster families have no Falsified control: 307 Valid theorems with nothing that would flag a vacuous Valid `WalletAnyTx.lean:43` · 40883a55
 - `v4b#1` **low** (in part, as verified): AnyTx's output, reference and launch failure families have no passing control on their own builders `MixOutputControls.lean:124` · 40883a55
 - `v5#1` **low**: CLAIMS.md's Blaster cross-check of the policy reads as covering every mint layout, but Blaster stops at five lines `CLAIMS.md:23` · 40883a55
 - `v5#2` **low**: README says the LinesAll kernel theorems list Lean's axioms alone, but nothing guards them, so a sorry there passes check.sh `README.md:86` · 40883a55
+- `r2docs#3` **nit**: The Lovejoin AnyTx README gives LogicLedgerUniqueness a weaker hypothesis than it has, and counts four of LogicBoxComposition's five theorems `README.md:203` · ddc17685
 - `v3#3` **nit**: tally.py's docstring says check.sh's ok can't tell Valid from Undetermined, but since #372 check.sh can `tally.py:10` · 40883a55
 - `v4a#2` **nit**: PolicyLinesAnyTx's header says mints of six lines or more 'aren't proved', though PolicyLinesAll proves every length in the kernel `PolicyLinesAnyTx.lean:22` · 40883a55
 - `v4b#2` **nit**: AnyTx README understates the ledger hypotheses of LogicBoxComposition and of the _valid forms `README.md:195` · 40883a55
@@ -245,10 +264,16 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `b1#5` **low**: Every workflow pins its third-party actions by tag or branch, never by commit, in the jobs that sign the CLI and build the data layer's binary too `release.yml:18` · c4b7a906
 - `d1#3` **low**: A site's payment into the Seedelf contract under a register-shaped datum that can't be spent is shown as 'without a register: anyone can take', when no one can ever take it `privacy.md:336` · 36fbb96f, d9e015fb
 - `e9b#2` **low**: Anti-impersonation warnings in warning colour are left out of the accuracy-critical translation set `i18n-critical.mjs:84` · 10a06db6, fc6a0aa1
+- `r2docs#1` **low**: flows.md says a stranger's later swap return never changes what the page says of the swap's own, but the timeline's last step still follows the latest return `flows.md:478` · 7b6881f7
+- `r2docs#2` **low**: flows.md says a site's transaction note shows "as what's signed reads", but the sign window reads the metadata the site carries, never what the body's auxiliary_data_hash commits to `flows.md:431` · ca970760
 - `r2still#3` **low**: This round's e7a#1, t1k#9 and t1j#6 tests fail on CI's preprod-only Vitest leg, so the fix PR's unit (preprod-only) job goes red and e7a#1's fix is pinned on one build only `swap-form-review.test.ts:309` · 04616cf6
+- `r2tests#7` **low**: New test private-index.test.ts 'is neither the wallet's nor a Seedelf's place' runs 3 to 6.4 s in its own file against Vitest's default 5 s, and times out with nothing wrong `private-index.test.ts:344` · 459d4cf8
 - `d1#4` **nit**: The root README's collateral rule has an exception it doesn't name: a session's 5 ₳ collateral mix spends the session's account under giveme.my's collateral `README.md:276` · c4b7a906
 - `d1#5` **nit**: privacy.md says the recovery phrase can't be copied, but once revealed it's ordinary selectable text `privacy.md:276` · 10a06db6
 - `d1#6` **nit**: The root README's troll attack says Bob pays more to spend the UTxO; Seedelf Wallet can't spend it at all `README.md:187` · c4b7a906
+- `r2docs#4` **nit**: architecture.md calls core's check_nesting "the one walk for every transaction from outside the wallet", but the worker's cbor.ts walk is the one guarding ogmiosUtxos on a site's transaction `architecture.md:195` · ca970760
+- `r2docs#5` **nit**: privacy.md and architecture.md don't say that this release re-reads the private index from a snapshot and every pool copy once more, or that a reader version is now stored `privacy.md:230` · ca970760
+- `r2docs#6` **nit**: flows.md's Collateral page still describes the automatic pick as any 5 ₳ of ADA, and two code comments cite a collateralFits in sessions.ts that no longer exists `flows.md:142` · ca970760
 - `v2#1` **nit**: ownerContext's docstring reads as serialising each input reference separately; the source serialises the list once `definitions.lean:445` · 40883a55
 - `v2#2` **nit**: ReadableLaunch's module doc reads as if the output search also requires an inline ReferenceDatum `definitions.lean:759` · 40883a55
 

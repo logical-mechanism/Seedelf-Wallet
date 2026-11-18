@@ -24,3 +24,10 @@ One reviewer read both diffs and the code around them, and reverted each fix in 
 2. **The 20-UTxO window** of `transfer`, `sweep -l` and `util mint` is picked before any filter, so a stranger's UTxOs that selection then refuses take slots.
 3. **Reference scripts in `sweep --all`:** it sweeps them, bounded by the ledger's 204,800 bytes; matching `transfer` would never spend them.
 4. **`sweep --all`'s order** stays the README's "the first 20 the CLI finds".
+
+## Errata (2026-11-18, the review of the merged fixes)
+
+- **"No selection takes junk that `main` wouldn't" doesn't hold.** fund's new order took a second holder of the sent token for its ADA before any ADA-only UTxO, so a fund `main` made was refused and others spent a token UTxO they didn't need (r2cli#2, [verify/r2cli-2.md](verify/r2cli-2.md)). Fixed: `af022a6f` on the fix branch, `afc52463` here.
+- **The window's order made a high of its own.** Keyset paging reads the contract in `tx_hash` order, which a payer chooses, so a stranger's piles could take every slot of the 20 a CLI spend drew on (r2cli#1, [verify/r2cli-1.md](verify/r2cli-1.md)). Fixed by ranking every owned UTxO, the refused ones out, the sent token's holders first, the rest by worth: `e6d6a18d`, `d8114f19` here. That settles items 2 and 4 above.
+- The register reader's indefinite pair (r2sign#1's CLI half): `53780f85`, `02dbefc8` here.
+- **`cli/stranger-rows`'s checks after those three** (`afc52463`): `cargo fmt --all -- --check` clean; `cargo test --workspace --locked`, 851 passed, 12 ignored; clippy over core, crypto, the WebAssembly and the CLI with `-D warnings`, clean.

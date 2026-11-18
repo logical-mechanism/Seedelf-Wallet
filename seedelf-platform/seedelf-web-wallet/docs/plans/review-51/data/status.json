@@ -290,5 +290,173 @@
    "e4d97bea"
   ],
   "note": "three siblings in the connector (the funding's row, the top-up review, Remove's Transaction details) went to G5"
+ },
+ "r2docs#2": {
+  "status": "fixed",
+  "commits": [
+   "ca970760"
+  ],
+  "note": "the words; checking the note against the body's metadata hash is the owner's call (owner-calls §5)"
+ },
+ "r2docs#4": {
+  "status": "fixed",
+  "commits": [
+   "ca970760"
+  ],
+  "note": "cip30.rs's own comment went to G3"
+ },
+ "r2docs#5": {
+  "status": "fixed",
+  "commits": [
+   "ca970760"
+  ],
+  "note": "no policy line: the snapshot is a whole-contract read the policy lists, and the copy read a pool read (G8's judgment, the lead's too)"
+ },
+ "r2docs#6": {
+  "status": "fixed",
+  "commits": [
+   "ca970760"
+  ],
+  "note": ""
+ },
+ "r2tests#2": {
+  "status": "fixed",
+  "commits": [
+   "5ba328e5"
+  ],
+  "note": ""
+ },
+ "r2tests#3": {
+  "status": "fixed",
+  "commits": [
+   "5ba328e5"
+  ],
+  "note": "RewardsSetting at :159, round one's sibling line, pinned too"
+ },
+ "r2docs#1": {
+  "status": "fixed",
+  "commits": [
+   "7b6881f7"
+  ],
+  "note": "the class fixed in the timeline, and flows.md:478; a cut own chain followed by a later one loses its 'Stopped after N of M' detail (still true words)"
+ },
+ "r2screens#2": {
+  "status": "fixed",
+  "commits": [
+   "7b6881f7"
+  ],
+  "note": ""
+ },
+ "r2tests#4": {
+  "status": "fixed",
+  "commits": [
+   "459d4cf8"
+  ],
+  "note": ""
+ },
+ "r2tests#7": {
+  "status": "fixed",
+  "commits": [
+   "459d4cf8"
+  ],
+  "note": "a 30 s limit with its reason; not sped up (WebAssembly objects earlier cases keep, inside the file)"
+ },
+ "r2verif#1": {
+  "status": "fixed",
+  "commits": [
+   "ddc17685"
+  ],
+  "note": ""
+ },
+ "r2verif#2": {
+  "status": "fixed",
+  "commits": [
+   "ddc17685"
+  ],
+  "note": ""
+ },
+ "r2verif#3": {
+  "status": "fixed",
+  "commits": [
+   "ddc17685"
+  ],
+  "note": ""
+ },
+ "r2verif#4": {
+  "status": "fixed",
+  "commits": [
+   "ddc17685"
+  ],
+  "note": "diag is listed on a full run while any LOOK row stands, the audit's hand-accepted ones too: an accepted list is the owner's call"
+ },
+ "r2verif#5": {
+  "status": "fixed",
+  "commits": [
+   "ddc17685"
+  ],
+  "note": ""
+ },
+ "r2docs#3": {
+  "status": "fixed",
+  "commits": [
+   "ddc17685"
+  ],
+  "note": ""
+ },
+ "r2tests#6": {
+  "status": "fixed",
+  "commits": [
+   "ddc17685"
+  ],
+  "note": ""
+ },
+ "r2tests#10": {
+  "status": "fixed",
+  "commits": [
+   "81516188"
+  ],
+  "note": ""
+ },
+ "r2money#1": {
+  "status": "fixed",
+  "commits": [
+   "b3687869"
+  ],
+  "note": ""
+ },
+ "r2money#2": {
+  "status": "fixed",
+  "commits": [
+   "b3687869"
+  ],
+  "note": "sibling fixed: the account-paid mint's collateral, reachable when no 5 ADA is set aside; the account mint's change band (about 2,200 lovelace) named, not fixed"
+ },
+ "r2tests#5": {
+  "status": "fixed",
+  "commits": [
+   "b3687869"
+  ],
+  "note": ""
+ },
+ "r2cli#1": {
+  "status": "fixed",
+  "commits": [
+   "e6d6a18d"
+  ],
+  "note": "the window: every owned UTxO, refused ones out, the sent token's holders first, the rest by worth; --utxo among them all; also on cli/stranger-rows"
+ },
+ "r2tests#8": {
+  "status": "fixed",
+  "commits": [
+   "e6d6a18d"
+  ],
+  "note": ""
+ },
+ "r2cli#2": {
+  "status": "fixed",
+  "commits": [
+   "af022a6f"
+  ],
+  "note": ""
  }
 }
