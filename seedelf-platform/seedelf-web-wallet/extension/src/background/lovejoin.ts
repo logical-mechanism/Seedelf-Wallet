@@ -1183,6 +1183,16 @@ interface Origin {
   /** Which public account's (its index), with `public`: none is account 0, as 1.1.0 kept it with one account. */
   account?: number;
   /**
+   * Where no public account was found among its inputs: those inputs' payment and stake keys, those at a Lovejoin
+   * mix_box left out, and the accounts (their indexes) they were judged against (accountKeys: the active one, every one
+   * known, the first MAX_PROBE). An account the wallet comes to know later (one added back by its number after a
+   * restore, 24 or more, is never derived unless known) has them judged again, on the device, asking nobody: kept as
+   * judged then, its deposit's boxes read as the private balance's for good (chunk 51, gap-g6#2). None of the two: kept
+   * before they were, judged against accounts no record names (rejudge).
+   */
+  inputs?: InputKeys[];
+  judged?: number[];
+  /**
    * When a pool read last listed a box it made (ms). It goes RECORD_KEEP_MS
    * after, as a chain's record does: a listing that's behind may not show a
    * box yet, and one looked up again costs a request.
@@ -1190,8 +1200,21 @@ interface Origin {
   seen: number;
 }
 
+/** A transaction's input as its payment and stake keys (hex): inputsOf's. */
+type InputKeys = { cred?: string; stake?: string };
+
+/** A public account's keys as accountKeys derives them (hex). */
+type AccountKeys = { account: number; payment: Set<string>; stake?: string };
+
 /** What Koios said made a box (madeBy), before it's kept. */
-type Told = Pick<Origin, "mixed" | "mixedIn" | "public" | "account">;
+type Told = Pick<Origin, "mixed" | "mixedIn" | "public" | "account" | "inputs" | "judged">;
+
+/**
+ * Which public account spent one of `inputs`, by one of its payment keys: never by its stake key alone, which anyone
+ * can pair with a payment key of their own (madeBy).
+ */
+const whoseInputs = (accounts: AccountKeys[], inputs: InputKeys[]): number | undefined =>
+  inputs.map((k) => (k.cred === undefined ? undefined : accounts.find((a) => a.payment.has(k.cred!))?.account)).find((n) => n !== undefined);
 
 /** Whether what made a box (`o`) says a mix in pool `p` made it: the classic pool's `mixed`, or a token pool's `mixedIn`. */
 const mixedFor = (o: Pick<Origin, "mixed" | "mixedIn"> | undefined, p: string): boolean | undefined =>
@@ -5066,8 +5089,10 @@ export class LovejoinService {
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
     const { wasm, wallet, now } = this.deps;
-    // The account that pays, and whose boxes alone it takes.
+    // The account that pays, and whose boxes alone it takes: what made each judged against the accounts known now
+    // (chunk 51, gap-g6#2).
     const account = await wallet.withKeys((keys) => keys.account);
+    await this.rejudge(network);
     const { params, utxos, collateral, held } = await readAccount(this.deps, network);
     // Its mixes make new boxes: not in a pool that takes none (1.6.0's release review, MONEY-3). A copy isn't such a
     // pool for it, as for the private side's: no deposit puts a box in (round two's review, R2-2).
@@ -6023,6 +6048,8 @@ export class LovejoinService {
     old: Set<string> = new Set(),
   ): Promise<{ unmixed: OutRef[]; free: OutRef[]; unsure: OutRef[]; deposits: OutRef[]; untold: OutRef[]; bootstrap: OutRef[] }> {
     const now = this.deps.now();
+    // What made a box, judged against the accounts the wallet knows now (chunk 51, gap-g6#2).
+    await this.rejudge(network);
     const before = await this.read(network);
     const { chains } = before;
     const found = await this.found(network, owned, listed, before, force, pools, old);
@@ -6213,6 +6240,7 @@ export class LovejoinService {
    * holds nothing for it.
    */
   private async made(network: NetworkName, boxes: OutRef[]): Promise<{ origins: Record<string, Origin>; untold: OutRef[] }> {
+    await this.rejudge(network);
     const s = await this.read(network);
     const known = knownOf(s);
     const ask = boxes.filter((b) => !known(b));
@@ -6281,34 +6309,97 @@ export class LovejoinService {
     // Each token pool's mix_box too: a mix in that pool made its boxes there (Origin `mixedIn`).
     const pools = (await this.readSet(network)).filter((p) => p.id !== CLASSIC);
     const scripts = new Set([mixBox, ...pools.map((p) => p.mixBox)]);
-    const accounts = await this.accountKeys(network);
-    // The stake key alone never makes an input an account's: its payment key is looked for further (independent review M14).
+    const { indexes, accounts } = await this.accountKeys(network);
+    // Once for each transaction Koios says the making of: what it says is kept (lookUp).
+    await this.fartherIn(accounts, spent.flatMap(([, keys]) => keys), scripts);
+    for (const [tx_hash, keys] of spent) {
+      const account = whoseInputs(accounts, keys);
+      const mixedIn = pools.filter((p) => keys.some((k) => k.cred === p.mixBox)).map((p) => p.id);
+      // No account's: what to judge again against an account the wallet comes to know later (rejudge).
+      const inputs = keys.filter((k) => (k.cred !== undefined && !scripts.has(k.cred)) || (k.cred === undefined && k.stake !== undefined));
+      told.set(tx_hash, {
+        mixed: keys.some((k) => k.cred === mixBox),
+        ...(mixedIn.length ? { mixedIn } : {}),
+        // Account 0's kept as 1.1.0 kept it: `public` alone.
+        ...(account !== undefined ? { public: true as const, ...(account ? { account } : {}) } : { inputs, judged: indexes }),
+      });
+    }
+    return told;
+  }
+
+  /**
+   * The stake key alone never makes an input an account's: an input that carries an account's stake key under a payment
+   * key the wallet doesn't know has that account's payment keys looked for further (fartherKeys), and those found go
+   * into its keys (independent review M14). `scripts`: the mix_box hashes, which are no one's payment key.
+   */
+  private async fartherIn(accounts: AccountKeys[], inputs: InputKeys[], scripts: ReadonlySet<string>): Promise<void> {
     for (const a of accounts) {
       if (a.stake === undefined) continue;
       const unknown = new Set(
-        spent.flatMap(([, keys]) =>
-          keys.flatMap(({ cred, stake }) => (cred !== undefined && !scripts.has(cred) && stake === a.stake && !a.payment.has(cred) ? [cred] : [])),
-        ),
+        inputs.flatMap(({ cred, stake }) => (cred !== undefined && !scripts.has(cred) && stake === a.stake && !a.payment.has(cred) ? [cred] : [])),
       );
       if (!unknown.size) continue;
-      // Once for each transaction Koios says the making of: what it says is kept (lookUp).
       const found = await this.deps.wallet.withAccount(a.account, ({ cardano }) =>
         fartherKeys((role, i) => cardano.paymentKeyHash(role, i), unknown),
       );
       for (const key of found) a.payment.add(key);
     }
-    const whose = (cred?: string) => (cred === undefined ? undefined : accounts.find((a) => a.payment.has(cred))?.account);
-    for (const [tx_hash, keys] of spent) {
-      const account = keys.map((k) => whose(k.cred)).find((n) => n !== undefined);
-      const mixedIn = pools.filter((p) => keys.some((k) => k.cred === p.mixBox)).map((p) => p.id);
-      told.set(tx_hash, {
-        mixed: keys.some((k) => k.cred === mixBox),
-        ...(mixedIn.length ? { mixedIn } : {}),
-        // Account 0's kept as 1.1.0 kept it: `public` alone.
-        ...(account !== undefined ? { public: true as const, ...(account ? { account } : {}) } : {}),
+  }
+
+  /**
+   * Judges again, on the device, what made a box no public account was found among the inputs of (Origin `inputs`),
+   * where the wallet knows an account now that it wasn't judged against (`judged`): an account added back by its number
+   * after a restore, say, past the first MAX_PROBE, which accountKeys derives only once it's known. Kept as judged then,
+   * that account's deposit's boxes read as the private balance's for good: Mix my boxes again took them, and a box
+   * brought back recorded no tie (chunk 51, gap-g6#2). From the inputs it kept, asking nobody. One kept before origins
+   * kept their inputs (no `judged`) was judged against the accounts known then, which no record names: where the wallet
+   * knows an account past the first MAX_PROBE, which it may have missed, it's asked about once more, at the next pool
+   * read (`asking`, found), its boxes held meanwhile, and kept with its inputs from then on. Its `public`, once found,
+   * stays: an input under an account's payment key is that account's whatever else is known. In the turn lookUp asks
+   * in, before a read takes what made a box (sortOut, made, Mix again from my public account).
+   */
+  private rejudge(network: NetworkName): Promise<void> {
+    return this.inTurn(`origins.${network}`, async () => {
+      const unnamed = Object.entries((await this.read(network)).origins ?? {}).filter(([, o]) => !o.public);
+      if (!unnamed.length) return;
+      const now = await this.accountIndexes();
+      const missed = (o: Origin) => (o.judged ? now.some((i) => !o.judged!.includes(i)) : now.some((i) => i >= MAX_PROBE));
+      const stale = unnamed.filter(([, o]) => missed(o));
+      if (!stale.length) return;
+      const kept = stale.filter(([, o]) => o.judged !== undefined && o.inputs !== undefined);
+      const again = new Set(stale.filter(([, o]) => o.judged === undefined || o.inputs === undefined).map(([tx]) => tx));
+      const judged = new Map<string, number | undefined>();
+      let against: number[] = now;
+      if (kept.length) {
+        const mixBox = NETWORKS[network].lovejoin?.mixBox;
+        const scripts = new Set([...(mixBox ? [mixBox] : []), ...(await this.readSet(network)).map((p) => p.mixBox)]);
+        const { indexes, accounts } = await this.accountKeys(network);
+        against = indexes;
+        await this.fartherIn(accounts, kept.flatMap(([, o]) => o.inputs!), scripts);
+        for (const [tx, o] of kept) judged.set(tx, whoseInputs(accounts, o.inputs!));
+      }
+      const at = this.deps.now();
+      await this.update(network, (x) => {
+        const origins = { ...x.origins };
+        for (const [tx, account] of judged) {
+          const o = origins[tx];
+          if (!o || o.public) continue;
+          const { inputs, judged: _was, ...rest } = o;
+          // Found now: as madeBy keeps an account's, its inputs no longer needed.
+          origins[tx] = account === undefined ? { ...rest, inputs: inputs ?? [], judged: against } : { ...rest, public: true, ...(account ? { account } : {}) };
+        }
+        const asking = { ...x.asking };
+        for (const tx of again) {
+          if (!origins[tx] || origins[tx]!.public) continue;
+          delete origins[tx];
+          asking[tx] ??= at;
+        }
+        if (Object.keys(origins).length) x.origins = origins;
+        else delete x.origins;
+        if (Object.keys(asking).length) x.asking = asking;
+        else delete x.asking;
       });
-    }
-    return told;
+    });
   }
 
   /**
@@ -6362,16 +6453,15 @@ export class LovejoinService {
    * finds none used only on the other network. Derived on the device, as Make
    * public's own-account check is: no request.
    */
-  private async accountKeys(network: NetworkName): Promise<Array<{ account: number; payment: Set<string>; stake?: string }>> {
+  private async accountKeys(network: NetworkName): Promise<{ indexes: number[]; accounts: AccountKeys[] }> {
     const { wallet, session, wasm } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const { active, found } = await wallet.withKeys(async ({ account }) => ({
       active: account,
       found: (await session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network))?.keys ?? [],
     }));
-    const known = (await this.deps.knownAccounts?.().catch(() => [])) ?? [];
-    const indexes = [...new Set([active, ...known, ...Array.from({ length: MAX_PROBE }, (_, i) => i)])];
-    const keys: Array<{ account: number; payment: Set<string>; stake?: string }> = [];
+    const indexes = await this.accountIndexes(active);
+    const keys: AccountKeys[] = [];
     for (const index of indexes) {
       keys.push(
         await wallet.withAccount(index, ({ cardano, account }) => {
@@ -6382,7 +6472,17 @@ export class LovejoinService {
         }),
       );
     }
-    return keys;
+    return { indexes, accounts: keys };
+  }
+
+  /**
+   * The accounts accountKeys derives, by index, lowest first: the active one (`active`, read when not given), every one
+   * the wallet knows, and the first MAX_PROBE. No key is derived.
+   */
+  private async accountIndexes(active?: number): Promise<number[]> {
+    const current = active ?? (await this.deps.wallet.withKeys(({ account }) => account));
+    const known = (await this.deps.knownAccounts?.().catch(() => [])) ?? [];
+    return [...new Set([current, ...known, ...Array.from({ length: MAX_PROBE }, (_, i) => i)])].sort((a, b) => a - b);
   }
 
   /**
@@ -7996,11 +8096,24 @@ export class LovejoinService {
       // Kept before due times were drawn again, or leaves kept: none.
       ...(record(kept?.marks) ? { marks: { ...kept!.marks } } : {}),
       ...(record(kept?.leaves) ? { leaves: { ...kept!.leaves } } : {}),
-      // Kept before a restore's boxes were looked up: none. One that doesn't read as an Origin is asked of again.
+      // Kept before a restore's boxes were looked up: none. One that doesn't read as an Origin is asked of again. Its
+      // inputs and the accounts they were judged against, kept only in their shape: else it reads as one kept before
+      // they were (rejudge).
       ...(record(kept?.origins)
         ? {
             origins: Object.fromEntries(
-              Object.entries(kept!.origins!).filter(([, o]) => record(o) && typeof o.mixed === "boolean" && typeof o.seen === "number"),
+              Object.entries(kept!.origins!)
+                .filter(([, o]) => record(o) && typeof o.mixed === "boolean" && typeof o.seen === "number")
+                .map(([tx, o]) => {
+                  const { inputs, judged, ...rest } = o;
+                  const text = (v: unknown) => v === undefined || typeof v === "string";
+                  const shaped =
+                    Array.isArray(inputs) &&
+                    inputs.every((k) => record(k) && text(k.cred) && text(k.stake)) &&
+                    Array.isArray(judged) &&
+                    judged.every((n) => Number.isSafeInteger(n) && n >= 0);
+                  return [tx, shaped ? { ...rest, inputs, judged } : rest];
+                }),
             ),
           }
         : {}),

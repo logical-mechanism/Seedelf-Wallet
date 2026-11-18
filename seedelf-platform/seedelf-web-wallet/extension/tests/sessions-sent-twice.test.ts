@@ -10,11 +10,12 @@ import { describe, expect, it } from "vitest";
 import { Collateral, StaleReviewError } from "../src/background/collateral";
 import { Minswap } from "../src/background/minswap";
 import { pendingKey } from "../src/background/pending";
+import { BUILT_TTL_MS } from "../src/background/script-spend";
 import { SessionService } from "../src/background/sessions";
 import { SESSION_SPENT } from "../src/background/spent";
 import { WalletLocked } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
-import { loadTestWasm, minswapEstimate, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
+import { busyFor, loadTestWasm, minswapEstimate, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const ORIGIN = "https://a.example";
@@ -163,5 +164,26 @@ describe("Send again on a funding that went out", () => {
     t.koios.fetch = realFetch;
     expect((await record(t))!.txs[0]).not.toHaveProperty("unsent");
     expect((await sessions.list("preprod"))[0]!.stage).not.toBe("failed");
+  });
+});
+
+// A site's funding goes only as it was reviewed: for that site, on that network, within 10 minutes. A review for site
+// A's connect never sends for site B's waiting one, from another window, and one hours old never goes with the fee and
+// pools it was built on (chunk 51, t1i#6).
+describe("a site's funding sent as it was reviewed", () => {
+  it("is refused for another site, on another network, or past 10 minutes, and nothing is recorded or sent", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const out = await sessions.siteOutBuild("preprod", ORIGIN, "15000000", []);
+    await expect(sessions.siteOutSubmit("preprod", out.txHash, "https://b.example")).rejects.toThrow("That payment isn't ready to send.");
+    // On another network, refused before that network's server is asked whether the review's account is still unused.
+    const asked = t.koios.calls.length;
+    await expect(sessions.siteOutSubmit("mainnet", out.txHash, ORIGIN)).rejects.toThrow("That payment isn't ready to send.");
+    expect(t.koios.calls.length).toBe(asked);
+    await busyFor(t, BUILT_TTL_MS + 1000);
+    await expect(sessions.siteOutSubmit("preprod", out.txHash, ORIGIN)).rejects.toThrow("That payment was built more than 10 minutes ago.");
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(await record(t)).toBeUndefined();
+    expect(await t.store.get("sessions.mainnet")).toBeUndefined();
   });
 });

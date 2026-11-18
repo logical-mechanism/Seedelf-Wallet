@@ -36,6 +36,7 @@ import { LovejoinLaunchService } from "../src/background/lovejoin-launch";
 import { HOLDER, LOVEJOIN_NFT } from "../src/background/lovejoin-pools";
 import { Minswap } from "../src/background/minswap";
 import { SESSION_BACK, SESSION_CHAIN_PREFIX, SessionService, wayOf } from "../src/background/sessions";
+import { BUILT_TTL_MS } from "../src/background/script-spend";
 import { SESSION_RESERVED_PREFIX, SESSION_SPENT } from "../src/background/spent";
 import { t as tr } from "../src/i18n";
 import { NETWORKS } from "../src/networks";
@@ -993,6 +994,23 @@ describe("Mix my boxes again sent once another such mix may spend the boxes (chu
     await expect(sessions.mixOutSubmit("preprod", out.txHash)).rejects.toThrow("Your boxes are being mixed again already.");
     expect(t.koios.submitted).toHaveLength(sent);
     expect((await t.store.get<{ sessions: unknown[] }>("sessions.preprod"))!.sessions).toHaveLength(1);
+  });
+});
+
+// A mix's funding goes only as it was reviewed: on its network, within 10 minutes (chunk 51, t1i#6's sibling).
+describe("a mix's funding sent as it was reviewed", SLOW, () => {
+  it("is never sent on another network, nor past 10 minutes", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const sessions = runner(t, pooled(t, [ADA_POOL]));
+    t.koios.addedToAccounts.push(...ADA_ROWS);
+    const out = await sessions.mixOutBuild("preprod", 1, { pool: ADA });
+    await expect(sessions.mixOutSubmit("mainnet", out.txHash)).rejects.toThrow("That mix isn't ready to send.");
+    await busyFor(t, BUILT_TTL_MS + 1000);
+    await expect(sessions.mixOutSubmit("preprod", out.txHash)).rejects.toThrow("That mix was built more than 10 minutes ago.");
+    expect(t.koios.submitted).toHaveLength(0);
+    // Refused before it's recorded: let through, Send's own age check turned it away, a session recorded unsent.
+    expect((await t.store.get<{ sessions: unknown[] }>("sessions.preprod"))?.sessions ?? []).toHaveLength(0);
   });
 });
 

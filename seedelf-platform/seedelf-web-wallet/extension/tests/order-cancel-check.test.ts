@@ -17,11 +17,12 @@ import { describe, expect, it } from "vitest";
 
 import type { KoiosUtxo } from "../src/background/koios";
 import { builtOutputs, SUNDAE_V3 } from "../src/background/minswap";
+import { BUILT_TTL_MS } from "../src/background/script-spend";
 import { dexOrderAt, SESSION_TX, type SessionService } from "../src/background/sessions";
 import { bech32, bech32Bytes } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, SESSION_ADDRESS } from "./fixtures/swap-tx";
-import { loadTestWasm, sessionSwap } from "./fakes";
+import { busyFor, loadTestWasm, sessionSwap } from "./fakes";
 import { ASK, atSession, ordered, signing, SWAP_TX, unlocked, type T } from "./swap-session";
 
 type Network = "preprod" | "mainnet";
@@ -297,6 +298,18 @@ describe("an order no cancel could ever spend (release review C05)", () => {
       await expect(sessions.txSubmit("preprod", txIdOf(bytes(swapPlacing(order))), "swap")).rejects.toThrow("That swap isn't ready to send.");
       expect(t.koios.submitted).toHaveLength(0);
     }
+  });
+
+  // Review it myself's swap goes only as it was reviewed: as a swap, on its network, within 10 minutes (chunk 51, t1i#6's
+  // and t1i#7's sibling).
+  it("sends Review it myself's swap only as it was reviewed: its kind, its network, within 10 minutes", async () => {
+    const { t, sessions } = await seeded("preprod", swapPlacing(MINSWAP_V1));
+    const review = await sessions.swapBuild("preprod", 0);
+    await expect(sessions.txSubmit("preprod", review.txHash, "cancel")).rejects.toThrow("That cancel isn't ready to send.");
+    await expect(sessions.txSubmit("mainnet", review.txHash, "swap")).rejects.toThrow("That swap isn't ready to send.");
+    await busyFor(t, BUILT_TTL_MS + 1000);
+    await expect(sessions.txSubmit("preprod", review.txHash, "swap")).rejects.toThrow("That swap was built more than 10 minutes ago.");
+    expect(t.koios.submitted).toHaveLength(0);
   });
 
   it("pauses rather than sign one whose cancel would cost more than Stop's own cancel may pay", async () => {

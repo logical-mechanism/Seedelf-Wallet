@@ -12,6 +12,7 @@ import { MAX_TOKEN_DEPOSIT_BOXES, UNLOCK_WAIT_MS } from "../src/background/lovej
 import { type BuiltOutput, builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, Minswap } from "../src/background/minswap";
 import { pendingKey } from "../src/background/pending";
 import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
+import { BUILT_TTL_MS } from "../src/background/script-spend";
 import {
   checkAsk,
   checkOrder,
@@ -1193,6 +1194,21 @@ describe("a swap that runs itself", () => {
     ]);
   });
 
+  // A swap's funding goes only as it was reviewed: on its network, within 10 minutes. On another, it's refused before
+  // that network's server is asked whether the review's account is still unused (chunk 51, t1i#6's sibling).
+  it("refuses a swap's funding on another network, or past 10 minutes, and sends nothing", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const out = await sessions.outBuild("preprod", await sessions.quote("preprod", ASK));
+    const asked = t.koios.calls.length;
+    await expect(sessions.outSubmit("mainnet", out.txHash)).rejects.toThrow("That payment isn't ready to send.");
+    expect(t.koios.calls.length).toBe(asked);
+    await busy(t, BUILT_TTL_MS + 1000);
+    await expect(sessions.outSubmit("preprod", out.txHash)).rejects.toThrow("That payment was built more than 10 minutes ago.");
+    expect(t.koios.submitted).toHaveLength(0);
+    expect((await t.store.get<{ sessions: unknown[] }>("sessions.preprod"))?.sessions ?? []).toHaveLength(0);
+  });
+
   it("pauses when the price moved past what was approved, and orders at least that when it's back within it", async () => {
     const t = await unlocked();
     const runner = alarm();
@@ -1923,6 +1939,35 @@ describe("bring everything back", () => {
     await expect(t.sessions.claimSubmit("preprod", returns.map((r) => r.txHash))).rejects.toThrow("aren't ready to send");
   });
 
+  // Its returns go within 10 minutes of their review, or none goes: one whose inputs moved since is refused by the node,
+  // and the rest would still go, one after another (chunk 51, t1l#14).
+  it("sends none of the returns its review built more than 10 minutes before", async () => {
+    const t = await unlocked();
+    const { wasm } = t.deps;
+    const at = await t.wallet.withKeys((k) => ({ address: k.oneTime.address(wasm.Network.Preprod, 0), keyHash: k.oneTime.keyHash(0) }));
+    const now = t.clock.now;
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [{ kind: "out", txHash: "1".repeat(64), at: now, confirmed: true }],
+          site: { origin: "https://a.example" },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push({ ...atSession("a0".repeat(32), 0, "20000000"), address: at.address, payment_cred: at.keyHash });
+    const { returns } = await t.sessions.claimBuild("preprod", [0]);
+    expect(returns).toHaveLength(1);
+    await busy(t, BUILT_TTL_MS + 1000);
+    await expect(t.sessions.claimSubmit("preprod", returns.map((r) => r.txHash))).rejects.toThrow(
+      "Those returns were built more than 10 minutes ago. Review them again.",
+    );
+    expect(t.koios.submitted).toHaveLength(0);
+  });
+
   it("leaves out a swap sent by hand while its order waits, says why, and takes it once the order is spent (release review C41)", async () => {
     const t = await unlocked();
     const now = t.clock.now;
@@ -2114,6 +2159,31 @@ describe("a return kept for Send", () => {
     // The user's Send still sends what they reviewed.
     await expect(sessions.backSubmit("preprod", back.txHash)).resolves.toMatchObject({ txHash: back.txHash });
     expect(t.koios.submitted.map(txIdOf).at(-1)).toBe(back.txHash);
+  });
+
+  // Sent only as reviewed: on its network, within 10 minutes (chunk 51, t1i#6's and t1i#7's sibling).
+  it("is never sent on another network, nor past 10 minutes", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const now = t.clock.now;
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [{ kind: "out", txHash: "1".repeat(64), at: now, confirmed: true }],
+          site: { origin: "https://a.example" },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(atSession("a0".repeat(32), 0, "12000000"));
+    const back = await sessions.backBuild("preprod", 0);
+    await expect(sessions.backSubmit("mainnet", back.txHash)).rejects.toThrow("That return isn't ready to send.");
+    await busy(t, BUILT_TTL_MS + 1000);
+    await expect(sessions.backSubmit("preprod", back.txHash)).rejects.toThrow("That return was built more than 10 minutes ago.");
+    expect(t.koios.submitted).toHaveLength(0);
   });
 });
 
