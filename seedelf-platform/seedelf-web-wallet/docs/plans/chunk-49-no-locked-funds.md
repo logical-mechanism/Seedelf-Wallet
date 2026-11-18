@@ -82,13 +82,18 @@ This was chunk 40's offer, carried by chunk 46 as ❓, and now it's the empirica
   - `rerandomize()` then a proof with the same sk is accepted.
 - **Done means:** it runs offline, under `cargo test -p seedelf-core --test <name>`. CI's `rust` job runs `cargo test --workspace --locked` and `cargo fmt --all -- --check` (`.github/workflows/web-wallet.yml`), so run `cargo fmt` on the new file. It never touches a network.
 
-### 4. ⬜ An outside read of the readable statements
+### 4. ✅ An outside read of the readable statements
 
 The proofs show that the bytes equal `walletAccepts`, `schnorrProve` and `policyAccepts`. They can't show that those say what Seedelf means.
 
 - **Run a reviewer agent** with a fresh context. Give it only `wallet.ak`, `schnorr.ak`, `seedelf.ak` and `token_name.ak` at `5b82530`, and the definitions in `Typed.lean` and `PolicyTyped.lean`: never the proofs, nor what we expect it to find. Ask, for each clause, whether it accepts exactly what the source does.
 - Chunk 45 did this for Lovejoin, and found wording issues only.
 - Record the findings here. A person's read stays the owner's call.
+
+**Done in chunk 51 (2026-11-18), as its lanes V1 and V2** ([its record](../archive/plans/review-51.md)). Each ran in a fresh context with only the sources and the definitions, the theorems cut to their statements.
+- **V1 (Seedelf): nothing found.** It compared every clause of `wallet.ak`, `seedelf.ak`, `schnorr.ak` and `token_name.ak` at `5b82530` (and the stdlib calls behind them) with `Typed.lean`'s and `PolicyTyped.lean`'s definitions: each accepts exactly what the source does.
+- **V2 (Lovejoin, the same for `mix_logic`, `mix_box` and `one_shot_mint` at `29573c5`): two docstring nits,** fixed: ownerContext's docstring read as serialising each input reference apart, and ReadableLaunch's module doc as if the output search also required an inline ReferenceDatum.
+- A person's read is still the owner's call.
 
 ### 5. ❓ `schnorrProve` against `Seedelf.V1.schnorrAccepts`
 

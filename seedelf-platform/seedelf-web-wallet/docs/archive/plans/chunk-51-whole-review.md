@@ -1,16 +1,16 @@
 # Chunk 51 · A whole-code review of the platform and the proofs
 
-**Status: ⬜ not started.** Written 2026-11-17 on `web-wallet/whole-review-plan`, from `main` at `81e49075`, so a new session can start it. The owner: "what I want is a chunk dedicated to this. We can get an agent on each path and just find everything to fix it if it exists. So basically platform and verification."
+**Status: ✅ done (2026-11-18).** Its record, with what it found, the fixes, the checks and the owner's calls, is [review-51.md](review-51.md). Written 2026-11-17 on `web-wallet/whole-review-plan`, from `main` at `81e49075`. The owner: "what I want is a chunk dedicated to this. We can get an agent on each path and just find everything to fix it if it exists. So basically platform and verification."
 
 ## Why now
 
-- **Nothing has read the whole code since before mainnet.** The crypto, launch, privacy and independent reviews of 2026-09-25 to 28 ([archive/plans/](../archive/plans/)) read the whole web wallet. Since then, each release review has read only what changed since the release before it. Much of today's code arrived after those reviews: token pools, Lovejoin v2, the DEX routes, staking and governance, the data layer's reads, and payments in parts.
-- **Old code still holds bugs that diffs miss.** 1.9.1's M1, an overpay when a token goes in three or more parts, had been there since 1.6.0 ([review-1.9.1.md](../archive/plans/review-1.9.1.md)).
+- **Nothing has read the whole code since before mainnet.** The crypto, launch, privacy and independent reviews of 2026-09-25 to 28 (the plans in [this folder](./)) read the whole web wallet. Since then, each release review has read only what changed since the release before it. Much of today's code arrived after those reviews: token pools, Lovejoin v2, the DEX routes, staking and governance, the data layer's reads, and payments in parts.
+- **Old code still holds bugs that diffs miss.** 1.9.1's M1, an overpay when a token goes in three or more parts, had been there since 1.6.0 ([review-1.9.1.md](review-1.9.1.md)).
 - **Strangers find what we don't.** Three bounty reports were confirmed, each in how the wallet sorts addresses or builds a payment:
   - a collateral UTxO read as a stranger's (#358);
   - a stranger's address with our stake key called our own (#359);
   - a chain of parts paying an output nobody asked for (#384).
-- **A fix on `main` comes first.** [SECURITY.md](../../../../SECURITY.md) voids a report whose issue is already fixed on `main` when it arrives. So a confirmed high or medium goes to `main` on its own PR, without waiting for this chunk to end.
+- **A fix on `main` comes first.** [SECURITY.md](../../../../../SECURITY.md) voids a report whose issue is already fixed on `main` when it arrives. So a confirmed high or medium goes to `main` on its own PR, without waiting for this chunk to end.
 
 ## Scope
 
@@ -46,9 +46,9 @@ The code on `main` is the bounty's scope, tag `web-wallet/1.9.1`, with one diffe
 
 - **Read first:**
   - this plan;
-  - [backlog.md](../backlog.md): its open calls and its *Declined*;
+  - [backlog.md](../../backlog.md): its open calls and its *Declined*;
   - SECURITY.md's scope;
-  - [review-1.9.1.md](../archive/plans/review-1.9.1.md) and [independent-review.md](../archive/plans/independent-review.md), for how a review here runs and what it found.
+  - [review-1.9.1.md](review-1.9.1.md) and [independent-review.md](independent-review.md), for how a review here runs and what it found.
 - **Write a workflow** (load the `workflow-authoring` skill first). It replaces `/code-review max` per path: one script gives every lane the same brief, the settled list and the verification tiers.
   - **Its size:** about 23 area lanes, 5 cross lenses, a critic with a gap round, then verifiers. That's far past the default size guideline of 10 agents. The owner asked for "an agent on each path", but say the count before starting.
   - **Waves:** run the platform lanes first, then verification, so the run never holds every slot at once.
@@ -75,7 +75,7 @@ The code on `main` is the bounty's scope, tag `web-wallet/1.9.1`, with one diffe
 **What counts as a finding.** Each needs a concrete scenario: these inputs or this state, and then this wrong outcome. Without one, it's a note, not a finding.
 - Funds lost, locked or stranded, or paid to the wrong place.
 - The wallet signs something other than what it shows, or shows a figure that's wrong by real money.
-- A link between a user's addresses or transactions that [privacy.md](../privacy.md) says isn't made, made by default.
+- A link between a user's addresses or transactions that [privacy.md](../../privacy.md) says isn't made, made by default.
 - A secret that leaks: the phrase, the Seedelf key, the vault, or a one-time account's key.
 - A stuck state with no way out, a crash, or a hang that a stranger or a site can cause.
 - A refusal of something the ledger and the contracts would accept.
@@ -241,7 +241,7 @@ Fix everything confirmed, except what needs the owner.
 ## Checks
 
 - **Record the counts at the start,** on the untouched worktree, so breakage shows.
-- **At the end, release step 1's checks** from [development.md](../development.md#1-on-the-release-branch-set-the-version-and-run-the-checks), without the version and the lists:
+- **At the end, release step 1's checks** from [development.md](../../development.md#1-on-the-release-branch-set-the-version-and-run-the-checks), without the version and the lists:
   - `cargo test --workspace --locked`;
   - the parts suite (`payment_parts_shapes_test --ignored`);
   - `npm test` on both builds;

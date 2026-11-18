@@ -11,9 +11,9 @@ T1's findings are guards that no test pinned: a T1 agent reverted each in a copy
 | critical |  |  |  |  |  |  |  |  |  | 0 |
 | high | 3 |  |  |  |  |  |  |  |  | 3 |
 | medium | 3 | 4 |  |  |  |  |  |  | 1 | 8 |
-| low | 248 | 38 | 9 | 2 | 2 |  |  | 1 | 13 | 327 |
-| nit | 39 | 1 |  |  |  |  | 1 |  | 3 | 45 |
-| **All** | **293** | **43** | **9** | **2** | **2** | **0** | **1** | **1** | **17** | **383** |
+| low | 262 | 38 | 9 | 2 | 2 |  |  | 1 | 13 | 327 |
+| nit | 40 | 1 |  |  |  |  | 1 |  | 3 | 45 |
+| **All** | **308** | **43** | **9** | **2** | **2** | **0** | **1** | **1** | **17** | **383** |
 
 *fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for the second fix round. *merged*: the same as another finding, which carries it.
 
@@ -116,6 +116,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 
 - `r3a#1` **high**: A stranger's mix can write the user's box datum as constructor 0's tag-102 form, which the contract accepts and the wallet no longer sees as a box `mod.rs:387` · 0c965ff8, 506e4ed2, e2b31e6f
 - `x2#1` **medium**: A stranger's 5 ₳ at a KEY address whose hash is a pool's mix_box script hash counts as a pool box: it counts toward the floor, gets drawn, and every chain that draws it fails, so returns come back directly `mod.rs:416` · 506e4ed2, 6aea4fb8, d2a7278d, fcdacc50
+- `l3cli#2` **low**: fund's new holders_of takes the holder with the most of the sent token first, so a stranger's UTxO holding more of it leads, and fund refuses or carries its junk `utxos.rs:220` · 5be0b1b4
 - `r2a#2` **low**: apart ends the search at the first order grown whole that's short, so it refuses payments a subset pays and the CLI's order would make `build.rs:2843` · c1c5b13a
 - `r2b#2` **low**: CLI `fund` says "Not Enough Lovelace/Tokens" when its ADA sits in token UTxOs larger than the one holding the token being sent `utxos.rs:258` · 48a4c977, 82078f10
 - `r2cli#2` **low**: fund's new order takes a second holder of the sent token for its ADA before any ADA-only UTxO: a fund main made is refused, and others spend a token UTxO they don't need `utxos.rs:251` · af022a6f
@@ -136,6 +137,8 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `r4#1` **high**: A stranger freezes any CLI external wallet: `external sweep` (and `external balance`) total every UTxO there, and three junk rows overflow the token sum forever `sweep.rs:40` · 027fc81b, 204ef8fb, 64379c03, fcb22df7
 - `r4#2` **medium**: A stranger's three junk UTxOs under the user's register break `balance` for good (and `sweep --all` while they're among its 20) `balance.rs:39` · 027fc81b, 64379c03
 - `r4#4` **medium**: A submit the CLI can't confirm (30 s timeout, 5xx, unreadable 2xx) is reported as a plain failure, and re-running the command pays again `spend.rs:91` · 48a4c977, 82078f10
+- `l3cli#1` **low**: The window ranks every ADA-only UTxO ahead of any token UTxO, so 20 small ones (anyone's) shut a large token UTxO out and transfer and sweep -l are refused `rows.rs:221` · 5be0b1b4
+- `l3cli#3` **low**: The window runs core's fitting over every owned UTxO, quadratic in their token kinds, so a stranger's piles slow every transfer, sweep -l and util mint `rows.rs:257` · 5be0b1b4
 - `r1#1` **low** (in part, as verified): The CLI reads the wallet contract with offset paging and no fixed order, so a page can skip or repeat a UTxO `koios.rs:252` · 48a4c977, 82078f10
 - `r2tests#8` **low**: The CLI's two new 'Tx Hash' lines (r4#4's id before sending, and the signing page's id in the terminal) have no test `submit.rs:26` · e6d6a18d
 - `r4#3` **low**: The signing page finds the witness set by searching the tx hex for the first `a105` (or `a0f5f6`) at any nibble, so create/fund/extract fail when their body happens to contain it `index.js:49` · 48a4c977, 82078f10
@@ -181,6 +184,10 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g4#1` **low**: A split route's leg paid between the runner's two reads of the account comes back alone, in a later return, directly, though its approval sent it through Lovejoin `sessions.ts:3904` · 506e4ed2
 - `gap-g6#1` **low**: Kept verdicts carry no version of the rule that made them, so a fix to what counts as the wallet's never reaches rows and boxes an older release already judged `contract-scan.ts:264` · 4cbac01e, 506e4ed2
 - `gap-g6#2` **low**: After a restore, what made a box is kept with only the accounts then known, so a custom account's (index 24 or more) deposit boxes read as the private balance's for good `lovejoin.ts:6324` · e66a6a16
+- `l3screens#1` **low**: The run ad8c3ce4 adds after every order reads spent leaves the page saying "Waiting for the order to fill … Stop cancels it." and keeps Stop, whose dialog describes and prices a cancel that never happens `sessions.ts:3986` · abcf2ffe, 0dce8a6b
+- `l3still#2` **low**: r2still#2's landedAfter cutoff takes a stranger's payment made while the swap's own return chain is being sent for the swap's own: its 'Lovejoin was left out' replaces how the swap came back (e2b#2 reopened) `sessions.ts:4728` · abcf2ffe
+- `l3time#1` **low**: Bring one back takes its phrase pin only after giveme.my answers, and its watch isn't pinned at all: a Remove and a restore in that window put the first phrase's withdraw into the restored phrase's schedule, private history and Home watch `lovejoin.ts:7886` · abcf2ffe
+- `l3time#2` **low**: r2still#2's wait counts runs, not time: a Refresh, Stop or Resume seconds after the run that read every order spent tells the outcome and builds the first return from listings no newer than that run's `sessions.ts:3986` · abcf2ffe
 - `r2sign#2` **low**: A second "msg" under label 674 is signed and published, but the window shows only the first and says nothing of the rest: x1a#3's otherMetadata check passes it as part of the note `dapp.ts:2996` · 61a4d717
 - `r2sign#3` **low**: Remove's new token rows show a token off the wallet's list in raw units: the decimals the Seedelf's UTxO carries never reach the review `withdraw.ts:188` · e4d97bea
 - `r2still#2` **low**: gap-g4#1 is fixed only for a leg the second listing holds; a leg both listings miss still comes back alone and directly, and since e2b#2's strangers rule the swap's page no longer says so `sessions.ts:4704` · ad8c3ce4
@@ -221,6 +228,10 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g10#2` **low** (in part, as verified): Activity cuts a counterparty's address to its first 3 to 10 characters and its last 6, and the last 6 are a bech32 checksum anyone can solve for `Activity.tsx:415` · 8fd738ff
 - `gap-g10#3` **low**: The Add tokens picker cuts a lookalike token's warning to "Calls itself SNEK, not on the…" in grey; Home's list shows it whole in amber (H-9), and the swap's picker cuts its mark too `TokenAmounts.tsx:269` · 8fd738ff
 - `gap-g2#3` **low**: The Mix and Bootstrap forms count public UTxOs the build refuses (any reference script, a datum too deep to read), so 'What Lovejoin can spend' and the stepper offer boxes Review then refuses `Lovejoin.tsx:410` · 8fd738ff, c8003eda
+- `l3screens#2` **low**: Where 7b6881f7 meets ad8c3ce4: a late leg's direct return now writes the session's skip reason, and the last step says "Directly: Lovejoin was left out" under its link to the swap's own return, which went through Lovejoin `Swaps.tsx:3106` · abcf2ffe
+- `l3sign#2` **low**: The sign window shows a held token off the wallet's list in raw units, while the Transaction details it opens scale it: 10^6 apart for a 6-decimal token `DappApprovals.tsx:1069` · abcf2ffe
+- `l3still#4` **low**: r2screens#1 is fixed only in part: the swap form and Send privately's too-much line still call the unlocked side 'your private balance', with nothing about the lock `Swaps.tsx:1152` · 7921367f, abcf2ffe
+- `l3still#5` **low**: r2sign#3's class is fixed only in part: a session's return review shows a token off the wallet's list in raw units `SiteSessions.tsx:282` · abcf2ffe
 - `r2screens#1` **low**: The connect window's private session now calls the unlocked side what's "in your private balance", with nothing about the lock `DappApprovals.tsx:994` · 61a4d717
 - `r2tests#1` **low**: d1#3's sign-window warning for a payment into Seedelf under a dead register has no test: drop it and the whole Vitest suite passes `DappApprovals.tsx:1212` · 61a4d717
 - `r2tests#2` **low**: x1a#1/e9a#3's form notes on Send and Make public (stake works elsewhere) have no test; only the reviews' lines are pinned `CardanoSend.tsx:312` · 5ba328e5
@@ -249,6 +260,9 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 
 ### The proofs
 
+- `l3tests#2` **low**: count.py's new exit status fails a full audit run for modules Lake replays: they read STALE by mtime, and no check.sh run can clear that `count.py:153` · b0202c08
+- `l3tests#3` **low**: check.sh's family runs no longer fail on an import's own sorry or Undetermined, and lovejoin-any-tx's 34 V2/Template imports were judged by none of the final runs `check.sh:275` · b0202c08
+- `l3tests#4` **low**: test-tools.sh still passes with three of the rules it claims to hold dropped: check.sh's own sorry, its NO TRACE, and count.py's exit status `test-tools.sh:8` · b0202c08
 - `r2tests#6` **low**: v3#1's fix (a failed rebuild never reads as ok) has no committed test: drop tally.py's traceless-import rule and nothing notices `tally.py:113` · ddc17685
 - `r2verif#1` **low**: check.sh's new SORRY verdict depends on PlutusCoreBlaster's sorry sitting at CekMachine.lean:309; on IOG's main it is at 317, so every module reads SORRY and hides real Undetermined results `check.sh:233` · ddc17685
 - `r2verif#2` **low**: check.sh reads #print axioms one line at a time, but Lean breaks a list over 120 columns into one axiom per line, so a native_decide (or a sorryAx listed after propext) reads ok `check.sh:240` · ddc17685
@@ -280,6 +294,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `d1#4` **nit**: The root README's collateral rule has an exception it doesn't name: a session's 5 ₳ collateral mix spends the session's account under giveme.my's collateral `README.md:276` · c4b7a906
 - `d1#5` **nit**: privacy.md says the recovery phrase can't be copied, but once revealed it's ordinary selectable text `privacy.md:276` · 10a06db6
 - `d1#6` **nit**: The root README's troll attack says Bob pays more to spend the UTxO; Seedelf Wallet can't spend it at all `README.md:187` · c4b7a906
+- `l3cli#4` **nit**: README says transfer, sweep and util mint can't spend a UTxO holding a reference script, but sweep --all sweeps them and --utxo spends them `README.md:195` · 5be0b1b4
 - `r2docs#4` **nit**: architecture.md calls core's check_nesting "the one walk for every transaction from outside the wallet", but the worker's cbor.ts walk is the one guarding ogmiosUtxos on a site's transaction `architecture.md:195` · ca970760
 - `r2docs#5` **nit**: privacy.md and architecture.md don't say that this release re-reads the private index from a snapshot and every pool copy once more, or that a reader version is now stored `privacy.md:230` · ca970760
 - `r2docs#6` **nit**: flows.md's Collateral page still describes the automatic pick as any 5 ₳ of ADA, and two code comments cite a collateralFits in sessions.ts that no longer exists `flows.md:142` · ca970760

@@ -24,6 +24,13 @@ What could become a chunk, the calls still open for the owner, and what's declin
 - ❓ **The release refreshes trust Node's own CA store** (1.7.0's release review, pr327#0): `npm run tokens`, `dreps` and `lovejoin-pools` fetch Koios through a Node whose built-in store still trusted emSign ECC Root CA - G3, the root GHSA-6q48-6c7w-9gw2 is about, and their answers ship in the bundle.
 - ❓ **Asking Minswap to list Seedelf Wallet** (outward-facing): its wallet list is fixed, so its own site never offers this wallet, and answering as Eternl would be impersonation. Listed, its site would reach the connector and private CIP-30.
 
+- ❓ **Chunk 51's four mediums** ([chunk 51's record](archive/plans/review-51.md), *Your calls*): e1a#1 (a stranger's deposit read as the wallet's own unmixed box), e6#1 (a planted Seedelf steers Remove), r2a#3 (a stranger's token pile taken first, at several times its ADA), gap-g1#1 (a payment under a register already on chain taken first by the stealth mint and fundings). Each has a recommendation there.
+- ❓ **Chunk 51's refusals the ledger doesn't make** ([chunk 51's record](archive/plans/review-51.md)): r2a#1, e7b#1, e7b#2, gap-g8#1 to #8. The recommendation for all: drop the refusal, a line on the review at most.
+- ❓ **Chunk 51's Lovejoin and session calls** ([chunk 51's record](archive/plans/review-51.md)): gap-g5#1, e2b#1, e7a#2, gap-g2#1, gap-g2#2, gap-g3#1, gap-g4#2, gap-g9#2, e8b#1's residue, the collateral switch read at build time.
+- ❓ **Chunk 51's "what's the user's own" calls** ([chunk 51's record](archive/plans/review-51.md)): gap-g9#1, gap-g1#2, x1a#2, l3sign#1, e9a#4, e4a#1's residue, and a failed Send burning a session index.
+- ❓ **Chunk 51's connector, screen and CLI calls** ([chunk 51's record](archive/plans/review-51.md)): e3b#3, w2#4, w2#5, G5's and G6's notes; e9a#1, w1a#1, gap-g8#9, gap-g7#1, gap-g7#2, the recovery phrase under Chrome Translate; r4#8, r4#5's last part, the sweeps' dusting.
+- ❓ **Chunk 51's policy, build and data-layer calls** ([chunk 51's record](archive/plans/review-51.md)): d1#1, d1#2, d1#7 (the published policy's words); b1#2, b1#3, v3#2, the diag scan's LOOK rows, G8's notes; seedelf-data's twin readers of r3a#1 and x2#1.
+
 ## Owed
 
 Promises the repo has already made, by the IDs the code and the docs cite (O1 to O10; the others are done or dropped).
@@ -117,6 +124,8 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 - ⬜ **Swaps straight against a pool**, not through the aggregator (chunk 15b).
 - ⬜ **More dApps on the dApps page:** each entry claims the dApp works privately, so each needs its own test run first.
 
+- ⬜ **A tail-only return's skip reason** (chunk 51, l3screens#2): a return of only the collateral's mix that carries a skip reason, followed by a stranger's return, reads as a later part's on the swap page. Recording which return wrote the reason would make it exact.
+
 ## Sessions and restore
 
 - ⬜ **A swap or a mix another browser brought back stays open here** (1.5.0's release review, C18): the money is safe, and the page waits for good.
@@ -138,6 +147,8 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 - ⬜ **Picking takes the biggest holder of each token** (1.9.1's release review, shapes#2, tests#5): core's `holding` takes, token by token, the UTxO holding the most of it, so a payment whose tokens the UTxO with the ADA already holds spends bundles too. The bounty report's shape still pays 1.17 ₳ in fees where that UTxO alone pays 0.26 ₳, and with more ADA beside, up to 3.7 ₳ more, its tokens split over parts that each pay their own least. Hand `max_inputs_by` only the fewest UTxOs that hold a part's share (the wallet's side), or have `holding` prefer one that holds several (core's, so the CLI's too: the owner's call).
 - ⬜ **A part's smaller payment can leave change under an output's least** (1.9.1's review of its fixes, r2-planner#1; its last look, last#1): there `reserving`'s second plan is short, and unless another split goes in as many parts and carries (with a UTxO holding none of the tokens left, it tries one), the first plan's overpayment stays. A window about 1.46 ₳ wide at each part boundary, 1 to 2 % of the asks where a token takes three parts or more: 90 boxes and 95 ₳ pay 98.52 ₳, two leasts over. In its own windows the first plan chains for nothing (150 boxes and 90 ₳: 7 parts wait). Paying all but the change's least there, the parts after it taking the rest, would close both; meanwhile `reserving`'s guard keeps the second plan from chaining (last#3).
 - ⬜ **A chain's short last part of tokens carries rather than taking more ADA** (1.9.1's release review, tests#1): near the most the balance can pay, the part after it is then short, and a payment the planner could make is refused (two of the parts suite's 108 refused asks). Trying the amount alone through `fit_part` first, which can add ADA, then the amount or the carry, pays them, at more planning time on a refusal. #384's amount-first after a carry is then reached: test that its last part spends the carry (critic#2).
+
+- ⬜ **Core's token sums are quadratic in their kinds** (chunk 51, l3cli#3's root): `fitting` and `Assets::add` clone the whole list for every token. The CLI's windows now bound what they hand core, but the web wallet's private sends still run it over every owned UTxO, so a stranger's many-token piles under the user's register slow each one. Not measured in the WebAssembly.
 
 ## Signing and the connector
 
@@ -185,6 +196,10 @@ From the headless run on Musashi (1.7.0's item 8). Its branch, `web-wallet/leios
 ## The CLI
 
 - ⬜ **`sweep` of 21 or more distinct tokens without `--lovelace`** (321-parts-rust#0): the shared builder refuses its default, one output's minimum. Take it from `build::minimum_address_payment` at the CLI's next change.
+
+## The proofs
+
+- ⬜ **Two Lovejoin AnyTx modules no family builds** (chunk 51, l3tests#3's note): `Lovejoin.AnyTx.LogicOwnerParserReach` and `LogicOwnerPrefix` are in no `check.sh` list and no listed module imports them, so no run builds or judges them, and `tally.py` reads them not ok. List them in a family, or retire them.
 
 ## Declined
 

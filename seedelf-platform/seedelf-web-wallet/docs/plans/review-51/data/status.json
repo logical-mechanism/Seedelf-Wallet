@@ -516,5 +516,112 @@
    "ad8c3ce4"
   ],
   "note": ""
+ },
+ "l3tests#2": {
+  "status": "fixed",
+  "commits": [
+   "b0202c08"
+  ],
+  "note": ""
+ },
+ "l3tests#3": {
+  "status": "fixed",
+  "commits": [
+   "b0202c08"
+  ],
+  "note": "each in-package import is judged under its own name; two Lovejoin AnyTx modules (LogicOwnerParserReach, LogicOwnerPrefix) are in no family list and no listed module imports them: never built, as before"
+ },
+ "l3tests#4": {
+  "status": "fixed",
+  "commits": [
+   "b0202c08"
+  ],
+  "note": ""
+ },
+ "l3still#4": {
+  "status": "fixed",
+  "commits": [
+   "7921367f",
+   "abcf2ffe"
+  ],
+  "note": "Send privately's half and the swap form's"
+ },
+ "l3cli#1": {
+  "status": "fixed",
+  "commits": [
+   "5be0b1b4"
+  ],
+  "note": "cca673cd on cli/stranger-rows"
+ },
+ "l3cli#2": {
+  "status": "fixed",
+  "commits": [
+   "5be0b1b4"
+  ],
+  "note": "cca673cd on cli/stranger-rows"
+ },
+ "l3cli#3": {
+  "status": "fixed",
+  "commits": [
+   "5be0b1b4"
+  ],
+  "note": "cca673cd on cli/stranger-rows; sibling fixed: fund, create and util extract at the payer's address; the root, core's fitting and Assets::add, is a backlog line"
+ },
+ "l3cli#4": {
+  "status": "fixed",
+  "commits": [
+   "5be0b1b4"
+  ],
+  "note": "cca673cd on cli/stranger-rows"
+ },
+ "l3screens#1": {
+  "status": "fixed",
+  "commits": [
+   "abcf2ffe",
+   "0dce8a6b"
+  ],
+  "note": "the e2e fixed in 0dce8a6b"
+ },
+ "l3time#2": {
+  "status": "fixed",
+  "commits": [
+   "abcf2ffe"
+  ],
+  "note": "a clock set back is noted afresh"
+ },
+ "l3still#2": {
+  "status": "fixed",
+  "commits": [
+   "abcf2ffe"
+  ],
+  "note": ""
+ },
+ "l3screens#2": {
+  "status": "fixed",
+  "commits": [
+   "abcf2ffe"
+  ],
+  "note": "new warning swaps.warn.skippedLater, back-translated in 0dce8a6b"
+ },
+ "l3time#1": {
+  "status": "fixed",
+  "commits": [
+   "abcf2ffe"
+  ],
+  "note": "publicSubmit's watch and lookUp left: no reachable wait"
+ },
+ "l3sign#2": {
+  "status": "fixed",
+  "commits": [
+   "abcf2ffe"
+  ],
+  "note": ""
+ },
+ "l3still#5": {
+  "status": "fixed",
+  "commits": [
+   "abcf2ffe"
+  ],
+  "note": ""
  }
 }
