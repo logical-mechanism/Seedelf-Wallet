@@ -160,6 +160,19 @@ fn injected_tx(page: &str) -> Option<String> {
     Some(page[start..start + len].to_string())
 }
 
+/// The id a page shows for its transaction, from its injected-data block.
+fn injected_id(page: &str) -> Option<String> {
+    let block = &page[page.find(r#"{ "message": ""#)?..];
+    let block = &block[..block.find('}')?];
+    let value: serde_json::Value = serde_json::from_str(&format!("{block}}}")).ok()?;
+    value["id"].as_str().map(str::to_string)
+}
+
+/// A transaction's id, as the CLI computes it: its body's hash.
+fn id_of(tx: &str) -> String {
+    hex::encode(seedelf_core::build::tx_id(&hex::decode(tx).expect("hex")).expect("a transaction"))
+}
+
 /// The value of the response header `name`, if it's there.
 fn header<'a>(response: &'a str, name: &str) -> Option<&'a str> {
     let head = response.split("\r\n\r\n").next()?;
@@ -208,6 +221,12 @@ async fn each_run_serves_its_page_at_an_address_of_its_own() {
             "the page at the address printed loads:\n{page}"
         );
         let tx = injected_tx(&page).expect("the page carries its transaction");
+        // And the id to look it up by, which signing doesn't change.
+        assert_eq!(
+            injected_id(&page),
+            Some(id_of(&tx)),
+            "the page carries its transaction's id:\n{page}"
+        );
 
         let (status, root) = get("/", Some(HOST)).await;
         assert!(

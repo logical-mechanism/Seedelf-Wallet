@@ -88,3 +88,29 @@ fn identity_generator_is_owned_by_no_key() {
         assert!(!datum.is_owned(sk).unwrap());
     }
 }
+
+/// A point that doesn't decompress is named for what it is, the generator or
+/// the public value: these words reach the web wallet through WebAssembly
+/// (chunk 51, r1#3's sibling).
+#[test]
+fn a_point_that_doesnt_decompress_is_named() {
+    let good = Register::create(random_scalar()).unwrap().generator;
+    // Both flag bits set, and more: no point's encoding.
+    let bad = "ff".repeat(48);
+    for (datum, point) in [
+        (Register::new(bad.clone(), good.clone()), "generator"),
+        (Register::new(good.clone(), bad.clone()), "public value"),
+    ] {
+        let said = [
+            datum.clone().rerandomize().unwrap_err().to_string(),
+            datum.is_valid().unwrap_err().to_string(),
+        ];
+        assert_eq!(
+            said,
+            [
+                format!("Failed to decompress {point}"),
+                format!("Failed to decompress {point}")
+            ]
+        );
+    }
+}
