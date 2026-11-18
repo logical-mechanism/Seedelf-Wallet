@@ -1,10 +1,10 @@
 # Chunk 50 · Docs for someone who has never heard of Seedelf
 
-**Status: 🟡 in progress** on `web-wallet/doc-audience`, from `main` at `cb83f18e`. Written 2026-11-14 on `web-wallet/doc-audience-plan`, from `main` at `45a0b3bb`.
+**Status: ✅ done**, merged 2026-11-17 as `81e49075` (PR #387, `web-wallet/doc-audience`, from `main` at `cb83f18e`). Written 2026-11-14 on `web-wallet/doc-audience-plan` (PR #383), from `main` at `45a0b3bb`. The record is at the end.
 
 The owner, after reading some of the READMEs: they "read more like you are talking to me who knows what is going on and not to the audience that does not know what is going on. Like referencing chunks or commits, successes or failures, or even just talking about finding bugs". And: "Our documentation should be written for this outside user trying to find out what its all about, not reading a story about your adventure". Many of the docs are working files for the sessions, and that's fine. This chunk is about the ones a stranger reads.
 
-Chunk 22 ([its record](../archive/plans/chunk-22-documentation-review.md)) checked every doc against the code. This chunk checks who each doc is written for. The facts are still checked against the code, never against another doc, as chunk 22 did. What changes is the voice, the order, and what's left out.
+Chunk 22 ([its record](chunk-22-documentation-review.md)) checked every doc against the code. This chunk checks who each doc is written for. The facts are still checked against the code, never against another doc, as chunk 22 did. What changes is the voice, the order, and what's left out.
 
 ## Start here
 
@@ -35,28 +35,28 @@ They found the GitHub repo, the Chrome Web Store listing, a crate on crates.io, 
 
 | File | What it's for | In the wrong voice now (examples, not the full list) |
 |---|---|---|
-| [README.md](../../../../README.md) | The protocol: stealth addresses, the CLI, the known attacks | Mostly written for outsiders already: check it |
-| [SECURITY.md](../../../../SECURITY.md), [RELEASE.md](../../../../RELEASE.md) | Reporting a vulnerability; checking a CLI release | Check them |
-| [seedelf-contracts/README.md](../../../../seedelf-contracts/README.md), [AUDIT.md](../../../../seedelf-contracts/AUDIT.md), [happy-path-scripts/README.md](../../../../seedelf-contracts/happy-path-scripts/README.md) | The deployed scripts, their hashes, their audit | Check them. Commit `5b82530` stays: it's provenance |
-| [seedelf-platform/README.md](../../../../seedelf-platform/README.md), and the four crate READMEs | The CLI, and the crates' pages on crates.io (`seedelf-cli` publishes this README: `readme = "../README.md"`) | Check them |
-| [seedelf-web-wallet/README.md](../../README.md) | The wallet's front page | *Status* sends readers to the root CLAUDE.md for versioning. *Scope* tags features "(chunk 13)", "(chunk 18)", "(chunks 15 and 15b)". The docs table cites "chunk 23's usability review". *Reference: Lace* and *Decisions* are contributor material on the front page (Q4) |
-| [extension/README.md](../../extension/README.md) | Its top half: what the extension does, screen by screen | The screens are mostly right. The build and test half is contributor tier |
-| [brand/README.md](../../brand/README.md), [media/README.md](../../media/README.md) | The logo set, and the post images | One chunk reference in brand |
-| [privacy.md](../privacy.md) | The wallet's privacy model: what's hidden, what isn't, and the rules it enforces | Tier is Q1. It opens "This doc keeps the older names", then "The owner's rule (2026-09-27)", and it cites chunks about 50 times |
-| [store/README.md](../store/README.md) | The texts pasted into the listing | Those texts are outward. The notes around them are the owner's, and can stay |
-| [store/privacy-policy.md](../store/privacy-policy.md) | The privacy policy | Already written for users: check it. Merging it publishes it |
-| [releases.md](../releases.md) | For anyone checking a zip | Commits, hashes and tags stay. *What it carried* names chunks and "the gate", 1.1.0's row says "the owner has it", and the intro cites "(the owner, 2026-10-04)" (Q5) |
-| [seedelf-data/README.md](../../../../seedelf-data/README.md) | The API's reference | It opens "The plan, and every decision behind it, is web wallet chunk 26", then "(web wallet chunk 34's 34c)", "(the owner, 2026-10-08)", "Checked end to end (2026-10-09)", "Checked against Koios (2026-10-11)", and the query planner's measurements. Those checks and measurements are maintainers' notes (Q3) |
-| [seedelf-verification/README.md](../../../../seedelf-verification/README.md), [CLAIMS.md](../../../../seedelf-verification/CLAIMS.md) | What the proofs claim, for anyone who reads "formally verified" | The README has "(…, chunk 48)", "until upstream merges the fixes (chunk 41)", "as WalletRegister's operand order was in chunk 41", "Stop, and tell the owner only", and a *Next* made of chunk records. CLAIMS.md is close already |
-| [seedelf-verification/Audit/README.md](../../../../seedelf-verification/Audit/README.md) | What the audit of the proofs was | Check it |
+| [README.md](../../../../../README.md) | The protocol: stealth addresses, the CLI, the known attacks | Mostly written for outsiders already: check it |
+| [SECURITY.md](../../../../../SECURITY.md), [RELEASE.md](../../../../../RELEASE.md) | Reporting a vulnerability; checking a CLI release | Check them |
+| [seedelf-contracts/README.md](../../../../../seedelf-contracts/README.md), [AUDIT.md](../../../../../seedelf-contracts/AUDIT.md), [happy-path-scripts/README.md](../../../../../seedelf-contracts/happy-path-scripts/README.md) | The deployed scripts, their hashes, their audit | Check them. Commit `5b82530` stays: it's provenance |
+| [seedelf-platform/README.md](../../../../../seedelf-platform/README.md), and the four crate READMEs | The CLI, and the crates' pages on crates.io (`seedelf-cli` publishes this README: `readme = "../README.md"`) | Check them |
+| [seedelf-web-wallet/README.md](../../../README.md) | The wallet's front page | *Status* sends readers to the root CLAUDE.md for versioning. *Scope* tags features "(chunk 13)", "(chunk 18)", "(chunks 15 and 15b)". The docs table cites "chunk 23's usability review". *Reference: Lace* and *Decisions* are contributor material on the front page (Q4) |
+| [extension/README.md](../../../extension/README.md) | Its top half: what the extension does, screen by screen | The screens are mostly right. The build and test half is contributor tier |
+| [brand/README.md](../../../brand/README.md), [media/README.md](../../../media/README.md) | The logo set, and the post images | One chunk reference in brand |
+| [privacy.md](../../privacy.md) | The wallet's privacy model: what's hidden, what isn't, and the rules it enforces | Tier is Q1. It opens "This doc keeps the older names", then "The owner's rule (2026-09-27)", and it cites chunks about 50 times |
+| [store/README.md](../../store/README.md) | The texts pasted into the listing | Those texts are outward. The notes around them are the owner's, and can stay |
+| [store/privacy-policy.md](../../store/privacy-policy.md) | The privacy policy | Already written for users: check it. Merging it publishes it |
+| [releases.md](../../releases.md) | For anyone checking a zip | Commits, hashes and tags stay. *What it carried* names chunks and "the gate", 1.1.0's row says "the owner has it", and the intro cites "(the owner, 2026-10-04)" (Q5) |
+| [seedelf-data/README.md](../../../../../seedelf-data/README.md) | The API's reference | It opens "The plan, and every decision behind it, is web wallet chunk 26", then "(web wallet chunk 34's 34c)", "(the owner, 2026-10-08)", "Checked end to end (2026-10-09)", "Checked against Koios (2026-10-11)", and the query planner's measurements. Those checks and measurements are maintainers' notes (Q3) |
+| [seedelf-verification/README.md](../../../../../seedelf-verification/README.md), [CLAIMS.md](../../../../../seedelf-verification/CLAIMS.md) | What the proofs claim, for anyone who reads "formally verified" | The README has "(…, chunk 48)", "until upstream merges the fixes (chunk 41)", "as WalletRegister's operand order was in chunk 41", "Stop, and tell the owner only", and a *Next* made of chunk records. CLAIMS.md is close already |
+| [seedelf-verification/Audit/README.md](../../../../../seedelf-verification/Audit/README.md) | What the audit of the proofs was | Check it |
 
 ### Contributor: someone about to change the code
 
 These are the design docs and how-tos:
 
-- [architecture.md](../architecture.md), [flows.md](../flows.md), [keys-and-accounts.md](../keys-and-accounts.md), [development.md](../development.md), [lovejoin-mix-width.md](../lovejoin-mix-width.md), [i18n/glossary.md](../i18n/glossary.md);
-- [wasm/README.md](../../wasm/README.md), the lower half of extension/README.md, [secret-box/README.md](../../extension/src/background/secret-box/README.md), [the Ogmios fixtures' README](../../../seedelf-core/tests/fixtures/ogmios/README.md);
-- [seedelf-data/deploy/README.md](../../../../seedelf-data/deploy/README.md);
+- [architecture.md](../../architecture.md), [flows.md](../../flows.md), [keys-and-accounts.md](../../keys-and-accounts.md), [development.md](../../development.md), [lovejoin-mix-width.md](../../lovejoin-mix-width.md), [i18n/glossary.md](../../i18n/glossary.md);
+- [wasm/README.md](../../../wasm/README.md), the lower half of extension/README.md, [secret-box/README.md](../../../extension/src/background/secret-box/README.md), [the Ogmios fixtures' README](../../../../seedelf-core/tests/fixtures/ogmios/README.md);
+- [seedelf-data/deploy/README.md](../../../../../seedelf-data/deploy/README.md);
 - the verification modules' READMEs: `Lovejoin/AnyTx`, `Lovejoin/Every`, `Seedelf/Every`.
 
 The working sessions read these too, so they keep more:
@@ -71,8 +71,8 @@ The working sessions read these too, so they keep more:
 ### Working files: left as they are
 
 - **The three CLAUDE.md files:** written for agents.
-- **[plans/](README.md) and [archive/](../archive/plans/README.md):** the live prompts and the record. They're meant to name chunks, PRs and the owner.
-- **[backlog.md](../backlog.md):** the owner's list. An outward doc that links it says what it is: what the maintainers might build next.
+- **[plans/](../../plans/README.md) and [archive/](README.md):** the live prompts and the record. They're meant to name chunks, PRs and the owner.
+- **[backlog.md](../../backlog.md):** the owner's list. An outward doc that links it says what it is: what the maintainers might build next.
 - **`seedelf-verification/Audit/review/findings.md`:** the audit's record.
 - **`seedelf-verification/Upstream/drafts/`:** written for upstream's maintainers.
 - **`media/x/*/thread.md`:** posts already out. Never edit them; raise a wrong claim in one with the owner.
@@ -124,12 +124,12 @@ The working sessions read these too, so they keep more:
 
 Asked 2026-11-17, with a sixth the inventory raised. The answers:
 
-- **Q1 · privacy.md is outward.** The owner's dated calls and the five declined proposals move to [backlog.md](../backlog.md)'s *Declined*. The rules and the known links stay, stated as facts.
+- **Q1 · privacy.md is outward.** The owner's dated calls and the five declined proposals move to [backlog.md](../../backlog.md)'s *Declined*. The rules and the known links stay, stated as facts.
 - **Q2 · Dated calls are dropped everywhere,** contributor docs included. The rule and its reason stay; git and the archive hold who called it and when. The CLAUDE.md files and the working files keep theirs.
 - **Q3 · seedelf-data's README is split.** It keeps what the API serves, its routes, how to run it, what it reads, and its limits. A new `seedelf-data/NOTES.md` takes the Koios cross-checks, the planner measurements, and why each decision was made.
-- **Q4 · The web wallet README's *Reference: Lace* and *Decisions* both move to [development.md](../development.md).** The front page keeps what a user needs.
+- **Q4 · The web wallet README's *Reference: Lace* and *Decisions* both move to [development.md](../../development.md).** The front page keeps what a user needs.
 - **Q5 · releases.md's *What it carried* says what changed for the user,** with the PR numbers kept as links. Chunk numbers and "the gate" go. 1.1.0's commit and hash read "not recorded".
-- **Q6 · releases.md's *Recording a release* and its per-release *Records* move,** unedited, to a new [release-records.md](release-records.md) beside the plans, a working file. releases.md keeps the table and how to verify a zip, and links the records as the maintainers'.
+- **Q6 · releases.md's *Recording a release* and its per-release *Records* move,** unedited, to a new [release-records.md](../../plans/release-records.md) beside the plans, a working file. releases.md keeps the table and how to verify a zip, and links the records as the maintainers'.
 
 Four more, asked 2026-11-17 once the blind reads were in:
 
@@ -210,9 +210,25 @@ All four ran on the final tree. The link script read every tracked Markdown file
 - **`cargo test -p seedelf-wasm --test readme_test`,** if wasm/README.md changed.
 - **No claim grew:** read the diff for wording that promises more than it did.
 
-## When it lands
+## When it landed
 
-- **store/privacy-policy.md:** merging it publishes it. If it changes at all, ask the owner whether it takes a dated *Changes* entry.
-- **store/README.md's texts go live** when the owner pastes them, at the next upload.
-- **The crate READMEs and the CLI's README reach crates.io** only with the next CLI publish.
-- **What the pass leaves open goes into [backlog.md](../backlog.md),** and this plan moves to [archive/plans/](../archive/plans/README.md) with its record.
+- **store/privacy-policy.md** changed (Q9) with a dated *Changes* entry, so merging #387 published it.
+- **What waits for the next upload:** a line in [backlog.md](../../backlog.md)'s *Owed*.
+  - store/README.md's texts changed in all three languages, and go live once they're pasted in.
+  - Captions 2 and 3 changed in `e2e/store-images.spec.ts`, but no screen did. So [development.md](../../development.md)'s image step now runs when a caption changes, as well as when the UI does.
+- **The crate READMEs and the CLI's README reach crates.io** with the next CLI publish, from [RELEASE.md](../../../../../RELEASE.md)'s steps. Nothing to track.
+- **Nothing else was left open.** The blind readers' last lists held only terms the docs define on purpose.
+
+## Record
+
+PR #383 (`web-wallet/doc-audience-plan`, merged as `8cd2b425`): this plan.
+
+PR #387 (`web-wallet/doc-audience`, into `main`, merged as `81e49075`):
+- `481ddb1f`: the rewrite of the outward docs, the contributor docs' light pass, the splits (`seedelf-data/NOTES.md`, `plans/release-records.md`) and the owner's calls Q1–Q6;
+- `b1e71d86`: the package's summary says only a Seedelf is paid privately (Q7), in three languages;
+- `126c6558`: no line says who makes Seedelf (Q11);
+- `05dd3093`: plain words, Seedelf first, no beta (Q12);
+- `c303753e`, `1d41dfed` and `c847fdfa`: the readability pass, the human-readability and audience review, and a last pass over the privacy, trust and verification claims;
+- `eb59d39b`: the store captions say what a payment shows, and the policy says who gets what.
+
+This file moved here with chunk 51's plan, on `web-wallet/whole-review-plan`.
