@@ -341,7 +341,10 @@ describe("a private index row as Koios's", () => {
 // address with them, under one of the user's registers, is nobody's to spend. It's neither owned nor any Seedelf's
 // place (balances.ts `atContract`), on this path as on Koios's.
 describe("the private index's row at a KEY address with the contract's hash", () => {
-  it("is neither the wallet's nor a Seedelf's place", async () => {
+  // A restore's snapshot judged through the real WebAssembly: 0.2 to 0.6 s alone, but 3 to 6 s after this file's first
+  // describe, here, and CI's runner is slower than this machine. Vitest's 5 s timed it out with nothing wrong, and hid
+  // what it guards behind that timeout (r2tests#7): sized so only what it checks fails it.
+  it("is neither the wallet's nor a Seedelf's place", { timeout: 30_000 }, async () => {
     const { index, deps } = await onIndex();
     const ours = ownedUtxos.find((u) => u.inline_datum?.bytes)!;
     const scriptAddress = Buffer.from(bech32Bytes(ours.address)).toString("hex");

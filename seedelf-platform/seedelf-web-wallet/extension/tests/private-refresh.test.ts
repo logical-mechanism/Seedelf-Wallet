@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
-import { submitWatched, watchSent } from "../src/background/pending";
+import { pendingKey, submitWatched, watchSent } from "../src/background/pending";
 import { SESSION_TRANSFER } from "../src/background/transfer";
 import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX } from "../src/background/wallet";
 import { WithdrawService } from "../src/background/withdraw";
@@ -297,6 +297,38 @@ describe("a Make public to another of the user's own accounts, once it lands (ch
     const from = t.koios.calls.length;
     await t.balances.get("preprod");
     expect(askedSince(t, from).account).toEqual([]);
+  });
+
+  // Chunk 51, the R2tests lens's note on e5#2: a watch kept before this release has no `paysAccounts`, only the old
+  // `toAccount`, which it set for a Make public to any of the user's accounts. Its landing judges it again by its
+  // summary, by today's rule: one paying another account reads only the private side, one paying the account on
+  // screen reads both. The old rule read the account on screen for either.
+  it("judges a watch kept before this release by its summary, never by its old toAccount", SLOW, async () => {
+    for (const [ownAccount, readsBoth] of [
+      [1, false],
+      [0, true],
+    ] as const) {
+      const t = await unlocked();
+      await t.accounts.add(1);
+      // As 1.9.1 kept it: `toAccount` for an own payment, whichever account; its summary; the account it was built on.
+      await t.wallet.withKeys(() =>
+        t.session.set(pendingKey("preprod"), {
+          kind: "withdraw",
+          network: "preprod",
+          txHash: "c7".repeat(32),
+          submittedAt: t.clock.now,
+          confirmations: null,
+          contract: true,
+          toAccount: true,
+          account: 0,
+          summary: { payments: [{ address: "addr_test1", own: true, ownAccount, lovelace: "5000000" }] },
+        }),
+      );
+      await lands(t);
+      const what = `paying account ${ownAccount}`;
+      expect((await t.session.get(SESSION_BALANCES_PREFIX + "preprod")) === undefined, what).toBe(readsBoth);
+      expect((await t.session.get(SESSION_PRIVATE_STALE_PREFIX + "preprod")) === true, what).toBe(!readsBoth);
+    }
   });
 
   it("one built on account 0 that pays account 1, landing once the wallet is on account 1, reads it again", async () => {

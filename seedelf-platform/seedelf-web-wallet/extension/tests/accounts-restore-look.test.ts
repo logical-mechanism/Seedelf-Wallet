@@ -117,6 +117,67 @@ describe("a look for accounts still asking Koios when the wallet is removed and 
     await expect(look).rejects.toThrow("The wallet is locked.");
     expect(await indexes(t)).toEqual([0]);
   });
+
+  /** Remove wallet, then a restore of the 12-word phrase, as the handlers make one (its own look aside). */
+  async function anotherPhrase(t: T) {
+    await t.wallet.reset();
+    await t.accounts.useFirst();
+    await t.wallet.create(vectors("cardano_account.json").find((v) => v.phrase.split(" ").length === 12)!.phrase, PASSWORD);
+    await t.accounts.recordFirst();
+  }
+
+  /** Holds Koios's `n`th account_addresses request, the probe of one account, until released. */
+  function holdProbe(t: T, n: number) {
+    const real = t.koios.fetch;
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const hit = new Promise<void>((r) => (reached = r));
+    let probes = 0;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/account_addresses") && ++probes === n) {
+        reached();
+        await gate;
+      }
+      return real(url, init);
+    };
+    return { hit, release };
+  }
+
+  // Chunk 51, r2tests#4: the case above holds the first probe, so the next probe's own pin ends the look before its
+  // merge. Here the last probe, the one Koios answers unused, spans them: nothing is probed after it, and the merge's
+  // own pin is what keeps account 1 out of the other phrase's list.
+  it("ends at its merge when its last probe spans them, putting nothing into that phrase's list", async () => {
+    const t = testBalances();
+    await t.wallet.create(phrase(0).phrase, PASSWORD);
+    await t.accounts.recordFirst();
+    t.koios.usedStakes.add(phrase(1).preprod.stake as string);
+    // Account 1 is found; account 2's probe, never used, the look's last, is held.
+    const { hit, release } = holdProbe(t, 2);
+    const look = t.accounts.discover("preprod");
+    look.catch(() => undefined);
+    await hit;
+    await anotherPhrase(t);
+    release();
+    await expect(look).rejects.toThrow("The wallet is locked.");
+    expect(await indexes(t)).toEqual([0]);
+  });
+
+  // And Settings' check of one account, whose one probe spans them: it adds nothing to that phrase's list.
+  it("ends a check of one account whose probe spans them, adding nothing to that phrase's list", async () => {
+    const t = testBalances();
+    await t.wallet.create(phrase(0).phrase, PASSWORD);
+    await t.accounts.recordFirst();
+    t.koios.usedStakes.add(phrase(1).preprod.stake as string);
+    const { hit, release } = holdProbe(t, 1);
+    const checked = t.accounts.check("preprod", 1);
+    checked.catch(() => undefined);
+    await hit;
+    await anotherPhrase(t);
+    release();
+    await expect(checked).rejects.toThrow("The wallet is locked.");
+    expect(await indexes(t)).toEqual([0]);
+  });
 });
 
 describe("an account a restore won't find by itself", () => {
