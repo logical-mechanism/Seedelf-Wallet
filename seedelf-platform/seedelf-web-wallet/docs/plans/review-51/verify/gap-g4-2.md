@@ -436,3 +436,45 @@ Start with the free lookup above. If it shows Minswap taking a funding's #1, the
 - pause the swap with a reason.
 
 In any case, add the swap to privacy.md:458's list.
+
+## Severity tiebreak: low
+
+The code path is real. Nothing between build-tx and the signature checks which of the session's own UTxOs Minswap spends. The trace verifier's test shows that a swap spending the 5 ₳ gets signed, and that its Lovejoin-approved return then comes back directly with NO_COLLATERAL, leaving the collateral unmixed.
+
+The harm, though, needs Minswap's honest coin selection to spend an input the swap doesn't need, and the funding is built so the swap never needs it:
+- Output 0 holds quote.fund (DEX fee + deposits + Minswap's fee + the 2 ₳ SWAP_MARGIN), plus the 1.5 ₳ reserve wherever the collateral's mix is approved (tailReserve, sessions.ts:1932-1948; the Settings switch is on by default).
+- The approval records `fund: quote.fund` (sessions.ts:1974), and withinFunding (6571-6583) refuses a swap whose paid-out ADA plus its fee goes over that.
+- So at least 1.5 ₳ is always left for the change. An ADA-only change needs about 0.98 ₳, and a selection that stops once it's covered never touches the 5 ₳.
+
+What the record shows:
+- The one recorded live session sell kept its 5 ₳ through the swap (chunk-16-lovejoin.md:376-395, preprod, 2026-09-25, MIN to ADA). Its output 0 had only 2 ₳ of slack (6 ₳ against a 4 ₳ order). That rules out selections that spend everything, select per output, or add a 5 ₳ buffer.
+- What's left is a selection that keeps adding inputs toward twice the target. It would take the 5 ₳ in two cases:
+  - Buys: the return is direct anyway, and the approval already hedges the collateral's mix ('mixed only if enough is left').
+  - Split-route sells: these lose at most the chain's 32 boxes (160 ₳) and the collateral's mix.
+- Nothing shows that Minswap uses such a selection.
+
+Beyond that:
+- On mainnet, a Lovejoin return also needs the new v2 5 ₳ pool past its 30-box floor (networks.ts:71). Below the floor, collateralWanted gives the floor's reason and the approval already says the ADA comes back directly.
+- No money is lost: a direct return is cheaper.
+- Nothing is signed beyond what was approved: the 5 ₳ rejoins the session's own change.
+
+So it's a missing check plus a gap in privacy.md:458's list, with no harm shown reachable today: low, as the impact verifier said. The trace verifier's medium depends on a real session swap being seen spending its funding's #1, and both verifiers already agree on that condition.
+
+**Decisive point:** withinFunding caps the swap at the approved quote.fund, while the funding's output 0 holds that plus the 1.5 ₳ reserve, so the swap never needs the 5 ₳. Minswap would take it only by adding an input it doesn't need. The one recorded live session sell kept its 5 ₳, with less slack than today's funding leaves.
+
+**Fix notes:**
+
+1. The lookup decides the grade. Read the inputs of real session swaps, buys first: the owner's 2026-10-07 mainnet buys (20 ₳ to SUNDAE/NTX/MIN, 50 ₳ to USDA/IAG/COPI/LQ; chunk-24-dapp-additions.md:109). A random-improve or twice-the-target selection would show there first. Then check any split-route sell. If any of them spends its funding's #1 output, regrade to medium.
+
+2. One case doesn't depend on Minswap's algorithm:
+   - The session is funded without the reserve: Settings' collateral mix is off, or orWithoutReserve drops it because the private balance can't pay the 1.5 ₳.
+   - The runner's fresh estimate in order() (sessions.ts:4160-4175) routes to a DEX more than about 0.7 ₳ dearer than the approved one, but still inside the 2 ₳ margin. For example: approved through SundaeSwap V3 (1.28 ₳ fee), built through SundaeSwap V1 (2.5 ₳).
+   - Output 0's change then falls below an output's minimum, so any builder must add the 5 ₳, and withinFunding still lets it through.
+   - It needs a non-default setting or a short balance, so it stays low. The fix's test should cover it beside tests/r51-gap-g4-2.test.ts.
+
+3. Put the guard in inspect for kind "swap" (sessions.ts:4349ff). That covers both the runner's order() and Review it myself's swapBuild (3210-3211). The check: does the swap spend a collateralFits row of `rows`? What follows is the owner's call:
+   - A pause refuses a transaction the ledger takes.
+   - The option that refuses nothing: let the return's chain put up any ADA-only UTxO of 5 ₳ or more, and pay an exact 5 ₳ out of it for the collateral's tail first. WebAssembly's session_collateral (wasm/src/lib.rs:985-999) already takes the largest ADA-only UTxO of 2 ₳ or more for the direct merge.
+   - The verifier's test tests/r51-gap-g4-2.test.ts passes under either fix.
+
+4. In any case, add the swap itself to privacy.md:458's list of what spends a session's collateral, and to architecture.md:641.

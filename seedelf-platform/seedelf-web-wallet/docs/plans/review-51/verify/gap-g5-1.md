@@ -494,3 +494,41 @@ Fix (b) is the owner's call. Add one short line beside the token in TokenWays, m
 Also widen privacy.md:439. It now says only "a payment above one box's worth from money that's all boxes can't". It should add that in a pool whose box is below the least a launch would need, a payment of part of one box is spent with other money too.
 
 A Vitest status read of a 3 ₳ token pool, showing neither cantComeBack nor unusable, would pin the current behaviour if the owner wants the line. Back-translate any new strings.
+
+## Severity tiebreak: low
+
+Both verifiers have the mechanism right, and I confirmed it in TREE. HEAD 140886c9 differs from web-wallet/1.9.1 only in docs and manifest.ts.
+- Discovery's standard rule has no box-value term (lovejoin-pools.ts:5-15, :530, listedValue).
+- tokenPool takes works[0] by `others`. Its only flag is `stuck` (sessions.ts:1715-1724).
+- TokenWays says only "Through Lovejoin: N boxes of Q TOKEN + X ₳, funded now", plus the stuck line (LovejoinReturn.tsx:241-275).
+- The S0d bound is checked only at the wallet's own launch.
+
+On the brief's scale it meets none of medium's tests.
+
+- **Who, and at what cost.** A pool-launcher, acting deliberately. No existing tool makes such a pool standard. The wallet's launch refuses a box below the least. The CLI has no Lovejoin at all. Lovejoin's own koios-token-launch.py (29573c5) parks the scripts at a key address in separate transactions, and decision 30 requires them at the holder in the launch transaction. So the launcher has to hand-build a one-transaction launch. That costs about 23.6 ₳ for good, plus at least 30 boxes of their own on mainnet (poolFloor 30, networks.ts:71), whose capital they get back at about 0.3 ₳ a box. The pool must also lead its token's pools. The launcher gains nothing the flood attack (privacy.md:405, admitted) doesn't already give them.
+- **What the user loses.** No money and no stuck state. Boxes come back by themselves, since cantComeBack passes, and the approval's figures are right. The only cost is the box's first partial private send: it has to co-spend other money. S0d's own definition (box_value.rs:13-19) guarantees only one partial send, or one whole send, from what came back. So against a pool at the least, the difference is one merge per box; after that both kinds of pool merge the same way.
+- **Not a link privacy.md says isn't made, and not made without a word.** The merge happens only when the user starts a partial send. Its review states it before Send: historiesNote (shared/histories.ts:193-211), rendered at Transfer.tsx:245, says "…ties them to each other, and undoes some of what Lovejoin did for the box". privacy.md:171 admits this very case: "When nothing it tried without merging pays (the change must exist…), it merges, and the review says what's spent together in a plain note." Its In short (:21) lists "boxes back from Lovejoin with your own money" as a link the review flags when a payment makes it. privacy.md:439 is incomplete, since it names only the "above one box's worth" case, but it says "The reviews say so", and that holds. Compare e1a#1's medium: there the wallet's recommended press made a link with no warning, against an explicit promise. That isn't the case here.
+- **Ways out.** Change sits beside the token on the approval and on every return review. Locking UTxOs steers what the box merges with. A whole box can go on its own at 3 ₳. Through Lovejoin is still at least as private as the direct return.
+- **Today.** Mainnet has no token pool (the bundled src/lovejoin-pools.json lists two 5 ₳ ADA pools). The ADA-pool half is reached only from a pool's own page, since a return's ADA goes only to the 5 ₳ pool.
+
+What's left is a missing check: no word where such a pool is chosen, with a small, disclosed privacy cost in an edge case. That's low on the brief's scale. It's real, not a nit.
+
+**Decisive point:** The link only happens at a partial send the user starts later, and that send's own review says so before Send: "…ties them to each other, and undoes some of what Lovejoin did for the box" (shared/histories.ts:193-211, Transfer.tsx:245). privacy.md's Co-spending rule admits exactly this case: "the change must exist… it merges, and the review says what's spent together in a plain note" (:171, and :21). So this is neither a link privacy.md says isn't made nor one made by default without a word. No money is lost and nothing gets stuck. The gap is a missing heads-up at the point where the pool is chosen, for a pool only a deliberate hand-built launch can make.
+
+**Fix notes:**
+
+- **Needs the owner.** Either fix changes what a screen offers.
+  - (a) Hide such pools, as decision 22 has it for non-standard pools.
+  - (b) Flag them. This mirrors call 34, where the worse case, a pool whose boxes can't come back at all, is shown and picked with a line beside the token. Hiding the milder case while showing the worse one would invert that order. Still, both decisions are the owner's.
+- **Measure each found pool at its own value, under live parameters, cached by epoch beside comeBack.** Use least_box_lovelace for its token's shape, or way_back over the pool's own Protocol. A launch-time check alone doesn't cover the class. S0d's own table (chunk-34-token-pools.md:504-517) shows the wallet's suggested 4.5 ₳ box stops covering the worst token after a 7.7% rise in the byte price, and the typical token after 17%. A parameter change can therefore move the wallet's own pools into this class.
+- **For (b), one short line, where `stuck` is said now:**
+  - TokenWays beside the token (swap approval, return reviews, Stop, SiteSessions);
+  - the hub row's flag;
+  - the pool page's callout before Review;
+  - ClaimAll;
+  - Change's list.
+  Model it on lovejoin.ways.warn.stuck, keep it short, and back-translate.
+- **Test fixtures.** The suite's v2 LJTEST twin pools at 2 ₳ are below S0d, so a flag in LovejoinService will show up in the lovejoin-flows, planner and crediting tests. A discovery-only fix (a) won't touch them, but it would have to change seedelf-data's copy of the standard and the shared vectors (tests/fixtures/lovejoin-shown.json) together. Those are outside chunk 51.
+- **Docs.** Whichever fix is chosen, privacy.md:439 and Co-spending's "What it can't fix" (:174) need a line. In a pool whose box is below what a launch needs, a payment of part of one box is spent with other money too.
+- **Correction to the impact verifier, not grade-changing.** By privacy.md:362 and :425, a direct return merges into the funding's change while that change is still in the private balance. So a direct return doesn't always hold only the 2 ₳ margin. It is tied to the session either way, so Through Lovejoin stays the more private default.
+- **The trace verifier's test.** Its key-based check in extension/tests/r51-gap-g5-1.test.ts passes under either fix, so the fixer can keep it.

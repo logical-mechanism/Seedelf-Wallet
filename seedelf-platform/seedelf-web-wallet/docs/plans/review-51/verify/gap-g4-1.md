@@ -370,3 +370,36 @@ The finder's fix is right in kind: build the first return from both readings, `b
 1. **Cover the class, not just `since`.** If the second listing also misses the leg (its source behind utxo_info's, for example two Koios backends), `since` is empty and the return still goes without it. Sturdier: return only from a run whose listing was taken after every order was already known spent. Record when ordersSpent first held (as auto.filled does), and build from the next run's listing. That costs one 15 s cycle.
 2. **The lone-fill sub-case is separate.** Counting auto.fills in buildBack's `own` (:4549) makes a fill pay only its own sweep, but that changes the H1/H2 stranger rule's inputs, so it's the owner's call. Before deciding, have the trace verifier run plan_return on a lone 2 ₳ fill with a 30-byte name (COPI) to see whether it's really left behind.
 3. **Test.** Extend swap-runner.test.ts:925's first case: the back's inputs include bb…#0, and no second back follows.
+
+## Severity tiebreak: low
+
+The bug is real. I checked it in TREE: act builds the return from the first listing (sessions.ts:3770, then :3904), and the second listing (:3880) feeds only outcomeOf and fillsOf. A leg that lands between the two reads is left out of the first return. Once that chain has used the 5 ₳ collateral, the leg comes back alone, directly, with NO_COLLATERAL.
+
+What anyone can reach is small:
+- Who causes it: nobody. It is a timing race in the user's default swap through Lovejoin. It needs a split route whose legs land in different blocks, with the late leg's block landing between two back-to-back reads through one client (data-layer.ts read) on a 15 to 60 s cycle. That is a few percent of split routes.
+- Money: nothing is lost beyond one more return's fee (about 0.2 ₳).
+- Privacy: the late leg comes back as one more private UTxO tied to the same session and its funding. privacy.md already admits that link for every Lovejoin return: "the rest comes back at once, tied to the session", "what else comes back carries the session's history", and a session whose collateral an earlier return took "comes back directly, and says Lovejoin was left out and why". The approval shows boxes as "About N, at most" and its plan says "the rest at once". No two histories are newly tied.
+- When it costs any mixing: only when the legs that landed first don't already pay for the chain's cap or the pool's room. The cap is 32 boxes at the default depth 2 (chainBoxes(2) = min(96, 130/4)), about 282 to 291 ₳ of spare, as privacy.md says. The finder's 500 ₳ example loses no mixing at the default: 32 boxes go in either way, and only the direct rest is split across two returns. Its "about 49 boxes" can't happen at depth 2. The trace verifier's run that showed lost boxes set lovejoinDepth 1 with 20 ₳ legs, inside that band.
+- Way out: none in the moment, since the second return goes automatically. The page does say that Lovejoin was left out, though it names the wrong cause (e2b#2's display side).
+
+The stranded token fill is the one heavier outcome, and it doesn't lift the grade. buildBack's own (sessions.ts:4549) leaves out auto.fills, so a lone fill is priced at a whole return plus 0.05 ₳ (wasm/src/lib.rs:1278-1283). My rough estimate puts that at about 1.9 to 2.0 ₳, right at a ~2 ₳ fill. It stacks the race on a token-buying split route, a fill at that edge and a long token name, and nobody has run it. The left-behind row is recorded and shown (leftBehind, atStake), and a restore's scan finds it again.
+
+I couldn't confirm the impact verifier's mainnet point (the 5 ₳ pool's free boxes today need a chain lookup) and didn't rely on it.
+
+**Decisive point:** The link the race makes is one privacy.md already admits for every Lovejoin return: what isn't boxed "comes back at once, tied to the session", and a later return without the collateral comes back directly and says so. The approval promises boxes only "at most". The race adds ADA to that link only in an edge case: a timing race on a split route whose first-landed legs don't already fill the 32-box cap (default depth 2) or the pool's room. So it isn't "a privacy link privacy.md says isn't made, made by default". It is a small cost in an edge case: about 0.2 ₳, one more UTxO under the same session's history, and a wrong reason on the page.
+
+**Fix notes:**
+
+No owner call needed for the main fix.
+
+1. The fix, at sessions.ts:3904: build the first return from what both readings found. Move `since` out of the `!auto.filled && !auto.refunded` block and call `bringBack(network, s.index, [...rows, ...since])`; `since` already leaves out own rows and those `arrived` holds. Or return without building when `since` is non-empty. Both made verify/gap-g4-1's test pass in a copy.
+
+2. Sturdier, from the impact verifier: build the return only from a listing taken after every order was already known spent. Record when ordersSpent first held, then build on the next run. That also covers a second listing that is itself behind utxo_info's source (two Koios backends), and costs one cycle.
+
+3. The family: any return built from a reading taken before the step that proves the account complete. C12's `unlisted` (sessions.ts:3818-3827) is the same guard for a cancel's and a pool swap's payout. A Splash last fill reaches the same line.
+
+4. Tests: extend swap-runner.test.ts:925-933 (its `late`) to assert that the return's inputs hold bb…#0 and that no second back follows. Add a case at the default depth 2 inside the band (a first return worth fewer than 32 boxes), since r51-gap-g4-1.test.ts runs at depth 1.
+
+5. Separate, the owner's call (H1): buildBack's `own` (sessions.ts:4549) leaves out auto.fills, so a swap's own token fill alone at the account is priced as a stranger's: a whole return plus STRANGER_MARGIN (wasm/src/lib.rs:1278-1283). My rough mainnet estimate is about 1.9 ₳ for a short name and 2.0 ₳ for a 30-byte one, at a typical ~2 ₳ fill. The fix in 1 removes this race's way to make a fill alone. Before closing, run plan_return on a lone 2 ₳ fill with a 30-byte name (COPI). If it's left behind, that's its own finding.
+
+6. Record corrections: the finder's "about 49 / 29 boxes" can't happen at depth 2, where the cap is 32. "Since" is c138b3b0 and d74677a9 (2026-09-27), and the bug is in every tag from 1.6.0 to 1.9.1.

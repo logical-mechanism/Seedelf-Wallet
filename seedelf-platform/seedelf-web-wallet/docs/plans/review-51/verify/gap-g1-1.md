@@ -363,3 +363,69 @@ I traced this on TREE at e36b62c5 (code as at cd764fba). I ran nothing but reads
 The trace verifier's tests are as the finder sketched:
 - a Vitest test where activity.classes gives received:<tx> for a copy of the Seedelf's datum;
 - a mint_test.rs-style test where mint_apart takes the 4 ₳ copy ahead of 30 ₳ received.
+
+## Severity tiebreak: medium
+
+Both verifiers agree on how it works, and I checked the steps that decide the grade in TREE.
+- Ownership is is_owned alone. No code compares two registers: `registerOf(` is called only at contract-scan.ts:401 and balances.ts:491.
+- Purpose::Mint ranks Received 0, ahead of a box back from Lovejoin at 1 (build.rs:2394-2400). Step 1's one_more sorts by (rank, lovelace) and takes the first single UTxO that builds (build.rs:2606, :2708-2711).
+- The histories note speaks only when classes.length > 1 (histories.ts:193). The UTxOs screen tags the copy "Received", like an honest payment.
+- The launch defaults to "private" (LovejoinLaunch.tsx:101). Every swap is funded from the private balance (Swaps.tsx:1-4).
+
+**Who and at what cost.** A stranger pays about 4.2 ₳ (4 ₳ under A's datum byte for byte plus the fee), and the user keeps the 4 ₳. That UTxO is then the input of the user's next stealth mint ahead of an honest 30 ₳ payment, and ahead of any box.
+
+**What the user loses.** The link the stealth mint exists to avoid. Every chain reader sees that B's minter holds A's key, and A's default account mint ties A to ω.
+- privacy.md:107 says this case "hides the payer".
+- privacy.md:13 and :50 promise chain readers can't see who owns a UTxO "because registers are re-randomized". A d = 1 copy isn't re-randomized.
+- The launch's words (en.json:1385, :1403), "not whose spend it was", are false.
+- Known links (privacy.md:94) admits nothing about a payer tracing what its UTxO pays for.
+
+**Default.** No unusual step is needed. Paying the mint from the private balance turns privacy up, not down, and it is the default once the public account is empty (CreateSeedelf.tsx:64). After the recommended steps (create a Seedelf, then make money private) the account is often empty. The order is the wallet's own, with no control.
+
+**Way out.** There is none the user can find. A hand lock works only if the user can tell the copy from an honest payment, and neither the tag nor the review tells them.
+
+**Precedent.** This is e6#1's shape: a stranger's plant turns a setup chosen for privacy into the very link that setup avoids, by the wallet's default, under a false assurance. That tiebreak went medium, and so did e1a#1, where "a payer knows theirs" didn't lower the grade. x1a#2 (low) is a smaller harm: it shows which Seedelf a public-account payment went to, a payment already public.
+
+**Where the impact verifier is right.**
+- The general form (any d, then published) is the README's settled attack, and an exact-copy check catches only d = 1.
+- The mint, swap and site notes are literally true.
+- The funding half is costlier: the copy must pay the whole funding alone and be the smallest received UTxO that does, since merges take received money largest first.
+- The launch needs about 25 ₳.
+
+None of these lowers the mint half. The critic scoped this finding to the wallet's ordering and words, and those are what make a settled protocol attack cheap and near-certain. Not high: no funds are at risk, and the wallet signs what it shows.
+
+**Decisive point:** The impact verifier's own conditional settles it. It says the stealth-mint case "would be medium if the owner counts a hostile payer as in scope for the ordering", and the brief already counts it: a stranger "can send any UTxO … any datum". With that, the mint half meets medium's privacy test on its own.
+- It is a link privacy.md:107 says isn't made ("hides the payer").
+- The wallet's default order makes it: Received first, ahead of boxes, smallest first. That puts a 4 ₳ copy ahead of every honest payment and every box.
+- The user made a choice that turns privacy up, not down.
+- The review shows no note, and the tag can't tell the copy from an honest payment.
+
+That is the same grade e6#1 and e1a#1 got.
+
+**Fix notes:**
+
+1. **The words carry the class**, since any d that is later published works and the device can't see it.
+   - Rewrite privacy.md:107.
+   - Add a Known links bullet under Creating a Seedelf or Co-spending: whoever paid you knows which UTxO it is, can tie whatever it later pays for to the Seedelf they paid, and can make that public (d = 1, a small d, or by publishing d).
+   - Fix en.json:1385 `lovejoin.launch.privacy.fromPrivate` and :1403 `lovejoin.launch.privacy.private`. "Not whose spend it was" is false with a copy, and loose already for money made private yourself.
+   - `mint.privacy.fromPrivate`, `swaps.privacy.oneTime` and `dapps.privacy.oneTime` are true as written: a short `.privacy.` clause at most.
+   - privacy.md:81, :356, :378, :454, README.md:193 and flows.md:356 are literally true; a caveat is optional.
+   - Mention the restore case: after a restore every older UTxO is Unknown, so a copy arriving later is the only received UTxO and goes first.
+   - New keys need `.privacy.` or `.warn.` names, and es and ja.
+
+2. **Owner's design call, the only change that narrows what any d can reach:** rank a box back from Lovejoin ahead of received money for Purpose::Mint, and perhaps for Fund where one box pays, since no payer knows a box. mint_test.rs:2671 stays valid either way.
+
+3. **The exact-copy check is optional and small in reach.**
+   - Key each spendable UTxO by registerOf's hex, in readContract or activity.classes, and match it against view.seedelfs' Locator.register and the other rows of view.owned.
+   - Rank a match last for Mint and Fund, give it its own UTxOs tag, and add a `.privacy.` or `.warn.` line on a review that spends one anyway.
+   - Never word it as protection: it catches d = 1 only.
+   - The wallet's own outputs never repeat a register (build.rs:336, pinned by api_test.rs:1941). The CLI's `util mint -g -p` (r4#8) can, so mind matches between owned rows.
+
+4. **Group it.**
+   - The funding half duplicates e1a#1's family (c).
+   - Fix the words together with x1a#2 (the same register-as-found class, cip30.rs:1386) and gap-g1#2 (site-signed payments of the wallet's own classed as received).
+   - Correct the finder's "every session funding": the copy must pay the whole funding alone and be the smallest received UTxO that does.
+
+5. **Test.** The trace verifier's tests/r51-gap-g1-1.test.ts has two received UTxOs and no box, so it passes only with the exact-copy check. Under words only, or a box-first rank, replace it with tests that pin the new words and the new rank.
+
+All of this changes a privacy default, a screen's tags and privacy words, so it needs the owner.
