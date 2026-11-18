@@ -9,7 +9,7 @@ import { useT } from "../../i18n";
 
 import type { Contact } from "../../shared/rpc";
 import { call } from "../background";
-import { shortHex } from "../format";
+import { shortCounterparty } from "../format";
 import { initials } from "../tokens";
 import { Callout } from "./Callout";
 import { SearchIcon } from "./Icons";
@@ -26,8 +26,11 @@ export function useContacts(): [Contact[] | undefined, (next?: Contact[]) => voi
   return [contacts, reload];
 }
 
-/** How a contact's value reads in a list: a seedelf or an address shortened, a $handle as is. */
-export const shortValue = (c: Pick<Contact, "value">) => (c.value.startsWith("$") ? c.value : shortHex(c.value, 12, 6));
+/**
+ * How a contact's value reads in a list: a seedelf or an address shortened to parts no one else can choose, a $handle
+ * as is. Twelve and six kept a name's prefix, its tag and three bytes anyone can grind (chunk 51, gap-g10#2).
+ */
+export const shortValue = (c: Pick<Contact, "value">) => (c.value.startsWith("$") ? c.value : shortCounterparty(c.value));
 
 function ContactRow({ contact, onClick, label }: { contact: Contact; onClick: () => void; label?: string }) {
   const tr = useT();

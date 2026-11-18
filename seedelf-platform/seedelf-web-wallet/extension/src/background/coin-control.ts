@@ -37,6 +37,7 @@ import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import { keptContractView } from "./contract-scan";
 import { measurable, type KoiosUtxo } from "./koios";
+import { evaluable } from "./lovejoin";
 import type { PrivateStore } from "./private-store";
 import { heldSent } from "./sent-txs";
 import { outpoint, spentSet } from "./spent";
@@ -304,14 +305,21 @@ export class CoinControlService {
     histories = true,
   ): Promise<{ lists: UtxoLists; fresh: PathedUtxo[] }> {
     const { wallet, session, contract = CONTRACT_V1 } = this.deps;
-    const [owned, account, spent, updatedAt] = await wallet.withKeys(async () => {
-      if (from) return [from.owned, from.account, await spentSet(session), from.updatedAt] as const;
+    const [owned, account, spent, updatedAt, ownStake] = await wallet.withKeys(async (keys) => {
+      // Which of the account's rows carry its own stake key, for the UTxOs screen to say whose each address is: the
+      // account is read by payment key, and anyone can pair its receive key with a stake part of theirs, or none
+      // (chunk 51, e9a#3).
+      const staked = (rows: PathedUtxo[]) =>
+        histories ? new Set(rows.filter((p) => keys.cardano.carriesStakeKey(p.utxo.address)).map((p) => outpoint(p.utxo))) : undefined;
+      if (from) return [from.owned, from.account, await spentSet(session), from.updatedAt, staked(from.account)] as const;
       if ((await session.get(SESSION_TOO_LARGE_PREFIX + network)) !== undefined) throw new Error(TOO_LARGE());
+      const rows = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
       return [
         (await keptContractView(session, network, contract))?.owned ?? [],
-        (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [],
+        rows,
         await spentSet(session),
         (await session.get<Balances>(SESSION_BALANCES_PREFIX + network))?.updatedAt,
+        staked(rows),
       ] as const;
     });
     const choices = await this.choices(network);
@@ -344,9 +352,13 @@ export class CoinControlService {
         ...info(p.utxo),
         address: p.utxo.address,
         path: { role: p.role, index: p.index },
+        ...(ownStake && !ownStake.has(outpoint(p.utxo)) ? { otherStake: true as const } : {}),
         locked: p === collateral || lockedCardano.has(outpoint(p.utxo)),
         ...(p === collateral ? { collateral: true } : {}),
         ...(measurable(p.utxo) ? {} : script),
+        // A UTxO WebAssembly's evaluator won't take (a reference script, a datum too deep to read) pays no Lovejoin
+        // mix, so the Mix and Bootstrap forms leave it out of what they count (chunk 51, gap-g2#3).
+        ...(evaluable(p.utxo) ? {} : { unmixable: true as const }),
       }),
     );
     return {

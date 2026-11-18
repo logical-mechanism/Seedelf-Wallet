@@ -295,7 +295,7 @@ describe("an Activity entry's “and 2 more” (the pass-two visual check)", () 
   const html = (more?: number) => renderToStaticMarkup(createElement(Who, { name: address, more }));
 
   it("is a part of its own after the name, its space kept, so the name's tail can't run over it", () => {
-    expect(html(1)).toMatch(/<\/span><\/span><span class="activity__more"> and 1 more<\/span>$/);
+    expect(html(1)).toMatch(/<span class="activity__who"[^>]*>[^<]*<\/span><span class="activity__more"> and 1 more<\/span>$/);
     expect(html(2)).toContain('<span class="activity__more"> and 2 more</span>');
     expect(html()).not.toContain("activity__more");
   });

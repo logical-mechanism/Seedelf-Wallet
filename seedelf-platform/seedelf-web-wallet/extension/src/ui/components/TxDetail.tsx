@@ -763,7 +763,10 @@ function Output({
             exactly the same to the ledger. Saying it on every row would read as
             a warning about nothing. The Raw CBOR tab has the bytes. */}
         {o.address.seedelf && ` · ${tr("tx.out.seedelfContract")}`}
-        {o.register && ` · ${tr(o.register.payable ? "tx.out.underRegister" : "tx.out.deadRegister")}`}
+        {/* Who could spend it: its key's holder, anyone (an identity public value, whose proof anyone can make), or no
+            one ever (chunk 51, d1#3: an identity public value read as "nobody could"). */}
+        {o.register &&
+          ` · ${tr(o.register.payable ? "tx.out.underRegister" : o.register.anyone ? "tx.out.warn.anyoneCanSpend" : "tx.out.deadRegister")}`}
         {o.inlineDatum && !o.register && ` · ${tr("tx.out.withDatum")}`}
         {o.datumHash && ` · ${tr("tx.out.datumByHash")}`}
         {o.scriptRef && ` · ${tr("tx.out.carriesScript", { kind: scriptWords(o.scriptRef.kind) })}`}
@@ -811,6 +814,14 @@ function YoursTag({ yours, testId }: { yours: TxYours; testId: string }) {
       <span className="utxo-tag" data-testid={testId}>
         {words}
       </span>
+      {/* One of the account's payment keys under a stake part none of the accounts' (someone else's, a pointer, or
+          none): the account's, but its stake works for whoever holds that part meanwhile, as Send's review and the
+          sign window say (tx-view.ts; chunk 51, x1a#1). */}
+      {yours.kind === "account" && yours.stakeElsewhere && (
+        <span className="utxo-tag utxo-tag--warn" data-testid={`${testId}-stake-elsewhere`}>
+          {tr("tx.yours.warn.stakeElsewhere")}
+        </span>
+      )}
     </span>
   );
 }

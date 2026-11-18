@@ -445,10 +445,14 @@ export class BalanceService {
       const name = seedelfTokenOf(utxo, policyId);
       if (name) {
         const paid = paidByOf(utxo, name, { ...held, owned });
+        // Every other token its UTxO holds, which goes with it when it's removed: anyone can mint a Seedelf beside
+        // tokens of theirs, and its card said only the ADA (chunk 51, w1b#2's card).
+        const tokens = sumValue([utxo]).tokens.filter((t) => !(t.policyId === policyId && t.assetName === name));
         seedelfs.push({
           assetName: name,
           label: seedelfLabel(name),
           lovelace: utxo.value,
+          ...(tokens.length ? { tokens } : {}),
           ...(paid ? { paidBy: paid.side } : {}),
           ...(paid?.account !== undefined ? { paidByAccount: paid.account } : {}),
         });

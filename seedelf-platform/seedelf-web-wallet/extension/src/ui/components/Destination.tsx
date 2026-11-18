@@ -13,7 +13,7 @@ import type { NetworkName } from "../../networks";
 import type { SeedelfLookup, WithdrawDestination } from "../../shared/rpc";
 import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NAME_RULE, SEEDELF_PREFIX, seedelfName } from "../../shared/seedelf-name";
 import { call } from "../background";
-import { shortHex } from "../format";
+import { shortCounterparty } from "../format";
 import { useNetwork } from "../network";
 import { useAccounts } from "../accounts";
 import { AccountRecipients } from "./AccountRecipients";
@@ -213,13 +213,14 @@ export function DestinationField({
           <p className="note">
             {t("destination.found")}{" "}
             {read.seedelf.label && <><strong>{read.seedelf.label}</strong>{" ·\u00a0"}</>}
-            <code title={read.seedelf.name}>{shortHex(read.seedelf.name, 12, 6)}</code>
+            {/* Cut to parts no one else can choose: its prefix and its last sixteen (chunk 51, gap-g10#2). */}
+            <code title={read.seedelf.name}>{shortCounterparty(read.seedelf.name)}</code>
             {saveLink}
           </p>
         ) : read.state === "read" ? (
           <p className="note">
             {`${read.destination.handle ? t("destination.handleIs", { handle: read.destination.handle }) : t("destination.sendsTo")} `}
-            <code title={read.destination.address}>{shortHex(read.destination.address, 14, 8)}</code>
+            <code title={read.destination.address}>{shortCounterparty(read.destination.address)}</code>
             {(savedAs || !read.destination.own) && saveLink}
           </p>
         ) : (

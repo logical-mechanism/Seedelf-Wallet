@@ -26,6 +26,7 @@ import type { CollateralStatus, PendingTx, SendSummary } from "../../shared/rpc"
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { RewardsRow, RewardsSetting } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { TxDetailButton } from "../components/TxDetail";
 import { TxBanner } from "../components/TxBanner";
@@ -181,7 +182,12 @@ export function Collateral({
         title={t("collateral.review.title")}
         titleId="collateral-review"
         review
-        onBack={() => setSummary(undefined)}
+        // Back from the review: its error is the review's, so the page it goes back to starts clean, as Send's does
+        // (chunk 51, e8b#5).
+        onBack={() => {
+          setSummary(undefined);
+          setError(undefined);
+        }}
         backDisabled={busy}
         aside={t("review.nothingSent")}
         error={error}
@@ -197,8 +203,11 @@ export function Collateral({
           <Row label={t("collateral.setAside")} value={`${formatAda(summary.payments[0]!.lovelace)}\u00a0₳`} strong />
           <Row label={t("review.fee")} value={`${formatAda(summary.fee)}\u00a0₳`} />
           <Row label={t("send.review.spent")} value={String(summary.inputs)} />
+          {/* A payment from the account takes the staking rewards along, as Send's does (chunk 51, e8b#2). */}
+          <RewardsRow withdrawal={summary.withdrawal} />
         </ReviewRows>
         <TxDetailButton txHash={summary.txHash} testId="collateral-tx" />
+        <RewardsSetting withdrawal={summary.withdrawal} />
         <p className="note">
           {t("collateral.review.note")}
         </p>

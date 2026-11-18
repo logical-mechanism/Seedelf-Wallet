@@ -238,15 +238,14 @@ export function TokenWays({
           const name = tokenText(network, w).label;
           const box = valueOf(w.pool);
           const into = w.pool && w.boxes > 0;
+          // Coming back directly though the way back is Lovejoin is a warning, in its colour, its words its own below
+          // (chunk 51, e9b#2); through a pool, or directly as chosen, is a note.
+          const unmixed = !into && !w.direct;
           const text = into
             ? tr(funded ? "lovejoin.ways.fundedInto" : "lovejoin.ways.into", {
                 boxes: box ? t("lovejoin.boxesOf", { count: w.boxes, box: boxText(network, box) }) : t("amount.boxes", { count: w.boxes, n: w.boxes }),
               })
-            : w.direct
-              ? tr("lovejoin.ways.directChosen")
-              : w.skipped
-                ? tr("lovejoin.ways.warn.direct", { why: withoutStop(w.skipped) })
-                : tr("lovejoin.ways.direct");
+            : tr("lovejoin.ways.directChosen");
           // A choice to make: another pool that takes a box, or back directly, or back into one after choosing directly.
           const choice = !!onChange && (w.pools.length > (w.pool ? 1 : 0) || (!!w.pool && !w.direct) || (!!w.direct && w.pools.length > 0));
           return (
@@ -264,7 +263,13 @@ export function TokenWays({
                   {tr("lovejoin.ways.change")}
                 </button>
               )}
-              <span className={`token-row__sub wrap${!into && !w.direct ? " token-row__sub--warn" : ""}`}>{text}</span>
+              {unmixed ? (
+                <span className="token-row__sub wrap token-row__sub--warn">
+                  {w.skipped ? tr("lovejoin.ways.warn.direct", { why: withoutStop(w.skipped) }) : tr("lovejoin.ways.direct")}
+                </span>
+              ) : (
+                <span className="token-row__sub wrap">{text}</span>
+              )}
               {/* Its pool's boxes can't pay their own way back today: chosen as any pool, and said (the owner's
                   call 34). */}
               {into && w.stuck && (

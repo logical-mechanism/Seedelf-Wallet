@@ -44,7 +44,7 @@ import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
-import { adaText, formatAda, lockedAside, shortHex, tokenKey as key } from "../format";
+import { adaText, formatAda, lockedAside, shortCounterparty, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { withoutStop } from "../sentence";
@@ -506,7 +506,8 @@ export function SeedelfNameInput({
             {t("destination.found")}{" "}
             {/* Each "·" starts what it leads to, never ends a line (the visual review of pass two). */}
             {found.seedelf.label && <><strong>{found.seedelf.label}</strong>{" ·\u00a0"}</>}
-            <code>{shortHex(found.seedelf.name, 12, 6)}</code>
+            {/* Cut to parts no one else can choose: its prefix and its last sixteen (chunk 51, gap-g10#2). */}
+            <code>{shortCounterparty(found.seedelf.name)}</code>
             {saved ? (
               <>{" ·\u00a0"}{t("destination.yourContact", { name: saved.name })}</>
             ) : (

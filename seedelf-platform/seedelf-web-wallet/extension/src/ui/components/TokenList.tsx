@@ -12,7 +12,7 @@ import { tokenKey } from "../format";
 import { useNetwork } from "../network";
 import { imageIn, useShownImage } from "../nft-images";
 import { useAmounts } from "../preferences";
-import { initials, sortTokens, tint, tokenMark, tokenText, type TokenView, viewToken } from "../tokens";
+import { initials, posingMark, sortTokens, tint, tokenText, type TokenView, unlistedMark, viewToken } from "../tokens";
 import { CopyField } from "./CopyField";
 import { CheckIcon, ChevronRightIcon } from "./Icons";
 import { Modal } from "./Modal";
@@ -42,6 +42,7 @@ export function TokenAvatar({ view, large }: { view: TokenView; large?: boolean 
 export function TokenRow({ view, coming, onOpen }: { view: TokenView; coming?: boolean; onOpen: (view: TokenView) => void }) {
   const tr = useT();
   const amount = useAmounts().text(view.amount);
+  const sub = coming ? joinList([tr("tokenList.onItsWay"), view.sub]) : view.sub;
   return (
     <li>
       <button
@@ -54,9 +55,7 @@ export function TokenRow({ view, coming, onOpen }: { view: TokenView; coming?: b
         <TokenAvatar view={view} />
         <span className="token-row__label">{view.label}</span>
         <span className="token-row__amount">{amount}</span>
-        <span className={view.warn ? "token-row__sub wrap token-row__sub--warn" : "token-row__sub"}>
-          {coming ? joinList([tr("tokenList.onItsWay"), view.sub]) : view.sub}
-        </span>
+        <span className={view.warn ? "token-row__sub wrap token-row__sub--warn" : "token-row__sub"}>{sub}</span>
       </button>
     </li>
   );
@@ -219,14 +218,22 @@ export function TokenDetails({
 export function TokenAmountText({ token, amount }: { token: TokenRef & { fingerprint?: string }; amount: string }) {
   const tr = useT();
   const text = tokenText(useNetwork(), token);
-  const mark = tokenMark(text);
+  // The mark is a clause, said here as a sentence: its full stop is the language's, not an ASCII one.
+  const sentence = (mark: string) => tr("common.sentence", { text: mark.charAt(0).toUpperCase() + mark.slice(1) });
+  // One passing for another is a warning, in its colour, with words of its own; one only not on the list is a note.
+  const posing = posingMark(text);
+  const unlisted = posing ? undefined : unlistedMark(text);
   return (
     <>
       {`${amount} ${text.label}`}
-      {mark && (
-        <span className={text.posesAs ? "token-mark token-mark--warn" : "token-mark"} data-testid="token-mark">
-          {/* The mark is a clause, said here as a sentence: its full stop is the language's, not an ASCII one. */}
-          {tr("common.sentence", { text: mark.charAt(0).toUpperCase() + mark.slice(1) })}
+      {posing && (
+        <span className="token-mark token-mark--warn" data-testid="token-mark">
+          {sentence(posing)}
+        </span>
+      )}
+      {unlisted && (
+        <span className="token-mark" data-testid="token-mark">
+          {sentence(unlisted)}
         </span>
       )}
     </>

@@ -13,7 +13,7 @@ import type { TokenAmount, TokenRef } from "../shared/rpc";
 import mainnet from "../tokens/registry.mainnet.json";
 import preprod from "../tokens/registry.preprod.json";
 import { assetFingerprint } from "../shared/fingerprint";
-import { foldName, formatQuantity, nameSkeleton, shortHex, tokenKey, tokenName } from "./format";
+import { BLANK, foldName, formatQuantity, nameSkeleton, oneSpaced, shortHex, tokenKey, tokenName } from "./format";
 
 export { assetFingerprint };
 
@@ -107,11 +107,13 @@ export function tokenText(network: NetworkName, t: TokenRef & { fingerprint?: st
   const fingerprint = t.fingerprint || assetFingerprint(t);
   const id = shortHex(fingerprint, 10, 6);
   if (info) return { label: info.ticker, listed: true, fingerprint, id };
-  const own = tokenName(t.assetName);
+  // Its blanks one space each: nine em spaces before a last "x" made a name the lists cut to "SNEK …" (gap-g10#1).
+  const own = oneSpaced(tokenName(t.assetName));
   // An empty asset name is what `tokenName` answers "(no name)" to, in whichever
   // language: tested here as the empty name, never as that answer's text.
+  // Something on it must draw: a name of braille blanks read as one with nothing in it.
   const readable =
-    !!t.assetName && own !== shortHex(t.assetName) && !HIDDEN.test(own.replace(EMOJI, "")) && /\S/.test(own);
+    !!t.assetName && own !== shortHex(t.assetName) && !HIDDEN.test(own.replace(EMOJI, "")) && [...own].some((c) => !BLANK.test(c));
   if (!readable) return { label: id, listed: false, fingerprint, id };
   const posesAs = lookalikeOf(network, own);
   return posesAs ? { label: id, listed: false, fingerprint, id, posesAs, own } : { label: own, listed: false, fingerprint, id };
@@ -124,11 +126,23 @@ export function tokenText(network: NetworkName, t: TokenRef & { fingerprint?: st
  * `whole` gives the whole fingerprint (a CSV). Nothing for a listed token.
  */
 export function tokenMark(text: TokenText, whole = false): string | undefined {
-  if (text.listed) return undefined;
-  if (text.posesAs) {
-    const real = text.posesAs === ADA ? ADA : t("tokens.theListed", { token: text.posesAs });
-    return t("tokens.mark.posesAs", { own: text.own, real });
-  }
+  return posingMark(text) ?? unlistedMark(text, whole);
+}
+
+/**
+ * `tokenMark` for a token passing for ADA or a listed one, the warning: "not on the wallet's list: it calls itself ₳,
+ * but it isn't ADA". Its keys are named `.warn.`, as it's said in the warning's colour (TokenAmountText; chunk 51,
+ * e9b#2). Nothing for any other.
+ */
+export function posingMark(text: TokenText): string | undefined {
+  if (text.listed || !text.posesAs) return undefined;
+  const real = text.posesAs === ADA ? ADA : t("tokens.warn.theListed", { token: text.posesAs });
+  return t("tokens.mark.warn.posesAs", { own: text.own, real });
+}
+
+/** `tokenMark` for one that's only not on the wallet's list: "not on the wallet's list, asset1qz8h…x7k3pd". */
+export function unlistedMark(text: TokenText, whole = false): string | undefined {
+  if (text.listed || text.posesAs) return undefined;
   // The label is its fingerprint already, unless it's a CSV's whole one.
   if (text.label === text.id && !whole) return t("tokens.mark.unlisted");
   return t("tokens.mark.unlistedId", { id: whole ? text.fingerprint : text.id });
@@ -263,7 +277,7 @@ export function viewToken(network: NetworkName, token: TokenAmount): TokenView {
     info,
     label: text.label,
     // One passing for another says what it calls itself, beside its fingerprint.
-    sub: info ? info.name : text.posesAs ? t("tokens.callsItself", { own: text.own }) : text.id,
+    sub: info ? info.name : text.posesAs ? t("tokens.warn.callsItself", { own: text.own }) : text.id,
     ...(!info && text.posesAs ? { warn: true } : {}),
     decimals,
     amount: formatQuantity(token.quantity, decimals),

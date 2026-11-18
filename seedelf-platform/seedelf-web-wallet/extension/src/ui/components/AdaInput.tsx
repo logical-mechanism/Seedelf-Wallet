@@ -15,6 +15,9 @@ import { AmountField } from "./AmountField";
  * The lovelace to ask for: what's typed, or "0" (only the minimum) when
  * it's empty and tokens go too. Undefined when there's nothing to send.
  */
+/** From this many characters, Max's "Max, up to …" is a step smaller: "Max, up to 10,408.014036" is 24. */
+const SHOWN_LONG = 22;
+
 export function lovelaceToSend(amount: string, withTokens: boolean): string | undefined {
   if (withTokens && amount.trim() === "") return "0";
   const lovelace = parseAda(amount);
@@ -51,7 +54,9 @@ export function AdaInput({
       <div className="amount-box">
         <AmountField
           id={id}
-          className={showing ? "amount-box__shown" : undefined}
+          // Long, a step smaller, and whole in its title: at the side panel's width it was cut (gap-g10#4).
+          className={showing ? (showing.length > SHOWN_LONG ? "amount-box__shown amount-box__shown--long" : "amount-box__shown") : undefined}
+          title={showing || undefined}
           placeholder={placeholder}
           value={showing ? shown : value}
           disabled={disabled}

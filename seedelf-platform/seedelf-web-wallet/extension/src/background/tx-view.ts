@@ -32,7 +32,7 @@ import type * as Wasm from "@seedelf/wasm";
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
-import type { TxAddress, TxDetail, TxOutput, TxRegister, TxView, TxYours } from "../shared/rpc";
+import type { Balances, TxAddress, TxDetail, TxOutput, TxRegister, TxView, TxYours } from "../shared/rpc";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { CONTRACT_V1 } from "./balances";
 import { GAP_LIMIT } from "./chain";
@@ -55,7 +55,7 @@ import { SESSION_STAKE } from "./staking";
 import { SESSION_TRANSFER } from "./transfer";
 import { SESSION_REMOVE, SESSION_WITHDRAW } from "./withdraw";
 import type { Area } from "./storage";
-import type { Keys, Wallet } from "./wallet";
+import { SESSION_BALANCES_PREFIX, type Keys, type Wallet } from "./wallet";
 import { isTrap } from "./wasm";
 
 export interface TxViewDeps {
@@ -186,7 +186,35 @@ export async function txView(
   await markYours(deps, network, detail).catch((e: unknown) => {
     if (isTrap(e)) throw e;
   });
+  await withDecimals(deps, network, detail).catch((e: unknown) => {
+    if (isTrap(e)) throw e;
+  });
   return { detail, cbor, ...(kept?.chain ? { chain: true as const } : {}) };
+}
+
+/**
+ * Each token of `d` (an output's, the collateral return's, a mint's) with its decimals as the last balance reading has
+ * them from Koios, read on the device, as Activity's are (activity.ts `withDecimals`): the review above the view, and
+ * Home, scaled a token off the wallet's list by them, and the view showed it in raw units (chunk 51, e9a#2). The
+ * wallet's list's own decimals still come first (ui/tokens.ts `tokenDecimals`). Locked, or with nothing known, nothing
+ * is added.
+ */
+async function withDecimals(deps: TxViewDeps, network: NetworkName, d: TxDetail): Promise<void> {
+  const lists = [...d.outputs.map((o) => o.assets), ...(d.collateralReturn ? [d.collateralReturn.assets] : []), d.mint];
+  if (!lists.some((list) => list.length)) return;
+  const { wallet, session } = deps;
+  const reading = await wallet.withKeys(() => session.get<Balances>(SESSION_BALANCES_PREFIX + network));
+  const known = new Map<string, number>();
+  for (const x of [...(reading?.seedelf.tokens ?? []), ...(reading?.cardano.tokens ?? [])]) {
+    if (x.decimals) known.set(`${x.policyId}.${x.assetName}`, x.decimals);
+  }
+  if (!known.size) return;
+  for (const list of lists) {
+    for (const a of list) {
+      const decimals = known.get(`${a.policyId}.${a.assetName}`);
+      if (decimals !== undefined) a.decimals = decimals;
+    }
+  }
 }
 
 /** Where `txHash` is among the parts a payment's first names (`partHashes`, script-spend.ts keepParts): -1 if not. */
