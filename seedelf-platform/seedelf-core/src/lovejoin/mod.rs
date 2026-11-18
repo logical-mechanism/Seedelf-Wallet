@@ -377,6 +377,11 @@ pub fn mix_datum(a: &[u8; 48], b: &[u8; 48]) -> Vec<u8> {
 /// `{a, b}` from a box's datum, if it's the well-formed shape. Anyone can pay
 /// `mix_box` any datum, so one nested too deeply to decode safely is skipped
 /// unread.
+///
+/// Constructor 0 has two spellings the ledger reads as the same data: tag 121,
+/// the wallet's own, and the general form `102([0, fields])`. mix_logic reads a
+/// box's datum as data, never as bytes, so whoever builds a mix of this wallet's
+/// box chooses which one its output carries. Both are read (chunk 51, r3a#1).
 fn parse_mix_datum(datum: &[u8]) -> Option<([u8; 48], [u8; 48])> {
     if !cbor::within_depth(datum, cbor::MAX_DEPTH) {
         return None;
@@ -384,7 +389,10 @@ fn parse_mix_datum(datum: &[u8]) -> Option<([u8; 48], [u8; 48])> {
     let PlutusData::Constr(constr) = PlutusData::decode_fragment(datum).ok()? else {
         return None;
     };
-    if constr.tag != 121 || constr.any_constructor.is_some() {
+    if !matches!(
+        (constr.tag, constr.any_constructor),
+        (121, None) | (102, Some(0))
+    ) {
         return None;
     }
     let [PlutusData::BoundedBytes(a), PlutusData::BoundedBytes(b)] = constr.fields.as_slice()
