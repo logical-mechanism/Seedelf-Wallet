@@ -759,7 +759,13 @@ describe("a mix from the private balance into a token pool (chunk 34's 34d)", SL
 });
 
 /** A launch as WebAssembly builds it: what the tests read of it. */
-type LaunchBuilt = { txHash: string; pool: { id: string }; locked: { deposit: string }; mixLogicStake: string };
+type LaunchBuilt = {
+  txHash: string;
+  pool: { id: string };
+  locked: { deposit: string };
+  mixLogicStake: string;
+  inputs?: Array<{ txHash: string; txIndex: number }>;
+};
 
 describe("a pool's start (chunk 34's 34d)", SLOW, () => {
   /**
@@ -772,11 +778,12 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     { look, alter }: { look?: () => Promise<void>; alter?: (built: LaunchBuilt, register: boolean) => LaunchBuilt } = {},
   ) => {
     const wasm = loadTestWasm();
-    const builds: Array<{ register: boolean; built: LaunchBuilt }> = [];
+    // Each build's UTxOs too, as it was given them (`txhash#index`).
+    const builds: Array<{ register: boolean; built: LaunchBuilt; utxos?: string[] }> = [];
     const kept = (request: string, made: string) => {
-      const { register } = JSON.parse(request) as { register: boolean };
+      const { register, utxos } = JSON.parse(request) as { register: boolean; utxos?: Array<{ tx_hash: string; tx_index: number }> };
       const built = alter ? alter(JSON.parse(made) as LaunchBuilt, register) : (JSON.parse(made) as LaunchBuilt);
-      builds.push({ register, built });
+      builds.push({ register, built, ...(utxos ? { utxos: utxos.map((u) => `${u.tx_hash}#${u.tx_index}`) } : {}) });
       return JSON.stringify(built);
     };
     const service = new LovejoinLaunchService({
@@ -855,10 +862,14 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
       "token list",
     );
     await expect(build({ token: min, quantity: "0", boxLovelace: "4500000" })).rejects.toThrow("whole number above zero");
+    // More of it a box than one output holds: over 2⁶⁴ − 1 (chunk 51, t1g#13).
+    await expect(build({ token: min, quantity: (2n ** 64n).toString(), boxLovelace: "4500000" })).rejects.toThrow("whole number above zero");
     // A copy of a shown pool's values.
     await expect(build({ token: min, quantity: "1000", boxLovelace: "4500000" })).rejects.toThrow("exists already");
-    // The classic pool's value, as an ADA pool.
+    // The classic pool's value, as an ADA pool: refused before the account is read (chunk 51, t1g#12).
+    const reads = t.koios.calls.length;
     await expect(build({ boxLovelace: "10000000" })).rejects.toThrow("classic pool's value");
+    expect(t.koios.calls.length).toBe(reads);
     // Too little to come back, too much for a token pool.
     await expect(build({ token: min, quantity: "1000", boxLovelace: "2000000" })).rejects.toThrow("at least");
     await expect(build({ token: min, quantity: "1000", boxLovelace: "9500000" })).rejects.toThrow("at most 9");
@@ -987,6 +998,10 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     expect(summary).toMatchObject({ from: "private", locked: { deposit: "2000000" } });
     const [withCert, bare] = launch.builds.map((b) => b.built) as [LaunchBuilt, LaunchBuilt];
     expect(bare.pool.id).toBe(withCert.pool.id);
+    // Without the certificate, it may spend only what the reviewed build does: needing 2 ₳ less, coin selection could
+    // pick, and tie, UTxOs the review never showed (launch_apart; chunk 51, t1g#6).
+    expect(launch.builds[1]!.utxos!.sort()).toEqual(withCert.inputs!.map((i) => `${i.txHash}#${i.txIndex}`).sort());
+    expect(launch.builds[0]!.utxos!.length).toBeGreaterThan(withCert.inputs!.length);
     // Nothing was asked of giveme.my at review, and nothing names the pool to Koios.
     expect(t.collateral.asked).toHaveLength(0);
     expect(askedOf(t, withCert.mixLogicStake)).toEqual([]);

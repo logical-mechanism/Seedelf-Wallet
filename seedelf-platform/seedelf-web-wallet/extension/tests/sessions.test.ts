@@ -277,6 +277,11 @@ describe("a swap's quote", () => {
     expect(t.minswap.calls.at(-1)).toMatchObject({ path: "tokens", body: { query: fake, only_verified: true } });
     await expect(t.sessions.outBuild("preprod", spoofed)).rejects.toThrow("won't swap into it");
     expect(t.koios.calls.some((c) => c.path === "account_addresses")).toBe(false);
+    // Listed by its own ID but marked unverified, against Minswap's own filter: no more verified (chunk 51, t1k#8).
+    verified.push({ token_id: fake, ticker: "SNEK", is_verified: false });
+    const unverified = await t.sessions.quote("preprod", { ...ASK, tokenOut: fake });
+    expect(unverified.verified).toBe(false);
+    await expect(t.sessions.outBuild("preprod", unverified)).rejects.toThrow("won't swap into it");
 
     // The real one, by its ID: verified.
     expect((await t.sessions.quote("preprod", { ...ASK, tokenOut: real })).verified).toBe(true);
@@ -1292,6 +1297,144 @@ describe("a swap that runs itself", () => {
     expect(view.auto!.paused).toMatchObject({ why: "refused", detail: "it gives ADA to the treasury." });
     expect(t.koios.submitted).toHaveLength(1);
   });
+
+  // What Minswap's build carries beside its outputs, none of which needs the session's key, and which no output or
+  // funding limit counts: a certificate's or a proposal's deposit, a withdrawal, a vote, a mint or a burn (chunk 51,
+  // t1h#1, t1h#5, t1k#5).
+  it("pauses rather than sign a swap that stakes, withdraws, votes, proposes, mints or burns", async () => {
+    const odd = async (extra: Map<number, Cbor>) => {
+      const t = await unlocked();
+      const sessions = signing(t);
+      t.minswap.swapCbor = swapTx({ extra });
+      await started(sessions);
+      funded(t);
+      const { paused } = (await sessions.advance("preprod", 0)).auto!;
+      // Paused, nothing is signed: only the funding was sent.
+      expect(t.koios.submitted).toHaveLength(paused ? 1 : 2);
+      return paused?.why === "refused" ? paused.detail : paused;
+    };
+    // CBOR maps keyed by bytes or lists, which the fixture's type doesn't name.
+    const map = (entries: Array<[Cbor, Cbor]>) => new Map(entries as Array<[never, Cbor]>) as unknown as Cbor;
+    const stranger = bytes("77".repeat(28));
+    const script = bytes("5c".repeat(28));
+    const STAKING = "it does something with staking or governance.";
+    // A stake registration (certificate 0), which needs no signature.
+    expect(await odd(new Map([[4, [[0, [0, stranger]]]]]))).toBe(STAKING);
+    // A withdrawal from a script's reward account, which needs none either.
+    expect(await odd(new Map([[5, map([[bytes(`f0${"5c".repeat(28)}`), 0]])]]))).toBe(STAKING);
+    // A DRep script's vote on an action.
+    expect(await odd(new Map([[19, map([[[3, script], map([[[bytes("ab".repeat(32)), 0], [1, null]]])]])]]))).toBe(STAKING);
+    // A proposal (an info action), whose deposit goes back to a reward account the builder picks.
+    const anchor = [{ raw: `71${Buffer.from("https://a.example").toString("hex")}` }, bytes("cd".repeat(32))];
+    expect(await odd(new Map([[20, [[100_000_000_000, bytes(`e0${"77".repeat(28)}`), [6], anchor]]]]))).toBe(STAKING);
+    // A mint, and a burn.
+    const MINTS = "it mints or burns tokens.";
+    expect(await odd(new Map([[9, map([[script, map([[bytes("01"), 1]])]])]]))).toBe(MINTS);
+    expect(await odd(new Map([[9, map([[script, map([[bytes("01"), { raw: "20" }]])]])]]))).toBe(MINTS);
+  }, 120_000);
+
+  // Minswap's fee is one output, ADA alone (chunk 51, t1h#2, t1h#4, t1k#6): a second one, or one carrying a token, is
+  // a payment to someone else.
+  it("pauses rather than sign a swap that pays Minswap's fee twice, or a token beside it", async () => {
+    const refused = async (swapCbor: string) => {
+      const t = await unlocked();
+      const sessions = signing(t);
+      t.minswap.swapCbor = swapCbor;
+      t.minswap.estimate = { ...minswapEstimate.estimate, aggregator_fee: "1000000" };
+      await started(sessions);
+      funded(t);
+      const { paused } = (await sessions.advance("preprod", 0)).auto!;
+      expect(t.koios.submitted).toHaveLength(paused ? 1 : 2);
+      return paused?.why === "refused" ? paused.detail : paused;
+    };
+    const other = `00${"c4".repeat(28)}${"c5".repeat(28)}`;
+    const another = `00${"c6".repeat(28)}${"c5".repeat(28)}`;
+    const OTHER = "it pays an address that isn't this session's.";
+    expect(
+      await refused(swapTx({ outputs: [[ORDER_ADDRESS, 14_000_000, ORDER_DATUM], [other, 1_000_000], [another, 1_000_000], [SESSION_ADDRESS, 129_585_414]] })),
+    ).toBe(OTHER);
+    expect(
+      await refused(swapTx({ outputs: [[ORDER_ADDRESS, 14_000_000, ORDER_DATUM], [other, 1_000_000, undefined, [[MIN, 5]]], [SESSION_ADDRESS, 130_585_414]] })),
+    ).toBe(OTHER);
+  }, 60_000);
+
+  // What an order swap pays out of the account's tokens is held to what was funded for it (chunk 51, t1h#3, t1k#7):
+  // the account may hold more, its address public once funded, and that's the user's.
+  it("pauses rather than sign an order that pays out more of a token than was funded, or a token that wasn't", async () => {
+    const FUND = "5b".repeat(32);
+    const EXTRA = "e1".repeat(32);
+    const selling = async (orderTokens: Array<[string, number]>) => {
+      const t = await unlocked();
+      const sessions = signing(t);
+      const now = t.clock.now;
+      // Session 0 selling 500 MIN, its funding landed with its 5 ₳ collateral, and 100 MIN someone sent the account.
+      await t.store.set("sessions.preprod", {
+        next: 1,
+        sessions: [
+          {
+            index: 0,
+            ownStake: true,
+            createdAt: now,
+            txs: [{ kind: "out", txHash: FUND, at: now, confirmed: true }],
+            swap: { ...ASK, tokenIn: MIN, tokenOut: "lovelace", amount: "500", amountOut: "1", minAmountOut: "1" },
+            auto: {
+              approved: {
+                minAmountOut: "1",
+                fund: { lovelace: "16000000", tokens: [{ policyId: MIN.slice(0, 56), assetName: MIN.slice(56), quantity: "500" }] },
+              },
+            },
+          },
+        ],
+      });
+      t.koios.confirmations = 1;
+      t.koios.addedToAccounts.push(
+        atSession(FUND, 0, "16000000", [[MIN, "500"]]),
+        atSession(FUND, 1, "5000000"),
+        atSession(EXTRA, 0, "2000000", [[MIN, "100"]]),
+      );
+      t.minswap.swapCbor = swapTx({
+        inputs: [`${FUND}#0`, `${EXTRA}#0`],
+        outputs: [
+          [ORDER_ADDRESS, 2_000_000, ORDER_DATUM, orderTokens],
+          [SESSION_ADDRESS, 15_794_811],
+        ],
+      });
+      const { paused } = (await sessions.advance("preprod", 0, true)).auto!;
+      expect(t.koios.submitted).toHaveLength(paused ? 0 : 1);
+      return paused?.why === "refused" ? paused.detail : paused;
+    };
+    // The 500 MIN funded: signed.
+    expect(await selling([[MIN, 500]])).toBeUndefined();
+    const MORE = "it pays out tokens that weren't funded for the swap.";
+    // 600: the 100 someone sent too.
+    expect(await selling([[MIN, 600]])).toBe(MORE);
+    // A token the swap wasn't funded with at all.
+    expect(await selling([[MIN, 500], [`${"5c".repeat(28)}01`, 1]])).toBe(MORE);
+  }, 60_000);
+
+  // The session's key signs the transaction its checks passed, and nothing else (chunk 51, t1h#12): a signer whose
+  // summary names another, or a witness set that changes the body, is never sent.
+  it("never sends a swap whose signature or witnesses change what was checked", async () => {
+    const real = loadTestWasm();
+    const failing = async (stood: Partial<ReturnType<typeof loadTestWasm>>) => {
+      const t = await unlocked();
+      const sessions = signing(t, alarm(), stood);
+      await started(sessions);
+      funded(t);
+      const view = await sessions.advance("preprod", 0);
+      // Only the funding was sent, and the step's failure says why.
+      expect(t.koios.submitted).toHaveLength(1);
+      return view.auto!.retry?.error;
+    };
+    const signSessionTx = (key: unknown, request: string) => {
+      const signed = JSON.parse(real.signSessionTx(key as never, request)) as { summary: { txHash: string } };
+      return JSON.stringify({ ...signed, summary: { ...signed.summary, txHash: "00".repeat(32) } });
+    };
+    expect(await failing({ signSessionTx } as never)).toBe("Signing changed the transaction, so it wasn't sent.");
+    // Witnesses put in over another body: Minswap's swap with a later end.
+    const attachWitnesses = (_txCbor: string, witnessSet: string) => real.attachWitnesses(swapTx({ ttl: 134_639_866 }), witnessSet);
+    expect(await failing({ attachWitnesses } as never)).toBe("Putting the signature in changed the transaction, so it wasn't sent.");
+  }, 60_000);
 
   it("cancels an order with the wallet's own cancel, everything back for a small fee, and pauses rather than sign one with a large fee (chunk 24, Step 3)", async () => {
     // A cancel the builder got wrong, as it would carry it: the checks before signing still hold it. `gift`: what it

@@ -43,6 +43,7 @@ import { builtOutputs, Minswap } from "../src/background/minswap";
 import { lovejoinOn, NETWORKS } from "../src/networks";
 import type { LovejoinStatus } from "../src/shared/rpc";
 import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
+import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
@@ -795,9 +796,11 @@ describe("the pool the chains draw from", CHAINS, () => {
 
   it("on mainnet, reads mainnet's mix_box and says its floor of 30, the classic pool there taking no new box (chunk 44)", async () => {
     const { t } = await withSession("40000000");
-    // The classic pool's recorded 20 boxes, as if they sat at mainnet's mix_box.
+    // The classic pool's recorded 20 boxes, as if they sat at mainnet's mix_box: at its address there, which a box is read
+    // by (chunk 51, x2#1).
     const mainnetBox = NETWORKS.mainnet.lovejoin!.mixBox;
-    t.koios.addedToAccounts.push(...POOL.map((u) => ({ ...u, tx_hash: `f${u.tx_hash.slice(1)}`, payment_cred: mainnetBox })));
+    const address = bech32("addr", Uint8Array.from([0x71, ...Buffer.from(mainnetBox, "hex")]));
+    t.koios.addedToAccounts.push(...POOL.map((u) => ({ ...u, tx_hash: `f${u.tx_hash.slice(1)}`, address, payment_cred: mainnetBox })));
     // The tile's own mix there is refused as retired before anything is read (chunk 44): no v2 pool is shown here.
     const calls = t.koios.calls.length;
     await expect(t.lovejoin.fits("mainnet", 1)).rejects.toThrow("This pool runs Lovejoin's retired scripts");
@@ -1483,6 +1486,33 @@ describe("a chain's boxes", CHAINS, () => {
     await busyFor(t, 15 * 60_000);
     await lovejoin.withdrawDue("preprod");
     expect(withdrawn(t, 1)).toEqual([`${"f1".repeat(32)}#0`]);
+  });
+
+  it("reads nothing while a chain is being sent, though a box is due and the unlock's waits are over (chunk 51, t1g#7)", async () => {
+    const { t } = await withSession("40000000");
+    t.koios.addedToAccounts.push(await ownedBox(t, "f1", 0, t.clock.now / 1000 - 5 * 3600));
+    await t.store.set("lovejoin.preprod", dueInAda(t.clock.now - HOUR));
+    const lovejoin = witnessed(t);
+    const runner = new SessionService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin,
+      sleep: async () => undefined,
+    });
+    const review = await runner.backBuild("preprod", 0);
+    await runner.backSubmit("preprod", review.txHash);
+    // Part of the chain sent. The box due an hour ago, the wallet unlocked an hour ago: a run reads no pool, nor draws a
+    // due time afresh, until the chain is sent.
+    const kept = (await t.store.get<{ pools?: Record<string, { due: number[] }> }>("lovejoin.preprod"))!;
+    await t.store.set("lovejoin.preprod", { ...kept, pools: { ...kept.pools, [ADA]: { due: [t.clock.now - HOUR] } } });
+    await unlockedAnHourAgo(t);
+    const reads = t.koios.calls.length;
+    const record = JSON.stringify(await t.store.get("lovejoin.preprod"));
+    expect(await lovejoin.withdrawDue("preprod", false)).toEqual([]);
+    expect(t.koios.calls.length).toBe(reads);
+    expect(JSON.stringify(await t.store.get("lovejoin.preprod"))).toBe(record);
   });
 
   it("brings no box back before it has waited the delay's least in the pool", async () => {

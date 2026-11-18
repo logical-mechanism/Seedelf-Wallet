@@ -126,6 +126,23 @@ describe("a mix from one public account, and Mix again from my public account on
     // Back on account 0, its own boxes are its to mix again, paid by it: none of account 1's money goes in.
     await t.accounts.use(0, ["preprod"]);
     expect((await inAda(t)).otherAccounts).toBeUndefined();
+    // Switched to account 1 while the review reads the pool's reward balance, after account 0's UTxOs were read: not
+    // built, as account 1 paying to mix account 0's boxes would tie the two, and nothing is kept for Send (chunk 51,
+    // t1g#14).
+    const real = t.koios.fetch;
+    let switched = false;
+    t.koios.fetch = async (url, init) => {
+      if (!switched && url.endsWith("/account_info")) {
+        switched = true;
+        await t.accounts.use(1, ["preprod"]);
+      }
+      return real(url, init);
+    };
+    await expect(t.lovejoin.publicAgainBuild("preprod", ADA)).rejects.toThrow("That mix isn't ready to send. Review it again.");
+    t.koios.fetch = real;
+    expect(switched).toBe(true);
+    expect(await t.wallet.withKeys(() => t.session.get(SESSION_LOVEJOIN_PUBLIC))).toBeUndefined();
+    await t.accounts.use(0, ["preprod"]);
     const again = await t.lovejoin.publicAgainBuild("preprod", ADA);
     expect(again).toMatchObject({ again: true, boxes: 4, owned: 4 });
     const spent = (await keptInputs(t)).flat();

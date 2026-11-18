@@ -147,4 +147,21 @@ describe("Send again on a funding that went out", () => {
     expect((await record(t))!.txs[0]).not.toHaveProperty("unsent");
     expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: out.txHash, maybeSent: true });
   });
+
+  // Something went out, and what isn't known: Koios's answer named another transaction (pending.ts's otherTxId), the
+  // one maybe-sent refusal that reaches markUnsent (chunk 51, t1h#10).
+  it("never marks a funding unsent when Koios's answer names another transaction", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const out = await sessions.siteOutBuild("preprod", ORIGIN, "15000000", []);
+    const realFetch = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      const answer = await realFetch(url, init);
+      return url.endsWith("/submittx") ? Response.json("ab".repeat(32), { status: 202 }) : answer;
+    };
+    await expect(sessions.siteOutSubmit("preprod", out.txHash, ORIGIN)).rejects.toThrow("The server answered with another transaction id");
+    t.koios.fetch = realFetch;
+    expect((await record(t))!.txs[0]).not.toHaveProperty("unsent");
+    expect((await sessions.list("preprod"))[0]!.stage).not.toBe("failed");
+  });
 });

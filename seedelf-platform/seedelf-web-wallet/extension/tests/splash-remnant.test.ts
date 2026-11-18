@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { bodyOutpoints } from "../src/background/cbor";
 import type { KoiosUtxo } from "../src/background/koios";
-import { bech32 } from "./fixtures/bech32";
+import { bech32, bech32Bytes } from "./fixtures/bech32";
 import { bytes, SESSION_ADDRESS } from "./fixtures/swap-tx";
 import { loadTestWasm, sessionSwap } from "./fakes";
 import { ASK, atSession, busy, MIN, signing, unlocked, type T } from "./swap-session";
@@ -74,7 +74,8 @@ function spends(t: T, txHash: string, inputs: string[], at = ORDER_AT) {
 function splashReference(t: T) {
   t.koios.addedToAccounts.push({
     stake_address: null,
-    payment_cred: "00".repeat(28),
+    // Its address's payment part, as Koios gives it.
+    payment_cred: Buffer.from(bech32Bytes(SPLASH_ORDER.reference.address!)).toString("hex").slice(2, 58),
     epoch_no: 300,
     block_height: 4_000_000,
     block_time: 1_700_000_000,

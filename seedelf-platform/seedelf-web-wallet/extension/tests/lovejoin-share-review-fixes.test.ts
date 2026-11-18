@@ -810,6 +810,16 @@ describe("the 5 ₳ pool a return and its collateral go into is v2's ADA pool of
     expect((await lj.funding("preprod", 1, false, undefined, MIN5.id)).collateralPool).toBe(ADA);
   });
 
+  it("never a copy of its values, which no wallet shows, wherever discovery lists it (chunk 51, t1g#3)", async () => {
+    const t = await wallet();
+    // Only a copy of the 5 ₳ values handed over (an earlier launch of them turned up after this device read it): no
+    // pool for a return's ADA or its collateral.
+    expect(await pooled(t, [{ copy: ADA_POOL } as never]).adaPool("preprod")).toBeUndefined();
+    // A copy listed before the pool shown: the shown one.
+    const copy = await launched("5000000", ["e2", "e6"]);
+    expect((await pooled(t, [{ copy: copy.ref } as never, ADA_POOL]).adaPool("preprod"))?.id).toBe(ADA);
+  });
+
   it("never 1.7's 5 ₳ pool, retired, which the Mix form would count the collateral's reserve for", async () => {
     const t = await wallet();
     expect((await pooled(t, [OLD_FIVE, ADA_POOL]).funding("preprod", 1, false, undefined, ADA)).collateralPool).toBe(ADA);

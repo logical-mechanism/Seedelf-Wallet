@@ -32,7 +32,7 @@ import { fakeIndex, indexRowOf } from "./fake-index";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, memoryArea, minswapEstimate, ownedUtxos, testBalances } from "./fakes";
-import { ADA, ADA_ROWS, ADA_VIEW, adaStrangers } from "./v2-pools";
+import { ADA, ADA_ROWS, ADA_VIEW, adaStrangers, onMainnet } from "./v2-pools";
 
 /** Real chains are built and measured in WebAssembly: seconds each, more on CI. */
 const SLOW = { timeout: 300_000 };
@@ -139,6 +139,8 @@ interface DeviceOptions {
   strangers?: KoiosUtxo[];
   /** The wallet's private balance, for a funding. */
   privateLovelace?: bigint;
+  /** The network the test reads, its rows at addresses there (preprod by default). */
+  network?: NetworkName;
 }
 
 /** A device as sw.ts wires it, with nothing kept of v2's 5 ₳ pool, nor read of any pool's room. */
@@ -147,10 +149,11 @@ async function device(o: DeviceOptions = {}) {
   await t.wallet.create(account(12).phrase, PASSWORD);
   t.koios.evaluation = AGREES;
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+  const on = (rows: KoiosUtxo[]) => (o.network === "mainnet" ? onMainnet(rows) : rows);
   if (o.privateLovelace !== undefined) {
-    t.koios.added.push({ ...ownedUtxos[0]!, tx_hash: "d1".repeat(32), tx_index: 0, value: o.privateLovelace.toString() } as KoiosUtxo);
+    t.koios.added.push(...on([{ ...ownedUtxos[0]!, tx_hash: "d1".repeat(32), tx_index: 0, value: o.privateLovelace.toString() } as KoiosUtxo]));
   }
-  const strangers = o.strangers ?? ADA_ROWS;
+  const strangers = on(o.strangers ?? ADA_ROWS);
   t.koios.addedToAccounts.push(...strangers);
   const idx = fakeIndex();
   idx.poolList = listing();
@@ -356,7 +359,7 @@ describe("a review lists the pools once, its collateral's look answered from tha
   });
 
   it("mainnet, the data layer up and its token feed covering the pool: a site's funding review asks it once, and Koios not", async () => {
-    const d = await device({ covered: true, strangers: adaStrangers(32), privateLovelace: 1_000_000_000n });
+    const d = await device({ covered: true, strangers: adaStrangers(32), privateLovelace: 1_000_000_000n, network: "mainnet" });
     expect(await d.lovejoin.lookForPools("mainnet")).toEqual({ grew: true });
     const tokens = tokenListings(d);
     const koios = poolListings(d.t);
@@ -397,7 +400,7 @@ describe("a review lists the pools once, its collateral's look answered from tha
     // (tailReserve's collateralPoolTakes; fx-may). A review's look is its one read of the pools (collateralRoom), so it
     // fails only where that read does, never on a read kept: here the data layer's last count of the pool's boxes is
     // under the floor, its token feed is down, and Koios fails for those boxes (1.8.0's release review, last-code#2).
-    const d = await device({ covered: true, strangers: adaStrangers(32), privateLovelace: 1_000_000_000n });
+    const d = await device({ covered: true, strangers: adaStrangers(32), privateLovelace: 1_000_000_000n, network: "mainnet" });
     (d.idx.poolList as { pools: Array<{ crowd: unknown }> }).pools[0]!.crowd = { boxes: 20, deposits: 0, mixed: 20 };
     expect(await d.lovejoin.lookForPools("mainnet")).toEqual({ grew: true });
     expect(await d.lovejoin.collateralPoolTakes("mainnet")).toBe("no");

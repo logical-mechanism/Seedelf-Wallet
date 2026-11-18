@@ -13,7 +13,7 @@ import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { CHAIN_RESEND_MS, LovejoinService, QUIET_AFTER_SEND_MS, QUIET_PUSH_MS, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { SESSION_SENT_PREFIX } from "../src/background/sent-txs";
-import { lastSpentAt, SESSION_SPENT, spentSet } from "../src/background/spent";
+import { lastSpentAt, SESSION_RESERVED_PREFIX, SESSION_SPENT, spentSet } from "../src/background/spent";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
@@ -51,9 +51,10 @@ async function ownedBox(t: T, tx: string) {
 /**
  * An unlocked wallet, unlocked an hour ago with its unlock's draws made, with
  * Lovejoin's 5 ₳ pool and `boxes` boxes of its own in it, all due; and Lovejoin
- * with giveme.my's witness stood in for, so a withdraw that goes is submitted.
+ * with giveme.my's witness stood in for, so a withdraw that goes is submitted. `finished`: the hash that finish names,
+ * the transaction's own unless said.
  */
-async function due(boxes = 1) {
+async function due(boxes = 1, finished?: (txCbor: string) => string) {
   const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(PHRASE, PASSWORD);
   const owned = await Promise.all(["e1", "e2"].slice(0, boxes).map((tx) => ownedBox(t, tx)));
@@ -70,7 +71,7 @@ async function due(boxes = 1) {
       ...wasm,
       finishLovejoinWithdraw: (request: string) => {
         const { txCbor } = JSON.parse(request) as { txCbor: string };
-        return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+        return JSON.stringify({ txCbor, txHash: finished ? finished(txCbor) : txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
       },
     } as typeof wasm,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
@@ -79,6 +80,28 @@ async function due(boxes = 1) {
   });
   return { t, lovejoin, box: `${"e1".repeat(32)}#0` };
 }
+
+describe("a due box a withdraw may not take (chunk 51, t1g#1, t1g#2)", SLOW, () => {
+  it("is never one a chain of the wallet's holds: it waits, and goes once that chain lets it go", async () => {
+    const { t, lovejoin, box } = await due();
+    // A Mix my boxes again kept for Send holds it, as reserve() keeps it, until its review's time is up.
+    await t.session.set(`${SESSION_RESERVED_PREFIX}preprod`, { again: { inputs: [box], collateral: [], until: t.clock.now + 10 * 60_000 } });
+    expect(await lovejoin.withdrawDue("preprod", false, t.clock.now)).toEqual([]);
+    expect(t.koios.submitted).toHaveLength(0);
+    await t.session.set(`${SESSION_RESERVED_PREFIX}preprod`, {});
+    await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(t.koios.submitted.flatMap((x) => txInputs(x))).toContain(box);
+  });
+
+  it("is never sent when finishing it names another transaction than the one built", async () => {
+    const { t, lovejoin } = await due(1, () => "00".repeat(32));
+    const before = (await kept(t)).due;
+    await lovejoin.withdrawDue("preprod", false, t.clock.now).catch(() => undefined);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect((await kept(t)).withdrawing).toBeUndefined();
+    expect((await kept(t)).due).toEqual(before);
+  });
+});
 
 /**
  * Koios's submit answers as `answer` says, given its node's answer when it

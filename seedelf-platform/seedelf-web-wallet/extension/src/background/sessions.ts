@@ -3310,6 +3310,9 @@ export class SessionService {
     pools?: Record<string, string | null>,
   ): Promise<SessionBackSummary> {
     const { wallet, session } = this.deps;
+    // A chain's transaction it left maybe sent, which never landed, goes first: what it spent is the return's again,
+    // and the return goes through Lovejoin (letGoUnseen, gap-g3#2).
+    await this.letGoUnseen(network, new Set([index]));
     const s = await this.live(network, index);
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     // Money that arrives after the return would need another one.
@@ -3360,6 +3363,8 @@ export class SessionService {
     direct: boolean,
   ): Promise<{ returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> }> {
     const { wallet, session } = this.deps;
+    // As backBuild: what a chain of one left maybe sent, never landed, goes first (letGoUnseen, gap-g3#2).
+    await this.letGoUnseen(network, new Set(indexes));
     const params = await this.deps.koios(network).epochParams();
     const returns: KeptBack[] = [];
     const skipped: Array<{ index: number; reason: string }> = [];
@@ -3674,6 +3679,49 @@ export class SessionService {
     }
   }
 
+  /**
+   * Lets go of what a return's chain left maybe sent in a session nothing steps (a site's, one the restore scan found,
+   * a swap paused or brought back by hand), which the chain never showed (chunk 51, gap-g3#2): a deposit or a mix Koios
+   * didn't answer (`inputs`), sent LOST_AFTER_MS or more ago, that tx_status doesn't know, every input of which utxo_info
+   * shows unspent, with nothing else of the session on its way. act's lost rule does this for a session that runs
+   * itself. Kept, the chain read as started for good (chainSoFar), and every later return came back directly with no word
+   * of Lovejoin, though nothing of it went in. Its transaction goes from the record, the chain's own stays, as markCut
+   * keeps it, and what it spent is free again: the next return goes through Lovejoin, as after one refused outright. A
+   * read that fails leaves it, a maybe. `only`: those sessions alone.
+   */
+  private async letGoUnseen(network: NetworkName, only?: ReadonlySet<number>): Promise<void> {
+    const at = this.deps.now();
+    const found = (await this.book(network)).sessions.flatMap((s) => {
+      if (s.closedAt || running(s) || (only && !only.has(s.index))) return [];
+      const maybe = s.txs.filter(
+        (t) => (t.kind === "deposit" || t.kind === "mix") && !t.confirmed && !t.unsent && !t.replaced && !!t.inputs?.length && at - t.at >= LOST_AFTER_MS,
+      );
+      // A return sent since may spend the same: its marks stay, and so does this, until it's settled.
+      const others = s.txs.some((t) => !t.confirmed && !t.unsent && !t.replaced && !maybe.includes(t));
+      return maybe.length && !others ? [{ index: s.index, maybe }] : [];
+    });
+    if (!found.length) return;
+    try {
+      const txs = found.flatMap((f) => f.maybe);
+      const statuses = await this.landed(network, txs);
+      const unseen = txs.filter((t) => statuses.get(t.txHash) == null);
+      if (!unseen.length) return;
+      const known = await this.spentStates(network, [...new Set(unseen.flatMap((t) => t.inputs!))]);
+      const gone = unseen.filter((t) => t.inputs!.every((o) => known.get(o) === false));
+      if (!gone.length) return;
+      const hashes = new Set(gone.map((t) => t.txHash));
+      for (const { index, maybe } of found) {
+        if (!maybe.some((t) => hashes.has(t.txHash))) continue;
+        await this.update(network, index, (r) => {
+          r.txs = r.txs.filter((t) => !hashes.has(t.txHash));
+        });
+      }
+      await this.deps.wallet.withKeys(() => forgetSpent(this.deps.session, gone.flatMap((t) => t.inputs!)));
+    } catch (e) {
+      if (isTrap(e)) throw e;
+    }
+  }
+
   /** Takes the session's next step, if it's time. A failure waits and tries again; a failed check pauses. */
   private async step(network: NetworkName, index: number, run: Run): Promise<void> {
     const at = this.deps.now();
@@ -3906,6 +3954,8 @@ export class SessionService {
     }
     // No order of the swap is open on chain (liveOrders). A fill or a refund spends it, and comes
     // in a transaction the session didn't make; a cancel's refund in its own.
+    // What the account's reading once every order is known spent found beside the first one's (`since`, below).
+    let late: KoiosUtxo[] = [];
     if (!kinds.has("cancel")) {
       const own = new Set(s.txs.map((t) => t.txHash));
       const arrived = active.filter((r) => !own.has(r.tx_hash));
@@ -3936,6 +3986,10 @@ export class SessionService {
           if (outcome === "partly") r.auto!.partly = true;
           if (fills.length) r.auto!.fills = fills;
         });
+        // And the return takes it too: a leg paid between the two readings came back alone in a later return, after
+        // this one's chain put the collateral in its pool, so directly, though its approval sent it through Lovejoin
+        // (chunk 51, gap-g4#1).
+        late = since;
       }
     } else if (!(await this.ordersSpent(network, s))) {
       // Cancelled: every order of the swap is spent too, as a fill's are. One Koios can't find yet isn't
@@ -3948,7 +4002,7 @@ export class SessionService {
     // lists what the cancel paid.
     s = await this.noteOrderOpen(network, s, false);
     if (unlisted) return;
-    await go((u) => this.bringBack(network, s.index, rows, false, u));
+    await go((u) => this.bringBack(network, s.index, [...rows, ...late], false, u));
   }
 
   /**
@@ -5740,6 +5794,8 @@ export class SessionService {
     // A chain a lock or a closed browser cut says so at a refresh too, not only at the runs' (cross-area review X03).
     // In the queue, as a refresh is, and before the book is read: it writes the book.
     if (refresh) await this.markCut(network).catch(() => undefined);
+    // And what a chain of a session nothing steps left maybe sent, never landed, goes (letGoUnseen, gap-g3#2).
+    if (refresh) await this.letGoUnseen(network);
     const book = await this.book(network);
     const live = book.sessions.filter((s) => !s.closedAt);
     const keys = await this.accounts(network, book.sessions);

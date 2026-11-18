@@ -36,7 +36,7 @@ import { LovejoinLaunchService } from "../src/background/lovejoin-launch";
 import { HOLDER, LOVEJOIN_NFT } from "../src/background/lovejoin-pools";
 import { Minswap } from "../src/background/minswap";
 import { SESSION_BACK, SESSION_CHAIN_PREFIX, SessionService, wayOf } from "../src/background/sessions";
-import { SESSION_SPENT } from "../src/background/spent";
+import { SESSION_RESERVED_PREFIX, SESSION_SPENT } from "../src/background/spent";
 import { t as tr } from "../src/i18n";
 import { NETWORKS } from "../src/networks";
 import type { LovejoinDelay } from "../src/shared/preferences";
@@ -45,6 +45,7 @@ import { reviewAfterSkip } from "../src/ui/components/LovejoinReturn";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, koiosPreprod, loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
+import { ASK, orderRow, SWAP_TX } from "./swap-session";
 import { ADA, ADA_POOL, ADA_ROWS, ADA_VIEW, ownDatum } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
@@ -874,6 +875,127 @@ describe("a mix keeps the depth and the wait its review showed, whatever Setting
   });
 });
 
+// A split route's second leg, paid in a block between the runner's listing of the account and its lookup of the orders:
+// every order then reads spent, and the outcome is told from a second listing that holds the leg (M18's `since`). The
+// return was built from the first listing all the same, so it left the leg out; its chain put the 5 ₳ collateral in the
+// pool, and the leg came back alone after it, directly, though its approval sent it through Lovejoin (chunk 51,
+// gap-g4#1).
+describe("a split route's leg paid between the runner's two listings of the account (chunk 51, gap-g4#1)", { timeout: 600_000 }, () => {
+  type Book = { closedAt?: number; lovejoinSkipped?: string; txs: Array<{ kind: string; replaced?: boolean }> };
+
+  it("comes back in the session's first return, through Lovejoin as approved, never alone after it", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const sessions = runner(t, pooled(t, [ADA_POOL]));
+    // Session 0 sold MIN for ADA through Lovejoin, as approved, one wave deep; Minswap split it into two orders,
+    // SWAP_TX#0 and #2, both landed. Its funding (FUND) paid it the 5 ₳ collateral too.
+    const now = t.clock.now;
+    const FUND = "01".repeat(32);
+    const orders = [`${SWAP_TX}#0`, `${SWAP_TX}#2`];
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [
+            { kind: "out", txHash: FUND, at: now, confirmed: true },
+            { kind: "swap", txHash: SWAP_TX, at: now, confirmed: true, orders, minAmountOut: "40000000" },
+          ],
+          swap: { ...ASK, tokenIn: MIN_UNIT, tokenOut: "lovelace", amount: "906594100", amountOut: "41000000", minAmountOut: "40000000" },
+          auto: {
+            approved: { minAmountOut: "40000000", fund: { lovelace: "16000000", tokens: [] } },
+            direct: false,
+            lovejoin: { depth: 1, delay: "1-6", box: "5000000" },
+          },
+        },
+      ],
+    });
+    // The account: the swap's change, the collateral, and leg 1's fill (20 ₳), listed; both orders spent at the DEX's
+    // contract; the 5 ₳ pool's 20 boxes of other people's.
+    t.koios.addedToAccounts.push(
+      atSession(SWAP_TX, 1, "2000000"),
+      atSession(FUND, 1, "5000000"),
+      ...orders.map((o) => orderRow(SWAP_TX, Number(o.split("#")[1]))),
+      atSession("aa".repeat(32), 0, "20000000"),
+      ...ADA_ROWS,
+    );
+    for (const o of orders) t.koios.spent.add(o);
+    // Leg 2's fill (20 ₳) lands in the block between the runner's listing and its lookup of the orders.
+    const LATE = `${"bb".repeat(32)}#0`;
+    const late = [atSession("bb".repeat(32), 0, "20000000")];
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      const path = new URL(url).pathname.split("/").pop();
+      const refs = typeof init?.body === "string" ? (JSON.parse(init.body) as { _utxo_refs?: string[] })._utxo_refs : undefined;
+      if (path === "utxo_info" && refs?.includes(orders[0]!)) t.koios.addedToAccounts.push(...late.splice(0));
+      return real(url, init);
+    };
+    const book = async () => (await t.store.get<{ sessions: Book[] }>("sessions.preprod"))!.sessions[0]!;
+    const before = t.koios.submitted.length;
+
+    // The runner's runs until it sends the session's first return: a chain through Lovejoin, kept as it's sent, or one
+    // that comes back directly.
+    let first: Uint8Array[] = [];
+    for (let run = 0; run < 3 && !first.length; run++) {
+      await sessions.advance("preprod", 0, true);
+      const chain = await t.wallet.withKeys(() => t.session.get<{ txs: Array<{ txCbor: string }> }>(`${SESSION_CHAIN_PREFIX}preprod.0`));
+      if (chain) first = chain.txs.map((x) => Uint8Array.from(Buffer.from(x.txCbor, "hex")));
+      else if ((await book()).txs.some((x) => x.kind === "back")) first = t.koios.submitted.slice(before);
+    }
+    expect(first.length).toBeGreaterThan(0);
+
+    // It lands, and the runner runs on until the session closes: whatever is left at the account comes back.
+    t.koios.confirmations = 1;
+    for (let run = 0; run < 10 && !(await book()).closedAt; run++) {
+      for (const tx of t.koios.submitted) for (const o of txInputs(tx)) t.koios.spent.add(o);
+      await sessions.advance("preprod", 0, true);
+    }
+    const s = await book();
+    expect({
+      closed: s.closedAt !== undefined,
+      // The first return takes leg 2's fill.
+      firstTakesLate: first.some((tx) => txInputs(tx).includes(LATE)),
+      // One return: the chain's, nothing after it.
+      returns: s.txs.filter((x) => x.kind === "back" && !x.replaced).length,
+      // Nothing came back saying Lovejoin was left out.
+      lovejoinSkipped: s.lovejoinSkipped,
+    }).toEqual({ closed: true, firstTakesLate: true, returns: 1, lovejoinSkipped: undefined });
+  });
+});
+
+// Mix my boxes again's Send asks once more whether another such mix may spend the boxes: one may have become so since
+// its review, as one whose return found nothing to bring back does once its return is built anew (`nothingBack`
+// cleared), and the two chains would draw the same boxes (chunk 51, t1h#8).
+describe("Mix my boxes again sent once another such mix may spend the boxes (chunk 51, t1h#8)", SLOW, () => {
+  it("is refused at Send, and nothing of it is recorded or sent", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1, lovejoinDelay: "1-6" });
+    const sessions = runner(t, pooled(t, [ADA_POOL]));
+    t.koios.addedToAccounts.push(...ADA_ROWS, await ownBox(t, "d6"), await ownBox(t, "d7"));
+    // Session 0 mixes the boxes again, its return having found nothing to bring back: it holds no box meanwhile.
+    const now = t.clock.now;
+    const first = {
+      index: 0,
+      ownStake: true,
+      createdAt: now,
+      txs: [{ kind: "out", txHash: "f0".repeat(32), at: now, confirmed: true }],
+      mix: { boxes: 2, again: true },
+      nothingBack: now,
+    };
+    await t.store.set("sessions.preprod", { next: 1, sessions: [first] });
+    const out = await sessions.againBuild("preprod", false, ADA);
+    // Its return is built anew since: it may spend the boxes again.
+    const { nothingBack: _gone, ...again } = first;
+    await t.store.set("sessions.preprod", { next: 1, sessions: [again] });
+    const sent = t.koios.submitted.length;
+    await expect(sessions.mixOutSubmit("preprod", out.txHash)).rejects.toThrow("Your boxes are being mixed again already.");
+    expect(t.koios.submitted).toHaveLength(sent);
+    expect((await t.store.get<{ sessions: unknown[] }>("sessions.preprod"))!.sessions).toHaveLength(1);
+  });
+});
+
 describe("every pool's room in one read (chunk 34's 34e)", SLOW, () => {
   it("reads every pool the wallet reads at once, as any read does, and keeps it for a review", async () => {
     const t = await wallet();
@@ -971,6 +1093,102 @@ describe("34e's review findings, each with a test", SLOW, () => {
     // The token comes back with the return; no transaction of the chain draws a box of its pool.
     expect(review.tokens).toContainEqual({ policyId: VIEW.token.policyId, assetName: VIEW.token.assetName, quantity: (2n * Q).toString() });
     for (const tx of (await kept(t)).chain!) expect(draws(tx.txCbor)).toBe(false);
+  });
+
+  /** Session 0's return holding LJTEST beside 40 ₳ and its 5 ₳ collateral, the token's pool `tokens` boxes deep. */
+  async function tokenReturn(t: T, { tokens = 6, ada = true } = {}) {
+    await siteSession(t);
+    const tokenBoxes = strangers(t, VIEW.mixBoxHash, tokens, 0x60, "2000000", asset(LJTEST, Q));
+    t.koios.addedToAccounts.push(
+      atSession(OUT, 0, "3000000", [asset(LJTEST, 2n * Q)]),
+      atSession(OUT, 1, "40000000"),
+      atSession(OUT, 2, "5000000"),
+      ...(ada ? ADA_ROWS : []),
+      ...tokenBoxes,
+    );
+    const refs = new Set(tokenBoxes.map((u) => `${u.tx_hash}#${u.tx_index}`));
+    return { tokenBoxes, draws: (cbor: string) => txInputs(Buffer.from(cbor, "hex")).some((o) => refs.has(o)) };
+  }
+
+  it("leaves a token's pool its review named out when that pool can't take a box now, and says so (chunk 51, t1g#4)", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const sessions = runner(t, pooled(t, [ADA_POOL, TOKEN_POOL]));
+    const { tokenBoxes, draws } = await tokenReturn(t);
+    // Another chain of the wallet's holds every box of the token's pool.
+    await t.session.set(`${SESSION_RESERVED_PREFIX}preprod`, { other: { inputs: tokenBoxes.map((u) => `${u.tx_hash}#${u.tx_index}`), collateral: [] } });
+    const review = await sessions.backBuild("preprod", 0, false, { [LJTEST]: TOKEN });
+    expect(review.lovejoin?.ways).toMatchObject([{ boxes: 0, skipped: tr("lj.tokens.skip.warn.poolCant") }]);
+    for (const tx of (await kept(t)).chain ?? []) expect(draws(tx.txCbor)).toBe(false);
+  });
+
+  it("lets go of what each try of a chain across pools drew when the network doesn't know a box of it (chunk 51, t1g#9)", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1, lovejoinCollateral: false });
+    const lj = pooled(t, [ADA_POOL, TOKEN_POOL]);
+    const sessions = runner(t, lj);
+    // 20 boxes of the token's pool, so it takes a box at every try; the network knows none of them.
+    const { tokenBoxes } = await tokenReturn(t, { tokens: 20 });
+    const refs = new Set(tokenBoxes.map((u) => `${u.tx_hash}#${u.tx_index}`));
+    t.koios.evaluation = (body: { params: { transaction: { cbor: string } } }) => {
+      const box = txInputs(Buffer.from(body.params.transaction.cbor, "hex")).find((o) => refs.has(o));
+      if (!box) return AGREES;
+      const [id, index] = box.split("#");
+      return {
+        jsonrpc: "2.0",
+        method: "evaluateTransaction",
+        error: { code: 3117, message: "Unknown transaction input", data: { unknownOutputReferences: [{ transaction: { id }, index: Number(index) }] } },
+      };
+    };
+    // Koios is behind, so another try later: nothing lets go of the last try's boxes but the try itself.
+    await expect(sessions.backBuild("preprod", 0)).rejects.toThrow(tr("lj.poolDrifted"));
+    const room = (await lj.room("preprod", TOKEN))!;
+    expect(room.free).toBe(room.others);
+  });
+
+  it("holds both pools' boxes it draws while the network checks a chain across them (chunk 51, t1g#10)", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1, lovejoinCollateral: false });
+    const lj = pooled(t, [ADA_POOL, TOKEN_POOL]);
+    const sessions = runner(t, lj);
+    await tokenReturn(t);
+    // Ogmios held: the review waits at the network's check of its first mixes.
+    const real = t.koios.fetch;
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let asked!: () => void;
+    const checking = new Promise<void>((resolve) => (asked = resolve));
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/ogmios")) {
+        asked();
+        await gate;
+      }
+      return real(url, init);
+    };
+    const built = sessions.backBuild("preprod", 0);
+    await checking;
+    const [ada, token] = [await lj.room("preprod", ADA), await lj.room("preprod", TOKEN)];
+    open();
+    const review = await built;
+    expect(review.lovejoin?.ways).toMatchObject([{ pool: TOKEN }]);
+    expect(review.lovejoin!.ways![0]!.boxes).toBeGreaterThan(0);
+    expect(token!.free).toBeLessThan(token!.others);
+    expect(ada!.free).toBeLessThan(ada!.others);
+  });
+
+  it("asks the network about each pool's first mix of a chain across them, and leaves out the one it refuses (chunk 51, t1g#11)", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1, lovejoinCollateral: false });
+    const sessions = runner(t, pooled(t, [ADA_POOL, TOKEN_POOL]));
+    await tokenReturn(t);
+    // The network refuses any mix in the 5 ₳ pool, the token's leg before it.
+    const adaRefs = new Set(ADA_ROWS.map((u) => `${u.tx_hash}#${u.tx_index}`));
+    const drawsAda = (cbor: string) => txInputs(Buffer.from(cbor, "hex")).some((o) => adaRefs.has(o));
+    t.koios.evaluation = (body: { params: { transaction: { cbor: string } } }) => (drawsAda(body.params.transaction.cbor) ? REFUSED : AGREES);
+    const review = await sessions.backBuild("preprod", 0);
+    // No transaction of what's kept draws a box of the 5 ₳ pool.
+    for (const tx of (await kept(t)).chain ?? []) expect(drawsAda(tx.txCbor)).toBe(false);
+    expect(review.lovejoin?.parts).toBeUndefined();
   });
 
   it("brings a swap's token back directly when the private balance pays for the swap but not its boxes, rather than refuse the swap (2)", async () => {
@@ -1520,6 +1738,22 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
     expect(record.tail).toMatchObject({ scheduled: true });
     expect(s.pools?.[five.id]?.due).toHaveLength(review.lovejoin!.boxes + 1);
     expect(s.mixes!.find((e) => e.id === record.id)!.shares).toEqual([{ pool: five.id, boxes: review.lovejoin!.boxes + 1 }]);
+  });
+
+  it("never asks giveme.my for its mix when the network measures it above what it declares (chunk 51, t1g#8)", async () => {
+    const { t, sessions } = await setUp(ONE_BOX);
+    const review = await sessions.backBuild("preprod", 0);
+    const [, mix] = (await steps(t)).slice(-3) as [Step, Step, Step];
+    await sessions.backSubmit("preprod", review.txHash);
+    await sessions.runAll("preprod");
+    // All of it on chain, and the network measures the collateral's mix above what it declares (a hard fork's
+    // evaluator, say): giveme.my would put its coin up for a mix the network refuses.
+    t.koios.confirmations = 1;
+    const over = { jsonrpc: "2.0", result: [{ validator: { purpose: "withdraw", index: 0 }, budget: { memory: 20_000_000, cpu: 10_000_000_000 } }] };
+    t.koios.evaluation = (body: unknown) => (JSON.stringify(body).includes(mix.txCbor) ? over : AGREES);
+    await sessions.runAll("preprod");
+    expect(t.collateral.asked).toEqual([]);
+    expect(t.koios.submitted.map((b) => txIdOf(b))).not.toContain(mix.txHash);
   });
 
   it("waits out giveme.my behind the chain, then stops, and the runner builds that mix again with fresh boxes", async () => {

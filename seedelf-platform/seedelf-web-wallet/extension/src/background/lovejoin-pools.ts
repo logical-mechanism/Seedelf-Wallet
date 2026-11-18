@@ -144,7 +144,17 @@ interface Stored extends Kept {
    * on this device, unless Remove wallet deletes the record (MERGED-1). Never which held them (R2-4).
    */
   checked?: string[];
+  /** The box reader `checked` was read with (BOX_READER): under another, every copy is read once again. */
+  reader?: number;
 }
+
+/**
+ * Which rule reads a pool's boxes for the wallet's own, by version, as the copies read once (`checked`) were read with
+ * it: a copy read before the reader changed may hold a box it now finds, read once again under it, the same for every
+ * device updated (chunk 51, gap-g6#1). 2: a box datum in constructor 0's general form (r3a#1), a key address carrying
+ * mix_box's hash never a box (x2#1). None: 1, before.
+ */
+export const BOX_READER = 2;
 
 /** What's kept, the head start's and the device's together. */
 interface Merged extends Kept {
@@ -219,7 +229,7 @@ function handedOf(pools: FoundPool[], handed: ReadonlySet<string>): HandedPool[]
 /** What a write of the device's record keeps of it as it was: the pools handed over, the copies read, and its list. */
 const keptOf = (was: Merged) => ({
   shown: [...was.shown],
-  ...(was.checked.size ? { checked: [...was.checked] } : {}),
+  ...(was.checked.size ? { checked: [...was.checked], reader: BOX_READER } : {}),
 });
 
 /** What WebAssembly answers about a pool (`lovejoin::PoolView`), as discovery reads it. */
@@ -345,6 +355,7 @@ export class PoolDiscovery {
         pools: now.pools.map(slim),
         ...keptOf(now),
         checked: [...new Set([...now.checked, ...read])],
+        reader: BOX_READER,
       };
       await this.deps.local.set(key(network), stored);
     });
@@ -392,11 +403,14 @@ export class PoolDiscovery {
     // handed over while it was the rule's was never read once, and stays handed over.
     const rule = new Set(shown([...pools.values()]).map((p) => refOf(p.ref.reference)));
     const earlierCode = new Set((stored?.shown ?? []).filter((r) => (stored?.checked ?? []).includes(r) && !rule.has(r)));
+    // Read with another box reader, every copy is taken as never read: the next pool read reads each once again, under
+    // today's (BOX_READER, gap-g6#1).
+    const read = (stored?.reader ?? 1) === BOX_READER ? (stored?.checked ?? []) : [];
     return {
       height,
       pools: [...pools.values()],
       shown: new Set((stored?.shown ?? []).filter((r) => !earlierCode.has(r))),
-      checked: new Set((stored?.checked ?? []).filter((r) => !earlierCode.has(r))),
+      checked: new Set(read.filter((r) => !earlierCode.has(r))),
       listed,
       ...(stored ? { stored } : {}),
     };

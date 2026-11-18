@@ -936,6 +936,14 @@ describe("a swap's order found spent (independent review M18)", () => {
     expect(view.auto).toMatchObject({ filled: true, partly: true });
   });
 
+  it("brings a leg paid after the account was read back in that same return, never alone after it (chunk 51, gap-g4#1)", async () => {
+    const { t, view } = await spent(buying, [atSession("aa".repeat(32), 0, "2000000", [[MIN, "450000000"]])], true, [
+      atSession("bb".repeat(32), 0, "2000000", [[MIN, "456594100"]]),
+    ]);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+    expect(bodyOutpoints(t.koios.submitted.at(-1)!, 0)).toContain(`${"bb".repeat(32)}#0`);
+  });
+
   it("tells a token→ADA refund by the token coming back, and a fill by it not", async () => {
     let { view } = await spent(selling, [atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]])]);
     expect(view.auto).toMatchObject({ filled: false, refunded: true });
