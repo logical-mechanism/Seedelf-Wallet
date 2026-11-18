@@ -32,6 +32,13 @@ For the lead, if a session ends or the machine reboots mid-run. `/tmp` is a tmpf
 - `web-wallet/lovejoin-box-datum-spelling`, worktree `../Seedelf-Wallet-fix-boxdatum`: r3a#1 (high).
 - `cli/stranger-rows`, worktree `../Seedelf-Wallet-fix-clirows`: r4#1 (high) and r4#2, made by a fixer agent.
 
+## Step 4, the fix round (started 2026-11-18, while the lenses ran)
+
+- Worktree `../Seedelf-Wallet-chunk51-fixes`, branch `web-wallet/whole-review-fixes`, from this branch with both high fixes cherry-picked in, and the verifiers' 60 `r51` tests copied across (untracked). It has its own Cargo target.
+- [FIX.md](FIX.md) is the fixers' brief. Fixers by file ownership: G1 core, G2 the CLI with Koios (its own commits, for a CLI patch release), G3 the WebAssembly crate, G4 the worker's Lovejoin and sessions, G5 the connector, G6 keys, money flows and chain reads; then G7 the screens, G8 docs, G9 CI and G10 the proofs.
+- The fixers don't commit: the lead commits each group's files by path, rebuilds the WebAssembly after the Rust groups, and runs every check.
+- If a session ends mid-round: `git -C ../Seedelf-Wallet-chunk51-fixes status` shows what each fixer left; compare it with the groups' file lists in this round's prompts (FIX.md's rules), finish or revert per group, and run the checks before committing.
+
 ## Next
 
 1. The lanes' answers into `lanes/`, one file each, and a first merge into `FINDINGS.md`.
