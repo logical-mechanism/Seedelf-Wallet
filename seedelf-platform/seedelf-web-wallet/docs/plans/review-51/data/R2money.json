@@ -1,0 +1,196 @@
+{
+ "findings": [
+  {
+   "id": "r2money#1",
+   "severity": "low",
+   "title": "A session's merged return whose only collateral is the 2 ₳ fallback is refused at a heavy fee, and the plain sweep of the same UTxOs, which builds, is never tried",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs",
+   "line": 1479,
+   "scenario": "Session 3 (base address, least 978,370 lovelace). A site's transaction the user approved spent the session's 5 ₳ collateral; dapp.ts keptApart only flags that. The account now holds 13 of the session's own UTxOs, each with 20 tokens and 6 ₳, plus one 2 ₳ UTxO of ADA alone. The funding's 10 ₳ change is still at the contract, so the return merges into it. plan_return picks the merged form because session_collateral's fallback takes the largest ADA-only UTxO of 2 ₳ or more. The merged return's fee is 747,574, and 3/2 of it is 1,121,361, so the collateral would get back 878,639, under its 978,370 least. Since 21caa3b8 the build refuses: \"The collateral can't cover this transaction's fee and come back as an output\". Nothing falls back. built_or_without_strangers has no strangers to drop, and session_return's attempt(None) builds the same merged plan, so every runner step and every Bring it back is refused while the shape holds. The same 14 UTxOs with merge = [] build as the plain sweep (no script, no collateral): fee 689,629, every UTxO taken. Before 21caa3b8 the wallet signed the merged return and the node refused it at submit, so neither version brings the money back. The only way out is a top-up that leaves exactly 5 ₳ (session_collateral prefers that), and the page doesn't offer one for this.",
+   "who": "user",
+   "since": "21caa3b8 for the refusal in words; the merged plan's 2 ₳ fallback with no sweep fallback is older (unknown)",
+   "evidence": "- lib.rs:985-999 session_collateral: the exact 5 ₳ UTxO, else `.filter(|u| lovelace(u) >= 2_000_000).max_by_key(...)`. Its doc says it 'leaves its return a valid output', but only the 2 ₳ floor is checked.\n- lib.rs:1190: plan_return sets `base` (merged) whenever merge is non-empty, the rows are evaluable and session_collateral finds one.\n- lib.rs:1479 → merged_return (lib.rs:1356-1374) → ScriptSpend::with_account → measure_locally.\n- build.rs:2206-2213, new in 21caa3b8: `checked_sub(fee * 3 / 2).filter(|back| *back >= least).context(\"... come back as an output\")`.\n- lib.rs:1321 built_or_without_strangers drops only strangers' token UTxOs. lib.rs:1437-1458: `attempt(None)` is the same plan. Nothing re-plans with an empty merge. external_sweep (build.rs:554), which needs no collateral, is reached only when plan.merged is false.\n- Run: a test in my own copy (seedelf-wasm natively, seedelf-web-wallet/wasm/tests/r2money_merged.rs; kept at /tmp/claude-1000/-home-logic-Documents-LogicalMechanism-Seedelf-Wallet/0e0d3674-7c6c-46fb-8cae-a49695fa3bfe/scratchpad/r51/work/R2money/r2money_merged.rs). Setup: session_test's helpers, 13 own UTxOs of 20 tokens (one policy, 32-byte names) at 6 ₳, a 2 ₳ ADA-only UTxO, and funding_change of 10 ₳. Output: `merged ERR: The collateral can't cover this transaction's fee and come back as an output` / `sweep OK: fee 689629 inputs 14 left 0`.\n- With build.rs:2210's filter reverted in the copy: `merged OK: fee 747574 merged 1 inputs 14`. The collateral's return there is 2,000,000 − 1,121,361 = 878,639, under the least, which the ledger refuses.\n- The copy and its target are removed.",
+   "confidence": "confirmed-by-run",
+   "fix": "Re-plan when the merged form can't be built. In planned_return (lib.rs:1479) or session_return's attempt, when merged_return fails for its collateral (or with any non-short build error of the merged form), plan again with `merge = &[]` and build the external_sweep, as plan_return already does for a row the merge can't measure. Alternatively, have session_collateral's fallback require `lovelace ≥ least + 3/2 × the plan's most fee` and report merged = false when none does. The cost is privacy-adjacent: the sweep makes new contract UTxOs instead of joining the funding's change. That fallback already exists for unmeasurable rows, so no default changes. Other collateral returns, checked: orders.rs:1042 holds least_back at the settled fee; launch.rs:503 and build.rs:3762 take 5 ₳ only; lovejoin/mod.rs:1134 (account mix) and :1633 (paid withdraw) have no least check, but take only the account's 5 ₳ collateral (collateralFits, or a user's choice of exactly 5 ₳), so they're unreachable today.",
+   "needs_owner": false,
+   "known_check": "Searched docs/backlog.md and docs/archive/plans/*.md for: session_collateral, '2 ₳ or more', 'largest ADA-only', merged return with collateral, 'collateral return', least. Searched review-51/INDEX.md for collateral returns: t1a#12 is the account mint's; gap-g4#2, a swap spending the 5 ₳, is the owner's call and doesn't cover the merged return. None match."
+  },
+  {
+   "id": "r2money#2",
+   "severity": "low",
+   "title": "ScriptSpend::stage holds the collateral's return to its least at the estimate's guessed fee too, so a merged return whose settled fee leaves that least is newly refused",
+   "file": "seedelf-platform/seedelf-core/src/build.rs",
+   "line": 2210,
+   "scenario": "The same session shape as r2money#1, but the fallback collateral is the least + 3/2 × the settled fee + 3,000 to 10,000 lovelace (2,102,731 to 2,109,731). At the settled fee (747,574) the collateral would get back 981,370 to 988,370, above its 978,370 least, and before 21caa3b8 the merged return built that way: a valid transaction. Now measure_locally's draft is staged at estimate()'s fee, which is priced on SPEND_BUDGET_GUESS (about 1.3× what the wallet script uses). At that fee the return falls under the least. The refusal isn't a shortfall, so measuring_draft passes it on and the whole return is refused. With one merged Seedelf UTxO the band is 3/2 of the guess's extra compute, measured at 10,000 to 15,000 lovelace. With MAX_MERGE's four it is about 57,000. It is reachable only with the 2 ₳ fallback collateral and a heavy return (r2money#1's preconditions). Withdraw_paid, fixed in the same commit, had the same kind of bug: a least held at a guessed fee.",
+   "who": "user",
+   "since": "21caa3b8",
+   "evidence": "- build.rs:1796-1801 `draft()`: `let fee = self.estimate()?.fee.total; built_with(self.stage(fee, None, redeemers)?, ...)`.\n- build.rs:1818-1828 `estimate()` settles at `Budgets::guess` (SPEND_BUDGET_GUESS = 100,000 mem and 450M steps; measured 76,043 and 337.8M, build.rs:1117-1124).\n- build.rs:1886-1890 measuring_draft: `match self.draft() { Err(e) if is_short(&e) => e, other => return other }`. The least error is an anyhow context, not NotEnough, so measure_locally ends there.\n- build.rs:2206-2213 is the least filter.\n- Runs in my own copy (same test file as r2money#1):\n  - `settled fee 747574 collateral 2102731` → `ERR: The collateral can't cover this transaction's fee and come back as an output`.\n  - The band sweep: `over 3000/6000/10000: ERR ... (settled fee 747574 leaves 981370/984370/988370 back)`; `over 15000: OK fee 747574, collateral back 993370 (least 978370)`.\n  - With the filter reverted: `over 3000: OK fee 747574, collateral back 981370`, the transaction the ledger takes.",
+   "confidence": "confirmed-by-run",
+   "fix": "Hold the collateral's return to its least only at the fee that's sent: check it in settle's result or in finalize. Drafts and estimates should stage it saturating, as 21caa3b8 did for withdraw_paid's change (stage saturating, the check in the round that settles). The same class elsewhere:\n- AccountMint::stage (build.rs:3760-3770) and the launch (launch.rs:501-511) check theirs at their estimate's fee too. Both take 5 ₳ collateral, so they'd need a fee over about 2.67 ₳: unreachable.\n- lovejoin mix_with's payer change at MIX_DRAFT_FEE (mod.rs:1099-1102) and the deposit's change at FIRST_DRAFT_FEE (mod.rs:836-842; build.rs:236) hold a least at a draft fee; see the notes.",
+   "needs_owner": false,
+   "known_check": "Same searches as r2money#1, plus 'guessed fee', 'first guess', 'draft fee' and 'estimate' with collateral in docs/archive/plans and backlog.md: none bear on the account collateral's return."
+  }
+ ],
+ "guards": [
+  {
+   "file": "seedelf-platform/seedelf-core/src/build.rs",
+   "line": 2210,
+   "stops": "An account collateral (a session's merged return) whose return falls under an output's least: the node would refuse the signed transaction",
+   "test": "seedelf-core/tests/merge_test.rs an_account_collateral_whose_return_falls_under_its_least_is_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/build.rs",
+   "line": 2209,
+   "stops": "An account collateral short of 3/2 of the fee",
+   "test": "seedelf-core/tests/merge_test.rs an_account_collateral_short_of_three_halves_of_the_fee_is_refused"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/build.rs",
+   "line": 2860,
+   "stops": "apart refusing a payment a subset pays when an order grown whole is short (r2a#2). The refusal stays NotEnough",
+   "test": "seedelf-core/tests/apart_test.rs a_bundle_that_costs_more_than_it_adds_never_stops_what_the_clis_order_pays"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/lovejoin/mod.rs",
+   "line": 1772,
+   "stops": "A paid withdraw's account change under its least, held at the settled fee and not the 0.5 ₳ guess",
+   "test": "seedelf-core/tests/lovejoin_test.rs a_paid_withdraw_keeps_the_accounts_change_at_least_an_outputs_least"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/lovejoin/mod.rs",
+   "line": 1798,
+   "stops": "A withdraw returned from a round whose declared budgets don't cover its measure (collateral lost on chain)",
+   "test": "seedelf-core/src/lovejoin/mod.rs tests::a_withdraw_declaring_less_than_its_scripts_use_is_never_returned"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/lovejoin/mod.rs",
+   "line": 448,
+   "stops": "A row at the KEY address carrying mix_box's hash, or mix_box's address on the other network, read as a box: drawn, counted in the floor, and failing chains (x2#1)",
+   "test": "seedelf-core/tests/lovejoin_test.rs a_key_address_carrying_mix_box_s_hash_holds_no_box; mix_boxs_address_on_the_other_network_holds_no_box"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/lovejoin/mod.rs",
+   "line": 412,
+   "stops": "The wallet's box dropped when a stranger's mix rewrote its datum as 102([0,[a,b]]) (r3a#1). Still constructor 0 only, two 48-byte fields, a ≠ b",
+   "test": "seedelf-core/tests/lovejoin_test.rs (r3a#1's tests at :678 and :803)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs",
+   "line": 2344,
+   "stops": "A private spend taking a row that isn't at the contract's script (x2#2), which the node would refuse",
+   "test": "seedelf-web-wallet/wasm/tests/api_test.rs (x2#2's, :2942)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs",
+   "line": 3034,
+   "stops": "Paying a Seedelf whose UTxO isn't at the contract's script, under a register a stranger wrote",
+   "test": "seedelf-web-wallet/wasm/tests/api_test.rs (:1930)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs",
+   "line": 5061,
+   "stops": "Remove spending a Seedelf UTxO that isn't at the contract's script",
+   "test": "none found by name (x2#2's api_test.rs cases cover check_spendable)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2949,
+   "stops": "A stranger's key-address row chosen as the private payer of a box's way back, which stopped every private bring-back",
+   "test": "seedelf-web-wallet/wasm/tests/lovejoin_flows_test.rs (:1157)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 453,
+   "stops": "A direct return's collateral tail sending its deposit and mix change to a stranger-staked address first",
+   "test": "seedelf-web-wallet/wasm/tests/lovejoin_test.rs (a6b37119's)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 1229,
+   "stops": "A plan or chain past 3 waves, or mixing again at depth 0 (r3a#2's waves bound)",
+   "test": "seedelf-web-wallet/wasm/tests/lovejoin_across_test.rs (36fbb96f's)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/balances.ts",
+   "line": 545,
+   "stops": "A KEY-address row with the contract's hash counted in the private balance (x2#2)",
+   "test": "extension/tests/contract-scan.test.ts (:272), private-index.test.ts (:340)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/contract-scan.ts",
+   "line": 200,
+   "stops": "A verdict an older release sealed (the planted row as ours) kept for good (gap-g6#1)",
+   "test": "extension/tests/private-index.test.ts (gap-g6#1's sealed v1 record)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/utxos.rs",
+   "line": 60,
+   "stops": "The CLI counting, sweeping or paying by a KEY-address row with the contract's hash",
+   "test": "seedelf-core/tests/utxos_test.rs (:586); seedelf-cli/tests/cli/sweep.rs (:276), remove.rs (:135); seedelf-cli/tests/koios_pages.rs (:499)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4005,
+   "stops": "A split route's leg paid between the two listings coming back alone, later and directly (gap-g4#1)",
+   "test": "extension/tests/swap-runner.test.ts (:939); lovejoin-planner.test.ts (:883)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 3710,
+   "stops": "letGoUnseen freeing a maybe-sent deposit or mix whose inputs aren't all known unspent",
+   "test": "extension/tests/return-chain-scope.test.ts (:157)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4518,
+   "stops": "A swap's unlisted input counted as the session's own unless it's an out of the session's own transaction, unspent, not the collateral and not counted spent (e7a#3)",
+   "test": "extension/tests/session-funding-parts.test.ts (:279)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 7718,
+   "stops": "A due withdraw submitted seconds after another send (x4#1); nothing is kept when it isn't sent",
+   "test": "extension/tests/lovejoin-withdraw-submit.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/rows.rs",
+   "line": 169,
+   "stops": "A sweep holding more of one token than an output holds, more kinds than a transaction carries, or reference scripts past the limit",
+   "test": "seedelf-cli/tests/cli/external_sweep.rs, sweep.rs"
+  },
+  {
+   "file": "seedelf-platform/seedelf-cli/src/commands/rows.rs",
+   "line": 271,
+   "stops": "A stranger's pile of tokens that brings less than its outputs need holding back the user's own UTxOs (it's left out alone, the least first)",
+   "test": "seedelf-cli/tests/cli/external_sweep.rs (fcb22df7's)"
+  }
+ ],
+ "checked_ok": [
+  "apart (r2a#2): after a whole order comes up short the error is still core's NotEnough, with the same static words; `failed && !short_whole` keeps the old result. Every order terminates. grown_before only skips prefixes of an order already grown whole, and those were tried. The outputs are fixed, so a later order changes only which inputs pay, and classes_mixed reports what it ties.",
+  "withdraw_paid's settle: the draft's change saturates and the least is checked in the round that returns. The returned Withdraw's change equals the transaction's output at that fee, and withdraw_paid_in's `paid` is fee + topped. An unbalanced draft is only measured, never returned.",
+  "ScriptSpend::stage's least equals the ledger's minimum for the collateral return. The 5 ₳ stand-in coin encodes in 5 bytes, as any return from 65,536 lovelace to 4.29e9 does.",
+  "x2#1 spends_as_mix_box matches mix_box: it reads only an input's payment credential, with any stake part (Lovejoin 29573c5 lib/lovejoin/mixbox.ak input_at_script). The data layer's rows carry bech32 addresses (fake-index.ts, seedelf-data README), so no index row is dropped. from_resolved reads the chain's own outputs, which are always at the enterprise address.",
+  "r3a#1: mix_logic reads Data, and 121 and 102([0,…]) both decode to Constr 0. parse_mix_datum still requires two 48-byte fields with a ≠ b. The pool reference datum (pool.rs:158) keeps tag 121 alone, which is a launcher's choice and not a fix's.",
+  "x2#2: the three rules agree. The worker's atContract, WASM's at_wallet_contract and the CLI's utxos::at_wallet_contract all require the payment part to be the contract's script, with any stake part. The worker and the CLI skip the network check WASM makes, which the ledger's WrongNetwork rule makes moot.",
+  "x2#2's coverage: every private-spend entry checks it (check_spendable on request.utxos, merged_return's merge, withdraw_private_in, remove_spend, recipient_register). So does every contract reader: readKoiosView's filter, readIndexView via ownedUtxos, incoming's `ours`, and the restore scan's spent rows.",
+  "x2#2 and synthesized rows: core's carried(), box_value's withdraw output and seedelfRow (a Locator keeps the real address) all carry the script address, so check_spendable doesn't newly refuse a chained part or a pay-by-name. SETTLED_RULE drops sealed v1 verdicts, and the kept views in session storage clear on the extension's update.",
+  "direct_tail and collateral_mix: the change row (coin_row) is at the same address the tail's outputs use (home). The deposit still spends every ADA-only UTxO. With no own 5 ₳, a stranger's 5 ₳ (the user's money now) is boxed, and a site's own outputs can only steer staking, not where money lands.",
+  "The waves bound: Settings' depths are 1 to 3, a mix record's depth is checked with isLovejoinDepth, and depth 0 comes only with a seed or a Bootstrap (again false), so no reachable plan or chain is newly refused.",
+  "gap-g4#1: `since` excludes own transactions and `arrived` rows by outpoint, and returnable is a pure filter, so no row reaches the return twice. `late` is set only on the step that decides the outcome, and a later step reads the leg in `rows`. x4#2's stillUnder sends nothing across a lock and an unlock, and releases the chain's reservation.",
+  "e7a#3: only an outpoint the session's own transaction paid (ownOuts) can count as the session's, and only while it's unspent per utxo_info, spent by the swap, not its collateral and not in the spent set. A stranger can't name such an outpoint. partsUnlisted waits at most LOST_AFTER_MS from the part's send.",
+  "letGoUnseen: it takes only maybe-sent deposits and mixes with their inputs recorded, at least 15 minutes old, unknown to tx_status, every input known unspent, and nothing else of the session unconfirmed. It runs in the queue and leaves out sessions that run themselves. A late landing can't double-spend.",
+  "e2b#2 receivedOf: the view's txs leave out replaced and unsent ones, and a resend of the same hash stays one record, so no return counts twice. A strangers-only return leaves lovejoinSkipped alone, and the early return in sendChain's update skips only the skip-word lines.",
+  "The CLI's rows.rs: most_that_fit terminates (TooLarge.fewer is strictly less, otherwise one row leaves each turn). sweepable keeps token totals within a u64 and kinds within 4,000. Sweeps pay only the user's address or contract. select's new order adds no input the old order wouldn't, and fund, create and extract's `fitting` can drop the user's token UTxO behind a stranger's overflow pile, but the pile itself then pays the same token.",
+  "A Bootstrap's collateral is now null, and readAccount's utxos already leave out the account's collateral (coins.account), so the deposit never spends it. refusesEvery and SentMeanwhile keep nothing before they throw, and the box keeps its due time."
+ ],
+ "notes": [
+  "letGoUnseen (gap-g3#2) misses the chained case. It frees a maybe-sent deposit, but not a maybe-sent mix that spends the deposit's outputs: utxo_info doesn't know those outputs, so `known.get(o) === false` never holds. The mix then stays maybe-sent for good, chainSoFar still reads the chain as started, and later returns come back directly with no word of Lovejoin. A mix that Koios took (no `inputs` recorded) makes `others` true, and nothing is let go at all. act's lost rule drops every chain transaction regardless. Reaching this needs a deposit that was in a mempool (a spent refusal after a busy try) and then dropped. The money part (the deposit's inputs) is freed, so this is privacy and wording only. Traced, not run.",
+  "gap-g4#1's late-leg merge takes only the legs the second credential_utxos listing shows. A leg whose fill is on chain (its order spent per utxo_info) but not yet listed by a Koios backend that's behind still comes back alone in a later return. Its batcher's transaction isn't in `fills` then, so the e2b#2 rule treats it as a stranger's.",
+  "r2a#2's cost grows with the Lovejoin boxes among the candidates: orders = by_history, by_tier, (B + 1) × rests fewest_boxes, and blind, each grown prefix by prefix. The fixer's 'at most 11 attempts' holds only for B = 0. With 15 boxes and 5 other UTxOs, a short amount makes roughly 200 attempts against 20 before. That's performance, for a T-lens timing in WebAssembly of a short probe inside in_parts' fit_part.",
+  "The same kind of bug as withdraw_paid's (a least held at a draft fee) is left elsewhere: lovejoin mix_with holds the payer's change to its least at MIX_DRAFT_FEE, 1 ₳ against about 0.85 ₳ settled (mod.rs:1099-1102). The doc at mod.rs:1895 says that's intended, and the planner funds for it. The deposit's change is held at settle's FIRST_DRAFT_FEE of 0.2 ₳ (mod.rs:836-842), a band of about 27k lovelace that returns DEPOSIT_SHORT. For the owner.",
+  "Nit: PoolBox::from_resolved's doc says 'by the same rules as from_row', but it keeps the exact enterprise address while from_row now takes any stake part. Nothing reaches the difference.",
+  "session_collateral's doc (lib.rs:982-984) claims the fallback 'leaves its return a valid output', but only 2 ₳ or more is checked. That is r2money#1's root, and its new refusal reaches the session page in core's English words.",
+  "Two commits after 10a06db6 (02f73991 translations, 04616cf6 tests, e597b56c docs) touch no money code."
+ ],
+ "coverage": "Read in full:\n- The diffs of: core build.rs, lovejoin/mod.rs and utxos.rs; wasm lovejoin.rs and lib.rs (non-test parts); sessions.ts (all 619 diff lines); lovejoin-pools.ts, balances.ts, contract-scan.ts, coin-control.ts, collateral.ts, incoming.ts and destination.ts; the CLI's balance, fund, create, extract, remove, transfer, history and external balance.\n- The CLI's rows.rs, sweep.rs and external/sweep.rs, in full.\n\nRead around the fixes:\n- core: apart, select_script_inputs, grow and one_more; ScriptSpend's draft, estimate, measure_locally, measuring_draft, settle, split, remainder and stage; settle; withdraw_declaring whole; mix_with's stage and loop; the deposit's change; carried(); fitting; the CLI's select; utxo_pages.\n- WASM: session_collateral, plan_return, built_or_without_strangers, merged_return, session_return, planned_return, direct_tail, collateral_mix, holdings_of, withdraw_paid_in, withdraw_private_in, transfer_spend, build_transfer, measured_or_more, fit_part's head and build_transfer_parts.\n- sessions.ts: act, inspect, buildBack (two thirds), sendChain's update, sendRecorded, pump, sendStep, letGoUnseen, view, receivedOf, fundingChange, returnable and listing.\n- lovejoin.ts: pumpChain, chainRetryMs and mayBeIn, publicBuild, readAccount, the reservation changes, refusesEvery and quiet.\n- Elsewhere: readIndexView, utxoOf, viewOf and seedelfRow; dapp.ts keptApart and chainHeld; Lovejoin 29573c5 mixbox.ak.\n\nRan: one test file of my own in a copy (seedelf-wasm natively, three tests), with and without 21caa3b8's least filter. The copy and its target are removed; the test file is kept in my scratch folder.\n\nSkimmed: pending.ts' diff (phrase pins, paysAccounts); orders.rs' seams; the CLI's koios.rs paging.\n\nNot reached:\n- cip30.rs and decode.rs (sign-window display), eval.rs and cbor.rs.\n- The UI screens' diffs, i18n, and the Lean and verification changes.\n- seedelf-koios' SubmitError, and the CLI's web_server.rs and signing page.\n- The extension tests, beyond the letGoUnseen test and the test names cited in guards.\n- The last third of buildBack (the chain path's token legs)."
+}

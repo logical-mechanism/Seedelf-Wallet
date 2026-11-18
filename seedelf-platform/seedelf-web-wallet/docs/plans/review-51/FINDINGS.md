@@ -9,11 +9,11 @@ T1's findings are guards that no test pinned: a T1 agent reverted each in a copy
 | Severity | fixed | owner | covered | moot | unreachable | open | refuted | unverified | merged | All |
 |---|---|---|---|---|---|---|---|---|---|---|
 | critical |  |  |  |  |  |  |  |  |  | 0 |
-| high | 2 |  |  |  |  |  |  |  |  | 2 |
+| high | 2 |  |  |  |  |  |  |  |  | 3 |
 | medium | 3 | 4 |  |  |  |  |  |  | 1 | 8 |
-| low | 201 | 37 | 9 | 2 | 2 | 21 |  | 1 | 6 | 279 |
-| nit | 30 | 1 |  |  |  | 1 | 1 |  | 1 | 34 |
-| **All** | **236** | **42** | **9** | **2** | **2** | **22** | **1** | **1** | **8** | **323** |
+| low | 223 | 37 | 9 | 2 | 2 |  |  | 1 | 7 | 298 |
+| nit | 31 | 1 |  |  |  |  | 1 |  | 2 | 41 |
+| **All** | **259** | **42** | **9** | **2** | **2** | **0** | **1** | **1** | **10** | **350** |
 
 *fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for the second fix round. *merged*: the same as another finding, which carries it.
 
@@ -106,31 +106,6 @@ Each of these refuses something the ledger and the contracts take. Most were chu
 
 - **seedelf-data's copies of two fixed readers.** Its `is_mix_datum` takes tag 121 alone, and its credential index may not tell key rows from script rows. These are r3a#1 and x2#1's twins on the server. The wallet now reads both right whatever the server says, but the server's crowd count can be off. *Recommend:* fix both in seedelf-data and deploy through the deploy workflow, as its own PR.
 
-## Still open: the second fix round
-
-- `t1i#6` low: A site's private-session funding sent only for the origin and network it was reviewed for, within 10 minutes: no test fails without three of its four checks `sessions.ts:2134`
-- `t1i#7` low: A top-up sent only as reviewed (same hash and network), within 10 minutes: no test fails without either check `sessions.ts:2398`
-- `t1l#1` low: A stranger's token name, a pool's ticker and a DRep's name kept from running as a CSV formula: no test fails without it `activity.ts:228`
-- `t1l#2` low: Send publicly's Total leaving counting a payment to another of the user's own accounts as leaving: no test fails without it `CardanoSend.tsx:165`
-- `t1l#3` low: Send privately's Total leaving leaving out a payment to the user's own Seedelf: no test fails without it `Transfer.tsx:178`
-- `t1l#5` low: A locked UTxO's tokens kept out of what a form may send: no test fails without it `format.ts:380`
-- `t1l#6` low: A review's '… after' held at 0 ₳: no test fails without it `ReviewTotals.tsx:100`
-- `t1l#7` low: A pasted recovery phrase cleared from the clipboard: no test fails without it `PhraseInput.tsx:91`
-- `t1l#8` low: Send publicly's warning before an ADA Handle goes into someone's Seedelf: no test fails without it `CardanoSend.tsx:338`
-- `t1l#9` low: A token amount the form can't read ('1.2.3') refused before Review: no test fails without it `TokenAmounts.tsx:72`
-- `t1l#10` low: Bring everything back building and signing its returns once, for the list it opened with: no test fails without it `ClaimAll.tsx:100`
-- `t1l#11` low: Home holding payments past 10 minutes while a maybe-sent one may still land: no test fails without it `Home.tsx:502`
-- `t1l#12` low: The browser's Back pressing a disabled screen Back (a transaction being sent): no test fails without it `history.ts:65`
-- `t1l#14` low: Bring everything back refusing returns built more than 10 minutes ago: no test fails without it `sessions.ts:3363`
-- `t1l#15` low: Set collateral held on an empty account, or while Home holds a payment: no test fails without it `Collateral.tsx:265`
-- `t1l#16` low: Make public's early stop on more than the private balance: no test fails without it `Withdraw.tsx:94`
-- `t1l#17` low: Send publicly's early stop on more than the account can pay: no test fails without it `CardanoSend.tsx:110`
-- `t1l#18` low: Make public's Max sending no token amounts, and its hidden token boxes not holding Review: no test fails without them `Withdraw.tsx:128`
-- `t1l#19` low: Send privately's Max turned off by Add recipient: no test fails without it `Transfer.tsx:379`
-- `t1l#23` low: Bring everything back leaving out a session that runs itself, or one holding nothing: no test fails without it `ClaimAll.tsx:43`
-- `x1b#2` nit: withdraw.ts says a shortfall's `most` is one transaction, but WebAssembly builds it in parts, up to 25 `withdraw.ts:104`
-- `gap-g6#2` low: After a restore, what made a box is kept with only the accounts then known, so a custom account's (index 24 or more) deposit boxes read as the private balance's for good `lovejoin.ts:6324`
-
 ## Fixed
 
 Each with a test that failed before its fix. The commits are on `web-wallet/whole-review-fixes`; the two highs and the CLI's fixes are also on their own branches for `main` (`web-wallet/lovejoin-box-datum-spelling`, `cli/stranger-rows`).
@@ -195,6 +170,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g3#2` **low**: A site session's chain whose deposit Koios never answered keeps that deposit as sent for good: its money is hidden two hours, then the rest comes back directly with no word of Lovejoin `sessions.ts:1311` · 506e4ed2
 - `gap-g4#1` **low**: A split route's leg paid between the runner's two reads of the account comes back alone, in a later return, directly, though its approval sent it through Lovejoin `sessions.ts:3904` · 506e4ed2
 - `gap-g6#1` **low**: Kept verdicts carry no version of the rule that made them, so a fix to what counts as the wallet's never reaches rows and boxes an older release already judged `contract-scan.ts:264` · 4cbac01e, 506e4ed2
+- `gap-g6#2` **low**: After a restore, what made a box is kept with only the accounts then known, so a custom account's (index 24 or more) deposit boxes read as the private balance's for good `lovejoin.ts:6324` · e66a6a16
 - `w3#1` **low**: A tile Mix's chain (and Mix my boxes again's) runs at Settings' depth when the runner builds it, not the depth its review showed and its funding paid for `sessions.ts:4667` · fdd3b8b2
 - `x1a#1` **low**: Send and Make public call the user's payment key under someone else's stake key "your own public account: it comes back", where the sign window says its staking rewards aren't yours `destination.ts:122` · 10a06db6, 6aea4fb8, 8fd738ff, d9e015fb
 - `x2#2` **low**: A UTxO at a KEY address whose hash is the Seedelf contract's, under the user's register, counts in the private balance, and any spend that takes it fails: Max always fails for wallets of up to 20 private UTxOs `balances.ts:489` · 03cf290e, 343fb772, 4cbac01e, 514c6579, 6aea4fb8
@@ -203,9 +179,11 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `e3a#4` **nit**: manifest.ts names the extension with a ternary whose two branches are the same `manifest.ts:59` · d9e015fb
 - `e7b#3` **nit**: KoiosProposal.expiration's doc says the opposite of how governance.ts reads it `koios.ts:289` · 2b3dfd80
 - `gap-g7#4` **nit**: networks.ts's lovejoin.mixCost is read by nothing, and its doc still says it's for the settings' words `networks.ts:20` · 8fd738ff
+- `x1b#2` **nit**: withdraw.ts says a shortfall's `most` is one transaction, but WebAssembly builds it in parts, up to 25 `withdraw.ts:104` · 853d5779
 - Guards now pinned by a test (T1): `t1g#1`, `t1g#2`, `t1g#3`, `t1g#4`, `t1g#5`, `t1g#6`, `t1g#7`, `t1g#8`, `t1g#9`, `t1g#10`, `t1g#11`, `t1g#12`, `t1g#13`, `t1g#14`, `t1h#1`, `t1h#2`, `t1h#3`, `t1h#4`, `t1h#5`, `t1h#6`, `t1h#7`, `t1h#8`, `t1h#9`, `t1h#10`, `t1h#12` · 506e4ed2
 - Guards now pinned by a test (T1): `t1h#11` · c8003eda
 - Guards now pinned by a test (T1): `t1i#1`, `t1i#4`, `t1i#5` · 5c5bc3c1, a9b5a3bb
+- Guards now pinned by a test (T1): `t1i#6`, `t1i#7`, `t1l#14` · e66a6a16
 - Guards now pinned by a test (T1): `t1i#8`, `t1i#17` · a9b5a3bb
 - Guards now pinned by a test (T1): `t1j#1`, `t1j#2`, `t1j#3`, `t1j#4`, `t1j#5`, `t1j#6`, `t1j#7`, `t1j#8`, `t1j#9`, `t1j#10`, `t1j#11`, `t1j#12`, `t1j#13`, `t1j#14` · f1da256d
 - Guards now pinned by a test (T1): `t1k#1`, `t1k#2`, `t1k#3`, `t1k#4`, `t1k#6`, `t1k#7`, `t1k#8`, `t1k#13`, `t1k#14` · f1da256d, 506e4ed2, c8003eda
@@ -243,6 +221,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - Guards now pinned by a test (T1): `t1i#2`, `t1i#12`, `t1i#13`, `t1i#15` · 5c5bc3c1, a9b5a3bb
 - Guards now pinned by a test (T1): `t1i#16` · 5c5bc3c1, c8003eda
 - Guards now pinned by a test (T1): `t1k#9`, `t1k#10`, `t1k#11`, `t1k#12` · f1da256d, 506e4ed2, c8003eda
+- Guards now pinned by a test (T1): `t1l#1`, `t1l#2`, `t1l#3`, `t1l#5`, `t1l#6`, `t1l#7`, `t1l#8`, `t1l#9`, `t1l#10`, `t1l#11`, `t1l#12`, `t1l#15`, `t1l#16`, `t1l#17`, `t1l#18`, `t1l#19`, `t1l#23` · f88560c4
 - Guards now pinned by a test (T1): `t1l#4`, `t1l#13`, `t1l#20`, `t1l#21`, `t1l#22` · c8003eda
 
 ### The proofs
@@ -264,6 +243,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `b1#5` **low**: Every workflow pins its third-party actions by tag or branch, never by commit, in the jobs that sign the CLI and build the data layer's binary too `release.yml:18` · c4b7a906
 - `d1#3` **low**: A site's payment into the Seedelf contract under a register-shaped datum that can't be spent is shown as 'without a register: anyone can take', when no one can ever take it `privacy.md:336` · 36fbb96f, d9e015fb
 - `e9b#2` **low**: Anti-impersonation warnings in warning colour are left out of the accuracy-critical translation set `i18n-critical.mjs:84` · 10a06db6, fc6a0aa1
+- `r2still#3` **low**: This round's e7a#1, t1k#9 and t1j#6 tests fail on CI's preprod-only Vitest leg, so the fix PR's unit (preprod-only) job goes red and e7a#1's fix is pinned on one build only `swap-form-review.test.ts:309` · 04616cf6
 - `d1#4` **nit**: The root README's collateral rule has an exception it doesn't name: a session's 5 ₳ collateral mix spends the session's account under giveme.my's collateral `README.md:276` · c4b7a906
 - `d1#5` **nit**: privacy.md says the recovery phrase can't be copied, but once revealed it's ordinary selectable text `privacy.md:276` · 10a06db6
 - `d1#6` **nit**: The root README's troll attack says Bob pays more to spend the UTxO; Seedelf Wallet can't spend it at all `README.md:187` · c4b7a906
@@ -302,4 +282,4 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 
 ## Merged into another finding
 
-`e3b#1` → `e3a#3`, `e5#1` → `r2a#1`, `e6#2` → `e4a#1`, `e8a#1` → `w3#1`, `e8b#6` → `e9a#1`, `r1#2` → `r4#4`, `r2b#1` → `r2a#1`, `w1b#1` → `r2a#1`
+`e3b#1` → `e3a#3`, `e5#1` → `r2a#1`, `e6#2` → `e4a#1`, `e8a#1` → `w3#1`, `e8b#6` → `e9a#1`, `r1#2` → `r4#4`, `r2b#1` → `r2a#1`, `r2still#1` → `r2sign#2`, `r2verif#6` → `r2docs#3`, `w1b#1` → `r2a#1`

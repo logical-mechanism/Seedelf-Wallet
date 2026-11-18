@@ -1,0 +1,189 @@
+# Lane R2sign
+
+Returned by the workflow's agent `a38c820a6cda69f40`, written here by the lead from its structured answer.
+
+## Findings (3)
+
+### r2sign#1 · medium · The sign window now calls two register shapes a Seedelf payment, with no warning, though no Seedelf Wallet ever reads them: a datum kept by hash that the unsigned witness set carries, and the general form with an indefinite pair
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs:1288`
+- **Who:** site · **Since:** 36fbb96f (this round's register_fields/spender and its carried-datum lookup; before it both shapes read 'none' with the noRegister warning) · **Confidence:** confirmed-by-run
+- **Needs the owner:** It adds a warning and words to the sign window, and changes what privacy.md says a payment into the contract is.
+
+**Scenario:**
+
+A site's transaction pays 100 ₳ of the dApp account's into Seedelf Wallet's contract under a payable register written one of two ways. (a) As a datum hash H, with the register datum D carried in the witness set's plutus_data. (b) Inline as 102([_ 0, [g, u]]): the general form with an indefinite pair, which the node accepts (r3a-1's verify, cardano-cli). The window lists 'Seedelf Wallet's contract, with data, 100 ₳' and shows only the privacy callout 'It pays a Seedelf. Nothing on chain says whose, but it comes from your public account in the open.' No warning shows. Before this round both shapes read 'none', under 'It pays Seedelf Wallet's contract without a register: whatever goes there, anyone can take.' On chain, no Seedelf Wallet lists or spends either output, web or CLI. chain.ts registerOf reads inline datums only and refuses an indefinite pair. seedelf-koios register_of_datum refuses it too. WebAssembly's spends read utxo.inline_datum only, and core's builder never adds a witness datum. So the 100 ₳ the window called a Seedelf payment never reaches that Seedelf's balance. That includes the user's own, for a site that offers to 'move money into your Seedelf'. In shape (a) the witness set isn't signed: with no script_data_hash in the body, the site can submit without D. Then only the site knows the preimage and only the key's holder knows x, so the money is locked for good. For shape (b) with the user's own register, Transaction details also says 'Yours, in your private balance', where the private balance never shows it. The same hash output with D left out still reads 'without a register: anyone can take'. That's false too: the preimage decides, and the site holds it. d1#3's verifier asked for that case to say it can't be judged.
+
+**Evidence:**
+
+cip30.rs:1288-1307: `Address::Shelley(s) if s.payment().is_script() && *s.payment().as_hash() == contract_hash => { let carried_datum = hash.as_ref().and_then(|h| carried.get(h)).and_then(|bytes| PlutusData::decode_fragment(bytes).ok()); let datum = inline_data(out).or(carried_datum.as_ref()); Some(match spender(datum) { Spender::Owner => "register", Spender::Anyone => "none", Spender::Nobody => "dead" } ...) }`.
+
+What the window reads:
+- `carried` (cip30.rs:1131-1146) comes from the witness set's plutus_data.
+- register_fields (cip30.rs:863-876) reads Pallas's data: `(121, _) | (102, Some(0))`, then two BoundedBytes. Pallas's Constr::decode (pallas-primitives 0.35.1 plutus_data.rs:332-339) takes `d.array()?` at any length, an indefinite pair included.
+- The fixer's own test pins the hash case: wasm/tests/cip30_test.rs:1938-1944, 'a register the witness set carries' → "register".
+- The window: DappApprovals.tsx:1206-1222 shows noRegister for "none" and paysSeedelfAccount (privacy tone) for "register".
+
+The receiving side:
+- chain.ts:84-94 registerOf: `const hex = utxo.inline_datum?.bytes;` and `if (!pair || pair.major !== 4 || pair.arg !== 2) return undefined;`.
+- seedelf-koios koios.rs:364-369: `102 => if d.array().ok()? != Some(2) ...`.
+- wasm lib.rs:2351 and :5064 read `extract_bytes_with_logging(&utxo.inline_datum)`.
+- core build.rs writes inline datums only (set_inline_datum at 341, 3078 and 3916) and has no witness-datum path.
+
+Transaction details:
+- decode.rs:1246 register_detail goes through register_fields, for inline datums only (:1305).
+- tx-view.ts:325: `o.address.seedelf && o.register?.payable && ownRegister(...)` gives 'Yours, in your private balance'. This part is traced, not run.
+
+The review saw this coming. x3-1's verify recommended register_of_datum as the window's reader: 'Even after this fix it would read register while the scan can't find it'. r3a-1's verify said the readers should take the indefinite pair. chain.ts:94 and koios.rs:369 are unchanged.
+
+Run: a Vitest through the real worker and WebAssembly (FIXTREE's built wasm/pkg), in a private copy under ~/.cache/seedelf-review-51/R2sign, since removed. 5/5 passed, each asserting a gap:
+- 4 ₳ to the preprod contract `70 94bca9c0…` under H of cip30_test's REGISTER_DATUM, with D in witness key 4: paid[0] {seedelf:'register', datum:'hash', script:true}. The page has the paysSeedelfAccount text and neither warning.
+- The same output with no D: seedelf 'none', with the noRegister text.
+- Inline `d8669f0082 5830<g> 5830<u> ff`: seedelf 'register', with the privacy text. registerOf(that datum) is undefined.
+- registerOf({inline_datum:null, datum_hash:H}) is undefined.
+
+The test's code is in notes.
+
+**Fix:**
+
+Fix the class: call a payment a Seedelf payment only where the receiving wallet will read it.
+- Accept the general form with an indefinite pair in both readers, chain.ts registerOf and seedelf-koios register_of_datum, as r3a-1's verify suggested. That spelling then lands in the private balance.
+- Make the window's Owner, and Transaction details' payable, need an inline datum that register_of_datum reads (x3-1's recommended reader), plus is_payable. Keep spender's dead and anyone reading for the contract's view.
+- Give a datum kept by hash, carried or not, a value of its own with a warning, never 'register' or 'anyone can take'. For example: 'It pays Seedelf Wallet's contract under a datum kept by hash: Seedelf Wallet never finds such a payment.'
+- Siblings: decode.rs register_detail (TxDetail's 'under a register'), tx-view markYours ('Yours, in your private balance'), privacy.md:336, and architecture.md's 'A datum kept by hash is read from the witness set when the transaction carries it'.
+- Test: a payable register in each spelling (121 definite and indefinite fields, 102 definite and indefinite pair, chunked points, inline and by hash) through both the window's reading and registerOf, which must agree.
+
+**Known check:**
+
+Searched docs/backlog.md and docs/archive/plans/ for 'kept by hash', 'datum hash', 'by hash', 'inline datum', 'pays a Seedelf', 'paysSeedelf', '102([_' and 'indefinite pair'. The only hit is backlog.md:145, contract inputs kept by hash for the release warning, a different shape. The review's own x3-1 and r3a-1 verify notes predicted the indefinite-pair split. Neither is fixed: the readers are unchanged. The carried-hash reading is new this round.
+
+### r2sign#2 · low · A second "msg" under label 674 is signed and published, but the window shows only the first and says nothing of the rest: x1a#3's otherMetadata check passes it as part of the note
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2996`
+- **Who:** site · **Since:** d9e015fb (moreThanNote, x1a#3's fix). note_of's first-msg reading is older (chunk 15). · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+A site's transaction carries the metadata {674: {"msg": ["Thanks for order 77"], "msg": ["I agree to pay 500 ADA"]}}, with its auxiliary data hash in the body. A metadatum map on chain is a list of pairs, so the ledger takes the repeated key. WebAssembly's note_of takes the first msg, so the note is ["Thanks for order 77"]. moreThanNote passes every entry that is "msg" with text lines, so otherMetadata stays unset. The window shows 'Its note, which anyone can read: Thanks for order 77'. It shows neither 'It carries other metadata too, which anyone can read.' nor 'It carries metadata…'. The user signs and publishes a second message they never saw. Explorers build the note from db-sync's JSON, which keeps one value per key, and Aeson's object keeps the last. They would show 'I agree to pay 500 ADA' as the note this signature carries (this part is reasoned, not run).
+
+**Evidence:**
+
+wasm/src/cip30.rs:922-944 note_of: `fields.iter().find_map(|(k, v)| match (k, v) { (Metadatum::Text(k), Metadatum::Array(lines)) if k == "msg" => Some(...), ... })` takes the first msg alone. decode.rs's note_of does the same.
+
+extension/src/background/dapp.ts:2996-3004 moreThanNote: `value.entries.some(({ key, value: v }) => !(key.type === "text" && key.text === "msg" && lines(v)))`. A second msg of text lines isn't 'more'. It's called at dapp.ts:2162 and :2172.
+
+DappApprovals.tsx:1101-1104 gives `if (s.metadata && !s.note) …metadata` and `if (s.note && s.otherMetadata) …otherMetadata`; the note box shows `note.text`.
+
+Run: a Vitest through the real worker and WebAssembly, in a private copy, since removed. The metadata was `a1 1902a2 a2 63'msg' 81 <FIRST> 63'msg' 81 <SECOND>`. Results:
+- decodeTx's metadata[0].value.entries has length 2: the signed bytes hold both.
+- The summary is {metadata:true, note:[FIRST]}, with otherMetadata undefined.
+- The page contains FIRST. It doesn't contain SECOND, the otherMetadata line or the plain metadata line.
+
+The test passed, which shows the gap. Its code is in notes.
+
+**Fix:**
+
+In moreThanNote, count a 674 map that holds msg more than once as more, and likewise a repeated 674 label if Pallas hands one over. Better, show every msg entry's lines in order in the note box, the way decode.rs lists them, then say there's more. The same rule belongs in note_of in both cip30.rs and decode.rs, so the window, Transaction details and the worker agree on what the note is.
+
+**Known check:**
+
+Searched backlog.md, archive/plans/ and the review's X1a lane and x1a-3 verify for 'duplicate', 'twice', 'repeated', 'msg', '674' and 'CIP-20'. No repeated-key shape is recorded. G5 named a separate gap for the owner: the note isn't checked against the body's auxiliary_data_hash. This one holds with a matching hash.
+
+### r2sign#3 · low · Remove's new token rows show a token off the wallet's list in raw units: the decimals the Seedelf's UTxO carries never reach the review
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/withdraw.ts:188`
+- **Who:** stranger · **Since:** 36fbb96f (RemoveRows and RemoveResult.tokens) · **Confidence:** traced
+
+**Scenario:**
+
+A stranger mints a Seedelf under the user's register beside 1,000,000 raw units of a token of their own, which Koios reports with 6 decimals: w1b#2's shape. Remove's review now lists the token, but as '1,000,000 X', since nothing gives it its decimals. Home's private list shows the same token as '1 X' once it's back, from the reading's decimals. The figure is off by 10^6 against every other screen. Nothing is paid away: it comes back to the user.
+
+**Evidence:**
+
+How the tokens lose their decimals:
+- wasm lib.rs:5120 `tokens: built.change_tokens.items.iter().map(token_amount).collect()`.
+- TokenAmount (lib.rs:120-127) is {policyId, assetName, quantity}, with no decimals.
+- withdraw.ts:187-188 spreads the result into RemoveSummary.
+- RemoveSeedelf.tsx:177 passes it to PaidRows, which calls tokens.ts:71-73 tokenQuantity, then tokenDecimals (`tokenInfo(network, t)?.decimals ?? t.decimals ?? 0`). That's 0 for an unlisted token.
+
+The decimals are there to use: the UTxO the build spends (withdraw.ts:173, `view.seedelfs[seedelf]`, a KoiosUtxo) carries asset_list[].decimals, which nothing reads. This is e9a#2's class, Transaction details in raw units, which this round fixed only in tx-view.ts (withDecimals).
+
+**Fix:**
+
+In buildRemove, give each summary token the decimals its UTxO's asset_list holds, or read them as tx-view's withDecimals does. Check the other review summaries built from WebAssembly token lists for the same gap.
+
+**Known check:**
+
+Searched backlog.md and archive/plans/ for 'decimals', 'raw units' and 'Remove'. backlog.md:17's 'two decimals' is the usability review's call about ADA, which is unrelated. e9a#2 is this class on Transaction details and was fixed there alone.
+
+## Guards (12)
+
+| Where | What it stops | Test |
+|---|---|---|
+| `seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs:1209` | A collateral return to anyone but the account while its own UTxOs are put up: refused. | wasm/tests/cip30_test.rs, asserts 'collateral would go to someone else' (:956, :1043, :1277) |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs:1229` | A transaction marked to fail its scripts while the account's collateral is up: refused. | wasm/tests/cip30_test.rs:1283 'marked to fail' |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs:1089` | Signing over a found input or collateral on the other network, a Byron row by its network magic: refused. | wasm/tests/cip30_test.rs:1645 a_counterpartys_byron_input_is_someone_elses (Byron); earlier network tests |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs:1712` | A payment key or DRep key signing while some input can't be found, which could spend the account's own UTxO not yet on chain: refused. | none checked by me |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs:1736` | A stake-key signature on a transaction tied to no network, which could restake on the other one: refused. | none checked by me |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs:1421` | Making the account's stake key a pool owner, so its stake becomes pledge with rewards elsewhere: refused. | none checked by me |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs:1547` | The account's own old deregistration with no known deposit, whose refund can't be shown: refused. | none checked by me |
+| `seedelf-platform/seedelf-core/src/cbor.rs:139` | A site's or a DEX's CBOR nested past 128 levels, refused before Pallas recurses and traps the instance (cip30.rs:1042, :1979-1980, decode.rs:648, orders.rs:1254). | seedelf-core/tests/cbor_test.rs a_transactions_nesting_counts_what_its_tagged_bytes_hold; orders_test.rs a_swap_nested_too_deep_is_refused_by_the_cancel_check_itself; wasm/tests/deep.test.mjs |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:1956` | A site's transaction spending or putting up what the dApp account's own Lovejoin chain, being sent, needs: refused. Only that account's chain counts, never another account's. | extension/tests/dapp-other-account-mix.test.ts |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2859` | A stranger's 5 ₳ with a datum or reference script standing in as a session's collateral, leaving the real one open to a site's spend. | extension/tests/dapp.test.ts (it.each over the three shapes) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/ui/screens/DappApprovals.tsx:135` | Signing a transaction where the account's key releases contract funds that don't reach it, without the user's own yes for that request. | extension/tests/dapp-prompt.test.ts 'a contract UTxO the account's key releases' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/ui/screens/Swaps.tsx:828` | Start swap sending a funding built on one pair while the approval names another picked during the build (e7a#1). | extension/tests/swap-form-review.test.ts |
+
+## Checked and holds
+
+- d1#3's spender against wallet.ak at 5b82530 and Lean's registerOf and schnorrProve. Owner is is_payable. A register with an identity public value under a decodable generator is anyone's: z=0 with g_r the identity passes, and an identity generator with it too. An identity generator under a valid non-identity public value needs a hash fixed point, so it's dead. Points that won't decompress (wrong length, off curve, torsion) are dead. No datum, or one that isn't a register, is anyone's: V3's datum is optional.
+- A carried datum is matched by blake2b-256 of its raw bytes, the ledger's own datum hash. So whatever else the unsigned witness set holds, it is the output's datum.
+- w2#2: the window's contract match now needs a script payment part (cip30.rs:1290); decode.rs's address_detail already did (:1390). A key address carrying the contract's 28 bytes reads as an ordinary payment.
+- w2#6, Byron rows. Rows are read by FromStr (bech32, then base58, then hex). network_of reads a Byron magic as the ledger does: any NetworkTag means a test network. A Byron input counts its root as a foreign key, so complete is false. Byron payees and withdrawals now show their base58.
+- Pallas 0.35.1's Display falls back to hex when bech32 fails, so the new to_string calls can't panic. Each one on a Shelley or stake address in cip30 also comes after its network check.
+- w2#1: a committee certificate counts a signer only for a key cold credential. Pool certificates still count one. A script stake credential's certificate needs no key, as the existing rule for script withdrawals and inputs has it.
+- The nesting walk in core is cip30's old one, line for line. `saturating_sub(1) > max` equals `> max + 1`, and MAX_DEPTH is 128. Every former caller keeps it, and check_cancels gained it.
+- decode.rs decimal(): tag 3's carry, leading zeros stripped before the 128-byte bound, -0x for a negative. PlutusTree shows the hex form, and Copy JSON is hidden for it. Nothing else in the extension parses a Plutus integer.
+- shownSiteText's HIDDEN set matches decode.rs hidden(): the same Cf, Default_Ignorable, Cc, Zl and Zp code points. It keeps tabs and line breaks and writes astral code points whole. readableText keeps a byte order mark. The 'written as codes' line shows only when something was escaped.
+- moreThanNote counts as more: another label, a 674 that isn't a map, a key that isn't msg, and a msg holding anything but text. Tested with a msg holding a number or bytes.
+- e3a#1, chainHeld. Only the public chain being sent counts, and only when its account matches the request's: Settings' dApp account at the first look, the reading's at the last, and getCollateral's from available(). Sessions are unchanged. Reservations live in chrome.storage.session, so no record without an account survives an update.
+- e3a#2: dapp.ts's session collateral rule equals coin-control's collateralFits. A stranger's plain 5 ₳ standing in costs nothing, since any fitting 5 ₳ serves the return.
+- e3b#4: an error shows only with its own request, or on the empty window, and answer() clears it before each answer. ConnectRequest is keyed by id, and its errors are tied to its request.
+- tx-view stakeElsewhere. A base address's stake key is read at hex[58,114). Enterprise, pointer and script stake parts are flagged. The other accounts' stake keys are read before flagging. The collateral return counts. The balance counts these UTxOs by payment credential (account.ts credentialUtxos), so 'Yours' holds.
+- tx-view withDecimals covers outputs, the collateral return and the mint, and formatQuantity handles a burn's negative.
+- destination.ts ownAccount sets stakeElsewhere only when no known account's stake key is carried. Send's and Make public's reviews get it through the destination spread (send.ts:166-167, withdraw.ts:137). The ADA does come back, as OwnNote says.
+- Remove spends only the Seedelf's UTxO (build.rs:3590), so RemoveResult.tokens is exactly what sat with it, less the burned Seedelf.
+- e7a#1: the first build's quote, pay and get come from one render (current exists only for sameAsk). Rebuild and Build again reuse out's. The approval and Start swap read out's alone, and the session is built on that quote.
+- e3b#2: ConnectRequest keeps the unlocked side, and the review's before is homeBalance(unlocked(...)), the same as before the fix and Home's figure.
+- The fix tree is untouched: git status is clean. My copy under ~/.cache/seedelf-review-51/R2sign is removed.
+
+## Notes
+
+- Line numbers are FIXTREE's at HEAD 02f73991 (web-wallet/whole-review-fixes); the chunk's TREE predates the fixes.
+- The test I ran, extension/tests/r2sign-checks.test.ts, came from a private copy, since removed. Imports: blake2b from @noble/hashes/blake2.js; bytesToHex from @noble/hashes/utils.js; createElement; renderToStaticMarkup; vitest; i18n from ../src/i18n/core; DappTxSummary, KoiosUtxo and TxDetail from ../src/shared/rpc; registerOf from ../src/background/chain; NetworkContext; SignTx from ../src/ui/screens/DappApprovals; koiosPreprod, loadTestWasm, testBalances and vectors from ./fakes. The signWindow(txCbor) harness is dapp-prompt.test.ts's x1a#3 one, verbatim: 12-word vector account 0, a 10 ₳ input '11'*32#0 at receive_0, enable, signTx, decline, return the summary and the rendered SignTx text. Cases: (1) metadata `a11902a2a2${cborText('msg')}81${cborText(FIRST)}${cborText('msg')}81${cborText(SECOND)}`, body `a40081825820${INPUT}00018182 5839${cip30Address(SITE)} 1a003d0900 021a00029810 075820${blake2b(metadata)}`, tx `84${body}a0f5${metadata}`: decodeTx metadata[0].value.entries has length 2; summary {metadata:true, note:[FIRST]}; otherMetadata undefined; the page lacks SECOND and both metadata lines. (2) body `a30081825820${INPUT}00018183581d70${CONTRACT}1a003d09005820${blake2b(REGISTER)}021a00029810`, CONTRACT = 94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469, REGISTER = cip30_test.rs REGISTER_DATUM. With witness `a10481${REGISTER}`: paid[0] {seedelf:'register', datum:'hash', script:true}, the paysSeedelfAccount text, no noRegister or deadRegister. With witness `a0`: seedelf 'none' and noRegister. (3) inline datum `d8669f00825830${g}5830${u}ff` (106 bytes) in a map output `a300581d70${CONTRACT}011a003d0900028201d818586a${datum}`: seedelf 'register', the paysSeedelfAccount text; registerOf of that datum is undefined. (4) registerOf({inline_datum:null, datum_hash:H}) is undefined, while the same REGISTER inline is read. Run as `timeout 10m npx vitest run tests/r2sign-checks.test.ts` under systemd-run MemoryMax=8G: 5 passed, which shows the gaps.
+- Not a finding, wording, older than this round. For a register whose public value is the identity, the window says 'It pays Seedelf Wallet's contract without a register: whatever goes there, anyone can take.' The effect is right, but there is a register. Transaction details now says 'a register anyone can spend', and privacy.md's new words admit 'or under one anyone can spend'. The string's words are the owner's to change.
+- Considered and dropped. Send to (the active account's payment key, another of the user's accounts' stake key) shows OwnNote alone. destination.ts computes `staked` and drops it, while the sign window names that account in its ties line. Such an address exists only if someone who knew both keys made it, so paying it reveals no new link. The stake works for the user's own account, so 'isn't yours' would be false.
+- Edge, for the owner. When knownAccounts() fails (caught as []), destination.ts and tx-view.ts flag another of the user's accounts' stake key as 'a stake part that isn't yours'.
+- w2#1 treats every script stake credential as needing no key signature, which matches the existing rule for script withdrawals and inputs. A native-script stake credential can still need other keys, so 'complete' is optimistic there. The witness set isn't signed, so reading native scripts from it wouldn't be a fix.
+- G5's named gap, the note not checked against the body's auxiliary_data_hash, is wider than r2sign#2: a site can show one note and publish another wholesale. It's known and the owner's, so it isn't re-reported.
+- For the owner, about the data layer, which I didn't check (seedelf-data is out of the chunk). If the private index ever filled `row.datum` from a datum kept by hash, private-index.ts:399 would present it as inline (datum_hash: null). The wallet would then list the UTxO as owned, and every spend including it would fail, since the builder adds no witness datum.
+- e3b#4: G5's owner note holds as written. Once an earlier request's error is hidden, the next request's screen doesn't say it failed.
+
+## Coverage
+
+Read in full:
+- This round's diffs (main..HEAD) of wasm cip30.rs, decode.rs, background dapp.ts, ui/dapp.ts, DappApprovals.tsx, tx-view.ts, destination.ts, StakedWarning.tsx, CardanoSend.tsx, Withdraw.tsx, RemoveSeedelf.tsx, Swaps.tsx (NewSwap and nowLine), PlutusTree.tsx and TxDetail.tsx.
+- Core's cbor.rs and orders.rs check_cancels, and en.json's changed strings.
+- cip30.rs from 1 to 1860: inspect end to end, note_of, row_address, network_of, spender and register_fields.
+- The surrounding code these call: chain.ts registerOf, seedelf-koios register_of_datum, private-index utxoOf, account.ts readAccountUtxos, withdraw.ts buildRemove, PaidRows, tokens.ts tokenQuantity, format.ts formatQuantity/unlocked, ReviewTotals homeBalance, dapp.ts ties/keysOf/siteTitle/view, and spent.ts reservations with lovejoin.ts ChainReservation.
+- The deployed wallet.ak and schnorr.ak at 5b82530, and Lean's Seedelf.Every.Typed registerOf and walletAccepts.
+- The fixer reports G1-G6, fix-branches.md, and the lane and verify records of d1#3, x1a#1, x3#1 and r3a#1.
+- Pallas 0.35.1's Address Display and FromStr, and its Constr decode.
+
+Skimmed:
+- lib.rs's other changes: 514c6579's at_wallet_contract, and buildRemove's result.
+- coin-control.ts collateralFits, Utxos.tsx's stake line (e9a#3), and the swap's e7a#4 lines.
+
+Not reached:
+- SiteSessions.tsx (x1b#1); G4's and G6's worker changes beyond what dapp.ts calls; Lovejoin.tsx and the staking, governance and pools screens.
+- The es and ja drafts of the new strings; the e2e suite; the new test files' bodies, except the two I reused (dapp-prompt.test.ts's x1a#3 block and cip30_test's who-can-take-it test).
+- I ran nothing in FIXTREE. One Vitest file ran in a private copy, since removed.

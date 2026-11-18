@@ -1,0 +1,167 @@
+# Lane R2cli
+
+Returned by the workflow's agent `a02b5da680270a25f`, written here by the lead from its structured answer.
+
+## Findings (2)
+
+### r2cli#1 · high · Twenty of a stranger's token piles, sorted first under Koios's new tx_hash order, take every slot of the 20 UTxOs a CLI spend draws on: sweep --all, sweep, transfer and util mint then fail on every run
+
+- **Where:** `seedelf-platform/seedelf-cli/src/commands/sweep.rs:166`
+- **Who:** stranger · **Since:** The 20-row window is old (MAXIMUM_WALLET_UTXOS). 48a4c977 (82078f10 on cli/stranger-rows) made its order a payer's choice: keyset paging by tx_hash. 64379c03 and fcb22df7 (027fc81b and 204ef8fb), r4#2's fix, cut sweep --all's 20 in sweepable before any short row is found. Yet the commit says it 'takes the first 20 UTxOs it can spend after those checks', and the README says 'run it again for the rest'. · **Confidence:** confirmed-by-run
+- **Needs the owner:** The CLI fixer left the transfer, sweep -l and util mint window open for the owner (fix-branches.md, 'For the owner' #2). Changing how the window is picked also changes the README's 'the first 20 the CLI finds', and which of the user's UTxOs are spent together. Reordering sweep --all alone keeps its fix's own claim and needs no call.
+
+**Scenario:**
+
+A CLI user holds 500 ₳ of their own in five UTxOs. A stranger mints 600 one-of tokens under 20 native policies. In one transaction they pay the contract 20 outputs under re-randomizations of the user's register, which sits on chain beside the Seedelf. Each output holds 30 tokens and 2.0 ₳; the CLI's own least for such a contract output is 1.99 ₳. The stranger varies a metadata nonce until the transaction's hash starts 0x0000, below the hash of every UTxO the user holds. In all it costs about 41 ₳, and the stranger loses it. The CLI now asks Koios for order=tx_hash.asc, so these 20 rows are the first 20 the user owns.
+
+`sweep --all` keeps them as its 20, because none of them is unpriced, overflowing or past 4,000 kinds. The user's 500 ₳ is set aside as 'Later'. most_that_fit then drops each pile as short and fails. The CLI prints 'Not Swept: 5', 'Past what one transaction takes (run sweep --all again): 5' and 'Error: Not enough ADA in the Seedelf balance for this, its fee and the change'. It does this on every run, and it names none of the 20 piles.
+
+`sweep -l`, `transfer` and `util mint` draw on the same first 20 through collect_wallet_utxos and refuse the same way. `--utxo <own>` answers 'No Usuable UTxOs Found'. No CLI command can move the 500 ₳. In main, Koios's answer had no order, likely oldest first, so such piles landed after the rows the user already held. The freeze then came only once the user had spent those rows. The new order puts the piles first at once, and the payer chooses it.
+
+**Evidence:**
+
+Trace, in FIXTREE:
+1. seedelf-koios/src/koios.rs:227 `format!("order=tx_hash.asc,tx_index.asc&limit={PAGE_SIZE}")`. Every page is in hash order, and pages join in order. utxos.rs:15-24 get_credential_utxos returns the rows unchanged.
+2. utxos.rs:147-177 collect_wallet_utxos keeps the first 20 owned rows in that order (`if number_of_utxos >= MAXIMUM_WALLET_UTXOS { break; }`, :166). It feeds transfer.rs:101, sweep.rs:181 and util/mint.rs:68. `--utxo` filters only those 20 (utxos.rs:577).
+3. sweep.rs:159-172 runs `collect_all_wallet_utxos`, then `rows::sweepable(owned_utxos, wallet_contract_size, MAXIMUM_WALLET_UTXOS as usize, ..)`, then `rows::most_that_fit(rows::by_worth(rows, &paid)?, ..)`. In rows.rs:155, `if taken.len() == at_most || .. { stayed.push((utxo, Stay::Later)) }`. sweepable leaves out only Unpriced (:151), Tokens (:179), kinds past 4,000 (:184) and reference bytes. So a short pile takes a slot, and by_worth sorts only the 20 it kept. external/sweep.rs:47-48 runs by_worth before sweepable, and with no cap.
+4. most_that_fit's short path (rows.rs:271-281) drops one pile per build. Once rows is empty it returns the error (:284-285), and the `short` list is dropped unreported.
+5. Every output of one transaction shares its hash, and a payer can vary that hash freely: a 0x0000 prefix takes about 65,536 tries.
+
+Run: a test in my own copy of FIXTREE, with its own target, removed afterwards. The test is seedelf-cli/tests/cli/r2cli.rs; a copy is in SCRATCH/r51/work/R2cli/r2cli_window_test.rs. It uses the harness's wallet_utxo and pile, with the fixture sorted by (tx_hash, tx_index) as Koios answers. The rows are the user's 5 × 100 ₳ at tx_hash(100..=104) and 20 piles under the user's register at tx_hash(1..=20).
+- Piles of 200 tokens and 4.5 ₳:
+  - `sweep --all` printed 'Not Swept: 5 / Past what one transaction takes (run sweep --all again): 5' and returned Err("Not enough ADA in the Seedelf balance for this, its fee and the change"), with 0 submits.
+  - `sweep -l 10 ADA` gave the same Err, with 0 submits.
+  - `sweep -l 10 ADA --utxo <own>` gave Err("No Usuable UTxOs Found").
+  - `transfer` of 10 ₳ to a Seedelf gave the same Err, with 0 submits.
+- Controls, with the same rows but the user's listed first: sweep --all, sweep -l and transfer each sent, with 1 submit.
+- Piles of 30 tokens and 2.0 ₳ (wallet_minimum_lovelace_with_assets of one is 1,991,220): sweep --all gave the same output, Err and 0 submits.
+
+**Fix:**
+
+sweep --all: run rows::by_worth over every owned row before rows::sweepable, as external sweep does. Piles that bring less than their outputs need then sort last, and take the window only when fewer than 20 better rows exist. most_that_fit already drops those as Short and sends the rest. When the build still fails, name the short rows instead of saying 'run sweep --all again'.
+
+The same class, collect_wallet_utxos (transfer, sweep -l, sweep --utxo, util mint): pick the 20 from every owned row in an order the payer can't choose. Use the same worth order: ADA alone by size first, then token rows by what they bring. Or let select_script_inputs choose among all owned rows and cap its inputs at 20. Nothing should take Koios's tx_hash order, or any key a payer controls, as the window's order. A sweep or selection test with the piles at the lowest hashes, the user's rows after them, shows each case.
+
+**Known check:**
+
+fix-branches.md 'For the owner' #2 names the window of transfer, sweep -l and util mint as 'picked before any filter'; it says nothing of the order or of sweep --all's short rows. verify/r4-2.md's fix notes say 'Better, cap at 20 after those filters, so junk can't take slots in the window.' The 20-UTxO cap is in the platform README's Limits (settled), and the root README's Troll Attacks covers reference scripts only. I searched backlog.md for 'first 20|20 UTxO|window|grind' and archive/plans/ for 'first 20|grind|tx_hash order|tx_hash.asc', and found only unrelated web wallet hits. INDEX.md, lanes/ and verify/ have nothing on 'window|first 20|grind|take slots' for the CLI.
+
+### r2cli#2 · low · fund's new order takes a second holder of the sent token for its ADA before any ADA-only UTxO: a fund main made is refused, and others spend a token UTxO they don't need
+
+- **Where:** `seedelf-platform/seedelf-core/src/utxos.rs:251`
+- **Who:** user · **Since:** 48a4c977, r2b#2's fix (82078f10 on cli/stranger-rows) · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+A CIP-30 address holds three UTxOs:
+- U1: 20 ₳ and 100 T.
+- U2: 9.4 ₳, 1 T and 60 NFTs of 60 policies.
+- U3: 100 ₳ alone.
+
+The user runs `fund -s <seedelf> -l 100000000 --asset <T>=100`. main picks U3 and U1, which hold 120 ₳: it pays 100 ₳ and the 100 T, with about 19.8 ₳ of change.
+
+The fix tree sorts the rows U1, U2, U3. U1 finds the token. U2 is then taken by the 'tokens found, still short of ADA' branch, before U3 is reached. That puts U2's 61 tokens into the change. The floor becomes 4 × the least for one output holding all 61, about 40 ₳. The goal rises to about 140 ₳, past the 129.4 ₳ the address holds, and select returns nothing. fund says 'Not Enough Lovelace/Tokens'.
+
+With -l 50 ₳ the fund builds, but it spends U2 too. Its 60 NFTs and 1 T go back through four new change outputs, at a larger fee. U2 can be the user's own UTxO, or a stranger's that holds one unit of the token being sent.
+
+**Evidence:**
+
+utxos.rs:248-254 sorts by `holds_sent = has_tokens && !tokens.is_empty() && assets_of(..).any(tokens)` with the key `(!holds_sent, has_tokens, Reverse(v))`, so every holder comes before the ADA-only rows. :304 `if !added && current_lovelace_sum < lovelace && found_assets.contains(tokens.clone())` then takes a later holder for its ADA. :324-341 set the floor to multiplier × wallet_minimum(all change tokens), and the recursion raises the goal.
+
+Run: a test calling utxos::select directly with fixture_params, in my copies with separate targets, removed afterwards. It is seedelf-core/tests/r2cli_select.rs; a copy is in SCRATCH/r51/work/R2cli/r2cli_select_test.rs.
+- On FIXTREE's code, U1, U2 and U3 with a 100 ₳ goal picked [] (R2CLI_PICKED [], the test failed). A 50 ₳ goal picked [U1, U2, U3].
+- On main's code, both goals picked [U3, U1] (the test passed).
+
+A pitfall: two copies sharing one CARGO_TARGET_DIR reuse each other's workspace crates, so my first main run silently built FIXTREE's core.
+
+**Fix:**
+
+Keep the holders first only until the tokens sent are found:
+1. Take holders, the most lovelace first, while `!found_assets.contains(tokens)`.
+2. Then take ADA-only rows.
+3. Then take every other token UTxO, holders included.
+
+This can be two passes over the list, or the third branch can skip a holder while ADA-only rows remain. Keep r2b#2's test (`fund_takes_ada_from_a_token_utxo_sorted_ahead_of_the_one_holding_the_token`) and add this case. create and extract call select with no tokens, so their order doesn't change.
+
+**Known check:**
+
+I checked r2b#2's lane text and its verdict (confirmed, low), which is about the case this fix closes, not this one. selection_integration.rs has the one r2b#2 test. I also searched fix-branches.md, backlog.md's CLI section, and INDEX.md and lanes/ for 'select|Not Enough Lovelace/Tokens|change floor': none covers the change of order.
+
+## Guards (20)
+
+| Where | What it stops | Test |
+|---|---|---|
+| `seedelf-platform/seedelf-cli/src/commands/rows.rs:169` | A sweep holding more of a token than one output can, with the rest's tokens, fails for good. Such a row stays as Stay::Tokens and doesn't take a window slot. | tests/cli/sweep.rs sweep_all_goes_when_a_strangers_tokens_total_past_a_u64; tests/cli/external_sweep.rs external_sweep_goes_when_a_strangers_tokens_total_past_a_u64 |
+| `seedelf-platform/seedelf-cli/src/commands/rows.rs:151` | Spending a reference script the CLI can't measure, which would be a short fee and a refused transaction. The row stays as Unpriced. | tests/cli/external_sweep.rs external_sweep_leaves_a_reference_script_it_cant_measure |
+| `seedelf-platform/seedelf-cli/src/commands/rows.rs:155` | A sweep past the ledger's 204,800 bytes of reference scripts. sweep --all counts the wallet contract's own size from the start. | tests/cli/external_sweep.rs external_sweep_takes_the_reference_scripts_one_transaction_may_use |
+| `seedelf-platform/seedelf-cli/src/commands/rows.rs:184` | Adding up tokens of a kind count no transaction can carry (MOST_KINDS 4,000). Core's sums grow with the square of the kinds, so this bounds the time too. | none found |
+| `seedelf-platform/seedelf-cli/src/commands/rows.rs:253` | A UTxO no transaction holds even alone holding back the ones after it. It stays as TooLarge. | tests/cli/external_sweep.rs external_sweep_leaves_a_utxo_no_transaction_can_hold |
+| `seedelf-platform/seedelf-cli/src/commands/rows.rs:281` | A short build drops every token row short of its own deposit at once, holding the user's own NFT back beside a pile. Now only the row that brings least goes, one at a time. | tests/cli/external_sweep.rs external_sweep_takes_a_token_utxo_the_rest_can_carry_beside_a_pile; tests/cli/sweep.rs sweep_all_leaves_tokens_the_rest_cant_carry |
+| `seedelf-platform/seedelf-cli/src/commands/submit.rs:33` | A re-run paying twice after a submit Koios didn't confirm. The id prints before the submit, with advice to look it up on a may-have-gone, and an earlier run is named on a spent input. | tests/cli/submit.rs a_submit_koios_never_confirmed_names_the_transaction_it_sent |
+| `seedelf-platform/seedelf-koios/src/koios.rs:626` | A timeout, a 5xx or a 2xx that isn't an id read as not sent. Only a connect or builder failure, a 429, or a node-down 4xx count as NotSent. | tests/cli/submit.rs submit_tx_tells_a_refusal_from_a_submit_that_may_have_gone |
+| `seedelf-platform/seedelf-koios/src/koios.rs:220` | An offset page skipping or repeating a UTxO. Keyset paging reads each outpoint once. | tests/koios_pages.rs a_utxo_spent_between_two_pages_hides_no_other_utxo, an_address_is_read_whole_in_pages_too |
+| `seedelf-platform/seedelf-koios/src/koios.rs:1019` | A history page repeating a transaction after one lands between pages. | tests/koios_pages.rs a_transaction_landing_between_two_history_pages_is_listed_once |
+| `seedelf-platform/seedelf-core/src/utxos.rs:41` | A KEY address carrying the contract's hash, under the user's register, counted as balance, spent by sweep (where the node would refuse it), or taken as a Seedelf's place. | tests/cli/sweep.rs sweep_all_leaves_a_row_at_the_key_address_carrying_the_contracts_hash; seedelf-core/tests/utxos_test.rs; tests/cli/remove.rs |
+| `seedelf-platform/seedelf-koios/src/koios.rs:931` | util history reading a register at the KEY address with the script's hash as a receipt. | koios.rs a_place_is_at_a_script_only_where_a_script_holds_its_credential; tests/koios_pages.rs a_credentials_history_reads_registers_at_its_script_alone |
+| `seedelf-platform/seedelf-cli/src/commands/util/extract.rs:69` | Extracting from another script, the key address or the other network. The contract's staked form is still taken. | tests/cli/extract.rs extract_rescues_a_datum_less_utxo_at_the_contracts_staked_form, extract_refuses_what_isnt_a_datum_less_utxo_of_the_contracts |
+| `seedelf-platform/seedelf-cli/src/web_server.rs:153` | A DNS-rebinding page reading the unsigned transaction: any Host but 127.0.0.1:44203 or localhost:44203 gets a 404. | tests/signing_page.rs the_page_answers_only_its_own_host |
+| `seedelf-platform/seedelf-cli/src/web_server.rs:224` | Printing an address an earlier run's server answers. The port is bound before anything prints, and the CLI stops if the port is taken. | tests/signing_page.rs a_second_run_never_announces_an_earlier_runs_page |
+| `seedelf-platform/seedelf-cli/src/web_server.rs:147` | An earlier run's page standing in for this run's: each run serves at a 128-bit random path. | tests/signing_page.rs each_run_serves_its_page_at_an_address_of_its_own |
+| `seedelf-platform/seedelf-cli/static/index.js:168` | Splicing the wallet's witnesses into the body at a searched 'a105'. The witness set is found by walking the CBOR, and the transaction's own redeemers are kept. | extension/tests/cli-signing-page.test.ts (7 cases) |
+| `seedelf-platform/seedelf-cli/static/index.js:35` | Signing with a wallet on the other network. | extension/tests/cli-signing-page.test.ts 'signs only with a wallet on the network it was built for' |
+| `seedelf-platform/seedelf-cli/src/commands/fund.rs:136` | A stranger's overflowing junk at the payer's address stopping fund. The same guard is at create.rs:77 and util/extract.rs:144, where extract uses the extracted UTxO's tokens as its base. | tests/cli/fund.rs fund_goes_when_a_strangers_tokens_at_the_address_total_past_a_u64; tests/cli/extract.rs extract_goes_when_a_strangers_tokens_at_the_address_total_past_a_u64 |
+| `seedelf-platform/seedelf-cli/src/commands/rows.rs:41` | balance and external balance failing for good on a token total past a u64. They now total in u128 and list the rows first. | tests/cli/balance.rs balance_shows_a_wallet_holding_tokens_past_a_u64, external_balance_shows_a_wallet_holding_tokens_past_a_u64, balance_totals_are_exact_past_a_u64 |
+
+## Checked and holds
+
+- external sweep sorts by worth before sweepable and has no window cap, so a stranger's short piles sort last and can't hold back the user's rows; only the piles stay.
+- most_that_fit always ends: (rows.len(), n) falls on every turn, since TooLarge::fewer(n) < n for n > 1, and any removal resets n to a smaller rows.len().
+- MOST_KINDS (4,000) is above what one 16 KiB transaction carries at 20 tokens an output (about 2,700), so it never leaves out what could go.
+- submit.rs prints the id, blake2b-256 of the body bytes as encoded, which is the ledger's id: Pallas's sign keeps the body bytes. It prints it before submitting, for both callers (prove_and_submit and external sweep).
+- submit_tx's split holds: a connect error (a connect timeout too) or a builder error is NotSent. Any other send error or timeout, a 5xx, an unreadable non-4xx body, or a 2xx that isn't a JSON string is MaybeSent. A 429 or TxSubmitConnectionError is NotSent, and BadInputsUTxO or 'All inputs are spent' is Spent.
+- utxo_pages matches koios.ts paged: the same order and or= filter, each outpoint once, stopping on a short page or on a page with nothing new, so it can't loop.
+- transaction_pages pages by offset with block_height.desc: an insertion only repeats a row, which seen drops, and never skips one.
+- at_wallet_contract and at_script each keep only a script payment part equal to the contract's, under any stake part. The bech32 first-character map (z, x, 2 and w for a script; q, y, g and v for a key) is right for mainnet and preprod headers.
+- util extract's check is network plus payment credential: the staked form is accepted, the KEY address and other scripts refused.
+- The signing page binds before it prints and serves under a fresh 128-bit path. Host equality is case-insensitive (http's Authority). It sends no-store, DENY and frame-ancestors 'none', escapes <, > and & in its JSON, and computes the id from the unsigned body.
+- index.js withWitnesses: pallas-txbuilder 0.35.1 writes vkeywitness: None in the unsigned transaction (conway.rs:259-260), so the wallet's key-0 entries are never dropped as 'ours'. The transaction's redeemers win on a clash, and an indefinite map is read. A head past the bytes throws instead of looping.
+- balance reads the contract once and lists the Seedelfs and rows before totalling; owned_seedelfs matches the old extract_all_owned_seedelfs except for the KEY-address filter.
+- fitting keeps the order it's given, so putting it before select in fund, create and extract doesn't change select's order.
+- On cli/stranger-rows, core's CLI paths are the same as FIXTREE's: utxos.rs is identical, and G1's build.rs changes touch only apart, which is never blind, and the account-collateral return.
+- The test seams (arm_cbor_capture, serving_url, override_endpoints, inject_wallet_scalar, override_github_base) do nothing unless a test calls them. No manifest or Cargo.lock change came with the CLI fixes.
+- create and extract call select with no tokens, so r2b#2's new order leaves their selection as it was (holds_sent is false whenever no tokens are sent).
+
+## Notes
+
+- The fixer's 'Dusting' item #1, sized: in my control run, sweep --all with the user's 5 × 100 ₳ listed first carried part of the stranger's 200-token piles, and 14 rows stayed. At about 13 ₳ needed against 4.5 ₳ brought per pile, each pile carried ties about 8.5 ₳ of the user's ADA into junk outputs at the destination. That ADA isn't lost, but it can only move with the junk.
+- G2's report names `credential_transactions`, but the code's function is `script_transactions` (seedelf-koios koios.rs:1002). The slip is in the report only.
+- util history now reads credential_txs for the whole contract: every Seedelf user's transactions, the staked form's too, 65 a page plus one tx_info per page. That costs more of Koios's public budget than the enterprise address did. It's correct, just costlier.
+- submit_tx takes any JSON string in a 2xx as success, and never compares it with the id the CLI computed. Koios is trusted, so this is a note only.
+- A BadInputsUTxO for an input that never existed is called Spent, with the 'maybe an earlier run's' advice. This is harmless.
+- r2cli#1's tests showed sweep --all naming none of the short piles on its final failure: most_that_fit drops `short` on the Err path. Whatever the owner decides on the window, naming them would at least tell the user what blocks the sweep.
+- Tooling gotcha (matches the memory note on worktree and cargo-target gotchas): two source copies sharing one CARGO_TARGET_DIR reuse each other's workspace crates, which have the same metadata hash, with dep-info pointing at the first copy. My first run on main silently tested FIXTREE's core. Each tree needs its own target.
+
+## Coverage
+
+Read in full, in FIXTREE:
+- seedelf-cli/src: commands/rows.rs, submit.rs, spend.rs, sweep.rs, external/{sweep,balance,mod}.rs, balance.rs, fund.rs, util/extract.rs, util/history.rs, web_server.rs.
+- seedelf-cli/static: index.js, index.html.
+- The diffs of create.rs (plus its selection and collateral code), remove.rs, transfer.rs (selection and --utxo), util/{mint,find,statistics}.rs, fee.rs, seedelf-display display.rs, and both READMEs' changes.
+- seedelf-koios koios.rs: the whole diff, covering utxo_pages, SubmitError and its helpers, submit_tx, TxInfoOutput.at_script, script_transactions and transaction_pages.
+- seedelf-core utxos.rs: the diff, plus select/do_select, assets_of, fitting, reference_script_size and filter_utxos.
+- seedelf-core build.rs, in part: TooLarge and fewer, settle and check_fee, external_sweep, minimum_deposit, change_outputs, minimum_address_payment and pay_address, sweep and sweep_all, the blind path of select_script_inputs, ScriptSpend::estimate and settle, Budgets::guess, MAX_TX_BUDGET, TooMany, tx_id.
+- The core diffs between cli/stranger-rows and FIXTREE.
+- pallas-txbuilder 0.35.1: conway.rs's witness set build and model.rs's sign.
+- koios.ts paged, for comparison.
+
+Skimmed: the CLI test names (cli/*, koios_pages.rs head, signing_page.rs names, the cli-signing-page.test.ts case names) and harness.rs.
+
+Ran: two tests of my own in copies under ~/.cache/seedelf-review-51/R2cli, one per tree with separate targets, all removed afterwards.
+- Core select, on FIXTREE's code and on main's.
+- The CLI window cases on FIXTREE's code: sweep --all, sweep -l, --utxo, transfer, and controls.
+
+Not reached:
+- The bodies of the fixers' submit, signing-page and koios_pages tests.
+- util age.
+- The extension's Vitest for the page beyond its case names.
+- The fixers' whole suites, which I didn't rerun.

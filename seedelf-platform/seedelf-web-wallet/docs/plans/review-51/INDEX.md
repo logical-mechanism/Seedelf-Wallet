@@ -277,6 +277,73 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 *Coverage:* Read in full: seedelf-verification/CLAIMS.md, README.md, Seedelf/Every/README.md, Lovejoin/Every/README.md, Lovejoin/AnyTx/README.md and Audit/README.md; the root README.md; the wallet README. Also read in full: check.sh, lakefile.lean, both lake-manifest.json files, Seedelf.lean, and the cited theorem files: Seedelf/Every/Typed.lean, PolicyTyped.lean and AlwaysFalse.lean; Lovejoin/Every/Readable.lean, Typed.lean and MintTyped.lean; Lovejoin/AnyTx/BoxPurposesAll.lean, BoxSemantics.lean, PurposesKernel.lean and LogicPublishKernel.lean. Plus Lovejoin/Template/Scripts.lean, Lovejoin/Scripts.lean, Seedelf/Scripts.lean, extract.sh, extract-lovejoin.sh, Audit/Checks/FlatDecodeCheck.lean, the wasm crate's lovejoin_proven_bytes_test.rs, and templates.rs's first 240 lines. Diffed CLAIMS.md and README.md from chunk 48 (363acdf3) to HEAD, and traced each changed wording to its commit. Skimmed: Poli…
 
+## R2cli (2 findings, 20 guards)
+
+- `r2cli#1` high (stranger): Twenty of a stranger's token piles, sorted first under Koios's new tx_hash order, take every slot of the 20 UTxOs a CLI spend draws on: sweep --all, sweep, transfer and util mint then fail on every run `sweep.rs:166` · verified **confirmed, high**
+- `r2cli#2` low (user): fund's new order takes a second holder of the sent token for its ADA before any ADA-only UTxO: a fund main made is refused, and others spend a token UTxO they don't need `utxos.rs:251` · verified **confirmed, low**
+
+*Coverage:* Read in full, in FIXTREE: - seedelf-cli/src: commands/rows.rs, submit.rs, spend.rs, sweep.rs, external/{sweep,balance,mod}.rs, balance.rs, fund.rs, util/extract.rs, util/history.rs, web_server.rs. - seedelf-cli/static: index.js, index.html. - The diffs of create.rs (plus its selection and collateral code), remove.rs, transfer.rs (selection and --utxo), util/{mint,find,statistics}.rs, fee.rs, seedelf-display display.rs, and both READMEs' changes. - seedelf-koios koios.rs: the whole diff, covering utxo_pages, SubmitError and its helpers, submit_tx, TxInfoOutput.at_script, script_transactions and transaction_pages. - seedelf-core utxos.rs: the diff, plus select/do_select, assets_of, fitting, reference_script_size and filter_utxos. - seedelf-core build.rs, in part: TooLarge and fewer, settle and check_fee, external_sweep, minimum_deposit, change_outputs, minimum_address_payment and pay_addre…
+
+## R2docs (6 findings, 13 guards)
+
+- `r2docs#1` low (stranger): flows.md says a stranger's later swap return never changes what the page says of the swap's own, but the timeline's last step still follows the latest return `flows.md:478` · verified **confirmed, low**
+- `r2docs#2` low (site): flows.md says a site's transaction note shows "as what's signed reads", but the sign window reads the metadata the site carries, never what the body's auxiliary_data_hash commits to `flows.md:431` · verified **confirmed, low**
+- `r2docs#3` nit (nobody): The Lovejoin AnyTx README gives LogicLedgerUniqueness a weaker hypothesis than it has, and counts four of LogicBoxComposition's five theorems `README.md:203`
+- `r2docs#4` nit (nobody): architecture.md calls core's check_nesting "the one walk for every transaction from outside the wallet", but the worker's cbor.ts walk is the one guarding ogmiosUtxos on a site's transaction `architecture.md:195`
+- `r2docs#5` nit (user): privacy.md and architecture.md don't say that this release re-reads the private index from a snapshot and every pool copy once more, or that a reader version is now stored `privacy.md:230`
+- `r2docs#6` nit (stranger): flows.md's Collateral page still describes the automatic pick as any 5 ₳ of ADA, and two code comments cite a collateralFits in sessions.ts that no longer exists `flows.md:142`
+
+*Coverage:* Read in full: COMMON.md, FIX.md, fix-branches.md, RESUME.md and fixes/G1-G6.md. G7-G10 have no report in fixes/, so I worked from their commit messages (8fd738ff, c8003eda, 10a06db6, c4b7a906, 40883a55). I read every changed .md line of the round, sentence by sentence, from `git diff main..HEAD` over all 13 files: architecture.md, flows.md, privacy.md, keys-and-accounts.md, lovejoin-mix-width.md, wasm/README.md, README.md, seedelf-platform/README.md, CLAIMS.md, the seedelf-verification README, Audit/README.md, and Lovejoin/AnyTx and Lovejoin/Every READMEs. For each line I read the code it names.\n- Web wallet: balances.ts (atContract, spendableOwned, seedelfSide), contract-scan.ts's diff and utxoOf, private-index.ts utxoOf, coin-control.ts (collateralFits, collateralOf, listed), destination.ts's diff, chain.ts registerOf, cip30.rs (spender, register_fields, the paid loop, note_of), decod…
+
+## R2money (2 findings, 22 guards)
+
+- `r2money#1` low (user): A session's merged return whose only collateral is the 2 ₳ fallback is refused at a heavy fee, and the plain sweep of the same UTxOs, which builds, is never tried `lib.rs:1479` · verified **confirmed, low**
+- `r2money#2` low (user): ScriptSpend::stage holds the collateral's return to its least at the estimate's guessed fee too, so a merged return whose settled fee leaves that least is newly refused `build.rs:2210` · verified **confirmed, low**
+
+*Coverage:* Read in full: - The diffs of: core build.rs, lovejoin/mod.rs and utxos.rs; wasm lovejoin.rs and lib.rs (non-test parts); sessions.ts (all 619 diff lines); lovejoin-pools.ts, balances.ts, contract-scan.ts, coin-control.ts, collateral.ts, incoming.ts and destination.ts; the CLI's balance, fund, create, extract, remove, transfer, history and external balance. - The CLI's rows.rs, sweep.rs and external/sweep.rs, in full.  Read around the fixes: - core: apart, select_script_inputs, grow and one_more; ScriptSpend's draft, estimate, measure_locally, measuring_draft, settle, split, remainder and stage; settle; withdraw_declaring whole; mix_with's stage and loop; the deposit's change; carried(); fitting; the CLI's select; utxo_pages. - WASM: session_collateral, plan_return, built_or_without_strangers, merged_return, session_return, planned_return, direct_tail, collateral_mix, holdings_of, withdra…
+
+## R2screens (3 findings, 9 guards)
+
+- `r2screens#1` low (user): The connect window's private session now calls the unlocked side what's "in your private balance", with nothing about the lock `DappApprovals.tsx:994` · verified **confirmed, low**
+- `r2screens#2` nit (user): Review swap's re-ask still overwrites a quote for the token picked meanwhile; after Back the form is stuck on "Getting a quote…" `Swaps.tsx:836`
+- `r2screens#3` nit (user): Bring everything back's button reads "Sending…" while its switch rebuilds the returns `ClaimAll.tsx:199`
+
+*Coverage:* Read in full, the diffs main..HEAD: - every file under extension/src/ui (34 files); - the screen-facing worker files: coin-control.ts, destination.ts, tx-view.ts, balances.ts (atContract, ownedUtxos, the seedelf card's tokens), handlers.ts (dapp-approvals); - shared/rpc.ts, scripts/i18n-critical.mjs, en.json, critical-keys.json, and the es and ja values of every new key.  Read in context in FIXTREE: - Swaps.tsx: NewSwap, SwapApproval, nowLine and subOf (669-1470, 283-310, 3300-3345); - ClaimAll.tsx, all of it; - DappApprovals.tsx: DappApprovals and ConnectRequest (76-1000), and SignTx and SignData's changed parts; - CardanoSend's form and review; MoveIn; CreateSeedelf's state and handlers; Collateral's handlers; - Lovejoin.tsx: publicPick, publicMixAda, publicBoxesAffordable, publicSideOf, HeldOnSide, mixMost, PoolPage's review build and render, anywayAccountsOf, privateTies, stoppedKey,…
+
+## R2sign (3 findings, 12 guards)
+
+- `r2sign#1` medium (site): The sign window now calls two register shapes a Seedelf payment, with no warning, though no Seedelf Wallet ever reads them: a datum kept by hash that the unsigned witness set carries, and the general form with an indefinite pair `cip30.rs:1288` · verified **confirmed, low**
+- `r2sign#2` low (site): A second "msg" under label 674 is signed and published, but the window shows only the first and says nothing of the rest: x1a#3's otherMetadata check passes it as part of the note `dapp.ts:2996` · verified **confirmed, low**
+- `r2sign#3` low (stranger): Remove's new token rows show a token off the wallet's list in raw units: the decimals the Seedelf's UTxO carries never reach the review `withdraw.ts:188` · verified **confirmed, low**
+
+*Coverage:* Read in full: - This round's diffs (main..HEAD) of wasm cip30.rs, decode.rs, background dapp.ts, ui/dapp.ts, DappApprovals.tsx, tx-view.ts, destination.ts, StakedWarning.tsx, CardanoSend.tsx, Withdraw.tsx, RemoveSeedelf.tsx, Swaps.tsx (NewSwap and nowLine), PlutusTree.tsx and TxDetail.tsx. - Core's cbor.rs and orders.rs check_cancels, and en.json's changed strings. - cip30.rs from 1 to 1860: inspect end to end, note_of, row_address, network_of, spender and register_fields. - The surrounding code these call: chain.ts registerOf, seedelf-koios register_of_datum, private-index utxoOf, account.ts readAccountUtxos, withdraw.ts buildRemove, PaidRows, tokens.ts tokenQuantity, format.ts formatQuantity/unlocked, ReviewTotals homeBalance, dapp.ts ties/keysOf/siteTitle/view, and spent.ts reservations with lovejoin.ts ChainReservation. - The deployed wallet.ak and schnorr.ak at 5b82530, and Lean's S…
+
+## R2still (3 findings, 20 guards)
+
+- `r2still#1` low (site): x1a#3's fix is partial: a 674 map with a second "msg" key publishes lines the sign window never shows, and no line says there's more metadata `dapp.ts:2996` · merged into r2sign#2
+- `r2still#2` low (nobody): gap-g4#1 is fixed only for a leg the second listing holds; a leg both listings miss still comes back alone and directly, and since e2b#2's strangers rule the swap's page no longer says so `sessions.ts:4704` · verified **confirmed, low**
+- `r2still#3` low (nobody): This round's e7a#1, t1k#9 and t1j#6 tests fail on CI's preprod-only Vitest leg, so the fix PR's unit (preprod-only) job goes red and e7a#1's fix is pinned on one build only `swap-form-review.test.ts:309`
+
+*Coverage:* Brief and record: read COMMON.md, FIX.md, RESUME.md, BASELINE.md, fix-branches.md and all six fixer reports. Read the INDEX table (all 323 lines, parsed) and the verify records of r3a#1, x2#1, r4#1, r4#2, e1a#1, e3a#1, e3a#2, e7a#1, x3#1, x4#1, gap-g4#1, gap-g4#2, gap-g5#1 and gap-g6#1, plus owner flags across every verify file. Read every fix commit's message in f87c3e77..HEAD.  Read in full in FIXTREE: the round's diffs of rpc.ts, dapp.ts, DappApprovals.tsx, ui/dapp.ts, coin-control.ts, balances.ts, contract-scan.ts, incoming.ts, pending.ts, sessions.ts (whole diff, plus act, inspect, buildBack and sendChain around it), lovejoin.ts (whole diff, plus withdrawOne and withdrawDue), lovejoin-pools.ts, wallet.ts, account.ts, accounts.ts, handlers.ts, App.tsx, tx-view.ts, destination.ts, collateral.ts, Swaps.tsx's NewSwap part, ClaimAll.tsx, SiteSessions.tsx, Collateral.tsx, format.ts, token…
+
+## R2time (2 findings, 11 guards)
+
+- `r2time#1` low (user): Bring one back paid by the public account: the watch's paysAccounts is read at the press, but the build pays and signs with whichever account is active after the reward-account read `lovejoin.ts:7155` · verified **confirmed, low**
+- `r2time#2` low (user): e4a#1's class, left after the phrase-pin fix: the writes after a submit (the watch's take, Lovejoin's box-back history, a session return's landing) still go to whichever phrase is in when the network answers `lovejoin.ts:7814` · verified **confirmed, low**
+
+*Coverage:* Lines are FIXTREE's (web-wallet/whole-review-fixes at 10a06db6). Paths are relative to the repository root, as in TREE.  Read in full: COMMON.md, FIX.md, RESUME.md, fix-branches.md, the six fixer reports (G1–G6), lanes X4 (both findings and every note), E4a and the head of E2b. I also read this round's diffs (main..HEAD) of wallet.ts, contract-scan.ts (and the whole file), lovejoin-pools.ts (1-470), balances.ts, account.ts, accounts.ts, pending.ts, handlers.ts, collateral.ts, lovejoin.ts, sessions.ts, dapp.ts, coin-control.ts, incoming.ts, staking.ts, shared/rpc.ts and ui/App.tsx.  Read in the parts that matter: - lovejoin.ts: the quiet constants and refusesEvery (1690-1790), withdrawDue/withdrawDueNow (6800-7000), withdrawNow/withdrawNowNow (7030-7170), bringAllBackNow and bringNoted (7265-7540), withdrawOne (7590-7830), dropWithdrawing/neverWent/dropRefused, reserve/release/holdOnly/re…
+
+## R2verif (6 findings, 6 guards)
+
+- `r2verif#1` low (nobody): check.sh's new SORRY verdict depends on PlutusCoreBlaster's sorry sitting at CekMachine.lean:309; on IOG's main it is at 317, so every module reads SORRY and hides real Undetermined results `check.sh:233` · verified **confirmed, low**
+- `r2verif#2` low (nobody): check.sh reads #print axioms one line at a time, but Lean breaks a list over 120 columns into one axiom per line, so a native_decide (or a sorryAx listed after propext) reads ok `check.sh:240` · verified **confirmed, low**
+- `r2verif#3` low (nobody): A failed rebuild still reads ok when the module that fails is in a dependency package: check.sh removes nothing, and tally.py and count.py count the old builds `check.sh:250` · verified **confirmed, low**
+- `r2verif#4` low (nobody): run-all.sh's new failure list can never name `diag` for a LOOK or INCONCLUSIVE replay, because scan-diag.py exits 0 whatever it finds `run-all.sh:28` · verified **confirmed, low**
+- `r2verif#5` low (nobody): README's new Controls bullet says each every-transaction family has a control over its own builder, but most builders have none, and Template.AnyTxPurposes has none and isn't listed as an exception `README.md:95` · verified **confirmed, low**
+- `r2verif#6` nit (nobody): AnyTx README's new sentence says LogicLedgerUniqueness needs only the reference inputs' value rule, but its theorems take validReferenceInputs, which also requires them strictly ascending `README.md:203` · merged into r2docs#3
+
+*Coverage:* Read in full: COMMON.md, FIX.md, fix-branches.md; lanes V3, V4a, V4b and V5; verify v3-1, v4a-1, v4b-1, v5-2 and v5-1's head; the fixer reports' heads (no verification fixer report exists in fixes/).  From 40883a55, read in full: - the whole diff under seedelf-verification; - check.sh, tally.py and Audit/count.py as files; - AnyTxControls, WalletAnyTxControls, Control4, Control64, FalsifiedBox and FalsifiedOwner.  Read the diffs of: run-all.sh, the Audit README, CLAIMS.md, the README (plus README lines 20-66 and 186-204), the AnyTx and Every READMEs, the three Readable docstrings, the six Output, Reference and Launch control modules, both generators, the LinesAll modules, PolicyLinesAnyTx and PolicyShapes (plus PolicyShapes 236-268).  Read where it mattered: - the statement of every twinned theorem; WalletAnyTx, Two and Three; Signers4; Control128's head; - LogicLedgerUniqueness' and Log…
+
 ## T1a (18 findings, 67 guards)
 
 - `t1a#1` low (nobody): A proof for a register outside the prime-order subgroup: no test fails without it `schnorr.rs:106`
@@ -555,6 +622,12 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 *Coverage:* 
 
+## fixed-in (0 findings, 0 guards)
+
+- none
+
+*Coverage:* 
+
 ## gap-G1 (2 findings, 11 guards)
 
 - `gap-g1#1` medium (stranger): A stranger's payment under a register already on chain (a Seedelf's own, d = 1, or a copied datum) is classed Received, and the stealth mint, every session funding and the private pool start take it first, tying them publicly to that Seedelf and, by the default mint, to the public account `activity.ts:389` · verified **confirmed, medium**
@@ -642,3 +715,9 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 - `lead#1` medium (stranger): A session's collateral tail takes the first 5 ₳ that fits the collateral rule, whoever's it is, so a stranger's plain 5 ₳ listed first is boxed and the session's own collateral comes back unmixed `lovejoin.rs:0` · verified **refuted, nit**
 
 *Coverage:* One lead, not a lane.
+
+## status (0 findings, 0 guards)
+
+- none
+
+*Coverage:* 

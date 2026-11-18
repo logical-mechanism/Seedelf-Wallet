@@ -1,0 +1,150 @@
+# Lane R2time
+
+Returned by the workflow's agent `a56d2ab95d6b17a10`, written here by the lead from its structured answer.
+
+## Findings (2)
+
+### r2time#1 · low · Bring one back paid by the public account: the watch's paysAccounts is read at the press, but the build pays and signs with whichever account is active after the reward-account read
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts:7155`
+- **Who:** user · **Since:** fdd3b8b2 (this round, e5#2's sibling: the separate `payer` read and paysAccounts). The build's own read of the active account dates from chunk 34's paid escape hatch. · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+1. The user is on Account 1 (index 0) and presses Bring one back, paid from the public account. withdrawNow reads `payer` = 0.
+2. withdrawOne's first request is the pool's reward account (rewardsIn → Koios account_info, :7641). While Koios answers, the user picks Account 2 (index 1). handlers.ts account-use lets the switch through: atStake lists no withdraw being built.
+3. withdrawOne then reads the active account (readAccount, :7652), builds with its keys and signs (:7657). The box comes back paid by Account 2's UTxO, tied to Account 2 on chain.
+4. The watch records `paysAccounts: [0]` (:7168).
+5. It lands with the wallet on Account 2. forgetReading → paysActive([0], 1) is false, so only the private side is read again, and Home keeps the account-side reading from before the landing. Until the next full reading, the change shows only as 'on its way', through the kept sent record while its inputs stay held.
+6. If the user has switched back to Account 1 by the landing, Account 1 is read in the second Account 2's transaction lands. That is the timing tie e5#2 set out to remove.
+7. The new comment at :7154 says "The account that pays is the one the wallet is on as it's pressed", which the build doesn't do. hatchOrder (:7125) reads the active account a third, separate time.
+
+No money is lost. The user-visible effect is a reading that isn't redone, plus, in a two-switch case, the timing tie. The pay-from-the-switched-to-account part predates this round. The round's new read, and its claim, make the watch disagree with what was signed.
+
+**Evidence:**
+
+lovejoin.ts:7154-7155: `// ... The account that pays is the one the wallet is on as it's pressed.` / `const payer = paid === true ? await this.deps.wallet.withKeys((keys) => keys.account) : undefined;`
+lovejoin.ts:7156: `const pending = await this.withdrawOne(network, read, chosen, { due, ..., ...(paid ? { paid } : {}) });`: the payer isn't passed.
+lovejoin.ts:7641: `const rewards = rewardsField(await this.rewardsIn(network, [pool]));`, a network wait (account_info).
+lovejoin.ts:7652: `const { params, utxos, collateral, held } = await readAccount(this.deps, network);`, which reads the active account.
+lovejoin.ts:7656-7658: `built = await wallet.withKeys((keys) => { payer = keys.account; return JSON.parse(wasm.buildLovejoinWithdrawPaid(keys.cardano, keys.seedelf, ...)) })`
+lovejoin.ts:7168: `await watchSent(this.deps, pending, { ...(payer !== undefined ? { paysAccounts: [payer] } : {}), ...watch });`
+pending.ts:201-206 paysActive: `if (w.paysAccounts) return w.paysAccounts.includes(active);`. pending.ts:215-217 forgetReading then sets only SESSION_PRIVATE_STALE.
+handlers.ts:378-380: account-use refuses only for `maybeSent || mixMaybeSent` or publicChainsSending.
+
+Confirmed by run, in a copy of FIXTREE (~/.cache/seedelf-review-51/R2time, removed since). The test is kept at /tmp/claude-1000/-home-logic-Documents-LogicalMechanism-Seedelf-Wallet/0e0d3674-7c6c-46fb-8cae-a49695fa3bfe/scratchpad/r51/work/R2time/r51-r2time-1.test.ts. It uses lovejoin-release-rules.test.ts's harness (real WebAssembly, the v2 token pool, DEAR params), with Account 2 given 20 ₳ and 5 ₳ at its 0/0. Its core:
+```
+const hold = holdKoios(t, "account_info");
+const going = lj.withdrawNow("preprod", { txHash: mine.tx_hash, txIndex: 0, pool: TOKEN }, false, true);
+await hold.hit; await t.accounts.use(1, ["preprod"]); hold.release();
+await going;
+expect(txInputs(t.koios.submitted.at(-1)!)).toContain(`${a1.tx_hash}#0`);   // paid by account 1
+expect(watch?.paysAccounts).toEqual([0]);                                   // watch names account 0
+await t.balances.get("preprod"); t.koios.confirmations = 1; await t.pending.pending("preprod");
+expect({ kept, privateOnly }).toEqual({ kept: true, privateOnly: true });   // account 1 not read again
+```
+Command: `systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0 timeout 10m npx vitest run tests/r51-r2time-1.test.ts --reporter=verbose --silent=false`. Output: `r2time#1 inputs [ 'd1d1…d1#0', 'f1f1…f1#0' ] watch [ 0 ] pending true` / `r2time#1 at landing on account 1: reading kept true private side alone true` / `✓ … 1 passed`.
+Control, the existing test with no switch: `npx vitest run tests/lovejoin-release-rules.test.ts -t "reads again, as it lands, the account that paid"` → 1 passed.
+
+**Fix:**
+
+Read the account once, at the press, and make it the payer throughout. Pass it into withdrawOne. Run readAccount for that account (readAccountUtxos already takes `{ account }`; readAccount needs the same option) and build under `wallet.withAccount(payer, …)`. Use the same value for paysAccounts, and for hatchOrder's preference (:7125). At minimum, have withdrawOne return the payer it signed with (the one it records in Withdrawing `ties`) and watch with that. Siblings: hatchOrder's own read of the active account, and the review flows that keep in a later turn than they build (X4's note on send.ts pay/keep).
+
+**Known check:**
+
+Searched backlog.md, docs/archive/plans/*.md and review-51's INDEX.md for withdrawNow, hatchOrder, paysAccounts, 'paid withdraw', 'switch' near withdraw, SWITCH_AT_STAKE. Found only lovejoin-release-rules.test.ts's switch after the submit, and chunk 34's escape-hatch notes (gap-1#0 is about a session's chain across a switch). Nothing covers a switch during the paid build.
+
+### r2time#2 · low · e4a#1's class, left after the phrase-pin fix: the writes after a submit (the watch's take, Lovejoin's box-back history, a session return's landing) still go to whichever phrase is in when the network answers
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts:7814`
+- **Who:** user · **Since:** Before 1.0.0. 2b3dfd80, this round's fix for e4a#1 and its family, pinned the readings, account looks and settleNow, and left these. · **Confidence:** traced
+
+**Scenario:**
+
+A due box's withdraw (the alarm's own, with nothing on screen) is submitted under wallet A while Koios holds requests: the shared limit's 429 hold, up to 60 s, then a 30 s submit timeout. Meanwhile the user removes wallet A and restores wallet B by pasting B's phrase. Remove wallet asks no second yes, because atStake lists no withdraw in flight. When Koios answers success, withdrawOne's post-submit steps run under B's keys.
+- `activity.sent(network, pending, back)` (:7814) seals A's 'box back' entry (amount, A's tx hash, origin ties naming A's account numbers) into B's history.<network>. It shows in B's private Activity for good, to whoever restored B.
+- settleWithdrawing's landing write (:7929) does the same for a withdraw that Koios didn't answer.
+- pending.ts submitWatched's take (:570) writes A's payment watch into B's session, and :581 writes its summary into B's history. This path needs Remove's second yes, since that maybe-sent payment is listed.
+- Sessions' noteLanded (sessions.ts:5287) writes a return's history the same way.
+This is the harm e4a#1 described (a false, persistent history, and A's private receipts shown to B's restorer). No funds move.
+
+**Evidence:**
+
+`grep -n "phrasePin\|phraseOf" src/background/*.ts` finds them only in balances.ts, account.ts, accounts.ts, dapp.ts and pending.ts:811 (settleNow). Nothing in lovejoin.ts, sessions.ts or pending.ts submitWatched/take.
+lovejoin.ts:7803-7815, after `submitted = await koios.submitTx(bytes)`: `await wallet.withKeys(() => stale(session, network, paid === true))` … `await this.deps.activity?.sent(network, pending, back).catch(bestEffort);`, with no check of whose keys are in. The only check, the unlock (:7713), comes before the submit.
+activity.ts:627-639 update: `await this.deps.store.get<History>(name) … await this.deps.store.set(name, next)`, under the current store key, with no owner check.
+pending.ts:570 `await take(deps, watched, …)` and :581 `await deps.activity?.sent(s.network, pending, s.summary)`, after `koios.submitTx` with no pin. take (:411-427) does `session.set(key, record)` under the current keys.
+handlers.ts:624-652 atStake: maybeSent, sessions, chainsSending, publicMaybe and partsWaiting are listed; Lovejoin's `withdrawing` isn't.
+koios.ts:436 `SUBMIT_TIMEOUT_MS = 30_000`; RateLimit.hold up to MAX_BACK_OFF_MS 60 s before the fetch.
+X4's notes (1)–(3) named these writers; G6's report lists settleNow as covered and names none of the others for anyone.
+
+**Fix:**
+
+Take a pin (`phrasePin()`, or the unlock time the run read) before each network wait, and check it in the same turn as each write that follows. In withdrawOne, check it right after the submit, before stale/activity.sent/dropWithdrawing, and skip all of them on a mismatch: the old phrase's record went with Remove. Do the same in settleWithdrawing's landing, in submitWatched before take and activity.sent, and in sessions' noteLanded/settleReturns. Better still, give ActivityService.sent and arrived a phrase argument that they check inside their store turn, so the class closes at the writer. Then grep for `activity?.sent(`, `activity?.arrived(` and `this.update(` after an awaited Koios/giveme.my call in pending.ts, lovejoin.ts and sessions.ts.
+
+**Known check:**
+
+This is e4a#1's class. X4's notes (1) pending settleNow (now pinned), (2) lovejoin withdrawOne/settleWithdrawing activity.sent, and (3) sessions noteLanded/settleReturns named these writers. G6's fix report covers settleNow only and names none of (2)/(3) for others. Searched backlog.md and archive plans for 'another phrase', 'next phrase', 'Remove wallet' + withdraw, and C16: found only the restore scan's C16.
+
+## Guards (11)
+
+| Where | What it stops | Test |
+|---|---|---|
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts:7718` | x4#1: a runner's withdraw sent seconds after another send that went out while Koios and giveme.my answered (SentMeanwhile, nothing kept, the due time stays) | lovejoin-withdraw-submit.test.ts 'a withdraw built while the user's Send goes (chunk 51, x4#1)' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts:7713` | A withdraw built across a lock and an unlock, or across Remove plus a restore (the unlock time changes), being sent (L11) | lovejoin-withdraw-submit.test.ts:178 'a withdraw built across a lock and an unlock' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts:4457` | x4#2: a swap's order, a cancel or a return sent seconds after a lock and an unlock during its Minswap/Koios calls; it waits the new unlock's draw, and a return releases its reservation | unlock-waits.test.ts 'sends no order seconds after a lock and an unlock while Minswap built it…' and 'sends no return seconds after a lock and an unlock while its build read Koios…' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts:7476` | e1b#1: Bring every box back meeting giveme.my's 429, giveme.my out of reach or Koios trouble box by box; a 5xx ends the run at the second in a row | lovejoin-bring-all-back.test.ts (the three e1b#1 cases) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/contract-scan.ts:279` | gap-g6#1: a 1.9.1 sealed record that counted a KEY-address row with the contract's hash as ours being trusted for good; it's read again from a snapshot | private-index.test.ts 'sealed as ours by an older release, is judged again by today's rule after the update' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin-pools.ts:408` | gap-g6#1: copies read once under 1.9.1's box reader never being read again under r3a#1's and x2#1's | lovejoin-merged-review.test.ts 'reads every copy once again after the box reader changed, and once only under today's' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/balances.ts:545` | x2#2: a KEY address carrying the contract's 28 bytes counted in the private balance, so Max fails | private-index.test.ts 'is neither the wallet's nor a Seedelf's place' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/wallet.ts:234` | e4a#1: a reading, account look or watch settle begun under one phrase writing into another's after Remove plus a restore | remove-wallet-reading.test.ts (5, one a same-phrase control); accounts-restore-look.test.ts |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts:201` | e5#2: a private spend paying another of the user's accounts re-reading the account on screen as it lands (timing tie) | private-refresh.test.ts; lovejoin-release-rules.test.ts 'reads again, as it lands, the account that paid…' |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:1965` | e3a#1: a site on the dApp account told of another public account's mix being sent | dapp-other-account-mix.test.ts |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/coin-control.ts:198` | e8b#1: a stranger's 5 ₳ with a reference script or a datum becoming the account's automatic collateral | coin-control.test.ts (6) |
+
+## Checked and holds
+
+- phraseOf is keys.oneTime.keyHash(0), the wallet's own key on every public account (withAccount spreads the same oneTime). So an account switch, a dApp-account read or a lock and unlock of the same phrase never trips a pin. Only another phrase does.
+- The pins live in memory only: nothing persisted changes shape, so an update from 1.9.1 or a second device is unaffected. The in-flight keys (balances `network:account:phrase`, dapp view `key#phrase`) stop another phrase's Home or site from joining an old reading.
+- balances read(): every turn is pinned. The final turn throws before keep() and before activity.arrived (which runs after the turn). readingNoted skips a failure note from another phrase. readPrivate is pinned in its last turn.
+- pending settleNow pins its first turn before lookFor and every later turn. A pin throw ends the settle with no watch, reading or sealed write. The landed branch's activity.sent runs after the pinned turn (a window of microseconds).
+- accounts.ts discover/check/merge: a look spanning Remove plus a restore can't merge into the new phrase's record. A probe started from the old known list only adds the new phrase's own used accounts.
+- SETTLED_RULE: a 1.9.1 record (v 1) is replaced once by snapshot → seal v 2 → since. No other code seals a v:1 record. feed.ts reads only the cursor and got. Cost: one restore's requests (contract/snapshot, since, names) and one ownership pass, mainnet only. It reveals nothing a restore doesn't. It loops only if sealing fails.
+- BOX_READER: a 1.9.1 pools record (no reader) makes every unhanded copy unread. The next pool read lists all copies in one request (the same for every device that found them). copiesRead then writes checked plus reader 2. keptOf drops reader only with checked empty. The R2-4 earlierCode cleanup still persists through shown. No loop. A device with no copies pays nothing.
+- SessionRecord.mix depth/delay: recorded only for a valid LovejoinDepth or LovejoinDelay and never for a Bootstrap. A 1.9.1 mix record falls back to Settings at build, as 1.9.1 did. The tail's delay follows the mix's.
+- RecordedTx.brought with old records: receivedOf sums each return's brought, plus s.received only while some return lacks brought. Unsent and replaced returns are excluded. A 1.9.1 return re-sent today gains brought, and s.received isn't counted again. SessionBackSummary.tokens is required, so the token merge is safe.
+- Watched.paysAccounts: 1.9.1 sealed maybe-sent records (toAccount, summary with ownAccount, w.account) are read through paysActive's summary path. ownAccount existed in 1.9.1. An unknown account reads conservatively (a full re-read).
+- ChainReservation.account lives in session storage only (wiped by a lock and by an extension update). reservations() keeps the field, holdOnly carries it, publicStart passes built.account. chainHeld compares `r.account ?? 0` with the request's account.
+- x4#1: SentMeanwhile is thrown before Withdrawing, the spent marks and takeDue, so nothing is held. withdrawDueNow swallows it, and the next run's quiet rule pushes the box. The RewardsChangedError retry passes `quiet`, but forgetWithdraw removes the first try's marks first, so the retry isn't stopped by its own try.
+- x4#2: stillUnder sits after each step's last network wait and right before signAndSend or sendBack. Nothing between it and the submit waits on the network (refuseParts and the chain's first window are local). waits() honours the recorded unlockWait/unlockDrawn. `asked` runs are exempt. A recovered session without auto gets no write. bringBack's release matches buildBack's own release for a direct build.
+- x4#2 across Remove plus a restore: the unlock time changes, so stillUnder returns false before signing with the new phrase's session key at the same index (before this round that tx failed at the node).
+- e1b#1: refusesEvery treats a node's refusal (a KoiosError with no trouble, SpentInputError) and giveme.my's 4xx as the box's own. A 429 from giveme.my, giveme.my out of reach or non-JSON, and a Koios error with a trouble count for every box. The data layer's own submit refusal falls back to Koios first. busy resets on a send or a box's own error. Runs still stop after BRING_FAILED_RUNS (3), as before, and the boxes keep their due times and Bring one back.
+- The new SessionRecord, RecordedTx, Watched, Stored and ChainReservation fields are all optional. Settled.v is a number. No sealed record gained a required field an old record lacks.
+
+## Notes
+
+- For the owner (predates this round): Bring one back paid by the public account reads the active account three separate times: hatchOrder (:7125), the new `payer` (:7155), and withdrawOne's readAccount and build (:7652-7657). The build's read decides. A switch during the build therefore pays from, and ties on chain, the account switched to. If the box is a public deposit's own box that no mix has moved since, that ties the two accounts publicly, which the user never chose. r2time#1's fix (one account read at the press, carried through) closes it.
+- x4#1's recheck has no push cap. The quiet rule's 'after 3 pushes it goes anyway, so none waits for good' no longer holds for a send that lands inside the build (seconds). A connected site submitting its own transactions through the connector (PER_MINUTE.submit = 10) overlaps most builds and can delay a due box for as long as it keeps paying fees (about 1.7 ₳ a minute). Bring one back and Bring every box back don't pass `quiet`. A delay at most, not a stuck state.
+- x4#1 rechecks after giveme.my has answered. giveme.my still sees the discarded withdraw's body seconds after the other send. privacy.md:235 already admits that giveme.my and the server tie these by IP, so it's not a new link.
+- SETTLED_RULE: when the v 2 record can't be sealed (local storage at its 10 MB quota: the manifest has no unlimitedStorage), every reading takes a fresh snapshot. 1.9.1 kept reading `since` from the old cursor. The cost is bounded (a restore's request), but it repeats.
+- The forced snapshot replaces the sealed cursor with one got 'now'. A private payment sealed maybe-sent before the update and restored at the unlock is then looked for by tx_status instead of the feed (cover() finds no cursor from before it). privacy.md:235 admits a tx_status per transaction.
+- With w3#1, e2b#1's case (b) (the owner's: a stranger's 5 ₳ at a finished mix's account) now builds the second chain at the reviewed depth, not Settings'. No new harm.
+- withdrawDueNow's waitedAt still uses Settings' delay least. A mix reviewed at 1-6 h therefore waits Settings' least (for example 6 h) since a mix last moved its box. ripeAt keeps it from ever going sooner than its own chain's least. It waits longer, which is more private, as swaps already do.
+- The r2time#1 test, kept for the lead at /tmp/claude-1000/-home-logic-Documents-LogicalMechanism-Seedelf-Wallet/0e0d3674-7c6c-46fb-8cae-a49695fa3bfe/scratchpad/r51/work/R2time/r51-r2time-1.test.ts, asserts today's behaviour (it passes). Flip its last two expectations to make it a failing test for the fix.
+
+## Coverage
+
+Lines are FIXTREE's (web-wallet/whole-review-fixes at 10a06db6). Paths are relative to the repository root, as in TREE.
+
+Read in full: COMMON.md, FIX.md, RESUME.md, fix-branches.md, the six fixer reports (G1–G6), lanes X4 (both findings and every note), E4a and the head of E2b. I also read this round's diffs (main..HEAD) of wallet.ts, contract-scan.ts (and the whole file), lovejoin-pools.ts (1-470), balances.ts, account.ts, accounts.ts, pending.ts, handlers.ts, collateral.ts, lovejoin.ts, sessions.ts, dapp.ts, coin-control.ts, incoming.ts, staking.ts, shared/rpc.ts and ui/App.tsx.
+
+Read in the parts that matter:
+- lovejoin.ts: the quiet constants and refusesEvery (1690-1790), withdrawDue/withdrawDueNow (6800-7000), withdrawNow/withdrawNowNow (7030-7170), bringAllBackNow and bringNoted (7265-7540), withdrawOne (7590-7830), dropWithdrawing/neverWent/dropRefused, reserve/release/holdOnly/reserving (4725-4840), publicStart (5235-5290), readSet/unreadCopies/ours (2911-2982, 3260-3420).
+- sessions.ts: step/act/waits/stillUnder/order/cancel/bringBack, the end of buildBack, sendBack/sendChain/sendStep/sendRecorded heads, view, receivedOf, letGoUnseen, mixOutBuild/mixFunding/mixOutSubmit.
+- Elsewhere: pending.ts take/watchSent/submitWatched/writeAhead/settle/settleNow; wallet.ts sends/unlockedAt/withAccount/wipe/noteSend; spent.ts; feed.ts (cursors, cover, chainStatus); koios.ts error classes, request and submitTx; data-layer.ts submitTx; account.ts readAccount; activity.ts update; chain.ts registerOf; private-index.ts utxoOf and isRow; handlers.ts atStake and account-use; DappApprovals.tsx load; Home.tsx refresh policy; Swaps.tsx's received rows.
+
+Skimmed: the rest of dapp.ts outside the diff, buildBack's chain path, and the e7a#3 inspect change.
+
+Not reached: the Rust diffs (G1–G3) beyond the shapes the TypeScript reads, G7's screen diffs beyond the above, the verification and CLI commits, and the e2e tests.
+
+Ran (in a copy at ~/.cache/seedelf-review-51/R2time, node_modules linked, since removed; FIXTREE untouched, status clean): my one Vitest test (r51-r2time-1, passed as written, showing the mismatch) and the existing control (lovejoin-release-rules 'reads again, as it lands, the account that paid', passed). No build, no network.

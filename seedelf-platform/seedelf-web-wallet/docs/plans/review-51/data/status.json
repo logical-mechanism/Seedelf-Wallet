@@ -57,92 +57,158 @@
   "note": "its trace verifier was stopped by the model's safeguards; not re-run"
  },
  "t1i#6": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "e66a6a16"
+  ],
+  "note": "the network clause is backed by fundingRecords' own check; the test pins that it refuses before asking the other network's server"
  },
  "t1i#7": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "e66a6a16"
+  ],
+  "note": ""
  },
  "t1l#1": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#2": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#3": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#5": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#6": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#7": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#8": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#9": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#10": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#11": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#12": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#14": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "e66a6a16"
+  ],
+  "note": ""
  },
  "t1l#15": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#16": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#17": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "t1l#18": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": "Withdraw.tsx:128 alone can't fail a test while :89 holds; the pair is caught"
  },
  "t1l#19": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": "Transfer.tsx:105 alone can't fail a test, since Max's chip is hidden with several recipients; setMax(false) at :380 is caught"
  },
  "t1l#23": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "f88560c4"
+  ],
+  "note": ""
  },
  "gap-g6#2": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "e66a6a16"
+  ],
+  "note": "with a dated privacy-policy Changes entry: an origin keeps its transaction's input keys, judged again on the device"
  },
  "x1b#2": {
-  "status": "open",
-  "note": "round two"
+  "status": "fixed",
+  "commits": [
+   "853d5779"
+  ],
+  "note": "the comment says a shortfall's most is built in parts, as Max is"
  },
  "d1#5": {
   "status": "fixed",
@@ -203,5 +269,12 @@
  "d1#7": {
   "status": "owner",
   "note": "the published policy's words: G8 left it for the owner"
+ },
+ "r2still#3": {
+  "status": "fixed",
+  "commits": [
+   "04616cf6"
+  ],
+  "note": "the lead's fix: the two tests hold in a preprod-only build"
  }
 }
