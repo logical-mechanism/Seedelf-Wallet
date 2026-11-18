@@ -1,6 +1,6 @@
 # Seedelf Wallet
 
-Seedelf Wallet is a Cardano wallet for Chrome with private payments built in. It's for anyone on Cardano who wants a full wallet, for staking, voting and dApps, with a private balance beside it, and no terminal.
+Seedelf Wallet is a Cardano wallet for Chrome with private payments built in. It's for anyone on Cardano who wants a full wallet (staking, voting, dApps) with a private balance beside it, without using a terminal.
 
 **Get it** from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp), or build it from this repository and load it into Chrome yourself ([extension/README.md](extension/README.md#build-and-load-in-chrome)). It's free.
 
@@ -11,7 +11,7 @@ It runs on Cardano mainnet. Preprod, Cardano's test network, is on the welcome s
 One wallet on Cardano, with one recovery phrase and one password, and two sides, **Public** and **Private**:
 
 - **The public account** (the Cardano account) is a full Cardano wallet. Receive, send, stake with a pool, spend the rewards, and delegate your vote, as in Lace or Eternl. Restore a Lace or Yoroi phrase and it's the same account, so you don't need a second wallet.
-- **The private balance** is Seedelf, a stealth wallet on Cardano. Make money private, pay anyone's Seedelf, and make it public again to any address, with no UTxO saying who owns it.
+- **The private balance** is Seedelf, a stealth wallet on Cardano, where no UTxO says who owns it. Make money private, pay anyone's Seedelf, and make money public again to any address.
 
 **How the private side works.** Money in the private balance sits at the Seedelf wallet contract. Each UTxO there is locked to a fresh re-randomization of its owner's key, so the UTxO doesn't say whose it is, and it's spent with a Schnorr proof that only your recovery phrase can make. To be paid privately, you mint a **Seedelf**, an NFT whose name starts `5eed0e1f`. It works like an ADA Handle for the private balance: anyone with its name can pay you. The [root README](../../README.md) has the protocol and its maths.
 
@@ -20,7 +20,7 @@ One wallet on Cardano, with one recovery phrase and one password, and two sides,
 - Seedelf funds sit at a script address with no staking part, so they earn no rewards and carry no voting weight.
 - A per-user staking key would link all of a user's Seedelfs together.
 
-So money that sits stays staked in the public account, and is made private when it should move privately.
+So money you're holding can stay in the public account, staked, and be made private when you want to move it privately.
 
 ## What it does
 
@@ -30,7 +30,7 @@ Every screen, and what it does, is in [extension/README.md](extension/README.md#
 
 - **Create** a wallet (a new 24-word phrase) or **restore** one from 12, 15 or 24 words, then lock it with a password.
 - **See your balances,** on Home's two tabs: what the public account holds, and what the private balance holds with its Seedelfs. Tokens and NFTs are listed with a search; an NFT's image shows only when you ask for it.
-- **Several public accounts:** the recovery phrase's Cardano accounts, one at a time, with a picker as Home's Public heading ("Public account 2 ▾") and names of your own. Each has its own addresses, staking and collateral. The private balance is one for the whole phrase, and each account's money made private keeps its own history: a private payment avoids spending two accounts' money together, and when it can't, or when you send everything (Max), its review names the accounts it ties together.
+- **Several public accounts:** the recovery phrase's Cardano accounts, one at a time, with a picker as Home's Public heading ("Public account 2 ▾") and names of your own. Each has its own addresses, staking and collateral. There's one private balance for the whole phrase, but the money each account made private keeps a history of its own: a private payment avoids spending two accounts' money together, and when it can't, or when you send everything (Max), its review names the accounts it ties together.
 - **Transaction details:** every review, and the connector's sign window, opens the transaction itself, decoded from the bytes about to be signed: inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata, with a tab for the raw bytes. Nothing is fetched to show it: no lookup, and a copy button instead of an explorer link.
 - **Also:** Contacts, a UTxOs screen on each side where a UTxO can be locked out of every payment, Activity on each side (saved as CSV if you want), hiding the balances, the lock time, a check of a written copy of the recovery phrase, and ADA's value in a currency on mainnet.
 - **Three languages:** English, Spanish and Japanese, all bundled with the wallet, so choosing one fetches nothing.
@@ -55,7 +55,7 @@ Every screen, and what it does, is in [extension/README.md](extension/README.md#
 **dApps, privately**
 
 1. **The connector:** sites connect over CIP-30, Cardano's standard for a site to talk to a wallet, as with Lace. It's off until you turn it on in Settings, and nothing is added to any page until then.
-2. **Private sessions:** a new one-time account, funded from your private balance, uses a dApp, and what comes back goes into the private balance. A swap runs this way through Minswap's aggregator, which routes across Cardano's DEXes, and after one approval it runs by itself.
+2. **Private sessions:** a dApp is used from a new one-time account, which the wallet funds from your private balance, and what comes back goes into the private balance. A swap runs this way through Minswap's aggregator, which routes across Cardano's DEXes, and after one approval it runs by itself.
 3. **dApps in the wallet:** Home's **dApps** page, with Minswap's swaps, which run in private sessions, and Lovejoin, the mixer (below).
 4. **Private CIP-30:** any site can connect to a private session instead of the public account, chosen in the connect window. Its session is managed under the dApps page's **Sites**.
 

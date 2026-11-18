@@ -2,7 +2,7 @@
 
 Machine-checked proofs of exactly when each of Seedelf's on-chain scripts accepts a transaction. Seedelf is a stealth wallet on Cardano. The proofs also cover the Lovejoin v2 scripts: Lovejoin is the mixer the Seedelf Wallet uses. This page is for anyone who reads "formally verified" and wants to know what it means: what's proved, about which bytes, in what model, what isn't covered, and how to check it.
 
-[CLAIMS.md](CLAIMS.md) says it in a page: what the proofs let us claim, and where it stops.
+[CLAIMS.md](CLAIMS.md) is the one-page version: what the proofs let us claim, and where the claim stops.
 
 ## The scripts
 

@@ -1,6 +1,6 @@
 # **seedelf-cli**
 
-`seedelf-cli` is a command-line wallet for Seedelf, a stealth wallet on Cardano. The ADA and tokens it holds sit at one smart contract, under registers (pairs of public curve points) that look random to everyone else. Anyone can pay you there, and only your secret key can prove which UTxOs are yours, so the chain doesn't show who received a payment or who spent it. It's for Cardano users who are at home in a terminal.
+`seedelf-cli` is a command-line wallet for Seedelf, a stealth wallet on Cardano. The ADA and tokens it holds sit at one smart contract, each UTxO under a register: a fresh, random-looking form of its owner's key. Anyone can pay you there, and only your secret key can prove which UTxOs are yours, so the chain doesn't show who received a payment or who spent it. It's for Cardano users who are at home in a terminal.
 
 Looking for a wallet in the browser instead? The [Seedelf Wallet](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/README.md) is a Cardano wallet for Chrome with Seedelf built in. It's a separate product from the CLI, with its own keys: neither can open the other's wallet.
 

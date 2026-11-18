@@ -4,19 +4,21 @@ Seedelf Wallet is a Cardano wallet for Chrome with a private balance built in. T
 
 The protocol underneath, stealth addresses and re-randomization, and the known attacks on it, are in the root README's [What is a Stealth Wallet?](../../../README.md#what-is-a-stealth-wallet) and [Wallet Limitations](../../../README.md#wallet-limitations). This page covers what the wallet does on top of them.
 
+The sections from *In short* through *Rules the wallet enforces* are the model: read those first. *Known links* then goes through each feature in detail: what it links, what each service learns, and what's kept on the device. It's written to be looked up, a feature at a time.
+
 ## In short
 
-The words are defined under *The words on the screens*, below.
+If a word here is new, *The words on the screens*, just below, explains it.
 
 - **Hidden, from people reading the chain:** who owns each UTxO in your private balance, and who spends it. Lovejoin, the mixer the wallet uses, also makes it harder to tell which box coming out of a mix is yours.
 - **Not hidden:** amounts, tokens, timing and which transactions spend which outputs; everything your public account does, staking included; and every ordinary address that pays into the private balance or out of it.
-- **Not hidden from the services that carry your transactions:** the Cardano server the wallet reads the chain through sends every transaction, and giveme.my, the collateral service private spends use, sees every private one, both from your IP address, so either can tie your private payments and Lovejoin boxes to your public account. On mainnet, one operator runs both giveme.my and the server the wallet reads first. A VPN hides who you are, not that the requests come from one place.
-- **Settings that turn it up:** Lovejoin's longer waits (2 to 12 or 6 to 24 hours, not 1 to 6) and four boxes a mix (at the default depth, one of up to 16, not 9); the currency set to *Nothing*, so CoinGecko is never asked; and connecting sites left off, the default, so no site can tell the wallet is installed.
+- **Not hidden from the services that carry your transactions:** every transaction goes out through the Cardano server, and every private spend also goes to giveme.my, the collateral service. Both see your IP address, so either can tie your private payments and Lovejoin boxes to your public account. On mainnet, giveme.my and the server the wallet reads first have the same operator. A VPN hides who you are, not that the requests come from one place.
+- **Settings that add privacy:** Lovejoin's longer waits (2 to 12 or 6 to 24 hours, instead of 1 to 6); four boxes a mix, so that at the default depth a box is one of up to 16 instead of 9; the currency set to *Nothing*, so CoinGecko is never asked; and connecting sites left off (the default), so no site can tell the wallet is installed.
 - **The links to avoid:**
   - making money public back to where it came from;
   - a unique amount, or a payment right after you made the money private;
   - creating your Seedelf with money you made private yourself: create it from the public account first, then make money private;
-  - spending money with different histories together (boxes back from Lovejoin with your own money, or two public accounts' money), which the review, the screen before you sign, names when it happens;
+  - spending money with different histories together (boxes back from Lovejoin with your own money, or two public accounts' money): the review, the screen you see before signing, says so when a payment does it;
   - paying one of your own public accounts from another;
   - bringing Lovejoin boxes back early, or all at once.
 - **Few people use Seedelf and Lovejoin today,** so timing and amounts carry most of the risk.
@@ -39,7 +41,7 @@ The words are defined under *The words on the screens*, below.
 
 - **The most private choice is the default, with a control to turn it down where it costs fees, time or convenience.** The controls are in Settings (Lovejoin's switches, its depth, its waits and its mixes' width; the currency; connecting sites; *Read Cardano through Koios only*), and a return's review and a swap's approval each carry their own Lovejoin switch. A default never means the only choice.
 - **Some settings go further than the default,** at a cost: Lovejoin's longer waits, four boxes a mix, and the currency set to *Nothing* (*In short*, above).
-- **The wallet never forbids a link you choose.** It says what a payment or a connection reveals, and only avoids making a link on your behalf.
+- **The wallet never forbids a link you choose.** It tells you what a payment or a connection reveals, and avoids making a link on your behalf, but it doesn't stop you making one.
 
 ## What is hidden and what isn't
 
@@ -89,7 +91,7 @@ These aren't settings.
 
 ## Known links
 
-The wallet can't prevent these links. Where it can, it says them on the screen where they happen.
+The wallet can't prevent these links. Wherever it can tell one is about to happen, it says so on that screen.
 
 ### Making money private
 
@@ -109,7 +111,7 @@ A Seedelf is linked to whatever pays for it.
 - **Make public to where the money came from re-links the chain.** This is the second implicit tracking method in the root README's [Implicit Tracking Methods](../../../README.md#implicit-tracking-methods). Make it public somewhere else, or keep it private.
 - **The Make public form says so.** It warns when the destination is **any of this wallet's own public accounts**: an address under one of their payment keys, whatever its staking part. It checks the first 20 addresses of each chain; for the account the wallet is on, any its last balance reading found; and up to the 500th of each chain when the address carries that account's own stake key, as another wallet with the same phrase may hand out. Every account the wallet knows is checked, not only the active one: the money is re-linked to that account either way, and the other accounts' keys are derived on the device, asking no one. Such a payment links the account to the private UTxOs spent, and so to whoever made them private.
 - **A stake key alone doesn't make an address yours:** anyone can pair their own payment key with it. Such an address gets a warning of its own: only that payment key's holder can spend the money, and anyone can still link the address to this money and to whoever made it private.
-- **Max** spends every UTxO, whatever their histories, bundles of tokens that add no ADA included, which ties them all together (*Co-spending*). It takes 20 to a transaction, in as many transactions as that takes, those adding the most ADA first (what each holds, less what its own tokens need). The review says which histories it merges.
+- **Max** spends every UTxO, whatever its history, including bundles of tokens that add no ADA, so it ties them all together (*Co-spending*). It spends 20 a transaction, in as many transactions as it needs, starting with those that add the most ADA (what each holds, less what its own tokens need). The review says which histories it merges.
 
 ### A payment in parts
 
@@ -130,7 +132,7 @@ A Seedelf is linked to whatever pays for it.
 
 - **Its ADA goes somewhere, and that's linked to the Seedelf's name.**
 - **The default follows who paid for it:** the public account for a Seedelf the account paid for, which is linked to it already, and the private balance for one the private balance paid for.
-- The wallet records who paid at each creation's Send, naming the public account its review was built and signed on, whichever account another window is on by then. The record is sealed, per network (`mintedBy.<network>`), apart from the Seedelf history, which is trimmed.
+- The wallet records who paid when a creation is sent, naming the public account its review was built and signed on, even if another window has switched account by then. The record is sealed, per network (`mintedBy.<network>`), and kept apart from the Seedelf history, so trimming that history never loses it.
 - For a Seedelf with no such record here (one created in another browser, say), it works out who paid from what it holds, never asking the Cardano server about the creation: another of its contract UTxOs from the creating transaction is the change of a creation the private balance paid for; one of the account's UTxOs or Activity entries from it marks one the account paid for. Otherwise nothing is chosen, and Review waits for you.
 - Each side's note says what it links for this Seedelf, with a warning where it links something new. To the public account, a Seedelf the private balance paid for ties its name, and the creation's private inputs and change, to the account. Into the private balance, one the account paid for ties the name to that new UTxO, and to whatever it's later spent with.
 - With several public accounts, it names the account that paid (*Several public accounts*).
@@ -491,7 +493,7 @@ Lovejoin is a mixer of boxes that each hold the same. Each pool holds boxes of o
 
 ## Holding and staking
 
-Private money sits at an address with no staking part, so it earns no staking rewards. That's the cost of not linking your Seedelfs through a staking key. Money that sits can stay in the public account, staked with a pool, and be made private when it should move privately.
+Private money sits at an address with no staking part, so it earns no staking rewards. That's the cost of not linking your Seedelfs through a staking key. Money you're holding can stay in the public account, staked with a pool, and be made private when you want to move it privately.
 
 ## For contributors
 

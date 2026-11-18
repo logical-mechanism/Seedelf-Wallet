@@ -112,7 +112,7 @@ The Cardano account is CIP-1852 account `0'` of the phrase, or whichever account
 
 **Rules:**
 
-1. **Several accounts, one at a time, and all of it.**
+1. **Several accounts, one at a time, each read in full.**
    - Discovery scans both the receive (`0/i`) and change (`1/i`) chains with the standard gap limit of 20, so a restored wallet shows its full balance. See [architecture.md](architecture.md#chain-data).
    - Everything under the account's payment keys is the account's, whatever the address's staking part: enterprise addresses, and our key with someone else's stake key, are found and spent too.
    - **Which account the wallet works on** is one integer in `chrome.storage.local` (`seedelf.account`, unsealed, beside the network and for the same reason: `Wallet` reads it while deriving the keys, before anything is unlocked). `Wallet` reads it at **every** key use, so a switch writes the choice and nothing else — the next use re-derives, and no request can sign with the account the user just left. **Which accounts the phrase has used, and what they are called, are sealed** with the other private records (`accounts`): how many accounts someone runs is about them.
