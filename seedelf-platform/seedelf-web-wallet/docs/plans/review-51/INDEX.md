@@ -296,35 +296,77 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## X1a (3 findings, 16 guards)
 
-- `x1a#1` low (stranger): Send and Make public call the user's payment key under someone else's stake key "your own public account: it comes back", where the sign window says its staking rewards aren't yours `destination.ts:122`
-- `x1a#2` low (site): The sign window says a site's payment into a Seedelf hides whose it is without checking its register: a register written as found shows on chain whose it is `cip30.rs:1386`
-- `x1a#3` low (site): The sign window leaves out "It carries metadata" whenever a note is shown, so a site's other metadata beside a CIP-20 note is never mentioned `DappApprovals.tsx:1083`
+- `x1a#1` low (stranger): Send and Make public call the user's payment key under someone else's stake key "your own public account: it comes back", where the sign window says its staking rewards aren't yours `destination.ts:122` · verified **confirmed, low**
+- `x1a#2` low (site): The sign window says a site's payment into a Seedelf hides whose it is without checking its register: a register written as found shows on chain whose it is `cip30.rs:1386` · verified **confirmed, low**
+- `x1a#3` low (site): The sign window leaves out "It carries metadata" whenever a note is shown, so a site's other metadata beside a CIP-20 note is never mentioned `DappApprovals.tsx:1083` · verified **confirmed, low**
 
 *Coverage:* Read in full: ui/screens/CardanoSend.tsx, MoveIn.tsx, CreateSeedelf.tsx and Collateral.tsx; background/send.ts, move-in.ts, mint.ts, destination.ts, tx-view.ts and account.ts; ui/dapp.ts; components/ReviewTotals.tsx, ReviewRows.tsx and PaidRows.tsx; seedelf-core/src/note.rs.  Read in the parts named: - DappApprovals.tsx 998-1378 (SignTx, SignData); - dapp.ts 1960-2520 (stakeDeposit, readTx, signTx, waitingCbor, ties, publicKeys, remember, the head of signData); - cip30.rs 1-540, 690-2008 and 2150-2384: types, Amount, keys, inspect, sign_tx, signData; - wasm lib.rs:   - 60-620: move_in, check_paths, sign_with_paths, withdrawing, sign_staking;   - 1536-2100: SendRequest/account_send, stake, drep_transaction;   - 2725-2925: account mint;   - 5085-5180: is_own_address, carries_stake_key; - core build.rs 90-490 (settle, Patches, outputs, minimums), 580-1100 (Payee, account builders, account_p…
 
 ## X1b (2 findings, 14 guards)
 
-- `x1b#1` low (user): A site session's Bring it back review through Lovejoin opens Transaction details on the chain's last transaction, unnamed, not the deposit `SiteSessions.tsx:299`
+- `x1b#1` low (user): A site session's Bring it back review through Lovejoin opens Transaction details on the chain's last transaction, unnamed, not the deposit `SiteSessions.tsx:299` · verified **confirmed, low**
 - `x1b#2` nit (nobody): withdraw.ts says a shortfall's `most` is one transaction, but WebAssembly builds it in parts, up to 25 `withdraw.ts:104`
 
 *Coverage:* Read in full: - extension/src/background: transfer.ts, withdraw.ts, mint.ts, script-spend.ts (all 644 lines). - extension/src/ui/screens: Transfer.tsx, Withdraw.tsx, RemoveSeedelf.tsx, CreateSeedelf.tsx. - extension/src/ui/components: ReviewTotals.tsx, LovejoinReturn.tsx (all 578 lines), HistoriesNote.tsx.  Read in part: - parts.ts 1-260: the header, reviewParts, splitParts, letGo's head. - sessions.ts: siteOutBuild 2031-2080; mixOutBuild, againBuild, mixFunding and mixOutSubmit 2155-2345; buildFunding and outSubmit's head 3000-3150; buildBack's chain call and summary 4577-4760; sendChain 5170-5250; wayOf, pricedClassic and fillsOf 6412-6447. - lovejoin.ts: againBoxes 3476-3580; chain and fanOut 3642-3900; unstale 4598-4612; bringAllBackNow's loop 7340-7420; grep-level reads of withdrawOne 7542-7700. - wasm lib.rs: classes_mixed 2221; the stealth mint 2396-2475; withdrawal_of, amounts_of…
 
 ## X2 (2 findings, 14 guards)
 
-- `x2#1` medium (stranger): A stranger's 5 ₳ at a KEY address whose hash is a pool's mix_box script hash counts as a pool box: it counts toward the floor, gets drawn, and every chain that draws it fails, so returns come back directly `mod.rs:416`
-- `x2#2` low (stranger): A UTxO at a KEY address whose hash is the Seedelf contract's, under the user's register, counts in the private balance, and any spend that takes it fails: Max always fails for wallets of up to 20 private UTxOs `balances.ts:489`
+- `x2#1` medium (stranger): A stranger's 5 ₳ at a KEY address whose hash is a pool's mix_box script hash counts as a pool box: it counts toward the floor, gets drawn, and every chain that draws it fails, so returns come back directly `mod.rs:416` · verified **confirmed, medium**
+- `x2#2` low (stranger): A UTxO at a KEY address whose hash is the Seedelf contract's, under the user's register, counts in the private balance, and any spend that takes it fails: Max always fails for wallets of up to 20 private UTxOs `balances.ts:489` · verified **confirmed, low**
 
 *Coverage:* Read in full: the brief (COMMON.md), INDEX.md, LANES.md, RESUME.md and BASELINE.md, R3a's full report and r3a-1's verification. I also read E6's checked list and notes, the notes of W1b, W2, W3, E1a and E1b, and W2's w2#2.  Code read for the traces: - seedelf-core: lovejoin/mod.rs 330-520, 920-1170 and 2282-2605; eval.rs 1-200 and 290-380; utxos.rs 1-130 and 315-432; build.rs 2530-2880 (select_script_inputs, one_more, grow, apart); lovejoin/value.rs is_row and is_value; orders.rs 1275-1300. - seedelf-koios: koios.rs 354-372. - wasm: lovejoin.rs 355-500 and 2580-2680; lib.rs 960-1010, 1160-1215, 2290-2360, 2995-3017, 4033-4081 and 4458-4553. - extension, in full: contract-scan.ts, chain.ts, shared/seedelf-name.ts. - extension, in part: balances.ts 80-90, 250-265 and 478-506; private-index.ts 1-80 and 370-413; koios.ts 780-940; lovejoin.ts 3220-3350, 3642-3700, 6227-6356, 6778-6960 and 751…
 
 ## X3 (1 findings, 13 guards)
 
-- `x3#1` low (site): The sign window's register reader takes only tag 121, so a site's valid Seedelf payment spelled in constructor 0's general form (tag 102) reads 'without a register: anyone can take' and 'Your private balance isn't in it' `cip30.rs:1011`
+- `x3#1` low (site): The sign window's register reader takes only tag 121, so a site's valid Seedelf payment spelled in constructor 0's general form (tag 102) reads 'without a register: anyone can take' and 'Your private balance isn't in it' `cip30.rs:1011` · verified **confirmed, low**
 
 *Coverage:* Read in full: extension background/chain.ts, destination.ts, short.ts, minted-by.ts, account.ts; shared/recipients.ts, seedelf-name.ts, histories.ts, preferences.ts; seedelf-core address.rs, constants.rs, transaction.rs, cbor.rs.  Read in the parts this lens needed: - seedelf-koios koios.rs: InlineDatum, ReferenceScript, UtxoResponse, extract_bytes_with_logging, register_of_datum, point_bytes, TxInfoOutput. - wasm cip30.rs: network_flag, network_of, keys_of, own_address, has_payment_key, MAX_TX_BYTES, MAX_NESTING, output_parts, register_datum, datum_names_key, released_from_contracts, inspect's output loop. - wasm decode.rs: register_detail, output_detail. - wasm lib.rs: LeftOut and left_out; lovelace_of and MAX_SUPPLY_LOVELACE; payment_key_of; MAX_MERGE and session_collateral; NOTHING_PAYS; plan_return; built_or_without_strangers; merged_return; session_return; planned_return; MAX_RECIP…
 
 ## X4 (2 findings, 16 guards)
 
-- `x4#1` low (user): A due box's withdraw reads the five-minute quiet rule before its Koios reads and giveme.my, never again before its submit, so a send that starts in between is followed seconds later `lovejoin.ts:6901`
-- `x4#2` low (user): The sessions runner checks the unlock's wait once, before a step's Minswap and Koios calls: a lock and unlock during them sends the step seconds after the unlock `sessions.ts:3807`
+- `x4#1` low (user): A due box's withdraw reads the five-minute quiet rule before its Koios reads and giveme.my, never again before its submit, so a send that starts in between is followed seconds later `lovejoin.ts:6901` · verified **confirmed, low**
+- `x4#2` low (user): The sessions runner checks the unlock's wait once, before a step's Minswap and Koios calls: a lock and unlock during them sends the step seconds after the unlock `sessions.ts:3807` · verified **confirmed, low**
 
 *Coverage:* Read in full: background/pending.ts, spent.ts, sent-txs.ts, wallet.ts, runs.ts, collateral.ts, dapp-window.ts, account.ts, storage.ts and private-store.ts's record lists. Read in the parts that cross time: sessions.ts (reset, runAll, settleReturns, markCut, step, act, waits, advance, order, cancel's head, signAndSend, sendRecorded, submit, disconnect, the session-key constants); lovejoin.ts (header and timing constants 1-40 and 1685-1760, withdrawDue/withdrawDueNow 6760-6960, withdrawOne 7540-7760, settleWithdrawing/resends 7820-7912, keepOnReset/adoptKept/cuts/chainsSending, keptMaybe/keptUnsettled, rewardsIn/readRewards, made, publicReady/checked/keep, pumpPublicNow's send loop 5290-5345); dapp.ts (stateChanged, closeWindow, windowClosed, networkChanged, ask, unlocked, fundPrivate, watchFunding, holder/funded, submitTx/send/sentFor/keepSent/settle); handlers.ts (create/restore/reset-wa…
+
+## critic (0 findings, 0 guards)
+
+- none
+
+*Coverage:* 
+
+## gap-G1 (2 findings, 11 guards)
+
+- `gap-g1#1` medium (stranger): A stranger's payment under a register already on chain (a Seedelf's own, d = 1, or a copied datum) is classed Received, and the stealth mint, every session funding and the private pool start take it first, tying them publicly to that Seedelf and, by the default mint, to the public account `activity.ts:389`
+- `gap-g1#2` low (site): A payment the user's own public account, or a private session, makes into the user's Seedelf through a site is classed Received, so the stealth mint and fundings take it as money others paid `dapp.ts:2644`
+
+*Coverage:* Read in full: the brief (COMMON.md), INDEX.md and LANES.md; X1a's report, E1a's e1a#1, and the parts of RESUME.md and FIX.md that bear on this lane. Code read in full: - extension/src/shared/histories.ts, background/mint.ts, background/chain.ts, background/contract-scan.ts; - seedelf-crypto/src/register.rs; - seedelf-core/src/build.rs 2290-3100 (Histories, Purpose ranks and tiers, select_script_inputs, one_more, grow, apart, max_inputs_by, holding, the mint builders), plus 320-480 (deposit_output(s), change_outputs), 2085-2175 (remainder, stage) and 3427-3450 (sweep_many_apart); - wasm/src/lib.rs 2080-2480 (ClassIn, histories, origin_of, merged_class, Carried, classes_mixed, MintRequest, check_spendable, mint_spend, build_mint, mint_result) and 3640-3905 (Worth, by_history_first, same_order).  Read in the ranges named or needed: - activity.ts 1-260 (header and types, skimmed past the acc…
+
+## gap-G2 (4 findings, 17 guards)
+
+- `gap-g2#1` low (user): Mix again from my public account refuses unless one ADA-only UTxO pays for every mix of every box it takes, never takes fewer, and the page offers no count `lovejoin.rs:2495`
+- `gap-g2#2` low (user): The escape hatch's question names no other account while the account on screen's own boxes are held by a reservation, and the worker then takes another account's box: Pay from my public account ties the two unannounced `Lovejoin.tsx:1128`
+- `gap-g2#3` low (stranger): The Mix and Bootstrap forms count public UTxOs the build refuses (any reference script, a datum too deep to read), so 'What Lovejoin can spend' and the stepper offer boxes Review then refuses `Lovejoin.tsx:410`
+- `gap-g2#4` nit (user): Mix again from my public account's review says 'N boxes your public account put in' where the account has more there, with no 'N of your M' or 'Mix the rest once this is done' `Lovejoin.tsx:4113`
+
+*Coverage:* Read in full: - ui/screens/Lovejoin.tsx, all 4,125 lines. The brief's ranges were read line by line: 1-500, 1045-1660, 2650-3760 and 3790-4125. The hub, MixList and the cards were read at pace. - ui/screens/LovejoinLaunch.tsx and ui/components/ReviewTotals.tsx. - background/: lovejoin-launch.ts, spent.ts, account.ts, coin-control.ts and lovejoin-rewards.ts. - seedelf-core/src/lovejoin/launch.rs.  lovejoin.ts, read in these ranges: - the helpers 1920-2260; - progress 2950-3010 and ours 3318-3350; - againBoxes, funding, chain and fanOut 3470-3910; - unstale through pumpPublicNow 4590-5460, including publicBuild, publicReady, checked, keep, publicAgainBuild, publicSubmit and publicStart; - draw and recordChain's head 5485-5550; - publicUnsettledNow, publicMaybe, cuts, chainsMixing and publicChainsSending 5743-5940; - madeBy, inputsOf, accountKeys, keysOf and status 6140-6510; - withdrawNow …
+
+## gap-G3 (2 findings, 24 guards)
+
+- `gap-g3#2` low (user): A site session's chain whose deposit Koios never answered keeps that deposit as sent for good: its money is hidden two hours, then the rest comes back directly with no word of Lovejoin `sessions.ts:1311`
+- `gap-g3#1` low (user): Only a withdraw waits after the wallet's own send: the runner's next send goes a minute or less after a box's withdraw, though privacy.md says the way back never lines up with anything else the wallet does `privacy.md:440`
+
+*Coverage:* Read in full, every line: - background/spent.ts, pending.ts, wallet.ts, runs.ts, sw.ts. - lovejoin.ts:   - 1-1883: the header, constants, pumpChain, ChainProgress and the types;   - 1882-2211: the helpers to ripeAt;   - 2811-2872: the class fields;   - 2953-3006: progress and lookDue;   - 3600-3909: chain and fanOut;   - 4300-4613: retireOnce's end, the collateral pool helpers, tailOf, tailChain, tailWitness, tailLanded, tailHeld, tailOver and unstale;   - 4614-5450: rewards, reserve and the reservation helpers, crossCheck, publicBuild, publicReady, checked, keep, publicAgainBuild, publicSubmit, publicStart, pumpPublic, publicLook and pumpPublicNow;   - 5450-5884: sendingOf through adoptKept;   - 5884-6523: cuts through status and chains;   - 6560-6760: clearMixes, releaseBootstrap, landedDeposit, rows, inChain, chainTxs, held and returning;   - 6760-7220: withdrawDue and withdrawDueNow,…
+
+## gap-G4 (2 findings, 18 guards)
+
+- `gap-g4#1` medium (user): A split route's leg paid between the runner's two reads of the account comes back alone, in a later return, directly, though its approval sent it through Lovejoin `sessions.ts:3904`
+- `gap-g4#2` medium (user): Nothing stops a swap Minswap builds from spending the session's 5 ₳ collateral, and then its return leaves out Lovejoin and the collateral's mix (NO_COLLATERAL) `sessions.ts:4170`
+
+*Coverage:* **Read in full:**\n- sessions.ts:\n  - 3380-4840: advance, stop, stopCost, resume, runAll, settleReturns, markCut, step, act, noteOrderOpen, waits, ordersSpent, placed, ordersOpen, liveOrders, remnantsFrom, order, cancel, cancelOf, cancelsChecked, referenceRows, bringBack, inspect, review, signAndSend, buildBack, collateralIntoPool.\n  - 4884-5160: throughLovejoin, collateralWanted, lovejoinWantsCollateral, nothingBack, leaveBehind, leftBy, fundingChange, sendBack, noteLanded, refuseParts.\n  - 5170-5270: sendChain's head.\n  - 5621-6000: listNow, view, listing, utxosOf, spentStates, landed.\n  - 6395-6872: spareOf, wayOf, pricedClassic, fillsOf, leftBehindView, chainView, autoView, outcomeOf, paidOut, withinFunding, dexOrderAt, checkOrder, directSpends, checkDirect, checkProceeds, withinNet, refuseOddities.\n  - Helpers 180-300, 880-1110, 1303-1312, 1880-2025 (outBuild).\n- minswap.ts, …
+
+## gap-G5 (1 findings, 19 guards)
+
+- `gap-g5#1` medium (pool-launcher): A pool someone else launched with a box under S0d's least is shown, picked by default and offered with no word, and what comes back from it can't pay part of itself without other money, so spending it undoes the mix `lovejoin-pools.ts:530`
+
+*Coverage:* Read in full, every line: - background/lovejoin-pools.ts (687) - ui/lovejoin-pools.ts (182) - background/lovejoin-launch.ts (460) - seedelf-core lovejoin/pool.rs (645), box_value.rs (403) and value.rs (131) - src/lovejoin-pools.json, decoded pool by pool with one python3 -I summary - Lovejoin 29573c5 via git show: one_shot_mint.ak, mix_logic.ak and lib/lovejoin/reference.ak, plus types.ak, value.ak, mixbox.ak, mix_box.ak and reference_holder.ak  Read in the ranges named: - lovejoin.ts: 600-940 (isRetired, adaPoolOf, valuesOf, poolChoice); 2800-3420 (readSet, verifiedPool, unreadCopies, progress, watchOf, poolNamed, cantComeBack, privateBootstrapMost/Bounds, poolsOf, usable, stuck, mixBoxes, listing, poolRows, lookForPools, wouldRead, ours, plan, fits' head); 3905-4000 (acrossOf's token pool choice); 4140-4380 (planAcross, usableNow, takesNewBoxes, adaPool, retiredIds, retireOnce, collate…

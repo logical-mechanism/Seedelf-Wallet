@@ -1,0 +1,195 @@
+{
+ "findings": [
+  {
+   "id": "gap-g2#1",
+   "severity": "low",
+   "title": "Mix again from my public account refuses unless one ADA-only UTxO pays for every mix of every box it takes, never takes fewer, and the page offers no count",
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2495,
+   "scenario": "Settings at the default depth (2 waves), three a mix, v2 5 ₳ pool with 64 or more free boxes. Public Account 1 holds 8 boxes from its earlier public mixes, and two ADA-only UTxOs of 25 ₳ and 20 ₳ (45 ₳ of ADA alone) beside its 5 ₳ collateral. On the pool's page, NotMixed (or the plain button) offers 'Mix again from my public account', which 'takes them first, and ties nothing new'. The worker counts min(8 boxes, room 64/8 = 8, chain cap 32) = 8, with no regard to what the account can pay. WebAssembly then needs again_funding_in = 1.5 + 8 × 4 × 0.95 = 31.9 ₳ in ONE ADA-only UTxO. The largest holds 25 ₳, so the review is refused: 'Your public account's ADA doesn't pay for mixing 8 boxes again: that takes 32 ₳ in one UTxO of ADA alone, besides the collateral'. The account holds 45 ₳ of ADA alone. The chain's real fees are about 32 × 0.84 ≈ 27 ₳. mix_logic constrains only the mix-script inputs, so the ledger and the contract would take a first mix with two fee inputs. Six boxes (24.3 ₳) would be paid by the 25 ₳ UTxO. But the button sends no count, and the worker never mixes fewer. The user's only ways out are to send ADA to themselves to make one large UTxO, to lower Settings' depth (less privacy), or to use 'Pay from my private balance anyway', which ties the private balance to the account. The public account's first mix (chain_from_account_at) takes as many ADA-only UTxOs as pay. Its Mix again doesn't.",
+   "who": "user",
+   "since": "1c054c3b (2026-09-27, the privacy review §2.10's Mix again from the public account); in every web-wallet tag from 1.6.0 to 1.9.1",
+   "evidence": "wasm/src/lovejoin.rs:2485 `// One UTxO pays for every mix: the largest of ADA alone.`; :2486 `let needed = lovejoin::again_funding_in(boxes, &protocol, request.depth, width);`; :2488-2494 `.filter(ADA only).filter(refusal none).filter(not collateral).max_by_key(lovelace)`; :2495 `let Some(paying) = paying.filter(|p| lovelace(p) >= needed) else { bail!(\"Your public account's ADA doesn't pay for mixing {} again: that takes {} ₳ in one UTxO of ADA alone, besides the collateral\" ...) }`.\n- seedelf-core/src/lovejoin/mod.rs:1966-1968 again_funding_in = DEPOSIT_RESERVE + boxes × per_box_again_in; :1942 per_box_again_in = mixes_per_box_at(depth,width) × mix_fee_estimate (950,000).\n- mod.rs:566-572: Payer { fee: Coin, ... } holds one input. mod.rs:1062-1064: mix_with adds `payer.fee.input()` alone. mod.rs:2557: fan_out's first mix pays from payer.fee, each later one from the change.\n- Worker, extension/src/background/lovejoin.ts:5052-5055: `const count = (w) => Math.min(theirs.length, Math.floor(others / (mixesPerBox(depth, w) * (w - 1))), most(w)); ... const boxes = count(way.width);`. Nothing caps it by the account's ADA.\n- UI, Lovejoin.tsx:2954-2955: againPublicReview sends only `{ ...named, width: w }`. AgainActions :1601-1611 is a bare button with no stepper.\n- Contrast: lovejoin.rs:2278-2294 (chain_from_account_at) takes 'as few ADA-only UTxOs as pay for the rest, the largest first'.\n- Lovejoin v2 29573c5 contracts/validators/mix_logic.ak:11-20 filters `tx.inputs` down to mix-script inputs, so fee inputs are unconstrained.\n- The refusal is pinned as intended: wasm/tests/lovejoin_test.rs:1268-1281, 'No one UTxO pays for it, though two together would: it says so.'\n- en.json lovejoin.warn.notMixed.takes.public_other: 'They came from your public account: Mix again from my public account takes them first, and ties nothing new.'\n- Nothing run (finders run nothing).",
+   "confidence": "traced",
+   "fix": "Pick one, the owner's call:\n- (a) The cheaper one, in the worker or WebAssembly: mix as many of the account's boxes as its largest ADA-only UTxO pays for (again_affordable_in on that UTxO's ADA, at the width). The review already carries `owned` (see gap-g2#4) to say the rest wait.\n- (b) Let core's Payer take several fee coins for the first mix, as chain_from_account_at's deposit does (fee: Vec<Coin>, all inputs of the first mix, change from their sum). That touches mix_with, its signers and its measure.\n\nTest (Rust, wasm/tests): again_from_account with two ADA-only UTxOs that together pay. Today it fails with 'doesn't pay for mixing 2 boxes again'. Under (a) it mixes one box. Under (b) it builds the chain with both UTxOs as the first mix's inputs.\n\nThe test at lovejoin_test.rs:1268-1281 changes with the fix.",
+   "needs_owner": true,
+   "owner_why": "It changes what Mix again from my public account builds (fewer boxes than asked, or a second fee input in core's mix builder), and a test pins today's refusal as intended.",
+   "known_check": "Searched docs/backlog.md and docs/archive/plans/*.md for 'one UTxO of ADA alone', 'largest of ADA alone', 'in one UTxO', 'again_from_account', 'publicAgainBuild', 'Mix again from my public account', 'lovejoin-again-public' and 'one utxo pays'. The only nearby item is the backlog's ⬜ R3-14 (chain_from_account_at's pick of a token pool's UTxOs, another builder). chunk-34 676 and chunk-43 178 name the function only. The INDEX's lanes don't have it. W3 and E1b read again_from_account_at without this note. The behaviour is pinned by a test comment, not settled in any list."
+  },
+  {
+   "id": "gap-g2#2",
+   "severity": "low",
+   "title": "The escape hatch's question names no other account while the account on screen's own boxes are held by a reservation, and the worker then takes another account's box: Pay from my public account ties the two unannounced",
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/ui/screens/Lovejoin.tsx",
+   "line": 1128,
+   "scenario": "Setup: a token pool whose boxes can't pay their own way back today (cantComeBack). Account 1 (on screen) has two mixed boxes there from its public mix. Account 2 has one mixed box Y there from its own.\n\nSteps:\n1. The user presses 'Mix again from my public account', looks at the review and presses Back. The kept review still reserves Account 1's two boxes for 10 minutes: checked() reserves 'public' with until = now + 10 min, the boxes being inputs of its mixes.\n2. Within those minutes, the user presses the stuck callout's 'Bring one back'.\n3. PaidQuestion gets account = hatchAccountOf(pool). That counts Account 1's two boxes as takeable, since status lists reserved boxes as owned. So it names nobody, and PayerNotes says only 'Paid from your public account, one of its UTxOs goes into the box's own transaction, so anyone can tie your public account to the box and to the private UTxO the box comes back into.'\n4. The user presses 'Pay from my public account'. withdrawNowNow takes backOrder(free(back, reserved)), which leaves Account 1's reserved boxes out, so hatchOrder's only candidate is Y, Account 2's box.\n\nOutcome: withdrawOne builds Account 1's largest ADA-only UTxO and change beside Account 2's box in one transaction, and signs and sends it. That ties Account 1 to Account 2 on chain. privacy.md promises 'Paying from the account on screen for another account's box ties the two accounts too, and its note names both', and the question never said the box was Account 2's.\n\nThe same happens for up to two hours after a public Mix again stopped at a mix that may have gone through: holdOnly keeps that step's inputs, Account 1's boxes among them, held as being sent. The default private payer takes Y too. Its note then omits that the box is Account 2's (the privateNamed wording).",
+   "who": "user",
+   "since": "3ea05dc1 (1.6.0's R3-3 fix: hatchAccountOf and hatchOrder), web-wallet/1.6.0",
+   "evidence": "- UI: Lovejoin.tsx:1128-1134. hatchAccountOf takes `pool.boxes.filter((b) => !never.has(key(b))).map((b) => others.get(key(b)))`, where never = notMixed ∪ unsure ∪ bootstrap, and returns an account only when `accounts.every((a) => a !== undefined)`. It knows nothing of reservations.\n- Lovejoin.tsx:3665: `<PaidQuestion account={hatchAccountOf(pool)} ...>`. :1167-1181 PayerNotes: `named = several && box !== undefined`, else lovejoin.stuck.privacy.public / .private.\n- status' boxes: lovejoin.ts:6397 `boxes: mine`, from ours() :3338 `owned: listed.filter((b) => !spent.has(ref(b)))`. Spent is left out, never reserved.\n- Worker: lovejoin.ts:7019 `const reserved = await this.reservedBoxes(network);`. :6360-6363 is reservedSet({ now }), which keeps kept-for-Send reservations (spent.ts:221-224, until > now) and holdOnly's step. :7072 `const order = backOrder(free(of(back), reserved).filter(...))`. :7075 `[chosen] = paid ? hatchOrder(order, after, active) : order;`. :2251-2257 hatchOrder ranks another account's box last, but takes it when it's all that's left.\n- Reservations: lovejoin.ts:4978 checked() `this.reserve(network, chainOwner(), built.txs, this.deps.now() + BUILT_TTL_MS)`. spent.ts:200-218 reservationOf covers every tx's inputs: the account's own boxes for a Mix again. Back (Lovejoin.tsx:3057) leaves it. lovejoin.ts:4762-4771 holdOnly.\n- lovejoin.ts:7580-7591 (paid === true): readAccount → the active account's UTxO pays, `payer = keys.account`, ties = [payer, deposited].\n- Tests pin only the no-reservation cases: lovejoin-accounts-review-fixes.test.ts:155-161 (hatchAccountOf) and lovejoin-crediting-review-fixes.test.ts:629, 641 (worker order).\n- Nothing run.",
+   "confidence": "traced",
+   "fix": "Make the question and the worker's pick agree:\n- (a) Worker side, the robust one. The hatch request carries whose box its question named (none = the account on screen's own or no account's). withdrawNowNow refuses with 'ask again' and a re-read when hatchOrder's pick is another account's and the question named none.\n- (b) Or expose the reserved boxes in status, re-read after Back from a review, and have hatchAccountOf and hatchTakes skip them, as free(…, reserved) does.\n\nSame family:\n- every UI copy of a worker pick that ignores reservations: hatchTakes, NotMixed's and AgainActions' counts (counts only);\n- the Bring one back anyway and held questions, which send a named box and are refused as boxReserved, so they're fine.\n\nTest (Vitest), in the style of lovejoin-crediting-review-fixes.test.ts:641:\n- two accounts' mixed boxes in a stuck pool;\n- a kept public Mix again review reserving the active account's boxes;\n- withdrawNow(undefined, false, true, pool).\nToday it takes the other account's box.",
+   "needs_owner": true,
+   "owner_why": "Fix (a) adds a refusal (ask again) to Bring one back paid; (b) needs none but changes what status hands the page.",
+   "known_check": "Searched backlog.md and docs/archive/plans/*.md for 'escape hatch', 'hatchOrder', 'hatchAccountOf', 'R3-3', 'boxReserved', 'another account's box', and 'reserved' together with hatch/Bring one back. review-1.6.0.md only lists R3-3 as fixed. chunk-34's leftovers and call 36 cover the payers, not reservations. e8a#3 is about Pay from my private balance anyway's words, not the hatch, so this isn't it."
+  },
+  {
+   "id": "gap-g2#3",
+   "severity": "low",
+   "title": "The Mix and Bootstrap forms count public UTxOs the build refuses (any reference script, a datum too deep to read), so 'What Lovejoin can spend' and the stepper offer boxes Review then refuses",
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/ui/screens/Lovejoin.tsx",
+   "line": 410,
+   "scenario": "Setup: the public account holds one ADA-only UTxO of 40 ₳ and its 5 ₳ collateral. A stranger sends it 50 ₳ carrying a small reference script whose bytes Koios returns. A tiny UTxO with an inline datum nested past 128 levels has the same effect, at less cost to the stranger.\n\nSteps:\n1. On a v2 5 ₳ pool's Mix form, From your public account, depth 2, the label 'What Lovejoin can spend from your public account' shows 90 ₳.\n2. The stepper goes to 10 boxes: 10 × 8.8 + 1.5 = 89.5 ₳.\n3. Review at 5 or more boxes.\n\nOutcome: chain_from_account_at drops the stranger's UTxO, as eval::refusal refuses any reference script and any unreadable datum. The review is refused: 'Your public account's ADA doesn't pay for 5 boxes of 5 ₳ and their mixes: that takes 46 ₳ in UTxOs of ADA alone, besides the collateral'. Only 4 boxes go.\n\nThe Bootstrap form's figure (bootstrapSide) and a token pool's count (publicBoxesAffordable, whose 'enough' also counts such a UTxO's token) err the same way. No money moves: the build refuses in words. But the form's guard copy errs high here, where X3 found it erring low, and its doc says it leaves out 'one holding a reference script'.",
+   "who": "stranger",
+   "since": "3ea05dc1 (publicPick, 1.6.0's R3-14 fix); coin-control's flag since 589c4ebb marks only unmeasurable scripts; web-wallet/1.6.0",
+   "evidence": "- Lovejoin.tsx:401-408, publicPick's doc: 'never its collateral, one kept out of payments or one holding a reference script'.\n- Lovejoin.tsx:410: `const spendable = utxos.filter((u) => !u.locked && !u.collateral && !u.unspendable);`. :411 sums the ADA-only ones. :447-449 publicMixAda. :458-471 publicBoxesAffordable. :312-316 mixMost. :618 'lovejoin.mix.inPublicSpendable'.\n- coin-control.ts:324 `...(measurable(p.utxo) ? {} : script)`. koios.ts:92-97: measurable is true for a reference script whose bytes Koios gives. No flag exists for a datum past MAX_DEPTH.\n- WebAssembly: wasm/src/lovejoin.rs:2227 (token pick) and :2284 (ADA pick) `.filter(|p| seedelf_core::eval::refusal(&p.utxo).is_none())`. seedelf-core/src/eval.rs:62-70 refusal returns Some for any `reference_script`, and unreadable_datum for a datum past cbor::MAX_DEPTH.\n- lovejoin.rs:2295-2307 is the refusal's text.\n- Nothing run.",
+   "confidence": "traced",
+   "fix": "Give the public side's UtxoInfo the same test WebAssembly applies: flag any UTxO eval::refusal would refuse (any reference script; an inline datum past MAX_DEPTH, which lovejoin.ts's `evaluable` and withinDepth already mirror) and have publicPick skip it. Or have the worker hand the form WebAssembly's own pick for a count.\n\nSame family: publicMixAda feeds both forms' figures and caps. Mix again and the paid withdraw have no UI pick. The launch filters in core (account_inputs, refusal).\n\nTest (Vitest, screens): publicMixAda over a UtxoInfo list holding a measurable-reference-script UTxO counts it today, and shouldn't.",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "Searched backlog.md and archive/plans for 'publicMixAda', 'publicPick', 'reference script' together with Lovejoin/public/mix, 'measurable' and 'unspendable'. Found: R3-14 (⬜, the token pick in WebAssembly), launch review #12 (reference-script UTxOs in payments), e8b#1 (a stranger's 5 ₳ with a reference script as collateral) and X3's note that the copy errs low. None covers the form counting what the build refuses."
+  },
+  {
+   "id": "gap-g2#4",
+   "severity": "nit",
+   "title": "Mix again from my public account's review says 'N boxes your public account put in' where the account has more there, with no 'N of your M' or 'Mix the rest once this is done'",
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/ui/screens/Lovejoin.tsx",
+   "line": 4113,
+   "scenario": "Setup: the account has 15 boxes from its public mixes in a pool with room for 10 at depth 2 (80 free others).\n\nOutcome: the review reads 'Mixed again: 10 boxes your public account put in' and nothing more. The private side's review of the same shape reads '10 of your 15 boxes in the pool' and 'The pool has room for 10 boxes at this depth now. Mix the rest once this is done.' flows.md:517 says the review 'says how many of the wallet's go (\"1 of your 3 boxes in the pool\")'. The worker computes the figure (`owned`) and the page drops it, so the user isn't told five stay as they were.",
+   "who": "user",
+   "since": "1c054c3b / 003f08b9 (the row never used `owned`)",
+   "evidence": "- lovejoin.ts:5056 `owned = theirs.length;` and :5114 `owned` in the summary. rpc.ts:2283-2284: 'Mixing again: how many of the account's boxes are in the pool (`boxes` is how many go this time)'.\n- Lovejoin.tsx:4113 `tr(\"lovejoin.review.publicPutIn\", { count: summary.boxes })`. summary.owned is read nowhere on the page.\n- AgainReview :3958-3974 uses mix.owned with someOfYours and asManyAsOneGo.",
+   "confidence": "traced",
+   "fix": "Show `owned` as AgainReview does: someOfYours where owned > boxes, and asManyAsOneGo under the rows (keys exist, back-translated).",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "Searched archive/plans and backlog for 'publicPutIn', 'someOfYours', 'asManyAsOneGo' and 'of your' together with public; git log -S publicPutIn shows the row has never used owned. Not in INDEX."
+  }
+ ],
+ "guards": [
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2204,
+   "stops": "A public mix or Bootstrap signing a UTxO whose path isn't the account's: another account's (a switch mid-build) or a stranger's under another key (check_paths; publicBuild has no account check of its own)",
+   "test": "wasm/tests/lovejoin_test.rs:847 the_public_account_mixes_straight_in_signed_by_the_keys_it_spends (likely; not read in full)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2493,
+   "stops": "Mix again from the public account paying its mixes from the collateral",
+   "test": "wasm/tests/lovejoin_test.rs:1256-1258 (no tx spends the collateral 0x5d or the smaller UTxO)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2777,
+   "stops": "A box brought back paid by the account spending its collateral as the paying UTxO",
+   "test": "none found by name"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/wasm/src/lovejoin.rs",
+   "line": 2327,
+   "stops": "A public mix drawing one of the wallet's own boxes (another account's, a session's) as a partner, which would tie them in one mix",
+   "test": "none found"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 5064,
+   "stops": "Mix again from the public account taking or drawing another account's or the private side's boxes: the request leaves every wallet box but the account's own out",
+   "test": "tests/lovejoin-accounts.test.ts (by name)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 4867,
+   "stops": "A public mix (not a Bootstrap) built without the account's collateral",
+   "test": "tests/public-mix-start.test.ts / collateral-held.test.ts (by name)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 4860,
+   "stops": "A public mix, Mix again (5018) or paid withdraw spending the account while a payment from it may still go through (settleMaybeSent)",
+   "test": "tests/maybe-sent.test.ts family (by name)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 4960,
+   "stops": "A second public mix, from any account, while one is being sent or stopped at a step that may have gone through (the account paying twice)",
+   "test": "tests/public-mix-start.test.ts, tests/public-mix-unsure.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 7075,
+   "stops": "The escape hatch taking another public account's box where the account on screen's own, or one no account put in, is free (hatchOrder)",
+   "test": "tests/lovejoin-crediting-review-fixes.test.ts:629, :641 (no reservations: gap-g2#2)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 7034,
+   "stops": "Bringing back a named box (anyway, held, paid) that a built or sending chain or a kept review will spend",
+   "test": "tests/lovejoin-bring-review-fixes.test.ts (boxReserved), approximate"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/lovejoin/mod.rs",
+   "line": 1106,
+   "stops": "A public mix's own collateral return leaving under 150% of the fee put up (fee*3/2 + 1), the ledger's InsufficientCollateral",
+   "test": "none found by name"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/lovejoin/launch.rs",
+   "line": 502,
+   "stops": "A public launch's collateral return over collateral − 3/2·fee; with settle's even() fee (launch.rs:559) the total is exactly 150%, never half a lovelace short; and a collateral too small refused (503-511)",
+   "test": "none found by name (lovejoin_launch_test.rs not read)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/lovejoin/launch.rs",
+   "line": 477,
+   "stops": "A public launch whose inputs don't cover the three outputs, the cert-0 deposit and the fee (ACCOUNT_LAUNCH_SHORT, checked_sub)",
+   "test": "none found by name"
+  },
+  {
+   "file": "seedelf-platform/seedelf-core/src/lovejoin/mod.rs",
+   "line": 803,
+   "stops": "A deposit whose ADA change falls under its least or whose paid-out sum overflows (DEPOSIT_SHORT, MORE_THAN_THERE_IS), so the public mix picks another UTxO",
+   "test": "lovejoin_test.rs (MONEY-5 case, by grep only)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/ui/screens/Lovejoin.tsx",
+   "line": 466,
+   "stops": "The public token pool's stepper offering a count its chain's pick can't pay (publicBoxesAffordable; errs high for refused UTxOs, gap-g2#3)",
+   "test": "tests/lovejoin-public-cap-review-fixes.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/handlers.ts",
+   "line": 380,
+   "stops": "An account switch while a public chain is being sent or stopped at a step that may have gone through, so its watch and reservation never change account mid-flight",
+   "test": "tests/lovejoin-accounts.test.ts (by name)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/account.ts",
+   "line": 199,
+   "stops": "Any build from the account spending a collateral a chain being sent puts up (and readAccountUtxos :122 the chain's inputs)",
+   "test": "tests/collateral-held.test.ts (by name)"
+  }
+ ],
+ "checked_ok": [
+  "The public mix review holds against the signed chain:\n- Into Lovejoin is chain.boxes, which equals request.boxes.\n- Network fees is the sum of every signed transaction's fee: the deposit's and each mix's (lovejoin.rs:2393-2402).\n- Transactions is txs.length.\n- Total leaving is boxes × the box's ADA + fees, with the pool's token named once.\n- After is Home's figure less leaving plus `taken`.\n- deposit_across puts the token change at 0/0 with exactly its least, and the ADA change last. That change pays the first mix.\n- Each mix's change goes to 0/0, and the first mix's withdrawal of the mix_logic balance (taken) rides in it to the last change.\n- Rewards hands the balance to the first mix and 0 to the rest.",
+  "The public Bootstrap holds:\n- depth 0, no collateral and no reward read;\n- fees are the deposit's alone, txs is 1;\n- after is before − leaving with no `taken`;\n- its boxes are held (bootstrapOf);\n- the token change stays at 0/0.",
+  "Mix again from the public account holds:\n- no deposit; Total leaving = fees; After adds taken.\n- The one paying UTxO is never the collateral or a refused UTxO, and every change goes to 0/0.\n- Other accounts' boxes are taken out of the request, so they are neither taken nor drawn.\n- WebAssembly's partners are never the wallet's own.",
+  "Collateral holds:\n- Every public mix puts up the account's 5 ₳ collateral, with a return of 5 ₳ − (3/2·fee + 1) to 0/0, which only a phase-2 failure would spend.\n- The paid withdraw does the same.\n- The public launch's return is collateral − 3/2·fee with an even fee, exactly 150%, and carries any tokens back.\n- With no collateral set, the launch puts up one of the account's UTxOs (account_collateral), which the ledger allows.",
+  "The box brought back paid by the account holds:\n- The fee and the top-up come from its largest ADA-only UTxO, never the collateral.\n- The change goes to 0/0, and the box plus taken go into a fresh register.\n- The history records what landed, `paid_back`, with no fee.\n- ties = [payer, the deposit's account].\n- The payer is the account the question names (active).",
+  "The pool's start holds, from either side:\n- Locked total = reference + mix_box + mix_logic + cert-0 deposit.\n- Total leaving = locked + fee = inputs − change.\n- The 'at most' note covers Send going without the deposit.\n- A public bare build keeps the same seed: same input order, a prefix of the inputs, so the same pool.\n- A private bare build spends only the reviewed inputs, and another pool is refused unless its credential is registered.\n- recordLaunch takes the account from keep().",
+  "Several accounts, builds and words:\n- Every public build reads the active account (readAccount, withKeys), and WebAssembly's check_paths refuses another account's UTxOs.\n- publicAgainBuild checks the account again at build.\n- status' otherAccounts is relative to the active account.\n- TotalRows and AfterRow name the active account, which is the build's: pages remount on a switch, and WIPED_ON_SWITCH clears the account UTxOs the stepper reads.\n- madeBy and accountKeys check payment keys of the active account, the known ones and the first 24, never a stake key alone, as privacy.md says.",
+  "Reservations hold:\n- One 'public' slot by design: one public review or chain at a time, network-wide.\n- checked, unreserve, keep, publicStart (held), holdOnly, release and publicReady each act only on the chain holding it.\n- A kept review's reservation is replaced by the next build.\n- A being-sent one is deleted only when nothing is sending or unsettled.\n- The only per-account reader of it is e3a#1's dApp probe.",
+  "Defaults don't tie two accounts beyond what's documented:\n- Mix my boxes again leaves every account's public boxes out.\n- Mix again from my public account takes the active account's alone.\n- The escape hatch prefers the active account's own and no-account boxes, and its private payer prefers a UTxO tied to no other account.\n- Pay from my private balance anyway ties them only after its warning (e8a#3's words).",
+  "Buttons by state of a public build:\n- Review kept: Send works for 10 minutes. Back leaves the boxes reserved for those 10 minutes; Bring one back now, Bring every box back and the auto-withdraw skip them, and the private Mix again counts fewer.\n- Chain being sent: Mix again from my public account is off; a public Review or Bootstrap is refused in words (still being sent); Mix my boxes again and Pay anyway work; every Bring back is refused or waits (chainsMixing); a switch is refused.\n- Stopped: everything works, and Mix again from my public account takes the not-mixed boxes first.\n- Stopped at a step that may have gone: the UI keeps public Review and Mix again on, and the worker refuses them in words (publicMaybeWait); a switch is refused; withdraws go, with that step's inputs held.\n- Done: the boxes come back on their own.",
+  "The UI's public figures match the worker's constants:\n- publicAfter adds taken once.\n- publicLeaving leaves the boxes out on a Mix again.\n- The classic pool (retired) shows no after line and is refused before reading the account."
+ ],
+ "notes": [
+  "e8a#2's family, a new fact. While the newest public chain's progress is kept (`sending`, which a stopped chain's stays until the next public mix or a lock), the hub hides every public chain row (Lovejoin.tsx:1935). The MixCard of an older stopped public chain also omits 'Why it stopped'. MixList gets the unfiltered `rows`, so chainOf finds its row and the card leaves the why to Chains (Lovejoin.tsx:2586-2590), which doesn't list it. That chain's reason shows nowhere. After a switch, the hub's 'Your mix from the public account: stopped after N of M…' block (progress(), lovejoin.ts:2958-2993) is another account's, unnamed.",
+  "Wording, narrow. After Remove wallet and a restore with a kept maybe-sent public mix of account N ≠ 0 (keepOnReset records no account), publicMaybe refuses every switch with 'A payment or mix from this account is still on its way' (worker.account.onItsWay), and every account's public mix waits ('Your last mix from the public account…'). It's account N's mix, and the restore opens account 0.",
+  "Wording, nit. The worker's refusal lj.privacy.otherAccount says 'Account {{number}}' (lovejoin.ts:5048), where the page's OtherAccounts note and the picker use the account's name once renamed. It's reached only from a stale page.",
+  "e8a#3's family, narrow. Mix my boxes again asks Koios about untold boxes at the press (made(), lovejoin.ts:3496). If every remaining box turns out to be another account's, it throws lj.privacy.fromAccount: 'These boxes came from your public account … Use Mix again from my public account', which on the active account takes none of them.",
+  "Not a finding: a public pool start isn't refused while a public chain is being sent. readAccount filters the spendable UTxOs by reserved.collateral, but returns `collateral` itself unfiltered (account.ts:199-200). So the launch can put up the chain's collateral too. It matters only if the locally measured one-shot mint failed phase 2, which would cost the chain's later mixes their collateral (phase-1 refusals) and leave its boxes not mixed yet.",
+  "w3#1's family. A public mix's chain record carries no `delay` (publicStart, lovejoin.ts:5209-5218). Its boxes' due times are drawn from Settings' wait when chainSent draws them, not the wait the review showed: a Settings change in the ten minutes before Send, or while it's sent, changes the reviewed wait. The depth is signed at build, so only the wait moves.",
+  "For gap-g2#1: the one-UTxO rule is pinned as intended by wasm/tests/lovejoin_test.rs:1268-1281. The owner may prefer to record it as a limit. In the common case, a public chain cut after its deposit, the deposit's change at 0/0 is usually at least what Mix again needs, so the refusal bites mostly where the account's ADA is fragmented or sits with tokens, or at depth 3."
+ ],
+ "coverage": "Read in full:\n- ui/screens/Lovejoin.tsx, all 4,125 lines. The brief's ranges were read line by line: 1-500, 1045-1660, 2650-3760 and 3790-4125. The hub, MixList and the cards were read at pace.\n- ui/screens/LovejoinLaunch.tsx and ui/components/ReviewTotals.tsx.\n- background/: lovejoin-launch.ts, spent.ts, account.ts, coin-control.ts and lovejoin-rewards.ts.\n- seedelf-core/src/lovejoin/launch.rs.\n\nlovejoin.ts, read in these ranges:\n- the helpers 1920-2260;\n- progress 2950-3010 and ours 3318-3350;\n- againBoxes, funding, chain and fanOut 3470-3910;\n- unstale through pumpPublicNow 4590-5460, including publicBuild, publicReady, checked, keep, publicAgainBuild, publicSubmit and publicStart;\n- draw and recordChain's head 5485-5550;\n- publicUnsettledNow, publicMaybe, cuts, chainsMixing and publicChainsSending 5743-5940;\n- madeBy, inputsOf, accountKeys, keysOf and status 6140-6510;\n- withdrawNow and withdrawNowNow 6980-7220;\n- split, splitAll, real, ownership and withdrawOne's three paths 7460-7780.\n\nwasm/src/lovejoin.rs, read in these ranges:\n- network_flag and payment_key 55-80;\n- Holdings and holdings_of 900-1075;\n- ChainRequest and ChainResult 1377-1565;\n- chain_from_account_at and again_from_account_at 2130-2560;\n- owned_in, withdraw_in, withdraw_paid_in, withdraw_private_in, box_value and finish 2600-3038.\n\nwasm/src/lib.rs: the launch builders 2460-2790 and chain_of.\n\nseedelf-core/src/lovejoin/mod.rs, read in these ranges:\n- Coin, Holding, Payer, Rewards and deposit_across 460-880;\n- mix and mix_with 915-1235;\n- withdraw_with and the estimates and reserves 1286-1990;\n- Funding, chain_across, again_at, collateral_tail, collateral_mix, fresh_for and fan_out 2186-2605.\n\nbuild.rs: account_inputs and account_collateral.\n\nElsewhere:\n- dapp.ts 1700-1740 and 1880-1930;\n- handlers.ts 360-400 and 525-605;\n- accounts.ts' WIPED_ON_SWITCH and use;\n- the en.json strings for every key these screens use;\n- privacy.md's Several public accounts and Lovejoin sections, plus a grep of the rest;\n- flows.md:517 and wasm/README.md:74-77;\n- Lovejoin v2 mix_logic.ak's input filter, skimmed;\n- wasm/tests/lovejoin_test.rs 1165-1345;\n- test names grepped in lovejoin-accounts-review-fixes and lovejoin-crediting-review-fixes.\n\nSkimmed or not reached:\n- sessions.ts' againBuild and mixFunding were read only to their heads. Its buildBack and mixOutSubmit (E2a, E8a and W3's ground) weren't reached.\n- Not reached: Settings' Bring every box back UI, the Collateral screen, es and ja, the e2e specs, lovejoin_launch_test.rs and the worker's chainSent and draw.\n\nNothing was run or built."
+}

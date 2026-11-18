@@ -1,0 +1,209 @@
+{
+ "findings": [
+  {
+   "id": "gap-g3#2",
+   "severity": "low",
+   "title": "A site session's chain whose deposit Koios never answered keeps that deposit as sent for good: its money is hidden two hours, then the rest comes back directly with no word of Lovejoin",
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1311,
+   "scenario": "A dApp's private session holds 40 ₳: a 35 ₳ funding and its 5 ₳ collateral. The user presses Bring it back, which goes through Lovejoin by Settings' default, and then Send. The chain's first transaction is the deposit. Koios never answers its submit: a 5xx or a timeout on every try (CHAIN_RETRIES: five tries over about 100 s), or one such try followed by a refusal that isn't 'spent' (Koios's node down). On mainnet the data layer's submit fails first and Koios after it. The deposit never reached a node.\n\nsendRecorded keeps it as maybe sent. It records `inputs`, never marks it `unsent`, and marks its inputs spent. The chain stops, and Send says Koios didn't answer.\n\nNothing ever settles that deposit. Only act lets a lost step go, and act runs only for sessions that run themselves. A site's session doesn't. Its other paths (runAll's pump and settleReturns, the list's refresh) only confirm what lands.\n\n(1) For two hours (SPENT_KEEP_MS) the session's page shows only the 5 ₳ collateral at the account. It says 'Stopped after 1 of 12 transactions; the rest stays at the account until you bring it back', as if the 35 ₳ went in. The Lovejoin page and Home list the chain as stopped with nothing found.\n\n(2) After that, Bring it back (or Bring everything back) builds a direct return of the whole 40 ₳. chainSoFar says the chain started, so no chain is built, and tailOf gives none (sent 0 < total − 2). The direct path sets no lovejoinSkipped. The review shows no Lovejoin switch (LovejoinSwitch hides itself when `through` has no `lovejoin`) and no warning (LovejoinNote returns null). Only the collateral's own mix is named, where the 5 ₳ pool takes it. So the session's spare ADA comes back directly, tied on chain to the session and, through its funding, to the private UTxOs that paid it. The default was Lovejoin, and nothing of the chain ever went in.\n\nIf the user brings the 5 ₳ back during the two hours instead, that return lands, the chain reads as finished, and the next return goes through Lovejoin.\n\nThe owner's intent for a first transaction refused outright is pinned in tests/return-chain-scope.test.ts:146: 'Brought back again: through Lovejoin, not directly with no word why.' No money is lost.",
+   "who": "user",
+   "since": "c138b3b0 and 1340fba1 (a session transaction Koios didn't answer stays maybe sent, its retries too), with 6b65c3cf (L17's `started`), 2026-09-27/28: before web-wallet/1.0.0, in every tagged release",
+   "evidence": "How the deposit is kept as maybe sent:\n- lovejoin.ts:258-263 chainRetryMs: `if (e instanceof KoiosBusyError) { if (tries.busy >= CHAIN_RETRIES) return undefined; ...}`, with CHAIN_RETRIES = 4 (:222).\n- sessions.ts:5396-5398 sendStep: `if (wait === undefined) throw e;`. lovejoin.ts:538 pumpChain rethrows. sessions.ts:5320-5339 pump's catch sets `s.chain.stopped`, calls chainEnded, dropPending and release, and throws.\n- sendRecorded, first try: :5571 `if (maybe) t.inputs = txInputs(bytes);`.\n- Every retry: :5526 `unanswered = sentBefore && (!!again.inputs || ...)`; :5566 `const unread = (sentBefore && e instanceof SpentUnread) || unanswered;`; :5572 `else if (!unread) t.unsent = true;` is never reached; :5579 `if (maybe || unread) rememberSpent(...)`.\n\nWhy nothing ever lets it go:\n- running() (:1269-1271) needs `s.auto`. A site's session has none, so act (:3683) never runs for it.\n- The only rule that lets a lost step go is act's: `gone` (:3701-3703), `freed = ...t.inputs` → forgetSpent (:3732, :3749), and the record dropped for a non-REBUILT kind (:3733-3735).\n- runAll's loop over sessions that don't run themselves (:3561-3572) only pumps a pending chain and calls settleReturns, which runs only for a summary or a funding awaiting landing (:3569). Even then it only confirms (:3596-3603).\n- listNow's refresh only confirms (:5643-5651).\n\nWhat the return then does:\n- chainSoFar (:1305-1311): `since` keeps every tx with `!t.unsent`, and `started: !finished && went.some((t) => t.kind === \"deposit\" || ...)` stays true.\n- buildBack: :4534 `const { sent, started } = chainSoFar(record);`. :4580-4581 tailChain → tailOf (lovejoin.ts:4447 `c.sent < c.total - 2` → undefined). :4616 `if (!direct && !started ...)` is skipped. The direct return (:4743-4820) carries `...said` with `skipped` unset.\n- listing (:5945-5951) leaves the spent-marked inputs out for SPENT_KEEP_MS.\n- chainView (:6466-6476) counts the deposit (`own` = deposits/mixes not unsent), which gives en.json:1006 'Stopped after {{sent}} of {{total}} transactions; the rest stays at the account until you bring it back'.\n- LovejoinReturn.tsx:376 `if (!back.lovejoin && through) return null;`; :414-421 no lovejoinSkipped and no `lovejoin`, so null.\n\nWhat's promised:\n- privacy.md:404-405 say the return is through Lovejoin by default, and that one which comes back directly 'says why'.\n- Contrast L5 (independent review) for public mixes: `maybe` is looked up and settled within 2 h (lovejoin.ts:5738-5806). The test at return-chain-scope.test.ts:132-149 covers only a first transaction refused (marked unsent).\n\nA verifier test in that file's harness: answer the first five /submittx 503, expect backSubmit to reject, move t.clock past LOST_AFTER_MS and SPENT_KEEP_MS, call `sessions.list(\"preprod\", true)` (tx_status null), then backBuild. Expect `lovejoin` defined; today it's a direct return with `lovejoin` and `lovejoinSkipped` both undefined, and the view's chain says sent 1. No command run (finder).",
+   "confidence": "traced",
+   "fix": "Give every session's chain what act gives a running one, through one helper that act and buildBack both call.\n- Before buildBack reads chainSoFar, and in runAll's loop over sessions that don't run themselves (and the list's refresh), find each deposit or mix the record keeps as maybe sent: `inputs` set, not confirmed.\n- If tx_status hasn't shown it LOST_AFTER_MS after it was sent, and utxo_info shows its inputs still unspent, let it go as act does (:3701-3749): forgetSpent its inputs and drop its record. chainSoFar then reads the chain as never started, chainView stops counting it, and the return goes through Lovejoin again.\n- One that landed meanwhile is confirmed, as now.\n\nThe class: chain transactions of sessions with no `auto` (a site's, and one the restore scan found). The public mix already has this rule (publicUnsettled).",
+   "needs_owner": false,
+   "owner_why": "",
+   "known_check": "Searched backlog.md and docs/archive/plans/*.md for: \"didn't answer\" together with deposit, chain, site and by hand; 'maybe sent'; 'stopped after 0'; L5, L17, F11, M7; 'chain cut before it began'.\n\nWhat I found:\n- L5 fixed this for public mixes (maybe + lookup).\n- act's lost rule (final review sessions-1) covers sessions that run themselves.\n- F11 made unanswered retries stay maybe sent.\n- L17's test (return-chain-scope.test.ts:132) covers a first transaction refused, not one never answered.\n- Backlog line 125 is wording for a mix's chain cut before it began.\n- chunk-34's 'a deposit Koios didn't answer may have gone in (a session's chain marks no maybe)' is about Bootstrap entries, not the return's way.\n\nNone covers a session that doesn't run itself."
+  },
+  {
+   "id": "gap-g3#1",
+   "severity": "low",
+   "title": "Only a withdraw waits after the wallet's own send: the runner's next send goes a minute or less after a box's withdraw, though privacy.md says the way back never lines up with anything else the wallet does",
+   "file": "seedelf-platform/seedelf-web-wallet/docs/privacy.md",
+   "line": 440,
+   "scenario": "A mix from the private balance (the tile's Mix) has been sent, and its funding is landing. One of the wallet's boxes in v2's 5 ₳ pool is due.\n\nRun R1, the minute's alarm at T:\n- The mix's step finds its funding not listed yet and sends nothing.\n- withdrawDue, last in the run, finds nothing sent since the run began and no send within 5 minutes, and withdraws the box at about T+10 s.\n\nThe funding lands. Run R2, at T+60 s:\n- The mix's step finds it funded. `go` checks only the unlock's wait.\n- bringBack builds its chain and sends its deposit into the same 5 ₳ pool, and its first mixes, at about T+65 s. That's under a minute after the box came out of that pool, from the same IP.\n\nThe same happens with:\n- a swap that runs itself, with its order or its return's chain;\n- Home's 15 s poll, which pumps a payment's waiting part;\n- the watch's resend of a payment that may still go through.\n\nWhere the alarm fires while a long run is still going (a Koios 429 hold, giveme.my's 20 s), sw.ts runs again at once after it, and the step goes seconds after the withdraw.\n\nprivacy.md:440 says the box 'comes back while the wallet is unlocked, under rules that keep its way back from lining up with anything else the wallet does'. :442 says 'Never in a run that sent anything else, nor within 5 minutes of the wallet's own send', and architecture.md:716 the same. Here the box's way back is within a minute of the wallet's own send.\n\n1.9.1's privacy.md said only that the box comes back 'or later when the wallet has just sent something', which is one way, as the code is. The docs rewrite 1d41dfed (2026-11-17) widened it. No money moves wrongly.",
+   "who": "user",
+   "since": "d74677a9 (2026-09-27, privacy review §3.1: the rule one way, before web-wallet/1.0.0); the wider wording 1d41dfed (2026-11-17, docs at HEAD)",
+   "evidence": "The rule only ever holds the withdraw:\n- lovejoin.ts:1689-1698: 'No box goes back within this long of the wallet's own last send'.\n- :6898-6912: `const { sent, forgotten } = await this.deps.wallet.sends(); if (since !== undefined && sent >= since) return []; ... const push = quiet(now, sent, forgotten);`, which only pushes the withdraw.\n- The withdraw is itself a send: :7684 `rememberSpent(session, network, bytes, at)` feeds lastSpentAt.\n\nThe order of a run and the next:\n- runs.ts:80-92 runs the sessions, the public pump, the watch and the parts first; :93-102 withdrawDue goes last. The next run's sessions come first.\n- sw.ts:84-93: the alarm's period is 1 minute. sw.ts:112-130: a run asked during a run (`asked`) runs at once after it.\n\nNo other sender reads the wallet's sends:\n- sessions.ts:3806-3808 `const go = async (send) => { if (!(await this.waits(network, s, run))) await send(); };`, and waits (:3940-3966) reads only `unlockedAt`.\n- :3811 `if (s.mix) return go(() => this.bringBack(...))`.\n- grep finds no `sends()`, `lastSpentAt` or QUIET in sessions.ts, parts.ts or runs.ts.\n- handlers.ts:239: Home's pending-tx poll `ctx.parts.pump(ctx.network)`. pending.ts:832-851: the watch's resend.\n\nThe wording:\n- privacy.md:440 and :442 (quoted in the scenario); architecture.md:716.\n- `git show web-wallet/1.9.1:.../privacy.md` line 221 reads '...comes back 2 to 20 minutes into the first time the wallet is unlocked after it, or later when the wallet has just sent something'.\n- git blame of privacy.md:440-442 gives 1d41dfed1.\n- privacy-review.md §3.1's own ask was one way: 'No withdraw in a pass that sent anything else, or within about 5–10 min of the wallet's own submit.'\n\nA verifier test, in the harness of unlock-waits.test.ts or lovejoin-withdraw-submit.test.ts:\n1. Make one box due and a mix session funded but not listed.\n2. Run runNetworks: expect a withdraw.\n3. List the funding and move the clock 60 s.\n4. Run again: today the session's deposit is submitted within 5 minutes of the withdraw.\n\nNo command run (finder).",
+   "confidence": "traced",
+   "fix": "Either:\n- (a) Hold the runner's automatic sends after a withdraw. The sessions runner's `go` (not 'asked' runs), parts' pump when the alarm or Home drives it, and the watch's resend would each wait out QUIET_AFTER_SEND_MS from the wallet's last withdraw, with a fresh draw as the withdraw's own push. That needs Lovejoin to note its last withdraw's time where the runner reads it (beside `seedelf.sends`).\n- or (b) Say it as the code does, as 1.9.1's privacy.md did: the box's way back waits after the wallet's own sends, and nothing of the wallet's waits after the way back. That means privacy.md:440, :442 and architecture.md:716.\n\nThe class is every automatic sender other than the withdraw: sessions.ts go/waits, parts.ts step, pending.ts settleNow's resend.",
+   "needs_owner": true,
+   "owner_why": "(a) changes when the runner's steps and a payment's parts go, which is a timing default; (b) changes the privacy doc's promise. Either is the owner's call.",
+   "known_check": "Searched backlog.md and docs/archive/plans/*.md for: QUIET_AFTER, 'quiet rule', '5 minutes of', 'within 5 min', 'after a withdraw', 'after the withdraw', 'following a withdraw', 'lining up', 'line up', symmetric.\n\nRead:\n- privacy-review.md §3.1, which is one way;\n- independent review M10, M11, L8, F8;\n- X4's x4#1 and x4#2, which are a send before the withdraw and an unlock during a step.\n\nNone covers a send after a withdraw. I compared 1.9.1's privacy.md (one-way wording) with HEAD's (the wider claim from 1d41dfed)."
+  }
+ ],
+ "guards": [
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/wallet.ts",
+   "line": 702,
+   "stops": "Any chain sending after an unlock. A lock clears session storage, which takes every chain's progress, its reservations and its pre-signed CBOR. So no pre-signed step of a chain sent before a lock is ever sent after it.",
+   "test": "tests/chain-lock.test.ts:42, :63"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 516,
+   "stops": "Giving giveme.my's coin to a collateral's mix whose parents aren't on the ledger: pumpChain asks for its witness only with nothing of the chain in flight",
+   "test": "tests/lovejoin-planner.test.ts:1427"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 482,
+   "stops": "A step skipped, or taken for unsent, after a worker stopped mid-submit. `sending` is saved before each submit, so the next call sends it again as maybe sent.",
+   "test": "tests/chain-resend.test.ts:55"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 525,
+   "stops": "A dropped window stopping the chain: every transaction in flight goes again, in order, after CHAIN_RESEND_MS (L25)",
+   "test": "tests/chain-resend.test.ts:55, :147, :177"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 538,
+   "stops": "A next step refused while its parents are in flight is resent once, then the chain stops (resentFor). The chain is never resent without end.",
+   "test": "tests/chain-resend.test.ts:74, :96"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 5291,
+   "stops": "A public mix sending, or writing its progress back, after a lock and an unlock, or over another chain that took its place (ours() in every save)",
+   "test": "tests/chain-lock.test.ts:42"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 5364,
+   "stops": "A public mix's retry after a back-off when the wallet locked meanwhile (L14)",
+   "test": "tests/chain-lock.test.ts:28"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 5321,
+   "stops": "A public mix's first transaction, which spends the account, forgotten across a lock. It's marked maybe sent, sealed, before its first submit (L5), so no second mix from the account pays again.",
+   "test": "tests/public-mix-unsure.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 5250,
+   "stops": "Two pumps sending one public mix at once (L26)",
+   "test": "tests/public-mix-pump.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 5193,
+   "stops": "publicStart, in the account's turn, refuses a Send while a payment may still go through, a public chain is being sent, or one stopped unsettled. So the account can't pay for a mix twice.",
+   "test": "tests/public-mix-start.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 5895,
+   "stops": "A chain whose progress is being put in place being taken for one a lock cut (recordChain's `starting`)",
+   "test": "tests/chain-record.test.ts:65"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 5586,
+   "stops": "A chain recorded with no progress (its start failed) being kept as sent: its record and mix entry go (L28)",
+   "test": "tests/chain-record.test.ts:27, :47"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 5401,
+   "stops": "A session chain's retry after a back-off across a lock and an unlock (pendingHere → ChainGone)",
+   "test": "tests/chain-lock.test.ts:63"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 5174,
+   "stops": "A second chain, or a second Send of one, for a session whose chain is on its way (final review lovejoin-4)",
+   "test": "none found by name"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 5182,
+   "stops": "Sending a reviewed chain whose inputs a transaction sent since spent. It would stop after its deposit (L18).",
+   "test": "tests/return-chain-scope.test.ts:187"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 3759,
+   "stops": "A running session's return built while any recorded chain step may still land, so a return can't race in-flight mixes over the account's change or collateral",
+   "test": "tests/chain-resend.test.ts:147 (approximate)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 3702,
+   "stops": "A step that never landed holding its inputs and the session's way back for good. Lost after LOST_AFTER_MS, its inputs are freed and the step is built again. Running sessions only (gap-g3#2).",
+   "test": "tests/sessions.test.ts (by name)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 1476,
+   "stops": "A collateral's mix built again for ever: at most TAIL_TRIES builds, within TAIL_KEEP_MS of its deposit",
+   "test": "tests/lovejoin-planner.test.ts:1835, :1530"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 4486,
+   "stops": "A return sweeping what pays for its collateral's mix while the box is merely unlisted. It waits up to TAIL_UNLANDED_MS, or LANDING_MS once known in.",
+   "test": "tests/lovejoin-planner.test.ts:1775"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 5436,
+   "stops": "A giveme.my behind the chain ending the collateral's mix at once: refusals are tolerated for GIVEME_BEHIND_MS from its deposit's landing",
+   "test": "none found by name"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 7277,
+   "stops": "Bring every box back taking a box a chain or review will spend, or a session's collateral box its mix may still use",
+   "test": "tests/lovejoin-bring-review-fixes.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 7644,
+   "stops": "A withdraw built across a lock and an unlock. Bring every box back's loop passes each withdrawOne the unlock it read.",
+   "test": "tests/lovejoin-withdraw-submit.test.ts:178"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "line": 7412,
+   "stops": "Bring every box back sending more after a withdraw that may have gone, or after a lock",
+   "test": "tests/lovejoin-bring-all-back.test.ts (by name)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/spent.ts",
+   "line": 113,
+   "stops": "Freeing a refused transaction's input that another transaction spent since (forgetSpent's `at`)",
+   "test": "tests/maybe-sent.test.ts (by name)"
+  }
+ ],
+ "checked_ok": [
+  "A lock or Remove wallet clears session storage, which takes each chain's progress and its pre-signed transactions with it. Every send is preceded by a check of that progress (pumpChain's save(), sendStep's and pumpPublicNow's checks after each back-off, witnessTail's keepPending). So after a lock and an unlock, nothing of a chain is sent, in a burst or otherwise. The only gap is between that save and the submit, with no network wait in it.",
+  "Session chain pumps are serialized by the sessions queue: every pump call is inside serial (runAll, step/act, sendChain from backSubmit, claimSubmit and the runner's bringBack, skipCollateralMix). So the ChainGone path's dropPending and release never touch a newer chain of the same session.",
+  "x4#1's class, sender by sender:\n- The chain pumps, pumpPublicNow and the tail have no timing gate of their own. The lock wipe and the progress checks above cover the unlock.\n- Bring every box back's loop reads the unlock once and passes it to each withdrawOne, which checks it again after giveme.my, just before the sealed write and the submit (lovejoin.ts:7644). Its quiet-rule skip is documented (privacy.md:446).\n- settleWithdrawing's resend reads the network, then resends(), then the unlock, before its submit.\n- Only x4#1 (withdrawDueNow) and x4#2 (a step's start) are members.",
+  "A pre-signed step is never sent twice except as the same bytes: resend() in order, `sending` marking a send cut short, a second page's Send finding the kept review cleared (clearKept after the first success) or refused. The ledger takes each once.",
+  "No step is skipped: `next` moves only after a send succeeds. The collateral's mix waits for nothing in flight and goes with its witnessed CBOR. A worker restart resumes from the saved progress at the next alarm.",
+  "When a parent is rolled back after being seen, pumpChain doesn't send it again. Its children are resent after CHAIN_RESEND_MS, and the chain stops after the spent retries. Every input a sent step may spend stays marked spent for SPENT_KEEP_MS, so no later build of the wallet's double-spends it, and the rest comes back directly. No money is lost.",
+  "When a chain stops, its reservation is released. That frees only what its unsent transactions would spend, plus its collateral. Steps in flight keep their inputs marked spent. Mempool order keeps mixes sent earlier ahead of a later spend of the session's collateral, so a return built after a stop doesn't invalidate them in practice.",
+  "For a running session, act waits for every recorded chain transaction to land or go lost (15 min) before a return, so a cut chain's direct return never races its in-flight mixes.",
+  "chainSent draws a deposit's due times once (`scheduled`). A tail's leaf gets its own at its mix's send. A box whose chainSent never ran (a lock between submit and record) gets one from scheduleFound's count at the next pool read. unscheduleUnfinished uses c.sent, which errs toward holding.",
+  "After a lock, cuts() and markCut mark the cut chain stopped. sortOut holds its boxes made by makers that aren't leaves as not mixed yet. A session chain cut after its own return was sent reads as stopped on the hub only until that return lands and noteLanded's restBack marks it carried.",
+  "The collateral's tail:\n- Its witness is asked only once its parents are seen.\n- tailBuildable caps it at TAIL_TRIES builds and TAIL_KEEP_MS.\n- tailChain waits while the box is unlisted (TAIL_UNLANDED_MS, LANDING_MS), or ends where the wallet's own send spent the box.\n- skipCollateralMix is in turn with the runner.\n- Bring every box back leaves a tail box a day at most.\n- A Mix my boxes again that takes the tail box after a lock ends that tail (`ours`), and the rest comes back.",
+  "Public mixes:\n- Send refuses while one is sent or unsettled.\n- reserve(held) catches a review replaced by a second page's.\n- holdOnly keeps only the maybe step's inputs, and publicUnsettled settles it within SPENT_KEEP_MS.\n- keepOnReset keeps it through Remove wallet.\n- A stop's release leaves the in-flight steps' inputs marked spent.",
+  "Network switch: every record, watch, reservation and chain is per network, and the runs go through every network, so a chain on the other network keeps going.",
+  "spent.ts: marks are kept by time, not by count, and sites' marks apart. forgetSpent's `at` keeps a spend made since. reservations() drops kept-for-Send entries past `until`. readFresh re-reads a listing behind the wallet's own spends.",
+  "pending.ts: writeAhead seals before the submit. restoreNow puts a maybe-sent payment back with RESEND_MS from the unlock. The resend runs only while the watch is unchanged (F7). A chain's sends don't go through pending.ts's watch, and nothing in my paths needs them to."
+ ],
+ "notes": [
+  "F5's fix lives in memory. `refused` (lovejoin.ts:2845-2853) is a plain Set, and its comment accepts that a worker restart forgets it ('looked for, and sent again under a new withdraw's rules'). Two new facts for the owner:\n- While locked no alarm runs, and Chrome stops an idle worker after about 30 s, so the fix holds only for a lock shorter than that.\n- Forgotten, a withdraw Koios refused for good (its box moved, or its pool's reward balance moved) is resent and refused again, and the refusal is swallowed at :7871. It's kept as `withdrawing` for SPENT_KEEP_MS. That holds every other way back on that network for two hours: withdrawDueNow :6798, Bring one back now's lj.lastBoxMaybe, Bring every box back's 'withdraw' wait. That's F5's own symptom.\nIt needs a lock during the withdraw's submit and a refusal, which is rare.",
+  "A resend of a chain transaction Koios took, still waiting in a mempool, is refused 'All inputs are spent' and retried 18 × 10 s. sendRecorded marks it `unsent` meanwhile, because `unread` covers only unanswered tries (F11). If it's still waiting after the retries, the chain stops, as pumpChain's own comment accepts. A lock during those retries leaves the record `unsent`, and act drops it as lost 2 minutes on. That's harmless today: later mixes keep `started`, and a Bootstrap's return makes it `finished`. chain-resend.test.ts's modelled io treats a resubmit of one in the mempool as accepted, so no test drives a resend refused while it waits.",
+  "A direct return reviewed before the session's chain started (Bring everything back's, say) can be sent by its Send while that chain is on its way. sendBack's direct path checks neither pendingChain nor the spent marks; sendChain checks both. Only one can land. E2a judged such races of the user's own two reviews harmless.",
+  "publicSubmit's own pumpPublic is skipped when an older pump still holds the network's claim. That happens when one sleeping in a back-off spans a lock and an unlock, and the user then sends a new mix. Nothing goes at Send, though Home's banner already shows it sent. The alarm sends its first window up to a minute later, or nothing if the wallet locks first. Narrow.",
+  "On mainnet the data layer's feed can show a collateral's mix's parents in before Koios does. giveme.my checks Koios, so a Koios lag past GIVEME_BEHIND_MS (3 min) ends that mix twice (TAIL_TRIES), and its box waits not mixed yet. privacy.md:437 covers this as 'giveme.my refusing past its wait'. Related: tailWitness treats an Ogmios merely behind a freshly listed box as StalePool, which ends that try. That's the backlog's 'Koios behind' rework (line 61).",
+  "Bring every box back runs in the unlock's run, ahead of unlockDraws. Its settleWithdrawing call passes no `run`, so a maybe-sent withdraw is resent at once. That's by design: privacy.md:446 and :449, 'none of a box's waits, the unlock's fresh draw included'.",
+  "A note for whoever weighs gap-g3#1. Back-to-back runs (sw.ts `asked`) happen only when a run lasts past the next alarm tick, or an unlock asks one. The common gap between a withdraw and the next run's step is 20–60 s, which privacy.md:442's 'within 5 minutes' still covers."
+ ],
+ "coverage": "Read in full, every line:\n- background/spent.ts, pending.ts, wallet.ts, runs.ts, sw.ts.\n- lovejoin.ts:\n  - 1-1883: the header, constants, pumpChain, ChainProgress and the types;\n  - 1882-2211: the helpers to ripeAt;\n  - 2811-2872: the class fields;\n  - 2953-3006: progress and lookDue;\n  - 3600-3909: chain and fanOut;\n  - 4300-4613: retireOnce's end, the collateral pool helpers, tailOf, tailChain, tailWitness, tailLanded, tailHeld, tailOver and unstale;\n  - 4614-5450: rewards, reserve and the reservation helpers, crossCheck, publicBuild, publicReady, checked, keep, publicAgainBuild, publicSubmit, publicStart, pumpPublic, publicLook and pumpPublicNow;\n  - 5450-5884: sendingOf through adoptKept;\n  - 5884-6523: cuts through status and chains;\n  - 6560-6760: clearMixes, releaseBootstrap, landedDeposit, rows, inChain, chainTxs, held and returning;\n  - 6760-7220: withdrawDue and withdrawDueNow, unlockDraws, withdrawNow, bringAllBack and stopBringingAllBack;\n  - 7211-8048: bringAllBackNow, bringNoted, bringSays, split, splitAll, real, ownership, withdrawOne, dropWithdrawing, neverWent, dropRefused, settleWithdrawing, resends, read and update.\n- sessions.ts:\n  - 1269-1478: running, mixingAgain, chainSoFar, lost, maybeSent, settle, landed, mayStillLand and the awaits helpers;\n  - 2155-2347: mixOutBuild, againBuild, mixFunding and mixOutSubmit;\n  - 3255-3455: backBuild, backSubmit, claimBuild, claimSubmit, advance and stop;\n  - 3520-3970: resume, runAll, settleReturns, markCut, step, act and waits;\n  - 4324-5619: bringBack, inspect, review, signAndSend, buildBack, the tail and reserve helpers, collateralWanted, nothingBack, leaveBehind, leftBy, fundingChange, sendBack, noteLanded, refuseParts, sendChain, pump, sendStep, witnessTail, the pending-chain helpers, sendRecorded and submit;\n  - 5621-5951: listNow, one, tailHeld, skipCollateralMix, view, live, automatic, utxosOf and listing;\n  - 6244-6326: book, save, update, atStake, clearMixes, serial and clearKept;\n  - 6466-6476: chainView.\n\nRead in part, where values crossed:\n- handlers.ts 200-280: pending-tx and reset-wallet;\n- koios.ts 600-680 and 1174-1290: the error classes and submitTx;\n- data-layer.ts 380-424: submitTx;\n- account.ts 95-190: readAccountUtxos and readAccount's head;\n- ui-port.ts, all of it;\n- LovejoinReturn.tsx 95-135 and 360-480;\n- greps of SiteSessions.tsx and en.json.\n\nTests:\n- read chain-resend.test.ts in full, return-chain-scope.test.ts 60-150, and chain-fixtures.ts's chainNet;\n- test names only in chain-lock, chain-record, session-resend-spent and lovejoin-planner.\n\nDocs:\n- the brief, INDEX, LANES, RESUME, BASELINE and FIX;\n- lanes X4, E1a, E1b, E2a and E2b in full;\n- privacy.md 399-461 plus greps, and 1.9.1's privacy.md 220-226;\n- architecture.md greps;\n- privacy-review §3.1;\n- independent-review's tables;\n- backlog greps.\n\nNot reached:\n- lovejoin.ts 2211-2811 (E1a's: ripeAt's end through withinDepth), 3006-3600 (listing, poolRows, ours, plan, againBoxes, funding) and 3909-4300 (acrossOf's body through takesNewBoxes);\n- sessions.ts 1-1268, 1480-2155, 2348-3255, 3970-4323 (orders, cancel, referenceRows), 5952-6240, 6326-6466 and 6476-6872;\n- parts.ts, dapp.ts and the WebAssembly builders.\n\nChrome's worker lifetime (the 30 s idle stop) is taken from its documentation, not tested. I ran only read-only commands (sed, grep, git log, show and blame). I built nothing and ran no test."
+}
