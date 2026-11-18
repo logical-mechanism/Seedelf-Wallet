@@ -1823,8 +1823,11 @@ fn boxes_never_come_back_into_a_register_no_one_or_anyone_can_spend() {
 }
 
 /// Chunk 51, t1c#5: a withdraw the public account pays keeps the account's
-/// change as an output the ledger takes, at least an output's least; less is
-/// refused in words, where the ledger would refuse the signed withdraw.
+/// change as an output the ledger takes, at least an output's least, at the
+/// fee that settles. A coin that pays that fee and the least is taken: it was
+/// refused when its first round, priced at a 0.5 ₳ guess, held the change to
+/// its least too. Less is refused in words, where the ledger would refuse the
+/// signed withdraw.
 #[test]
 fn a_paid_withdraw_keeps_the_accounts_change_at_least_an_outputs_least() {
     let protocol = Protocol::of(true).unwrap();
@@ -1840,20 +1843,20 @@ fn a_paid_withdraw_keeps_the_accounts_change_at_least_an_outputs_least() {
             &payer(lovelace),
             &mut Rewards::none(),
         )
-        .map(|w| w.fee)
+        .map(|w| (w.fee, w.change.map(|c| c.lovelace)))
     };
-    let fee = paid(20_000_000).unwrap();
+    let (fee, _) = paid(20_000_000).unwrap();
     let least = seedelf_core::transaction::calculate_min_required_utxo(
         pallas_txbuilder::Output::new(key_address(0x33), 1_000_000),
         &params(),
     )
     .unwrap();
-    // Its first round prices at 0.5 ₳, before the fee settles, and keeps the
-    // change's least after that too, as a mix's payer keeps it after its draft.
-    if let Err(e) = paid(500_000 + least + 5_000) {
-        panic!("fee {fee}, least {least}: {e}");
-    }
     // Each build's proofs are new, so its fee moves by a hair: well clear of it.
+    let coin = fee + least + 5_000;
+    assert!(coin < 500_000 + least, "{coin}");
+    let (fee, change) = paid(coin).unwrap_or_else(|e| panic!("{coin}: {e}"));
+    assert_eq!(change, Some(coin - fee));
+    assert!(coin - fee >= least);
     let refused = paid(fee + least - 5_000);
     assert!(
         matches!(&refused, Err(e) if e.to_string().contains("keep the change")),

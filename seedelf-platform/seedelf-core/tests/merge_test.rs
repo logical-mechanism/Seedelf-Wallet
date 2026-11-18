@@ -297,7 +297,8 @@ fn an_account_row_on_the_other_network_is_refused() {
 /// Chunk 51, t1a#18: the collateral the account puts up covers 3/2 of the
 /// fee. One short of that is refused in words, where the node would refuse
 /// the transaction for its collateral. (Its return's size moves the fee by a
-/// few hundred lovelace, so the amounts here stay clear of that.)
+/// few hundred lovelace, so the amounts here stay clear of that; and its
+/// return is held to the least an output holds, the test below.)
 #[test]
 fn an_account_collateral_short_of_three_halves_of_the_fee_is_refused() {
     let owner = Register::create(schnorr::random_scalar()).unwrap();
@@ -314,10 +315,46 @@ fn an_account_collateral_short_of_three_halves_of_the_fee_is_refused() {
             .map(|built| built.fee.total)
     };
     let fee = fee_with(5_000_000).unwrap();
-    assert!(fee_with(fee * 3 / 2 + 1_000).is_ok());
+    assert!(fee_with(fee * 3 / 2 + 1_000_000).is_ok());
     let refused = fee_with(fee * 3 / 2 - 1_000);
     assert!(
         matches!(&refused, Err(e) if e.to_string().contains("can't cover this transaction's fee")),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51: what the account's collateral gives back is an output, held to
+/// the least one holds, as an account-paid mint's and launch's are. A session
+/// return puts up an ADA-only UTxO of 2 ₳ or more when it has no 5 ₳ one, and
+/// a return's fee can take 3/2 of it past that: the ledger refuses such a
+/// collateral return, so it's refused here, in words.
+#[test]
+fn an_account_collateral_whose_return_falls_under_its_least_is_refused() {
+    let owner = Register::create(schnorr::random_scalar()).unwrap();
+    let s = session();
+    let one_time = session().key;
+    let change = contract_row(0x30, 0, 20_000_000, &owner.clone().rerandomize().unwrap());
+    let inputs = [row(0x10, 0, &s.address, 30_000_000, &[])];
+    let fee_with = |lovelace: u64| {
+        ScriptSpend::new(&chain(), std::slice::from_ref(&change), &owner, one_time)
+            .unwrap()
+            .with_account(s.key, &inputs, &row(0x20, 0, &s.address, lovelace, &[]))
+            .unwrap()
+            .estimate()
+            .map(|built| built.fee.total)
+    };
+    let fee = fee_with(5_000_000).unwrap();
+    let least = seedelf_core::transaction::address_minimum_lovelace_with_assets(
+        &params(),
+        &s.address.to_bech32().unwrap(),
+        seedelf_core::assets::Assets::new(),
+    )
+    .unwrap();
+    // Its return's size moves the fee by a few hundred lovelace: clear of that.
+    assert!(fee_with(fee * 3 / 2 + least + 1_000).is_ok());
+    let refused = fee_with(fee * 3 / 2 + least - 1_000);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("come back as an output")),
         "{refused:?}"
     );
 }

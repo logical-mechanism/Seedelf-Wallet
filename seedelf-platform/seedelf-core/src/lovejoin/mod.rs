@@ -1610,15 +1610,11 @@ fn withdraw_declaring(
                 );
             }
             tx = tx.output(back(lovelace)?);
+            // The account's change at this round's fee, which a draft's first
+            // guess (0.5 ₳) may put under its least, or under nothing: it's held
+            // to its least at the fee that settles (chunk 51).
             if let Some(p) = payer {
-                let change = p
-                .fee
-                .lovelace
-                .checked_sub(fee + topped)
-                .filter(|c| *c >= least)
-                .context(
-                    "There isn't enough ADA left to pay this withdraw's fee and keep the change",
-                )?;
+                let change = p.fee.lovelace.saturating_sub(fee + topped);
                 tx = tx.output(Output::new(p.address.clone(), change));
             }
             for reference in protocol.reference_inputs() {
@@ -1769,11 +1765,18 @@ fn withdraw_declaring(
                     let change = match payer {
                         None => None,
                         Some(p) => Some(Coin {
+                            lovelace: p
+                                .fee
+                                .lovelace
+                                .checked_sub(fee + topped)
+                                .filter(|c| *c >= least)
+                                .context(
+                                    "There isn't enough ADA left to pay this withdraw's fee and keep the change",
+                                )?,
                             utxo: eval::resolve_outputs(&tx.tx_bytes.0)?
                                 .get(1)
                                 .context("The withdraw has no change")?
                                 .clone(),
-                            lovelace: p.fee.lovelace - fee - topped,
                         }),
                     };
                     rewards.taken(protocol);

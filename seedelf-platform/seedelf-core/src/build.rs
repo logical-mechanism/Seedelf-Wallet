@@ -2193,11 +2193,24 @@ impl ScriptSpend {
                 .disclosed_signer(self.signer)
                 .disclosed_signer(Hash::new(COLLATERAL_HASH)),
             Some(account) => {
-                // The fee is even, so 3/2 of it is whole.
+                // The fee is even, so 3/2 of it is whole. What comes back is
+                // an output, held to the least one holds, as an account-paid
+                // mint's and launch's are: a session's return can put up an
+                // ADA-only UTxO of 2 ₳ or more when it has no 5 ₳ one (chunk 51).
+                let least = address_minimum_lovelace_with_assets(
+                    params,
+                    &account.collateral_addr.to_bech32().map_err(|e| {
+                        anyhow::anyhow!("The collateral's address can't be written: {e}")
+                    })?,
+                    Assets::new(),
+                )?;
                 let back = account
                     .collateral_lovelace
                     .checked_sub(fee * 3 / 2)
-                    .context("The collateral can't cover this transaction's fee")?;
+                    .filter(|back| *back >= least)
+                    .context(
+                        "The collateral can't cover this transaction's fee and come back as an output",
+                    )?;
                 tx.collateral_input(account.collateral.clone())
                     .collateral_output(Output::new(account.collateral_addr.clone(), back))
                     .disclosed_signer(self.signer)
