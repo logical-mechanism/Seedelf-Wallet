@@ -2750,6 +2750,9 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   koios,
   swaps,
 }) => {
+  // The outcome is told from a run READ_EVERY_MS (15 s) after every order first reads spent (below), so this one runs
+  // longer than the default.
+  test.setTimeout(90_000);
   // One spend: the funding takes the 25 ₳ UTxO alone.
   koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
   const page = await openApp(context);
@@ -2945,7 +2948,16 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
     ],
   });
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByTestId("session-now")).toContainText("Coming back into your private balance");
+  // The run that first reads every order spent only notes it: the outcome is told, and the return built, from a run
+  // 15 s on, so a split route's legs paid in different blocks come back together (chunk 51, r2still#2, l3time#2).
+  // Meanwhile the page says it all comes back next, and Stop, which can't cancel a spent order, is gone (l3screens#1).
+  await expect(page.getByTestId("session-now")).toHaveText("It all comes back to your private balance next, by itself.");
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+  expect(koios.submitted).toHaveLength(1);
+  await expect(async () => {
+    await page.getByRole("button", { name: "Refresh" }).click();
+    await expect(page.getByTestId("session-now")).toContainText("Coming back into your private balance", { timeout: 2_000 });
+  }).toPass({ timeout: 45_000, intervals: [3_000] });
   await expect(timeline.locator('[data-state="done"]')).toHaveCount(3);
   await expect(page.getByTestId("session-rows")).toContainText("906.5941 MIN");
   expect(koios.submitted).toHaveLength(2);
