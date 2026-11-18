@@ -94,12 +94,12 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
     let scalar: Scalar = setup::unlock_wallet_interactive();
     let owner: Register = Register::create(scalar)?;
 
-    let policy_id: &str = &chain.config.contract.seedelf_policy_id;
+    let contract = &chain.config.contract;
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(chain.config.contract.wallet_contract_hash, network_flag)
             .await?;
     let owned_utxos: Vec<UtxoResponse> =
-        utxos::collect_wallet_utxos(scalar, policy_id, every_utxo.clone())?;
+        utxos::collect_wallet_utxos(scalar, contract, every_utxo.clone())?;
 
     // each recipient's register, found with their seedelf
     let payments: Vec<Payment> = args
@@ -109,7 +109,7 @@ pub async fn run(args: TransforArgs, network_flag: bool, variant: u64) -> Result
         .zip(all_selected_tokens)
         .map(|((seedelf, lovelace), tokens)| {
             let register =
-                utxos::find_seedelf_datum(seedelf.clone(), policy_id, every_utxo.clone())?
+                utxos::find_seedelf_datum(seedelf.clone(), contract, every_utxo.clone())?
                     .ok_or_else(|| anyhow!("Seedelf {seedelf} not found on chain"))?;
             Ok(Payment {
                 register,

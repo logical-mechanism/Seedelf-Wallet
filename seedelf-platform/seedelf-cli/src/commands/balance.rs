@@ -19,23 +19,20 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
 
     let config: Config = get_config(variant, network_flag)?;
 
-    let seedelfs = display::all_seedelfs(
-        scalar,
-        network_flag,
-        hex::encode(config.contract.wallet_contract_hash).as_str(),
-        &config.contract.seedelf_policy_id,
-    )
-    .await;
+    // The contract read once, for the Seedelfs and the balance both: only its
+    // script's rows, never the KEY address Koios lists with them (chunk 51,
+    // x2#2).
+    let every_utxo: Vec<UtxoResponse> =
+        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
 
+    let seedelfs = utxos::owned_seedelfs(scalar, &config.contract, &every_utxo);
     if !seedelfs.is_empty() {
         println!("{}", "\nCurrent Seedelf:\n".bright_green());
         display::print_seedelfs(seedelfs);
     }
 
-    let every_utxo: Vec<UtxoResponse> =
-        utxos::get_credential_utxos(config.contract.wallet_contract_hash, network_flag).await?;
     let all_utxos: Vec<UtxoResponse> =
-        utxos::collect_all_wallet_utxos(scalar, &config.contract.seedelf_policy_id, every_utxo)?;
+        utxos::collect_all_wallet_utxos(scalar, &config.contract, every_utxo)?;
 
     println!(
         "\nWallet Has {} UTxOs",

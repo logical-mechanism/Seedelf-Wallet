@@ -1,9 +1,10 @@
 use crate::assets::{Asset, Assets, string_to_u64};
-use crate::constants::{MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS};
+use crate::constants::{Contract, MAXIMUM_TOKENS_PER_UTXO, MAXIMUM_WALLET_UTXOS};
 use crate::transaction::wallet_minimum_lovelace_with_assets;
 use anyhow::{Context, Ok, Result, anyhow, bail};
 use blstrs::Scalar;
 use hex;
+use pallas_addresses::{Address, ShelleyPaymentPart};
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{
     ProtocolParameters, UtxoResponse, address_utxos, contains_policy_id, credential_utxos,
@@ -29,14 +30,36 @@ pub async fn get_address_utxos(address: &str, network_flag: bool) -> Result<Vec<
     Ok(utxos)
 }
 
-/// collects all the wallet utxos owned by some scalar.
+/// Whether `utxo` sits at the wallet contract: its address's payment part is
+/// the contract's script, with any stake part or none. Asked for the
+/// contract's UTxOs, Koios lists a credential's by its 28 bytes alone, a
+/// key's and a script's alike, so the KEY address carrying the contract's
+/// hash comes with them: no key can spend from it, and anyone can pay it
+/// under one of a user's registers, each public beside a Seedelf. Nothing
+/// there is anyone's (chunk 51, x2#2, as the web wallet's balances.ts
+/// `atContract` reads it).
+pub fn at_wallet_contract(utxo: &UtxoResponse, wallet_contract_hash: [u8; 28]) -> bool {
+    let Some(Address::Shelley(address)) = Address::from_bech32(&utxo.address).ok() else {
+        return false;
+    };
+    matches!(
+        address.payment(),
+        ShelleyPaymentPart::Script(hash) if **hash == wallet_contract_hash
+    )
+}
+
+/// collects all the wallet utxos owned by some scalar: the contract's
+/// ([`at_wallet_contract`]) under one of its registers, holding no Seedelf.
 pub fn collect_all_wallet_utxos(
     sk: Scalar,
-    seedelf_policy_id: &str,
+    contract: &Contract,
     utxos: Vec<UtxoResponse>,
 ) -> Result<Vec<UtxoResponse>> {
     let mut all_utxos: Vec<UtxoResponse> = Vec::new();
     for utxo in utxos {
+        if !at_wallet_contract(&utxo, contract.wallet_contract_hash) {
+            continue;
+        }
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
             // utxo must be owned by this secret scalar. A register whose
             // points don't decompress is nobody's: anyone can pay the
@@ -44,7 +67,7 @@ pub fn collect_all_wallet_utxos(
             // stops the scan.
             if inline_datum.is_owned(sk).unwrap_or(false) {
                 // its owned but lets not count the seedelf in the balance
-                if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
+                if !contains_policy_id(&utxo.asset_list, &contract.seedelf_policy_id) {
                     all_utxos.push(utxo.clone());
                 }
             }
@@ -53,14 +76,20 @@ pub fn collect_all_wallet_utxos(
     Ok(all_utxos)
 }
 
+/// The register of the contract's UTxO ([`at_wallet_contract`]) holding the
+/// Seedelf named `seedelf`, if one does.
 pub fn find_seedelf_datum(
     seedelf: String,
-    seedelf_policy_id: &str,
+    contract: &Contract,
     utxos: Vec<UtxoResponse>,
 ) -> Result<Option<Register>> {
+    let seedelf_policy_id: &str = &contract.seedelf_policy_id;
     let mut seedelf_datum: Option<Register> = None;
 
     for utxo in utxos {
+        if !at_wallet_contract(&utxo, contract.wallet_contract_hash) {
+            continue;
+        }
         // Extract bytes
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum)
             && contains_policy_id(&utxo.asset_list, seedelf_policy_id)
@@ -82,13 +111,18 @@ pub fn find_seedelf_datum(
     Ok(seedelf_datum)
 }
 
-/// Find a specific seedelf.
+/// Find a specific seedelf: the contract's UTxO ([`at_wallet_contract`])
+/// holding it.
 pub fn find_seedelf_utxo(
     seedelf: String,
-    seedelf_policy_id: &str,
+    contract: &Contract,
     utxos: Vec<UtxoResponse>,
 ) -> Result<Option<UtxoResponse>> {
+    let seedelf_policy_id: &str = &contract.seedelf_policy_id;
     for utxo in utxos {
+        if !at_wallet_contract(&utxo, contract.wallet_contract_hash) {
+            continue;
+        }
         if contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
             let asset_name = utxo
                 .asset_list
@@ -108,23 +142,27 @@ pub fn find_seedelf_utxo(
     Ok(None)
 }
 
-// Find wallet utxos owned by some scalar. The maximum amount of utxos is limited by a upper bound.
+// Find wallet utxos owned by some scalar: the contract's ([`at_wallet_contract`]),
+// holding no Seedelf. The maximum amount of utxos is limited by a upper bound.
 pub fn collect_wallet_utxos(
     sk: Scalar,
-    seedelf_policy_id: &str,
+    contract: &Contract,
     utxos: Vec<UtxoResponse>,
 ) -> Result<Vec<UtxoResponse>> {
     let mut number_of_utxos: u64 = 0;
     let mut usable_utxos: Vec<UtxoResponse> = Vec::new();
 
     for utxo in utxos {
+        if !at_wallet_contract(&utxo, contract.wallet_contract_hash) {
+            continue;
+        }
         // Extract bytes
         if let Some(inline_datum) = extract_bytes_with_logging(&utxo.inline_datum) {
             // utxo must be owned by this secret scalar. A register whose
             // points don't decompress is nobody's, and doesn't stop the scan.
             if inline_datum.is_owned(sk).unwrap_or(false) {
                 // its owned but it can't hold a seedelf
-                if !contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
+                if !contains_policy_id(&utxo.asset_list, &contract.seedelf_policy_id) {
                     if number_of_utxos >= MAXIMUM_WALLET_UTXOS {
                         // we hit the max utxos allowed in a single tx
                         break;
@@ -440,14 +478,19 @@ pub fn fitting(
     ))
 }
 
-/// Find a seedelf that contains the label and print the match.
+/// The Seedelfs at the contract ([`at_wallet_contract`]) whose names contain
+/// the label.
 pub fn find_all_seedelfs(
     label: String,
-    seedelf_policy_id: &str,
+    contract: &Contract,
     utxos: Vec<UtxoResponse>,
 ) -> Result<Vec<String>> {
+    let seedelf_policy_id: &str = &contract.seedelf_policy_id;
     let mut matches = Vec::new();
     for utxo in utxos {
+        if !at_wallet_contract(&utxo, contract.wallet_contract_hash) {
+            continue;
+        }
         if contains_policy_id(&utxo.asset_list, seedelf_policy_id) {
             let asset_name = utxo
                 .asset_list
@@ -467,11 +510,35 @@ pub fn find_all_seedelfs(
     Ok(matches)
 }
 
-/// Find a seedelf that contains the label and print the match.
+/// The Seedelfs held at the contract ([`at_wallet_contract`]) under one of
+/// `sk`'s registers, by name: what `balance` lists.
+pub fn owned_seedelfs(sk: Scalar, contract: &Contract, utxos: &[UtxoResponse]) -> Vec<String> {
+    utxos
+        .iter()
+        .filter(|utxo| at_wallet_contract(utxo, contract.wallet_contract_hash))
+        .filter(|utxo| {
+            extract_bytes_with_logging(&utxo.inline_datum)
+                .is_some_and(|register| register.is_owned(sk).unwrap_or(false))
+        })
+        .filter_map(|utxo| {
+            utxo.asset_list.as_ref()?.iter().find_map(|asset| {
+                (asset.policy_id == contract.seedelf_policy_id).then(|| asset.asset_name.clone())
+            })
+        })
+        .collect()
+}
+
+/// The contract's UTxOs ([`at_wallet_contract`]): how many, their lovelace,
+/// and how many hold a Seedelf.
 pub fn count_lovelace_and_utxos(
-    seedelf_policy_id: &str,
+    contract: &Contract,
     utxos: Vec<UtxoResponse>,
 ) -> Result<(usize, u64, u64)> {
+    let seedelf_policy_id: &str = &contract.seedelf_policy_id;
+    let utxos: Vec<UtxoResponse> = utxos
+        .into_iter()
+        .filter(|utxo| at_wallet_contract(utxo, contract.wallet_contract_hash))
+        .collect();
     let mut total_lovelace: u64 = 0;
     let mut total_seedelfs: u64 = 0;
 

@@ -1,4 +1,9 @@
+use pallas_addresses::{
+    Address, Network, PaymentKeyHash, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+};
+use seedelf_core::address::wallet_contract;
 use seedelf_core::assets::{Asset, Assets, string_to_u64};
+use seedelf_core::constants::{Contract, get_config};
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::random_scalar;
@@ -472,10 +477,18 @@ fn a_reference_script_that_cant_be_measured_is_never_taken_for_none() {
     );
 }
 
+/// Variant 1's contract on preprod: its script's hash, and its Seedelfs' policy.
+fn preprod_contract() -> Contract {
+    get_config(1, true).unwrap().contract
+}
+
 /// A wallet-contract row under `register`'s inline datum, as Koios returns it.
 fn register_utxo(tx_hash_byte: u8, register: &Register) -> UtxoResponse {
     UtxoResponse {
         tx_hash: hex::encode([tx_hash_byte; 32]),
+        address: wallet_contract(true, preprod_contract().wallet_contract_hash)
+            .to_bech32()
+            .unwrap(),
         value: "5000000".to_string(),
         inline_datum: Some(InlineDatum {
             bytes: hex::encode(register.to_vec().unwrap()),
@@ -517,9 +530,9 @@ fn wallet_scans_skip_an_identity_register() {
         found.into_iter().map(|u| u.tx_hash).collect()
     };
     let owned = vec![hex::encode([0x02; 32])];
-    let all = utxos::collect_all_wallet_utxos(sk, PID_EXTRA, rows.clone()).unwrap();
+    let all = utxos::collect_all_wallet_utxos(sk, &preprod_contract(), rows.clone()).unwrap();
     assert_eq!(hashes(all), owned);
-    let usable = utxos::collect_wallet_utxos(sk, PID_EXTRA, rows).unwrap();
+    let usable = utxos::collect_wallet_utxos(sk, &preprod_contract(), rows).unwrap();
     assert_eq!(hashes(usable), owned);
 }
 
@@ -558,9 +571,101 @@ fn wallet_scans_skip_a_register_whose_points_dont_decompress() {
         .collect();
     let after: Vec<UtxoResponse> = before.iter().cloned().rev().collect();
     for rows in [before, after] {
-        let all = utxos::collect_all_wallet_utxos(sk, PID_EXTRA, rows.clone()).unwrap();
+        let all = utxos::collect_all_wallet_utxos(sk, &preprod_contract(), rows.clone()).unwrap();
         assert_eq!(hashes(all), owned);
-        let usable = utxos::collect_wallet_utxos(sk, PID_EXTRA, rows).unwrap();
+        let usable = utxos::collect_wallet_utxos(sk, &preprod_contract(), rows).unwrap();
         assert_eq!(hashes(usable), owned);
     }
+}
+
+/// Koios lists a credential's UTxOs by its 28 bytes, a key's and a script's
+/// alike: asked for the wallet contract's, it lists the KEY address carrying
+/// the same hash too, which no key can spend from. A stranger pays there
+/// under one of the user's registers (each is public beside a Seedelf), or a
+/// Seedelf's owner sends the token there. Neither is the contract's, so
+/// neither is counted, spent, or taken for a Seedelf's place (chunk 51, x2#2).
+#[test]
+fn a_row_at_the_key_address_carrying_the_contracts_hash_isnt_the_contracts() {
+    let config = get_config(1, true).unwrap();
+    let contract = &config.contract;
+    let policy = contract.seedelf_policy_id.clone();
+    let at_script = wallet_contract(true, contract.wallet_contract_hash)
+        .to_bech32()
+        .unwrap();
+    let at_key = Address::from(ShelleyAddress::new(
+        Network::Testnet,
+        ShelleyPaymentPart::Key(PaymentKeyHash::new(contract.wallet_contract_hash)),
+        ShelleyDelegationPart::Null,
+    ))
+    .to_bech32()
+    .unwrap();
+    let sk = random_scalar();
+    let ours = |byte: u8, address: &str| {
+        let mut row = register_utxo(byte, &Register::create(sk).unwrap().rerandomize().unwrap());
+        row.address = address.to_string();
+        row
+    };
+    let holding = |byte: u8, address: &str, seedelf: &str| {
+        let mut row = ours(byte, address);
+        row.asset_list = Some(vec![KoiosAsset {
+            policy_id: policy.clone(),
+            asset_name: seedelf.to_string(),
+            quantity: "1".to_string(),
+            ..Default::default()
+        }]);
+        row
+    };
+    // One Seedelf sent to the key address, and one at the contract.
+    let gone = format!("5eed0e1f{}", "ab".repeat(28));
+    let live = format!("5eed0e1f{}", "cd".repeat(28));
+    let rows = vec![
+        ours(0x01, &at_script),
+        ours(0x02, &at_key),
+        holding(0x03, &at_key, &gone),
+        holding(0x04, &at_script, &live),
+    ];
+
+    let hashes = |found: Vec<UtxoResponse>| -> Vec<String> {
+        found.into_iter().map(|u| u.tx_hash).collect()
+    };
+    let only_ours = vec![hex::encode([0x01; 32])];
+    let all = utxos::collect_all_wallet_utxos(sk, contract, rows.clone()).unwrap();
+    assert_eq!(hashes(all), only_ours, "the balance");
+    let usable = utxos::collect_wallet_utxos(sk, contract, rows.clone()).unwrap();
+    assert_eq!(hashes(usable), only_ours, "what a spend takes");
+
+    let place = |seedelf: &str| {
+        utxos::find_seedelf_utxo(seedelf.to_string(), contract, rows.clone())
+            .unwrap()
+            .map(|u| u.tx_hash)
+    };
+    assert_eq!(
+        place(&gone),
+        None,
+        "a Seedelf at the key address has no place"
+    );
+    assert_eq!(
+        place(&live),
+        Some(hex::encode([0x04; 32])),
+        "one at the contract has"
+    );
+    let register = |seedelf: &str| {
+        utxos::find_seedelf_datum(seedelf.to_string(), contract, rows.clone()).unwrap()
+    };
+    assert!(register(&gone).is_none(), "nor a register");
+    assert!(register(&live).is_some());
+    let named =
+        |label: &str| utxos::find_all_seedelfs(label.to_string(), contract, rows.clone()).unwrap();
+    assert!(
+        named("ab").is_empty(),
+        "util find names none at the key address"
+    );
+    assert_eq!(named("cd"), vec![live.clone()]);
+    assert_eq!(
+        utxos::owned_seedelfs(sk, contract, &rows),
+        vec![live.clone()],
+        "the Seedelfs balance lists"
+    );
+    let counted = utxos::count_lovelace_and_utxos(contract, rows).unwrap();
+    assert_eq!(counted, (2, 10_000_000, 1), "what util statistics counts");
 }

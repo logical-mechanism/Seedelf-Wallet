@@ -890,13 +890,25 @@ struct TxInfoResponse {
     outputs: Vec<TxInfoOutput>,
 }
 
-/// An input or output in `tx_info`: only its inline datum is kept. Every
-/// other field, a reference script's JSON among them, is skipped unread, so
-/// its depth can't make the response unreadable.
+/// An input or output in `tx_info`: only its address and its inline datum are
+/// kept. Every other field, a reference script's JSON among them, is skipped
+/// unread, so its depth can't make the response unreadable.
 #[derive(Debug, Deserialize, Clone, Default)]
 struct TxInfoOutput {
     #[serde(default)]
+    payment_addr: Option<PaymentAddr>,
+    #[serde(default)]
     inline_datum: Option<InlineDatum>,
+}
+
+/// An input's or output's address in `tx_info`: bech32, and its payment
+/// credential's hash, hex.
+#[derive(Debug, Deserialize, Clone, Default)]
+struct PaymentAddr {
+    #[serde(default)]
+    bech32: Option<String>,
+    #[serde(default)]
+    cred: Option<String>,
 }
 
 impl TxInfoOutput {
@@ -905,6 +917,32 @@ impl TxInfoOutput {
     fn register(&self) -> Option<Register> {
         let cbor = hex::decode(&self.inline_datum.as_ref()?.bytes).ok()?;
         register_of_datum(&cbor)
+    }
+
+    /// Whether it sits at the script whose hash is `script` (hex), with any
+    /// stake part or none: its payment credential is those 28 bytes, and its
+    /// address's header says a script holds them. A Shelley address's first
+    /// bech32 character after the separator is its header's type, doubled
+    /// (the network's bits follow): `z`, `x`, `2` and `w` are the four types
+    /// whose payment part is a script's (base with a key's or a script's
+    /// stake, pointer, enterprise), and `q`, `y`, `g` and `v` a key's. Koios
+    /// lists the KEY address carrying a script's hash with the script's own
+    /// (chunk 51, x2#2).
+    fn at_script(&self, script: &str) -> bool {
+        let Some(address) = &self.payment_addr else {
+            return false;
+        };
+        let held_by_a_script = address
+            .bech32
+            .as_deref()
+            .and_then(|bech32| bech32.rsplit_once('1'))
+            .and_then(|(_, data)| data.chars().next())
+            .is_some_and(|kind| matches!(kind, 'z' | 'x' | '2' | 'w'));
+        held_by_a_script
+            && address
+                .cred
+                .as_deref()
+                .is_some_and(|cred| cred.eq_ignore_ascii_case(script))
     }
 }
 
@@ -917,16 +955,19 @@ pub struct TxResponse {
 }
 
 impl TxResponse {
-    fn from_info_response(info: TxInfoResponse) -> Self {
+    /// The registers under `info`'s inputs and outputs, of those `kept` keeps.
+    fn from_info_response(info: TxInfoResponse, kept: &impl Fn(&TxInfoOutput) -> bool) -> Self {
         let input_registers = info
             .inputs
             .iter()
+            .filter(|input| kept(input))
             .filter_map(TxInfoOutput::register)
             .collect();
 
         let output_registers = info
             .outputs
             .iter()
+            .filter(|output| kept(output))
             .filter_map(TxInfoOutput::register)
             .collect();
 
@@ -947,34 +988,39 @@ pub async fn address_transactions(
     let payload: Value = serde_json::json!({
         "_addresses": [address],
     });
-    transaction_pages(network_flag, "address_txs", &payload).await
+    transaction_pages(network_flag, "address_txs", &payload, &|_| true).await
 }
 
-/// Return the transaction history of a payment credential (a key or script
-/// hash, hex): every transaction that made or spent an output under it,
-/// whatever its address's delegation part. The wallet contract's is what
-/// `util history` reads, so it finds what was paid to the contract's staked
-/// form too, where every CLI up to 0.4.10 paid it (chunk 51).
-pub async fn credential_transactions(
+/// Return the transaction history of a script (its hash, hex): every
+/// transaction that made or spent an output at it, whatever its address's
+/// delegation part, with the registers there alone. The wallet contract's is
+/// what `util history` reads, so it finds what was paid to the contract's
+/// staked form too, where every CLI up to 0.4.10 paid it (chunk 51). Koios
+/// lists a credential's transactions by its 28 bytes, so the KEY address
+/// carrying the script's hash comes too: no key spends from it, and a
+/// register there is no one's receipt (chunk 51, x2#2).
+pub async fn script_transactions(
     network_flag: bool,
-    payment_credential: &str,
+    script_hash: &str,
 ) -> Result<Vec<TxResponse>, Error> {
     let payload: Value = serde_json::json!({
-        "_payment_credentials": [payment_credential],
+        "_payment_credentials": [script_hash],
     });
-    transaction_pages(network_flag, "credential_txs", &payload).await
+    let at_the_script = |place: &TxInfoOutput| place.at_script(script_hash);
+    transaction_pages(network_flag, "credential_txs", &payload, &at_the_script).await
 }
 
 /// Every transaction a Koios transaction list (`address_txs`,
-/// `credential_txs`) answers, newest first, each once, with the registers its
-/// inputs and outputs hold. The list is read 65 at a time in a fixed order: a
-/// transaction that lands between two requests moves the rest down one, so a
-/// page can repeat the last row of the one before, and that row is kept once
-/// (chunk 51, r1#1).
+/// `credential_txs`) answers, newest first, each once, with the registers
+/// under its inputs and outputs that `kept` keeps. The list is read 65 at a
+/// time in a fixed order: a transaction that lands between two requests moves
+/// the rest down one, so a page can repeat the last row of the one before,
+/// and that row is kept once (chunk 51, r1#1).
 async fn transaction_pages(
     network_flag: bool,
     list: &str,
     payload: &Value,
+    kept: &impl Fn(&TxInfoOutput) -> bool,
 ) -> Result<Vec<TxResponse>, Error> {
     let address_tx_url: String = koios_url(network_flag, list);
 
@@ -1030,7 +1076,7 @@ async fn transaction_pages(
             let txs: Vec<TxInfoResponse> = tx_info_response.json().await?;
             let mut tx_responses: Vec<TxResponse> = txs
                 .into_iter()
-                .map(TxResponse::from_info_response)
+                .map(|info| TxResponse::from_info_response(info, kept))
                 .collect();
 
             // Append the retrieved transactions to the main list
@@ -1306,8 +1352,48 @@ mod tests {
             r#"[{{"tx_hash":"00","block_height":7,"inputs":[{{"inline_datum":{deep_datum},"reference_script":null}},{{"inline_datum":null}}],"outputs":[{{"inline_datum":{ours},"reference_script":{deep_script}}}],"plutus_contracts":[{{"input":{{"redeemer":{{"datum":{{"value":{deep_datum}}}}}}}}}]}}]"#
         );
         let txs: Vec<TxInfoResponse> = serde_json::from_str(&page).unwrap();
-        let tx = TxResponse::from_info_response(txs.into_iter().next().unwrap());
+        let tx = TxResponse::from_info_response(txs.into_iter().next().unwrap(), &|_| true);
         assert!(tx.input_registers.is_empty());
         assert_eq!(tx.output_registers, vec![register]);
+    }
+
+    /// `tx_info` gives an input's or output's address and its payment
+    /// credential: it's at a script only where its address's header is one
+    /// of the four types whose payment part is a script's, and the credential
+    /// is that script's. Koios lists the KEY address carrying a script's hash
+    /// with the script's (chunk 51, x2#2).
+    #[test]
+    fn a_place_is_at_a_script_only_where_a_script_holds_its_credential() {
+        let script = "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469";
+        let place = |bech32: &str, cred: &str| TxInfoOutput {
+            payment_addr: Some(PaymentAddr {
+                bech32: Some(bech32.to_string()),
+                cred: Some(cred.to_string()),
+            }),
+            inline_datum: None,
+        };
+        // The wallet contract on preprod, and the KEY address with its hash.
+        let contract = "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f";
+        let key = "addr_test1vz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6ghn7njf";
+        assert!(place(contract, script).at_script(script));
+        assert!(place(contract, &script.to_uppercase()).at_script(script));
+        assert!(!place(key, script).at_script(script));
+        // Each header type by its address's first character: a script's
+        // payment part, then a key's.
+        for kind in ['z', 'x', '2', 'w'] {
+            assert!(
+                place(&format!("addr1{kind}2te2wq"), script).at_script(script),
+                "{kind}"
+            );
+        }
+        for kind in ['q', 'y', 'g', 'v'] {
+            assert!(
+                !place(&format!("addr1{kind}2te2wq"), script).at_script(script),
+                "{kind}"
+            );
+        }
+        // Another script's credential, and no address at all.
+        assert!(!place(contract, &"ab".repeat(28)).at_script(script));
+        assert!(!TxInfoOutput::default().at_script(script));
     }
 }

@@ -95,6 +95,12 @@ fn extract_all_owned_seedelfs(
     seedelfs
 }
 
+/// Every Seedelf under one of `sk`'s registers, read from Koios by the
+/// contract's hash: a KEY address carrying the same 28 bytes comes with the
+/// contract's rows, and this can't tell them apart (chunk 51, x2#2).
+#[deprecated(
+    note = "counts the KEY address carrying the contract's hash too: read the rows once and use seedelf_core::utxos::owned_seedelfs, which keeps the contract's script alone"
+)]
 pub async fn all_seedelfs(
     sk: Scalar,
     network_flag: bool,

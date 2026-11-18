@@ -102,7 +102,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
 
     let seedelf_utxo: UtxoResponse = match utxos::find_seedelf_utxo(
         args.seedelf.clone(),
-        &config.contract.seedelf_policy_id,
+        &config.contract,
         every_utxo_at_script,
     ) {
         Ok(Some(utxo)) => utxo,

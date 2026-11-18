@@ -15,7 +15,10 @@
 use std::collections::BTreeMap;
 
 use blstrs::Scalar;
-use pallas_addresses::{Address, StakeAddress};
+use pallas_addresses::{
+    Address, Network, PaymentKeyHash, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+    StakeAddress,
+};
 use pallas_crypto::hash::Hasher;
 use pallas_primitives::alonzo::{MaybeIndefArray, PlutusData};
 use pallas_primitives::conway::{DatumOption, RedeemerTag};
@@ -63,6 +66,19 @@ pub fn wallet_address() -> Address {
 
 pub fn wallet_address_bech32() -> String {
     wallet_address().to_bech32().expect("wallet bech32")
+}
+
+/// The KEY address carrying the wallet contract's hash: Koios lists its UTxOs
+/// with the contract's, since it asks by the 28 bytes alone, and no key can
+/// spend from it (chunk 51, x2#2).
+pub fn key_address_with_the_contracts_hash() -> String {
+    Address::from(ShelleyAddress::new(
+        Network::Testnet,
+        ShelleyPaymentPart::Key(PaymentKeyHash::new(config().contract.wallet_contract_hash)),
+        ShelleyDelegationPart::Null,
+    ))
+    .to_bech32()
+    .expect("key address bech32")
 }
 
 /// A deterministic, non-script preprod address usable as a payer / payee.
