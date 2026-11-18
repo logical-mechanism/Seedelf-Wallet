@@ -191,9 +191,10 @@ export const isCollateralShaped = (u: KoiosUtxo) => BigInt(u.value) === COLLATER
 /**
  * A collateral-shaped UTxO the wallet takes by itself, and offers on the Collateral page: no reference script, and no
  * datum, inline or by hash, which WebAssembly's evaluator refuses (eval::refusal), as a session's chain puts one up
- * (sessions.ts `collateralFits`, independent review L20). A stranger's 5 ₳ of ADA alone with a reference script, or a
- * datum too deep to read, became the account's collateral, and every public Lovejoin mix then failed to build (chunk
- * 51, e8b#1). One the user chose stays theirs: the ledger takes it, for a site's transaction say.
+ * by this same rule, which sessions.ts imports (independent review L20). A stranger's 5 ₳ of ADA alone with a
+ * reference script, or a datum too deep to read, became the account's collateral, and every public Lovejoin mix
+ * then failed to build (chunk 51, e8b#1). One the user chose stays theirs: the ledger takes it, for a site's
+ * transaction say.
  */
 export const collateralFits = (u: KoiosUtxo) => isCollateralShaped(u) && !u.reference_script && !u.inline_datum && !u.datum_hash;
 

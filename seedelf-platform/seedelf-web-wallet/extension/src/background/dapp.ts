@@ -2849,7 +2849,7 @@ const sessionOf = (holder: Holder) => (holder ? { session: holder.index } : {});
 /**
  * A private session's collateral: the funding's 5 ₳ of pure ADA, kept out of
  * what a site may spend, as the public account's is. By the rule its return
- * puts one up by (sessions.ts `collateralFits`): 5 ₳ of ADA alone, with no
+ * puts one up by (coin-control.ts `collateralFits`): 5 ₳ of ADA alone, with no
  * reference script and no datum, inline or by hash, which the funding's never
  * has. A stranger's 5 ₳ with a datum, listed before the funding's, stood in
  * for it here: getCollateral offered the stranger's, getUtxos the real one,

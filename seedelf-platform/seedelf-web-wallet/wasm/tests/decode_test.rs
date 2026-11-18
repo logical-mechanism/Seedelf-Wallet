@@ -1408,10 +1408,10 @@ fn a_huge_datum_comes_through_whole() {
 }
 
 /// How many constructors deep a datum can nest and still be read. The guard is
-/// on CBOR levels (`MAX_NESTING`, 128) and a constructor is two of them — a tag
-/// around an array — with the witness set's own levels on top, so a datum goes
-/// about sixty deep. `a_datum_nested_past_the_cbor_guard_is_refused` holds the
-/// other side of the line.
+/// on CBOR levels (core's `cbor::MAX_DEPTH`, 128) and a constructor is two of
+/// them — a tag around an array — with the witness set's own levels on top, so
+/// a datum goes about sixty deep. `a_datum_nested_past_the_cbor_guard_is_refused`
+/// holds the other side of the line.
 const DEEPEST: usize = 60;
 
 /// And a deeply nested one: a datum inside a datum inside a datum, as deep as

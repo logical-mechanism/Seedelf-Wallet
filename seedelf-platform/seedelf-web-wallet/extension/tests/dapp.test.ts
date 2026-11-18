@@ -1405,7 +1405,7 @@ describe("private CIP-30: a site connected to a private session", SLOW, () => {
   });
 
   // Chunk 51, e3a#2: the connector took the first 5 ₳ of ADA alone at the session's account as its collateral, a
-  // stranger's with a datum or a script too, which the session's return never puts up (sessions.ts collateralFits).
+  // stranger's with a datum or a script too, which the session's return never puts up (coin-control.ts collateralFits).
   // Koios lists an account by transaction id (koios.ts paged), so a stranger's whose id sorts first stood in for the
   // funding's: getCollateral offered it, getUtxos the funding's real 5 ₳, and a transaction spending that one went
   // unflagged.
