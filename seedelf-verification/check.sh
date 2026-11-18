@@ -4,7 +4,11 @@
 # Every module runs, cheapest first; the summary says how each went and the
 # most memory its scope used. A module that builds but logs a Blaster check as
 # "Undetermined" is UNDETERM, not ok: Blaster logs that as a warning only, so the
-# build passes, but the check proved nothing (a timeout, or no model found).
+# build passes, but the check proved nothing (a timeout, or no model found). One
+# whose log has a `sorry`, or a `#print axioms` naming sorryAx or the compiler's
+# axioms (`native_decide`), is SORRY: the kernel didn't check all of it. A build
+# that fails, times out or is killed loses its last good build's files, so no
+# reader (tally.py, Audit/count.py) takes that build for this one.
 #   ./check.sh                       every Seedelf module but the kernel's (seedelf-every) and Slice/'s
 #                                    (seedelf-slice)
 #   ./check.sh seedelf-any-tx        Seedelf's properties in every transaction (Seedelf/AnyTx.lean)
@@ -39,7 +43,7 @@ mods=("$@")
 # the script doesn't read left as any Data.
 any_tx=(Seedelf.AnyTx Seedelf.AnyTxCover Seedelf.AnyTxSteps Seedelf.AlwaysFalseAnyTx
   Seedelf.WalletPurposeAnyTx Seedelf.WalletNoLockAnyTx Seedelf.WalletRedeemerAnyTx Seedelf.WalletAnyTx Seedelf.WalletAnyTxTwo
-  Seedelf.WalletAnyTxThree Seedelf.AnyTxShapes)
+  Seedelf.WalletAnyTxThree Seedelf.AnyTxControls Seedelf.WalletAnyTxControls Seedelf.AnyTxShapes)
 # The wallet's core property with four signatories and more (gen-seedelf-signers.py), one module
 # a length, listed in Seedelf/Signers/modules.txt.
 mapfile -t signers < <(grep -v -e '^#' -e '^[[:space:]]*$' Seedelf/Signers/modules.txt)
@@ -156,7 +160,8 @@ any_tx_v2=(Lovejoin.Template.AnyTxPurposes Lovejoin.AnyTx.FeePurpose Lovejoin.An
   Lovejoin.AnyTx.MixToken3 Lovejoin.AnyTx.MixToken3Controls Lovejoin.AnyTx.MixToken3Output Lovejoin.AnyTx.MixToken3OutputControls
   Lovejoin.AnyTx.MixToken4 Lovejoin.AnyTx.MixToken4Controls Lovejoin.AnyTx.MixToken4Output Lovejoin.AnyTx.MixToken4OutputControls
   Lovejoin.AnyTx.FeeSpend Lovejoin.AnyTx.FeeRecovery Lovejoin.AnyTx.FeeControls Lovejoin.AnyTx.Launch Lovejoin.AnyTx.LaunchControls
-  Lovejoin.AnyTx.OwnerIff Lovejoin.AnyTx.MixIff Lovejoin.AnyTx.FeeMix Lovejoin.AnyTx.FeeMixControls)
+  Lovejoin.AnyTx.OwnerIff Lovejoin.AnyTx.MixIff Lovejoin.AnyTx.FeeMix Lovejoin.AnyTx.FeeMixControls
+  Lovejoin.AnyTx.FalsifiedBox Lovejoin.AnyTx.FalsifiedOwner)
 [ "${mods[0]}" = lovejoin-any-tx ] && mods=("${any_tx_v2[@]}")
 # v2 in every transaction, kernel-checked (chunk 45): the compiled code read back as Lean over Data,
 # no fixed list length and no step limit. mix_logic's withdrawals and one_shot_mint's launch, the
@@ -201,6 +206,21 @@ peakf=$(mktemp)
 outf=$(mktemp)
 summary=()
 check_failed=0
+# Lake writes a module's trace only when its build ends, and never removes one: a failed
+# rebuild leaves the last good build's, newer than the source, and tally.py and Audit/count.py
+# would read it as this run's. So a failed module's build goes, as if it had never built: the
+# trace, the .olean, .ilean and .c, and their hashes. The .olean must go too: with no trace,
+# Lake would take an old .olean as up to date by its date, and this would say ok to a build
+# that proved nothing.
+forget() {
+  case $1 in ''|*[!A-Za-z0-9_.]*|.*|*.|*..*) return 0 ;; esac
+  local p=${1//.//} was=
+  [ -f "$p.lean" ] || return 0
+  [ -e ".lake/build/lib/lean/$p.trace" ] || [ -e ".lake/build/lib/lean/$p.olean" ] && was=1
+  rm -f ".lake/build/lib/lean/$p".* ".lake/build/ir/$p".*
+  [ -n "$was" ] && echo "== $1 failed: its last good build removed, so it reads as not built"
+  return 0
+}
 for m in "${mods[@]}"; do
   echo "== $m (cap $CAP, limit $LIMIT)"
   start=$SECONDS
@@ -213,9 +233,22 @@ for m in "${mods[@]}"; do
     | grep -v -E 'Replayed|CekMachine.lean:309|Successfully decoded|^trace: \.> LEAN_PATH' \
     | tee "$outf"
   rc=${PIPESTATUS[0]}
-  # Replayed logs print their warnings too, so an up-to-date module is caught as well.
+  # Replayed logs print their warnings too, so an up-to-date module is caught as well. Lean
+  # builds a proof with a `sorry` with a warning only, and one by `native_decide` with no word
+  # but in a `#print axioms` (PlutusCoreBlaster's own sorry, CekMachine.lean:309, is filtered).
   undet=$(grep -cE '^warning: .*Undetermined' "$outf")
-  [ "$rc" -eq 0 ] && [ "$undet" -gt 0 ] && rc=undetermined
+  unsound=$(grep -cE "^warning: .*declaration uses 'sorry'|depends on axioms: \[.*(sorryAx|Lean\.ofReduceBool|Lean\.trustCompiler)" "$outf")
+  if [ "$rc" = 0 ]; then
+    if [ "$unsound" -gt 0 ]; then rc=sorry; elif [ "$undet" -gt 0 ]; then rc=undetermined; fi
+  fi
+  # A failed build: forget each module Lake says failed (`✖ … Building M`). A module whose
+  # import failed never started, and keeps its build: the readers see that what it imports has
+  # none. A timeout or a kill leaves no word of which build it stopped, nor does a failure
+  # before any build, so then the module asked for goes too.
+  case $rc in 0|undetermined|sorry) ;; *)
+    failed=$(grep -aoE '✖ \[[0-9]+/[0-9]+\] Building [A-Za-z0-9_.]+' "$outf" | awk '{print $NF}')
+    [ "$rc" = 1 ] && [ -n "$failed" ] || failed="$failed $m"
+    for f in $failed; do forget "$f"; done ;; esac
   [ "$rc" = 0 ] || check_failed=1
   took=$((SECONDS - start))s
   peak=$(cat "$peakf")
@@ -223,6 +256,7 @@ for m in "${mods[@]}"; do
   case $rc in
     0) summary+=("ok        $m ($took$peak)") ;;
     undetermined) summary+=("UNDETERM  $m ($undet Undetermined, $took$peak)") ;;
+    sorry) summary+=("SORRY     $m ($unsound sorry or native_decide, $took$peak)") ;;
     124) summary+=("TIMEOUT   $m (past $LIMIT$peak)") ;;
     137) summary+=("KILLED    $m (over $CAP, $took)") ;;
     *) summary+=("FAILED    $m (exit $rc, $took$peak)") ;;

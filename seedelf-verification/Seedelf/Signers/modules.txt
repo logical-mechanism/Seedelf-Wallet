@@ -125,3 +125,6 @@ Seedelf.Signers.Signers126
 Seedelf.Signers.Signers127
 Seedelf.Signers.Signers128
 Seedelf.Signers.Control128
+Seedelf.Signers.Control4
+Seedelf.Signers.Control64
+Seedelf.Signers.Control127

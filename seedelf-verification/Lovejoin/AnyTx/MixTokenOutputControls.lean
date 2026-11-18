@@ -1,10 +1,11 @@
 import Lovejoin.AnyTx.MixTokenOutputs
 import Lovejoin.AnyTx.MixTokenControls
 
-/-! Alter one token quantity, name or policy while retaining the known-good proof. -/
+/-! Alter one token quantity, name or policy while retaining the known-good proof; and the same
+builder at its passing point (README rule 3). -/
 namespace Lovejoin.AnyTx.MixTokenOutputControls
 open PlutusCore.Data (Data)
-open Seedelf.V1 (endsInError)
+open Seedelf.V1 (endsWithUnit endsInError)
 open Lovejoin.AnyTx (testL)
 open Lovejoin.AnyTx.OwnerMoreControls (fields box2)
 open Lovejoin.AnyTx.MixTwoControls (tail)
@@ -14,6 +15,13 @@ open Lovejoin.V2.Tok2
 
 private def value (policy name : PlutusCore.ByteString.ByteString) (qty : PlutusCore.Integer.Integer) : Data :=
   .Map [(.B "", .Map [(.B "", .I 2000000)]), (.B policy, .Map [(.B name, .I qty)])]
+
+-- At the pool's own value, either output, the changed output is the honest one and the Mix
+-- returns unit, as MixTokenControls' honest run does; so the failures below fail on the change.
+#guard endsWithUnit (mixTokenBadValue.exec nftPolicy mixBoxHash 2000000 tokPolicy tokName 1000000
+  katA1 katB1 katA2 katB2 katOA1 katOB1 katOA2 katOB2 userKey (fields 1000000) box2 tail kat (value tokPolicy tokName 1000000) true)
+#guard endsWithUnit (mixTokenBadValue.exec nftPolicy mixBoxHash 2000000 tokPolicy tokName 1000000
+  katA1 katB1 katA2 katB2 katOA1 katOB1 katOA2 katOB2 userKey (fields 1000000) box2 tail kat (value tokPolicy tokName 1000000) false)
 
 #guard endsInError (mixTokenBadValue.exec nftPolicy mixBoxHash 2000000 tokPolicy tokName 1000000
   katA1 katB1 katA2 katB2 katOA1 katOB1 katOA2 katOB2 userKey (fields 1000000) box2 tail kat (value tokPolicy tokName 999999) true)

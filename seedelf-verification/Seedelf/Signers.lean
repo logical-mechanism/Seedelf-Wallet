@@ -124,6 +124,9 @@ import Seedelf.Signers.Signers126
 import Seedelf.Signers.Signers127
 import Seedelf.Signers.Signers128
 import Seedelf.Signers.Control128
+import Seedelf.Signers.Control4
+import Seedelf.Signers.Control64
+import Seedelf.Signers.Control127
 
 /-! The wallet's core property with 4 to 128 signatories, one module a length, and its
 controls (gen-seedelf-signers.py writes this file). -/

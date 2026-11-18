@@ -4,14 +4,22 @@ as Audit/count.py does for the audit's families:
     python3 -I tally.py Seedelf          every module under Seedelf/
     python3 -I tally.py Slice/Slice      Slice/'s, from its own package's traces
 
-A module is ok when its trace is newer than its source, holds no error, no "❌", no
-"Undetermined" and no `sorry`, and holds exactly as many "✅ Valid" as its source has `blaster`
-proofs and plain `#blaster` checks, and "✅ Expected Falsified" as `#blaster (solve-result: 1)`
-checks (comments and strings stripped). check.sh's `ok` can't tell Valid from Undetermined, since
-Blaster logs Undetermined as a warning only; this can. Lake writes no trace for a failed build. A
-module with nothing to prove and no trace, such as an aggregator check.sh never builds, is
-skipped and listed."""
+A module is ok when its trace is newer than its source, every module of the package it imports,
+directly or not, has a trace, and its log holds no error, no "❌", no "Undetermined", no `sorry`
+and no compiler-trusting axiom (`native_decide`), and exactly as many "✅ Valid" as its source has
+`blaster` proofs and plain `#blaster` checks, and "✅ Expected Falsified" as
+`#blaster (solve-result: 1)` checks (comments and strings stripped). What this adds to check.sh's
+summary of one run: each module's ✅ held against its own source, whichever runs built it.
+
+Lake writes a trace when a build ends and keeps the last good one when a rebuild fails, so
+check.sh removes a failed module's build: here it reads as not built, and every module resting on
+it as not ok. This reads the last builds only: an import or a pin changed since one shows only once
+check.sh rebuilds, so run check.sh on what you count. A module that is only imports, an aggregator
+check.sh never builds, is skipped and listed."""
 import glob, json, os, re, sys
+
+# The axioms of a proof the compiler checked, not the kernel (`native_decide`).
+COMPILER = ("Lean.ofReduceBool", "Lean.trustCompiler")
 
 
 def strip(src):
@@ -47,29 +55,67 @@ def expected(code):
     return valid, falsified
 
 
+IMPORT = r"(?<![\w.])import\s+([A-Za-z_][\w.]*)"
 lib = sys.argv[1].rstrip("/")
 root = os.path.dirname(lib) or "."
+traces = os.path.join(root, ".lake", "build", "lib", "lean")
+codes, holes = {}, {}
+
+
+def path(base, mod, ext):
+    return os.path.join(base, *mod.split(".")) + ext
+
+
+def code(mod):
+    if mod not in codes:
+        codes[mod] = strip(open(path(root, mod, ".lean"), encoding="utf-8").read())
+    return codes[mod]
+
+
+def hole(mod):
+    """A module of the package that `mod` imports, directly or not, with no trace, or None."""
+    if mod not in holes:
+        holes[mod] = None  # an import cycle, which Lean refuses, ends here
+        for imp in re.findall(IMPORT, code(mod)):
+            if imp != mod and os.path.exists(path(root, imp, ".lean")):
+                found = imp if not os.path.exists(path(traces, imp, ".trace")) else hole(imp)
+                if found:
+                    holes[mod] = found
+                    break
+    return holes[mod]
+
+
 srcs = sorted(glob.glob(os.path.join(lib, "**", "*.lean"), recursive=True))
 total_v = total_f = 0
 bad, skipped = [], []
 for src in srcs:
-    rel = os.path.relpath(src, root)[:-len(".lean")]
-    mod = rel.replace(os.sep, ".")
-    ev, ef = expected(strip(open(src, encoding="utf-8").read()))
-    trace = os.path.join(root, ".lake", "build", "lib", "lean", rel + ".trace")
+    mod = os.path.relpath(src, root)[:-len(".lean")].replace(os.sep, ".")
+    ev, ef = expected(code(mod))
+    trace = path(traces, mod, ".trace")
     if not os.path.exists(trace):
-        (skipped if (ev, ef) == (0, 0) else bad).append(f"{mod}: no trace (failed, or never built)")
+        if re.sub(IMPORT, "", code(mod)).strip():
+            bad.append(f"{mod}: no trace (failed, or never built)")
+        else:
+            skipped.append(f"{mod}: no trace, and only imports")
         continue
-    msgs = [(e.get("level"), e.get("message", "")) for e in json.load(open(trace, encoding="utf-8")).get("log", [])]
+    try:
+        msgs = [(e.get("level"), e.get("message", ""))
+                for e in json.load(open(trace, encoding="utf-8")).get("log", [])]
+    except (OSError, ValueError) as e:
+        bad.append(f"{mod}: its trace doesn't read ({type(e).__name__}): rebuild it")
+        continue
     v = sum(m.count("✅ Valid") for _, m in msgs)
     f = sum(m.count("✅ Expected Falsified") for _, m in msgs)
     total_v += v; total_f += f
+    under = hole(mod)
     problems = [p for p, hit in [
         ("built before its source changed", os.path.getmtime(trace) < os.path.getmtime(src)),
+        (f"rests on {under}, which has no trace", under is not None),
         ("an error", any(l == "error" for l, _ in msgs)),
         ("a ❌", any("❌" in m for _, m in msgs)),
         ("Undetermined", any("Undetermined" in m for _, m in msgs)),
         ("a sorry", any("sorry" in m for _, m in msgs)),
+        ("a compiler-trusting axiom (native_decide)", any(a in m for _, m in msgs for a in COMPILER)),
         (f"{v} Valid where it expects {ev}", v != ev),
         (f"{f} Expected Falsified where it expects {ef}", f != ef),
     ] if hit]

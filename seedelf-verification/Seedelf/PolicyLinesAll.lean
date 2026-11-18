@@ -170,8 +170,15 @@ theorem honest_one_line_returns_unit :
 
 end Seedelf.V1.LinesAll
 
-#print axioms Seedelf.V1.LinesAll.policy_fails_two_or_more_lines
-#print axioms Seedelf.V1.LinesAll.policy_never_succeeds_two_or_more_lines
-#print axioms Seedelf.V1.LinesAll.policy_unsuccessful_two_or_more_lines
-#print axioms Seedelf.V1.LinesAll.policy_fails_two_or_more_lines_ctx
-#print axioms Seedelf.V1.LinesAll.honest_one_line_returns_unit
+/-! ### Axioms: Lean's own, no `sorry`, `blasterProven` or `ofReduceBool` -/
+
+/-- info: 'Seedelf.V1.LinesAll.policy_fails_two_or_more_lines' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Seedelf.V1.LinesAll.policy_fails_two_or_more_lines
+/-- info: 'Seedelf.V1.LinesAll.policy_never_succeeds_two_or_more_lines' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Seedelf.V1.LinesAll.policy_never_succeeds_two_or_more_lines
+/-- info: 'Seedelf.V1.LinesAll.policy_unsuccessful_two_or_more_lines' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Seedelf.V1.LinesAll.policy_unsuccessful_two_or_more_lines
+/-- info: 'Seedelf.V1.LinesAll.policy_fails_two_or_more_lines_ctx' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Seedelf.V1.LinesAll.policy_fails_two_or_more_lines_ctx
+/-- info: 'Seedelf.V1.LinesAll.honest_one_line_returns_unit' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Seedelf.V1.LinesAll.honest_one_line_returns_unit

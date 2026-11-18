@@ -15,6 +15,8 @@ import Seedelf.WalletRedeemerAnyTx
 import Seedelf.WalletAnyTx
 import Seedelf.WalletAnyTxTwo
 import Seedelf.WalletAnyTxThree
+import Seedelf.AnyTxControls
+import Seedelf.WalletAnyTxControls
 import Seedelf.AnyTxShapes
 import Seedelf.Signers
 import Seedelf.PolicyAnyTxSteps
