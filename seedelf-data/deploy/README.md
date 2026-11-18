@@ -1,6 +1,6 @@
 # Deploying the data layer
 
-How the data layer goes live: home's services reached through a WireGuard tunnel, and the API on a VPS behind Caddy. Why it's shaped this way is in the record of the data layer's plan ([Home](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#home), [Tunnel and VPS](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#tunnel-and-vps)). **Mainnet only:** preprod stays on Koios, and the preprod server at home is another project's.
+How the data layer goes live: home's services reached through a WireGuard tunnel, and the API on a VPS behind Caddy. Why it's built this way is explained in the data layer's archived plan ([Home](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#home), [Tunnel and VPS](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#tunnel-and-vps)). **Mainnet only:** preprod stays on Koios, and the preprod server at home is another project's.
 
 Every file here is a template. `<…>` marks a value to fill in on the machine. Keys, passwords, addresses and database names are never committed.
 
@@ -19,22 +19,22 @@ Every file here is a template. `<…>` marks a value to fill in on the machine. 
 
 ## 1. Home
 
-**Postgres.** `home/seedelf_reader.sql` makes the `seedelf_reader` role. Its TCP keepalives matter: without them, a session the tunnel cut off kept its slot for about 2 hours, and the API was refused the rest of its pool.
+**Postgres.** `home/seedelf_reader.sql` makes the `seedelf_reader` role. Its TCP keepalives matter: without them, a session the tunnel cut off kept its connection slot for about 2 hours, and Postgres refused the rest of the API's connection pool.
 
 1. Add the tunnel's address to `listen_addresses`, and the logging settings: `home/postgresql-seedelf.conf`.
 2. Add the VPS's line to `pg_hba.conf`: `home/pg_hba-seedelf.conf`.
 3. Install the drop-in `home/postgresql-after-network.conf`, so Postgres binds after the network and `wg0` are up. Without it, Postgres can bind localhost alone after a reboot.
 4. `systemctl daemon-reload`, then restart Postgres.
 
-**The Seedelf Kupo** (`home/kupo_seedelf.service`; on the server, `--log-level-http-server Warning` is a drop-in, `kupo_seedelf.service.d/http-log.conf`), **cardano-submit-api** (`--config home/tx-submit-mainnet-config.yaml --port 8090`) and **Ogmios** (port 1337, which serves another project too) listen on every address: the LAN for building locally, and `wg0` for the VPS. The router forwards none of their ports, and `home/nftables-seedelf.conf` lets only the VPS in through `wg0`.
+**The Seedelf Kupo** (`home/kupo_seedelf.service`; on the server, `--log-level-http-server Warning` is set in a drop-in, `kupo_seedelf.service.d/http-log.conf`), **cardano-submit-api** (`--config home/tx-submit-mainnet-config.yaml --port 8090`) and **Ogmios** (port 1337, which serves another project too) listen on every address: the LAN for building locally, and `wg0` for the VPS. The router forwards none of their ports, and `home/nftables-seedelf.conf` lets only the VPS in through `wg0`.
 
-**db-sync** runs the options in `home/db-sync-insert-options.json`, `offchain_vote_data` on among them. Check them again after every db-sync upgrade: 13.7.0.1 added that option switched off, and vote metadata stopped with no error.
+**db-sync** runs with the options in `home/db-sync-insert-options.json`, which include `offchain_vote_data` turned on. Check them again after every db-sync upgrade: 13.7.0.1 added that option switched off, and vote metadata stopped with no error.
 
 **db-sync's extra indexes** are in `home/db-sync-indexes.sql`:
 - the 13 found on the server on 2026-10-09 that db-sync doesn't make (about 79 GB);
 - 3 small ones the API adds for a wallet's first load.
 
-Run it as the role db-sync writes with. It skips any index already there, and builds the rest without holding up db-sync. Its head has the command that lists every index with its size, and the one that finds a build that failed.
+Run it as the role db-sync writes with. It skips any index already there, and builds the rest without holding up db-sync. The top of the file has the command that lists every index with its size, and the one that finds a failed build.
 
 **The tunnel:**
 
@@ -52,7 +52,7 @@ Run it as the role db-sync writes with. It skips any index already there, and bu
 
 1. **Packages:** `wireguard-tools`, `nftables`, `vnstat`, `postgresql-client` (for `pg_isready`), and Caddy.
    - Ubuntu's own Caddy is years old. Caddy's apt repository (Cloudsmith) answered `402 Payment Required` on 2026-10-09, so Caddy is the `.deb` from its [GitHub release](https://github.com/caddyserver/caddy/releases): check it with `grep ' caddy_<version>_linux_amd64.deb$' caddy_<version>_checksums.txt | sha512sum -c -`, then `apt install ./caddy_<version>_linux_amd64.deb`.
-   - `systemctl disable --now caddy` until step 4: its default site would answer on port 80.
+   - `systemctl disable --now caddy` until §4, *Going public*: its default site would answer on port 80.
 2. **WireGuard:**
    - make keys as at home, and fill in `edge/wg0.conf`;
    - `systemctl enable --now wg-quick@wg0`.
@@ -83,7 +83,7 @@ Run it as the role db-sync writes with. It skips any index already there, and bu
    - the environment (Settings → Environments): the maintainer as required reviewer, `main` alone, and two variables. `DEPLOY_HOST` is the API's name. `DEPLOY_KNOWN_HOSTS` is `ssh-keyscan -t ed25519 <the name>`, checked against `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the VPS;
    - check it: `ssh -n -i <the key> deploy@<the name> status` answers, and any other command gets the script's usage.
 
-**Nothing is public yet:** no DNS name leads here until step 4.
+**Nothing is public yet:** no DNS name leads here until §4, *Going public*.
 
 ## 3. Home's own traffic stays home's
 
@@ -93,7 +93,7 @@ Run it as the role db-sync writes with. It skips any index already there, and bu
 
 **What's left to see:** someone determined could tie the API to the relay, by sending a transaction through the API and watching which relay announces it first. The worst they can do with that is attack an IP that's public already, and wallets fall back to Koios.
 
-An earlier form of this step moved the node's and db-sync's traffic into the tunnel, failing closed. A node that only reaches out through the VPS is no relay, so it's gone. Its files (`seedelf-tunnel-routes.service`, `nftables-seedelf-egress.conf`, the VPS's forwarding and NAT) are in git's history, should the relay ever move off this box.
+An earlier form of this step moved the node's and db-sync's traffic into the tunnel, failing closed. A node that only reaches out through the VPS is no relay, so that form was dropped. Its files (`seedelf-tunnel-routes.service`, `nftables-seedelf-egress.conf`, the VPS's forwarding and NAT) are in git's history, should the relay ever move off this box.
 
 ## 4. Going public
 
@@ -119,7 +119,7 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
 
   On home, Postgres's log holds no statement, and Kupo's no request path.
 - **DNS and certificates:** crt.sh lists `mainnet.<domain>` and nothing that leads home.
-- **The drills** (the record of the data layer's plan, [Verification](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#verification)):
+- **The drills** (the data layer's archived plan, [Verification](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#verification)):
 
   | Stop | Expect |
   |---|---|
@@ -132,14 +132,14 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
   | home's power | the same, then a clean start in NUT's order |
   | the VPS | the wallet goes to Koios |
 
-  The wallet goes back to the API at its first reading after a 5-minute hold, and a retry that fails starts the hold again. Postgres keeps answering on `10.88.0.2` across a restart of the tunnel. The drills as run, with their times, are in [the record of the VPS's set-up](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26c-data-layer-vps.md#the-drills-2026-10-09).
+  The wallet goes back to the API at its first reading after a 5-minute hold, and a retry that fails starts the hold again. Postgres keeps answering on `10.88.0.2` across a restart of the tunnel. The drills as run, with their times, are in [the archived plan for the VPS's set-up](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26c-data-layer-vps.md#the-drills-2026-10-09).
 
 ## Routine
 
 - **A new API build:** GitHub's Actions → *Data layer deploy* → *Run workflow*, on `main`, and approve the run when GitHub asks.
   - `deploy` builds `main` and installs it, keeping the running binary as `.prev`. It checks `/health`, which must answer as well as before, and the store's CORS line, and puts the old binary back by itself if the new one fails.
   - `rollback` swaps the two, and a second one undoes it. `status` says what's running.
-  - **After a deploy, check by hand the routes `/health` doesn't read:** the token pools', and two public ones. The commands are [the release procedure's](../../seedelf-platform/seedelf-web-wallet/docs/development.md#2-on-main-after-the-merge-build-and-test-the-store-package), after its `status` run. A restarted server works out its first pool list off the request, for up to a minute, so the token pools' routes can answer 503 meanwhile: ask again before you take it for a failed deploy.
+  - **After a deploy, check by hand the routes `/health` doesn't read:** the token pools', and two public ones. The commands are [the release procedure's](../../seedelf-platform/seedelf-web-wallet/docs/development.md#2-on-main-after-the-merge-build-and-test-the-store-package), after its `status` run. A restarted server works out its first pool list in the background, for up to a minute, so the token pools' routes can answer 503 meanwhile: ask again before you take it for a failed deploy.
   - **A `rollback` can take a route, or a request's shape, away from a released wallet,** against [the release rule](../../seedelf-platform/seedelf-web-wallet/docs/development.md#2-on-main-after-the-merge-build-and-test-the-store-package) that a wallet the store ships never meets an older API. Its checks pass all the same: they read `/health` and CORS alone. So roll back only as a stopgap, and fix forward. A route the old build lacks answers 404, and a request it takes in another shape answers 400:
     - on a public route (`/api/v1/…`) or the private index's, either holds that whole part of the wallet on Koios for 5 minutes, and again at its first such request after each hold;
     - on the token pools' routes (`lovejoin/pools`, `lovejoin/tokens` and `lovejoin/tokens/since`, added by #317; #311's build, `304f1d16`, is the last deployed without them), neither holds any part. The wallet reads the token pools' boxes from Koios instead and asks it what made its own ([privacy.md](../../seedelf-platform/seedelf-web-wallet/docs/privacy.md#known-links), *Lovejoin*), looks for new pools at Koios's holder, shows no crowd counts on the Lovejoin hub, and watches a token pool's chain through `tx_status`.
@@ -149,5 +149,5 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
 - **Caddy:** apt doesn't update it (§2, step 1). Watch its releases, and install a new one's `.deb` the same way, checked.
 - **Before a node upgrade,** check Kupo's and Ogmios's compatibility with the new version: there's no preprod to try it on first.
 - **After a db-sync upgrade,** compare its insert options with `home/db-sync-insert-options.json`.
-- **After a db-sync resync,** once it has caught up, run `home/db-sync-indexes.sql` again: a new database has only db-sync's own indexes. Resync with `home/db-sync-insert-options.json`'s options from the empty database: the crowds and the token pools' reads on rely on `tx_out` `consumed`, which keeps every output and writes each block's in chain order (a read on starts above the output and transaction ids it has read), as `prune` and `bootstrap` don't.
+- **After a db-sync resync,** once it has caught up, run `home/db-sync-indexes.sql` again: a new database has only db-sync's own indexes. Resync with `home/db-sync-insert-options.json`'s options from the empty database: the crowds and the token pools' later reads rely on `tx_out`'s `consumed` mode, which keeps every output and writes each block's outputs in chain order (each later read starts above the output and transaction IDs already read); `prune` and `bootstrap` don't.
 - **At every wallet release,** refresh the token decimals (`api/data/token-decimals.json`, built in) along with the wallet's own token list, then deploy.

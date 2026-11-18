@@ -1,6 +1,6 @@
 # **seedelf-contracts**
 
-The Cardano smart contracts of Seedelf, a stealth wallet for Cardano, written in [Aiken](https://aiken-lang.org/). There are three: the wallet contract, which holds every private UTxO (each payment to a Seedelf); the minting policy for Seedelf tokens, the `5eed0e1f…` names people pay; and an always-false script, which holds their reference scripts (each script stored on chain once, in a UTxO that transactions point to instead of carrying the script). The root [README](../README.md) explains how they work. This folder is for anyone who wants to read the contracts, check the deployed ones, or build them. To use Seedelf, use the [Seedelf Wallet](../seedelf-platform/seedelf-web-wallet/README.md) for Chrome or the [seedelf-cli](../seedelf-platform/README.md).
+Seedelf's smart contracts, written in [Aiken](https://aiken-lang.org/). Seedelf is a stealth wallet for Cardano. There are three: the wallet contract, which holds every private UTxO (each payment to a Seedelf); the minting policy for Seedelfs, the `5eed0e1f…` NFTs a payer looks up; and an always-false script, which holds the reference scripts of the other two. The root [README](../README.md) explains how they work. This folder is for anyone who wants to read the contracts, check the deployed ones, or build them. To use Seedelf, use the [Seedelf Wallet](../seedelf-platform/seedelf-web-wallet/README.md) for Chrome or the [seedelf-cli](../seedelf-platform/README.md).
 
 The folder also holds the [happy path scripts](happy-path-scripts/README.md), a `cardano-cli` test harness for preprod. These files are used for testing purposes only.
 
@@ -24,7 +24,7 @@ always_false: 6777ba4dc8c3043377201624502d92636381144700d49983258b75db  # holds 
 
 ### Checking version 1
 
-The committed scripts' hashes, with no build. A script's hash is what `cardano-cli conway transaction policyid` prints for its file, the command the build script writes `hashes/` with:
+To check the committed scripts' hashes without a build, run `cardano-cli conway transaction policyid` on each file, the same command the build script uses to write `hashes/`:
 
 ```bash
 for n in wallet seedelf always_false; do
@@ -33,11 +33,11 @@ for n in wallet seedelf always_false; do
 done
 ```
 
-Each should print its hash above. [`extract.sh`](../seedelf-verification/extract.sh), in seedelf-verification (the formal proofs about version 1, below), makes the same check in Python before its proofs read the scripts.
+Each should print its hash above. seedelf-verification, the formal proofs about version 1 (below), makes the same check in Python, in [`extract.sh`](../seedelf-verification/extract.sh), before its proofs read the scripts.
 
-The chain's copies: seedelf-core's [`tests/constants_test.rs`](../seedelf-platform/seedelf-core/tests/constants_test.rs) checks that the reference outputs, as they sit on chain ([`src/references.rs`](../seedelf-platform/seedelf-core/src/references.rs) holds them byte for byte), carry scripts with these hashes and sizes, at the always-false script's address, on each network. To compare with the chain yourself, look up the reference UTxOs above with a Cardano node or an explorer.
+To check the chain's copies: seedelf-core's [`tests/constants_test.rs`](../seedelf-platform/seedelf-core/tests/constants_test.rs) checks that the reference outputs carry scripts with these hashes and sizes, at the always-false script's address, on each network. [`src/references.rs`](../seedelf-platform/seedelf-core/src/references.rs) holds those outputs byte for byte, as they sit on chain. To compare with the chain yourself, look up the reference UTxOs above with a Cardano node or an explorer.
 
-A rebuild, from that commit's own build script. It needs `aiken` v1.1.9 (which fetches stdlib v2.2.0 from GitHub itself), `cardano-cli`, `python3` and python's `cbor2` on your `PATH`, and it writes `plutus.json`, `contracts/` and `hashes/`:
+To rebuild with that commit's own build script, you need `aiken` v1.1.9 (which fetches stdlib v2.2.0 from GitHub itself), `cardano-cli`, `python3` and python's `cbor2` on your `PATH`. It writes `plutus.json`, `contracts/` and `hashes/`:
 
 ```bash
 git worktree add ../seedelf-v1 5b82530
@@ -50,7 +50,7 @@ Compare its `hashes/` with the hashes above. The repository's own checks are on 
 
 ### This folder isn't version 1
 
-This folder's source, `contracts/` and `hashes/` are a later revision, optimized, and never deployed, so their hashes aren't version 1's. The committed `contracts/` and `hashes/` were built with Aiken v1.1.19 and stdlib v3.0.0; `aiken.toml` now pins Aiken v1.1.24 and stdlib v4.0.0, so a rebuild today needn't match them either. [AUDIT.md](AUDIT.md) reviews this later revision, not the version 1 scripts on chain.
+This folder's source, `contracts/` and `hashes/` are a later, optimized revision that was never deployed, so their hashes aren't version 1's. The committed `contracts/` and `hashes/` were built with Aiken v1.1.19 and stdlib v3.0.0; `aiken.toml` now pins Aiken v1.1.24 and stdlib v4.0.0, so a rebuild today needn't match them either. [AUDIT.md](AUDIT.md) reviews this later revision, not the version 1 scripts on chain.
 
 ## What's been checked
 

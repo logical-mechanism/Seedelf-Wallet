@@ -1,23 +1,23 @@
 # The audit of the proofs
 
-A review of this folder's proofs, about Seedelf (a stealth wallet on Cardano) and Lovejoin (its mixer), as of 2026-11-03. It asked whether each proved result (each ✅, as the Lean 4 builds print it) is real, and what the proofs and their docs leave out. It's the project's own review, done with AI review agents, not an independent audit.
+A review of this folder's proofs, as of 2026-11-03. Seedelf is a stealth wallet on Cardano; the proofs also cover Lovejoin, the mixer the Seedelf Wallet uses. It asked whether each proved result (each ✅, as the Lean 4 builds print it) is real, and what the proofs and their docs leave out. It's the project's own review, done with AI review agents, not an independent audit.
 
 It covers the scenario proofs, each of which fixes the fields its script never reads. The every-transaction proofs, kernel and Blaster alike, are newer, and it doesn't cover them. The claim in [CLAIMS.md](../CLAIMS.md) rests on the kernel ones.
 
 ## What was reviewed
 
-- **The tools:** Blaster, IOG's Lean tactic that hands a goal to the Z3 solver, as trusted code at its pin; and PlutusCoreBlaster, as the model of the machine Cardano runs scripts on.
+- **The tools:** Blaster, IOG's Lean tactic that hands a goal to the Z3 solver, reviewed as trusted code at its pinned commit; and PlutusCoreBlaster, reviewed as the model of the machine Cardano runs scripts on.
 - **The inputs:** that the proved bytes are the deployed ones, and that the scenarios are real Plutus V3 script contexts.
 - **The proofs:** each theorem's statement, and the build's evidence for it; Seedelf's specs against their Aiken source; Lovejoin's classic pool, v2's Mix and its scenarios, and the templates.
 - **The docs:** each written claim against the proofs.
 
-Each critical and high finding was checked by two more reviewers, who tried to refute it (one on its evidence, one on its impact), and each medium by one. Lows and infos weren't checked. A severity (critical, high, medium, low, info) is the one after those checks. Where a finding needed it, the review added theorems, mutant scripts and checks: the suites in this folder (*What's here*, below).
+Each critical and high finding was checked by two more reviewers, who tried to refute it (one on its evidence, one on its impact), and each medium by one. Lows and infos weren't checked. Each severity (critical, high, medium, low, info) is as it stood after those checks. Where a finding needed it, the review added theorems, mutant scripts and checks: the suites in this folder (*What's here*, below).
 
 The record is [review/findings.md](review/findings.md), with the full evidence in `review/findings.json` beside it.
 
 ## What it found
 
-55 findings: 1 critical, 8 high, 13 medium, 24 low and 8 info, and one more refuted. None is a bug in a contract, and no proved result was false. They're what the proofs and their docs left out: a claim worded wider than its theorem, a check no theorem varied, a scenario that couldn't pass, a tool trusted without a check. The critical one: the theorems on the Seedelf policy's amount rule said nothing about mints, only about burns.
+55 findings: 1 critical, 8 high, 13 medium, 24 low, 8 info and 1 refuted. None is a bug in a contract, and no proved result was false. They're what the proofs and their docs left out: a claim worded wider than its theorem, a check no theorem varied, a scenario that couldn't pass, a tool trusted without a check. The critical one: the theorems on the Seedelf policy's amount rule said nothing about mints, only about burns.
 
 ## How each was resolved
 
@@ -42,8 +42,8 @@ The record is [review/findings.md](review/findings.md), with the full evidence i
   - v2's mix_logic outside its withdrawal.
   - The medium findings.
 - `Checks/`: evaluation-only checks, such as the flat decoder against Aiken's text, the Steps runs as `#guard`s, and every theorem's axioms.
-- `diag/`: Blaster's SMT queries for proved theorems, dumped and replayed through Z3 (`bash Audit/diag/run-diag.sh quick`). It checks Lean-blaster [#194](https://github.com/input-output-hk/Lean-blaster/issues/194): a contradictory background would make a ✅ vacuous. Where a Mix theorem's premises time out, they're replayed again with the boxes in collapsed, as some controls are (below). A replay that settles nothing is flagged INCONCLUSIVE, never counted clean.
-- `count.py`: reads each module's last build log and compares it with what its source expects. Blaster logs a check that comes back Undetermined as a warning only. `check.sh`, the folder's build runner, reports such a module as `UNDETERM` (undetermined), not `ok`; this also checks each module's counts.
+- `diag/`: Blaster's SMT queries for proved theorems, dumped and replayed through Z3 (`bash Audit/diag/run-diag.sh quick`). It checks for Lean-blaster [#194](https://github.com/input-output-hk/Lean-blaster/issues/194): a contradictory background would make a ✅ vacuous. Where a Mix theorem's premises time out, they're replayed again with every input box sharing box 1's points and branches, as some controls do (below). A replay that settles nothing is flagged INCONCLUSIVE, never counted clean.
+- `count.py`: reads each module's last build log and compares it with what its source expects. Blaster logs a check that comes back Undetermined as a warning only. `check.sh`, the folder's build runner, reports such a module as `UNDETERM` (undetermined), not `ok`.
 
 ## Running it
 
@@ -62,4 +62,4 @@ It needs what the [README](../README.md)'s *Running it* lists, Z3 included, and 
 - `⚠️ Undetermined`, or a count that's off: inconclusive, not a pass.
 - A failed `#guard`: a concrete run disagrees with what the scenario claims.
 - A `by blaster` theorem that fails in `Gaps/`: the gap is real for that shape, or the statement is wrong. Either way it's worth a look before anything is claimed.
-- A control asked at one instance: over every input, Z3 doesn't always find a counterexample in time, so some V2 controls give every box in box 1's points and branches, and Z3 needn't build different boxes. A control needs only one counterexample. Each module doc says which controls, and which field stays apart where a branch must fail alone.
+- Controls posed at one instance: over every input, Z3 doesn't always find a counterexample in time, so some V2 controls make every input box share box 1's points and branches, and Z3 needn't build different boxes. A control needs only one counterexample. Each module doc says which controls do this, and, where a branch must fail on its own, which field is kept separate.

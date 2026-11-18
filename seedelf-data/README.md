@@ -1,14 +1,14 @@
 # seedelf-data
 
-The API Seedelf Wallet reads Cardano mainnet through, at `https://mainnet.seedelf.logicalmechanism.io`. Seedelf Wallet is a Cardano wallet for Chrome with Seedelf built in: a stealth wallet that hides who receives and who spends ([what Seedelf is](../README.md)). Logical Mechanism, who make the wallet, run this API in front of their own Cardano node, db-sync (the chain in a Postgres database) and Kupo (a smaller index of chosen outputs).
+Seedelf Wallet reads Cardano mainnet through this API, at `https://mainnet.seedelf.logicalmechanism.io`. Seedelf Wallet is a Cardano wallet for Chrome with Seedelf built in; Seedelf is a stealth wallet that hides who receives and who spends ([what Seedelf is](../README.md)). The API sits in front of its own Cardano node, db-sync (the chain in a Postgres database) and Kupo (an index of only the outputs it's set to match).
 
 **Mainnet only.** On preprod the wallet reads Koios ([koios.rest](https://koios.rest), a public Cardano API), and so does mainnet with the wallet's Settings → *Read Cardano through Koios only* on.
 
-**It answers the wallet, part by part.** Its public routes take Koios's own paths and JSON, so when a part of this API can't answer, the wallet reads that part from Koios instead. The parts are the ones the wallet's Settings name: the private balance, the public account, and sending.
+**The wallet falls back to Koios part by part.** Its public routes take Koios's own paths and JSON, so when a part of this API can't answer, the wallet reads that part from Koios instead. The parts are the ones the wallet's Settings name: the private balance, the public account, and sending.
 
 ## What it serves
 
-- **[The private index](#the-private-index)** of the Seedelf contract and of Lovejoin's classic mix box, for the private balance and Lovejoin's boxes. Lovejoin is the mixer the wallet uses: a pool's equal-value UTxOs, its boxes, sit at its mix box, and the classic pool is an ADA pool of 10 ₳ boxes on scripts of its own. Every answer is the same for whoever asks: none names a UTxO, a register (the datum that marks a Seedelf UTxO's owner, which only its owner can recognise) or an owner. The wallet decides which rows are its own.
+- **[The private index](#the-private-index)** of the Seedelf contract and of Lovejoin's classic mix box, for the private balance and Lovejoin's boxes. Lovejoin is the mixer the wallet uses: its boxes are a pool's equal-value UTxOs, held at the pool's mix box, and the classic pool is an ADA pool of 10 ₳ boxes with scripts of its own. Every answer is the same for whoever asks: none names a UTxO, a register (a Seedelf UTxO's datum, which only its owner can recognise) or an owner. The wallet decides which rows are its own.
 - **[Lovejoin's token pools](#lovejoins-token-pools):** which pools are shown, each pool's crowd (how many deposits its boxes could have come from), and every shown pool's boxes in one feed.
 - **[The public routes](#the-public-routes):** the 24 other Koios endpoints the wallet uses, for the public account, staking and governance, under Koios's own `/api/v1/` paths and JSON. They take only the requests the wallet makes.
 - **[The submit part](#the-submit-part):** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to a cardano-submit-api and an Ogmios, for sending.
@@ -57,7 +57,7 @@ The live tests run one at a time: the database role allows 10 connections, and a
 
 ## What it reads
 
-The API runs on a VPS, behind Caddy. The services it reads run on Logical Mechanism's own machine, which the VPS reaches through a WireGuard tunnel.
+The API runs on a VPS, behind Caddy. The services it reads run on a separate machine, which the VPS reaches through a WireGuard tunnel.
 
 - **db-sync's Postgres,** for everything but the submit part. It reads with a read-only role: SELECT only, `default_transaction_read_only`, a 60 s timeout. That Postgres has neither Koios's own SQL functions (its `grest` schema) nor the pg_cardano extension they use, so the SQL is the API's own.
 - **A Kupo that indexes only the contract and the mix box,** the private index's second source. It needs only the node, so the private index keeps answering while db-sync is down or behind.
@@ -127,7 +127,7 @@ Every route is under `/seedelf/v1/mainnet/`, and every answer carries `network` 
 |---|---|
 | `contract/snapshot` | the contract's rows unspent as of the stable `cursor` |
 | `contract/since/{cursor}` | what changed after that cursor, which the answer repeats as `from`: `created` (each with its `spent`, if it's gone since) and `spent` (older rows spent after it, each its `ref`, `slot`, `time` and `by`), plus the new stable `cursor` |
-| `names` | every Seedelf name unspent at the tip, with the row that holds it. A name is a token under the Seedelf policy, `84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255`, whose name starts with `5eed0e1f` |
+| `names` | every Seedelf unspent at the tip, with the row that holds it. A Seedelf is a token under the Seedelf policy, `84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255`, whose name starts with `5eed0e1f` |
 | `lovejoin/pool` and `lovejoin/since/{cursor}` | the same for Lovejoin's classic pool, at its mix box. Each box carries `made_by`: whether its transaction spent a box itself, and each input's payment and stake credentials |
 
 For example, the contract's rows, then what changed since:
@@ -172,19 +172,19 @@ Beside the classic pool, anyone can launch a Lovejoin pool, each with its own bo
 | `lovejoin/pools` | every shown pool as of the stable `cursor`: its `id`, its `version` (its template set, below: `v2` or `tokenV1`), its `reference` UTxO, the `seed` its launch spent, its `mix_box` and `mix_logic` reference scripts at the holder (each row with its `script_hash`; the wallet derives the bytes), where its `launch` is (`tx`, `block`, `index` in the block, slot and time), and its `crowd`; and the classic pool's `crowd` |
 | `lovejoin/tokens` and `lovejoin/tokens/since/{cursor}` | the boxes of every shown pool, read as `lovejoin/pool` and `lovejoin/since` are, with `pools`: the `mix_box` hashes covered, those shown as of the cursor (or `from`'s). A box's `made_by.mixed` is whether its transaction spent from its own pool |
 
-**What a launch is:** it spends a seed UTxO, and the seed fixes the pool's scripts. `one_shot_mint` applied to the seed hashes to P, the policy of the pool's `lovejoin` NFT and the pool's `id`; `mix_logic` to L; `mix_box` to M, where the boxes sit. The launch puts the pool's reference UTxO at the holder (`reference_holder`), a script that takes no parameters and is always false, so what's there stays for good.
+**What a launch is:** it spends a seed UTxO, and the seed fixes the pool's scripts. Applied to the seed, `one_shot_mint` hashes to P, `mix_logic` to L and `mix_box` to M. P is the policy of the pool's `lovejoin` NFT and the pool's `id`; M is where the boxes sit. The launch puts the pool's reference UTxO at the holder, `reference_holder`: an always-false script with no parameters, so whatever is put there stays for good.
 
 **Two template sets:** the versions of Lovejoin's token-pool scripts the API recognises. `v2` is the one the wallet launches pools on. `tokenV1` is an older set: the wallet no longer launches on it, and only brings boxes back from its pools. They differ only in `mix_logic`, and a seed makes the same P on either, so a pool's datum's L says which set it runs.
 
-**A pool is shown when it's standard and the earliest launched of its values on its template set** (the box's ADA and its token), by block, then place in the block, then id. The sets are apart: a `v2` pool is never a copy of a `tokenV1` pool, and a `tokenV1` pool shown stays shown, for the boxes the wallet brings back from it. Standard means:
+**A pool is shown when it's standard and, on its template set, the earliest launched of the standard pools with its values** (its box's ADA and token), ordered by block, then place in the block, then id. The sets are separate: a `v2` pool is never a copy of a `tokenV1` pool, and a `tokenV1` pool shown stays shown, for the boxes the wallet brings back from it. Standard means:
 - its reference UTxO is at the holder's enterprise address, with no reference script, holding one `lovejoin` NFT and ADA alone, and its datum decodes as `one_shot_mint` holds a launch to;
 - its token is in the wallet's mainnet token list (`tokens/list.json`, built in), or it's an ADA pool at any amount but the classic pool's 10 ₳;
 - one of its launch's inputs, the seed, makes its NFT's policy, and the datum names exactly the scripts that seed makes on one of the two sets;
-- its launch transaction itself put `mix_box` and `mix_logic` at the holder, each under no datum or one nested no deeper than the wallet reads (128 levels), and registered L as a stake credential, unless an earlier block did. The wallet passes a deeper row over and never shows its pool, so this leaves it out too. A readable copy of the script beside a deep row is the one listed.
+- its launch transaction itself put `mix_box` and `mix_logic` at the holder, each under no datum or a datum nested at most 128 levels deep (the deepest the wallet reads), and registered L as a stake credential, unless L was registered in an earlier block. The wallet passes over a script row under a deeper datum and never shows its pool, so this rule leaves the pool out too; if the launch also put a readable copy of the script at the holder, that copy is the one listed.
 
 The rule is in `api/src/lovejoin/standard.rs`. None of it changes once it's on chain, so each candidate is checked once and its verdict kept in memory, and a pool shown stays shown. Everything at the holder is locked for good, so spam there is burned, and costs this server one check.
 
-**A pool's crowd** is its `boxes`, the `deposits` they could have come from, and how many of the boxes a mix made (`mixed`). A transaction that pays a pool's `mix_box` without spending from it is a deposit; one that spends from it is a mix, and each box it makes could have come from any deposit behind any of its inputs. The deposits counted are those some box in the pool now could have come from, worked backwards from the boxes through each mix. A box is an output of exactly the box value with a box's datum: two different 48-byte values, meant as BLS12-381 G1 points; whether they're on the curve is the wallet's to check. The crowd is the same for everyone: the wallet takes its own out.
+**A pool's crowd** is its `boxes`, the `deposits` they could have come from, and how many of the boxes a mix made (`mixed`). A transaction that pays a pool's `mix_box` without spending from it is a deposit; one that spends from it is a mix, and each box it makes could have come from any deposit behind any of its inputs. The deposits counted are those some box in the pool now could have come from, worked backwards from the boxes through each mix. A box is an output holding exactly the box value, under a datum of two different 48-byte values meant as BLS12-381 G1 points; checking that they're on the curve is left to the wallet. The crowd is the same for everyone: the wallet takes its own out.
 
 For example, every shown pool and its crowd:
 
@@ -192,7 +192,7 @@ For example, every shown pool and its crowd:
 curl -s "https://mainnet.seedelf.logicalmechanism.io/seedelf/v1/mainnet/lovejoin/pools"   # {"network", "cursor", "classic", "pools"}
 ```
 
-**Kept:** a cursor's pool list for an hour, worked out once per cursor off any request, with a minute's budget. A request waits at most 5 s. One that waits no longer, or whose cursor or list can't be read, gets the last list worked out, and 503 only before the first. The boxes' feed is kept for db-sync's tip.
+**Kept:** a cursor's pool list, for an hour. It's worked out once per cursor, in the background rather than inside a request, with a minute's budget. A request waits at most 5 s; past that, or when its cursor or the list can't be read, it gets the last list worked out, and a 503 only before the first one exists. The boxes' feed is kept for db-sync's tip.
 
 ## The public routes
 
@@ -276,7 +276,7 @@ curl -s "$api/api/v1/pool_history?_pool_bech32=pool1gaztx97t53k47fr7282d70tje832
 - **`account_reward_history`** is Koios's: every reward paid to the key, by a pool or not. The next epoch's rewards are listed before they're paid, as Koios's are.
 - **`account_update_history`** is Koios's, less withdrawals: a stake key's `registration`, `deregistration`, `delegation_pool` and `delegation_drep` rows, each with its transaction's hash and its block's epoch, slot and time. The request filters out Koios's fifth kind (`action_type=neq.withdrawal`): the wallet withdraws rewards with nearly every payment, and its Activity screen has them. A transaction's certificates of one kind for the key are one row, as in Koios's.
 
-**`pool_history` follows Koios's pool history function** (`grest.get_pool_history_data_bulk`), with every pool's epoch worked out at once and kept. Each row is an epoch's active stake, the blocks made by slot leader, and `deleg_rewards`: the members' rewards earned in it and the leader's, less the pool's fees by the terms active then, rounded half to even. The 18 epochs are those whose rewards are final, two ago back 18.
+**`pool_history` follows Koios's pool history function** (`grest.get_pool_history_data_bulk`), with every pool's epoch worked out at once and kept. Each row is an epoch's active stake, the blocks made by slot leader, and `deleg_rewards`: the members' rewards earned in it and the leader's, less the pool's fees by the terms active then, rounded half to even. The 18 epochs are those whose rewards are final: the 18 ending two epochs ago.
 - Every epoch has its `deleg_rewards`. A pool that made blocks and was paid nothing (a pledge not met) paid `"0"`, where Koios says null. Koios lists a pool's newest 18 epochs with stake, however old; this lists those of the 18 newest it had stake in.
 - A request waits at most 3 s for epochs still being worked out (after a start, or as an epoch turns), then answers with those done.
 - The newest epoch, worked out in its first hour of being paid, is worked out again 10 minutes on: db-sync inserts an epoch's rewards bit by bit until they're paid.

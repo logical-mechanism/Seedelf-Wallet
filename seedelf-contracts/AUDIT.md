@@ -6,7 +6,7 @@ A security review of Seedelf's Aiken contracts: its findings, rated by severity,
 
 **Not the deployed contracts.** What's on chain is version 1, an earlier revision: commit `5b82530`, built with Aiken v1.1.9 and stdlib v2.2.0. This review doesn't cover version 1's bytes. [README.md](README.md#deployed-contracts-version-1) has version 1's hashes and reference UTxOs.
 
-**Terms.** Seedelf is a stealth wallet for Cardano; the repository's [README](../README.md) explains the protocol. A `Register` is the wallet contract's datum: a `generator` $g$ and a `public_value` $u = g^x$, both compressed BLS12-381 G1 points, where $x$ is the owner's secret. A spend's redeemer is a `Proof`: `g_r_b` is $g^r$ for a secret nonce $r$, `z_b` is $z = r + c \cdot x$, and `vkh` is the hash of the one-time key (the review calls it a one-time pad) that must sign the transaction. $c$ is the Fiat-Shamir challenge, a hash of $g$, $g^r$, $u$ and `vkh`. A Seedelf token is the minting policy's `5eed0e1f`-prefixed NFT that locates a user's root Register, the one payers re-randomize. `seedelf-crypto` and `seedelf-core` are the Rust crates that build registers, proofs and transactions for the CLI and the Seedelf Wallet.
+**Terms.** Seedelf is a stealth wallet for Cardano; the repository's [README](../README.md) explains the protocol. A `Register` is the wallet contract's datum: a `generator` $g$ and a `public_value` $u = g^x$, both compressed BLS12-381 G1 points, where $x$ is the owner's secret. A spend's redeemer is a `Proof`: `g_r_b` is $g^r$ for a secret nonce $r$, `z_b` is $z = r + c \cdot x$, and `vkh` is the hash of the one-time key that must sign the transaction (the review calls it a one-time pad). $c$ is the Fiat-Shamir challenge, a hash of $g$, $g^r$, $u$ and `vkh`. A Seedelf token is the minting policy's `5eed0e1f`-prefixed NFT that locates a user's root Register, the one payers re-randomize. `seedelf-crypto` and `seedelf-core` are the Rust crates that build registers, proofs and transactions for the CLI and the Seedelf Wallet.
 
 **Files audited:**
 - [validators/wallet.ak](validators/wallet.ak)
@@ -97,7 +97,7 @@ The challenge is 224 bits. The standard target for Schnorr Fiat-Shamir is 128-bi
 - **Discrete-log extractor soundness** still inherits BLS12-381 G1's ~128-bit classical security, so the practical posture is unchanged.
 - **Grinding (adaptive proof-of-knowledge attacks)** are bounded by ~2¹¹² — still well out of reach, but below the common target.
 
-Recommendation (non-blocking): if a future validator rev is ever spun up, consider `blake2b_256` for a clean 128-bit margin. Note that the off-chain prover in `seedelf-crypto` must match exactly; do not change unilaterally. 224 bits was chosen intentionally for cost (a comment in `lib/schnorr.ak`, removed in commit `e930657`, gave the reason: to avoid costly arithmetic modulo the field prime) — this is a deliberate, documented trade-off, not a defect.
+Recommendation (non-blocking): if a future validator rev is ever spun up, consider `blake2b_256` for a clean 128-bit margin. Note that the off-chain prover in `seedelf-crypto` must match exactly; do not change unilaterally. 224 bits was chosen intentionally, for cost: a comment in `lib/schnorr.ak`, removed in commit `e930657`, said it avoids costly arithmetic modulo the field prime. This is a deliberate, documented trade-off, not a defect.
 
 ### 2.2 [Info] No explicit subgroup check on input points
 

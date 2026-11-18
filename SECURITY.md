@@ -24,7 +24,7 @@ You must describe a **plausible scenario** in which a loss of funds can occur (o
 
 Only **the code** of the **latest tagged release** of **[this repository](https://github.com/logical-mechanism/Seedelf-Wallet/)** is in scope. For the CLI and the contracts, that's the latest version tag, of the form `x.y.z`; for the Seedelf Wallet, the latest tag of the form `web-wallet/x.y.z`. The repository's [tags](https://github.com/logical-mechanism/Seedelf-Wallet/tags) list both.
 
-**The bounty can only be rewarded in ADA**, paid to a Cardano mainnet address or a Seedelf (the name a Seedelf wallet is paid by) that you give us. No identity verification is required. The developers determine the bounty amount for your report, which depends on the severity of the issue and other factors, and ranges from 1 USD to 10,000 USD (in terms of ADA).
+**The bounty can only be rewarded in ADA**, paid to a Cardano mainnet address or a Seedelf that you give us. No identity verification is required. The developers determine the bounty amount for your report, which depends on the severity of the issue and other factors, and ranges from 1 USD to 10,000 USD (in terms of ADA).
 
 Clarifications on scope:
 
@@ -37,8 +37,8 @@ Clarifications on scope:
 - Vulnerabilities that are attributable to hardware are out of scope.
 - A report is invalid and not eligible for a bounty from this program if the developers fix the issue noted in the report in the `main` branch before we receive your report.
 - If the vulnerability involves binary exploitation, we may ask you to provide a proof of concept of secret key exfiltration.
-- Vulnerabilities present in Aiken, the language the contracts are written in, that the Seedelf developers have not introduced are not eligible for a bounty from this program.
+- Vulnerabilities present in Aiken (the language the contracts are written in) that the Seedelf developers have not introduced are not eligible for a bounty from this program.
 - Vulnerabilities present in any of our third-party dependencies must be reported upstream and are not eligible for a bounty from this program.
-- Attacks that need a compromised or dishonest data source (Logical Mechanism's data layer, the server the Seedelf Wallet reads mainnet through, or a backend of Koios, the public Cardano API) are out of scope: the CLI and the Seedelf Wallet trust their data sources to report the chain truthfully (see [Data Layer Reliance](./README.md#data-layer-reliance)).
+- Attacks that need a compromised or dishonest data source (the data layer the Seedelf Wallet reads mainnet through, or a backend of Koios, a public Cardano API) are out of scope: the CLI and the Seedelf Wallet trust their data sources to report the chain truthfully (see [Data Layer Reliance](./README.md#data-layer-reliance)).
 - Known vulnerabilities will result in a bounty not being awarded. We might make an exception if the developers underestimated the severity of the reported issue without an immediate fix.
 - If, during your research, you disrupt Seedelf's release infrastructure or services or attempt to coerce its developers, you will not be awarded a bounty.

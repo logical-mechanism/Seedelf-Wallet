@@ -2,16 +2,14 @@
 
 `seedelf-cli` is a command-line wallet for Seedelf, a stealth wallet on Cardano. The ADA and tokens it holds sit at one smart contract, under registers (pairs of public curve points) that look random to everyone else. Anyone can pay you there, and only your secret key can prove which UTxOs are yours, so the chain doesn't show who received a payment or who spent it. It's for Cardano users who are at home in a terminal.
 
-**Note: Wallet Is Currently In Beta**
-
 Looking for a wallet in the browser instead? The [Seedelf Wallet](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/README.md) is a Cardano wallet for Chrome with Seedelf built in. It's a separate product from the CLI, with its own keys: neither can open the other's wallet.
 
 ## How It Works
 
-- **A Seedelf is your name in the contract.** It's a token whose name starts with `5eed0e1f`, held in a UTxO under a register of yours: two points on the BLS12-381 curve, a generator and a public value. You give a payer its name: the 64-character hex string `balance` prints.
+- **A Seedelf works like an ADA Handle for the contract.** It's an NFT whose name starts with `5eed0e1f`. You give a payer its name, the 64-character hex string `balance` prints, and their wallet finds your register from the UTxO that holds it.
 - **Every payment gets a fresh register.** The payer's wallet reads your Seedelf's register and re-randomizes it. The new register is still yours to spend, and it looks random to everyone else, as long as the elliptic-curve Decisional Diffie-Hellman problem is hard.
 - **Spending takes a proof, not your signature.** For each UTxO it spends, the CLI proves that it knows the secret key behind the register without revealing the key (a Schnorr proof), and the contract checks the proof. The transaction is signed by a one-time key made for it.
-- **The collateral is shared.** Every Cardano script spend puts up collateral: a UTxO the network keeps if a script fails. Collateral sits at an address, so your own would show who spent. For spends from your Seedelf balance, the CLI uses the collateral [giveme.my](https://giveme.my/) puts up, the same for every user. Logical Mechanism, who maintain Seedelf, run giveme.my, and it signs that collateral for each such spend. `create` and `util extract` put up the browser wallet's own 5 ADA instead.
+- **The collateral is shared.** Every Cardano script spend puts up collateral: a UTxO the network keeps if a script fails. Collateral sits at an address, so your own would show who spent. For spends from your Seedelf balance, the CLI uses the collateral that [giveme.my](https://giveme.my/) puts up and signs for each spend, the same for every user. `create` and `util extract` put up the browser wallet's own 5 ADA instead.
 - **Your balance is every UTxO your key can spend.** The CLI finds them by testing each register at the contract against your key. It reads the chain through [Koios](https://www.koios.rest/), and submits its own spends there.
 
 The root [README](https://github.com/logical-mechanism/Seedelf-Wallet#what-is-a-stealth-wallet) explains the protocol and its proofs.
@@ -137,20 +135,20 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 | `sweep` | Your balance pays an address. | `-a, --address` or `--ada-handle`; `-l, --lovelace` and `--asset`, or `--all`; `--utxo` |
 | `remove` | Burns one of your Seedelfs and sends the ADA it held to an address. | `-s, --seedelf`, `-a, --address` |
 | `util expose-key` | Prints your secret key. Use with caution. | |
-| `util base` | Prints your base register: the one your key makes before any re-randomization, which every register of yours comes from. | |
-| `util find` | Lists every Seedelf whose token name contains `--label`, matched against the name in hex (so give the label in hex, as the name holds it), or every Seedelf without it. | `-l, --label` |
+| `util base` | Prints your base register, the one every register of yours is re-randomized from. | |
+| `util find` | Lists every Seedelf whose token name contains `--label`, given in hex, or every Seedelf without it. | `-l, --label` |
 | `util age` | How old a Seedelf is. | `-s, --seedelf` |
 | `util statistics` | Statistics about the Seedelf protocol. | |
 | `util history` | Your spends and receipts. | `--spend-only`, `--receive-only` |
-| `util mint` | Mints a new Seedelf paid from your balance, with no browser wallet. With `--generator` and `--public-value`, the Seedelf goes under that register instead of yours: a Seedelf made for someone else, from a register of theirs (`util base` prints one). | `-l, --label`, `-g, --generator`, `-p, --public-value`, `--utxo` |
+| `util mint` | Mints a new Seedelf paid from your balance, with no browser wallet. With `--generator` and `--public-value`, it mints a Seedelf for someone else, under the register they give you (theirs from `util base`). | `-l, --label`, `-g, --generator`, `-p, --public-value`, `--utxo` |
 | `util extract` | Sends a UTxO at the contract that has no datum to an address. A payment sent to the contract without a datum has no register, so the contract lets anyone spend it. The address pays the fee and needs a 5 ADA collateral UTxO, and its browser wallet signs. | `-u, --utxo`, `-a, --address` |
-| `util migrate` | Refuses every `--from-variant`: there's no variant before 1, the only one. | `--from-variant` |
+| `util migrate` | For moving funds to a newer contract variant. Variant 1 is the only one, so it does nothing yet. | `--from-variant` |
 | `external balance` | The external wallet's address and balance (see below). | |
 | `external sweep` | Sends everything at the external wallet into your balance. | |
 
 - **Amounts:** `--lovelace` (`--lovelaces` for `transfer`) is in lovelace: 1 ADA is 1,000,000. `--asset` is `<policy_id>.<token_name>=<amount>`, both in hex. For `fund` and `sweep`, repeat it, or comma-separate several tokens in one; `transfer` takes one per Seedelf, below.
 - **Several Seedelfs at once:** `transfer` takes `-s` once for each Seedelf, `-l` once for each, in the same order, and `--asset` once for each if any has tokens, comma-separating that Seedelf's tokens (`--asset ""` for one that has none).
-- **`--utxo`** for `transfer`, `sweep` and `util mint` is `<tx_hash>#<index>`, repeatable: the UTxOs to spend, in place of the CLI's own pick. It picks only among the 20 UTxOs a spend draws on (see Limits), and skips any other without a word; `sweep --all` ignores it. `util extract`'s `-u, --utxo` is the one UTxO it extracts.
+- **`--utxo`** for `transfer`, `sweep` and `util mint` is `<tx_hash>#<index>`, repeatable: the UTxOs to spend, in place of the CLI's own pick. It picks only among the 20 UTxOs a spend draws on (see Limits), and silently skips any other; `sweep --all` ignores it. `util extract`'s `-u, --utxo` is the one UTxO it extracts.
 
 ### dApp Interactions: The Sweep-Fund Flow
 

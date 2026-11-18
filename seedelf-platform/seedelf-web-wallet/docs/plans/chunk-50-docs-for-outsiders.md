@@ -137,7 +137,13 @@ Four more, asked 2026-11-17 once the blind reads were in:
 - **Q8 · Seedelf's own audit status stays unstated.** The docs add no line on it. AUDIT.md says what it reviewed and that it isn't version 1.
 - **Q9 · The privacy policy's line 77 is reworded now,** with a dated *Changes* entry: "We don't collect … any data" sat badly beside our two services receiving what the page lists. Merging publishes it.
 - **Q10 · The CLI README's links are absolute GitHub URLs,** so they work on its crates.io page, from the next CLI publish.
-- **Q11 · No doc says who makes or maintains Seedelf** (the owner, reading the pushed branch): "made by Logical Mechanism" is redundant on Logical Mechanism's own GitHub and its own store listing. The lines the rewrite added are out, the store texts' "we're Logical Mechanism" in all three languages too. Who runs a service that sees your data stays, since that's a privacy fact: giveme.my and the data layer are Logical Mechanism's.
+- **Q11 · No doc says who makes or maintains Seedelf** (the owner, reading the pushed branch): "made by Logical Mechanism" is redundant on Logical Mechanism's own GitHub and its own store listing. The lines the rewrite added are out, the store texts' "we're Logical Mechanism" in all three languages too. On a second reading, who runs giveme.my and the data layer went too ("Does the reader need to know this information"): the docs say "its own server" and "a collateral service". Where one party seeing both is the privacy fact, privacy.md says "the same operator". The privacy policy keeps its publisher and "our" services, and the store's host justification "run by the developer".
+- **Q12 · The owner's second reading:** most of it reads right; these parts read as machine-written, and are fixed.
+  - **A Seedelf is an NFT whose name works like an ADA Handle for the contract,** in every doc and the store texts, never "your name in the contract" or "the name a private balance is paid by". A register is "a fresh, random-looking form of its owner's key", never "a copy".
+  - **No "beta":** everything is released and in use. The CLI README's beta note is gone.
+  - **"Not right now", never "Not planned":** the web wallet README's list leaves things open. A hardware wallet's limit is technical, so it moved to *Limits*.
+  - **Seedelf's docs talk about Seedelf.** The web wallet README's Lovejoin section is three lines, the store's Lovejoin paragraph lost the pool-start rules (all three languages, sentences cut, none newly translated but the Seedelf and register lines), and the verification README and CLAIMS.md lead with Seedelf, Lovejoin v2 after it.
+  - **A plain-words pass:** four read-only reviewers flagged the awkward lines in the long docs, and each fix was checked against the file and, where it describes behaviour, the code or UI text.
 
 ### 2. ✅ The inventory
 

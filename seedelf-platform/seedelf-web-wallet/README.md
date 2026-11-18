@@ -11,9 +11,9 @@ It runs on Cardano mainnet. Preprod, Cardano's test network, is on the welcome s
 One wallet on Cardano, with one recovery phrase and one password, and two sides, **Public** and **Private**:
 
 - **The public account** (the Cardano account) is a full Cardano wallet. Receive, send, stake with a pool, spend the rewards, and delegate your vote, as in Lace or Eternl. Restore a Lace or Yoroi phrase and it's the same account, so you don't need a second wallet.
-- **The private balance** is Seedelf's, a stealth wallet on Cardano. Make money private, pay anyone's Seedelf (the name a private balance is paid by), and make it public again to any address, with no UTxO saying who owns it.
+- **The private balance** is Seedelf, a stealth wallet on Cardano. Make money private, pay anyone's Seedelf, and make it public again to any address, with no UTxO saying who owns it.
 
-**How the private side works.** Money in the private balance sits at the Seedelf wallet contract. Each UTxO there is locked to a fresh re-randomization of its owner's key, so the UTxO doesn't say whose it is, and it's spent with a Schnorr proof that only your recovery phrase can make. To be paid privately, you mint a **Seedelf**: a name token, starting `5eed0e1f`, that anyone can look up to pay you. The [root README](../../README.md) has the protocol and its maths.
+**How the private side works.** Money in the private balance sits at the Seedelf wallet contract. Each UTxO there is locked to a fresh re-randomization of its owner's key, so the UTxO doesn't say whose it is, and it's spent with a Schnorr proof that only your recovery phrase can make. To be paid privately, you mint a **Seedelf**, an NFT whose name starts `5eed0e1f`. It works like an ADA Handle for the private balance: anyone with its name can pay you. The [root README](../../README.md) has the protocol and its maths.
 
 **Private money can't be staked,** by design:
 
@@ -31,9 +31,9 @@ Every screen, and what it does, is in [extension/README.md](extension/README.md#
 - **Create** a wallet (a new 24-word phrase) or **restore** one from 12, 15 or 24 words, then lock it with a password.
 - **See your balances,** on Home's two tabs: what the public account holds, and what the private balance holds with its Seedelfs. Tokens and NFTs are listed with a search; an NFT's image shows only when you ask for it.
 - **Several public accounts:** the recovery phrase's Cardano accounts, one at a time, with a picker as Home's Public heading ("Public account 2 ▾") and names of your own. Each has its own addresses, staking and collateral. The private balance is one for the whole phrase, and each account's money made private keeps its own history: a private payment avoids spending two accounts' money together, and when it can't, or when you send everything (Max), its review names the accounts it ties together.
-- **Transaction details:** every review, and the connector's sign window, opens the transaction itself, decoded from the bytes about to be signed: inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata, with a tab for the raw bytes. It asks nobody anything: no lookup, no explorer link, a copy button instead.
+- **Transaction details:** every review, and the connector's sign window, opens the transaction itself, decoded from the bytes about to be signed: inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata, with a tab for the raw bytes. Nothing is fetched to show it: no lookup, and a copy button instead of an explorer link.
 - **Also:** Contacts, a UTxOs screen on each side where a UTxO can be locked out of every payment, Activity on each side (saved as CSV if you want), hiding the balances, the lock time, a check of a written copy of the recovery phrase, and ADA's value in a currency on mainnet.
-- **Three languages:** English, Spanish and Japanese, every one bundled, so choosing one asks nobody anything.
+- **Three languages:** English, Spanish and Japanese, all bundled with the wallet, so choosing one fetches nothing.
 
 **The public account**
 
@@ -61,25 +61,22 @@ Every screen, and what it does, is in [extension/README.md](extension/README.md#
 
 **Lovejoin, the mixer**
 
-Lovejoin is a mixer on Cardano, with contracts of its own, apart from Seedelf's. Each of its pools holds boxes of one value: an amount of ADA alone, or a set amount of one token plus some ADA. A mix spends your boxes together with other people's, so what comes out is harder to tie to what went in.
+Lovejoin is a mixer on Cardano, with its own contracts. A mix spends your boxes, UTxOs of one fixed value, together with other people's, so what comes out is harder to tie to what went in.
 
-- **A private session's return goes through it by default:** the spare ADA comes back through Lovejoin's pool of 5 ₳ boxes, so what comes back is harder to tie to the session, and its tokens through their own pool where one is shown. The session's 5 ₳ collateral is mixed once too, where a 5 ₳ pool holds enough other people's boxes and enough of the session's ADA is left to pay for it. Settings switches turn each off, and any box can be brought back directly.
-- **The Lovejoin tile** mixes ADA or a pool's token from either side. **Help start the pool** puts boxes in for others to mix with, and they stay until you bring them back. **Four boxes a mix,** in place of three, is a Settings option. **Bring every box back now** brings every box back at once, which ties them together.
-- **Anyone can start a pool** from the wallet (**Start a pool**), of a token on the wallet's list, or of ADA at any amount but 10 ₳. About 23 ₳ of what it costs never comes back.
-- **On mainnet a pool mixes only once it holds 30 boxes that aren't yours.** While there's no such pool, a session's return comes back directly.
-- **The Lovejoin v2 contracts the wallet mixes with are formally verified,** on the compiled templates every v2 pool applies. The older pools it only brings boxes back from aren't covered: [what's proved, and where it stops](../../seedelf-verification/CLAIMS.md).
-- **Some older pools take no new boxes,** the classic pool of 10 ₳ boxes among them. If you have boxes in one, the wallet lists that pool and brings them back by itself, one right after another, which ties them together.
-- **Lovejoin has had no third-party audit,** only its makers' own review, and the wallet says so wherever Lovejoin is chosen.
+- **A private session's return goes through it by default,** once a pool holds enough other people's boxes (30 on mainnet); until then it comes back directly. Settings turns it off.
+- **The Lovejoin tile** mixes ADA, or a token that has a pool, from either side, and anyone can start a new pool.
+- **The v2 contracts it mixes with are [formally verified](../../seedelf-verification/CLAIMS.md),** but Lovejoin has had no third-party audit, and the wallet says so wherever Lovejoin is chosen.
 
-**Not planned**
+[extension/README.md](extension/README.md#screens) has the rest.
+
+**Not right now**
 
 - Several pools per account: one pool per account is the model, and several accounts spread stake across pools anyway.
 - Folders or an account centre, or a Seedelf key per account: one private balance for the whole phrase.
 - Reading several accounts at once, or a total across them: either would link them.
 - A notification centre: a private payment can't be found while the wallet is locked, so it would mostly repeat Activity.
 - `web+cardano` payment links (CIP-13), a phone feature.
-- Other chains than Cardano, and mobile. Midnight, a privacy blockchain beside Cardano, is the one other chain whose support is being planned.
-- **Hardware wallets can't be done at all:** the Seedelf key is derived from the recovery phrase's seed, and a hardware wallet's whole purpose is that the seed never leaves it. So a device could hold the public account and never the private balance.
+- Other chains than Cardano, and mobile. Support for Midnight, a privacy blockchain beside Cardano, is being planned.
 - Nothing that reports on you or ties you to an identity: no analytics, and no identity checks (AML/KYC), so no on-ramp, and no yield products or token claims that would need them.
 
 New features come from what users ask for.
@@ -100,12 +97,12 @@ New features come from what users ask for.
 - **Paying a Seedelf takes Seedelf Wallet or the seedelf-cli,** Seedelf's command-line wallet. Someone using another wallet pays your public account's address instead, in the open.
 - **Some links can't be avoided,** and the wallet says so where they happen. Making money private ties the public account to it. A Seedelf is tied to whatever paid for it. A private session's one-time account is public: anyone can follow its money, and money you made private leads back to your public account. [docs/privacy.md](docs/privacy.md) is the wallet's privacy model: what's hidden, what isn't, and [the known links](docs/privacy.md#known-links).
 - **The services the wallet talks to see your IP address,** and can group what one address does, though the chain can't.
-  - On mainnet it reads Cardano through Logical Mechanism's own server first, and through Koios, a public Cardano API, for any part that server can't answer. Settings → Network switches to Koios alone. Preprod always reads Koios.
-  - Spends from the private balance also go to giveme.my, Logical Mechanism's collateral service. It puts up the collateral such a spend needs, the same for everyone, so your own collateral never tags your private spends.
+  - On mainnet it reads Cardano through its own server first, and through Koios, a public Cardano API, for any part that server can't answer. Settings → Network switches to Koios alone. Preprod always reads Koios.
+  - Spends from the private balance also go to giveme.my, a collateral service. It puts up the collateral such a spend needs, the same for everyone, so no collateral of yours ties your private spends to you.
   - CoinGecko is asked ADA's price on mainnet, unless the currency is set to none. Minswap sees a swap, and Blockfrost's IPFS gateway an NFT image you ask to see.
   - There's no analytics and no telemetry. The [privacy policy](docs/store/privacy-policy.md) says what the wallet handles and every service it talks to.
 - **The protocol has known attacks,** such as watching whose collateral a transaction uses, or tracking IP addresses: the root README's [Wallet Limitations](../../README.md#wallet-limitations).
-- **Lovejoin has had no third-party audit,** and hardware wallets can't hold the private balance (above).
+- **Hardware wallets can't hold the private balance.** The Seedelf key is derived from the recovery phrase's seed, and a hardware wallet never lets its seed out. A device could hold the public account, but never the private balance.
 
 ## Relationship to the CLI
 

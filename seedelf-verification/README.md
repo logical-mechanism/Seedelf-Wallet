@@ -1,6 +1,6 @@
 # seedelf-verification
 
-Machine-checked proofs of exactly when each of Seedelf's on-chain scripts, and each Lovejoin v2 script it mixes with, accepts a transaction. Seedelf is a stealth wallet on Cardano, and Lovejoin is the mixer it uses. This page is for anyone who reads "formally verified" and wants to know what it means: what's proved, about which bytes, in what model, what isn't covered, and how to check it.
+Machine-checked proofs of exactly when each of Seedelf's on-chain scripts accepts a transaction. Seedelf is a stealth wallet on Cardano. The proofs also cover the Lovejoin v2 scripts: Lovejoin is the mixer the Seedelf Wallet uses. This page is for anyone who reads "formally verified" and wants to know what it means: what's proved, about which bytes, in what model, what isn't covered, and how to check it.
 
 [CLAIMS.md](CLAIMS.md) says it in a page: what the proofs let us claim, and where it stops.
 
@@ -8,13 +8,13 @@ Machine-checked proofs of exactly when each of Seedelf's on-chain scripts, and e
 
 **Seedelf's three,** variant 1 of its contracts, the one deployed on Cardano:
 
-- **wallet** (`94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469`): the address a Seedelf's funds sit at. Each UTxO there carries a Register (g, u), a pair of BLS12-381 points made from its owner's key, and moves with a Schnorr proof of that key (z and g_r, `z_b` and `g_r_b` in the source), bound to `vkh`, the hash of a key that signs the transaction.
-- **policy** (`84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255`): mints and burns the Seedelf tokens, whose names start `5eed0e1f`, one token per Seedelf.
+- **wallet** (`94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469`): the address that holds Seedelf funds. Each UTxO there has a Register (g, u) as its datum: two BLS12-381 points, a generator g and a public value u = g^x, where x is its owner's secret key. A UTxO moves with a Schnorr proof of knowledge of x (z and g_r, `z_b` and `g_r_b` in the source), bound to `vkh`, the hash of a key that signs the transaction.
+- **policy** (`84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255`): mints and burns Seedelfs, NFTs whose names start `5eed0e1f`.
 - **always_false** (`6777ba4dc8c3043377201624502d92636381144700d49983258b75db`): never passes. It holds the scripts' reference UTxOs for good.
 
 **Lovejoin v2's five.** All but reference_holder are templates, which each pool applies to its own parameters:
 
-- **mix_box:** the address a pool's boxes sit at. A well-formed box moves only beside a withdrawal from mix_logic.
+- **mix_box:** the address a pool's boxes sit at. A well-formed box moves only in a transaction that also withdraws from mix_logic.
 - **mix_logic:** a staking script. Its withdrawal checks an Owner (each box's owner takes it out, with a proof of its key) or a Mix (two or more boxes in, as many new boxes out, with a proof for each).
 - **one_shot_mint:** mints the pool's one NFT, once, at its launch.
 - **reference_holder:** holds the pool's NFT and its settings (the reference datum), and never passes.
@@ -26,7 +26,7 @@ Machine-checked proofs of exactly when each of Seedelf's on-chain scripts, and e
 - **The model.** Cardano runs a script as UPLC (Untyped Plutus Core) on a CEK machine, the evaluator the node uses. The proofs use IOG's model of both, in Lean 4: [PlutusCoreBlaster](https://github.com/input-output-hk/PlutusCoreBlaster) for UPLC and the machine, and [CardanoLedgerApiBlaster](https://github.com/input-output-hk/CardanoLedgerApiBlaster) for the ledger's types.
 - **The checker.** Every theorem CLAIMS.md cites is checked by Lean's kernel, on Lean's own axioms alone. A second set is proved by [Blaster](https://github.com/input-output-hk/Lean-blaster), IOG's tactic that hands a goal to the Z3 solver, as a cross-check: Z3's word, not the kernel's (*What a ✅ is worth*, below).
 
-**All three Seedelf scripts are proved in Lean's kernel, with no Blaster** ([`Seedelf/Every/`](Seedelf/Every/README.md)). For every transaction, each accepts exactly when its statement in its Aiken source's terms holds (`walletAccepts`, `policyAccepts`; always_false never does), with no step limit, any number of signatories and any mint. That those statements say what the source says is a reading, not a proof (*Not proved, and why*). The Blaster modules below are a cross-check, by another route, of the same properties.
+**All three Seedelf scripts are proved in Lean's kernel, with no Blaster** ([`Seedelf/Every/`](Seedelf/Every/README.md)). For every transaction, with no step limit, any number of signatories and any mint, each accepts exactly when a statement written in its Aiken source's terms holds (`walletAccepts`, `policyAccepts`); always_false never accepts. That those statements say what the source says rests on reading them, not on a proof (*Not proved, and why*). The Blaster modules below are a cross-check, by another route, of the same properties.
 
 Lovejoin's proofs are here too, in `Lovejoin/`: v2's, and scenario proofs of its older classic mainnet pool, which the claim leaves out. [CLAIMS.md](CLAIMS.md) and [Lovejoin/AnyTx/README.md](Lovejoin/AnyTx/README.md) say what they cover and what they leave out. `Audit/` holds the project's own review of the proofs ([its README](Audit/README.md)). It covers the scenario proofs, not the kernel proofs the claim rests on.
 
@@ -34,7 +34,7 @@ Lovejoin's proofs are here too, in `Lovejoin/`: v2's, and scenario proofs of its
 
 ### In Lean's kernel
 
-On the same bytes, for every V3 script context (any value of CardanoLedgerApiBlaster's type for what the ledger hands a Plutus V3 script: its transaction, redeemer and purpose), and for any context `Data` at all. Each theorem is about the deployed program's own run (`cekExecuteProgram`): it returns `()`, which is acceptance, after some number of steps exactly when the condition holds, and otherwise reaches `Error` and never halts. No step limit, no layout, no ledger hypothesis, Lean's own axioms alone. [Seedelf/Every/README.md](Seedelf/Every/README.md) has the modules.
+On the same bytes, for every V3 script context (any value of CardanoLedgerApiBlaster's type for the transaction, redeemer and purpose the ledger hands a Plutus V3 script), and for any context `Data` at all. Each theorem is about the deployed program's own run (`cekExecuteProgram`). When the condition holds, the run returns `()`, which is acceptance, after some number of steps; otherwise it reaches `Error` and never halts. No step limit, no layout, no ledger hypothesis, Lean's own axioms alone. [Seedelf/Every/README.md](Seedelf/Every/README.md) has the modules.
 
 | Script | Theorem | Accepts exactly when |
 |---|---|---|
@@ -63,8 +63,6 @@ On the same bytes, **in every transaction**. Every field a script doesn't read i
 | `Slice/`'s `Rule` | **The policy's rule** for one line: it passes iff the first input's index is a byte, the line is the policy's own, and it burns one token whose first four bytes are 5eed0e1f, or mints one token named as `token_name.generate` names the first input and the tag. Every run returns unit or reaches `Error`. Every value symbolic, every unread field any `Data` | 258, combined into 2 |
 | `PolicyShapes` | Every V3 context with an input and a mint the ledger accepts is one of the policy's scenarios. Kernel-checked | 15 |
 
-**Lovejoin v2,** kernel-checked in every transaction ([`Lovejoin/AnyTx/README.md`](Lovejoin/AnyTx/README.md)): mix_box (`Lovejoin.AnyTx.BoxPurposesAll.every_context_iff`), reference_holder (`Lovejoin.AnyTx.PurposesKernel.reference_holder_every_context_errors`), mix_logic (`Lovejoin.Every.Readable.mix_logic_accepts_iff`: both withdrawals, the Owner and the Mix, and its publish) and one_shot_mint (`Lovejoin.Every.Readable.one_shot_mint_accepts_iff`: the launch). Each characterizes its script in every V3 context, any list length, no step limit, Lean's own axioms alone: reference_holder errors in all of them, mix_box's is an iff with no hypothesis, and mix_logic's and one_shot_mint's are iffs under the ledger's value rules, mix_logic's on the reference inputs' values and one_shot_mint's on the mint and the outputs' (CLAIMS.md, *Where it stops*). mix_logic's and one_shot_mint's are stated in the Aiken source's terms (`validate_owner`, `walk_outputs`, `verify_pre`, `datum_sane`, …), each proved equal to what the bytes do. fee_contract is out of scope: no Seedelf transaction uses it.
-
 So, for every transaction:
 - always_false never passes.
 - The wallet passes only a spend, and a redeemer that isn't a proof fails. With a proof, a UTxO whose datum isn't a Register moves. A Register UTxO moves exactly when the Schnorr check holds and `vkh` is among the signatories, however many (Blaster's cross-check stops at 128, where a 16,384-byte transaction holds at most 125: each needs its 30-byte hash and a 101-byte witness).
@@ -81,12 +79,12 @@ So, for every transaction:
 | `WalletRegister` | **The wallet's core property:** a Register UTxO moves iff the Schnorr check holds and `vkh` signed. The check is the Aiken source's `prove`, in its order: z and c = blake2b_224(g ‖ g_r ‖ u ‖ vkh) decode into the scalar field, and g^z = g_r · u^c. One input and one signer; g, u, z, g_r, `vkh` and the signer all symbolic | 1 |
 | `PolicyAmount` | Any amount other than ±1 fails | 1 |
 | `PolicyForeign` | A mint or burn whose one line is another policy's fails | 2 |
-| `PolicyBurn` | No 5eed0e1f token burns off a first input at #256 or -1 | 2 |
+| `PolicyBurn` | No 5eed0e1f token burns when the first input's output index is 256 or -1 | 2 |
 
 What a ✅ is worth:
 
 - **Z3's word, or Lean's kernel.** Blaster closes a goal with `axiom blasterProven : ∀ {α}, α` once Z3 finds no counterexample (it doesn't yet rebuild a Lean proof from Z3's answer), hence the `declaration uses 'blasterProven'` warnings. The kernel-checked modules use no Z3: `Seedelf/Every/` (every Seedelf script, every transaction), `AnyTxCover`, `PolicyAnyTx`'s `rfl`s, `AnyTxShapes`, `PolicyShapes` and the `LinesAll` ones. Their `#print axioms` lists Lean's own alone, and the `LinesAll` theorems hold with no step limit and over every Lean string.
-- **IOG's model of the machine.** PlutusCoreBlaster's CEK machine and builtins are working toward conformance with the node's, its README says: a conformance suite run apart from its CI, leaving out what it doesn't implement yet. They aren't proved equal to the node's, and that suite never runs the flat decoder that reads each script's bytes. The project's own review of the proofs checked the decoder's reading of the 13 scripts the proofs read against Aiken's, once (`Audit.Checks.FlatDecodeCheck`). The proofs run on a fork of PlutusCoreBlaster (*Running it*), whose changes don't change what any script evaluates to: its `opaque` builtins wrap the builtins' own functions, and its other changes are merged upstream. It runs the post-Conway V3 builtin semantics (`defaultFunSemanticsVariantE`). The crypto builtins (BLS12-381, the hashes) are `opaque`, and so is `ByteStringToInteger`, and `SliceByteString` in `Slice/`. A property holds for any interpretation of them, so it says what the bytes check, not that the check is hard to fool. Where a spec decodes a scalar (`scalarOf`) or slices (`Slice/`'s `policyAccepts`), it calls the same alias the builtin runs; the kernel's `policyAccepts` (`Seedelf/Every/`) runs the real slice.
+- **IOG's model of the machine.** PlutusCoreBlaster's README says its CEK machine and builtins are working toward conformance with the node's, tested by a conformance suite that runs apart from its CI and leaves out what it doesn't implement yet. They aren't proved equal to the node's, and that suite never runs the flat decoder that reads each script's bytes. The project's own review of the proofs compared, once, the decoder's reading of the 13 scripts the proofs use with Aiken's (`Audit.Checks.FlatDecodeCheck`). The proofs run on a fork of PlutusCoreBlaster (*Running it*), whose changes don't change what any script evaluates to: its `opaque` builtins wrap the builtins' own functions, and its other changes are merged upstream. It runs the post-Conway V3 builtin semantics (`defaultFunSemanticsVariantE`). The crypto builtins (BLS12-381, the hashes) are `opaque`, and so is `ByteStringToInteger`, and `SliceByteString` in `Slice/`. A property holds for any interpretation of them, so it says what the bytes check, not that the check is hard to fool. Where a spec decodes a scalar (`scalarOf`) or slices (`Slice/`'s `policyAccepts`), it calls the same alias the builtin runs; the kernel's `policyAccepts` (`Seedelf/Every/`) runs the real slice.
 - **Strings over the solver's alphabet.** Blaster gives a `String` the SMT string sort, whose characters are `0x0`–`0x2FFFF` where Lean's are scalar values up to `0x10FFFF` (Lean-blaster's issue [#389](https://github.com/input-output-hk/Lean-blaster/issues/389) shows it proving `False` from that). A `ByteString` is a `String` of characters `0`–`255`, inside both, so a theorem over bytestrings covers every bytestring; it says nothing about strings with characters above `0x2FFFF`, which no script sees.
 - **Every transaction, by layout.** Each Blaster module fixes only what its script walks or takes apart:
   - the wallet's signatories (one module a count, none to 128) and the shapes of its redeemer and datum;
@@ -97,6 +95,10 @@ What a ✅ is worth:
 - **The slice package.** `Slice/` runs the same hex, `../Seedelf/Scripts/seedelf.hex`. Its builders are word-for-word copies of `PolicyAnyTx`'s, so `PolicyShapes` covers its layout too. Two workarounds shape it:
   - each first-input index from 0 to 255 is a theorem of its own (`gen-seedelf-slice.py`), with two more off a byte, put together in the kernel;
   - the token name is quantified over its `String`, then restated over `ByteString` by structure eta.
+
+### Lovejoin v2
+
+Kernel-checked in every transaction ([`Lovejoin/AnyTx/README.md`](Lovejoin/AnyTx/README.md)): mix_box (`Lovejoin.AnyTx.BoxPurposesAll.every_context_iff`), reference_holder (`Lovejoin.AnyTx.PurposesKernel.reference_holder_every_context_errors`), mix_logic (`Lovejoin.Every.Readable.mix_logic_accepts_iff`: both withdrawals, the Owner and the Mix, and its publish) and one_shot_mint (`Lovejoin.Every.Readable.one_shot_mint_accepts_iff`: the launch). Each characterizes its script in every V3 context, at any list length, with no step limit and on Lean's own axioms alone. reference_holder errors in every context. mix_box's theorem is an iff with no hypothesis. mix_logic's and one_shot_mint's are iffs under the ledger's value rules: mix_logic's on the values of the reference inputs, one_shot_mint's on the mint and the outputs' values (CLAIMS.md, *Where it stops*). mix_logic's and one_shot_mint's are stated in the Aiken source's terms (`validate_owner`, `walk_outputs`, `verify_pre`, `datum_sane`, …), each proved equal to what the bytes do. fee_contract is out of scope: no Seedelf transaction uses it.
 
 ## Not proved, and why
 
@@ -160,7 +162,7 @@ The scripts' bytes are committed, as `.hex` files. The extract scripts rebuild t
 rm -f .lake/build/lib/lean/{Seedelf,Lovejoin,Lovejoin/V2,Lovejoin/Template}/Scripts.{olean,trace} Slice/.lake/build/lib/lean/Slice/Scripts.{olean,trace}
 ```
 
-**Never build bare** (`lake build`). `check.sh` builds each module in its own memory-capped scope (8 GB and 10 minutes; `lovejoin-every`, `seedelf-every` and their modules 16 GB and 30 minutes; `CAP=` and `LIMIT=` to change), which the kernel kills past the cap. An uncapped build has used over 50 GB. The first build fetches and compiles the dependencies and takes a while.
+**Never build bare** (`lake build`). `check.sh` builds each module in its own memory-capped scope (8 GB and 10 minutes; `lovejoin-every`, `seedelf-every` and their modules 16 GB and 30 minutes; `CAP=` and `LIMIT=` to change), which Linux kills past the cap. An uncapped build has used over 50 GB. The first build fetches and compiles the dependencies and takes a while.
 
 To check the standard Lovejoin and Seedelf proof suites, including the separate Slice package, from this directory:
 
@@ -172,7 +174,7 @@ To check the standard Lovejoin and Seedelf proof suites, including the separate 
 
 The runner returns a nonzero status if any module fails. It checks Lake builds, and a module that builds but logs a Blaster check as Undetermined fails too (`UNDETERM`). This command excludes the separate audit and upstream reproductions. For the longer audit and its warning counts, see [`Audit/README.md`](Audit/README.md).
 
-**That mainnet's v2 pool runs these bytes** is a test in the wallet's WebAssembly crate, which needs no Lean: from `seedelf-platform/`, `cargo test -p seedelf-wasm --test lovejoin_proven_bytes_test`. It holds the template files here to the bytes the wallet derives pools from, and derives the live v2 pool's NFT policy (`fcb3f5ec5f58d8fc31cf60408b77a1fe4f431880dc810bd12e8a9aa2`), mix_logic and mix_box from them, hash for hash.
+**That mainnet's v2 pool runs these bytes** is checked by a test in the wallet's WebAssembly crate, which needs no Lean: from `seedelf-platform/`, `cargo test -p seedelf-wasm --test lovejoin_proven_bytes_test`. It checks that the template files here match the bytes the wallet derives pools from, and derives the live v2 pool's NFT policy (`fcb3f5ec5f58d8fc31cf60408b77a1fe4f431880dc810bd12e8a9aa2`), mix_logic and mix_box from them, hash for hash.
 
 ## Questions and reports
 
