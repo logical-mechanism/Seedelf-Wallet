@@ -20,13 +20,13 @@ const named = (name: string) => ({ policyId: STRANGER, assetName: Buffer.from(na
 
 describe("a value with a placeholder's text in it", () => {
   it("never takes a later value out of its slot", () => {
-    expect(t("tokens.mark.posesAs", { own: "ADA {{real}}", real: "ADA" })).toBe(
+    expect(t("tokens.mark.warn.posesAs", { own: "ADA {{real}}", real: "ADA" })).toBe(
       "not on the wallet's list: it calls itself ADA {{real}}, but it isn't ADA",
     );
     expect(t("tokens.withMark", { amount: "1 {{mark}}", mark: "listed" })).toBe("1 {{mark}} (listed)");
     // Unescaped, a stray brace, a replacement pattern, or the stand-in t() uses itself: each comes back as it went in.
     for (const own of ["{{- real}}", "{", "x{", "{{", "{$&}", "\uFDD00\uFDD0", "{{real}}\uFDD01\uFDD0"]) {
-      const said = t("tokens.mark.posesAs", { own, real: "ADA" });
+      const said = t("tokens.mark.warn.posesAs", { own, real: "ADA" });
       expect(said, own).toBe(`not on the wallet's list: it calls itself ${own}, but it isn't ADA`);
     }
   });
@@ -34,7 +34,7 @@ describe("a value with a placeholder's text in it", () => {
   it("leaves what isn't a value as it was: a plural's count, and a language asked for", async () => {
     expect(t("tokens.count", { count: 1 })).toBe("1 token");
     await i18n.changeLanguage("ja");
-    expect(t("tokens.mark.posesAs", { own: "{{real}}", real: "ADA", lng: "en" })).toBe(
+    expect(t("tokens.mark.warn.posesAs", { own: "{{real}}", real: "ADA", lng: "en" })).toBe(
       "not on the wallet's list: it calls itself {{real}}, but it isn't ADA",
     );
   });
@@ -45,7 +45,7 @@ describe("a value with a placeholder's text in it", () => {
       const text = tokenText("preprod", named("ADA {{real}}"));
       expect(text).toMatchObject({ posesAs: "ADA", own: "ADA {{real}}" });
       const mark = tokenMark(text)!;
-      expect(mark).toBe(t("tokens.mark.posesAs", { own: "ADA {{real}}", real: "ADA" }));
+      expect(mark).toBe(t("tokens.mark.warn.posesAs", { own: "ADA {{real}}", real: "ADA" }));
       // Its own name once, the wallet's "ADA" at the end, where the sentence puts it.
       expect(mark.split("{{real}}")).toHaveLength(2);
       expect(mark).not.toContain("ADA ADA");

@@ -218,6 +218,11 @@ export interface SeedelfInfo {
   /** ADA locked with the token (lovelace string); only `remove` gets it back. */
   lovelace: string;
   /**
+   * Any other tokens in its UTxO, which `remove` moves with it: anyone can mint a Seedelf beside tokens of theirs
+   * (chunk 51, w1b#2). Left out when there are none.
+   */
+  tokens?: TokenAmount[];
+  /**
    * Who paid for it, when the wallet knows (background/minted-by.ts):
    * Remove sends its ADA back to that side by default, and asks otherwise.
    */
@@ -428,6 +433,7 @@ export interface DrepDetails {
   status: "registered" | "deregistered" | "not_registered";
   /** Voted recently enough to count: an inactive DRep's votes don't. */
   active: boolean;
+  /** The last epoch it stays active in without voting or updating (Koios's `expires_epoch_no`), as OwnDrep's. */
   expiresEpoch: number | null;
   /** The stake delegated to it (lovelace). */
   votingPower: string;
@@ -606,6 +612,12 @@ export interface UtxoInfo {
    * second review, AC-4).
    */
   path?: { role: 0 | 1; index: number };
+  /**
+   * That address's stake part isn't the account's own stake key: someone else's, a pointer, or none. The account is
+   * read by payment key, so anyone can pay its receive key under a stake part of theirs, and the details called that
+   * "the one Receive shows" (chunk 51, e9a#3). Set on the UTxOs screen's lists.
+   */
+  otherStake?: true;
   /** Kept out of every payment (the collateral always is). */
   locked: boolean;
   /** The Cardano account's collateral. */
@@ -622,6 +634,12 @@ export interface UtxoInfo {
    * is always flat, so an owned UTxO never has one too deep to read.)
    */
   unspendable?: "script";
+  /**
+   * A public one that WebAssembly's script evaluator refuses (core's eval::refusal): it holds a reference script, or an
+   * inline datum too deep to read. A payment takes it, but no Lovejoin chain from the account does, so the Mix and
+   * Bootstrap forms leave it out of what they count (publicPick; chunk 51, gap-g2#3).
+   */
+  unmixable?: true;
 }
 
 /** Both sides' UTxOs, largest first. */
@@ -1210,6 +1228,11 @@ export interface TxAsset {
    */
   nameText: string | null;
   quantity: string;
+  /**
+   * Its decimals as the last balance reading has them from Koios, added by the worker for a token it holds (tx-view.ts
+   * `withDecimals`), so the view scales it as the review above it and Home do (chunk 51, e9a#2). Not in the bytes.
+   */
+  decimals?: number;
 }
 
 /** An address as an output's bytes have it. */
@@ -1226,12 +1249,17 @@ export interface TxAddress {
   seedelf: boolean;
 }
 
-/** The register a Seedelf UTxO's datum holds. */
+/** The register a Seedelf UTxO's datum holds, and who could spend a payment under it (decode.rs `spender`). */
 export interface TxRegister {
   generator: string;
   publicValue: string;
-  /** Whether a payment under it could be spent: an identity point fails. */
+  /** Whoever knows its scalar could, and no one else (core's `is_payable`). */
   payable: boolean;
+  /**
+   * Anyone could: its public value is the identity, whose proof anyone can make. Neither this nor `payable`: no one
+   * ever can, the generator an identity or a point off the curve or its subgroup (chunk 51, d1#3).
+   */
+  anyone?: boolean;
 }
 
 /**
