@@ -281,6 +281,16 @@ export function click(e: FakeElement) {
   });
 }
 
+/** The browser's Back, as the page hears it: a popstate on the window, and what React draws from it. */
+export function popState() {
+  act(() => {
+    const event = new FakeEvent("popstate");
+    event.target = null;
+    fakeWindow.fire(event, true);
+    fakeWindow.fire(event, false);
+  });
+}
+
 /** A form's submit, as a submit button's press makes one in a browser. */
 export function submit(form: FakeElement) {
   act(() => {

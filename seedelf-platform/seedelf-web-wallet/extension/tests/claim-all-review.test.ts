@@ -21,7 +21,7 @@ vi.mock("../src/ui/background", async (original) => ({
     new Promise((resolve, reject) => worker.waiting.push({ type, payload, resolve, reject })),
 }));
 
-const { ClaimAll, ClaimReview } = await import("../src/ui/screens/ClaimAll");
+const { ClaimAll, ClaimReview, isClaimable } = await import("../src/ui/screens/ClaimAll");
 const { NetworkContext } = await import("../src/ui/network");
 
 let createRoot: (container: unknown) => Root;
@@ -152,5 +152,31 @@ describe("Bring everything back's total (chunk 51, e8b#4)", () => {
     expect(total([back(4, "c4", { tokens: [MIN] }), back(5, "c5", { tokens: [MIN] })])).toContain("and 1 token<");
     // And two kinds are two.
     expect(total([back(4, "c4", { tokens: [MIN] }), back(5, "c5", { tokens: [MIN, FOO] })])).toContain("and 2 tokens<");
+  });
+});
+
+// Chunk 51's T1 lens over the screens (lane T1l): two of Bring everything back's guards a revert passed.
+describe("Bring everything back's builds and its sessions (chunk 51, T1l)", () => {
+  it("builds and signs its returns once, for the list it opened with, however it draws after (t1l#10)", async () => {
+    const root = createRoot(container);
+    act(() => root.render(createElement(ClaimAll, { sessions: [session(4), session(5), session(6)], onBack: () => {}, onDone: () => {} })));
+    await answer("session-claim-build", throughLovejoin);
+    const builds = () => worker.waiting.filter((w) => w.type === "session-claim-build");
+    // The build landing draws the page again, and asks for nothing more.
+    expect(builds()).toHaveLength(0);
+    // Nor does a return taken off: it stays off.
+    click(row("dex.example"));
+    expect(builds()).toHaveLength(0);
+    expect(pressed(row("dex.example"))).toBe("false");
+    act(() => root.unmount());
+  });
+
+  it("offers only a session holding something that nothing brings back by itself (t1l#23)", () => {
+    // The control: open, holding 2 UTxOs, nothing running.
+    expect(isClaimable(session(4))).toBe(true);
+    // A swap that brings itself back.
+    expect(isClaimable({ ...session(4), auto: { step: "filling" } as NonNullable<SessionView["auto"]> })).toBe(false);
+    // A session holding nothing.
+    expect(isClaimable({ ...session(4), holding: { lovelace: "0", tokens: [], utxos: 0 } })).toBe(false);
   });
 });
