@@ -342,3 +342,50 @@ The finder's direction is right, and it's one root with gap-g1#2 and G1's note: 
 **Docs, whatever the code does:** privacy.md:173 and :349-350 should say it in one short line. With the phrase in two profiles, each reads the other's private transactions as payments received. So its selection order and its notes can't keep them apart.
 
 It needs the owner: the fix changes a selection default, the Activity and UTxOs labels, and privacy.md's wording. Write it from a reproduction, not the finder's text: a Vitest with two services on one phrase, where one's funding change arrives at the other, and the other's next funding takes it alone with spentHistories [received:<tx>] and historiesNote undefined.
+
+## Severity tiebreak: low
+
+The bug is real, but on the brief's scale it is a small cost in an edge case, not a privacy link made by default. I checked in TREE:
+- arrived() records anything this profile didn't record itself as received; the Unknown origin applies only to the first reading (activity.ts:431-450).
+- Fund ranks Received 1 ahead of Own 4 and Session 5 (build.rs:2401-2411).
+- one_more takes the smallest UTxO of the best rank that pays alone (build.rs:2608).
+- With one class, spentHistories and historiesNote show no note.
+- privacy.md:173 covers only another browser's first reading.
+
+Why low:
+- Who and what's lost: only the user can cause it, by keeping the phrase in two Chrome profiles with private transactions on both. No stranger or site can trigger it, no ADA moves wrongly, and the balance stays right.
+- The setup is the wallet's own advice (privacy.md:349-350; the connect window, en.json:469, says "Another Chrome profile and a VPN avoid that"). That puts this at the top of low, but the setup is still not the default.
+- No new link in the finding's own scenario. U and O were both made private from account 0, and privacy.md:98 and :174, and en.json:469, already admit that a session funded from such money leads back to the public account. So S_A and S_B are known to be one owner's whichever UTxO F_A spends. One device would spend O and leave the same trace to account 0, also with no note (one own class).
+- A new link appears only when this profile also holds unlinked money that the misread UTxO beats:
+  - another person's payment, when the misread UTxO is smaller and pays alone (both rank 1 for a funding);
+  - Unknown money, or money made private from another account the user keeps apart, which it outranks;
+  - for the stealth mint, another person's payment it undercuts. Paying the mint from the private balance isn't the default unless the public account is empty (CreateSeedelf.tsx:64).
+- Lovejoin boxes: mainnet's 5 ₳ boxes can't pay a funding alone, so one device would also spend the other session's money alone there. What's lost is the note naming that session.
+- The "Received" rows in Activity and the CSV are this profile's own records with the right amounts. The label is wrong, not the figure.
+- Ways out: keep private spends to one profile, mix first, or lock the UTxO by hand. The "Received" tag does hide why it should be locked.
+- This matches gap-g1#2: same root, harm only when an unlinked UTxO would otherwise pay, verified low. M7 was medium because it hit one device with no setup at all.
+
+**Decisive point:** In the finding's own scenario, F_B → C → F_A tells an observer nothing new. Both sessions are funded from money made private from account 0, and privacy.md:98 and :174 (and the connect window, en.json:469) already admit that each one leads back to that account. One device would spend O and leave the same trace. A link one device wouldn't make, and that goes unwarned, needs this profile to also hold unlinked money that the misread UTxO beats on rank or size (another person's payment it undercuts, or another account's money it outranks). That is an edge case on top of a two-profile setup that isn't the default, the same condition gap-g1#2 was graded low on.
+
+**Fix notes:**
+
+Fix the root once for gap-g1#2, G1's note and this finding: arrived() (activity.ts:431-450) records anything this profile didn't send itself as "received".
+
+Mainnet:
+- contract-scan.ts:300 and :305 drop the index's spenders (`since.spent[].by`, `created[].spent.by`, private-index.ts:44 and :52). Keep them and hand them to arrived().
+- An arrival whose transaction spent one of the wallet's own rows is the phrase's own spend made in the other profile. Give it the merged history of the rows it spent, as privacy.md:169 says a spend's change does, plus a part marking it as spent elsewhere. Rank that part like another session's money (Fund rank 5, tier 1) so the review names it.
+- Plain Unknown is not enough. Fund ranks Unknown 3, ahead of Own 4, and spentHistories (script-spend.ts:201-205) returns nothing for a lone Unknown class, so the trace test's last assertion would still fail.
+- An arrival whose transaction spent one of the wallet's pool boxes is boxFrom(tx).
+
+Koios gives no spender. A catch-up reading keeps rows spent elsewhere until the next full read (contract-scan.ts:146-166). So a fix there must class a reading's arrivals as not received when an owned row this profile didn't spend vanishes, and revisit the arrivals noted since the last full read.
+
+Activity and the CSV should stop titling these rows Received and counting them as receipts.
+
+Whatever the code does, privacy.md:173 and :349-350, and flows.md:110 ("the wallet's own change … don't count"), should say in one short line what the other profile's later transactions read as here.
+
+Needs the owner: the fix changes a selection default, the Activity, CSV and UTxOs labels, and privacy.md's wording.
+
+Tests:
+- Keep the trace verifier's test, extension/tests/r51-gap-g9-1.test.ts, as the regression base.
+- Add the case where the harm is real: this profile also holds another person's payment R that is larger than C and pays alone. Assert that the funding takes R, and that a private-balance mint does too.
+- Write the fix from the reproduction, not from the finder's sketch.
