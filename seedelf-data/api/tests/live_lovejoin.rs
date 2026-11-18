@@ -173,6 +173,66 @@ async fn every_crowd_counts_only_the_boxes_its_mix_box_spends() {
     }
 }
 
+/// Every launch's scripts are read at the holder's script alone (chunk 51,
+/// x2#1's twin at the holder): each script row of each candidate's launch,
+/// so each shown pool's two, is at an address whose payment part is the
+/// holder's script, as the wallet reads a pool's scripts. Says how many
+/// reference scripts sit at the KEY address under the holder's hash, which
+/// the launches' rows leave out: what the fix's deploy took out of them.
+#[tokio::test]
+#[ignore = "live db-sync"]
+async fn every_launchs_scripts_are_read_at_the_holders_script_alone() {
+    let chain = chain();
+    let at = stable(&chain).await;
+    let holder = bytes(HOLDER_HASH);
+    let at_the_holder = |address: &str| {
+        at_the_script(address) && address_bytes(address).is_some_and(|raw| raw[1..29] == holder[..])
+    };
+    let (found, _) = db::found(&chain, &holder, NFT_NAME, at, db::Gathered::default())
+        .await
+        .unwrap();
+    let refs: Vec<&db::Found> = found.iter().collect();
+    let launches = db::launches(&chain, &holder, &refs).await.unwrap();
+    let scripts: Vec<&Row> = launches
+        .values()
+        .flat_map(|l| l.scripts.iter().map(|(row, _)| row))
+        .collect();
+    for row in &scripts {
+        assert!(
+            at_the_holder(&row.address),
+            "{} at {}",
+            row.reference,
+            row.address
+        );
+    }
+    let shown = Discovery::default().shown(&chain, at).await.unwrap();
+    for pool in &shown {
+        assert_eq!(pool.scripts.len(), 2, "{}", standard::hex(&pool.id));
+        for row in &pool.scripts {
+            assert!(
+                at_the_holder(&row.address),
+                "{}: {} at {}",
+                standard::hex(&pool.id),
+                row.reference,
+                row.address
+            );
+        }
+    }
+    // Nothing at the holder is ever spent, nor at the key address under its hash (no key has it): what's unspent
+    // there is all either ever held.
+    let rows = chain.unspent_as_of(&holder, at, false).await.unwrap();
+    let key: Vec<&Row> = rows.iter().filter(|r| !at_the_script(&r.address)).collect();
+    println!(
+        "{} candidates, {} script rows from their launches, {} pools shown; {} rows at the key \
+         address under the holder's hash, {} of them with a reference script, left out",
+        found.len(),
+        scripts.len(),
+        shown.len(),
+        key.len(),
+        key.iter().filter(|r| r.script).count()
+    );
+}
+
 /// Every candidate at the holder is read and checked, its launch's facts
 /// included, and each says why it is or isn't shown.
 #[tokio::test]

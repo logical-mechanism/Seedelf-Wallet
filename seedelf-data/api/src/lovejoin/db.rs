@@ -148,15 +148,14 @@ const REGISTERS: &str = "select sr.tx_id::bigint as launch, encode(sa.hash_raw, 
      from stake_registration sr join stake_address sa on sa.id = sr.addr_id \
      where sr.tx_id = any($1::bigint[])";
 
-/// What each of `found`'s transactions did: what it spent, the reference
-/// scripts it put at `holder`, the script credentials it registered.
-pub async fn launches(
-    chain: &Chain,
-    holder: &[u8],
-    found: &[&Found],
-) -> Result<HashMap<i64, Launch>> {
-    let ids: Vec<i64> = found.iter().map(|f| f.tx_id).collect();
-    let scripts = format!(
+/// `launches`' query of the reference scripts: `$1` the launches'
+/// transaction ids, `$2` the holder's hash. Only at an address whose payment
+/// part is the holder's script, whatever its stake part, as the wallet reads a
+/// pool's scripts (seedelf-core's `at_holder`): `payment_cred` is the same 28
+/// bytes at the KEY address under that hash (chunk 51, x2#1's twin at the
+/// holder).
+fn scripts_sql() -> String {
+    format!(
         "select o.tx_id::bigint as launch, {}, encode(s.hash, 'hex') as script_hash \
          from tx_out o \
          join tx t on t.id = o.tx_id \
@@ -164,10 +163,21 @@ pub async fn launches(
          join address a on a.id = o.address_id \
          join script s on s.id = o.reference_script_id \
          left join datum d on d.id = o.inline_datum_id \
-         where o.tx_id = any($1::bigint[]) and a.payment_cred = $2::bytea \
+         where o.tx_id = any($1::bigint[]) and a.payment_cred = $2::bytea and a.has_script \
          order by o.id",
         row_columns("false")
-    );
+    )
+}
+
+/// What each of `found`'s transactions did: what it spent, the reference
+/// scripts it put at `holder`'s script, the script credentials it registered.
+pub async fn launches(
+    chain: &Chain,
+    holder: &[u8],
+    found: &[&Found],
+) -> Result<HashMap<i64, Launch>> {
+    let ids: Vec<i64> = found.iter().map(|f| f.tx_id).collect();
+    let scripts = scripts_sql();
     let client = chain.private().await?;
     // On one connection, pipelined: one round trip to home.
     let by_id: &[&(dyn ToSql + Sync)] = &[&ids];
@@ -382,5 +392,29 @@ mod tests {
         // Every output the crowd reads is one gathered there.
         assert!(rest.contains("from outs o"), "{rest}");
         assert!(!rest.contains(" tx_out "), "{rest}");
+    }
+
+    /// Chunk 51, x2#1's twin at the holder: `payment_cred` is the holder's
+    /// hash at its KEY address too, so a reference script a launch put there
+    /// counted as put at the holder. The wallet reads a pool's scripts only
+    /// at the holder's script, whatever the stake part (seedelf-core's
+    /// `at_holder`), and shows no pool whose scripts it would carry. So it
+    /// dropped such a pool, which this listed as standard and, the earliest
+    /// of its values, kept for good: a stranger's launch hid every pool of
+    /// its values from the wallet's mainnet list.
+    #[test]
+    fn a_launchs_scripts_are_read_only_at_the_holders_script() {
+        let sql = scripts_sql();
+        let (_, filter) = sql.split_at(sql.rfind(" where ").expect("a filter"));
+        assert_eq!(
+            filter.trim(),
+            "where o.tx_id = any($1::bigint[]) and a.payment_cred = $2::bytea and a.has_script \
+             order by o.id"
+        );
+        // The address it filters on is the output's own.
+        assert!(
+            sql.contains("join address a on a.id = o.address_id"),
+            "{sql}"
+        );
     }
 }

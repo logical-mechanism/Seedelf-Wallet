@@ -47,7 +47,10 @@ pub struct Launch {
     pub slot: i64,
     /// What it spent: one of them is the seed.
     pub inputs: Vec<([u8; 32], u64)>,
-    /// Its outputs at the holder that carry a reference script, each with the script's hash.
+    /// Its outputs at the holder's script, whatever their stake part, that
+    /// carry a reference script, each with the script's hash: never the KEY
+    /// address under the holder's hash, where the wallet reads no script
+    /// (`db::launches`).
     pub scripts: Vec<(Row, [u8; 28])>,
     /// The script credentials it registers.
     pub registers: Vec<[u8; 28]>,
