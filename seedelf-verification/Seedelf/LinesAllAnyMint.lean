@@ -198,5 +198,11 @@ example : ∀ (r : TxRest) (sigs inputs redeemer : Data) (own : ByteString)
 
 end Seedelf.V1.LinesAll
 
-#print axioms Seedelf.V1.LinesAll.policy_fails_unless_one_line
-#print axioms Seedelf.V1.LinesAll.policy_fails_unless_one_line_ctx
+/-! ### Axioms: Lean's own, no `sorry`, `blasterProven` or `ofReduceBool` -/
+
+/-- info: 'Seedelf.V1.LinesAll.policy_fails_unless_one_line' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Seedelf.V1.LinesAll.policy_fails_unless_one_line
+/-- info: 'Seedelf.V1.LinesAll.policy_fails_unless_one_line_ctx' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Seedelf.V1.LinesAll.policy_fails_unless_one_line_ctx
+/-- info: 'Seedelf.V1.LinesAll.flatPairs_pairsOf' does not depend on any axioms -/
+#guard_msgs in #print axioms Seedelf.V1.LinesAll.flatPairs_pairsOf

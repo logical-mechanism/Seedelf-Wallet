@@ -12,8 +12,8 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { CHAIN_CUT } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
 import { SESSION_BACK, SessionService } from "../src/background/sessions";
-import { SESSION_SPENT } from "../src/background/spent";
-import { sessionSwap, testBalances, vectors } from "./fakes";
+import { SESSION_SPENT, SPENT_KEEP_MS } from "../src/background/spent";
+import { busyFor, sessionSwap, testBalances, vectors } from "./fakes";
 import { ADA, ADA_POOL, ADA_ROWS } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
@@ -147,6 +147,43 @@ describe("a site's session paid again after its chain stopped partway (independe
     const third = await sessions.backBuild("preprod", 0);
     expect(third.lovejoinSkipped).toBeUndefined();
     expect(third.lovejoin).toMatchObject({ depth: 1 });
+  });
+});
+
+// A chain whose deposit Koios never answered (a 503 every try), so it never reached a node: act's lost rule
+// (LOST_AFTER_MS) settles such a send only for a session that runs itself, so a site's kept it as maybe sent for good,
+// its chain read as started, and every later return came back directly, with no Lovejoin and no word why (chunk 51,
+// gap-g3#2).
+describe("a site's session whose chain's deposit Koios never answered (chunk 51, gap-g3#2)", () => {
+  type Book = { sessions: Array<{ txs: Array<{ kind: string; unsent?: boolean; inputs?: string[] }> }> };
+
+  it("brings it back through Lovejoin again once that deposit is known never to have landed", CHAINS, async () => {
+    const { t, sessions } = await withSession();
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin).toBeDefined();
+    // Koios never answers a submit: a 503 every time, so nothing reaches a node (the fake's own submit never runs).
+    const fetch = t.koios.fetch;
+    t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? new Response("upstream unavailable", { status: 503 }) : fetch(url, init));
+    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow();
+    t.koios.fetch = fetch;
+    expect(t.koios.submitted).toHaveLength(0);
+    // Kept as maybe sent: its inputs named, for the lost rule to read.
+    const deposit = (await t.store.get<Book>("sessions.preprod"))!.sessions[0]!.txs.find((x) => x.kind === "deposit");
+    expect(deposit).toMatchObject({ inputs: expect.arrayContaining([`${"c1".repeat(32)}#0`]) });
+    expect(deposit!.unsent).toBeUndefined();
+
+    // Well past LOST_AFTER_MS (15 minutes) and SPENT_KEEP_MS (2 hours), the user busy all along, so nothing locks.
+    // tx_status still doesn't know the deposit (the fake's confirmations are null), and utxo_info shows what it spends
+    // unspent.
+    await busyFor(t, SPENT_KEEP_MS + 5 * 60_000);
+    await sessions.list("preprod", true);
+    const again = await sessions.backBuild("preprod", 0);
+    // Nothing of the chain went in: brought back again, through Lovejoin, as the default says.
+    expect(again.lovejoinSkipped).toBeUndefined();
+    expect(again.lovejoin).toMatchObject({ depth: 1 });
+    // And its page no longer counts a transaction of that chain as sent.
+    const view = (await sessions.list("preprod")).find((v) => v.index === 0)!;
+    expect(view.chain?.sent ?? 0).toBe(0);
   });
 });
 

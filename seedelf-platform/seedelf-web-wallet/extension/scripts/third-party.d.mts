@@ -22,5 +22,8 @@ export declare function npmPackages(
   installed?: (path: string) => boolean,
 ): Component[];
 
+/** The notices' order for a group's components: by name, the same in every locale. */
+export declare function byName(a: { name: string }, b: { name: string }): number;
+
 /** The notices for `version`: their text, and how many components and licence texts it holds. */
 export declare function thirdParty(version: string): { text: string; components: number; texts: number };

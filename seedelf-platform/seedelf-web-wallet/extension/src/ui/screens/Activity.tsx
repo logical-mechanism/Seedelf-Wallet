@@ -36,10 +36,10 @@ import {
   voteOf,
 } from "../activity";
 import { call } from "../background";
+import { shownSiteText } from "../dapp";
 import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
 import { ExplorerLink } from "../components/ExplorerLink";
-import { MiddleEllipsis } from "../components/MiddleEllipsis";
 import {
   ArrowUpRightIcon,
   ChevronRightIcon,
@@ -59,7 +59,7 @@ import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmountRow } from "../components/TokenList";
-import { formatAda, shortHex } from "../format";
+import { formatAda, shortCounterparty, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 
@@ -219,13 +219,14 @@ export function Activity({
   // Sent and not in a block yet: Private activity's entry from its history while Home watches it, Public activity's
   // from what the device keeps (the worker marks it), until Koios lists it (blind test §9.3).
   const pending = (e: ActivityEntry) => !!e.pending || e.txHash === pendingHash;
-  const groups: Array<[string, ActivityEntry[]]> = [];
+  // Each day's heading, newest first, and that day's entries picked from the list: kept apart, as the critical-set
+  // guard follows a pair of them pushed together as one, and took an entry's token for a heading (chunk 51, e9b#2).
+  const days: string[] = [];
   for (const e of entries ?? []) {
     const label = dayHeading(e.at, now);
-    const last = groups.at(-1);
-    if (last && last[0] === label) last[1].push(e);
-    else groups.push([label, [e]]);
+    if (!days.includes(label)) days.push(label);
   }
+  const onDay = (label: string) => (entries ?? []).filter((e) => dayHeading(e.at, now) === label);
 
   return (
     <Screen title={t(of === "seedelf" ? "activity.titlePrivate" : "activity.titlePublic")} titleId="activity-title" onBack={onBack}>
@@ -261,11 +262,11 @@ export function Activity({
         <p className="note center empty">{t("activity.empty")}</p>
       ) : (
         <div className="stack" data-testid="activity">
-          {groups.map(([label, list]) => (
+          {days.map((label) => (
             <section key={label} className="section" aria-label={label}>
               <h2>{label}</h2>
               <ul className="list">
-                {list.map((e) => (
+                {onDay(label).map((e) => (
                   <li key={e.txHash}>
                     <button type="button" className="token-row" onClick={() => setOpen(e)}>
                       <span className={`avatar activity__icon activity__icon--${e.direction}`}>{icon(e)}</span>
@@ -300,9 +301,12 @@ export function Activity({
             className="secondary"
             onClick={() => {
               const day = new Date().toISOString().slice(0, 10);
-              download(`seedelf-wallet-${of === "seedelf" ? "private" : "public"}-activity-${network}-${day}.csv`, activityCsv(network, entries));
-              // What's pending isn't in the file: it isn't on chain yet.
-              setSaved(exported(entries).length);
+              download(
+                `seedelf-wallet-${of === "seedelf" ? "private" : "public"}-activity-${network}-${day}.csv`,
+                activityCsv(network, entries, pendingHash),
+              );
+              // What's pending isn't in the file: it isn't on chain yet, the payment Home watches included (e9a#5).
+              setSaved(exported(entries, pendingHash).length);
             }}
           >
             <DownloadIcon size={16} />
@@ -334,7 +338,7 @@ export function Activity({
             {open.fee && <Row label={t("activity.row.fee")} value={`${formatAda(open.fee)}\u00a0₳`} />}
             {/* Who was paid, or who paid: a public Send's recipient was labelled "Seedelf", and a payment read from the
                 chain named no one (chunk 23's review, A-1). */}
-            {openDetail && <Row label={t(detailLabel(open.kind))} value={openDetail} />}
+            {openDetail && <Row label={t(detailLabel(open))} value={openDetail} />}
             {open.staking && poolOf(open.staking) && (
               <Row label={t("activity.row.pool")} value={poolOf(open.staking)!} title={open.staking.pool} />
             )}
@@ -359,13 +363,7 @@ export function Activity({
               {t("activity.alreadyPrivateWhy")}
             </p>
           )}
-          {open.note && (
-            <div className="stack-tight" data-testid="activity-note">
-              <span className="label">{t("activity.row.note")}</span>
-              <p className="note activity__note">{open.note}</p>
-              <p className="note">{t("activity.privacy.note")}</p>
-            </div>
-          )}
+          {open.note && <EntryNote note={open.note} />}
           <div className="field-row">
             <code className="note">{shortHex(open.txHash, 14, 8)}</code>
             <CopyButton value={open.txHash} label={t("activity.copyId")} />
@@ -382,8 +380,9 @@ export function Activity({
 /**
  * An entry's line under its title: pending, the time, then who or where (or,
  * with no one, `otherwise`: its staking). An address is cut in the middle,
- * keeping the tail people compare, as everywhere else: cut at the end it read
- * "08:35 · a…" (chunk 23's second review, AC-1).
+ * keeping its own first letters and its tail: cut at the end it read "08:35 ·
+ * a…" (chunk 23's second review, AC-1), and squeezed into the line it kept
+ * only its checksum (chunk 51, gap-g10#2).
  */
 function EntryLine({ lead, entry, otherwise }: { lead: string[]; entry: ActivityEntry; otherwise?: string }) {
   // A session is named by its number, in the page's words; anyone else as the worker kept them.
@@ -400,6 +399,24 @@ function EntryLine({ lead, entry, otherwise }: { lead: string[]; entry: Activity
   );
 }
 
+/**
+ * An entry's CIP-20 note, which whoever paid wrote: each character that changes how it reads without showing written
+ * as its code, as the sign window writes a site's (ui/dapp.ts `shownSiteText`), so a right-to-left override can't turn
+ * it around (chunk 51, gap-g7#3's class). Exported for its tests.
+ */
+export function EntryNote({ note }: { note: string }) {
+  const t = useT();
+  const shown = shownSiteText(note);
+  return (
+    <div className="stack-tight" data-testid="activity-note">
+      <span className="label">{t("activity.row.note")}</span>
+      <p className="note activity__note">{shown.text}</p>
+      {shown.escaped && <p className="note" data-testid="activity-note-codes">{t("dappUi.warn.hiddenChars")}</p>}
+      <p className="note">{t("activity.privacy.note")}</p>
+    </div>
+  );
+}
+
 /** Where "and 2 more" is cut around the name: no translation holds it. */
 const NAME_AT = "\u0000";
 
@@ -411,8 +428,17 @@ const NAME_AT = "\u0000";
  */
 export function Who({ name, more }: { name: string; more?: number }) {
   const t = useT();
-  // A tag or a $handle is short and said whole; an address has no spaces and runs long.
-  const shown = name.length > 24 && !/\s/.test(name) ? <MiddleEllipsis text={name} /> : <span>{name}</span>;
+  // A tag or a $handle is short and said whole; an address or a Seedelf's name has no spaces and runs long. It's cut to
+  // parts nobody else can choose, and goes to a line of its own rather than give way: squeezed into the line, an
+  // address kept as few as three first letters and its checksum, which anyone can solve for (chunk 51, gap-g10#2).
+  const shown =
+    name.length > 24 && !/\s/.test(name) ? (
+      <span className="activity__who" title={name} data-value={name}>
+        {shortCounterparty(name)}
+      </span>
+    ) : (
+      <span>{name}</span>
+    );
   if (!more) return shown;
   const [before, after] = t("activity.andMore", { first: NAME_AT, count: more }).split(NAME_AT);
   return (
@@ -424,9 +450,12 @@ export function Who({ name, more }: { name: string; more?: number }) {
   );
 }
 
-/** What an entry's who-or-where row is called: who it paid, who paid it, or the Seedelf it made or removed. */
-function detailLabel(kind: ActivityEntry["kind"]): I18nKey {
-  if (kind === "received") return "activity.row.from";
-  if (kind === "sent" || kind === "send" || kind === "withdraw" || kind === "transfer") return "activity.row.to";
-  return "activity.row.seedelf";
+/**
+ * What an entry's who-or-where row is called: the Seedelf it made or removed, or by which way the money went, where it
+ * came from or where it went. Every other kind was "Seedelf", so a private session's funding read "Seedelf: Private
+ * session 3", and a box back "Seedelf: Lovejoin" (chunk 51, e9a#6). Exported for its tests.
+ */
+export function detailLabel(e: ActivityEntry): I18nKey {
+  if (e.kind === "mint" || e.kind === "remove") return "activity.row.seedelf";
+  return e.direction === "in" ? "activity.row.from" : "activity.row.to";
 }

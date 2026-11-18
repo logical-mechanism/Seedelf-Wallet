@@ -5,12 +5,17 @@
 // being not funded" (the owner, 2026-10-21). Short of one, nothing of it is swapped, and what came waits at the account
 // for the user to bring back (the owner's call: offered, not automatic). Session 0 of the 12-word phrase, the real
 // WebAssembly, a private balance of 40 small UTxOs of ADA alone, and the fakes of swap-session.ts.
+import { blake2b } from "@noble/hashes/blake2.js";
 import { describe, expect, it } from "vitest";
 
+import { bodyOutpoints } from "../src/background/cbor";
+import type { KoiosUtxo } from "../src/background/koios";
 import { builtOutputs } from "../src/background/minswap";
 import { partKey } from "../src/background/script-spend";
 import { SESSION_OUT } from "../src/background/sessions";
+import { outpoint, SESSION_SPENT } from "../src/background/spent";
 import { txIdOf } from "./fixtures/cbor";
+import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, SESSION_ADDRESS } from "./fixtures/swap-tx";
 import { loadTestWasm, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
 import { ASK, atSession, bookOf, busy, funded, PASSWORD, signing, type T } from "./swap-session";
 
@@ -215,5 +220,116 @@ describe("a session's funding more UTxOs pay than one transaction spends (the ow
     const [view] = await sessions.list("preprod");
     expect(view!.stage).toBe("failed");
     expect(view!.unsent).toBe(true);
+  });
+});
+
+/** Minswap's swap from `inputs` at the account, shaped as swapTx's: its order at Minswap V1's script, and the change back. */
+function swapFrom(inputs: KoiosUtxo[]): string {
+  const order = 14_000_000;
+  const fee = 205_189;
+  const change = inputs.reduce((n, u) => n + Number(u.value), 0) - order - fee;
+  expect(change).toBeGreaterThan(1_000_000);
+  const spent = [...inputs]
+    .sort((a, b) => (a.tx_hash === b.tx_hash ? a.tx_index - b.tx_index : a.tx_hash < b.tx_hash ? -1 : 1))
+    .map((u): Cbor => [bytes(u.tx_hash), u.tx_index]);
+  const body = new Map<number, Cbor>([
+    [0, { tag: 258, of: spent }],
+    [
+      1,
+      [
+        new Map<number, Cbor>([
+          [0, bytes(ORDER_ADDRESS)],
+          [1, order],
+          [2, [0, blake2b(bytes(ORDER_DATUM), { dkLen: 32 })]],
+        ]),
+        new Map<number, Cbor>([
+          [0, bytes(SESSION_ADDRESS)],
+          [1, change],
+        ]),
+      ],
+    ],
+    [2, fee],
+    [3, 134_639_865],
+  ]);
+  const witnesses = new Map<number, Cbor>([[4, { tag: 258, of: [{ raw: ORDER_DATUM }] }]]);
+  return hex(cbor([body, witnesses, true, null]));
+}
+
+/** Koios lists session 0's account from a backend behind the chain, without `behind`; its utxo_info still knows them. Returns the catch-up. */
+function listingBehind(t: T, behind: Set<string>): () => void {
+  const real = t.koios.fetch;
+  t.koios.fetch = async (url, init) => {
+    const answer = await real(url, init);
+    const asked = init.body ? (JSON.parse(String(init.body)) as { _payment_credentials?: string[] }) : undefined;
+    if (!url.includes("/credential_utxos") || !asked?._payment_credentials?.includes(sessionSwap.keyHash)) return answer;
+    const rows = (await answer.json()) as KoiosUtxo[];
+    return Response.json(rows.filter((u) => !behind.has(outpoint(u))));
+  };
+  return () => {
+    t.koios.fetch = real;
+  };
+}
+
+// Chunk 51, e7a#3: a swap funded in parts, every part on chain as tx_status says, while the account's listing (from a
+// gateway backend behind the chain) doesn't show the last part's outputs yet. Minswap's build-tx picks the sender's
+// UTxOs from its own, newer view and spends them too: the session's own funding, at its own key address, which
+// utxo_info knows. It was read as another's, and the swap paused as "it spends something that isn't this session's".
+// It's the session's own now (its parts' recorded `outs`), and a Stop meanwhile waits for them rather than bring them
+// back in a second return, with a second fee.
+describe("a swap funded in parts, its last part not listed yet (chunk 51, e7a#3)", SLOW, () => {
+  /** Session 0 funded in parts, every part on chain, and Minswap's build spending what every part paid but the 5 ₳ collateral. */
+  async function lagging() {
+    const t = await spread();
+    const sessions = signing(t);
+    const { parts } = await fundedInParts(sessions);
+    expect(parts.length).toBeGreaterThanOrEqual(2);
+    expect(ids(t)).toEqual(parts);
+    t.koios.confirmations = 1;
+    const rows = parts.map((p) => paidTheAccount(t, p));
+    t.koios.addedToAccounts.push(...rows.flat());
+    const inputs = rows.flat().filter((u) => u.value !== "5000000");
+    // Minswap's build spends the last part's output: the ADA it carries is part of what the order needs.
+    expect(rows.at(-1)!.some((u) => inputs.includes(u))).toBe(true);
+    const swap = swapFrom(inputs);
+    t.minswap.swapCbor = swap;
+    return { t, sessions, rows, swapId: txIdOf(bytes(swap)) };
+  }
+
+  it("places Minswap's swap from every part, the listing caught up or not, and never pauses it as spending another's", async () => {
+    for (const behind of [false, true]) {
+      const { t, sessions, rows, swapId } = await lagging();
+      const caughtUp = behind ? listingBehind(t, new Set(rows.at(-1)!.map(outpoint))) : () => undefined;
+      await busy(t, 61_000);
+      const view = await sessions.advance("preprod", 0, true);
+      expect(view.auto!.paused, `listing behind: ${behind}`).toBeUndefined();
+      expect(ids(t)).toContain(swapId);
+      caughtUp();
+    }
+  });
+
+  it("still pauses a swap spending a part's output the wallet counts spent, as a copy built again would (final review sessions-2)", async () => {
+    const { t, sessions, rows } = await lagging();
+    listingBehind(t, new Set(rows.at(-1)!.map(outpoint)));
+    // Something of the wallet's spent the last part's output already, and isn't on chain yet.
+    await t.session.set(SESSION_SPENT, Object.fromEntries(rows.at(-1)!.map((u) => [outpoint(u), t.clock.now])));
+    await busy(t, 61_000);
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.paused).toMatchObject({ why: "refused", detail: "it spends something that isn't this session's." });
+  });
+
+  it("brings everything back in one return when stopped meanwhile, once the listing catches up", async () => {
+    const { t, sessions, rows } = await lagging();
+    const caughtUp = listingBehind(t, new Set(rows.at(-1)!.map(outpoint)));
+    await busy(t, 61_000);
+    // Stopped before any order: no return leaves the last part's outputs behind for one of their own.
+    let view = await sessions.stop("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).not.toContain("back");
+    caughtUp();
+    await busy(t, 61_000);
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.filter((x) => x.kind === "back")).toHaveLength(1);
+    const back = t.koios.submitted.at(-1)!;
+    for (const u of rows.flat()) expect(bodyOutpoints(back, 0)).toContain(outpoint(u));
+    expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(0);
   });
 });

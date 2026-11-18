@@ -15,7 +15,7 @@ jobs:
       # The toolchain seedelf-platform/rust-toolchain.toml pins, which every
       # cargo call in that folder runs on: keep the two in step.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
 
@@ -81,7 +81,7 @@ jobs:
       # The toolchain seedelf-platform/rust-toolchain.toml pins, which every
       # cargo call in that folder runs on: keep the two in step.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
           targets: x86_64-pc-windows-gnu
@@ -103,9 +103,9 @@ jobs:
           # Write the multiline environment variable to a file
           $env:RELEASE_GPG_KEY | Out-File -FilePath $keyFile -Encoding ascii
       
-          # Check if the file actually has content
-          Write-Host "Contents of $($keyFile):"
-          Get-Content $keyFile
+          # Check the file has content, never printing it: it's the secret key,
+          # and the log's masking was all that kept it out (chunk 51, b1#4).
+          if ([string]::IsNullOrWhiteSpace((Get-Content -Raw $keyFile))) { throw "RELEASE_GPG_KEY is empty" }
       
           # Import the key
           gpg --batch --yes --import $keyFile
@@ -177,7 +177,7 @@ jobs:
       # The toolchain seedelf-platform/rust-toolchain.toml pins, which every
       # cargo call in that folder runs on: keep the two in step.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
           targets: x86_64-apple-darwin
@@ -274,7 +274,7 @@ jobs:
               --armor --detach-sign -o hashes.txt.asc hashes.txt
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2 (v2.6.2)
         with:
           tag_name: ${{ github.ref_name }}
           draft: true

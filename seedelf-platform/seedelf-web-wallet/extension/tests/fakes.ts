@@ -47,6 +47,7 @@ import { WithdrawService } from "../src/background/withdraw";
 import type { Area } from "../src/background/storage";
 import type { SwapAsk } from "../src/shared/rpc";
 import { NETWORKS } from "../src/networks";
+import { bech32, bech32Bytes } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { asAsked } from "./fixtures/minswap-echo";
 import { ORDER_DATUM, ORDER_DATUM_HASH } from "./fixtures/swap-tx";
@@ -301,8 +302,8 @@ const dexReferences: KoiosUtxo[] = [
         `${f.reference!.tx_hash}#${f.reference!.tx_index}`,
         {
           stake_address: null,
-          // Each sits at a script that holds it: its payment part, as Koios gives it.
-          payment_cred: "00".repeat(28),
+          // Its address's payment part, as Koios gives it.
+          payment_cred: Buffer.from(bech32Bytes(f.reference!.address!)).toString("hex").slice(2, 58),
           epoch_no: 300,
           block_height: 4_000_000,
           block_time: 1_700_000_000,
@@ -342,7 +343,8 @@ export const epochParams = JSON.parse(
  * whose making the wallet asks of before it takes it (independent review M14).
  */
 export function madeByMix(koios: Pick<FakeKoios, "txSpends">, ...txs: string[]): void {
-  const input = { payment_addr: { bech32: "addr_test1", cred: NETWORKS.preprod.lovejoin!.mixBox } };
+  const box = NETWORKS.preprod.lovejoin!.mixBox;
+  const input = { payment_addr: { bech32: bech32("addr_test", Uint8Array.from([0x70, ...Buffer.from(box, "hex")])), cred: box } };
   for (const tx of txs) koios.txSpends.set(tx, [input]);
 }
 

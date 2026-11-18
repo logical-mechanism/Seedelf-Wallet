@@ -12,6 +12,7 @@ import { MAX_TOKEN_DEPOSIT_BOXES, UNLOCK_WAIT_MS } from "../src/background/lovej
 import { type BuiltOutput, builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, Minswap } from "../src/background/minswap";
 import { pendingKey } from "../src/background/pending";
 import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
+import { BUILT_TTL_MS } from "../src/background/script-spend";
 import {
   checkAsk,
   checkOrder,
@@ -32,7 +33,7 @@ import { lovejoinOf } from "./chain-fixtures";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, ORDER_SCRIPT, recordedSwap, SENDER, SESSION_ADDRESS, swapTx } from "./fixtures/swap-tx";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
-import { orderRow } from "./swap-session";
+import { orderRow, pastSpent } from "./swap-session";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -277,6 +278,11 @@ describe("a swap's quote", () => {
     expect(t.minswap.calls.at(-1)).toMatchObject({ path: "tokens", body: { query: fake, only_verified: true } });
     await expect(t.sessions.outBuild("preprod", spoofed)).rejects.toThrow("won't swap into it");
     expect(t.koios.calls.some((c) => c.path === "account_addresses")).toBe(false);
+    // Listed by its own ID but marked unverified, against Minswap's own filter: no more verified (chunk 51, t1k#8).
+    verified.push({ token_id: fake, ticker: "SNEK", is_verified: false });
+    const unverified = await t.sessions.quote("preprod", { ...ASK, tokenOut: fake });
+    expect(unverified.verified).toBe(false);
+    await expect(t.sessions.outBuild("preprod", unverified)).rejects.toThrow("won't swap into it");
 
     // The real one, by its ID: verified.
     expect((await t.sessions.quote("preprod", { ...ASK, tokenOut: real })).verified).toBe(true);
@@ -791,6 +797,11 @@ describe("a swap that runs itself", () => {
     t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
     t.clock.now += 15_000;
     view = await sessions.advance("preprod", 0);
+    // That run notes the order spent; the next one tells the fill from its own listings and brings it back (chunk 51,
+    // r2still#2).
+    expect(view.auto).toMatchObject({ step: "filling", filled: false });
+    t.clock.now += 15_000;
+    view = await sessions.advance("preprod", 0);
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
     expect(view.holding).toMatchObject({ tokens: [{ assetName: "4d494e", quantity: "906594100" }], utxos: 2 });
     expect(t.koios.submitted).toHaveLength(3);
@@ -823,9 +834,12 @@ describe("a swap that runs itself", () => {
     // Asked about the order itself: the swap's output 0, where the batcher finds it.
     expect(t.koios.calls.at(-1)).toMatchObject({ path: "utxo_info", body: { _utxo_refs: [`${SWAP_TX}#0`] } });
 
-    // Filled: the order is spent, and its proceeds come back with the rest.
+    // Filled: the order is spent, and its proceeds come back with the rest, a run after the one that notes it spent
+    // (chunk 51, r2still#2).
     t.koios.spent.add(`${SWAP_TX}#0`);
     t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
+    t.clock.now += 15_000;
+    await sessions.advance("preprod", 0);
     t.clock.now += 15_000;
     view = await sessions.advance("preprod", 0);
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
@@ -1037,7 +1051,7 @@ describe("a swap that runs itself", () => {
         // Filled: its proceeds come back, with no second order.
         t.koios.spent.add(`${SWAP_TX}#0`);
         t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
-        view = await sessions.advance("preprod", 0, true);
+        view = await pastSpent(t, sessions);
         expect(view.auto).toMatchObject({ step: "returning", filled: true });
         expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(builds);
       }
@@ -1114,7 +1128,7 @@ describe("a swap that runs itself", () => {
     t.koios.missing.delete(SWAP_TX);
     landed(t, SWAP_TX);
     fill(t, SWAP_TX);
-    view = await sessions.advance("preprod", 0, true);
+    view = await pastSpent(t, sessions);
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
     expect(view.txs.map((x) => [x.kind, x.txHash])).toEqual([
       ["out", expect.any(String)],
@@ -1140,7 +1154,7 @@ describe("a swap that runs itself", () => {
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(later);
     landed(t, later);
     fill(t, later);
-    view = await sessions.advance("preprod", 0, true);
+    view = await pastSpent(t, sessions);
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
     expect(view.txs.map((x) => [x.kind, x.txHash])).toEqual([
       ["out", expect.any(String)],
@@ -1186,6 +1200,21 @@ describe("a swap that runs itself", () => {
       { txHash: "e4".repeat(32), txIndex: 0, reason: "script", lovelace: "3000000" },
       { txHash: "e3".repeat(32), txIndex: 0, reason: "fee", lovelace: "1200000" },
     ]);
+  });
+
+  // A swap's funding goes only as it was reviewed: on its network, within 10 minutes. On another, it's refused before
+  // that network's server is asked whether the review's account is still unused (chunk 51, t1i#6's sibling).
+  it("refuses a swap's funding on another network, or past 10 minutes, and sends nothing", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const out = await sessions.outBuild("preprod", await sessions.quote("preprod", ASK));
+    const asked = t.koios.calls.length;
+    await expect(sessions.outSubmit("mainnet", out.txHash)).rejects.toThrow("That payment isn't ready to send.");
+    expect(t.koios.calls.length).toBe(asked);
+    await busy(t, BUILT_TTL_MS + 1000);
+    await expect(sessions.outSubmit("preprod", out.txHash)).rejects.toThrow("That payment was built more than 10 minutes ago.");
+    expect(t.koios.submitted).toHaveLength(0);
+    expect((await t.store.get<{ sessions: unknown[] }>("sessions.preprod"))?.sessions ?? []).toHaveLength(0);
   });
 
   it("pauses when the price moved past what was approved, and orders at least that when it's back within it", async () => {
@@ -1292,6 +1321,144 @@ describe("a swap that runs itself", () => {
     expect(view.auto!.paused).toMatchObject({ why: "refused", detail: "it gives ADA to the treasury." });
     expect(t.koios.submitted).toHaveLength(1);
   });
+
+  // What Minswap's build carries beside its outputs, none of which needs the session's key, and which no output or
+  // funding limit counts: a certificate's or a proposal's deposit, a withdrawal, a vote, a mint or a burn (chunk 51,
+  // t1h#1, t1h#5, t1k#5).
+  it("pauses rather than sign a swap that stakes, withdraws, votes, proposes, mints or burns", async () => {
+    const odd = async (extra: Map<number, Cbor>) => {
+      const t = await unlocked();
+      const sessions = signing(t);
+      t.minswap.swapCbor = swapTx({ extra });
+      await started(sessions);
+      funded(t);
+      const { paused } = (await sessions.advance("preprod", 0)).auto!;
+      // Paused, nothing is signed: only the funding was sent.
+      expect(t.koios.submitted).toHaveLength(paused ? 1 : 2);
+      return paused?.why === "refused" ? paused.detail : paused;
+    };
+    // CBOR maps keyed by bytes or lists, which the fixture's type doesn't name.
+    const map = (entries: Array<[Cbor, Cbor]>) => new Map(entries as Array<[never, Cbor]>) as unknown as Cbor;
+    const stranger = bytes("77".repeat(28));
+    const script = bytes("5c".repeat(28));
+    const STAKING = "it does something with staking or governance.";
+    // A stake registration (certificate 0), which needs no signature.
+    expect(await odd(new Map([[4, [[0, [0, stranger]]]]]))).toBe(STAKING);
+    // A withdrawal from a script's reward account, which needs none either.
+    expect(await odd(new Map([[5, map([[bytes(`f0${"5c".repeat(28)}`), 0]])]]))).toBe(STAKING);
+    // A DRep script's vote on an action.
+    expect(await odd(new Map([[19, map([[[3, script], map([[[bytes("ab".repeat(32)), 0], [1, null]]])]])]]))).toBe(STAKING);
+    // A proposal (an info action), whose deposit goes back to a reward account the builder picks.
+    const anchor = [{ raw: `71${Buffer.from("https://a.example").toString("hex")}` }, bytes("cd".repeat(32))];
+    expect(await odd(new Map([[20, [[100_000_000_000, bytes(`e0${"77".repeat(28)}`), [6], anchor]]]]))).toBe(STAKING);
+    // A mint, and a burn.
+    const MINTS = "it mints or burns tokens.";
+    expect(await odd(new Map([[9, map([[script, map([[bytes("01"), 1]])]])]]))).toBe(MINTS);
+    expect(await odd(new Map([[9, map([[script, map([[bytes("01"), { raw: "20" }]])]])]]))).toBe(MINTS);
+  }, 120_000);
+
+  // Minswap's fee is one output, ADA alone (chunk 51, t1h#2, t1h#4, t1k#6): a second one, or one carrying a token, is
+  // a payment to someone else.
+  it("pauses rather than sign a swap that pays Minswap's fee twice, or a token beside it", async () => {
+    const refused = async (swapCbor: string) => {
+      const t = await unlocked();
+      const sessions = signing(t);
+      t.minswap.swapCbor = swapCbor;
+      t.minswap.estimate = { ...minswapEstimate.estimate, aggregator_fee: "1000000" };
+      await started(sessions);
+      funded(t);
+      const { paused } = (await sessions.advance("preprod", 0)).auto!;
+      expect(t.koios.submitted).toHaveLength(paused ? 1 : 2);
+      return paused?.why === "refused" ? paused.detail : paused;
+    };
+    const other = `00${"c4".repeat(28)}${"c5".repeat(28)}`;
+    const another = `00${"c6".repeat(28)}${"c5".repeat(28)}`;
+    const OTHER = "it pays an address that isn't this session's.";
+    expect(
+      await refused(swapTx({ outputs: [[ORDER_ADDRESS, 14_000_000, ORDER_DATUM], [other, 1_000_000], [another, 1_000_000], [SESSION_ADDRESS, 129_585_414]] })),
+    ).toBe(OTHER);
+    expect(
+      await refused(swapTx({ outputs: [[ORDER_ADDRESS, 14_000_000, ORDER_DATUM], [other, 1_000_000, undefined, [[MIN, 5]]], [SESSION_ADDRESS, 130_585_414]] })),
+    ).toBe(OTHER);
+  }, 60_000);
+
+  // What an order swap pays out of the account's tokens is held to what was funded for it (chunk 51, t1h#3, t1k#7):
+  // the account may hold more, its address public once funded, and that's the user's.
+  it("pauses rather than sign an order that pays out more of a token than was funded, or a token that wasn't", async () => {
+    const FUND = "5b".repeat(32);
+    const EXTRA = "e1".repeat(32);
+    const selling = async (orderTokens: Array<[string, number]>) => {
+      const t = await unlocked();
+      const sessions = signing(t);
+      const now = t.clock.now;
+      // Session 0 selling 500 MIN, its funding landed with its 5 ₳ collateral, and 100 MIN someone sent the account.
+      await t.store.set("sessions.preprod", {
+        next: 1,
+        sessions: [
+          {
+            index: 0,
+            ownStake: true,
+            createdAt: now,
+            txs: [{ kind: "out", txHash: FUND, at: now, confirmed: true }],
+            swap: { ...ASK, tokenIn: MIN, tokenOut: "lovelace", amount: "500", amountOut: "1", minAmountOut: "1" },
+            auto: {
+              approved: {
+                minAmountOut: "1",
+                fund: { lovelace: "16000000", tokens: [{ policyId: MIN.slice(0, 56), assetName: MIN.slice(56), quantity: "500" }] },
+              },
+            },
+          },
+        ],
+      });
+      t.koios.confirmations = 1;
+      t.koios.addedToAccounts.push(
+        atSession(FUND, 0, "16000000", [[MIN, "500"]]),
+        atSession(FUND, 1, "5000000"),
+        atSession(EXTRA, 0, "2000000", [[MIN, "100"]]),
+      );
+      t.minswap.swapCbor = swapTx({
+        inputs: [`${FUND}#0`, `${EXTRA}#0`],
+        outputs: [
+          [ORDER_ADDRESS, 2_000_000, ORDER_DATUM, orderTokens],
+          [SESSION_ADDRESS, 15_794_811],
+        ],
+      });
+      const { paused } = (await sessions.advance("preprod", 0, true)).auto!;
+      expect(t.koios.submitted).toHaveLength(paused ? 0 : 1);
+      return paused?.why === "refused" ? paused.detail : paused;
+    };
+    // The 500 MIN funded: signed.
+    expect(await selling([[MIN, 500]])).toBeUndefined();
+    const MORE = "it pays out tokens that weren't funded for the swap.";
+    // 600: the 100 someone sent too.
+    expect(await selling([[MIN, 600]])).toBe(MORE);
+    // A token the swap wasn't funded with at all.
+    expect(await selling([[MIN, 500], [`${"5c".repeat(28)}01`, 1]])).toBe(MORE);
+  }, 60_000);
+
+  // The session's key signs the transaction its checks passed, and nothing else (chunk 51, t1h#12): a signer whose
+  // summary names another, or a witness set that changes the body, is never sent.
+  it("never sends a swap whose signature or witnesses change what was checked", async () => {
+    const real = loadTestWasm();
+    const failing = async (stood: Partial<ReturnType<typeof loadTestWasm>>) => {
+      const t = await unlocked();
+      const sessions = signing(t, alarm(), stood);
+      await started(sessions);
+      funded(t);
+      const view = await sessions.advance("preprod", 0);
+      // Only the funding was sent, and the step's failure says why.
+      expect(t.koios.submitted).toHaveLength(1);
+      return view.auto!.retry?.error;
+    };
+    const signSessionTx = (key: unknown, request: string) => {
+      const signed = JSON.parse(real.signSessionTx(key as never, request)) as { summary: { txHash: string } };
+      return JSON.stringify({ ...signed, summary: { ...signed.summary, txHash: "00".repeat(32) } });
+    };
+    expect(await failing({ signSessionTx } as never)).toBe("Signing changed the transaction, so it wasn't sent.");
+    // Witnesses put in over another body: Minswap's swap with a later end.
+    const attachWitnesses = (_txCbor: string, witnessSet: string) => real.attachWitnesses(swapTx({ ttl: 134_639_866 }), witnessSet);
+    expect(await failing({ attachWitnesses } as never)).toBe("Putting the signature in changed the transaction, so it wasn't sent.");
+  }, 60_000);
 
   it("cancels an order with the wallet's own cancel, everything back for a small fee, and pauses rather than sign one with a large fee (chunk 24, Step 3)", async () => {
     // A cancel the builder got wrong, as it would carry it: the checks before signing still hold it. `gift`: what it
@@ -1780,6 +1947,35 @@ describe("bring everything back", () => {
     await expect(t.sessions.claimSubmit("preprod", returns.map((r) => r.txHash))).rejects.toThrow("aren't ready to send");
   });
 
+  // Its returns go within 10 minutes of their review, or none goes: one whose inputs moved since is refused by the node,
+  // and the rest would still go, one after another (chunk 51, t1l#14).
+  it("sends none of the returns its review built more than 10 minutes before", async () => {
+    const t = await unlocked();
+    const { wasm } = t.deps;
+    const at = await t.wallet.withKeys((k) => ({ address: k.oneTime.address(wasm.Network.Preprod, 0), keyHash: k.oneTime.keyHash(0) }));
+    const now = t.clock.now;
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [{ kind: "out", txHash: "1".repeat(64), at: now, confirmed: true }],
+          site: { origin: "https://a.example" },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push({ ...atSession("a0".repeat(32), 0, "20000000"), address: at.address, payment_cred: at.keyHash });
+    const { returns } = await t.sessions.claimBuild("preprod", [0]);
+    expect(returns).toHaveLength(1);
+    await busy(t, BUILT_TTL_MS + 1000);
+    await expect(t.sessions.claimSubmit("preprod", returns.map((r) => r.txHash))).rejects.toThrow(
+      "Those returns were built more than 10 minutes ago. Review them again.",
+    );
+    expect(t.koios.submitted).toHaveLength(0);
+  });
+
   it("leaves out a swap sent by hand while its order waits, says why, and takes it once the order is spent (release review C41)", async () => {
     const t = await unlocked();
     const now = t.clock.now;
@@ -1971,6 +2167,31 @@ describe("a return kept for Send", () => {
     // The user's Send still sends what they reviewed.
     await expect(sessions.backSubmit("preprod", back.txHash)).resolves.toMatchObject({ txHash: back.txHash });
     expect(t.koios.submitted.map(txIdOf).at(-1)).toBe(back.txHash);
+  });
+
+  // Sent only as reviewed: on its network, within 10 minutes (chunk 51, t1i#6's and t1i#7's sibling).
+  it("is never sent on another network, nor past 10 minutes", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const now = t.clock.now;
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [{ kind: "out", txHash: "1".repeat(64), at: now, confirmed: true }],
+          site: { origin: "https://a.example" },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(atSession("a0".repeat(32), 0, "12000000"));
+    const back = await sessions.backBuild("preprod", 0);
+    await expect(sessions.backSubmit("mainnet", back.txHash)).rejects.toThrow("That return isn't ready to send.");
+    await busy(t, BUILT_TTL_MS + 1000);
+    await expect(sessions.backSubmit("preprod", back.txHash)).rejects.toThrow("That return was built more than 10 minutes ago.");
+    expect(t.koios.submitted).toHaveLength(0);
   });
 });
 

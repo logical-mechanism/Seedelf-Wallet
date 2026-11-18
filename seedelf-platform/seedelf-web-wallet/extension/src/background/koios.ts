@@ -286,7 +286,7 @@ export interface KoiosProposal {
   proposal_index: number;
   proposal_type: string;
   proposed_epoch: number;
-  /** The last epoch it can be voted on in. */
+  /** The epoch it's expired in (its `expired_epoch`): votes are taken through the one before (governance.ts). */
   expiration: number;
   deposit: string;
   meta_url: string | null;

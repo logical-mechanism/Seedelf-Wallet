@@ -70,28 +70,48 @@ export const ORDER_DATUM_HASH = hex(blake2b(bytes(ORDER_DATUM), { dkLen: 32 }));
  * session 0's funding (the recorded one, session-swap.json, with its order's
  * details carried): the order at a DEX's contract, kept by its datum's hash,
  * and the change back. `outputs` in their place, each `[address, lovelace,
- * datum]`; `donation` to the treasury; `ttl`, the slot it's valid until
- * (Minswap's, built again later, has a later one, so another id).
+ * datum, tokens]` (a token's unit and quantity); `donation` to the treasury;
+ * `ttl`, the slot it's valid until (Minswap's, built again later, has a later
+ * one, so another id); `inputs`, `txhash#index`, in place of the funding's;
+ * `extra`, more of the body by its keys (certificates, withdrawals, a mint).
  */
 export function swapTx({
   datum = ORDER_DATUM,
   outputs,
   donation,
   ttl = 134_639_865,
-}: { datum?: string; outputs?: Array<[string, number, string?]>; donation?: number; ttl?: number } = {}): string {
+  inputs,
+  extra,
+}: {
+  datum?: string;
+  outputs?: Array<[string, number, string?, Array<[string, number]>?]>;
+  donation?: number;
+  ttl?: number;
+  inputs?: string[];
+  extra?: Map<number, Cbor>;
+} = {}): string {
   const hashOf = (d: string) => blake2b(bytes(d), { dkLen: 32 });
   const paid = outputs ?? [
     [ORDER_ADDRESS, 14_000_000, datum],
     [SESSION_ADDRESS, 131_585_414],
   ];
+  // A value with tokens: its lovelace, then each policy's names and quantities.
+  const valueOf = (lovelace: number, tokens: Array<[string, number]> = []): Cbor => {
+    if (!tokens.length) return lovelace;
+    const policies = new Map<string, Array<[string, number]>>();
+    for (const [unit, quantity] of tokens) policies.set(unit.slice(0, 56), [...(policies.get(unit.slice(0, 56)) ?? []), [unit.slice(56), quantity]]);
+    const assets = new Map([...policies].map(([policy, names]) => [bytes(policy), new Map(names.map(([name, q]) => [bytes(name), q]))]));
+    return [lovelace, assets as unknown as Cbor];
+  };
+  const spent = inputs?.map((r) => [bytes(r.split("#")[0]!), Number(r.split("#")[1])] as Cbor) ?? [[bytes(sessionSwap.utxo.tx_hash), sessionSwap.utxo.tx_index]];
   const body = new Map<number, Cbor>([
-    [0, { tag: 258, of: [[bytes(sessionSwap.utxo.tx_hash), sessionSwap.utxo.tx_index]] }],
+    [0, { tag: 258, of: spent }],
     [
       1,
-      paid.map(([address, lovelace, d]) => {
+      paid.map(([address, lovelace, d, tokens]) => {
         const out = new Map<number, Cbor>([
           [0, bytes(address)],
-          [1, lovelace],
+          [1, valueOf(lovelace, tokens)],
         ]);
         if (d) out.set(2, [0, hashOf(d)]);
         return out;
@@ -100,6 +120,7 @@ export function swapTx({
     [2, 205_189],
     [3, ttl],
   ]);
+  for (const [key, value] of extra ?? []) body.set(key, value);
   if (donation) body.set(22, donation);
   // The datums its orders name by hash, carried in the witness set, as Minswap's are.
   const datums = paid.flatMap(([, , d]) => (d ? [{ raw: d }] : []));

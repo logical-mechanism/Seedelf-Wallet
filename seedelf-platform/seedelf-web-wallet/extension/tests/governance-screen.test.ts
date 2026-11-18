@@ -16,7 +16,7 @@ import {
   DrepProfileEdit,
 } from "../src/ui/screens/Governance";
 import { StakingReview } from "../src/ui/screens/Staking";
-import { pickOf, Voting } from "../src/ui/screens/Voting";
+import { DrepCard as LookedUpDrep, pickOf, Voting } from "../src/ui/screens/Voting";
 import { dayText, epochEnds } from "../src/ui/format";
 import { NetworkContext } from "../src/ui/network";
 
@@ -484,5 +484,25 @@ describe("Voting power, for an account that may be its own DRep", () => {
     expect(html).toMatch(/aria-checked="true"[^>]*>(?:(?!<\/button>).)*Your own DRep/s);
     // Review can't be pressed for it, and says why under it, not in a tooltip alone (blind test T03's verifier).
     expect(html).toMatch(/<p class="note foot-note" data-testid="vote-why">Your voting power already goes there<\/p>/);
+  });
+});
+
+describe("a DRep's last active epoch, the same on both cards (chunk 51, e7b#4)", () => {
+  it("one looked up that's inactive has been since the epoch after the one its own card says it's active until", () => {
+    // Koios's expires_epoch_no is the last epoch it stays active in (rpc.ts OwnDrep.expiresEpoch): the account's own
+    // card says active until that epoch's end, and Voting's card said inactive since that very epoch.
+    expect(card(registered)).toContain("(epoch 340)");
+    const looked = (expiresEpoch: number | null) =>
+      text(
+        markup(
+          createElement(LookedUpDrep, {
+            drep: { id: ID, status: "registered", active: false, expiresEpoch, votingPower: "0", delegators: 0 },
+          }),
+        ),
+      );
+    expect(looked(340)).toContain("Inactive since epoch 341");
+    expect(looked(340)).not.toContain("epoch 340");
+    expect(looked(null)).toContain("Inactive");
+    expect(looked(null)).not.toContain("since epoch");
   });
 });

@@ -13,7 +13,7 @@ use pallas_primitives::conway::Certificate;
 use pallas_traverse::MultiEraTx;
 use rand_core::OsRng;
 use seedelf_core::address::wallet_contract;
-use seedelf_core::build::{Chain, FinalSpend, MAX_TX_SIZE};
+use seedelf_core::build::{Chain, FinalSpend, MAX_TX_SIZE, ScriptSpend};
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::lovejoin::{self, BoxToken, Terms, Version, templates};
 use seedelf_crypto::register::Register;
@@ -540,4 +540,81 @@ fn an_account_launch_never_spends_a_utxo_carrying_a_reference_script() {
     .unwrap()
     .to_string();
     assert!(why.contains("public account"), "{why}");
+}
+
+/// Chunk 51, t1d#1: the public account's collateral for a launch must come
+/// back as an output after 3/2 of the fee. One too small is refused in words,
+/// where the node would refuse the signed launch.
+#[test]
+fn an_account_launch_refuses_a_collateral_too_small_to_come_back() {
+    let w = world(true);
+    let change = Address::from_bech32(&account_row(true, [0x0a; 28], 0, 1, None).address).unwrap();
+    let available = vec![account_row(true, [0x0a; 28], 0x51, 40_000_000, None)];
+    let launch = |lovelace: u64| {
+        let collateral = account_row(true, [0x0a; 28], 0x5c, lovelace, None);
+        lovejoin::launch_from_account(
+            &w.chain,
+            &available,
+            Some(&collateral),
+            &terms(),
+            true,
+            &change,
+            None,
+        )
+        .map(|launch| launch.seed)
+    };
+    assert!(launch(5_000_000).is_ok());
+    for lovelace in [1_000_000, 1_200_000] {
+        let refused = launch(lovelace);
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("collateral is too small")),
+            "{lovelace}: {refused:?}"
+        );
+    }
+}
+
+/// Chunk 51, t1d#7: the pool a finished launch makes is verified before the
+/// wallet signs it: read back under a seed it didn't spend, it isn't trusted.
+#[test]
+fn a_launch_read_back_under_another_seed_isnt_trusted() {
+    let w = world(true);
+    let inputs = vec![owned(&w, 0x31, 30_000_000, None)];
+    let launch = lovejoin::launch(&w.chain, &inputs, &terms(), true, &w.owner, w.signer).unwrap();
+    let done = finished(&w, &launch);
+    let tx = &done.tx.tx_bytes.0;
+    assert!(lovejoin::launched_pool(true, tx, launch.seed).is_ok());
+    let why = lovejoin::launched_pool(true, tx, ([0x32; 32], 1)).map(|pool| pool.id);
+    assert!(
+        matches!(&why, Err(e) if e.to_string().contains("isn't one the wallet trusts")),
+        "{why:?}"
+    );
+}
+
+/// Chunk 51, t1a#7: a launch's NFT is minted by a script the transaction
+/// carries, which must hash to the policy it mints under: one that doesn't
+/// is refused before anything is built, where the node would refuse it for a
+/// missing script.
+#[test]
+fn an_inline_minting_script_must_hash_to_its_policy() {
+    let w = world(true);
+    let inputs = vec![owned(&w, 0x31, 30_000_000, None)];
+    let script = hex::decode("4e4d01000033222220051200120011").unwrap();
+    let mint = |policy: Hash<28>| {
+        ScriptSpend::new(&w.chain, &inputs, &w.owner, w.signer)
+            .unwrap()
+            .mint_inline(
+                policy,
+                script.clone(),
+                b"lovejoin".to_vec(),
+                1,
+                vec![0xd8, 0x79, 0x80],
+            )
+            .map(|_| ())
+    };
+    assert!(mint(Hasher::<224>::hash_tagged(&script, 3)).is_ok());
+    let refused = mint(Hash::new([0x13; 28]));
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("The minting script isn't the policy's")),
+        "{refused:?}"
+    );
 }

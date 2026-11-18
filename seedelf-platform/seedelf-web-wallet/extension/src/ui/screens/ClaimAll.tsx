@@ -30,7 +30,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
-import { formatAda } from "../format";
+import { formatAda, tokenKey } from "../format";
 import { useNetwork } from "../network";
 import { withoutStop } from "../sentence";
 import { tokenText } from "../tokens";
@@ -79,6 +79,9 @@ export function ClaimAll({
   const [direct, setDirect] = useState(false);
   const [result, setResult] = useState<Result>();
   const [busy, setBusy] = useState(false);
+  // Busy building them all again for the switch, which sends nothing: the button says so, as a swap's approval does
+  // (SendButton's `rebuilding`; chunk 51, r2screens#3).
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string>();
   const network = useNetwork();
   const byIndex = new Map(sessions.map((s) => [s.index, s]));
@@ -104,16 +107,20 @@ export function ClaimAll({
   async function rebuild(straight: boolean) {
     if (!built || busy) return;
     setBusy(true);
+    setRebuilding(true);
     setError(undefined);
     try {
       const again = await call("session-claim-build", { indexes: sessions.map((s) => s.index), ...(straight ? { direct: true } : {}) });
       setBuilt(again);
-      setChosen(new Set(again.returns.map((r) => r.index).filter((i) => chosen.has(i))));
+      // The choice as it stands when the build lands, not as it stood at the press: a session left out meanwhile
+      // stayed in (chunk 51, e8b#3). The rows are off while it builds too.
+      setChosen((now) => new Set(again.returns.map((r) => r.index).filter((i) => now.has(i))));
       setDirect(straight);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      setRebuilding(false);
     }
   }
 
@@ -194,7 +201,11 @@ export function ClaimAll({
       error={error}
       foot={
         <button type="button" className="primary" onClick={() => void send()} disabled={!built || busy || !picked.length}>
-          {busy ? t("common.sending") : picked.length ? t("claim.sendReturns", { count: picked.length }) : t("claim.chooseSession")}
+          {busy
+            ? t(rebuilding ? "common.building" : "common.sending")
+            : picked.length
+              ? t("claim.sendReturns", { count: picked.length })
+              : t("claim.chooseSession")}
         </button>
       }
     >
@@ -256,7 +267,8 @@ export function ClaimReview({
   const picked = built.returns.filter((r) => chosen.has(r.index));
   const total = picked.reduce((sum, r) => sum + BigInt(r.lovelace), 0n);
   const fees = picked.reduce((sum, r) => sum + BigInt(r.fee), 0n);
-  const tokens = picked.reduce((sum, r) => sum + r.tokens.length, 0);
+  // Kinds of token, as Send's and Make public's totals count them: a token two returns bring was counted twice (e8b#4).
+  const tokens = new Set(picked.flatMap((r) => r.tokens.map(tokenKey))).size;
   const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
   const collaterals = picked.filter((r) => r.collateralTail).length;
   // A chain through Lovejoin counts its collateral's mix already; a return with no chain of boxes sends that first.
@@ -312,11 +324,13 @@ export function ClaimReview({
               const on = chosen.has(r.index);
               return (
                 <li key={r.index}>
+                  {/* Off while the switch builds them all again, as the switch, Back and Send are (e8b#3). */}
                   <button
                     type="button"
                     className={on ? "token-row claim-row claim-row--on" : "token-row claim-row"}
                     aria-pressed={on}
                     onClick={() => onToggle(r.index)}
+                    disabled={busy}
                   >
                     <span className="claim-check" aria-hidden="true">
                       {on && <CheckIcon size={14} />}

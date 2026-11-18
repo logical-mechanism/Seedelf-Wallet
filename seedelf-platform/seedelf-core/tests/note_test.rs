@@ -211,3 +211,17 @@ fn a_note_and_a_reward_withdrawal_go_together() {
     let signed = built.tx.clone().sign(fake_signer()).unwrap();
     assert!(note.patch(signed).is_err());
 }
+
+/// Chunk 51, t1b#1: a note is never patched into a signed transaction. It
+/// changes the body, and so the hash the signatures were made over, which the
+/// node would refuse. This one holds no metadata yet, so only its signature
+/// stops the patch (the test above signs one that already carries a note).
+#[test]
+fn a_signed_transaction_is_never_given_a_note() {
+    let note = Note::new("after signing").unwrap().unwrap();
+    let signed = send(&Staking::none(), None).tx.sign(fake_signer()).unwrap();
+    assert_eq!(
+        note.patch(signed).unwrap_err().to_string(),
+        "A transaction is patched before it's signed, not after"
+    );
+}

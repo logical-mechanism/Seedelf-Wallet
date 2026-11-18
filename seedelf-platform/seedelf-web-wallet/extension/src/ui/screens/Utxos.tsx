@@ -407,8 +407,15 @@ export function UtxoDetails({
             testId="utxo-address"
           />
         )}
-        {/* Whose it is: often not the Receive address, which said nothing of why (AC-4). */}
-        {utxo.address && utxo.path && (
+        {/* Whose it is: often not the Receive address, which said nothing of why (AC-4). One of the account's keys
+            under a stake part that isn't the account's is none of those, and the one Receive shows least of all:
+            anyone can pay the receive key so, and what's paid there stakes for them (chunk 51, e9a#3). */}
+        {utxo.address && utxo.path && utxo.otherStake && (
+          <Callout tone="warn" testId="utxo-address-stake">
+            {t("utxos.addressWhose.warn.stakeElsewhere")}
+          </Callout>
+        )}
+        {utxo.address && utxo.path && !utxo.otherStake && (
           <p className="note" data-testid="utxo-address-whose">
             {t(
               utxo.path.role === 1

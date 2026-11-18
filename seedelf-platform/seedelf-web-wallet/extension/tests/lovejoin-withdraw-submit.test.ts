@@ -7,14 +7,19 @@
 // unlocked while it was built (L11). The real WebAssembly, v2's 5 ₳ pool
 // (the classic pool, retired, brings its boxes all back at the first run,
 // with no wait: chunk 44), and fakes of Koios and giveme.my.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
+import { handle, type Context } from "../src/background/handlers";
 import { CHAIN_RESEND_MS, LovejoinService, QUIET_AFTER_SEND_MS, QUIET_PUSH_MS, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { SESSION_SENT_PREFIX } from "../src/background/sent-txs";
-import { lastSpentAt, SESSION_SPENT, spentSet } from "../src/background/spent";
+import { pendingKey } from "../src/background/pending";
+import { NetworkChoice } from "../src/background/preferences";
+import { lastSpentAt, SESSION_RESERVED_PREFIX, SESSION_SPENT, spentSet } from "../src/background/spent";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
+import type { NetworkName } from "../src/networks";
+import type { AtStake } from "../src/shared/rpc";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
 import { busyFor, loadTestWasm, testBalances, vectors } from "./fakes";
@@ -51,9 +56,10 @@ async function ownedBox(t: T, tx: string) {
 /**
  * An unlocked wallet, unlocked an hour ago with its unlock's draws made, with
  * Lovejoin's 5 ₳ pool and `boxes` boxes of its own in it, all due; and Lovejoin
- * with giveme.my's witness stood in for, so a withdraw that goes is submitted.
+ * with giveme.my's witness stood in for, so a withdraw that goes is submitted. `finished`: the hash that finish names,
+ * the transaction's own unless said.
  */
-async function due(boxes = 1) {
+async function due(boxes = 1, finished?: (txCbor: string) => string) {
   const t = testBalances({ pools: [ADA_POOL] });
   await t.wallet.create(PHRASE, PASSWORD);
   const owned = await Promise.all(["e1", "e2"].slice(0, boxes).map((tx) => ownedBox(t, tx)));
@@ -70,7 +76,7 @@ async function due(boxes = 1) {
       ...wasm,
       finishLovejoinWithdraw: (request: string) => {
         const { txCbor } = JSON.parse(request) as { txCbor: string };
-        return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+        return JSON.stringify({ txCbor, txHash: finished ? finished(txCbor) : txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
       },
     } as typeof wasm,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
@@ -79,6 +85,28 @@ async function due(boxes = 1) {
   });
   return { t, lovejoin, box: `${"e1".repeat(32)}#0` };
 }
+
+describe("a due box a withdraw may not take (chunk 51, t1g#1, t1g#2)", SLOW, () => {
+  it("is never one a chain of the wallet's holds: it waits, and goes once that chain lets it go", async () => {
+    const { t, lovejoin, box } = await due();
+    // A Mix my boxes again kept for Send holds it, as reserve() keeps it, until its review's time is up.
+    await t.session.set(`${SESSION_RESERVED_PREFIX}preprod`, { again: { inputs: [box], collateral: [], until: t.clock.now + 10 * 60_000 } });
+    expect(await lovejoin.withdrawDue("preprod", false, t.clock.now)).toEqual([]);
+    expect(t.koios.submitted).toHaveLength(0);
+    await t.session.set(`${SESSION_RESERVED_PREFIX}preprod`, {});
+    await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(t.koios.submitted.flatMap((x) => txInputs(x))).toContain(box);
+  });
+
+  it("is never sent when finishing it names another transaction than the one built", async () => {
+    const { t, lovejoin } = await due(1, () => "00".repeat(32));
+    const before = (await kept(t)).due;
+    await lovejoin.withdrawDue("preprod", false, t.clock.now).catch(() => undefined);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect((await kept(t)).withdrawing).toBeUndefined();
+    expect((await kept(t)).due).toEqual(before);
+  });
+});
 
 /**
  * Koios's submit answers as `answer` says, given its node's answer when it
@@ -200,6 +228,68 @@ describe("a withdraw built across a lock and an unlock (independent review L11)"
     expect(t.koios.submitted).toHaveLength(submits);
     const [drawn] = (await kept(t)).due;
     expect(drawn).toBeGreaterThanOrEqual(unlocked + UNLOCK_WAIT_MS[0]);
+  });
+});
+
+// Chunk 51, x4#1: a due box's withdraw read the quiet after the wallet's own send (QUIET_AFTER_SEND_MS) once, before
+// its Koios reads and giveme.my's witness, and never again before its submit. A Send that went while giveme.my answered
+// was followed seconds later by the withdraw, the very pairing the rule is for ("a withdraw minutes after a payment says
+// both are one owner's"; privacy.md, *Timing*). The rule is read again once those calls are done, as the unlock is.
+describe("a withdraw built while the user's Send goes (chunk 51, x4#1)", { timeout: 120_000 }, () => {
+  /** The 15-word phrase's receive address: someone else's. */
+  const THEIRS = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!.preprod
+    .receive_0 as string;
+
+  it("isn't sent seconds after the Send: it keeps its due time, and goes once the quiet after the Send is over", async () => {
+    const { t, lovejoin } = await due();
+    // The user reviews a payment from the public account. Nothing has been sent for an hour.
+    const review = await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
+    expect(await t.wallet.sends()).toEqual({ sent: 0, forgotten: 0 });
+    const before = (await kept(t)).due;
+    const submits = t.koios.submitted.length;
+
+    // The alarm's run begins (runs.ts `since`), passes the quiet check, reads the pool's reward account, builds the
+    // withdraw and asks giveme.my to witness it. Three seconds in, while giveme.my answers, the user presses Send.
+    const since = t.clock.now;
+    const witness = t.collateral.fetch;
+    let paid: number | undefined;
+    t.collateral.fetch = async (url, init) => {
+      t.clock.now += 3_000;
+      paid = t.clock.now;
+      // writeAhead stamps a Send's inputs on the device's clock (pending.ts), which in the worker is the services' own
+      // (sw.ts `now: Date.now`). Here the services run on the test's clock, so the device's is set to it.
+      const wall = vi.spyOn(Date, "now").mockReturnValue(paid);
+      try {
+        await t.send.submit("preprod", review.txHash);
+      } finally {
+        wall.mockRestore();
+      }
+      return witness(url, init);
+    };
+    const went = await lovejoin.withdrawDue("preprod", false, since);
+    t.collateral.fetch = witness;
+
+    // giveme.my was asked: the run had passed the quiet check. And the Send went meanwhile, the wallet's last send.
+    expect(t.collateral.asked).toHaveLength(1);
+    expect(await t.wallet.withKeys(() => lastSpentAt(t.session, t.clock.now))).toBe(paid);
+    // Only the Send went out: no withdraw seconds after it, nor kept as on its way. Its box keeps its due time.
+    expect(t.koios.submitted.slice(submits).map(txIdOf)).toEqual([review.txHash]);
+    expect(went).toEqual([]);
+    expect((await kept(t)).withdrawing).toBeUndefined();
+    expect((await kept(t)).due).toHaveLength(before.length);
+
+    // A minute on, still within the quiet after the Send, it doesn't go either.
+    await busyFor(t, 60_000);
+    await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(t.koios.submitted).toHaveLength(submits + 1);
+
+    // Once it's due and the quiet after the Send is over, it goes.
+    const [at] = (await kept(t)).due;
+    await busyFor(t, Math.max(at!, paid! + QUIET_AFTER_SEND_MS) - t.clock.now);
+    const [back] = await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(back?.kind).toBe("lovejoin-withdraw");
+    expect(t.koios.submitted).toHaveLength(submits + 2);
+    expect(t.clock.now - paid!).toBeGreaterThanOrEqual(QUIET_AFTER_SEND_MS);
   });
 });
 
@@ -336,5 +426,144 @@ describe("a withdraw that may have gone through, sent again (independent review 
     await paid(t, t.clock.now - 2_000);
     await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow("may still be on its way");
     expect(resent(t, txHash)).toBe(1);
+  });
+});
+
+// Chunk 51, r2time#2 (e4a#1's class, after its phrase pin): what a withdraw wrote once Koios answered went to whichever
+// phrase was in by then. A due box's withdraw, the alarm's own, goes to Koios under one phrase; while Koios answers, the
+// user removes the wallet, which lists nothing open (a withdraw on its way isn't among what Remove wallet lists), and
+// restores another. Its box-back entry was sealed into that phrase's private history: withdrawOne's write after its
+// submit, and settleWithdrawing's for one Koios didn't answer, seen later. Each write after an answer is pinned to the
+// phrase it began under now, and throws as a lock does under another.
+describe("a withdraw Koios answers once the wallet is removed and another phrase restored (chunk 51, r2time#2)", { timeout: 120_000 }, () => {
+  const OTHER = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 24)!;
+
+  /** Settings' Remove wallet, its screen reading first what's open (returned), then the other phrase restored. */
+  async function removedForOther(t: T, lovejoin: LovejoinService): Promise<AtStake[]> {
+    const networks: NetworkName[] = ["preprod", "mainnet"];
+    const ctx = {
+      ...(t as unknown as Context),
+      lovejoin,
+      wasm: loadTestWasm(),
+      connector: async (on: boolean) => on,
+      version: "1.0.0",
+      network: "preprod",
+      networks,
+      networkChoice: new NetworkChoice(t.local, networks),
+    } as Context;
+    const listed = (await handle({ type: "reset-check" }, ctx)) as AtStake[];
+    await handle({ type: "reset-wallet" }, ctx);
+    await handle({ type: "restore-wallet", phrase: OTHER.phrase, password: PASSWORD }, ctx);
+    return listed;
+  }
+
+  /** The transactions the private Activity of the phrase that's in lists. */
+  const history = async (t: T) => (await t.activity.seedelf("preprod")).map((e) => e.txHash);
+
+  it("taken by Koios meanwhile: none of it in the other phrase's history", async () => {
+    const { t, lovejoin } = await due();
+    let listed: AtStake[] | undefined;
+    // Koios takes it and answers slowly (a 429's hold before it, a node slow to say): the user removes the wallet and
+    // restores the other phrase meanwhile.
+    submitting(t, (taken) => taken!, { meanwhile: async () => void (listed = await removedForOther(t, lovejoin)) });
+    await lovejoin.withdrawDue("preprod", false, t.clock.now).catch(() => undefined);
+    const sent = txIdOf(t.koios.submitted.at(-1)!);
+    // Remove wallet listed nothing open, so it took no second yes; and the other phrase is the wallet now.
+    expect(listed).toEqual([]);
+    expect((await t.wallet.account("preprod")).receiveAddress).toBe(OTHER.preprod.receive_0);
+    expect(await history(t)).not.toContain(sent);
+  });
+
+  it("Koios didn't answer, seen on chain by the next run's look: none of it in the other phrase's history", async () => {
+    const { t, lovejoin } = await due();
+    // Koios takes it, and its answer never comes (a 504): it may have gone through, so it's kept and looked for.
+    const real = t.koios.fetch;
+    submitting(t, () => new Response("", { status: 504 }));
+    await lovejoin.withdrawDue("preprod", false, t.clock.now).catch(() => undefined);
+    const sent = txIdOf(t.koios.submitted.at(-1)!);
+    // The alarm's next run looks for it (tx_status), and it's on chain: the user removes the wallet and restores the
+    // other phrase while Koios answers.
+    t.koios.confirmations = 1;
+    let listed: AtStake[] | undefined;
+    t.koios.fetch = async (url, init) => {
+      if (listed === undefined && url.endsWith("/tx_status") && String(init?.body).includes(sent)) listed = await removedForOther(t, lovejoin);
+      return real(url, init);
+    };
+    await lovejoin.withdrawDue("preprod", false, t.clock.now).catch(() => undefined);
+    expect(listed).toEqual([]);
+    expect((await t.wallet.account("preprod")).receiveAddress).toBe(OTHER.preprod.receive_0);
+    expect(await history(t)).not.toContain(sent);
+  });
+
+  it("asked of Koios what made its box, the answer coming meanwhile: none of it in the other phrase's Lovejoin record", async () => {
+    const { t, lovejoin } = await due();
+    const real = t.koios.fetch;
+    let listed: AtStake[] | undefined;
+    // No record of the wallet's accounts for the due box: Koios is asked what made it before it's taken (M14).
+    t.koios.fetch = async (url, init) => {
+      if (listed === undefined && url.endsWith("/tx_info") && String(init?.body).includes("e1".repeat(32))) listed = await removedForOther(t, lovejoin);
+      return real(url, init);
+    };
+    await lovejoin.withdrawDue("preprod", false, t.clock.now).catch(() => undefined);
+    t.koios.fetch = real;
+    expect(listed).toEqual([]);
+    expect((await t.wallet.account("preprod")).receiveAddress).toBe(OTHER.preprod.receive_0);
+    // What made the first phrase's box isn't sealed into the other's record, and nothing is sent.
+    expect((await t.store.get<{ origins?: Record<string, unknown> }>("lovejoin.preprod"))?.origins?.["e1".repeat(32)]).toBeUndefined();
+    expect(t.koios.submitted).toHaveLength(0);
+  });
+
+  // Chunk 51, l3time#1: Bring one back took its pin only after giveme.my answered, so a Remove and a restore while it
+  // answered pinned the restored phrase: the first phrase's withdraw was kept in that phrase's schedule, sent, and its
+  // box-back entry sealed into its history; and its Home watch was taken under whatever phrase was in. The pin is taken
+  // as it's pressed now, and the watch is the pinned phrase's alone.
+  const bringOneBack = (lovejoin: LovejoinService) =>
+    lovejoin.withdrawNow("preprod", { txHash: "e1".repeat(32), txIndex: 0, pool: ADA }).then(
+      (p) => p.txHash,
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+  const watched = (t: T) => t.wallet.withKeys(() => t.session.get<{ txHash: string }>(pendingKey("preprod")));
+
+  it("Bring one back, giveme.my answering meanwhile: none of it goes, nor into the other phrase's schedule, history or watch", async () => {
+    const { t, lovejoin } = await due();
+    const real = t.collateral.fetch;
+    let listed: AtStake[] | undefined;
+    // What's written into the other phrase's Lovejoin record once it's in: a withdraw kept there, even for a moment.
+    const set = t.store.set.bind(t.store);
+    const kept: unknown[] = [];
+    t.collateral.fetch = async (url, init) => {
+      if (listed === undefined) {
+        listed = await removedForOther(t, lovejoin);
+        t.store.set = (async (key: Parameters<typeof set>[0], value: unknown) => {
+          if (key === "lovejoin.preprod" && (value as { withdrawing?: unknown }).withdrawing) kept.push((value as { withdrawing: unknown }).withdrawing);
+          return set(key, value);
+        }) as typeof t.store.set;
+      }
+      return real(url, init);
+    };
+    const outcome = await bringOneBack(lovejoin);
+    t.collateral.fetch = real;
+    t.store.set = set;
+    expect(listed).toEqual([]);
+    expect((await t.wallet.account("preprod")).receiveAddress).toBe(OTHER.preprod.receive_0);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(kept).toEqual([]);
+    expect((await t.store.get<{ withdrawing?: unknown }>("lovejoin.preprod"))?.withdrawing).toBeUndefined();
+    expect(await history(t)).toEqual([]);
+    expect(await watched(t)).toBeUndefined();
+    expect(outcome).toBe("The wallet is locked.");
+  });
+
+  it("Bring one back, Koios answering its submit meanwhile: the other phrase's Home watches none of it", async () => {
+    const { t, lovejoin } = await due();
+    let listed: AtStake[] | undefined;
+    submitting(t, (taken) => taken!, { meanwhile: async () => void (listed = await removedForOther(t, lovejoin)) });
+    const outcome = await bringOneBack(lovejoin);
+    const sent = txIdOf(t.koios.submitted.at(-1)!);
+    expect(listed).toEqual([]);
+    expect((await t.wallet.account("preprod")).receiveAddress).toBe(OTHER.preprod.receive_0);
+    expect(await history(t)).not.toContain(sent);
+    expect(await watched(t)).toBeUndefined();
+    expect(outcome).toBe("The wallet is locked.");
   });
 });

@@ -97,6 +97,26 @@ describe("a return's chain through Lovejoin (independent review L20)", () => {
     expect(review.lovejoin).toBeUndefined();
     expect(review.lovejoinSkipped).toMatch(/5\u00a0₳ collateral isn't at its account/);
   });
+
+  // Anyone can pay the session's account exactly 5 ₳ with a token beside it, or under a datum by hash, which the
+  // evaluator can't find: neither stands in for the session's own once that's gone (chunk 51, t1h#6, t1h#7).
+  it("says why when the only 5 ₳ there carries a token, or a datum by hash", CHAINS, async () => {
+    const strangers: KoiosUtxo[] = [
+      {
+        ...atSession("0e".repeat(32), 0, "5000000"),
+        asset_list: [{ policy_id: "5c".repeat(28), asset_name: "01", quantity: "1", decimals: 0, fingerprint: "" }] as never,
+      },
+      { ...atSession("0d".repeat(32), 0, "5000000"), datum_hash: "ee".repeat(32) },
+    ];
+    for (const stranger of strangers) {
+      const { t, sessions } = await withSession();
+      t.koios.spent.add(`${"c2".repeat(32)}#1`);
+      t.koios.addedToAccounts.unshift(stranger);
+      const review = await sessions.backBuild("preprod", 0);
+      expect(review.lovejoin, stranger.tx_hash).toBeUndefined();
+      expect(review.lovejoinSkipped, stranger.tx_hash).toMatch(/5\u00a0₳ collateral isn't at its account/);
+    }
+  });
 });
 
 /** The outputs a built payment makes, as Koios would list them once it lands. */

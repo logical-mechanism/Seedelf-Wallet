@@ -14,8 +14,12 @@ import { SESSION_COLLATERAL } from "../src/background/send";
 import { SESSION_SENT_PREFIX, type SentTx } from "../src/background/sent-txs";
 import { SESSION_SPENT } from "../src/background/spent";
 import type { KoiosUtxo } from "../src/background/koios";
+import { SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
+import { t as tr } from "../src/i18n";
 import { LOCAL_ACCOUNT } from "../src/shared/preferences";
+import { account, CHAINS, publicFunded, type Tested } from "./chain-fixtures";
 import { accountMintPreprod, koiosPreprod, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
+import { ADA } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const phrase = (words: number) =>
@@ -377,5 +381,99 @@ describe("the lists while a spend is on its way", () => {
     expect(after.seedelf.utxos).toBe(before.seedelf.utxos - 1);
     const counted = seedelf.filter((u) => !u.seedelf).reduce((sum, u) => sum + BigInt(u.lovelace), 0n);
     expect(counted).toBe(BigInt(after.seedelf.lovelace));
+  });
+});
+
+// Chunk 51, e8b#1: a stranger's 5 ₳ of ADA alone at the public account's 0/0 that carries a reference script, or an
+// inline datum nested past core's cbor::MAX_DEPTH (128), or a datum by hash, was the collateral-shaped UTxO the wallet
+// took by itself: with no collateral chosen, collateralOf took it as the oldest pure 5 ₳, and after a reclaim it was
+// the Collateral page's candidate, the only UTxO its Set offers. Every Lovejoin build from the public account then
+// failed: WebAssembly's Coin::from_row puts the collateral through eval::resolve_row, which refuses those shapes. The
+// wallet's own pick and the page's candidate now take only what a session's chain would put up (`collateralFits`).
+describe("a stranger's 5 ₳ the wallet can't put up (chunk 51, e8b#1)", CHAINS, () => {
+  const STRANGER = "d7".repeat(32);
+  const OWN_FIVE = `${"e5".repeat(32)}#0`; // publicFunded's own 5 ₳
+
+  /** What a stranger can put on an output of 5 ₳ alone: a reference script (one the wallet can measure), or a deep datum. */
+  const SHAPES: Array<[string, Partial<KoiosUtxo>]> = [
+    ["a reference script", { reference_script: { hash: "ab".repeat(28), size: 3, type: "timelock", bytes: "820080" } }],
+    ["an inline datum 200 levels deep", { inline_datum: { bytes: `${"81".repeat(200)}00`, value: null } }],
+  ];
+
+  /** The stranger's 5 ₳ at the 12-word account's 0/0, a block older than publicFunded's own 5 ₳. */
+  async function strangers(t: Tested, shape: Partial<KoiosUtxo>): Promise<void> {
+    const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
+    const keyHash = await t.wallet.withKeys((keys) => keys.cardano.paymentKeyHash(0, 0));
+    t.koios.addedToAccounts.push({
+      ...first!,
+      tx_hash: STRANGER,
+      tx_index: 0,
+      address: account(12).preprod.receive_0,
+      value: "5000000",
+      payment_cred: keyHash,
+      asset_list: [],
+      block_height: first!.block_height! - 1,
+      ...shape,
+    });
+  }
+
+  /** A wallet with no 5 ₳ of its own, the stranger's read. */
+  async function strangersOnly(shape: Partial<KoiosUtxo>): Promise<Tested> {
+    const t = testBalances();
+    await t.wallet.create(account(12).phrase, PASSWORD);
+    await strangers(t, shape);
+    await t.balances.get("preprod");
+    // It was read: the account's list holds it.
+    expect((await t.coins.lists("preprod")).cardano.some((u) => u.txHash === STRANGER)).toBe(true);
+    return t;
+  }
+
+  it.each([...SHAPES, ["a datum by hash", { datum_hash: "ab".repeat(32) }] as [string, Partial<KoiosUtxo>]])(
+    "with %s is neither the account's collateral nor the Collateral page's candidate",
+    async (_, shape) => {
+      const t = await strangersOnly(shape);
+      // The wallet takes none by itself: there's no 5 ₳ a public mix could put up, so Set pays 5 ₳ to 0/0.
+      expect(await t.coins.collateral("preprod")).toEqual({ state: "none", reclaimed: false });
+      // Nor is it offered after a reclaim, where Set takes the candidate (Collateral.tsx).
+      expect(await t.coins.reclaim("preprod")).toEqual({ state: "none", reclaimed: true });
+    },
+  );
+
+  // Chunk 51, t1j#5: a 5 ₳ UTxO that holds a token too is no collateral: the ledger takes a collateral of ADA alone
+  // unless the transaction returns the rest, which a site's doesn't, so neither the wallet's pick, the page's candidate
+  // nor a choice may be one.
+  const TOKENED: Partial<KoiosUtxo> = {
+    asset_list: [{ policy_id: "aa".repeat(28), asset_name: "6a756e6b", quantity: "1", decimals: 0, fingerprint: "" }],
+  };
+
+  it("holding a token too, is never the collateral, nor offered, nor taken as a choice", async () => {
+    const t = await strangersOnly(TOKENED);
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "none", reclaimed: false });
+    await expect(t.coins.use("preprod", `${STRANGER}#0`)).rejects.toThrow(tr("worker.coins.exactlyFive"));
+  });
+
+  it("holding a token too, and older, leaves the account's own pure 5 ₳ the collateral", async () => {
+    const t = await publicFunded();
+    await strangers(t, TOKENED);
+    await t.balances.get("preprod", true);
+    expect(await t.coins.collateral("preprod")).toMatchObject({ state: "set", by: "wallet", utxo: { txHash: OWN_FIVE.slice(0, 64), index: 0 } });
+  });
+
+  it("chosen by the user, is the collateral all the same: the ledger takes it", async () => {
+    const t = await strangersOnly(SHAPES[0]![1]);
+    expect(await t.coins.use("preprod", `${STRANGER}#0`)).toMatchObject({ state: "set", by: "you", utxo: { txHash: STRANGER, index: 0 } });
+  });
+
+  it.each(SHAPES)("with %s leaves a public mix the account's own 5 ₳ to put up", async (_, shape) => {
+    const t = await publicFunded();
+    await strangers(t, shape);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
+    expect(mix.mixes).toBeGreaterThan(0);
+    const kept = await t.wallet.withKeys(() =>
+      t.session.get<{ chain: Array<{ kind: string; txCbor: string }> }>(SESSION_LOVEJOIN_PUBLIC),
+    );
+    for (const tx of kept!.chain.filter((x) => x.kind === "mix")) {
+      expect(bodyOutpoints(hexBytes(tx.txCbor), 13)).toEqual([OWN_FIVE]);
+    }
   });
 });

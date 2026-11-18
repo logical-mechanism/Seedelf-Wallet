@@ -2785,3 +2785,84 @@ fn the_most_a_private_bootstrap_puts_in_is_the_most_that_builds() {
     assert!(bootstraps(&fees, &classic, true, paid).is_some());
     assert!(bootstraps(&fees, &classic, true, paid + 1).is_none());
 }
+
+/// A reference UTxO at the holder holding `quantity` of the token `name`
+/// under the pool's policy and ADA alone, `datum` inline.
+fn holding(name: &[u8], quantity: u64, datum: &[u8]) -> Resolved {
+    let address: Address = ShelleyAddress::new(
+        Network::Testnet,
+        ShelleyPaymentPart::Script(Hash::new(templates::REFERENCE_HOLDER_HASH)),
+        ShelleyDelegationPart::Null,
+    )
+    .into();
+    let output = Output::new(address, 2_000_000)
+        .add_asset(Hash::new(LJ_POLICY), name.to_vec(), quantity)
+        .unwrap()
+        .set_inline_datum(datum.to_vec());
+    Resolved {
+        tx_hash: [0x45; 32],
+        index: 0,
+        output: output
+            .build_babbage_raw()
+            .unwrap()
+            .encode_fragment()
+            .unwrap(),
+    }
+}
+
+/// Chunk 51, t1d#5: a pool's reference holds one token of its policy, named
+/// lovejoin, as one_shot_mint mints it: two of them, or one under another
+/// name, is no pool's reference.
+#[test]
+fn a_reference_holding_other_than_one_lovejoin_nft_is_no_pool() {
+    let datum = lj_datum().encode();
+    assert!(lovejoin::verify_pool(true, &holding(b"lovejoin", 1, &datum), LJ_SEED, &[]).is_ok());
+    for (name, quantity) in [(&b"lovejoin"[..], 2u64), (&b"junk"[..], 1)] {
+        let found = lovejoin::verify_pool(true, &holding(name, quantity, &datum), LJ_SEED, &[]);
+        assert_eq!(
+            found.err(),
+            Some(Rejected::NotOneNft),
+            "{quantity} of {}",
+            String::from_utf8_lossy(name)
+        );
+    }
+}
+
+/// Chunk 51, t1d#6: a v2 pool whose datum names another mix_logic (L) isn't
+/// one the wallet trusts. derive_for falls back to v2's scripts for an L it
+/// doesn't know, whose M then matches, so only the L check refuses it.
+#[test]
+fn a_v2_datum_naming_another_mix_logic_is_wrong_scripts() {
+    let derived = templates::derive_in(templates::Set::V2, &LJ_SEED.0, LJ_SEED.1).unwrap();
+    let genuine = ReferenceDatum {
+        mix_box_hash: derived.mix_box.hash,
+        mix_logic_hash: derived.mix_logic.hash,
+        fee_hash: derived.fee_contract.hash,
+        ..lj_datum()
+    };
+    let holder = templates::REFERENCE_HOLDER_HASH;
+    let verify = |d: &ReferenceDatum| {
+        let reference = candidate_output(derived.policy(), &d.encode(), None, false, None, holder);
+        lovejoin::verify_pool(true, &reference, LJ_SEED, &[])
+    };
+    assert_eq!(verify(&genuine).unwrap().version, Version::V2);
+    let wrong = ReferenceDatum {
+        mix_logic_hash: [1; 28],
+        ..genuine
+    };
+    assert_eq!(verify(&wrong).err(), Some(Rejected::WrongScripts));
+}
+
+/// Chunk 51, t1d#7: a launch the wallet would sign publishes its two scripts
+/// at the holder. Lovejoin's own preprod launch, whose scripts sit at a key
+/// address, is a genuine pool but not a launch of the wallet's.
+#[test]
+fn a_launch_whose_scripts_arent_at_the_holder_isnt_the_wallets() {
+    let doc = json(include_str!("fixtures/lovejoin-token-preprod.json"));
+    let mint = hex::decode(doc["txs"][0]["cbor"].as_str().unwrap()).unwrap();
+    let why = lovejoin::launched_pool(true, &mint, LJ_SEED).map(|pool| pool.id);
+    assert!(
+        matches!(&why, Err(e) if e.to_string().contains("doesn't publish its scripts at the holder")),
+        "{why:?}"
+    );
+}

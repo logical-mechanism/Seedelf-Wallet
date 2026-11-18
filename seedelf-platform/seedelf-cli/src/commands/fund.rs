@@ -1,4 +1,4 @@
-use crate::commands::fee;
+use crate::commands::{fee, rows};
 use crate::web_server;
 use anyhow::{Result, bail};
 use clap::Args;
@@ -102,7 +102,7 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
 
     let seedelf_utxo: UtxoResponse = match utxos::find_seedelf_utxo(
         args.seedelf.clone(),
-        &config.contract.seedelf_policy_id,
+        &config.contract,
         every_utxo_at_script,
     ) {
         Ok(Some(utxo)) => utxo,
@@ -130,6 +130,18 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
     // reference-script fee, and the script may be deployed there on purpose:
     // never spend one here.
     every_non_collatreal_utxo.retain(|utxo| utxo.reference_script.is_none());
+    // Anyone can pay the address too: what would push a token's total past
+    // what one output holds stays out of the selection (chunk 51), and core
+    // is handed no more kinds of token than one transaction could carry
+    // (l3cli#3).
+    let every_non_collatreal_utxo = rows::for_select(
+        &params,
+        every_non_collatreal_utxo,
+        &selected_tokens,
+        &Assets::new(),
+    )?;
+    let (every_non_collatreal_utxo, _) =
+        utxos::fitting(&every_non_collatreal_utxo, &Assets::new(), |_| false)?;
     let usable_utxos: Vec<UtxoResponse> = utxos::select(
         &params,
         every_non_collatreal_utxo,
@@ -284,9 +296,9 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
 
     println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
-    // inject the tx cbor into the local webserver to prompt the wallet
-    display::webserver_address();
-    web_server::run_web_server(tx_cbor, network_flag).await;
+    // inject the tx cbor into the local webserver to prompt the wallet; it
+    // prints the page's address once it's serving
+    web_server::run_web_server(tx_cbor, network_flag).await?;
     text_coloring::display_purple("Server has stopped.");
 
     Ok(())

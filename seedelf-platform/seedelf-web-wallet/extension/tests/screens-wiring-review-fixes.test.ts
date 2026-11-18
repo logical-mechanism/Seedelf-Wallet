@@ -209,7 +209,7 @@ vi.mock("../src/ui/background", async (original) => ({
 const { t } = await import("../src/i18n");
 const { DEFAULT_PREFERENCES } = await import("../src/shared/preferences");
 const { NetworkContext } = await import("../src/ui/network");
-const { PreferencesContext } = await import("../src/ui/preferences");
+const { HIDDEN, PreferencesContext } = await import("../src/ui/preferences");
 const { AccountsContext } = await import("../src/ui/accounts");
 const { Collateral } = await import("../src/ui/screens/Collateral");
 const { LockCountdown } = await import("../src/ui/components/LockCountdown");
@@ -219,17 +219,28 @@ const { NewSwap, Session } = await import("../src/ui/screens/Swaps");
 const { ConnectRequest } = await import("../src/ui/screens/DappApprovals");
 const { SiteSession } = await import("../src/ui/screens/SiteSessions");
 const { COLLATERAL_MIX_COST } = await import("../src/ui/components/LovejoinReturn");
-const { adaText, formatAda } = await import("../src/ui/format");
+const { adaText, formatAda, tokenKey } = await import("../src/ui/format");
 const { SESSION_FEE_ESTIMATE, toCents } = await import("../src/ui/swap");
 const { TxDetailButton, TxDetailModal } = await import("../src/ui/components/TxDetail");
 const { Transfer } = await import("../src/ui/screens/Transfer");
 const { Withdraw } = await import("../src/ui/screens/Withdraw");
 const { CardanoSend } = await import("../src/ui/screens/CardanoSend");
+const { PhraseInput } = await import("../src/ui/components/PhraseInput");
+const { Home } = await import("../src/ui/screens/Home");
+const { ADA_HANDLE_POLICY } = await import("../src/shared/handles");
+const { assetFingerprint } = await import("../src/shared/fingerprint");
 
 /** The test's clock, as the fake timers keep it. */
 const NOW = Date.UTC(2026, 9, 25, 12);
 const TX = "ab".repeat(32);
 const noop = () => undefined;
+/**
+ * A token off the wallet's list (2 preprod, 32 mainnet), 1,000,000 of its raw units: as the private side holds it, with
+ * Koios's 6 decimals, and as WebAssembly's token lists give it back in a summary, with none (chunk 51, r2sign#3).
+ */
+const FOO = { policyId: "f0".repeat(28), assetName: "464f4f" };
+const FOO_HELD = { ...FOO, quantity: "1000000", decimals: 6, fingerprint: assetFingerprint(FOO) };
+const FOO_RAW = { ...FOO, quantity: "1000000" };
 
 /** The worker answers `type` with `value`, or with what `value` makes of the payload. */
 function answer(type: string, value: unknown) {
@@ -879,6 +890,346 @@ describe("a site's funding review and its top-up's, counting what the summary th
   });
 });
 
+// Chunk 51, e3b#2: the connect window's private-session form reads the private balance itself (`balances`), and stated,
+// capped and offered its tokens against all of it, what the user locked included, where Home hands every other form the
+// unlocked side and the funding's build leaves a locked UTxO out: with 100 ₳ held and 60 ₳ of it locked with a token,
+// it said 100 ₳, took 50 ₳ with Review on and offered the token, and the build refused both. Its review's "after"
+// starts from Home's figure all the same, the locked ₳ in it.
+describe("the connect window's private session, held to what its funding can spend (chunk 51, e3b#2)", () => {
+  const token = { policyId: "16".repeat(28), assetName: "4f4e45", quantity: "1" };
+  /** The worker's reading: 100 ₳ over two UTxOs, 60 ₳ and a token in the one the user locked. */
+  const seedelf = { lovelace: "100000000", tokens: [token], utxos: 2, seedelfs: [], locked: { lovelace: "60000000", tokens: [token], utxos: 1 } };
+  const address = "addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz";
+  /** Its funding, built: 24 ₳ for the site, the 5 ₳ kept aside and a 0.23 ₳ fee, 29.23 ₳ in all. */
+  const funding = {
+    network: "preprod",
+    txHash: TX,
+    index: 0,
+    address,
+    payments: [
+      { address, lovelace: "24000000", tokens: [] },
+      { address, lovelace: "5000000", tokens: [] },
+    ],
+    max: false,
+    fee: { size: "200000", compute: "30000", scriptReference: "0", total: "230000" },
+    changeLovelace: "0",
+    changeTokens: 0,
+    changeOutputs: 0,
+    changeMinimum: "0",
+    inputs: 1,
+    left: 0,
+  };
+  /** The connect window with a private session chosen (the first state that starts undefined), its effects run. */
+  const connect = (side = seedelf, prefs: Partial<typeof DEFAULT_PREFERENCES> = {}) => {
+    seam.effects.add("ConnectRequest");
+    answer("balances", { seedelf: side });
+    seedInitial(undefined, "private");
+    return render(
+      createElement(ConnectRequest, {
+        approval: { kind: "connect", id: "a1", origin: "https://example.org", title: "Example", password: false },
+        busy: false,
+        held: false,
+        onError: noop,
+        onAnswer: async () => false,
+      } as never),
+      prefs,
+    );
+  };
+  /** Its form with `amount` typed: the state after the governance switch's and the private balance's. */
+  const form = (amount: string, side = seedelf, prefs: Partial<typeof DEFAULT_PREFERENCES> = {}) => {
+    seam.seeds.push({ after: [false, undefined], initial: "", value: amount });
+    return connect(side, prefs);
+  };
+  /** The line under the amount, as a person reads it. */
+  const held = (page: string) => words(/data-testid="dapp-private-held"[^>]*>(.*?)<\/p>/s.exec(page)?.[1] ?? "");
+  /** What it says with `ada` free and `locked` locked, as Make public says it. */
+  const available = (ada: string, locked: string) =>
+    words(t("dappUi.availableAndCollateral", { ada, locked: t("home.lockedMeta", { amount: locked }) }));
+  /** The note for an amount over `ada`, free (`where` "withdraw.available") or all of it ("withdraw.inPrivate"). */
+  const over = (ada: string, where: "withdraw.available" | "withdraw.inPrivate") =>
+    words(t("withdraw.tooMuch", { amount: ada, available: t(where) }));
+
+  it("states and caps the amount at what isn't locked, and offers no token held only in a locked UTxO", () => {
+    const free = formatAda("40000000");
+    const page = form("50");
+    expect(asked()).toContain("balances");
+    expect(held(page)).toBe(available(free, formatAda("60000000")));
+    expect(words(page)).toContain(over(free, "withdraw.available"));
+    expect(page).toMatch(/<button type="submit" class="primary" disabled="">/);
+    expect(page).not.toContain('class="token-picker"');
+
+    seam.reset();
+    const fits = form("30");
+    expect(words(fits)).not.toContain(over(free, "withdraw.available"));
+    expect(fits).toMatch(/<button type="submit" class="primary">/);
+  });
+
+  // Chunk 51, r2screens#1: the line and the note called that side what's "in your private balance", with nothing of the
+  // lock: "40 ₳ in your private balance", and with everything locked "0 ₳", Review off with no reason given. They say
+  // it as Make public does, "available" and what's locked beside it (chunk 12's #23), and say no lock where there's none.
+  it("says what's locked beside what it can spend, everything locked too, and no lock where there's none", () => {
+    const all = form("10", { ...seedelf, locked: { lovelace: "100000000", tokens: [token], utxos: 2 } });
+    expect(held(all)).toBe(available("0", formatAda("100000000")));
+    expect(words(all)).toContain(over("0", "withdraw.available"));
+    expect(words(all)).not.toContain(t("withdraw.inPrivate"));
+    expect(all).toMatch(/<button type="submit" class="primary" disabled="">/);
+
+    seam.reset();
+    const none = form("150", { ...seedelf, locked: { lovelace: "0", tokens: [], utxos: 0 } });
+    expect(held(none)).toBe(words(t("dappUi.heldAndCollateral", { ada: formatAda("100000000") })));
+    expect(words(none)).toContain(over(formatAda("100000000"), "withdraw.inPrivate"));
+    expect(words(none)).not.toMatch(/\blocked\b/);
+  });
+
+  it("hides its figures with the balances, what's locked among them (HM-9)", () => {
+    const page = form("50", seedelf, { hideBalances: true });
+    expect(held(page)).toBe(available(HIDDEN, HIDDEN));
+    expect(words(page)).toContain(over(HIDDEN, "withdraw.available"));
+    expect(words(page)).not.toContain(`${formatAda("60000000")} ₳`);
+    expect(words(page)).not.toContain(`${formatAda("40000000")} ₳`);
+  });
+
+  it("counts its review's after from Home's figure, the locked ₳ in it, as every other review does", () => {
+    // The review: the state after the amount's and its tokens', both empty.
+    seed(["", {}], funding);
+    const page = connect();
+    expect(row(page, "dapp-funding-rows", t("review.after.private"))).toBe(ada((100_000_000n - 29_230_000n).toString()));
+  });
+
+  // Chunk 51, r2sign#3's sibling: WebAssembly's token lists carry no decimals, so the row for the site showed a token off
+  // the wallet's list in raw units, 10^6 times what the form above it and Home say. It takes the decimals the private
+  // side holds it with, Koios's from the rows the funding spends, as Make public's review does; the wallet's list first.
+  it("shows the site's tokens in the units the private balance holds them in", () => {
+    const side = { ...seedelf, tokens: [FOO_HELD], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+    const [site, kept] = funding.payments;
+    seed(["", {}], { ...funding, payments: [{ ...site!, tokens: [FOO_RAW] }, kept!] });
+    const page = words(connect(side));
+    expect(page).toMatch(/(?<![\d,.])1 FOO\b/);
+    expect(page).not.toContain("1,000,000 FOO");
+  });
+});
+
+// Chunk 51, x1b#1: a site session's Bring it back review through Lovejoin opened Transaction details on its chain's last
+// transaction, the return, under the plain words, where every other chain review opens the chain's first, the deposit,
+// and names it (6bd936f4; flows.md, "A chain's review shows the transaction the money goes in through"). The return
+// spends the last mix's change, which nothing has sent yet. The worker's side is pinned already (chain-entry.test.ts):
+// the summary's `txHash` is the chain's last, its `lovejoin.entry` the first, and the view opens either by hash.
+describe("which transaction a session's return review opens (chunk 51, x1b#1)", () => {
+  /** The chain's first transaction, its deposit: where the session's money goes into the pool. */
+  const DEPOSIT = "d0".repeat(32);
+  /** The chain's last, the return. */
+  const RETURN = "ba".repeat(32);
+  const POOL = "5e".repeat(28);
+  const session = { index: 0, stage: "open", site: { origin: "https://example.org" }, txs: [], createdAt: NOW };
+  const seedelf = { lovelace: "50000000", tokens: [], utxos: 2, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+  /** A return of about 40 ₳ through Lovejoin (sessions.ts buildBack): six 5 ₳ boxes, a deposit, eight mixes, the return. */
+  const through = {
+    network: "preprod",
+    index: 0,
+    txHash: RETURN,
+    fee: "3900000",
+    lovelace: "6100000",
+    tokens: [],
+    depositOutputs: 1,
+    inputs: 2,
+    merged: 1,
+    lovejoin: { boxes: 6, depth: 2, mixes: 8, fees: "3900000", txs: 10, delay: "1-6", pool: POOL, values: { [POOL]: { lovelace: "5000000" } }, entry: DEPOSIT },
+  };
+  /** The same return coming back directly: one transaction, the return itself. */
+  const { lovejoin: _lovejoin, ...direct } = through;
+  /** What the review's button opens and says (`label`, none for "Transaction details"), and the page. */
+  const opened = (testId: string, page: () => string) => {
+    let button: Record<string, unknown> | undefined;
+    on((name, props) => name === "TxDetailButton" && props.testId === testId, (props) => (button = props));
+    const markup = page();
+    expect(button, `${testId} made`).toBeDefined();
+    return { txHash: button!.txHash, label: button!.label, words: words(markup) };
+  };
+  /** The site session's page, its return's review built: the state after which part shows. */
+  const site = (back: unknown) => () => {
+    seed(["main"], back);
+    return render(
+      createElement(SiteSession, { session, seedelf, reading: false, onRefresh: noop, onBack: noop, onPending: noop, onDisconnected: noop } as never),
+    );
+  };
+
+  it("a site's return through Lovejoin opens its chain's first transaction, the deposit, and names it", () => {
+    const { txHash, label, words: said } = opened("site-back-tx", site(through));
+    expect({ txHash, label }).toEqual({ txHash: DEPOSIT, label: t("tx.entry.deposit") });
+    expect(said).toContain(words(t("tx.entry.deposit")));
+    expect(said).not.toContain(words(t("tx.detailsButton")));
+  });
+
+  it("as the same return reviewed from a swap's page does (6bd936f4)", () => {
+    const { txHash, label } = opened("session-back-tx", () => {
+      seed([session, undefined, undefined], through);
+      return render(createElement(Session, { session, reading: false, onRefresh: noop, onBack: noop, onChanged: noop } as never));
+    });
+    expect({ txHash, label }).toEqual({ txHash: DEPOSIT, label: t("tx.entry.deposit") });
+  });
+
+  it("a site's return that comes back directly is one transaction: it opens that one, under the plain words", () => {
+    const { txHash, label, words: said } = opened("site-back-tx", site(direct));
+    expect({ txHash, label }).toEqual({ txHash: RETURN, label: undefined });
+    expect(said).toContain(words(t("tx.detailsButton")));
+  });
+});
+
+// Chunk 51, t1i#13: a private session's funding the network or giveme.my refused is used up (its session was
+// recorded before it was sent): its review offers building it again, never Send. The form's own submit, Enter in the
+// password box, mustn't send it again either. No test failed without the check; the worker refuses a second send all
+// the same (sessions.ts refuseStarted).
+describe("a private session's funding, refused, never sent again from its review (chunk 51, t1i#13)", () => {
+  const address = "addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz";
+  const funding = {
+    network: "preprod",
+    txHash: TX,
+    index: 0,
+    address,
+    payments: [
+      { address, lovelace: "24000000", tokens: [] },
+      { address, lovelace: "5000000", tokens: [] },
+    ],
+    max: false,
+    fee: { size: "200000", compute: "30000", scriptReference: "0", total: "230000" },
+    changeLovelace: "0",
+    changeTokens: 0,
+    changeOutputs: 0,
+    changeMinimum: "0",
+    inputs: 1,
+    left: 0,
+  };
+  /** The funding's review, refused or not, with its form submitted (Enter): what it asked the window to send. */
+  function submitted(refused: boolean): unknown[] {
+    seam.reset();
+    const sends: unknown[] = [];
+    // The review: the state after the amount's and its tokens', both empty; the refusal, after its building and password.
+    seed(["", {}], funding);
+    if (refused) seed([false, ""], { kind: "again", detail: "giveme.my refused the collateral" });
+    on(
+      (name, props) => name === "Screen" && props.review === true,
+      (props) => (props.onSubmit as (e: { preventDefault(): void }) => void)({ preventDefault: noop }),
+    );
+    render(
+      createElement(ConnectRequest, {
+        approval: { kind: "connect", id: "a1", origin: "https://example.org", title: "Example", password: false },
+        busy: false,
+        held: false,
+        onError: noop,
+        onAnswer: async (...args: unknown[]) => {
+          sends.push(args);
+          return false;
+        },
+      } as never),
+    );
+    return sends;
+  }
+
+  it("sends nothing on the form's submit while the refusal shows; without one, it sends the funding reviewed", () => {
+    expect(submitted(true)).toEqual([]);
+    expect(submitted(false)).toEqual([[true, { fund: { txHash: TX } }]]);
+  });
+});
+
+// Chunk 51, t1i#15: a site session's top-up form states and caps the amount at the spendable side Home hands it; no
+// test failed without the cap (the worker refuses the build anyway, NotEnoughPrivate, after the press).
+describe("a site session's top-up, held to the spendable private balance (chunk 51, t1i#15)", () => {
+  const seedelf = { lovelace: "80000000", tokens: [], utxos: 2, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+  /** The top-up form with `amount` typed: the session's page opened on it, and the first state that starts empty. */
+  function form(amount: string, side = seedelf, prefs: Partial<typeof DEFAULT_PREFERENCES> = {}): string {
+    seam.reset();
+    seedInitial("main", "top-up");
+    seam.seeds.push({ after: [], initial: "", value: amount });
+    return render(
+      createElement(SiteSession, {
+        session: { index: 0, stage: "open", site: { origin: "https://example.org" }, txs: [], createdAt: NOW },
+        seedelf: side,
+        reading: false,
+        onRefresh: noop,
+        onBack: noop,
+        onPending: noop,
+        onDisconnected: noop,
+      } as never),
+      prefs,
+    );
+  }
+
+  // Chunk 51, r2sign#3's sibling: WebAssembly's token lists carry no decimals, so the top-up's review showed a token off
+  // the wallet's list in raw units, 10^6 times what Home says. It takes the decimals the private side holds it with,
+  // Koios's from the rows the top-up spends, as Make public's review does; the wallet's list first.
+  it("shows its review's tokens in the units the private balance holds them in", () => {
+    const address = "addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz";
+    const summary = {
+      network: "preprod",
+      txHash: TX,
+      index: 0,
+      address,
+      payments: [{ address, lovelace: "24000000", tokens: [FOO_RAW] }],
+      max: false,
+      fee: { size: "200000", compute: "30000", scriptReference: "0", total: "230000" },
+      changeLovelace: "0",
+      changeTokens: 0,
+      changeOutputs: 0,
+      changeMinimum: "0",
+      inputs: 1,
+      left: 0,
+    };
+    seam.reset();
+    seedInitial("main", "top-up");
+    // The review: the state after the amount's and its tokens', both empty.
+    seed(["", {}], summary);
+    const page = words(
+      render(
+        createElement(SiteSession, {
+          session: { index: 0, stage: "open", site: { origin: "https://example.org" }, txs: [], createdAt: NOW },
+          seedelf: { ...seedelf, tokens: [FOO_HELD] },
+          reading: false,
+          onRefresh: noop,
+          onBack: noop,
+          onPending: noop,
+          onDisconnected: noop,
+        } as never),
+      ),
+    );
+    expect(page).toContain(words(t("sites.topUp.reviewTitle")));
+    expect(page).toMatch(/(?<![\d,.])1 FOO\b/);
+    expect(page).not.toContain("1,000,000 FOO");
+  });
+
+  // Chunk 51, r2screens#1's class: the form's line and its note called the unlocked side Home hands it the private
+  // balance, and said nothing of the lock: 100 ₳ held with 60 ₳ of it locked read "40 ₳ in your private balance". They
+  // say it as Make public does (chunk 12's #23).
+  it("says what's locked beside what it can spend, as Make public does, and no lock where there's none", () => {
+    // Home's unlocked side of 100 ₳ held over two UTxOs, 60 ₳ of it in the one the user locked.
+    const side = { ...seedelf, lovelace: "40000000", utxos: 1, locked: { lovelace: "60000000", tokens: [], utxos: 1 } };
+    const [free, held] = [formatAda("40000000"), formatAda("60000000")];
+    const over = words(form("50", side));
+    expect(over).toContain(words(`${t("withdraw.asideAvailable", { amount: free })}${t("home.lockedMeta", { amount: held })}`));
+    expect(over).toContain(words(t("withdraw.tooMuch", { amount: free, available: t("withdraw.available") })));
+    expect(over).not.toContain(t("withdraw.inPrivate"));
+
+    const open = words(form("100"));
+    expect(open).toContain(words(t("sites.topUp.aside", { ada: formatAda("80000000") })));
+    expect(open).toContain(words(t("withdraw.tooMuch", { amount: formatAda("80000000"), available: t("withdraw.inPrivate") })));
+    expect(open).not.toMatch(/\blocked\b/);
+
+    const hidden = words(form("50", side, { hideBalances: true }));
+    expect(hidden).toContain(words(`${t("withdraw.asideAvailable", { amount: HIDDEN })}${t("home.lockedMeta", { amount: HIDDEN })}`));
+    expect(hidden).not.toContain(`${held} ₳`);
+    expect(hidden).not.toContain(`${free} ₳`);
+  });
+
+  it("says the amount is more than the spendable side and keeps Review off, and lets one that fits through", () => {
+    const note = words(t("withdraw.tooMuch", { amount: formatAda("80000000"), available: t("withdraw.inPrivate") }));
+    const over = form("100");
+    expect(words(over)).toContain(note);
+    expect(over).toMatch(/<button type="submit" class="primary" disabled="">/);
+    const fits = form("30");
+    expect(words(fits)).not.toContain(note);
+    expect(fits).toMatch(/<button type="submit" class="primary">/);
+  });
+});
+
 describe("Transaction details' stepper, through a payment's parts (1.7.0's release review: pr335#0, pr335#3, x-mut-ts#6)", () => {
   const [first, second] = ["a1".repeat(32), "b2".repeat(32)];
   /** What the worker hands back for transaction `txHash`: its body is made as nothing here, so only its id is read. */
@@ -1254,5 +1605,221 @@ describe("someone else's payment key under an account's stake key, on Send's and
     expect(has(page, "withdraw-own")).toBe(false);
     // The payment and the fee, as every payment is counted (1.7.2's review of its fixes, r2-tests#2).
     expect(row(page, "withdraw-review", t("review.total.private"))).toBe(ada("600550000"));
+  });
+});
+
+// Chunk 51's T1 lens over the screens (lane T1l): guards on the public and private screens that a revert passed with
+// every test green. Each is pinned here, over the seam, against its revert.
+describe("the screens' guards no test pinned, wired (chunk 51, T1l)", () => {
+  const address = "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp";
+  const none = { lovelace: "0", tokens: [], utxos: 0 };
+  const staking = { registered: false, pool: null, drep: null, rewards: "0", deposit: "0" };
+  const cardano = { lovelace: "100000000", tokens: [], utxos: 3, addressesUsed: 1, locked: none, staking };
+  const seedelf = { lovelace: "800000000", tokens: [], utxos: 23, seedelfs: [], locked: none };
+  const token = { policyId: "aa".repeat(28), assetName: "01", quantity: "1" };
+  const held = { ...token, quantity: "5", decimals: 0, fingerprint: "" };
+  const theirs = `5eed0e1f${"ab".repeat(28)}`;
+  const mine = `5eed0e1f${"cd".repeat(28)}`;
+  /** `element` in a wallet of `count` accounts, account 0 on screen. */
+  const among = (element: ReactElement, count = 1) =>
+    createElement(
+      AccountsContext.Provider,
+      {
+        value: {
+          accounts: [0, 1, 2].slice(0, count).map((index) => ({ index })),
+          active: 0,
+          loaded: true,
+          name: "Account 1",
+          several: count > 1,
+          reload: async () => undefined,
+        },
+      },
+      element,
+    );
+  /** The To field of draft 0 read so, as DestinationInput keeps it, asking nothing. */
+  const readAs = (to: string, read: unknown) => seedInitial({}, { 0: { to, read } });
+  const anAddress = { state: "read", destination: { address, own: false } };
+  /** A review's total row (TotalRows `review-total`), its label naming the account where there are several. */
+  const total = (markup: string) => words(/data-testid="review-total"><dt>.*?<\/dt><dd[^>]*>(.*?)<\/dd>/.exec(markup)?.[1] ?? "");
+  /** Whether the form's Review, its submit, can be pressed. */
+  const reviewOn = (markup: string) => {
+    const submit = /<button type="submit" class="primary"([^>]*)>/.exec(markup);
+    return !!submit && !submit[1]!.includes('disabled=""');
+  };
+  /** The button whose own words are `label`: its attributes. */
+  const button = (markup: string, label: string) =>
+    [...markup.matchAll(/<button([^>]*)>(.*?)<\/button>/g)].find((m) => words(m[2]!) === words(label))?.[1];
+
+  it("Send's Total leaving counts a payment to another of the user's accounts, its token too (t1l#2)", () => {
+    const paid = { lovelace: "5000000", minimum: null, tokens: [token] };
+    const review = (ownAccount: number) => {
+      seam.reset();
+      seed([{}, false, "", false], { network: "preprod", txHash: TX, max: false, fee: "200000", changeLovelace: "0", changeTokens: 0, inputs: 1, payments: [{ address, own: true, ownAccount, ...paid }] });
+      return render(among(createElement(CardanoSend, { cardano, total: "100000000", onCancel: noop, onSent: noop }), 2));
+    };
+    // To Public account 2, from account 1: it leaves this account, the 5 ₳, the 0.2 ₳ fee and the token.
+    expect(total(review(1))).toBe(words(t("format.adaAndTokens", { ada: formatAda("5200000"), count: 1 })));
+    // The control: to this same account it comes straight back, and only the fee leaves.
+    expect(total(review(0))).toBe(ada("200000"));
+  });
+
+  it("Send privately's Total leaving leaves out a payment to the user's own Seedelf, its token too (t1l#3)", () => {
+    seed([{}, false], {
+      network: "preprod",
+      txHash: TX,
+      max: false,
+      fee: { size: "250000", compute: "20000", scriptReference: "0", total: "270000" },
+      changeLovelace: "0",
+      changeTokens: 0,
+      changeOutputs: 1,
+      changeMinimum: "0",
+      inputs: 2,
+      left: 0,
+      payments: [
+        { to: theirs, lovelace: "5000000", minimum: null, tokens: [], toSelf: false },
+        { to: mine, label: "web-wallet", lovelace: "2000000", minimum: null, tokens: [token], toSelf: true },
+      ],
+    });
+    const page = render(among(createElement(Transfer, { seedelf, total: "800000000", onCancel: noop, onSent: noop })));
+    // The 5 ₳ and the fee leave; the 2 ₳ and its token come back to the private balance.
+    expect(total(page)).toBe(ada("5270000"));
+  });
+
+  it("a recovery phrase pasted into its boxes is cleared from the clipboard (t1l#7)", () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText }, language: "en-US", languages: ["en-US"] });
+    const phrase = "abandon ability able about above absent absorb abstract absurd abuse access accident".split(" ");
+    const onChange = vi.fn();
+    on("WordBox", (props) => (props.onPaste as (text: string) => boolean)(phrase.join(" ")));
+    render(createElement(PhraseInput, { words: Array<string>(12).fill(""), onChange }));
+    expect(onChange).toHaveBeenCalledWith(phrase);
+    expect(writeText).toHaveBeenCalledWith("");
+  });
+
+  it("Send's form warns before an ADA Handle goes into someone's Seedelf, and not before an address (t1l#8)", () => {
+    const handle = { policyId: ADA_HANDLE_POLICY, assetName: Buffer.from("alice").toString("hex"), quantity: "1", decimals: 0, fingerprint: "" };
+    const form = (to: string, read: unknown) => {
+      seam.reset();
+      readAs(to, read);
+      return render(
+        among(createElement(CardanoSend, { cardano: { ...cardano, tokens: [handle] }, to, picked: { [tokenKey(handle)]: "1" }, onCancel: noop, onSent: noop })),
+      );
+    };
+    expect(has(form(theirs, { state: "seedelf", seedelf: { name: theirs, own: false } }), "handle-into-seedelf")).toBe(true);
+    expect(has(form(address, anAddress), "handle-into-seedelf")).toBe(false);
+  });
+
+  it("Home holds payments past 10 minutes while one Koios didn't answer may still land (t1l#11)", () => {
+    const reading = {
+      network: "preprod",
+      updatedAt: NOW,
+      seedelf: { ...seedelf, seedelfs: [{ assetName: mine, label: "web-wallet", lovelace: "1500000" }] },
+      cardano,
+    };
+    const home = (maybeSent: boolean) => {
+      seam.reset();
+      // The reading, and the payment Home watches: states only awaited answers reach.
+      seed([undefined, undefined], reading);
+      seam.seeds.push({
+        after: Array(7).fill(undefined),
+        initial: null,
+        value: { kind: "transfer", network: "preprod", txHash: TX, submittedAt: NOW - 11 * 60_000, confirmations: null, ...(maybeSent ? { maybeSent } : {}) },
+      });
+      return render(among(createElement(Home, {})));
+    };
+    // Sent 11 minutes ago, and Koios never answered it: it may still land, so Send and Make public wait for it.
+    const held = home(true);
+    for (const label of [t("home.action.sendPrivately"), t("home.action.makePublic")]) {
+      expect(button(held, label), label).toContain('disabled=""');
+      expect(words(button(held, label) ?? ""), label).toContain(words(t("home.busy.maybe")));
+    }
+    // The control: one Koios answered is held 10 minutes, no longer.
+    const free = home(false);
+    for (const label of [t("home.action.sendPrivately"), t("home.action.makePublic")]) {
+      expect(button(free, label), label).not.toContain('disabled=""');
+    }
+  });
+
+  it("Set collateral waits on an empty account, and while Home holds a payment, saying why (t1l#15)", () => {
+    const page = (utxos: number, blocked?: string) => {
+      seam.reset();
+      seam.effects.add("Collateral");
+      answer("collateral", { state: "none", reclaimed: false });
+      answer("balances", { cardano: { utxos } });
+      return render(createElement(Collateral, { onBack: noop, ...(blocked ? { blocked } : {}) }));
+    };
+    const why = (markup: string) => words(/data-testid="collateral-why">(.*?)<\/p>/.exec(markup)?.[1] ?? "");
+    const empty = page(0);
+    expect(why(empty)).toBe(words(t("collateral.fundFirst")));
+    expect(button(empty, t("collateral.set"))).toContain('disabled=""');
+    const blocked = "A payment is on its way: Home waits for it.";
+    const holding = page(2, blocked);
+    expect(why(holding)).toBe(blocked);
+    expect(button(holding, t("collateral.set"))).toContain('disabled=""');
+    // The control: funded, nothing held, it can be pressed, with no reason.
+    const free = page(2);
+    expect(has(free, "collateral-why")).toBe(false);
+    expect(button(free, t("collateral.set"))).not.toContain('disabled=""');
+  });
+
+  it("Make public stops at more than the private balance before Review, and says so (t1l#16)", () => {
+    const form = (amount: string) => {
+      seam.reset();
+      readAs(address, anAddress);
+      return render(among(createElement(Withdraw, { seedelf, to: address, amount, onCancel: noop, onSent: noop })));
+    };
+    const over = form("900");
+    expect(words(over)).toContain(words(t("withdraw.tooMuch", { amount: formatAda(seedelf.lovelace), available: t("withdraw.inPrivate") })));
+    expect(reviewOn(over)).toBe(false);
+    expect(asked()).not.toContain("withdraw-build");
+    // The control: 700 ₳ of the 800 ₳.
+    const within = form("700");
+    expect(has(within, "withdraw-too-much")).toBe(false);
+    expect(reviewOn(within)).toBe(true);
+  });
+
+  it("Send stops at more than the account can pay before Review, and says so (t1l#17)", () => {
+    const form = (amount: string) => {
+      seam.reset();
+      readAs(address, anAddress);
+      return render(among(createElement(CardanoSend, { cardano, to: address, amount, onCancel: noop, onSent: noop })));
+    };
+    const over = form("150");
+    expect(words(over)).toContain(words(t("moveIn.tooMuch", { amount: formatAda(cardano.lovelace) })));
+    expect(reviewOn(over)).toBe(false);
+    // The control: 50 ₳ of the 100 ₳.
+    const within = form("50");
+    expect(has(within, "send-too-much")).toBe(false);
+    expect(reviewOn(within)).toBe(true);
+  });
+
+  it("Make public's Max sends no token amounts, and the token boxes it hides don't hold Review (t1l#18)", () => {
+    const withToken = { ...seedelf, tokens: [held] };
+    const form = (typed: string, submit = false) => {
+      seam.reset();
+      readAs(address, anAddress);
+      // Max on, pressed after the token was picked.
+      seedInitial(false, true);
+      if (submit) on("Screen", (props) => (props.onSubmit as (e: { preventDefault(): void }) => void)({ preventDefault: noop }));
+      return render(among(createElement(Withdraw, { seedelf: withToken, to: address, picked: { [tokenKey(held)]: typed }, onCancel: noop, onSent: noop })));
+    };
+    // A token picked with an amount, then Max: Review asks for everything, and no token amount. (Either guard keeps
+    // it so: the boxes Max hides are left out of its amounts, and its payment drops any token amount.)
+    form("1", true);
+    const built = payloads("withdraw-build") as Array<{ payments: Array<{ lovelace: string | null; tokens: unknown[] }> }>;
+    expect(built).toHaveLength(1);
+    expect(built[0]!.payments).toEqual([{ to: address, lovelace: null, tokens: [] }]);
+    // A token picked and left empty, then Max: its hidden box doesn't hold Review back.
+    expect(reviewOn(form(""))).toBe(true);
+  });
+
+  it("Send privately's Add recipient turns Max off, and taking that recipient off leaves it off (t1l#19)", () => {
+    // Max on, then Add recipient, then that recipient taken off.
+    seedInitial(false, true);
+    on("AddRecipient", (props) => (props.onAdd as () => void)());
+    on((name, props) => name === "RecipientCard" && props.index === 1, (props) => (props.onRemove as () => void)());
+    const page = render(among(createElement(Transfer, { seedelf, onCancel: noop, onSent: noop })));
+    // One recipient again: its Max is there to press, and isn't pressed.
+    expect(button(page, t("common.max"))).toContain('aria-pressed="false"');
   });
 });

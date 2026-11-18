@@ -82,6 +82,13 @@ function reward(t: T, index: number) {
   return t.wallet.withKeys((keys) => keys.oneTime.rewardAddress(net, index));
 }
 
+/** An output at one-time account `index`'s own address, as Koios lists it by that account's payment key. */
+async function atAccount(t: T, index: number, tx_hash: string, value: string): Promise<KoiosUtxo> {
+  const net = loadTestWasm().Network.Preprod;
+  const own = await t.wallet.withKeys((keys) => ({ address: keys.oneTime.address(net, index), payment_cred: keys.oneTime.keyHash(index) }));
+  return { ...atSession(tx_hash, 0, value), ...own };
+}
+
 /** The sealed record of preprod's sessions, as the tests read it. */
 async function bookOf(t: T) {
   return t.store.get<{ next: number; sessions: Array<Record<string, any>> }>("sessions.preprod");
@@ -321,10 +328,7 @@ describe("the restore scan", () => {
     });
     await usedWith(t, 0, [[FUNDING_TX, 5_000_000]]);
     await usedWith(t, 1, [["c1".repeat(32), 5_000_100]]);
-    t.koios.addedToAccounts.push(
-      atSession(FUNDING_TX, 1, "20000000"),
-      { ...atSession("c1".repeat(32), 0, "7000000"), payment_cred: await t.wallet.withKeys((k) => k.oneTime.keyHash(1)) },
-    );
+    t.koios.addedToAccounts.push(atSession(FUNDING_TX, 1, "20000000"), await atAccount(t, 1, "c1".repeat(32), "7000000"));
     // Session 2 starts on this device while the scan reads.
     const real = t.koios.fetch;
     t.koios.fetch = async (url, init) => {
@@ -365,8 +369,7 @@ describe("the restore scan", () => {
     // Account 3 holds 7 ₳; account 25, in the second batch, holds nothing.
     await usedWith(t, 3, [["c3".repeat(32), 5_000_300]]);
     await usedWith(t, 25, [["d5".repeat(32), 5_002_500]]);
-    const key3 = await t.wallet.withKeys((k) => k.oneTime.keyHash(3));
-    t.koios.addedToAccounts.push({ ...atSession("c3".repeat(32), 0, "7000000"), payment_cred: key3 });
+    t.koios.addedToAccounts.push(await atAccount(t, 3, "c3".repeat(32), "7000000"));
     expect(await sessions.scan("preprod")).toEqual({ used: 2, found: [3] });
     expect((await bookOf(t))!.next).toBe(26);
   });

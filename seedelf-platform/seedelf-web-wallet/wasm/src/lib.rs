@@ -979,9 +979,11 @@ pub mod api {
     pub const MAX_MERGE: usize = 4;
 
     /// The session's own collateral among its UTxOs: its 5 ₳ ADA-only one,
-    /// or else the largest ADA-only one that covers a script's collateral
-    /// and leaves its return a valid output. Never one the wallet's evaluator
-    /// can't take (`seedelf_core::eval::refusal`).
+    /// or else the largest ADA-only one of 2 ₳ or more. A heavy return's fee
+    /// can take 3/2 of that one under an output's least: core then refuses it
+    /// (`build::CollateralShort`), and the return goes as the plain sweep,
+    /// which puts up none ([`session_return`]; chunk 51, r2money#1). Never one
+    /// the wallet's evaluator can't take (`seedelf_core::eval::refusal`).
     pub(crate) fn session_collateral(utxos: &[UtxoResponse]) -> Option<&UtxoResponse> {
         let ada_only = utxos
             .iter()
@@ -1346,7 +1348,8 @@ pub mod api {
     /// The return of `rows`, UTxOs under session `index`'s key, merged into
     /// `merge` (the funding's Seedelf change, checked here to be this
     /// wallet's): one Seedelf spend proven with `sk`, with `collateral` (one
-    /// of `rows`) as its collateral. The proofs are bound to a new one-time
+    /// of `rows`) as its collateral, refused as [`build::CollateralShort`]
+    /// where that can't carry it. The proofs are bound to a new one-time
     /// key, as every Seedelf spend's (privacy rule 1), never the session's:
     /// a site connected to the session can ask its key to sign, so a proof
     /// bound to it could be replayed in what the site builds. Measured in the
@@ -1429,6 +1432,7 @@ pub mod api {
                 pool,
                 &request.collateral_boxes,
                 &request.utxos,
+                &request.own,
                 &mut rewards,
             )
             .ok()
@@ -1442,13 +1446,22 @@ pub mod api {
                     request.own.clone(),
                 ),
             };
-            let plan = plan_return(&params, &rows, merge, &own)?;
-            if plan.taken.is_empty() {
-                bail!(NOTHING_PAYS);
+            let built = |merge: &[UtxoResponse]| {
+                let plan = plan_return(&params, &rows, merge, &own)?;
+                if plan.taken.is_empty() {
+                    bail!(NOTHING_PAYS);
+                }
+                built_or_without_strangers(plan, |plan| {
+                    planned_return(accounts, sk, &request, &params, plan)
+                })
+            };
+            match built(merge) {
+                // The merged form its collateral can't carry (`session_collateral`'s fallback, under 5 ₳, beside a
+                // heavy return): planned again with no merge, the plain sweep, which puts up no collateral, as
+                // plan_return makes it for a UTxO the merge can't measure (chunk 51, r2money#1).
+                Err(e) if build::is_collateral_short(&e) => built(&[]),
+                other => other,
             }
-            built_or_without_strangers(plan, |plan| {
-                planned_return(accounts, sk, &request, &params, plan)
-            })
         };
         let ((mut result, _), tail) = match tail {
             Some(t) => match attempt(Some(&t)) {
@@ -2308,14 +2321,45 @@ pub mod api {
         })
     }
 
-    /// Checks the UTxOs a Seedelf spend may pay with: every one is this
-    /// wallet's, none holds a seedelf (it would go with the change), and the
-    /// wallet's evaluator can take each (`seedelf_core::eval::refusal`): not
-    /// one holding a reference script. The worker leaves those out of what a
-    /// spend may pay with, so the balance, Max and coin control agree.
+    /// Whether `utxo` sits at Seedelf Wallet's contract on this network: its
+    /// address's payment part the contract's script, with any staking part.
+    /// Its address decides, never its `payment_cred` alone: Koios lists a
+    /// credential's UTxOs by its 28 bytes, a key's and a script's alike, so
+    /// asked for the contract's it lists the KEY address with the same 28
+    /// bytes too, which nothing can spend (chunk 51, x2#2; the worker's
+    /// `atContract`, core's `Protocol::spends_as_mix_box`).
+    pub fn at_wallet_contract(network_flag: bool, utxo: &UtxoResponse) -> Result<bool> {
+        let contract = get_config(VARIANT, network_flag)?
+            .contract
+            .wallet_contract_hash;
+        let network = if network_flag {
+            AddressNetwork::Testnet
+        } else {
+            AddressNetwork::Mainnet
+        };
+        Ok(matches!(
+            Address::from_bech32(&utxo.address),
+            Ok(Address::Shelley(s)) if s.network() == network
+                && matches!(s.payment(), ShelleyPaymentPart::Script(h) if **h == contract)
+        ))
+    }
+
+    /// Checks the UTxOs a Seedelf spend may pay with: every one sits at the
+    /// contract ([`at_wallet_contract`]) and is this wallet's, none holds a
+    /// seedelf (it would go with the change), and the wallet's evaluator can
+    /// take each (`seedelf_core::eval::refusal`): not one holding a reference
+    /// script. The worker leaves those out of what a spend may pay with, so
+    /// the balance, Max and coin control agree.
     fn check_spendable(sk: Scalar, chain: &Chain, utxos: &[UtxoResponse]) -> Result<()> {
         let policy = &chain.config.contract.seedelf_policy_id;
         for utxo in utxos {
+            if !at_wallet_contract(chain.network_flag, utxo)? {
+                bail!(
+                    "UTxO {}#{} isn't in the Seedelf Wallet contract",
+                    utxo.tx_hash,
+                    utxo.tx_index
+                );
+            }
             let owned = extract_bytes_with_logging(&utxo.inline_datum)
                 .map(|register| register.is_owned(sk).unwrap_or(false))
                 .unwrap_or(false);
@@ -2996,7 +3040,12 @@ pub mod api {
         if !is_seedelf_name(to) {
             bail!("A Seedelf's name is 64 hex characters starting 5eed0e1f");
         }
-        if utxo.payment_cred != hex::encode(chain.config.contract.wallet_contract_hash) {
+        // Its address decides ([`at_wallet_contract`]), and the row's own
+        // payment_cred must agree: at the KEY address carrying the contract's
+        // hash, the register is whatever a stranger wrote (chunk 51, x2#2).
+        if !at_wallet_contract(chain.network_flag, utxo)?
+            || utxo.payment_cred != hex::encode(chain.config.contract.wallet_contract_hash)
+        {
             bail!("That Seedelf isn't in the Seedelf Wallet contract, so it can't be paid");
         }
         let policy = &chain.config.contract.seedelf_policy_id;
@@ -5005,6 +5054,10 @@ pub mod api {
         pub to: Option<String>,
         /// What comes back: the ADA locked with it, less the fee.
         pub lovelace: String,
+        /// And every other token its UTxO held, which comes back with it:
+        /// anyone can mint a Seedelf beside tokens of theirs under a register
+        /// of ours (chunk 51, w1b#2). The burned Seedelf isn't among them.
+        pub tokens: Vec<TokenAmount>,
         pub fee: FeeOut,
         pub inputs: Vec<OutRef>,
     }
@@ -5016,6 +5069,10 @@ pub mod api {
     ) -> Result<(ScriptSpend, Vec<u8>)> {
         let chain = chain_of(&request.network, &request.params)?;
         let utxo = &request.utxo;
+        // Only a UTxO at the contract's script can be spent (chunk 51, x2#2).
+        if !at_wallet_contract(chain.network_flag, utxo)? {
+            bail!("That Seedelf isn't in the Seedelf Wallet contract");
+        }
         let owned = extract_bytes_with_logging(&utxo.inline_datum)
             .is_some_and(|register| register.is_owned(sk).unwrap_or(false));
         if !owned {
@@ -5072,6 +5129,7 @@ pub mod api {
             name: hex::encode(name),
             to: request.to.as_ref().map(|t| t.trim().to_string()),
             lovelace: built.change_lovelace.to_string(),
+            tokens: built.change_tokens.items.iter().map(token_amount).collect(),
             fee: fee_out(&built.fee),
             inputs: out_refs(spend),
         }
@@ -5669,6 +5727,370 @@ pub mod api {
             // And the reader is whole after it.
             let real = read(&f, f["datum"].as_str().unwrap(), json!({ "inline": true }));
             assert!(real.ours, "{real:?}");
+        }
+    }
+
+    /// Guards of the payment planner, of a session's return and of signing that no test reached (chunk 51, T1e),
+    /// each with stand-ins where a build would prove and measure.
+    #[cfg(test)]
+    mod guard_tests {
+        use super::*;
+        use pallas_txbuilder::BuildConway;
+        use std::cell::Cell;
+
+        fn params() -> serde_json::Value {
+            serde_json::from_str::<serde_json::Value>(include_str!(
+                "../../../seedelf-core/tests/fixtures/epoch_params.json"
+            ))
+            .unwrap()[0]
+                .clone()
+        }
+
+        /// `quantity` of one token.
+        fn token(quantity: u64) -> TokenAmount {
+            TokenAmount {
+                policy_id: "ab".repeat(28),
+                asset_name: hex::encode("T"),
+                quantity: quantity.to_string(),
+            }
+        }
+
+        /// UTxO `n`: `lovelace`, and `token` too.
+        fn row(n: u64, lovelace: u64, token: Option<&TokenAmount>) -> UtxoResponse {
+            UtxoResponse {
+                tx_hash: format!("{n:064x}"),
+                value: lovelace.to_string(),
+                asset_list: token.map(|t| {
+                    vec![seedelf_koios::koios::Asset {
+                        decimals: 0,
+                        quantity: t.quantity.clone(),
+                        policy_id: t.policy_id.clone(),
+                        asset_name: t.asset_name.clone(),
+                        fingerprint: String::new(),
+                    }]
+                }),
+                ..Default::default()
+            }
+        }
+
+        fn outrefs(spent: &[&UtxoResponse]) -> Vec<OutRef> {
+            spent
+                .iter()
+                .map(|u| OutRef {
+                    tx_hash: u.tx_hash.clone(),
+                    tx_index: u.tx_index,
+                })
+                .collect()
+        }
+
+        /// A part as the planner reads one: what it spends, what it pays, what it carries forward.
+        #[derive(Debug, Clone)]
+        struct Part {
+            inputs: Vec<OutRef>,
+            paid: u64,
+            carry: Option<UtxoResponse>,
+        }
+
+        fn inputs_of(part: &Part) -> &[OutRef] {
+            &part.inputs
+        }
+
+        fn paid_of(part: &Part) -> Result<u64> {
+            Ok(part.paid)
+        }
+
+        fn carried(part: &Part) -> Option<UtxoResponse> {
+            part.carry.clone()
+        }
+
+        /// The least a payment carries: 1 ₳ of ADA alone, 1.5 ₳ with the token.
+        fn least(tokens: &[TokenAmount]) -> Result<u64> {
+            Ok(if tokens.is_empty() {
+                1_000_000
+            } else {
+                1_500_000
+            })
+        }
+
+        /// Each stand-in part's fee.
+        const FEE: u64 = 200_000;
+
+        fn held(picks: &[UtxoResponse]) -> u64 {
+            picks.iter().map(|u| u.value.parse::<u64>().unwrap()).sum()
+        }
+
+        /// A part of `picks` paying `lovelace`, where a build would prove and measure one: too many for one
+        /// transaction past [`MAX_WITHDRAW_UTXOS`], refused where they don't hold it and the fee.
+        fn part(picks: Vec<UtxoResponse>, lovelace: u64) -> Result<Part> {
+            if picks.len() > MAX_WITHDRAW_UTXOS {
+                return Err(build::TooMany(picks.len()).into());
+            }
+            if held(&picks) < lovelace + FEE {
+                bail!("the stand-in's UTxOs don't pay it");
+            }
+            Ok(Part {
+                inputs: outrefs(&picks.iter().collect::<Vec<_>>()),
+                paid: lovelace,
+                carry: None,
+            })
+        }
+
+        /// The parts [`in_parts`] plans of `owed` and `tokens` over `utxos`, `beside` paid in the first, with no
+        /// chain; and how many it built of the most their UTxOs pay, and of an amount.
+        fn planned(
+            utxos: &[UtxoResponse],
+            owed: u64,
+            tokens: Vec<TokenAmount>,
+            beside: u64,
+        ) -> (Result<Vec<Part>>, usize, usize) {
+            let chain = chain_of("preprod", &params()).unwrap();
+            let worth = Worth::of(&chain, utxos, None);
+            let (most, amounts) = (Cell::new(0), Cell::new(0));
+            let parts = in_parts(
+                build::TooMany(utxos.len()).into(),
+                utxos,
+                owed,
+                tokens,
+                beside,
+                &[],
+                least,
+                &worth,
+                false,
+                inputs_of,
+                paid_of,
+                carried,
+                |picks, _, _| {
+                    most.set(most.get() + 1);
+                    let all = held(&picks).saturating_sub(FEE);
+                    part(picks, all)
+                },
+                |picks, lovelace, _, _| {
+                    amounts.set(amounts.get() + 1);
+                    part(picks, lovelace)
+                },
+                |_, _, _| bail!("no chain here"),
+            );
+            (parts, most.get(), amounts.get())
+        }
+
+        #[test]
+        fn a_payment_goes_as_max_parts_transactions_at_most() {
+            // t1e#4: a token in 601 UTxOs, one in each, all of it asked for: 31 parts of 20, past the 25 one payment
+            // goes as. Refused at the 25th in the first try's own words, none built past it.
+            let all = token(601);
+            let utxos: Vec<UtxoResponse> = (1..=601)
+                .map(|n| row(n, 2_000_000, Some(&token(1))))
+                .collect();
+            let owed = least(std::slice::from_ref(&all)).unwrap();
+            let (parts, most, _) = planned(&utxos, owed, vec![all], 0);
+            assert_eq!(
+                parts.err().map(|e| e.to_string()),
+                Some(build::TooMany(601).to_string())
+            );
+            assert_eq!(most, MAX_PARTS - 1, "no part past the most is built");
+        }
+
+        #[test]
+        fn the_part_sending_the_last_tokens_pays_what_is_owed_and_ends_the_payment() {
+            // t1e#5 and t1e#6: a part sends the last of the token and its UTxOs hold what's still owed: it pays
+            // exactly that, and nothing follows it. Short of the first, it paid what's owed less an output's least,
+            // which a part of its own then paid; short of the second, a payment paid in full went on to a part
+            // nobody asked for, the recipient paid that least and its fee.
+            let t = token(1);
+            let mut utxos = vec![row(1, 2_000_000, Some(&t))];
+            utxos.extend((2..=26).map(|n| row(n, 2_000_000, None)));
+            let (parts, _, _) = planned(&utxos, 10_000_000, vec![t], 0);
+            let paid: Vec<u64> = parts.unwrap().iter().map(|p| p.paid).collect();
+            assert_eq!(paid, [10_000_000]);
+        }
+
+        #[test]
+        fn an_amount_past_what_the_utxos_hold_is_refused_before_any_part() {
+            // t1e#7: of 100 ₳, 101 ₳ asked, or 97 ₳ with a session's 5 ₳ collateral beside it in the first part, is
+            // refused at once in holding_enough's words, no part built or proven: parts were planned for an amount
+            // no number of them could pay, and a funding's collateral went uncounted.
+            let utxos: Vec<UtxoResponse> = (1..=10).map(|n| row(n, 10_000_000, None)).collect();
+            for (owed, beside) in [(101_000_000, 0), (97_000_000, 5_000_000)] {
+                let (parts, most, amounts) = planned(&utxos, owed, vec![], beside);
+                assert_eq!(
+                    parts.err().map(|e| e.to_string()).as_deref(),
+                    Some("Not enough ADA in the Seedelf balance for this payment and its fees"),
+                    "{owed} asked, {beside} beside"
+                );
+                assert_eq!((most, amounts), (0, 0), "{owed} asked, {beside} beside");
+            }
+        }
+
+        #[test]
+        fn a_chained_part_spends_something_beside_its_carry() {
+            // t1e#9: a part of a chain spending only the carry it was handed goes round for a fee, carrying less
+            // forward each time; refused, the chain is planned otherwise. A part spending more beside it carries on.
+            let carry = row(1, 3_000_000, None);
+            let made = row(2, 2_500_000, None);
+            let over = |spent: &[&UtxoResponse]| Part {
+                inputs: outrefs(spent),
+                paid: 1_000_000,
+                carry: Some(made.clone()),
+            };
+            let forward = Some(carry.clone());
+            let alone = next_of(&over(&[&carry]), &forward, &inputs_of, &carried);
+            assert_eq!(
+                alone.err().map(|e| e.to_string()).as_deref(),
+                Some("A part of the chain spends nothing new")
+            );
+            let own = row(3, 4_000_000, None);
+            let next = next_of(&over(&[&carry, &own]), &forward, &inputs_of, &carried).unwrap();
+            assert_eq!(next.tx_hash, made.tx_hash);
+        }
+
+        /// A part as [`reserving`] reads one: which plan made it, what it pays, and all it takes.
+        #[derive(Debug, Clone)]
+        struct Planned {
+            plan: &'static str,
+            lovelace: u64,
+            tokens: Vec<TokenAmount>,
+            takes: u64,
+        }
+
+        fn sent(p: &Planned) -> Result<(u64, &[TokenAmount], u64)> {
+            Ok((p.lovelace, &p.tokens, p.takes))
+        }
+
+        fn planned_as(
+            plan: &'static str,
+            lovelace: u64,
+            tokens: &[TokenAmount],
+            takes: u64,
+        ) -> Planned {
+            Planned {
+                plan,
+                lovelace,
+                tokens: tokens.to_vec(),
+                takes,
+            }
+        }
+
+        #[test]
+        fn a_second_plan_taking_as_much_as_the_first_never_replaces_it() {
+            // t1e#10: 16 ₳ paid of 12 ₳ asked, more than the token's least, so it's planned again; the second plan
+            // goes only where it takes less from the Seedelf balance. Taking as much, the first stays.
+            let t = token(1);
+            let first = vec![
+                planned_as("first", 10_000_000, std::slice::from_ref(&t), 10_200_000),
+                planned_as("first", 6_000_000, &[], 6_200_000),
+            ];
+            let kept = |takes: u64| -> Vec<&'static str> {
+                reserving(
+                    |reserve: &[u64], _| {
+                        Ok(if reserve.is_empty() {
+                            first.clone()
+                        } else {
+                            vec![
+                                planned_as(
+                                    "again",
+                                    9_000_000,
+                                    std::slice::from_ref(&t),
+                                    takes - 6_200_000,
+                                ),
+                                planned_as("again", 6_000_000, &[], 6_200_000),
+                            ]
+                        })
+                    },
+                    anyhow!("too many"),
+                    12_000_000,
+                    least,
+                    sent,
+                    |_| false,
+                )
+                .unwrap()
+                .iter()
+                .map(|p| p.plan)
+                .collect()
+            };
+            assert_eq!(
+                kept(16_400_000),
+                ["first", "first"],
+                "as much: the first stays"
+            );
+            assert_eq!(
+                kept(16_300_000),
+                ["again", "again"],
+                "less: the second goes"
+            );
+        }
+
+        #[test]
+        fn a_first_plan_paying_what_was_asked_is_planned_once() {
+            // t1e#11: a first plan paying no more than was asked is kept as it is. Planned again, every part was
+            // built and proven a second time for the same parts.
+            let plans = Cell::new(0);
+            let parts = reserving(
+                |_: &[u64], _| {
+                    plans.set(plans.get() + 1);
+                    Ok(vec![planned_as("first", 12_000_000, &[], 12_200_000)])
+                },
+                anyhow!("too many"),
+                12_000_000,
+                least,
+                sent,
+                |_| false,
+            )
+            .unwrap();
+            assert_eq!((plans.get(), parts.len()), (1, 1));
+        }
+
+        #[test]
+        fn a_sessions_collateral_is_never_a_utxo_the_evaluator_refuses() {
+            // t1e#2 (the launch review's L20): a 5 ₳ of ADA alone carrying a reference script, which anyone can send
+            // the session, is no collateral a merged return can be measured with. plan_return already sweeps, with no
+            // merge, wherever one is priced, so this is the second line.
+            let scripted = UtxoResponse {
+                reference_script: Some(Default::default()),
+                ..row(1, 5_000_000, None)
+            };
+            let plain = row(2, 3_000_000, None);
+            assert_eq!(
+                session_collateral(&[scripted.clone(), plain.clone()]).map(|u| u.tx_hash.clone()),
+                Some(plain.tx_hash)
+            );
+            assert!(session_collateral(&[scripted]).is_none());
+        }
+
+        #[test]
+        fn a_spent_utxo_with_no_key_path_is_refused_never_left_unsigned() {
+            // t1e#13: every caller builds `paths` over what it spends (check_paths), so none reaches this today. A
+            // UTxO without one would leave the transaction a witness short, which the ledger refuses.
+            let account = CardanoAccount::from_phrase(
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+                0,
+            )
+            .unwrap();
+            let ours = row(0x11, 2_000_000, None);
+            let unknown = UtxoResponse {
+                tx_index: 1,
+                ..row(0x22, 2_000_000, None)
+            };
+            let mut paths = Paths::new();
+            paths.insert((ours.tx_hash.clone(), 0), (Role::Receive, 0));
+            let input = |u: &UtxoResponse| {
+                let hash: [u8; 32] = hex::decode(&u.tx_hash).unwrap().try_into().unwrap();
+                pallas_txbuilder::Input::new(Hash::new(hash), u.tx_index)
+            };
+            let tx = pallas_txbuilder::StagingTransaction::new()
+                .input(input(&ours))
+                .input(input(&unknown))
+                .output(pallas_txbuilder::Output::new(
+                    account.base_address(true, Role::Receive, 0).unwrap(),
+                    3_800_000,
+                ))
+                .fee(200_000)
+                .build_conway_raw()
+                .unwrap();
+            let refused = sign_with_paths(&tx, &account, &paths, &[&ours, &unknown]);
+            assert_eq!(
+                refused.err().map(|e| e.to_string()),
+                Some(format!("no key path for UTxO {}#1", unknown.tx_hash))
+            );
         }
     }
 }
@@ -6440,6 +6862,28 @@ pub fn finish_lovejoin_withdraw(request: &str) -> Result<String, JsError> {
     to_json(&lovejoin::finish_withdraw(from_json(request)?).map_err(js_error)?)
 }
 
+/// A transaction's request from a site connected to a session, read as the
+/// public account's is but for governance: a session has no DRep, whatever the
+/// request says. The one-time accounts' DRep key `3/0` is the same for every
+/// session, so a certificate or vote it signed would tie every session that
+/// signed one together; governance is the public account's alone (chunk 21;
+/// chunk 51, t1e#1).
+fn session_tx_request(request: &str) -> Result<cip30::TxRequest, JsError> {
+    Ok(cip30::TxRequest {
+        governance: false,
+        ..from_json(request)?
+    })
+}
+
+/// A request to sign data from a site connected to a session, read with
+/// [`session_tx_request`]'s rule: never as the one-time accounts' DRep.
+fn session_data_request(request: &str) -> Result<cip30::DataRequest, JsError> {
+    Ok(cip30::DataRequest {
+        governance: false,
+        ..from_json(request)?
+    })
+}
+
 /// What a transaction built for a session (a swap, a cancel) does to its
 /// one-time account, as JSON, read the way the connector reads a dApp's
 /// (`cip30::inspect_tx`); `keys` is the session's one path, `0/i`.
@@ -6448,11 +6892,7 @@ pub fn inspect_session_tx(
     accounts: &WasmOneTimeAccounts,
     request: &str,
 ) -> Result<String, JsError> {
-    let request = cip30::TxRequest {
-        // A session has no DRep: governance is the public account's alone.
-        governance: false,
-        ..from_json(request)?
-    };
+    let request = session_tx_request(request)?;
     to_json(&cip30::inspect_tx(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -6460,11 +6900,7 @@ pub fn inspect_session_tx(
 /// `{ witnessSet, summary }`, as `signDappTx`.
 #[wasm_bindgen(js_name = signSessionTx)]
 pub fn sign_session_tx(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
-    let request = cip30::TxRequest {
-        // A session has no DRep: governance is the public account's alone.
-        governance: false,
-        ..from_json(request)?
-    };
+    let request = session_tx_request(request)?;
     to_json(&cip30::sign_tx(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -6476,11 +6912,7 @@ pub fn session_data_signer(
     accounts: &WasmOneTimeAccounts,
     request: &str,
 ) -> Result<String, JsError> {
-    let request = cip30::DataRequest {
-        // A session has no DRep: governance is the public account's alone.
-        governance: false,
-        ..from_json(request)?
-    };
+    let request = session_data_request(request)?;
     to_json(&cip30::data_signer(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -6488,11 +6920,7 @@ pub fn session_data_signer(
 /// `{ signature, key }`, as `signDappData`.
 #[wasm_bindgen(js_name = signSessionData)]
 pub fn sign_session_data(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
-    let request = cip30::DataRequest {
-        // A session has no DRep: governance is the public account's alone.
-        governance: false,
-        ..from_json(request)?
-    };
+    let request = session_data_request(request)?;
     to_json(&cip30::sign_data(&accounts.inner, &request).map_err(js_error)?)
 }
 

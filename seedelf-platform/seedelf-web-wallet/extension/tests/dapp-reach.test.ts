@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { reachOpenPages } from "../src/background/connector";
 import { handle, type Context } from "../src/background/handlers";
 import { PreferencesService } from "../src/background/preferences";
-import { CONTENT_SCRIPTS, DAPP_ORIGINS, PAGE_CHANNEL } from "../src/shared/dapp";
+import { CONTENT_SCRIPTS, cutOff, DAPP_ORIGINS, PAGE_CHANNEL } from "../src/shared/dapp";
 import { memoryArea, testWallet } from "./fakes";
 
 const original = {
@@ -150,5 +150,67 @@ describe("the bridge, put in a page twice", () => {
     expect(listeners).toHaveLength(1);
     listeners[0]!({ source: page, origin: "https://dapp.example", data: { [PAGE_CHANNEL]: "request", id: "a", method: "getNetworkId", args: [] } });
     expect(sent).toEqual([{ id: "a", method: "getNetworkId", args: [] }]);
+  });
+});
+
+// Chunk 51, t1i#5: the worker restarts with a page's calls on their way (Chrome stopped it, or it was updated). A call
+// that only reads is asked again, once, on a new port. A signature fails saying nothing was signed, and a send that it
+// may have gone through, since it may have: asked again, the user would be shown it twice and the send could pay
+// twice (independent review M3). No test failed with every call asked again, or a read asked again without end.
+describe("the bridge, when the worker restarts with calls on their way (chunk 51, t1i#5)", () => {
+  it("asks a read again once, and ends a signature and a send in words that say what may have happened", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const listeners: Array<(event: unknown) => void> = [];
+      const replies: Array<{ id?: string; error?: { info?: string } }> = [];
+      const page = {
+        addEventListener: (type: string, listener: (event: unknown) => void) => {
+          if (type === "message") listeners.push(listener);
+        },
+        postMessage: (message: { id?: string; error?: { info?: string } }) => replies.push(message),
+      };
+      /** Each port the bridge opened: what was sent on it, and the worker's end going away. */
+      const ports: Array<{ sent: string[]; drop: () => void }> = [];
+      (globalThis as { window?: unknown }).window = page;
+      (globalThis as { location?: unknown }).location = { origin: "https://dapp.example" };
+      (globalThis as { chrome?: unknown }).chrome = {
+        runtime: {
+          connect: () => {
+            const gone: Array<() => void> = [];
+            const port = { sent: [] as string[], drop: () => gone.splice(0).forEach((g) => g()) };
+            ports.push(port);
+            return {
+              onMessage: { addListener: () => undefined },
+              onDisconnect: { addListener: (listener: () => void) => gone.push(listener) },
+              postMessage: (call: { id?: string }) => {
+                if (call.id) port.sent.push(call.id);
+              },
+            };
+          },
+        },
+      };
+      await import("../src/content/bridge");
+      const ask = (id: string, method: string) =>
+        listeners[0]!({ source: page, origin: "https://dapp.example", data: { [PAGE_CHANNEL]: "request", id, method, args: [] } });
+      const failed = (id: string) => replies.find((r) => r.id === id)?.error?.info;
+      ask("read", "getBalance");
+      ask("sign", "signTx");
+      ask("send", "submitTx");
+      expect(ports.map((p) => p.sent)).toEqual([["read", "sign", "send"]]);
+
+      ports[0]!.drop();
+      // The read goes again, on a new port; the signature and the send end, saying what may have happened.
+      expect(ports.map((p) => p.sent)).toEqual([["read", "sign", "send"], ["read"]]);
+      expect(failed("sign")).toBe(cutOff("signTx"));
+      expect(failed("send")).toBe(cutOff("submitTx"));
+      expect(failed("read")).toBeUndefined();
+
+      // Restarted again: the read isn't asked a third time, it ends too.
+      ports[1]!.drop();
+      expect(ports).toHaveLength(2);
+      expect(failed("read")).toBe(cutOff("getBalance"));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

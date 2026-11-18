@@ -1408,10 +1408,10 @@ fn a_huge_datum_comes_through_whole() {
 }
 
 /// How many constructors deep a datum can nest and still be read. The guard is
-/// on CBOR levels (`MAX_NESTING`, 128) and a constructor is two of them — a tag
-/// around an array — with the witness set's own levels on top, so a datum goes
-/// about sixty deep. `a_datum_nested_past_the_cbor_guard_is_refused` holds the
-/// other side of the line.
+/// on CBOR levels (core's `cbor::MAX_DEPTH`, 128) and a constructor is two of
+/// them — a tag around an array — with the witness set's own levels on top, so
+/// a datum goes about sixty deep. `a_datum_nested_past_the_cbor_guard_is_refused`
+/// holds the other side of the line.
 const DEEPEST: usize = 60;
 
 /// And a deeply nested one: a datum inside a datum inside a datum, as deep as
@@ -1746,4 +1746,233 @@ fn a_legacy_output_is_read_as_one() {
     assert_eq!(out.address.payment.as_deref(), Some("key"));
     assert!(out.address.stake.is_none());
     assert!(!detail.witnessed, "an empty witness set is no witness");
+}
+
+/// A Babbage-form output paying `lovelace` to the address `bytes`, with `datum`
+/// written into it.
+fn output(address: &[u8], lovelace: u64, datum: Option<PlutusData>) -> conway::TransactionOutput {
+    conway::PseudoTransactionOutput::PostAlonzo(conway::PostAlonzoTransactionOutput {
+        address: Bytes::from(address.to_vec()),
+        value: conway::Value::Coin(lovelace),
+        datum_option: datum
+            .map(|d| conway::PseudoDatumOption::Data(pallas_codec::utils::CborWrap(d))),
+        script_ref: None,
+    })
+}
+
+/// A transaction of one input, a fee and `outputs`, unwitnessed.
+fn paying(outputs: Vec<conway::TransactionOutput>) -> String {
+    let body = conway::TransactionBody {
+        inputs: Set::from(vec![TransactionInput {
+            transaction_id: Hash::new([1u8; 32]),
+            index: 0,
+        }]),
+        outputs,
+        fee: 200_000,
+        ttl: None,
+        certificates: None,
+        withdrawals: None,
+        auxiliary_data_hash: None,
+        validity_interval_start: None,
+        mint: None,
+        script_data_hash: None,
+        collateral: None,
+        required_signers: None,
+        network_id: None,
+        collateral_return: None,
+        total_collateral: None,
+        reference_inputs: None,
+        voting_procedures: None,
+        proposal_procedures: None,
+        treasury_value: None,
+        donation: None,
+    };
+    let tx = conway::Tx {
+        transaction_body: body,
+        transaction_witness_set: conway::WitnessSet {
+            vkeywitness: None,
+            native_script: None,
+            bootstrap_witness: None,
+            plutus_v1_script: None,
+            plutus_data: None,
+            redeemer: None,
+            plutus_v2_script: None,
+            plutus_v3_script: None,
+        },
+        success: true,
+        auxiliary_data: Nullable::Null,
+    };
+    hex::encode(tx.encode_fragment().unwrap())
+}
+
+/// Chunk 51, w2#6: a Byron payee shows as its base58, as every explorer writes
+/// it and as Copy copies it. `to_bech32` refuses a Byron address, and the hex it
+/// fell back to was the address's CBOR, which no one can check by eye.
+#[test]
+fn a_byron_payee_shows_as_its_base58() {
+    use pallas_addresses::byron::{
+        AddrAttrProperty, AddrAttrs, AddrType, AddressPayload, ByronAddress, SpendingData,
+    };
+    use pallas_codec::minicbor::bytes::ByteVec;
+    // A mainnet Byron address: no network magic, as a Daedalus or Icarus wallet's.
+    let attributes: AddrAttrs = Vec::<AddrAttrProperty>::new().into();
+    let byron = ByronAddress::from_decoded(AddressPayload::new(
+        AddrType::PubKey,
+        SpendingData::PubKey(ByteVec::from(vec![7; 64])),
+        attributes,
+    ));
+    let address = pallas_addresses::Address::Byron(byron.clone());
+    let detail = decode_tx(
+        "mainnet",
+        &paying(vec![output(&address.to_vec(), 4_800_000, None)]),
+    )
+    .unwrap();
+    let shown = &detail.outputs[0].address;
+    assert_eq!(shown.kind, "byron");
+    assert_eq!(shown.bech32, byron.to_base58(), "not its CBOR");
+    assert_eq!(shown.hex, address.to_hex(), "its bytes are there too");
+}
+
+/// Chunk 51, d1#3: at Seedelf Wallet's contract a datum is read as a register
+/// the way the deployed contract reads one (wallet.ak at 5b82530): constructor
+/// 0 of two byte strings, in either spelling, whatever their length. The
+/// register says who could spend what's under it: its key's holder (`payable`),
+/// anyone (`anyone`, an identity public value, which "a register nobody could
+/// spend" said wrongly), or no one (neither: a field that isn't one of G1's
+/// points, or an identity generator).
+#[test]
+fn a_register_says_who_could_spend_what_is_under_it() {
+    let contract = seedelf_core::address::wallet_contract(
+        true,
+        seedelf_core::constants::get_config(1, true)
+            .unwrap()
+            .contract
+            .wallet_contract_hash,
+    );
+    // REGISTER_DATUM's two points: the G1 generator and a test vector's public value.
+    let (g, u) = (&REGISTER_DATUM[10..106], &REGISTER_DATUM[110..206]);
+    let identity = format!("c0{}", "00".repeat(47));
+    let datums = [
+        constr(121, None, vec![bytes(g), bytes(u)]),
+        constr(102, Some(0), vec![bytes(g), bytes(u)]),
+        constr(121, None, vec![bytes(g), bytes(&identity)]),
+        constr(121, None, vec![bytes(&identity), bytes(u)]),
+        constr(121, None, vec![bytes(g), bytes(&u[..94])]),
+        constr(121, None, vec![bytes(g), bytes(u), bytes(u)]),
+    ];
+    assert_eq!(
+        hex::encode(datums[0].encode_fragment().unwrap()),
+        format!("d879825830{g}5830{u}"),
+        "the first is REGISTER_DATUM's register, in a definite list"
+    );
+    let outputs = datums
+        .iter()
+        .map(|d| output(&contract.to_vec(), 2_000_000, Some(d.clone())))
+        .collect();
+    let detail = decode_tx("preprod", &paying(outputs)).unwrap();
+    // As the screen reads it: `payable` and `anyone`, by those names.
+    let read: Vec<Value> = detail
+        .outputs
+        .iter()
+        .map(|o| {
+            let register = serde_json::to_value(&o.register).unwrap();
+            serde_json::json!([register["payable"], register["anyone"]])
+        })
+        .collect();
+    let (owner, anyone, nobody) = (
+        serde_json::json!([true, false]),
+        serde_json::json!([false, true]),
+        serde_json::json!([false, false]),
+    );
+    let not_one = serde_json::json!([null, null]);
+    assert_eq!(
+        read,
+        [
+            owner.clone(),
+            owner,
+            anyone,
+            nobody.clone(),
+            nobody,
+            not_one
+        ]
+    );
+    let general = detail.outputs[1].register.as_ref().unwrap();
+    assert_eq!(
+        (general.generator.as_str(), general.public_value.as_str()),
+        (g, u)
+    );
+}
+
+/// Big-endian bytes from a decimal string, by multiplying up: the other way
+/// round from the decoder's long division, so the two can't agree by sharing a
+/// mistake.
+fn from_decimal(text: &str) -> Vec<u8> {
+    let mut n: Vec<u8> = Vec::new();
+    for digit in text.bytes() {
+        assert!(digit.is_ascii_digit(), "{text:?} isn't decimal");
+        let mut carry = u16::from(digit - b'0');
+        for byte in n.iter_mut().rev() {
+            let now = u16::from(*byte) * 10 + carry;
+            *byte = now as u8;
+            carry = now >> 8;
+        }
+        if carry > 0 {
+            n.insert(0, carry as u8);
+        }
+    }
+    n
+}
+
+/// Chunk 51, w2#3: a big number's decimal costs a pass over its bytes for each
+/// digit, and a site picks how long it is: one filling a transaction took on
+/// the order of 10^10 steps, the worker answering nothing all the while. Past
+/// 128 bytes (about 300 digits) it's shown in hex, which costs one pass; up to
+/// that, in decimal, exactly.
+#[test]
+fn a_big_number_past_128_bytes_is_shown_in_hex() {
+    let value = |datum: PlutusData| -> String {
+        let detail = decode_tx("preprod", &tx_with_datums(vec![datum])).unwrap();
+        match &detail.datums[0].data {
+            DetailPlutus::Int { value } => value.clone(),
+            other => panic!("{other:?} isn't a number"),
+        }
+    };
+    let positive =
+        |n: &[u8]| PlutusData::BigInt(pallas_primitives::BigInt::BigUInt(n.to_vec().into()));
+    // Tag 3 holds n for the number -1 - n.
+    let negative =
+        |n: &[u8]| PlutusData::BigInt(pallas_primitives::BigInt::BigNInt(n.to_vec().into()));
+
+    // 128 bytes: decimal, exactly, leading zeros aside (they add work, not value).
+    let most: Vec<u8> = (1..=128u8).collect();
+    let text = value(positive(&most));
+    assert_eq!(from_decimal(&text), most);
+    assert_eq!(
+        value(positive(&[vec![0; 1_000], most.clone()].concat())),
+        text
+    );
+    let mut one_more = most.clone();
+    *one_more.last_mut().unwrap() += 1;
+    assert_eq!(
+        value(negative(&most)).strip_prefix('-').map(from_decimal),
+        Some(one_more)
+    );
+
+    // 129: hex, all of it.
+    let longer: Vec<u8> = (1..=129u8).collect();
+    assert_eq!(
+        value(positive(&longer)),
+        format!("0x{}", hex::encode(&longer))
+    );
+    let mut one_more = longer.clone();
+    *one_more.last_mut().unwrap() += 1;
+    assert_eq!(
+        value(negative(&longer)),
+        format!("-0x{}", hex::encode(&one_more))
+    );
+
+    // As long as a transaction holds: hex too, never the decimal, whose writing grows with the square of its length.
+    // The text itself says which was written, so no clock is needed (chunk 51, r2tests#10).
+    let huge = vec![1u8; 60_000];
+    assert_eq!(value(positive(&huge)), format!("0x{}", hex::encode(&huge)));
 }

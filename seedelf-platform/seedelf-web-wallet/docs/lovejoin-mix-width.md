@@ -164,6 +164,4 @@ Adding four touched every place below. A fifth width, or a change of default, wo
 - The screens' `width ** depth` and costs at a width: Settings (`depthCost`), the Lovejoin page and `LovejoinReturn` (`lovejoinHides`).
 - The words: "three wide" and "up to 9" in the strings, in [privacy.md](privacy.md), in [flows.md](flows.md) and in [architecture.md](architecture.md#lovejoin).
 
-`extension/src/networks.ts`'s `mixCost` is still a three-box figure, and nothing reads it.
-
 A pool's floor and the chain cap (`MAX_CHAIN_MIXES`, 130) would want a fresh look too, since four wide draws almost twice the others at depth 2.

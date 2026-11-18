@@ -266,8 +266,8 @@ structure SchnorrProof where
 
 def SchnorrProof.toData (p : SchnorrProof) : Data := .Constr 0 [.B p.t, .B p.z]
 
-/-- validate_owner's `ctx`: `blake2b_256(serialise_data(self.outputs) ‖ serialise_data(each
-input's output_reference) ‖ mix_script_hash)`. -/
+/-- validate_owner's `ctx`: `blake2b_256(serialise_data(self.outputs) ‖ serialise_data(the list
+of every input's output_reference) ‖ mix_script_hash)`, the list serialised once, as one. -/
 def ownerContext (tx : TxInfo) (msh : ByteString) : Option ByteString := do
   let o ← Lovejoin.Classic.serialised (IsData.toData tx.txInfoOutputs)
   let r ← Lovejoin.Classic.serialised (.List (tx.txInfoInputs.map fun i => IsData.toData i.txInInfoOutRef))

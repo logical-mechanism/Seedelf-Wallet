@@ -110,7 +110,7 @@ seedelf-cli create [OPTIONS] --address <ADDRESS>
 
 `<ADDRESS>` pays for the mint. It must belong to a browser wallet that supports CIP-30, the standard that lets a web page ask a Cardano browser wallet to sign. It must also hold a UTxO of exactly 5 ADA with no tokens, which the mint puts up as collateral; `create` refuses to build the transaction without one. To make one, send exactly 5 ADA from that wallet to that same address. The optional `--label` is a personal tag in plain text, which anyone can read: the token's name keeps its first 15 bytes, in hex.
 
-`create` then serves a page at [http://127.0.0.1:44203/](http://127.0.0.1:44203/). Open it in the browser that has your wallet, and pick the wallet from the dropdown in the top right corner. The page asks the wallet to sign, and the wallet submits the transaction. The page's `Transaction CBOR` section shows the transaction's CBOR. Stop the server with Ctrl-C when it's done.
+`create` then serves a page on your machine and prints its address once it's serving: `http://127.0.0.1:44203/` and a path of its own for each run, so the address it prints shows this run's transaction and no other. Open it in the browser that has your wallet, and pick the wallet from the dropdown in the top right corner. The page asks the wallet to sign, and the wallet submits the transaction. The page shows the transaction's ID and CBOR before you sign, and the CLI prints the ID too. If the wallet doesn't confirm the submit, the transaction may still have gone through: look the ID up before you run the command again. Stop the server with Ctrl-C when it's done. One run's page serves at a time: while another is serving, `create` says so and stops. A page left open from an earlier run still holds that run's transaction, so close it.
 
 Once the mint lands, `seedelf-cli balance` shows your Seedelf by its full name: the 64-character hex string you give to anyone who pays you. From then on it can be paid from any CIP-30 wallet with `fund`, or from another Seedelf balance with `transfer`. `fund` pays your own Seedelf or anyone's.
 
@@ -131,7 +131,7 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 | `welcome` | Prints a short introduction. | |
 | `balance` | Your Seedelfs and your balance. | |
 | `create` | Mints a new Seedelf, paid by an address of a browser wallet, which signs it. | `-a, --address`, `-l, --label` |
-| `fund` | An address pays a Seedelf, yours or anyone's. The browser wallet signs it. | `-a, --address`, `-s, --seedelf`, `-l, --lovelace`, `--asset` |
+| `fund` | An address pays a Seedelf, yours or anyone's. The browser wallet signs it. It never spends a UTxO of exactly 5 ADA with no tokens: that's the collateral `create` and `util extract` put up. | `-a, --address`, `-s, --seedelf`, `-l, --lovelace`, `--asset` |
 | `transfer` | Your balance pays one or more Seedelfs. | `-s, --seedelfs`, `-l, --lovelaces`, `--asset`, `--utxo` |
 | `sweep` | Your balance pays an address. | `-a, --address` or `--ada-handle`; `-l, --lovelace` and `--asset`, or `--all`; `--utxo` |
 | `remove` | Burns one of your Seedelfs and sends the ADA it held to an address. | `-s, --seedelf`, `-a, --address` |
@@ -145,11 +145,11 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 | `util extract` | Sends a UTxO at the contract that has no datum to an address. A payment sent to the contract without a datum has no register, so the contract lets anyone spend it. The address pays the fee and needs a 5 ADA collateral UTxO, and its browser wallet signs. | `-u, --utxo`, `-a, --address` |
 | `util migrate` | For moving funds to a newer contract variant. Variant 1 is the only one, so it does nothing yet. | `--from-variant` |
 | `external balance` | The external wallet's address and balance (see below). | |
-| `external sweep` | Sends everything at the external wallet into your balance. | |
+| `external sweep` | Sends what the external wallet holds into your balance, as much as one transaction takes, and says what it left. | |
 
 - **Amounts:** `--lovelace` (`--lovelaces` for `transfer`) is in lovelace: 1 ADA is 1,000,000. `--asset` is `<policy_id>.<token_name>=<amount>`, both in hex. For `fund` and `sweep`, repeat it, or comma-separate several tokens in one; `transfer` takes one per Seedelf, below.
 - **Several Seedelfs at once:** `transfer` takes `-s` once for each Seedelf, `-l` once for each, in the same order, and `--asset` once for each if any has tokens, comma-separating that Seedelf's tokens (`--asset ""` for one that has none).
-- **`--utxo`** for `transfer`, `sweep` and `util mint` is `<tx_hash>#<index>`, repeatable: the UTxOs to spend, in place of the CLI's own pick. It picks only among the 20 UTxOs a spend draws on (see Limits), and silently skips any other; `sweep --all` ignores it. `util extract`'s `-u, --utxo` is the one UTxO it extracts.
+- **`--utxo`** for `transfer`, `sweep` and `util mint` is `<tx_hash>#<index>`, repeatable: the UTxOs to spend, in place of the CLI's own pick. It picks among all your UTxOs that hold no Seedelf, and silently skips any other; `sweep --all` ignores it. `util extract`'s `-u, --utxo` is the one UTxO it extracts.
 
 ### dApp Interactions: The Sweep-Fund Flow
 
@@ -190,8 +190,9 @@ Both flows keep the dApp apart from your Seedelf. The new wallet is funded from 
 - **The services see your IP address.** Koios reads the chain and submits your Seedelf spends, giveme.my puts up their collateral, and most commands ask `api.github.com` for the latest version (the update check). Koios and giveme.my can group your spends as one person's by that address.
 - **Spends from your balance need giveme.my.** While it doesn't answer, none can go out.
 - **Change can tie spends together.** A spend's change comes back to you, so the spend that later uses it can be assumed to be yours too.
+- **A submit Koios doesn't confirm may still have gone through.** The CLI prints a transaction's id before it submits, and says so when Koios doesn't answer in time, answers with a server error, or answers with something other than the id. Look the id up before you run the command again: a second run builds and pays again.
 - **The CLI trusts Koios.** It runs no node. Koios can't spend your funds, since a spend needs your key's proof, but a Koios that lied could hide UTxOs, or report a wrong register for a Seedelf or a wrong address for an ADA Handle, and so redirect a payment.
-- **A spend draws on at most 20 of your UTxOs,** the first 20 the CLI finds that hold no Seedelf. `sweep --all` sends what those hold; run it again for the rest.
+- **A spend draws on at most 20 of your UTxOs** that hold no Seedelf: any holding the tokens it sends, as few as hold them, then those that bring most, whatever they hold: each one's ADA beyond what its own tokens need. Anyone can pay your Seedelf, so a stranger's pile of tokens holding too little ADA comes last. `transfer`, `sweep` and `util mint` never pick a UTxO holding a reference script themselves, since spending one costs Conway's reference-script fee, but `--utxo` can name one. `sweep --all` sends the 20 that bring most that it can spend together, reference scripts included up to what one transaction may use, or as many of them as one transaction holds, and says what it left; run it again for the rest. When it sends nothing, it names the UTxOs whose tokens need more ADA than they hold. `external sweep` does the same, with no limit of 20.
 
 The root README's [Wallet Limitations](https://github.com/logical-mechanism/Seedelf-Wallet#wallet-limitations) has the known attacks in full.
 

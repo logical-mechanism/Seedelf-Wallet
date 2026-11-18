@@ -53,6 +53,7 @@ import type { LovejoinWidth } from "../../shared/preferences";
 import type {
   Balances,
   CollateralStatus,
+  KnownAccount,
   LovejoinChainTx,
   LovejoinChainView,
   LovejoinFunding,
@@ -400,14 +401,16 @@ function accountLeast(tokens: Array<Pick<TokenAmount, "policyId" | "assetName" |
 
 /**
  * WebAssembly's chain's pick of the public account's UTxOs for a mix of `boxes` boxes from it (chain_from_account_at),
- * never its collateral, one kept out of payments or one holding a reference script: in a token pool (`token`, a box's),
+ * never its collateral, one kept out of payments, one holding a reference script, or one its evaluator refuses
+ * (`unmixable`: a reference script Koios gives, a datum too deep to read), which a stranger can put at the account and
+ * the form counted, where Review then refused its count (chunk 51, gap-g2#3): in a token pool (`token`, a box's),
  * the fewest UTxOs holding its token that hold the boxes' worth, the most of it first, their ADA counted, less the least
  * ADA of the output that gives the account back their tokens beyond that (accountLeast), which the build pays first;
  * then every UTxO of ADA alone. Between UTxOs holding as much of the token, the one with less ADA first: the stepper
  * never counts on the build's order. `spend`: what that pays the funding with; `enough`: whether they hold the token.
  */
 function publicPick(utxos: UtxoInfo[], token: TokenQuantity | undefined, boxes: number): { spend: bigint; enough: boolean } {
-  const spendable = utxos.filter((u) => !u.locked && !u.collateral && !u.unspendable);
+  const spendable = utxos.filter((u) => !u.locked && !u.collateral && !u.unspendable && !u.unmixable);
   const alone = spendable.filter((u) => !u.tokens.length).reduce((sum, u) => sum + BigInt(u.lovelace), 0n);
   if (!token) return { spend: alone, enough: true };
   const key = (x: Pick<TokenAmount, "policyId" | "assetName">) => `${x.policyId}.${x.assetName}`;
@@ -931,17 +934,30 @@ const chainName = (c: LovejoinChainView) =>
   c.session === undefined ? t("lovejoin.chain.fromPublic") : t("lovejoin.privateSession", { number: c.session + 1 });
 
 /**
+ * What a chain that stopped partway says, with why: the boxes it didn't mix wait for Mix my boxes again, a session's;
+ * for Mix again from my public account, a mix from the public account's, as Mix my boxes again leaves those out (privacy
+ * review §2.10; chunk 51, e8a#2). Why alone in a retired pool (`retired`), which mixes none again (1.8.0's release
+ * review, W8), and for a public mix where the wallet has several public accounts (`several`): the row can't say whose
+ * it was, and the pool's page names the account to switch to (OtherAccounts).
+ */
+const stoppedKey = (c: LovejoinChainView, several: boolean): I18nKey =>
+  c.retired || (c.session === undefined && several)
+    ? "lovejoin.detail.whyStopped"
+    : c.session === undefined
+      ? "lovejoin.chains.whyStoppedPublic"
+      : "lovejoin.chains.whyStopped";
+
+/**
  * The wallet's chains through Lovejoin that aren't all sent: one being sent
  * holds every box back until it's done; one that stopped partway says why,
- * and the boxes it didn't mix wait for Mix my boxes again, but in a retired
- * pool (`retired`), which mixes none again: there it says why alone (1.8.0's
- * release review, W8). One whose boxes were all mixed again or brought back
- * since isn't listed (lovejoin.ts `shown`). `onOpen`: the page opens a
- * transaction of one in its own view (ChainTxs).
+ * and which way mixes the boxes it didn't (stoppedKey). One whose boxes were
+ * all mixed again or brought back since isn't listed (lovejoin.ts `shown`).
+ * `onOpen`: the page opens a transaction of one in its own view (ChainTxs).
  */
 export function Chains({ chains, onOpen }: { chains: LovejoinChainView[]; onOpen?: OpenChainTx }) {
   const amounts = useAmounts();
   const tr = useT();
+  const { several } = useAccounts();
   if (!chains.length) return null;
   return (
     <section className="section" aria-labelledby="lovejoin-chains-title">
@@ -969,11 +985,7 @@ export function Chains({ chains, onOpen }: { chains: LovejoinChainView[]; onOpen
               {c.width === 4 && ` · ${tr("lovejoin.mixes.four")}`}
             </span>
             <p className="token-row__detail" data-testid="lovejoin-chain-detail">
-              {c.stopped
-                ? tr(c.retired ? "lovejoin.detail.whyStopped" : "lovejoin.chains.whyStopped", {
-                    why: withoutStop(c.stopped),
-                  })
-                : tr("lovejoin.chains.waitAll")}
+              {c.stopped ? tr(stoppedKey(c, several), { why: withoutStop(c.stopped) }) : tr("lovejoin.chains.waitAll")}
             </p>
             {c.txs && <ChainTxs txs={c.txs} onOpen={onOpen} />}
           </li>
@@ -1507,6 +1519,39 @@ export function publicBoxesOf(status?: Pick<LovejoinStatus, "fromPublic" | "othe
   const mine = new Set([...all].filter((k) => !away.has(k)));
   const accounts = [...new Set((status?.otherAccounts ?? []).map((b) => b.account))].sort((a, b) => a - b);
   return { all, mine, accounts };
+}
+
+/**
+ * The public accounts Pay from my private balance anyway ties to the private UTxOs it spends, by index, as the pool's
+ * read has them: it takes every box of the wallet's in the pool that no Bootstrap holds, whichever account's mix put it
+ * in (the worker's againBoxes, publicToo). Where another account's box is among them, every account it takes one of,
+ * the one on screen (`active`) too; none where none is, as "your public account" is then the one on screen (chunk 51,
+ * e8a#3). Exported for its test.
+ */
+export function anywayAccountsOf(pool: Pick<ShownPool, "fromPublic" | "otherAccounts" | "bootstrap">, active: number): number[] {
+  const key = (b: { txHash: string; txIndex: number }) => `${b.txHash}#${b.txIndex}`;
+  const holds = new Set((pool.bootstrap ?? []).map(key));
+  const others = (pool.otherAccounts ?? []).filter((b) => !holds.has(key(b))).map((b) => b.account);
+  if (!others.length) return [];
+  const own = [...publicBoxesOf(pool).mine].some((k) => !holds.has(k));
+  return [...new Set([...others, ...(own ? [active] : [])])].sort((a, b) => a - b);
+}
+
+/**
+ * What paying the mixes of public accounts' boxes from the private balance ties, in Pay from my private balance
+ * anyway's question (`question`) or in its review: "your public account" where no other account's box goes in; the
+ * accounts by name where one does (`accounts`, anywayAccountsOf), as "your public account" read as the one on screen,
+ * whose Mix again from my public account doesn't take another's (chunk 51, e8a#3; 1.6.0's x-privacy#0 named Bring one
+ * back anyway's). Two or more, and the one funding ties them to each other too.
+ */
+function privateTies(question: boolean, accounts: number[], known: KnownAccount[]): string {
+  const names = accounts.map((index) => nameOf(known, index));
+  if (!names.length) return t(question ? "lovejoin.privateAnyway.privacy.ties" : "lovejoin.review.privacy.publicToo");
+  if (names.length === 1) {
+    return t(question ? "lovejoin.privateAnyway.privacy.tiesNamed" : "lovejoin.review.privacy.publicTooNamed", { account: names[0] });
+  }
+  const list = `${joinList(names.slice(0, -1))}${t("histories.list.and")}${names.at(-1)}`;
+  return t(question ? "lovejoin.privateAnyway.privacy.tiesAccounts" : "lovejoin.review.privacy.publicTooAccounts", { accounts: list });
 }
 
 /**
@@ -2706,6 +2751,7 @@ export function PoolPage({
   const amounts = useAmounts();
   const tr = useT();
   const network = useNetwork();
+  const { accounts, active } = useAccounts();
   // Asked first: bringing back a box not mixed yet, mixing a public mix's boxes again from the private balance,
   // bringing back a box a Bootstrap holds, or one paid for to come back (the private balance or the public account).
   // `heldAll`: Bring them all back asks first too (1.6.0's release review, PRIV-5).
@@ -3118,7 +3164,13 @@ export function PoolPage({
         {/* A pool whose boxes can't pay their own way back: said on the review, which then promises none back after
             its wait (session 5's cross-area review, M1). Never the classic pool. */}
         {review.source === "private" ? (
-          <PrivateReview summary={review.summary} before={homeBalance(seedelf)} box={pool.box} cantComeBack={pool.cantComeBack} />
+          <PrivateReview
+            summary={review.summary}
+            before={homeBalance(seedelf)}
+            box={pool.box}
+            cantComeBack={pool.cantComeBack}
+            anywayAccounts={anywayAccountsOf(pool, active)}
+          />
         ) : (
           // "Public account after" in the pools new in 1.6.0 only: the classic pool's screens read byte for byte as
           // 1.5.x's (the plan's backward compatibility 7; fix round two, R9).
@@ -3646,7 +3698,8 @@ export function PoolPage({
             </>
           }
         >
-          <p className="note">{tr("lovejoin.privateAnyway.privacy.ties")}</p>
+          {/* The accounts whose boxes it takes, by name, where another's are among them (e8a#3). */}
+          <p className="note">{privateTies(true, anywayAccountsOf(pool, active), accounts)}</p>
         </Modal>
       )}
       {/* Bringing back a Bootstrap's box: what one nobody has mixed shows, said first (chunk 34's 34a′, for 34d). */}
@@ -3833,23 +3886,27 @@ const lessReserve = (lovelace: string, summary: SessionOutSummary) =>
  * A mix from the private balance: the one-time account's funding, then what runs by itself. `box`: what each box in
  * its pool holds (the classic pool's 10 ₳ when none is given). `cantComeBack`: the pool's boxes can't pay their own
  * way back today, said first, and no row promises a box back after its wait (session 5's cross-area review, M1).
+ * `anywayAccounts`: the public accounts whose boxes Pay from my private balance anyway takes, which its review names
+ * (anywayAccountsOf; chunk 51, e8a#3).
  */
 export function PrivateReview({
   summary,
   before,
   box = CLASSIC_BOX,
   cantComeBack,
+  anywayAccounts = [],
 }: {
   summary: SessionOutSummary & { mix: LovejoinFunding };
   before?: string;
   box?: BoxValue;
   cantComeBack?: CantComeBack;
+  anywayAccounts?: number[];
 }) {
   const tr = useT();
   const network = useNetwork();
   const [boxesPart, collateral] = summary.payments;
   const { mix } = summary;
-  if (mix.again) return <AgainReview summary={summary} before={before} cantComeBack={cantComeBack} />;
+  if (mix.again) return <AgainReview summary={summary} before={before} cantComeBack={cantComeBack} anywayAccounts={anywayAccounts} />;
   return (
     <>
       <StuckReviewNote cantComeBack={cantComeBack} />
@@ -3924,17 +3981,23 @@ function CollateralMixNote({ summary }: { summary: Pick<SessionOutSummary, "coll
   return <CollateralMixLine mix={summary.collateralMix} mixed="swaps.review.privacy.collateralMix" testId="lovejoin-collateral-mix-note" />;
 }
 
-/** Mix my boxes again: the one-time account's funding, then the fan-out of the boxes in the pool. */
+/**
+ * Mix my boxes again: the one-time account's funding, then the fan-out of the boxes in the pool. Paid from the private
+ * balance anyway (`publicToo`), what that ties, to the accounts by name where another's boxes go in (`anywayAccounts`).
+ */
 function AgainReview({
   summary,
   before,
   cantComeBack,
+  anywayAccounts,
 }: {
   summary: SessionOutSummary & { mix: LovejoinFunding };
   before?: string;
   cantComeBack?: CantComeBack;
+  anywayAccounts: number[];
 }) {
   const tr = useT();
+  const { accounts } = useAccounts();
   const [mixesPart, collateral] = summary.payments;
   const { mix } = summary;
   return (
@@ -3976,7 +4039,7 @@ function AgainReview({
         {joinSentences([
           tr("lovejoin.review.privacy.again"),
           lovejoinHides(mix.depth, mix.width),
-          mix.publicToo && tr("lovejoin.review.privacy.publicToo"),
+          mix.publicToo && privateTies(false, anywayAccounts, accounts),
         ])}
       </Callout>
       {summary.parts && (
@@ -4093,7 +4156,11 @@ function PublicBootstrapReview({
   );
 }
 
-/** Mix again from my public account: the boxes a mix from it put in, each mix paid by it, sent now (§2.10). */
+/**
+ * Mix again from my public account: the boxes a mix from it put in, each mix paid by it, sent now (§2.10). Where the
+ * account has more there than the pool has room for at the depth (`owned`), how many of them go, and to mix the rest
+ * once this is done, as Mix my boxes again's review says it: it said only how many go (chunk 51, gap-g2#4).
+ */
 function PublicAgainReview({
   summary,
   box,
@@ -4106,11 +4173,20 @@ function PublicAgainReview({
   cantComeBack?: CantComeBack;
 }) {
   const tr = useT();
+  const some = !!summary.owned && summary.owned > summary.boxes;
   return (
     <>
       <StuckReviewNote cantComeBack={cantComeBack} />
       <ReviewRows testId="lovejoin-public-again-review">
-        <Row label={tr("lovejoin.review.mixedAgain")} value={tr("lovejoin.review.publicPutIn", { count: summary.boxes })} strong />
+        <Row
+          label={tr("lovejoin.review.mixedAgain")}
+          value={
+            some
+              ? tr("lovejoin.review.publicSomeOf", { boxes: summary.boxes, owned: summary.owned })
+              : tr("lovejoin.review.publicPutIn", { count: summary.boxes })
+          }
+          strong
+        />
         <Row label={tr("lovejoin.mixedLabel")} value={mixedValue(summary)} />
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
@@ -4119,6 +4195,11 @@ function PublicAgainReview({
         {!cantComeBack && <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} stack />}
       </ReviewRows>
       <WidthNote fellBack={summary.fellBack} />
+      {some && (
+        <p className="note" data-testid="lovejoin-public-again-rest">
+          {tr("lovejoin.review.asManyAsOneGo", { count: summary.boxes })}
+        </p>
+      )}
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.publicAgain"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>
   );

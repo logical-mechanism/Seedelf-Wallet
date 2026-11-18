@@ -120,6 +120,25 @@ describe("a switch while a reading is still running", () => {
     expect(await t.withdraw.resolve("preprod", other)).toMatchObject({ own: true, ownAccount: 0 });
   });
 
+  // Chunk 51, t1i#8: the case above lets the account left's reading end before the new account's is kept, so the new
+  // one's keep() comes last either way. In the other order, the reading of the account left, ending last, would be kept
+  // over the new account's: its balance, UTxOs and addresses read as the new account's until Refresh.
+  it("never keeps it over the new account's own, kept while it still ran", async () => {
+    const t = await twoAccounts();
+    await t.balances.get("preprod");
+    const hold = holdBeforeKeep(t);
+    const left = t.balances.get("preprod", true);
+    await hold.hit;
+    await t.accounts.use(1, ["preprod"]);
+    // Account 2's Home reads and keeps its own first.
+    expect((await t.balances.get("preprod")).cardano).toMatchObject({ lovelace: "7000000", utxos: 1 });
+    hold.release();
+    await left;
+    expect((await kept<AccountAddresses>(t, SESSION_ACCOUNT_ADDRESSES_PREFIX))?.stake).toBe(await stakeOf(t, 1));
+    expect((await kept<Array<{ utxo: KoiosUtxo }>>(t, SESSION_ACCOUNT_UTXOS_PREFIX))?.map((p) => p.utxo.tx_hash)).toEqual(["a1".repeat(32)]);
+    expect((await t.balances.get("preprod")).cardano.lovelace).toBe("7000000");
+  });
+
   it("gives the new account its own reading when the switch lands while the contract is read, never 'locked'", async () => {
     const t = await twoAccounts();
     const hold = holdKoios(t, "credential_utxos");

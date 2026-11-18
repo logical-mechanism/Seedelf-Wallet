@@ -2,7 +2,8 @@
 // who each output pays, and where the account's staking money goes. Rewards
 // withdrawn and a deposit refunded are the account's money as much as its
 // UTxOs are, and the headline counts them in what it sends; these say
-// whether they come back to it.
+// whether they come back to it. And a site's own text, a message or a note,
+// as what's signed reads (`shownSiteText`).
 
 import { joinSentences, t } from "../i18n";
 import type { DappTie, DappTxSummary } from "../shared/rpc";
@@ -252,4 +253,29 @@ function delegationLine(pool: string | null, what: string | undefined): string |
   if (pool) return t("dappUi.cert.warn.stakes", { pool });
   if (what) return t("dappUi.cert.warn.votes", { what });
   return undefined;
+}
+
+/**
+ * What changes how text reads without showing itself, as the transaction view has it (WebAssembly's decode.rs
+ * `hidden`): Unicode's Cf and Default_Ignorable_Code_Point, which a token's name may not hold (ui/tokens.ts), the
+ * controls, and the line and paragraph separators.
+ */
+const HIDDEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}\p{Cc}\p{Zl}\p{Zp}]/gu;
+
+/**
+ * A site's text, a CIP-8 message or a CIP-20 note, as the window shows it: as what's signed reads, character for
+ * character. Each character that changes how it reads without showing is written as its code, `\u{202E}`, as the
+ * transaction view writes the chain's (decode.rs `shown`), so none reorders or hides the rest: a right-to-left override
+ * (U+202E) around "0001" showed "Pay 1000 ADA" over bytes that say 0001, and a zero-width space made two messages read
+ * the same (chunk 51, e3a#3). A tab and line breaks stay, which a message is laid out by. `escaped`: one was written
+ * so, which the window says.
+ */
+export function shownSiteText(text: string): { text: string; escaped: boolean } {
+  let escaped = false;
+  const shown = text.replace(HIDDEN, (c) => {
+    if (c === "\t" || c === "\n" || c === "\r") return c;
+    escaped = true;
+    return `\\u{${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}}`;
+  });
+  return { text: shown, escaped };
 }

@@ -54,9 +54,13 @@ describe("hidden balances on a form", () => {
 
   it("hide the private balance under a private session's amount, as a top-up's do", () => {
     // The form shows once a private session is chosen, which a page rendered once can't do: its lines are read here.
+    // screens-wiring-review-fixes.test.ts renders them hidden over its seam, what's locked among them (r2screens#1).
     const source = readFileSync(new URL("../src/ui/screens/DappApprovals.tsx", import.meta.url), "utf8");
     expect(source).toContain('tr("dappUi.heldAndCollateral", { ada: amounts.ada(seedelf.lovelace) })');
-    expect(source).toContain('tr("sites.topUp.tooMuch", { held: amounts.ada(seedelf.lovelace) })');
-    expect(source).not.toMatch(/formatAda\(seedelf\.lovelace\)/);
+    expect(source).toMatch(
+      /tr\("dappUi\.availableAndCollateral", \{\s*ada: amounts\.ada\(seedelf\.lovelace\),\s*locked: lockedAside\(seedelf, amounts\.ada\),/,
+    );
+    expect(source).toMatch(/tr\("withdraw\.tooMuch", \{\s*amount: amounts\.ada\(seedelf\.lovelace\),/);
+    expect(source).not.toMatch(/formatAda\(seedelf\.(locked\.)?lovelace\)/);
   });
 });

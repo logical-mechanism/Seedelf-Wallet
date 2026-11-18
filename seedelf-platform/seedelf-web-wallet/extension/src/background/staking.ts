@@ -302,7 +302,11 @@ export function saturation(stake: bigint, supply: bigint, optimal: number): numb
   return Number((stake * BigInt(optimal) * 10_000n) / supply) / 100;
 }
 
-/** A DRep's name from its CIP-119 `givenName`: text, or JSON-LD's `@value`, cut to 64 characters. */
+/**
+ * A DRep's name from its CIP-119 `givenName`: text, or JSON-LD's `@value`, cut to 64 characters, with no control
+ * character, nor a format or other default-ignorable one, as the screens' plainName leaves none: a bidi override or a
+ * zero-width character turns a name round or hides in it, and the DRep chooses it (chunk 51, gap-g7#3).
+ */
 export function drepName(givenName: unknown): string | undefined {
   const text =
     typeof givenName === "string"
@@ -310,7 +314,7 @@ export function drepName(givenName: unknown): string | undefined {
       : typeof (givenName as { "@value"?: unknown } | null)?.["@value"] === "string"
         ? (givenName as { "@value": string })["@value"]
         : undefined;
-  const clean = text?.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim();
+  const clean = text?.replace(/[\u0000-\u001f\u007f-\u009f\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").trim();
   return clean ? clean.slice(0, 64) : undefined;
 }
 

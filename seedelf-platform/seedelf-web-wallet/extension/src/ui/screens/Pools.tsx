@@ -249,10 +249,11 @@ export function PoolListRow({
   const ticker = pool.ticker ? plainName(pool.ticker) : undefined;
   const label = ticker ?? shortId(pool.id);
   // A pool its delegators earn nothing or less from says so on its row, not only on its page (chunk 23's review,
-  // ST-1): a 100% margin keeps every reward, and past 100% saturation everyone's shrink.
+  // ST-1): a 100% margin keeps every reward, and past 100% saturation everyone's shrink. Warnings in the warning's
+  // colour, so named `.warn.` (chunk 51, e9b#2).
   const flags = [
-    pool.margin >= 1 ? t("pools.tag.keepsAll") : "",
-    pool.saturation > 100 ? t("pools.tag.oversaturated") : "",
+    pool.margin >= 1 ? t("pools.tag.warn.keepsAll") : "",
+    pool.saturation > 100 ? t("pools.tag.warn.oversaturated") : "",
   ].filter(Boolean);
   const terms = [
     t("pools.row.marginCost", { margin: formatPercent(pool.margin * 100), cost: formatAda(pool.cost) }),
@@ -296,8 +297,11 @@ export function PoolListRow({
   );
 }
 
-/** One pool's details and recent epochs, fresh (two requests), and Stake. */
-function PoolPage({
+/**
+ * One pool's details and recent epochs, fresh (two requests), and Stake: held, saying why, for a pool that has retired,
+ * as nothing else refuses one before the node does. Exported for its test.
+ */
+export function PoolPage({
   row,
   known,
   knownHistory,

@@ -9,7 +9,10 @@
 //         transaction through getCollateral), and otherwise never spent. As in Lace, it's a UTxO set
 //         aside, not an amount. With none chosen, the wallet takes the
 //         oldest pure 5 ₳ UTxO the account holds, so a UTxO another wallet
-//         with the same phrase uses as its collateral stays put. Reclaiming
+//         with the same phrase uses as its collateral stays put: one with no
+//         reference script and no datum, which a Lovejoin mix can put up
+//         (`collateralFits`). One chosen (`use`) may be any 5 ₳ of ADA alone,
+//         as the ledger takes it. Reclaiming
 //         it returns it to the balance, and then the wallet takes none by
 //         itself until one is set again. Seedelf spends never use it:
 //         giveme.my lends theirs (privacy rule 2).
@@ -34,6 +37,7 @@ import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import { keptContractView } from "./contract-scan";
 import { measurable, type KoiosUtxo } from "./koios";
+import { evaluable } from "./lovejoin";
 import type { PrivateStore } from "./private-store";
 import { heldSent } from "./sent-txs";
 import { outpoint, spentSet } from "./spent";
@@ -87,7 +91,8 @@ export interface Choices {
   cardano: string[];
   /**
    * The collateral the user chose. Null once reclaimed: the wallet then
-   * takes none by itself. Absent: it takes the oldest pure 5 ₳ UTxO.
+   * takes none by itself. Absent: it takes the oldest pure 5 ₳ UTxO it can
+   * put up (`collateralFits`).
    */
   collateral?: string | null;
   /** When the payment making `collateral` was sent (ms since the epoch), while it's on its way. */
@@ -180,8 +185,18 @@ export async function collateralPayments(store: PrivateStore, network: NetworkNa
   return paid;
 }
 
-/** A pure-ADA UTxO of exactly 5 ₳: what can be the collateral. */
+/** A pure-ADA UTxO of exactly 5 ₳: what can be the collateral, the user's choice, as the ledger takes it. */
 export const isCollateralShaped = (u: KoiosUtxo) => BigInt(u.value) === COLLATERAL_LOVELACE && !u.asset_list?.length;
+
+/**
+ * A collateral-shaped UTxO the wallet takes by itself, and offers on the Collateral page: no reference script, and no
+ * datum, inline or by hash, which WebAssembly's evaluator refuses (eval::refusal), as a session's chain puts one up
+ * by this same rule, which sessions.ts imports (independent review L20). A stranger's 5 ₳ of ADA alone with a
+ * reference script, or a datum too deep to read, became the account's collateral, and every public Lovejoin mix
+ * then failed to build (chunk 51, e8b#1). One the user chose stays theirs: the ledger takes it, for a site's
+ * transaction say.
+ */
+export const collateralFits = (u: KoiosUtxo) => isCollateralShaped(u) && !u.reference_script && !u.inline_datum && !u.datum_hash;
 
 /**
  * Oldest first, then by outpoint, so the wallet's pick doesn't change between readings. By block, or by time for the
@@ -202,7 +217,7 @@ export function collateralOf(
     const chosen = utxos.find((p) => outpoint(p.utxo) === choices.collateral);
     if (chosen) return { utxo: chosen, by: "you" };
   }
-  const oldest = utxos.map((p) => p.utxo).filter(isCollateralShaped).sort(oldestFirst)[0];
+  const oldest = utxos.map((p) => p.utxo).filter(collateralFits).sort(oldestFirst)[0];
   const utxo = oldest && utxos.find((p) => p.utxo === oldest);
   return utxo ? { utxo, by: "wallet" } : undefined;
 }
@@ -278,15 +293,34 @@ export class CoinControlService {
    * `histories`: each private UTxO's too, for the UTxOs screen.
    */
   async lists(network: NetworkName, from?: ReadingUtxos, histories = true): Promise<UtxoLists> {
+    return (await this.listed(network, from, histories)).lists;
+  }
+
+  /**
+   * `lists`, with the account's own rows they list (`fresh`): what a list's row doesn't say, whether it carries a
+   * script or a datum, is in these.
+   */
+  private async listed(
+    network: NetworkName,
+    from?: ReadingUtxos,
+    histories = true,
+  ): Promise<{ lists: UtxoLists; fresh: PathedUtxo[] }> {
     const { wallet, session, contract = CONTRACT_V1 } = this.deps;
-    const [owned, account, spent, updatedAt] = await wallet.withKeys(async () => {
-      if (from) return [from.owned, from.account, await spentSet(session), from.updatedAt] as const;
+    const [owned, account, spent, updatedAt, ownStake] = await wallet.withKeys(async (keys) => {
+      // Which of the account's rows carry its own stake key, for the UTxOs screen to say whose each address is: the
+      // account is read by payment key, and anyone can pair its receive key with a stake part of theirs, or none
+      // (chunk 51, e9a#3).
+      const staked = (rows: PathedUtxo[]) =>
+        histories ? new Set(rows.filter((p) => keys.cardano.carriesStakeKey(p.utxo.address)).map((p) => outpoint(p.utxo))) : undefined;
+      if (from) return [from.owned, from.account, await spentSet(session), from.updatedAt, staked(from.account)] as const;
       if ((await session.get(SESSION_TOO_LARGE_PREFIX + network)) !== undefined) throw new Error(TOO_LARGE());
+      const rows = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
       return [
         (await keptContractView(session, network, contract))?.owned ?? [],
-        (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [],
+        rows,
         await spentSet(session),
         (await session.get<Balances>(SESSION_BALANCES_PREFIX + network))?.updatedAt,
+        staked(rows),
       ] as const;
     });
     const choices = await this.choices(network);
@@ -319,15 +353,22 @@ export class CoinControlService {
         ...info(p.utxo),
         address: p.utxo.address,
         path: { role: p.role, index: p.index },
+        ...(ownStake && !ownStake.has(outpoint(p.utxo)) ? { otherStake: true as const } : {}),
         locked: p === collateral || lockedCardano.has(outpoint(p.utxo)),
         ...(p === collateral ? { collateral: true } : {}),
         ...(measurable(p.utxo) ? {} : script),
+        // A UTxO WebAssembly's evaluator won't take (a reference script, a datum too deep to read) pays no Lovejoin
+        // mix, so the Mix and Bootstrap forms leave it out of what they count (chunk 51, gap-g2#3).
+        ...(evaluable(p.utxo) ? {} : { unmixable: true as const }),
       }),
     );
     return {
-      seedelf: seedelf.sort(largestFirst),
-      cardano: cardano.sort(largestFirst),
-      ...(updatedAt !== undefined ? { updatedAt } : {}),
+      lists: {
+        seedelf: seedelf.sort(largestFirst),
+        cardano: cardano.sort(largestFirst),
+        ...(updatedAt !== undefined ? { updatedAt } : {}),
+      },
+      fresh,
     };
   }
 
@@ -361,7 +402,7 @@ export class CoinControlService {
    */
   async collateral(network: NetworkName): Promise<CollateralStatus> {
     const choices = await this.choices(network);
-    const lists = await this.lists(network, undefined, false);
+    const { lists, fresh } = await this.listed(network, undefined, false);
     const set = lists.cardano.find((u) => u.collateral);
     if (set) {
       const by = choices.collateral === `${set.txHash}#${set.index}` ? "you" : "wallet";
@@ -374,7 +415,10 @@ export class CoinControlService {
       // it again anyway (1.6.0's review of the fixes, 309#1's leftover).
       if (await this.onItsWay(network, txHash)) return { state: "waiting", txHash, late: true };
     }
-    const candidate = lists.cardano.filter((u) => isCollateralShaped(asKoios(u))).sort(oldestInfoFirst)[0];
+    // The one Set takes with none chosen: the oldest the wallet would take by itself (`collateralFits`), read off the
+    // account's own rows. With none, Set pays a new 5 ₳.
+    const oldest = fresh.map((p) => p.utxo).filter(collateralFits).sort(oldestFirst)[0];
+    const candidate = oldest && lists.cardano.find((u) => u.txHash === oldest.tx_hash && u.index === oldest.tx_index);
     return { state: "none", reclaimed: choices.collateral === null, ...(candidate ? { candidate } : {}) };
   }
 
@@ -474,5 +518,3 @@ function asKoios(u: UtxoInfo): KoiosUtxo {
 
 const largestFirst = (a: UtxoInfo, b: UtxoInfo) =>
   Number(BigInt(b.lovelace) - BigInt(a.lovelace)) || `${a.txHash}#${a.index}`.localeCompare(`${b.txHash}#${b.index}`);
-
-const oldestInfoFirst = (a: UtxoInfo, b: UtxoInfo) => oldestFirst(asKoios(a), asKoios(b));

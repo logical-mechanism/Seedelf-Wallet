@@ -430,7 +430,11 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         message.txHash,
         (hash) => ctx.dapp.waitingCbor(hash),
       );
+    // What sites wait for is kept through a lock, for the user to answer once unlocked, but shown only then: a waiting
+    // signature says which of the wallet's other accounts and sessions it touches, from the sealed records (chunk 51,
+    // e4b#2). The locked window names the sites alone (`dapp-unlocking`).
     case "dapp-approvals":
+      if ((await wallet.state()) !== "unlocked") throw new WalletLocked(t("worker.locked"));
       return ctx.dapp.approvals();
     case "dapp-unlocking":
       return ctx.dapp.unlockingSites();

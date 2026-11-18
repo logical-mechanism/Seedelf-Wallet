@@ -62,16 +62,29 @@ pub fn random_scalar() -> Scalar {
 fn proof_nonce(sk: &Scalar, generator: &[u8], public_value: &[u8], vkh: &[u8]) -> Result<Scalar> {
     let mut aux = [0u8; 32];
     OsRng.fill_bytes(&mut aux);
+    let r = proof_nonce_with(sk, generator, public_value, vkh, &aux);
+    aux.zeroize();
+    r
+}
+
+/// [`proof_nonce`] with its 32 random bytes given, so a test can hold them
+/// still, as a failing source would.
+fn proof_nonce_with(
+    sk: &Scalar,
+    generator: &[u8],
+    public_value: &[u8],
+    vkh: &[u8],
+    aux: &[u8; 32],
+) -> Result<Scalar> {
     let mut key = sk.to_bytes_be();
     let mut mac = Hmac::new(Sha512::new(), &key);
-    for part in [NONCE_TAG, generator, public_value, vkh, &aux] {
+    for part in [NONCE_TAG, generator, public_value, vkh, aux] {
         mac.input(part);
     }
     let mut wide = [0u8; 64];
     mac.raw_result(&mut wide);
     let r = scalar_from_okm(&wide);
     key.zeroize();
-    aux.zeroize();
     wide.zeroize();
     r
 }
@@ -154,7 +167,10 @@ pub fn create_proof(datum: Register, sk: Scalar, vkh: String) -> Result<(String,
     ))
 }
 
-/// Used for testing
+/// Whether `z_b` and `g_r_b` prove knowledge of the register's secret, bound
+/// to `vkh`, as the deployed wallet validator decides it (5b82530
+/// lib/schnorr.ak `prove`). Used by the tests, and exported to WebAssembly as
+/// `verifyProof`. An error when a point or a hex string can't be read.
 pub fn prove(
     generator: &str,
     public_value: &str,
@@ -180,7 +196,7 @@ pub fn prove(
             .map_err(|e| anyhow::anyhow!("{e:?}"))?,
     )
     .into_option()
-    .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
+    .ok_or_else(|| anyhow!("Failed to decompress public value"))?;
 
     // Decode and decompress g_r_b
     let g_r: G1Affine = G1Affine::from_compressed(
@@ -190,15 +206,22 @@ pub fn prove(
             .map_err(|e| anyhow::anyhow!("{e:?}"))?,
     )
     .into_option()
-    .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
+    .ok_or_else(|| anyhow!("Failed to decompress g_r"))?;
 
-    // Convert z_b to Scalar
+    // z as the validator reads it, `scalar.from_bytearray_big_endian(z_b)`:
+    // big-endian, any length, and a scalar only when its value is below the
+    // group order. Past that, the validator's `expect` fails: no proof
+    // (chunk 51, r1#3).
     let z_bytes: Vec<u8> = hex::decode(z_b).context("Failed to decode z_b hex")?;
+    let significant: &[u8] = &z_bytes[z_bytes.iter().take_while(|b| **b == 0).count()..];
+    if significant.len() > 32 {
+        return Ok(false);
+    }
     let mut z_array: [u8; 32] = [0u8; 32];
-    z_array[(32 - z_bytes.len())..].copy_from_slice(&z_bytes);
-    let z: Scalar = Scalar::from_bytes_be(&z_array)
-        .into_option()
-        .ok_or_else(|| anyhow!("Failed to Convert To Scalar"))?;
+    z_array[32 - significant.len()..].copy_from_slice(significant);
+    let Some(z) = Scalar::from_bytes_be(&z_array).into_option() else {
+        return Ok(false);
+    };
 
     // Compute g^z = g1 * z
     let g_z: G1Projective = g1 * z; // Convert to G1Affine for comparison
@@ -223,4 +246,49 @@ pub fn prove(
 
     // Verify g^z = g^r * u^c
     Ok(g_z == (G1Projective::from(g_r) + u_c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The nonce's hedge (chunk 51, t1a#6). With its 32 random bytes held
+    /// still, as a source that fails or repeats would hold them, the nonce
+    /// still follows the statement and the key: two statements never share
+    /// one, which would give `sk` away, and nobody without `sk` can work it out.
+    #[test]
+    fn a_stuck_random_source_still_gives_each_statement_and_key_its_own_nonce() {
+        let aux = [0x5a; 32];
+        let sk = Scalar::from(18446744073709551606u64);
+        let register = Register::create(sk).unwrap();
+        let other = register.clone().rerandomize().unwrap();
+        let bytes = |point: &str| hex::decode(point).unwrap();
+        let (g, u) = (bytes(&register.generator), bytes(&register.public_value));
+        let vkh = [0x11; 28];
+        let nonce = |sk: &Scalar, g: &[u8], u: &[u8], vkh: &[u8]| {
+            proof_nonce_with(sk, g, u, vkh, &aux).unwrap()
+        };
+        let r = nonce(&sk, &g, &u, &vkh);
+
+        // One key, one statement, one draw: one nonce. Only the draw makes it new.
+        assert_eq!(r, nonce(&sk, &g, &u, &vkh));
+        // Another statement, whichever part of it: another nonce.
+        assert_ne!(r, nonce(&sk, &g, &u, &[0x22; 28]), "another vkh");
+        assert_ne!(
+            r,
+            nonce(&sk, &bytes(&other.generator), &u, &vkh),
+            "another generator"
+        );
+        assert_ne!(
+            r,
+            nonce(&sk, &g, &bytes(&other.public_value), &vkh),
+            "another public value"
+        );
+        // Another key: another nonce, so a draw anyone can predict doesn't
+        // make the nonce theirs.
+        assert_ne!(r, nonce(&Scalar::from(2u64), &g, &u, &vkh), "another key");
+        // And another draw.
+        let drawn = proof_nonce_with(&sk, &g, &u, &vkh, &[0xa5; 32]).unwrap();
+        assert_ne!(r, drawn, "another draw");
+    }
 }

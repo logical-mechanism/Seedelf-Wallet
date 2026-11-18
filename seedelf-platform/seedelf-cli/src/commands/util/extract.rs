@@ -7,7 +7,7 @@ use seedelf_koios::koios::{
     UtxoResponse, address_utxos, epoch_params, evaluate_transaction, utxo_info,
 };
 
-use crate::commands::fee;
+use crate::commands::{fee, rows};
 use crate::web_server;
 use anyhow::{Result, bail};
 use seedelf_core::address;
@@ -62,9 +62,21 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             }
             let utxo_addr: Address = Address::from_bech32(&utxo.address)
                 .map_err(|e| anyhow::anyhow!("UTxO address is not valid bech32: {e}"))?;
-            if utxo_addr
-                != address::wallet_contract(network_flag, config.contract.wallet_contract_hash)
-            {
+            // The contract is its payment credential: a UTxO at any of its
+            // addresses, the enterprise form or a staked one (where every CLI
+            // up to 0.4.10 paid it), is the contract's, and with no datum the
+            // contract lets anyone spend it (chunk 51, r4#7).
+            let at_contract = match (
+                &utxo_addr,
+                address::wallet_contract(network_flag, config.contract.wallet_contract_hash),
+            ) {
+                (Address::Shelley(utxo_addr), Address::Shelley(contract)) => {
+                    utxo_addr.network() == contract.network()
+                        && utxo_addr.payment() == contract.payment()
+                }
+                _ => false,
+            };
+            if !at_contract {
                 bail!("UTxO not in wallet");
             }
             if utxo.is_spent {
@@ -126,6 +138,12 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     // reference-script fee, and the script may be deployed there on purpose:
     // never spend one of the address's here.
     all_utxos.retain(|utxo| utxo.reference_script.is_none());
+    // Anyone can pay the address too: what would push a token's total past
+    // what one output holds, with the extracted UTxO's, stays out of the
+    // selection (chunk 51), and core is handed no more kinds of token than
+    // one transaction could carry, with the extracted UTxO's (l3cli#3).
+    let all_utxos = rows::for_select(&params, all_utxos, &Assets::new(), &empty_utxo_tokens)?;
+    let (all_utxos, _) = utxos::fitting(&all_utxos, &empty_utxo_tokens, |_| false)?;
     let usable_utxos: Vec<UtxoResponse> =
         utxos::select(&params, all_utxos, minimum_lovelace, Assets::new())?;
     if usable_utxos.is_empty() {
@@ -286,9 +304,9 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
 
     println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
-    // inject the tx cbor into the local webserver to prompt the wallet
-    display::webserver_address();
-    web_server::run_web_server(tx_cbor, network_flag).await;
+    // inject the tx cbor into the local webserver to prompt the wallet; it
+    // prints the page's address once it's serving
+    web_server::run_web_server(tx_cbor, network_flag).await?;
     text_coloring::display_purple("Server has stopped.");
 
     Ok(())

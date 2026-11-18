@@ -43,9 +43,11 @@ function head(b: Uint8Array, pos: number): Head {
 
 /**
  * How deep a dApp's CBOR may nest: each list, map and tag is a level, as the
- * WebAssembly counts them (cip30.rs refuses past 128 too). A real
- * transaction is a few levels deep; a site's could be thousands, and reading
- * it would run the worker's stack out.
+ * WebAssembly counts them (core's `cbor::check_nesting` refuses past 128 too,
+ * before the connector's read and Transaction details decode; `ogmiosUtxos`
+ * doesn't walk, so `nestsWithin` runs before a site's transaction reaches it).
+ * A real transaction is a few levels deep; a site's could be thousands, and
+ * reading it would run the worker's stack out.
  */
 export const MAX_DEPTH = 128;
 

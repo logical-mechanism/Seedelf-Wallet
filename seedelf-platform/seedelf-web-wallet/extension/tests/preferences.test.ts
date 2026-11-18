@@ -93,6 +93,20 @@ describe("preferences", () => {
     expect((await prefs.get()).koiosOnly).toBe(true);
   });
 
+  // Chunk 51, t1i#17: an account index past 2^31 - 1 can't be hardened, so it's no account. The account picker has
+  // accounts.ts's bound too; the dApp account Settings sets has this one alone.
+  it("take a dApp account only within the hardened range, and read one kept past it as the default", async () => {
+    const local = memoryArea();
+    const prefs = new PreferencesService(local);
+    await prefs.set({ dappAccount: 5 });
+    await prefs.set({ dappAccount: 0x8000_0000 });
+    expect((await prefs.get()).dappAccount).toBe(5);
+    await prefs.set({ dappAccount: 0x7fff_ffff });
+    expect((await prefs.get()).dappAccount).toBe(0x7fff_ffff);
+    await local.set("seedelf.preferences", { dappAccount: 0x8000_0000 });
+    expect((await prefs.get()).dappAccount).toBe(DEFAULT_PREFERENCES.dappAccount);
+  });
+
   it("read a kept value that's no longer allowed as the default", async () => {
     const local = memoryArea();
     await local.set("seedelf.preferences", { spendRewards: false, lockAfterMinutes: 1440, currency: 3 });

@@ -419,10 +419,17 @@ impl DirectTail {
 }
 
 /// The tail of a session's direct return (`api::session_return`) into the 5 ₳
-/// pool `pool` names, drawing from its `rows`: the session's own collateral
-/// among `utxos`, paid for by every other ADA-only UTxO there the wallet's
+/// pool `pool` names, drawing from its `rows`: the session's collateral among
+/// `utxos`, paid for by every other ADA-only UTxO there the wallet's
 /// evaluator can take. Refused where there's no such collateral, or nothing
 /// else to pay. Its mix takes what `rewards` holds for the pool.
+///
+/// `own`, the session's own transactions, decide as they do for a chain
+/// (`holdings_of`): the collateral is a 5 ₳ of theirs before anyone else's,
+/// and the change goes to its address, else to one they paid, never first to
+/// a stranger's, which may name the session's key under a stake key of its
+/// own (chunk 51, W1b). The deposit spends every UTxO of ADA alone either way.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn direct_tail(
     network_flag: bool,
     params: &ProtocolParameters,
@@ -430,12 +437,24 @@ pub(crate) fn direct_tail(
     pool: &PoolRef,
     rows: &[UtxoResponse],
     utxos: &[UtxoResponse],
+    own: &[String],
     rewards: &mut Rewards,
 ) -> Result<DirectTail> {
+    let is_own = |u: &&UtxoResponse| own.contains(&u.tx_hash);
     let collateral = utxos
         .iter()
-        .find(|u| fits_collateral(u))
+        .filter(|u| fits_collateral(u))
+        .find(is_own)
+        .or_else(|| utxos.iter().find(|u| fits_collateral(u)))
         .context("The session's 5 ₳ collateral isn't at its account")?;
+    // Where the change goes: the collateral's address when it's the session's
+    // own, else one its own transactions paid, else the collateral's, as
+    // before.
+    let home = if is_own(&collateral) {
+        collateral
+    } else {
+        utxos.iter().find(is_own).unwrap_or(collateral)
+    };
     let is_collateral =
         |u: &UtxoResponse| u.tx_hash == collateral.tx_hash && u.tx_index == collateral.tx_index;
     let payers: Vec<&UtxoResponse> = utxos
@@ -451,7 +470,7 @@ pub(crate) fn direct_tail(
         .iter()
         .map(|u| Coin::from_row(u))
         .collect::<Result<Vec<_>>>()?;
-    let address = Address::from_bech32(&collateral.address)
+    let address = Address::from_bech32(&home.address)
         .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
     let tail = CollateralTail::build(
         network_flag,
@@ -471,7 +490,7 @@ pub(crate) fn direct_tail(
                 .iter()
                 .any(|p| p.tx_hash == u.tx_hash && p.tx_index == u.tx_index)
     };
-    let mut rest = vec![coin_row(&tail.mix.change, &collateral.address)];
+    let mut rest = vec![coin_row(&tail.mix.change, &home.address)];
     rest.extend(utxos.iter().filter(|u| !spent(u)).cloned());
     Ok(DirectTail { tail, rest })
 }
@@ -544,7 +563,17 @@ pub fn collateral_mix(
         .filter(|u| seedelf_core::eval::refusal(u).is_none())
         .max_by_key(|u| u.value.parse::<u64>().unwrap_or(0))
         .context("Nothing of ADA alone at the session's account pays for the collateral's mix")?;
-    let address = Address::from_bech32(&payer.address)
+    // Where its change goes, as a chain's with no collateral of its own
+    // (`holdings_of`): to a UTxO under the session's key that its own
+    // transactions paid, never first a stranger's, which may name that key
+    // under a stake key of its own (chunk 51, W1b); else the payer's.
+    let home = request
+        .utxos
+        .iter()
+        .filter(|u| payment_key(&u.address) == Some(key))
+        .find(|u| request.own.contains(&u.tx_hash))
+        .unwrap_or(payer);
+    let address = Address::from_bech32(&home.address)
         .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
     let (mix, leaf) = lovejoin::collateral_mix(
         &params,
@@ -556,7 +585,7 @@ pub fn collateral_mix(
         1,
         &mut request.rewards.read()?,
     )?;
-    let mut rows = vec![coin_row(&mix.change, &payer.address)];
+    let mut rows = vec![coin_row(&mix.change, &home.address)];
     rows.extend(
         request
             .utxos
@@ -1197,6 +1226,7 @@ pub fn plan_at(
     width: usize,
 ) -> Result<PlanResult> {
     lovejoin::check_width(width)?;
+    check_waves(request.depth, least_waves(request.again))?;
     let protocol = protocol_of(network_flag(&request.network)?, pool)?;
     let held = holdings(
         accounts,
@@ -1328,6 +1358,7 @@ pub fn plan_across_pools(
         bail!("Mixing again goes into one Lovejoin pool");
     }
     lovejoin::check_width(width)?;
+    check_waves(request.depth, least_waves(false))?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(
         across
@@ -1570,6 +1601,7 @@ pub fn chain_at(
     width: usize,
 ) -> Result<ChainResult> {
     lovejoin::check_width(width)?;
+    check_waves(request.depth, least_waves(request.again))?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = protocol_of(network_flag, pool_ref)?;
@@ -1721,6 +1753,7 @@ pub fn chain_across_pools(
         bail!("Mixing again goes into one Lovejoin pool");
     }
     lovejoin::check_width(width)?;
+    check_waves(request.depth, least_waves(false))?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocols = protocols_of(network_flag, &across.legs)?;
@@ -2048,10 +2081,23 @@ fn check_depth(boxes: usize, depth: u32, least: u32) -> Result<()> {
     if boxes == 0 {
         bail!("Mix at least one box");
     }
+    check_waves(depth, least)
+}
+
+/// How deep a fan-out goes: `least` (a deposit's 0, a mix's 1) to 3 waves.
+/// A plan or a session's chain, which works out its boxes itself, checks this
+/// alone, at a mix's 1 to mix again (chunk 51, r3a#2).
+fn check_waves(depth: u32, least: u32) -> Result<()> {
     if !(least..=3).contains(&depth) {
         bail!("The fan-out is {least} to 3 waves deep");
     }
     Ok(())
+}
+
+/// The fewest waves `again` takes: a mix's 1 to mix boxes again, a deposit's
+/// 0 otherwise ([`check_mix`], [`check_deposit`]).
+fn least_waves(again: bool) -> u32 {
+    u32::from(again)
 }
 
 /// What mixing `boxes` boxes at `depth` takes, before anything is built:
@@ -2895,8 +2941,12 @@ pub fn withdraw_private_in(
     // A UTxO too small is passed over having taken nothing.
     let mut rewards = request.rewards.read()?;
     for utxo in &request.utxos {
+        // Only a UTxO at the contract's script is the private balance's: at
+        // the KEY address carrying its hash, which Koios lists beside it,
+        // nothing can spend one (chunk 51, x2#2).
         if utxo.asset_list.as_ref().is_some_and(|a| !a.is_empty())
             || seedelf_core::eval::refusal(utxo).is_some()
+            || !api::at_wallet_contract(network_flag, utxo)?
         {
             continue;
         }

@@ -27,6 +27,7 @@ import type {
   WithdrawSummary, BuildStage } from "../shared/rpc";
 import { checkRecipients } from "../shared/recipients";
 import { seedelfName } from "../shared/seedelf-name";
+import { decimalsOf } from "./balances";
 import { seedelfLabel } from "./chain";
 import { destinationResolver, resolveDestination } from "./destination";
 import { reviewParts, sendParts } from "./parts";
@@ -101,7 +102,8 @@ export class WithdrawService {
     }
     progress?.("measuring");
     // In as many transactions as the UTxOs it spends need, each spending its own (the owner's test of 1.6.0): one
-    // when one does. A shortfall's `most` is one transaction, as it was.
+    // when one does. A shortfall's `most` is built so too, as Max is, in as many parts as it takes (up to MAX_PARTS)
+    // and added up (`whole`): what an amount in parts can pay.
     const measured = (r: typeof request & { most?: boolean }) =>
       measureLocally<{ parts: WithdrawResult[] }>(this.deps, r, (keys, json) => wasm.buildWithdrawParts(keys.seedelf, json)).then(
         (built) => built.parts,
@@ -185,7 +187,15 @@ export class WithdrawService {
       },
     );
     const { txCbor, seed, inputs: _inputs, to: _to, ...rest } = finished;
-    const summary: RemoveSummary = { ...rest, network, label: seedelfLabel(seedelf), to };
+    // What sat with the Seedelf comes back in the units its UTxO gives it (Koios's decimals), for a token off the
+    // wallet's list too: WebAssembly's token lists carry none, and the review showed one in raw units, 10^6 times what
+    // the UTxOs screen and Home show (chunk 51, r2sign#3). The wallet's list still comes first (ui/tokens.ts).
+    const decimals = decimalsOf([utxo]);
+    const tokens = rest.tokens.map((token) => {
+      const d = decimals.get(`${token.policyId}.${token.assetName}`);
+      return d ? { ...token, decimals: d } : token;
+    });
+    const summary: RemoveSummary = { ...rest, tokens, network, label: seedelfLabel(seedelf), to };
     // Its ADA back in the private balance has the history of what paid for the Seedelf.
     const origin = (await classesOf(this.deps, network, [utxo]))[`${utxo.tx_hash}#${utxo.tx_index}`];
     await keep(this.deps, SESSION_REMOVE, { ...summary, txCbor, seed, ...(origin ? { origin } : {}) });

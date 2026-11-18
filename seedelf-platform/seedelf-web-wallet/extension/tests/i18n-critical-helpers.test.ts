@@ -71,6 +71,10 @@ const SHARED_WORDS: Record<string, string> = {
   "histories.tag.received": "where a UTxO's money came from, as the UTxOs list tags its row",
   "histories.tag.session": "where a UTxO's money came from, as the UTxOs list tags its row",
   "histories.tag.unknown": "where a UTxO's money came from, as the UTxOs list tags its row",
+  // A lookalike token's mark, and Home's row of one, are warnings by their class since chunk 51 (e9b#2): these are what
+  // they say around the warning's own words.
+  "common.sentence": "a sentence's full stop, the language's own, around a lookalike token's mark",
+  "tokenList.onItsWay": "a token's state, as Home's list says some of it is on its way back",
   "settings.lovejoin.depthCost": "what a depth costs, as the depth select's options say it",
 };
 
@@ -114,6 +118,13 @@ describe("a warning's words from outside its own JSX", () => {
     ["settings.password.warn.currentFirst", "error", "ui/components/Screen.tsx"],
     ["settings.sites.warn.notGranted", "error", "ui/screens/Settings.tsx"],
     ["serviceAccess.warn.stillRefused", "error", "ui/App.tsx"],
+    // An element in the warning's colour, by its `--warn` class: a lookalike token's mark and Home's row of one, and a
+    // pool's warning tags (chunk 51, e9b#2).
+    ["tokens.mark.warn.posesAs", "posing", "ui/components/TokenList.tsx"],
+    ["tokens.warn.theListed", "posing", "ui/components/TokenList.tsx"],
+    ["tokens.warn.callsItself", "view", "ui/components/TokenList.tsx"],
+    ["tokens.warn.callsItself", "v", "ui/components/TokenAmounts.tsx"],
+    ["pools.tag.warn.keepsAll", "f", "ui/screens/Pools.tsx"],
     // A key critical by name, wherever it's said: what fills its placeholders.
     ["histories.kind.privacy.boxes", 't("histories.privacy.together")', "shared/histories.ts"],
     ["histories.privacy.sessionNames", 't("histories.privacy.sessions")', "shared/histories.ts"],

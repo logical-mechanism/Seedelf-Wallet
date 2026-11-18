@@ -227,7 +227,10 @@ function SeedelfCard({
       <p className="note" data-testid={`seedelf-about-${s.assetName}`}>
         {/* No tag, no stand-in: "Unnamed" could be someone's tag. */}
         {s.label ? `${t("receive.seedelfs.tag", { tag: s.label })} · ` : ""}
-        {t("receive.seedelfs.deposit", { amount: amounts.ada(s.lovelace) })}
+        {/* And the other tokens its UTxO holds, which go with it when it's removed (chunk 51, w1b#2). */}
+        {s.tokens?.length
+          ? t("receive.seedelfs.depositTokens", { amount: amounts.ada(s.lovelace), count: s.tokens.length })
+          : t("receive.seedelfs.deposit", { amount: amounts.ada(s.lovelace) })}
       </p>
       {!only && (
         <div className="receive-card__actions">

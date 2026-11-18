@@ -36,7 +36,7 @@ import {
   sentVote,
   votesOut,
 } from "../src/ui/screens/Governance";
-import { paysNothing, PoolListRow, sortPools } from "../src/ui/screens/Pools";
+import { paysNothing, PoolListRow, PoolPage, sortPools } from "../src/ui/screens/Pools";
 import { noFundsReason, oversaturation, poolWarnings, Staking, StakingReview } from "../src/ui/screens/Staking";
 
 const markup = (element: ReactElement) =>
@@ -145,6 +145,33 @@ describe("a staking review's button says the act (ST-2)", () => {
   });
 });
 
+describe("a staking review's Public account after (chunk 51, t1k#10)", () => {
+  // What the account holds once it lands, from Home's figure (10,465.475311 ₳, its rewards in): less the fee and any
+  // deposit, more any deposit back. Withdrawn rewards were in the figure already: neither more nor less. Read with the
+  // balances shown.
+  const shownReview = (s: StakingSummary) =>
+    markup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: { ...DEFAULT_PREFERENCES, hideBalances: false }, loaded: true, set: async () => undefined } },
+        createElement(StakingReview, { summary: s, busy: false, onBack: noop, onSend: noop, total: "10465475311" }),
+      ),
+    );
+  const after = (s: StakingSummary) => /Public account after ([\d,.]+)\s₳/.exec(text(shownReview(s)))?.[1];
+
+  it("is the account less the fee, for a withdrawal of rewards already counted", () => {
+    expect(after(summary({ kind: "withdraw" }, { withdrawal: "57475311" }))).toBe("10,465.302638");
+  });
+
+  it("is less the fee and the deposit, for a first delegation", () => {
+    expect(after(summary({ kind: "delegate", pool: LOGIC }, { pool: LOGIC, deposit: "2000000" }))).toBe("10,463.302638");
+  });
+
+  it("is less the fee and more the deposit back, for Stop staking, whose rewards were counted", () => {
+    expect(after(summary({ kind: "stop" }, { withdrawal: "57475311", refund: "2000000" }))).toBe("10,467.302638");
+  });
+});
+
 describe("an oversaturated pool, in numbers (ST-8)", () => {
   it("says how many times its limit, and what share of a reward is left", () => {
     expect(oversaturation(458.39)).toEqual({ times: "4.6", share: "22%" });
@@ -190,6 +217,31 @@ describe("the pool list (ST-4, ST-5)", () => {
     const plain = markup(createElement(PoolListRow, { pool: row({}), current: false, shared: false, onOpen: noop }));
     expect(plain).not.toContain("token-row__tags");
     expect(plain).not.toContain("pledge");
+  });
+});
+
+describe("a pool's page (chunk 51, t1k#12)", () => {
+  const page = (status: PoolDetails["status"]) =>
+    markup(
+      createElement(PoolPage, {
+        row: row({}),
+        known: details({ status }),
+        onHistory: noop,
+        shared: 0,
+        registered: true,
+        busy: false,
+        onBack: noop,
+        onStake: noop,
+      }),
+    );
+
+  it("holds Stake with for a pool that has retired, saying so under it: nothing else refuses the delegation before the node", () => {
+    const retired = page("retired");
+    expect(retired).toMatch(/<button type="button" class="primary" disabled="" title="This pool has retired">Stake with TPREP<\/button>/);
+    expect(retired).toContain('data-testid="pool-why">This pool has retired</p>');
+    const live = page("registered");
+    expect(live).toMatch(/<button type="button" class="primary">Stake with TPREP<\/button>/);
+    expect(live).not.toContain('data-testid="pool-why"');
   });
 });
 
@@ -364,5 +416,15 @@ describe("the rewards' switch, beside the note it decides (blind test §9.9, E04
     const locked = page(true, { ...staking, drep: null });
     expect(theSwitch(locked)).toBeUndefined();
     expect(locked).not.toContain("staking-rewards-note");
+  });
+
+  it("holds Stop staking while the rewards are locked, saying why: stopping withdraws them, which the ledger refuses (chunk 51, t1k#11)", () => {
+    const stop = (html: string) => /<button[^>]*class="menu-row menu-row--danger"[^>]*>(?:(?!<\/button>).)*Stop staking/s.exec(html)?.[0];
+    const locked = stop(page(true, { ...staking, drep: null }));
+    expect(locked).toContain('disabled=""');
+    expect(locked).toContain('title="Delegate your voting power first: stopping withdraws the rewards"');
+    // The vote delegated, or no rewards to withdraw: it can be pressed.
+    expect(stop(page(true))).not.toContain('disabled=""');
+    expect(stop(page(true, { ...staking, drep: null, rewards: "0" }))).not.toContain('disabled=""');
   });
 });

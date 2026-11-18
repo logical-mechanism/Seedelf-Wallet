@@ -11,6 +11,7 @@ import { Collateral } from "../src/background/collateral";
 import { KoiosBusyError, KoiosError, type KoiosUtxo } from "../src/background/koios";
 import { builtOutputs, Minswap } from "../src/background/minswap";
 import { pendingKey } from "../src/background/pending";
+import { BUILT_TTL_MS } from "../src/background/script-spend";
 import { SESSION_TOP_UP, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
@@ -181,5 +182,40 @@ describe("a top-up Koios didn't answer, sent again and turned away", () => {
     await expect(sessions.topUpSubmit("preprod", more.txHash)).rejects.toBeInstanceOf(KoiosBusyError);
     expect(await recorded(t, more.txHash)).toMatchObject({ unsent: true, why: "busy" });
     expect((await t.session.get<{ txHash: string }>(pendingKey("preprod")))?.txHash).not.toBe(more.txHash);
+  });
+});
+
+// A review older than BUILT_TTL_MS is refused at Send before anything of it is recorded: let through, the top-up went
+// into its session's record, turned away there (chunk 51, t1h#9).
+describe("a top-up reviewed more than 10 minutes before its Send", () => {
+  it("is refused before it's recorded, and nothing is sent", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const more = await toppingUp(t, sessions);
+    await busy(t, BUILT_TTL_MS + 60_000);
+    const sent = t.koios.submitted.length;
+    await expect(sessions.topUpSubmit("preprod", more.txHash)).rejects.toThrow("That top-up was built more than 10 minutes ago. Review it again.");
+    expect(await recorded(t, more.txHash)).toBeUndefined();
+    expect(t.koios.submitted).toHaveLength(sent);
+  });
+});
+
+// A top-up goes only as the page reviewed it: Send on a page holding review X, when another window's review Y is kept
+// now, sent Y's bytes recorded under X's hash, so the record and what went disagreed; nor on another network (chunk
+// 51, t1i#7). Its age is t1h#9's, above.
+describe("a top-up sent as it was reviewed", () => {
+  it("is refused when the review kept isn't the page's, or on another network, and nothing is recorded or sent", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const x = await toppingUp(t, sessions);
+    // Another window reviews a top-up since: Y is kept now, in X's place.
+    const y = await sessions.topUpBuild("preprod", 0, "4000000", []);
+    expect(y.txHash).not.toBe(x.txHash);
+    const sent = t.koios.submitted.length;
+    await expect(sessions.topUpSubmit("preprod", x.txHash)).rejects.toThrow("That top-up isn't ready to send.");
+    await expect(sessions.topUpSubmit("mainnet", y.txHash)).rejects.toThrow("That top-up isn't ready to send.");
+    expect(t.koios.submitted).toHaveLength(sent);
+    expect(await recorded(t, x.txHash)).toBeUndefined();
+    expect(await recorded(t, y.txHash)).toBeUndefined();
   });
 });

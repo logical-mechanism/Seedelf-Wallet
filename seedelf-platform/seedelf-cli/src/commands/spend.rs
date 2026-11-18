@@ -2,7 +2,7 @@
 //! Ogmios measure the draft, finish it, get giveme.my's collateral witness,
 //! sign with the one-time key, and submit.
 
-use crate::commands::fee;
+use crate::commands::submit;
 use anyhow::{Context, Result};
 use blstrs::Scalar;
 use colored::Colorize;
@@ -13,7 +13,7 @@ use rand_core::OsRng;
 use seedelf_core::build::{self, Budgets, ScriptSpend};
 use seedelf_core::constants::COLLATERAL_PUBLIC_KEY;
 use seedelf_crypto::schnorr::create_proof;
-use seedelf_koios::koios::{evaluate_transaction, submit_tx, witness_collateral};
+use seedelf_koios::koios::{evaluate_transaction, witness_collateral};
 
 /// A new one-time signing key: every proof in the spend is bound to its hash.
 pub(crate) struct OneTimeKey {
@@ -88,20 +88,5 @@ pub(crate) async fn prove_and_submit(
         hex::encode(signed_tx_cbor.tx_bytes.clone()).white()
     );
 
-    let response = submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await?;
-    let tx_hash = fee::parse_submit_response(&response)?;
-    println!("\nTransaction Successfully Submitted!");
-    println!("\nTx Hash: {}", tx_hash.bright_cyan());
-    if network_flag {
-        println!(
-            "{}",
-            format!("\nhttps://preprod.cardanoscan.io/transaction/{tx_hash}").bright_purple()
-        );
-    } else {
-        println!(
-            "{}",
-            format!("\nhttps://cardanoscan.io/transaction/{tx_hash}").bright_purple()
-        );
-    }
-    Ok(())
+    submit::submit(signed_tx_cbor.tx_bytes.as_ref(), network_flag).await
 }

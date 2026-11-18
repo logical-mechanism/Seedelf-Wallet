@@ -58,3 +58,109 @@ async fn remove_burns_token_and_returns_ada() {
         .expect("the seedelf token must be in the mint field");
     assert_eq!(burned, -1, "exactly one seedelf token must be burned");
 }
+
+/// A `remove` scenario with everything a burn needs mounted, the Seedelf
+/// under `owner`'s register (the wallet's own when `None`), paying
+/// `address`: the run's refusal, and how often it evaluated and sent.
+async fn remove_refused(
+    owner: Option<blstrs::Scalar>,
+    address: String,
+) -> (anyhow::Error, usize, usize) {
+    let mut scenario = Scenario::start().await;
+    let owner = owner.unwrap_or(scenario.scalar);
+    scenario
+        .mount_credential_utxos(vec![seedelf_utxo(owner, 1, 5_000_000, SAMPLE_SEEDELF)])
+        .await;
+    scenario.mount_evaluate_mint(1).await;
+    scenario.mount_collateral().await;
+    scenario.mount_submit().await;
+    let refused = run(
+        RemoveArgs {
+            seedelf: SAMPLE_SEEDELF.to_string(),
+            address,
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect_err("remove is refused");
+    (
+        refused,
+        scenario.requests_to("/api/v1/ogmios").await,
+        scenario.requests_to("/api/v1/submittx").await,
+    )
+}
+
+/// A Seedelf under another key's register is refused before anything is
+/// proven, evaluated or sent: the contract would refuse the proof anyway,
+/// in a script error (chunk 51, t1b#8).
+#[tokio::test]
+#[serial]
+async fn remove_refuses_a_seedelf_this_wallet_doesnt_own() {
+    let someone_else = seedelf_crypto::schnorr::random_scalar();
+    let (refused, evaluated, sent) =
+        remove_refused(Some(someone_else), external_address_bech32()).await;
+    assert!(
+        refused.to_string().contains("isn't this wallet's"),
+        "{refused:#}"
+    );
+    assert_eq!((evaluated, sent), (0, 0), "nothing is evaluated or sent");
+}
+
+/// The burned Seedelf's ADA goes only to a normal address on this network:
+/// core pays `remove`'s change unchecked, and a payment with no datum to a
+/// script can lock for good there (chunk 51, t1b#9).
+#[tokio::test]
+#[serial]
+async fn remove_refuses_to_pay_a_script_stake_or_other_network_address() {
+    for address in not_payable_addresses() {
+        let (refused, evaluated, sent) = remove_refused(None, address.clone()).await;
+        assert!(
+            refused
+                .to_string()
+                .contains("Supplied Address Is Incorrect"),
+            "{address}: {refused:#}"
+        );
+        assert_eq!(
+            (evaluated, sent),
+            (0, 0),
+            "{address}: nothing is evaluated or sent"
+        );
+    }
+}
+
+/// A Seedelf token sent to the KEY address carrying the contract's hash comes
+/// with the contract's rows, but no key can spend from there: `remove` says
+/// the Seedelf isn't on chain, where it built a spend the node refused
+/// (chunk 51, x2#2).
+#[tokio::test]
+#[serial]
+async fn remove_finds_no_seedelf_at_the_key_address_carrying_the_contracts_hash() {
+    let mut scenario = Scenario::start().await;
+    let mut held = seedelf_utxo(scenario.scalar, 1, 5_000_000, SAMPLE_SEEDELF);
+    held.address = key_address_with_the_contracts_hash();
+    scenario.mount_credential_utxos(vec![held]).await;
+    scenario.mount_evaluate_mint(1).await;
+    scenario.mount_collateral().await;
+    scenario.mount_submit().await;
+
+    let refused = run(
+        RemoveArgs {
+            seedelf: SAMPLE_SEEDELF.to_string(),
+            address: external_address_bech32(),
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect_err("no Seedelf at the contract");
+    assert!(
+        refused.to_string().contains("not found on chain"),
+        "{refused:#}"
+    );
+    assert_eq!(
+        scenario.requests_to("/api/v1/submittx").await,
+        0,
+        "nothing is sent"
+    );
+}

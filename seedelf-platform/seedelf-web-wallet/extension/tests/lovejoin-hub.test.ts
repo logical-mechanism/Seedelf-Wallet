@@ -312,6 +312,16 @@ describe("Your mixes: every mix, followed until its last box is back (session 1,
     );
   const count = (markup: string, testId: string) => markup.split(`data-testid="${testId}"`).length - 1;
 
+  it("offers Stop on a private mix's card only before its chain exists (chunk 51, t1l#13)", () => {
+    // Before its chain, Stop brings it back directly, no box going in. Once its chain is being sent, or is all sent,
+    // its boxes are going in or are in: Stop's words would be false, and the worker's stop doesn't look at the chain.
+    expect(count(listMarkup([], [session(4, now, "funding", { auto: {} as never })]), "lovejoin-mix-stop")).toBe(1);
+    const entry: LovejoinMixView = { id: "m20", at: now, session: 19, shares: [{ pool: A, boxes: 4, back: 0, moved: 0 }], chain: { total: 6, sent: 3 } };
+    const mix = (chain: SessionView["chain"]) => session(19, now - 60_000, "returning", { mix: { boxes: 4, pool: A }, auto: {} as never, chain });
+    expect(count(listMarkup([entry], [mix({ total: 6, sent: 3, confirmed: 2, cut: false })]), "lovejoin-mix-stop")).toBe(0);
+    expect(count(listMarkup([entry], [mix({ total: 6, sent: 6, confirmed: 4, cut: false })]), "lovejoin-mix-stop")).toBe(0);
+  });
+
   it("leaves cleared mixes out, a cleared entry's session with it, and brings no older ones in for those cleared (the owner's test of 1.6.0)", () => {
     const list = [{ ...entries[0]!, cleared: true as const }, ...entries.slice(1)];
     const mine = session(2, now - 1500, "closed", { mix: { boxes: 2, pool: A, cleared: true } });

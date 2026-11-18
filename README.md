@@ -184,7 +184,7 @@ Neither the CLI nor the Seedelf Wallet has Tor built in. `koios.rest` does not s
 
 ### Troll Attacks
 
-The design of the wallet contract opens users to a troll attack: Alice pays Bob's Seedelf a UTxO overloaded with a large but useless reference script. Alice pays significantly more fees to create this UTxO. Bob pays more than usual to spend it, but less than Alice paid. The attack exists, but it's useless: it gains Alice nothing, and costs her more than it costs Bob.
+The design of the wallet contract opens users to a troll attack: Alice pays Bob's Seedelf a UTxO overloaded with a large but useless reference script. Alice pays significantly more fees to create this UTxO. Bob pays more than usual to spend it with the CLI, but less than Alice paid. The Seedelf Wallet can't spend such a UTxO yet: it leaves it out of the private balance and of payments, and marks it on the UTxOs screen. The attack exists, but it's useless: it gains Alice nothing, and costs her more than it costs Bob.
 
 ### Implicit Tracking Methods
 
@@ -273,7 +273,7 @@ Spendability is always in the hands of the original owner. It is safe to assume 
 
 ## Defeating The Collateral Problem
 
-The `seedelf-cli` uses the [Cardano Collateral Provider](https://giveme.my/), `giveme.my`. Every user shares the same collateral UTxO, so on chain the collateral says nothing about who is spending, which defeats the tainted-collateral attack (see [De-Anonymizing Attacks](#de-anonymizing-attacks)). `giveme.my` itself still sees your IP address with each spend (see [De-Anonymizing Via IP Tracking](#de-anonymizing-via-ip-tracking)). The Seedelf Wallet uses `giveme.my`'s collateral for its Seedelf spends too, and for some of its Lovejoin transactions. Where a transaction already names one of the wallet's own key accounts, such as the public account, that account puts up its own collateral instead. Its [privacy.md](./seedelf-platform/seedelf-web-wallet/docs/privacy.md) has which transactions use which.
+The `seedelf-cli` uses the [Cardano Collateral Provider](https://giveme.my/), `giveme.my`. Every user shares the same collateral UTxO, so on chain the collateral says nothing about who is spending, which defeats the tainted-collateral attack (see [De-Anonymizing Attacks](#de-anonymizing-attacks)). `giveme.my` itself still sees your IP address with each spend (see [De-Anonymizing Via IP Tracking](#de-anonymizing-via-ip-tracking)). The Seedelf Wallet uses `giveme.my`'s collateral for its Seedelf spends too, and for some of its Lovejoin transactions. Where a transaction already names one of the wallet's own key accounts, such as the public account, that account puts up its own collateral instead, with two exceptions. The Lovejoin mix of a private session's 5 ₳ collateral is paid for by the session's account and backed by `giveme.my`, since the 5 ₳ is in the box being mixed. A swap Minswap routes through Danogo's pools carries Minswap's own collateral. The Seedelf Wallet's [privacy.md](./seedelf-platform/seedelf-web-wallet/docs/privacy.md) has which transactions use which.
 
 ## What's In This Repository
 

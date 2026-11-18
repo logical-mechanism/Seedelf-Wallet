@@ -694,6 +694,11 @@ describe("DReps", () => {
     expect(drepName("\u0007")).toBeUndefined();
     expect(drepName(42)).toBeUndefined();
     expect(drepName(null)).toBeUndefined();
+    // Nor a bidi override or a zero-width character, which turn a name round or hide in it: every screen shows this
+    // one, Voting's card, Governance's own DRep and a staking review among them (chunk 51, gap-g7#3).
+    expect(drepName("Ev\u202eil\u200b Drep")).toBe("Evil Drep");
+    expect(drepName({ "@value": "\u2066Bob\u2069\ufeff" })).toBe("Bob");
+    expect(drepName("\u200b\u2060\u202e")).toBeUndefined();
   });
 });
 

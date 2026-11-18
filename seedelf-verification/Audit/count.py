@@ -9,16 +9,28 @@ What a module expects comes from its own source, comments and strings stripped:
 - every other `#blaster` command, and every `blaster` tactic, must log "✅ Valid";
 - a `#guard` logs nothing when it holds and fails the build when it doesn't.
 
-A module is ok only when its trace is newer than its source, has no error, no "❌" and no
-"Undetermined" line, and holds exactly the expected counts. Blaster logs Undetermined as a
-warning only (Blaster/Smt/Env.lean:70): check.sh reports such a module as UNDETERM, not ok,
-and this also checks the counts. Lake writes no trace for a failed build: read check.sh's console output for those."""
-import json, os, re, sys
+A module is ok only when its trace is newer than its source, every module it imports, directly or
+not, in this package or a dependency's (.lake/packages/), has a trace, its log has no error, no
+"❌", no "Undetermined" line and no `sorry`, and it holds exactly the expected counts. check.sh
+dates each trace it reads to its run, a log Lake replayed too (Lake replays one only for the source
+it was built from), so a trace older than its source is one no run has read since the source was
+written: `./check.sh <module>` rebuilds it or reads it again. Blaster logs Undetermined as a
+warning only (Blaster/Smt/Env.lean:70): check.sh reports such a module as UNDETERM, not ok, and
+this also checks the counts. Lake keeps the last good trace when a rebuild fails, so check.sh
+removes a failed module's build, here or in the dependency that holds it: it reads here as NO
+TRACE, and a module resting on it as STALE. This reads the last builds only, as tally.py does: an
+import or a pin changed since one shows once check.sh rebuilds. It exits 1 when any module isn't
+ok."""
+import glob, json, os, re, sys
 
 SV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIT = os.path.join(SV, "Audit")
 TRACES = os.path.join(SV, ".lake", "build", "lib", "lean")
 FORBIDDEN_AXIOMS = ("sorryAx", "Lean.ofReduceBool", "Lean.trustCompiler")
+IMPORT = r"(?<![\w.])import\s+([A-Za-z_][\w.]*)"
+# This package, then each dependency Lake keeps under .lake/packages/, each with its own .lake/build.
+ROOTS = [SV] + sorted(glob.glob(os.path.join(SV, ".lake", "packages", "*")))
+_holes, _homes = {}, {}
 
 
 def strip_comments(src):
@@ -70,6 +82,30 @@ def family(name):
     return [l.strip() for l in open(path) if l.strip() and not l.startswith("#")]
 
 
+def home(mod):
+    """The root of the package that holds `mod`'s source, this one or a dependency's, or None."""
+    if mod not in _homes:
+        rel = os.path.join(*mod.split(".")) + ".lean"
+        _homes[mod] = next((r for r in ROOTS if os.path.exists(os.path.join(r, rel))), None)
+    return _homes[mod]
+
+
+def hole(mod):
+    """A module `mod` imports, directly or not, here or in a dependency, with no trace, or None."""
+    if mod not in _holes:
+        _holes[mod] = None  # an import cycle, which Lean refuses, ends here
+        src = os.path.join(home(mod), *mod.split(".")) + ".lean"
+        for imp in re.findall(IMPORT, strip_comments(open(src, encoding="utf-8").read())):
+            r = home(imp)
+            if imp != mod and r is not None:
+                t = os.path.join(r, ".lake", "build", "lib", "lean", *imp.split(".")) + ".trace"
+                found = imp if not os.path.exists(t) else hole(imp)
+                if found:
+                    _holes[mod] = found
+                    break
+    return _holes[mod]
+
+
 def check(mod):
     src = os.path.join(SV, *mod.split(".")) + ".lean"
     trace = os.path.join(TRACES, *mod.split(".")) + ".trace"
@@ -79,8 +115,14 @@ def check(mod):
     if not os.path.exists(trace):
         return "NO TRACE", "never built, or its build failed: see check.sh's output", exp
     if os.path.getmtime(trace) < os.path.getmtime(src):
-        return "STALE", "trace older than the source: rebuild it", exp
-    log = json.load(open(trace)).get("log", [])
+        return "STALE", "trace older than the source: run ./check.sh on it", exp
+    under = hole(mod)
+    if under:
+        return "STALE", f"rests on {under}, which has no trace: see check.sh's output", exp
+    try:
+        log = json.load(open(trace, encoding="utf-8")).get("log", [])
+    except (OSError, ValueError) as e:
+        return "STALE", f"its trace doesn't read ({type(e).__name__}): run ./check.sh on it", exp
     msgs = [(e.get("level", ""), e.get("message", "")) for e in log]
     got = {
         "valid": sum("✅ Valid" in m for _, m in msgs),
@@ -88,7 +130,8 @@ def check(mod):
         "undetermined": sum("✅ Expected Undetermined" in m for _, m in msgs),
     }
     problems = [m.splitlines()[0][:160] for lvl, m in msgs
-                if lvl == "error" or "❌" in m or "⚠️ Undetermined" in m]
+                if lvl == "error" or "❌" in m or "⚠️ Undetermined" in m
+                or "declaration uses 'sorry'" in m]
     # `#print axioms` output (audit-last): a proof may rest on blasterProven and Lean's three
     # standard axioms, never on these.
     problems += [f"axiom {a}: {m.splitlines()[0][:120]}" for _, m in msgs
@@ -110,7 +153,8 @@ def main():
             totals[status] = totals.get(status, 0) + 1
             print(f"  {status:9} {mod}: {note}")
     print("\n== " + ", ".join(f"{v} {k}" for k, v in totals.items()))
+    return 0 if all(k == "ok" for k, v in totals.items() if v) else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

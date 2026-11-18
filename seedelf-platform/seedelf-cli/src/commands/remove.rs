@@ -52,15 +52,12 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(chain.config.contract.wallet_contract_hash, network_flag)
             .await?;
-    let seedelf_utxo: UtxoResponse = match utxos::find_seedelf_utxo(
-        args.seedelf.clone(),
-        &chain.config.contract.seedelf_policy_id,
-        every_utxo,
-    ) {
-        Ok(Some(utxo)) => utxo,
-        Ok(None) => bail!("Seedelf {} not found on chain", args.seedelf),
-        Err(e) => bail!("Failed to look up seedelf {}: {e}", args.seedelf),
-    };
+    let seedelf_utxo: UtxoResponse =
+        match utxos::find_seedelf_utxo(args.seedelf.clone(), &chain.config.contract, every_utxo) {
+            Ok(Some(utxo)) => utxo,
+            Ok(None) => bail!("Seedelf {} not found on chain", args.seedelf),
+            Err(e) => bail!("Failed to look up seedelf {}: {e}", args.seedelf),
+        };
 
     // Say so here, rather than have the wallet script refuse the proof.
     let owned: bool = extract_bytes_with_logging(&seedelf_utxo.inline_datum)

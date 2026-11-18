@@ -19,12 +19,14 @@ use pallas_primitives::{BoundedBytes, Fragment};
 use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::{BuildConway, Input, Output, ScriptKind, StagingTransaction};
 use seedelf_core::build::Budgets;
-use seedelf_core::cbor::MAX_DEPTH;
+use seedelf_core::cbor::{MAX_DEPTH, nests_within, within_depth};
 use seedelf_core::eval;
 use seedelf_core::orders::{
     self, Cancel, Credential, OrderToCancel, Protocol, Session, cancel_orders, read_order,
 };
-use seedelf_koios::koios::{InlineDatum, ProtocolParameters, ReferenceScript, UtxoResponse};
+use seedelf_koios::koios::{
+    Asset as KoiosAsset, InlineDatum, ProtocolParameters, ReferenceScript, UtxoResponse,
+};
 use serde_json::{Value, json};
 
 fn params(preprod: bool) -> ProtocolParameters {
@@ -1886,4 +1888,216 @@ fn what_isnt_an_order_a_swap_places_never_checks_out() {
         })
         .is_err()
     );
+}
+
+/// Chunk 51, r3b#1: the swap a DEX builds comes from outside the wallet, and
+/// Pallas decodes its plutus data by recursion, so a datum a few thousand
+/// levels deep overflows WebAssembly's stack, which kills the module. The dry
+/// run refuses such a swap itself, before decoding it, wherever the datum
+/// sits: in the witnesses for its hash, or inline in an output, in tag 24's
+/// byte string, which Pallas decodes too and `within_depth` doesn't open. It
+/// was safe only because the worker's inspect read the same bytes first. The
+/// deep swaps run on a thread with a large stack, so that a decode of them
+/// fails here as an assertion rather than overflowing the test's own stack.
+#[test]
+fn a_swap_nested_too_deep_is_refused_by_the_cancel_check_itself() {
+    let run = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let s = Setup::of(&fixture("MinswapV2", "mainnet"));
+            // Minswap V2's order as a swap places it, and beside it an output
+            // at the session's address under a datum `deep` levels down: by
+            // its hash, the datum in the witnesses, or inline.
+            let swap = |deep: Option<(usize, bool)>| {
+                let Some((levels, inline)) = deep else {
+                    return swap_placing(&s.address, &s.order, &s.datum, true, None);
+                };
+                let mut order = Output::new(
+                    Address::from_bech32(&s.order.address).unwrap(),
+                    s.order.value.parse().unwrap(),
+                );
+                for a in s.order.asset_list.iter().flatten() {
+                    let policy: [u8; 28] = hex::decode(&a.policy_id).unwrap().try_into().unwrap();
+                    order = order
+                        .add_asset(
+                            Hash::new(policy),
+                            hex::decode(&a.asset_name).unwrap(),
+                            a.quantity.parse().unwrap(),
+                        )
+                        .unwrap();
+                }
+                let datum = nested_arrays(levels);
+                let beside = Output::new(s.address.clone(), 2_000_000);
+                let mut tx = StagingTransaction::new()
+                    .input(Input::new(Hash::new([0x77; 32]), 0))
+                    .output(Output::new(s.address.clone(), 3_000_000))
+                    .output(order.set_inline_datum(s.datum.clone()));
+                tx = if inline {
+                    tx.output(beside.set_inline_datum(datum))
+                } else {
+                    tx.output(beside.set_datum_hash(Hasher::<256>::hash(&datum)))
+                        .datum(datum)
+                };
+                tx.fee(200_000).build_conway_raw().unwrap().tx_bytes.0
+            };
+            let check = |tx: &[u8]| {
+                orders::check_cancels(&orders::SwapCheck {
+                    params: &s.params,
+                    network_flag: s.preprod,
+                    session: s.session,
+                    address: &s.address,
+                    tx_cbor: tx,
+                    orders: &[1],
+                    references: &s.references,
+                })
+            };
+
+            // The honest swap checks out, and so does one beside a datum real
+            // ones nest no deeper than.
+            for tx in [swap(None), swap(Some((20, true))), swap(Some((20, false)))] {
+                assert!(nests_within(&tx, MAX_DEPTH));
+                let checks = check(&tx).expect("an honest swap is read");
+                assert_eq!(checks.len(), 1);
+                assert_eq!(checks[0].why, None, "{:?}", checks[0]);
+                assert!(checks[0].fee.is_some(), "{:?}", checks[0]);
+            }
+            // 4,000 levels: past the few thousand that overflowed
+            // WebAssembly's stack, in about 4 KB.
+            for inline in [false, true] {
+                let tx = swap(Some((4_000, inline)));
+                // An inline datum is a byte string to a walk that doesn't open it.
+                assert_eq!(within_depth(&tx, MAX_DEPTH), inline);
+                let refused = check(&tx).map(|c| format!("{c:?}")).unwrap_err().to_string();
+                assert_eq!(
+                    refused,
+                    "The wallet can't read this transaction: its data is nested more than 128 levels deep.",
+                    "inline {inline}"
+                );
+            }
+        })
+        .unwrap();
+    if let Err(panic) = run.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// `row` holding `what` besides its ADA: anyone can send the session's
+/// address a UTxO like it.
+fn with_extra(row: &UtxoResponse, what: &str) -> UtxoResponse {
+    let mut row = row.clone();
+    match what {
+        "a token" => {
+            row.asset_list = Some(vec![KoiosAsset {
+                decimals: 0,
+                quantity: "7".to_string(),
+                policy_id: "c0".repeat(28),
+                asset_name: String::new(),
+                fingerprint: String::new(),
+            }])
+        }
+        "an inline datum" => {
+            row.inline_datum = Some(InlineDatum {
+                bytes: "d87980".to_string(),
+                value: Value::Null,
+            })
+        }
+        "a datum hash" => row.datum_hash = Some(hex::encode([0x5d; 32])),
+        "a reference script" => row.reference_script = Some(Default::default()),
+        _ => panic!("{what}"),
+    }
+    row
+}
+
+/// Chunk 51, t1d#2: a cancel's collateral holds ADA alone. Its return is
+/// written as ADA alone, so a token on it would go missing, which the ledger
+/// refuses after the session signed; the worker puts up only ADA alone, and
+/// this backs it.
+#[test]
+fn a_cancels_collateral_holding_a_token_or_a_datum_is_refused() {
+    let s = Setup::of(&fixture("MinswapV2", "mainnet"));
+    let funds = vec![own(&s.address, 0xaa, 10_000_000)];
+    let plain = own(&s.address, 0xbb, SESSION_COLLATERAL);
+    assert!(s.cancel(&[s.order()], &funds, &plain).is_ok());
+    for what in ["a token", "an inline datum", "a datum hash"] {
+        let refused = s
+            .cancel(&[s.order()], &funds, &with_extra(&plain, what))
+            .map(|c| c.fee);
+        assert!(
+            matches!(&refused, Err(e) if format!("{e:#}").contains("must hold ADA alone")),
+            "{what}: {refused:?}"
+        );
+    }
+}
+
+/// `datum` in other bytes: the same data, its fields' list definite where it
+/// was indefinite, or the other way round.
+fn rewritten(datum: &[u8]) -> Vec<u8> {
+    let mut data = PlutusData::decode_fragment(datum).unwrap();
+    let PlutusData::Constr(c) = &mut data else {
+        panic!("not a constructor");
+    };
+    c.fields = match &c.fields {
+        MaybeIndefArray::Def(v) => MaybeIndefArray::Indef(v.clone()),
+        MaybeIndefArray::Indef(v) => MaybeIndefArray::Def(v.clone()),
+    };
+    let bytes = data.encode_fragment().unwrap();
+    assert_ne!(bytes, datum);
+    bytes
+}
+
+/// Chunk 51, t1d#3: a cancel is built only on the datum its order holds, in
+/// its bytes: inline, or the bytes its hash names. Who owns the order is read
+/// from those bytes, so other bytes of the same data would decide it on what
+/// the order's script never sees.
+#[test]
+fn a_cancel_is_built_only_on_the_datum_its_order_holds() {
+    let refused_as = |s: &Setup, order: OrderToCancel, words: &str| {
+        let funds = vec![own(&s.address, 0xaa, 10_000_000)];
+        let collateral = own(&s.address, 0xbb, SESSION_COLLATERAL);
+        let refused = s.cancel(&[order], &funds, &collateral).map(|c| c.fee);
+        assert!(
+            matches!(&refused, Err(e) if format!("{e:#}").contains(words)),
+            "{words}: {refused:?}"
+        );
+    };
+    let v2 = Setup::of(&fixture("MinswapV2", "mainnet"));
+    let inline = OrderToCancel {
+        utxo: v2.order.clone(),
+        datum: rewritten(&v2.datum),
+    };
+    refused_as(&v2, inline, "isn't the one it holds");
+    let v1 = Setup::of(&fixture("Minswap", "mainnet"));
+    assert!(v1.order.datum_hash.is_some());
+    let by_hash = OrderToCancel {
+        utxo: v1.order.clone(),
+        datum: rewritten(&v1.datum),
+    };
+    refused_as(&v1, by_hash, "isn't the one its hash names");
+    let mut bare = v2.order.clone();
+    bare.inline_datum = None;
+    bare.datum_hash = None;
+    let none = OrderToCancel {
+        utxo: bare,
+        datum: v2.datum.clone(),
+    };
+    refused_as(&v2, none, "holds no datum");
+}
+
+/// Chunk 51, t1d#4: a cancel never spends a session row holding a datum or a
+/// script, which a stranger can send the session's address; the worker passes
+/// only rows of ADA alone, and this backs it.
+#[test]
+fn a_cancel_never_spends_a_session_row_holding_a_datum_or_a_script() {
+    let s = Setup::of(&fixture("MinswapV2", "mainnet"));
+    let collateral = own(&s.address, 0xbb, SESSION_COLLATERAL);
+    let fund = own(&s.address, 0xaa, 10_000_000);
+    for what in ["an inline datum", "a datum hash", "a reference script"] {
+        let refused = s
+            .cancel(&[s.order()], &[with_extra(&fund, what)], &collateral)
+            .map(|c| c.fee);
+        assert!(
+            matches!(&refused, Err(e) if format!("{e:#}").contains("holds a datum or a script")),
+            "{what}: {refused:?}"
+        );
+    }
 }

@@ -6,6 +6,7 @@
 import type { NetworkName } from "../networks";
 import mainnet from "../dreps/mainnet.json";
 import preprod from "../dreps/preprod.json";
+import { plainName } from "./format";
 
 export interface DrepEntry {
   /** CIP-129, as Koios gives it. */
@@ -19,9 +20,12 @@ interface DrepList {
   dreps: DrepEntry[];
 }
 
+// Each name as every screen shows it (plainName): a DRep chooses its own, and the list keeps the bidi overrides and
+// zero-width characters its generator leaves, which turned a name round where a row showed it as it came:
+// Delegations' rows and Activity's staking line (chunk 51, gap-g7#3).
 const listOf = (file: { recorded: string; dreps: string[][] }): DrepList => ({
   recorded: file.recorded,
-  dreps: file.dreps.map(([id, name]) => ({ id: id!, name: name! })),
+  dreps: file.dreps.map(([id, name]) => ({ id: id!, name: plainName(name!) })),
 });
 
 const LISTS: Record<NetworkName, DrepList> = {

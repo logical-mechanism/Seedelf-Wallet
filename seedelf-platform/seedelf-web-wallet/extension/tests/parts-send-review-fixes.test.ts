@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
-import { Collateral } from "../src/background/collateral";
+import { Collateral, StaleReviewError } from "../src/background/collateral";
 import { DappService, type DappSession } from "../src/background/dapp";
 import { handle, RESET_AT_STAKE, type Context } from "../src/background/handlers";
 import { Koios, type KoiosUtxo } from "../src/background/koios";
@@ -35,7 +35,7 @@ import type { Area } from "../src/background/storage";
 import { SESSION_BACK, SessionService } from "../src/background/sessions";
 import { SESSION_TRANSFER, TransferService } from "../src/background/transfer";
 import { NOT_HELD, txView } from "../src/background/tx-view";
-import { WithdrawService } from "../src/background/withdraw";
+import { SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
 import type { PendingTx } from "../src/shared/rpc";
 import { PendingBanner } from "../src/ui/components/PendingBanner";
 import { NetworkContext } from "../src/ui/network";
@@ -577,6 +577,43 @@ describe("a payment in parts' guards no test pinned (1.6.0's review)", SLOW, () 
     expect(a.parts).toHaveLength(2);
     expect(b.parts).toHaveLength(2);
     await expect(withdraw.submit("preprod", a.txHash)).rejects.toThrow();
+    expect(t.koios.submitted).toEqual([]);
+  });
+
+  // Chunk 51, t1j#7: the case above never reaches the later parts' check, as the other review wrote over the first
+  // part too and Send's own check refuses first. A later part alone another review's (two windows' writes
+  // interleaving), or gone (session storage full mid-write), refuses the payment whole before anything goes, and
+  // giveme.my isn't asked; otherwise the first part went, and the next was refused only as it went.
+  it("refuses Send whole when only a later kept part is another review's, or gone, and sends nothing", async () => {
+    for (const later of ["another review's", "gone"] as const) {
+      const t = await spread(40);
+      const { withdraw } = services(t);
+      const a = await withdraw.build("preprod", [{ to: OWN, lovelace: "600000000", tokens: [] }]);
+      expect(a.parts, later).toHaveLength(2);
+      const key = partKey(SESSION_WITHDRAW, 1);
+      const part = (await t.session.get<{ txHash: string }>(key))!;
+      if (later === "gone") await t.session.remove(key);
+      else await t.session.set(key, { ...part, txHash: "ee".repeat(32) });
+      await expect(withdraw.submit("preprod", a.txHash), later).rejects.toBeInstanceOf(StaleReviewError);
+      expect(t.koios.submitted, later).toEqual([]);
+      expect(t.collateral.asked, later).toEqual([]);
+    }
+  });
+
+  // Chunk 51, t1j#11: a later part spending what a chain sent since the review spends. Only one of the two can land,
+  // so the payment is refused whole, before anything goes, as one transaction is (the first part's own check is
+  // script-spend-reserved.test.ts's).
+  it("refuses Send whole when a later part spends what a chain sent since the review spends, and sends nothing", async () => {
+    const t = await spread(40);
+    const { withdraw } = services(t);
+    const a = await withdraw.build("preprod", [{ to: OWN, lovelace: "600000000", tokens: [] }]);
+    expect(a.parts).toHaveLength(2);
+    const inputsOf = async (key: string) => txInputs(Uint8Array.from(Buffer.from((await t.session.get<{ txCbor: string }>(key))!.txCbor, "hex")));
+    const first = new Set(await inputsOf(SESSION_WITHDRAW));
+    const [only] = (await inputsOf(partKey(SESSION_WITHDRAW, 1))).filter((i) => !first.has(i));
+    expect(only).toBeDefined();
+    await t.session.set(`${SESSION_RESERVED_PREFIX}preprod`, { "session:0": { inputs: [only], collateral: [] } });
+    await expect(withdraw.submit("preprod", a.txHash)).rejects.toThrow("a chain through Lovejoin");
     expect(t.koios.submitted).toEqual([]);
   });
 

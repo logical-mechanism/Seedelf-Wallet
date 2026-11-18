@@ -6,7 +6,7 @@
 // with Ogmios measuring its spends, and nothing is sent until the user has
 // reviewed it and pressed Send.
 
-import { useEffect, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useState, type FormEvent } from "react";
 import { joinSentences, useT } from "../../i18n";
 
 import type { Balances, PendingTx, WithdrawSummary } from "../../shared/rpc";
@@ -36,7 +36,7 @@ import {
 } from "../components/Recipients";
 import { Row } from "../components/ReviewRows";
 import { againOrForm, RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
-import { StakedWarning } from "../components/StakedWarning";
+import { StakedWarning, StakeElsewhereNote } from "../components/StakedWarning";
 import { TotalRows } from "../components/ReviewTotals";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
@@ -245,9 +245,13 @@ export function Withdraw({
         <LeftOutNote leftOut={summary.leftOut} testId="withdraw-left-out" />
         {/* With several, each of the user's own by its number: the warning didn't say which it meant (PY-5). */}
         {/* Someone else's key under an account's stake key isn't the user's own (the 2026-11-02 bounty report). */}
+        {/* The user's key under a stake part that isn't theirs is: its stake works for someone else (chunk 51, x1a#1). */}
         {summary.payments.map((p, i) =>
           p.own ? (
-            <OwnWarning key={i} account={p.ownAccount} nth={several ? i + 1 : undefined} />
+            <Fragment key={i}>
+              <OwnWarning account={p.ownAccount} nth={several ? i + 1 : undefined} />
+              {p.stakeElsewhere && <StakeElsewhereNote side="withdraw" nth={several ? i + 1 : undefined} />}
+            </Fragment>
           ) : (
             p.staked !== undefined && (
               <StakedWarning key={i} side="withdraw" account={p.staked} nth={several ? i + 1 : undefined} />
@@ -315,6 +319,9 @@ export function Withdraw({
               ownAccounts="private"
             />
             {read.state === "read" && read.destination.own && <OwnWarning account={read.destination.ownAccount} />}
+            {read.state === "read" && read.destination.own && read.destination.stakeElsewhere && (
+              <StakeElsewhereNote side="withdraw" />
+            )}
             {read.state === "read" && !read.destination.own && read.destination.staked !== undefined && (
               <StakedWarning side="withdraw" account={read.destination.staked} />
             )}

@@ -88,3 +88,80 @@ fn identity_generator_is_owned_by_no_key() {
         assert!(!datum.is_owned(sk).unwrap());
     }
 }
+
+/// Compressed encodings by a small x: a point on the curve, or none.
+fn small_x() -> impl Iterator<Item = ([u8; 48], Option<blstrs::G1Affine>)> {
+    (1u8..=u8::MAX).map(|x| {
+        let mut bytes = [0u8; 48];
+        bytes[0] = 0x80;
+        bytes[47] = x;
+        (
+            bytes,
+            blstrs::G1Affine::from_compressed_unchecked(&bytes).into_option(),
+        )
+    })
+}
+
+/// A compressed point on the curve but outside the prime-order subgroup:
+/// `from_compressed` refuses it, as the wallet contract does.
+fn torsion_point() -> String {
+    small_x()
+        .find_map(|(bytes, point)| {
+            (!bool::from(point?.is_torsion_free())).then(|| hex::encode(bytes))
+        })
+        .expect("a small x off the subgroup")
+}
+
+/// A compressed encoding of no point: an x the curve has no y for.
+fn off_curve_point() -> String {
+    small_x()
+        .find_map(|(bytes, point)| point.is_none().then(|| hex::encode(bytes)))
+        .expect("a small x off the curve")
+}
+
+/// Re-randomizing a register outside the prime-order subgroup would give
+/// another one, and a payment under it is locked for good: the validator
+/// refuses such points (chunk 51, t1a#2). rerandomize refuses it instead,
+/// whichever point is off the subgroup, and an encoding off the curve too.
+#[test]
+fn rerandomize_refuses_a_register_outside_the_prime_order_subgroup() {
+    let good = Register::create(random_scalar())
+        .unwrap()
+        .rerandomize()
+        .unwrap();
+    for bad in [torsion_point(), off_curve_point()] {
+        for datum in [
+            Register::new(bad.clone(), good.public_value.clone()),
+            Register::new(good.generator.clone(), bad.clone()),
+        ] {
+            assert!(datum.clone().rerandomize().is_err(), "{datum:?}");
+        }
+    }
+    assert!(good.rerandomize().is_ok());
+}
+
+/// A point that doesn't decompress is named for what it is, the generator or
+/// the public value: these words reach the web wallet through WebAssembly
+/// (chunk 51, r1#3's sibling).
+#[test]
+fn a_point_that_doesnt_decompress_is_named() {
+    let good = Register::create(random_scalar()).unwrap().generator;
+    // Both flag bits set, and more: no point's encoding.
+    let bad = "ff".repeat(48);
+    for (datum, point) in [
+        (Register::new(bad.clone(), good.clone()), "generator"),
+        (Register::new(good.clone(), bad.clone()), "public value"),
+    ] {
+        let said = [
+            datum.clone().rerandomize().unwrap_err().to_string(),
+            datum.is_valid().unwrap_err().to_string(),
+        ];
+        assert_eq!(
+            said,
+            [
+                format!("Failed to decompress {point}"),
+                format!("Failed to decompress {point}")
+            ]
+        );
+    }
+}

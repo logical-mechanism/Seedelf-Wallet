@@ -33,6 +33,9 @@ For every theorem it reports:
             unknown); also a Z3 verdict whose query can't be read, a goal premises() can't
             read (prem=shape?), and a --list theorem with no dump. Neither counts as clean.
             Without z3 on PATH (or the --alt one) the scan stops, unless --no-z3 is given.
+  status    exit 0 only when no row is LOOK, INCONCLUSIVE (MISSING included) or FAILED; a Lean
+            run that ended nonzero (`rc=` in its .txt: failed, timed out, killed) is FAILED.
+            run-diag.sh exits with it, and Audit/run-all.sh lists the diag family by it.
 Usage: python3 -I scan-diag.py <out dir> [--list FILE] [--no-z3] [--timeout SECONDS] [--alt [Z3 PATH]]
   --list    only the theorems a run-diag.sh list names (one diag/lean path per line)
 """
@@ -115,6 +118,8 @@ def extract_dump(text):
     return '\n'.join(body)
 
 def verdict(text):
+    rc = re.findall(r'^rc=(\d+)$', text, re.M)
+    if rc and rc[-1] != '0': return 'FAILED'  # the Lean run failed, timed out or was killed
     if re.search(r'✅ Valid', text): return 'OPT-ONLY'
     if re.search(r'Undetermined', text) and 'Smt Query:' in text: return 'Z3'
     return 'FAILED'
@@ -295,8 +300,10 @@ def main():
         print(line)
     for m in sorted(only - seen) if only is not None else []:
         incon += 1; print(f"MISSING  {m}  listed, but no dump  <-- INCONCLUSIVE")
+    failed = sum(r['verdict'] == 'FAILED' for r in rows)
     print(f"\n{len(rows)} theorems; {sum(r['verdict']=='OPT-ONLY' for r in rows)} closed by the optimizer alone; "
-          f"{sum(r['verdict']=='Z3' for r in rows)} needed Z3; {sum(r['verdict']=='FAILED' for r in rows)} failed; "
+          f"{sum(r['verdict']=='Z3' for r in rows)} needed Z3; {failed} failed; "
           f"{flags} flagged; {incon} inconclusive" + ('' if use_z3 else '; no replays run (--no-z3)'))
+    return 1 if flags or incon or failed else 0
 
-main()
+sys.exit(main())

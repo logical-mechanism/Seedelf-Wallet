@@ -113,7 +113,7 @@ import {
 } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
-import { withStop } from "../sentence";
+import { withoutStop, withStop } from "../sentence";
 import {
   aboutAda,
   adaShort,
@@ -264,7 +264,8 @@ function tagOf(s: SessionView): { tone: SwapTone; label: string } {
   if (a.paused) return { tone: "wait", label: t("swaps.tag.needsYou") };
   if (a.retry) return { tone: "wait", label: t("swaps.tag.retrying") };
   // Stopped, and waiting on an order it can't cancel yet: neither done nor an error (independent review L16).
-  if (a.orderOpen !== undefined) return { tone: "off", label: t("swaps.tag.orderOpen") };
+  // Not once every order reads spent, its fill or refund told by the next run (chunk 51, l3screens#1).
+  if (a.orderOpen !== undefined && !a.spent) return { tone: "off", label: t("swaps.tag.orderOpen") };
   return { tone: "live", label: t(a.stopping ? "swaps.tag.stopping" : "swaps.tag.running") };
 }
 
@@ -273,6 +274,13 @@ const PAUSED: Record<SessionPause["why"], I18nKey> = {
   refused: "swaps.paused.refused",
   short: "swaps.paused.short",
 };
+
+/**
+ * Whether a running swap's next step is held by the draw an unlock made (privacy review §3.1; the worker's waits): the
+ * view carries it while it lasts, and nothing of it goes out until then, at most 20 minutes from when it was drawn
+ * (UNLOCK_WAIT_MS), which may be a while after the unlock. Never once it's done.
+ */
+const heldByUnlock = (a: SessionAuto, now: number) => a.step !== "done" && a.waitsUntil !== undefined && a.waitsUntil > now;
 
 /** A session's second line: what it's doing while it runs (its tag says if it's stopping), or when it ran. */
 function subOf(s: SessionView, now: number): string {
@@ -287,7 +295,11 @@ function subOf(s: SessionView, now: number): string {
   if (s.auto.paused) {
     return s.auto.paused.why === "refused" && s.auto.stopping ? t("swaps.paused.cancelRefused") : t(PAUSED[s.auto.paused.why]);
   }
+  // Every order read spent: it comes back next, its fill or refund told by the next run (chunk 51, l3screens#1).
+  if (s.auto.spent && (s.auto.step === "filling" || s.auto.step === "cancelling")) return t(STEP.returning);
   if (s.auto.orderOpen !== undefined) return t("swaps.sub.orderOpen");
+  // Its next step waits an unlock's draw (chunk 51, e7a#4).
+  if (heldByUnlock(s.auto, now)) return t("swaps.sub.waiting");
   // A swap against a DEX's pools has no order to place: it's swapping, though Stop was pressed as it went out
   // (chunk 24). It lands as it is or not at all.
   if (s.auto.againstPools && s.auto.step === "ordering") return t("swaps.step.swapping");
@@ -318,6 +330,8 @@ const stoppable = (a: SessionAuto) =>
   !a.filled &&
   !a.refunded &&
   !a.againstPools &&
+  // Every order read spent, its fill or refund told by the next run: no cancel is left to build (chunk 51, l3screens#1).
+  !a.spent &&
   (a.step === "funding" || a.step === "ordering" || a.step === "filling");
 
 /**
@@ -690,7 +704,17 @@ export function NewSwap({
   const [details, setDetails] = useState(false);
   const [inverted, setInverted] = useState(false);
   const [price, setPrice] = useState<AdaPrice | null>(null);
-  const [out, setOut] = useState<{ summary: SessionOutSummary; quote: SwapQuote; lovejoin?: SwapLovejoin }>();
+  // The review: the funding built, with the quote, its time and the picks it was built on, which the approval names.
+  // The form stays live while it builds: drawn with the form's picks as they were by then, a pick changed meanwhile
+  // named another token over the funding Start swap sends (chunk 51, e7a#1).
+  const [out, setOut] = useState<{
+    summary: SessionOutSummary;
+    quote: SwapQuote;
+    lovejoin?: SwapLovejoin;
+    pay: Pick;
+    get: Pick;
+    at: number;
+  }>();
   // The approval's switch: through Lovejoin, as Settings starts it, or directly (privacy review §4.1).
   const [through, setThrough] = useState(true);
   // Change on the approval (chunk 34's 34e): the pool the token it gets goes into, by its unit, null for none.
@@ -709,6 +733,9 @@ export function NewSwap({
   }, []);
 
   const held = heldOf(seedelf, pay.id);
+  // Home hands the form the private balance's unlocked side: with some of it locked, its figures are what's available,
+  // as Make public says it, never all of the private balance (chunk 51, l3still#4).
+  const someLocked = seedelf.locked.utxos > 0;
   const raw = parseQuantity(amount, pay.side.decimals);
   const tooMuch = !!raw && BigInt(raw) > BigInt(held);
   const getId = get?.id;
@@ -801,28 +828,37 @@ export function NewSwap({
    * balance has, which the form then says. `keepWay`: a review built again
    * keeps the way back the user chose on the one before, its switch and its
    * Change, built that way (chunk 34's 34f: the switch's way decides whether
-   * the token's boxes are funded). `way` sets them anew.
+   * the token's boxes are funded). `way` sets them anew. Built again from the
+   * review (`keepWay`), it's the review's swap, its quote and picks, never
+   * the form's: a pick changed while the first one built would build the
+   * other pair under the same approval (chunk 51, e7a#1).
    */
   async function buildOut(keepWay = false, way?: { through?: boolean; pools?: Record<string, string | null> }): Promise<boolean> {
-    if (!current || !quoted || !get) return false;
-    let quote = current;
-    if (Date.now() - quoted.at > QUOTE_FRESH_MS) {
+    const from = keepWay && out ? out : current && quoted && get ? { quote: current, at: quoted.at, pay, get } : undefined;
+    if (!from) return false;
+    let { quote, at } = from;
+    if (Date.now() - at > QUOTE_FRESH_MS) {
       quote = await call("swap-quote", quote.ask);
-      setQuoted({ quote, at: Date.now() });
+      at = Date.now();
+      // The form's quote too, where it holds the same swap's when this answers: not once a pick changed meanwhile and
+      // that pick's own quote landed. Read against the render Review was pressed in, MIN's took the place of SNEK's, and
+      // Back found the form waiting on a quote nothing asked for again (chunk 51, r2screens#2).
+      const fresh = { quote, at };
+      setQuoted((was) => (!was || sameAsk(was.quote.ask, fresh.quote.ask) ? fresh : was));
       if (adaShort(seedelf.lovelace, quote)) return false;
     }
     const wantThrough = way?.through ?? (keepWay ? through : undefined);
     const wantPools = way?.pools ?? (keepWay ? pools : {});
     const { lovejoin, ...summary } = await call("session-out-build", {
       quote,
-      display: { in: pay.side, out: get.side },
+      display: { in: from.pay.side, out: from.get.side },
       ...(wantThrough !== undefined ? { through: wantThrough } : {}),
       ...(Object.keys(wantPools).length ? { pools: wantPools } : {}),
     });
     setThrough(wantThrough ?? lovejoin?.on ?? false);
     setPools(wantPools);
     setTurnedOff(way?.through === false || (keepWay && turnedOff && wantThrough === false));
-    setOut({ summary, quote, lovejoin });
+    setOut({ summary, quote, lovejoin, pay: from.pay, get: from.get, at });
     return true;
   }
 
@@ -893,7 +929,7 @@ export function NewSwap({
     }
   }
 
-  if (out && get) {
+  if (out) {
     return (
       <Screen
         title={tr("swaps.review.title")}
@@ -921,10 +957,13 @@ export function NewSwap({
           )
         }
       >
+        {/* The swap built, by the picks it was built on (e7a#1). */}
         <SwapApproval
-          {...out}
-          pay={pay}
-          get={get}
+          summary={out.summary}
+          quote={out.quote}
+          lovejoin={out.lovejoin}
+          pay={out.pay}
+          get={out.get}
           through={through}
           onThrough={(on) => void rebuild({ through: on })}
           onPool={(unit, pool) => void rebuild({ pools: { ...pools, [unit]: pool } })}
@@ -1047,7 +1086,7 @@ export function NewSwap({
             <span>{fiat(pay.id, raw)}</span>
             <span
               className={tooMuch ? "swap-card__held swap-card__held--short" : "swap-card__held"}
-              title={tr("swaps.inPrivate")}
+              title={tr(someLocked ? "swaps.inPrivateAvailable" : "swaps.inPrivate")}
               data-testid="swap-held"
             >
               <WalletIcon size={14} />
@@ -1085,7 +1124,7 @@ export function NewSwap({
           <div className="swap-card__foot">
             <span>{get && fiat(get.id, shown?.amountOut)}</span>
             {get && (
-              <span className="swap-card__held" title={tr("swaps.inPrivate")}>
+              <span className="swap-card__held" title={tr(someLocked ? "swaps.inPrivateAvailable" : "swaps.inPrivate")}>
                 <WalletIcon size={14} />
                 {amounts.quantity(heldOf(seedelf, get.id), get.side.decimals)}
               </span>
@@ -1096,7 +1135,7 @@ export function NewSwap({
       {note && <p className="field-note">{note}</p>}
       {tooMuch && (
         <p className="field-note" data-testid="swap-short">
-          {tr("swaps.tooMuch", { held: amountOf(held, pay, amounts.quantity) })}
+          {tr(someLocked ? "swaps.tooMuchAvailable" : "swaps.tooMuch", { held: amountOf(held, pay, amounts.quantity) })}
         </p>
       )}
       {/* Max is less than the balance: it says why, on the page, not only in its label (DX-4). With what its funding adds
@@ -1118,7 +1157,7 @@ export function NewSwap({
       {unverified && get && <Unverified pick={get} />}
       {short && current && (
         <p className="field-note" data-testid="swap-short">
-          {tr("swaps.short", {
+          {tr(someLocked ? "swaps.shortAvailable" : "swaps.short", {
             takes: formatAda(current.fund.lovelace),
             collateral: formatAda(current.collateral),
             held: amounts.ada(seedelf.lovelace),
@@ -1932,7 +1971,8 @@ export function TokenSelect({
       {which === "get" && (
         <p className="field-note">{tr("swaps.pick.privacy.ownListFirst")}</p>
       )}
-      <h3 className="swap-pick__heading">{tr("swaps.inPrivate")}</h3>
+      {/* What the private balance's unlocked side holds: what's available, where some of it is locked (l3still#4). */}
+      <h3 className="swap-pick__heading">{tr(seedelf.locked.utxos ? "swaps.inPrivateAvailable" : "swaps.inPrivate")}</h3>
       {mine.length ? (
         <ul className="list" data-testid="swap-own-tokens">
           {mine.map((p) => row(p, p.sub, p.held))}
@@ -2528,7 +2568,14 @@ export function Session({
           busy={busy}
           onRetry={() => void act(async () => setS(await call("session-resume", { index: s.index })))}
         />
-        <LovejoinSkipped reason={s.lovejoinSkipped} />
+        {/* A later part's reason, never said as the swap's own return's, which went through Lovejoin (l3screens#2). */}
+        {laterSkip(s) ? (
+          <Callout tone="warn" testId="session-lovejoin-skipped">
+            {tr("swaps.warn.skippedLater", { why: withoutStop(s.lovejoinSkipped!) })}
+          </Callout>
+        ) : (
+          <LovejoinSkipped reason={s.lovejoinSkipped} />
+        )}
         {rows}
         <CollateralHeldWayOut held={s.collateralHeld} busy={busy} onSkip={skipCollateralMix} />
         <LeftBehindNote leftBehind={s.leftBehind} />
@@ -3066,15 +3113,46 @@ type StepState = "done" | "now" | "paused" | "failed" | "todo" | "skipped";
  * cut short or stopped, the chain's own words. It said "Everything at the account, under fresh registers" whichever
  * way it went, while a swap's spare ADA, and since 34e its proceeds' boxes, went into Lovejoin's pools for hours
  * (1.6.0's rehearsal, step 4). Those words stay for a return that went directly with nothing for a box, and for a swap
- * from before the switch whose return isn't built, which goes as Settings has it.
+ * from before the switch whose return isn't built, which goes as Settings has it. Once the swap's own return went, a
+ * chain sent after it is a later return's, a stranger's payment brought back, say, which takes the session's chain
+ * record: it never speaks for the swap's own, which then says only which way that went (chunk 51, r2docs#1). Nor a
+ * later part's reason for leaving Lovejoin out (laterSkip; chunk 51, l3screens#2).
  */
 function backStepText(s: SessionView): string {
   const auto = s.auto!;
-  if (s.lovejoinSkipped) return t("swaps.step.directLeftOut");
+  if (s.lovejoinSkipped && !laterSkip(s)) return t("swaps.step.directLeftOut");
   if (auto.direct) return t("swaps.step.directChosen");
+  const own = ownReturnAt(s);
+  if (own >= 0 && s.txs.slice(own + 1).some(mixed)) {
+    return t(s.txs.slice(0, own).some(mixed) ? "swaps.step.throughLovejoin" : "swaps.step.freshRegisters");
+  }
   if (s.chain) return s.chain.cut || s.chain.stopped ? chainText(s.chain) : t("swaps.step.throughLovejoin");
-  const returned = s.txs.some((x) => x.kind === "back");
-  return !returned && auto.direct === false ? t("swaps.step.throughLovejoin") : t("swaps.step.freshRegisters");
+  return own < 0 && auto.direct === false ? t("swaps.step.throughLovejoin") : t("swaps.step.freshRegisters");
+}
+
+/**
+ * Where the swap's own return is among the session's transactions: its first. The worker takes a return for one of
+ * only what others paid the account (KeptBack `strangers`) once one of the session's own went, over the same returns a
+ * view shows (sessions.ts `apart`), so the first is always the swap's own. A later one may bring back what a stranger
+ * paid it before it closed: the Received row counts it beside the swap's, and the last step never names it in the
+ * swap's place (chunk 51, r2docs#1). -1 before any.
+ */
+const ownReturnAt = (s: SessionView) => s.txs.findIndex((x) => x.kind === "back");
+
+/** A return's transaction through Lovejoin: every one of a chain's comes before its return, the WebAssembly's last. */
+const mixed = (x: SessionTx) => x.kind === "deposit" || x.kind === "mix";
+
+/**
+ * Whether the session's reason for leaving Lovejoin out is a later return's, not the swap's own: the return that wrote
+ * it (`lovejoinSkippedBy`, as the worker records it) isn't the swap's own, its first, such as a late leg's fill that no
+ * listing held until the first had gone and that came back directly (chunk 51, l3screens#2). Read off the return
+ * itself, as the view can't tell the swap's own of its collateral's mix alone and then the return directly, its own
+ * reason with it, from a chain of one box: read off what went before, that reason was called a later part's once a
+ * stranger's return came after it (l4worker#1). A record from before the worker kept which, the swap's own.
+ */
+function laterSkip(s: SessionView): boolean {
+  const own = s.txs[ownReturnAt(s)];
+  return !!s.lovejoinSkipped && s.lovejoinSkippedBy !== undefined && !!own && s.lovejoinSkippedBy !== own.txHash;
 }
 
 /**
@@ -3095,11 +3173,13 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   // Stopped before any order: the order and its fill never happen.
   const unordered = auto.stopping && !tx("swap");
   // Stopped, but an order Koios can't find yet is still open: not cancelled (independent review L16).
-  const open = auto.orderOpen !== undefined;
+  const open = auto.orderOpen !== undefined && !auto.spent;
   // Nor a swap against a DEX's pools that went out before Stop took effect: it has no order to cancel, and lands as
   // it is, filled in itself, or not at all (chunk 24; the 1.3.0 release review, C24). One that never lands isn't
   // shown, and reads as stopped before any.
-  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded && !auto.againstPools);
+  // Nor every order read spent, its fill or refund told by the next run: no cancel goes, and the step is named as the
+  // plan names it till then (chunk 51, l4worker#2).
+  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded && !auto.againstPools && !auto.spent);
   // Unless its cancel was refused: the order is still open at the DEX, its funds with it (release review C15).
   // Stopping, the cancel is all the runner builds that can be refused (subOf).
   const cancelRefused = cancelled && !tx("cancel") && auto.paused?.why === "refused";
@@ -3177,7 +3257,8 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
     {
       title: tr("swaps.plan.back"),
       sub: backStepText(s),
-      tx: tx("back"),
+      // The swap's own return, never a later one of what a stranger paid its account (ownReturnAt; r2docs#1).
+      tx: s.txs[ownReturnAt(s)],
     },
   ];
   const done = auto.step === "done";
@@ -3273,11 +3354,14 @@ const ORDER_OPEN = () => t("swaps.now.orderOpen");
  * What's happening now, in plain words. A swap against a DEX's pools has no
  * order: it's on its way, Stop pressed as it went out or not, then filled in
  * itself as it lands, and nothing is cancelled (chunk 24; the 1.3.0 release
- * review, C13, C24).
+ * review, C13, C24). Found as the wallet unlocked, its next step waits a fresh
+ * draw first (privacy review §3.1), which it says till `now` is past it: it
+ * said it was asking Minswap all through the wait (chunk 51, e7a#4).
  */
-export function nowLine(s: SessionView): string {
+export function nowLine(s: SessionView, now = Date.now()): string {
   const a = s.auto!;
   if (s.stage === "failed") return s.unsent ? neverSent(s) : t("swaps.now.fundingUnseen");
+  if (heldByUnlock(a, now)) return t("swaps.now.waiting");
   switch (a.step) {
     case "funding":
       return t(a.stopping ? "swaps.now.stoppingAtFunding" : "swaps.now.funding");
@@ -3288,14 +3372,15 @@ export function nowLine(s: SessionView): string {
       return t(a.approvedPools ? "swaps.now.quotingPools" : "swaps.now.quoting");
     case "filling":
       // Filled or refunded, or landed against a DEX's pools: nothing waits on a DEX, and there's no Stop. Its return
-      // goes next, once an unlock's wait or Koios's listing lets it.
-      if (a.filled || a.refunded || a.againstPools) return t("swaps.now.comingBackNext");
+      // goes next, once an unlock's wait or Koios's listing lets it. So too once every order reads spent, its fill or
+      // refund told by the next run (chunk 51, l3screens#1).
+      if (a.filled || a.refunded || a.againstPools || a.spent) return t("swaps.now.comingBackNext");
       return t("swaps.now.filling");
     case "cancelling":
       // An order Koios can't find yet can't be cancelled: what the swap waits on, plainly (independent review L16).
-      if (a.orderOpen !== undefined) return ORDER_OPEN();
+      if (a.orderOpen !== undefined && !a.spent) return ORDER_OPEN();
       // Stopped, but filled or refunded first, or landed against a DEX's pools: there's nothing to cancel.
-      if (a.filled || a.refunded || a.againstPools) return t("swaps.now.comingBackNext");
+      if (a.filled || a.refunded || a.againstPools || a.spent) return t("swaps.now.comingBackNext");
       return t("swaps.now.cancelling");
     case "returning":
       if (s.chain) {

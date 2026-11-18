@@ -126,6 +126,23 @@ describe("a mix from one public account, and Mix again from my public account on
     // Back on account 0, its own boxes are its to mix again, paid by it: none of account 1's money goes in.
     await t.accounts.use(0, ["preprod"]);
     expect((await inAda(t)).otherAccounts).toBeUndefined();
+    // Switched to account 1 while the review reads the pool's reward balance, after account 0's UTxOs were read: not
+    // built, as account 1 paying to mix account 0's boxes would tie the two, and nothing is kept for Send (chunk 51,
+    // t1g#14).
+    const real = t.koios.fetch;
+    let switched = false;
+    t.koios.fetch = async (url, init) => {
+      if (!switched && url.endsWith("/account_info")) {
+        switched = true;
+        await t.accounts.use(1, ["preprod"]);
+      }
+      return real(url, init);
+    };
+    await expect(t.lovejoin.publicAgainBuild("preprod", ADA)).rejects.toThrow("That mix isn't ready to send. Review it again.");
+    t.koios.fetch = real;
+    expect(switched).toBe(true);
+    expect(await t.wallet.withKeys(() => t.session.get(SESSION_LOVEJOIN_PUBLIC))).toBeUndefined();
+    await t.accounts.use(0, ["preprod"]);
     const again = await t.lovejoin.publicAgainBuild("preprod", ADA);
     expect(again).toMatchObject({ again: true, boxes: 4, owned: 4 });
     const spent = (await keptInputs(t)).flat();
@@ -233,5 +250,92 @@ describe("a restore's box a deposit from another public account made (release re
     await t.accounts.add(1);
     await t.accounts.use(1, ["preprod"]);
     expect((await inAda(t)).otherAccounts).toEqual([{ txHash: D, txIndex: 0, account: 0, pool: ADA }]);
+  });
+});
+
+// Chunk 51, gap-g6#2. What made a box no record accounts for is judged against the accounts the wallet knows at that
+// pool read (lovejoin.ts accountKeys: the active one, the known ones and 0-23), and was kept as judged then. A deposit
+// from public account 30, which only `add` or `check` reaches, read after a restore before the user added 30 back, was
+// kept as no account's: once 30 was known, the 5 ₳ pool's page still said nothing of account 30, and Mix my boxes again
+// from the private balance took those boxes, which privacy.md's "Mixing the boxes again" says it never does ("takes only
+// the others"). Kept with the inputs it was judged from, it's judged again on the device once the wallet knows another
+// account; one kept before origins kept their inputs is asked about once more.
+describe("a restore's box a deposit from a custom account made, that account added after (chunk 51, gap-g6#2)", CHAINS, () => {
+  /** Past MAX_PROBE's 0-23: never derived by accountKeys unless the wallet knows it. */
+  const CUSTOM = 30;
+  const TIES = "mixing them from your private balance would tie the two";
+
+  /**
+   * A restore's two boxes in the 5 ₳ pool, made by deposit `D`, which Koios says spent public account 30's first
+   * receive address (a public Bootstrap or a mix cut after its deposit). The Seedelf key is account 0's, so the boxes are
+   * the wallet's whichever account paid. A fresh wallet that knows only account 0 is what a restore leaves.
+   */
+  async function restored(t: Tested, D: string): Promise<string[]> {
+    const input = await t.wallet.withAccount(CUSTOM, (k) => ({
+      bech32: k.cardano.receiveAddress(t.deps.wasm.Network.Preprod, 0),
+      cred: k.cardano.paymentKeyHash(0, 0),
+    }));
+    t.koios.txSpends.set(D, [{ payment_addr: input }]);
+    t.koios.addedToAccounts.push(await ownedBox(t, D, 0), await ownedBox(t, D, 1));
+    return [`${D}#0`, `${D}#1`];
+  }
+
+  /** How often Koios was asked what made a box (tx_info). */
+  const asked = (t: Tested) => t.koios.calls.filter((c) => c.path === "tx_info").length;
+
+  it("control: account 30 added before the first pool read is that account's, and the private balance leaves its boxes out", async () => {
+    const t = await publicFunded();
+    await t.accounts.recordFirst();
+    await t.accounts.add(CUSTOM);
+    const boxes = await restored(t, "dc".repeat(32));
+    const status = await inAda(t);
+    expect(status.fromPublic.map(ref).sort()).toEqual([...boxes].sort());
+    expect(status.otherAccounts?.map((b) => b.account)).toEqual([CUSTOM, CUSTOM]);
+    await expect(t.lovejoin.againBoxes("preprod", false, ADA)).rejects.toThrow(TIES);
+  });
+
+  it("is that account's once it's added after the first pool read, judged again on the device, asking nobody", async () => {
+    const t = await publicFunded();
+    await t.accounts.recordFirst();
+    const boxes = await restored(t, "dd".repeat(32));
+    // The restore's first pool read (Lovejoin's page opened) before the user adds account 30: 30 is neither known nor
+    // among the first 24, so nothing names it yet.
+    const before = await inAda(t);
+    expect(before.fromPublic).toEqual([]);
+    expect(before.notMixed.map(ref).sort()).toEqual([...boxes].sort());
+    const asks = asked(t);
+    // The user adds account 30 by its number (accounts.ts add: no request). The wallet knows it now.
+    await t.accounts.add(CUSTOM);
+    expect((await t.accounts.known()).map((a) => a.index)).toEqual([0, CUSTOM]);
+    // Account 30's deposit boxes are its, named on the page, and never mixed again from the private balance unless
+    // asked: judged again from the inputs kept, nobody asked.
+    const after = await inAda(t);
+    expect(after.fromPublic.map(ref).sort()).toEqual([...boxes].sort());
+    expect(after.otherAccounts?.map((b) => b.account)).toEqual([CUSTOM, CUSTOM]);
+    await expect(t.lovejoin.againBoxes("preprod", false, ADA)).rejects.toThrow(TIES);
+    expect(asked(t)).toBe(asks);
+  });
+
+  it("asks once more about what made a box kept before origins kept their inputs, once the wallet knows an account past the first 24", async () => {
+    const t = await publicFunded();
+    await t.accounts.recordFirst();
+    const D = "de".repeat(32);
+    const boxes = await restored(t, D);
+    // As an earlier version kept it: a deposit made them, no account named, nothing to judge it again from.
+    await t.store.set("lovejoin.preprod", { due: [], chains: [], origins: { [D]: { mixed: false, seen: t.clock.now } } });
+    // Every account known is among the first 24, which it was judged against: it stands, and nobody is asked.
+    const asks = asked(t);
+    expect((await inAda(t)).fromPublic).toEqual([]);
+    expect(asked(t)).toBe(asks);
+    // Account 30 added, which it may have missed: Koios is asked about D once more, and its boxes are 30's from then on.
+    await t.accounts.add(CUSTOM);
+    const after = await inAda(t);
+    expect(after.fromPublic.map(ref).sort()).toEqual([...boxes].sort());
+    expect(after.otherAccounts?.map((b) => b.account)).toEqual([CUSTOM, CUSTOM]);
+    expect(asked(t)).toBe(asks + 1);
+    await expect(t.lovejoin.againBoxes("preprod", false, ADA)).rejects.toThrow(TIES);
+    // Kept with its account now: asked of no more.
+    await inAda(t);
+    expect(asked(t)).toBe(asks + 1);
   });
 });

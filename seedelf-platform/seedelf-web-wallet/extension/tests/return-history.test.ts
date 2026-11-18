@@ -11,6 +11,7 @@ import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { sessionSwap, testBalances, vectors } from "./fakes";
+import { pastSpent } from "./swap-session";
 
 const PASSWORD = "correct horse battery";
 const MIN = "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e";
@@ -112,7 +113,7 @@ describe("a session's return Koios didn't answer (independent review M7)", () =>
     const t = await unlocked();
     await filledSwap(t);
     const undo = unanswered(t);
-    await t.sessions.advance("preprod", 0, true);
+    await pastSpent(t, t.sessions);
     undo();
     const back = txIdOf(t.koios.submitted.at(-1)!);
     t.koios.missing.add(back);
@@ -136,7 +137,7 @@ describe("a session's return Koios didn't answer (independent review M7)", () =>
     const t = await unlocked();
     await filledSwap(t);
     let undo = unanswered(t);
-    await t.sessions.advance("preprod", 0, true);
+    await pastSpent(t, t.sessions);
     undo();
     const first = txIdOf(t.koios.submitted.at(-1)!);
     t.koios.missing.add(first);

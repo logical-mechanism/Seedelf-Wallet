@@ -1,4 +1,4 @@
-use crate::commands::fee;
+use crate::commands::{fee, rows};
 use crate::setup;
 use crate::web_server;
 use anyhow::{Context, Result, bail};
@@ -72,6 +72,12 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
     // reference-script fee, and the script may be deployed there on purpose:
     // never spend one here.
     all_utxos.retain(|utxo| utxo.reference_script.is_none());
+    // Anyone can pay the address too: what would push a token's total past
+    // what one output holds stays out of the selection (chunk 51), and core
+    // is handed no more kinds of token than one transaction could carry
+    // (l3cli#3).
+    let all_utxos = rows::for_select(&params, all_utxos, &Assets::new(), &Assets::new())?;
+    let (all_utxos, _) = utxos::fitting(&all_utxos, &Assets::new(), |_| false)?;
 
     // lovelace goal here should account for the estimated fee
     let selected_utxos: Vec<UtxoResponse> =
@@ -297,9 +303,9 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
 
     println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
-    // inject the tx cbor into the local webserver to prompt the wallet
-    display::webserver_address();
-    web_server::run_web_server(tx_cbor, network_flag).await;
+    // inject the tx cbor into the local webserver to prompt the wallet; it
+    // prints the page's address once it's serving
+    web_server::run_web_server(tx_cbor, network_flag).await?;
     text_coloring::display_purple("Server has stopped.");
 
     Ok(())

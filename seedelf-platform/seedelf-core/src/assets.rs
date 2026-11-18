@@ -364,7 +364,13 @@ pub fn string_to_u64(input: String) -> Result<u64> {
     input.parse::<u64>().context("Failed To Parse u64")
 }
 
+/// One of the asset `asset_id` names (an NFT): its policy id, 56 hex
+/// characters, then its token name's hex. Refused in words when it's shorter,
+/// or not hex, never a panic, which is a trap in WebAssembly (chunk 51, r2b#4).
 pub fn asset_id_to_asset(asset_id: String) -> Result<Asset> {
-    // Assume NFT for now
-    Asset::new(asset_id[..56].to_string(), asset_id[56..].to_string(), 1)
+    let (policy_id, token_name) = asset_id
+        .get(..56)
+        .zip(asset_id.get(56..))
+        .context("An asset id is its policy id, 56 hex characters, then its token name's hex")?;
+    Asset::new(policy_id.to_string(), token_name.to_string(), 1)
 }

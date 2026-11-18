@@ -1,4 +1,5 @@
 // The pure chain helpers, against real preprod rows where possible.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { discoverChain, registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "../src/background/chain";
@@ -48,6 +49,8 @@ describe("registerOf", () => {
       "d879",
       `d87a82${field(g)}${field(u)}`, // constructor 1
       `d866820182${field(g)}${field(u)}`, // constructor 1's general form
+      `d8669f0082${field(g)}${field(u)}`, // an indefinite pair with no break to end it, which the node refuses
+      `d8669f0082${field(g)}${field(u)}00ff`, // or a third item before its break
       `d87983${field(g)}${field(u)}${field(u)}`, // three fields
       `d87981${field(g)}`, // one
       `d87982${field(g)}582f${"cd".repeat(47)}`, // 47 bytes
@@ -60,9 +63,36 @@ describe("registerOf", () => {
       `9f${field(g)}${field(u)}ff`, // no constructor
       "zz",
       "d8799",
+      // Chunk 51, t1k#1: well-formed data that realigns into two 48-byte runs, each refused by one check alone. A
+      // stranger who knew a register could grind one whose misread pair is theirs to pay: counted, never spendable.
+      `d879825831${g}408257${"11".repeat(23)}56${"22".repeat(22)}`, // a 49-byte string, then a list of 23 and 22 (the length check)
+      `d87982183081585f${"33".repeat(45)}${field(u)}`, // the number 48, then a list of one 95-byte string (the byte-string check)
+      // Ill-formed ones, each refused by one check alone.
+      `d879825f5817${g.slice(0, 46)}ff${field(u)}`, // a point of 23 bytes in chunks
+      `d8799f5f5f${field(g)}ff${field(u)}ff`, // a chunk that's itself in chunks
+      `d87981${field(g)}${field(u)}`, // a list of one holding two
+      `d8799f${field(g)}${field(u)}00`, // an indefinite list whose break is something else
     ]) {
       expect(registerOf(withDatum(bytes)), bytes).toBeUndefined();
     }
+  });
+
+  it("reads every spelling of a register the WebAssembly and the CLI read, and nothing else (chunk 51, r2sign#1)", () => {
+    // The shared vectors (tests/fixtures/register-spellings.json): seedelf-koios `register_of_datum`, the sign window
+    // and Transaction details read the same ones in wasm/tests/register_spellings_test.rs. An indefinite pair,
+    // `102([_ 0, [g, u]])`, which the node takes, was the window's Seedelf payment but never this reader's.
+    const fixture = JSON.parse(readFileSync(new URL("./fixtures/register-spellings.json", import.meta.url), "utf8")) as {
+      generator: string;
+      publicValue: string;
+      spellings: Array<{ name: string; datum: string; register: boolean }>;
+    };
+    expect(fixture.spellings.filter((s) => s.register).length).toBeGreaterThan(5);
+    const theRegister = { generator: fixture.generator, publicValue: fixture.publicValue };
+    for (const s of fixture.spellings) {
+      expect(registerOf(withDatum(s.datum)), s.name).toEqual(s.register ? theRegister : undefined);
+    }
+    // A datum kept by hash: no inline datum, no register, whatever it hashes.
+    expect(registerOf({ ...base, inline_datum: null, datum_hash: "ab".repeat(32) })).toBeUndefined();
   });
 
   it("goes by the bytes, never the datum's JSON", () => {

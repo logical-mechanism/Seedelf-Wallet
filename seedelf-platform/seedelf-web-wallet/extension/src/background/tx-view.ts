@@ -32,10 +32,14 @@ import type * as Wasm from "@seedelf/wasm";
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
-import type { TxAddress, TxDetail, TxOutput, TxRegister, TxView, TxYours } from "../shared/rpc";
+import type { Balances, TxAddress, TxDetail, TxOutput, TxRegister, TxView, TxYours } from "../shared/rpc";
+import type { PathedUtxo } from "./account";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
-import { CONTRACT_V1 } from "./balances";
+import { CONTRACT_V1, decimalsOf } from "./balances";
 import { GAP_LIMIT } from "./chain";
+import { SESSION_ACCOUNT_UTXOS_PREFIX } from "./coin-control";
+import { keptContractView } from "./contract-scan";
+import type { KoiosUtxo } from "./koios";
 import { SESSION_MINT } from "./mint";
 import { SESSION_BUILT } from "./move-in";
 import { SESSION_LOVEJOIN_PUBLIC, SESSION_LOVEJOIN_SENDING } from "./lovejoin";
@@ -55,7 +59,7 @@ import { SESSION_STAKE } from "./staking";
 import { SESSION_TRANSFER } from "./transfer";
 import { SESSION_REMOVE, SESSION_WITHDRAW } from "./withdraw";
 import type { Area } from "./storage";
-import type { Keys, Wallet } from "./wallet";
+import { SESSION_BALANCES_PREFIX, type Keys, type Wallet } from "./wallet";
 import { isTrap } from "./wasm";
 
 export interface TxViewDeps {
@@ -74,6 +78,12 @@ export interface TxViewDeps {
    * again" (1.3.0's release review, C28).
    */
   inChain?: (network: NetworkName, txHash: string) => Promise<boolean>;
+  /**
+   * The connector (dapp.ts), for a signature a site is waiting for: the decimals its window scaled the request's tokens
+   * by (`waitingDecimals`), so the view scales them the same (chunk 51, l3sign#2). handlers.ts hands it in with the
+   * rest of the worker's context.
+   */
+  dapp?: { waitingDecimals(txHash: string): ReadonlyMap<string, number> | undefined };
 }
 
 /**
@@ -154,13 +164,14 @@ export async function txView(
         for (const key of keys) {
           const record = await session.get<unknown>(key);
           const cbor = cborOf(record, wanted, network);
-          if (cbor) return { cbor, chain };
+          if (cbor) return { cbor, chain, record };
           // A payment in parts keeps each after the first under its own key, the first naming them all (script-spend.ts
           // keepParts): a review in parts opens every one (1.6.0's release review, 321-parts-worker#5; 1.7.0).
           const part = partOf(record, wanted);
           if (part > 0) {
-            const later = cborOf(await session.get<unknown>(partKey(key, part)), wanted, network);
-            if (later) return { cbor: later, chain };
+            const kept = await session.get<unknown>(partKey(key, part));
+            const later = cborOf(kept, wanted, network);
+            if (later) return { cbor: later, chain, record: kept };
           }
         }
       }
@@ -186,7 +197,79 @@ export async function txView(
   await markYours(deps, network, detail).catch((e: unknown) => {
     if (isTrap(e)) throw e;
   });
+  await withDecimals(deps, network, detail, wanted, kept?.record).catch((e: unknown) => {
+    if (isTrap(e)) throw e;
+  });
   return { detail, cbor, ...(kept?.chain ? { chain: true as const } : {}) };
+}
+
+/**
+ * The decimals Koios gave each token the device knows of, by `policy.asset`, where they aren't 0: in `rows` (what a
+ * site's request spends, as its reading resolved them), in the rows the wallet's transactions are built from as the
+ * device keeps them (the account's, the contract's Seedelf UTxOs too), and in the last reading's tokens, as
+ * balances.ts reads them for what's on its way (`decimalsOf`). The sign window's tokens and Transaction details' both
+ * take theirs from here, so the two can't scale a token apart (chunk 51, e9a#2, r2sign#3, l3sign#2). Call it while
+ * unlocked.
+ */
+export async function heldDecimals(
+  deps: Pick<TxViewDeps, "session">,
+  network: NetworkName,
+  rows: readonly KoiosUtxo[] = [],
+): Promise<Map<string, number>> {
+  const { session } = deps;
+  const reading = await session.get<Balances>(SESSION_BALANCES_PREFIX + network);
+  const account = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
+  const owned = (await keptContractView(session, network))?.owned ?? [];
+  const tokens = [...(reading?.cardano.tokens ?? []), ...(reading?.seedelf.tokens ?? [])];
+  return decimalsOf([...rows, ...account.map((p) => p.utxo), ...owned], tokens);
+}
+
+/**
+ * Each token of `d` (an output's, the collateral return's, a mint's) with its decimals from Koios, read on the device,
+ * as Activity's are (activity.ts `withDecimals`): the review above the view, and Home, scaled a token off the wallet's
+ * list by them, and the view showed it in raw units (chunk 51, e9a#2). `heldDecimals`'s, or for a signature a site is
+ * waiting for, those its window scaled it by (l3sign#2); and those the review's own record carries, `kept`, the one
+ * the bytes were found in: its summary's tokens take theirs from the rows it was built from, a session's account's
+ * for its return, which the device keeps no rows of (l3still#5's class). The wallet's list's own decimals still come
+ * first (ui/tokens.ts `tokenDecimals`). Locked, or with nothing known, nothing is added.
+ */
+async function withDecimals(
+  deps: TxViewDeps,
+  network: NetworkName,
+  d: TxDetail,
+  txHash: string,
+  kept?: unknown,
+): Promise<void> {
+  const lists = [...d.outputs.map((o) => o.assets), ...(d.collateralReturn ? [d.collateralReturn.assets] : []), d.mint];
+  if (!lists.some((list) => list.length)) return;
+  const held = await deps.wallet.withKeys(
+    async () => deps.dapp?.waitingDecimals(txHash) ?? (await heldDecimals(deps, network)),
+  );
+  const known = new Map([...decimalsIn(kept), ...held]);
+  if (!known.size) return;
+  for (const list of lists) {
+    for (const a of list) {
+      const decimals = known.get(`${a.policyId}.${a.assetName}`);
+      if (decimals !== undefined) a.decimals = decimals;
+    }
+  }
+}
+
+/**
+ * The decimals a kept record's tokens carry, by `policy.asset`, where they aren't 0: any `{ policyId, assetName,
+ * quantity, decimals }` in it, as a review's summary lists what it pays. A handful of levels deep, as `cborOf` reads.
+ */
+function decimalsIn(kept: unknown, found = new Map<string, number>(), depth = 0): Map<string, number> {
+  if (depth > 8 || !kept || typeof kept !== "object") return found;
+  const record = kept as Record<string, unknown>;
+  const { policyId, assetName, quantity, decimals } = record;
+  if (typeof policyId === "string" && typeof assetName === "string" && typeof quantity === "string") {
+    const shown = typeof decimals === "number" && Number.isInteger(decimals) && decimals > 0;
+    if (shown) found.set(`${policyId}.${assetName}`, decimals);
+    return found;
+  }
+  for (const value of Array.isArray(kept) ? kept : Object.values(record)) decimalsIn(value, found, depth + 1);
+  return found;
 }
 
 /** Where `txHash` is among the parts a payment's first names (`partHashes`, script-spend.ts keepParts): -1 if not. */
@@ -201,6 +284,16 @@ function paymentKey(address: TxAddress): string | undefined {
   const hash = address.hex.slice(2, 58);
   return hash.length === 56 ? hash.toLowerCase() : undefined;
 }
+
+/** A base address's stake key hash (hex), when a key and not a script is its stake part: none for any other address. */
+function stakePartKey(address: TxAddress): string | undefined {
+  if (address.kind !== "base" || address.stake !== "key") return undefined;
+  const hash = address.hex.slice(58, 114);
+  return hash.length === 56 ? hash.toLowerCase() : undefined;
+}
+
+/** An output marked as one of the public accounts'. */
+type AccountOutput = TxOutput & { yours: Extract<TxYours, { kind: "account" }> };
 
 /** A reward address's stake key hash (hex), when a key and not a script it is: none for any other address. */
 function stakeKey(wasm: typeof Wasm, address: string): string | undefined {
@@ -247,7 +340,8 @@ function ownRegister(wasm: typeof Wasm, keys: Keys, register: TxRegister): boole
  * with whose, and each reward address that's the user's by its stake key: a
  * withdrawal's, and a proposal's deposit back. The active account, the
  * private balance and the sessions in one turn of the wallet's lock, then any
- * other account the wallet knows, each in its own.
+ * other account the wallet knows, each in its own. An account's output whose
+ * stake part is none of the accounts' stake keys is `stakeElsewhere`.
  */
 async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): Promise<void> {
   const { wasm, wallet, session } = deps;
@@ -269,10 +363,16 @@ async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): P
     deps.sessionIndices?.(network).catch(() => []) ?? [],
     deps.knownAccounts?.().catch(() => []) ?? [],
   ]);
+  // The accounts' stake keys as each is read, and which accounts were: whose stake an account's output works for.
+  const stakes = new Set<string>();
+  const read = new Set<number>();
   const active = await wallet.withKeys(async (keys) => {
     const found = await session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
     const account = accountKeys(keys.cardano, found?.keys);
     const sessions = new Map(indices.map((index) => [keys.oneTime.keyHash(index).toLowerCase(), index]));
+    const stake = stakeKey(wasm, keys.cardano.stakeAddress(net));
+    if (stake) stakes.add(stake);
+    read.add(keys.account);
     for (const o of outputs) {
       const key = paymentKey(o.address);
       if (key && account.has(key)) o.yours = { kind: "account", account: keys.account };
@@ -283,7 +383,6 @@ async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): P
       }
     }
     if (rewards.length || d.requiredSigners.length) {
-      const stake = stakeKey(wasm, keys.cardano.stakeAddress(net));
       const sessionStakes = new Map(indices.map((index) => [stakeKey(wasm, keys.oneTime.rewardAddress(net, index)), index]));
       for (const [r, key] of rewards) {
         if (key === stake) r.yours = { kind: "account", account: keys.account };
@@ -305,16 +404,35 @@ async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): P
     const rest = outputs.filter((o) => !o.yours && paymentKey(o.address));
     const restRewards = rewards.filter(([r]) => !r.yours);
     const restSigners = d.requiredSigners.filter((h) => !yourSigners.includes(h));
-    if (!rest.length && !restRewards.length && !restSigners.length) return;
+    if (!rest.length && !restRewards.length && !restSigners.length) break;
     if (index === active) continue;
     const theirs = await wallet.withAccount(index, (keys) => ({
       payment: rest.length || restSigners.length ? accountKeys(keys.cardano) : undefined,
       stake: stakeKey(wasm, keys.cardano.stakeAddress(net)),
       drep: restSigners.length ? drepKey(keys.cardano) : undefined,
     }));
+    if (theirs.stake) stakes.add(theirs.stake);
+    read.add(index);
     for (const h of restSigners) if (theirs.payment?.has(h) || h === theirs.stake || h === theirs.drep) yourSigners.push(h);
     for (const o of rest) if (theirs.payment?.has(paymentKey(o.address)!)) o.yours = { kind: "account", account: index };
     for (const [r, key] of restRewards) if (key === theirs.stake) r.yours = { kind: "account", account: index };
+  }
+  // An account's output whose stake part is none of the accounts' stake keys (someone else's, a pointer, or none) is
+  // the account's, as the balance counts it, but its stake earns and votes for whoever holds that part meanwhile, or
+  // nobody: Send says so of the same address, and the sign window counts it apart (destination.ts ownAccount,
+  // `stakeElsewhere`; chunk 51, as x1a#1). The other accounts' stake keys are read only where one may be it.
+  const theAccounts = outputs.filter((o): o is AccountOutput => o.yours?.kind === "account");
+  const part = (o: AccountOutput) => stakePartKey(o.address);
+  if (theAccounts.some((o) => part(o) !== undefined && !stakes.has(part(o)!))) {
+    for (const index of known) {
+      if (read.has(index)) continue;
+      const stake = await wallet.withAccount(index, (keys) => stakeKey(wasm, keys.cardano.stakeAddress(net)));
+      if (stake) stakes.add(stake);
+    }
+  }
+  for (const o of theAccounts) {
+    const key = part(o);
+    if (key === undefined || !stakes.has(key)) o.yours.stakeElsewhere = true;
   }
 }
 

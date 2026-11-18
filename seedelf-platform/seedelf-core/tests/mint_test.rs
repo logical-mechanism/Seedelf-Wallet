@@ -1379,6 +1379,163 @@ mod account {
                 .contains("Seedelf policy")
         );
     }
+
+    /// Chunk 51: an account-paid mint never puts a Seedelf under a register
+    /// with an identity point, as no payment does (`is_payable`). An identity
+    /// public value is `g^0`, so anyone could prove its key and take the
+    /// Seedelf and its ADA; an identity generator locks them for good. Both
+    /// are valid points, so a check of the points alone lets them through.
+    #[test]
+    fn a_register_with_an_identity_point_is_never_minted() {
+        let p = payer();
+        let identity = format!("c0{}", "00".repeat(47));
+        let (g, u) = (p.seedelf.generator.clone(), p.seedelf.public_value.clone());
+        let mint = |register: &Register| {
+            build::account_mint(
+                &p.chain,
+                &[at(&p, 0x74, 0, 9_000_000, &[])],
+                None,
+                "",
+                register,
+                &p.change,
+                &Staking::none(),
+                None,
+            )
+        };
+        for register in [
+            Register::new(identity.clone(), u),
+            Register::new(g, identity.clone()),
+            Register::new(identity.clone(), identity),
+        ] {
+            assert!(register.is_valid().unwrap(), "{register:?}");
+            let refused = mint(&register).err().unwrap_or_else(|| {
+                panic!("minted under {register:?}");
+            });
+            assert!(refused.to_string().contains("register"), "{refused}");
+        }
+        // The same UTxO mints under a register of the user's own.
+        assert!(mint(&p.seedelf).is_ok());
+    }
+
+    /// An account-paid mint of 9 ₳ putting up a collateral of `lovelace` of
+    /// the account's own (chunk 51's collateral tests).
+    fn mint_with(p: &Payer, lovelace: u64) -> anyhow::Result<build::AccountMint> {
+        build::account_mint(
+            &p.chain,
+            &[at(p, 0x76, 0, 9_000_000, &[])],
+            Some(&at(p, 0x75, 0, lovelace, &[])),
+            "",
+            &p.seedelf,
+            &p.change,
+            &Staking::none(),
+            None,
+        )
+    }
+
+    /// Chunk 51 (t1d#1's sibling, the account launch's): the collateral an
+    /// account-paid mint puts up must come back as an output after 3/2 of
+    /// the fee it pays, finished with the policy's budget as Ogmios measured
+    /// it. One too small is refused in words, where the node would refuse the
+    /// signed mint.
+    #[test]
+    fn a_collateral_too_small_to_come_back_is_never_put_up() {
+        let p = payer();
+        let finished = |lovelace: u64| {
+            mint_with(&p, lovelace)
+                .and_then(|mint| mint.finalize(&recorded()))
+                .map(|built| built.fee.total)
+        };
+        assert!(finished(5_000_000).is_ok());
+        for lovelace in [1_000_000, 1_200_000] {
+            let refused = finished(lovelace);
+            assert!(
+                matches!(&refused, Err(e) if e.to_string().contains("too small to put up as collateral")
+                    && build::is_collateral_short(e)),
+                "{lovelace}: {refused:?}"
+            );
+        }
+    }
+
+    /// Chunk 51, r2money#2's sibling: that least is held at the fee the mint
+    /// pays, never at the estimate's guess (MINT_BUDGET_GUESS, the fee its
+    /// draft is staged at). Held to the guess, a collateral within 3/2 of its
+    /// extra compute over what it needs was refused: a mint the ledger takes.
+    /// With no 5 ₳ set aside, the wallet puts up its own pick, of any size.
+    #[test]
+    fn a_collateral_that_comes_back_with_its_least_at_the_fee_the_mint_pays_is_put_up() {
+        let p = payer();
+        let clear = mint_with(&p, 5_000_000).unwrap();
+        let fee = clear.finalize(&recorded()).unwrap().fee.total;
+        let guessed = MultiEraTx::decode(&clear.draft().unwrap().tx_bytes.0)
+            .unwrap()
+            .fee()
+            .unwrap();
+        let least = address_minimum_lovelace_with_assets(
+            &p.chain.params,
+            &at(&p, 0x75, 0, 0, &[]).address,
+            seedelf_core::assets::Assets::new(),
+        )
+        .unwrap();
+        // 1,000 lovelace over its least at the fee it pays, and under it at the guess's.
+        let collateral = least + fee * 3 / 2 + 1_000;
+        assert!(
+            collateral < least + guessed * 3 / 2,
+            "fee {fee}, guessed {guessed}"
+        );
+        let built = mint_with(&p, collateral)
+            .and_then(|mint| mint.finalize(&recorded()))
+            .unwrap_or_else(|e| {
+                panic!("refused: {e} (least {least}, fee {fee}, collateral {collateral})")
+            });
+        assert_eq!(built.fee.total, fee);
+        let tx = MultiEraTx::decode(&built.tx.tx_bytes.0).unwrap();
+        let back = tx.collateral_return().expect("a collateral return");
+        assert_eq!(back.value().coin(), collateral - fee * 3 / 2);
+        assert!(back.value().coin() >= least);
+        // Under that least at the fee it pays, it's refused.
+        let refused = mint_with(&p, least + fee * 3 / 2 - 1_000)
+            .and_then(|mint| mint.finalize(&recorded()))
+            .map(|built| built.fee.total);
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("too small to put up as collateral")
+                && build::is_collateral_short(e)),
+            "{refused:?}"
+        );
+    }
+
+    /// Chunk 51, t1a#11: an account-paid mint leaves out a UTxO whose tokens
+    /// would push a token's total past a u64 (anyone can send the account two
+    /// of 2^63), as the other selections do, and pays from the rest: here the
+    /// ADA alone and one of the two are short, and that one with a third pays.
+    #[test]
+    fn an_account_mint_leaves_out_a_utxo_whose_tokens_would_overflow_the_rest() {
+        let p = payer();
+        let available = [
+            at(&p, 0x80, 0, 1_000_000, &[]),
+            at(&p, 0x81, 0, 2_000_000, &[("big", 1 << 63)]),
+            at(&p, 0x82, 0, 2_000_000, &[("big", 1 << 63)]),
+            at(&p, 0x83, 0, 1_900_000, &[("small", 1)]),
+        ];
+        let collateral = at(&p, 0x84, 0, 5_000_000, &[]);
+        let mint = build::account_mint(
+            &p.chain,
+            &available,
+            Some(&collateral),
+            "",
+            &p.seedelf,
+            &p.change,
+            &Staking::none(),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let spent = outpoints(mint.inputs());
+        let both = outpoints(&available[1..3]);
+        assert!(
+            both.iter().filter(|o| spent.contains(o)).count() <= 1,
+            "{spent:?}"
+        );
+        assert!(spent.contains(&outpoints(&available[3..])[0]), "{spent:?}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2536,6 +2693,87 @@ mod withdraw {
             .unwrap();
         let e = spend.finalize(&spends_only(1)).err().unwrap();
         assert!(e.to_string().contains("Seedelf policy"), "{e}");
+    }
+
+    /// Chunk 51, t1a#10: Max's pick (`max_inputs`, which the web wallet's Max
+    /// and payments in parts use) never takes a UTxO the wallet's evaluator
+    /// can't take, as selection doesn't: one carrying a reference script,
+    /// which anyone can pay a Seedelf, is left out, however large.
+    #[test]
+    fn max_never_takes_a_utxo_the_wallets_evaluator_cant_take() {
+        let w = world();
+        let scripted = UtxoResponse {
+            reference_script: recorded_script(),
+            ..owned(&w, 0x01, 0, 30_000_000, &[])
+        };
+        let available = [
+            scripted,
+            owned(&w, 0x02, 0, 4_000_000, &[]),
+            owned(&w, 0x03, 0, 3_000_000, &[]),
+        ];
+        let (taken, left) = build::max_inputs(&available, &Assets::new(), 20).unwrap();
+        assert_eq!(outpoints(&taken), outpoints(&available[1..]));
+        assert_eq!(left, 1);
+    }
+
+    /// Chunk 51, t1a#14: Remove takes a UTxO holding one of one Seedelf, as its
+    /// policy mints and burns exactly one: one listing two of a Seedelf (which
+    /// no chain holds) is refused, never half burnt.
+    #[test]
+    fn remove_takes_only_one_of_one_seedelf() {
+        let w = world();
+        let name = format!("5eed0e1f{}", "05".repeat(28));
+        let mut twice = seedelf(&w, 0x05, &name);
+        twice.asset_list.as_mut().unwrap()[0].quantity = "2".into();
+        let refused =
+            build::remove(&w.chain, &twice, &w.owner, w.signer).map(|spend| spend.inputs().len());
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("exactly one Seedelf")),
+            "{refused:?}"
+        );
+        assert!(build::remove(&w.chain, &seedelf(&w, 0x05, &name), &w.owner, w.signer).is_ok());
+    }
+
+    /// Chunk 51, t1a#15: a payment to an address of none of a token is
+    /// refused in words: pallas would panic building its output, a trap in
+    /// WebAssembly, as the payment to a Seedelf's twin check says.
+    #[test]
+    fn an_address_payment_of_none_of_a_token_is_refused_in_words() {
+        let w = world();
+        let available = [owned(&w, 0x01, 0, 10_000_000, &[("tok", 5)])];
+        let to = key_address(Network::Testnet);
+        let zero = Assets {
+            items: vec![Token::new(TOKEN_POLICY.to_string(), hex::encode("tok"), 0).unwrap()],
+        };
+        let refused = build::sweep(
+            &w.chain, &available, &to, 2_000_000, &zero, &w.owner, w.signer,
+        )
+        .map(|spend| spend.inputs().len());
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("none of a token")),
+            "{refused:?}"
+        );
+    }
+
+    /// Chunk 51, t1a#17: a burn takes its token from what the spend spends: a
+    /// burn of a Seedelf none of its inputs holds is refused, where the node
+    /// would refuse its value as unbalanced.
+    #[test]
+    fn a_burn_of_a_token_the_spend_doesnt_hold_is_refused() {
+        let w = world();
+        let plain = owned(&w, 0x06, 0, 5_000_000, &[]);
+        let name = hex::decode(format!("5eed0e1f{}", "06".repeat(28))).unwrap();
+        let refused =
+            build::ScriptSpend::new(&w.chain, std::slice::from_ref(&plain), &w.owner, w.signer)
+                .unwrap()
+                .mint(name, -1, vec![0xd8, 0x79, 0x80])
+                .unwrap()
+                .estimate()
+                .map(|built| built.fee.total);
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("don't hold the token to burn")),
+            "{refused:?}"
+        );
     }
 }
 

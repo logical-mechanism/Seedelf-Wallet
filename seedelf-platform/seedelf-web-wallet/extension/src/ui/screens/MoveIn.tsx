@@ -3,7 +3,7 @@
 // only the ADA they need moves. The worker builds and signs; nothing is sent
 // until the user has reviewed the result and pressed Send.
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useT } from "../../i18n";
 
 import type { Balances, MoveInSummary, PendingTx } from "../../shared/rpc";
@@ -52,6 +52,9 @@ export function MoveIn({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const network = useNetwork();
+  // A refusal is about what was asked: once the form changes, it's gone, not left to read as the new answer, as Make
+  // public's is (T05; chunk 51, e8b#5).
+  useEffect(() => setError(undefined), [amount, max, tokenAmounts]);
 
   const tokens = tokenChoices(network, cardano.tokens, tokenAmounts);
   const withTokens = tokens.sent.length > 0;
@@ -102,7 +105,11 @@ export function MoveIn({
         review
         hint={t("moveIn.review.note")}
         hintTestId="move-in-review-note"
-        onBack={() => setSummary(undefined)}
+        // Back from the review: its error is the review's, so the form it goes back to starts clean (e8b#5).
+        onBack={() => {
+          setSummary(undefined);
+          setError(undefined);
+        }}
         backDisabled={busy}
         aside={t("review.nothingUntil", { action })}
         error={error}

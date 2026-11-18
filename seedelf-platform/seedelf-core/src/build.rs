@@ -527,6 +527,57 @@ pub fn is_too_many(e: &anyhow::Error) -> bool {
     e.downcast_ref::<TooMany>().is_some()
 }
 
+/// An account's collateral that can't cover 3/2 of the fee its transaction
+/// sends and come back as an output holding an output's least, which the
+/// ledger refuses ([`is_collateral_short`]). A larger collateral may carry
+/// it, or a transaction running no script, which puts up none.
+#[derive(Debug, Clone, Copy)]
+pub struct CollateralShort(pub &'static str);
+
+impl fmt::Display for CollateralShort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for CollateralShort {}
+
+/// Whether `e` is [`CollateralShort`]: the account's collateral can't carry
+/// the fee its transaction sends.
+pub fn is_collateral_short(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<CollateralShort>().is_some()
+}
+
+/// A Seedelf spend's account collateral ([`ScriptSpend::with_account`]).
+const SPEND_COLLATERAL_SHORT: CollateralShort =
+    CollateralShort("The collateral can't cover this transaction's fee and come back as an output");
+
+/// An account-paid mint's ([`account_mint`]).
+const MINT_COLLATERAL_SHORT: CollateralShort =
+    CollateralShort("The Cardano account's UTxOs are too small to put up as collateral");
+
+/// What a collateral of `lovelace` at `address`, holding `tokens`, gives
+/// back when its transaction sends `fee`: 3/2 of the fee stays, and what comes
+/// back is an output, held to an output's least; `short` when it can't. Only
+/// for the fee that's sent: a draft's and an estimate's are guesses, priced on
+/// budget guesses about 1.3× what the scripts use, and held to them the least
+/// refused collaterals the ledger takes (chunk 51, r2money#2). A draft stages
+/// its return saturating instead: it's only measured, never sent.
+pub(crate) fn collateral_back(
+    params: &ProtocolParameters,
+    address: &str,
+    lovelace: u64,
+    tokens: Assets,
+    fee: u64,
+    short: CollateralShort,
+) -> Result<u64> {
+    let least = address_minimum_lovelace_with_assets(params, address, tokens)?;
+    lovelace
+        .checked_sub(fee * 3 / 2)
+        .filter(|back| *back >= least)
+        .ok_or_else(|| short.into())
+}
+
 /// The amount asked for is below what the outputs must carry.
 #[derive(Debug)]
 struct TooLittle {
@@ -1807,14 +1858,33 @@ impl ScriptSpend {
     }
 
     /// The unsigned transaction, with the budgets Ogmios measured on the
-    /// draft and the fee they and the signed size need.
+    /// draft and the fee they and the signed size need. An account's
+    /// collateral is held here, at that fee, to cover 3/2 of it and come back
+    /// as an output ([`CollateralShort`] when it can't).
     pub fn finalize(&self, budgets: &Budgets) -> Result<FinalSpend> {
         let redeemers = self.proofs()?;
-        self.settle(budgets, redeemers)
+        let finished = self.settle(budgets, redeemers)?;
+        if let Some(account) = &self.account {
+            let address = account
+                .collateral_addr
+                .to_bech32()
+                .map_err(|e| anyhow::anyhow!("The collateral's address can't be written: {e}"))?;
+            collateral_back(
+                &self.chain.params,
+                &address,
+                account.collateral_lovelace,
+                Assets::new(),
+                finished.fee.total,
+                SPEND_COLLATERAL_SHORT,
+            )?;
+        }
+        Ok(finished)
     }
 
     /// [`Self::finalize`] with guessed budgets and stand-in proofs: whether
-    /// these inputs can pay, before anything is proven or measured.
+    /// these inputs can pay, before anything is proven or measured. An
+    /// account's collateral isn't held to its guessed fee, only to the fee
+    /// that's sent.
     pub fn estimate(&self) -> Result<FinalSpend> {
         let placeholder = create_spend_redeemer(
             "00".repeat(32),
@@ -1892,7 +1962,8 @@ impl ScriptSpend {
         let Some(fee) = self.most_fee()? else {
             return Err(short);
         };
-        // A fee the collateral can't cover: the guess wasn't what fell short.
+        // A fee its outputs can't be staged at: the guess wasn't what fell
+        // short. (An account's collateral is held at the fee that's sent.)
         match self.stage(fee, None, redeemers) {
             Ok(staged) => {
                 built_with(staged, self.patches()).context("Failed To Build The Draft Transaction")
@@ -2193,11 +2264,11 @@ impl ScriptSpend {
                 .disclosed_signer(self.signer)
                 .disclosed_signer(Hash::new(COLLATERAL_HASH)),
             Some(account) => {
-                // The fee is even, so 3/2 of it is whole.
-                let back = account
-                    .collateral_lovelace
-                    .checked_sub(fee * 3 / 2)
-                    .context("The collateral can't cover this transaction's fee")?;
+                // The fee is even, so 3/2 of it is whole. What comes back is
+                // an output, held to an output's least at the fee that's sent,
+                // in finalize: a draft's or an estimate's is a guess (chunk 51,
+                // r2money#2).
+                let back = account.collateral_lovelace.saturating_sub(fee * 3 / 2);
                 tx.collateral_input(account.collateral.clone())
                     .collateral_output(Output::new(account.collateral_addr.clone(), back))
                     .disclosed_signer(self.signer)
@@ -2526,12 +2597,13 @@ fn holds_tokens(utxo: &UtxoResponse) -> bool {
 ///    class first; then by the purpose's order, its last resorts after the
 ///    rest, and boxes back from Lovejoin last of all, one at a time, so two
 ///    are spent together only when nothing else pays. When that runs into
-///    what a transaction can spend (too many inputs), the same without the
-///    purpose's order; then as few boxes as pay, none first, then one more
-///    at a time, each with the fewest other inputs (the largest first,
-///    tokens or not), or with UTxOs holding tokens last, for when their
-///    tokens make it too large; and at the last the CLI's own order, so
-///    nothing the CLI pays is refused.
+///    what a transaction can spend (too many inputs), or everything together
+///    is short (a UTxO whose tokens need more change than it holds costs more
+///    than it adds), the same without the purpose's order; then as few boxes
+///    as pay, none first, then one more at a time, each with the fewest other
+///    inputs (the largest first, tokens or not), or with UTxOs holding tokens
+///    last, for when their tokens make it too large; and at the last the
+///    CLI's own order, so nothing the CLI pays is refused.
 pub(crate) fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
@@ -2753,8 +2825,9 @@ fn apart<T>(
 
     // Then orders tried in turn, each grown one UTxO at a time. One that runs
     // into what more inputs can't mend (too much computation, too large) is
-    // left for the next; short with everything is short in any order
-    // (independent review M6).
+    // left for the next (independent review M6), and so is one short with
+    // everything: a UTxO whose tokens need more change than it holds costs
+    // more than it adds, so fewer may pay (chunk 51, r2a#2).
     //
     // a. As the CLI would, but the purpose's last resorts after the rest,
     //    and boxes after everything, one at a time; within each, by the
@@ -2823,6 +2896,8 @@ fn apart<T>(
     blind.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
     let mut failed = false;
     let mut boxes_fail = false;
+    // Whether an order grown whole was short: everything together.
+    let mut short_whole = false;
     let mut grown: Vec<Vec<&UtxoResponse>> = Vec::new();
     // Each order, and how many boxes it brings forward (none for a, b, d).
     let orders = [(by_history, 0), (by_tier, 0)]
@@ -2840,10 +2915,7 @@ fn apart<T>(
         let whole = order.len() == rest.len();
         match grow(&order, j, &mut try_with) {
             Grown::Built(built) => return Ok(built),
-            Grown::Short if whole => {
-                failed = false;
-                break;
-            }
+            Grown::Short if whole => short_whole = true,
             // Short without the other boxes: one more may pay.
             Grown::Short => {}
             Grown::Failed(at) => {
@@ -2855,7 +2927,9 @@ fn apart<T>(
             grown.push(order);
         }
     }
-    Err(match (failed, other, not_enough) {
+    // Short with everything is refused as short, whatever failed besides, as
+    // when the search ended there.
+    Err(match (failed && !short_whole, other, not_enough) {
         (true, Some(e), _) => e,
         (_, _, Some(e)) => e,
         (_, Some(e), None) => e,
@@ -3659,9 +3733,21 @@ impl AccountMint {
     }
 
     /// The unsigned transaction, with the policy's measured budget and the
-    /// fee it and the signed size need.
+    /// fee it and the signed size need. The collateral is held here, at that
+    /// fee, to cover 3/2 of it and come back as an output, its tokens with it
+    /// ([`CollateralShort`] when it can't).
     pub fn finalize(&self, budgets: &Budgets) -> Result<FinalAccountMint> {
-        self.settle(budgets)
+        let finished = self.settle(budgets)?;
+        let (lovelace, tokens) = assets_of(vec![self.collateral.clone()])?;
+        collateral_back(
+            &self.chain.params,
+            &self.collateral.address,
+            lovelace,
+            tokens,
+            finished.fee.total,
+            MINT_COLLATERAL_SHORT,
+        )?;
+        Ok(finished)
     }
 
     /// [`Self::finalize`] with a guessed budget: whether these inputs pay.
@@ -3739,20 +3825,13 @@ impl AccountMint {
         )?;
 
         // The collateral comes back, less 3/2 of the fee, to where it was,
-        // with any tokens it holds.
+        // with any tokens it holds: held to an output's least at the fee
+        // that's sent, in finalize, since a draft's is the estimate's guess
+        // (chunk 51, r2money#2).
         let collateral_addr = Address::from_bech32(&self.collateral.address)
             .map_err(|e| anyhow::anyhow!("The collateral UTxO's address is invalid: {e}"))?;
         let (collateral_lovelace, collateral_tokens) = assets_of(vec![self.collateral.clone()])?;
         let collateral_back = collateral_lovelace.saturating_sub(fee * 3 / 2);
-        if collateral_back
-            < address_minimum_lovelace_with_assets(
-                params,
-                &self.collateral.address,
-                collateral_tokens.clone(),
-            )?
-        {
-            bail!("The Cardano account's UTxOs are too small to put up as collateral");
-        }
         let mut collateral_return = Output::new(collateral_addr, collateral_back);
         for asset in &collateral_tokens.items {
             collateral_return = collateral_return

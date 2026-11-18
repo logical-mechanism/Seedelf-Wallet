@@ -71,22 +71,16 @@ pub fn blake2b_256(data: &str) -> Result<String> {
 
 /// Computes the SHA3-256 hash of the input data.
 ///
-/// This function accepts a string input, which is expected to be hex-encoded.
-/// If the input is not a valid hex string, it falls back to hashing an empty byte array.
-/// The resulting hash is 256 bits (32 bytes) and is returned as a hex-encoded string.
+/// The input MUST be a hex-encoded string, as for [`blake2b_224`]: a non-hex
+/// input is an error, never hashed as something else.
 ///
 /// # Arguments
 ///
-/// * `data` - A string slice representing the input data, expected to be hex-encoded.
+/// * `data` - A hex-encoded string slice.
 ///
 /// # Returns
 ///
-/// * `String` - The SHA3-256 hash of the input data, encoded as a hex string.
-///
-/// # Panics
-///
-/// * This function will not panic, but if `data` is not a valid hex string,
-///   it will hash an empty byte array.
+/// * `String` - The SHA3-256 hash, hex-encoded.
 pub fn sha3_256(data: &str) -> Result<String> {
     let mut sha3_hasher = Sha3_256::new();
     Digest::update(

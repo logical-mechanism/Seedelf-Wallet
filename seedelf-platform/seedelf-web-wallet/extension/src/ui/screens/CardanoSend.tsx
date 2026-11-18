@@ -9,7 +9,7 @@
 // that link. The worker builds and signs; nothing is sent until the user has
 // reviewed it and pressed Send.
 
-import { useState, type FormEvent } from "react";
+import { Fragment, useEffect, useState, type FormEvent } from "react";
 import { joinSentences, useT } from "../../i18n";
 
 import type { Balances, PendingTx, SendPaid, SendSummary } from "../../shared/rpc";
@@ -39,7 +39,7 @@ import {
 import { Row } from "../components/ReviewRows";
 import { RewardsRow, RewardsSetting, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
-import { StakedWarning } from "../components/StakedWarning";
+import { StakedWarning, StakeElsewhereNote } from "../components/StakedWarning";
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
@@ -86,6 +86,9 @@ export function CardanoSend({
   const [summary, setSummary] = useState<SendSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // A refusal is about what was asked: once the form changes, it's gone, as Make public's is (T05; chunk 51, e8b#5's
+  // sibling).
+  useEffect(() => setError(undefined), [list.drafts, max, note]);
 
   // Max pays a single recipient.
   const maxed = max && !list.several;
@@ -199,7 +202,11 @@ export function CardanoSend({
         title={t("withdraw.review.title")}
         titleId="send-review"
         review
-        onBack={() => setSummary(undefined)}
+        // Back from the review: its error is the review's, so the form it goes back to starts clean (e8b#5's sibling).
+        onBack={() => {
+          setSummary(undefined);
+          setError(undefined);
+        }}
         backDisabled={busy}
         aside={t("review.nothingSent")}
         error={error}
@@ -229,16 +236,23 @@ export function CardanoSend({
         ))}
         {/* With several, each own one by its number: "your own public account" didn't say which it meant (PY-5).
             Another of the user's accounts says what paying it shows, as the form did: it doesn't come back here.
-            Someone else's key under an account's stake key is neither, and leaves (the 2026-11-02 bounty report). */}
+            Someone else's key under an account's stake key is neither, and leaves (the 2026-11-02 bounty report).
+            The user's key under a stake part that isn't theirs comes back, but its stake works for someone else
+            meanwhile (chunk 51, x1a#1). */}
         {summary.payments.map((p, i) =>
           !p.own ? (
             p.staked !== undefined && (
               <StakedWarning key={i} side="send" account={p.staked} nth={several ? i + 1 : undefined} />
             )
-          ) : p.ownAccount !== undefined && p.ownAccount !== active ? (
-            <OtherAccountNote key={i} index={p.ownAccount} />
           ) : (
-            <OwnNote key={i} nth={several ? i + 1 : undefined} />
+            <Fragment key={i}>
+              {p.ownAccount !== undefined && p.ownAccount !== active ? (
+                <OtherAccountNote index={p.ownAccount} />
+              ) : (
+                <OwnNote nth={several ? i + 1 : undefined} />
+              )}
+              {p.stakeElsewhere && <StakeElsewhereNote side="send" nth={several ? i + 1 : undefined} />}
+            </Fragment>
           ),
         )}
         <LeftOutNote leftOut={summary.leftOut} testId="send-left-out" />
@@ -295,6 +309,9 @@ export function CardanoSend({
             {read.state === "read" &&
               read.destination.own &&
               (otherAccount(read) !== undefined ? <OtherAccountNote index={otherAccount(read)!} /> : <OwnNote />)}
+            {read.state === "read" && read.destination.own && read.destination.stakeElsewhere && (
+              <StakeElsewhereNote side="send" />
+            )}
             {read.state === "read" && !read.destination.own && read.destination.staked !== undefined && (
               <StakedWarning side="send" account={read.destination.staked} />
             )}

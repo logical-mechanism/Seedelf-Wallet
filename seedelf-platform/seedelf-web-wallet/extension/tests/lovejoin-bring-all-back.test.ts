@@ -15,7 +15,7 @@ import { NETWORKS } from "../src/networks";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, loadTestWasm, testBalances, vectors } from "./fakes";
-import { ADA, ADA_POOL, ADA_ROWS, adaBox, ownDatum, retiredAlready } from "./v2-pools";
+import { ADA, ADA_POOL, ADA_ROWS, adaBox, madeByAdaMix, ownDatum, retiredAlready } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const PHRASE = (vectors("cardano_account.json") as Array<{ account: number; phrase: string }>).find(
@@ -325,6 +325,110 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
     expect(await lj.withdrawDue("preprod")).toEqual([]);
     expect(t.collateral.asked).toEqual([]);
     expect((await sealed(t)).due).toHaveLength(1);
+  });
+});
+
+// Chunk 51, e1b#1: a run met a refusal that turns every box away (giveme.my at its limit or out of reach, Koios not
+// answering) box after box: each box's withdraw built in WebAssembly and giveme.my asked of it, three runs over, while
+// giveme.my said to slow down. The run ends there now, its reason kept, so three such runs still stop it, as the
+// one-box test above has it, and the next run tries again. A box's own refusal still passes that box over.
+describe("Bring every box back now while giveme.my or Koios turns every box away (chunk 51, e1b#1)", SLOW, () => {
+  /** Three of the wallet's boxes in v2's 5 ₳ pool, `txhash#index`, Bring every box back now asked: the user's own press. */
+  async function asked(t: T): Promise<{ lj: LovejoinService; mine: string[] }> {
+    // Past 1.8.0's first run (retireOnce).
+    await retiredAlready(t.store);
+    const lj = pooled(t, { pools: async () => [ADA_POOL] });
+    const ours = await Promise.all(
+      ["f1", "f2", "f3"].map(async (tx) => {
+        madeByAdaMix(t.koios, tx.repeat(32));
+        return adaBox(tx, await ownDatum(t.wallet), t.clock.now, 5);
+      }),
+    );
+    t.koios.addedToAccounts.push(...POOL, ...ADA_ROWS, ...ours);
+    await lj.status("preprod");
+    await lj.bringAllBack("preprod");
+    return { lj, mine: ours.map((u) => `${u.tx_hash}#${u.tx_index}`) };
+  }
+
+  /** giveme.my's requests in each of BRING_FAILED_RUNS runs, a minute apart, none of which sends anything: then it stops. */
+  async function runs(t: T, lj: LovejoinService): Promise<number[]> {
+    const perRun: number[] = [];
+    for (let run = 1; run <= BRING_FAILED_RUNS; run++) {
+      const before = t.collateral.asked.length;
+      expect(await lj.withdrawDue("preprod")).toEqual([]);
+      perRun.push(t.collateral.asked.length - before);
+      expect((await sealed(t)).bringing).toMatchObject({ back: 0, left: 3, fails: run, why: expect.any(String) });
+      await busyFor(t, 60_000);
+    }
+    expect((await sealed(t)).bringing?.stopped).toBe(true);
+    return perRun;
+  }
+
+  /** giveme.my not reached: each request counted, as the fake counts one, then lost. */
+  const unreachable = (t: T) => async (_url: string, init: RequestInit) => {
+    t.collateral.asked.push(JSON.parse(String(init.body)).tx);
+    throw new TypeError("Failed to fetch");
+  };
+
+  it(`asks giveme.my once a run while it's at its limit or out of reach, still stops after ${BRING_FAILED_RUNS} runs, and goes once asked again`, async () => {
+    for (const way of ["at its limit", "out of reach"] as const) {
+      const t = await wallet();
+      const { lj } = await asked(t);
+      const real = t.collateral.fetch;
+      if (way === "at its limit") t.collateral.answer = { status: 429, body: { detail: "Too Many Requests" } };
+      else t.collateral.fetch = unreachable(t);
+      expect(await runs(t, lj), way).toEqual([1, 1, 1]);
+      expect(t.koios.submitted).toEqual([]);
+      // giveme.my answers again: asked again, every box goes in one run.
+      t.collateral.fetch = real;
+      t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+      await lj.bringAllBack("preprod");
+      expect(await lj.withdrawDue("preprod"), way).toHaveLength(3);
+    }
+  });
+
+  it("ends a run at giveme.my's second 5xx in a row, and passes over a box whose own transaction it fails on", async () => {
+    // Every answer a 503: the second ends the run.
+    const t = await wallet();
+    const { lj } = await asked(t);
+    t.collateral.answer = { status: 503, body: { detail: "Service Unavailable" } };
+    expect(await runs(t, lj)).toEqual([2, 2, 2]);
+    expect(t.koios.submitted).toEqual([]);
+
+    // A 500 for the first box's own transaction alone: the other two go in the same run, and that box waits.
+    const u = await wallet();
+    const { lj: lj2, mine } = await asked(u);
+    let failing: string | undefined;
+    u.collateral.fetch = async (_url, init) => {
+      const tx = JSON.parse(String(init.body)).tx as string;
+      u.collateral.asked.push(tx);
+      const box = txInputs(Uint8Array.from(Buffer.from(tx, "hex"))).find((o) => mine.includes(o));
+      failing ??= box;
+      return box === failing ? Response.json({ detail: "Internal Server Error" }, { status: 500 }) : Response.json({ witness: "a1008182" });
+    };
+    expect(await lj2.withdrawDue("preprod")).toHaveLength(2);
+    expect(u.collateral.asked).toHaveLength(3);
+    expect((await sealed(u)).bringing).toEqual({ at: expect.any(Number), back: 2, left: 1 });
+  });
+
+  it("ends a run at Koios's limit at submit, which every withdraw would meet, and passes over a box the network refuses", async () => {
+    const t = await wallet();
+    const { lj } = await asked(t);
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) =>
+      String(url).endsWith("/submittx") ? new Response("Too Many Requests", { status: 429 }) : real(url, init);
+    expect(await runs(t, lj)).toEqual([1, 1, 1]);
+
+    // The network refusing the first box's withdraw, in its own words: the other two go in the same run.
+    const u = await wallet();
+    const { lj: lj2 } = await asked(u);
+    const fake = u.koios.fetch;
+    let refused = 0;
+    u.koios.fetch = async (url, init) =>
+      String(url).endsWith("/submittx") && refused++ === 0 ? new Response("ValueNotConservedUTxO", { status: 400 }) : fake(url, init);
+    expect(await lj2.withdrawDue("preprod")).toHaveLength(2);
+    expect(u.collateral.asked).toHaveLength(3);
+    expect((await sealed(u)).bringing).toEqual({ at: expect.any(Number), back: 2, left: 1 });
   });
 });
 

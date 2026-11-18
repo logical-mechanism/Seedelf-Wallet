@@ -38,7 +38,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import { CONTRACT_V1, ownedUtxos, type ContractConfig } from "./balances";
+import { atContract, CONTRACT_V1, ownedUtxos, type ContractConfig } from "./balances";
 import { registerOf, seedelfTokenOf, type RegisterHex } from "./chain";
 import type { Koios, KoiosUtxo } from "./koios";
 import { noteCursor } from "./feed";
@@ -146,7 +146,9 @@ async function readKoiosView(deps: ScanDeps, network: NetworkName, { full = fals
   // Read outside the wallet's queue, so it never holds up a lock.
   const koios = deps.koios(network);
   const read = () => koios.credentialUtxos([contract.walletContractHash], after);
-  const rows = await readFresh(spent, read, (r) => r, deps.sleep);
+  // The contract's own rows: Koios lists a KEY address with the contract's 28 bytes beside them, which isn't the
+  // contract's, nor any Seedelf's place (`atContract`, chunk 51, x2#2).
+  const rows = (await readFresh(spent, read, (r) => r, deps.sleep)).filter((u) => atContract(wasm, u, contract));
 
   // Which rows are ours: a batch at a time, each its own turn in the queue,
   // with the worker's other events let in between.
@@ -157,7 +159,7 @@ async function readKoiosView(deps: ScanDeps, network: NetworkName, { full = fals
     mine.push(
       ...(await wallet.withKeys((keys) => {
         same(keys);
-        return ownedUtxos(wasm, keys, batch);
+        return ownedUtxos(wasm, keys, batch, contract);
       })),
     );
   }
@@ -186,12 +188,27 @@ async function readKoiosView(deps: ScanDeps, network: NetworkName, { full = fals
 }
 
 /**
+ * The rule `Settled`'s verdicts were made under: which rows are this wallet's
+ * (balances.ts `ownedUtxos`). Settled rows are never checked again, so a
+ * record sealed under another is read again from a snapshot, the request every
+ * wallet makes at a restore, and every row judged again by today's rule. Bumped
+ * with every release that changes it: 2 since chunk 51's x2#2, where a row at
+ * the KEY address carrying the contract's 28 bytes stopped being the wallet's,
+ * which 1.9.1 could seal as ours for good, nobody able to spend it away
+ * (gap-g6#1); 3 since its r2sign#1, where a register written with an
+ * indefinite pair, `102([_ 0, [g, u]])`, which the node takes, became one
+ * (chain.ts `registerOf`), so a row sealed as not ours is judged again.
+ */
+const SETTLED_RULE = 3;
+
+/**
  * What the private index's feed has settled for this wallet, sealed
  * (`contract.<network>`): the stable cursor, this wallet's rows unspent as of
  * it, as the index gave them, and the newer rows already checked.
  */
 interface Settled {
-  v: 1;
+  /** The rule its verdicts were made under (`SETTLED_RULE`). */
+  v: number;
   /** Whose: a hash of the Seedelf key's base register. A record another wallet's read wrote is never taken for this one's. */
   owner: string;
   cursor: string;
@@ -248,7 +265,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
       const batch = rows.slice(i, i + OWNED_BATCH).map((r) => utxoOf(r, contract.walletContractHash, network));
       for (const u of await wallet.withKeys((keys) => {
         same(keys);
-        return ownedUtxos(wasm, keys, batch);
+        return ownedUtxos(wasm, keys, batch, contract);
       })) {
         mine.add(outpoint(u));
       }
@@ -261,7 +278,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     if (e instanceof UnreadableRecordError) return undefined;
     throw e;
   });
-  let settled = kept?.v === 1 && kept.owner === owner ? kept : undefined;
+  let settled = kept?.v === SETTLED_RULE && kept.owner === owner ? kept : undefined;
   let since: IndexSince | undefined;
   try {
     since = settled && (await index.since(settled.cursor, { kept: true }));
@@ -274,7 +291,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     const snapshot = await index.snapshot();
     const mine = await ours(snapshot.rows);
     settled = {
-      v: 1,
+      v: SETTLED_RULE,
       owner,
       cursor: snapshot.cursor,
       got: deps.now(),
@@ -308,7 +325,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
   ]);
   const above = changes.created.filter((r) => r.created.slot > cursor);
   const next: Settled = {
-    v: 1,
+    v: SETTLED_RULE,
     owner,
     cursor: changes.cursor,
     got: changes.cursor === settled.cursor ? (settled.got ?? had) : had,
@@ -332,7 +349,9 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     const seedelfs: Record<string, Locator> = {};
     for (const { name, row } of named.names) {
       const at = utxoOf(row, contract.walletContractHash, network);
-      if (seedelfTokenOf(at, contract.seedelfPolicyId) === name && !spent.has(outpoint(at))) seedelfs[name] = locatorOf(at);
+      if (seedelfTokenOf(at, contract.seedelfPolicyId) === name && atContract(wasm, at, contract) && !spent.has(outpoint(at))) {
+        seedelfs[name] = locatorOf(at);
+      }
     }
     // This wallet's own, where the feed just put them: `names` may be from another block than `since`, and one of ours
     // that moved between the two would read as another's for this reading, and Remove couldn't build (26b's review).

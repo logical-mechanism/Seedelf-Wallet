@@ -274,5 +274,9 @@ describe("Mix my boxes again, its own box unknown to the Ogmios that measures it
     expect(record.auto?.retry?.error).toBe(tr("lj.poolDrifted"));
     expect(record.txs.map((x) => x.kind)).toEqual(["out"]);
     expect(named).toBe(3);
+    // Nothing its last try drew stays reserved: tried again later, it isn't let go of otherwise, and every other chain
+    // of the wallet's would find those boxes taken for ten minutes (chunk 51, t1g#9).
+    const room = (await t.lovejoin.room("preprod", ADA))!;
+    expect(room.free).toBe(room.others);
   });
 });

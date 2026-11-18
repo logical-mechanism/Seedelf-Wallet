@@ -1926,6 +1926,41 @@ mod transfer {
         let e = api::finish_transfer(sk, r).unwrap_err().to_string();
         assert!(e.contains("evaluation"), "{e}");
     }
+
+    /// Chunk 51, x2#2: a Seedelf's UTxO at the KEY address carrying the
+    /// contract's hash, which Koios lists with the contract's own rows (its
+    /// `payment_cred` the contract's 28 bytes), isn't in the contract, so it
+    /// can't be paid: the register beside it is whatever a stranger wrote.
+    #[test]
+    fn a_seedelf_at_the_key_address_carrying_the_contracts_hash_cant_be_paid() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let config = seedelf_core::constants::get_config(1, true).unwrap();
+        let mut r = request();
+        r.payments[0].recipient.address =
+            pallas_addresses::Address::Shelley(pallas_addresses::ShelleyAddress::new(
+                pallas_addresses::Network::Testnet,
+                pallas_addresses::ShelleyPaymentPart::Key(pallas_crypto::hash::Hash::new(
+                    config.contract.wallet_contract_hash,
+                )),
+                pallas_addresses::ShelleyDelegationPart::Null,
+            ))
+            .to_bech32()
+            .unwrap();
+        assert_eq!(
+            r.payments[0].recipient.payment_cred,
+            hex::encode(config.contract.wallet_contract_hash),
+            "as Koios lists it"
+        );
+        let said = api::draft_transfer(sk, r)
+            .map(|_| "drafted".to_string())
+            .unwrap_or_else(|e| e.to_string());
+        assert!(
+            said.contains("isn't in the Seedelf Wallet contract"),
+            "{said}"
+        );
+        assert!(api::draft_transfer(sk, request()).is_ok());
+    }
+
     /// The contract outputs of a send from the Cardano account: each one's
     /// register and lovelace. Everything else is change.
     fn contract_outputs(tx_cbor: &str) -> Vec<(Register, u64)> {
@@ -2806,6 +2841,149 @@ mod withdraw {
         let outs = outputs(&result.tx_cbor);
         assert_eq!(outs.len(), 1);
         assert!(outs[0].0.starts_with("addr_test1w"), "{}", outs[0].0);
+    }
+
+    /// Chunk 51, w1b#2: a Seedelf's UTxO can hold other tokens beside it. The
+    /// deployed policy (seedelf.ak at 5b82530) checks only the minted name,
+    /// so anyone can mint a Seedelf with tokens of their own under a register
+    /// of ours, and the wallet lists it as ours. A removal moves those tokens
+    /// with the ADA, so its result names each one for Remove's review, as
+    /// every other result whose change goes where the user picks does.
+    #[test]
+    fn a_removal_names_the_other_tokens_it_moves() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (policy, name) = ("cd".repeat(28), hex::encode("junk"));
+        let mut utxo = owned().pop().unwrap();
+        assert_eq!(
+            utxo.asset_list.as_ref().map(Vec::len),
+            Some(1),
+            "the fixture's Seedelf UTxO holds its Seedelf alone"
+        );
+        // 3 ₳: enough for an output carrying the token after the fee.
+        utxo.value = "3000000".into();
+        utxo.asset_list
+            .as_mut()
+            .unwrap()
+            .push(seedelf_koios::koios::Asset {
+                decimals: 0,
+                quantity: "100".into(),
+                policy_id: policy.clone(),
+                asset_name: name.clone(),
+                fingerprint: String::new(),
+            });
+        // Where it goes "to the account": its receive address 0/0.
+        let account = CardanoAccount::from_phrase(PHRASE, 0)
+            .unwrap()
+            .base_address(true, Role::Receive, 0)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        // How much of the token each output pays, by address.
+        let paid = |tx_cbor: &str| -> Vec<(String, u64)> {
+            let bytes = hex::decode(tx_cbor).unwrap();
+            let tx = MultiEraTx::decode(&bytes).unwrap();
+            let mut paid = Vec::new();
+            for output in tx.outputs() {
+                let value = output.value();
+                for group in value.assets() {
+                    for asset in group.assets() {
+                        if hex::encode(group.policy()) == policy
+                            && hex::encode(asset.name()) == name
+                        {
+                            paid.push((
+                                output.address().unwrap().to_bech32().unwrap(),
+                                asset.output_coin().unwrap(),
+                            ));
+                        }
+                    }
+                }
+            }
+            paid
+        };
+        for to in [Some(account.clone()), None] {
+            let mut r = removal(to.clone());
+            r.utxo = utxo.clone();
+            let result = api::build_remove(sk, r).unwrap();
+            let paid = paid(&result.tx_cbor);
+            assert_eq!(paid.iter().map(|(_, q)| q).sum::<u64>(), 100, "{to:?}");
+            match &to {
+                Some(account) => assert!(paid.iter().all(|(at, _)| at == account), "{paid:?}"),
+                // Back into the private balance: the contract.
+                None => assert!(
+                    paid.iter().all(|(at, _)| at.starts_with("addr_test1w")),
+                    "{paid:?}"
+                ),
+            }
+            // In the JSON the worker turns into the review.
+            assert_eq!(
+                serde_json::to_value(&result).unwrap()["tokens"],
+                json!([{ "policyId": policy, "assetName": name, "quantity": "100" }]),
+                "the result names the token that goes with the ADA ({to:?})"
+            );
+        }
+        // A Seedelf alone brings back no token.
+        let alone = api::build_remove(sk, removal(Some(theirs()))).unwrap();
+        assert_eq!(serde_json::to_value(&alone).unwrap()["tokens"], json!([]));
+    }
+
+    /// The KEY address carrying the contract's hash, on preprod: no key has
+    /// that hash, so nothing there can ever be spent.
+    fn at_the_contracts_hash_as_a_key() -> String {
+        let config = seedelf_core::constants::get_config(1, true).unwrap();
+        pallas_addresses::Address::Shelley(ShelleyAddress::new(
+            AddressNetwork::Testnet,
+            ShelleyPaymentPart::Key(Hash::new(config.contract.wallet_contract_hash)),
+            ShelleyDelegationPart::Null,
+        ))
+        .to_bech32()
+        .unwrap()
+    }
+
+    /// Chunk 51, x2#2: Koios lists a credential's UTxOs by its 28 bytes, a
+    /// key's and a script's alike, so asked for the contract's it lists the
+    /// KEY address with the same 28 bytes too, its `payment_cred` the
+    /// contract's. A stranger's output there under one of the user's
+    /// registers isn't in the contract: nothing can spend it, and a private
+    /// spend that took it failed at the node. Every private spend's check
+    /// (`check_spendable`, here a withdrawal's) and a removal refuse it.
+    #[test]
+    fn a_key_address_carrying_the_contracts_hash_holds_nothing_to_spend() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let burnt = at_the_contracts_hash_as_a_key();
+        let mut withdrawal = request("amount");
+        for utxo in &mut withdrawal.utxos {
+            utxo.address = burnt.clone();
+        }
+        let mut removal_there = removal(Some(theirs()));
+        removal_there.utxo.address = burnt.clone();
+        let config = seedelf_core::constants::get_config(1, true).unwrap();
+        assert_eq!(
+            removal_there.utxo.payment_cred,
+            hex::encode(config.contract.wallet_contract_hash),
+            "as Koios lists it"
+        );
+        let said: Vec<(&str, String)> = vec![
+            (
+                "a withdrawal",
+                api::draft_withdraw(sk, withdrawal)
+                    .map(|_| "drafted".to_string())
+                    .unwrap_or_else(|e| e.to_string()),
+            ),
+            (
+                "a removal",
+                api::draft_remove(sk, removal_there)
+                    .map(|_| "drafted".to_string())
+                    .unwrap_or_else(|e| e.to_string()),
+            ),
+        ];
+        let wrong: Vec<_> = said
+            .iter()
+            .filter(|(_, said)| !said.contains("isn't in the Seedelf Wallet contract"))
+            .collect();
+        assert!(wrong.is_empty(), "spent from a key address: {wrong:?}");
+        // At the contract's own script address, the same rows spend.
+        assert!(api::draft_withdraw(sk, request("amount")).is_ok());
+        assert!(api::draft_remove(sk, removal(Some(theirs()))).is_ok());
     }
 
     #[test]
@@ -4960,6 +5138,27 @@ mod parts_of_any_shape {
         let asked = Some(150_000_000);
         assert!(api::build_transfer_parts(sk, transfer(utxos.clone(), asked, vec![])).is_err());
         assert!(api::build_withdraw_parts(sk, withdraw(utxos, asked, vec![])).is_err());
+    }
+
+    #[test]
+    fn several_recipients_go_in_one_transaction_or_not_at_all() {
+        // Chunk 51, t1e#3: parts pay one recipient (and a session's funding its collateral beside it, in the first).
+        // Several at once that one transaction can't take are refused in its words: planned in parts, each part paid
+        // the first recipient alone, and the second, named in the request, was never paid. 150 ₳ each to two, of 40
+        // UTxOs of 10 ₳.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let utxos = ada(1, 40, 10_000_000);
+        let too_much = |e: &anyhow::Error| {
+            seedelf_core::build::is_too_many(e) || seedelf_core::build::is_too_large(e)
+        };
+        let mut to_two = withdraw(utxos.clone(), Some(150_000_000), vec![]);
+        to_two.payments.push(to_two.payments[0].clone());
+        let e = api::build_withdraw_parts(sk, to_two).err().unwrap();
+        assert!(too_much(&e), "{e}");
+        let mut to_two = transfer(utxos, Some(150_000_000), vec![]);
+        to_two.payments.push(to_two.payments[0].clone());
+        let e = api::build_transfer_parts(sk, to_two).err().unwrap();
+        assert!(too_much(&e), "{e}");
     }
 
     #[test]

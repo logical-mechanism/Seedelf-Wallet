@@ -173,6 +173,14 @@ function wrap(line) {
   return [...lines, current];
 }
 
+/**
+ * The notices' order for a group's components: by name, in en-US's order whatever the shell's locale. With none
+ * named, localeCompare took the packaging shell's (LC_ALL, then LC_MESSAGES, then LANG), and the same commit made
+ * another zip in Estonian, Lithuanian, Czech and more (chunk 51, b1#1). C and en_US resolve to en-US, so a shell
+ * in either gives the order it gave before.
+ */
+export const byName = (a, b) => a.name.localeCompare(b.name, "en-US");
+
 export function thirdParty(version) {
   const groups = [
     ["Rust crates compiled into the WebAssembly module (assets/seedelf_wasm_bg-*.wasm)", crates()],
@@ -222,7 +230,7 @@ export function thirdParty(version) {
   ];
   for (const [title, components] of groups) {
     out.push(rule, title, rule, "");
-    for (const c of components.sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const c of components.sort(byName)) {
       out.push(`${c.name}: ${c.licence}`);
       if (c.note) out.push(`  ${c.note}`);
     }

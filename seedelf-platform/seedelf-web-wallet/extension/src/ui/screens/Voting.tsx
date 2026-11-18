@@ -474,7 +474,9 @@ export function DrepCard({ drep, shared = 0, listed = true }: { drep: DrepDetail
         : drep.active
         ? t("vote.status.active")
         : drep.expiresEpoch !== null
-          ? t("vote.status.inactiveSince", { epoch: drep.expiresEpoch })
+          ? // Koios's expiry is the last epoch it stays active in, as the account's own card says it (Active until
+            // the end of epoch E): it's inactive from the next (chunk 51, e7b#4).
+            t("vote.status.inactiveSince", { epoch: drep.expiresEpoch + 1 })
           : t("vote.status.inactive");
   return (
     <div className="stack-tight" data-testid="drep-details">
