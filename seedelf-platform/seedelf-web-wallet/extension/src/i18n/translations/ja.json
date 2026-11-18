@@ -2648,7 +2648,7 @@
   "tx.out.deadRegister": "誰も使用できないレジスター",
   "tx.out.seedelfContract": "Seedelf Wallet のコントラクト",
   "tx.out.underRegister": "レジスターのもと",
-  "tx.out.warn.anyoneCanSpend": "誰でも使用できるレジスター",
+  "tx.out.warn.anyoneCanSpend": "誰でも中身を取れるレジスター",
   "tx.out.withDatum": "データム付き",
   "tx.paysOutputs_other": "{{count}} 件の出力へ支払い",
   "tx.plutus.bytes_other": "{{n}} バイト",
