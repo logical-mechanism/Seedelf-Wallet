@@ -4,7 +4,11 @@
 // native binary of it, so a Mac and Linux zipped the same commit differently
 // (scripts/third-party.mjs).
 
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { npmPackages } from "../scripts/third-party.mjs";
 
@@ -54,4 +58,77 @@ describe("the notices' npm packages", () => {
     const lock = { packages: { "": { dependencies: { gone: "^1" } } } };
     expect(() => npmPackages(lock, () => true)).toThrow("package.json needs gone");
   });
+});
+
+// Chunk 51, b1#1. The notices are one of the store zip's files, and releases.md says the same commit gives the same
+// zip. Each group was sorted with localeCompare and no locale, which takes the packaging shell's (LC_ALL, then
+// LC_MESSAGES, then LANG): in Estonian z sorts before t, in Lithuanian y before j, in Czech ch after h, so a checker
+// whose shell spoke one of those got another zip from the same commit. The sort is the one step of the notices that
+// reads the locale. Each case sorts every crate in Cargo.lock and every package in package-lock.json, named as the
+// notices name them, in a fresh node with that locale, as `npm run package` would run.
+
+const script = pathToFileURL(fileURLToPath(new URL("../scripts/third-party.mjs", import.meta.url))).href;
+
+/** "<name> v<version>" for every package in Cargo.lock and in package-lock.json, as the notices name a component. */
+function everyName(): string[] {
+  const cargo = readFileSync(new URL("../../../Cargo.lock", import.meta.url), "utf8");
+  const crates = [...cargo.matchAll(/^name = "([^"]+)"\nversion = "([^"]+)"$/gm)].map(([, n, v]) => `${n} v${v}`);
+  const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
+  const tail = (path: string) => path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+  const packages = Object.entries(lock.packages as Record<string, { name?: string; version?: string }>)
+    .filter(([path]) => path)
+    .map(([path, p]) => `${p.name ?? tail(path)} v${p.version}`);
+  return [...crates, ...packages];
+}
+
+/** `names` sorted in a fresh node in `locale`: by the notices' `byName`, or `bare`, localeCompare with no locale. */
+function sortedIn(locale: string, names: string[], order: "byName" | "bare" = "byName"): string[] {
+  const env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: locale };
+  delete env.NODE_OPTIONS;
+  const code = [
+    `import { readFileSync } from "node:fs";`,
+    `import { byName } from ${JSON.stringify(script)};`,
+    `const bare = (a, b) => a.name.localeCompare(b.name);`,
+    `const sorted = JSON.parse(readFileSync(0, "utf8")).map((name) => ({ name })).sort(${order});`,
+    `process.stdout.write(JSON.stringify(sorted.map((c) => c.name)));`,
+  ].join("\n");
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", code], {
+    env,
+    input: JSON.stringify(names),
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  return JSON.parse(out);
+}
+
+describe("the notices' order", () => {
+  const all = everyName();
+  let reference: string[] = [];
+  beforeAll(() => {
+    reference = sortedIn("C", all);
+  }, 60_000);
+
+  it("is tried on names a locale reorders: those of every crate and package the notices can name", () => {
+    expect(all.length).toBeGreaterThan(400);
+    expect(sortedIn("et_EE.UTF-8", all, "bare")).not.toEqual(sortedIn("C", all, "bare"));
+  }, 60_000);
+
+  it.each([
+    "en_US.UTF-8",
+    "et_EE.UTF-8",
+    "lt_LT.UTF-8",
+    "lv_LV.UTF-8",
+    "cs_CZ.UTF-8",
+    "sk_SK.UTF-8",
+    "cy_GB.UTF-8",
+    "th_TH.UTF-8",
+    "haw_US.UTF-8",
+    "az_AZ.UTF-8",
+  ])(
+    "is the same in %s as in C",
+    (locale) => {
+      expect(sortedIn(locale, all)).toEqual(reference);
+    },
+    60_000,
+  );
 });

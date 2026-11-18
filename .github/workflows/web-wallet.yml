@@ -87,13 +87,13 @@ jobs:
 
       # The toolchain seedelf-platform/rust-toolchain.toml pins: keep the two
       # in step, so CI builds and tests what ships (launch review #61).
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 (v2.9.3)
         with:
           workspaces: seedelf-platform
 
@@ -121,12 +121,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 (v2.9.3)
         with:
           workspaces: seedelf-platform
 
@@ -266,7 +266,7 @@ jobs:
 
       # The notices ask cargo which crates the WebAssembly links, and read
       # their licences from the sources cargo fetches.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
           targets: wasm32-unknown-unknown
