@@ -15,6 +15,7 @@ mod extract;
 mod fund;
 mod mint;
 mod remove;
+mod spend;
 mod submit;
 mod sweep;
 mod transfer;

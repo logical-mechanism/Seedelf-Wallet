@@ -6,10 +6,16 @@ use pallas_addresses::{
     Address, Network, ScriptHash, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
     StakeAddress, StakeKeyHash,
 };
+use serde_json::{Value, json};
 use serial_test::serial;
 
 use seedelf_cli::commands::util::extract::{ExtractArgs, run};
+use seedelf_core::assets::Assets;
 use seedelf_core::constants::PREPROD_STAKE_HASH;
+use seedelf_core::transaction::{
+    address_minimum_lovelace_with_assets, wallet_minimum_lovelace_with_assets,
+};
+use seedelf_crypto::schnorr::random_scalar;
 use seedelf_koios::koios::UtxoResponse;
 
 use crate::harness::*;
@@ -135,19 +141,39 @@ async fn extract_rescues_a_datum_less_utxo_at_the_contracts_staked_form() {
     assert_eq!(tx.collateral, vec![(tx_hash(51), 0)]);
 }
 
-/// What isn't the contract's stays refused: a datum-less UTxO under another
-/// script, or under the contract's script on the other network.
+/// `util extract` refuses what isn't a datum-less UTxO of the contract's,
+/// before it evaluates or serves anything (chunk 51, t1b#7): a UTxO with a
+/// datum (a Seedelf's own, whose empty proof the contract refuses), one at
+/// another script, at the contract's script on the other network or at a key
+/// address, and one already spent. Everything it needs to go on is mounted,
+/// so without its checks it would.
 #[tokio::test]
 #[serial]
-async fn extract_refuses_a_utxo_that_isnt_the_contracts() {
-    for not_ours in [
-        staked_script_address(Network::Testnet, [0xab; 28]),
-        staked_script_address(Network::Mainnet, config().contract.wallet_contract_hash),
+async fn extract_refuses_what_isnt_a_datum_less_utxo_of_the_contracts() {
+    let mut with_datum = empty_datum_utxo(50, 2_000_000, &[]);
+    with_datum.inline_datum = Some(register_inline_datum(&owned_register(random_scalar())));
+    let mut at_a_key = empty_datum_utxo(50, 2_000_000, &[]);
+    at_a_key.address = external_address_bech32();
+    let mut spent = empty_datum_utxo(50, 2_000_000, &[]);
+    spent.is_spent = true;
+    let elsewhere = |network, script| datum_less_utxo_at(&staked_script_address(network, script));
+    for (utxo, why) in [
+        (with_datum, "UTxO has datum"),
+        (
+            elsewhere(Network::Testnet, [0xab; 28]),
+            "UTxO not in wallet",
+        ),
+        (
+            elsewhere(Network::Mainnet, config().contract.wallet_contract_hash),
+            "UTxO not in wallet",
+        ),
+        (at_a_key, "UTxO not in wallet"),
+        (spent, "UTxO is spent"),
     ] {
         let mut scenario = Scenario::start().await;
-        scenario
-            .mount_utxo_info(vec![datum_less_utxo_at(&not_ours)])
-            .await;
+        scenario.mount_utxo_info(vec![utxo]).await;
+        scenario.mount_address_utxos(funding_utxos()).await;
+        scenario.mount_evaluate(1).await;
         scenario.arm_web_capture();
         let refused = run(
             ExtractArgs {
@@ -158,12 +184,96 @@ async fn extract_refuses_a_utxo_that_isnt_the_contracts() {
             VARIANT,
         )
         .await
-        .expect_err("not the contract's UTxO");
+        .expect_err(why);
+        assert!(refused.to_string().contains(why), "{why}: {refused:#}");
+        assert_eq!(
+            scenario.requests_to("/api/v1/ogmios").await,
+            0,
+            "{why}: nothing is evaluated"
+        );
         assert!(
-            refused.to_string().contains("UTxO not in wallet"),
-            "refused, as not the contract's: {refused:#}"
+            seedelf_cli::web_server::take_captured_cbor().is_none(),
+            "{why}: nothing is served to sign"
         );
     }
+}
+
+/// Run `extract` on `extracted` from an address holding `utxos`, the mock's
+/// evaluation answering `budget` (cpu, memory), at the recorded parameters
+/// with `change` made to them: what it returned, and the transaction it
+/// served to sign, if it served one.
+async fn extract_priced(
+    extracted: UtxoResponse,
+    utxos: Vec<UtxoResponse>,
+    budget: (u64, u64),
+    change: impl FnOnce(&mut Value),
+) -> (anyhow::Result<()>, Option<DecodedTx>) {
+    let mut scenario = Scenario::start().await;
+    scenario.mount_params(change).await;
+    let outpoint = format!("{}#{}", extracted.tx_hash, extracted.tx_index);
+    scenario.mount_utxo_info(vec![extracted]).await;
+    scenario.mount_address_utxos(utxos).await;
+    scenario.mount_evaluate_budgets(&[budget]).await;
+    scenario.arm_web_capture();
+    let outcome = run(
+        ExtractArgs {
+            utxo: outpoint,
+            address: external_address_bech32(),
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await;
+    let served = seedelf_cli::web_server::take_captured_cbor().map(|cbor| decode_tx(&cbor));
+    (outcome, served)
+}
+
+/// The fee is rounded up to even, so the collateral put up, 3/2 of it, is
+/// whole and covers the ledger's 150% (chunk 51, t1b#5). Evaluations about a
+/// lovelace of compute apart give the fee both parities before it's rounded.
+#[tokio::test]
+#[serial]
+async fn extract_rounds_its_fee_even_so_its_collateral_covers_150_percent() {
+    for step in 0..6 {
+        let budget = (250_000_000, 800_000 + 18 * step);
+        let extracted = empty_datum_utxo(50, 2_000_000, &[]);
+        let (outcome, served) = extract_priced(extracted, funding_utxos(), budget, |_| {}).await;
+        outcome.expect("extract should succeed");
+        assert_collateral_covers_the_fee(&served.expect("a transaction to sign"));
+    }
+}
+
+/// A fee past what `util extract` pays out is refused in words, never an
+/// output that wraps below zero (chunk 51, t1b#6). The fee must stay within
+/// what the 5 ADA collateral covers, 3.33 ADA, so the UTxO extracted and the
+/// ADA the address's selection takes come to 3.2 ADA, and the script runs to
+/// about 1.2 ADA of compute, on a 2 ADA fee floor: about 3.25 ADA.
+#[tokio::test]
+#[serial]
+async fn extract_refuses_a_fee_past_what_it_pays_out() {
+    let params = recorded_params();
+    // What the selection needs: the output's minimum and a change output's.
+    let payer =
+        address_minimum_lovelace_with_assets(&params, &external_address_bech32(), Assets::new())
+            .expect("the output's minimum")
+            + wallet_minimum_lovelace_with_assets(&params, Assets::new())
+                .expect("a change minimum")
+            + 100_000;
+    let extracted = empty_datum_utxo(50, 3_200_000 - payer, &[]);
+    let utxos = vec![
+        address_utxo(&external_address_bech32(), 51, 5_000_000, &[]),
+        address_utxo(&external_address_bech32(), 52, payer, &[]),
+    ];
+    let (outcome, served) = extract_priced(extracted, utxos, (5_580_000_000, 14_000_000), |p| {
+        p["min_fee_b"] = json!(2_000_000);
+    })
+    .await;
+    let refused = outcome.expect_err("a fee past what it pays out is refused");
+    assert!(
+        refused.to_string().contains("insufficient lovelace"),
+        "{refused:#}"
+    );
+    assert!(served.is_none(), "nothing is served to sign");
 }
 
 /// Run `extract` on `extracted` from an address holding `utxos`, at the

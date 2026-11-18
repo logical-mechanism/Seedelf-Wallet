@@ -15,17 +15,18 @@
 use std::collections::BTreeMap;
 
 use blstrs::Scalar;
-use pallas_addresses::Address;
+use pallas_addresses::{Address, StakeAddress};
+use pallas_crypto::hash::Hasher;
 use pallas_primitives::alonzo::{MaybeIndefArray, PlutusData};
-use pallas_primitives::conway::DatumOption;
+use pallas_primitives::conway::{DatumOption, RedeemerTag};
 use pallas_traverse::{MultiEraOutput, MultiEraTx};
 use seedelf_core::assets::{Asset as CoreAsset, Assets};
-use seedelf_core::constants::{Config, get_config};
+use seedelf_core::constants::{COLLATERAL_HASH, Config, get_config};
 use seedelf_core::transaction::{
     address_minimum_lovelace_with_assets, wallet_minimum_lovelace_with_assets,
 };
 use seedelf_crypto::register::Register;
-use seedelf_crypto::schnorr::random_scalar;
+use seedelf_crypto::schnorr::{prove, random_scalar};
 use seedelf_koios::koios::{Asset, InlineDatum, ProtocolParameters, ReferenceScript, UtxoResponse};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -258,6 +259,8 @@ pub struct ResolvedValue {
     pub lovelace: u64,
     /// `(policy_id_hex, token_name_hex) -> quantity`.
     pub assets: BTreeMap<(String, String), u64>,
+    /// The register its inline datum holds, if it holds one.
+    pub register: Option<Register>,
 }
 
 /// Maps every fixture outpoint to its value so a decoded transaction's inputs
@@ -272,6 +275,9 @@ impl Ledger {
         for utxo in utxos {
             let mut value = ResolvedValue {
                 lovelace: utxo.value.parse().expect("utxo lovelace"),
+                register: utxo.inline_datum.as_ref().and_then(|datum| {
+                    seedelf_koios::koios::register_of_datum(&hex::decode(&datum.bytes).ok()?)
+                }),
                 ..ResolvedValue::default()
             };
             if let Some(list) = &utxo.asset_list {
@@ -369,8 +375,15 @@ impl Scenario {
     /// Serve `epoch_params` with the reference-script price set to `per_byte`
     /// lovelace, over the recorded preprod value (15).
     pub async fn mount_reference_script_price(&self, per_byte: u64) {
+        self.mount_params(|params| params["min_fee_ref_script_cost_per_byte"] = json!(per_byte))
+            .await;
+    }
+
+    /// Serve `epoch_params` as recorded, with `change` made to its one row:
+    /// a fee parameter raised, say.
+    pub async fn mount_params(&self, change: impl FnOnce(&mut Value)) {
         let mut params: Value = serde_json::from_str(EPOCH_PARAMS_FIXTURE).expect("epoch params");
-        params[0]["min_fee_ref_script_cost_per_byte"] = json!(per_byte);
+        change(&mut params[0]);
         Mock::given(method("GET"))
             .and(path("/api/v1/epoch_params"))
             .respond_with(ResponseTemplate::new(200).set_body_json(params))
@@ -378,6 +391,17 @@ impl Scenario {
             .with_priority(1)
             .mount(&self.server)
             .await;
+    }
+
+    /// How many requests the mock was sent for `path` (`/api/v1/ogmios`, say).
+    pub async fn requests_to(&self, path: &str) -> usize {
+        self.server
+            .received_requests()
+            .await
+            .expect("request recording enabled")
+            .iter()
+            .filter(|r| r.url.path() == path)
+            .count()
     }
 
     /// Mount `credential_utxos` (the wallet-contract UTxO set) and record the
@@ -414,11 +438,20 @@ impl Scenario {
     /// Mount the Ogmios `evaluateTransaction` endpoint with `n` canned
     /// execution-unit budgets.
     pub async fn mount_evaluate(&self, n: usize) {
-        let budgets: Vec<Value> = (0..n)
-            .map(|i| {
+        self.mount_evaluate_budgets(&vec![(250_000_000, 800_000); n])
+            .await;
+    }
+
+    /// Mount the Ogmios `evaluateTransaction` endpoint with these budgets,
+    /// `(cpu, memory)` for spends 0, 1, … in turn.
+    pub async fn mount_evaluate_budgets(&self, budgets: &[(u64, u64)]) {
+        let budgets: Vec<Value> = budgets
+            .iter()
+            .enumerate()
+            .map(|(i, (cpu, memory))| {
                 json!({
                     "validator": {"index": i, "purpose": "spend"},
-                    "budget": {"cpu": 250_000_000u64, "memory": 800_000u64}
+                    "budget": {"cpu": cpu, "memory": memory}
                 })
             })
             .collect();
@@ -511,6 +544,13 @@ impl Drop for Scenario {
         seedelf_cli::setup::inject_wallet_scalar(None);
         seedelf_cli::web_server::take_captured_cbor();
     }
+}
+
+/// The recorded preprod parameters the mock serves, read as the CLI reads
+/// them, with no mock running.
+pub fn recorded_params() -> ProtocolParameters {
+    let params: Value = serde_json::from_str(EPOCH_PARAMS_FIXTURE).expect("epoch params");
+    ProtocolParameters::from_koios(&params[0]).expect("the recorded parameters")
 }
 
 /// Fetch protocol parameters through the mock — the exact params the command
@@ -759,4 +799,122 @@ pub fn assert_sound_transaction(tx: &DecodedTx, scenario: &Scenario, params: &Pr
     assert_value_conserved(tx, &scenario.ledger);
     assert_no_sub_min_outputs(tx, params);
     assert_wallet_output_datums(tx, scenario.scalar);
+}
+
+/// The collateral a transaction puts up, the address's 5 ADA less its
+/// return, covers the ledger's 150% of its fee: the fee is even, so 3/2 of it
+/// is whole. An odd fee's ⌊3/2 × fee⌋ falls half a lovelace short, and the
+/// node refuses the transaction (chunk 51, t1b#5).
+pub fn assert_collateral_covers_the_fee(tx: &DecodedTx) {
+    let back = tx.collateral_return.as_ref().expect("a collateral return");
+    let put_up = 5_000_000 - back.lovelace;
+    assert!(
+        tx.fee.is_multiple_of(2) && 2 * put_up >= 3 * tx.fee,
+        "the fee must be even and the collateral cover 150% of it: a fee of {}, a collateral of {put_up}",
+        tx.fee
+    );
+}
+
+/// The one-time key a Seedelf spend is signed with, hex, after asserting
+/// what binds the spend to it (chunk 51, t1b#12): it's the one required
+/// signer besides the collateral service, it signs, and every spent input's
+/// redeemer names it and carries a proof that verifies for that input's
+/// register. The deployed contract takes a proof whose key is among the
+/// signers, so a key anyone could know would let anyone replay the proofs.
+pub fn one_time_key_of(cbor_hex: &str, ledger: &Ledger) -> String {
+    let bytes = hex::decode(cbor_hex).expect("tx cbor hex");
+    let tx = MultiEraTx::decode(&bytes).expect("decode transaction");
+
+    let collateral = hex::encode(COLLATERAL_HASH);
+    let signers: Vec<String> = tx
+        .required_signers()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|signer| signer.to_string())
+        .collect();
+    assert!(
+        signers.contains(&collateral),
+        "the collateral service is a required signer: {signers:?}"
+    );
+    let others: Vec<&String> = signers.iter().filter(|s| **s != collateral).collect();
+    assert_eq!(
+        others.len(),
+        1,
+        "one key signs beside the collateral service: {signers:?}"
+    );
+    let key = others[0].clone();
+    let witnesses: Vec<String> = tx
+        .vkey_witnesses()
+        .iter()
+        .map(|w| Hasher::<224>::hash(&w.vkey).to_string())
+        .collect();
+    assert!(
+        witnesses.contains(&key),
+        "the one-time key {key} signs: {witnesses:?}"
+    );
+
+    let inputs = tx.inputs_sorted_set();
+    let mut proven = 0;
+    for redeemer in tx.redeemers() {
+        if !matches!(redeemer.tag(), RedeemerTag::Spend) {
+            continue;
+        }
+        let input = &inputs[redeemer.index() as usize];
+        let register = ledger
+            .resolve(&hex::encode(*input.hash()), input.index())
+            .register
+            .expect("a spent input's register");
+        let PlutusData::Constr(proof) = redeemer.data() else {
+            panic!("a spend's redeemer is a proof");
+        };
+        let fields: Vec<String> = match &proof.fields {
+            MaybeIndefArray::Def(v) | MaybeIndefArray::Indef(v) => v,
+        }
+        .iter()
+        .map(|field| match field {
+            PlutusData::BoundedBytes(b) => {
+                let slice: &[u8] = b;
+                hex::encode(slice)
+            }
+            other => panic!("a proof's fields are bytes: {other:?}"),
+        })
+        .collect();
+        let [z, g_r, vkh] = fields.as_slice() else {
+            panic!("a proof is z, g_r and the key's hash: {fields:?}");
+        };
+        assert_eq!(
+            vkh,
+            &key,
+            "input {}'s proof names the one-time key",
+            redeemer.index()
+        );
+        assert!(
+            prove(&register.generator, &register.public_value, z, g_r, vkh).expect("a proof"),
+            "input {}'s proof verifies for its register, bound to the one-time key",
+            redeemer.index()
+        );
+        proven += 1;
+    }
+    assert_eq!(proven, inputs.len(), "every input spent is proven");
+    key
+}
+
+/// Addresses no payment goes to: a script's (the wallet contract's own), a
+/// stake address, and a key address on the other network (mainnet). A
+/// payment there with no datum can lock for good, or never arrives.
+pub fn not_payable_addresses() -> Vec<String> {
+    let Address::Shelley(external) = external_address() else {
+        panic!("the external address is a Shelley address");
+    };
+    vec![
+        wallet_address_bech32(),
+        StakeAddress::try_from(external)
+            .expect("its stake address")
+            .to_bech32()
+            .expect("stake bech32"),
+        seedelf_core::address::dapp_address("11".repeat(28), false)
+            .expect("a mainnet address")
+            .to_bech32()
+            .expect("mainnet bech32"),
+    ]
 }
