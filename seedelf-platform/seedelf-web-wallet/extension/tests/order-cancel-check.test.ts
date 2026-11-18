@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
 import type { KoiosUtxo } from "../src/background/koios";
 import { builtOutputs, SUNDAE_V3 } from "../src/background/minswap";
 import { dexOrderAt, SESSION_TX, type SessionService } from "../src/background/sessions";
-import { bech32 } from "./fixtures/bech32";
+import { bech32, bech32Bytes } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, SESSION_ADDRESS } from "./fixtures/swap-tx";
 import { loadTestWasm, sessionSwap } from "./fakes";
@@ -177,7 +177,8 @@ function mainnetReferences(t: T) {
   for (const f of FIXTURES.filter((x) => x.network === "mainnet" && x.reference)) {
     t.koios.addedToAccounts.push({
       stake_address: null,
-      payment_cred: "00".repeat(28),
+      // Its address's payment part, as Koios gives it.
+      payment_cred: Buffer.from(bech32Bytes(f.reference!.address!)).toString("hex").slice(2, 58),
       epoch_no: 300,
       block_height: 4_000_000,
       block_time: 1_700_000_000,
@@ -219,6 +220,26 @@ describe("a swap's outputs, as the order check reads them (builtOutputs)", () =>
     ]);
     const witnesses = new Map<number, Cbor>([[4, { tag: 258, of: [{ raw: ORDER_DATUM }] }]]);
     expect(form(hex(cbor([legacy, witnesses, true, null])))).toEqual([{ datum: ORDER_DATUM, inline: false, scriptRef: false }]);
+  });
+
+  it("throws on a transaction it can't read, each in its own words, so no check passes it (chunk 51, t1k#14)", () => {
+    const input: Cbor = { tag: 258, of: [[bytes(sessionSwap.utxo.tx_hash), sessionSwap.utxo.tx_index]] };
+    const body = (outputs?: Cbor[]) =>
+      new Map<number, Cbor>([[0, input], ...(outputs ? ([[1, outputs]] as Array<[number, Cbor]>) : []), [2, 205_189]]);
+    const output = (fields: Array<[number, Cbor]>) => new Map<number, Cbor>(fields);
+    const read = (tx: Cbor) => () => builtOutputs(Uint8Array.from(cbor(tx)));
+    const paid = output([[0, bytes(SESSION_ADDRESS)], [1, 2_000_000]]);
+    // What it reads: one output, its address and its ADA.
+    expect(read([body([paid]), new Map(), true, null])()).toMatchObject([{ address: SESSION_ADDRESS, lovelace: 2_000_000n }]);
+    // A three-item array, the Shelley era's shape, which read on as if it were one.
+    expect(read([body([paid]), new Map(), null])).toThrow("not a 4-item transaction array");
+    // A body without its outputs.
+    expect(read([body(), new Map(), true, null])).toThrow("the transaction has no outputs");
+    // An output without its value, which read on as one paying nothing.
+    expect(read([body([output([[0, bytes(SESSION_ADDRESS)]])]), new Map(), true, null])).toThrow("an output has no value");
+    // An inline datum as bare bytes, not in tag 24.
+    const bare = output([[0, bytes(SESSION_ADDRESS)], [1, 2_000_000], [2, [1, bytes("d87980")]]]);
+    expect(read([body([bare]), new Map(), true, null])).toThrow("an output's inline datum isn't wrapped as CBOR");
   });
 });
 
@@ -300,6 +321,16 @@ describe("an order no cancel could ever spend (release review C05)", () => {
         expect(t.koios.submitted, fee).toHaveLength(0);
       }
     }
+  });
+
+  // An answer covering fewer orders than asked says nothing of the rest: every check of none passes (chunk 51,
+  // t1h#11).
+  it("pauses rather than sign one whose dry run answers for fewer orders than it places", async () => {
+    const { t, sessions } = await seeded("preprod", swapPlacing(MINSWAP_V1));
+    wasmOf(sessions).checkOrderCancels = (() => JSON.stringify({ orders: [] })) as never;
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.paused).toMatchObject({ why: "refused", detail: NOT_CANCELLABLE });
+    expect(t.koios.submitted).toHaveLength(0);
   });
 });
 

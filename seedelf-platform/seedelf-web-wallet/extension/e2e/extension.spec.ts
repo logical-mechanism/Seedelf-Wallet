@@ -4679,7 +4679,8 @@ test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async (
   await results.getByRole("button").filter({ hasText: `${LOGIC_DREP.slice(0, 16)}…${LOGIC_DREP.slice(-6)}` }).click();
   const facts = page.getByTestId("drep-facts");
   await expect(facts).toContainText("NameLogical Mechanism dRep");
-  await expect(facts).toContainText("StatusInactive since epoch 189");
+  // Koios's expires_epoch_no is 189, the last epoch it was active in (chunk 51, e7b#4).
+  await expect(facts).toContainText("StatusInactive since epoch 190");
   await expect(facts).toContainText("Voting power5,914,902.920642 ₳");
   await expect(page.getByTestId("drep-details")).toContainText("hasn't voted lately");
   expect(koios.calls.slice(lookups).sort()).toEqual(["drep_info", "drep_metadata"]);

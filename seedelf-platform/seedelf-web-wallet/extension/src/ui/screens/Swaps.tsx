@@ -274,6 +274,13 @@ const PAUSED: Record<SessionPause["why"], I18nKey> = {
   short: "swaps.paused.short",
 };
 
+/**
+ * Whether a running swap's next step is held by the draw an unlock made (privacy review §3.1; the worker's waits): the
+ * view carries it while it lasts, and nothing of it goes out until then, at most 20 minutes from when it was drawn
+ * (UNLOCK_WAIT_MS), which may be a while after the unlock. Never once it's done.
+ */
+const heldByUnlock = (a: SessionAuto, now: number) => a.step !== "done" && a.waitsUntil !== undefined && a.waitsUntil > now;
+
 /** A session's second line: what it's doing while it runs (its tag says if it's stopping), or when it ran. */
 function subOf(s: SessionView, now: number): string {
   if (isOver(s)) return whenOf(s.createdAt, new Date(now));
@@ -288,6 +295,8 @@ function subOf(s: SessionView, now: number): string {
     return s.auto.paused.why === "refused" && s.auto.stopping ? t("swaps.paused.cancelRefused") : t(PAUSED[s.auto.paused.why]);
   }
   if (s.auto.orderOpen !== undefined) return t("swaps.sub.orderOpen");
+  // Its next step waits an unlock's draw (chunk 51, e7a#4).
+  if (heldByUnlock(s.auto, now)) return t("swaps.sub.waiting");
   // A swap against a DEX's pools has no order to place: it's swapping, though Stop was pressed as it went out
   // (chunk 24). It lands as it is or not at all.
   if (s.auto.againstPools && s.auto.step === "ordering") return t("swaps.step.swapping");
@@ -690,7 +699,17 @@ export function NewSwap({
   const [details, setDetails] = useState(false);
   const [inverted, setInverted] = useState(false);
   const [price, setPrice] = useState<AdaPrice | null>(null);
-  const [out, setOut] = useState<{ summary: SessionOutSummary; quote: SwapQuote; lovejoin?: SwapLovejoin }>();
+  // The review: the funding built, with the quote, its time and the picks it was built on, which the approval names.
+  // The form stays live while it builds: drawn with the form's picks as they were by then, a pick changed meanwhile
+  // named another token over the funding Start swap sends (chunk 51, e7a#1).
+  const [out, setOut] = useState<{
+    summary: SessionOutSummary;
+    quote: SwapQuote;
+    lovejoin?: SwapLovejoin;
+    pay: Pick;
+    get: Pick;
+    at: number;
+  }>();
   // The approval's switch: through Lovejoin, as Settings starts it, or directly (privacy review §4.1).
   const [through, setThrough] = useState(true);
   // Change on the approval (chunk 34's 34e): the pool the token it gets goes into, by its unit, null for none.
@@ -801,28 +820,34 @@ export function NewSwap({
    * balance has, which the form then says. `keepWay`: a review built again
    * keeps the way back the user chose on the one before, its switch and its
    * Change, built that way (chunk 34's 34f: the switch's way decides whether
-   * the token's boxes are funded). `way` sets them anew.
+   * the token's boxes are funded). `way` sets them anew. Built again from the
+   * review (`keepWay`), it's the review's swap, its quote and picks, never
+   * the form's: a pick changed while the first one built would build the
+   * other pair under the same approval (chunk 51, e7a#1).
    */
   async function buildOut(keepWay = false, way?: { through?: boolean; pools?: Record<string, string | null> }): Promise<boolean> {
-    if (!current || !quoted || !get) return false;
-    let quote = current;
-    if (Date.now() - quoted.at > QUOTE_FRESH_MS) {
+    const from = keepWay && out ? out : current && quoted && get ? { quote: current, at: quoted.at, pay, get } : undefined;
+    if (!from) return false;
+    let { quote, at } = from;
+    if (Date.now() - at > QUOTE_FRESH_MS) {
       quote = await call("swap-quote", quote.ask);
-      setQuoted({ quote, at: Date.now() });
+      at = Date.now();
+      // The form's quote too, where it's the same swap: it isn't once a pick changed while the review built.
+      if (ask && sameAsk(quote.ask, ask)) setQuoted({ quote, at });
       if (adaShort(seedelf.lovelace, quote)) return false;
     }
     const wantThrough = way?.through ?? (keepWay ? through : undefined);
     const wantPools = way?.pools ?? (keepWay ? pools : {});
     const { lovejoin, ...summary } = await call("session-out-build", {
       quote,
-      display: { in: pay.side, out: get.side },
+      display: { in: from.pay.side, out: from.get.side },
       ...(wantThrough !== undefined ? { through: wantThrough } : {}),
       ...(Object.keys(wantPools).length ? { pools: wantPools } : {}),
     });
     setThrough(wantThrough ?? lovejoin?.on ?? false);
     setPools(wantPools);
     setTurnedOff(way?.through === false || (keepWay && turnedOff && wantThrough === false));
-    setOut({ summary, quote, lovejoin });
+    setOut({ summary, quote, lovejoin, pay: from.pay, get: from.get, at });
     return true;
   }
 
@@ -893,7 +918,7 @@ export function NewSwap({
     }
   }
 
-  if (out && get) {
+  if (out) {
     return (
       <Screen
         title={tr("swaps.review.title")}
@@ -921,10 +946,13 @@ export function NewSwap({
           )
         }
       >
+        {/* The swap built, by the picks it was built on (e7a#1). */}
         <SwapApproval
-          {...out}
-          pay={pay}
-          get={get}
+          summary={out.summary}
+          quote={out.quote}
+          lovejoin={out.lovejoin}
+          pay={out.pay}
+          get={out.get}
           through={through}
           onThrough={(on) => void rebuild({ through: on })}
           onPool={(unit, pool) => void rebuild({ pools: { ...pools, [unit]: pool } })}
@@ -3273,11 +3301,14 @@ const ORDER_OPEN = () => t("swaps.now.orderOpen");
  * What's happening now, in plain words. A swap against a DEX's pools has no
  * order: it's on its way, Stop pressed as it went out or not, then filled in
  * itself as it lands, and nothing is cancelled (chunk 24; the 1.3.0 release
- * review, C13, C24).
+ * review, C13, C24). Found as the wallet unlocked, its next step waits a fresh
+ * draw first (privacy review §3.1), which it says till `now` is past it: it
+ * said it was asking Minswap all through the wait (chunk 51, e7a#4).
  */
-export function nowLine(s: SessionView): string {
+export function nowLine(s: SessionView, now = Date.now()): string {
   const a = s.auto!;
   if (s.stage === "failed") return s.unsent ? neverSent(s) : t("swaps.now.fundingUnseen");
+  if (heldByUnlock(a, now)) return t("swaps.now.waiting");
   switch (a.step) {
     case "funding":
       return t(a.stopping ? "swaps.now.stoppingAtFunding" : "swaps.now.funding");

@@ -290,6 +290,10 @@ describe("Lovejoin's public reviews say what the public account holds after (R9)
     expect(totals({})).not.toContain("after");
     // The private balance's, as before: Home's figure from what the page has.
     expect(totals({ review: { ...start, from: "private" } })).toContain("Private balance after 276.41 ₳");
+    // Home's figure holds what's locked and what's on its way back too: the after counts them, as Home does (chunk 51,
+    // t1l#4). 300 ₳ spendable, 25 ₳ locked and 5 ₳ coming back, less 23.59 ₳: 306.41 ₳, not the spendable's 276.41 ₳.
+    const holding = { lovelace: "300000000", locked: { lovelace: "25000000", tokens: [], utxos: 1 }, incoming: { lovelace: "5000000", tokens: [] } };
+    expect(totals({ review: { ...start, from: "private" }, seedelf: holding })).toContain("Private balance after 306.41 ₳");
   });
 });
 

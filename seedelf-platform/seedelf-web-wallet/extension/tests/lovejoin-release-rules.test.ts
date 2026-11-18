@@ -540,6 +540,26 @@ describe("the Bootstrap form's bounds are the worker's (1.6.0's release review, 
     // what passes here, in words (1.7.0's release review, pr333#0).
     expect(bootstrapLimits(box, "private", ada(needs + 300_000n), 96, 30, dear).short).toBe(false);
   });
+
+  it("holds the count typed to one deposit's most, and to one at least (chunk 51, t1l#21)", () => {
+    // The count's box takes any number typed: 200 was shown and sent where one deposit takes 64, and the worker refused it.
+    expect(bootstrapLimits({ id: A, box: { lovelace: "25000000" } }, "public", ada(10_000_000_000n), undefined, 200).putting).toBe(64);
+    expect(bootstrapLimits({ id: undefined, box: { lovelace: "10000000" } }, "public", ada(10_000_000_000n), undefined, 200).putting).toBe(96);
+    expect(bootstrapLimits({ id: A, box: { lovelace: "25000000" } }, "public", ada(10_000_000_000n), undefined, 0).putting).toBe(1);
+    expect(bootstrapLimits({ id: A, box: { lovelace: "25000000" } }, "public", ada(10_000_000_000n), undefined, 12).putting).toBe(12);
+  });
+
+  it("is short from the private balance where it holds too little of the pool's token, however much ADA (chunk 51, t1l#22)", () => {
+    const pool = { id: A, box: MIN_100, floor: 30, others: 0 };
+    const min = (quantity: string) => ({ ...MIN_100.token, quantity, fingerprint: "asset1min", decimals: 6 });
+    // 30 boxes of 100 MIN, the pool's floor: 500 MIN pays five.
+    const few = bootstrapLimits(pool, "private", { lovelace: "10000000000", tokens: [min("500000000")] }, 96);
+    expect(few).toMatchObject({ putting: 30, tokenShort: true, short: true });
+    const enough = bootstrapLimits(pool, "private", { lovelace: "10000000000", tokens: [min("3000000000")] }, 96);
+    expect(enough).toMatchObject({ putting: 30, tokenShort: false, short: false });
+    // From the public account the worker reads the token itself: nothing held here says otherwise.
+    expect(bootstrapLimits(pool, "public", { lovelace: "0", tokens: [] })).toMatchObject({ tokenShort: false, short: false });
+  });
 });
 
 describe("Your mixes' Clear and Clear all (the owner's test of 1.6.0)", SLOW, () => {

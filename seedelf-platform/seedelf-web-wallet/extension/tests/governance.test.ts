@@ -268,6 +268,23 @@ describe("the DRep's transactions", () => {
     expect(await builtCertificates(t)).toEqual([16]);
   });
 
+  it("builds no retirement on a deposit the server didn't say, and says so in its own words (chunk 51, t1k#13)", async () => {
+    // Retiring returns exactly the deposit paid: none from Koios's drep_info, or one that isn't a whole number of
+    // lovelace, is never guessed at, and nothing goes to WebAssembly. Core refuses a 0 refund too, in other words.
+    const t = await unlocked();
+    rich(t);
+    for (const deposit of [null, "0", "", "-500000000", "500.5", "abc"]) {
+      t.koios.dreps.set(OWN, registered({ deposit }));
+      await expect(t.staking.build("preprod", { kind: "drep-retire" }), String(deposit)).rejects.toThrow(
+        "The server didn't say this DRep's deposit, so its retirement can't be built. Try again later.",
+      );
+      expect(await t.session.get(SESSION_STAKE), String(deposit)).toBeUndefined();
+    }
+    // Said, it retires.
+    t.koios.dreps.set(OWN, registered({ deposit: "500000000" }));
+    expect((await t.staking.build("preprod", { kind: "drep-retire" })).refund).toBe("500000000");
+  });
+
   it("says a retirement moves the account's own vote from the build's own read, as its transaction does", async () => {
     const t = await unlocked();
     rich(t);

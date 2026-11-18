@@ -223,6 +223,21 @@ describe("the public Mix form's cap counts only the ADA its chain spends (1.6.0'
     expect(held(publicMixAda(account))).toBe(1);
     expect(held("63000000")).toBe(4);
   });
+
+  it("counts no UTxO the chain's evaluator refuses, though a payment takes it: a reference script Koios gives the bytes of, or a datum too deep to read (chunk 51, gap-g2#3)", () => {
+    // WebAssembly's pick (chain_from_account_at) leaves out every UTxO core's eval::refusal refuses: the form counted
+    // a stranger's, and Review then refused the count its stepper offered.
+    const refused = [
+      ...account,
+      utxo("40000000", { txHash: "b1".repeat(32), unmixable: true }),
+      utxo("3000000", { txHash: "b2".repeat(32), unmixable: true, tokens: [{ ...MIN, quantity: "900000000", fingerprint: "asset1min", decimals: 6 }] }),
+    ];
+    const MIN_BOX = { ...MIN, quantity: "100000000" };
+    expect(publicMixAda(refused)).toBe("25000000");
+    for (const boxes of [1, 5, 9]) expect(publicMixAda(refused, MIN_BOX, boxes), `${boxes}`).toBe(publicMixAda(account, MIN_BOX, boxes));
+    const { side } = publicSideOf({ lovelace: "71000000", tokens: [] }, refused);
+    expect(side?.lovelace).toBe("25000000");
+  });
 });
 
 describe("the public Mix form's cap in a token pool counts what its chain picks, count by count (1.6.0's review of the fixes, R3-14)", () => {
@@ -284,6 +299,18 @@ describe("the public Mix form's cap in a token pool counts what its chain picks,
     expect(at([utxo("50000000"), utxo("1500000", { tokens: [tok("50")] })], 1).adaMost).toBe(0);
     // The classic pool, ADA alone, needs no pick: as before.
     expect(mixOffer("public", { lovelace: "25000000", tokens: [] }, undefined, ONE, BOX, 10, 1, 0n, [utxo("25000000")]).most).toBe(1);
+  });
+
+  it("offers no count on a stranger's UTxO holding the token that the chain's evaluator refuses (chunk 51, gap-g2#3)", () => {
+    const account = [utxo("9000000"), utxo("5400000", { txHash: "a1".repeat(32), tokens: [tok("300")] })];
+    // 900 of the token and 40 ₳ beside it, at a UTxO with a reference script or a datum too deep to read: never taken.
+    const refused = [...account, utxo("40000000", { txHash: "b2".repeat(32), unmixable: true, tokens: [tok("900")] })];
+    const at = (utxos: UtxoInfo[], boxes: number) =>
+      mixOffer("public", publicSideOf({ lovelace: "0", tokens: [tok("1200")] }, utxos, TOK, boxes).side, TOK, ONE_TOK, BOX_TOK, 10, boxes, 0n, utxos);
+    // The 300 make three boxes at most, which 14.4 ₳ pays (10.35 ₳).
+    expect(at(account, 1)).toMatchObject({ adaMost: 3, most: 3 });
+    expect(at(refused, 1)).toMatchObject({ adaMost: 3, most: 3 });
+    for (const boxes of [1, 3, 4]) expect(publicMixAda(refused, TOK, boxes), `${boxes}`).toBe(publicMixAda(account, TOK, boxes));
   });
 });
 
