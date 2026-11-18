@@ -126,6 +126,10 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     // reference-script fee, and the script may be deployed there on purpose:
     // never spend one of the address's here.
     all_utxos.retain(|utxo| utxo.reference_script.is_none());
+    // Anyone can pay the address too: what would push a token's total past
+    // what one output holds, with the extracted UTxO's, stays out of the
+    // selection (chunk 51).
+    let (all_utxos, _) = utxos::fitting(&all_utxos, &empty_utxo_tokens, |_| false)?;
     let usable_utxos: Vec<UtxoResponse> =
         utxos::select(&params, all_utxos, minimum_lovelace, Assets::new())?;
     if usable_utxos.is_empty() {

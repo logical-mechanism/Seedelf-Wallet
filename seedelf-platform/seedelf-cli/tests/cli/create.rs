@@ -187,3 +187,28 @@ async fn create_refuses_without_a_collateral() {
         "{refused}"
     );
 }
+
+/// Anyone can pay the paying address too: three UTxOs of 2^63 − 1 of one
+/// token there stopped `create` whenever its selection reached all three
+/// (chunk 51). It leaves the third out and pays from the rest.
+#[tokio::test]
+#[serial]
+async fn create_goes_when_a_strangers_tokens_at_the_address_total_past_a_u64() {
+    let bought = ("bb".repeat(28), hex::encode("BOUGHT"), 1);
+    let payer = external_address_bech32();
+    let mut utxos = vec![address_utxo(&payer, 1, 5_000_000, &[])];
+    utxos.extend((2..=4).map(|n| address_utxo(&payer, n, 1_300_000, &[junk()])));
+    utxos.push(address_utxo(
+        &payer,
+        5,
+        1_250_000,
+        std::slice::from_ref(&bought),
+    ));
+    let tx = create_with(utxos, None).await;
+    let mut inputs = tx.inputs.clone();
+    inputs.sort();
+    assert_eq!(
+        inputs,
+        vec![(tx_hash(2), 0), (tx_hash(3), 0), (tx_hash(5), 0)]
+    );
+}

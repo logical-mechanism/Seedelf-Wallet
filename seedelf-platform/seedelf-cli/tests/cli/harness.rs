@@ -223,6 +223,31 @@ pub fn with_reference_script(mut utxo: UtxoResponse, size: usize) -> UtxoRespons
     utxo
 }
 
+/// A stranger's junk token, 2^63 − 1 of it: the most one mint makes. Anyone can
+/// send it to any address, or to the contract under a re-randomization of
+/// someone's register, and three UTxOs of it total more than a u64, and so one
+/// output, can hold (chunk 51, r4#1 and r4#2).
+pub fn junk() -> TokenAmount {
+    ("cc".repeat(28), hex::encode("JUNK"), i64::MAX as u64)
+}
+
+/// `count` distinct tokens, one of each, named by a single byte, 200 to a
+/// policy, the policies numbered from `first`: a pile of tokens, which takes
+/// more bytes and more ADA in the outputs a payment splits it into (20 tokens
+/// to an output) than in the one UTxO it came in.
+pub fn pile(first: u8, count: usize) -> Vec<TokenAmount> {
+    (0..count)
+        .map(|i| {
+            let policy = first + (i / 200) as u8;
+            (
+                format!("{policy:02x}").repeat(28),
+                format!("{:02x}", i % 200),
+                1,
+            )
+        })
+        .collect()
+}
+
 // ----------------------------------------------------------------------------
 // fixture ledger — resolves the values behind a transaction's inputs
 // ----------------------------------------------------------------------------

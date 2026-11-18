@@ -145,7 +145,7 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 | `util extract` | Sends a UTxO at the contract that has no datum to an address. A payment sent to the contract without a datum has no register, so the contract lets anyone spend it. The address pays the fee and needs a 5 ADA collateral UTxO, and its browser wallet signs. | `-u, --utxo`, `-a, --address` |
 | `util migrate` | For moving funds to a newer contract variant. Variant 1 is the only one, so it does nothing yet. | `--from-variant` |
 | `external balance` | The external wallet's address and balance (see below). | |
-| `external sweep` | Sends everything at the external wallet into your balance. | |
+| `external sweep` | Sends what the external wallet holds into your balance, as much as one transaction takes, and says what it left. | |
 
 - **Amounts:** `--lovelace` (`--lovelaces` for `transfer`) is in lovelace: 1 ADA is 1,000,000. `--asset` is `<policy_id>.<token_name>=<amount>`, both in hex. For `fund` and `sweep`, repeat it, or comma-separate several tokens in one; `transfer` takes one per Seedelf, below.
 - **Several Seedelfs at once:** `transfer` takes `-s` once for each Seedelf, `-l` once for each, in the same order, and `--asset` once for each if any has tokens, comma-separating that Seedelf's tokens (`--asset ""` for one that has none).
@@ -191,7 +191,7 @@ Both flows keep the dApp apart from your Seedelf. The new wallet is funded from 
 - **Spends from your balance need giveme.my.** While it doesn't answer, none can go out.
 - **Change can tie spends together.** A spend's change comes back to you, so the spend that later uses it can be assumed to be yours too.
 - **The CLI trusts Koios.** It runs no node. Koios can't spend your funds, since a spend needs your key's proof, but a Koios that lied could hide UTxOs, or report a wrong register for a Seedelf or a wrong address for an ADA Handle, and so redirect a payment.
-- **A spend draws on at most 20 of your UTxOs,** the first 20 the CLI finds that hold no Seedelf. `sweep --all` sends what those hold; run it again for the rest.
+- **A spend draws on at most 20 of your UTxOs,** the first 20 the CLI finds that hold no Seedelf. `sweep --all` sends the first 20 it can spend together, or as many of them as one transaction holds, and says what it left; run it again for the rest. `external sweep` does the same, with no limit of 20.
 
 The root README's [Wallet Limitations](https://github.com/logical-mechanism/Seedelf-Wallet#wallet-limitations) has the known attacks in full.
 

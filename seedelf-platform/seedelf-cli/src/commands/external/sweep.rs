@@ -1,10 +1,11 @@
-use crate::commands::fee;
+use crate::commands::{fee, rows};
 use crate::setup;
 use anyhow::Result;
 use blstrs::Scalar;
 use colored::Colorize;
 use pallas_addresses::Address;
 use pallas_txbuilder::BuiltTransaction;
+use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, get_config};
 use seedelf_core::{address, build, utxos};
 use seedelf_crypto::convert;
@@ -37,13 +38,23 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
             .try_into()
             .map_err(|_| anyhow::anyhow!("The dApp key hash must be 28 bytes"))?,
     );
-    let (tx, tx_fee): (BuiltTransaction, u64) = build::external_sweep(
-        &params,
-        &all_utxos,
-        &Register::create(scalar)?,
-        &wallet_addr,
-        signer,
+    let owner: Register = Register::create(scalar)?;
+
+    // Anyone can pay this address, so the sweep takes what one transaction
+    // can, and the rest stays for the next (chunk 51, r4#1).
+    let deposit = |tokens: &Assets| build::minimum_deposit(&params, tokens);
+    let mut stayed = Vec::new();
+    let rows = rows::sweepable(
+        rows::by_worth(all_utxos, &deposit)?,
+        0,
+        usize::MAX,
+        &mut stayed,
     )?;
+    let swept = rows::most_that_fit(rows, &deposit, &mut stayed, |rows| {
+        build::external_sweep(&params, rows, &owner, &wallet_addr, signer)
+    });
+    rows::print_stayed(&stayed, "external sweep");
+    let (tx, tx_fee): (BuiltTransaction, u64) = swept?;
     println!(
         "{} {}",
         "\nTx Fee:".bright_blue(),
