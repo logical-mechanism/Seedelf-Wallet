@@ -66,7 +66,7 @@ import { heldSent } from "./sent-txs";
 import { outpoint, reservedSet, spentSet } from "./spent";
 import { knownPool } from "./staking";
 import type { Area } from "./storage";
-import { SESSION_BALANCES_PREFIX, type Wallet } from "./wallet";
+import { SESSION_BALANCES_PREFIX, type PhrasePin, type Wallet } from "./wallet";
 import { isTrap } from "./wasm";
 
 /** chrome.storage.session: the Cardano account's stake address and addresses, from the last balance reading. */
@@ -302,9 +302,9 @@ export class ActivityService {
   /**
    * Notes a transaction this wallet just submitted, from the summary the user
    * reviewed. Its change and deposits, when the scan finds them, aren't
-   * counted again as arrivals.
+   * counted again as arrivals. `pin`: the phrase it was sent under (update).
    */
-  sent(network: NetworkName, pending: PendingTx, summary: object): Promise<void> {
+  sent(network: NetworkName, pending: PendingTx, summary: object, pin?: PhrasePin): Promise<void> {
     // A payment or a staking change on the Cardano account isn't Seedelf's: its Activity comes from Koios.
     if (!SEEDELF_KINDS.has(pending.kind)) return Promise.resolve();
     const s = summary as Record<string, any>;
@@ -373,7 +373,7 @@ export class ActivityService {
       const o = back.length && origin ? merged([origin, ...back]) : origin;
       if (o) entry.origin = o;
       return { ...h, entries: [...h.entries.filter((e) => e.txHash !== entry.txHash), entry] };
-    });
+    }, pin);
   }
 
   /**
@@ -422,9 +422,10 @@ export class ActivityService {
    * Notes this wallet's contract UTxOs it hasn't seen before as arrivals, one
    * entry per transaction. Its own transactions' change isn't an arrival, and
    * a UTxO holding a seedelf is a name, not a payment. What the history's
-   * first reading finds was there before it: its origin is Unknown.
+   * first reading finds was there before it: its origin is Unknown. `pin`:
+   * the phrase the reading was made under (update).
    */
-  arrived(network: NetworkName, owned: KoiosUtxo[]): Promise<void> {
+  arrived(network: NetworkName, owned: KoiosUtxo[], pin?: PhrasePin): Promise<void> {
     const { contract = CONTRACT_V1 } = this.deps;
     return this.update(network, (h) => {
       const seen = new Set(h.seen);
@@ -467,7 +468,7 @@ export class ActivityService {
         entries: all.filter((e) => holding.has(e.txHash) || room-- > 0),
         seen: [...h.seen, ...fresh.map(outpoint)].slice(-KEEP_SEEN),
       };
-    });
+    }, pin);
   }
 
   /** The Cardano account's activity: the first page, what's newer since, or (`more`) the next page. */
@@ -624,9 +625,16 @@ export class ActivityService {
     return entries;
   }
 
-  private update(network: NetworkName, change: (h: History) => History | undefined): Promise<void> {
+  /**
+   * `pin`: the phrase the work that writes it began under, taken before its network wait (wallet.ts phrasePin), checked
+   * in this turn before the history is read and again before it's written. The wallet removed and another phrase
+   * restored meanwhile, it throws as a lock does and writes nothing: one phrase's entry, its amount, its hash and the
+   * accounts it ties, was sealed into the next phrase's history for good (chunk 51, r2time#2, e4a#1's class).
+   */
+  private update(network: NetworkName, change: (h: History) => History | undefined, pin?: PhrasePin): Promise<void> {
     const run = this.queue.then(async () => {
       const name = `history.${network}` as const;
+      if (pin) await this.deps.wallet.withKeys(pin);
       // One this device starts now: its first reading notes what was there before it.
       const history = (await this.deps.store.get<History>(name)) ?? {
         entries: [],
@@ -635,7 +643,9 @@ export class ActivityService {
         startedAt: (this.deps.now ?? Date.now)(),
       };
       const next = change(history);
-      if (next) await this.deps.store.set(name, next);
+      if (!next) return;
+      if (pin) await this.deps.wallet.withKeys(pin);
+      await this.deps.store.set(name, next);
     });
     this.queue = run.catch(() => undefined);
     return run;

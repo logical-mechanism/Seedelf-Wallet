@@ -25,6 +25,7 @@ import {
   ORDER,
   ordered,
   orderRow,
+  pastSpent,
   signing,
   started,
   SWAP_TX,
@@ -86,7 +87,7 @@ describe("a swap's copy tx_status doesn't show (independent review L15)", () => 
     t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
     const builds = t.minswap.calls.filter((c) => c.path === "build-tx").length;
     await busy(t, 16 * 60_000);
-    const view = await sessions.advance("preprod", 0, true);
+    const view = await pastSpent(t, sessions);
     expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(builds);
     // The fill's proceeds come back instead.
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
@@ -124,7 +125,7 @@ describe("a swap's copy tx_status doesn't show (independent review L15)", () => 
     // utxo_info catches up: the order is spent, and the fill comes back.
     t.koios.addedToAccounts.push(atContract(SWAP_TX, 0));
     t.koios.spent.add(`${SWAP_TX}#0`);
-    view = await sessions.advance("preprod", 0, true);
+    view = await pastSpent(t, sessions);
     expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(builds);
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
@@ -427,7 +428,7 @@ describe("a cancel Koios took that the batcher's fill beat (release review C03)"
 
     // Unseen for 15 minutes, it's given up: what it spent is free again, and everything comes back in one return.
     await busy(t, 16 * 60_000);
-    let view = await sessions.advance("preprod", 0, true);
+    let view = await pastSpent(t, sessions);
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
     const back = t.koios.submitted.at(-1)!;
     expect(bodyOutpoints(back, 0)!.sort()).toEqual([`${SWAP_TX}#1`, `${"0c".repeat(32)}#1`, `${"aa".repeat(32)}#0`].sort());
@@ -768,7 +769,7 @@ describe("a cancel built again after it went unseen (release review C32)", () =>
     t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "902083681"]]));
     // Unseen for 15 minutes from the resend: given up, what it spends is free again, and it all comes back in one return.
     await busy(t, 16 * 60_000);
-    view = await restarted.advance("preprod", 0, true);
+    view = await pastSpent(t, restarted);
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
     expect(bodyOutpoints(t.koios.submitted.at(-1)!, 0)!.sort()).toEqual([`${SWAP_TX}#1`, `${"0c".repeat(32)}#1`, `${"aa".repeat(32)}#0`].sort());
   }, 30_000);
@@ -884,7 +885,11 @@ describe("a swap's order found spent (independent review M18)", () => {
     );
     for (const o of orders) t.koios.spent.add(o);
     t.koios.addedToAccounts.push(...arrived);
-    // `late` lands as the orders are looked up: after the account was read.
+    // The run that first reads every order spent only notes it: the next one tells the outcome, and builds the return,
+    // from its own listings (chunk 51, r2still#2).
+    await sessions.advance("preprod", 0, true);
+    expect((await bookOf(t)).sessions[0]!.auto).toMatchObject({ spentSeen: t.clock.now });
+    // `late` lands as that run looks the orders up: after the account was read.
     const real = t.koios.fetch;
     t.koios.fetch = async (url, init) => {
       if (url.endsWith("/utxo_info")) t.koios.addedToAccounts.push(...late.splice(0));

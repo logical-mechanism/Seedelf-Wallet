@@ -168,18 +168,22 @@ export interface SpendingAccount {
  * and the protocol parameters. The stake key is read too for `stake`, or
  * when the user spends rewards. `params`: the protocol parameters, when the
  * caller read them already for the same review (a pool's start, 1.6.0's
- * release review, 318-worker#3).
+ * release review, 318-worker#3). `account`: that public account's, whichever
+ * is active (Bring one back paid from the account it was pressed on; chunk
+ * 51, r2time#1).
  */
 export async function readAccount(
   deps: AccountDeps & { coins: CoinControlService; preferences?: PreferencesService },
   network: NetworkName,
-  { stake: readStake = false, params: known }: { stake?: boolean; params?: Record<string, unknown> } = {},
+  { stake: readStake = false, params: known, account }: { stake?: boolean; params?: Record<string, unknown>; account?: number } = {},
 ): Promise<SpendingAccount> {
   const { wasm, wallet } = deps;
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const [spent, stakeAddress, preferences, reserved, sent] = await Promise.all([
     wallet.withKeys(() => spentSet(deps.session)),
-    wallet.withKeys(({ cardano }) => cardano.stakeAddress(net)),
+    account === undefined
+      ? wallet.withKeys(({ cardano }) => cardano.stakeAddress(net))
+      : wallet.withAccount(account, ({ cardano }) => cardano.stakeAddress(net)),
     deps.preferences?.get(),
     wallet.withKeys(() => reservedSet(deps.session, network, { sending: true })),
     wallet.withKeys(() => heldSent(deps.session, network)),
@@ -187,11 +191,11 @@ export async function readAccount(
   const spendRewards = preferences?.spendRewards ?? false;
   const koios = deps.koios(network);
   const [{ utxos }, params, stake] = await Promise.all([
-    readAccountUtxos(deps, network, spent),
+    readAccountUtxos(deps, network, spent, account === undefined ? {} : { account }),
     known ?? koios.epochParams(),
     readStake || spendRewards ? koios.accountInfo(stakeAddress) : undefined,
   ]);
-  const { spendable, collateral } = await deps.coins.account(network, utxos);
+  const { spendable, collateral } = await deps.coins.account(network, utxos, account);
   // Not the rewards one of the wallet's own transactions on its way withdraws: Koios reports them until its block,
   // its change holds them, and only one withdrawal of them can land. Home's forms leave them out too (balances.ts,
   // blind test §9.1).

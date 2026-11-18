@@ -275,9 +275,11 @@ describe("a funding's waiting part, asked before it goes (1.6.0's review: stop-d
   it("a Send's parts are asked nothing of the sessions: neither their queue nor their book (the merged fixes' review)", async () => {
     const t = await spread(1, "1000000");
     const sessions = signing(t);
-    // The queue busy with a long step, and a book that won't open.
+    // The queue busy with a long step, and a book that won't open. The step is made first: a turn begins once its
+    // phrase is read (serial's `turnPin`; chunk 51, r2time#2), after this test's look.
     let release!: () => void;
-    void (sessions as unknown as { serial(task: () => Promise<void>): Promise<void> }).serial(() => new Promise<void>((r) => (release = r)));
+    const step = new Promise<void>((r) => (release = r));
+    void (sessions as unknown as { serial(task: () => Promise<void>): Promise<void> }).serial(() => step);
     const get = t.store.get.bind(t.store);
     t.store.get = (async (key: Parameters<typeof get>[0]) => {
       if (key.startsWith("sessions.")) throw new Error("won't open");

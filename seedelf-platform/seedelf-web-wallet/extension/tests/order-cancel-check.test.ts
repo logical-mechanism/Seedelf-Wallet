@@ -23,7 +23,7 @@ import { bech32, bech32Bytes } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, SESSION_ADDRESS } from "./fixtures/swap-tx";
 import { busyFor, loadTestWasm, sessionSwap } from "./fakes";
-import { ASK, atSession, ordered, signing, SWAP_TX, unlocked, type T } from "./swap-session";
+import { ASK, atSession, ordered, pastSpent, signing, SWAP_TX, unlocked, type T } from "./swap-session";
 
 type Network = "preprod" | "mainnet";
 
@@ -488,7 +488,7 @@ describe("a SundaeSwap V4 order on mainnet: Stop, the restore scan, and its fill
     // A batcher fills it: the order is spent, and the token comes to the session's address with no datum.
     t.koios.spent.add(`${SWAP}#0`);
     t.koios.addedToAccounts.push(paidIn("f1".repeat(32), "2000000", [[ASK.tokenOut, "906594100"]]));
-    const view = await sessions.advance("mainnet", 0, true);
+    const view = await pastSpent(t, sessions, "mainnet");
     expect(view.auto!.paused).toBeUndefined();
     expect(view.auto!.filled).toBe(true);
     expect(view.auto!.refunded).toBeFalsy();

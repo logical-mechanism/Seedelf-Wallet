@@ -10,6 +10,7 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { SESSION_SPENT, SPENT_KEEP_MS, spentSet } from "../src/background/spent";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, sessionSwap, testBalances, vectors } from "./fakes";
+import { pastSpent } from "./swap-session";
 
 const PASSWORD = "correct horse battery";
 const MIN = "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e";
@@ -84,7 +85,7 @@ describe("a session's return, held as spent on the wallet's own clock (1.6.0's r
       const t = await unlocked();
       await filledSwap(t);
       const undo = answer === "maybe sent" ? unanswered(t) : () => undefined;
-      await t.sessions.advance("preprod", 0, true);
+      await pastSpent(t, t.sessions);
       undo();
       const spends = txInputs(t.koios.submitted.at(-1)!);
       expect(spends, answer).toEqual(expect.arrayContaining([`${FILL}#0`, `${SWAP}#1`, `${OUT}#1`]));
@@ -102,7 +103,7 @@ describe("a session's return, held as spent on the wallet's own clock (1.6.0's r
     const t = await unlocked();
     await filledSwap(t);
     const undo = unanswered(t);
-    await t.sessions.advance("preprod", 0, true);
+    await pastSpent(t, t.sessions);
     undo();
     // It never lands: Koios still lists what it spends, which the wallet holds as spent meanwhile.
     t.koios.missing.add(txIdOf(t.koios.submitted.at(-1)!));

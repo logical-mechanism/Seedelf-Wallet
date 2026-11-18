@@ -26,7 +26,7 @@ import tokenList from "../src/tokens/list.json";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { koiosPreprod, loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
-import { orderRow, SWAP_TX } from "./swap-session";
+import { orderRow, pastSpent, SWAP_TX } from "./swap-session";
 import { ADA, ADA_POOL, ADA_ROWS, adaStrangers } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
@@ -367,7 +367,7 @@ describe("1.8.0's release review, critic#4: a swap approved on 1.7.2 comes back 
     // What its approval priced for its proceeds and its margin (priced's `spare`), as 1.7.2 did: five boxes, not nine.
     const approved = await pricedOn172(lj, 62_000_000n, 1);
     expect(approved.boxes).toBe(5);
-    const view = await sessions.advance("preprod", 0, true);
+    const view = await pastSpent(t, sessions);
     expect(view.auto).toMatchObject({ filled: true });
     const chain = (await sealed(t)).chains.at(-1)!;
     expect(chain).toMatchObject({ session: 0, boxes: approved.boxes });
@@ -385,7 +385,7 @@ describe("1.8.0's release review, critic#4: a swap approved on 1.7.2 comes back 
     t.koios.addedToAccounts.push(...adaStrangers(40));
     const approved = await pricedOn172(lj, 40_000_000n, 2);
     expect(approved.boxes).toBe(2);
-    const view = await sessions.advance("preprod", 0, true);
+    const view = await pastSpent(t, sessions);
     expect(view.auto).toMatchObject({ refunded: true });
     const chain = (await sealed(t)).chains.at(-1)!;
     expect(chain).toMatchObject({ session: 0, boxes: approved.boxes });

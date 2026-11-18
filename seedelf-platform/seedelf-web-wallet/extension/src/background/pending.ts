@@ -516,6 +516,15 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
   const ahead = await writeAhead(deps, s);
   // Sent before: Send's own copy says so, or the watch has it already, maybe sent.
   const again = s.again || ahead.again;
+  // The phrase it's sent under, pinned before Koios is asked: the watch's take and its history go into that phrase's
+  // alone. The wallet removed and another phrase restored while Koios answered, the payment went into the next phrase's
+  // watch and history (chunk 51, r2time#2, e4a#1's class). Locked by now, nothing is pinned: the take needs the keys, as
+  // before.
+  const pin = phrasePin();
+  const pinned = await deps.wallet.withKeys(pin).then(
+    () => pin,
+    () => undefined,
+  );
   let submitted: string | undefined;
   let confirmations: number | null = null;
   try {
@@ -567,6 +576,8 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
     triedAt: ahead.record.triedAt ?? ahead.record.submittedAt,
   };
   try {
+    // Under another phrase by now, nothing of it is taken or written: it throws as a lock does (`pinned`).
+    if (pinned) await deps.wallet.withKeys(pinned);
     await take(deps, watched, async () => {
       await rememberSpent(session, s.network, bytes);
       await session.remove(s.key);
@@ -578,7 +589,7 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
     // (chunk 23's second review, fix round).
     if (e instanceof WalletLocked) throw e;
   }
-  await deps.activity?.sent(s.network, pending, s.summary).catch(() => undefined);
+  await deps.activity?.sent(s.network, pending, s.summary, pinned).catch(() => undefined);
   return pending;
 }
 

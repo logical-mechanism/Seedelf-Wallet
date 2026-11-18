@@ -33,7 +33,7 @@ import { lovejoinOf } from "./chain-fixtures";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, ORDER_SCRIPT, recordedSwap, SENDER, SESSION_ADDRESS, swapTx } from "./fixtures/swap-tx";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
-import { orderRow } from "./swap-session";
+import { orderRow, pastSpent } from "./swap-session";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -797,6 +797,11 @@ describe("a swap that runs itself", () => {
     t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
     t.clock.now += 15_000;
     view = await sessions.advance("preprod", 0);
+    // That run notes the order spent; the next one tells the fill from its own listings and brings it back (chunk 51,
+    // r2still#2).
+    expect(view.auto).toMatchObject({ step: "filling", filled: false });
+    t.clock.now += 15_000;
+    view = await sessions.advance("preprod", 0);
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
     expect(view.holding).toMatchObject({ tokens: [{ assetName: "4d494e", quantity: "906594100" }], utxos: 2 });
     expect(t.koios.submitted).toHaveLength(3);
@@ -829,9 +834,12 @@ describe("a swap that runs itself", () => {
     // Asked about the order itself: the swap's output 0, where the batcher finds it.
     expect(t.koios.calls.at(-1)).toMatchObject({ path: "utxo_info", body: { _utxo_refs: [`${SWAP_TX}#0`] } });
 
-    // Filled: the order is spent, and its proceeds come back with the rest.
+    // Filled: the order is spent, and its proceeds come back with the rest, a run after the one that notes it spent
+    // (chunk 51, r2still#2).
     t.koios.spent.add(`${SWAP_TX}#0`);
     t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
+    t.clock.now += 15_000;
+    await sessions.advance("preprod", 0);
     t.clock.now += 15_000;
     view = await sessions.advance("preprod", 0);
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
@@ -1043,7 +1051,7 @@ describe("a swap that runs itself", () => {
         // Filled: its proceeds come back, with no second order.
         t.koios.spent.add(`${SWAP_TX}#0`);
         t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
-        view = await sessions.advance("preprod", 0, true);
+        view = await pastSpent(t, sessions);
         expect(view.auto).toMatchObject({ step: "returning", filled: true });
         expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(builds);
       }
@@ -1120,7 +1128,7 @@ describe("a swap that runs itself", () => {
     t.koios.missing.delete(SWAP_TX);
     landed(t, SWAP_TX);
     fill(t, SWAP_TX);
-    view = await sessions.advance("preprod", 0, true);
+    view = await pastSpent(t, sessions);
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
     expect(view.txs.map((x) => [x.kind, x.txHash])).toEqual([
       ["out", expect.any(String)],
@@ -1146,7 +1154,7 @@ describe("a swap that runs itself", () => {
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(later);
     landed(t, later);
     fill(t, later);
-    view = await sessions.advance("preprod", 0, true);
+    view = await pastSpent(t, sessions);
     expect(view.auto).toMatchObject({ step: "returning", filled: true });
     expect(view.txs.map((x) => [x.kind, x.txHash])).toEqual([
       ["out", expect.any(String)],

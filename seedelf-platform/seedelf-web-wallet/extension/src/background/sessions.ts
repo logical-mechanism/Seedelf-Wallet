@@ -194,7 +194,7 @@ import {
   type SpendWhat,
 } from "./script-spend";
 import { forgetSpent, outpoint, readFresh, rememberSpent, reservations, reservedSet, spentSet, unspent } from "./spent";
-import { SESSION_PRIVATE_STALE_PREFIX, WalletLocked, WASM_BROKEN, type Keys } from "./wallet";
+import { phrasePin, SESSION_PRIVATE_STALE_PREFIX, WalletLocked, WASM_BROKEN, type Keys, type PhrasePin } from "./wallet";
 import { isTrap } from "./wasm";
 
 /** chrome.storage.session: a session's funding payment, built and waiting for Send. */
@@ -423,6 +423,11 @@ interface AutoRecord {
   partly?: boolean;
   /** When the runner saw the order refunded: nothing of it filled (independent review M18). */
   refunded?: number;
+  /**
+   * When a run first read every order of the swap spent, its outcome not told yet: it's told, and the first return
+   * built, by the next run, from that run's own listings of the account, never from this one's (chunk 51, r2still#2).
+   */
+  spentSeen?: number;
   /** When the runner found the funding never reached the chain. */
   failed?: number;
   /**
@@ -1516,6 +1521,8 @@ function fundingsListed(s: SessionRecord, listed: KoiosUtxo[]): Set<string> {
 export class SessionService {
   /** One step at a time, the runner's and the user's alike. */
   private queue: Promise<unknown> = Promise.resolve();
+  /** The phrase the queue's turn running now began under (serial): every write of the book checks it (save). */
+  private turnPin: PhrasePin | undefined;
   /** When the runner last read each session's chain, by `network:index`. */
   private readAt = new Map<string, number>();
   /** What each session's account held then. */
@@ -3971,6 +3978,17 @@ export class SessionService {
         return;
       }
       if (!auto.filled && !auto.refunded) {
+        // Every order read spent for the first time: nothing is told apart, nor brought back, in this run. A split
+        // route's legs are paid in different blocks, and both of a run's listings may come from a backend behind the
+        // one utxo_info's answer came from: a leg they both missed came back alone after the first return, directly,
+        // and its outcome and fills were told without it (chunk 51, r2still#2, gap-g4#1's class). The next run's
+        // listings, READ_EVERY_MS on, tell it and build the first return.
+        if (auto.spentSeen === undefined) {
+          await this.update(network, s.index, (r) => {
+            r.auto!.spentSeen = now();
+          });
+          return;
+        }
         // A fill or a refund, told apart by what arrived (independent review M18), read again now that every
         // order is known spent: a split route's legs are paid in different blocks, and one may have come since
         // the reading above. What either reading holds counts.
@@ -3985,6 +4003,7 @@ export class SessionService {
           else r.auto!.filled = now();
           if (outcome === "partly") r.auto!.partly = true;
           if (fills.length) r.auto!.fills = fills;
+          delete r.auto!.spentSeen;
         });
         // And the return takes it too: a leg paid between the two readings came back alone in a later return, after
         // this one's chain put the collateral in its pool, so directly, though its approval sent it through Lovejoin
@@ -4700,13 +4719,18 @@ export class SessionService {
     // Only what others paid its account, once a return of its own went: no transaction of the session's made any of it,
     // nor its order's fill (a stranger's, its address on chain since its funding). Sent, it leaves the session's word on
     // how its own came back as it was (KeptBack `strangers`; chunk 51, e2b#2). Never a site's, whose own proceeds a
-    // contract's batcher may pay it.
+    // contract's batcher may pay it. Nor what reached the chain before that return went, though no listing held it
+    // then, so no fill names it: a split route's leg a listing behind missed is the swap's own, and its page says how it
+    // came back (chunk 51, r2still#2). By the block's time against the device's: what landed within a second of the
+    // return reads as before it.
     const fills = new Set(record?.auto?.fills ?? []);
+    const firstBack = record?.txs.find((t) => t.kind === "back" && !t.unsent && !t.replaced);
+    const landedAfter = (u: KoiosUtxo) => typeof u.block_time !== "number" || u.block_time * 1000 > firstBack!.at;
     const apart =
       record &&
       !record.site &&
-      record.txs.some((t) => t.kind === "back" && !t.unsent && !t.replaced) &&
-      rows.every((u) => !own.includes(u.tx_hash) && !fills.has(u.tx_hash))
+      firstBack &&
+      rows.every((u) => !own.includes(u.tx_hash) && !fills.has(u.tx_hash) && landedAfter(u))
         ? { strangers: true as const }
         : {};
     const lovejoin = this.deps.lovejoin;
@@ -5251,7 +5275,7 @@ export class SessionService {
     await this.deps.lovejoin?.restBack(network, built.index).catch((e: unknown) => {
       if (isTrap(e)) throw e;
     });
-    const written = await (this.deps.activity?.sent(network, pending, built) ?? Promise.resolve()).then(
+    const written = await (this.deps.activity?.sent(network, pending, built, this.turnPin) ?? Promise.resolve()).then(
       () => true,
       () => false,
     );
@@ -5284,7 +5308,7 @@ export class SessionService {
       if (!t.confirmed || !t.summary) continue;
       const pending: PendingTx = { kind: "session-back", network, txHash: t.txHash, submittedAt: t.at, confirmations: null };
       try {
-        await this.deps.activity?.sent(network, pending, t.summary);
+        await this.deps.activity?.sent(network, pending, t.summary, this.turnPin);
         written.add(t.txHash);
       } catch {
         // Tried again at the next reading.
@@ -5411,7 +5435,8 @@ export class SessionService {
         : {}),
     };
     try {
-      await (lovejoin ? lovejoin.recordChain(network, record, start) : start());
+      // Into the phrase this turn began under alone, as the session's book is (turnPin; chunk 51, r2time#2).
+      await (lovejoin ? lovejoin.recordChain(network, record, start, this.turnPin) : start());
     } catch (e) {
       // It never started: the session says what it said before, not that this chain is on its way.
       await this.update(network, built.index, (s) => {
@@ -5517,7 +5542,7 @@ export class SessionService {
       submittedAt: this.deps.now(),
       confirmations: null,
     };
-    const written = await (this.deps.activity?.sent(network, last, pending.summary) ?? Promise.resolve()).then(
+    const written = await (this.deps.activity?.sent(network, last, pending.summary, this.turnPin) ?? Promise.resolve()).then(
       () => true,
       () => false,
     );
@@ -6419,7 +6444,9 @@ export class SessionService {
     return (await this.deps.store.get<Book>(`sessions.${network}`)) ?? { next: 0, sessions: [] };
   }
 
-  private save(network: NetworkName, book: Book): Promise<void> {
+  private async save(network: NetworkName, book: Book): Promise<void> {
+    // In a turn of the queue, into the phrase that turn began under alone (serial's `turnPin`; chunk 51, r2time#2).
+    if (this.turnPin) await this.deps.wallet.withKeys(this.turnPin);
     return this.deps.store.set(`sessions.${network}`, book);
   }
 
@@ -6473,8 +6500,27 @@ export class SessionService {
     });
   }
 
+  /**
+   * Runs `task` after every earlier one, pinned to the phrase it begins under (wallet.ts phrasePin, `turnPin`): what it
+   * writes once Koios, giveme.my or Minswap answered goes into that phrase's book and history alone. The wallet removed
+   * and another phrase restored while it waited, one phrase's sessions book, or a return's landing, was sealed under the
+   * next phrase's key (chunk 51, r2time#2, e4a#1's class): now each write throws as a lock does. One that begins locked
+   * pins nothing, and its writes need the keys as before.
+   */
   private serial<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(task, task);
+    const pinned = async () => {
+      const pin = phrasePin();
+      this.turnPin = await this.deps.wallet.withKeys(pin).then(
+        () => pin,
+        () => undefined,
+      );
+      try {
+        return await task();
+      } finally {
+        this.turnPin = undefined;
+      }
+    };
+    const run = this.queue.then(pinned, pinned);
     this.queue = run.catch(() => undefined);
     return run;
   }

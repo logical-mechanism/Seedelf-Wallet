@@ -966,6 +966,136 @@ describe("a split route's leg paid between the runner's two listings of the acco
   });
 });
 
+// The same leg where both of the run's listings miss it, Koios's gateway answering them from a backend a block behind
+// the one that answers utxo_info, which reads every order spent: the first return went from those listings, its chain
+// put the 5 ₳ collateral in the pool, and the leg came back alone after it, directly. And as e2b#2's strangers rule read
+// it, that return was a stranger's: the leg's transaction is neither the session's own nor among the fills, told from
+// the listings that missed it, so the swap's page never said Lovejoin was left out of it. Now the run that first reads
+// every order spent only notes it (`auto.spentSeen`), and the next tells the outcome, the fills and the first return
+// from its own listings; and what landed before the first return went is never a stranger's, whatever no listing held
+// then (chunk 51, r2still#2).
+describe("a split route's leg that both of the runner's listings miss (chunk 51, r2still#2)", { timeout: 600_000 }, () => {
+  type Book = { closedAt?: number; lovejoinSkipped?: string; auto?: { spentSeen?: number }; txs: Array<{ kind: string; txHash: string; replaced?: boolean }> };
+  /** Leg 2's fill, 20 ₳: in the block utxo_info's backend has, and the listings' backend not yet. */
+  const LATE = `${"bb".repeat(32)}#0`;
+
+  /**
+   * Session 0 sold MIN for ADA through Lovejoin, as approved, one wave deep; Minswap split it into two orders, both
+   * landed and spent, as utxo_info reads them. Its account lists the swap's change, the 5 ₳ collateral its funding paid
+   * and leg 1's fill (20 ₳), not leg 2's; the 5 ₳ pool holds 20 boxes of other people's.
+   */
+  async function split() {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const sessions = runner(t, pooled(t, [ADA_POOL]));
+    const now = t.clock.now;
+    const FUND = "01".repeat(32);
+    const orders = [`${SWAP_TX}#0`, `${SWAP_TX}#2`];
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [
+            { kind: "out", txHash: FUND, at: now, confirmed: true },
+            { kind: "swap", txHash: SWAP_TX, at: now, confirmed: true, orders, minAmountOut: "40000000" },
+          ],
+          swap: { ...ASK, tokenIn: MIN_UNIT, tokenOut: "lovelace", amount: "906594100", amountOut: "41000000", minAmountOut: "40000000" },
+          auto: {
+            approved: { minAmountOut: "40000000", fund: { lovelace: "16000000", tokens: [] } },
+            direct: false,
+            lovejoin: { depth: 1, delay: "1-6", box: "5000000" },
+          },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(
+      atSession(SWAP_TX, 1, "2000000"),
+      atSession(FUND, 1, "5000000"),
+      ...orders.map((o) => orderRow(SWAP_TX, Number(o.split("#")[1]))),
+      atSession("aa".repeat(32), 0, "20000000"),
+      ...ADA_ROWS,
+    );
+    for (const o of orders) t.koios.spent.add(o);
+    const book = async () => (await t.store.get<{ sessions: Book[] }>("sessions.preprod"))!.sessions[0]!;
+    const before = t.koios.submitted.length;
+    /** The session's first return as the runner sent it: a chain through Lovejoin, kept as it's sent, or one directly. */
+    const firstReturn = async (): Promise<Uint8Array[]> => {
+      const chain = await t.wallet.withKeys(() => t.session.get<{ txs: Array<{ txCbor: string }> }>(`${SESSION_CHAIN_PREFIX}preprod.0`));
+      if (chain) return chain.txs.map((x) => Uint8Array.from(Buffer.from(x.txCbor, "hex")));
+      return (await book()).txs.some((x) => x.kind === "back") ? t.koios.submitted.slice(before) : [];
+    };
+    /** Everything sent lands, and the runner runs on until the session closes; its last run's view. */
+    const toTheEnd = async () => {
+      t.koios.confirmations = 1;
+      for (let run = 0; run < 10 && !(await book()).closedAt; run++) {
+        for (const tx of t.koios.submitted) for (const o of txInputs(tx)) t.koios.spent.add(o);
+        await sessions.advance("preprod", 0, true);
+      }
+      return sessions.advance("preprod", 0, true);
+    };
+    /** Leg 2's fill listed at last: in a block a minute before the runner's first run. */
+    const late = () => t.koios.addedToAccounts.push({ ...atSession("bb".repeat(32), 0, "20000000"), block_time: Math.floor(now / 1000) - 60 });
+    return { t, sessions, book, firstReturn, toTheEnd, late };
+  }
+
+  it("comes back in the session's first return, through Lovejoin as approved, once the run after the one that read every order spent lists it", async () => {
+    const { t, sessions, book, firstReturn, toTheEnd, late } = await split();
+    // The run that first reads every order spent, its listings a block behind: it notes that, and sends nothing.
+    const sent = t.koios.submitted.length;
+    await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(sent);
+    expect((await book()).auto?.spentSeen).toBe(t.clock.now);
+    // The listings' backend has caught up by the next run.
+    late();
+    let first: Uint8Array[] = [];
+    for (let run = 0; run < 2 && !first.length; run++) {
+      await sessions.advance("preprod", 0, true);
+      first = await firstReturn();
+    }
+    expect(first.length).toBeGreaterThan(0);
+    await toTheEnd();
+    const s = await book();
+    expect({
+      closed: s.closedAt !== undefined,
+      // The first return takes leg 2's fill.
+      firstTakesLate: first.some((tx) => txInputs(tx).includes(LATE)),
+      // One return: the chain's, nothing after it.
+      returns: s.txs.filter((x) => x.kind === "back" && !x.replaced).length,
+      // Nothing came back saying Lovejoin was left out.
+      lovejoinSkipped: s.lovejoinSkipped,
+    }).toEqual({ closed: true, firstTakesLate: true, returns: 1, lovejoinSkipped: undefined });
+  });
+
+  it("comes back alone after it, directly, where no listing holds it until then: the swap's own, its page says Lovejoin was left out", async () => {
+    const { t, sessions, book, firstReturn, toTheEnd, late } = await split();
+    // The listings miss the leg run after run: the first return goes from what they hold.
+    let first: Uint8Array[] = [];
+    for (let run = 0; run < 3 && !first.length; run++) {
+      await sessions.advance("preprod", 0, true);
+      first = await firstReturn();
+    }
+    expect(first.length).toBeGreaterThan(0);
+    expect(first.some((tx) => txInputs(tx).includes(LATE))).toBe(false);
+    // Listed once that's sent: in a block from before it went.
+    late();
+    const view = await toTheEnd();
+    const s = await book();
+    const later = s.txs.slice(s.txs.findIndex((x) => x.kind === "back" && !x.replaced) + 1).filter((x) => !x.replaced);
+    const lateTx = t.koios.submitted.find((tx) => txInputs(tx).includes(LATE));
+    // It came back alone, directly: a return of its own after the first, no deposit or mix after the first's.
+    expect(lateTx).toBeDefined();
+    expect(later.map((x) => x.kind)).toEqual(["back"]);
+    expect(later[0]!.txHash).toBe(txIdOf(lateTx!));
+    expect(s.closedAt).toBeDefined();
+    // The swap's own money came back without Lovejoin: its page says so, and why.
+    expect(s.lovejoinSkipped).toBe(tr("sess.skip.warn.noCollateral"));
+    expect(view.lovejoinSkipped).toBe(s.lovejoinSkipped);
+  });
+});
+
 // Mix my boxes again's Send asks once more whether another such mix may spend the boxes: one may have become so since
 // its review, as one whose return found nothing to bring back does once its return is built anew (`nothingBack`
 // cleared), and the two chains would draw the same boxes (chunk 51, t1h#8).

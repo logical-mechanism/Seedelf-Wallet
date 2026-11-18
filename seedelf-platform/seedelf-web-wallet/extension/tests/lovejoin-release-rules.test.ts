@@ -14,9 +14,11 @@ import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
+import { handle, type Context } from "../src/background/handlers";
 import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, type PoolRef } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
+import { pendingKey } from "../src/background/pending";
 import { SessionService } from "../src/background/sessions";
 import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { t as tr } from "../src/i18n";
@@ -119,6 +121,20 @@ async function wallet(): Promise<T> {
 function atAccount(tx: string, value: string, assets: Array<{ policy_id: string; asset_name: string; quantity: string }> = []): KoiosUtxo {
   const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
   return { ...first!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: assets.map((a) => ({ ...a, decimals: 0, fingerprint: "asset1test" })) as never };
+}
+
+/** Public account `index`'s: a UTxO of ADA alone at its receive address 0/0, as `tx`'s with `value`. */
+async function atAccountOf(t: T, index: number, tx: string, value: string): Promise<KoiosUtxo> {
+  const [address, key] = await t.wallet.withAccount(index, ({ cardano }) => [cardano.receiveAddress(t.deps.wasm.Network.Preprod, 0), cardano.paymentKeyHash(0, 0)]);
+  return {
+    ...atAccount(tx, value),
+    address,
+    stake_address: null,
+    payment_cred: key,
+    inline_datum: null,
+    datum_hash: null,
+    reference_script: null,
+  } as unknown as KoiosUtxo;
 }
 
 const ljtest = (quantity: bigint) => ({ policy_id: VIEW.token.policyId, asset_name: VIEW.token.assetName, quantity: quantity.toString() });
@@ -345,6 +361,81 @@ describe("a box back that ties a public account to the private balance (1.6.0's 
       const kept = (await t.session.get(SESSION_BALANCES_PREFIX + "preprod")) !== undefined;
       expect(kept, `on account ${on}`).toBe(on !== 0);
       expect(await t.session.get(SESSION_PRIVATE_STALE_PREFIX + "preprod"), `on account ${on}`).toBe(on !== 0 ? true : undefined);
+    }
+  });
+
+  // Chunk 51, r2time#1: Bring one back paid read which account pays twice. withdrawNow read it as it was pressed, for
+  // the watch, and withdrawOne read, built and signed with whichever account was active after its pool's reward-account
+  // read: a switch in between, which account-use lets through, had one account pay while the watch named the other. It
+  // pays from the account it was pressed on now, read, built and signed with that account's keys.
+  it("pays from the account it was pressed on, though the wallet moves to another while it builds, and watches that one", { timeout: 240_000 }, async () => {
+    /** The token pool's mix_logic reward account: what withdrawOne's first request asks account_info about. */
+    const logic = (JSON.parse(loadTestWasm().lovejoinMixLogic(JSON.stringify({ network: "preprod", poolRef: TOKEN_POOL }))) as { stake: string }).stake;
+    // `landOn`: the account the wallet is on as it lands: the one switched to, or back on the one it was pressed on.
+    for (const landOn of [1, 0]) {
+      const t = await wallet();
+      const lj = pooled(t);
+      const ctx = {
+        ...(t as unknown as Context),
+        lovejoin: lj,
+        wasm: loadTestWasm(),
+        connector: async (on: boolean) => on,
+        version: "1.0.0",
+        network: "preprod",
+        networks: ["preprod"],
+      } as Context;
+      const mine = await tokenBox(t, "f1", true, 7);
+      await t.accounts.add(1);
+      // Each account can pay: 20 ₳, and 5 ₳ for its collateral.
+      const zero = [atAccount("e1", "20000000"), atAccount("e5", "5000000")];
+      const one = await Promise.all([atAccountOf(t, 1, "d1", "20000000"), atAccountOf(t, 1, "d5", "5000000")]);
+      t.koios.addedToAccounts.push(...zero, ...one, ...POOL, mine, ...(await strangers(t)));
+      t.koios.params = DEAR;
+      await t.balances.get("preprod");
+      const sent = t.koios.submitted.length;
+
+      // Pressed on account 0. While Koios answers withdrawOne's first request, the user picks account 1: account-use's
+      // gate lets it through, as nothing of account 0's is maybe sent and no public mix is being sent.
+      const real = t.koios.fetch;
+      let release!: () => void;
+      let reached!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const hit = new Promise<void>((r) => (reached = r));
+      let once = true;
+      t.koios.fetch = async (url, init) => {
+        if (once && new URL(url).pathname.endsWith("/account_info") && String(init?.body ?? "").includes(logic)) {
+          once = false;
+          reached();
+          await gate;
+        }
+        return real(url, init);
+      };
+      const going = lj.withdrawNow("preprod", { txHash: mine.tx_hash, txIndex: 0, pool: TOKEN }, false, true);
+      await hit;
+      await handle({ type: "account-use", index: 1 }, ctx);
+      expect(await t.accounts.active()).toBe(1);
+      release();
+      const pending = await going;
+
+      // Account 0 paid: its UTxOs alone are spent, the history ties it (PRIV-3), and the watch names it.
+      expect(t.koios.submitted).toHaveLength(sent + 1);
+      const inputs = txInputs(t.koios.submitted.at(-1)!);
+      const spends = (us: KoiosUtxo[]) => us.some((u) => inputs.includes(`${u.tx_hash}#${u.tx_index}`));
+      expect({ zero: spends(zero), one: spends(one) }, `inputs ${inputs.join(", ")}`).toEqual({ zero: true, one: false });
+      expect((await historyOf(t, pending.txHash))?.origin?.id).toBe(`box:${pending.txHash}+public:0`);
+      const watch = await t.wallet.withKeys(() => t.session.get<{ txHash: string; paysAccounts?: number[] }>(pendingKey("preprod")));
+      expect(watch).toMatchObject({ txHash: pending.txHash, paysAccounts: [0] });
+
+      // On account `landOn` as it lands, Home's reading of it kept: on the account that paid, both sides are read
+      // again; on another, the private side alone (e5#2).
+      if (landOn !== (await t.accounts.active())) await handle({ type: "account-use", index: landOn }, ctx);
+      expect(await t.accounts.active()).toBe(landOn);
+      await t.balances.get("preprod");
+      t.koios.confirmations = 1;
+      expect(await t.pending.pending("preprod")).toMatchObject({ kind: "lovejoin-withdraw", txHash: pending.txHash, confirmations: 1 });
+      const kept = (await t.wallet.withKeys(() => t.session.get(SESSION_BALANCES_PREFIX + "preprod"))) !== undefined;
+      const privateOnly = await t.wallet.withKeys(() => t.session.get(SESSION_PRIVATE_STALE_PREFIX + "preprod"));
+      expect({ kept, privateOnly }, `landing on ${landOn}`).toEqual(landOn === 0 ? { kept: false, privateOnly: undefined } : { kept: true, privateOnly: true });
     }
   });
 

@@ -10,6 +10,7 @@ import { bodyOutpoints } from "../src/background/cbor";
 import type { KoiosUtxo } from "../src/background/koios";
 import { txIdOf } from "./fixtures/cbor";
 import { sessionSwap, testBalances, vectors } from "./fakes";
+import { pastSpent } from "./swap-session";
 
 const PASSWORD = "correct horse battery";
 const MIN = "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e";
@@ -145,7 +146,7 @@ describe("a session's return, with a stranger's tokens at its account (independe
       atSession(OUT, 1, "5000000"),
       atSession(STRANGER, 0, "12000000", junk(400)),
     );
-    let view = await t.sessions.advance("preprod", 0, true);
+    let view = await pastSpent(t, t.sessions);
     expect(t.koios.submitted).toHaveLength(1);
     const back = last(t);
     expect(bodyOutpoints(back, 0)!.sort()).toEqual([`${FILL}#0`, `${OUT}#1`, `${SWAP}#1`].sort());
@@ -197,7 +198,7 @@ describe("a session's return, with a stranger's tokens at its account (independe
     const t = await unlocked();
     await filledSwap(t);
     t.koios.addedToAccounts.push(atSession(STRANGER, 0, "1200000", [[MIN, "5"]]));
-    const view = await t.sessions.advance("preprod", 0, true);
+    const view = await pastSpent(t, t.sessions);
     expect(t.koios.submitted).toHaveLength(0);
     expect(view.leftBehind).toEqual([{ txHash: STRANGER, txIndex: 0, reason: "fee", lovelace: "1200000" }]);
   });

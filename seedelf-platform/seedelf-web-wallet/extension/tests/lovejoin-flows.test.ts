@@ -16,16 +16,17 @@ import { bodyOutpoints, txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { handle, type Context } from "../src/background/handlers";
 import type { KoiosTxInfo, KoiosTxOut, KoiosUtxo } from "../src/background/koios";
-import { CLASSIC, LovejoinService, STUCK_WAIT_MS, type PoolRef } from "../src/background/lovejoin";
+import { CLASSIC, LovejoinService, SESSION_LOVEJOIN_SENDING, STUCK_WAIT_MS, type PoolRef } from "../src/background/lovejoin";
 import { LovejoinLaunchService, SESSION_LOVEJOIN_LAUNCH } from "../src/background/lovejoin-launch";
 import { HOLDER, LOVEJOIN_NFT, type FoundPool } from "../src/background/lovejoin-pools";
 import { PendingService } from "../src/background/pending";
+import { NetworkChoice } from "../src/background/preferences";
 import { SessionService } from "../src/background/sessions";
 import { builtOutputs, Minswap } from "../src/background/minswap";
 import { SESSION_BALANCES_PREFIX, SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { t as tr } from "../src/i18n";
 import tokenList from "../src/tokens/list.json";
-import { NETWORKS } from "../src/networks";
+import { NETWORKS, type NetworkName } from "../src/networks";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { epochParams, koiosPreprod, loadTestWasm, madeByMix, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
@@ -193,6 +194,81 @@ describe("a mix from the public account into a token pool (chunk 34's 34d)", SLO
     t.koios.addedToAccounts.push(atAccount("e1", "3000000", [ljtest(Q / 2n)]), atAccount("e5", "5000000"), ...POOL, ...(await strangers(t)));
     await expect(lj.publicBuild("preprod", 1, { pool: "ab".repeat(28) })).rejects.toThrow("isn't one the wallet reads");
     await expect(lj.publicBuild("preprod", 1, { pool: TOKEN })).rejects.toThrow("enough of this pool's token");
+  });
+});
+
+// Chunk 51, r2time#2 (e4a#1's class): a mix from the public account whose Send asked Koios whether its pool's reward
+// balance moved since its review (chunk 43), while the user removed the wallet and restored another phrase: once Koios
+// answered, its chain was recorded into that phrase's Lovejoin record and its progress kept in its session, and the
+// first phrase's mix was sent from there. The Send is the phrase's it began under now: under another, nothing of it is
+// recorded, kept or sent.
+describe("a public mix's Send Koios answers once the wallet is removed and another phrase restored (chunk 51, r2time#2)", SLOW, () => {
+  it("records, keeps and sends none of it under the other phrase", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(atAccount("e1", "3000000", [ljtest(2n * Q)]), atAccount("e5", "5000000"), ...POOL, ...(await strangers(t)));
+    const summary = await lj.publicBuild("preprod", 1, { pool: TOKEN });
+    const networks: NetworkName[] = ["preprod", "mainnet"];
+    const ctx = {
+      ...(t as unknown as Context),
+      lovejoin: lj,
+      wasm: loadTestWasm(),
+      connector: async (on: boolean) => on,
+      version: "1.0.0",
+      network: "preprod",
+      networks,
+      networkChoice: new NetworkChoice(t.local, networks),
+    } as Context;
+    // Send reads the token pool's reward balance again (rewardsMoved): Koios's answer waits while the wallet is removed.
+    const logic = (JSON.parse(loadTestWasm().lovejoinMixLogic(JSON.stringify({ network: "preprod", poolRef: TOKEN_POOL }))) as { stake: string }).stake;
+    const real = t.koios.fetch;
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const hit = new Promise<void>((r) => (reached = r));
+    let once = true;
+    t.koios.fetch = async (url, init) => {
+      if (once && url.endsWith("/account_info") && String(init?.body ?? "").includes(logic)) {
+        once = false;
+        reached();
+        await gate;
+      }
+      return real(url, init);
+    };
+    const sent = t.koios.submitted.length;
+    const sending = lj.publicSubmit("preprod", summary.txHash);
+    sending.catch(() => undefined);
+    await hit;
+
+    // Remove wallet, its second yes given, and the other phrase restored while Koios answers: its keys are in.
+    await handle({ type: "reset-wallet", force: true }, ctx);
+    const other = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 24)!;
+    const restored = handle({ type: "restore-wallet", phrase: other.phrase, password: PASSWORD }, ctx);
+    const receive = () => t.wallet.account("preprod").then((a) => a.receiveAddress, () => undefined);
+    for (let tries = 0; tries < 2_000 && (await receive()) !== other.preprod.receive_0; tries++) await new Promise((r) => setTimeout(r, 5));
+    expect(await receive()).toBe(other.preprod.receive_0);
+    // What's written into the other phrase's Lovejoin record from here on.
+    const set = t.store.set.bind(t.store);
+    const chains: unknown[] = [];
+    t.store.set = (async (key: Parameters<typeof set>[0], value: unknown) => {
+      if (key === "lovejoin.preprod") chains.push(...((value as Sealed).chains ?? []));
+      return set(key, value);
+    }) as typeof t.store.set;
+    release();
+    const outcome = await sending.then(
+      () => "sent",
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+    await restored;
+    t.koios.fetch = real;
+    t.store.set = set;
+
+    // None of its chain went into the other phrase's record, not even for a moment, nor its progress; nothing was sent.
+    expect(chains).toEqual([]);
+    expect(await t.wallet.withKeys(() => t.session.get(SESSION_LOVEJOIN_SENDING + "preprod"))).toBeUndefined();
+    expect(t.koios.submitted).toHaveLength(sent);
+    // And its Send ends as a lock ends one.
+    expect(outcome).toBe("The wallet is locked.");
   });
 });
 

@@ -5,7 +5,9 @@
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { builtOutputs, Minswap } from "../src/background/minswap";
+import type { PrivateStore } from "../src/background/private-store";
 import { SessionService } from "../src/background/sessions";
+import type { NetworkName } from "../src/networks";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, ORDER_ADDRESS, ORDER_DATUM_HASH, ORDER_SCRIPT, swapTx } from "./fixtures/swap-tx";
@@ -169,4 +171,19 @@ export async function bookOf(t: T) {
   return (await t.store.get<{
     sessions: Array<{ index: number; closedAt?: number; auto?: Record<string, unknown>; txs: Array<Record<string, unknown>> }>;
   }>("sessions.preprod"))!;
+}
+
+/**
+ * The runner's run of session `index`, and the next one where that run only noted every order of its swap spent
+ * (`auto.spentSeen`): the outcome is told, and the first return built, from the run after, its own listings of the
+ * account (chunk 51, r2still#2).
+ */
+export async function pastSpent(t: { store: PrivateStore }, sessions: Pick<SessionService, "advance">, network: NetworkName = "preprod", index = 0) {
+  const noted = async () =>
+    (await t.store.get<{ sessions: Array<{ index: number; auto?: { spentSeen?: number } }> }>(`sessions.${network}` as const))?.sessions.find(
+      (s) => s.index === index,
+    )?.auto?.spentSeen;
+  const was = await noted();
+  const view = await sessions.advance(network, index, true);
+  return was === undefined && (await noted()) !== undefined ? sessions.advance(network, index, true) : view;
 }
