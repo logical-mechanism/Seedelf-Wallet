@@ -1926,6 +1926,41 @@ mod transfer {
         let e = api::finish_transfer(sk, r).unwrap_err().to_string();
         assert!(e.contains("evaluation"), "{e}");
     }
+
+    /// Chunk 51, x2#2: a Seedelf's UTxO at the KEY address carrying the
+    /// contract's hash, which Koios lists with the contract's own rows (its
+    /// `payment_cred` the contract's 28 bytes), isn't in the contract, so it
+    /// can't be paid: the register beside it is whatever a stranger wrote.
+    #[test]
+    fn a_seedelf_at_the_key_address_carrying_the_contracts_hash_cant_be_paid() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let config = seedelf_core::constants::get_config(1, true).unwrap();
+        let mut r = request();
+        r.payments[0].recipient.address =
+            pallas_addresses::Address::Shelley(pallas_addresses::ShelleyAddress::new(
+                pallas_addresses::Network::Testnet,
+                pallas_addresses::ShelleyPaymentPart::Key(pallas_crypto::hash::Hash::new(
+                    config.contract.wallet_contract_hash,
+                )),
+                pallas_addresses::ShelleyDelegationPart::Null,
+            ))
+            .to_bech32()
+            .unwrap();
+        assert_eq!(
+            r.payments[0].recipient.payment_cred,
+            hex::encode(config.contract.wallet_contract_hash),
+            "as Koios lists it"
+        );
+        let said = api::draft_transfer(sk, r)
+            .map(|_| "drafted".to_string())
+            .unwrap_or_else(|e| e.to_string());
+        assert!(
+            said.contains("isn't in the Seedelf Wallet contract"),
+            "{said}"
+        );
+        assert!(api::draft_transfer(sk, request()).is_ok());
+    }
+
     /// The contract outputs of a send from the Cardano account: each one's
     /// register and lovelace. Everything else is change.
     fn contract_outputs(tx_cbor: &str) -> Vec<(Register, u64)> {
@@ -2889,6 +2924,66 @@ mod withdraw {
         // A Seedelf alone brings back no token.
         let alone = api::build_remove(sk, removal(Some(theirs()))).unwrap();
         assert_eq!(serde_json::to_value(&alone).unwrap()["tokens"], json!([]));
+    }
+
+    /// The KEY address carrying the contract's hash, on preprod: no key has
+    /// that hash, so nothing there can ever be spent.
+    fn at_the_contracts_hash_as_a_key() -> String {
+        let config = seedelf_core::constants::get_config(1, true).unwrap();
+        pallas_addresses::Address::Shelley(ShelleyAddress::new(
+            AddressNetwork::Testnet,
+            ShelleyPaymentPart::Key(Hash::new(config.contract.wallet_contract_hash)),
+            ShelleyDelegationPart::Null,
+        ))
+        .to_bech32()
+        .unwrap()
+    }
+
+    /// Chunk 51, x2#2: Koios lists a credential's UTxOs by its 28 bytes, a
+    /// key's and a script's alike, so asked for the contract's it lists the
+    /// KEY address with the same 28 bytes too, its `payment_cred` the
+    /// contract's. A stranger's output there under one of the user's
+    /// registers isn't in the contract: nothing can spend it, and a private
+    /// spend that took it failed at the node. Every private spend's check
+    /// (`check_spendable`, here a withdrawal's) and a removal refuse it.
+    #[test]
+    fn a_key_address_carrying_the_contracts_hash_holds_nothing_to_spend() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let burnt = at_the_contracts_hash_as_a_key();
+        let mut withdrawal = request("amount");
+        for utxo in &mut withdrawal.utxos {
+            utxo.address = burnt.clone();
+        }
+        let mut removal_there = removal(Some(theirs()));
+        removal_there.utxo.address = burnt.clone();
+        let config = seedelf_core::constants::get_config(1, true).unwrap();
+        assert_eq!(
+            removal_there.utxo.payment_cred,
+            hex::encode(config.contract.wallet_contract_hash),
+            "as Koios lists it"
+        );
+        let said: Vec<(&str, String)> = vec![
+            (
+                "a withdrawal",
+                api::draft_withdraw(sk, withdrawal)
+                    .map(|_| "drafted".to_string())
+                    .unwrap_or_else(|e| e.to_string()),
+            ),
+            (
+                "a removal",
+                api::draft_remove(sk, removal_there)
+                    .map(|_| "drafted".to_string())
+                    .unwrap_or_else(|e| e.to_string()),
+            ),
+        ];
+        let wrong: Vec<_> = said
+            .iter()
+            .filter(|(_, said)| !said.contains("isn't in the Seedelf Wallet contract"))
+            .collect();
+        assert!(wrong.is_empty(), "spent from a key address: {wrong:?}");
+        // At the contract's own script address, the same rows spend.
+        assert!(api::draft_withdraw(sk, request("amount")).is_ok());
+        assert!(api::draft_remove(sk, removal(Some(theirs()))).is_ok());
     }
 
     #[test]

@@ -2308,14 +2308,45 @@ pub mod api {
         })
     }
 
-    /// Checks the UTxOs a Seedelf spend may pay with: every one is this
-    /// wallet's, none holds a seedelf (it would go with the change), and the
-    /// wallet's evaluator can take each (`seedelf_core::eval::refusal`): not
-    /// one holding a reference script. The worker leaves those out of what a
-    /// spend may pay with, so the balance, Max and coin control agree.
+    /// Whether `utxo` sits at Seedelf Wallet's contract on this network: its
+    /// address's payment part the contract's script, with any staking part.
+    /// Its address decides, never its `payment_cred` alone: Koios lists a
+    /// credential's UTxOs by its 28 bytes, a key's and a script's alike, so
+    /// asked for the contract's it lists the KEY address with the same 28
+    /// bytes too, which nothing can spend (chunk 51, x2#2; the worker's
+    /// `atContract`, core's `Protocol::spends_as_mix_box`).
+    pub fn at_wallet_contract(network_flag: bool, utxo: &UtxoResponse) -> Result<bool> {
+        let contract = get_config(VARIANT, network_flag)?
+            .contract
+            .wallet_contract_hash;
+        let network = if network_flag {
+            AddressNetwork::Testnet
+        } else {
+            AddressNetwork::Mainnet
+        };
+        Ok(matches!(
+            Address::from_bech32(&utxo.address),
+            Ok(Address::Shelley(s)) if s.network() == network
+                && matches!(s.payment(), ShelleyPaymentPart::Script(h) if **h == contract)
+        ))
+    }
+
+    /// Checks the UTxOs a Seedelf spend may pay with: every one sits at the
+    /// contract ([`at_wallet_contract`]) and is this wallet's, none holds a
+    /// seedelf (it would go with the change), and the wallet's evaluator can
+    /// take each (`seedelf_core::eval::refusal`): not one holding a reference
+    /// script. The worker leaves those out of what a spend may pay with, so
+    /// the balance, Max and coin control agree.
     fn check_spendable(sk: Scalar, chain: &Chain, utxos: &[UtxoResponse]) -> Result<()> {
         let policy = &chain.config.contract.seedelf_policy_id;
         for utxo in utxos {
+            if !at_wallet_contract(chain.network_flag, utxo)? {
+                bail!(
+                    "UTxO {}#{} isn't in the Seedelf Wallet contract",
+                    utxo.tx_hash,
+                    utxo.tx_index
+                );
+            }
             let owned = extract_bytes_with_logging(&utxo.inline_datum)
                 .map(|register| register.is_owned(sk).unwrap_or(false))
                 .unwrap_or(false);
@@ -2996,7 +3027,12 @@ pub mod api {
         if !is_seedelf_name(to) {
             bail!("A Seedelf's name is 64 hex characters starting 5eed0e1f");
         }
-        if utxo.payment_cred != hex::encode(chain.config.contract.wallet_contract_hash) {
+        // Its address decides ([`at_wallet_contract`]), and the row's own
+        // payment_cred must agree: at the KEY address carrying the contract's
+        // hash, the register is whatever a stranger wrote (chunk 51, x2#2).
+        if !at_wallet_contract(chain.network_flag, utxo)?
+            || utxo.payment_cred != hex::encode(chain.config.contract.wallet_contract_hash)
+        {
             bail!("That Seedelf isn't in the Seedelf Wallet contract, so it can't be paid");
         }
         let policy = &chain.config.contract.seedelf_policy_id;
@@ -5020,6 +5056,10 @@ pub mod api {
     ) -> Result<(ScriptSpend, Vec<u8>)> {
         let chain = chain_of(&request.network, &request.params)?;
         let utxo = &request.utxo;
+        // Only a UTxO at the contract's script can be spent (chunk 51, x2#2).
+        if !at_wallet_contract(chain.network_flag, utxo)? {
+            bail!("That Seedelf isn't in the Seedelf Wallet contract");
+        }
         let owned = extract_bytes_with_logging(&utxo.inline_datum)
             .is_some_and(|register| register.is_owned(sk).unwrap_or(false));
         if !owned {

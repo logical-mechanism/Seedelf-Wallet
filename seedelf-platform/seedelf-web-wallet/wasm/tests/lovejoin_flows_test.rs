@@ -1057,6 +1057,43 @@ fn a_box_too_poor_to_come_back_is_paid_from_the_private_balance() {
     );
 }
 
+/// Chunk 51, x2#2: Koios lists a credential's UTxOs by its 28 bytes, a key's and a script's alike, so the KEY address
+/// whose hash is the Seedelf contract's comes back with the private balance's rows. A stranger's output there, under
+/// one of the user's registers, is no Seedelf UTxO: nothing can spend it, so it never pays a box's way back, and the
+/// next UTxO, at the contract, does.
+#[test]
+fn a_box_comes_back_paid_only_from_the_contracts_own_address() {
+    let sk = Scalar::from(6_262u64);
+    let pool = vec![
+        box_row_worth("c1", Some(sk), 1_500_000),
+        box_row_worth("c2", None, 1_500_000),
+    ];
+    let config = get_config(VARIANT, true).unwrap();
+    let burnt = pallas_addresses::Address::Shelley(pallas_addresses::ShelleyAddress::new(
+        pallas_addresses::Network::Testnet,
+        pallas_addresses::ShelleyPaymentPart::Key(Hash::new(config.contract.wallet_contract_hash)),
+        pallas_addresses::ShelleyDelegationPart::Null,
+    ))
+    .to_bech32()
+    .unwrap();
+    // Its payment_cred stays the contract's, as Koios lists it.
+    let there = private_row_with(sk, 0xe2, 50_000_000, json!({ "address": burnt }));
+    let paying = private_row(sk, 0xe1, 5_000_000);
+    let alone = bring_back_privately(sk, pool.clone(), None, vec![there.clone()])
+        .map(|back| format!("paid by {}", back.spent))
+        .unwrap_or_else(|e| e.to_string());
+    let first = bring_back_privately(sk, pool, None, vec![there, paying])
+        .map(|back| format!("paid by {}", back.spent))
+        .unwrap_or_else(|e| e.to_string());
+    assert_eq!(
+        [alone.as_str(), first.as_str()],
+        [
+            wasm::NO_PRIVATE_PAYS,
+            &format!("paid by {}#1", "e1".repeat(32))
+        ]
+    );
+}
+
 #[test]
 fn the_private_balance_passes_over_what_cant_pay_and_takes_the_next() {
     let sk = Scalar::from(6_262u64);

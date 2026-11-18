@@ -2912,8 +2912,12 @@ pub fn withdraw_private_in(
     // A UTxO too small is passed over having taken nothing.
     let mut rewards = request.rewards.read()?;
     for utxo in &request.utxos {
+        // Only a UTxO at the contract's script is the private balance's: at
+        // the KEY address carrying its hash, which Koios lists beside it,
+        // nothing can spend one (chunk 51, x2#2).
         if utxo.asset_list.as_ref().is_some_and(|a| !a.is_empty())
             || seedelf_core::eval::refusal(utxo).is_some()
+            || !api::at_wallet_contract(network_flag, utxo)?
         {
             continue;
         }
