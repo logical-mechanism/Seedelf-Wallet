@@ -30,17 +30,19 @@ The owner's ask, 2026-11-17: "We can get an agent on each path and just find eve
 4. **Round one:** ten fixers by file ownership (G1 core, G2 the CLI and Koios, G3 the WebAssembly, G4 the worker's Lovejoin and sessions, G5 the connector, G6 keys, money flows and chain reads, G7a and G7b the screens, G8 docs and CI, G10 the proofs), test first: each test failed before its fix and passes after.
 5. **The review of the merged fixes:** nine lenses (R2money, R2sign, R2time, R2cli, R2tests, R2screens, R2verif, R2docs, R2still), verified by stakes as above, then round two by the same fixers.
 6. **The last look** at round two: seven lenses (L3money, L3time, L3sign, L3screens, L3cli, L3tests, L3still), then round three.
+7. **A final look** at round three: three lenses (L4cli, L4worker, L4tools), then round four. Its seven findings were all lows and nits in round three's own changes, and it found none above.
 
 ## What it found
 
-383 findings. Severity is the verifiers' where they ran, else the finder's.
+390 findings. Severity is the verifiers' where they ran, else the finder's.
 
 | Severity | Fixed | The owner's | Covered, moot or unreachable | Merged | Refuted | Not verified | All |
 |---|---|---|---|---|---|---|---|
-| high | TODO | | | | | | 3 |
-| medium | TODO | 4 | | 1 | | | 8 |
-| low | TODO | TODO | 13 | TODO | | 1 | TODO |
-| nit | TODO | 1 | | TODO | 1 | | TODO |
+| high | 3 | | | | | | 3 |
+| medium | 3 | 4 | | 1 | | | 8 |
+| low | 267 | 38 | 13 | 13 | | 1 | 332 |
+| nit | 42 | 1 | | 3 | 1 | | 47 |
+| **All** | **315** | **43** | **13** | **17** | **1** | **1** | **390** |
 
 - **The T1 lenses' 177** are guards no test pinned: each now has a test that fails without it, or is recorded as moot, unreachable or covered by another's test.
 - **Covered, moot or unreachable** (13): a guard another finding's test already pins (9), one no test can fail without (2), and two no path reaches today.
@@ -99,34 +101,46 @@ On `web-wallet/whole-review-fixes`, from `f87c3e77` (this branch with the two hi
 
 **Round two** (`02f73991` to `ad8c3ce4`, 22 commits): the round's back-translation (`02f73991`, `76c1df4b`); the lead's test fixes for the preprod-only build and the renamed picker rows (`04616cf6`, `417fff13`); the first part's tests and fixes (`853d5779`, `f88560c4`, `e66a6a16`, `2d639df8`, `e4d97bea`, `5ba328e5`, `459d4cf8`); the review of the merged fixes' (`ca970760` docs, `7b6881f7` the swap page, `ddc17685` the proof tooling, `53780f85` and `81516188` the register readers, `b3687869` the collateral at the fee sent, `e6d6a18d` and `af022a6f` the CLI's window and fund, `61a4d717` the sign window, `ad8c3ce4` the phrase pins at the writers and the swap's late leg).
 
-TODO-ROUND3
+**Round three,** the last look's 14 (`7921367f` to `0dce8a6b`):
+- `7921367f`, `abcf2ffe`: the swap page's spent step (it says it all comes back next, and Stop goes), the late leg's wait as 15 s of time for every run, the stranger cut at the swap's first return, a later part's skip reason, Bring one back's pin at the press, tokens in their units in the sign window and a session's return, and what's available where part of the private balance is locked.
+- `5be0b1b4` (`cca673cd` on `cli/stranger-rows`): the CLI's window and fund rank by what each UTxO brings, and hand core at most 4,000 kinds.
+- `b0202c08`: a family run judges each in-package import under its own name, and a replayed trace is dated as Lake judges it.
+- `0dce8a6b`: the private swap's e2e waits out the spent step, and the new warning's back-translation.
+
+**Round four,** the final look's 7 (`0198cb3f` to `d89a9360`):
+- `9cc81ed5`: the worker records which return wrote a swap's skip reason, and a stopped swap's spent step reads "Filled", not "Cancelled".
+- `d89a9360` (`e898095e` on `cli/stranger-rows`): only the holders core will pick come before the kinds budget, and no row cap comes before core's u64 fit.
+- `0198cb3f`: test-tools.sh holds every rule it names (50 checks), and tally.py's advice names the step for the package it reads.
 
 ## The checks
 
-On the fix branch's final tree, `0dce8a6b` (the record's commits add only docs), each check under a memory cap, against the counts at the start (`35b339f6`: `main` at `cd764fba` with the folder's first commit):
+On the fix branch's final tree, `d89a9360` (the record's commits add only docs), each check under a memory cap, against the counts at the start (`35b339f6`: `main` at `cd764fba` with the folder's first commit):
 
 | Check | At the start | At the end |
 |---|---|---|
 | `cargo fmt --all -- --check`, clippy `-D warnings` (CI's crates, and core, koios, the CLI and display) | not recorded | clean |
-| `cargo test --workspace --locked` | 790 passed, 12 ignored | 959 passed, 12 ignored |
+| `cargo test --workspace --locked` | 790 passed, 12 ignored | 962 passed, 12 ignored |
 | The parts suite (`payment_parts_shapes_test --ignored`, release) | 0 with problems, 108 refused, 0 Max | the same |
 | The WebAssembly's node tests | not recorded | 60 |
 | `tsc --noEmit` | not recorded | clean |
-| `npm test`, default build | 3,306 passed, 4 skipped | 3,635 passed, 4 skipped |
-| `VITE_ENABLE_MAINNET=false npm test` | 3,306 passed, 4 skipped | 3,623 passed, 16 skipped (the swap page's mainnet-only tests) |
-| `npm run e2e`, dev build | 109 passed, 1 skipped | TODO-E2E-DEV |
-| `npm run e2e`, store build (`build:store`, never `npm run package`) | 109 passed, 1 skipped | TODO-E2E-STORE |
-| `npm run e2e:data` | 3 | TODO-E2E-DATA |
-| `LIVE_KOIOS=1 npx vitest run tests/live.test.ts` | — | TODO-LIVE-KOIOS |
+| `npm test`, default build | 3,306 passed, 4 skipped | 3,637 passed, 4 skipped |
+| `VITE_ENABLE_MAINNET=false npm test` | 3,306 passed, 4 skipped | 3,625 passed, 16 skipped (the swap page's mainnet-only tests) |
+| `npm run e2e`, dev build | 109 passed, 1 skipped | 109 passed, 1 skipped (the found-later test, by design) |
+| `npm run e2e`, store build (`build:store`, never `npm run package`) | 109 passed, 1 skipped | 109 passed, 1 skipped |
+| `npm run e2e:data` | 3 | 3 |
+| `LIVE_KOIOS=1 npx vitest run tests/live.test.ts` | — | 2 |
 
 - **The i18n gates:** 112 of 112; the round's 26 new or newly critical keys were each back-translated blind from Spanish and Japanese, and one Japanese value was reworded.
 - **The changed e2e test** (the private swap's spent step) passed four times in a row under `taskset -c 0,1` with four workers.
-- **`cli/stranger-rows`:** fmt clean; 859 passed, 12 ignored; clippy clean.
-- **The proofs,** with round three's `check.sh` (`b0202c08`), one family at a time: `test-tools.sh` (41 checks) passes; `lovejoin` 25 ok and its 5 unlisted imports, `lovejoin-v2` 115 and 12, `lovejoin-any-tx` 143 and 48, `lovejoin-every` 76, `seedelf-every` 28; `./check.sh` 163 ok and 3 imports, with PolicyBurn and PolicyMint failing as the README says. The readers: Seedelf 182 modules, 377 Valid, 19 Expected Falsified, the same two not ok; Lovejoin 310 modules, 475 Valid, 11 Expected Falsified, two not ok (the modules no family builds, *Left open*).
+- **`cli/stranger-rows`** (`e898095e`, every CLI fix through round four): fmt clean; 862 passed, 12 ignored; clippy clean.
+- **The proofs,** with round three's `check.sh` (`b0202c08`), one family at a time: `test-tools.sh` passes (50 checks, with round four's); `lovejoin` 25 ok and its 5 unlisted imports, `lovejoin-v2` 115 and 12, `lovejoin-any-tx` 143 and 48, `lovejoin-every` 76, `seedelf-every` 28; `./check.sh` 163 ok and 3 imports, with PolicyBurn and PolicyMint failing as the README says. The readers: Seedelf 182 modules, 377 Valid, 19 Expected Falsified, the same two not ok; Lovejoin 310 modules, 475 Valid, 11 Expected Falsified, two not ok (the modules no family builds, *Left open*).
 
 ## The live runs
 
-TODO-LIVE
+On preprod, with test wallet A restored in a fresh profile each time, on a copy of the fix branch's dev build. Every flow submitted a real transaction and waited for it to confirm (the hashes are in `LIVE.md`, in the folder):
+- **On round one's build** (`417fff13`): `run.mjs all`, six flows (a mint paid by the account, a move-in of 25.5 ₳, a stealth mint, a private send of 3.3 ₳, a Make public of 5.5 ₳, a removal), and `run.mjs staking`, four (TPREP, no confidence, always abstain, LOGIC). All confirmed; preprod.koios.rest and www.giveme.my were the only hosts.
+- **On the final build's flows** (`0dce8a6b`; round four touched only the CLI, the swap page, a session's record and the proof tooling): the same ten again, all confirmed, the same hosts. Among them, a mint (`c32aa09a…`), the move-in (`fb4a8701…`), the private send (`9b681652…`), the Make public (`12455391…`), the removal (`92116387…`) and the move to LOGIC (`6046bd8e…`).
+- **Not run live:** a session's return, a swap and Bring one back, which the fixes also touched. Minswap is mainnet's alone, and test wallet A's held boxes are the owner's to keep, so the fakes and the worker's tests cover those.
 
 ## For the owner
 
@@ -232,6 +246,7 @@ In [backlog.md](../../backlog.md), from this review:
 - **The owner's calls above,** one ❓ line a group, with their IDs.
 - ⬜ **Core's token sums are quadratic in their kinds** (l3cli#3's root): `fitting` and `Assets::add` clone the whole list for every token. The CLI's windows now bound what they hand core, but the web wallet's private sends still run it over every owned UTxO, so a stranger's many-token piles under the user's register slow each one. Not measured in the WebAssembly.
 - ⬜ **Two Lovejoin AnyTx modules no family builds** (l3tests#3's note): `Lovejoin.AnyTx.LogicOwnerParserReach` and `LogicOwnerPrefix` are in no `check.sh` list and no listed module imports them, so no run builds or judges them, and `tally.py` reads them not ok.
+- ⬜ **A swap keeps one skip reason** (l4worker#1's limits): a late leg's direct return after a swap's own return that had its own reason replaces it, so the page reads it as a later part's and the swap's own words are lost; and a direct return rebuilt under a new hash with no reason leaves the old hash named. A reason kept per return would close both.
 
 Recorded, not backlog lines:
 - **w2#3** wasn't verified: the model's safety filter stopped its trace verifier. Its fix stands on its own test.
@@ -241,7 +256,7 @@ Recorded, not backlog lines:
 
 ## Lessons
 
-- **Every fix round broke something where two fixes meet, again.** Round one's keyset paging (r1#1) made the CLI's worst bug of the review (r2cli#1, high). Its sign-window readings made the window reassure where 1.9.1 warned (r2sign#1). Round two's wait for a late leg (r2still#2) made every swap's page wrong for up to a minute after its fill. The review of the merged fixes found 28 above a nit, and the last look 14 more. Plan two reviews after the first fix round, not one.
+- **Every fix round broke something where two fixes meet, again.** Round one's keyset paging (r1#1) made the CLI's worst bug of the review (r2cli#1, high). Its sign-window readings made the window reassure where 1.9.1 warned (r2sign#1). Round two's wait for a late leg (r2still#2) made every swap's page wrong for up to a minute after its fill. Round three's kinds budget let a stranger's piles crowd the user's ADA out again (l4cli#1). Each review of the fixes found fewer, and smaller: 28 above a nit, then 14 lows, then 5 lows and 2 nits. Plan to review the fixes until a round finds nothing above a low, not once.
 - **No window takes its order from a key a payer chooses.** Koios's `tx_hash` order, the amount of a token held, "ADA alone first": each let a stranger, or the user's own change, decide which UTxOs a spend may draw on. Rank by what each brings to the spend, with what the spend refuses left out.
 - **A payment is called a Seedelf's only where its wallet reads it.** Three of the sign window's readings (a register's general form, a datum kept by hash, and, still open, a reference script) said "a Seedelf payment" for an output no Seedelf Wallet lists or spends. One vector set now holds the readers together.
 - **A fixer who can't run Playwright can rename a control unseen.** Two rounds broke the e2e: a lookalike token's picker name, and a swap's extra runner step. The lead runs the e2e after each round, and a fixer greps the e2e for any name or words it changes.
@@ -265,6 +280,7 @@ The code, the tests and the docs cite these by ID, as "chunk 51, <id>". Their fu
 | `critic`, `gap-g1#` to `gap-g10#`, `lead#` | the completeness critic, its gap round, the lead's own |
 | `r2money#`, `r2sign#`, `r2time#`, `r2cli#`, `r2tests#`, `r2screens#`, `r2verif#`, `r2docs#`, `r2still#` | the review of the merged fixes |
 | `l3money#`, `l3time#`, `l3sign#`, `l3screens#`, `l3cli#`, `l3tests#`, `l3still#` | the last look |
+| `l4cli#`, `l4worker#`, `l4tools#` | the final look |
 | `G1` to `G10` | the fixers' groups (FIX.md) |
 
 Mind the two R2s: `r2a#` and `r2b#` are round one's core lanes (`build.rs` and the rest of core), `r2<lens>#` the review of the merged fixes.

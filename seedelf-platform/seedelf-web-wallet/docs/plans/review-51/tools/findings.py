@@ -124,7 +124,7 @@ for s in sevs:
     out.append(f"| {s} | " + " | ".join(str(count(lambda r: r['sev'] == s and r['out'] == o) or "") for o in outs)
                + f" | {count(lambda r: r['sev'] == s)} |")
 out.append("| **All** | " + " | ".join(f"**{count(lambda r: r['out'] == o)}**" for o in outs) + f" | **{len(rows)}** |")
-out += ["", "*fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for the second fix round. *merged*: the same as another finding, which carries it.", ""]
+out += ["", "*fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for a fix round still to come. *merged*: the same as another finding, which carries it.", ""]
 out += [owner_md.strip(), ""]
 
 open_rows = [r for r in rows if r["out"] == "open"]

@@ -623,5 +623,54 @@
    "abcf2ffe"
   ],
   "note": ""
+ },
+ "l4worker#1": {
+  "status": "fixed",
+  "commits": [
+   "9cc81ed5"
+  ],
+  "note": "one reason field still: a late leg's reason after an own return with its own replaces it (backlog)"
+ },
+ "l4worker#2": {
+  "status": "fixed",
+  "commits": [
+   "9cc81ed5"
+  ],
+  "note": ""
+ },
+ "l4tools#1": {
+  "status": "fixed",
+  "commits": [
+   "0198cb3f"
+  ],
+  "note": ""
+ },
+ "l4tools#2": {
+  "status": "fixed",
+  "commits": [
+   "0198cb3f"
+  ],
+  "note": ""
+ },
+ "l4cli#1": {
+  "status": "fixed",
+  "commits": [
+   "d89a9360"
+  ],
+  "note": "e898095e on cli/stranger-rows"
+ },
+ "l4cli#2": {
+  "status": "fixed",
+  "commits": [
+   "d89a9360"
+  ],
+  "note": "e898095e on cli/stranger-rows"
+ },
+ "l4cli#3": {
+  "status": "fixed",
+  "commits": [
+   "d89a9360"
+  ],
+  "note": "e898095e on cli/stranger-rows"
  }
 }

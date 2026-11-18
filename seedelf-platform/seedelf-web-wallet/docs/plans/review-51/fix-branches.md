@@ -32,3 +32,5 @@ One reviewer read both diffs and the code around them, and reverted each fix in 
 - The register reader's indefinite pair (r2sign#1's CLI half): `53780f85`, `02dbefc8` here.
 - **`cli/stranger-rows`'s checks after those three** (`afc52463`): `cargo fmt --all -- --check` clean; `cargo test --workspace --locked`, 851 passed, 12 ignored; clippy over core, crypto, the WebAssembly and the CLI with `-D warnings`, clean.
 - **The last look's CLI fixes** (l3cli#1 to #4): `5be0b1b4` on the fix branch, `cca673cd` here. `cli/stranger-rows`'s checks after it: fmt clean; 859 passed, 12 ignored; clippy clean.
+- **The final look's CLI fixes** (l4cli#1 to #3): `d89a9360` on the fix branch, `e898095e` here.
+- **`cli/stranger-rows`'s checks after round four** (`e898095e`): fmt clean; 862 passed, 12 ignored; clippy clean.

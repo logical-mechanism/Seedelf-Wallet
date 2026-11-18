@@ -125,6 +125,7 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 - ⬜ **More dApps on the dApps page:** each entry claims the dApp works privately, so each needs its own test run first.
 
 
+- ⬜ **A swap keeps one skip reason** (chunk 51, l4worker#1's limits): a late leg's direct return after a swap's own return that had its own reason replaces it, so the page reads it as a later part's and the swap's own words are lost; and a direct return rebuilt under a new hash with no reason leaves the old hash named. A reason kept per return would close both.
 ## Sessions and restore
 
 - ⬜ **A swap or a mix another browser brought back stays open here** (1.5.0's release review, C18): the money is safe, and the page waits for good.

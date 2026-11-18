@@ -11,11 +11,11 @@ T1's findings are guards that no test pinned: a T1 agent reverted each in a copy
 | critical |  |  |  |  |  |  |  |  |  | 0 |
 | high | 3 |  |  |  |  |  |  |  |  | 3 |
 | medium | 3 | 4 |  |  |  |  |  |  | 1 | 8 |
-| low | 262 | 38 | 9 | 2 | 2 |  |  | 1 | 13 | 332 |
-| nit | 40 | 1 |  |  |  |  | 1 |  | 3 | 47 |
-| **All** | **308** | **43** | **9** | **2** | **2** | **0** | **1** | **1** | **17** | **390** |
+| low | 267 | 38 | 9 | 2 | 2 |  |  | 1 | 13 | 332 |
+| nit | 42 | 1 |  |  |  |  | 1 |  | 3 | 47 |
+| **All** | **315** | **43** | **9** | **2** | **2** | **0** | **1** | **1** | **17** | **390** |
 
-*fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for the second fix round. *merged*: the same as another finding, which carries it.
+*fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for a fix round still to come. *merged*: the same as another finding, which carries it.
 
 ## ❓ The owner's calls
 
@@ -139,6 +139,9 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `r4#4` **medium**: A submit the CLI can't confirm (30 s timeout, 5xx, unreadable 2xx) is reported as a plain failure, and re-running the command pays again `spend.rs:91` · 48a4c977, 82078f10
 - `l3cli#1` **low**: The window ranks every ADA-only UTxO ahead of any token UTxO, so 20 small ones (anyone's) shut a large token UTxO out and transfer and sweep -l are refused `rows.rs:221` · 5be0b1b4
 - `l3cli#3` **low**: The window runs core's fitting over every owned UTxO, quadratic in their token kinds, so a stranger's piles slow every transfer, sweep -l and util mint `rows.rs:257` · 5be0b1b4
+- `l4cli#1` **low**: The window gives within_kinds' 4,000 kinds to every holder of a sent token first, whatever each brings, so four stranger piles holding one unit of a fungible token the user sends push the user's own ADA out, and transfer --asset and sweep --asset are refused `rows.rs:364` · d89a9360
+- `l4cli#2` **low**: fund's for_select gives the 4,000 kinds to the sent token's holders by lovelace, so four stranger piles at the payer's address, each holding one unit of it, leave out the user's own holder or ADA, and fund --asset is refused where round two sent `rows.rs:319` · d89a9360
+- `l4cli#3` **low**: The window caps its candidates at 20 rows in within_kinds before core's fitting drops what would overflow a u64, so 20 stranger UTxOs of 2^63-1 of one token fill the 20, fitting keeps two, and a spend the user's own UTxOs pay is refused `rows.rs:363` · d89a9360
 - `r1#1` **low** (in part, as verified): The CLI reads the wallet contract with offset paging and no fixed order, so a page can skip or repeat a UTxO `koios.rs:252` · 48a4c977, 82078f10
 - `r2tests#8` **low**: The CLI's two new 'Tx Hash' lines (r4#4's id before sending, and the signing page's id in the terminal) have no test `submit.rs:26` · e6d6a18d
 - `r4#3` **low**: The signing page finds the witness set by searching the tx hex for the first `a105` (or `a0f5f6`) at any nibble, so create/fund/extract fail when their body happens to contain it `index.js:49` · 48a4c977, 82078f10
@@ -232,6 +235,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `l3sign#2` **low**: The sign window shows a held token off the wallet's list in raw units, while the Transaction details it opens scale it: 10^6 apart for a 6-decimal token `DappApprovals.tsx:1069` · abcf2ffe
 - `l3still#4` **low**: r2screens#1 is fixed only in part: the swap form and Send privately's too-much line still call the unlocked side 'your private balance', with nothing about the lock `Swaps.tsx:1152` · 7921367f, abcf2ffe
 - `l3still#5` **low**: r2sign#3's class is fixed only in part: a session's return review shows a token off the wallet's list in raw units `SiteSessions.tsx:282` · abcf2ffe
+- `l4worker#1` **low**: laterSkip treats any deposit or mix before the swap's first return as 'it went through Lovejoin'. So once anything comes back after a direct own return that had only its collateral's mix before it (the default), the page says the swap's own reason was a later part's and that the swap came back through Lovejoin `Swaps.tsx:3153` · 9cc81ed5
 - `r2screens#1` **low**: The connect window's private session now calls the unlocked side what's "in your private balance", with nothing about the lock `DappApprovals.tsx:994` · 61a4d717
 - `r2tests#1` **low**: d1#3's sign-window warning for a payment into Seedelf under a dead register has no test: drop it and the whole Vitest suite passes `DappApprovals.tsx:1212` · 61a4d717
 - `r2tests#2` **low**: x1a#1/e9a#3's form notes on Send and Make public (stake works elsewhere) have no test; only the reviews' lines are pinned `CardanoSend.tsx:312` · 5ba328e5
@@ -250,6 +254,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g10#4` **nit**: Amount boxes on the forms clip their own figures at the side panel's width: a token's box after Max, the swap's two amounts, Send's "Max, up to …" `styles.css:3449` · 8fd738ff
 - `gap-g2#4` **nit**: Mix again from my public account's review says 'N boxes your public account put in' where the account has more there, with no 'N of your M' or 'Mix the rest once this is done' `Lovejoin.tsx:4113` · c8003eda
 - `gap-g7#3` **nit**: Activity and Delegations show the bundled DRep names without plainName, which Voting applies to the same entries; the generator keeps bidi and zero-width characters `activity.ts:119` · c8003eda
+- `l4worker#2` **nit**: In the spent step of a stopped swap, the timeline's third step still says 'Cancelled: The order's funds back at the account' though no cancel goes and the order was filled; abcf2ffe flagged spent for the line, sub-line, tag and Stop but not the timeline's `cancelled` `Swaps.tsx:3180` · 9cc81ed5
 - `r2screens#2` **nit**: Review swap's re-ask still overwrites a quote for the token picked meanwhile; after Back the form is stuck on "Getting a quote…" `Swaps.tsx:836` · 7b6881f7
 - `r2screens#3` **nit**: Bring everything back's button reads "Sending…" while its switch rebuilds the returns `ClaimAll.tsx:199` · 2d639df8
 - Guards now pinned by a test (T1): `t1i#2`, `t1i#12`, `t1i#13`, `t1i#15` · 5c5bc3c1, a9b5a3bb
@@ -263,6 +268,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `l3tests#2` **low**: count.py's new exit status fails a full audit run for modules Lake replays: they read STALE by mtime, and no check.sh run can clear that `count.py:153` · b0202c08
 - `l3tests#3` **low**: check.sh's family runs no longer fail on an import's own sorry or Undetermined, and lovejoin-any-tx's 34 V2/Template imports were judged by none of the final runs `check.sh:275` · b0202c08
 - `l3tests#4` **low**: test-tools.sh still passes with three of the rules it claims to hold dropped: check.sh's own sorry, its NO TRACE, and count.py's exit status `test-tools.sh:8` · b0202c08
+- `l4tools#1` **low**: test-tools.sh doesn't hold two rules this commit states: the import walk reaching imports of imports, and traces dated only after a passed build. Either one reverted still passes all 41 checks `test-tools.sh:12` · 0198cb3f
 - `r2tests#6` **low**: v3#1's fix (a failed rebuild never reads as ok) has no committed test: drop tally.py's traceless-import rule and nothing notices `tally.py:113` · ddc17685
 - `r2verif#1` **low**: check.sh's new SORRY verdict depends on PlutusCoreBlaster's sorry sitting at CekMachine.lean:309; on IOG's main it is at 317, so every module reads SORRY and hides real Undetermined results `check.sh:233` · ddc17685
 - `r2verif#2` **low**: check.sh reads #print axioms one line at a time, but Lean breaks a list over 120 columns into one axiom per line, so a native_decide (or a sorryAx listed after propext) reads ok `check.sh:240` · ddc17685
@@ -274,6 +280,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `v4b#1` **low** (in part, as verified): AnyTx's output, reference and launch failure families have no passing control on their own builders `MixOutputControls.lean:124` · 40883a55
 - `v5#1` **low**: CLAIMS.md's Blaster cross-check of the policy reads as covering every mint layout, but Blaster stops at five lines `CLAIMS.md:23` · 40883a55
 - `v5#2` **low**: README says the LinesAll kernel theorems list Lean's axioms alone, but nothing guards them, so a sorry there passes check.sh `README.md:86` · 40883a55
+- `l4tools#2` **nit**: tally.py's new advice for a stale trace, 'run ./check.sh on it', fails for every module of tally.py's documented `Slice/Slice` use: `./check.sh Slice.X` reads FAILED `tally.py:129` · 0198cb3f
 - `r2docs#3` **nit**: The Lovejoin AnyTx README gives LogicLedgerUniqueness a weaker hypothesis than it has, and counts four of LogicBoxComposition's five theorems `README.md:203` · ddc17685
 - `v3#3` **nit**: tally.py's docstring says check.sh's ok can't tell Valid from Undetermined, but since #372 check.sh can `tally.py:10` · 40883a55
 - `v4a#2` **nit**: PolicyLinesAnyTx's header says mints of six lines or more 'aren't proved', though PolicyLinesAll proves every length in the kernel `PolicyLinesAnyTx.lean:22` · 40883a55
