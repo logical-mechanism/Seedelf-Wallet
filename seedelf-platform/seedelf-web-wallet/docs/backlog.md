@@ -124,7 +124,6 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 - ⬜ **Swaps straight against a pool**, not through the aggregator (chunk 15b).
 - ⬜ **More dApps on the dApps page:** each entry claims the dApp works privately, so each needs its own test run first.
 
-- ⬜ **A tail-only return's skip reason** (chunk 51, l3screens#2): a return of only the collateral's mix that carries a skip reason, followed by a stranger's return, reads as a later part's on the swap page. Recording which return wrote the reason would make it exact.
 
 ## Sessions and restore
 

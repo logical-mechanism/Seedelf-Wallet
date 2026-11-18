@@ -103,7 +103,26 @@ TODO-ROUND3
 
 ## The checks
 
-TODO-CHECKS
+On the fix branch's final tree, `0dce8a6b` (the record's commits add only docs), each check under a memory cap, against the counts at the start (`35b339f6`: `main` at `cd764fba` with the folder's first commit):
+
+| Check | At the start | At the end |
+|---|---|---|
+| `cargo fmt --all -- --check`, clippy `-D warnings` (CI's crates, and core, koios, the CLI and display) | not recorded | clean |
+| `cargo test --workspace --locked` | 790 passed, 12 ignored | 959 passed, 12 ignored |
+| The parts suite (`payment_parts_shapes_test --ignored`, release) | 0 with problems, 108 refused, 0 Max | the same |
+| The WebAssembly's node tests | not recorded | 60 |
+| `tsc --noEmit` | not recorded | clean |
+| `npm test`, default build | 3,306 passed, 4 skipped | 3,635 passed, 4 skipped |
+| `VITE_ENABLE_MAINNET=false npm test` | 3,306 passed, 4 skipped | 3,623 passed, 16 skipped (the swap page's mainnet-only tests) |
+| `npm run e2e`, dev build | 109 passed, 1 skipped | TODO-E2E-DEV |
+| `npm run e2e`, store build (`build:store`, never `npm run package`) | 109 passed, 1 skipped | TODO-E2E-STORE |
+| `npm run e2e:data` | 3 | TODO-E2E-DATA |
+| `LIVE_KOIOS=1 npx vitest run tests/live.test.ts` | — | TODO-LIVE-KOIOS |
+
+- **The i18n gates:** 112 of 112; the round's 26 new or newly critical keys were each back-translated blind from Spanish and Japanese, and one Japanese value was reworded.
+- **The changed e2e test** (the private swap's spent step) passed four times in a row under `taskset -c 0,1` with four workers.
+- **`cli/stranger-rows`:** fmt clean; 859 passed, 12 ignored; clippy clean.
+- **The proofs,** with round three's `check.sh` (`b0202c08`), one family at a time: `test-tools.sh` (41 checks) passes; `lovejoin` 25 ok and its 5 unlisted imports, `lovejoin-v2` 115 and 12, `lovejoin-any-tx` 143 and 48, `lovejoin-every` 76, `seedelf-every` 28; `./check.sh` 163 ok and 3 imports, with PolicyBurn and PolicyMint failing as the README says. The readers: Seedelf 182 modules, 377 Valid, 19 Expected Falsified, the same two not ok; Lovejoin 310 modules, 475 Valid, 11 Expected Falsified, two not ok (the modules no family builds, *Left open*).
 
 ## The live runs
 
@@ -212,7 +231,6 @@ Each of these refuses something the ledger and the contracts take. Most were chu
 In [backlog.md](../../backlog.md), from this review:
 - **The owner's calls above,** one ❓ line a group, with their IDs.
 - ⬜ **Core's token sums are quadratic in their kinds** (l3cli#3's root): `fitting` and `Assets::add` clone the whole list for every token. The CLI's windows now bound what they hand core, but the web wallet's private sends still run it over every owned UTxO, so a stranger's many-token piles under the user's register slow each one. Not measured in the WebAssembly.
-- ⬜ **A tail-only return's skip reason** (l3screens#2): a return of only the collateral's mix that carries a skip reason, followed by a stranger's return, reads as a later part's on the swap page. Recording which return wrote the reason would make it exact.
 - ⬜ **Two Lovejoin AnyTx modules no family builds** (l3tests#3's note): `Lovejoin.AnyTx.LogicOwnerParserReach` and `LogicOwnerPrefix` are in no `check.sh` list and no listed module imports them, so no run builds or judges them, and `tally.py` reads them not ok.
 
 Recorded, not backlog lines:

@@ -11,9 +11,9 @@ T1's findings are guards that no test pinned: a T1 agent reverted each in a copy
 | critical |  |  |  |  |  |  |  |  |  | 0 |
 | high | 3 |  |  |  |  |  |  |  |  | 3 |
 | medium | 3 | 4 |  |  |  |  |  |  | 1 | 8 |
-| low | 262 | 38 | 9 | 2 | 2 |  |  | 1 | 13 | 327 |
-| nit | 40 | 1 |  |  |  |  | 1 |  | 3 | 45 |
-| **All** | **308** | **43** | **9** | **2** | **2** | **0** | **1** | **1** | **17** | **383** |
+| low | 262 | 38 | 9 | 2 | 2 |  |  | 1 | 13 | 332 |
+| nit | 40 | 1 |  |  |  |  | 1 |  | 3 | 47 |
+| **All** | **308** | **43** | **9** | **2** | **2** | **0** | **1** | **1** | **17** | **390** |
 
 *fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for the second fix round. *merged*: the same as another finding, which carries it.
 
