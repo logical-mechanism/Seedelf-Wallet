@@ -6,19 +6,24 @@
 #   TOOLS=<folder> bash test-tools.sh  another copy of check.sh, tally.py and Audit/
 # What it holds them to:
 # - check.sh decides SORRY, UNDETERM and NO TRACE from the module's own trace, never from the
-#   console (which replays every import's log, a dependency's sorry included), reads a wrapped
-#   `#print axioms` list whole, takes no verdict from a reading that stops halfway, and exits 1
-#   for any of them;
-# - it reads each module of this package that a listed module imports and the run doesn't list,
-#   from its own trace, under its own name ("an import of"), and fails the run for one not ok; a
-#   listed import only under its own entry, and a dependency's module never;
-# - it dates each trace it reads to the build's start: a module Lake replays over a source
-#   written again since reads fresh, one whose source is written during the build doesn't;
+#   console (which replays every import's log, a dependency's sorry included): a sorry, or a
+#   `#print axioms` naming sorryAx or the compiler's axioms, read whole when it wraps, is SORRY; a
+#   warning's Undetermined is UNDETERM, an info line's "✅ Expected Undetermined" isn't; a
+#   reading that stops halfway gives no verdict; and it exits 1 for any of them;
+# - it reads each module of this package that a listed module imports, directly or not (Demo.Leaf
+#   is two deep), and the run doesn't list, from its own trace, under its own name ("an import
+#   of"), once a run, and fails the run for one not ok; a listed import only under its own entry,
+#   and a dependency's module never;
+# - it dates each trace it reads to the build's start, and only once a build passes: a module Lake
+#   replays over a source written again since reads fresh, an import two deep too; one whose source
+#   is written during the build doesn't, nor does an import's after a build that times out or fails;
 # - a failed build loses its old build files, the module's own or a dependency's (forget()), and a
 #   timeout's goes too;
 # - tally.py and Audit/count.py call a module not ok when it rests on one with no trace, here or
 #   in a dependency, when its trace is older than its source, and when its trace doesn't read or
 #   holds a sorry; count.py exits 1 then, and 0 when every module is ok;
+# - tally.py names the step that reads a module again for the package it reads: seedelf-slice's
+#   for Slice/'s;
 # - Audit/run-all.sh: a run of some families ends on their status alone, a full run on count.py's
 #   too;
 # - Audit/diag/scan-diag.py exits nonzero for a LOOK, an INCONCLUSIVE or a failed Lean run.
@@ -59,17 +64,19 @@ log = [{"level": rest[i], "message": rest[i + 1]} for i in range(0, len(rest), 2
 json.dump({"depHash": "1", "inputs": [], "outputs": {}, "synthetic": False, "log": log}, open(f, "w", encoding="utf-8"))
 PY
 }
-# The package: Demo.Top imports the dependency's Dep.Base, Demo.Down imports Demo.Top, Demo.Side
-# imports Dep.Base alone. All of it built and ok: sources older than their builds.
+# The package: Demo.Top imports Demo.Leaf and the dependency's Dep.Base, Demo.Down imports
+# Demo.Top (so Demo.Leaf two deep), Demo.Side imports Dep.Base alone. All of it built and ok:
+# sources older than their builds.
 make_pkg() {
   P=$T/pkg; rm -rf "$P"; mkdir -p "$P/Demo" "$P/Audit" "$P/Seedelf/Signers"
   : > "$P/Seedelf/Signers/modules.txt"
   cp "$TOOLS/check.sh" "$TOOLS/tally.py" "$P/"; cp "$TOOLS/Audit/count.py" "$P/Audit/"
-  printf 'Demo.Top\nDemo.Down\nDemo.Side\n' > "$P/Audit/audit-t.txt"
-  printf 'import Dep.Base\nimport Blaster\n\ntheorem Demo.top : True := by blaster\n' > "$P/Demo/Top.lean"
+  printf 'Demo.Top\nDemo.Down\nDemo.Side\nDemo.Leaf\n' > "$P/Audit/audit-t.txt"
+  printf 'theorem Demo.leaf : True := by blaster\n' > "$P/Demo/Leaf.lean"
+  printf 'import Demo.Leaf\nimport Dep.Base\nimport Blaster\n\ntheorem Demo.top : True := by blaster\n' > "$P/Demo/Top.lean"
   printf 'import Demo.Top\n\ntheorem Demo.down : True := by blaster\n' > "$P/Demo/Down.lean"
   printf 'import Dep.Base\n\ntheorem Demo.side : True := by blaster\n' > "$P/Demo/Side.lean"
-  for m in Top Down Side; do
+  for m in Top Down Side Leaf; do
     trace "$P/.lake/build/lib/lean/Demo/$m.trace" info "Demo/$m.lean:4:0: ✅ Valid" \
       warning "Demo/$m.lean:4:0: declaration uses 'blasterProven' (SMT-verified, no proof term)"
     for e in olean olean.hash ilean ilean.hash; do echo old > "$P/.lake/build/lib/lean/Demo/$m.$e"; done
@@ -112,7 +119,7 @@ count_says() { grep -qE "^  $2 +$1: .*$3" "$T/count.out"; }
 
 echo "== the readers on a good build"
 make_pkg; readers
-tally_ok Demo.Top && tally_ok Demo.Down && tally_ok Demo.Side && grep -q '3 ok' "$T/count.out" \
+tally_ok Demo.Top && tally_ok Demo.Down && tally_ok Demo.Side && tally_ok Demo.Leaf && grep -q '4 ok' "$T/count.out" \
   && ok "every module ok" || no "a good build doesn't read ok"
 [ "$counted" = 0 ] && ok "count.py exits 0" || no "count.py exits $counted on a good build"
 
@@ -127,7 +134,7 @@ tally_ok Demo.Side && ok "tally.py: Demo.Side, resting on neither, still ok" || 
 
 echo "== the readers: a dependency's module with no trace"
 make_pkg; rm "$P/.lake/packages/Dep/.lake/build/lib/lean/Dep/Base.trace"; readers
-tally_says Demo.Side 'rests on Dep.Base' && tally_says Demo.Down 'rests on Dep.Base' \
+tally_says Demo.Side 'rests on Dep.Base' && tally_says Demo.Top 'rests on Dep.Base' && tally_says Demo.Down 'rests on Dep.Base' \
   && ok "tally.py: everything over Dep.Base rests on it" || no "tally.py doesn't follow an import into a dependency"
 count_says Demo.Side STALE 'rests on Dep.Base' && ok "count.py: Demo.Side is STALE" \
   || no "count.py doesn't follow an import into a dependency"
@@ -195,13 +202,23 @@ console; check 0 Demo.Side
 rm "$P/.lake/build/lib/lean/Demo/Side.trace"; check 0 Demo.Side
 [ "$(verdict Demo.Side)" = NOTRACE ] && [ "$crc" = 1 ] && ok "a passed build with no trace to read is NO TRACE, exit 1" \
   || no "a passed build with no trace reads $(verdict Demo.Side), exit $crc"
+make_pkg; trace "$P/.lake/build/lib/lean/Demo/Side.trace" info "Demo/Side.lean:4:0: ✅ Valid" \
+  info "Demo/Side.lean:9:0: 'Demo.side' depends on axioms: [propext, sorryAx, Classical.choice, Quot.sound]"
+console; check 0 Demo.Side
+[ "$(verdict Demo.Side)" = SORRY ] && [ "$crc" = 1 ] && ok "a #print axioms naming sorryAx alone is SORRY, exit 1" \
+  || no "an axiom list with sorryAx reads $(verdict Demo.Side), exit $crc"
+trace "$P/.lake/build/lib/lean/Demo/Side.trace" info "Demo/Side.lean:4:0: ✅ Valid" \
+  info "Demo/Side.lean:6:0: ✅ Expected Undetermined"
+check 0 Demo.Side
+[ "$(verdict Demo.Side)" = ok ] && [ "$crc" = 0 ] && ok "an info line's ✅ Expected Undetermined is ok" \
+  || no "an Expected Undetermined reads $(verdict Demo.Side), exit $crc"
 make_pkg; console; TT_PATH=$T/halt: check 0 Demo.Down
 [ "$(verdict Demo.Down)" = NOTRACE ] && [ "$crc" = 1 ] && ok "a judge that stops halfway leaves no verdict: NO TRACE, exit 1" \
   || no "a judge that stops halfway reads $(verdict Demo.Down), exit $crc"
 
 echo "== check.sh: an import the run doesn't list, from its own trace, under its own name"
 make_pkg; console; check 0 Demo.Down
-[ "$(import_verdict Demo.Top Demo.Down)" = "" ] && grep -q 'each read from its own trace: 1 of 1 ok' "$T/check.out" && [ "$crc" = 0 ] \
+[ "$(import_verdict Demo.Top Demo.Down)" = "" ] && grep -q 'each read from its own trace: 2 of 2 ok' "$T/check.out" && [ "$crc" = 0 ] \
   && ok "a clean import: counted ok, exit 0" || no "a clean import: '$(import_verdict Demo.Top Demo.Down)', exit $crc"
 trace "$P/.lake/build/lib/lean/Demo/Top.trace" info "Demo/Top.lean:4:0: ✅ Valid" warning "Demo/Top.lean:6:8: declaration uses 'sorry'"
 check 0 Demo.Down
@@ -215,6 +232,17 @@ check 0 Demo.Down
 rm "$P/.lake/build/lib/lean/Demo/Top.trace"; check 0 Demo.Down
 [ "$(import_verdict Demo.Top Demo.Down)" = NOTRACE ] && [ "$crc" = 1 ] && ok "no trace to read: NO TRACE, exit 1" \
   || no "an import with no trace reads '$(import_verdict Demo.Top Demo.Down)', exit $crc"
+make_pkg; trace "$P/.lake/build/lib/lean/Demo/Leaf.trace" info "Demo/Leaf.lean:1:0: ✅ Valid" \
+  warning "Demo/Leaf.lean:3:8: declaration uses 'sorry'"
+console; check 0 Demo.Down
+[ "$(verdict Demo.Down)" = ok ] && [ "$(import_verdict Demo.Leaf Demo.Down)" = SORRY ] && [ "$crc" = 1 ] \
+  && ok "an import two deep: SORRY Demo.Leaf (an import of Demo.Down), exit 1" \
+  || no "an import two deep: Demo.Leaf '$(import_verdict Demo.Leaf Demo.Down)', exit $crc"
+check 0 Demo.Top Demo.Down
+[ "$(grep -c '^SORRY     Demo.Leaf (an import of ' "$T/check.out")" = 1 ] \
+  && grep -q 'each read from its own trace: 0 of 1 ok' "$T/check.out" \
+  && ok "an import two listed modules share: one line, counted once" \
+  || no "a shared import: $(grep -c '^SORRY     Demo.Leaf (an import of ' "$T/check.out") lines, $(grep -o '[0-9]* of [0-9]* ok' "$T/check.out")"
 make_pkg; trace "$P/.lake/build/lib/lean/Demo/Top.trace" warning "Demo/Top.lean:6:8: declaration uses 'sorry'"
 console; check 0 Demo.Down Demo.Top
 [ "$(verdict Demo.Top)" = SORRY ] && [ "$(import_verdict Demo.Top Demo.Down)" = "" ] \
@@ -226,7 +254,7 @@ console; check 0 Demo.Side
 
 echo "== check.sh dates each trace it reads to the build's start"
 make_pkg; touch -d '2026-11-12 10:00' "$P/Demo/Top.lean" "$P/Demo/Down.lean"; readers
-tally_says Demo.Down 'a trace older than its source (run ./check.sh on it)' \
+tally_says Demo.Down 'a trace older than its source (run ./check.sh Demo.Down)' \
   && count_says Demo.Down STALE 'trace older than the source: run ./check.sh on it' \
   && ok "sources written again after their build: both readers say to run check.sh" || no "a source newer than its trace reads ok"
 console '✔ [3/3] Replayed Demo.Down'; check 0 Demo.Down; readers
@@ -235,6 +263,35 @@ tally_ok Demo.Down && tally_ok Demo.Top && count_says Demo.Down ok '' && count_s
 make_pkg; console; TT_EDIT=$P/Demo/Side.lean check 0 Demo.Side; readers
 tally_says Demo.Side 'a trace older than its source' && count_says Demo.Side STALE 'older than the source' \
   && ok "a source written during its build reads stale after it" || no "a source written during its build reads fresh"
+make_pkg; touch -d '2026-11-12 10:00' "$P/Demo/Leaf.lean"; readers
+tally_says Demo.Leaf 'a trace older than its source' && count_says Demo.Leaf STALE 'older than the source' \
+  || no "the case shows nothing: Demo.Leaf, written again since its build, reads fresh"
+console '✔ [5/5] Replayed Demo.Down'; check 0 Demo.Down; readers
+tally_ok Demo.Leaf && count_says Demo.Leaf ok '' && ok "once check.sh replays Demo.Down, its import two deep, Demo.Leaf, reads ok" \
+  || no "an import two deep still reads stale after a replay"
+make_pkg; touch -d '2026-11-12 10:00' "$P/Demo/Top.lean"; console; check 124 Demo.Down; readers
+[ "$(verdict Demo.Down)" = TIMEOUT ] && tally_says Demo.Top 'a trace older than its source' && count_says Demo.Top STALE 'older than the source' \
+  && ok "a build that times out dates nothing: its import Demo.Top, written again since its build, reads stale" \
+  || no "after a timeout, Demo.Top, written again since its build, reads fresh"
+make_pkg; touch -d '2026-11-12 10:00' "$P/Demo/Top.lean"
+console '✖ [9/9] Building Demo.Down (2.1s)' 'error: build failed'; check 1 Demo.Down; readers
+[ "$(verdict Demo.Down)" = FAILED ] && tally_says Demo.Top 'a trace older than its source' && count_says Demo.Top STALE 'older than the source' \
+  && ok "nor does a build that fails" || no "after a failed build, Demo.Top, written again since its build, reads fresh"
+
+echo "== tally.py names the step that reads a module again, for the package it reads"
+make_pkg; touch -d '2026-11-12 10:00' "$P/Demo/Side.lean"
+mkdir -p "$P/Slice/Slice"; printf 'Slice.Rule\n' > "$P/Slice/modules.txt"
+printf 'theorem Slice.rule : True := by blaster\n' > "$P/Slice/Slice/Rule.lean"
+trace "$P/Slice/.lake/build/lib/lean/Slice/Rule.trace" info "Slice/Rule.lean:1:0: ✅ Valid"
+touch -d '2026-11-10 11:00' "$P/Slice/.lake/build/lib/lean/Slice/Rule.trace"   # its source is newer: written again since
+(cd "$P" && python3 -I tally.py Demo > "$T/tally.out" 2>&1; python3 -I tally.py Slice/Slice > "$T/slice.out" 2>&1)
+tally_says Demo.Side 'a trace older than its source (run ./check.sh Demo.Side)' \
+  && grep -q "^NOT OK   Slice.Rule: a trace older than its source (run ./check.sh seedelf-slice Slice.Rule)" "$T/slice.out" \
+  && ok "./check.sh Demo.Side here, ./check.sh seedelf-slice Slice.Rule for Slice/'s" \
+  || no "tally.py's step: $(grep -ho '(run [^)]*)' "$T/tally.out" "$T/slice.out" | paste -sd ' ' -)"
+console; check 0 seedelf-slice Slice.Rule; (cd "$P" && python3 -I tally.py Slice/Slice > "$T/slice.out" 2>&1)
+[ "$(verdict Slice.Rule)" = ok ] && ! grep -q '^NOT OK' "$T/slice.out" && ok "and that step reads Slice.Rule again: ok" \
+  || no "./check.sh seedelf-slice Slice.Rule leaves it $(verdict Slice.Rule), tally.py $(tail -1 "$T/slice.out")"
 
 echo "== run-all.sh's exit status"
 make_audit; console; run_all 0
