@@ -832,8 +832,11 @@ export function NewSwap({
     if (Date.now() - at > QUOTE_FRESH_MS) {
       quote = await call("swap-quote", quote.ask);
       at = Date.now();
-      // The form's quote too, where it's the same swap: it isn't once a pick changed while the review built.
-      if (ask && sameAsk(quote.ask, ask)) setQuoted({ quote, at });
+      // The form's quote too, where it holds the same swap's when this answers: not once a pick changed meanwhile and
+      // that pick's own quote landed. Read against the render Review was pressed in, MIN's took the place of SNEK's, and
+      // Back found the form waiting on a quote nothing asked for again (chunk 51, r2screens#2).
+      const fresh = { quote, at };
+      setQuoted((was) => (!was || sameAsk(was.quote.ask, fresh.quote.ask) ? fresh : was));
       if (adaShort(seedelf.lovelace, quote)) return false;
     }
     const wantThrough = way?.through ?? (keepWay ? through : undefined);
@@ -3094,16 +3097,32 @@ type StepState = "done" | "now" | "paused" | "failed" | "todo" | "skipped";
  * cut short or stopped, the chain's own words. It said "Everything at the account, under fresh registers" whichever
  * way it went, while a swap's spare ADA, and since 34e its proceeds' boxes, went into Lovejoin's pools for hours
  * (1.6.0's rehearsal, step 4). Those words stay for a return that went directly with nothing for a box, and for a swap
- * from before the switch whose return isn't built, which goes as Settings has it.
+ * from before the switch whose return isn't built, which goes as Settings has it. Once the swap's own return went, a
+ * chain sent after it is a later return's, a stranger's payment brought back, say, which takes the session's chain
+ * record: it never speaks for the swap's own, which then says only which way that went (chunk 51, r2docs#1).
  */
 function backStepText(s: SessionView): string {
   const auto = s.auto!;
   if (s.lovejoinSkipped) return t("swaps.step.directLeftOut");
   if (auto.direct) return t("swaps.step.directChosen");
+  const own = ownReturnAt(s);
+  // Every transaction of a chain comes before its return (the WebAssembly's chain puts the return last).
+  const mixed = (x: SessionTx) => x.kind === "deposit" || x.kind === "mix";
+  if (own >= 0 && s.txs.slice(own + 1).some(mixed)) {
+    return t(s.txs.slice(0, own).some(mixed) ? "swaps.step.throughLovejoin" : "swaps.step.freshRegisters");
+  }
   if (s.chain) return s.chain.cut || s.chain.stopped ? chainText(s.chain) : t("swaps.step.throughLovejoin");
-  const returned = s.txs.some((x) => x.kind === "back");
-  return !returned && auto.direct === false ? t("swaps.step.throughLovejoin") : t("swaps.step.freshRegisters");
+  return own < 0 && auto.direct === false ? t("swaps.step.throughLovejoin") : t("swaps.step.freshRegisters");
 }
+
+/**
+ * Where the swap's own return is among the session's transactions: its first. The worker takes a return for one of
+ * only what others paid the account (KeptBack `strangers`) once one of the session's own went, over the same returns a
+ * view shows (sessions.ts `apart`), so the first is always the swap's own. A later one may bring back what a stranger
+ * paid it before it closed: the Received row counts it beside the swap's, and the last step never names it in the
+ * swap's place (chunk 51, r2docs#1). -1 before any.
+ */
+const ownReturnAt = (s: SessionView) => s.txs.findIndex((x) => x.kind === "back");
 
 /**
  * A swap that runs itself, as four steps: funded, the order placed, filled
@@ -3205,7 +3224,8 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
     {
       title: tr("swaps.plan.back"),
       sub: backStepText(s),
-      tx: tx("back"),
+      // The swap's own return, never a later one of what a stranger paid its account (ownReturnAt; r2docs#1).
+      tx: s.txs[ownReturnAt(s)],
     },
   ];
   const done = auto.step === "done";

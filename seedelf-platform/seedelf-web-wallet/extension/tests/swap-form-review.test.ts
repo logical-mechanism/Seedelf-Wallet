@@ -518,3 +518,40 @@ describe.runIf(__MAINNET_ENABLED__)("Review swap is pressed only where the fundi
     expect(foot(tree)).toEqual({ label: "Not enough ADA", disabled: true });
   });
 });
+
+// Chunk 51, r2screens#2: Review swap past the quote's minute asks Minswap again first, and that answer replaced the
+// form's quote with the swap's whatever the form held by then: You receive changed to SNEK meanwhile, SNEK's own quote
+// gave way to MIN's, and after Back the form read "Getting a quote…" with Review off, with nothing asking again.
+describe.runIf(__MAINNET_ENABLED__)("a token picked while Review asks Minswap again (chunk 51, r2screens#2)", () => {
+  it("keeps the form the quote of the token picked meanwhile: Back finds it quoted, and Review on", async () => {
+    let tree = await formFor100AdaToMin();
+    // Over a minute on: Review swap asks Minswap again for MIN first, and that answer is held.
+    vi.advanceTimersByTime(61_000);
+    let answer: (() => void) | undefined;
+    run.answers.set("swap-quote", (ask) => {
+      const a = ask as SwapAsk;
+      return a.tokenOut === MIN ? new Promise((resolve) => (answer = () => resolve(quoteOf(a)))) : quoteOf(a);
+    });
+    expect(reviewSwap(tree)).toBe(true);
+    tree = await settle();
+    expect(answer, "the re-ask is out").toBeDefined();
+    // Meanwhile You receive goes to SNEK, and SNEK's own quote lands on the form.
+    tree = await toSnek(tree);
+    expect(footButton(tree)?.props.children).toBe("Building…");
+    // Then MIN's fresh quote answers and the MIN build lands: the approval names MIN (e7a#1).
+    answer!();
+    tree = await settle();
+    finishBuild!();
+    tree = await settle();
+    expect(tree.props.titleId).toBe("swap-fund-review");
+    expect(shown(tree)).toEqual({ pay: "100 ₳", receive: "≈ 906.5941 MIN", least: "897.61792 MIN" });
+    // Back: the form for SNEK, its own quote kept, and Review on, with nothing asked again.
+    const asked = payloads("swap-quote").length;
+    (tree.props.onBack as () => void)();
+    tree = draw();
+    expect(tree.props.titleId).toBe("swap-title");
+    expect((tokenButton(tree, "swap-to")?.props.pick as { id: string } | undefined)?.id).toBe(SNEK);
+    expect({ label: footButton(tree)?.props.children, disabled: footButton(tree)?.props.disabled }).toEqual({ label: "Review swap", disabled: false });
+    expect(payloads("swap-quote")).toHaveLength(asked);
+  });
+});

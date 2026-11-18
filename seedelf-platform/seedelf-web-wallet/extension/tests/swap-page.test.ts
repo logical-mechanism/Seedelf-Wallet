@@ -258,6 +258,11 @@ describe("a finished swap whose account a stranger paid before it closed (chunk 
     expect(view.stage).toBe("closed");
     expect(view.received).toEqual({ lovelace: (BigInt(own.lovelace) + BigInt(theirs.lovelace)).toString(), tokens: [PROCEEDS] });
     expect(shown(view)).toMatch(/Received 906\.5941 MIN/);
+    // Its last step, Back in your private balance, links the swap's own return, never the stranger's that came after it
+    // (chunk 51, r2docs#1).
+    const [ownBack, strangers] = view.txs.filter((x) => x.kind === "back");
+    expect(stepLinks(view).at(-1)).toBe(ownBack!.txHash);
+    expect(stepLinks(view)).not.toContain(strangers!.txHash);
   });
 
   it(
@@ -349,6 +354,80 @@ describe("a finished swap whose account a stranger paid before it closed (chunk 
     // Every return its own: the record's is none of theirs. No return: nothing to say.
     expect(receivedOf(before, [back("2000000")]).received?.lovelace).toBe("2000000");
     expect(receivedOf(before, [swap])).toEqual({});
+  });
+});
+
+/** A session's page, as markup. */
+const markupOf = (s: SessionView) =>
+  renderToStaticMarkup(
+    createElement(
+      NetworkContext.Provider,
+      { value: "preprod" },
+      createElement(Session, { session: s, reading: false, onRefresh: () => undefined, onBack: () => undefined, onChanged: () => undefined }),
+    ),
+  );
+
+/** The Cardanoscan transactions a session's timeline links, step by step, in order: a step that's done and has one. */
+function stepLinks(s: SessionView): string[] {
+  const steps = /<ol class="timeline__steps">([\s\S]*?)<\/ol>/.exec(markupOf(s))?.[1] ?? "";
+  return [...steps.matchAll(/cardanoscan\.io\/transaction\/([0-9a-f]{64})/g)].map((m) => m[1]!);
+}
+
+// Chunk 51, r2docs#1: the swap's last step, Back in your private balance, followed its latest return, which can be what
+// a stranger paid its account before it closed, brought back after the swap's own: its link opened the stranger's, and a
+// chain of the stranger's alone, which takes the session's chain record, spoke for how the swap's own came back. The
+// swap's own is its first return (the worker marks a return of strangers' alone only once one of its own went), and no
+// chain sent after it speaks for it.
+describe("a finished swap's last step names its own return, whatever came back after it (chunk 51, r2docs#1)", () => {
+  const tx = (kind: SessionView["txs"][number]["kind"], hex: string) => ({ kind, txHash: hex.repeat(32), at: 0, confirmed: true });
+  const OUT = tx("out", "ab");
+  const SWAP = tx("swap", "cd");
+  const done = (over: Partial<SessionView>) =>
+    swapSession({
+      stage: "closed",
+      auto: { step: "done", stopping: false, filled: true, approvedMinOut: "4158000", direct: false },
+      ...over,
+    });
+  /** What the last step, Back in your private balance, says under its title. */
+  const backStep = (s: SessionView) => {
+    const html = markupOf(s);
+    return /<p class="timeline__sub">(.*?)<\/p>/.exec(html.slice(html.indexOf(">Back in your private balance<")))?.[1]?.replaceAll("&#x27;", "'");
+  };
+
+  it("came back directly, nothing for a box: a stranger's chain after it, stopped, never reads as its own", () => {
+    const s = done({
+      txs: [OUT, SWAP, tx("back", "b1"), tx("deposit", "d2"), tx("mix", "e2")],
+      chain: { total: 3, sent: 2, confirmed: 2, cut: false, stopped: "The network rejected the transaction" },
+    });
+    expect(backStep(s)).toBe("Everything at the account, under fresh registers");
+    expect(page(s)).not.toContain("Stopped after");
+    expect(stepLinks(s).at(-1)).toBe("b1".repeat(32));
+  });
+
+  it("came back through Lovejoin: a stranger's chain after it, stopped, never takes its place", () => {
+    const s = done({
+      txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("back", "b1"), tx("deposit", "d2"), tx("back", "b2")],
+      chain: { total: 3, sent: 1, confirmed: 1, cut: false, stopped: "The network rejected the transaction" },
+    });
+    expect(backStep(s)).toBe("What goes into Lovejoin boxes comes back later, each box by itself; the rest at once, under fresh registers");
+    expect(page(s)).not.toContain("Stopped after");
+    expect(stepLinks(s).at(-1)).toBe("b1".repeat(32));
+  });
+
+  it("says what it always did where nothing came back after it, or only directly: its own chain cut short, or all sent", () => {
+    // Cut short: what was left came back directly, in a return of its own.
+    const cut = done({ txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("back", "b1")], chain: { total: 4, sent: 2, confirmed: 2, cut: true } });
+    expect(backStep(cut)).toBe("Stopped after 2 of 4 transactions; what was left came back directly");
+    // All sent, then a stranger's 2 ₳ back directly: its link is the swap's own return.
+    const sent = done({
+      txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("back", "b1"), tx("back", "b2")],
+      chain: { total: 3, sent: 3, confirmed: 3, cut: false },
+    });
+    expect(backStep(sent)).toBe("What goes into Lovejoin boxes comes back later, each box by itself; the rest at once, under fresh registers");
+    expect(stepLinks(sent).at(-1)).toBe("b1".repeat(32));
+    // Directly as chosen, or Lovejoin left out: as before.
+    expect(backStep(done({ txs: [OUT, SWAP, tx("back", "b1")], auto: { step: "done", stopping: false, filled: true, approvedMinOut: "4158000", direct: true } }))).toBe("Directly, as you chose");
+    expect(backStep(done({ txs: [OUT, SWAP, tx("back", "b1")], lovejoinSkipped: "too little" }))).toBe("Directly: Lovejoin was left out");
   });
 });
 
