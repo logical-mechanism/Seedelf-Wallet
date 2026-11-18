@@ -3069,6 +3069,81 @@ fn a_datum_naming_the_accounts_key_counts_under_a_script_data_hash_too() {
     assert_eq!(s.released_tokens.len(), 1);
 }
 
+/// `Constr 0 [key]` with the key's 28 bytes written each way the node reads alike (cardano-cli 11.0.0.0, offline: each
+/// hashes as data, and a transaction carrying it shows the field as `{"bytes": key}`).
+fn datums_naming(key: Hash<28>) -> Vec<(&'static str, String)> {
+    let k = hex::encode(key);
+    let (first, second) = k.split_at(28);
+    let ones: String = key.iter().map(|b| format!("41{b:02x}")).collect();
+    vec![
+        ("whole", format!("d8799f581c{k}ff")),
+        ("under a longer head", format!("d8799f59001c{k}ff")),
+        ("in one chunk", format!("d8799f5f581c{k}ffff")),
+        (
+            "in two chunks of 14",
+            format!("d8799f5f4e{first}4e{second}ffff"),
+        ),
+        ("in 28 chunks of 1", format!("d8799f5f{ones}ffff")),
+        (
+            "with an empty chunk between",
+            format!("d8799f5f4e{first}404e{second}ffff"),
+        ),
+        (
+            "in the general form, in chunks",
+            format!("d86682009f5f4e{first}4e{second}ffff"),
+        ),
+    ]
+}
+
+/// Chunk 51, r3a#1's class (class#2): whoever writes a contract UTxO's datum chooses how its bytes are spelled, and the
+/// contract reads it as data, never as bytes. On a site's transaction with a script data hash and no required signer
+/// (1.9.0's critic#1), a datum naming the account's key is what says the key releases the UTxO: the window calls it out
+/// and Sign waits for the user. The key in chunks is named too, inline or carried by hash in the witness set; searched
+/// for in the datum's bytes alone, it wasn't.
+#[test]
+fn a_datum_names_the_accounts_key_however_its_bytes_are_spelled() {
+    let mut b = body(
+        vec![input(TX_A, 1), input(TX_B, 0)],
+        vec![out_with_token(&theirs(), 51_800_000)],
+    );
+    b.script_data_hash = Some(Hash::new([1; 32]));
+    let tx = tx_hex(b);
+    let own = row(TX_A, 1, &ours(Role::Receive, 0), 2_000_000, &[]);
+    let mut missed = Vec::new();
+    for (how, datum) in datums_naming(key_00()) {
+        let mut inline = contract_row(TX_B, 0);
+        inline.inline_datum = Some(cip30::InlineDatum {
+            bytes: datum.clone(),
+        });
+        let rows = vec![own.clone(), inline];
+        let s = cip30::inspect_tx(&account(), &request(tx.clone(), rows, false)).unwrap();
+        if !(s.names_key && s.key_releases) {
+            missed.push(format!("inline, {how}: {datum}"));
+        }
+        // Kept by hash: the transaction carries the datum as written, and the hash is of those bytes.
+        let mut held = contract_row(TX_B, 0);
+        held.datum_hash = Some(hex::encode(Hasher::<256>::hash(
+            &hex::decode(&datum).unwrap(),
+        )));
+        let carrying = format!("{}a10481{datum}f5f6", tx.strip_suffix("a0f5f6").unwrap());
+        let rows = vec![own.clone(), held];
+        let s = cip30::inspect_tx(&account(), &request(carrying, rows, false)).unwrap();
+        if !(s.names_key && s.key_releases) {
+            missed.push(format!("carried by hash, {how}: {datum}"));
+        }
+    }
+    assert!(missed.is_empty(), "{missed:#?}");
+    // Two byte strings are two values to the contract: half the key in each names no key.
+    let k = hex::encode(key_00());
+    let (first, second) = k.split_at(28);
+    let mut halves = contract_row(TX_B, 0);
+    halves.inline_datum = Some(cip30::InlineDatum {
+        bytes: format!("d8799f4e{first}4e{second}ff"),
+    });
+    let s = cip30::inspect_tx(&account(), &request(tx, vec![own, halves], false)).unwrap();
+    assert!(!s.names_key && !s.key_releases);
+}
+
 /// The account's own token of the kind a contract UTxO holds, passed through, never stands for the contract's: the
 /// order's ADA paid to the account and its token to the site still read as releasing the token (1.9.0's release
 /// review, mutants#2).

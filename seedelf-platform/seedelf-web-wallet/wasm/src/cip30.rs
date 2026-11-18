@@ -13,13 +13,13 @@ use pallas_addresses::byron::AddrAttrProperty;
 use pallas_addresses::{
     Address, Network as AddressNetwork, ShelleyDelegationPart, ShelleyPaymentPart, StakePayload,
 };
-use pallas_codec::minicbor::{self, Encoder};
+use pallas_codec::minicbor::{self, Decoder, Encoder, data::Type};
 use pallas_codec::utils::Nullable;
 use pallas_crypto::hash::{Hash, Hasher};
 use pallas_primitives::{Fragment, Metadatum, PlutusData, StakeCredential, conway};
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
-use seedelf_core::cbor::check_nesting;
+use seedelf_core::cbor::{MAX_DEPTH, check_nesting, within_depth};
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::staking::{drep_id, pool_id};
 use seedelf_crypto::cardano::{CardanoAccount, Role};
@@ -976,10 +976,13 @@ fn at_script(row: &KoiosRow) -> bool {
     matches!(row_address(row), Ok(Address::Shelley(s)) if s.payment().is_script())
 }
 
-/// Whether a contract UTxO's datum names one of the account's keys: its 28-byte hash anywhere in the datum's bytes, in
-/// whatever role the contract gives it (an owner, a canceller, a seller, a payee). The datum is the row's own, or for
-/// one kept by hash the one the transaction carries under that hash. It says the key is named, not whose the UTxO is
-/// or what the contract does with it.
+/// Whether a contract UTxO's datum names one of the account's keys: its 28-byte hash anywhere in the datum's bytes, or
+/// in a byte string's value with its chunks joined ([`any_byte_value`]), in whatever role the contract gives it (an
+/// owner, a canceller, a seller, a payee). The datum is the row's own, or for one kept by hash the one the transaction
+/// carries under that hash. It says the key is named, not whose the UTxO is or what the contract does with it.
+///
+/// Whoever writes a datum chooses how its bytes are spelled, and the contract reads it as data: a key in chunks is the
+/// same key to it (chunk 51, r3a#1's class).
 fn datum_names_key(row: &KoiosRow, carried: &HashMap<String, Vec<u8>>, keys: &Keys) -> bool {
     let inline = row
         .inline_datum
@@ -990,10 +993,51 @@ fn datum_names_key(row: &KoiosRow, carried: &HashMap<String, Vec<u8>>, keys: &Ke
             .get(&row.datum_hash.as_ref()?.to_lowercase())
             .map(Vec::as_slice)
     });
-    bytes.is_some_and(|b| {
+    let names = |b: &[u8]| {
         b.windows(28)
             .any(|w| <[u8; 28]>::try_from(w).is_ok_and(|h| keys.of_hash(&Hash::new(h)).is_some()))
-    })
+    };
+    bytes.is_some_and(|b| names(b) || any_byte_value(b, names))
+}
+
+/// Whether `test` holds for a byte string's value in `datum`, its chunks joined: each byte string on its own, never
+/// joined to the next. Only for one well-formed item held to [`MAX_DEPTH`], read token by token, never by a recursive
+/// decoder, as seedelf-koios's `register_of_datum` reads a register.
+fn any_byte_value(datum: &[u8], test: impl Fn(&[u8]) -> bool) -> bool {
+    if !within_depth(datum, MAX_DEPTH) {
+        return false;
+    }
+    let mut d = Decoder::new(datum);
+    while d.position() < datum.len() {
+        let read = match d.datatype() {
+            Ok(Type::Bytes | Type::BytesIndef) => match byte_value(&mut d) {
+                Ok(value) if test(&value) => return true,
+                read => read.map(drop),
+            },
+            Ok(Type::Array | Type::ArrayIndef) => d.array().map(drop),
+            Ok(Type::Map | Type::MapIndef) => d.map().map(drop),
+            Ok(Type::Tag) => d.tag().map(drop),
+            Ok(Type::Break) => {
+                d.set_position(d.position() + 1);
+                Ok(())
+            }
+            Ok(_) => d.skip(),
+            Err(e) => Err(e),
+        };
+        if read.is_err() {
+            return false;
+        }
+    }
+    false
+}
+
+/// A byte string's value at `d`'s position: its bytes, or its chunks' joined.
+fn byte_value(d: &mut Decoder) -> Result<Vec<u8>, minicbor::decode::Error> {
+    let mut value = Vec::new();
+    for chunk in d.bytes_iter()? {
+        value.extend_from_slice(chunk?);
+    }
+    Ok(value)
 }
 
 /// The most of a fee that's taken as one when working out what leaves a contract: well over what the largest
