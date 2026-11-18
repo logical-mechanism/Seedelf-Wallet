@@ -13,7 +13,7 @@ use pallas_primitives::conway::Certificate;
 use pallas_traverse::MultiEraTx;
 use rand_core::OsRng;
 use seedelf_core::address::wallet_contract;
-use seedelf_core::build::{Chain, FinalSpend, MAX_TX_SIZE};
+use seedelf_core::build::{Chain, FinalSpend, MAX_TX_SIZE, ScriptSpend};
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::lovejoin::{self, BoxToken, Terms, Version, templates};
 use seedelf_crypto::register::Register;
@@ -587,5 +587,34 @@ fn a_launch_read_back_under_another_seed_isnt_trusted() {
     assert!(
         matches!(&why, Err(e) if e.to_string().contains("isn't one the wallet trusts")),
         "{why:?}"
+    );
+}
+
+/// Chunk 51, t1a#7: a launch's NFT is minted by a script the transaction
+/// carries, which must hash to the policy it mints under: one that doesn't
+/// is refused before anything is built, where the node would refuse it for a
+/// missing script.
+#[test]
+fn an_inline_minting_script_must_hash_to_its_policy() {
+    let w = world(true);
+    let inputs = vec![owned(&w, 0x31, 30_000_000, None)];
+    let script = hex::decode("4e4d01000033222220051200120011").unwrap();
+    let mint = |policy: Hash<28>| {
+        ScriptSpend::new(&w.chain, &inputs, &w.owner, w.signer)
+            .unwrap()
+            .mint_inline(
+                policy,
+                script.clone(),
+                b"lovejoin".to_vec(),
+                1,
+                vec![0xd8, 0x79, 0x80],
+            )
+            .map(|_| ())
+    };
+    assert!(mint(Hasher::<224>::hash_tagged(&script, 3)).is_ok());
+    let refused = mint(Hash::new([0x13; 28]));
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("The minting script isn't the policy's")),
+        "{refused:?}"
     );
 }

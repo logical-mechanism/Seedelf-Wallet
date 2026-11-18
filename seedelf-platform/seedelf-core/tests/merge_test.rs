@@ -258,3 +258,66 @@ fn an_account_under_another_key_or_a_token_collateral_is_refused() {
         .unwrap();
     assert!(error.to_string().contains("one-time key"), "{error}");
 }
+
+/// Chunk 51, t1a#16: the account's rows are this network's. One under the
+/// account's key on the other network is neither an input nor the
+/// collateral: the node would refuse an input that isn't on its chain.
+#[test]
+fn an_account_row_on_the_other_network_is_refused() {
+    let owner = Register::create(schnorr::random_scalar()).unwrap();
+    let s = session();
+    let one_time = session().key;
+    let change = contract_row(0x30, 0, 20_000_000, &owner.clone().rerandomize().unwrap());
+    let spend =
+        || ScriptSpend::new(&chain(), std::slice::from_ref(&change), &owner, one_time).unwrap();
+    let ours = row(0x11, 0, &s.address, 5_000_000, &[]);
+    let mainnet: Address = ShelleyAddress::new(
+        Network::Mainnet,
+        ShelleyPaymentPart::Key(s.key),
+        ShelleyDelegationPart::Null,
+    )
+    .into();
+    let elsewhere = row(0x13, 0, &mainnet, 30_000_000, &[]);
+    assert!(
+        spend()
+            .with_account(s.key, std::slice::from_ref(&ours), &ours)
+            .is_ok()
+    );
+    for (inputs, collateral) in [(&elsewhere, &ours), (&ours, &elsewhere)] {
+        let refused = spend()
+            .with_account(s.key, std::slice::from_ref(inputs), collateral)
+            .map(|_| ());
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("isn't under the account's key")),
+            "{refused:?}"
+        );
+    }
+}
+
+/// Chunk 51, t1a#18: the collateral the account puts up covers 3/2 of the
+/// fee. One short of that is refused in words, where the node would refuse
+/// the transaction for its collateral. (Its return's size moves the fee by a
+/// few hundred lovelace, so the amounts here stay clear of that.)
+#[test]
+fn an_account_collateral_short_of_three_halves_of_the_fee_is_refused() {
+    let owner = Register::create(schnorr::random_scalar()).unwrap();
+    let s = session();
+    let one_time = session().key;
+    let change = contract_row(0x30, 0, 20_000_000, &owner.clone().rerandomize().unwrap());
+    let inputs = [row(0x10, 0, &s.address, 30_000_000, &[])];
+    let fee_with = |lovelace: u64| {
+        ScriptSpend::new(&chain(), std::slice::from_ref(&change), &owner, one_time)
+            .unwrap()
+            .with_account(s.key, &inputs, &row(0x20, 0, &s.address, lovelace, &[]))
+            .unwrap()
+            .estimate()
+            .map(|built| built.fee.total)
+    };
+    let fee = fee_with(5_000_000).unwrap();
+    assert!(fee_with(fee * 3 / 2 + 1_000).is_ok());
+    let refused = fee_with(fee * 3 / 2 - 1_000);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("can't cover this transaction's fee")),
+        "{refused:?}"
+    );
+}

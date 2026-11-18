@@ -1450,6 +1450,33 @@ fn withdraw_with(
     paying: Paying<'_>,
     rewards: &mut Rewards,
 ) -> Result<Withdraw> {
+    let one_over = |measured: &Budgets| measured.with_margin(1);
+    withdraw_declaring(
+        params,
+        protocol,
+        boxes,
+        owner,
+        destination,
+        paying,
+        rewards,
+        &one_over,
+    )
+}
+
+/// [`withdraw_with`], each round declaring `declare` of what the round before
+/// measured: 1% over it, but in a test, which declares less than the scripts
+/// use, to show such a withdraw is never returned (chunk 51, t1c#15).
+#[allow(clippy::too_many_arguments)]
+fn withdraw_declaring(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    boxes: &[PoolBox],
+    owner: &Scalar,
+    destination: Register,
+    paying: Paying<'_>,
+    rewards: &mut Rewards,
+    declare: &dyn Fn(&Budgets) -> Budgets,
+) -> Result<Withdraw> {
     let payer = match paying {
         Paying::Account(p) => Some(p),
         _ => None,
@@ -1765,7 +1792,7 @@ fn withdraw_with(
                 // ledger asks, which it rounds up (InsufficientCollateral).
                 fee = even(needed);
             }
-            _ => declared = Some(measured.with_margin(1)),
+            _ => declared = Some(declare(&measured)),
         }
     }
     bail!("The withdraw's fee did not settle")
@@ -2667,5 +2694,106 @@ pub(crate) fn shuffle<T>(items: &mut [T]) {
     for i in (1..items.len()).rev() {
         let j = (OsRng.next_u64() % (i as u64 + 1)) as usize;
         items.swap(i, j);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    /// Preprod's parameters at epoch 315, with its V3 cost model.
+    fn params() -> ProtocolParameters {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/eval-preprod.json")).unwrap();
+        let seedelf = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"].as_str().unwrap().starts_with("seedelf spend"))
+            .unwrap();
+        ProtocolParameters::from_koios(&json!({
+            "min_fee_a": 44, "min_fee_b": 155381, "coins_per_utxo_size": "4310",
+            "key_deposit": "2000000", "price_mem": 0.0577, "price_step": 0.0000721,
+            "min_fee_ref_script_cost_per_byte": 15,
+            "cost_models": { "PlutusV3": seedelf["cost_model_v3"] },
+        }))
+        .unwrap()
+    }
+
+    /// Chunk 51, t1c#15: a withdraw is returned only from a round whose
+    /// declared budgets cover what that round's scripts used. Each round's
+    /// proof is new, so its measure moves by a hair, which declaring 1% over
+    /// the round before covers. Declared short of it here instead, no round
+    /// covers, and no withdraw comes back, where one declaring less than it
+    /// uses would fail its scripts on chain and lose the collateral.
+    #[test]
+    fn a_withdraw_declaring_less_than_its_scripts_use_is_never_returned() {
+        let params = params();
+        let protocol = Protocol::of(true).unwrap();
+        let sk = Scalar::from(31_415u64);
+        let mut address = vec![0x60];
+        address.extend([0x55; 28]);
+        let address = Address::from_bytes(&address).unwrap();
+        let coin = Coin {
+            utxo: Resolved {
+                tx_hash: [0x55; 32],
+                index: 0,
+                output: Output::new(address.clone(), 50_000_000)
+                    .build_babbage_raw()
+                    .unwrap()
+                    .encode_fragment()
+                    .unwrap(),
+            },
+            lovelace: 50_000_000,
+        };
+        let owner = Register::create(sk).unwrap();
+        let owners = vec![owner.clone().rerandomize().unwrap()];
+        let boxes = deposit(&params, &protocol, &[coin], &owners, &address, 1)
+            .unwrap()
+            .boxes;
+        let destination = || owner.clone().rerandomize().unwrap();
+        let back = |declare: &dyn Fn(&Budgets) -> Budgets| {
+            withdraw_declaring(
+                &params,
+                &protocol,
+                &boxes,
+                &sk,
+                destination(),
+                Paying::Boxes,
+                &mut Rewards::none(),
+                declare,
+            )
+            .map(|w| w.fee)
+        };
+        assert!(back(&|measured| measured.with_margin(1)).is_ok());
+        let short = |measured: &Budgets| {
+            let lowered = |purpose: &str, budget: Option<Budget>, index: u64| {
+                budget.map(|b| {
+                    json!({
+                        "validator": { "purpose": purpose, "index": index },
+                        "budget": {
+                            "memory": b.mem - b.mem.div_ceil(100),
+                            "cpu": b.steps - b.steps.div_ceil(100),
+                        },
+                    })
+                })
+            };
+            let rows: Vec<Value> = (0..8)
+                .flat_map(|i| {
+                    [
+                        lowered("spend", measured.spend(i), i),
+                        lowered("withdraw", measured.withdraw(i), i),
+                    ]
+                })
+                .flatten()
+                .collect();
+            Budgets::from_ogmios(&json!({ "result": rows })).unwrap()
+        };
+        let refused = back(&short);
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("did not settle")),
+            "{refused:?}"
+        );
     }
 }

@@ -1094,3 +1094,74 @@ fn a_four_wide_chain_mixes_four_boxes_at_a_time() {
         .is_err()
     );
 }
+
+/// Chunk 51, t1c#2: a pool's box ADA comes from its datum, so a deposit's boxes
+/// times it can pass what a u64 holds: two boxes of 2^63 lovelace are refused
+/// in words, never wrapped to nothing paid for them.
+#[test]
+fn a_deposits_boxes_past_what_a_sum_holds_are_refused_in_words() {
+    let half = ada_pool_of(1 << 63);
+    let refused = lovejoin::deposit(
+        &params(),
+        &half,
+        &[coin(0x11, 50_000_000)],
+        &owners(Scalar::from(9u64), 2),
+        &session(),
+        1,
+    )
+    .map(|d| d.fee);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("Too many boxes")),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51, t1c#10: a deposit's inputs' ADA is summed checked: two of 2^63
+/// lovelace (more than there is: a lying index's) are refused in words.
+#[test]
+fn a_deposits_inputs_past_what_a_sum_holds_are_refused_in_words() {
+    let classic = Protocol::of(true).unwrap();
+    let refused = lovejoin::deposit(
+        &params(),
+        &classic,
+        &[coin(0x11, 1 << 63), coin(0x12, 1 << 63)],
+        &owners(Scalar::from(9u64), 1),
+        &session(),
+        1,
+    )
+    .map(|d| d.fee);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("The inputs' ADA overflows")),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51, t1c#7: a deposit never makes a box under a register a payment
+/// isn't safe under (`build::is_payable`): one whose public value is the
+/// identity is anyone's to take, and one that isn't made of points, or whose
+/// generator is the identity, can never come back.
+#[test]
+fn a_deposit_never_makes_a_box_no_one_or_anyone_can_spend() {
+    let classic = Protocol::of(true).unwrap();
+    let g = Register::create(Scalar::from(9u64)).unwrap().generator;
+    let identity = format!("c0{}", "00".repeat(47));
+    for register in [
+        Register::new(g.clone(), identity.clone()),
+        Register::new(identity.clone(), g.clone()),
+        Register::new("00".repeat(48), "00".repeat(48)),
+    ] {
+        let refused = lovejoin::deposit(
+            &params(),
+            &classic,
+            &[coin(0x11, 50_000_000)],
+            &[register],
+            &session(),
+            1,
+        )
+        .map(|d| d.fee);
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("valid, non-identity register")),
+            "{refused:?}"
+        );
+    }
+}

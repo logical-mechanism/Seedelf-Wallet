@@ -254,16 +254,16 @@ fn a_mix_of_pool_boxes_passes_mix_logic() {
 fn a_mix_needs_two_boxes_and_a_payer_who_can_pay() {
     let protocol = Protocol::of(true).unwrap();
     let boxes = pool_boxes(&protocol);
-    assert!(
-        lovejoin::mix(
-            &params(),
-            &protocol,
-            &boxes[..1],
-            &payer(20_000_000),
-            &mut Rewards::none()
-        )
-        .is_err()
-    );
+    // In its own words, before the sigma-OR would refuse it in others (chunk 51, t1c#12).
+    let one = lovejoin::mix(
+        &params(),
+        &protocol,
+        &boxes[..1],
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap_err();
+    assert!(one.to_string().contains("at least two boxes"), "{one}");
     let short = lovejoin::mix(
         &params(),
         &protocol,
@@ -1004,7 +1004,8 @@ fn a_seed_is_the_deposit_alone_and_needs_no_pool_and_no_collateral() {
         40_000_000 - 30_000_000 - seed.txs[0].fee
     );
 
-    // Anything that mixes still needs collateral, and says so.
+    // Anything that mixes still needs collateral, and the chain says so before
+    // its first mix would (chunk 51, t1c#13).
     let err = lovejoin::chain(
         &params,
         &protocol,
@@ -1015,7 +1016,11 @@ fn a_seed_is_the_deposit_alone_and_needs_no_pool_and_no_collateral() {
         &mut Rewards::none(),
     )
     .unwrap_err();
-    assert!(err.to_string().contains("needs collateral"), "{err}");
+    assert!(
+        err.to_string()
+            .contains("A chain that mixes needs collateral"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -1628,5 +1633,230 @@ fn a_sessions_collateral_mix_takes_only_what_its_chain_left() {
     assert_eq!(
         withdrawals(&tail.mix.tx.tx_bytes.0),
         withdraws(&protocol, 0)
+    );
+}
+
+/// The compressed identity point of G1: `c0` and 47 zero bytes.
+fn identity() -> [u8; 48] {
+    let mut point = [0u8; 48];
+    point[0] = 0xc0;
+    point
+}
+
+/// Chunk 51, t1c#1: a box with an identity point is no one's, and no box: the
+/// identity decodes and sits in the subgroup, so only this check keeps a
+/// stranger's such box out of the count a pool's floor is held to, and out of
+/// the user's mixes, where it would hide them among one box fewer.
+#[test]
+fn a_box_with_an_identity_point_is_no_box() {
+    let protocol = Protocol::of(true).unwrap();
+    let owner = Register::create(Scalar::from(5u64))
+        .unwrap()
+        .rerandomize()
+        .unwrap();
+    let point: [u8; 48] = hex::decode(&owner.public_value)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let other: [u8; 48] = hex::decode(&owner.generator).unwrap().try_into().unwrap();
+    let as_output = |datum: &[u8]| Resolved {
+        tx_hash: [0x5a; 32],
+        index: 0,
+        output: protocol
+            .box_value()
+            .output(protocol.mix_box_address())
+            .unwrap()
+            .set_inline_datum(datum.to_vec())
+            .build_babbage_raw()
+            .unwrap()
+            .encode_fragment()
+            .unwrap(),
+    };
+    let genuine = lovejoin::mix_datum(&other, &point);
+    assert!(PoolBox::from_row(&box_row(&protocol, &genuine), &protocol).is_some());
+    assert!(PoolBox::from_resolved(as_output(&genuine), &protocol).is_some());
+    for (a, b) in [(identity(), point), (point, identity())] {
+        let datum = lovejoin::mix_datum(&a, &b);
+        assert_eq!(
+            PoolBox::from_row(&box_row(&protocol, &datum), &protocol),
+            None
+        );
+        assert_eq!(PoolBox::from_resolved(as_output(&datum), &protocol), None);
+    }
+}
+
+/// Chunk 51, t1c#9: the lead's x2#1 fix reads a row's address, and
+/// `a_key_address_carrying_mix_box_s_hash_holds_no_box` pins that; this pins
+/// its network half: mix_box's own script address on the other network holds
+/// no box of this one's.
+#[test]
+fn mix_boxs_address_on_the_other_network_holds_no_box() {
+    let owner = Register::create(Scalar::from(6u64))
+        .unwrap()
+        .rerandomize()
+        .unwrap();
+    let a: [u8; 48] = hex::decode(&owner.generator).unwrap().try_into().unwrap();
+    let b: [u8; 48] = hex::decode(&owner.public_value)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let datum = lovejoin::mix_datum(&a, &b);
+    for protocol in [Protocol::of(true).unwrap(), Protocol::of(false).unwrap()] {
+        let mut row = box_row(&protocol, &datum);
+        assert!(PoolBox::from_row(&row, &protocol).is_some());
+        let other_network = if protocol.network_flag { 0x71 } else { 0x70 };
+        row.address = pallas_addresses::Address::from_bytes(
+            &[vec![other_network], protocol.mix_box_hash.to_vec()].concat(),
+        )
+        .unwrap()
+        .to_bech32()
+        .unwrap();
+        assert_eq!(PoolBox::from_row(&row, &protocol), None, "{}", row.address);
+    }
+}
+
+/// Chunk 51, t1c#8: only ADA pays for Lovejoin. A UTxO holding a token isn't
+/// a coin: no output of a mix or a withdraw, nor a collateral return, would
+/// carry its token, which the ledger refuses.
+#[test]
+fn a_utxo_holding_a_token_is_no_coin_to_pay_lovejoin_with() {
+    let row = |assets: Value| -> seedelf_koios::koios::UtxoResponse {
+        serde_json::from_value(json!({
+            "tx_hash": hex::encode([0x61; 32]), "tx_index": 0,
+            "address": key_address(0x61).to_bech32().unwrap(), "value": "20000000",
+            "stake_address": null, "payment_cred": "", "epoch_no": 0, "block_height": 0,
+            "block_time": 0, "datum_hash": null, "inline_datum": null,
+            "reference_script": null, "asset_list": assets, "is_spent": false,
+        }))
+        .unwrap()
+    };
+    assert_eq!(
+        Coin::from_row(&row(json!([]))).unwrap().lovelace,
+        20_000_000
+    );
+    let token = json!([{ "policy_id": "c0".repeat(28), "asset_name": "", "quantity": "1",
+                         "decimals": 0, "fingerprint": "" }]);
+    let refused = Coin::from_row(&row(token)).map(|c| c.lovelace);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("holds tokens; only ADA pays for Lovejoin")),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51, t1c#11: a box is mixed once in a transaction, in the wallet's
+/// own words, before the evaluator would refuse it in its own.
+#[test]
+fn a_box_is_never_mixed_twice_in_one_transaction() {
+    let protocol = Protocol::of(true).unwrap();
+    let boxes = pool_boxes(&protocol);
+    let twice = [boxes[0].clone(), boxes[1].clone(), boxes[0].clone()];
+    let refused = lovejoin::mix(
+        &params(),
+        &protocol,
+        &twice,
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .map(|m| m.fee);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("can't be mixed twice")),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51, t1c#14: a fan-out is 0 to 3 waves deep; deeper, it would plan
+/// tens of mixes a box (and from 21 waves count past a usize on wasm32).
+#[test]
+fn a_fan_out_deeper_than_three_waves_is_refused() {
+    let protocol = Protocol::of(true).unwrap();
+    let owners = vec![
+        Register::create(Scalar::from(7u64))
+            .unwrap()
+            .rerandomize()
+            .unwrap(),
+    ];
+    let refused = lovejoin::chain(
+        &params(),
+        &protocol,
+        &funding(&[coin(0x44, 40_000_000)]),
+        &owners,
+        4,
+        &all_pool_boxes(&protocol),
+        &mut Rewards::none(),
+    )
+    .map(|chain| chain.txs.len());
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("0 to 3 waves deep")),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51, t1c#6: boxes come back only into a register a payment is safe
+/// under (`build::is_payable`): an identity public value is anyone's to take,
+/// an identity generator or a non-point locks them for good.
+#[test]
+fn boxes_never_come_back_into_a_register_no_one_or_anyone_can_spend() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(27_182u64);
+    let ours = our_boxes(sk, 1);
+    let g = Register::create(sk).unwrap().generator;
+    let identity = hex::encode(identity());
+    for destination in [
+        Register::new(g.clone(), identity.clone()),
+        Register::new(identity.clone(), g.clone()),
+        Register::new("00".repeat(48), "00".repeat(48)),
+    ] {
+        let refused = lovejoin::withdraw(
+            &params(),
+            &protocol,
+            &ours,
+            &sk,
+            destination,
+            &mut Rewards::none(),
+        )
+        .map(|w| w.lovelace);
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("valid, non-identity register")),
+            "{refused:?}"
+        );
+    }
+}
+
+/// Chunk 51, t1c#5: a withdraw the public account pays keeps the account's
+/// change as an output the ledger takes, at least an output's least; less is
+/// refused in words, where the ledger would refuse the signed withdraw.
+#[test]
+fn a_paid_withdraw_keeps_the_accounts_change_at_least_an_outputs_least() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(16_180u64);
+    let ours = our_boxes(sk, 1);
+    let paid = |lovelace: u64| {
+        lovejoin::withdraw_paid(
+            &params(),
+            &protocol,
+            &ours,
+            &sk,
+            Register::create(sk).unwrap().rerandomize().unwrap(),
+            &payer(lovelace),
+            &mut Rewards::none(),
+        )
+        .map(|w| w.fee)
+    };
+    let fee = paid(20_000_000).unwrap();
+    let least = seedelf_core::transaction::calculate_min_required_utxo(
+        pallas_txbuilder::Output::new(key_address(0x33), 1_000_000),
+        &params(),
+    )
+    .unwrap();
+    // Its first round prices at 0.5 ₳, before the fee settles, and keeps the
+    // change's least after that too, as a mix's payer keeps it after its draft.
+    if let Err(e) = paid(500_000 + least + 5_000) {
+        panic!("fee {fee}, least {least}: {e}");
+    }
+    // Each build's proofs are new, so its fee moves by a hair: well clear of it.
+    let refused = paid(fee + least - 5_000);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("keep the change")),
+        "{refused:?}"
     );
 }
