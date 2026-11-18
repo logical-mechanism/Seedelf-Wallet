@@ -142,7 +142,10 @@ pub struct DetailOutput {
     /// Wallet's own contract. Anyone's datum can be constructor 0 with two
     /// byte strings; what makes one a register is the contract that will read
     /// it, and the address is the only thing that says which contract that is.
-    /// It's read as that contract reads one ([`register_fields`]).
+    /// It's read as that contract reads one ([`register_fields`]), from the
+    /// inline datum alone: never from a datum kept by hash, carried in the
+    /// witness set or not, since no Seedelf Wallet reads one (chunk 51,
+    /// r2sign#1).
     pub register: Option<DetailRegister>,
     /// A script the output carries for others to read.
     pub script_ref: Option<DetailScript>,

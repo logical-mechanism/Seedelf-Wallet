@@ -1,4 +1,5 @@
 // The pure chain helpers, against real preprod rows where possible.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { discoverChain, registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "../src/background/chain";
@@ -48,6 +49,8 @@ describe("registerOf", () => {
       "d879",
       `d87a82${field(g)}${field(u)}`, // constructor 1
       `d866820182${field(g)}${field(u)}`, // constructor 1's general form
+      `d8669f0082${field(g)}${field(u)}`, // an indefinite pair with no break to end it, which the node refuses
+      `d8669f0082${field(g)}${field(u)}00ff`, // or a third item before its break
       `d87983${field(g)}${field(u)}${field(u)}`, // three fields
       `d87981${field(g)}`, // one
       `d87982${field(g)}582f${"cd".repeat(47)}`, // 47 bytes
@@ -72,6 +75,24 @@ describe("registerOf", () => {
     ]) {
       expect(registerOf(withDatum(bytes)), bytes).toBeUndefined();
     }
+  });
+
+  it("reads every spelling of a register the WebAssembly and the CLI read, and nothing else (chunk 51, r2sign#1)", () => {
+    // The shared vectors (tests/fixtures/register-spellings.json): seedelf-koios `register_of_datum`, the sign window
+    // and Transaction details read the same ones in wasm/tests/register_spellings_test.rs. An indefinite pair,
+    // `102([_ 0, [g, u]])`, which the node takes, was the window's Seedelf payment but never this reader's.
+    const fixture = JSON.parse(readFileSync(new URL("./fixtures/register-spellings.json", import.meta.url), "utf8")) as {
+      generator: string;
+      publicValue: string;
+      spellings: Array<{ name: string; datum: string; register: boolean }>;
+    };
+    expect(fixture.spellings.filter((s) => s.register).length).toBeGreaterThan(5);
+    const theRegister = { generator: fixture.generator, publicValue: fixture.publicValue };
+    for (const s of fixture.spellings) {
+      expect(registerOf(withDatum(s.datum)), s.name).toEqual(s.register ? theRegister : undefined);
+    }
+    // A datum kept by hash: no inline datum, no register, whatever it hashes.
+    expect(registerOf({ ...base, inline_datum: null, datum_hash: "ab".repeat(32) })).toBeUndefined();
   });
 
   it("goes by the bytes, never the datum's JSON", () => {

@@ -1924,8 +1924,10 @@ fn a_payment_into_seedelf_says_who_can_take_it() {
             })
         })
         .collect();
-    // Kept by hash: read from the witness set where the transaction carries the
-    // datum, and taken as anyone's where it doesn't.
+    // Kept by hash, carried in the witness set or not: "hash", never a Seedelf
+    // payment nor anyone's (chunk 51, r2sign#1). No Seedelf Wallet finds or
+    // spends such a payment, and the transaction may go on chain without the
+    // datum, whose preimage then decides who can take it.
     let carried = [constr_0(&[g, u], false), constr_0(&[identity, u], false)];
     let by_hash = |hash: Hash<32>| {
         conway::PseudoTransactionOutput::PostAlonzo(conway::PostAlonzoTransactionOutput {
@@ -1939,17 +1941,17 @@ fn a_payment_into_seedelf_says_who_can_take_it() {
         (
             "a register the witness set carries",
             Hasher::<256>::hash(&carried[0].encode_fragment().unwrap()),
-            "register",
+            "hash",
         ),
         (
             "an identity generator the witness set carries",
             Hasher::<256>::hash(&carried[1].encode_fragment().unwrap()),
-            "dead",
+            "hash",
         ),
         (
             "a datum the witness set doesn't carry",
             Hash::new([0x44; 32]),
-            "none",
+            "hash",
         ),
     ];
     let rows = vec![row(TX_B, 0, &ours(Role::Receive, 0), 20_000_000, &[])];

@@ -74,7 +74,8 @@ function pointAt(b: Uint8Array, at: number): { hex: string; next: number } | und
  * The register in a wallet-contract UTxO's inline datum, read from its CBOR:
  * constructor 0 holding exactly two 48-byte byte strings, with nothing after,
  * however the CBOR spells them (a definite or indefinite list, bytes whole or
- * in chunks, constructor 0's general form `102([0, fields])`). That's what
+ * in chunks, constructor 0's general form `102([0, fields])`, its pair
+ * definite or indefinite), as the node reads every one alike. That's what
  * the CLI and the WebAssembly read (seedelf-koios `register_of_datum`), never
  * the datum's JSON, which Koios's rows lose once `trimmed`. It's read token by
  * token, so a deeply nested datum is only "not a register". Anything else
@@ -89,9 +90,13 @@ export function registerOf(utxo: KoiosUtxo): RegisterHex | undefined {
   const tag = headAt(b, 0);
   if (!tag || tag.major !== 6) return undefined;
   let at = tag.next;
+  // In the general form, whether its pair is an indefinite list, which a break must end after the fields: the node
+  // takes `102([_ 0, fields])` too (chunk 51, r2sign#1).
+  let openPair = false;
   if (tag.arg === CONSTR_ANY) {
     const pair = headAt(b, at);
-    if (!pair || pair.major !== 4 || pair.arg !== 2) return undefined;
+    if (!pair || pair.major !== 4 || (pair.arg !== null && pair.arg !== 2)) return undefined;
+    openPair = pair.arg === null;
     const index = headAt(b, pair.next);
     if (!index || index.major !== 0 || index.arg !== 0) return undefined;
     at = index.next;
@@ -105,8 +110,9 @@ export function registerOf(utxo: KoiosUtxo): RegisterHex | undefined {
   const publicValue = generator && pointAt(b, generator.next);
   if (!generator || !publicValue) return undefined;
   at = publicValue.next;
-  if (fields.arg === null) {
-    // An indefinite list: a break must end it after the two fields.
+  // An indefinite list, the fields or the pair: a break must end each, after the two fields.
+  for (const open of [fields.arg === null, openPair]) {
+    if (!open) continue;
     if (b[at] !== 0xff) return undefined;
     at++;
   }

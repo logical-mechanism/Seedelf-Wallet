@@ -522,9 +522,10 @@ impl Keys {
 pub(crate) const MAX_TX_BYTES: usize = 64 * 1024;
 
 // How deep a site's CBOR may nest is core's to say (`seedelf_core::cbor`:
-// `check_nesting`, `MAX_DEPTH`, 128 levels). It's one walk, run on every
-// transaction from outside the wallet before anything decodes it: a site's
-// here and in `decode`, a DEX's swap in `orders::check_cancels`.
+// `check_nesting`, `MAX_DEPTH`, 128 levels). It's the one walk in
+// WebAssembly, run before the connector's read and Transaction details
+// decode, and on a DEX's swap (`orders::check_cancels`); `ogmiosUtxos`
+// decodes without it, behind the worker's `nestsWithin`.
 
 // ---------------------------------------------------------------------------
 // What a dApp's transaction does
@@ -590,10 +591,13 @@ pub struct Paid {
     pub datum: Option<String>,
     /// The address is a script's: a contract holds what it's paid.
     pub script: bool,
-    /// Into Seedelf Wallet's contract ([`spender`]): "register" when its datum
-    /// is a register only its key's holder can spend, "none" when there's no
-    /// register or anyone can prove it (anyone could take it), and "dead" when
-    /// no proof can meet it (no one ever can).
+    /// Into Seedelf Wallet's contract ([`spender`]), by its inline datum:
+    /// "register" when it's a register only its key's holder can spend,
+    /// "none" when there's no datum or register, or anyone can prove it
+    /// (anyone could take it), and "dead" when no proof can meet it (no one
+    /// ever can). "hash" for a datum kept by hash, whatever the witness set
+    /// carries (chunk 51, r2sign#1): no Seedelf Wallet ever finds or spends
+    /// such a payment, and who can take it is the preimage's to decide.
     pub seedelf: Option<String>,
     /// The address has one of the account's payment keys, but someone
     /// else's staking part, or none: the account could spend what's there,
@@ -875,9 +879,11 @@ pub(crate) fn register_fields(data: &PlutusData) -> Option<(&[u8], &[u8])> {
     }
 }
 
-/// Who can spend a payment into the contract under `datum`: none is no datum,
-/// or one kept by a hash the transaction doesn't carry. That one can't be
-/// read, and the site that wrote it may hold it, so it's taken as anyone's.
+/// Who can spend a payment into the contract under `datum`, its inline datum:
+/// none is no datum at all, which the contract lets anyone spend. A datum kept
+/// by hash is never read here, carried or not: its output may go on chain
+/// without it, and no Seedelf Wallet reads one, so the callers say so instead
+/// (chunk 51, r2sign#1).
 pub(crate) fn spender(datum: Option<&PlutusData>) -> Spender {
     let Some((g, u)) = datum.and_then(register_fields) else {
         return Spender::Anyone;
@@ -1289,18 +1295,20 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             Address::Shelley(s)
                 if s.payment().is_script() && *s.payment().as_hash() == contract_hash =>
             {
-                // The datum the contract will read: the output's own, or the
-                // one the transaction carries under the output's hash.
-                let carried_datum = hash
-                    .as_ref()
-                    .and_then(|h| carried.get(h))
-                    .and_then(|bytes| PlutusData::decode_fragment(bytes).ok());
-                let datum = inline_data(out).or(carried_datum.as_ref());
                 Some(
-                    match spender(datum) {
-                        Spender::Owner => "register",
-                        Spender::Anyone => "none",
-                        Spender::Nobody => "dead",
+                    if hash.is_some() {
+                        // A datum kept by hash (chunk 51, r2sign#1): no Seedelf Wallet reads a payment's register from
+                        // anywhere but its inline datum, so none ever finds or spends it. Whatever the witness set
+                        // carries for it isn't read: an output's datum may never reach the chain (the ledger takes
+                        // the transaction without it), so who can take what's paid is the preimage's to decide, and
+                        // that may be the site's alone.
+                        "hash"
+                    } else {
+                        match spender(inline_data(out)) {
+                            Spender::Owner => "register",
+                            Spender::Anyone => "none",
+                            Spender::Nobody => "dead",
+                        }
                     }
                     .to_string(),
                 )

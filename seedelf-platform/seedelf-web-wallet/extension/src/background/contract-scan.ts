@@ -195,9 +195,11 @@ async function readKoiosView(deps: ScanDeps, network: NetworkName, { full = fals
  * with every release that changes it: 2 since chunk 51's x2#2, where a row at
  * the KEY address carrying the contract's 28 bytes stopped being the wallet's,
  * which 1.9.1 could seal as ours for good, nobody able to spend it away
- * (gap-g6#1).
+ * (gap-g6#1); 3 since its r2sign#1, where a register written with an
+ * indefinite pair, `102([_ 0, [g, u]])`, which the node takes, became one
+ * (chain.ts `registerOf`), so a row sealed as not ours is judged again.
  */
-const SETTLED_RULE = 2;
+const SETTLED_RULE = 3;
 
 /**
  * What the private index's feed has settled for this wallet, sealed

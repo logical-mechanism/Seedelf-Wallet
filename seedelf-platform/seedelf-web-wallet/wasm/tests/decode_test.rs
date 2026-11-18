@@ -1971,13 +1971,8 @@ fn a_big_number_past_128_bytes_is_shown_in_hex() {
         format!("-0x{}", hex::encode(&one_more))
     );
 
-    // As long as a transaction holds, and read at once.
+    // As long as a transaction holds: hex too, never the decimal, whose writing grows with the square of its length.
+    // The text itself says which was written, so no clock is needed (chunk 51, r2tests#10).
     let huge = vec![1u8; 60_000];
-    let started = std::time::Instant::now();
     assert_eq!(value(positive(&huge)), format!("0x{}", hex::encode(&huge)));
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
-        "{:?}",
-        started.elapsed()
-    );
 }

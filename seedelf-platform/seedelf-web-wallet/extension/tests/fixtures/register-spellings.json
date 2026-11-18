@@ -1,0 +1,83 @@
+{
+  "about": "Chunk 51, r2sign#1: one register written every way the ledger reads it alike (register: true), and data at Seedelf Wallet's contract that isn't one (register: false). Every reader of a payment's register must read each the same: seedelf-koios register_of_datum (the WebAssembly's spends, core's ScriptSpend, the CLI), the extension's chain.ts registerOf (the private balance), and the WebAssembly's readings for the sign window (cip30) and Transaction details (decode). Read by wasm/tests/register_spellings_test.rs and extension/tests/chain.test.ts. The register is seedelf-crypto's test vector: the base register of the scalar `secret`.",
+  "secret": "18446744073709551606",
+  "generator": "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+  "publicValue": "82dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475",
+  "spellings": [
+    {
+      "name": "121([_ g, u]): an indefinite list, as Seedelf Wallet writes it",
+      "datum": "d8799f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475ff",
+      "register": true
+    },
+    {
+      "name": "121([g, u]): a definite list",
+      "datum": "d87982583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475",
+      "register": true
+    },
+    {
+      "name": "102([0, [g, u]]): constructor 0's general form",
+      "datum": "d866820082583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475",
+      "register": true
+    },
+    {
+      "name": "102([0, [_ g, u]]): its fields an indefinite list",
+      "datum": "d86682009f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475ff",
+      "register": true
+    },
+    {
+      "name": "102([_ 0, [g, u]]): an indefinite pair",
+      "datum": "d8669f0082583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475ff",
+      "register": true
+    },
+    {
+      "name": "102([_ 0, [_ g, u]]): an indefinite pair of an indefinite list",
+      "datum": "d8669f009f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475ffff",
+      "register": true
+    },
+    {
+      "name": "121([g, u]) with g in chunks",
+      "datum": "d879825f5097f1d3a73197d7942695638c4fa9ac0f5820c3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bbff583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475",
+      "register": true
+    },
+    {
+      "name": "121([_ g, u]) with both points in chunks",
+      "datum": "d8799f5f5097f1d3a73197d7942695638c4fa9ac0f5820c3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bbff5f5082dcf46570656ca0d6fb143b8e7c28165820b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475ffff",
+      "register": true
+    },
+    {
+      "name": "102([_ 0, [g, u]]) with u in chunks",
+      "datum": "d8669f0082583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb5f5082dcf46570656ca0d6fb143b8e7c28165820b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475ffff",
+      "register": true
+    },
+    {
+      "name": "121([_ g, u]) with longer heads than needed",
+      "datum": "d900799f59003097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb5a0000003082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475ff",
+      "register": true
+    },
+    {
+      "name": "122([g, u]): constructor 1",
+      "datum": "d87a82583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475",
+      "register": false
+    },
+    {
+      "name": "102([1, [g, u]]): constructor 1's general form",
+      "datum": "d866820182583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475",
+      "register": false
+    },
+    {
+      "name": "102([_ 1, [g, u]]): the same with an indefinite pair",
+      "datum": "d8669f0182583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475ff",
+      "register": false
+    },
+    {
+      "name": "121([g, u, u]): three fields",
+      "datum": "d87983583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475",
+      "register": false
+    },
+    {
+      "name": "121([g]): one field",
+      "datum": "d87981583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+      "register": false
+    }
+  ]
+}
