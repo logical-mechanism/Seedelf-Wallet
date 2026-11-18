@@ -432,7 +432,9 @@ const toSnek = async (tree: El) => {
   return quoteLands();
 };
 
-describe("a pick changed while the swap's review builds (chunk 51, e7a#1)", () => {
+// Swaps are mainnet's alone, and a preprod-only build carries no mainnet token list for the picker: CI runs this
+// file in both builds, and these run in the default one.
+describe.runIf(__MAINNET_ENABLED__)("a pick changed while the swap's review builds (chunk 51, e7a#1)", () => {
   it("control: nothing changed while it builds, the approval names the swap that's sent (100 ₳ → 906.5941 MIN)", async () => {
     await reviewWith(async (tree) => tree);
     expect(sent()).toEqual({ pay: "100 ₳", receive: "≈ 906.5941 MIN", least: "897.61792 MIN" });
@@ -475,7 +477,7 @@ describe("a pick changed while the swap's review builds (chunk 51, e7a#1)", () =
   });
 });
 
-describe("Review swap is pressed only where the funding pays (chunk 51, t1k#9)", () => {
+describe.runIf(__MAINNET_ENABLED__)("Review swap is pressed only where the funding pays (chunk 51, t1k#9)", () => {
   /** The form's foot button, as a person sees it: what it says, and whether it can be pressed. */
   const foot = (tree: El) => ({ label: footButton(tree)?.props.children, disabled: footButton(tree)?.props.disabled });
 

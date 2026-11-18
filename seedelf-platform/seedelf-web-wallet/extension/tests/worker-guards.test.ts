@@ -218,8 +218,10 @@ describe("the worker's own guards (chunk 51, T1j)", () => {
     const phrase = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!.phrase as string;
     expect(await ask({ type: "create-wallet", phrase, password: PASSWORD })).toMatchObject({ ok: true, value: { state: "unlocked" } });
     held.trap = true;
-    // The worker is on mainnet, as a wallet with no network kept starts: a mainnet address reaches the address check.
-    const resolved = await ask({ type: "resolve-destination", to: vectors("cardano_account.json")[0]!.mainnet.receive_0 });
+    // The worker is on the build's first network, as a wallet with no network kept starts (mainnet, or preprod in a
+    // preprod-only build): an address on it reaches the address check.
+    const start = __MAINNET_ENABLED__ ? "mainnet" : "preprod";
+    const resolved = await ask({ type: "resolve-destination", to: vectors("cardano_account.json")[0]![start].receive_0 });
     expect(resolved).toEqual({ ok: false, error: i18n.t("worker.wallet.trapped") });
     expect(await ask({ type: "status" })).toMatchObject({ ok: true, value: { state: "locked", lockedBy: "trap" } });
   });
