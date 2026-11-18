@@ -423,3 +423,50 @@ Split the fix. Only the datum-hash half needs the owner.
    - 1.9.1's "none" is the cautious fallback, but its "anyone can take" is false for a carried register.
    - Optionally, count a carried datum only when the body's script_data_hash commits to the witness datums. With no redeemers that can be computed without cost models, so a datum the site can strip after signing isn't read as carried.
 3. **Docs.** architecture.md:201 ("A datum kept by hash is read from the witness set…") and privacy.md:336 follow from 1 and 2. privacy.md is being edited in the working copy, so work from HEAD.
+
+
+## Severity tiebreak (trace medium, impact low)
+
+**Severity: low.**
+
+The finding holds on FIXTREE HEAD e66a6a16, which changes none of the traced files after f88560c4.
+- cip30.rs:1292-1304 reads the datum a transaction carries for an output's hash and never looks at the body's script_data_hash.
+- register_fields (:863-876) takes tag 102 with an indefinite pair.
+- Both scan readers still refuse that pair (chain.ts:94 `pair.arg !== 2`, koios.rs:369 `d.array() != Some(2)`) and read inline datums only.
+
+On the brief's scale it is low, not medium:
+- **Who causes it:** a site. It has to write bytes no standard encoder writes: Plutus, Aiken and CSL write constructor 0 as tag 121, and use tag 102 only with a definite pair. Or it uses a datum-by-hash style that no Seedelf tool or known dApp uses for a Seedelf payment. The site pays nothing and gains nothing.
+- **What the window shows is true:** the amount, the full contract address, and the register. The window uses a carried datum only when its blake2b hash equals the output's hash, so the lock it describes is the one the signed body commits to. This is not "signs something other than what it shows".
+- **What the user loses:** in shape (b), and in shape (a) whenever the body carries a script_data_hash, the money sits under a register only its key's holder can spend, and the datum is public. Every standard builder writes that hash, and cardano-cli won't embed a datum without one. The money is stranded until a release, not lost. For (b), that release is the reader widening that three verify records already recommend. Transaction details' "Yours, in your private balance" (behind DappApprovals.tsx:1358's button) is right about who owns it and early about the balance.
+- **The one lock for good:** shape (a) with no script_data_hash and the datum stripped. That is griefing with nothing to gain, and it is already reachable. A hostile site gets the same "It pays a Seedelf…" callout over a canonical tag-121 register whose key it throws away. w2#2, a burn shown under these same words, was verified low on exactly these grounds.
+- **Privacy:** no link is made. privacy.md:336 at HEAD promises only that the owner stays hidden, and says that which datum is a register "is the contract's to say". Both shapes keep that.
+- **Way out:** decline. The window no longer gives a reason to; 1.9.1 warned, though with the wrong words.
+
+**The disputed ledger point:** yes, the site can submit without the datum, and with the finder's body it has to. I read this in cardano-ledger's own source, kept locally at `/home/logic/.claude/projects/-home-logic-Documents-LogicalMechanism-Seedelf-Wallet/cfcbd3c7-4fba-46f9-8be7-526fb876c645/review-1.8.1-scratch/review/v-pv11-impact/src/`. The snapshot `ledger-226b002d` is cardano-ledger-conway 1.22.1.0, the version node 11.1.3's cabal requires.
+- Conway's UTXOW runs babbageUtxowTransition (Conway/Rules/Utxow.hs:221). That runs checkScriptIntegrityHash against mkScriptIntegrity (Alonzo/Tx.hs:320-342), which is SNothing only when the redeemers, the language views and the witness datums are all empty. One carried datum makes it SJust. So a body with no script_data_hash is rejected as signed: PPViewHashesDontMatch, called ScriptIntegrityHashMismatch from PV11.
+- With the datum stripped, the same body passes. missingRequiredDatums (Alonzo/Rules/Utxow.hs:234-250) requires only the datums of spent script inputs. An output's hash only allows its preimage as a supplemental datum (Babbage/UTxO.hs:65-75); it never requires it.
+- validateVerifiedWits checks signatures over the body hash alone. The wallet returns vkey witnesses only (cip30.rs:1852-1853), so the site writes the final witness set.
+- When the body does carry a script_data_hash over the datum, stripping it fails the match, and editing the body breaks the user's signature. Then the datum goes on chain.
+
+So the trace verifier is right that the strip works. The impact verifier is right that the output's hash fixes which register locks the money, and that the strip is the only way it is lost for good.
+
+**Decisive point:** The only outcome worse than "stranded until a release" is a site stripping the carried datum from a body that has no script_data_hash. The ledger accepts that transaction. But it is griefing with nothing to gain, and a hostile site can already get it signed under the same "It pays a Seedelf…" callout by using a canonical register whose key it throws away. w2#2 was graded low for exactly that harm under those words. On every honest path the script_data_hash keeps the datum on chain and the money stays under its owner's register, so a release brings it back. Nothing a site or user can reach fits a medium line.
+
+**Fix notes:** This is the fix round's own regression (36fbb96f); at 1.9.1 both shapes read "none". Fix it before the round merges, whatever the grade.
+
+1. **Widen both scan readers (no owner call needed).** chain.ts registerOf (:92-95) and seedelf-koios register_of_datum (:366-371) should take tag 102 with an indefinite pair, closed by its own break after the fields. Both verifiers ran this sketch.
+   - With it, (b)'s "register" and Transaction details' "Yours, in your private balance" become true.
+   - In the same release, bump the private index's sealed-verdict rule version (4cbac01e), so rows already sealed as not the user's are judged again.
+   - Pin it with one vector list that register_fields, register_of_datum and registerOf all read: 121 with definite and indefinite fields, 102 with a definite and an indefinite pair, chunked points.
+2. **A datum kept by hash (the owner's words).** Stop reading carried datums for the Pays label (cip30.rs:1292-1298).
+   - No Seedelf tool lists or spends a row kept by hash, whether or not its datum reached the chain. Give such an output, carried or not, its own value and warning, never "register" and never "anyone can take". That also answers d1#3's request to say it can't be judged.
+   - It is a new critical `.warn.` key, with es/ja drafts back-translated.
+   - The label needs no script_data_hash check. If one is ever wanted to tell locked from stranded: in Conway, with no redeemers, the integrity preimage is A0, then the datums' original bytes, then A0 (conway.cddl:519-521). It needs no cost models.
+3. **Keep `carried` for datum_names_key**, which reads contract inputs. The ledger requires a spent input's datum in the witness set (missingRequiredDatums), and the script_data_hash commits to it there, so it can't be stripped. Only an output's datum is optional.
+4. **Words and tests.** Update:
+   - cip30_test.rs:1938-1950's three hashed rows;
+   - the Paid doc comment (cip30.rs:593-597) and spender's doc comment (:878-880);
+   - architecture.md:201 ("A datum kept by hash is read from the witness set…");
+   - privacy.md:336 ("Which a register is, is the contract's to say").
+   The doc words need the owner. privacy.md changed in e66a6a16, so edit from HEAD.
+5. **Regression test.** Keep `/home/logic/Documents/LogicalMechanism/Seedelf-Wallet-chunk51-fixes/seedelf-platform/seedelf-web-wallet/wasm/tests/r51_r2sign_1.rs` (untracked). It fails at exactly the three readings.

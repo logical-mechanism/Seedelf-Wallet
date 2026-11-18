@@ -326,6 +326,21 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 *Coverage:* Brief and record: read COMMON.md, FIX.md, RESUME.md, BASELINE.md, fix-branches.md and all six fixer reports. Read the INDEX table (all 323 lines, parsed) and the verify records of r3a#1, x2#1, r4#1, r4#2, e1a#1, e3a#1, e3a#2, e7a#1, x3#1, x4#1, gap-g4#1, gap-g4#2, gap-g5#1 and gap-g6#1, plus owner flags across every verify file. Read every fix commit's message in f87c3e77..HEAD.  Read in full in FIXTREE: the round's diffs of rpc.ts, dapp.ts, DappApprovals.tsx, ui/dapp.ts, coin-control.ts, balances.ts, contract-scan.ts, incoming.ts, pending.ts, sessions.ts (whole diff, plus act, inspect, buildBack and sendChain around it), lovejoin.ts (whole diff, plus withdrawOne and withdrawDue), lovejoin-pools.ts, wallet.ts, account.ts, accounts.ts, handlers.ts, App.tsx, tx-view.ts, destination.ts, collateral.ts, Swaps.tsx's NewSwap part, ClaimAll.tsx, SiteSessions.tsx, Collateral.tsx, format.ts, token…
 
+## R2tests (10 findings, 27 guards)
+
+- `r2tests#1` low (site): d1#3's sign-window warning for a payment into Seedelf under a dead register has no test: drop it and the whole Vitest suite passes `DappApprovals.tsx:1212`
+- `r2tests#2` low (stranger): x1a#1/e9a#3's form notes on Send and Make public (stake works elsewhere) have no test; only the reviews' lines are pinned `CardanoSend.tsx:312`
+- `r2tests#3` low (user): e8b#2's sibling: Create Seedelf's review line for withdrawn rewards has no test `CreateSeedelf.tsx:150`
+- `r2tests#4` low (user): e4a#1's accounts.ts siblings: the merge's and check()'s phrase pins have no test, though the fixer's report says each sibling fails its own case `accounts.ts:288`
+- `r2tests#5` low (stranger): r2a#2's error half (failed && !short_whole) is caught by no suite, the ignored parts suite included `build.rs:2874`
+- `r2tests#6` low (nobody): v3#1's fix (a failed rebuild never reads as ok) has no committed test: drop tally.py's traceless-import rule and nothing notices `tally.py:113`
+- `r2tests#7` low (nobody): New test private-index.test.ts 'is neither the wallet's nor a Seedelf's place' runs 3 to 6.4 s in its own file against Vitest's default 5 s, and times out with nothing wrong `private-index.test.ts:344`
+- `r2tests#8` low (user): The CLI's two new 'Tx Hash' lines (r4#4's id before sending, and the signing page's id in the terminal) have no test `submit.rs:26`
+- `r2tests#9` nit (stranger): e2b#2's 'nor clears' half (a strangers-only return leaves the skip reason alone) has no test `sessions.ts:5361`
+- `r2tests#10` nit (nobody): decode_test's big-number test asserts a real-clock bound that adds nothing to the check before it `decode_test.rs:1979`
+
+*Coverage:* Every fix commit from f87c3e77 to HEAD (10a06db6) was read and had its main change reverted in my copy; most commits had several sub-fixes reverted one at a time (about 168 mutants). Survivors were confirmed against the whole crate suite (Rust) or the whole default Vitest suite (TypeScript: four full runs of 3,554 tests each); for r2a#2 also the ignored release parts suite, run three times. Test-only commits (cc7440c9, 46975c50, 1d509df7, 3b755369, f1da256d, a9b5a3bb, 0a7d493e, 1dc64e1d, 5c5bc3c1, b27f0160) were checked only for behaviour-preserving seams; T1's lens owns their guards. 40883a55: only tally.py's rule was exercised, on a fake package. Its Lean parts (controls, SORRY verdict, #guard_msgs) and count.py's and check.sh's halves were read, not run (no Lean build allowed). Docs commits (10a06db6, README parts of c4b7a906 and 48a4c977) have no test to expect. Not reverted one by o…
+
 ## R2time (2 findings, 11 guards)
 
 - `r2time#1` low (user): Bring one back paid by the public account: the watch's paysAccounts is read at the press, but the build pays and signs with whichever account is active after the reward-account read `lovejoin.ts:7155` · verified **confirmed, low**

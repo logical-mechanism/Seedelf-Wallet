@@ -276,5 +276,19 @@
    "04616cf6"
   ],
   "note": "the lead's fix: the two tests hold in a preprod-only build"
+ },
+ "r2screens#3": {
+  "status": "fixed",
+  "commits": [
+   "2d639df8"
+  ],
+  "note": ""
+ },
+ "r2sign#3": {
+  "status": "fixed",
+  "commits": [
+   "e4d97bea"
+  ],
+  "note": "three siblings in the connector (the funding's row, the top-up review, Remove's Transaction details) went to G5"
  }
 }

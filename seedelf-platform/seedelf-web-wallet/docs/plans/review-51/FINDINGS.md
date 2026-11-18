@@ -11,9 +11,9 @@ T1's findings are guards that no test pinned: a T1 agent reverted each in a copy
 | critical |  |  |  |  |  |  |  |  |  | 0 |
 | high | 2 |  |  |  |  |  |  |  |  | 3 |
 | medium | 3 | 4 |  |  |  |  |  |  | 1 | 8 |
-| low | 223 | 37 | 9 | 2 | 2 |  |  | 1 | 7 | 298 |
-| nit | 31 | 1 |  |  |  |  | 1 |  | 2 | 41 |
-| **All** | **259** | **42** | **9** | **2** | **2** | **0** | **1** | **1** | **10** | **350** |
+| low | 224 | 37 | 9 | 2 | 2 |  |  | 1 | 7 | 306 |
+| nit | 32 | 1 |  |  |  |  | 1 |  | 2 | 43 |
+| **All** | **261** | **42** | **9** | **2** | **2** | **0** | **1** | **1** | **10** | **360** |
 
 *fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for the second fix round. *merged*: the same as another finding, which carries it.
 
@@ -171,6 +171,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g4#1` **low**: A split route's leg paid between the runner's two reads of the account comes back alone, in a later return, directly, though its approval sent it through Lovejoin `sessions.ts:3904` · 506e4ed2
 - `gap-g6#1` **low**: Kept verdicts carry no version of the rule that made them, so a fix to what counts as the wallet's never reaches rows and boxes an older release already judged `contract-scan.ts:264` · 4cbac01e, 506e4ed2
 - `gap-g6#2` **low**: After a restore, what made a box is kept with only the accounts then known, so a custom account's (index 24 or more) deposit boxes read as the private balance's for good `lovejoin.ts:6324` · e66a6a16
+- `r2sign#3` **low**: Remove's new token rows show a token off the wallet's list in raw units: the decimals the Seedelf's UTxO carries never reach the review `withdraw.ts:188` · e4d97bea
 - `w3#1` **low**: A tile Mix's chain (and Mix my boxes again's) runs at Settings' depth when the runner builds it, not the depth its review showed and its funding paid for `sessions.ts:4667` · fdd3b8b2
 - `x1a#1` **low**: Send and Make public call the user's payment key under someone else's stake key "your own public account: it comes back", where the sign window says its staking rewards aren't yours `destination.ts:122` · 10a06db6, 6aea4fb8, 8fd738ff, d9e015fb
 - `x2#2` **low**: A UTxO at a KEY address whose hash is the Seedelf contract's, under the user's register, counts in the private balance, and any spend that takes it fails: Max always fails for wallets of up to 20 private UTxOs `balances.ts:489` · 03cf290e, 343fb772, 4cbac01e, 514c6579, 6aea4fb8
@@ -218,6 +219,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g10#4` **nit**: Amount boxes on the forms clip their own figures at the side panel's width: a token's box after Max, the swap's two amounts, Send's "Max, up to …" `styles.css:3449` · 8fd738ff
 - `gap-g2#4` **nit**: Mix again from my public account's review says 'N boxes your public account put in' where the account has more there, with no 'N of your M' or 'Mix the rest once this is done' `Lovejoin.tsx:4113` · c8003eda
 - `gap-g7#3` **nit**: Activity and Delegations show the bundled DRep names without plainName, which Voting applies to the same entries; the generator keeps bidi and zero-width characters `activity.ts:119` · c8003eda
+- `r2screens#3` **nit**: Bring everything back's button reads "Sending…" while its switch rebuilds the returns `ClaimAll.tsx:199` · 2d639df8
 - Guards now pinned by a test (T1): `t1i#2`, `t1i#12`, `t1i#13`, `t1i#15` · 5c5bc3c1, a9b5a3bb
 - Guards now pinned by a test (T1): `t1i#16` · 5c5bc3c1, c8003eda
 - Guards now pinned by a test (T1): `t1k#9`, `t1k#10`, `t1k#11`, `t1k#12` · f1da256d, 506e4ed2, c8003eda
