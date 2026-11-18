@@ -87,13 +87,13 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## E1a (1 findings, 15 guards)
 
-- `e1a#1` medium (stranger): A stranger's deposit under the wallet's register is taken for the wallet's own unmixed box, and Mix my boxes again takes it first, tying the mix session and its private funding to that register `lovejoin.ts:3819`
+- `e1a#1` medium (stranger): A stranger's deposit under the wallet's register is taken for the wallet's own unmixed box, and Mix my boxes again takes it first, tying the mix session and its private funding to that register `lovejoin.ts:3819` · verified **confirmed, low**
 
 *Coverage:* Read in full, every line: lovejoin.ts lines 1-4000, lovejoin-pools.ts (all 687 lines) and lovejoin-rewards.ts (122 lines). Calls followed into lovejoin.ts past 4000 and read: 4010-4310 (the rest of acrossOf, tailRows, planAcross, usableNow, takesNewBoxes, adaPool, retiredIds, the start of retireOnce); 4590-4850 (unstale, mixLogicHashes, rewardsIn/readRewards/rewardsOf/rewardsMoved, reserve/unreserve/release/holdOnly/reserving/inTurn, crossCheck); 5450-5730 (schedule, scheduleFound, draw, recordChain, chainSent, chainEnded, restBack, chainMarked); 5884-6510 (cuts, chainsSending/chainsMixing, sortOut, found, made, lookUp, madeBy, inputsOf, accountKeys, keysOf, reservedBoxes, status, chains); 6751-7212 (returning, withdrawDue(Now), unlockDraws, withdrawNow(Now), bringAllBack, stopBringingAllBack); 7466-8048 (split, splitAll, real, ownership, withdrawOne, dropWithdrawing, neverWent, dropRefu…
 
 ## E1b (1 findings, 28 guards)
 
-- `e1b#1` low (user): Bring every box back meets a service-wide refusal box by box: a build, an account_info and a giveme.my request for every box, three runs over `lovejoin.ts:7412`
+- `e1b#1` low (user): Bring every box back meets a service-wide refusal box by box: a build, an account_info and a giveme.my request for every box, three runs over `lovejoin.ts:7412` · verified **partly, low**
 
 *Coverage:* Read every line: seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts lines 4000-8048, lovejoin-launch.ts (all 460 lines) and lovejoin-rewards.ts (all 122 lines).  Read for context in lovejoin.ts (E1a's half, not reviewed line by line for findings): - the header and constants (1-640); - the types and the sealed schedule (640-1610); - the helpers my half calls (1676-2600: unmixedOf, recorded, knownOf, mixedOf, depositsOf, moreThanDue, unschedule, backOrder, originOf, carriedOf, ripeAt, madeSince, depositAccountOf, moveDue, takeDue, empty, countBack, holderOf, moveOn, squareUp, bootstrapOf, stillIn); - narrower and withinDepth (2600-2811); - the class's fields, readSet, verifiedPool, progress, onChain, watchOf, cantComeBack, listing, poolRows, ours and plan (2811-3410); - acrossOf's head (3899-4000).  Followed out of my paths: - spent.ts reservationOf and reservedSet; s…
 
@@ -105,16 +105,16 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## E2b (2 findings, 26 guards)
 
-- `e2b#1` low (stranger): A finished mix's account paid before it closes gets a second chain with the mix's own settings, or the mix is marked "Not mixed" `sessions.ts:1309`
-- `e2b#2` low (stranger): A finished swap's "Received" shows only its last return, and a later return's skip reason replaces the main return's `sessions.ts:5522`
+- `e2b#1` low (stranger): A finished mix's account paid before it closes gets a second chain with the mix's own settings, or the mix is marked "Not mixed" `sessions.ts:1309` · verified **confirmed, low**
+- `e2b#2` low (stranger): A finished swap's "Received" shows only its last return, and a later return's skip reason replaces the main return's `sessions.ts:5522` · verified **confirmed, low**
 
 *Coverage:* Read in full: extension/src/background/parts.ts (1-663) and sessions.ts lines 3450-6872: stopCost, resume, runAll, settleReturns, markCut, step, act, noteOrderOpen, waits, ordersSpent, placed, ordersOpen, liveOrders, remnantsFrom, order, cancel, cancelOf, cancelsChecked, referenceRows, bringBack, inspect, review, signAndSend, buildBack, the tail and reserve helpers, collateralWanted, nothingBack, leaveBehind, leftBy, fundingChange, sendBack, noteLanded, refuseParts, sendChain, pump, sendStep, witnessTail, the pending-chain helpers, sendRecorded, submit, listNow, view, the readers, fundingRecords, sendFunding, partsStopped, partsMayGo, returning, stillWaiting, outRecord, accounts, freshIndex, stillUnused, book/save/update, atStake, clearMixes, serial, and every free function after the class. Followed calls into E2a's half, read: sessions.ts 1-1480 (types and helpers: fundingState, short, …
 
 ## E3a (4 findings, 20 guards)
 
-- `e3a#1` medium (site): A site on the dApp account can probe another public account's Lovejoin chain: the 'public' reservation isn't per account `dapp.ts:1912`
-- `e3a#3` medium (site): signData shows a site's message with direction overrides and invisible characters raw, so it can read differently from the bytes signed `dapp.ts:2896`
-- `e3a#2` low (stranger): The connector takes the first 5 ₳ without tokens as a session's collateral: a stranger's 5 ₳ with a datum hides a spend of the real one `dapp.ts:2777`
+- `e3a#1` medium (site): A site on the dApp account can probe another public account's Lovejoin chain: the 'public' reservation isn't per account `dapp.ts:1912` · verified **confirmed, low**
+- `e3a#3` medium (site): signData shows a site's message with direction overrides and invisible characters raw, so it can read differently from the bytes signed `dapp.ts:2896` · verified **confirmed, low**
+- `e3a#2` low (stranger): The connector takes the first 5 ₳ without tokens as a session's collateral: a stranger's 5 ₳ with a datum hides a spend of the real one `dapp.ts:2777` · verified **confirmed, low**
 - `e3a#4` nit (nobody): manifest.ts names the extension with a ternary whose two branches are the same `manifest.ts:59`
 
 *Coverage:* Read in full: src/background/dapp.ts (2949 lines), dapp-window.ts, tx-view.ts, src/content/bridge.ts and page.ts, src/shared/dapp.ts, src/manifest.ts, plus #387's diff to it.  Followed out of them, reading the relevant parts: - sw.ts 330-470 (the dApp port, dappSession, the window/storage/permission listeners). - handlers.ts 330-470 (preferences-set, account-use, network-set, tx-detail, the dapp-* messages). - connector.ts, all of it; ui-port.ts 1-60. - spent.ts: remember/forget, reservedSet, reservationOf. - cbor.ts: head, skip, bodyField, outpoints, certificateKinds, txId. - koios.ts: the error classes and submitTx; data-layer.ts submitTx. - lovejoin.ts: chainOwner/publicOwner/accountOf, reserve, unreserve, release, holdOnly, publicReady, the public mix and Mix again builds, Send's reservation. - sessions.ts: collateralFits, plainAda, accountUtxos, the return's collateral pick. - accou…
@@ -122,53 +122,53 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 ## E3b (5 findings, 18 guards)
 
 - `e3b#1` low (site): The sign window shows a site's CIP-8 message and CIP-20 note with direction overrides and invisible characters still active, and the note isn't checked against the body `DappApprovals.tsx:1369` · merged into e3a#3
-- `e3b#2` low (user): The connector's private-session form counts locked private UTxOs as available `DappApprovals.tsx:607`
-- `e3b#3` low (user): While a sent private-session funding waits, every request behind it is hidden: no count, no Decline all, and closing the window declines them unseen `DappApprovals.tsx:626`
-- `e3b#4` low (user): An approved request's failure stays on screen over the next request, right above its Sign `DappApprovals.tsx:169`
+- `e3b#2` low (user): The connector's private-session form counts locked private UTxOs as available `DappApprovals.tsx:607` · verified **confirmed, low**
+- `e3b#3` low (user): While a sent private-session funding waits, every request behind it is hidden: no count, no Decline all, and closing the window declines them unseen `DappApprovals.tsx:626` · verified **confirmed, low**
+- `e3b#4` low (user): An approved request's failure stays on screen over the next request, right above its Sign `DappApprovals.tsx:169` · verified **confirmed, low**
 - `e3b#5` nit (user): A sent funding's Cardanoscan link follows the wallet to the other network `DappApprovals.tsx:642`
 
 *Coverage:* Read every line of: ui/dapp.ts, ui/sites.ts, ui/screens/DappApprovals.tsx, SiteSessions.tsx, ConnectedSites.tsx, Dapps.tsx. Followed into, read in the parts that matter: - background/dapp.ts: lines 1-1505 in full; signTx, readTx, ties, publicKeys, remember, signData, submitTx, send and helpers (1755-2949) in full; 1520-1700 (view, read, available, balance) skimmed. - wasm/src/cip30.rs: Amount and difference (110-290), keys_of and own_address (436-520), output_parts and register_datum (960-1066), released_from_contracts and inspect (1100-1892), anchor_url and is_bidi, sign_tx, CIP-8 data_key, data_signer and sign_data (2185-2400). - wasm/src/lib.rs: the session and dApp tx and data bindings. - wasm/src/decode.rs: shown, hidden and metadata_hash_matches. - background/sessions.ts: siteOutBuild, siteOutSubmit, topUpBuild, topUpSubmit, backBuild, backSubmit, claimBuild, disconnect, view() sta…
 
 ## E4a (1 findings, 9 guards)
 
-- `e4a#1` low (user): A balance reading begun before Remove wallet finishes under the next phrase's wallet: it's shared with the new wallet's Home, kept as its reading, and its private UTxOs are sealed into the new wallet's history `balances.ts:392`
+- `e4a#1` low (user): A balance reading begun before Remove wallet finishes under the next phrase's wallet: it's shared with the new wallet's Home, kept as its reading, and its private UTxOs are sealed into the new wallet's history `balances.ts:392` · verified **confirmed, low**
 
 *Coverage:* Read in full: background/{vault,private-store,storage,storage-access,wallet,accounts,account,preferences,wasm}.ts; background/secret-box/ (README, index, kdf, format, seal, open); shared/{password,preferences,fingerprint}.ts; ui/screens/{Create,Restore,Unlock,Settings}.tsx (all 1,721 lines of Settings); ui/delete-phrase.ts. I followed the values out of them into: handlers.ts lines 1-330 plus atStake and status; sw.ts in full; ui-port.ts; ui/background.ts; App.tsx lines 1-200; components PhraseGrid, PhraseInput, SetPassword and PasswordField; history.ts (head); the sealed maybe-sent helpers and adoptKept in pending.ts; keepOnReset, adoptKept and keptMaybe in lovejoin.ts; reset, book and save in sessions.ts; contract-scan.ts readContractView, readKoiosView and readIndexView; balances.ts get, reading, shared, read and readPrivate; activity.ts arrived, update and cardano; staking.ts readStak…
 
 ## E4b (2 findings, 12 guards)
 
-- `e4b#1` low (site): A site can keep the wallet from auto-locking: each connector window it opens counts as user activity when it mounts `App.tsx:94`
-- `e4b#2` low (nobody): `dapp-approvals` answers while locked, with a waiting signature's summary and its ties to the wallet's other accounts and sessions `handlers.ts:433`
+- `e4b#1` low (site): A site can keep the wallet from auto-locking: each connector window it opens counts as user activity when it mounts `App.tsx:94` · verified **confirmed, low**
+- `e4b#2` low (nobody): `dapp-approvals` answers while locked, with a waiting signature's summary and its ties to the wallet's other accounts and sessions `handlers.ts:433` · verified **confirmed, low**
 
 *Coverage:* Read in full, every line: shared/rpc.ts (3,323), background/sw.ts (459), background/handlers.ts (655), background/ui-port.ts (69). Also read in full: background/wallet.ts, accounts.ts, runs.ts, storage-access.ts, connector.ts, dapp-window.ts, wasm.ts, content/bridge.ts, content/page.ts, shared/dapp.ts, src/manifest.ts, ui/background.ts, ui/view.ts, shared/open-in.ts, and the built dist/manifest.json (read only). Read in part, where my files call them: dapp.ts (call/run, enable, ask, answer, approvals, stateChanged, closeWindow, windowClosed, networkChanged, dappAccountChanged, connectorOff, gone, sites, forget, disconnectSession, answerSite, failed, notSent, DappError), parts.ts (waitingOn, pumpParts, PartsService), preferences.ts (NetworkChoice, PreferencesService), tx-view.ts (txView), lovejoin.ts (poolChoice, poolNamed, fits, funding's head, publicBuild's head, withdrawDue, publicMayb…
 
 ## E5 (2 findings, 30 guards)
 
-- `e5#1` low (user): Send, Make public and Contacts refuse an address with a key payment part and a script stake part, and every Byron address, in words that misdescribe them `destination.ts:97` · merged into r2a#1
-- `e5#2` low (user): A Make public to another of the user's own accounts reads the active account again as it lands, the timing link privacy review §2.9 removed `pending.ts:165`
+- `e5#1` low (user): Send, Make public and Contacts refuse an address with a key payment part and a script stake part, and every Byron address, in words that misdescribe them `destination.ts:97` · verified **partly, low** · merged into r2a#1
+- `e5#2` low (user): A Make public to another of the user's own accounts reads the active account again as it lands, the timing link privacy review §2.9 removed `pending.ts:165` · verified **confirmed, low**
 
 *Coverage:* Read in full, every line: background/send.ts, transfer.ts, move-in.ts, mint.ts, withdraw.ts, script-spend.ts, destination.ts, coin-control.ts, pending.ts, spent.ts, sent-txs.ts, short.ts, cbor.ts, and shared/recipients.ts, handles.ts, seedelf-name.ts, histories.ts, label.ts. Also read in full: background/account.ts and feed.ts. Followed values into: handlers.ts dispatch (150-240); koios.ts submitTx and its error classes (600-680, 1175-1290); contract-scan.ts' sealed record (170-260, 340-370); balances.ts reading choice (195-240); parts.ts reviewParts, sendParts and the splitParts header; sessions.ts' use of whole() (3080-3110); dapp.ts submit and keepSent (2560-2680); accounts.ts WIPED_ON_SWITCH. In wasm/src/lib.rs: SendRequest/account_send, recipient_register, transfer_plan's head, build_transfer_parts, build_withdraw_parts' head, carry_kept, max_in_parts, max_chained, withdraw_result, …
 
 ## E6 (2 findings, 15 guards)
 
-- `e6#1` medium (stranger): A stranger can plant a Seedelf so Remove preselects the public account and says it 'links nothing new' `minted-by.ts:124`
+- `e6#1` medium (stranger): A stranger can plant a Seedelf so Remove preselects the public account and says it 'links nothing new' `minted-by.ts:124` · verified **confirmed, low**
 - `e6#2` low (user): A balance reading that spans Remove wallet plus a restore is kept as the new wallet's and uses up its first-reading mark `balances.ts:392` · merged into e4a#1
 
 *Coverage:* Read every line of the lane's 13 files (5,767 lines): koios.ts, data-layer.ts, chain.ts, balances.ts, activity.ts, feed.ts, incoming.ts, private-index.ts, contract-scan.ts, minted-by.ts, nft-image.ts, prices.ts, contacts.ts.  Read the parts that matter in the code they call or feed: - seedelf-crypto register.rs (is_owned, is_valid, rerandomize) and blstrs 0.7.1 G1Affine::from_compressed - seedelf-koios register_of_datum and point_bytes - the deployed seedelf.ak at 5b82530 - wallet.ts: Keys, withKeys, withAccount, load/derive on account switch, open - accounts.ts WIPED_ON_SWITCH; account.ts readAccountUtxos and readAccount - handlers.ts: create/restore/reset-wallet - sessions.ts scanNow's pin - RemoveSeedelf.tsx's default and notes, with their en.json strings - NftImage.tsx's rendering; ui/format.ts formatQuantity - governance.ts ownDrepId; lovejoin.ts mixBoxes; staking.ts delegationHisto…
 
 ## E7a (4 findings, 20 guards)
 
-- `e7a#1` medium (user): A token picked while the swap's review builds is named on the approval, beside the other token's quote, and Start swap runs the swap that was built `Swaps.tsx:926`
-- `e7a#2` low (user): Stop's dialog says the swap comes back directly, less the return's fee, until its cost is read or when the read fails, and Stop then brings it back through Lovejoin as approved `Swaps.tsx:2451`
-- `e7a#3` low (user): A swap funded in parts pauses as 'it spends something that isn't this session's' when Minswap's build spends a part Koios doesn't list yet `sessions.ts:4377`
+- `e7a#1` medium (user): A token picked while the swap's review builds is named on the approval, beside the other token's quote, and Start swap runs the swap that was built `Swaps.tsx:926` · verified **confirmed, low**
+- `e7a#2` low (user): Stop's dialog says the swap comes back directly, less the return's fee, until its cost is read or when the read fails, and Stop then brings it back through Lovejoin as approved `Swaps.tsx:2451` · verified **partly, low**
+- `e7a#3` low (user): A swap funded in parts pauses as 'it spends something that isn't this session's' when Minswap's build spends a part Koios doesn't list yet `sessions.ts:4377` · verified **confirmed, low**
 - `e7a#4` nit (user): A swap held by its wait after an unlock says it's asking Minswap now `Swaps.tsx:3288`
 
 *Coverage:* Read in full, every line: background/minswap.ts (630), ui/swap.ts (270), ui/screens/Swaps.tsx (3450).  Followed out of them into background/sessions.ts: - 180-1100: constants, AutoRecord, Refused/PriceMoved, checkAsk, slippageKeeping, quotesTheAsk, routeOf, quoteOf, tailUnpaid/keepsReserve, collateralFits, plainAda, fundingOf/fundingState. - 1480-2025: tokens, quote, lovejoinCost, tokenPool/tokenAt read for the values the approval shows, priced skimmed, verified, outBuild. - 3105-3300: outSubmit, swapBuild, orders, cancelBuild, txSubmit. - 3390-3540: advance, stop, stopCost, resume. - 3636-4135: step, act, waits, ordersSpent, placed, liveOrders. - 4135-4495: order, cancel, cancelOf, cancelsChecked, referenceRows, inspect, review, signAndSend. - Also: 4897 throughLovejoin, 5490-5600 sendRecorded, 5825-5920 view, 5936-5960 listing, 6420-6872 autoView, outcomeOf, withinFunding, dexOrderAt, …
 
 ## E7b (4 findings, 18 guards)
 
-- `e7b#1` low (user): Delegating again to the pool or DRep Koios names is refused, though the ledger takes it `staking.ts:539`
-- `e7b#2` low (user): A DRep profile's address is refused unless it starts http(s):// or ipfs://, though the ledger takes any address up to 128 bytes `Governance.tsx:165`
+- `e7b#1` low (user): Delegating again to the pool or DRep Koios names is refused, though the ledger takes it `staking.ts:539` · verified **confirmed, low**
+- `e7b#2` low (user): A DRep profile's address is refused unless it starts http(s):// or ipfs://, though the ledger takes any address up to 128 bytes `Governance.tsx:165` · verified **confirmed, low**
 - `e7b#3` nit (nobody): KoiosProposal.expiration's doc says the opposite of how governance.ts reads it `koios.ts:289`
 - `e7b#4` nit (user): Voting's "Inactive since epoch E" and the DRep card's "Active until the end of epoch E" read the same field an epoch apart `Voting.tsx:477`
 
@@ -177,7 +177,7 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 ## E8a (3 findings, 15 guards)
 
 - `e8a#1` low (user): A mix from the private balance, and Mix my boxes again, build their chain at Settings' depth and wait when the runner builds it, not the reviewed ones `sessions.ts:4667` · merged into w3#1
-- `e8a#3` low (user): Pay from my private balance anyway warns of a tie to 'your public account' when the boxes it takes are another account's `Lovejoin.tsx:3649`
+- `e8a#3` low (user): Pay from my private balance anyway warns of a tie to 'your public account' when the boxes it takes are another account's `Lovejoin.tsx:3649` · verified **confirmed, low**
 - `e8a#2` nit (user): A public account's stopped chain on the hub says 'Mix my boxes again mixes the boxes it didn't', and doesn't name which account `Lovejoin.tsx:973`
 
 *Coverage:* Read every line of ui/screens/Lovejoin.tsx (4,125), ui/screens/LovejoinLaunch.tsx (460), ui/components/LovejoinReturn.tsx (578) and ui/components/BringAllBack.tsx (471). Followed the values out: handlers.ts' Lovejoin dispatch; rpc.ts's Lovejoin and session types; ui/lovejoin-pools.ts, ui/swap.ts' estimates and ReviewTotals.tsx in full; lovejoin-launch.ts in full. In lovejoin.ts: funding, plan, fits, room, againBoxes, the mix bounds and constants, widthFor/wayOver/againWay, status, part of sortOut, withdrawDueNow, withdrawNowNow, bringAllBack and part of bringAllBackNow, stopBringingAllBack, progress, rows/shown, chain() and its countAt, hatchOrder, cantComeBack. In sessions.ts: mixOutBuild, againBuild, mixFunding, mixOutSubmit, buildFunding, tailReserve, orWithoutReserve, collateralIntoPool, buildBack's chain call and delay, mixingAgain, resume, fundingState and the view's stage, wayOf. …
