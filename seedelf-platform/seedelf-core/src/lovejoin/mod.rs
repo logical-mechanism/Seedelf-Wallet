@@ -291,6 +291,24 @@ impl Protocol {
     }
 
     /// `mix_box`'s enterprise script address, where every box sits.
+    /// Whether `bech32` is an address mix_box spends: on this network, its
+    /// payment part mix_box's script, with any stake part or none.
+    pub fn spends_as_mix_box(&self, bech32: &str) -> bool {
+        let network = if self.network_flag {
+            Network::Testnet
+        } else {
+            Network::Mainnet
+        };
+        match Address::from_bech32(bech32) {
+            Ok(Address::Shelley(address)) => {
+                address.network() == network
+                    && matches!(address.payment(),
+                        ShelleyPaymentPart::Script(hash) if **hash == self.mix_box_hash)
+            }
+            _ => false,
+        }
+    }
+
     pub fn mix_box_address(&self) -> Address {
         let network = if self.network_flag {
             Network::Testnet
@@ -419,10 +437,15 @@ impl PoolBox {
     /// identity. Anything else at the address is someone's mistake, left
     /// alone: a box holding more than the box value could be mixed by anyone,
     /// who'd take the excess.
+    ///
+    /// The row's address decides, not its `payment_cred`: Koios lists a
+    /// credential's UTxOs by its 28 bytes, a key's and a script's alike, so
+    /// the KEY address whose hash is mix_box's comes back with the pool's own
+    /// rows. Nothing can spend that, and mix_box reads an input's payment
+    /// part as its script, so only an address whose payment part is
+    /// mix_box's script holds a box, whatever its stake part (chunk 51, x2#1).
     pub fn from_row(row: &UtxoResponse, protocol: &Protocol) -> Option<Self> {
-        if !protocol.box_value().is_row(row)
-            || row.payment_cred != hex::encode(protocol.mix_box_hash)
-        {
+        if !protocol.box_value().is_row(row) || !protocol.spends_as_mix_box(&row.address) {
             return None;
         }
         let (a, b) = parse_mix_datum(&hex::decode(&row.inline_datum.as_ref()?.bytes).ok()?)?;

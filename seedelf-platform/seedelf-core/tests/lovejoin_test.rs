@@ -722,6 +722,58 @@ fn a_box_in_constructor_0s_general_form_is_still_the_wallets() {
     }
 }
 
+/// Chunk 51, x2#1: Koios lists a credential's UTxOs by its 28 bytes, a key's and a
+/// script's alike, so a stranger's 5 ₳ at the KEY address whose hash is
+/// mix_box's script hash comes back with the pool's own rows. No mix can spend
+/// it (mix_box reads an input's payment part as a script), so read as a box it
+/// was counted toward the pool's floor and drawn, and every chain that drew it
+/// failed. Only an address whose payment part is mix_box's script holds a box,
+/// whatever its stake part, as the contract reads it.
+#[test]
+fn a_key_address_carrying_mix_box_s_hash_holds_no_box() {
+    let sk = seedelf_crypto::schnorr::random_scalar();
+    let owner = Register::create(sk).unwrap().rerandomize().unwrap();
+    let a: [u8; 48] = hex::decode(&owner.generator).unwrap().try_into().unwrap();
+    let b: [u8; 48] = hex::decode(&owner.public_value)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let datum = lovejoin::mix_datum(&a, &b);
+    for protocol in [Protocol::of(true).unwrap(), Protocol::of(false).unwrap()] {
+        let net = if protocol.network_flag { 0 } else { 1 };
+        let bech32 = |bytes: Vec<u8>| {
+            pallas_addresses::Address::from_bytes(&bytes)
+                .unwrap()
+                .to_bech32()
+                .unwrap()
+        };
+        let at = |address: String| {
+            let mut row = box_row(&protocol, &datum);
+            row.address = address;
+            PoolBox::from_row(&row, &protocol)
+        };
+        // The key address: header 0b0110 (a key, no stake part), then the hash.
+        let twin = bech32([vec![0x60 | net], protocol.mix_box_hash.to_vec()].concat());
+        assert_eq!(at(twin.clone()), None, "{twin} is no box");
+        // Its base form too (a key, with a stake key).
+        let twin_staked =
+            bech32([vec![net], protocol.mix_box_hash.to_vec(), vec![0x77; 28]].concat());
+        assert_eq!(at(twin_staked.clone()), None, "{twin_staked} is no box");
+        // mix_box's own address holds one, and so does its form with a stake
+        // part (0b0001: a script, with a stake key), which the contract also spends.
+        assert!(at(protocol.mix_box_address().to_bech32().unwrap()).is_some());
+        let staked = bech32(
+            [
+                vec![0x10 | net],
+                protocol.mix_box_hash.to_vec(),
+                vec![0x77; 28],
+            ]
+            .concat(),
+        );
+        assert!(at(staked).is_some_and(|b| b.is_owned(&sk)));
+    }
+}
+
 /// `b` with its inline datum spelled `102([0, [_ a, b]])` in its output's bytes,
 /// as a stranger's mix may leave a box. The datum sits in tag 24's byte string
 /// (`d8 18 58 <length>`), whichever spelling it had before.
