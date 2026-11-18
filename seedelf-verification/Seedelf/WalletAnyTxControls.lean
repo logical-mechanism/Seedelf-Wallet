@@ -5,9 +5,10 @@ import Blaster
 /-! Negative controls for the Register families in every transaction (`WalletAnyTx`,
 `WalletAnyTxTwo`, `WalletAnyTxThree`), each expected Falsified (README rule 8): a control that
 comes back Valid prints "❌ Unexpected Valid" and fails the build. Each is one of its family's
-theorems with a condition left out, or its outcome turned around, over the family's own builder,
-so the solver meets the same script as the theorems do. Were that background contradictory
-(Lean-blaster #194), every statement over it would come back Valid, these too.
+theorems with a condition left out, or its outcome turned around, over the same builder as that
+theorem: a control probes the one builder it names, since each Blaster goal is its own query, and
+these three families' four builders each have one. Were a builder's background contradictory
+(Lean-blaster #194), every statement over it would come back Valid, the control too.
 - One signer, the iff without `vkh = signer`: a proof that checks, signed by another key, errors.
 - One signer, the iff without the Schnorr check: the one-time key's signature on a proof that
   fails errors.

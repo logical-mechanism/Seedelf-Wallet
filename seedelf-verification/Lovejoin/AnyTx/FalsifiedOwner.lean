@@ -7,9 +7,11 @@ import Blaster
 /-! Negative controls for the one- and two-box Owner families in every transaction: `OwnerOne`,
 `OwnerTwo`, `OwnerLayouts` and `OwnerOtherInputs`, each expected Falsified (README rule 8): a
 control that comes back Valid prints "❌ Unexpected Valid" and fails the build. Each is its family's
-first theorem with the outcome turned around, over the family's own builder, in its own namespace
-and opens, so the solver meets the same script as the theorems do. Were that background
-contradictory (Lean-blaster #194), every statement over it would come back Valid, these too. -/
+first theorem with the outcome turned around, over the same builder as that theorem, in its
+family's namespace and opens. A control probes the one builder it names: each Blaster goal is its
+own query, so a family's other builders go unprobed (these families have 6 builders, 4 with a
+control). Were that builder's background contradictory (Lean-blaster #194), every statement over it
+would come back Valid, the control too. -/
 
 -- OwnerOne's `box_needs_proof`, `isUnsuccessful` turned to `returnsUnit`.
 namespace Lovejoin.AnyTx.OwnerOne

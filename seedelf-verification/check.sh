@@ -6,9 +6,12 @@
 # "Undetermined" is UNDETERM, not ok: Blaster logs that as a warning only, so the
 # build passes, but the check proved nothing (a timeout, or no model found). One
 # whose log has a `sorry`, or a `#print axioms` naming sorryAx or the compiler's
-# axioms (`native_decide`), is SORRY: the kernel didn't check all of it. A build
-# that fails, times out or is killed loses its last good build's files, so no
-# reader (tally.py, Audit/count.py) takes that build for this one.
+# axioms (`native_decide`), is SORRY: the kernel didn't check all of it. Both are
+# read from the module's own build log, its trace, never from the console, which
+# replays every import's log too. A module whose build fails, times out or is
+# killed loses its last good build's files, and so does a dependency's module
+# that fails, so no reader (tally.py, Audit/count.py) takes that build for this
+# one: a module resting on one reads not ok there.
 #   ./check.sh                       every Seedelf module but the kernel's (seedelf-every) and Slice/'s
 #                                    (seedelf-slice)
 #   ./check.sh seedelf-any-tx        Seedelf's properties in every transaction (Seedelf/AnyTx.lean)
@@ -206,20 +209,49 @@ peakf=$(mktemp)
 outf=$(mktemp)
 summary=()
 check_failed=0
+# The package that holds module M's source: this one (.), or the dependency under
+# .lake/packages/ that does. Fails when neither does.
+root_of() {
+  case $1 in ''|*[!A-Za-z0-9_.]*|.*|*.|*..*) return 1 ;; esac
+  local p=${1//.//} d
+  [ -f "$p.lean" ] && { echo .; return 0; }
+  for d in .lake/packages/*/; do [ -f "$d$p.lean" ] && { echo "${d%/}"; return 0; }; done
+  return 1
+}
 # Lake writes a module's trace only when its build ends, and never removes one: a failed
 # rebuild leaves the last good build's, newer than the source, and tally.py and Audit/count.py
-# would read it as this run's. So a failed module's build goes, as if it had never built: the
-# trace, the .olean, .ilean and .c, and their hashes. The .olean must go too: with no trace,
-# Lake would take an old .olean as up to date by its date, and this would say ok to a build
-# that proved nothing.
+# would read it as this run's. So a failed module's build goes, as if it had never built, here
+# or in the dependency that holds it: the trace, the .olean, .ilean and .c, and their hashes.
+# The .olean must go too: with no trace, Lake would take an old .olean as up to date by its
+# date, and this would say ok to a build that proved nothing. Fails when M is no module of this
+# package or a dependency's.
 forget() {
-  case $1 in ''|*[!A-Za-z0-9_.]*|.*|*.|*..*) return 0 ;; esac
-  local p=${1//.//} was=
-  [ -f "$p.lean" ] || return 0
-  [ -e ".lake/build/lib/lean/$p.trace" ] || [ -e ".lake/build/lib/lean/$p.olean" ] && was=1
-  rm -f ".lake/build/lib/lean/$p".* ".lake/build/ir/$p".*
-  [ -n "$was" ] && echo "== $1 failed: its last good build removed, so it reads as not built"
+  local r p=${1//.//} was= where=
+  r=$(root_of "$1") || return 1
+  [ "$r" = . ] || where=" (in $r)"
+  [ -e "$r/.lake/build/lib/lean/$p.trace" ] || [ -e "$r/.lake/build/lib/lean/$p.olean" ] && was=1
+  rm -f "$r/.lake/build/lib/lean/$p".* "$r/.lake/build/ir/$p".*
+  [ -n "$was" ] && echo "== $1 failed$where: its last good build removed, so it reads as not built"
   return 0
+}
+# A module's own build log, its trace, after a build that passed (Lake writes it as the build
+# ends, and so it is this run's): how many of its Blaster checks are Undetermined, and how many
+# entries show a proof the kernel didn't check, a `sorry` or a `#print axioms` naming sorryAx or
+# the compiler's axioms (`native_decide`). Each message is read whole: Lean breaks an axiom list
+# past 120 columns, one axiom a line. Prints "- -" when there's no trace to read.
+own_log() {
+  python3 -I - "$1" <<'EOF'
+import json, sys
+try:
+    log = json.load(open(sys.argv[1], encoding="utf-8")).get("log", [])
+except (OSError, ValueError):
+    print("- -"); raise SystemExit
+msgs = [(e.get("level"), e.get("message", "")) for e in log]
+undet = sum(l == "warning" and "Undetermined" in m for l, m in msgs)
+unsound = sum("declaration uses 'sorry'" in m or ("depends on axioms" in m and any(
+    a in m for a in ("sorryAx", "Lean.ofReduceBool", "Lean.trustCompiler"))) for _, m in msgs)
+print(undet, unsound)
+EOF
 }
 for m in "${mods[@]}"; do
   echo "== $m (cap $CAP, limit $LIMIT)"
@@ -230,25 +262,31 @@ for m in "${mods[@]}"; do
     bash -c 'timeout "$1" lake build "$2"; rc=$?
       cat "/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.peak" > "$3" 2>/dev/null
       exit $rc' _ "$LIMIT" "$m" "$peakf" 2>&1 \
-    | grep -v -E 'Replayed|CekMachine.lean:309|Successfully decoded|^trace: \.> LEAN_PATH' \
+    | grep -v -E "Replayed|PlutusCore/UPLC/CekMachine\.lean:[0-9]+:[0-9]+: declaration uses 'sorry'|Successfully decoded|^trace: \.> LEAN_PATH" \
     | tee "$outf"
   rc=${PIPESTATUS[0]}
-  # Replayed logs print their warnings too, so an up-to-date module is caught as well. Lean
-  # builds a proof with a `sorry` with a warning only, and one by `native_decide` with no word
-  # but in a `#print axioms` (PlutusCoreBlaster's own sorry, CekMachine.lean:309, is filtered).
-  undet=$(grep -cE '^warning: .*Undetermined' "$outf")
-  unsound=$(grep -cE "^warning: .*declaration uses 'sorry'|depends on axioms: \[.*(sorryAx|Lean\.ofReduceBool|Lean\.trustCompiler)" "$outf")
+  # The verdict comes from the module's own log, its trace (own_log), never from the console:
+  # the console replays every import's log too, a dependency's included (PlutusCoreBlaster's own
+  # `sorry`, in CekMachine.lean, which the filter above only keeps off the screen). Lean logs a
+  # `sorry` with a warning, and a `native_decide` with no word but in a `#print axioms`.
+  undet=0 unsound=0
   if [ "$rc" = 0 ]; then
-    if [ "$unsound" -gt 0 ]; then rc=sorry; elif [ "$undet" -gt 0 ]; then rc=undetermined; fi
+    undet= unsound=
+    r=$(root_of "$m") && read -r undet unsound < <(own_log "$r/.lake/build/lib/lean/${m//.//}.trace")
+    # No trace, or no count read from it (python3 missing, say), is no verdict.
+    case $undet.$unsound in *[!0-9.]*|.*|*.) rc=notrace ;;
+      *) if [ "$unsound" -gt 0 ]; then rc=sorry; elif [ "$undet" -gt 0 ]; then rc=undetermined; fi ;; esac
   fi
-  # A failed build: forget each module Lake says failed (`✖ … Building M`). A module whose
-  # import failed never started, and keeps its build: the readers see that what it imports has
-  # none. A timeout or a kill leaves no word of which build it stopped, nor does a failure
-  # before any build, so then the module asked for goes too.
-  case $rc in 0|undetermined|sorry) ;; *)
-    failed=$(grep -aoE '✖ \[[0-9]+/[0-9]+\] Building [A-Za-z0-9_.]+' "$outf" | awk '{print $NF}')
-    [ "$rc" = 1 ] && [ -n "$failed" ] || failed="$failed $m"
-    for f in $failed; do forget "$f"; done ;; esac
+  # A failed build: forget each module Lake says failed (`✖ … Building M`), here or in a
+  # dependency. A module whose import failed never started, and keeps its build: the readers
+  # see that what it rests on has none. A timeout or a kill leaves no word of which build it
+  # stopped, nor does a failure Lake pins on no module here or in a dependency, so then the
+  # module asked for goes too.
+  case $rc in 0|undetermined|sorry|notrace) ;; *)
+    found=
+    for f in $(grep -aoE '✖ \[[0-9]+/[0-9]+\] Building [A-Za-z0-9_.]+' "$outf" | awk '{print $NF}'); do
+      forget "$f" && found=1; done
+    [ "$rc" = 1 ] && [ -n "$found" ] || forget "$m" ;; esac
   [ "$rc" = 0 ] || check_failed=1
   took=$((SECONDS - start))s
   peak=$(cat "$peakf")
@@ -256,7 +294,8 @@ for m in "${mods[@]}"; do
   case $rc in
     0) summary+=("ok        $m ($took$peak)") ;;
     undetermined) summary+=("UNDETERM  $m ($undet Undetermined, $took$peak)") ;;
-    sorry) summary+=("SORRY     $m ($unsound sorry or native_decide, $took$peak)") ;;
+    sorry) summary+=("SORRY     $m ($unsound sorry or native_decide$([ "$undet" -gt 0 ] && echo ", $undet Undetermined"), $took$peak)") ;;
+    notrace) summary+=("NO TRACE  $m (built, but left no trace to read, $took$peak)") ;;
     124) summary+=("TIMEOUT   $m (past $LIMIT$peak)") ;;
     137) summary+=("KILLED    $m (over $CAP, $took)") ;;
     *) summary+=("FAILED    $m (exit $rc, $took$peak)") ;;

@@ -4,18 +4,20 @@ as Audit/count.py does for the audit's families:
     python3 -I tally.py Seedelf          every module under Seedelf/
     python3 -I tally.py Slice/Slice      Slice/'s, from its own package's traces
 
-A module is ok when its trace is newer than its source, every module of the package it imports,
-directly or not, has a trace, and its log holds no error, no "❌", no "Undetermined", no `sorry`
-and no compiler-trusting axiom (`native_decide`), and exactly as many "✅ Valid" as its source has
-`blaster` proofs and plain `#blaster` checks, and "✅ Expected Falsified" as
-`#blaster (solve-result: 1)` checks (comments and strings stripped). What this adds to check.sh's
-summary of one run: each module's ✅ held against its own source, whichever runs built it.
+A module is ok when its trace is newer than its source, every module it imports, directly or not,
+in this package or a dependency's (.lake/packages/), has a trace, and its log holds no error, no
+"❌", no "Undetermined", no `sorry` and no compiler-trusting axiom (`native_decide`), and exactly
+as many "✅ Valid" as its source has `blaster` proofs and plain `#blaster` checks, and "✅
+Expected Falsified" as `#blaster (solve-result: 1)` checks (comments and strings stripped). What
+this adds to check.sh's summary of one run: each module's ✅ held against its own source,
+whichever runs built it.
 
 Lake writes a trace when a build ends and keeps the last good one when a rebuild fails, so
-check.sh removes a failed module's build: here it reads as not built, and every module resting on
-it as not ok. This reads the last builds only: an import or a pin changed since one shows only once
-check.sh rebuilds, so run check.sh on what you count. A module that is only imports, an aggregator
-check.sh never builds, is skipped and listed."""
+check.sh removes a failed module's build, here or in the dependency that holds it: here it reads
+as not built, and every module resting on it as not ok. This reads the last builds only: an
+import or a pin changed since one shows only once check.sh rebuilds, so run check.sh on what you
+count. A module that is only imports, an aggregator check.sh never builds, is skipped and
+listed; a lakefile.lean is no module."""
 import glob, json, os, re, sys
 
 # The axioms of a proof the compiler checked, not the kernel (`native_decide`).
@@ -59,33 +61,46 @@ IMPORT = r"(?<![\w.])import\s+([A-Za-z_][\w.]*)"
 lib = sys.argv[1].rstrip("/")
 root = os.path.dirname(lib) or "."
 traces = os.path.join(root, ".lake", "build", "lib", "lean")
-codes, holes = {}, {}
+# This package, then each dependency Lake keeps under .lake/packages/ (each its own root, with its
+# own .lake/build): where a module's source and trace are.
+roots = [root] + sorted(glob.glob(os.path.join(root, ".lake", "packages", "*")))
+codes, holes, homes = {}, {}, {}
 
 
 def path(base, mod, ext):
     return os.path.join(base, *mod.split(".")) + ext
 
 
+def home(mod):
+    """The root of the package that holds `mod`'s source, this one or a dependency's, or None."""
+    if mod not in homes:
+        homes[mod] = next((r for r in roots if os.path.exists(path(r, mod, ".lean"))), None)
+    return homes[mod]
+
+
 def code(mod):
     if mod not in codes:
-        codes[mod] = strip(open(path(root, mod, ".lean"), encoding="utf-8").read())
+        codes[mod] = strip(open(path(home(mod), mod, ".lean"), encoding="utf-8").read())
     return codes[mod]
 
 
 def hole(mod):
-    """A module of the package that `mod` imports, directly or not, with no trace, or None."""
+    """A module `mod` imports, directly or not, here or in a dependency, with no trace, or None."""
     if mod not in holes:
         holes[mod] = None  # an import cycle, which Lean refuses, ends here
         for imp in re.findall(IMPORT, code(mod)):
-            if imp != mod and os.path.exists(path(root, imp, ".lean")):
-                found = imp if not os.path.exists(path(traces, imp, ".trace")) else hole(imp)
+            r = home(imp)
+            if imp != mod and r is not None:
+                found = (imp if not os.path.exists(path(os.path.join(r, ".lake", "build", "lib", "lean"), imp, ".trace"))
+                         else hole(imp))
                 if found:
                     holes[mod] = found
                     break
     return holes[mod]
 
 
-srcs = sorted(glob.glob(os.path.join(lib, "**", "*.lean"), recursive=True))
+srcs = sorted(s for s in glob.glob(os.path.join(lib, "**", "*.lean"), recursive=True)
+              if os.path.basename(s) != "lakefile.lean")
 total_v = total_f = 0
 bad, skipped = [], []
 for src in srcs:

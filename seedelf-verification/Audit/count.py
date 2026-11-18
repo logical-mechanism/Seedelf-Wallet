@@ -9,22 +9,25 @@ What a module expects comes from its own source, comments and strings stripped:
 - every other `#blaster` command, and every `blaster` tactic, must log "✅ Valid";
 - a `#guard` logs nothing when it holds and fails the build when it doesn't.
 
-A module is ok only when its trace is newer than its source, every module of the package it
-imports, directly or not, has a trace, its log has no error, no "❌", no "Undetermined" line and
-no `sorry`, and it holds exactly the expected counts. Blaster logs Undetermined as a warning only
-(Blaster/Smt/Env.lean:70): check.sh reports such a module as UNDETERM, not ok, and this also
-checks the counts. Lake keeps the last good trace when a rebuild fails, so check.sh removes a
-failed module's build: it reads here as NO TRACE, and a module resting on it as STALE. This reads
-the last builds only, as tally.py does: an import or a pin changed since one shows once check.sh
-rebuilds."""
-import json, os, re, sys
+A module is ok only when its trace is newer than its source, every module it imports, directly or
+not, in this package or a dependency's (.lake/packages/), has a trace, its log has no error, no
+"❌", no "Undetermined" line and no `sorry`, and it holds exactly the expected counts. Blaster logs
+Undetermined as a warning only (Blaster/Smt/Env.lean:70): check.sh reports such a module as
+UNDETERM, not ok, and this also checks the counts. Lake keeps the last good trace when a rebuild
+fails, so check.sh removes a failed module's build, here or in the dependency that holds it: it
+reads here as NO TRACE, and a module resting on it as STALE. This reads the last builds only, as
+tally.py does: an import or a pin changed since one shows once check.sh rebuilds. It exits 1 when
+any module isn't ok."""
+import glob, json, os, re, sys
 
 SV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIT = os.path.join(SV, "Audit")
 TRACES = os.path.join(SV, ".lake", "build", "lib", "lean")
 FORBIDDEN_AXIOMS = ("sorryAx", "Lean.ofReduceBool", "Lean.trustCompiler")
 IMPORT = r"(?<![\w.])import\s+([A-Za-z_][\w.]*)"
-_holes = {}
+# This package, then each dependency Lake keeps under .lake/packages/, each with its own .lake/build.
+ROOTS = [SV] + sorted(glob.glob(os.path.join(SV, ".lake", "packages", "*")))
+_holes, _homes = {}, {}
 
 
 def strip_comments(src):
@@ -76,15 +79,24 @@ def family(name):
     return [l.strip() for l in open(path) if l.strip() and not l.startswith("#")]
 
 
+def home(mod):
+    """The root of the package that holds `mod`'s source, this one or a dependency's, or None."""
+    if mod not in _homes:
+        rel = os.path.join(*mod.split(".")) + ".lean"
+        _homes[mod] = next((r for r in ROOTS if os.path.exists(os.path.join(r, rel))), None)
+    return _homes[mod]
+
+
 def hole(mod):
-    """A module of the package that `mod` imports, directly or not, with no trace, or None."""
+    """A module `mod` imports, directly or not, here or in a dependency, with no trace, or None."""
     if mod not in _holes:
         _holes[mod] = None  # an import cycle, which Lean refuses, ends here
-        src = os.path.join(SV, *mod.split(".")) + ".lean"
+        src = os.path.join(home(mod), *mod.split(".")) + ".lean"
         for imp in re.findall(IMPORT, strip_comments(open(src, encoding="utf-8").read())):
-            if imp != mod and os.path.exists(os.path.join(SV, *imp.split(".")) + ".lean"):
-                found = (imp if not os.path.exists(os.path.join(TRACES, *imp.split(".")) + ".trace")
-                         else hole(imp))
+            r = home(imp)
+            if imp != mod and r is not None:
+                t = os.path.join(r, ".lake", "build", "lib", "lean", *imp.split(".")) + ".trace"
+                found = imp if not os.path.exists(t) else hole(imp)
                 if found:
                     _holes[mod] = found
                     break
@@ -138,7 +150,8 @@ def main():
             totals[status] = totals.get(status, 0) + 1
             print(f"  {status:9} {mod}: {note}")
     print("\n== " + ", ".join(f"{v} {k}" for k, v in totals.items()))
+    return 0 if all(k == "ok" for k, v in totals.items() if v) else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
