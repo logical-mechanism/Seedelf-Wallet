@@ -640,3 +640,93 @@ fn a_plan_or_a_sessions_chain_is_refused_past_its_waves() {
     }
     assert!(wasm::plan_at(&accounts(), plan_again(1), None, &[], 3).is_ok());
 }
+
+/// A token pool of LJTEST launched from `seed`#0, as [`pool_ref`]'s is from
+/// Lovejoin's own seed: another pool (its own NFT and scripts) of the same token.
+fn token_pool_from(seed: [u8; 32]) -> PoolRef {
+    let d = templates::derive(&seed, 0).unwrap();
+    let mut pool = pool_ref();
+    let datum = ReferenceDatum {
+        box_value: BoxValue {
+            lovelace: 2_000_000,
+            token: Some(BoxToken {
+                policy: hex::decode(LJTEST).unwrap().try_into().unwrap(),
+                name: b"LJTEST".to_vec(),
+                quantity: Q,
+            }),
+        },
+        max_fee: 1_500_000,
+        mix_box_hash: d.mix_box.hash,
+        mix_logic_hash: d.mix_logic.hash,
+        fee_hash: d.fee_contract.hash,
+    };
+    pool.reference.tx_hash = "6f".repeat(32);
+    pool.reference.inline_datum =
+        serde_json::from_value(json!({ "bytes": hex::encode(datum.encode()), "value": {} }))
+            .unwrap();
+    pool.reference.asset_list = serde_json::from_value(json!([{
+        "policy_id": hex::encode(d.policy()), "asset_name": hex::encode("lovejoin"),
+        "quantity": "1", "decimals": 0, "fingerprint": "",
+    }]))
+    .unwrap();
+    for ((row, script), first) in pool
+        .scripts
+        .iter_mut()
+        .zip([&d.mix_box, &d.mix_logic])
+        .zip(["6d", "06"])
+    {
+        row.tx_hash = first.repeat(32);
+        row.reference_script = serde_json::from_value(json!({
+            "hash": hex::encode(script.hash), "size": script.cbor.len(), "type": "plutusV3",
+            "bytes": hex::encode(&script.cbor),
+        }))
+        .unwrap();
+    }
+    pool.seed = OutRef {
+        tx_hash: hex::encode(seed),
+        tx_index: 0,
+    };
+    pool
+}
+
+/// Chunk 51, t1f#12: a chain across pools never names one pool twice, nor two
+/// pools of one token, each refused on its own: the same ADA pool twice (only
+/// the pools' ids tell), and two different pools of LJTEST (only the token
+/// tells). The only case before named one token pool twice, which both checks
+/// refuse, so each masked the other.
+#[test]
+fn a_chain_across_pools_names_no_pool_twice_nor_one_token_twice() {
+    let (utxos, funding, _) = filled();
+    let another = token_pool_from([0x5e; 32]);
+    let ids = (
+        token_pool().id,
+        wasm::protocol_of(true, Some(&another)).unwrap().id,
+    );
+    assert_ne!(ids.0, ids.1, "two pools");
+    let leg = |pool_ref: Option<PoolRef>| LegRequest {
+        pool_ref,
+        pool: Vec::new(),
+        most: None,
+    };
+    let said = |legs: Vec<LegRequest>| {
+        wasm::plan_across_pools(
+            &accounts(),
+            plan_request(utxos.clone(), 1),
+            std::slice::from_ref(&funding),
+            &across(legs, Vec::new()),
+            3,
+        )
+        .map(|p| format!("planned {:?}", p.legs))
+        .unwrap_or_else(|e| e.to_string())
+    };
+    assert_eq!(
+        [
+            said(vec![leg(None), leg(None)]),
+            said(vec![leg(Some(pool_ref())), leg(Some(another))]),
+        ],
+        [
+            "A chain names one Lovejoin pool twice",
+            "A chain takes a token into one Lovejoin pool"
+        ]
+    );
+}

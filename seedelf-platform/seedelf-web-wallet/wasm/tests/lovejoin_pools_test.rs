@@ -134,6 +134,32 @@ fn a_pool_the_worker_found_is_verified_and_shown() {
     assert_eq!(away.scripts_inline, 2);
 }
 
+/// Chunk 51, t1f#2: a launch can put any datum beside its scripts at the holder
+/// (one_shot_mint checks only the reference output). A script row whose datum
+/// is too deep to read is no reference, passed over, so the pool still reads:
+/// read, it was refused, and the pool was never verified or shown, and nothing
+/// in it built. The mix_box twin is lovejoin_test's
+/// a_strangers_deep_utxos_at_mix_box_leave_the_pool_readable.
+#[test]
+fn a_launchs_deep_datum_beside_a_script_at_the_holder_leaves_the_pool_readable() {
+    let d = derived();
+    let mut pool = lj_pool_ref(true);
+    pool.scripts.push(row(json!({
+        "tx_hash": "e7".repeat(32), "address": holder(), "value": "30000000",
+        "payment_cred": hex::encode(templates::REFERENCE_HOLDER_HASH),
+        "inline_datum": { "bytes": format!("{}00", "81".repeat(200)), "value": {} },
+        "reference_script": { "hash": hex::encode(d.mix_logic.hash), "size": d.mix_logic.cbor.len(),
+                              "type": "plutusV3", "bytes": hex::encode(&d.mix_logic.cbor) },
+    })));
+    let view = wasm::verify_pool(VerifyPoolRequest {
+        network: "preprod".into(),
+        pool,
+    })
+    .map(|v| format!("{} with {} scripts carried", v.id, v.scripts_inline))
+    .unwrap_or_else(|e| e.to_string());
+    assert_eq!(view, format!("{LJ_POLICY} with 0 scripts carried"));
+}
+
 #[test]
 fn a_pool_without_its_launchs_seed_isnt_trusted() {
     let mut pool = lj_pool_ref(true);

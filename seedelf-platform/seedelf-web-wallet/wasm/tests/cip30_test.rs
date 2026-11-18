@@ -1054,6 +1054,110 @@ fn a_collateral_return_to_someone_else_is_refused() {
     );
 }
 
+/// Chunk 51, t1f#4: what the collateral puts at risk is the account's own
+/// collateral less what comes back to it. A site's collateral found beside it
+/// is the site's: counted in, the window said 15 ₳ put up and 3 ₳ at risk, where
+/// the account's 5 ₳ comes back whole in the 12 ₳ return.
+#[test]
+fn the_sites_collateral_beside_the_accounts_isnt_the_accounts() {
+    let rows = vec![
+        row(TX_A, 0, &ours(Role::Receive, 0), 6_000_000, &[]),
+        row(TX_A, 1, &ours(Role::Receive, 0), 5_000_000, &[]),
+        row(TX_B, 3, &theirs(), 10_000_000, &[]),
+    ];
+    let mut b = body(
+        vec![input(TX_A, 0)],
+        vec![out(&ours(Role::Receive, 0), 5_800_000, None)],
+    );
+    b.collateral = NonEmptySet::try_from(vec![input(TX_A, 1), input(TX_B, 3)]).ok();
+    b.collateral_return = Some(out(&ours(Role::Receive, 0), 12_000_000, None));
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    let collateral = summary.collateral.unwrap();
+    assert_eq!(
+        (
+            collateral.own,
+            collateral.lovelace.as_str(),
+            collateral.at_risk.as_str(),
+            collateral.returned_lovelace.as_deref(),
+        ),
+        (1, "5000000", "0", Some("12000000"))
+    );
+}
+
+/// Chunk 51, t1f#3: every sum of amounts the bytes or the rows decide is
+/// checked. The module has no overflow checks of its own (wasm-release), so an
+/// unchecked sum wraps: three of the account's UTxOs of 2^63 - 1 of a token
+/// (one mint holds that much) totalled 2^63 - 3, and the window understated
+/// what leaves by about 1.8 x 10^19 of it.
+#[test]
+fn amounts_past_what_a_u64_holds_are_refused_never_wrapped() {
+    const MOST_A_MINT_MAKES: u64 = 9_223_372_036_854_775_807;
+    let said = |b: conway::TransactionBody, rows: Vec<KoiosRow>| {
+        cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true))
+            .map(|s| format!("read: net {} lovelace", s.net_lovelace))
+            .unwrap_or_else(|e| e.to_string())
+    };
+
+    // The token: three of the account's UTxOs, spent together.
+    let rows: Vec<KoiosRow> = (0..3)
+        .map(|i| {
+            row(
+                TX_A,
+                i,
+                &ours(Role::Receive, 0),
+                2_000_000,
+                &[(POLICY, "0000", MOST_A_MINT_MAKES)],
+            )
+        })
+        .collect();
+    let tokens = said(
+        body(
+            (0..3).map(|i| input(TX_A, i)).collect(),
+            vec![out(&theirs(), 5_800_000, None)],
+        ),
+        rows,
+    );
+
+    // ADA: two of the account's own outputs, half a u64 and more each.
+    let half = u64::MAX / 2 + 1;
+    let ada = said(
+        body(
+            vec![input(TX_A, 0)],
+            vec![
+                out(&ours(Role::Receive, 0), half, None),
+                out(&ours(Role::Change, 0), half, None),
+            ],
+        ),
+        vec![row(TX_A, 0, &ours(Role::Receive, 0), 2_000_000, &[])],
+    );
+
+    // Staking: an unregistration's refund and a withdrawal of the account's.
+    let mut b = body(
+        vec![input(TX_A, 0)],
+        vec![out(&ours(Role::Receive, 0), 1_800_000, None)],
+    );
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::UnReg(
+        stake_credential(),
+        u64::MAX - 10,
+    )])
+    .ok();
+    b.withdrawals =
+        NonEmptyKeyValuePairs::try_from(vec![(Bytes::from(stake_account_bytes()), 100)]).ok();
+    let staking = said(
+        b,
+        vec![row(TX_A, 0, &ours(Role::Receive, 0), 2_000_000, &[])],
+    );
+
+    assert_eq!(
+        [tokens.as_str(), ada.as_str(), staking.as_str()],
+        [
+            "a token amount overflows",
+            "an ADA amount overflows",
+            "an ADA amount overflows"
+        ]
+    );
+}
+
 // --- The account's other keys as payment keys (the 2026-11-02 report) -------
 
 /// The enterprise address of a key hash. No wallet hands one out for the
@@ -1386,6 +1490,36 @@ fn the_stake_key_never_signs_what_could_be_the_other_networks() {
     ));
     let summary = cip30::inspect_tx(&account(), &request(tx_hex(theirs_only), rows, true)).unwrap();
     assert!(summary.signs.is_empty());
+}
+
+/// Chunk 51, t1f#1: a withdrawal from the account's reward address on the
+/// other network is refused, so it never ties a transaction to this one.
+/// Taken as the account's, it would have the stake key sign: one key on both
+/// networks, a delegation "on preprod" counted on mainnet, its inputs a site's
+/// there (chunk 29's hole, reopened through a withdrawal).
+#[test]
+fn a_withdrawal_on_the_other_network_never_ties_a_delegation_to_this_one() {
+    let stake = account().key_hash(Role::Staking, 0).unwrap();
+    let mut b = body(vec![input(TX_B, 7)], vec![]);
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::StakeDelegation(
+        StakeCredential::AddrKeyhash(stake),
+        Hash::new([7; 28]),
+    )])
+    .ok();
+    b.withdrawals = NonEmptyKeyValuePairs::try_from(vec![(
+        Bytes::from(account().stake_address(false).unwrap().to_vec()),
+        0,
+    )])
+    .ok();
+    let rows = vec![row(TX_B, 8, &theirs(), 5_000_000, &[])];
+    for partial_sign in [true, false] {
+        let request = request(tx_hex(b.clone()), rows.clone(), partial_sign);
+        let read = cip30::inspect_tx(&account(), &request)
+            .map(|s| format!("read, signed by {:?}", s.signs))
+            .unwrap_or_else(|e| e.to_string());
+        assert!(read.contains("withdraws from mainnet"), "{read}");
+        assert!(cip30::sign_tx(&account(), &request).is_err());
+    }
 }
 
 /// A Byron address: mainnet's with no network magic, a test network's with

@@ -85,6 +85,13 @@ fn pool_ref() -> PoolRef {
 
 /// [`pool_ref`] with boxes of `lovelace` beside the token.
 fn pool_ref_worth(lovelace: u64) -> PoolRef {
+    // 1.5 ₳ for the 2 ₳ pool, as Lovejoin's; below the box value, as a pool's datum must be.
+    pool_ref_with(lovelace, Q, lovelace * 3 / 4)
+}
+
+/// [`pool_ref`] with boxes of `lovelace` beside `quantity` of the token, and
+/// `max_fee`: what a launcher may write in a reference datum.
+fn pool_ref_with(lovelace: u64, quantity: u64, max_fee: u64) -> PoolRef {
     let d = derived();
     let datum = ReferenceDatum {
         box_value: BoxValue {
@@ -92,11 +99,10 @@ fn pool_ref_worth(lovelace: u64) -> PoolRef {
             token: Some(BoxToken {
                 policy: hex::decode(LJTEST).unwrap().try_into().unwrap(),
                 name: b"LJTEST".to_vec(),
-                quantity: Q,
+                quantity,
             }),
         },
-        // 1.5 ₳ for the 2 ₳ pool, as Lovejoin's; below the box value, as a pool's datum must be.
-        max_fee: lovelace * 3 / 4,
+        max_fee,
         mix_box_hash: d.mix_box.hash,
         mix_logic_hash: d.mix_logic.hash,
         fee_hash: d.fee_contract.hash,
@@ -648,6 +654,97 @@ fn the_public_account_mixes_into_a_token_pool_with_its_token() {
         short.to_string().contains("enough of this pool's token"),
         "{short}"
     );
+}
+
+/// Chunk 51, t1f#9: how many boxes a session's token pays for is summed past
+/// what a u64 holds. One mint makes at most 2^63 - 1, so three of the session's
+/// own UTxOs hold 3 x (2^63 - 1): summed in a u64, the module (which has no
+/// overflow checks) wrapped it to 2^63 - 3, and the plan put in 9 boxes where
+/// the token pays for 27.
+#[test]
+fn a_sessions_token_past_a_u64_pays_for_every_box_it_makes() {
+    const MOST_A_MINT_MAKES: u64 = 9_223_372_036_854_775_807;
+    const PER_BOX: u64 = 1_000_000_000_000_000_000;
+    let mut utxos = vec![
+        at_session(0x10, 0, 400_000_000, vec![]),
+        at_session(0x11, 0, 5_000_000, vec![]),
+    ];
+    let mut own = Vec::new();
+    for tx in 0x20..0x23u8 {
+        utxos.push(at_session(
+            tx,
+            0,
+            2_000_000,
+            vec![ljtest(MOST_A_MINT_MAKES)],
+        ));
+        own.push(hex::encode([tx; 32]));
+    }
+    let plan = wasm::plan_in(
+        &accounts(),
+        PlanRequest {
+            network: "preprod".into(),
+            index: 0,
+            utxos,
+            collateral: Some(OutRef {
+                tx_hash: hex::encode([0x11; 32]),
+                tx_index: 0,
+            }),
+            depth: 1,
+            again: false,
+            collateral_reserve: false,
+        },
+        Some(&pool_ref_with(2_000_000, PER_BOX, 1_500_000)),
+        &own,
+    )
+    .unwrap();
+    let pays_for = (3 * u128::from(MOST_A_MINT_MAKES) / u128::from(PER_BOX)) as usize;
+    assert_eq!(pays_for, 27);
+    assert_eq!(plan.boxes, pays_for, "{plan:?}");
+}
+
+/// Chunk 51, t1f#10: a public mix's ADA, and the least ADA the token change
+/// needs, are summed checked. A launcher can write a box's ADA near what a u64
+/// holds into its pool's datum (verify_pool checks the scripts, not the value);
+/// summed unchecked, the module wrapped the need to under a token change's
+/// least, and the public account's pick stopped early.
+#[test]
+fn a_public_mixs_need_past_a_u64_is_refused_in_words() {
+    let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let sk = Scalar::from(5_110u64);
+    // What a box costs beside its ADA (its mix, the deposit's reserve), read off a 2 ₳ pool.
+    let small = wasm::protocol_of(true, Some(&pool_ref_with(2_000_000, Q, 1_500_000))).unwrap();
+    let beside = lovejoin::funding_for_in(1, &small, 1, 3).unwrap() - 2_000_000;
+    // A box whose cost comes to half an ADA under the most a u64 holds: the token change's least tips it over.
+    let huge = u64::MAX - beside - 500_000;
+    let pool = pool_ref_with(huge, Q, 1_500_000);
+    let fits = lovejoin::funding_for_in(1, &wasm::protocol_of(true, Some(&pool)).unwrap(), 1, 3);
+    assert_eq!(
+        fits.unwrap(),
+        u64::MAX - 500_000,
+        "the box alone fits a u64"
+    );
+    let said = wasm::chain_from_account_in(
+        &account,
+        sk,
+        AccountChainRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos: vec![
+                // Three boxes' worth of the token: two of them come back, beside their least ADA.
+                public(0x60, Role::Receive, 1, 3_000_000, vec![ljtest(3 * Q)]),
+                public(0x61, Role::Change, 0, 20_000_000, vec![]),
+            ],
+            collateral: Some(public(0x6c, Role::Receive, 0, 5_000_000, vec![])),
+            pool: others(4),
+            depth: 1,
+            boxes: 1,
+            rewards: Default::default(),
+        },
+        Some(&pool),
+    )
+    .map(|c| format!("built {} transactions", c.txs.len()))
+    .unwrap_or_else(|e| e.to_string());
+    assert_eq!(said, lovejoin::MORE_THAN_THERE_IS);
 }
 
 #[test]
