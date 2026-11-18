@@ -15,8 +15,6 @@
 mod harness;
 
 use std::future::Future;
-use std::io::Read;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use blstrs::Scalar;
@@ -31,8 +29,6 @@ use seedelf_cli::web_server::serving_url;
 
 const HOST: &str = "127.0.0.1:44203";
 const URL_PREFIX: &str = "http://127.0.0.1:44203";
-/// Set in the child process that makes the second run.
-const CHILD: &str = "SEEDELF_SIGNING_PAGE_CHILD";
 /// The Seedelf the user picked first, then saw was the wrong contact.
 const SEEDELF_A: &str = SAMPLE_SEEDELF;
 /// 100 ADA in each run.
@@ -276,7 +272,7 @@ async fn each_run_serves_its_page_at_an_address_of_its_own() {
 /// real, while the earlier run holds the port. Does nothing in the parent.
 #[tokio::test]
 async fn second_fund_in_a_child_process() {
-    if std::env::var_os(CHILD).is_none() {
+    if !is_child("second_fund_in_a_child_process") {
         return;
     }
     let mut scenario = Scenario::start().await;
@@ -305,9 +301,11 @@ async fn a_second_run_never_announces_an_earlier_runs_page() {
     let (earlier_tx, still, (stdout, stderr)) = while_serving(SEEDELF_A, |url| async move {
         let (_, page) = get(&path_of(&url), Some(HOST)).await;
         let earlier_tx = injected_tx(&page).expect("the earlier run's page");
-        let child = tokio::task::spawn_blocking(|| run_child(Duration::from_secs(180)))
-            .await
-            .expect("the second run");
+        let child = tokio::task::spawn_blocking(|| {
+            run_child("second_fund_in_a_child_process", Duration::from_secs(180))
+        })
+        .await
+        .expect("the second run");
         let (_, still) = get(&path_of(&url), Some(HOST)).await;
         (earlier_tx, injected_tx(&still), child)
     })
@@ -393,74 +391,43 @@ async fn the_page_answers_only_its_own_host() {
     }
 }
 
-/// Run `second_fund_in_a_child_process` in a child process; its stdout and
-/// stderr, colours stripped.
-fn run_child(within: Duration) -> (String, String) {
-    let mut child = Command::new(std::env::current_exe().expect("the test binary"))
-        .args([
-            "--exact",
-            "second_fund_in_a_child_process",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD, "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("start the second run");
-    let mut out = child.stdout.take().expect("stdout");
-    let mut err = child.stderr.take().expect("stderr");
-    let out_reader = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = out.read_to_string(&mut s);
-        s
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = err.read_to_string(&mut s);
-        s
-    });
-    let deadline = Instant::now() + within;
-    loop {
-        if child.try_wait().expect("wait for the second run").is_some() {
-            break;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
+/// A run serving its page, as the child process of
+/// [`the_terminal_names_the_transaction_its_page_signs`]: `fund` to Seedelf A,
+/// serving for real until it has read the page, then the id the page shows.
+/// Does nothing in the parent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fund_serving_its_page_in_a_child_process() {
+    if !is_child("fund_serving_its_page_in_a_child_process") {
+        return;
     }
-    (
-        strip_ansi(&out_reader.join().expect("stdout reader")),
-        strip_ansi(&err_reader.join().expect("stderr reader")),
-    )
+    let id = while_serving(SEEDELF_A, |url| async move {
+        let (_, page) = get(&path_of(&url), Some(HOST)).await;
+        injected_id(&page).expect("the page shows its transaction's id")
+    })
+    .await;
+    println!("PAGE ID: {id}");
 }
 
-fn line_after(text: &str, prefix: &str) -> Option<String> {
-    text.lines()
-        .map(str::trim)
-        .find_map(|l| l.strip_prefix(prefix).map(|rest| rest.trim().to_string()))
-}
-
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            out.push(c);
-            continue;
-        }
-        if chars.peek() == Some(&'[') {
-            chars.next();
-            for n in chars.by_ref() {
-                if n.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        }
-    }
-    out
+/// The terminal names the transaction the page signs, with the page's
+/// address: a submit the browser wallet doesn't confirm may have gone through
+/// all the same, and its id is what to look up before running the command
+/// again. No test failed without that line (chunk 51, r2tests#8).
+#[test]
+#[serial]
+fn the_terminal_names_the_transaction_its_page_signs() {
+    port_is_free();
+    let (stdout, stderr) = run_child(
+        "fund_serving_its_page_in_a_child_process",
+        Duration::from_secs(180),
+    );
+    let printed = line_after(&stdout, "Tx Hash: ");
+    let shown = line_after(&stdout, "PAGE ID: ");
+    assert!(
+        shown.is_some(),
+        "precondition: the run served its page\n{stdout}\n{stderr}"
+    );
+    assert_eq!(
+        printed, shown,
+        "the terminal names the transaction the page shows\n{stdout}"
+    );
 }

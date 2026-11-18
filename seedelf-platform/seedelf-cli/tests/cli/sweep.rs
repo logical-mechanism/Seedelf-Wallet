@@ -145,45 +145,127 @@ fn sorted_inputs(tx: &DecodedTx) -> Vec<(String, u64)> {
 /// A stranger pays three UTxOs of 2^63 − 1 of one token under
 /// re-randomizations of the user's register (chunk 51, r4#2). Together
 /// they're past what one output holds, so `sweep --all` stopped whenever all
-/// three were among the 20 it took. It leaves the third out, and still takes
-/// 20 it can spend together; the rest wait for the next run.
+/// three were among the 20 it took. It takes the 20 that bring most, which
+/// the junk, holding little ADA, is never among while the user has 20 of
+/// their own (r2cli#1); with fewer, it reaches the junk, leaves the third
+/// out, and still takes what it can spend together. The rest wait for the
+/// next run.
 #[tokio::test]
 #[serial]
 async fn sweep_all_goes_when_a_strangers_tokens_total_past_a_u64() {
     let bought = ("bb".repeat(28), hex::encode("BOUGHT"), 1_000);
-    let tx = sweep_all_of(
-        |scalar| {
-            let mut rows: Vec<_> = (1..=3)
-                .map(|n| wallet_utxo(scalar, n, 1_500_000, &[junk()]))
-                .collect();
-            rows.push(wallet_utxo(
-                scalar,
-                10,
-                5_000_000,
-                std::slice::from_ref(&bought),
-            ));
-            rows.extend((11..=29).map(|n| wallet_utxo(scalar, n, 5_000_000, &[])));
-            rows
-        },
-        20,
-    )
-    .await;
-
-    let mut expected = vec![(tx_hash(1), 0), (tx_hash(2), 0)];
-    expected.extend((10..=27).map(|n| (tx_hash(n), 0)));
-    assert_eq!(
-        sorted_inputs(&tx),
-        expected,
-        "the first 20 it can spend together: the third junk UTxO stays"
-    );
-    let swept = |token: &TokenAmount| -> u64 {
+    // The junk at the lowest hashes, the user's UTxOs (5 ₳ each, one of them
+    // holding 1,000 of a token they bought) after it.
+    let rows = |scalar, own: u64| {
+        let mut rows: Vec<_> = (1..=3)
+            .map(|n| wallet_utxo(scalar, n, 1_500_000, &[junk()]))
+            .collect();
+        rows.push(wallet_utxo(
+            scalar,
+            10,
+            5_000_000,
+            std::slice::from_ref(&bought),
+        ));
+        rows.extend((11..11 + own).map(|n| wallet_utxo(scalar, n, 5_000_000, &[])));
+        rows
+    };
+    let swept = |tx: &DecodedTx, token: &TokenAmount| -> u64 {
         tx.outputs
             .iter()
             .filter_map(|o| o.assets.get(&(token.0.clone(), token.1.clone())))
             .sum()
     };
-    assert_eq!(swept(&junk()), 2 * (i64::MAX as u64));
-    assert_eq!(swept(&bought), 1_000);
+
+    let tx = sweep_all_of(|scalar| rows(scalar, 19), 20).await;
+    let expected: Vec<_> = (10..=29).map(|n| (tx_hash(n), 0)).collect();
+    assert_eq!(
+        sorted_inputs(&tx),
+        expected,
+        "the user's 20, which bring most: all three junk UTxOs stay"
+    );
+    assert_eq!(swept(&tx, &junk()), 0);
+    assert_eq!(swept(&tx, &bought), 1_000);
+
+    let tx = sweep_all_of(|scalar| rows(scalar, 6), 9).await;
+    let mut expected = vec![(tx_hash(1), 0), (tx_hash(2), 0)];
+    expected.extend((10..=16).map(|n| (tx_hash(n), 0)));
+    assert_eq!(
+        sorted_inputs(&tx),
+        expected,
+        "all it can spend together: the third junk UTxO stays"
+    );
+    assert_eq!(swept(&tx, &junk()), 2 * (i64::MAX as u64));
+    assert_eq!(swept(&tx, &bought), 1_000);
+}
+
+/// The run [`sweep_all_of_nothing_but_piles_names_them`] reads, as its child
+/// process: `sweep --all` of a balance that is only a stranger's 25 piles of
+/// 30 tokens, each holding less ADA than its outputs need, so nothing can go.
+/// Does nothing in the parent.
+#[tokio::test]
+#[serial]
+async fn sweep_all_of_nothing_but_piles_in_a_child_process() {
+    if !is_child("sweep::sweep_all_of_nothing_but_piles_in_a_child_process") {
+        return;
+    }
+    let mut scenario = Scenario::start().await;
+    let piles: Vec<_> = (0..25u8)
+        .map(|i| {
+            let mut row = wallet_utxo(scenario.scalar, 7, 2_000_000, &pile(0x10 + i, 30));
+            row.tx_index = u64::from(i);
+            row
+        })
+        .collect();
+    scenario.mount_credential_utxos(piles).await;
+    scenario.mount_evaluate(20).await;
+    scenario.mount_collateral().await;
+    scenario.mount_submit().await;
+    let swept = run(
+        sweep_args(external_address_bech32(), None, true),
+        PREPROD,
+        VARIANT,
+    )
+    .await;
+    match swept {
+        Ok(()) => println!("OUTCOME: sent"),
+        Err(e) => println!("OUTCOME: error: {e:#}"),
+    }
+}
+
+/// A `sweep --all` that sends nothing names the UTxOs that stopped it, by
+/// outpoint, and says nothing of running it again, which would take the same
+/// UTxOs. It named none of them, and said "run sweep --all again" of the rest,
+/// which were the user's own whenever a stranger's piles came first (chunk
+/// 51, r2cli#1).
+#[test]
+#[serial]
+fn sweep_all_of_nothing_but_piles_names_them() {
+    let (stdout, stderr) = run_child(
+        "sweep::sweep_all_of_nothing_but_piles_in_a_child_process",
+        std::time::Duration::from_secs(120),
+    );
+    let outcome = line_after(&stdout, "OUTCOME: ").unwrap_or_default();
+    assert!(
+        outcome.starts_with("error:"),
+        "precondition: nothing could go: {outcome}\n{stdout}\n{stderr}"
+    );
+    let named: std::collections::BTreeSet<String> = stdout
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("UTxO: ").map(str::to_string))
+        .collect();
+    let tried: std::collections::BTreeSet<String> =
+        (0..20).map(|i| format!("{}#{i}", tx_hash(7))).collect();
+    assert_eq!(named, tried, "the 20 piles it tried are named:\n{stdout}");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "Past what one transaction takes: 5"),
+        "the 5 it never reached are counted:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("again"),
+        "no advice to run it again:\n{stdout}"
+    );
 }
 
 /// UTxOs whose tokens' outputs (20 tokens to an output) pass 16 KiB together

@@ -53,7 +53,7 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
     let swept = rows::most_that_fit(rows, &deposit, &mut stayed, |rows| {
         build::external_sweep(&params, rows, &owner, &wallet_addr, signer)
     });
-    rows::print_stayed(&stayed, "external sweep");
+    rows::print_stayed(&stayed, swept.is_ok().then_some("external sweep"));
     let (tx, tx_fee): (BuiltTransaction, u64) = swept?;
     println!(
         "{} {}",

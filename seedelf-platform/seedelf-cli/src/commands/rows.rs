@@ -11,6 +11,8 @@
 //! - A sweep spends what one transaction can take ([`sweepable`],
 //!   [`most_that_fit`]). The rest stays where it is, and the command says so
 //!   ([`print_stayed`]).
+//! - Which UTxOs a spend may take is never Koios's order, which is the order
+//!   of the hashes, and so a payer's to pick ([`window`], [`by_worth`]).
 
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -18,7 +20,8 @@ use seedelf_core::assets::{Asset, Assets, string_to_u64};
 use seedelf_core::build::{self, TooLarge};
 use seedelf_core::utxos;
 use seedelf_koios::koios::UtxoResponse;
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, HashMap};
 
 /// What some rows hold together, for a balance to show.
 pub struct Totals {
@@ -226,6 +229,42 @@ pub(crate) fn by_worth(
     Ok(keyed.into_iter().map(|(_, u)| u).collect())
 }
 
+/// The UTxOs a spend from the contract picks among (`transfer`, `sweep`,
+/// `util mint`): at most `at_most` of `rows`, every owned one. First those
+/// holding the tokens `needed`, as few as hold them; then the rest in the
+/// order a sweep takes them ([`by_worth`], with `needs` the least a UTxO's
+/// own tokens need back in the contract). What the spend would never pick
+/// takes no place (core's [`build::max_inputs_by`]: a reference script, or
+/// tokens past what one output holds with the rest's).
+///
+/// Never Koios's order, nor any other a payer picks: anyone can pay the
+/// contract under one of your registers and grind the hash its transaction
+/// gets, so 20 piles of tokens that bring less than their outputs need came
+/// first, and no spend could pay (chunk 51, r2cli#1).
+pub(crate) fn window(
+    rows: Vec<UtxoResponse>,
+    needed: &Assets,
+    needs: &impl Fn(&Assets) -> Result<u64>,
+    at_most: usize,
+) -> Result<Vec<UtxoResponse>> {
+    let ranked = by_worth(rows, needs)?;
+    let place: HashMap<(&str, u64), usize> = ranked
+        .iter()
+        .enumerate()
+        .map(|(i, u)| ((u.tx_hash.as_str(), u.tx_index), i))
+        .collect();
+    // max_inputs_by takes the most first: here, the first by worth.
+    let (window, _) = build::max_inputs_by(&ranked, needed, at_most, |u| {
+        Reverse(
+            place
+                .get(&(u.tx_hash.as_str(), u.tx_index))
+                .copied()
+                .unwrap_or(usize::MAX),
+        )
+    })?;
+    Ok(window)
+}
+
 /// `build` of as many of `rows` as one transaction takes, the first first;
 /// what stays goes to `stayed`.
 ///
@@ -237,7 +276,8 @@ pub(crate) fn by_worth(
 ///   the one of them that brings least, then the next, until it builds. So a
 ///   token UTxO received with a key address's least ADA, short of its deposit
 ///   by the register's bytes, still goes whenever the rest can carry it. Those
-///   left are said only once the rest goes.
+///   left go to `stayed`, whether the rest goes or nothing does: when nothing
+///   does, they're what stopped it (chunk 51, r2cli#1).
 /// - Any other failure is returned as it is.
 pub(crate) fn most_that_fit<T>(
     mut rows: Vec<UtxoResponse>,
@@ -276,21 +316,51 @@ pub(crate) fn most_that_fit<T>(
                     }
                 }
                 let Some((i, _)) = least else {
+                    stayed.extend(short.drain(..).map(|u| (u, Stay::Short)));
                     return Err(error);
                 };
                 short.push(rows.remove(i));
             }
         }
         if rows.is_empty() {
+            stayed.extend(short.drain(..).map(|u| (u, Stay::Short)));
             return Err(error);
         }
         n = rows.len();
     }
 }
 
+/// Why a UTxO stays, for each [`Stay`], as [`print_stayed`] says it. `again`
+/// is the command to run again for those a next run can take, once this run
+/// has sent; when it sent nothing, a next run takes the same UTxOs, so that
+/// would be no advice (chunk 51, r2cli#1).
+fn reasons(again: Option<&str>) -> [(Stay, String); 5] {
+    let next = |why: &str| match again {
+        Some(command) => format!("{why} (run {command} again)"),
+        None => why.to_string(),
+    };
+    [
+        (Stay::Later, next("Past what one transaction takes")),
+        (
+            Stay::Tokens,
+            next("More of a token than one output holds with the rest"),
+        ),
+        (Stay::TooLarge, "Too large for any transaction".to_string()),
+        (
+            Stay::Short,
+            "Tokens needing more ADA than they bring, more than the rest can make up".to_string(),
+        ),
+        (
+            Stay::Unpriced,
+            "A reference script the CLI can't measure, so it can't price spending it".to_string(),
+        ),
+    ]
+}
+
 /// Says how many of a sweep's UTxOs stay where they are, and why, if any do.
-/// `command` is the one to run again for those a next run can take.
-pub(crate) fn print_stayed(stayed: &[(UtxoResponse, Stay)], command: &str) {
+/// `again` is the command to run again for those a next run can take: `None`
+/// when this run sent nothing ([`reasons`]).
+pub(crate) fn print_stayed(stayed: &[(UtxoResponse, Stay)], again: Option<&str>) {
     if stayed.is_empty() {
         return;
     }
@@ -299,27 +369,7 @@ pub(crate) fn print_stayed(stayed: &[(UtxoResponse, Stay)], command: &str) {
         "Not Swept:".bright_yellow(),
         stayed.len().to_string().bright_yellow()
     );
-    let reasons = [
-        (
-            Stay::Later,
-            format!("Past what one transaction takes (run {command} again)"),
-        ),
-        (
-            Stay::Tokens,
-            format!("More of a token than one output holds with the rest (run {command} again)"),
-        ),
-        (Stay::TooLarge, "Too large for any transaction".to_string()),
-        (
-            Stay::Short,
-            "Tokens needing more ADA than they bring, more than this transaction can make up"
-                .to_string(),
-        ),
-        (
-            Stay::Unpriced,
-            "A reference script the CLI can't measure, so it can't price spending it".to_string(),
-        ),
-    ];
-    for (stay, why) in reasons {
+    for (stay, why) in reasons(again) {
         let these: Vec<&UtxoResponse> = stayed
             .iter()
             .filter(|(_, s)| *s == stay)
@@ -335,5 +385,84 @@ pub(crate) fn print_stayed(stayed: &[(UtxoResponse, Stay)], command: &str) {
                 println!("  UTxO: {}#{}", utxo.tx_hash, utxo.tx_index);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seedelf_koios::koios::Asset as KoiosAsset;
+
+    /// A UTxO at outpoint `n` of `lovelace` and `tokens` tokens, one of each.
+    fn row(n: u8, lovelace: u64, tokens: u8) -> UtxoResponse {
+        UtxoResponse {
+            tx_hash: hex::encode([n; 32]),
+            value: lovelace.to_string(),
+            asset_list: Some(
+                (0..tokens)
+                    .map(|i| KoiosAsset {
+                        policy_id: hex::encode([0x40 + i; 28]),
+                        asset_name: "01".to_string(),
+                        quantity: "1".to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    /// Each token's output needs 1 ₳.
+    fn needs(tokens: &Assets) -> Result<u64> {
+        Ok(tokens.len() * 1_000_000)
+    }
+
+    /// A sweep that builds with none of what it was given says which UTxOs
+    /// stopped it: those that bring less than their tokens need, each named
+    /// by outpoint where it said nothing of them (chunk 51, r2cli#1).
+    #[test]
+    fn a_sweep_that_cant_build_names_what_stopped_it() {
+        let piles = vec![row(1, 1_000_000, 3), row(2, 1_000_000, 2)];
+        // With ADA of the user's too little to pay a fee, or none.
+        for rows in [
+            piles.clone(),
+            [piles.clone(), vec![row(3, 500_000, 0)]].concat(),
+        ] {
+            let mut stayed = Vec::new();
+            let built: Result<()> = most_that_fit(rows.clone(), &needs, &mut stayed, |_| {
+                Err(anyhow::anyhow!("Not enough ADA"))
+            });
+            assert!(built.is_err(), "nothing builds");
+            let short: Vec<&str> = stayed
+                .iter()
+                .filter(|(_, stay)| *stay == Stay::Short)
+                .map(|(u, _)| u.tx_hash.as_str())
+                .collect();
+            assert_eq!(
+                short,
+                vec![piles[0].tx_hash.as_str(), piles[1].tx_hash.as_str()],
+                "the two piles, the one that brings least first, of {} UTxOs",
+                rows.len()
+            );
+        }
+    }
+
+    /// "Run it again" is said only once a run has sent: one that sent nothing
+    /// takes the same UTxOs the next time (chunk 51, r2cli#1).
+    #[test]
+    fn run_it_again_is_said_only_once_something_went() {
+        let said = |again| reasons(again).map(|(_, why)| why);
+        assert!(
+            said(None).iter().all(|why| !why.contains("again")),
+            "{:?}",
+            said(None)
+        );
+        let went = said(Some("sweep --all"));
+        assert!(
+            went[..2]
+                .iter()
+                .all(|why| why.ends_with("(run sweep --all again)")),
+            "{went:?}"
+        );
     }
 }
