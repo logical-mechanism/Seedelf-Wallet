@@ -33,9 +33,12 @@ import type * as Wasm from "@seedelf/wasm";
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import type { Balances, TxAddress, TxDetail, TxOutput, TxRegister, TxView, TxYours } from "../shared/rpc";
+import type { PathedUtxo } from "./account";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
-import { CONTRACT_V1 } from "./balances";
+import { CONTRACT_V1, decimalsOf } from "./balances";
 import { GAP_LIMIT } from "./chain";
+import { SESSION_ACCOUNT_UTXOS_PREFIX } from "./coin-control";
+import { keptContractView } from "./contract-scan";
 import { SESSION_MINT } from "./mint";
 import { SESSION_BUILT } from "./move-in";
 import { SESSION_LOVEJOIN_PUBLIC, SESSION_LOVEJOIN_SENDING } from "./lovejoin";
@@ -193,21 +196,25 @@ export async function txView(
 }
 
 /**
- * Each token of `d` (an output's, the collateral return's, a mint's) with its decimals as the last balance reading has
- * them from Koios, read on the device, as Activity's are (activity.ts `withDecimals`): the review above the view, and
- * Home, scaled a token off the wallet's list by them, and the view showed it in raw units (chunk 51, e9a#2). The
- * wallet's list's own decimals still come first (ui/tokens.ts `tokenDecimals`). Locked, or with nothing known, nothing
- * is added.
+ * Each token of `d` (an output's, the collateral return's, a mint's) with its decimals from Koios, read on the device,
+ * as Activity's are (activity.ts `withDecimals`): the review above the view, and Home, scaled a token off the wallet's
+ * list by them, and the view showed it in raw units (chunk 51, e9a#2). From the rows the wallet's transactions are
+ * built from, as the device keeps them, and the last reading's tokens, as balances.ts reads them for what's on its way
+ * (`decimalsOf`): the reading's side totals alone leave out a Seedelf's UTxO (spendableOwned), and Remove's view showed
+ * what sat with it in raw units (r2sign#3). The wallet's list's own decimals still come first (ui/tokens.ts
+ * `tokenDecimals`). Locked, or with nothing known, nothing is added.
  */
 async function withDecimals(deps: TxViewDeps, network: NetworkName, d: TxDetail): Promise<void> {
   const lists = [...d.outputs.map((o) => o.assets), ...(d.collateralReturn ? [d.collateralReturn.assets] : []), d.mint];
   if (!lists.some((list) => list.length)) return;
   const { wallet, session } = deps;
-  const reading = await wallet.withKeys(() => session.get<Balances>(SESSION_BALANCES_PREFIX + network));
-  const known = new Map<string, number>();
-  for (const x of [...(reading?.seedelf.tokens ?? []), ...(reading?.cardano.tokens ?? [])]) {
-    if (x.decimals) known.set(`${x.policyId}.${x.assetName}`, x.decimals);
-  }
+  const known = await wallet.withKeys(async () => {
+    const reading = await session.get<Balances>(SESSION_BALANCES_PREFIX + network);
+    const account = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
+    const owned = (await keptContractView(session, network))?.owned ?? [];
+    const tokens = [...(reading?.cardano.tokens ?? []), ...(reading?.seedelf.tokens ?? [])];
+    return decimalsOf([...account.map((p) => p.utxo), ...owned], tokens);
+  });
   if (!known.size) return;
   for (const list of lists) {
     for (const a of list) {

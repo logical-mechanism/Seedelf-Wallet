@@ -769,6 +769,9 @@ function Output({
           ` · ${tr(o.register.payable ? "tx.out.underRegister" : o.register.anyone ? "tx.out.warn.anyoneCanSpend" : "tx.out.deadRegister")}`}
         {o.inlineDatum && !o.register && ` · ${tr("tx.out.withDatum")}`}
         {o.datumHash && ` · ${tr("tx.out.datumByHash")}`}
+        {/* At the contract, a datum kept by hash is no register: no Seedelf Wallet reads one from anywhere but the
+            inline datum, so none finds such a payment, as the sign window warns (chunk 51, r2sign#1). */}
+        {o.address.seedelf && o.datumHash && ` · ${tr("tx.out.warn.seedelfByHash")}`}
         {o.scriptRef && ` · ${tr("tx.out.carriesScript", { kind: scriptWords(o.scriptRef.kind) })}`}
       </span>
       <span className="dapp-amount">

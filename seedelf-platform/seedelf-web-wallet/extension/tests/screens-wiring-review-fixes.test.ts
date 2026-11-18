@@ -209,7 +209,7 @@ vi.mock("../src/ui/background", async (original) => ({
 const { t } = await import("../src/i18n");
 const { DEFAULT_PREFERENCES } = await import("../src/shared/preferences");
 const { NetworkContext } = await import("../src/ui/network");
-const { PreferencesContext } = await import("../src/ui/preferences");
+const { HIDDEN, PreferencesContext } = await import("../src/ui/preferences");
 const { AccountsContext } = await import("../src/ui/accounts");
 const { Collateral } = await import("../src/ui/screens/Collateral");
 const { LockCountdown } = await import("../src/ui/components/LockCountdown");
@@ -228,11 +228,19 @@ const { CardanoSend } = await import("../src/ui/screens/CardanoSend");
 const { PhraseInput } = await import("../src/ui/components/PhraseInput");
 const { Home } = await import("../src/ui/screens/Home");
 const { ADA_HANDLE_POLICY } = await import("../src/shared/handles");
+const { assetFingerprint } = await import("../src/shared/fingerprint");
 
 /** The test's clock, as the fake timers keep it. */
 const NOW = Date.UTC(2026, 9, 25, 12);
 const TX = "ab".repeat(32);
 const noop = () => undefined;
+/**
+ * A token off the wallet's list (2 preprod, 32 mainnet), 1,000,000 of its raw units: as the private side holds it, with
+ * Koios's 6 decimals, and as WebAssembly's token lists give it back in a summary, with none (chunk 51, r2sign#3).
+ */
+const FOO = { policyId: "f0".repeat(28), assetName: "464f4f" };
+const FOO_HELD = { ...FOO, quantity: "1000000", decimals: 6, fingerprint: assetFingerprint(FOO) };
+const FOO_RAW = { ...FOO, quantity: "1000000" };
 
 /** The worker answers `type` with `value`, or with what `value` makes of the payload. */
 function answer(type: string, value: unknown) {
@@ -912,9 +920,9 @@ describe("the connect window's private session, held to what its funding can spe
     left: 0,
   };
   /** The connect window with a private session chosen (the first state that starts undefined), its effects run. */
-  const connect = () => {
+  const connect = (side = seedelf, prefs: Partial<typeof DEFAULT_PREFERENCES> = {}) => {
     seam.effects.add("ConnectRequest");
-    answer("balances", { seedelf });
+    answer("balances", { seedelf: side });
     seedInitial(undefined, "private");
     return render(
       createElement(ConnectRequest, {
@@ -924,27 +932,61 @@ describe("the connect window's private session, held to what its funding can spe
         onError: noop,
         onAnswer: async () => false,
       } as never),
+      prefs,
     );
   };
   /** Its form with `amount` typed: the state after the governance switch's and the private balance's. */
-  const form = (amount: string) => {
+  const form = (amount: string, side = seedelf, prefs: Partial<typeof DEFAULT_PREFERENCES> = {}) => {
     seam.seeds.push({ after: [false, undefined], initial: "", value: amount });
-    return connect();
+    return connect(side, prefs);
   };
+  /** The line under the amount, as a person reads it. */
+  const held = (page: string) => words(/data-testid="dapp-private-held"[^>]*>(.*?)<\/p>/s.exec(page)?.[1] ?? "");
+  /** What it says with `ada` free and `locked` locked, as Make public says it. */
+  const available = (ada: string, locked: string) =>
+    words(t("dappUi.availableAndCollateral", { ada, locked: t("home.lockedMeta", { amount: locked }) }));
+  /** The note for an amount over `ada`, free (`where` "withdraw.available") or all of it ("withdraw.inPrivate"). */
+  const over = (ada: string, where: "withdraw.available" | "withdraw.inPrivate") =>
+    words(t("withdraw.tooMuch", { amount: ada, available: t(where) }));
 
   it("states and caps the amount at what isn't locked, and offers no token held only in a locked UTxO", () => {
     const free = formatAda("40000000");
     const page = form("50");
     expect(asked()).toContain("balances");
-    expect(words(/data-testid="dapp-private-held"[^>]*>(.*?)<\/p>/s.exec(page)?.[1] ?? "")).toBe(words(t("dappUi.heldAndCollateral", { ada: free })));
-    expect(words(page)).toContain(words(t("sites.topUp.tooMuch", { held: free })));
+    expect(held(page)).toBe(available(free, formatAda("60000000")));
+    expect(words(page)).toContain(over(free, "withdraw.available"));
     expect(page).toMatch(/<button type="submit" class="primary" disabled="">/);
     expect(page).not.toContain('class="token-picker"');
 
     seam.reset();
     const fits = form("30");
-    expect(words(fits)).not.toContain(words(t("sites.topUp.tooMuch", { held: free })));
+    expect(words(fits)).not.toContain(over(free, "withdraw.available"));
     expect(fits).toMatch(/<button type="submit" class="primary">/);
+  });
+
+  // Chunk 51, r2screens#1: the line and the note called that side what's "in your private balance", with nothing of the
+  // lock: "40 ₳ in your private balance", and with everything locked "0 ₳", Review off with no reason given. They say
+  // it as Make public does, "available" and what's locked beside it (chunk 12's #23), and say no lock where there's none.
+  it("says what's locked beside what it can spend, everything locked too, and no lock where there's none", () => {
+    const all = form("10", { ...seedelf, locked: { lovelace: "100000000", tokens: [token], utxos: 2 } });
+    expect(held(all)).toBe(available("0", formatAda("100000000")));
+    expect(words(all)).toContain(over("0", "withdraw.available"));
+    expect(words(all)).not.toContain(t("withdraw.inPrivate"));
+    expect(all).toMatch(/<button type="submit" class="primary" disabled="">/);
+
+    seam.reset();
+    const none = form("150", { ...seedelf, locked: { lovelace: "0", tokens: [], utxos: 0 } });
+    expect(held(none)).toBe(words(t("dappUi.heldAndCollateral", { ada: formatAda("100000000") })));
+    expect(words(none)).toContain(over(formatAda("100000000"), "withdraw.inPrivate"));
+    expect(words(none)).not.toMatch(/\blocked\b/);
+  });
+
+  it("hides its figures with the balances, what's locked among them (HM-9)", () => {
+    const page = form("50", seedelf, { hideBalances: true });
+    expect(held(page)).toBe(available(HIDDEN, HIDDEN));
+    expect(words(page)).toContain(over(HIDDEN, "withdraw.available"));
+    expect(words(page)).not.toContain(`${formatAda("60000000")} ₳`);
+    expect(words(page)).not.toContain(`${formatAda("40000000")} ₳`);
   });
 
   it("counts its review's after from Home's figure, the locked ₳ in it, as every other review does", () => {
@@ -952,6 +994,18 @@ describe("the connect window's private session, held to what its funding can spe
     seed(["", {}], funding);
     const page = connect();
     expect(row(page, "dapp-funding-rows", t("review.after.private"))).toBe(ada((100_000_000n - 29_230_000n).toString()));
+  });
+
+  // Chunk 51, r2sign#3's sibling: WebAssembly's token lists carry no decimals, so the row for the site showed a token off
+  // the wallet's list in raw units, 10^6 times what the form above it and Home say. It takes the decimals the private
+  // side holds it with, Koios's from the rows the funding spends, as Make public's review does; the wallet's list first.
+  it("shows the site's tokens in the units the private balance holds them in", () => {
+    const side = { ...seedelf, tokens: [FOO_HELD], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+    const [site, kept] = funding.payments;
+    seed(["", {}], { ...funding, payments: [{ ...site!, tokens: [FOO_RAW] }, kept!] });
+    const page = words(connect(side));
+    expect(page).toMatch(/(?<![\d,.])1 FOO\b/);
+    expect(page).not.toContain("1,000,000 FOO");
   });
 });
 
@@ -1082,25 +1136,91 @@ describe("a private session's funding, refused, never sent again from its review
 describe("a site session's top-up, held to the spendable private balance (chunk 51, t1i#15)", () => {
   const seedelf = { lovelace: "80000000", tokens: [], utxos: 2, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
   /** The top-up form with `amount` typed: the session's page opened on it, and the first state that starts empty. */
-  function form(amount: string): string {
+  function form(amount: string, side = seedelf, prefs: Partial<typeof DEFAULT_PREFERENCES> = {}): string {
     seam.reset();
     seedInitial("main", "top-up");
     seam.seeds.push({ after: [], initial: "", value: amount });
     return render(
       createElement(SiteSession, {
         session: { index: 0, stage: "open", site: { origin: "https://example.org" }, txs: [], createdAt: NOW },
-        seedelf,
+        seedelf: side,
         reading: false,
         onRefresh: noop,
         onBack: noop,
         onPending: noop,
         onDisconnected: noop,
       } as never),
+      prefs,
     );
   }
 
+  // Chunk 51, r2sign#3's sibling: WebAssembly's token lists carry no decimals, so the top-up's review showed a token off
+  // the wallet's list in raw units, 10^6 times what Home says. It takes the decimals the private side holds it with,
+  // Koios's from the rows the top-up spends, as Make public's review does; the wallet's list first.
+  it("shows its review's tokens in the units the private balance holds them in", () => {
+    const address = "addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz";
+    const summary = {
+      network: "preprod",
+      txHash: TX,
+      index: 0,
+      address,
+      payments: [{ address, lovelace: "24000000", tokens: [FOO_RAW] }],
+      max: false,
+      fee: { size: "200000", compute: "30000", scriptReference: "0", total: "230000" },
+      changeLovelace: "0",
+      changeTokens: 0,
+      changeOutputs: 0,
+      changeMinimum: "0",
+      inputs: 1,
+      left: 0,
+    };
+    seam.reset();
+    seedInitial("main", "top-up");
+    // The review: the state after the amount's and its tokens', both empty.
+    seed(["", {}], summary);
+    const page = words(
+      render(
+        createElement(SiteSession, {
+          session: { index: 0, stage: "open", site: { origin: "https://example.org" }, txs: [], createdAt: NOW },
+          seedelf: { ...seedelf, tokens: [FOO_HELD] },
+          reading: false,
+          onRefresh: noop,
+          onBack: noop,
+          onPending: noop,
+          onDisconnected: noop,
+        } as never),
+      ),
+    );
+    expect(page).toContain(words(t("sites.topUp.reviewTitle")));
+    expect(page).toMatch(/(?<![\d,.])1 FOO\b/);
+    expect(page).not.toContain("1,000,000 FOO");
+  });
+
+  // Chunk 51, r2screens#1's class: the form's line and its note called the unlocked side Home hands it the private
+  // balance, and said nothing of the lock: 100 ₳ held with 60 ₳ of it locked read "40 ₳ in your private balance". They
+  // say it as Make public does (chunk 12's #23).
+  it("says what's locked beside what it can spend, as Make public does, and no lock where there's none", () => {
+    // Home's unlocked side of 100 ₳ held over two UTxOs, 60 ₳ of it in the one the user locked.
+    const side = { ...seedelf, lovelace: "40000000", utxos: 1, locked: { lovelace: "60000000", tokens: [], utxos: 1 } };
+    const [free, held] = [formatAda("40000000"), formatAda("60000000")];
+    const over = words(form("50", side));
+    expect(over).toContain(words(`${t("withdraw.asideAvailable", { amount: free })}${t("home.lockedMeta", { amount: held })}`));
+    expect(over).toContain(words(t("withdraw.tooMuch", { amount: free, available: t("withdraw.available") })));
+    expect(over).not.toContain(t("withdraw.inPrivate"));
+
+    const open = words(form("100"));
+    expect(open).toContain(words(t("sites.topUp.aside", { ada: formatAda("80000000") })));
+    expect(open).toContain(words(t("withdraw.tooMuch", { amount: formatAda("80000000"), available: t("withdraw.inPrivate") })));
+    expect(open).not.toMatch(/\blocked\b/);
+
+    const hidden = words(form("50", side, { hideBalances: true }));
+    expect(hidden).toContain(words(`${t("withdraw.asideAvailable", { amount: HIDDEN })}${t("home.lockedMeta", { amount: HIDDEN })}`));
+    expect(hidden).not.toContain(`${held} ₳`);
+    expect(hidden).not.toContain(`${free} ₳`);
+  });
+
   it("says the amount is more than the spendable side and keeps Review off, and lets one that fits through", () => {
-    const note = words(t("sites.topUp.tooMuch", { held: formatAda("80000000") }));
+    const note = words(t("withdraw.tooMuch", { amount: formatAda("80000000"), available: t("withdraw.inPrivate") }));
     const over = form("100");
     expect(words(over)).toContain(note);
     expect(over).toMatch(/<button type="submit" class="primary" disabled="">/);

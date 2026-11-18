@@ -2990,16 +2990,22 @@ function readableText(hex: string): string | undefined {
 }
 
 /**
- * Whether metadata holds more than a CIP-20 note's lines: a label but 674, or under 674 anything but "msg" and its
- * text. What the window shows of a site's metadata is those lines alone (x1a#3).
+ * Whether metadata holds more than a CIP-20 note's lines: anything but one label, 674, holding one entry, "msg" and
+ * its text. What the window shows of a site's metadata is those lines alone (x1a#3). A metadatum map is a list of
+ * pairs on chain, so a second "msg" is signed and published too, while the window's note is the first (cip30.rs
+ * note_of; r2sign#2). A second 674 label reads the same way, though the ledger refuses one.
  */
 export function moreThanNote(metadata: readonly TxMetadata[]): boolean {
   const lines = (m: TxMetadatum) => m.type === "text" || (m.type === "list" && m.items.every((i) => i.type === "text"));
-  return metadata.some(
-    ({ label, value }) =>
-      label !== "674" ||
-      value.type !== "map" ||
-      value.entries.some(({ key, value: v }) => !(key.type === "text" && key.text === "msg" && lines(v))),
+  return (
+    metadata.length > 1 ||
+    metadata.some(
+      ({ label, value }) =>
+        label !== "674" ||
+        value.type !== "map" ||
+        value.entries.length !== 1 ||
+        value.entries.some(({ key, value: v }) => !(key.type === "text" && key.text === "msg" && lines(v))),
+    )
   );
 }
 

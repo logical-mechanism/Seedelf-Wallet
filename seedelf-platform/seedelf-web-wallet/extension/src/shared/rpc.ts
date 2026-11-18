@@ -1074,10 +1074,12 @@ export interface DappTxSummary {
     /** A script's address: a contract holds what it's paid. */
     script: boolean;
     /**
-     * Into Seedelf Wallet's contract: under a register only its key's holder can spend, with none or one anyone can
-     * prove (anyone could take it), or under one no proof can meet, "dead" (no one ever can).
+     * Into Seedelf Wallet's contract, by its inline datum: under a register only its key's holder can spend, with none
+     * or one anyone can prove (anyone could take it), or under one no proof can meet, "dead" (no one ever can). "hash"
+     * for a datum kept by hash, carried or not: no Seedelf Wallet finds or spends such a payment, and the site may keep
+     * its datum (cip30.rs `inspect`; chunk 51, r2sign#1).
      */
-    seedelf: "register" | "none" | "dead" | null;
+    seedelf: "register" | "none" | "dead" | "hash" | null;
     /**
      * The account's payment key under a stake part that isn't its own, or
      * none: spendable by the account, but its stake counts for someone else,

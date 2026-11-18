@@ -10,6 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { criticalKeys } from "../scripts/i18n-critical.mjs";
+import { moreThanNote } from "../src/background/dapp";
 import { i18n } from "../src/i18n/core";
 import { epochStart, type NetworkName, slotStart } from "../src/networks";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
@@ -587,6 +588,37 @@ describe("a site's transaction's metadata beside its note (chunk 51, x1a#3)", ()
     expect(page).toContain(LINE());
   }, 60_000);
 
+  // Chunk 51, r2sign#2: a metadatum map is a list of pairs on chain, so a second "msg" under 674 is kept (cardano-cli
+  // 11.0.0.0's view lists both), and the body's hash commits to it: signing publishes it too. The note is the first.
+  const SECOND = "I agree to pay 500 ADA";
+  const secondMsg = `1902a2a2${cborText("msg")}81${cborText(NOTE)}${cborText("msg")}81${cborText(SECOND)}`;
+
+  it("names a second msg beside the note, which signing publishes too", async () => {
+    const tx = withMetadata(`a1${secondMsg}`);
+    const wasm = loadTestWasm();
+    const detail = JSON.parse(wasm.decodeTx(wasm.Network.Preprod, tx)) as TxDetail;
+    expect(detail.metadataHashMatches).toBe(true);
+    const entries = detail.metadata[0]?.value.type === "map" ? detail.metadata[0].value.entries : [];
+    expect(entries.map((e) => (e.key.type === "text" ? e.key.text : e.key.type))).toEqual(["msg", "msg"]);
+    expect(JSON.stringify(entries[1]?.value)).toContain(SECOND);
+
+    const { summary, page } = await signWindow(tx, ten);
+    expect(summary).toMatchObject({ metadata: true, note: [NOTE], otherMetadata: true });
+    expect(page).toContain(`Its note, which anyone can read ${NOTE}`);
+    expect(page).toContain(LINE());
+  }, 60_000);
+
+  it("reads a second 674 label as more than the note, though the ledger refuses one", () => {
+    const wasm = loadTestWasm();
+    const read = (metadata: string) =>
+      (JSON.parse(wasm.decodeTx(wasm.Network.Preprod, withMetadata(metadata))) as TxDetail).metadata;
+    const second = `1902a2a1${cborText("msg")}81${cborText(SECOND)}`;
+    expect(read(`a2${note}${second}`).map((m) => m.label)).toEqual(["674", "674"]);
+    expect(moreThanNote(read(`a2${note}${second}`))).toBe(true);
+    expect(moreThanNote(read(`a1${secondMsg}`))).toBe(true);
+    expect(moreThanNote(read(`a1${note}`))).toBe(false);
+  });
+
   it("adds nothing beside a note that's all its metadata holds", async () => {
     const { summary, page } = await signWindow(withMetadata(`a1${note}`), ten);
     expect(summary).toMatchObject({ metadata: true, note: [NOTE] });
@@ -594,6 +626,66 @@ describe("a site's transaction's metadata beside its note (chunk 51, x1a#3)", ()
     expect(page).not.toContain(LINE());
     expect(page).not.toContain(METADATA());
   }, 60_000);
+});
+
+// Chunk 51, r2tests#1 and r2sign#1: what the window says of a payment into Seedelf Wallet's contract, by WebAssembly's
+// reading of what's under it (cip30.rs `inspect`). A register only its key's holder can spend is a Seedelf payment: its
+// privacy note, and signing's note never says the private balance is out of it, since it may be the user's own. None,
+// or one anyone can prove, anyone can take; one no proof can meet is locked for good; and no Seedelf Wallet finds a
+// payment that keeps its datum by hash, which the site may keep (never "anyone can take it", nor a register). The Pays
+// list says "Seedelf Wallet's contract" for all four, so each callout is the window's one word of it, and none had a
+// test: the dead one dropped, the whole suite passed (r2tests#1).
+describe("a payment into Seedelf Wallet's contract, by what's under it (chunk 51, r2tests#1, r2sign#1)", () => {
+  type Reading = "register" | "none" | "dead" | "hash";
+  /** The contract's preprod address (tests/fixtures/owned-utxos.json). */
+  const CONTRACT = "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f";
+  const CALLOUTS: Record<Reading, { testId: string; tone: "warn" | "privacy"; words: (session: boolean) => string }> = {
+    register: {
+      testId: "dapp-seedelf-payment",
+      tone: "privacy",
+      words: (session) => i18n.t(session ? "dappUi.privacy.paysSeedelfSession" : "dappUi.privacy.paysSeedelfAccount"),
+    },
+    none: { testId: "dapp-seedelf-unsafe", tone: "warn", words: () => i18n.t("dappUi.warn.noRegister") },
+    dead: { testId: "dapp-seedelf-dead", tone: "warn", words: () => i18n.t("dappUi.warn.deadRegister") },
+    hash: { testId: "dapp-seedelf-hash", tone: "warn", words: () => i18n.t("dappUi.warn.datumByHash") },
+  };
+  const READINGS = Object.keys(CALLOUTS) as Reading[];
+  /** A site's transaction paying 10 ₳ into the contract, read as `seedelf`: its datum inline, or kept by hash. */
+  const paying = (seedelf: Reading) => {
+    const datum = seedelf === "hash" ? "hash" : "inline";
+    return summary({
+      paid: [{ address: CONTRACT, lovelace: "10000000", tokens: [], datum, script: true, seedelf, ownPaymentKey: false }],
+    });
+  };
+
+  it.each([false, true])("says each reading in its own callout and no other's, the session's too (%s)", (session) => {
+    for (const reading of READINGS) {
+      const html = render(paying(reading), "preprod", { session });
+      const page = text(html);
+      expect(page).toContain(i18n.t("dappUi.paid.withData", { what: i18n.t("dappUi.paid.seedelfContract") }));
+      for (const other of READINGS) {
+        const { testId, tone, words } = CALLOUTS[other];
+        expect(html.includes(`<div class="callout callout--${tone}" data-testid="${testId}">`), `${testId} for "${reading}"`).toBe(
+          other === reading,
+        );
+        expect(page.includes(words(session)), `${other}'s words for "${reading}"`).toBe(other === reading);
+      }
+    }
+  });
+
+  it("never calls a payment kept by hash anyone's or a register's", () => {
+    const page = text(render(paying("hash")));
+    expect(page).not.toMatch(/anyone can take|\bregister\b/i);
+  });
+
+  it("leaves the private balance out of signing's note only where nothing pays a Seedelf", () => {
+    // The worker checked the wallet's other accounts and found none in it (`ties` []): the note says the private
+    // balance isn't in it, but where a Seedelf is paid, which may be the user's own.
+    const out = i18n.t("dappUi.privacy.notPrivate");
+    for (const reading of READINGS) {
+      expect(text(render(paying(reading), "preprod", { ties: [] })).includes(out), reading).toBe(reading !== "register");
+    }
+  });
 });
 
 describe("who's asking", () => {

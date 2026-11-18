@@ -392,4 +392,23 @@ describe("Transaction details, of a payment into Seedelf Wallet's contract (chun
     // A view read before the WebAssembly knew who: as it was.
     expect(said(false)).toContain(t("tx.out.deadRegister"));
   });
+
+  // Chunk 51, r2sign#1: a datum kept by hash is no register WebAssembly reads (decode.rs `register`, the inline datum
+  // alone), carried in the witness set or not, and no Seedelf Wallet finds such a payment. Its line says so, as the sign
+  // window does, and calls it neither anyone's nor a register.
+  it("says no Seedelf Wallet finds a payment there that keeps its datum by hash, and only there", () => {
+    const line = (seedelf: boolean) => {
+      const detail = decoded();
+      Object.assign(detail.outputs[0]!, { inlineDatum: null, datum: null, datumHash: "ab".repeat(32), register: null });
+      detail.outputs[0]!.address.seedelf = seedelf;
+      const markup = render(createElement(TxDetailBody, { detail, network: "preprod", testId: "tx" }));
+      return words(/<li class="list__row dapp-paid">.*?<\/li>/s.exec(markup)?.[0] ?? "");
+    };
+    const at = line(true);
+    expect(at).toContain(`${t("tx.out.seedelfContract")} · ${t("tx.out.datumByHash")} · ${t("tx.out.warn.seedelfByHash")}`);
+    expect(at).not.toMatch(/anyone|\bregister\b/i);
+    // Another contract's datum by hash: whoever reads it, it's not the wallet's to say.
+    expect(line(false)).toContain(t("tx.out.datumByHash"));
+    expect(line(false)).not.toContain(t("tx.out.warn.seedelfByHash"));
+  });
 });

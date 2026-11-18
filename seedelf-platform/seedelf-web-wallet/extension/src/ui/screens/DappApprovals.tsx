@@ -49,7 +49,7 @@ import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
 import { certificateLine, certifiedLine, paidTo, proposalLine, releasesContractFunds, shownSiteText, signingTies, stakedLine, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
-import { adaText, formatAda, formatQuantity, shortHex, slotText, unlocked } from "../format";
+import { adaText, formatAda, formatQuantity, lockedAside, shortHex, slotText, tokenKey, unlocked } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts, usePreferences } from "../preferences";
 import { aboutAda, SESSION_FEE_ESTIMATE, toCents } from "../swap";
@@ -744,8 +744,15 @@ export function ConnectRequest({
   // The funding, built: what goes where, and Send.
   if (review) {
     const [paidSite, collateral] = review.payments;
-    // Less what it pays for its collateral's mix, which a row of its own shows.
-    const forSite = paidSite && { ...paidSite, lovelace: (BigInt(paidSite.lovelace) - BigInt(review.collateralReserve ?? "0")).toString() };
+    // Less what it pays for its collateral's mix, which a row of its own shows. Each token as the private side holds
+    // it, with Koios's decimals from the rows the funding spends: WebAssembly's token lists carry none, and a token off
+    // the wallet's list showed in raw units, as Make public's review never does (chunk 51, r2sign#3's sibling). The
+    // wallet's list still comes first (tokens.ts `tokenDecimals`).
+    const forSite = paidSite && {
+      ...paidSite,
+      lovelace: (BigInt(paidSite.lovelace) - BigInt(review.collateralReserve ?? "0")).toString(),
+      tokens: paidSite.tokens.map((tk) => ({ ...seedelf?.tokens.find((h) => tokenKey(h) === tokenKey(tk)), ...tk })),
+    };
     return (
       <Screen
         onSubmit={send}
@@ -989,13 +996,26 @@ export function ConnectRequest({
                 placeholder={withTokens ? tr("sites.topUp.minimum") : "0"}
                 autoFocus={false}
               />
+              {/* The side the funding can spend, said as Make public says it: "available", and what's locked beside it
+                  (chunk 12's #23). Called the private balance, 40 ₳ of 100 ₳ with 60 ₳ locked read as all of it, and
+                  everything locked as "0 ₳" with Review off for no reason given (chunk 51, r2screens#1). */}
               {seedelf && (
                 <p className="note" data-testid="dapp-private-held">
-                  {tr("dappUi.heldAndCollateral", { ada: amounts.ada(seedelf.lovelace) })}
+                  {seedelf.locked.utxos
+                    ? tr("dappUi.availableAndCollateral", {
+                        ada: amounts.ada(seedelf.lovelace),
+                        locked: lockedAside(seedelf, amounts.ada),
+                      })
+                    : tr("dappUi.heldAndCollateral", { ada: amounts.ada(seedelf.lovelace) })}
                 </p>
               )}
               {tooMuch && seedelf && (
-                <p className="field-note">{tr("sites.topUp.tooMuch", { held: amounts.ada(seedelf.lovelace) })}</p>
+                <p className="field-note">
+                  {tr("withdraw.tooMuch", {
+                    amount: amounts.ada(seedelf.lovelace),
+                    available: tr(seedelf.locked.utxos ? "withdraw.available" : "withdraw.inPrivate"),
+                  })}
+                </p>
               )}
             </div>
             {withTokens && <MinimumHint />}
@@ -1212,6 +1232,14 @@ export function SignTx({
       {s.paid.some((p) => p.seedelf === "dead") && (
         <Callout tone="warn" testId="dapp-seedelf-dead">
           {tr("dappUi.warn.deadRegister")}
+        </Callout>
+      )}
+      {/* Under a datum kept by hash, carried or not: no Seedelf Wallet reads a register from anywhere but the inline
+          datum, so none finds or spends it, and the site may keep the datum. Never "anyone can take it", nor a Seedelf
+          payment (chunk 51, r2sign#1). */}
+      {s.paid.some((p) => p.seedelf === "hash") && (
+        <Callout tone="warn" testId="dapp-seedelf-hash">
+          {tr("dappUi.warn.datumByHash")}
         </Callout>
       )}
       {s.paid.some((p) => p.seedelf === "register") && (
