@@ -12,12 +12,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { handle, RESET_AT_STAKE, type Context } from "../src/background/handlers";
-import { MAYBE_SENT_WAIT, pendingKey } from "../src/background/pending";
+import { MAYBE_SENT_WAIT, pendingKey, submitWatched } from "../src/background/pending";
 import { NetworkChoice } from "../src/background/preferences";
 import { spentSet } from "../src/background/spent";
+import { SESSION_TRANSFER } from "../src/background/transfer";
 import type { NetworkName } from "../src/networks";
 import type { AtStake, Message, Status } from "../src/shared/rpc";
-import { loadTestWasm, testBalances, vectors } from "./fakes";
+import { loadTestWasm, testBalances, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const account = (words: number) =>
@@ -171,6 +172,48 @@ describe("a payment that may still go through, across Remove wallet", () => {
     await ask({ type: "restore-wallet", phrase: OTHER, password: PASSWORD }, w.ctx);
     expect(w.t.local.data.has(SEALED)).toBe(false);
     expect(await w.t.pending.pending("preprod")).toBeNull();
+  });
+
+  // Chunk 51, e4a#1's family (pending.ts): a look for it already asking Koios when the wallet was removed, and another
+  // phrase restored, went on under that phrase's keys: its landing went into that phrase's sealed history, as a
+  // payment it sent. The look is the phrase's whose watch it read, as a reading is.
+  it("still looked for when another phrase is restored, goes into nothing of that phrase's", async () => {
+    const w = await wallet();
+    const { t, ctx } = w;
+    // A private payment Koios didn't answer: watched as maybe sent, with its review for the history once it's seen.
+    t.koios.evaluation = transferPreprod.evaluation;
+    const built = await t.transfer.build("preprod", [{ to: transferPreprod.to, lovelace: "2000000", tokens: [] }]);
+    const kept = (await t.wallet.withKeys(() => t.session.get<{ txCbor: string }>(SESSION_TRANSFER)))!;
+    const real = t.koios.fetch;
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const hit = new Promise<void>((r) => (reached = r));
+    let timeouts = 1;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/submittx") && timeouts-- > 0) throw new DOMException("signal timed out", "TimeoutError");
+      // Home's look, as the wallet is removed: tx_status waits.
+      if (url.endsWith("/tx_status")) {
+        reached();
+        await gate;
+      }
+      return real(url, init);
+    };
+    const sending = { network: "preprod", txHash: built.txHash, kind: "transfer", txCbor: kept.txCbor, key: SESSION_TRANSFER, kept } as const;
+    expect(await submitWatched(t.deps, { ...sending, summary: built, contract: true, again: false })).toMatchObject({ maybeSent: true });
+    t.koios.confirmations = 1;
+    const look = t.pending.pending("preprod");
+    look.catch(() => undefined);
+    await hit;
+
+    await ask({ type: "reset-wallet", force: true }, ctx);
+    await ask({ type: "restore-wallet", phrase: OTHER, password: PASSWORD }, ctx);
+    release();
+    // It lands, and the look ends as a lock ends one: the other phrase's history, watch and reading know nothing of it.
+    await expect(look).rejects.toThrow("The wallet is locked.");
+    expect((await t.activity.seedelf("preprod")).map((e) => e.txHash)).toEqual([]);
+    expect(await t.wallet.withKeys(() => t.session.get(pendingKey("preprod")))).toBeUndefined();
+    expect(await t.pending.pending("preprod")).toBeNull();
   });
 
   it("leaves nothing sealed once settled, so Remove wallet deletes everything else as before", async () => {

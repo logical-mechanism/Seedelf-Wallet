@@ -94,6 +94,31 @@ describe("a restore's look for more accounts", () => {
   });
 });
 
+describe("a look for accounts still asking Koios when the wallet is removed and another phrase restored", () => {
+  // Chunk 51, e4a#1's family (accounts.ts): the look went on under the next phrase's keys, probing its accounts from
+  // where it was, and put what it found into that phrase's list. It's the phrase's it began under, as a reading is.
+  it("ends as a lock ends it, and puts nothing into that phrase's list", async () => {
+    const t = testBalances();
+    await t.wallet.create(phrase(0).phrase, PASSWORD);
+    await t.accounts.recordFirst();
+    t.koios.usedStakes.add(phrase(1).preprod.stake as string);
+    let release!: () => void;
+    t.koios.hold = new Promise((r) => (release = r));
+    const look = t.accounts.discover("preprod");
+    look.catch(() => undefined);
+    await vi.waitFor(() => expect(t.koios.calls.some((c) => c.path === "account_addresses")).toBe(true));
+    // Remove wallet, then a restore of the 12-word phrase, as the handlers make one (its own look aside).
+    await t.wallet.reset();
+    await t.accounts.useFirst();
+    await t.wallet.create(vectors("cardano_account.json").find((v) => v.phrase.split(" ").length === 12)!.phrase, PASSWORD);
+    await t.accounts.recordFirst();
+    release();
+    t.koios.hold = undefined;
+    await expect(look).rejects.toThrow("The wallet is locked.");
+    expect(await indexes(t)).toEqual([0]);
+  });
+});
+
 describe("an account a restore won't find by itself", () => {
   it("is any past the run of accounts found used, from Account 2 up", () => {
     const used = (index: number) => ({ index, foundAt: 1 });

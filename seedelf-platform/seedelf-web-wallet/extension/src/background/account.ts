@@ -38,7 +38,7 @@ import type { Koios, KoiosAccountInfo, KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
 import { outpoint, readFresh, reservedSet, spentSet, unspent } from "./spent";
 import type { Area } from "./storage";
-import type { Keys, Wallet } from "./wallet";
+import { phrasePin, type Keys, type Wallet } from "./wallet";
 
 export interface AccountDeps {
   wasm: typeof Wasm;
@@ -91,18 +91,29 @@ export function discoverAccount(keys: Keys, net: Wasm.Network, used: ReadonlySet
  * `account`: which public account to read, when it isn't the one the wallet
  * is working on — the dApp connector reads the account **sites** use, which
  * is chosen once and doesn't follow the picker (dapp.ts, chunk 18).
+ *
+ * Every key it reads is one phrase's, `phrase` when the caller began under
+ * one (`phrasePin`): the wallet removed and another phrase restored while
+ * Koios answered ends the read, as a lock does, so Koios is never asked about
+ * that phrase's keys beside this one's stake address (chunk 51, e4a#1).
  */
 export async function readAccountUtxos(
   deps: AccountDeps,
   network: NetworkName,
   spent: ReadonlySet<string>,
-  { account }: { account?: number } = {},
+  { account, phrase }: { account?: number; phrase?: string } = {},
 ): Promise<{ account: Account; utxos: PathedUtxo[] }> {
   const { wasm, wallet } = deps;
   const koios = deps.koios(network);
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-  const withAccount = <T,>(task: (keys: Keys) => T | Promise<T>): Promise<T> =>
-    account === undefined ? wallet.withKeys(task) : wallet.withAccount(account, task);
+  const pin = phrasePin(phrase);
+  const withAccount = <T,>(task: (keys: Keys) => T | Promise<T>): Promise<T> => {
+    const pinned = (keys: Keys) => {
+      pin(keys);
+      return task(keys);
+    };
+    return account === undefined ? wallet.withKeys(pinned) : wallet.withAccount(account, pinned);
+  };
   // Network calls happen outside withKeys, so they never hold up a lock.
   const [stake, reserved] = await withAccount(
     async ({ cardano }) => [cardano.stakeAddress(net), await reservedSet(deps.session, network, { sending: true })] as const,

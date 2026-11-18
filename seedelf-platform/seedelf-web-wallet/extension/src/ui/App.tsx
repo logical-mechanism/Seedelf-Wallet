@@ -73,7 +73,9 @@ export function App() {
     return () => window.removeEventListener("popstate", drop);
   }, [walletExists]);
 
-  // While unlocked, user input pushes auto-lock back.
+  // While unlocked, user input pushes auto-lock back. A page opening counts as the user's too, but the connector's
+  // window: any site's request opens it, with no input at all, and a site opening it every 14 minutes kept the
+  // wallet from ever locking (chunk 51, e4b#1). There a click or a key counts, as everywhere.
   const unlocked = status?.state === "unlocked";
   // Once it's locked, however that came about, a Lock that failed before is
   // past, and the NFT images the user asked to see are forgotten: a locked
@@ -91,7 +93,7 @@ export function App() {
   }, [lockedOrGone]);
   useEffect(() => {
     if (!unlocked) return;
-    reportActivity();
+    if (!connectorWindow) reportActivity();
     const events = ["pointerdown", "keydown"] as const;
     for (const e of events) window.addEventListener(e, reportActivity, { passive: true });
     return () => {

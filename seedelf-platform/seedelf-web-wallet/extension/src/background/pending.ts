@@ -53,7 +53,7 @@ import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetSent, keptAsSent, recentlySent } from "./sent-txs";
 import { forgetSpent, outpoint, rememberSpent, spentAt } from "./spent";
 import type { Area } from "./storage";
-import { noteSend, SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WalletLocked, type Wallet } from "./wallet";
+import { noteSend, phrasePin, SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WalletLocked, type Wallet } from "./wallet";
 
 /**
  * chrome.storage.session: the submitted transaction being watched, one per
@@ -124,8 +124,16 @@ interface Watched extends PendingTx {
    * look, and nothing is sent.
    */
   restored?: boolean;
-  /** A private spend that pays the public account (`paysAccount`): its landing reads the account again too. */
+  /**
+   * A private spend that pays the public account: its landing reads the account again too. Lovejoin's own say no
+   * more (`watchSent`): a Seedelf spend's say which of the user's accounts (`paysAccounts`).
+   */
   toAccount?: boolean;
+  /**
+   * Which of the user's public accounts a Seedelf spend pays (`accountsPaid`): its landing reads the account again
+   * only while the wallet is on one of them (`paysActive`).
+   */
+  paysAccounts?: number[];
   /** One that pays a Seedelf or a Lovejoin box: the feed it's watched on (feed.ts `feedOfTx`), or Lovejoin's own as its pools say (watchSent). */
   feed?: Feed;
   /** Lovejoin's own in a token pool: those pools' `mix_box` hashes, looked for on their feed (feed.ts `Watching`, 1.6.0's release review, DATA-1). */
@@ -158,24 +166,54 @@ const PRIVATE_SPENDS: ReadonlySet<PendingTx["kind"]> = new Set([
   "lovejoin-launch",
 ]);
 
-/** Whether a Seedelf spend's reviewed summary pays the wallet's own public account: a removal to it, or a Make public to it. */
-function paysAccount(kind: PendingTx["kind"], summary: object): boolean {
-  const s = summary as { to?: unknown; payments?: Array<{ own?: unknown }> };
-  if (kind === "remove") return s.to === "account";
-  if (kind === "withdraw") return Array.isArray(s.payments) && s.payments.some((p) => p.own === true);
-  return false;
+/**
+ * Which of the user's public accounts a Seedelf spend's reviewed summary pays: a removal to the account, the one its
+ * review was built on (`account`), or a Make public to any of them, each payment to the one it names (`ownAccount`).
+ * A payment marked `own` that names none pays the account it was built on, as `own` meant before the wallet named any
+ * other. Undefined: that account isn't known (a watch kept before it was).
+ */
+function accountsPaid(kind: PendingTx["kind"], summary: object, account: number | undefined): Array<number | undefined> {
+  const s = summary as { to?: unknown; payments?: Array<{ own?: unknown; ownAccount?: unknown }> };
+  if (kind === "remove") return s.to === "account" ? [account] : [];
+  if (kind !== "withdraw" || !Array.isArray(s.payments)) return [];
+  return s.payments.filter((p) => p.own === true).map((p) => (typeof p.ownAccount === "number" ? p.ownAccount : account));
+}
+
+/**
+ * What the watch of Seedelf spend `s` keeps of the public accounts it pays, by `account`, the one its review was built
+ * on: which (`paysAccounts`). With that account not known, that it pays one (`toAccount`), as before: its landing then
+ * reads whichever the wallet is on.
+ */
+function paying(s: Sending, account: number | undefined): Pick<Watched, "paysAccounts" | "toAccount"> {
+  const paid = s.contract ? accountsPaid(s.kind, s.summary, account) : [];
+  if (!paid.length) return {};
+  const known = paid.filter((a): a is number => a !== undefined);
+  return known.length === paid.length ? { paysAccounts: [...new Set(known)] } : { toAccount: true };
+}
+
+/**
+ * Whether private spend `w` pays public account `active`, the one the wallet is on as it lands, whose side a full
+ * reading would read again. One that pays another of the user's accounts leaves the account on screen out of it, as
+ * any private spend does: Koios asked about the account on screen in the second a private transaction paying another
+ * lands ties the two by timing, on a shared IP too (privacy review §2.9; chunk 51, e5#2). And one that pays the
+ * account it was built on, landing once the wallet is on another, has that other read no more than one paying neither.
+ */
+function paysActive(w: Watched, active: number): boolean {
+  if (w.paysAccounts) return w.paysAccounts.includes(active);
+  // One sealed maybe sent before which accounts it pays were kept says so by its summary.
+  if (w.contract && w.summary) return accountsPaid(w.kind, w.summary, w.account).some((a) => a === undefined || a === active);
+  return !!w.toAccount;
 }
 
 /**
  * `w` landed, or was let go: the next balance reading sees it. A private
- * spend that pays nothing to the public account leaves the account's side
- * as it was, and only the private side is read again; anything else drops
- * the whole reading. Call it while unlocked.
+ * spend that pays nothing to public account `active`, the one the wallet is
+ * on now (that turn's keys' account), leaves the account's side as it was,
+ * and only the private side is read again; anything else drops the whole
+ * reading. Call it while unlocked.
  */
-async function forgetReading(session: Area, w: Watched): Promise<void> {
-  // One sealed maybe sent before `toAccount` was kept says so by its summary.
-  const toAccount = w.toAccount || (!!w.contract && !!w.summary && paysAccount(w.kind, w.summary));
-  if (PRIVATE_SPENDS.has(w.kind) && w.invalidHereafter === undefined && !toAccount) {
+async function forgetReading(session: Area, w: Watched, active: number): Promise<void> {
+  if (PRIVATE_SPENDS.has(w.kind) && w.invalidHereafter === undefined && !paysActive(w, active)) {
     await session.set(SESSION_PRIVATE_STALE_PREFIX + w.network, true);
   } else {
     await session.remove(SESSION_BALANCES_PREFIX + w.network);
@@ -418,6 +456,7 @@ function shown(watched: Watched): PendingTx {
     resentAt: _resentAt,
     restored: _restored,
     toAccount: _toAccount,
+    paysAccounts: _paysAccounts,
     account: _account,
     feed: _feed,
     pools: _pools,
@@ -513,7 +552,9 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
   // The inputs of one that can expire, to free them if it does; a private one to the account says so; one that
   // pays a Seedelf or a box, the feed it's watched on.
   const watched: Watched = {
-    ...(s.invalidHereafter === undefined ? { ...pending, ...toAccount(s) } : { ...pending, inputs: txInputs(bytes) }),
+    ...(s.invalidHereafter === undefined
+      ? { ...pending, ...paying(s, ahead.record.account ?? s.account) }
+      : { ...pending, inputs: txInputs(bytes) }),
     ...(s.contract ? { contract: true } : paysFeed(s, bytes)),
     // Before the submit, which may have waited on the data layer and Koios both.
     triedAt: ahead.record.triedAt ?? ahead.record.submittedAt,
@@ -540,7 +581,6 @@ const paysFeed = (s: Sending, bytes: Uint8Array) => {
   const feed = s.contract ? undefined : feedOfTx(bytes, s.network);
   return feed ? { feed } : {};
 };
-const toAccount = (s: Sending) => (s.contract && paysAccount(s.kind, s.summary) ? { toAccount: true } : {});
 
 /** What `writeAhead` wrote: the watch's record of `s`, and the sealed write, by its nonce. */
 interface Ahead {
@@ -582,7 +622,6 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
     confirmations: null,
     maybeSent: true,
     ...slot(s),
-    ...toAccount(s),
     ...paysFeed(s, bytes),
     txCbor: s.txCbor,
     inputs: txInputs(bytes),
@@ -600,6 +639,9 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
       // Whose it is: the account its review was built on, which another window may have switched from since (the
       // fix round's second review); with none kept, the one active now.
       record.account = s.account ?? keys.account;
+      // And which of the user's accounts it pays, by that one: its landing reads the account on screen only if it's
+      // among them (`paysActive`).
+      Object.assign(record, paying(s, record.account));
       // What's there already, for a refusal to put back as it was.
       const before = {
         watched: was,
@@ -756,16 +798,22 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
   const ours = (cur: Watched | undefined): cur is Watched => cur?.txHash === w.txHash;
   const unchanged = (cur: Watched | undefined) =>
     ours(cur) && cur.maybeSent === w.maybeSent && cur.submittedAt === w.submittedAt && cur.resentAt === w.resentAt;
+  // The phrase whose watch `w` is, from before Koios is asked: the wallet removed and another phrase restored
+  // meanwhile ends the settle, as a lock does, so nothing of it goes into that phrase's watch, reading or history, nor
+  // is it sent again from there (chunk 51, e4a#1's family). Every turn below checks it first.
+  const pin = phrasePin();
+  await wallet.withKeys(pin);
 
   // A private one on the private index's feed, which names no transaction; tx_status otherwise (feed.ts).
   const { confirmations, tip, fed } = await lookFor(deps, w);
   if (confirmations !== null) {
     const { maybeSent: _maybeSent, ...seen } = { ...w, confirmations };
     await turn(async () => {
-      await wallet.withKeys(async () => {
+      await wallet.withKeys(async (keys) => {
+        pin(keys);
         if (ours(await session.get<Watched>(key))) await session.remove(key);
         // The next balance reading should see the new UTxOs.
-        await forgetReading(session, w);
+        await forgetReading(session, w, keys.account);
         await dropKept(session, w);
       });
       await unseal(deps, w);
@@ -797,7 +845,8 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
     !w.restored;
   if (expired || unseen) {
     const held = await turn(async () => {
-      const held = await wallet.withKeys(async () => {
+      const held = await wallet.withKeys(async (keys) => {
+        pin(keys);
         const cur = await session.get<Watched>(key);
         // Past its slot, it can't land whatever happened meanwhile; one sent again and taken meanwhile isn't unseen.
         if (expired ? !ours(cur) : !unchanged(cur)) return { cur };
@@ -816,7 +865,7 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
         // on what it spent counts then, as only one can land (chunk 23's second review, fix round).
         if (expired) await forgetSent(session, w.network, w.txHash);
         await session.remove(key);
-        await forgetReading(session, w);
+        await forgetReading(session, w, keys.account);
         await dropKept(session, w);
         return undefined;
       });
@@ -837,7 +886,8 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
     // meanwhile took it, and put it back as sent again just now, or haven't yet: nothing goes out the
     // moment the wallet unlocks, whoever joins this look (independent review L9, final review F7).
     const moved = await turn(() =>
-      wallet.withKeys(async () => {
+      wallet.withKeys(async (keys) => {
+        pin(keys);
         const cur = await session.get<Watched>(key);
         if (!unchanged(cur)) return { cur };
         // Each time it goes again is the wallet's send, when that may be the one the network takes: Lovejoin's
@@ -853,7 +903,10 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
         const { maybeSent: _maybeSent, txCbor: _txCbor, summary, kept: _kept, inMempool: _inMempool, ...sent } = current;
         current = { ...sent, submittedAt: now() };
         taken = true;
-        await wallet.withKeys(() => dropKept(session, w));
+        await wallet.withKeys((keys) => {
+          pin(keys);
+          return dropKept(session, w);
+        });
         if (summary) await deps.activity?.sent(w.network, shown(current), summary).catch(() => undefined);
       }
     } catch (e) {
@@ -862,7 +915,8 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
       if (e instanceof SpentInputError || e instanceof SpentMaybeSentError) current = await mempool(koios, current);
     }
     return turn(async () => {
-      const after = await wallet.withKeys(async () => {
+      const after = await wallet.withKeys(async (keys) => {
+        pin(keys);
         const cur = await session.get<Watched>(key);
         if (unchanged(cur)) {
           await session.set(key, current);
@@ -890,10 +944,11 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
   // reading never read the contract again (the fix round's review of blind test §9.3).
   if (!w.maybeSent && w.invalidHereafter === undefined && age > WATCH_MS) {
     await turn(() =>
-      wallet.withKeys(async () => {
+      wallet.withKeys(async (keys) => {
+        pin(keys);
         if (!unchanged(await session.get<Watched>(key))) return;
         await session.remove(key);
-        await forgetReading(session, w);
+        await forgetReading(session, w, keys.account);
       }),
     );
   }
