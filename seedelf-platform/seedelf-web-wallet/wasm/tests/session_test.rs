@@ -366,6 +366,47 @@ fn a_return_merges_into_the_funding_change_under_the_sessions_collateral() {
     assert!(err.to_string().contains("isn't this wallet's"), "{err}");
 }
 
+/// Chunk 51, t1e#14: a merged return is priced for four of the funding's changes at most (`MERGED_OVERHEAD_BYTES`),
+/// so it merges into four at most: five are refused, never built past what the plan reckoned. The worker sends
+/// four at most.
+#[test]
+fn a_return_merges_into_four_of_the_fundings_changes_at_most() {
+    let accounts = accounts();
+    let at = session(3);
+    let sk = random_scalar();
+    let back = |merged: u64| {
+        api::session_return(
+            &accounts,
+            sk,
+            SessionReturnRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 3,
+                utxos: vec![
+                    utxo(1, 0, &at, 20_000_000, &[]),
+                    utxo(3, 0, &at, 5_000_000, &[]),
+                ],
+                merge: (0..merged)
+                    .map(|i| funding_change(9, i, sk, 10_000_000))
+                    .collect(),
+                own: vec![],
+                collateral_pool: None,
+                collateral_boxes: vec![],
+                rewards: Default::default(),
+            },
+        )
+    };
+    assert_eq!(back(4).unwrap().merged, 4);
+    let e = back(5).unwrap_err().to_string();
+    assert!(
+        e.contains(&format!(
+            "at most {} of the funding's UTxOs",
+            api::MAX_MERGE
+        )),
+        "{e}"
+    );
+}
+
 /// 2^63 − 1 of one token: three of these add up past what an output can hold.
 const JUNK: u64 = (1 << 63) - 1;
 const JUNK_POLICY: &str = "abababababababababababababababababababababababababababab";
@@ -841,6 +882,91 @@ fn the_connector_reads_and_signs_a_swap_for_a_session_with_its_key_alone() {
     );
 }
 
+/// Chunk 51, t1e#1: a site given governance (CIP-95) and connected to a session gets no DRep from it, whatever the
+/// request says. The one-time accounts' DRep key `3/0` is the same for every session, so a vote or certificate it
+/// signed would tie every session that signed one together: the session's calls read each request with governance
+/// off. Called as the extension calls them, by their WebAssembly names.
+#[test]
+fn a_sessions_calls_never_sign_as_the_one_time_accounts_drep() {
+    let accounts = accounts();
+    let Ok(wasm) = seedelf_wasm::WasmOneTimeAccounts::from_phrase(PHRASE.into()) else {
+        panic!("the one-time accounts")
+    };
+    let index = 5;
+    let drep = accounts.key_hash(Role::Drep, 0).unwrap();
+    // The session's swap, with a vote of that DRep key's beside it.
+    let (tx, inputs) = swap_tx(index);
+    let mut whole = conway::Tx::decode_fragment(&hex::decode(&tx).unwrap()).unwrap();
+    whole.transaction_body.voting_procedures = NonEmptyKeyValuePairs::try_from(vec![(
+        conway::Voter::DRepKey(drep),
+        NonEmptyKeyValuePairs::try_from(vec![(
+            conway::GovActionId {
+                transaction_id: Hash::new([9; 32]),
+                action_index: 0,
+            },
+            conway::VotingProcedure {
+                vote: conway::Vote::Yes,
+                anchor: Nullable::Null,
+            },
+        )])
+        .unwrap(),
+    )])
+    .ok();
+    let tx = hex::encode(whole.encode_fragment().unwrap());
+    let request = json!({
+        "network": "preprod",
+        "txCbor": tx,
+        "keys": [{ "role": 0, "index": index }],
+        "inputs": [{
+            "tx_hash": inputs[0].tx_hash,
+            "tx_index": inputs[0].tx_index,
+            "address": inputs[0].address,
+            "value": inputs[0].value,
+        }],
+        "partialSign": true,
+        "stakeIndex": index,
+        "governance": true,
+    })
+    .to_string();
+    let Ok(summary) = seedelf_wasm::inspect_session_tx(&wasm, &request) else {
+        panic!("inspected")
+    };
+    let summary: Value = serde_json::from_str(&summary).unwrap();
+    assert_eq!(summary["signs"], json!(["0/5"]), "never the DRep key");
+    assert_eq!(summary["ownVotes"], 0);
+    let Ok(signed) = seedelf_wasm::sign_session_tx(&wasm, &request) else {
+        panic!("signed")
+    };
+    let signed: Value = serde_json::from_str(&signed).unwrap();
+    let witness_set = conway::WitnessSet::decode_fragment(
+        &hex::decode(signed["witnessSet"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let signers: Vec<Hash<28>> = witness_set
+        .vkeywitness
+        .unwrap()
+        .iter()
+        .map(|w| Hasher::<224>::hash(&w.vkey.to_vec()))
+        .collect();
+    assert_eq!(signers, [accounts.key_hash(Role::Receive, index).unwrap()]);
+
+    // Data: the DRep's ID is no key of the session's (signSessionData reads the request as sessionDataSigner does).
+    let id = seedelf_core::staking::drep_id(&conway::DRep::Key(drep));
+    let data = json!({
+        "network": "preprod",
+        "keys": [{ "role": 0, "index": index }],
+        "address": id,
+        "payload": hex::encode("Sign in to example.com"),
+        "stakeIndex": index,
+        "governance": true,
+    })
+    .to_string();
+    let Ok(signer) = seedelf_wasm::session_data_signer(&wasm, &data) else {
+        panic!("asked")
+    };
+    assert_eq!(signer, "null");
+}
+
 /// The public key in a COSE_Key (CIP-8's `key`): its `-2` entry.
 fn cose_key_x(key_hex: &str) -> [u8; 32] {
     let key = hex::decode(key_hex).unwrap();
@@ -1169,6 +1295,97 @@ fn a_sessions_own_cancel_releases_nothing_away_from_it() {
         seen += 1;
     }
     assert!(seen >= 11, "{seen} cancels");
+}
+
+/// Chunk 51, t1e#15: a cancel spends only what's at the session's account. The worker reads its funds and collateral
+/// there, so nothing reaches this today; another account's UTxO would be one this session's key can't sign for, tied
+/// to the session by the cancel.
+#[test]
+fn a_cancel_spends_nothing_at_another_account() {
+    let accounts = accounts();
+    let index = 3;
+    let session = Session {
+        payment: accounts.key_hash(Role::Receive, index).unwrap(),
+        stake: accounts.key_hash(Role::Staking, index).unwrap(),
+    };
+    let address = api::one_time_address(&accounts, false, index).unwrap();
+    let elsewhere = api::one_time_address(&accounts, false, index + 1).unwrap();
+    let rows: Value = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/epoch_params_mainnet.json"
+    ))
+    .unwrap();
+    let params = if rows.is_array() {
+        rows[0].clone()
+    } else {
+        rows
+    };
+    let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/order_cancels.json"
+    ))
+    .unwrap();
+    let f = fixtures
+        .iter()
+        .find(|f| f["network"] == "mainnet" && f["stuck"] != true)
+        .unwrap();
+    // A real order made out to the session, as a_sessions_own_cancel_releases_nothing_away_from_it makes them.
+    let protocol: orders::Protocol = serde_json::from_value(f["protocol"].clone()).unwrap();
+    let text = f["datum"].as_str().unwrap();
+    let read = orders::read(protocol, &hex::decode(text).unwrap()).unwrap();
+    let (Credential::Key(payment), Some(Credential::Key(stake))) =
+        (read.pays[0].payment, read.pays[0].stake)
+    else {
+        panic!("{protocol:?}'s order doesn't pay a base address of keys")
+    };
+    let text = text
+        .replace(&hex::encode(payment), &hex::encode(session.payment))
+        .replace(&hex::encode(stake), &hex::encode(session.stake));
+    let mut order = fixture_utxo(&f["order"]);
+    match &mut order.inline_datum {
+        Some(inline) => inline.bytes = text.clone(),
+        None => {
+            order.datum_hash = Some(hex::encode(Hasher::<256>::hash(
+                &hex::decode(&text).unwrap(),
+            )))
+        }
+    }
+    let references: Vec<UtxoResponse> = f["reference"]
+        .as_object()
+        .map(|_| vec![fixture_utxo(&f["reference"])])
+        .unwrap_or_default();
+    let cancel = |funds: &UtxoResponse, collateral: &UtxoResponse| {
+        api::build_order_cancel(api::OrderCancelRequest {
+            network: "mainnet".into(),
+            params: params.clone(),
+            session: address.to_bech32().unwrap(),
+            orders: vec![api::OrderRow {
+                utxo: order.clone(),
+                datum: text.clone(),
+            }],
+            funds: vec![funds.clone()],
+            collateral: collateral.clone(),
+            references: references.clone(),
+        })
+        .map(|c| c.covers.len())
+        .map_err(|e| e.to_string())
+    };
+    let funds = utxo(0xaa, 0, &address, 10_000_000, &[]);
+    let collateral = utxo(0xbb, 0, &address, 5_000_000, &[]);
+    assert_eq!(cancel(&funds, &collateral), Ok(1), "{protocol:?}");
+    let theirs = utxo(0xcc, 0, &elsewhere, 10_000_000, &[]);
+    let refused = Err(format!(
+        "UTxO {}#0 isn't at the session's account",
+        theirs.tx_hash
+    ));
+    assert_eq!(cancel(&theirs, &collateral), refused, "their funds");
+    let their_collateral = UtxoResponse {
+        value: "5000000".into(),
+        ..theirs.clone()
+    };
+    assert_eq!(
+        cancel(&funds, &their_collateral),
+        refused,
+        "their collateral"
+    );
 }
 
 /// Writes the extension's fixture for a session's swap (`extension/tests/

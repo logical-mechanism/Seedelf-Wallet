@@ -5141,6 +5141,27 @@ mod parts_of_any_shape {
     }
 
     #[test]
+    fn several_recipients_go_in_one_transaction_or_not_at_all() {
+        // Chunk 51, t1e#3: parts pay one recipient (and a session's funding its collateral beside it, in the first).
+        // Several at once that one transaction can't take are refused in its words: planned in parts, each part paid
+        // the first recipient alone, and the second, named in the request, was never paid. 150 ₳ each to two, of 40
+        // UTxOs of 10 ₳.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let utxos = ada(1, 40, 10_000_000);
+        let too_much = |e: &anyhow::Error| {
+            seedelf_core::build::is_too_many(e) || seedelf_core::build::is_too_large(e)
+        };
+        let mut to_two = withdraw(utxos.clone(), Some(150_000_000), vec![]);
+        to_two.payments.push(to_two.payments[0].clone());
+        let e = api::build_withdraw_parts(sk, to_two).err().unwrap();
+        assert!(too_much(&e), "{e}");
+        let mut to_two = transfer(utxos, Some(150_000_000), vec![]);
+        to_two.payments.push(to_two.payments[0].clone());
+        let e = api::build_transfer_parts(sk, to_two).err().unwrap();
+        assert!(too_much(&e), "{e}");
+    }
+
+    #[test]
     fn a_chained_parts_carry_keeps_the_history_of_the_part_that_made_it() {
         // A chained part spends the carry, an output of the part before it, which no history the worker sends
         // names: it read as money of no history, so the review said a payment of money made private from one
