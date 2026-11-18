@@ -21,6 +21,7 @@ vi.mock("../src/ui/background", async (original) => ({
     new Promise((resolve, reject) => worker.waiting.push({ type, payload, resolve, reject })),
 }));
 
+const { t } = await import("../src/i18n");
 const { ClaimAll, ClaimReview, isClaimable } = await import("../src/ui/screens/ClaimAll");
 const { NetworkContext } = await import("../src/ui/network");
 
@@ -111,6 +112,22 @@ describe("Bring everything back: a session left out while the switch builds them
     const meant = shownAfterTap === "false" ? ["b4", "b6"] : ["b4", "b5", "b6"];
     expect(submit?.payload).toEqual({ txHashes: meant.map((h) => h.repeat(32)) });
 
+    act(() => root.unmount());
+  });
+
+  it("says it's building, not sending, while the switch builds the returns again (chunk 51, r2screens#3)", async () => {
+    const root = createRoot(container);
+    act(() => root.render(createElement(ClaimAll, { sessions: [session(4), session(5), session(6)], onBack: () => {}, onDone: () => {} })));
+    await answer("session-claim-build", throughLovejoin);
+    // The switch builds them all again: nothing is being sent, and the button, off, says what's going on.
+    click(theSwitch());
+    expect(sendButton().hasAttribute("disabled")).toBe(true);
+    expect(sendButton().textContent).toBe(t("common.building"));
+    await answer("session-claim-build", straightBack);
+    expect(sendButton().textContent).toBe("Send 3 returns");
+    // Sent: now it says so.
+    click(sendButton());
+    expect(sendButton().textContent).toBe(t("common.sending"));
     act(() => root.unmount());
   });
 

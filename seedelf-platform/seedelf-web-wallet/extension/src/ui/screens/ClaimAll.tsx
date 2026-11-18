@@ -79,6 +79,9 @@ export function ClaimAll({
   const [direct, setDirect] = useState(false);
   const [result, setResult] = useState<Result>();
   const [busy, setBusy] = useState(false);
+  // Busy building them all again for the switch, which sends nothing: the button says so, as a swap's approval does
+  // (SendButton's `rebuilding`; chunk 51, r2screens#3).
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string>();
   const network = useNetwork();
   const byIndex = new Map(sessions.map((s) => [s.index, s]));
@@ -104,6 +107,7 @@ export function ClaimAll({
   async function rebuild(straight: boolean) {
     if (!built || busy) return;
     setBusy(true);
+    setRebuilding(true);
     setError(undefined);
     try {
       const again = await call("session-claim-build", { indexes: sessions.map((s) => s.index), ...(straight ? { direct: true } : {}) });
@@ -116,6 +120,7 @@ export function ClaimAll({
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      setRebuilding(false);
     }
   }
 
@@ -196,7 +201,11 @@ export function ClaimAll({
       error={error}
       foot={
         <button type="button" className="primary" onClick={() => void send()} disabled={!built || busy || !picked.length}>
-          {busy ? t("common.sending") : picked.length ? t("claim.sendReturns", { count: picked.length }) : t("claim.chooseSession")}
+          {busy
+            ? t(rebuilding ? "common.building" : "common.sending")
+            : picked.length
+              ? t("claim.sendReturns", { count: picked.length })
+              : t("claim.chooseSession")}
         </button>
       }
     >
