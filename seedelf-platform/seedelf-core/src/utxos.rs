@@ -198,9 +198,36 @@ pub fn collect_address_utxos(utxos: Vec<UtxoResponse>) -> Result<Vec<UtxoRespons
     Ok(usable_utxos)
 }
 
-/// Where [`select`] takes a UTxO, the least first: not holding a token being
-/// sent, holding tokens, and the most lovelace first.
-type SelectOrder = (bool, bool, Reverse<u64>);
+/// As few of `held` (each UTxO's lovelace and tokens) as hold `tokens`
+/// together, as a script spend picks them (build.rs `holding`): for each
+/// token in turn, those holding the most of it first, until there's enough.
+/// Their places in `held`, in the order picked.
+fn holders_of(held: &[(u64, Assets)], tokens: &Assets) -> Vec<usize> {
+    let mut picked: Vec<usize> = Vec::new();
+    for want in &tokens.items {
+        let of = |i: usize| -> u64 {
+            held[i]
+                .1
+                .items
+                .iter()
+                .filter(|a| a.policy_id == want.policy_id && a.token_name == want.token_name)
+                .fold(0, |sum, a| sum.saturating_add(a.amount))
+        };
+        let mut have: u64 = picked.iter().fold(0, |sum, &i| sum.saturating_add(of(i)));
+        let mut holders: Vec<usize> = (0..held.len())
+            .filter(|i| !picked.contains(i) && of(*i) > 0)
+            .collect();
+        holders.sort_by_key(|&i| Reverse(of(i)));
+        for i in holders {
+            if have >= want.amount {
+                break;
+            }
+            have = have.saturating_add(of(i));
+            picked.push(i);
+        }
+    }
+    picked
+}
 
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
 // use largest first algo but account for change
@@ -227,32 +254,38 @@ fn do_select(
     // all the found assets
     let mut found_assets: Assets = Assets::new();
 
-    // Sort: the UTxOs holding a token being sent first, then those with no
-    // tokens, then the other token UTxOs, each group by descending lovelace
-    // value. Koios reports a token-less outpoint as either `Some(vec![])` or
+    // The order to take them in, as a script spend takes them when nothing is
+    // known of their histories (build.rs `select_script_inputs`): the fewest
+    // holding the tokens being sent ([`holders_of`]), then those with no
+    // tokens, then every other token UTxO, each group the most lovelace
+    // first. Koios reports a token-less outpoint as either `Some(vec![])` or
     // `None`; both must group together. The loop below takes a UTxO holding
     // none of the tokens only once they're all found, and never comes back to
     // one it passed, so the tokens' holders go first: an address whose ADA
     // sat in such a UTxO, sorted ahead of a smaller one holding the token,
-    // found nothing (chunk 51, r2b#2).
+    // found nothing (chunk 51, r2b#2). Only the holders needed lead: another,
+    // taken for its ADA ahead of ADA alone, put its other tokens in the
+    // change, whose floor could pass all the address held (r2cli#2).
     //
     // Pre-parse the values once and bail on any malformed entry. An earlier
     // version used `Result::into_iter().cmp(...)`, which silently treated
     // parse failures as `Equal` and could break the largest-first invariant
     // the selector below depends on.
-    let mut sortable: Vec<(SelectOrder, UtxoResponse)> = utxos
-        .into_iter()
+    let held: Vec<(u64, Assets)> = utxos
+        .iter()
         .map(|u| -> Result<_> {
             let v = string_to_u64(u.value.clone()).context("Invalid UTxO Value")?;
-            let has_tokens = u.asset_list.as_ref().is_some_and(|list| !list.is_empty());
-            let holds_sent = has_tokens
-                && !tokens.is_empty()
-                && assets_of(vec![u.clone()])?.1.any(tokens.clone());
-            Ok(((!holds_sent, has_tokens, Reverse(v)), u))
+            Ok((v, assets_of(vec![u.clone()])?.1))
         })
         .collect::<Result<Vec<_>>>()?;
-    sortable.sort_by_key(|(order, _)| *order);
-    let utxos: Vec<UtxoResponse> = sortable.into_iter().map(|(_, u)| u).collect();
+    let front: Vec<usize> = holders_of(&held, &tokens);
+    let mut rest: Vec<usize> = (0..held.len()).filter(|i| !front.contains(i)).collect();
+    rest.sort_by_key(|&i| (!held[i].1.is_empty(), Reverse(held[i].0)));
+    let utxos: Vec<UtxoResponse> = front
+        .into_iter()
+        .chain(rest)
+        .map(|i| utxos[i].clone())
+        .collect();
 
     for utxo in utxos.clone() {
         // the value from koios is the lovelace
