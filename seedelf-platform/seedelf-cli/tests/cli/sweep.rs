@@ -231,3 +231,40 @@ async fn sweep_all_leaves_tokens_the_rest_cant_carry() {
     assert_eq!(tx.inputs, vec![(tx_hash(1), 0)]);
     assert!(tx.outputs.iter().all(|o| o.assets.is_empty()));
 }
+
+/// `sweep` refuses a script, stake or other-network address itself, before it
+/// unlocks the wallet or reads the contract (chunk 51, t1b#9). Core's builders
+/// refuse them too, in their own words, once the contract is read: a payment
+/// with no datum to a script can lock for good there.
+#[tokio::test]
+#[serial]
+async fn sweep_refuses_to_pay_a_script_stake_or_other_network_address() {
+    for address in not_payable_addresses() {
+        for all in [false, true] {
+            let mut scenario = Scenario::start().await;
+            scenario
+                .mount_credential_utxos(vec![wallet_utxo(scenario.scalar, 1, 10_000_000, &[])])
+                .await;
+            scenario.mount_evaluate(1).await;
+            scenario.mount_collateral().await;
+            scenario.mount_submit().await;
+
+            let lovelace = (!all).then_some(2_000_000);
+            let refused = run(sweep_args(address.clone(), lovelace, all), PREPROD, VARIANT)
+                .await
+                .expect_err("a payment no address takes is refused");
+            assert!(
+                refused
+                    .to_string()
+                    .contains("Supplied Address Is Incorrect"),
+                "{address}, all: {all}: {refused:#}"
+            );
+            assert_eq!(
+                scenario.requests_to("/api/v1/credential_utxos").await,
+                0,
+                "{address}, all: {all}: refused before the contract is read"
+            );
+            assert_eq!(scenario.requests_to("/api/v1/submittx").await, 0);
+        }
+    }
+}

@@ -214,3 +214,60 @@ async fn fund_goes_when_a_strangers_tokens_at_the_address_total_past_a_u64() {
         ]
     );
 }
+
+/// A fee past the change `fund` selected for is refused in words, never a
+/// change that wraps below zero into an output no one has (chunk 51, t1b#6).
+/// Its selection covers the payment and a change output's minimum, not the
+/// fee, so a fee of about 2 ADA leaves the change short: with no token to
+/// return, and with one.
+#[tokio::test]
+#[serial]
+async fn fund_refuses_a_fee_past_its_change() {
+    let returned = ("dd".repeat(28), hex::encode("BACK"), 1);
+    for tokens in [vec![], vec![returned]] {
+        let mut scenario = Scenario::start().await;
+        scenario
+            .mount_params(|params| params["min_fee_b"] = serde_json::json!(2_000_000))
+            .await;
+        scenario
+            .mount_credential_utxos(vec![seedelf_utxo(
+                seedelf_crypto::schnorr::random_scalar(),
+                1,
+                1_500_000,
+                SAMPLE_SEEDELF,
+            )])
+            .await;
+        // 10 ADA to pay, and 2 ADA over: a change output's minimum, not the fee.
+        scenario
+            .mount_address_utxos(vec![address_utxo(
+                &external_address_bech32(),
+                2,
+                12_000_000,
+                &tokens,
+            )])
+            .await;
+        scenario.arm_web_capture();
+
+        let refused = run(
+            FundArgs {
+                address: external_address_bech32(),
+                seedelf: SAMPLE_SEEDELF.to_string(),
+                lovelace: Some(10_000_000),
+                assets: vec![],
+            },
+            PREPROD,
+            VARIANT,
+        )
+        .await
+        .expect_err("a fee past the change is refused");
+        assert!(
+            refused.to_string().contains("insufficient lovelace"),
+            "with {} tokens back: {refused:#}",
+            tokens.len()
+        );
+        assert!(
+            seedelf_cli::web_server::take_captured_cbor().is_none(),
+            "nothing is served to sign"
+        );
+    }
+}

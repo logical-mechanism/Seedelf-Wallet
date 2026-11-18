@@ -31,15 +31,18 @@ const pageHtml = cliStatic("index.html");
 /** A transaction's id, as web_server.rs computes it (seedelf-core's `build::tx_id`): its body's hash. */
 const idOf = (tx: string) => txId(bytes(tx));
 
+/** The page's network, as web_server.rs writes it: "" for mainnet, "preprod." for preprod. */
+type PageNetwork = "" | "preprod.";
+
 /**
- * index.html's two injected blocks, filled as web_server.rs fills them
- * (mainnet): the transaction and its id, and the network.
+ * index.html's two injected blocks, filled as web_server.rs fills them: the
+ * transaction and its id, and the network.
  */
-function serve(message: string): { data: string; network: string } {
+function serve(message: string, network: PageNetwork): { data: string; network: string } {
   const data = `{ "message": ${JSON.stringify(message)}, "id": ${JSON.stringify(idOf(message))} }`;
   const filled = pageHtml
     .replace('{ "message": "ACAB000000000000" }', data)
-    .replace('{ "network": "FADECAFE00000000" }', '{ "network": "" }');
+    .replace('{ "network": "FADECAFE00000000" }', `{ "network": ${JSON.stringify(network)} }`);
   const block = (id: string) => {
     const found = filled.match(new RegExp(`<script id="${id}" type="application/json">([\\s\\S]*?)</script>`));
     if (!found) throw new Error(`index.html has no ${id} block`);
@@ -74,11 +77,13 @@ const VKEYS = `d9010281825820${VKEY}5840${SIGNATURE}`;
 const WALLET_WITNESSES = `a100${VKEYS}`;
 
 /**
- * The fake wallet: signTx returns `witnesses`, or throws `signError`; submitTx
- * throws `submitError`, or answers `answer`, by default the id of what it was
- * handed.
+ * The fake wallet: on network `networkId` (CIP-30's: 0 preprod, 1 mainnet;
+ * the page's own by default); signTx returns `witnesses`, or throws
+ * `signError`; submitTx throws `submitError`, or answers `answer`, by default
+ * the id of what it was handed.
  */
 interface FakeWallet {
+  networkId?: number;
   witnesses?: string;
   signError?: unknown;
   submitError?: unknown;
@@ -97,9 +102,9 @@ interface PageRun {
   idShown: string;
 }
 
-/** Runs the page on `unsigned`, with the fake wallet picked in the dropdown. */
-async function signOnThePage(unsigned: string, wallet: FakeWallet = {}): Promise<PageRun> {
-  const served = serve(unsigned);
+/** Runs the page on `unsigned`, served for `network`, with the fake wallet picked in the dropdown. */
+async function signOnThePage(unsigned: string, wallet: FakeWallet = {}, network: PageNetwork = ""): Promise<PageRun> {
+  const served = serve(unsigned, network);
   const elements: Record<string, FakeElement> = {
     "injected-data": element(served.data),
     "injected-network-data": element(served.network),
@@ -112,7 +117,7 @@ async function signOnThePage(unsigned: string, wallet: FakeWallet = {}): Promise
   elements.wallet_dropdown!.value = "cliwallet";
   const seen: { signed?: string; submitted?: string; idWhenSigning?: string; onLoad?: () => Promise<void> } = {};
   const api = {
-    getNetworkId: async () => 1,
+    getNetworkId: async () => wallet.networkId ?? (network === "preprod." ? 0 : 1),
     signTx: async (tx: string) => {
       seen.signed = tx;
       seen.idWhenSigning = elements.tx_id!.textContent;
@@ -353,5 +358,31 @@ describe("the CLI's signing page names the transaction it serves", () => {
     expect(run.status).toContain("user declined to sign");
     expect(run.status).not.toContain("may have gone through");
     expect(run.link.href).toBe("");
+  });
+});
+
+describe("the CLI's signing page signs only with a wallet on the network it was built for", () => {
+  // A transaction built for one network is refused on the other, for its
+  // addresses: the page says to switch instead, and asks nothing of the
+  // wallet (chunk 51, t1b#11).
+  it("asks to switch, and has nothing signed or sent, when the wallet is on the other network", async () => {
+    const cases: [PageNetwork, number, string][] = [
+      ["preprod.", 1, "Wallet is not using the pre-production network"],
+      ["", 0, "Wallet is not using the mainnet network"],
+    ];
+    for (const [network, networkId, says] of cases) {
+      const run = await signOnThePage(fundTx().unsigned, { networkId }, network);
+      expect(run.status, `a page for ${network || "mainnet"}, a wallet on ${networkId}`).toContain(says);
+      expect(run.signed).toBeUndefined();
+      expect(run.submitted).toBeUndefined();
+    }
+  });
+
+  it("signs and links on preprod with a wallet on preprod", async () => {
+    const tx = fundTx();
+    const run = await signOnThePage(tx.unsigned, { networkId: 0 }, "preprod.");
+    expect(run.signed).toBe(tx.unsigned);
+    expect(run.status).toContain("successfully submitted");
+    expect(run.link.href).toBe(`https://preprod.cardanoscan.io/transaction/${idOf(tx.unsigned)}`);
   });
 });
