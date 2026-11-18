@@ -277,6 +277,29 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 *Coverage:* Read in full: seedelf-verification/CLAIMS.md, README.md, Seedelf/Every/README.md, Lovejoin/Every/README.md, Lovejoin/AnyTx/README.md and Audit/README.md; the root README.md; the wallet README. Also read in full: check.sh, lakefile.lean, both lake-manifest.json files, Seedelf.lean, and the cited theorem files: Seedelf/Every/Typed.lean, PolicyTyped.lean and AlwaysFalse.lean; Lovejoin/Every/Readable.lean, Typed.lean and MintTyped.lean; Lovejoin/AnyTx/BoxPurposesAll.lean, BoxSemantics.lean, PurposesKernel.lean and LogicPublishKernel.lean. Plus Lovejoin/Template/Scripts.lean, Lovejoin/Scripts.lean, Seedelf/Scripts.lean, extract.sh, extract-lovejoin.sh, Audit/Checks/FlatDecodeCheck.lean, the wasm crate's lovejoin_proven_bytes_test.rs, and templates.rs's first 240 lines. Diffed CLAIMS.md and README.md from chunk 48 (363acdf3) to HEAD, and traced each changed wording to its commit. Skimmed: Poli…
 
+## T1a (18 findings, 67 guards)
+
+- `t1a#1` low (nobody): A proof for a register outside the prime-order subgroup: no test fails without it `schnorr.rs:106`
+- `t1a#2` low (stranger): Re-randomizing a register outside the prime-order subgroup, which writes a locked UTxO: no test fails without it `register.rs:119`
+- `t1a#3` low (nobody): A zero mix witness, whose output box anyone can withdraw: no test fails without it `lovejoin.rs:256`
+- `t1a#4` low (nobody): A zero secret in an owner's Lovejoin Schnorr proof: no test fails without it `lovejoin.rs:200`
+- `t1a#5` low (nobody): A sigma-OR with N outside [2, 255], whose 1-byte N wouldn't match the validator's: no test fails without it `lovejoin.rs:179`
+- `t1a#6` low (nobody): The proof nonce's hedge against a failing random source: no test fails without it `schnorr.rs:62`
+- `t1a#7` low (nobody): A minting script that doesn't hash to its policy: no test fails without it `build.rs:1726`
+- `t1a#8` low (user): A payment output read back as the carry: no test fails without it `build.rs:2267`
+- `t1a#9` low (nobody): Signing that changes the transaction's body: no test fails without it `build.rs:1193`
+- `t1a#10` low (stranger): Max and parts taking a UTxO the wallet's evaluator can't take: no test fails without it `build.rs:2911`
+- `t1a#11` low (stranger): An account-paid mint or launch spending tokens whose total passes a u64: no test fails without it `build.rs:3808`
+- `t1a#12` low (user): An account mint's collateral return under its least: no test fails without it `build.rs:3747`
+- `t1a#13` low (nobody): Bytes that aren't one complete datum read as a register (two of register_of_datum's checks): no test fails without either `koios.rs:373`
+- `t1a#14` low (nobody): A Seedelf UTxO holding a quantity other than 1 taken for remove: no test fails without it `build.rs:3559`
+- `t1a#15` low (user): A zero amount of a token paid to an address (Pallas's unwrap would trap): no test fails without it `build.rs:3337`
+- `t1a#16` low (nobody): An account input or collateral on the other network: no test fails without that part of with_account's check `build.rs:1601`
+- `t1a#17` low (nobody): A burn of a token the spent UTxOs don't hold: no test fails without remainder's check `build.rs:2105`
+- `t1a#18` low (user): A fee whose 3/2 an account's collateral can't cover: no test fails without that check `build.rs:2197`
+
+*Coverage:* Tried every guard in R1's (17) and R2a's (29) lists, none merged (the lanes don't overlap): 46 guards as 84 mutants (crypto 18, Koios 14, core 52), with a guard's sub-checks mutated one by one where it has several. Two extra mutants: WebAssembly's own giveme.my signature checks (lib.rs:5183, lovejoin.rs:3028), the production form of R2a's build.rs:1167. For each mutant: the lane's named test file, then the crate's tests; every survivor then ran the crates that depend on it (for crypto and Koios, the whole workspace, 790 tests; for core, seedelf-wasm and seedelf-cli, 351). Order: the guards with no named test first (schnorr.rs:106, register.rs:119, lovejoin.rs:256, 200, 179, schnorr.rs:62, build.rs:278, 441, 1726, 2058, 2264, 1193, 2553/2911, 2556 and the other fitting sites, 3747), then a stranger's or a site's input (koios.rs:361, 139, 157, register.rs:190, build.rs:3107, 3290), then th…
+
 ## T1b (12 findings, 45 guards)
 
 - `t1b#1` low (nobody): A note patched after signing: no test fails without it `note.rs:83`
@@ -294,6 +317,27 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 *Coverage:* Every guard in both lists was tried: R2b's 28 and R4's 14, with R2b#26 and R4#7 (transaction.rs:130) merged, so 41 distinct guards. That took 61 mutants. Multi-site guards got one mutant per site, multi-condition guards one per condition, and two faithful variants were added for spend.rs (a fixed key; another 28-byte hash). 3 prepared panicking variants (M16p, M19p, M20p) were not run, because their wrapping versions were caught. Crates run per mutant: seedelf-core (named test, then all 356), seedelf-wasm native (305) for core guards, and seedelf-cli (46) for CLI guards and for core guards the CLI calls. Not run: the extension's Vitest (it reaches Rust only through the prebuilt wasm/pkg; WebAssembly wasn't rebuilt, per the brief), the CLI's 4 ignored live Koios tests, Playwright, and the parts suite. No guard left untried.
 
+## T1c (16 findings, 43 guards)
+
+- `t1c#1` low (stranger): A stranger's box with an identity point counted and drawn into the user's mixes: no test fails without it `mod.rs:453`
+- `t1c#2` low (pool-launcher): A pool's box ADA times a deposit's boxes wrapping past a u64: no test fails without the checked product `mod.rs:775`
+- `t1c#3` low (pool-launcher): A launch's token quantity of 0 reaching the box-value probes (check_token): no test fails without it, since value.rs gives the same words `box_value.rs:193`
+- `t1c#4` low (nobody): A token box of 0 of its token reaching pallas through BoxValue::output: no test fails without value.rs's refusal `value.rs:108`
+- `t1c#5` low (user): A paid withdraw's account change under an output's least: no test fails without it `mod.rs:1560`
+- `t1c#6` low (nobody): Boxes coming back into an identity or invalid destination register: no test fails without it `mod.rs:1433`
+- `t1c#7` low (nobody): A deposit's box paid under an identity or invalid register: no test fails without it `mod.rs:732`
+- `t1c#8` low (nobody): A token-holding UTxO paying for Lovejoin (Coin::from_row): no test fails without its refusal `mod.rs:479`
+- `t1c#9` low (nobody): A pool row away from mix_box's payment credential read as a box: no test fails without the credential check `mod.rs:416`
+- `t1c#10` low (nobody): A deposit's inputs' ADA summed past a u64: no test fails without the checked sum `mod.rs:762`
+- `t1c#11` low (nobody): One box mixed twice in a transaction: no test fails without the refusal `mod.rs:992`
+- `t1c#12` low (nobody): A mix of fewer than two boxes: no test fails without the refusal, since its test asserts only is_err `mod.rs:985`
+- `t1c#13` low (nobody): A chain that mixes without collateral: no test fails without chain_across's refusal, since mix() refuses in near words `mod.rs:2309`
+- `t1c#14` low (nobody): A fan-out deeper than three waves: no test fails without fresh_for's depth bound `mod.rs:2520`
+- `t1c#15` low (nobody): A withdraw whose declared budgets are under what its own proof measured: no test fails without the covers check `mod.rs:1686`
+- `t1c#16` low (nobody): A withdraw whose fee never settled: no test fails without the 'did not settle' refusal `mod.rs:1740`
+
+*Coverage:* I tried all 31 of R3a's guard entries. Five entries name more than one guard, so I split them: 415 into the value check, the credential check and from_resolved's twin; 760 into the inputs' sum, the boxes' product and the paid sum; 985 into the box count and the duplicate check; 1212 into the mix's and the withdraw's (1721); 2529 into PoolShort and the depth bound. I added from_row's points() use (426), the read the 333 entry describes (757) and the settle test behind 1740 (1696). That makes 46 mutant runs, including the 1105 and 1582 variants and the value.rs and box_value.rs pair.  How each was run, in T1c's copy only, each command capped: - The lane's named test file first, where it had one. - Then seedelf-core's Lovejoin set: lovejoin_test, lovejoin_pools_test, lovejoin_planner_test, lovejoin_box_value_test, lovejoin_vectors_test, lovejoin_width_test, lovejoin_mainnet_test, lovejoin_l…
+
 ## T1d (9 findings, 61 guards)
 
 - `t1d#1` low (user): An account launch whose collateral can't come back as an output: no test fails without the refusal `launch.rs:503`
@@ -307,6 +351,26 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 - `t1d#9` low (user): A cancel declaring less than its finished bytes measure: no test fails without the check `orders.rs:1102`
 
 *Coverage:* I tried all 30 of R3b's guards (none repeats), as 84 mutants, each of a different check. 78 of them ran one at a time in my copy of seedelf-platform. Each ran its named test file first, then, if nothing failed, the whole seedelf-core crate (--lib --tests: 31 targets, 356 tests, 6 ignored). The exception is the last 11 orders.rs mutants, which ran --lib plus orders_test only (28 tests), since nothing else in the crate reaches orders.rs. Five more were never run apart, as their results are implied: g21's token and datum parts and g22's three arms, because removing each whole check failed nothing. g1de (the NFT's name and quantity together) ran only in the combined wasm runs. 27 checks that failed no seedelf-core test (the survivors and the equivalent ones) also ran in two combined runs of seedelf-wasm's native suite (305 tests); in the second, 305 passed. 9 probe tests (the tests a fix wou…
+
+## T1e (15 findings, 59 guards)
+
+- `t1e#1` low (site): A session's sign and inspect calls forcing governance off, so the one-time accounts' DRep key never signs: no test fails without it `lib.rs:6453`
+- `t1e#2` low (stranger): A session's collateral never being a UTxO the evaluator refuses (L20): no test fails without it `lib.rs:989`
+- `t1e#3` low (user): Several recipients (not a funding) being split into parts: no test fails without it `lib.rs:4793`
+- `t1e#4` low (user): An amount going out as more than MAX_PARTS (25) transactions: no test fails without it `lib.rs:4138`
+- `t1e#5` low (user): The part sending the last tokens paying anything but exactly what's owed when its ADA covers it: no test fails without it `lib.rs:4152`
+- `t1e#6` low (user): A part after the payment was paid in full, in parts that each pay their own fee: no test fails without it `lib.rs:4184`
+- `t1e#7` low (user): An amount (with a funding's collateral) more than the UTxOs hold being planned into parts at all: no test fails without it `lib.rs:4133`
+- `t1e#8` low (user): A carry's amount being retried on the largest UTxOs: no test fails without it `lib.rs:3571`
+- `t1e#9` low (user): A chained part spending only its carry (a fee for nothing): no test fails without it `lib.rs:4335`
+- `t1e#10` low (user): A second plan that takes as much as the first replacing it: no test fails without it `lib.rs:4390`
+- `t1e#11` low (user): Re-planning a payment whose first plan pays no more than asked: no test fails without it `lib.rs:4372`
+- `t1e#12` low (user): A carry read back from an output that isn't it (two outputs could be the carry): no test fails without it `build.rs:2267`
+- `t1e#13` low (nobody): A spent input with no key path being skipped, not refused, when the account signs: no test fails without it `lib.rs:333`
+- `t1e#14` low (nobody): A return merging into more than MAX_MERGE (4) of the funding's UTxOs: no test fails without it `lib.rs:1367`
+- `t1e#15` low (nobody): An order cancel's funds or collateral not at the session's account: no test fails without it `lib.rs:807`
+
+*Coverage:* I tried all 37 distinct guards in W1a (17) and W1b (21, with W1b's 3642 merged into W1a's 4133), as 59 mutants: each guard's sub-checks separately, plus 2 siblings of the same class. 41 mutants were caught and 18 were not; the 18 are the 15 findings, three of which cover two mutants each. For each mutant I ran the lane's named test file in full (or its module filter: parts_of_any_shape, chain_end_tests, return_plan_tests). If nothing failed, I ran the crate's whole default suite: seedelf-wasm's 16 targets (305 tests); for core mutants seedelf-core's 31 targets (356 tests) first; for the register mutant seedelf-crypto's suite first. I added the ignored payment_parts_shapes_test in release where the lane named it (4152, 4184, 3050) and for the planner's bounds (4335, 4138). What I didn't run: Vitest and the wasm .mjs tests against mutants, since they load the prebuilt wasm/pkg and the brie…
 
 ## T1f (12 findings, 41 guards)
 
@@ -361,6 +425,29 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 *Coverage:* All 50 unique guards in E2a's and E2b's lists were tried: E2a's 25 and E2b's 26, with E2a#11 and E2b#19 merged. Every sub-check a lane named by line or clause is a mutant of its own, 140 in all, each in a copy, never in TREE. Every mutant has a verdict: 127 caught and 13 not caught. The 13 fall under 9 lane guards: E2a#8, E2a#11/E2b#19, E2a#19, E2a#22, E2b#0, E2b#1, E2b#6, E2b#8 and E2b#11. They are reported as 12 findings, since both signAndSend checks are one. No guard was left untried. Run scope: phase 1 ran a03 and a22 against their named or candidate files. Every other mutant ran against the tests the probes show its guard firing in, out of the 194 test files whose imports reach the four guarded modules. All 194 ran once with probes. The unreached ones were confirmed by a combined run over their named files. a11h also ran its one reaching file whole without -t. The whole suite wasn'…
 
+## T1i (18 findings, 46 guards)
+
+- `t1i#1` low (site): An approval whose request left the queue during the password check, signing nothing else: no test fails without it `dapp.ts:685`
+- `t1i#2` low (site): A site's ADA-only contract release, waiting for the user's yes: no test fails without it `dapp.ts:34`
+- `t1i#3` low (site): A site's port from an iframe, a non-https page or another extension, refused: no test fails without it `sw.ts:364`
+- `t1i#4` low (site): A site's transaction the wallet can't sign whole, without partialSign, refused: no test fails without it `dapp.ts:2087`
+- `t1i#5` low (site): After a worker restart, only read calls are asked again, and only once: no test fails without it `bridge.ts:56`
+- `t1i#6` low (site): A site's private-session funding sent only for the origin and network it was reviewed for, within 10 minutes: no test fails without three of its four checks `sessions.ts:2134`
+- `t1i#7` low (user): A top-up sent only as reviewed (same hash and network), within 10 minutes: no test fails without either check `sessions.ts:2398`
+- `t1i#8` low (user): A balance reading of the account the user switched from, kept as the new account's: no test fails without the check `balances.ts:392`
+- `t1i#9` low (user): A contract read that spans another wallet's keys, ended: no test fails without either same() check `contract-scan.ts:137`
+- `t1i#10` low (user): An account switch while a payment that may still go through is open, refused: no test fails without it `handlers.ts:380`
+- `t1i#11` low (user): Decline all, or any answer, refused for a private session's funding that's already sent: no test fails without either side's check `DappApprovals.tsx:197`
+- `t1i#12` low (user): The sign window's answer refused while busy, during the hold, or without the password: no test fails without those conditions `DappApprovals.tsx:154`
+- `t1i#13` low (user): A private session's funding sent again while its refusal is shown: no test fails without the check `DappApprovals.tsx:715`
+- `t1i#14` low (user): A private session's amount over the private balance, refused in the connect window: no test fails without the check `DappApprovals.tsx:687`
+- `t1i#15` low (user): A top-up over the spendable private balance, refused in its form: no test fails without the check `SiteSessions.tsx:572`
+- `t1i#16` low (user): A site session's Disconnect kept off until its account is read: no test fails without the wait `SiteSessions.tsx:120`
+- `t1i#17` low (user): A dApp account index past 2^31 - 1 kept in the preferences: no test fails without the bound `preferences.ts:72`
+- `t1i#18` low (nobody): A private session's signature carrying no governance (DRep key): no test fails without the check, which no flow can reach `dapp.ts:2061`
+
+*Coverage:* All 46 lane guards tried: E3a's 20, E3b's 18 and E4a's 9, with dapp.ts:2183 (E3a#7 and E3b#14) merged. That came to 100 distinct mutants, since most guards were split into their conditions; the specs are in SCRATCH/r51/work/T1i/specs, which is tmpfs. Order: no test or an unknown test first (sw.ts:364, tx-view.ts:344, DappApprovals.tsx:197 and :687, and the guards named only by e2e), then a site's input (the rest of E3a, plus ui/dapp.ts and Connect), then the rest. Each mutant ran first against the lane's named Vitest cases by file:line, then against the named files in full plus that source file's importing or calling tests: 31 dapp files, 11 DappApprovals files, 9 SiteSessions files, and 16 to 20 sessions files per function. I ran in four copies: one per batch (UI, and two sharing the worker specs), plus a pristine one for baselines. 45 caught; 18 findings are uncaught guards or conditio…
+
 ## T1j (14 findings, 68 guards)
 
 - `t1j#1` low (site): The connector serving a port from an iframe, another extension, a non-tab page or a plain-http page: no test fails without it `sw.ts:364`
@@ -398,6 +485,34 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 - `t1k#14` low (nobody): A transaction Minswap built that the wallet can't read (not 4 items, no outputs, an output without a value, an inline datum not wrapped in tag 24): no test fails without builtOutputs' refusals `minswap.ts:509`
 
 *Coverage:* Tried all 53 lane guards: E6's 15, E7a's 20 and E7b's 18. None was duplicated across lanes, since the three lanes cover different files. Order followed the brief: first the guards whose test was none or unknown (E6#2, E6#8, E7b#8, #10, #12, #15, #16, #17), then those on a stranger's input (E6#0, #1, #3, #4, #5 and the Minswap checks), then the rest. In all I ran 168 mutants: E6 43, E7a 93, E7b 32. That is 155 Vitest and 13 cargo staking_test, plus 3 crypto and 1 wasm Rust mutants run by hand. On top came 30 wide-pass reruns and 11 demonstration runs. Not tried: the 'reads token by token' performance property of chain.ts:84 (no simple mutant); blstrs's own torsion refusal (third-party code); koios.ts submitTx's TxSubmitConnectionError retry and paged()'s 'nothing new' stop (a hang guard, not the money one); stake()'s own call to check_paths apart from the shared check; refuseSent and late…
+
+## T1l (23 findings, 117 guards)
+
+- `t1l#1` low (stranger): A stranger's token name, a pool's ticker and a DRep's name kept from running as a CSV formula: no test fails without it `activity.ts:228`
+- `t1l#2` low (user): Send publicly's Total leaving counting a payment to another of the user's own accounts as leaving: no test fails without it `CardanoSend.tsx:165`
+- `t1l#3` low (user): Send privately's Total leaving leaving out a payment to the user's own Seedelf: no test fails without it `Transfer.tsx:178`
+- `t1l#4` low (user): Start a pool's 'Private balance after' counted from Home's figure: no test fails without it `LovejoinLaunch.tsx:456`
+- `t1l#5` low (user): A locked UTxO's tokens kept out of what a form may send: no test fails without it `format.ts:380`
+- `t1l#6` low (user): A review's '… after' held at 0 ₳: no test fails without it `ReviewTotals.tsx:100`
+- `t1l#7` low (user): A pasted recovery phrase cleared from the clipboard: no test fails without it `PhraseInput.tsx:91`
+- `t1l#8` low (user): Send publicly's warning before an ADA Handle goes into someone's Seedelf: no test fails without it `CardanoSend.tsx:338`
+- `t1l#9` low (user): A token amount the form can't read ('1.2.3') refused before Review: no test fails without it `TokenAmounts.tsx:72`
+- `t1l#10` low (user): Bring everything back building and signing its returns once, for the list it opened with: no test fails without it `ClaimAll.tsx:100`
+- `t1l#11` low (user): Home holding payments past 10 minutes while a maybe-sent one may still land: no test fails without it `Home.tsx:502`
+- `t1l#12` low (user): The browser's Back pressing a disabled screen Back (a transaction being sent): no test fails without it `history.ts:65`
+- `t1l#13` low (user): Stop offered on a mix card once its chain exists: no test fails without it `Lovejoin.tsx:862`
+- `t1l#14` low (user): Bring everything back refusing returns built more than 10 minutes ago: no test fails without it `sessions.ts:3363`
+- `t1l#15` low (user): Set collateral held on an empty account, or while Home holds a payment: no test fails without it `Collateral.tsx:265`
+- `t1l#16` low (user): Make public's early stop on more than the private balance: no test fails without it `Withdraw.tsx:94`
+- `t1l#17` low (user): Send publicly's early stop on more than the account can pay: no test fails without it `CardanoSend.tsx:110`
+- `t1l#18` low (user): Make public's Max sending no token amounts, and its hidden token boxes not holding Review: no test fails without them `Withdraw.tsx:128`
+- `t1l#19` low (user): Send privately's Max turned off by Add recipient: no test fails without it `Transfer.tsx:379`
+- `t1l#20` low (user): Start a pool's checks before Review (a quantity, the box's least and most, a copy, the classic 10 ₳): no test fails without them `LovejoinLaunch.tsx:153`
+- `t1l#21` low (user): A Bootstrap's count held to its most: no test fails without it `Lovejoin.tsx:3734`
+- `t1l#22` low (user): A private Bootstrap held where the balance holds too little of the pool's token: no test fails without it `Lovejoin.tsx:3736`
+- `t1l#23` low (user): Bring everything back leaving out a session that runs itself, or one holding nothing: no test fails without it `ClaimAll.tsx:43`
+
+*Coverage:* I tried all 63 guard entries in E8a (15), E8b (19), E9a (16) and E9b (13). Merging duplicates left 59 distinct guards: E9a and E9b share format.ts unlocked() and activity.ts csvCell, and E9a's format.ts:166 and :288 are E9b's :168-170 and :279-292 sites. These ran as 117 mutants: one per site or condition, plus Send privately's Max tried alone and combined with :105. Each ran its three stages unless caught earlier. Order: first the guards with no named test or only an e2e one, then those on a stranger's or a site's input, then the rest. Not done: (1) Playwright isn't run by this lens, so the 11 e2e-only pins are traced, not run. (2) Per-condition mutants of Start a pool's six checks: removing all six at once fails nothing, so none can be pinned alone. (3) No Rust guards fell in these lanes, so there was no cargo build and no WebAssembly limit to hit. Stage 3 covers every committed test t…
 
 ## X1a (3 findings, 16 guards)
 
