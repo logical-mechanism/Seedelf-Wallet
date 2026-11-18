@@ -1,0 +1,226 @@
+{
+ "findings": [
+  {
+   "id": "e2b#1",
+   "severity": "low",
+   "title": "A finished mix's account paid before it closes gets a second chain with the mix's own settings, or the mix is marked \"Not mixed\"",
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1309,
+   "scenario": "Setup: a mix session from the Lovejoin tile (a deposit mix, a Bootstrap, or Mix my boxes again) sends its whole chain, and the chain's return lands. Before the runner's next step closes the session (it closes only once the account reads empty), a stranger pays the one-time account. Its address is public from the funding, and the chain takes several blocks to send.\n(a) A small payment (2 ₳, or 1 ₳ of dust): the next step calls bringBack. chainSoFar counts the finished chain as not started, so buildBack tries Lovejoin again. collateralWanted returns true for any mix, and with no 5 ₳ UTxO at the account, buildBack writes mix.skipped = \"its 5 ₳ collateral isn't at its account anymore, and the mixes need it\". This happens before the return is even built, so dust that can't come back changes it too. The stranger's money comes back directly and the session closes. From then on the Lovejoin hub shows the user's finished mix, whose boxes did go in and were mixed, as \"Not mixed\" / \"Came back without going into Lovejoin\" / \"Lovejoin was left out: …\".\n(b) An exact 5 ₳ of ADA alone plus a few ₳ for fees, sent to a Mix my boxes again session: the runner builds a second Mix again chain (lovejoin.chain with again: true and the session's box count, the stranger's 5 ₳ as its collateral). That chain re-mixes the wallet's own boxes in the pool without the user asking, and their wait starts again. Nothing holds them from Lovejoin's withdraws meanwhile: mixingAgain is false once the first chain's return is sent. On a deposit mix the same payment is deposited as boxes, and on a Bootstrap it's held as Bootstrap boxes until brought back by hand.\nNo money is lost, and the stranger pays.",
+   "who": "stranger",
+   "since": "aaf2e068 (1.5.0's release review fixes: chainSoFar's `finished`), mix.skipped's write from 7db81171 (chunk 16); in every tag from web-wallet/1.6.0 to 1.9.1",
+   "evidence": "sessions.ts:1307-1311: `const finished = !!chain && sent.some((t) => t.txHash === chain.last || (!record?.mix && t.kind === \"back\" && t.confirmed && !t.replaced)); ... return { sent, started: !finished && went.some((t) => t.kind === \"deposit\" || t.kind === \"mix\") };`. A mix whose chain's last was sent is `finished`, so `started` is false. The comment above it (1295-1297) gives the very reason this is wrong for mixes: \"another chain would mix the wallet's boxes again, which nothing holds for it anymore (mixingAgain), so what reaches its account after comes back directly too\". The code applies that only to a mix stopped partway.\nact: 3794 closes only if `!returnable(s, listed).length`, so a stranger's UTxO keeps the session open. 3811: `if (s.mix) return go(() => this.bringBack(network, s.index, rows, !!s.auto?.stopping));`.\nbuildBack: 4534 `const { sent, started } = chainSoFar(record);`. 4616 `if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record)))`, and throughLovejoin is true for any mix (4898).\n(a) 4623-4625: no collateralFits row. 4629-4640: collateralWanted, where 4920 `if (s?.mix) return !depositOnly(s);` gives true, so `skipped = NO_COLLATERAL()`. 4686-4691: `if (skipped && record?.mix) await this.update(network, index, (r) => { r.mix!.skipped = skipped; });`. That runs before `build`, so the TOO_LITTLE path (4771-4776) keeps it too. ui/screens/Lovejoin.tsx:877 `if (s.stage === \"closed\") return s.mix?.skipped ? { tone: \"off\", label: t(\"lovejoin.tag.notMixed\") } : …done`, :889 `lovejoin.sub.skipped` (\"Came back without going into Lovejoin\"), :913 `lj.leftOut`.\n(b) 4654-4678: `lovejoin.chain(network, index, rows, collateral, params, merge, boxes, record?.mix?.again, own, record?.mix?.publicToo, …, record.mix.pool ?? CLASSIC, { ...wayOf(record), … })`. lovejoin.ts:3658 asks only for a collateral when `again`, 3691 skips takesNewBoxes for again, 3787 `const owned = free(split.owned, split.reserved)` takes the wallet's boxes. sessions.ts:1279-1288: mixingAgain is false once `s.txs.some((t) => t.kind === \"back\" && !t.unsent)`.\nOnly the stopped case is pinned: tests/return-chain-scope.test.ts:154 \"brings what reaches its account after back directly, never in another chain\", with `chain: { …, stopped: CHAIN_CUT() }`. No test has a finished chain.\nA verifier test in that file's style: a mix session with txs [out, deposit, back] all confirmed and `chain: { total: 3, last: <the back's hash>, at }` (not stopped), 40 ₳ plus a 5 ₳ UTxO at the account, then `advance(…, true)`. It submits a chain and the book's chain.last changes, where the stopped case sends one direct return. Again with only 2 ₳ at the account: the book's `mix.skipped` is set.",
+   "confidence": "traced",
+   "fix": "End a mix's Lovejoin once any chain of it went in, finished or stopped. In chainSoFar, make `started` true for a mix (`record.mix`) whenever its latest chain's deposit or a mix went, as for one stopped partway, so a later arrival comes back directly in a plain return and is never a second chain. Then extend return-chain-scope.test.ts's case to a finished chain. Write mix.skipped only for the mix's own return, before its chain went in, never from a later one. Same class: e2b#2, the other session-level outcome fields a later return overwrites (`received`, `lovejoinSkipped`).",
+   "needs_owner": true,
+   "owner_why": "It changes how money that reaches a finished mix's account comes back: directly, rather than in another chain through Lovejoin. That's a way-back choice the owner made for stopped mixes (independent review L17) but never for finished ones.",
+   "known_check": "Searched backlog.md and docs/archive/plans/*.md for \"reaches its account after\", \"paid again\", \"a mix's account\", \"second chain\", \"mix.skipped\" and \"Not mixed\", and read architecture.md's *Only a session's latest chain counts*. Found only independent review L17 (mixes stopped partway, tested), 1.6.0's 323-worker#8 (the resumed tail's `from` case) and chunk 16's \"a site's session paid again later goes through Lovejoin again\" (tests/lovejoin.test.ts:515, a site session). None covers a mix whose chain finished."
+  },
+  {
+   "id": "e2b#2",
+   "severity": "low",
+   "title": "A finished swap's \"Received\" shows only its last return, and a later return's skip reason replaces the main return's",
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 5522,
+   "scenario": "A swap's return brings back its proceeds (say 900 MIN and 3 ₳) through Lovejoin, and lands. Before the session closes, a second return goes. Three ways that happens:\n- A stranger pays the account, as in e2b#1. The runner's `kinds.has(\"back\")` path brings that back.\n- A funding part marked missed after 20 minutes (Koios didn't answer it) lands after Stop brought back what came.\n- After an order copy Koios took and never landed, Stop's first return takes only what that copy didn't spend, often the 5 ₳ collateral alone, and the rest comes back once its spent marks expire, about 2 h later.\nsendRecorded replaces `s.received` with each return's own figures as it records it. So once closed, the swap's page (Swaps.tsx:2394-2401, \"Received\") shows only the second return's amount, e.g. \"1.8 ₳\", never the 900 MIN. Where the second return comes back directly with a reason (a stranger's 2 ₳ gets noBox), sendBack writes `lovejoinSkipped`. The page then says \"Lovejoin was left out of its return: its spare ADA is too little for a box. So it comes back directly, tied to the session on chain.\", and the timeline's last step reads \"Directly: Lovejoin was left out\", though the swap's own return went through Lovejoin. The balance and the private history are right. Only the finished page's figure and its words are wrong.",
+   "who": "stranger",
+   "since": "d423b79a (chunk 23's usability fixes, DX-5) for `received`; `lovejoinSkipped`'s write on a direct return since chunk 16",
+   "evidence": "sessions.ts:5520-5522, sendRecorded's first update, before the submit: `if (kind === \"back\" && summary) s.received = { lovelace: summary.lovelace, tokens: summary.tokens };`. It's replaced at every return. SessionRecord's own comment (571-576) says it's the latest return's, \"so a finished swap can say what it got\". ui/screens/Swaps.tsx:2394-2401: `{s.stage === \"closed\" && s.received && (<Row label={tr(…\"swaps.rows.received\")} value={joinList([...s.received.tokens…, ada(s.received.lovelace)])} strong />)}`.\nSecond returns come from act. 3794: no close while `returnable(s, listed)` holds anything. 3836: `if (auto.stopping || kinds.has(\"back\")) return unlisted ? undefined : go(() => this.bringBack(network, s.index, rows));`. 3868: `!(kinds.has(\"back\") && (auto.filled || auto.refunded))`. 3904: bringBack again.\nlovejoinSkipped: sendBack 5076-5079 `after: (s) => { if (skipped && !s.mix) s.lovejoinSkipped = skipped; }`. sendChain 5194 deletes it only when a chain goes. Swaps.tsx:3073 `if (s.lovejoinSkipped) return t(\"swaps.step.directLeftOut\")`, and :2531/:2594 `<LovejoinSkipped reason={s.lovejoinSkipped} />` (en.json `lovejoin.warn.skippedIts`).\nA verifier test: in sessions.test.ts's harness, start a swap, fill it, and land its return. Before the next advance, push `atSession(\"c9\".repeat(32), 0, \"2000000\")` to addedToAccounts, then advance until the stage is \"closed\". `view.received` equals only the second return's figures.",
+   "confidence": "traced",
+   "fix": "Keep each return's at-once figures on its own RecordedTx, in a field that isn't deleted when its history is written (`summary` is). Show the sum over the returns that aren't unsent and weren't dropped as replaced. Keep a skip reason with the return it belongs to, and have the swap's timeline and callout read the reason of the return that carried the session's own money, never a later stranger's. Same class: e2b#1's `mix.skipped`.",
+   "needs_owner": false,
+   "owner_why": "A corrected figure and wording on a finished page: no refusal, privacy default or new choice.",
+   "known_check": "Searched backlog.md and docs/archive/plans/*.md for \"received\", \"Received\", \"DX-5\", \"lovejoinSkipped\", \"latest return\" and \"two returns\". DX-5 (chunk 23's second review) brought `received` in as the latest return's. Nothing considers a session with more than one return."
+  }
+ ],
+ "guards": [
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6571,
+   "stops": "withinFunding: an order swap Minswap built paying out (fee included) more ADA or tokens than the approval funded",
+   "test": "tests/sessions.test.ts \"pauses rather than sign a swap that pays out more than was funded for it\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6659,
+   "stops": "checkOrder: an order swap paying anyone but the session, its own cancellable orders under its stake part, and one fee no more than the approved aggregator fee",
+   "test": "tests/sessions.test.ts \"pauses rather than sign a swap that pays anyone but the session, an order made out to it, and Minswap's quoted fee\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6718,
+   "stops": "directSpends: a direct swap spending anything but Danogo pools and a collateral its owner already signed, putting up the session's own as collateral, or withdrawing anything non-zero",
+   "test": "tests/direct-swaps.test.ts \"pauses rather than sign one that spends anyone else's UTxO but a Danogo pool's\", \"...puts up the session's own UTxO as collateral...\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6771,
+   "stops": "checkDirect: a direct swap paying the pools' script anywhere but where a spent pool was, or a second fee",
+   "test": "tests/direct-swaps.test.ts \"pauses rather than sign one that pays the pools' script anywhere but where a spent pool was, or twice for one\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6807,
+   "stops": "checkProceeds: a direct swap giving the session less than the approved minimum",
+   "test": "tests/direct-swaps.test.ts \"pauses rather than sign one whose pool gives a lovelace under the minimum\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6826,
+   "stops": "withinNet: a direct swap's net outflow above the funding, its fees beyond the funded costs, or more of a token than funded",
+   "test": "tests/direct-swaps.test.ts \"pauses rather than sign one that takes more of the session's ADA than was funded, into a pool\", \"...sells more of the token than was funded\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6850,
+   "stops": "refuseOddities: a session transaction needing another key, staking or governance, a mint, an unknown input, or a treasury donation",
+   "test": "tests/sessions.test.ts \"pauses rather than sign a swap that gives ADA to the treasury, which no output shows\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4195,
+   "stops": "cancel: Stop's own cancel paying anything out, or a fee over MAX_CANCEL_FEE",
+   "test": "tests/sessions.test.ts \"cancels an order with the wallet's own cancel, everything back for a small fee, and pauses rather than sign one with a large fee\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4288,
+   "stops": "cancelsChecked: signing a swap whose order no wallet-built cancel can spend within MAX_CANCEL_FEE (money Stop couldn't bring back)",
+   "test": "tests/order-cancel-check.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4158,
+   "stops": "order: placing an order whose fresh quote is under the approved minimum (PriceMoved), and asking Minswap with only the slippage that keeps the approved minimum after a dip",
+   "test": "tests/sessions.test.ts \"pauses when the price moved past what was approved, and orders at least that when it's back within it\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4156,
+   "stops": "order: a swap approved against Danogo's pools placed as an order (before and after build-tx)",
+   "test": "tests/direct-swaps.test.ts \"pauses rather than place an order once Minswap routes it through one, before anything's built\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4477,
+   "stops": "signAndSend: submitting a signed swap or cancel whose hash differs from the one inspected (signature or witness changed the body)",
+   "test": "none found"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 3764,
+   "stops": "act: swapping or mixing a funding in parts that's short of a part; it pauses for the user, or, stopped, brings back what came",
+   "test": "tests/session-funding-parts.test.ts \"short of a part that never lands, swaps nothing and waits for the user, who brings back what came\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 3795,
+   "stops": "act: closing a session (nothing reads its account again) while Koios hasn't shown its own outputs spent, a replaced copy may land, or an order may still pay it",
+   "test": "tests/sessions.test.ts \"isn't over while Koios still lists what a step that never landed spent...\", \"brings the funding back when Stop comes while an order Koios didn't answer is unseen...\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 5150,
+   "stops": "refuseParts: a return (direct or chain) spending what a payment's waiting parts will spend, which would refuse those parts",
+   "test": "tests/parts-send-review-fixes.test.ts \"refuses, sending none of it, a return through Lovejoin reviewed before the payment's Send...\", \"refuses Bring it back's...\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 5181,
+   "stops": "sendChain: a reviewed chain whose inputs another wallet transaction spent since (it would stop after its deposit)",
+   "test": "tests/return-chain-scope.test.ts \"isn't sent when a transaction sent since its review spent what it spends, and nothing of it goes\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 5043,
+   "stops": "fundingChange: a return merging a funding change that a waiting part or another chain being sent will spend",
+   "test": "tests/parts-send-review-fixes.test.ts (the 1196 and 1293 cases)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6109,
+   "stops": "partsMayGo: a funding's waiting part going after Stop, a return built or on its way, a close, a failure, or the record gone",
+   "test": "tests/parts-send-review-fixes.test.ts \"asks a session's funding whether each waiting part may go, and stops the rest when it mustn't (mayGo)\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 5571,
+   "stops": "sendRecorded: a session transaction Koios didn't answer, or a resend refused as spent, being taken for never sent (its inputs stay counted spent, so no second copy builds on them)",
+   "test": "tests/session-resend-spent.test.ts \"stays maybe sent when the network refuses it as spent...\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1052,
+   "stops": "collateralFits: a chain putting up a stranger's 5 ₳ that carries a datum or a reference script as its collateral",
+   "test": "tests/lovejoin.test.ts \"never puts up a stranger's 5 ₳ carrying a reference script as the chain's collateral\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts",
+   "line": 448,
+   "stops": "step: a waiting part going without the session's leave (mayGo) or while another payment on the network may still go through (settleMaybeSent)",
+   "test": "tests/parts-send-review-fixes.test.ts \"waits for a payment that may still go through before it sends a waiting part, then sends it\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts",
+   "line": 220,
+   "stops": "splitParts/went: another build taking what the waiting parts spend (their reservation, shrunk as each goes)",
+   "test": "tests/parts-send-review-fixes.test.ts \"doesn't send a waiting part that spends what another chain of the wallet's reserved since\", \"frees what the waiting parts held when the first is turned away at Send\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts",
+   "line": 503,
+   "stops": "pumpParts: two pumps (alarm and Home's poll) sending one part twice",
+   "test": "tests/parts-send-review-fixes.test.ts \"runs one pump at a time: Home's poll while the alarm's run sends a part stops nothing\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts",
+   "line": 632,
+   "stops": "sendParts: Send pressed again on a maybe-sent first part re-sending parts the pump holds (they'd be paid twice by a new review)",
+   "test": "tests/parts-send-review-fixes.test.ts \"sends only the first again once the rest wait, and says how many went, never that the rest didn't\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts",
+   "line": 475,
+   "stops": "step: a part that went already (worker stopped mid-submit) being stopped as refused, or a refused one being counted as went",
+   "test": "tests/parts-send-review-fixes.test.ts \"counts a part a stopped worker sent, and the watch settled since, as went, and sends the rest\""
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/parts.ts",
+   "line": 441,
+   "stops": "step: waiting parts going for ever after a parent that never shows (stopped as unseen, their reservation freed)",
+   "test": "tests/payment-parts-chain.test.ts \"stops the rest when the part before never shows, and frees what they'd have spent\""
+  }
+ ],
+ "checked_ok": [
+  "parts.ts sends no part twice: Send sends only the parts before the first waiting one (goNow), the pump only from `sent` on, `sendingOn` keeps the pump off a payment Send is still sending, one pump runs per network, and a repeated send of a kept part goes as the same bytes (`sentCbor`).",
+  "parts.ts lostSend: after a worker stop mid-Send, `wentOf` counts the parts that went in order by sentBefore. All went: the rest wait as Send would have left them. Otherwise the rest are freed and the session is told (partsStopped).",
+  "parts.ts step: mayGo is asked before settleMaybeSent and before each send. A behind refusal from giveme.my or Koios waits GIVEME_BEHIND_MS from `seen`, MaybeSentWait waits, and any other failure stops the rest only if sentBefore is false.",
+  "partsStopped marks unsent only parts that never reached Koios: stopWaiting runs on a never-shown parent, a refusal, or mayGo false, and a refused part was taken back (undoAhead → forgetSent), so sentBefore is false for it.",
+  "Stop of a chained funding: stop() sets `stopping`, act waits while waiting parts are neither confirmed nor missed, the pump's mayGo then returns false and the parts are cancelled, act marks them missed and, being stopped, brings back what came without pausing. This matches flows.md.",
+  "A part sent and maybe sent, then late (20 min), is missed, but ownGone holds the close for REPLACED_WATCH_MS while awaitsLanding, so a late landing within 2 h comes back in a second return.",
+  "A funding part stays among the first `parts` entries of s.txs: settle() and act only remove REBUILT kinds or non-`out` gone copies, and pushes append, so fundingOf/afterFunding stay right.",
+  "Waiting parts across a lock: the sealed book keeps `waits`, stillWaiting reads none once the parts' record is wiped, and the parts go late, then missed, then short, as documented (the backlog's ❓ covers what Home says).",
+  "fundingChange excludes inputs reserved by parts or chains being sent, so the runner's own return never merges a waiting part's carry; refuseParts guards a return reviewed earlier.",
+  "partsMayGo and partsStopped run in the sessions queue, and nothing inside the queue awaits the parts pump or holds pending.ts's network turn while waiting on it: no deadlock. The queue can delay a pump by minutes (a chain's pump), not stop it.",
+  "act's swap-copy handling: an unseen copy is looked for by its orders (placed) and by its change in the listing before a rebuild. A rebuilt copy can't double up with the first: an order swap's inputs stay counted spent, so a rebuild either uses disjoint inputs or is refused (this pause is known and tested).",
+  "stopCost's `cancelled` = held + fund − aggregatorFee − SWAP_MARGIN − CANCEL_FEE_ESTIMATE is right for an ADA order on chain: it works out to change + order ADA − cancel fee, less the reserve set aside.",
+  "checkOrder, withinFunding, checkDirect, directSpends, withinNet, checkProceeds and refuseOddities together keep a runner-signed swap within the approval: the session's UTxOs (bar Danogo pools and a pre-signed foreign collateral), one key, payments only to the session, its own cancellable orders and one fee within the quote, no more out than funded, and at least the approved minimum against the pools.",
+  "cancel/cancelOf: Stop's cancel pays nothing but its fee (≤ 3 ₳), its collateral is a 5 ₳ ADA-only UTxO or the largest ADA-only one, and a stranger's token or datum UTxO never pays it.",
+  "remnantsFrom adopts a Splash remnant only when its creating transaction spent the session's recorded order or a remnant already adopted. A stranger's output with the session's datum is followed back and rejected.",
+  "sendRecorded: a resend of a copy given up clears `replaced` and restarts its clock (C32). A failed retry of a copy that may be on its way stays maybe sent, its inputs held.",
+  "pump's failure path marks chain.stopped, ends the chain record, drops the progress and releases the reservation, and hands a trap on before any record write.",
+  "listNow's found-session end waits LOST_AFTER_MS from the first quiet refresh when the record holds a swap (X01), and removes the record only with nothing left behind.",
+  "disconnect and forget refuse while a funding part may still land (stillWatched, awaitsLanding, spentStates), so a site session's record never goes while its money may arrive.",
+  "freshIndex asks only `next` at first, then INDEX_PROBE at a time. stillUnused moves `next` past an index used on chain before recording a funding.",
+  "The view's stage for a funding in parts: funded only when landed or short. A site session's missed parts count from `at`, minus the waiting set."
+ ],
+ "notes": [
+  "holdWaiting (parts.ts:341-369) remakes a waiting record a lock wiped (`cur` undefined → `w`), as its comment intends, but not the reservation. If a lock and an unlock both happen while Send's last go-now part is at Koios and Koios doesn't answer, the waiting parts go after the unlock, though parts.ts's header says a lock means the rest never go, and their inputs stay unreserved until the next part goes (went() reserves again). The harm is close to nil: settleMaybeSent refuses other private payments while that part is maybe sent. This is a new fact for the backlog's ❓ *Waiting parts across a lock*.",
+  "act's and listNow's close never ask the watch (stillWatched) the way disconnect and forget do. ownGone holds the close for REPLACED_WATCH_MS (2 h) from a funding part's `at`, but pending.ts keeps resending a maybe-sent part it finds `inMempool` for up to HELD_IN_MEMPOOL_MS (2.5 h). A part that lands in that gap pays a closed session's account, which Find leftovers skips (scanNow skips every index the book holds, closed ones too: chunk 27's call). This needs a private transaction sitting in a mempool for 2+ hours, so it's not reported.",
+  "sendParts pressed again on a maybe-sent first part, after the pump has sent every other part but before the watch settles the first: splitParts finds Send's copies gone and sends all again. The second part is refused as sent already, and the review gets worker.parts.partly (\"1 of N went…\") though all N went. Home's banner shows no line, since sent equals total. Wording only, and a narrow race.",
+  "Known and tested: sessions.test.ts:1008 expects an order copy Koios took and never landed to make the rebuilt swap pause, refused as spending what isn't the session's, until its spent marks expire (up to 2 h). New fact: Stop pressed during that pause brings back only what the copy didn't spend, often the 5 ₳ collateral alone, unmixed for want of ADA. The rest comes back about 2 h later in a second, direct return (NO_COLLATERAL), which also triggers e2b#2's figure.",
+  "The parts pump runs its records in one sequential loop, and a session funding's mayGo waits in the sessions queue, which a chain's pump and sendStep retries can hold for minutes. So a plain Send's waiting parts later in the same pump run wait behind it. The comment at parts.ts MayGo and sessions.ts:6100-6101 says a step that holds the queue never holds a Send's parts. That's true of mayGo itself, not of the loop. It only delays them.",
+  "spareOf (sessions.ts:6400) counts ADA-only UTxOs with a datum as spare, and subtracts 5 ₳ for any exactly-5 ₳ one, datum or not, while collateralFits rejects those. With a stranger's datum UTxO at the account, Stop's dialog boxes and collateralWanted's reason can differ from the chain's own count. Only the reason text and the dialog are affected."
+ ],
+ "coverage": "Read in full: extension/src/background/parts.ts (1-663) and sessions.ts lines 3450-6872: stopCost, resume, runAll, settleReturns, markCut, step, act, noteOrderOpen, waits, ordersSpent, placed, ordersOpen, liveOrders, remnantsFrom, order, cancel, cancelOf, cancelsChecked, referenceRows, bringBack, inspect, review, signAndSend, buildBack, the tail and reserve helpers, collateralWanted, nothingBack, leaveBehind, leftBy, fundingChange, sendBack, noteLanded, refuseParts, sendChain, pump, sendStep, witnessTail, the pending-chain helpers, sendRecorded, submit, listNow, view, the readers, fundingRecords, sendFunding, partsStopped, partsMayGo, returning, stillWaiting, outRecord, accounts, freshIndex, stillUnused, book/save/update, atStake, clearMixes, serial, and every free function after the class.\nFollowed calls into E2a's half, read: sessions.ts 1-1480 (types and helpers: fundingState, short, chainSoFar, settle, ownGone, lost and so on), 2128-2155 (siteOutSubmit), 2200-2451 (againBuild, mixFunding, mixOutSubmit, topUpBuild, topUpSubmit), 2520-2720 (disconnect, stillWatched, siteSigned, fundingSeen, siteFunding), 2709-3010 (the restore scan), 3026-3127 (markUnsent, buildFunding), 3135-3427 (outSubmit, swapBuild, orders, cancelBuild, txSubmit, backBuild, claim, stop).\nOther code read in full or in the parts that matter: script-spend.ts (send, keep/keepParts, laterParts, refuseSpentSince, refuseReserved, readContract, whole); pending.ts (writeAhead, submitWatched, undoAhead, stillMaybeSent, settleNow, sentBefore, settleMaybeSent, nameParts); spent.ts; feed.ts chainStatus; runs.ts; handlers.ts pending-tx; sw.ts wiring; and the parts of wallet.ts that lock and use withKeys.\nSkimmed: lovejoin.ts pumpChain, chain(), fanOut's start and chainEnded; minswap.ts builtOutputs and its CBOR readers; contract-scan.ts readContractView; ui/screens/Lovejoin.tsx tagOf/subOf/detailOf; Swaps.tsx's Received row and backStepText; LovejoinReturn.tsx's skip notes; the tests named in guards, plus sessions.test.ts 884-1060, return-chain-scope.test.ts 100-200, lovejoin.test.ts 505-560 and parts-send-review-fixes.test.ts 1023-1130.\nNot reached: lovejoin.ts beyond those functions (E1's), and the WebAssembly builders (buildWithdrawParts, buildSessionReturn, buildOrderCancel, inspectSessionTx), which I took as their documented contracts.\nRan nothing but reads and git log/blame/show. Built nothing, ran no test."
+}

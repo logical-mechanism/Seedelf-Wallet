@@ -1,0 +1,173 @@
+# Lane E3a
+
+Returned by the workflow's agent `a0f85e56b552e2677`, written here by the lead from its structured answer.
+
+## Findings (4)
+
+### e3a#1 · medium · A site on the dApp account can probe another public account's Lovejoin chain: the 'public' reservation isn't per account
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:1912`
+- **Who:** site · **Since:** 955f44ad (2026-10-02, the one chosen dApp account, which can differ from the account that mixes); before web-wallet/1.6.0 · **Confidence:** traced
+
+**Scenario:**
+
+Account 1 (index 0) is the dApp account, which is Settings' default, and site S is connected to the public side. The user works on Account 2 (index 1) and sends a mix from the public account through Lovejoin. The mix is built from the active account but reserved under the single owner 'public'. While its chain is being sent, S calls signTx with a minimal transaction (0x84, a body holding key 0, then three filler items) whose inputs list candidate outpoints. These can be Account 2's 5 ₳ collateral, if S suspects that address, or every box in the pool plus every output of each new mix (about 1,700 fit in one 64 KiB call). heldForLovejoin runs first, before any lookup, any window or any per-minute count. It refuses with 'This transaction uses a UTxO (<first>) that a Lovejoin chain still holds…', or '<n> UTxOs (<first> and <n-1> more)'. A stranger's UTxO instead hears 'Nothing in this transaction is the public account's to sign.' From this S learns three things: this wallet is mixing now; exactly which pool boxes and chain outputs the chain holds; and, by following those transactions on chain back to the chain's first one (or straight from Account 2's collateral), that Account 2 belongs to the same wallet as Account 1. privacy.md:334 promises the opposite: 'Nor about the wallet's other accounts: a signature is checked only against its own account's Lovejoin chain … Anything else … gets the stranger's answer.'
+
+**Evidence:**
+
+dapp.ts:2150 `await this.heldForLovejoin(network, holder, inputs, collateral);` runs right after bodyOutpoints, before readInTurn/readTx, so nothing is counted (PER_MINUTE is only touched in readTx and resolve). dapp.ts:1896-1907: heldForLovejoin throws siteError(TxSignError.ProofGeneration, dapp.usesChainHeld) naming `first` and `count`. dapp.ts:1910-1913 chainHeld: `reservedSet(session, network, { sending: true, only: chainOwner(holder?.index) })`, and for a public-side site holder is undefined. lovejoin.ts:1931 `chainOwner = (index) => (index === undefined ? "public" : ...)`. lovejoin.ts:1936 says 'Its reservation stays chainOwner()'s: one mix from the public side at a time, whichever account pays.' lovejoin.ts:4862 builds the mix with readAccount(this.deps, network), the active account, and lovejoin.ts:4902 sets `account: keys.account`. At Send, lovejoin.ts:5214 records `account: built.account ?? 0` on the chain record, but lovejoin.ts:5223 reserves `this.reserve(network, chainOwner(), built.chain, undefined, true)`. spent.ts:200-218 reservationOf takes every input and collateral of every transaction in the chain: the account's UTxOs, the pool boxes it draws, and its own intermediate outputs. dapp.ts:1278-1280: the dApp account is preferences.dappAccount, not the active account. handlers.ts:379 refuses an account switch while a public chain sends, but Settings' dApp account is a separate choice, so mixing from an account other than the dApp account is ordinary use. en.json:335 (usesChainHeld) and :313 (nothingToSign) are different words. The approval path repeats the check (dapp.ts:2184). tests/dapp.test.ts:1375-1407 pins session vs. public only, with the dApp account and the mixing account the same (account 0). Nothing was run.
+
+**Fix:**
+
+Limit the public side's check to the dApp account's own chain. Either record the paying account on a chainOwner() reservation (lovejoin.ts reserve and holdOnly already have built.account) or read it from the chain's record. Then chainHeld(network, holder, account) returns nothing for 'public' when that account isn't the site's: use dappAccount() at signTx's first look, and view.account at approval. getCollateral's chainHolds goes through the same helper. Add a test next to dapp.test.ts:1375, using dapp-accounts.test.ts's two-account setup: put a 'public' reservation holding an outpoint of Account 2's mix, and check that a site on Account 1 hears the stranger's words. Same family: every reader that assumes one public account behind 'public' (for example lovejoin.ts accountOf maps 'public' to account 0).
+
+**Known check:**
+
+Searched backlog.md and archive/plans/ for heldForLovejoin, usesChainHeld, chainHeld, chainOwner, oracle, and 'dapp account' together with lovejoin/mix/reserv/chain. The only hits are privacy-review.md §2.1, which fixed cross-holder probes when there was one public account and chose 'Check only the holder's own reservation', and chunk-18, which keeps reservations across accounts. Neither covers a dApp account apart from the mixing account. The review-51 lanes so far (W2's duplicate-key note only) don't have it either.
+
+### e3a#3 · medium · signData shows a site's message with direction overrides and invisible characters raw, so it can read differently from the bytes signed
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2896`
+- **Who:** site · **Since:** fe8b7748 (2026-09-24, chunk 15) · **Confidence:** traced
+
+**Scenario:**
+
+A connected site calls signData with its account's address and the hex of the UTF-8 text 'Pay ‮0001‬ ADA for order 77', with U+202E before 0001 and U+202C after it. readableText lets it through, because it refuses only C0 controls other than tab, LF and CR, plus DEL. So the approval's `text` keeps those characters. The window then shows it under 'The message:' in a <pre>, without the hex. Inside that element the override reverses the run, so the window reads 'Pay 1000 ADA for order 77' while the signature covers bytes that say 0001. The same trick works on any nonce, ID or amount, and zero-width characters make two different messages look identical. For a site given governance, the DRep key signs such messages too. A CIP-8 signature moves nothing in the wallet itself. The harm falls on whoever relies on a message the user read wrongly, so 'signs something other than what it shows' holds for messages only.
+
+**Evidence:**
+
+dapp.ts:2891-2900 readableText: `return /[U+0000-U+0008 U+000B U+000C U+000E-U+001F U+007F]/.test(text) ? undefined : text`. Bidi overrides and isolates (U+202A-U+202E, U+2066-U+2069), U+200B-U+200F, U+2028/2029, U+FEFF, the soft hyphen, variation selectors and C1 controls all pass. dapp.ts:2526-2535 puts this text in the sign-data approval. DappApprovals.tsx:1366-1371 renders `{text ?? payload}` in `<pre className="dapp-message">`. styles.css:3703-3716: `.dapp-message { unicode-bidi: isolate }` only keeps the text from reordering what surrounds it, not what is inside. The project applies this rule elsewhere: wasm decode.rs:858-905 shown()/hidden() ('A right-to-left override turns "drowssap" into "password" on the screen … made visible rather than dropped'); governance.ts:117-129 shownText ('each can make a line read as something it isn't'); dapp.ts:465-472 siteTitle (U+202E reversed the origin, the release review); chunk-17-transaction-view.md item 3. tests/dapp.test.ts:919-943 checks plain text and hex only. Suggested test (r51-e3a-3): `const signing = t.dapp.call(s, "signData", [wasm.cip30Address(OWN), hex("Pay U+202E0001U+202C ADA")]); await until(() => t.dapp.approvals().length === 1); expect(t.dapp.approvals()[0].text ?? "").not.toMatch(/[U+202A-U+202E U+2066-U+2069]/)`. It fails today.
+
+**Fix:**
+
+Show the message the way the transaction view shows chain text: write every character in decode.rs's hidden() set (Cf, Default_Ignorable_Code_Point, C0 and C1 controls, U+2028/2029) as a visible escape such as `\u{202E}`, keeping the text the same length as the bytes say. Alternatively, fall back to hex whenever one is present. ui/tokens.ts's HIDDEN regex is the browser's copy of that set. Same family: siteTitle strips, shownText strips, decode.rs shown escapes; readableText is the one copy that does neither.
+
+**Known check:**
+
+Searched backlog.md and archive/plans/ for 202e, bidi, 'direction char', invisible, readableText, signData, sign-data and CIP-8. Hits: chunk-17's item 3 (the transaction view's escaping), review-1.7.1's signData last look, independent-review M15 (signData's address cap), launch-review ('CIP-8 verifies'). None is about how the message's text is shown.
+
+### e3a#2 · low · The connector takes the first 5 ₳ without tokens as a session's collateral: a stranger's 5 ₳ with a datum hides a spend of the real one
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2777`
+- **Who:** stranger · **Since:** b134a737 (private CIP-30); independent review L20's fix 10f19f40 changed sessions.ts' copy only · **Confidence:** traced
+
+**Scenario:**
+
+A stranger (or the site itself, which knows the address) sends exactly 5 ₳ with no tokens but with an inline datum, a datum hash or a reference script to a site session's one-time account. Koios lists it before the funding's own 5 ₳; that ordering is independent review L20's own case, 'A stranger's deep-datum 5 ₳ listed first'. sessionCollateral then takes the stranger's UTxO as the session's collateral. Three things follow. getCollateral offers the stranger's UTxO. getUtxos and getBalance offer the funding's real 5 ₳ as spendable. A site transaction that spends that 5 ₳ as an ordinary input gets no 'It spends this session's collateral, leaving none for the site's contracts.' line, because collateralSpent is checked against the stranger's UTxO. Once signed, the session's return finds no collateral its mixes can put up, since sessions.ts refuses one with a datum or a script. So the return comes back directly, unmixed and tied to the session, and says why only at that point rather than at signing. No money is lost.
+
+**Evidence:**
+
+dapp.ts:2776-2779: `utxos.find((p) => BigInt(p.utxo.value) === SESSION_COLLATERAL && !p.utxo.asset_list?.length)`. It checks no datum, no reference script, and doesn't prefer the funding's own. dapp.ts:1673-1675 available() uses it for spendable. dapp.ts:1845-1848 keptApart (holder) computes collateralSpent from it. dapp.ts:1719-1731 getCollateral offers it. By contrast, sessions.ts:1052-1054 collateralFits requires `!u.reference_script && !u.inline_datum && !u.datum_hash`, and sessions.ts:4617-4625 picks for the return 'Its own collateral, the one its funding paid, else any 5 ₳ of ADA alone … Never a stranger's 5 ₳ carrying a reference script or a datum' (`rows.find((u) => collateralFits(u) && u.tx_hash === funding) ?? rows.find(collateralFits)`). privacy.md:458 promises a stranger's 5 ₳ with a datum 'can't stand in and make it skip'. The en.json:510 warning (dappUi.warn.collateralSpent) is the line that goes missing.
+
+**Fix:**
+
+Use one rule for a session's collateral. Export sessions.ts's choice (the funding's own 5 ₳ first, else collateralFits) and use it in dapp.ts sessionCollateral, so that available, getCollateral and keptApart agree with the return. Test: a session account with a 5 ₳ + inline-datum row listed before the funding's 5 ₳. getUtxos must leave the funding's 5 ₳ out, a signTx spending it must be collateralSpent, and getCollateral must give the funding's.
+
+**Known check:**
+
+backlog.md has no collateral line about the connector's pick. independent-review L20 and M9, and privacy-review §2.15 (the return's pick) fixed sessions.ts only. Grepped sessionCollateral and getCollateral across archive/plans/: nothing further.
+
+### e3a#4 · nit · manifest.ts names the extension with a ternary whose two branches are the same
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/manifest.ts:59`
+- **Who:** nobody · **Since:** 6b599c4c (chore: finalize store name) · **Confidence:** traced
+
+**Scenario:**
+
+`name: mainnetEnabled ? "Seedelf Wallet" : "Seedelf Wallet"`: since the store name was finalized, both builds get the same name, so the condition does nothing.
+
+**Evidence:**
+
+manifest.ts:59; git log -L 59,59 shows af1bacea then 6b599c4c.
+
+**Fix:**
+
+`name: "Seedelf Wallet"`.
+
+**Known check:**
+
+Dead code; nothing to search beyond the line's history.
+
+## Guards (20)
+
+| Where | What it stops | Test |
+|---|---|---|
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:1838` | On the public account, keptApart refuses a site's transaction that spends a UTxO the user locked, puts one up as collateral, or spends the collateral as an input. On a session it flags a spend of the collateral in the prompt. | tests/dapp.test.ts:640 'won't sign a site's transaction that uses a UTxO the user locked, or spends the collateral'; tests/dapp-account-coins.test.ts:61; tests/dapp.test.ts:1347 (session flag) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:1896` | heldForLovejoin refuses a site's transaction that spends, or puts up as collateral, what the holder's Lovejoin chain being sent needs, which would otherwise stop the chain partway. | tests/dapp.test.ts:671, :1363, :1375; tests/dapp-declined.test.ts:188 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:1725` | getCollateral offers no collateral while the holder's chain holds it, so a site can't make the network take it by flipping isValid. | tests/dapp-chain-collateral.test.ts:37 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:1729` | getCollateral returns nothing for an amount over 5 ₳ or over the collateral UTxO. | tests/dapp.test.ts:266-267 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2087` | Refuses a transaction the wallet can't sign completely unless partialSign is true. | tests/dapp.test.ts:449-520 (partial cases) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2093` | Refuses registering or delegating a session's stake key, whose deposit or rewards the return would leave behind for good. | tests/dapp.test.ts:1483 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2099` | Refuses a transaction that pays into a known Lovejoin pool's mix_logic reward account. | tests/dapp-lovejoin-rewards.test.ts:208 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2183` | At approval it checks again: still connected to the same holder, the connector still on, no chain or lock started meanwhile, and the same dApp account. | tests/dapp-declined.test.ts:159, :173, :188; tests/dapp-account-change.test.ts:341, :367 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2163` | A signature read for a dApp account or network that Settings has since left is refused and never shown (the last look before ask, both checks in one turn). | tests/dapp-account-change.test.ts:252, :276 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:1311` | withViewKeys signs only with the keys of the account the request was read for, so a dApp-account change landing mid-approval can't move the signing keys. | tests/dapp-account-change.test.ts:367 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:663` | answer() rejects an approval asked on a network or dApp account that has since changed, before the password; the waiting entry is checked again after it. | tests/dapp-account-change.test.ts:177, :189 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2569` | submitTx: a site resending during a send gets the first send's answer, and one the wallet keeps as sent hears its id rather than Failure, so the site doesn't rebuild and pay twice (M3/F12). | tests/dapp-maybe-sent.test.ts:134, :184; tests/dapp-resend-refused.test.ts:106 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2588` | A maybe-sent submit is answered with its id, kept as sent, its inputs kept as spent, and looked for or sent again, rather than reported as failed. | tests/dapp-maybe-sent.test.ts:81 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2776` | Keeps a session's 5 ₳ collateral out of what a site may spend (weaker than sessions.ts' rule: e3a#2). | tests/dapp.test.ts:1293 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:1935` | sentOutputs answers a site only with the wallet's recent outputs that pay its own holder; every other output goes the stranger's way (privacy review §2.2). | tests/dapp.test.ts:1409 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2874` | Refuses unread: a transaction over 64 KiB, an amount over 8 KiB (:1738), an address over 512 chars (:2492), and a payload over 64 KiB (:2493). This stops WebAssembly running out of memory under a site's call. | tests/dapp-caps.test.ts:57, :98 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/sw.ts:364` | The site's origin comes from Chrome (sender.origin), top frames only, https or localhost only; a page can't name itself or connect from an iframe. | none found |
+| `seedelf-platform/seedelf-web-wallet/extension/src/content/bridge.ts:56` | After a worker restart only read calls are asked again. A signature fails with 'nothing was signed', and a submit says it may have gone through, so the site doesn't send twice blindly. | tests/dapp-maybe-sent.test.ts:210 (cutOff words); tests/dapp-reach.test.ts:127 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts:2061` | The DRep key signs only for a site given governance on the public account (`governance && !holder`); a session never gets it. | tests/dapp-governance.test.ts |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/tx-view.ts:344` | A kept record naming another network isn't shown in the transaction view (cborOf's `here`). | not checked (tests/tx-view.test.ts exists) |
+
+## Checked and holds
+
+- The site's origin is Chrome's word (sw.ts:363-369: sender.id, a tab, frameId 0, https or localhost). The bridge relays only messages whose event.source is its own window and whose origin is the page's (bridge.ts:90). Content scripts run in top frames only (connector.ts:46). A cross-origin iframe can neither reach the bridge nor read its replies.
+- Other extensions can't reach the connector: the manifest has no externally_connectable, the worker registers no onConnectExternal or onMessageExternal, and both dappSession and serveUi check sender.id (serveUi also checks the extension URL).
+- manifest.ts has no web_accessible_resources. The approval window can't be framed by a site (no clickjacking), the extension can't be found by probing resources, and page.ts inlines its icon.
+- The CSP holds: script-src self plus wasm-unsafe-eval, object-src none, connect-src limited to the wallet's services. There are no innerHTML or dangerouslySetInnerHTML sinks in src/. #387's manifest change is the summary text alone, at 110, 124 and 83 characters against the 132 cap (tests/manifest.test.ts:110-112).
+- Every CIP-30 argument is checked before use. A tx must be hex and size-capped; amounts are capped and read by WebAssembly; a non-integer, NaN or negative number throws in JS, and the resulting RangeError isn't counted as a trap because isTrap needs a WebAssembly frame. paginate needs integers (page ≥ 0, limit ≥ 1). partialSign must be exactly true. Address and payload are type- and size-checked, and the method is whitelisted in both bridge and worker.
+- cover() returns null at the first wanted token the account doesn't hold, so a site's long amount costs little. paginate's maxSize error has CIP-30's shape.
+- The approval queue: ids are random UUIDs. answer() checks the connector, network and dApp account again before the password, and the waiting entry after it, so two approvals at once sign once. The caps hold: 20 in all, 5 per site, 32 running calls per site, and a site's unlock-time enable() calls count once.
+- A page that goes away: gone() settles its waiting and unlocking requests. Calls still on their way stop at ask, unlocked and funded via gonePages. Running-call slots are freed in call()'s finally.
+- Network change: networkChanged declines what was asked on the left network (a sent funding is kept). A signature still being read is refused by sameNetwork in the same turn as sameAccount. The checks in answer() and the waiting-index check after the password cover a switch while the password is checked.
+- dApp account change: waiting public signatures are declined with AccountChange. The approval re-checks via stillConnected and sameAccount. withViewKeys keeps the signing keys those of the account the request was read for. Switching the active account changes nothing for sites.
+- CIP-95: governance goes only to the public account and only when the user turns the switch on (connect) or presses Allow (connected site). A decline is kept and the site stays connected. A session never gets getPubDRepKey, the stake keys or the DRep key.
+- Private sessions: each call resolves its holder. Reads and signing use the session's 0/i and 2/i keys only. A site whose session changed is refused at approval. A session's stake key can be unregistered but never registered or delegated.
+- Parse differences between cbor.ts and Pallas (indefinite-length inputs, or duplicate body keys as in W2's note) can't bypass keptApart or heldForLovejoin into a signature. Anything the TS parse misses isn't in `rows`, so WebAssembly lists it as unknown and refuses whenever a payment or DRep key signs (cip30.rs:1792-1801), collateral included (:1293).
+- submitTx: sends are deduped by network, origin and id. A site's own unsigned transaction is kept for that origin's chaining alone, and sentFor answers only that site or a wallet-signed transaction. Koios's 429 is not maybe-sent, so nothing is kept for it.
+- The content scripts are IIFEs that import only shared/dapp.ts (no chrome or i18n at load). page.ts leaves only window.cardano.seedelf in the page, non-writable. Anything a page can do through page.ts it could already do by posting to the bridge itself.
+- Every error a site hears is in English (siteError's words('en'); sw.ts falls back to SITE_TRAPPED).
+- tx-view.ts makes no network request and writes nothing. For a site it returns only a waiting sign-tx's own bytes, by the hash in its summary. markYours never blocks the view. A kept record of another network isn't shown.
+
+## Notes
+
+- For the owner, settled with a new fact (privacy review §2.1 kept the check on the holder's own chain): the refusal names and counts any outpoint in the holder's own reservation. That reservation holds every input of the pre-signed chain: other people's pool boxes it will draw, and each of its own intermediate outputs (spent.ts reservationOf). Mix my boxes again also reserves the account's own boxes already in the pool. The probe is free and unlimited, since it runs before any per-minute count. So a site on a session whose return goes through Lovejoin (the default), or a site on the account while its own public mix or Mix again is being sent, can test each new mix's outputs as they land. That lets it follow the box step by step to the chain's last mix, or learn which pool boxes are the account's. privacy.md:334 says the check exists but not what it tells that site, and 'At best a box is one of the fan-out's 3^depth leaves' doesn't hold against it. A narrower guard would refuse by name only the holder's own key-locked UTxOs and its collateral, which the site knew of anyway. Pool boxes and the chain's own outputs could take the stranger's path, since the holder's keys can't spend them.
+- dapp.ts:682: the funding path in answer() doesn't re-check that the connect is still waiting after the password check, unlike the path at :684-685. If the window closes, the page goes away, the network switches or the connector is turned off during the check, fundPrivate still sends the funding and records the site as connected to the session. It does so even with the connector off, because connect() doesn't look at it. The user had pressed Send and the money stays on the dApps page, so this is low.
+- KEEP_SIGNED (32) is one list per network for every public-side site, and site-submitted transactions go into it too (keepSent). 32 further submits within the 2 h hold, from any connected site, push a maybe-sent transaction's record out. After that, its resend refused as spent while tx_status doesn't know it yet is heard as Failure, the M3/F12 case. This needs a maybe-sent, 32 more submits (at least 3.2 min at 10 a minute), and the first transaction still only in a mempool, so it is probably unreachable.
+- Plausible, Chrome not checked: readAmount accepts a bigint, but Chrome serializes runtime port messages without BigInt support, so bridge.ts's port.postMessage likely throws for one. The site would then hear 'Seedelf Wallet was updated or reloaded', which is the wrong reason; the bigint branch at dapp.ts:1736 may be dead.
+- refusedUntil is kept per origin across both networks, but declined() lists a refusal only on the network it was made on. A site declined on preprod is refused on mainnet for up to 5 min, and the mainnet lists don't show it or offer Let it ask now. This is UX only.
+- dapp-window.ts close() removes the whole window of any TAB context whose URL has view=dapp. The worker only ever opens it as a popup; a user who pastes that URL into a tab of their main window would have that window closed by dapp-close. No site or stranger can reach this.
+
+## Coverage
+
+Read in full: src/background/dapp.ts (2949 lines), dapp-window.ts, tx-view.ts, src/content/bridge.ts and page.ts, src/shared/dapp.ts, src/manifest.ts, plus #387's diff to it.
+
+Followed out of them, reading the relevant parts:
+- sw.ts 330-470 (the dApp port, dappSession, the window/storage/permission listeners).
+- handlers.ts 330-470 (preferences-set, account-use, network-set, tx-detail, the dapp-* messages).
+- connector.ts, all of it; ui-port.ts 1-60.
+- spent.ts: remember/forget, reservedSet, reservationOf.
+- cbor.ts: head, skip, bodyField, outpoints, certificateKinds, txId.
+- koios.ts: the error classes and submitTx; data-layer.ts submitTx.
+- lovejoin.ts: chainOwner/publicOwner/accountOf, reserve, unreserve, release, holdOnly, publicReady, the public mix and Mix again builds, Send's reservation.
+- sessions.ts: collateralFits, plainAda, accountUtxos, the return's collateral pick.
+- account.ts readAccountUtxos; wasm.ts isTrap; governance.ts shownText; networks.ts' origin helpers.
+- wasm decode.rs shown/hidden; cip30.rs 1175-1300 and 1760-1830 (unknown inputs and collateral).
+- DappApprovals.tsx: Site, SignData, the governance screen; styles.css .dapp-message.
+- privacy.md: Connecting a site, private swaps, a site's session, Lovejoin's opening.
+- privacy-review §2.1, §2.2, §2.11, §2.15; independent-review's Not fixed; backlog.md, searched.
+- dApp tests: test names, dapp.test.ts 905-1010 and 1293-1410, dapp-accounts.test.ts' setup.
+
+Not reached:
+- coin-control.ts (account, choices).
+- sessions.ts' siteOutBuild, siteOutSubmit, siteFunding, fundingSeen, siteSigned and siteAccount, beyond their calls.
+- WebAssembly's inspect/sign bindings in full (W2, W1b).
+- ties() and markYours checked only by reading, not traced against each address shape (left to X1 and E3b).
+- The dApp UI screens beyond the parts named (E3b).
+- Chrome's own behaviour: port serialization, getContexts timing, prerender frame ids.
+
+Nothing was built or run.

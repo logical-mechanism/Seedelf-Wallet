@@ -1,0 +1,218 @@
+{
+ "findings": [
+  {
+   "id": "e7a#1",
+   "severity": "medium",
+   "title": "A token picked while the swap's review builds is named on the approval, beside the other token's quote, and Start swap runs the swap that was built",
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/ui/screens/Swaps.tsx",
+   "line": 926,
+   "scenario": "The user sets You pay to 100 ₳ and You receive to MIN. The quote comes back as about 906.5941 MIN, and they press Review swap. The button reads Building… while session-out-build runs, which takes several seconds: an index probe, the parameters, pool reads and the funding's build. While it runs, the user opens You receive (or presses the round Switch) and picks another token, X. Nothing stops them: the token buttons and the Switch stay live while busy. The build then finishes, and the approval shows the MIN build's figures under X's name, logo and decimals: 'You receive ≈ 906.5941 X' (or '≈ 906594100 X' if X has 0 decimals), 'Asks for at least … X', and 'The wallet relies on Minswap for the minimum of … X'. The funding rows are MIN's and correct, so nothing on the approval looks wrong. The user presses Start swap. The funding sent is the MIN build, recorded with swap ADA→MIN, and the runner places an ADA→MIN order. The user approved X and gets MIN. Undoing it costs a second swap: about 2 ₳ of DEX fee, about 0.75 ₳ of network fees, Minswap's fee and Lovejoin's. If they notice on the swap's page before the order goes out, Stop costs the funding's and the return's fees, plus Lovejoin's mixes where it comes back through Lovejoin. With the Switch, the approval reads 'You pay 100 MIN' over a funding of ADA.",
+   "who": "user",
+   "since": "e43cec9a (2026-09-24, chunk 15, before 1.0.0): every web-wallet release",
+   "evidence": "Swaps.tsx:806-826, buildOut: `if (!current || !quoted || !get) return false; let quote = current; … const { lovejoin, ...summary } = await call(\"session-out-build\", { quote, display: { in: pay.side, out: get.side }, … }); … setOut({ summary, quote, lovejoin });`. The picks the build was made for go into `display`, but `out` doesn't keep them.\nSwaps.tsx:896 and 924-927: `if (out && get) { … <SwapApproval {...out} pay={pay} get={get} …/>`. The approval takes the form's live `pay` and `get` state.\nSwaps.tsx:1044 and 1083: `<TokenButton … onClick={() => setPicking(\"pay\")} />` and the same for \"get\". TokenButton (622-648) renders a button with no `disabled`.\nSwaps.tsx:1058-1062: the Switch has `disabled={!get}` only.\nSwaps.tsx:787-796: `choose` calls setGet or setPay with no busy check. Only Review (975) and Back (966) are disabled while busy.\nSwapApproval formats the built quote with the live picks: 1326 `amountOf(quote.amountIn, pay)`, 1331 `≈ {amountOf(quote.amountOut, get)}`, 1335 `least: amountOf(quote.minAmountOut, get)`, 1352 (the minimum callout), 1366 `fundText(…, pay.side, …)`, 1389 SwapCosts' 'Comes back' with `get`.\nWorker side: sessions.ts:1969 `const swap = { ...ask, amountOut: quote.amountOut, minAmountOut: quote.minAmountOut, ...(display ? { display } : {}) }` is kept with the funding. outSubmit (3164) records `swap: built.swap`, and order() (4140) builds `checkAsk(s.swap)`, the built pair.\nTrace: review() → buildOut awaits → the user's choose() runs setGet(X) → a new ask starts a new quote, which is never used by `out` → setOut(old quote) → the render passes get = X → Start swap's send() sends out.summary.txHash, the MIN build (886) → the session runs ADA→MIN.\nTests: grep found none that changes a pick while the review builds. The seam harness in tests/screens-wiring-review-fixes.test.ts (`seed`, `answer`) can render NewSwap with `out` holding an ADA→MIN quote and `get` seeded to another token; the approval names that token. A verifier's Vitest would show it.",
+   "confidence": "traced",
+   "fix": "Keep the picks with the build, and render the approval from them. For example, `setOut({ summary, quote, lovejoin, pay: payAtCall, get: getAtCall })`, with SwapApproval, FundParts and SwapCosts taking `out.pay`/`out.get`, which is also the `display` the worker records. Or drop a build whose pair no longer matches the form after the await (compare `quote.ask` and the picks with the current ones). Either way, also consider disabling the cards, the Switch, Max/Half and the slippage chip while `busy`. The class: a review that awaits a build and then renders live form state beside its result. Look for the same shape in the other review screens: CardanoSend, Transfer and Withdraw (E8b/E9a), Lovejoin's mix form (E8a), and a site session's funding (E3b).",
+   "needs_owner": false,
+   "owner_why": "Only if the fix disables the form's controls while building (what the screen offers during a build); rendering from the build's own picks changes nothing the screen offers.",
+   "known_check": "Searched docs/backlog.md and docs/archive/plans/*.md for 'buildOut', 'while it builds', 'Building', 'picks', 'token changed', 'flip', 'SwapApproval', and the review-1.6.0, 1.9.0 and 1.9.1 records (320-screens#3 is about Building vs Sending only). Nothing found."
+  },
+  {
+   "id": "e7a#2",
+   "severity": "low",
+   "title": "Stop's dialog says the swap comes back directly, less the return's fee, until its cost is read or when the read fails, and Stop then brings it back through Lovejoin as approved",
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/ui/screens/Swaps.tsx",
+   "line": 2451,
+   "scenario": "A swap approved to come back through Lovejoin is running: an ADA→token swap, say, before its order. The user opens Stop. The dialog asks session-stop-cost, which reads Lovejoin's 5 ₳ pool, its room and whether it takes the collateral. If that read fails (Koios's 429, the data layer down), the page maps the failure to `null`, the value that means 'comes back directly anyway'. The dialog then shows no Lovejoin switch. It reads 'If no order has gone out yet, none will, and everything comes back to your private balance, less the return's network fee.', and its button reads 'Stop the swap'. Pressing it sends session-stop without `direct`, so auto.direct stays false and the return is built through Lovejoin. The funding's ADA goes into boxes, with their mix fees (about 0.95 ₳ a box at the usual depth, more boxes the bigger the swap) and 0.3 ₳ a box to bring back, and returns over 1 to 6 hours a box. The dialog said one fee and an immediate return, and offered no way to choose direct. The same words and button show while the read is still in flight (`cost === undefined`, with 'Working out what goes through Lovejoin…' under them), so a quick press does the same. The approval's ifStopped line had disclosed the Lovejoin way back at Start swap.",
+   "who": "user",
+   "since": "b972461c (2026-09-27, the null on a failed read); the direct-fee wording since 9d712251 (2026-10-02)",
+   "evidence": "Swaps.tsx:2450-2451: `// … without it, Stop says only what it always did.` `call(\"session-stop-cost\", { index: s.index }).then(setStopCost, () => setStopCost(null));`. StopDialog's doc (2829-2830) gives null as 'null when it comes back directly anyway'.\nSwaps.tsx:2857: `const mixes = !!cost && !cost.skipped && cost.boxes > 0;` is false for null and for undefined, so no switch (2887), the label is 'swaps.stop.confirm' (2882), and the press is `onStop(mixes && !through)`, which is onStop(false) (2881).\nSwaps.tsx:2865-2870: `mix = through || !mixes ? cost?.collateralMix : undefined` is undefined, so mixedBack and mayMixBack are false and 2925-2937 picks 'swaps.stop.notPlacedDirect' (or 'cancelledDirect' once an order is out). en.json: 'swaps.stop.notPlacedDirect' => \"…everything comes back to your private balance, less the return's network fee.\"\nWorker side: sessions.ts:3409-3417, stop(direct=false), sets `stopping` and touches auto.direct only `if (direct)`. sessions.ts:4897-4900, throughLovejoin(s), returns `!s.auto.direct`, which is true for a swap approved through Lovejoin (outSubmit 3155). sessions.ts:3451-3453: stopCost returns null only when it would come back directly. Any read under priced() / collateralPoolTakes rejects instead, and the page turns that into the same null.\nTests: screens.test.ts:557-596 and swap-page.test.ts:101-125 test null only as 'Directly: as it always said'. None test a swap approved through Lovejoin whose cost read failed.",
+   "confidence": "traced",
+   "fix": "Tell a failed read apart from 'directly'. For example, `.then(setStopCost, () => setStopCost(\"failed\"))`, and in that state say the swap comes back as approved (through Lovejoin) with the approval's switch, or say the cost couldn't be read. Never the direct wording or 'less the return's network fee'. Do the same while `cost === undefined`: either the same hedged words, or the button labelled for the approved way. Keep Stop itself enabled, since it must always work. The class: Stop's dialog decides its words from a forecast, and the stop follows the approval. Compare backlog r2-worker#4 (the Plan's 'directly' with no 5 ₳ pool known, kept by the owner as a forecast). This case is no forecast: a missing read, shown as the direct choice, with the switch hidden.",
+   "needs_owner": true,
+   "owner_why": "Showing the approval's switch on a failed read, or holding Stop's direct words, changes what the dialog offers; the owner's rule is a visible control for turning the private default down.",
+   "known_check": "Searched docs/backlog.md and docs/archive/plans/*.md for 'stop.working', 'Working out what goes through', 'stopCost', 'session-stop-cost', 'cost === undefined', 'setStopCost'. Read backlog r2-worker#4 (a related forecast, settled for the Plan) and the 1.6.0 L1, LW-1 and fx-promise lines on Stop's words. None cover a failed or pending read."
+  },
+  {
+   "id": "e7a#3",
+   "severity": "low",
+   "title": "A swap funded in parts pauses as 'it spends something that isn't this session's' when Minswap's build spends a part Koios doesn't list yet",
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4377,
+   "scenario": "A swap is funded in two parts, as happens when the private balance holds the token or ADA in more UTxOs than one transaction spends. Both parts are confirmed by the funding's feed or tx_status. The runner then lists the account (credential_utxos), and a backend behind the chain lists only part 1's outputs. That's Koios's gateway on preprod, or mainnet with the data layer down. `active` isn't empty, so order() asks Minswap's build-tx, which picks the sender's UTxOs from its own, newer view and spends part 2's output too. inspect() counts every input missing from `rows` as someone else's (`others`), so the order swap is read as a swap against pools. directSpends then refuses part 2's input as a key UTxO that isn't Danogo's pool. The swap pauses ('Needs you') with 'The wallet won't sign what Minswap built: it spends something that isn't this session's.' That's false: the input is the session's own funding. Nothing is lost. Try again works once the listing catches up, and the same happens to Review it myself in the meantime.",
+   "who": "user",
+   "since": "78869714 (2026-10-06, chunk 24, which made `others.length > 0` mean a direct swap); reachable through a funding in parts since 1.6.0",
+   "evidence": "sessions.ts:4372-4377: `const own = new Map(rows.map((r) => [outpoint(r), r])); const others = refs.filter((r) => !own.has(r)); … const direct = kind === \"swap\" && others.length > 0;`.\nsessions.ts:6742-6743, directSpends: `if (at.spends.includes(ref)) { if (!script || payment !== pool) throw new Refused(t(\"sess.refuse.warn.spendsOther\")); …`. An input at the session's own key address isn't a script, so it's refused. One utxo_info doesn't know is refused at 6727.\nsessions.ts:3759 waits only for every recorded tx to be confirmed; 3770 `const { listed, rows } = await this.listing(network, keyHash)`; 3804 `if (!active.length) return;`; 3837 `return go(() => this.order(network, s, address, rows))`. Nothing waits for every funding part's outputs to be listed. stopCost's comment (3473-3475) names this very state: 'the reading doesn't list every part of it yet: Koios behind the chain'.\nsessions.ts:3665-3667: a Refused becomes `auto.paused = { why: \"refused\" }`.\nminswap.ts:8-9: build-tx 'picks the sender's UTxOs from its own view of the chain'.\nOn mainnet, data-layer.ts:244-247 serves credentialUtxos from the data layer first, which makes the lag rarer there.\nDesign kept apart from this: tests/sessions.test.ts:1008-1021 pins a pause when a rebuilt copy spends an input the wallet still counts spent (final review sessions-2). That pause guards against a second order. This one guards nothing.",
+   "confidence": "plausible",
+   "fix": "Count an input of Minswap's swap as the session's own when utxo_info shows it at the session's own payment-key address and the wallet doesn't count it spent. Only inputs at other addresses should make a swap 'direct'. Keep the sessions-2 pause for counted-spent inputs. Optionally, the runner could also wait, before ordering, until every funding part's outputs are listed: fundingState(s, rows) gives 'landed' with all of them `there`. Test: a sessions test with a two-part funding, both confirmed, the account fake listing only part 1, and Minswap's fake build spending both. Today it pauses; it should place the order.",
+   "needs_owner": false,
+   "known_check": "Searched docs/backlog.md, docs/archive/plans/*.md and architecture.md for 'spendsOther', 'spends something that isn't', 'others.length > 0', 'not listed yet', 'listing lacks', 'read as a direct'. chunk-15b's line 23 is the Danogo case, where the refusal was right. tests/sessions.test.ts:1008 is the counted-spent case, by design."
+  },
+  {
+   "id": "e7a#4",
+   "severity": "nit",
+   "title": "A swap held by its wait after an unlock says it's asking Minswap now",
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/ui/screens/Swaps.tsx",
+   "line": 3288,
+   "scenario": "The wallet unlocks with a funded swap that hasn't placed its order. The runner draws a wait of 2 to 20 minutes (privacy review §3.1) and sends nothing until then. Throughout, the swap's page shows a spinner on 'Placing the order' and the line 'Asking Minswap for a fresh quote, then placing the order.' The view carries `waitsUntil`, and the Lovejoin page words the same state as 'it goes on within 20 minutes of the unlock'. The swap page never reads it.",
+   "who": "user",
+   "since": "unknown",
+   "evidence": "sessions.ts:3945-3956, waits(), holds a step found after an unlock until `unlockWait`. sessions.ts:6526: `...(auto.unlockWait !== undefined ? { waitsUntil: auto.unlockWait } : {})`. Swaps.tsx:3284-3288: nowLine's 'ordering' returns 'swaps.now.quoting' ('Asking Minswap for a fresh quote, then placing the order.'). grep finds waitsUntil read only in ui/screens/Lovejoin.tsx:900.",
+   "confidence": "traced",
+   "fix": "While `auto.waitsUntil > now`, have nowLine (and subOf) say the swap goes on within N minutes of the unlock, as Lovejoin.tsx's 'lovejoin.sub.waiting' does. The words are new and need translating.",
+   "needs_owner": false,
+   "known_check": "Searched docs/backlog.md and docs/archive/plans/*.md for 'waitsUntil', 'within 20 minutes of the unlock', 'unlock wait', 'unlock's wait'. Only Lovejoin's and the independent review's L10 to L12 (the wait itself) turned up."
+  }
+ ],
+ "guards": [
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6659,
+   "stops": "checkOrder: Minswap's swap paying anything but the session's own address; an order at a DEX script orders.json pins that is cancelled by the session's own key (or its own stake key) and pays exactly the session (under its staking part, none, or Minswap's fixed V3 part at V3's script); and at most one ADA-only output no larger than the approved Minswap fee. Refuses the session's key under another staking part, other contracts, and unreadable or unspendable orders.",
+   "test": "tests/sessions.test.ts, tests/order-cancel-check.test.ts, tests/sundae-orders.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6571,
+   "stops": "withinFunding: the runner's order swap paying out more ADA (fee included) or more tokens than approved.fund. The token boxes' ADA and the collateral's reserve are outside it, so protected.",
+   "test": "tests/sessions.test.ts, tests/direct-swaps.test.ts (by the words 'more ADA than was funded')"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4261,
+   "stops": "cancelsChecked: signing a swap whose order's own cancel can't be built, is refused by the order's script, or would cost more than 3 ₳ (so Stop always brings the money back)",
+   "test": "tests/order-cancel-check.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6850,
+   "stops": "refuseOddities: other signers, unknown inputs, certificates, withdrawals, votes, proposals, mints, a treasury donation, and a cancel not signed by exactly 0/i (+ the stake key for V3/V4)",
+   "test": "tests/sessions.test.ts, tests/direct-swaps.test.ts, tests/order-cancel-check.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6718,
+   "stops": "directSpends: a Danogo swap spending anything but Danogo's pool script and a collateral its owner already signed, putting up the session's own collateral, or withdrawing non-zero or from another script",
+   "test": "tests/direct-swaps.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6771,
+   "stops": "checkDirect: a Danogo swap paying anything but the session, each spent pool recreated once at its own address, and one ADA-only fee within the approved Minswap fee",
+   "test": "tests/direct-swaps.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6807,
+   "stops": "checkProceeds: a Danogo swap giving less than the order step's minimum (at least the approved one), with the network fee counted back only up to 3 ₳",
+   "test": "tests/direct-swaps.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6826,
+   "stops": "withinNet: a Danogo swap's net spend beyond the approved funding, fees beyond the funded costs, or more of a token leaving than funded",
+   "test": "tests/direct-swaps.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 863,
+   "stops": "quotesTheAsk (applied in routeOf at 902): an estimate for another amount or pair, which would have the user approve one amount's minimum and pay another",
+   "test": "tests/swap-quote-ask.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1603,
+   "stops": "quote(), and the same checks at order() 4145-4152 and swapBuild() 3202-3209: a route through a DEX off MAINNET_PROTOCOLS, or one the session's check can't follow (multi-leg, Danogo beside another), refused before funding, paused at the order, refused in Review it myself",
+   "test": "tests/swap-routes.test.ts, tests/sundae-orders.test.ts, tests/direct-swaps.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/minswap.ts",
+   "line": 342,
+   "stops": "excludedProtocols: routing (estimate and build-tx) through any DEX Minswap offers on mainnet that isn't on MAINNET_PROTOCOLS (7 names excluded), and Djed's minting on both networks",
+   "test": "tests/swap-routes.test.ts, tests/sessions.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4158,
+   "stops": "PriceMoved: placing an order when the fresh quote expects less than the approved minimum (pauses for the user)",
+   "test": "tests/swap-runner.test.ts, tests/swap-page-words.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4163,
+   "stops": "After a dip within the slippage, the order is asked with slippageKeeping's slippage and the approved minimum, so Minswap's own minimum never goes under the approved one (bound checked: amountOut/(1+s) ≥ least+1)",
+   "test": "tests/swap-runner.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4156,
+   "stops": "A swap approved against Danogo's pools being placed as an order whose minimum the approval didn't warn of (and again on what build-tx built, 4172)",
+   "test": "tests/direct-swaps.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 4195,
+   "stops": "Stop's cancel paying anyone but the session, or a cancel fee over 3 ₳ (MAX_CANCEL_FEE)",
+   "test": "tests/sessions.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 831,
+   "stops": "checkAsk: a malformed amount or token ID, the same token on both sides, and slippage outside 0.1–20%",
+   "test": "tests/sessions.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1919,
+   "stops": "outBuild refuses to fund a swap into a token that's neither ADA, on the wallet's list, nor verified by Minswap by its exact ID (verified() at 1899; the quote says so too)",
+   "test": "tests/sessions.test.ts:258"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/ui/swap.ts",
+   "line": 180,
+   "stops": "adaShort, which with Swaps.tsx:755-761 `ready` keeps Review off when the private balance can't pay the funding and the 5 ₳ collateral; tooMuch and unverified do the same",
+   "test": "tests/swap-form.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/ui/swap.ts",
+   "line": 131,
+   "stops": "maxAdaIn: Max leaving out the costs, the collateral, any quoted reserve and 2 ₳ (FEE_ROOM) for the funding's fee and change, so Max's amount funds",
+   "test": "tests/swap-form.test.ts, tests/collateral-reserve-review-fixes.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/minswap.ts",
+   "line": 508,
+   "stops": "builtOutputs: a transaction it can't read (not four items, no outputs, a non-tag-24 inline datum, a non-bytes address) throws before any check passes, so it's never signed",
+   "test": "tests/order-cancel-check.test.ts, tests/sessions.test.ts"
+  }
+ ],
+ "checked_ok": [
+  "checkOrder refuses an output paying the session's payment key under any other staking part or address shape before any order is read (sessions.ts:6676), and orders.rs Session::owns compares the whole Plutus address, payment and stake, against the session's, for every receiver the datum names.",
+  "An output at an order script with no datum, or whose datum hash the witness set doesn't carry, is never read as an order. Only the single ADA-only, at-most-the-approved-fee exception can pass it, which bounds the amount.",
+  "The runner bounds Minswap's fee output by the approved aggregator fee, not the fresh quote's (sessions.ts:4169). withinFunding counts approved.fund only, so the token boxes' ADA (auto.lovejoin.fund) and the collateral's reserve can't be paid out by a build.",
+  "slippageKeeping's slippage keeps amountOut/(1+s%) at or above least+1 (worked through). The asked minimum recorded with the copy (minAmountOut) is what the timeline shows (L24).",
+  "Danogo: outOfPlace keeps Danogo alone in a route. checkProceeds uses the runner's min, at least the approved one. withinNet uses approved.fund even when Review it myself builds it.",
+  "routeOf: when the second ask fails as name-refused or no-route, the first answer stands, and quote, order and Review it myself then each refuse its unchecked or out-of-place DEXes in the wallet's words. Other failures throw and retry.",
+  "excludedProtocols('mainnet') is 7 names (OpenDjedV1, VyFinance, MuesliSwap, SplashStable, SundaeSwapStable, CswapV1, WingRidersStableV1), as architecture.md says. Every order DEX on MAINNET_PROTOCOLS has a mainnet orders.json entry: Spectrum's orders sit at Splash's script, and Danogo places none.",
+  "builtOutputs hashes witness datums over their original bytes, reads map and legacy outputs, inline and by-hash datums, and scriptRef as the ledger lays them out, and handles tagged sets and indefinite arrays. Malformed CBOR throws; it's never misread.",
+  "SwapApproval's money figures add up. leaving = Σpayments + fee. back = leaving − ADA swapped − cost + ADA proceeds. forSwap strips the token boxes' fund and the collateral's reserve, so FundParts' room is the 2 ₳ margin. With a funding in parts, payments[0] is the summed swap part (script-spend.ts whole) and payments[1] the collateral.",
+  "maxAdaIn and followMax: Max is rounded down to whole ₳, follows the quote's costs down and never up or to nothing. adaShort leaves the collateral's reserve out on purpose, since orWithoutReserve funds without it.",
+  "The approval's Lovejoin switch: each rebuild passes `through`, setThrough follows the build, Send passes direct = !through whenever there's a SwapLovejoin, and outSubmit records auto.direct from it. The return goes the way the approval showed it (throughLovejoin reads auto.direct).",
+  "With its cost read, Stop's dialog sends what it shows: onStop(mixes && !through). stop() sets auto.direct only on an explicit direct.",
+  "stoppable and stopReading hide Stop once a swap against pools went out, an order filled or was refunded, or Stop is under way. A pool swap given up (replaced) leaves the view, and Stop comes back. lateStopOf names an order or a pool swap that went before Stop took effect.",
+  "Review it myself refuses while a sent copy may still land (swapBuild's sent, landed and placed checks). It's held to checkOrder, cancelsChecked and refuseOddities at its own quote's fee and minimum, which it shows (the funding limit is left out, as documented). sendRecorded clears the pause after any successful step send.",
+  "The runner's cancel refuses one paying anyone but the session, or one over 3 ₳. A by-hand cancel's review shows where it pays (documented). Cancels take collateral and fees from ADA-only UTxOs at the account only.",
+  "The token picker matches the wallet's own list and held tokens on the device first. Minswap is asked only when nothing matches, or on Search Minswap. The worker re-checks verification by exact ID at the quote and at Review.",
+  "Max and Half reach Minswap rounded down to whole units (wholeUnits). The quote's privacy callout and the review's 'relies on Minswap for the minimum' warning are shown for every order route.",
+  "Every request to Minswap goes with credentials omitted, no referrer and no-store (SERVICE_FETCH), with a 20 s timeout. A 429 and an outage are retries, never pauses."
+ ],
+ "notes": [
+  "The minimum's trust (Minswap writes it and the wallet doesn't read it back) and V4's cap (backlog L9) are settled. Nothing new found on either.",
+  "Words, for the owner: the pause that tests/sessions.test.ts:1008 pins by design (a copy built again spends an input still counted spent, final review sessions-2) says 'it spends something that isn't this session's', which is false there too. The input is the session's own, held back to avoid a second order. e7a#3 is the same words from a cause with no safety purpose.",
+  "Review it myself's review (SessionTxReviewScreen, Swaps.tsx:2674-2685) gives 'Into the order: X ₳ and N tokens', a count with no quantity. In that path there is no withinFunding, so the review is the user's only look at how much of a token leaves. An honest Minswap puts exactly the ask in. Showing the quantity (tokenAmountText) would close it. A nit for E9/E8 if it's wanted.",
+  "Can't check offline: Minswap's build-tx picks the account's UTxOs itself. If its coin selection spends the session's 5 ₳ collateral UTxO in the order, the return finds no exact-5 ₳ coin and leaves Lovejoin out. It says so (privacy review §2.15, NO_COLLATERAL), but against the approval's 'through Lovejoin'. Worth reading a few real mainnet order transactions' inputs. If it happens, the default private return is lost on those swaps.",
+  "Also offline-only: whether Minswap's API accepts the 4-decimal slippage that slippageKeeping produces (e.g. 0.0137) and slippage 0 when the quote is barely above the approved minimum. If it refuses, the dipped case retries until the price moves. That isn't a pause, and Stop works.",
+  "A token found through Minswap's search is shown with Minswap's decimals (SwapTokenInfo.decimals, null as 0). The approval and the session's page use them (the recorded display), while other views show an unlisted token in the wallet's own decimals. That's consistent within the swap, but the same token reads differently on Home. Display only.",
+  "Theoretical, and bounded: builtOutputs (TS) decides where the swap pays, and WebAssembly's decode decides what's paid out (withinFunding) and the transaction id. A CBOR shape the two read differently, such as duplicate body keys, would need a dishonest Minswap, and withinFunding would still bound it. That's inside the trust architecture.md already states ('could take up to the funded swap amount either way')."
+ ],
+ "coverage": "Read in full, every line: background/minswap.ts (630), ui/swap.ts (270), ui/screens/Swaps.tsx (3450).\n\nFollowed out of them into background/sessions.ts:\n- 180-1100: constants, AutoRecord, Refused/PriceMoved, checkAsk, slippageKeeping, quotesTheAsk, routeOf, quoteOf, tailUnpaid/keepsReserve, collateralFits, plainAda, fundingOf/fundingState.\n- 1480-2025: tokens, quote, lovejoinCost, tokenPool/tokenAt read for the values the approval shows, priced skimmed, verified, outBuild.\n- 3105-3300: outSubmit, swapBuild, orders, cancelBuild, txSubmit.\n- 3390-3540: advance, stop, stopCost, resume.\n- 3636-4135: step, act, waits, ordersSpent, placed, liveOrders.\n- 4135-4495: order, cancel, cancelOf, cancelsChecked, referenceRows, inspect, review, signAndSend.\n- Also: 4897 throughLovejoin, 5490-5600 sendRecorded, 5825-5920 view, 5936-5960 listing, 6420-6872 autoView, outcomeOf, withinFunding, dexOrderAt, checkOrder, directSpends, checkDirect, checkProceeds, withinNet, refuseOddities.\n\nOther code: seedelf-core/src/orders.rs 260-620 (Session::owns, read, read_order, unspendable), orders.json's protocol list, background/handlers.ts 455-520, background/cbor.ts skip/head, background/script-spend.ts whole(), background/koios.ts measurable and SERVICE_FETCH, sw.ts's Minswap construction, shared/rpc.ts SwapQuote.\n\nDocs and tests: architecture.md 649-675, flows.md 466-482, backlog's Swaps section, review-1.9.0's open lists, privacy review §2.15. The Stop dialog tests (screens.test.ts, swap-page.test.ts), the rebuild tests in sessions.test.ts (860-1060), and the seam harness in screens-wiring-review-fixes.test.ts.\n\nSkimmed: lovejoinCost's and priced's internals (E1's and E2's), the en.json strings the screens use.\n\nNot reached: WebAssembly's readDexOrder, checkOrderCancels, buildOrderCancel and inspectSessionTx (W1b and R3b), lovejoin.ts pricing and funding (E1a/E1b), ui/components/LovejoinReturn.tsx (E8a), and core's check_cancels and cancel_orders bodies (R3b).\n\nNothing was run: reads, grep and git log/blame only."
+}

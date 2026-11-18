@@ -1,0 +1,187 @@
+{
+ "findings": [],
+ "guards": [
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1331,
+   "stops": "refuseStarted: a second Send of a funding that started a session (the record holds it, or it was sent and its record has gone since), and a review whose index another funding took meanwhile (stale, built again on the next unused account), so one index never funds two sessions on this device",
+   "test": "tests/session-index-taken.test.ts, tests/sessions-refused.test.ts, tests/dapp.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6228,
+   "stops": "stillUnused, called at 2140, 2323 and 3151 just before a new session is recorded: funding a one-time account that another browser or a restored wallet used since Review (stake key or payment key on chain); moves next past it",
+   "test": "tests/session-index.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 6201,
+   "stops": "freshIndex, called at 1920, 2032 and 2242: handing out an index the chain shows used (next alone, then 20 at a time only once next is used)",
+   "test": "tests/session-index.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 2536,
+   "stops": "disconnect while the session's return through Lovejoin is still being sent: the record would go while the chain still pays the account",
+   "test": "none found (no test asserts sess.chainSendingDisconnect)"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 2545,
+   "stops": "disconnect while a funding, top-up or return may still land (recent, or still in pending.ts's watch or its sealed copy)",
+   "test": "tests/session-top-up-again.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 2560,
+   "stops": "disconnect while the account still holds anything a return takes (read as Koios lists it, what the wallet spent included, so a return that never lands keeps its inputs counted)",
+   "test": "tests/session-close.test.ts, tests/site-funding-seen.test.ts, tests/dapp.test.ts:1603"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 2567,
+   "stops": "disconnect on an empty read Koios doesn't back up: what fundings, top-ups and the site's signed transactions paid the account must show spent (ownGone, line 996), or a funding Koios doesn't know waits out REPLACED_WATCH_MS",
+   "test": "tests/session-close.test.ts, tests/site-funding-seen.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1551,
+   "stops": "Forget of a session that isn't failed, of one whose funding the watch may still send (1555), and of one Koios knows an unspent output of (1563: settled and resumed instead)",
+   "test": "tests/sessions.test.ts, tests/session-close.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 2404,
+   "stops": "topUpSubmit: a second top-up for one sent already, a stale or too-old review, and for a session brought back by hand a 5 ₳ while a cancel or another 5 ₳ is on its way (2414-2417)",
+   "test": "tests/restore-scan.test.ts, tests/session-top-up-again.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 2450,
+   "stops": "cancelCollateralBuild: 5 ₳ into an account for a cancel when it isn't by hand, a cancel is on its way, no order waits, the account already holds a usable collateral, 5 ₳ is coming, or the order's script refuses the cancel (dry run on a stand-in, 2461)",
+   "test": "tests/restore-scan.test.ts, tests/swap-page.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 2478,
+   "stops": "backCollateralBuild: 5 ₳ for Lovejoin's collateral while an order waits, one is there or coming, or the return wouldn't go through Lovejoin anyway",
+   "test": "tests/restore-scan.test.ts, tests/lovejoin-found-later.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1052,
+   "stops": "collateralFits: a stranger's 5 ₳ carrying a datum, a reference script or tokens taken as the chain's collateral (the evaluator refuses it, which would stop the chain)",
+   "test": "tests/session-collateral.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1114,
+   "stops": "fundingState: a funding in parts counted funded before every part landed (swap or mix run, site handed the account), or a part waiting for the one before counted missed",
+   "test": "tests/site-funding-seen.test.ts, tests/parts-send-review-fixes.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 3330,
+   "stops": "claimBuildNow: Bring everything back building a return for a session that runs itself, or for one whose order is still open (3332)",
+   "test": "tests/sessions.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 3277,
+   "stops": "backBuildNow: a return while an order of the session's swap is open (money arriving after it would need another return)",
+   "test": "tests/restore-scan.test.ts, tests/sessions.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 3183,
+   "stops": "swapBuild: a second swap beside one sent, or one given up that may have landed (tx_status, its order known to Koios, or its change listed)",
+   "test": "tests/swap-runner.test.ts, tests/pool-swap-landing.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1603,
+   "stops": "quote: a route through a DEX the wallet can't check or where the session's check can't follow it, before anything is funded",
+   "test": "tests/swap-routes.test.ts, tests/direct-swaps.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 863,
+   "stops": "quotesTheAsk (applied in routeOf, 902): approving the minimum of an estimate for another amount or other tokens",
+   "test": "tests/swap-quote-ask.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 1919,
+   "stops": "outBuild: funding a swap into a token that isn't verified (a look-alike held in the private balance)",
+   "test": "tests/sessions.test.ts:258"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 2322,
+   "stops": "mixOutSubmit: a second Mix my boxes again while one may still spend the same boxes (also againBuild, 2208)",
+   "test": "tests/lovejoin.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 2818,
+   "stops": "scanNow: writing 'nothing found' from a server behind the one that showed an account used (also recoveredRecords 2890 and 2946); the pin at 2787 keeps a scan from writing into another phrase's book",
+   "test": "tests/restore-scan.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 2950,
+   "stops": "recoveredRecords: a stranger's payment, even from their own Seedelf UTxOs, counted as the found session's own (its tokens' deposit paid from the session's ADA)",
+   "test": "tests/restore-scan.test.ts"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "line": 3030,
+   "stops": "markUnsent: a funding or top-up Koios didn't answer, or cut off by a lock, marked never sent (which would let its index or another top-up be taken for one that may land)",
+   "test": "none found by name"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/collateral.ts",
+   "line": 82,
+   "stops": "giveme.my's outage or limit (5xx, 429) said as a refusal of the user's money, and a new review forced where waiting fixes it",
+   "test": "none found by name"
+  },
+  {
+   "file": "seedelf-platform/seedelf-web-wallet/extension/src/background/runs.ts",
+   "line": 58,
+   "stops": "a WebAssembly trap under the alarm's run left the wallet unlocked on a broken instance, retrying every minute",
+   "test": "none found by name"
+  }
+ ],
+ "checked_ok": [
+  "Index allocation within one device holds: every write of the book goes through serial(); refuseStarted only lets a review through when its index is at or past next, and save sets next to built.index + 1, so next never moves back and no two records share an index (scan sets next past every used index; Forget and Disconnect keep next).",
+  "Two profiles of one phrase: freshIndex starts at the local next but asks the chain, then stillUnused asks again at Send, so a profile whose book is behind skips what the other used. Only near-simultaneous fundings can share an account, which keys-and-accounts.md documents.",
+  "A reset (Remove wallet, then restore): SessionService.reset clears the scan, restoring, seen and readAt; the new book starts at 0 and freshIndex/stillUnused skip every index used on chain. scanNow pins the phrase by one-time key 0, so a scan cut off by Remove wallet writes nothing into the next phrase's book.",
+  "Seven kept reviews share three or four session-storage keys (SESSION_OUT, _SITE_OUT, _MIX_OUT, _TOP_UP, ...). A review another window overwrote is caught at Send by its txHash (stale, never sent), and the same is true of the parts under partKey.",
+  "Funding in parts: fundingRecords writes a record for every part before any is sent, and checks each kept part's hash and network. A later part that fails, or is maybe sent ahead of the rest, marks the rest unsent, so the funding reads short. Funding parts stay at the front of txs, because act and settle remove only replaced copies of swaps, cancels and returns, never an out.",
+  "Stop: the orders are cancelled, then everything comes back. A funding found never funded whose parts partly landed has failed lifted, then is brought back. Parts that wait are refused by partsMayGo once the session is stopping, failed, returning or gone. A stopped mix comes back directly. Stop refuses a closed session.",
+  "Top-ups: topUpBuild reads accountUtxos (less what was spent or is reserved), adds a fresh 5 ₳ only when no exact 5 ₳ ADA-only UTxO without datum or script is there, and always goes as one transaction. topUpSubmit re-checks sentIn, the review's age and a session brought back by hand, records the top-up before send(), and a closed or forgotten session refuses it (live).",
+  "Disconnect, followed for a stranger's UTxO at a site session's account: it blocks Disconnect only until a return either takes it, if it pays its own way, or leaves it behind for cost. After that the session closes with leftBehind (origin kept, as privacy review 3.12/L19 settle), so a stranger can't block Disconnect for good without paying again each time.",
+  "The connector's single-part funding: fundingState counts it landed once anything is at the account. Nobody else knows a fresh one-time address before its funding, so a stranger can't pre-seed it. A multi-part funding is matched by each part's own tx hash, which no stranger can forge.",
+  "Site signed outputs: siteSigned records outputs by payment key hash only (key-payment headers 0-7, even). Unknown ones count as gone at Disconnect, since the site may never send them; known, unspent and unlisted ones hold Disconnect until Koios catches up.",
+  "The restore scan's records: account_txs comes newest first (order=block_height.desc), so .at(-1) and slice(0,-1) agree on the funding. Own transactions are those that spent from the account. A payment counts as the session's only when its first contract input carries this phrase's register. Script or Byron inputs don't throw (cred null), and order candidates come only from the key's own transactions.",
+  "Pool-launcher check: tokenAt divides by a token pool's quantity, but core's datum decoder refuses token_quantity 0 (pool.rs:200), so a hostile pool can't make every quote into its token throw.",
+  "quoteOf, slippageKeeping, quotesTheAsk and checkAsk hold: the funding is the amount plus the DEX fee, deposits, aggregator fee and 2 ₳ margin. slippageKeeping stays strictly under the bound, and its least of 0 is unreachable (dipped needs min_amount_out < least).",
+  "buildFunding's review figures: whole() sums each part's first payment and the first part's collateral is added back, so the review shows the parts added up. The kept first part keeps its own figures for the history, and the later parts keep theirs.",
+  "BigInt throughout the figures (holdingOf, spare, funding sums): no wrap. Number() conversions are capped by Math.min against small constants.",
+  "claimSubmit and backSubmit: sendRecorded records a return before submit and refuses a record that's gone. A chain's sendChain refuses what was spent since or is reserved for parts. claimBuild never puts two sessions' UTxOs in one transaction.",
+  "runs.ts: one network's non-trap failure never stops another's. A trap locks and stops the alarm. A relock mid-run turns the rest into the unlock's run, which sends nothing. ctx.parts?.pump(...).catch(...) short-circuits whole when parts is absent.",
+  "collateral.ts: a timeout or a network failure is a CollateralError (unreachable), 5xx and 429 are busy, other non-OK answers are refused with giveme.my's detail, and a non-JSON 200 is refused. Nothing is submitted to Koios before giveme.my answers, so marking such a failure unsent is right.",
+  "connector.ts: the scripts are registered only when the switch is on and Chrome grants the origins, top frames only. reachOpenPages skips a page that already has window.cardano.seedelf, and a page that fakes it only keeps the wallet out of itself. Off never removes the https grant.",
+  "The swap's manual review (swapBuild, then txSubmit) is offered only while paused and not stopping (Swaps.tsx:2510). session-back-build is called only from the by-hand and site views, so the runner and a manual return don't race through the UI."
+ ],
+ "notes": [
+  "Settled, new fact: keys-and-accounts.md says the scan can't find 'an index past a run of 20 unused', and that only a funding never sent leaves one unused. That run can come from retries alone. Each Send that's turned away (giveme.my down, for example) burns its index, since refuseStarted refuses resending a recorded funding and the next review takes next. So 20-39 failed Sends in a row hide every later session from a restore's scan.",
+  "Guard with no test: Disconnect's refusal while a return's chain is being sent (sessions.ts:2536, sess.chainSendingDisconnect) is asserted by no test I found. A lock wipes the chain's progress, but the account listing still blocks Disconnect then, so the listing is the backstop.",
+  "Worker-side only, not reachable from the UI: backBuild/backBuildNow (sessions.ts:3261) and txSubmit don't refuse a session that runs itself, and claimSubmit doesn't dedupe txHashes. The screens never send those, and a race between the runner's return and a manual one conflicts on inputs, so only one lands.",
+  "Plausible, rare, no money lost (M7's corner): Disconnect (sessions.ts:2531) can delete a record whose return's history (summary) was never written. This needs a return that Koios didn't answer, or whose history write failed, and that landed, while tx_status and its feed still don't show it 20+ minutes later even though the listing and utxo_info do. The summary goes with the record, and the returned UTxO may then read as money received and be taken first by a later funding. A fix would refuse Disconnect while any return still has a summary inside REPLACED_WATCH_MS, as runAll already looks for those.",
+  "freshIndex (sessions.ts:6204) loops with no upper bound while every probed stake address reads used. An honest server never answers that way, and strangers can't predict future one-time stake keys, so there's no reachable harm. SCAN_MOST-style cap would make it explicit.",
+  "connector.ts applyConnector: two concurrent calls (startup's applyKept and a Settings toggle) can both see nothing registered and both register. The second throws a duplicate-ID error, which reaches the Settings reply, while the scripts stay registered. Cosmetic, not money.",
+  "Pre-release preprod sessions only (ownStake false): siteAccount returns the session's own stake key's reward address, while the session's address carries the shared Seedelf staking part."
+ ],
+ "coverage": "Read in full: sessions.ts lines 1-3450, every line, plus connector.ts, collateral.ts and runs.ts in full. I followed the first half's calls into E2b's half and read these in full: stopCost, resume, runAll, settleReturns, markCut, step, act, ordersSpent, placed, ordersOpen, liveOrders, remnantsFrom, order, cancel (3451-4205); bringBack, inspect, review, signAndSend (4324-4495); buildBack through noteLanded and refuseParts (4502-5158), and sendChain's opening checks (5170-5197); sendRecorded and submit (5490-5619); listNow, backWantsCollateral, one, tailHeld, skipCollateralMix and view (5621-5918); and live through serial (5921-6306): freshIndex, stillUnused, fundingRecords, sendFunding, partsStopped, partsMayGo, returning, stillWaiting, outRecord, accounts, book/save/update, atStake, clearMixes, wayOf/pricedClassic/fillsOf (6400-6450). Skimmed or not reached in E2b's half: cancelOf, cancelsChecked, referenceRows (4207-4323); sendChain's body, pump, sendStep, witnessTail and the pending-chain helpers (5197-5480); and 6307-6872 (clearKept, leftOut, clauseOf, poolShort, tailDrawn, spareOf, autoView, outcomeOf, paidOut, withinFunding, dexOrderAt/dexOrder, checkOrder, directSpends, checkDirect, checkProceeds, withinNet, refuseOddities), which are E2b's to read. Outside the lane, read where a value crossed: spent.ts in full; script-spend.ts 100-620 (readContract, send, whole, keepParts, laterParts, refuseSpentSince); parts.ts splitParts; pending.ts' header; feed.ts chainStatus; koios.ts accountTxs/usedStakeAddresses; dapp.ts forget/disconnectSession/privateBuild (900-960), holder/funded (1300-1420), fundPrivate/watchFunding (1420-1530) and signTx's siteSigned call (2160-2210); handlers.ts' restore and reset; sw.ts' connector calls; storage-access.ts guardedConnector; WebAssembly lib.rs plan_return, session_collateral, without_strangers and build_withdraw_parts' head; core lovejoin/pool.rs' datum token bounds; and Swaps.tsx's paused-review and Stop wiring. Settled lists checked: backlog.md (Sessions and restore, Lovejoin collateral items), keys-and-accounts.md Accounts, and privacy.md Network and A one-time account's stake key. I searched archive/plans for: fills/stranger/F4, the session stake key registered, origin/3.12/L19, freshIndex/the 20-address probe (launch review 22), and the scan gap. I ran no tests; the guards' tests come from grepping each guard's English text in extension/tests. I found no finding with a concrete reachable scenario in this half; the candidates I weighed are in notes."
+}
