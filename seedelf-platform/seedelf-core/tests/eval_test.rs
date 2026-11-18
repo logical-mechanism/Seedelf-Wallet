@@ -3,10 +3,12 @@
 
 use hex_literal::hex;
 use pallas_addresses::Address;
+use pallas_txbuilder::{BuildConway, Input, Output, StagingTransaction};
 use seedelf_core::build::Budgets;
 use seedelf_core::eval::{self, Resolved};
 use seedelf_koios::koios::UtxoResponse;
 use serde_json::{Value, json};
+use std::str::FromStr;
 
 fn cases() -> Vec<Value> {
     let doc: Value =
@@ -217,6 +219,42 @@ fn outputs_go_to_ogmios_as_its_utxos() {
             .starts_with("addr_test1w")
     );
     assert!(first["datum"].as_str().unwrap().starts_with("d879"));
+}
+
+/// Chunk 51, a sibling of w2#6: an output paying a Byron address goes to
+/// Ogmios in base58, as Ogmios and Koios write one, beside the transaction's
+/// other outputs. A Byron address has no bech32, and asking for one failed the
+/// whole transaction, so the extension read none of its outputs.
+#[test]
+fn a_byron_output_goes_to_ogmios_in_base58() {
+    // Pallas's own vectors: an Icarus address and a Daedalus one.
+    let icarus = "Ae2tdPwUPEZLs4HtbuNey7tK4hTKrwNwYtGqp7bDfCy2WdR3P6735W5Yfpe";
+    let daedalus = "DdzFFzCqrht7PQiAhzrn6rNNoADJieTWBt8KeK9BZdUsGyX9ooYD9NpMCTGjQoUKcHN47g8JMXhvKogsGpQHtiQ65fZwiypjrC6d3a4Q";
+    let key = Address::from_bytes(&[&[0x61][..], &[7; 28]].concat()).unwrap();
+    let built = StagingTransaction::new()
+        .input(Input::new([7u8; 32].into(), 0))
+        .output(Output::new(key.clone(), 2_000_000))
+        .output(Output::new(Address::from_str(icarus).unwrap(), 3_000_000))
+        .output(Output::new(Address::from_str(daedalus).unwrap(), 4_000_000))
+        .fee(200_000)
+        .build_conway_raw()
+        .unwrap();
+    let utxos = eval::ogmios_utxos(&built.tx_bytes.0).unwrap();
+    let rows = utxos.as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    let written: Vec<&str> = rows
+        .iter()
+        .map(|r| r["address"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        written,
+        [key.to_bech32().unwrap().as_str(), icarus, daedalus]
+    );
+    let lovelace: Vec<&Value> = rows
+        .iter()
+        .map(|r| &r["value"]["ada"]["lovelace"])
+        .collect();
+    assert_eq!(lovelace, [2_000_000, 3_000_000, 4_000_000]);
 }
 
 /// A key address's UTxO listing one token once for each of `quantities`. The

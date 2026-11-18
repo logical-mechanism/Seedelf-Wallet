@@ -1,10 +1,15 @@
 //! The withdraw-zero patch (`seedelf_core::withdraw_zero`).
 
 use pallas_codec::minicbor;
-use pallas_primitives::Fragment;
-use pallas_primitives::conway::{self, ExUnits, RedeemerTag, Redeemers};
+use pallas_primitives::conway::{
+    self, ExUnits, PlutusData, RedeemerTag, Redeemers, RedeemersKey, RedeemersValue,
+};
+use pallas_primitives::{Fragment, NonEmptyKeyValuePairs};
 use pallas_traverse::MultiEraTx;
-use pallas_txbuilder::{BuildConway, Input, Output, ScriptKind, StagingTransaction};
+use pallas_txbuilder::{
+    BuildConway, BuiltTransaction, Input, Output, ScriptKind, StagingTransaction,
+};
+use seedelf_core::build::tx_id;
 use seedelf_core::withdraw_zero::{WithdrawZero, reward_account, script_data_hash};
 use serde_json::Value;
 
@@ -67,7 +72,7 @@ fn the_recorded_withdrawals_are_mix_logics_reward_account() {
     }
 }
 
-fn built() -> pallas_txbuilder::BuiltTransaction {
+fn staged() -> StagingTransaction {
     // An enterprise key address on a test network.
     let mut raw = vec![0x60];
     raw.extend([9u8; 28]);
@@ -77,8 +82,38 @@ fn built() -> pallas_txbuilder::BuiltTransaction {
         .output(Output::new(address, 5_000_000))
         .fee(200_000)
         .language_view(ScriptKind::PlutusV3, vec![1, 2, 3])
-        .build_conway_raw()
-        .unwrap()
+}
+
+fn built() -> BuiltTransaction {
+    staged().build_conway_raw().unwrap()
+}
+
+/// `built` with `edit` made to it as a Conway transaction, encoded again with
+/// its new hash: a shape the builders never hand the patch today.
+fn edited(mut built: BuiltTransaction, edit: impl FnOnce(&mut conway::Tx)) -> BuiltTransaction {
+    let mut tx = conway::Tx::decode_fragment(&built.tx_bytes.0).unwrap();
+    edit(&mut tx);
+    let bytes = tx.encode_fragment().unwrap();
+    built.tx_hash.0 = *tx_id(&bytes).unwrap();
+    built.tx_bytes.0 = bytes;
+    built
+}
+
+/// mix_logic's withdraw-zero, its redeemer `Constr 0 []`, on preprod.
+fn withdraw_zero() -> WithdrawZero {
+    WithdrawZero::new(&MIX_LOGIC, true, 0, &hex::decode("d87980").unwrap()).unwrap()
+}
+
+/// What patching `built` says when it refuses it.
+fn refusal(built: BuiltTransaction) -> String {
+    let budget = ExUnits {
+        mem: 1_000,
+        steps: 2_000,
+    };
+    match withdraw_zero().patch(built, budget, &[1, 2, 3]) {
+        Ok(_) => panic!("patched"),
+        Err(e) => e.to_string(),
+    }
 }
 
 #[test]
@@ -167,4 +202,69 @@ fn a_signed_transaction_is_not_patched() {
 fn mainnet_reward_accounts_have_the_mainnet_header() {
     assert_eq!(reward_account(&MIX_LOGIC, false)[0], 0xf1);
     assert_eq!(reward_account(&MIX_LOGIC, true)[0], 0xf0);
+}
+
+/// Chunk 51, t1b#2: a transaction that already withdraws from another reward
+/// account isn't patched. Its withdrawal would be dropped from a body balanced
+/// with it, and the Reward redeemer's index 0 is mix_logic's only while that's
+/// the one withdrawal. mix_logic's own, from a patch before, is replaced
+/// (`a_patch_adds_the_withdrawal_and_its_redeemer`).
+#[test]
+fn a_transaction_withdrawing_from_another_account_is_not_patched() {
+    let other = reward_account(&[1u8; 28], true);
+    let ours = reward_account(&MIX_LOGIC, true);
+    for withdrawals in [vec![(other.clone(), 5)], vec![(ours, 0), (other, 5)]] {
+        let withdrawing = edited(built(), |tx| {
+            let withdrawals = withdrawals
+                .into_iter()
+                .map(|(account, lovelace)| (account.into(), lovelace))
+                .collect();
+            tx.transaction_body.withdrawals = Some(NonEmptyKeyValuePairs::Def(withdrawals));
+        });
+        assert_eq!(
+            refusal(withdrawing),
+            "The transaction already withdraws from another account"
+        );
+    }
+}
+
+/// Chunk 51, t1b#3: a transaction carrying witness datums isn't patched. The
+/// script data hash the patch works out leaves datums out, so it wouldn't
+/// match the witness set, and the node would refuse it (PPViewHashesDontMatch).
+#[test]
+fn a_transaction_with_witness_datums_is_not_patched() {
+    let carrying = staged()
+        .datum(hex::decode("d87980").unwrap())
+        .build_conway_raw()
+        .unwrap();
+    let tx = conway::Tx::decode_fragment(&carrying.tx_bytes.0).unwrap();
+    assert!(tx.transaction_witness_set.plutus_data.is_some());
+    assert_eq!(
+        refusal(carrying),
+        "A transaction with witness datums can't be given a withdraw-zero yet"
+    );
+}
+
+/// Chunk 51, t1b#4: redeemers written as a map aren't rewritten as a list.
+/// The patch writes a list, so a map's redeemers would go out in bytes no
+/// earlier hash or measure of the transaction saw.
+#[test]
+fn redeemers_in_a_map_are_not_rewritten_as_a_list() {
+    let mapped = edited(built(), |tx| {
+        let key = RedeemersKey {
+            tag: RedeemerTag::Spend,
+            index: 0,
+        };
+        let value = RedeemersValue {
+            data: PlutusData::decode_fragment(&hex::decode("d87980").unwrap()).unwrap(),
+            ex_units: ExUnits { mem: 1, steps: 1 },
+        };
+        tx.transaction_witness_set.redeemer = Some(Redeemers::Map(NonEmptyKeyValuePairs::Def(
+            vec![(key, value)],
+        )));
+    });
+    assert_eq!(
+        refusal(mapped),
+        "The transaction's redeemers are a map, which this patch doesn't write"
+    );
 }

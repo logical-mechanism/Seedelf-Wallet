@@ -390,18 +390,24 @@ fn ogmios_purpose(tag: &str) -> String {
 /// `evaluateTransaction`'s `additionalUtxo`: with them the network's own
 /// evaluator can measure a transaction whose parents aren't on chain yet (a
 /// chain's first mix, on its unsent deposit). That's the check that the
-/// wallet's evaluator still costs scripts as the network does.
+/// wallet's evaluator still costs scripts as the network does. A Byron
+/// address is written in base58, as Ogmios and Koios write one: it has no
+/// bech32 (chunk 51, w2#6's sibling).
 pub fn ogmios_utxos(tx_cbor: &[u8]) -> Result<Value> {
     let tx =
         MultiEraTx::decode(tx_cbor).map_err(|e| anyhow!("The transaction can't be read: {e}"))?;
     let id = hex::encode(tx.hash());
     let mut rows = Vec::new();
     for (index, output) in tx.outputs().iter().enumerate() {
-        let address = output
+        let address = match output
             .address()
             .map_err(|e| anyhow!("An output's address can't be read: {e}"))?
-            .to_bech32()
-            .map_err(|e| anyhow!("An output's address can't be written: {e}"))?;
+        {
+            Address::Byron(byron) => byron.to_base58(),
+            address => address
+                .to_bech32()
+                .map_err(|e| anyhow!("An output's address can't be written: {e}"))?,
+        };
         let value = output.value();
         let mut amounts = serde_json::Map::new();
         amounts.insert("ada".into(), json!({ "lovelace": value.coin() }));
