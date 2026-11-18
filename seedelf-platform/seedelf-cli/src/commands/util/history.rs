@@ -3,12 +3,10 @@ use anyhow::Result;
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
-use pallas_addresses::Address;
-use seedelf_core::address;
 use seedelf_core::constants::{Config, get_config};
 use seedelf_display::display;
 use seedelf_koios::koios::TxResponse;
-use seedelf_koios::koios::address_transactions;
+use seedelf_koios::koios::credential_transactions;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -30,9 +28,14 @@ pub(crate) async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> 
     let config: Config = get_config(variant, network_flag)?;
 
     println!("\n{}\n", "Getting History..".bright_blue(),);
-    let wallet_addr: Address =
-        address::wallet_contract(network_flag, config.contract.wallet_contract_hash);
-    let txs: Vec<TxResponse> = address_transactions(network_flag, wallet_addr.to_string()).await?;
+    // By the contract's payment credential, not its address: what was paid to
+    // its staked form, as every CLI up to 0.4.10 paid it, is the contract's
+    // too (chunk 51).
+    let txs: Vec<TxResponse> = credential_transactions(
+        network_flag,
+        &hex::encode(config.contract.wallet_contract_hash),
+    )
+    .await?;
     // println!("{:?}", txs);
     for tx in &txs {
         let input_match = tx

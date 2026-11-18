@@ -2,9 +2,14 @@
 //! paying it (plus address funding) out to an address. Finishes by serving the
 //! CIP30 signing site, so the test captures the CBOR at the web-server seam.
 
+use pallas_addresses::{
+    Address, Network, ScriptHash, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+    StakeAddress, StakeKeyHash,
+};
 use serial_test::serial;
 
 use seedelf_cli::commands::util::extract::{ExtractArgs, run};
+use seedelf_core::constants::PREPROD_STAKE_HASH;
 use seedelf_koios::koios::UtxoResponse;
 
 use crate::harness::*;
@@ -49,6 +54,116 @@ async fn extract_rescues_empty_datum_utxo() {
     assert_eq!(tx.outputs.len(), 1);
     assert_eq!(tx.outputs_to(&external_address()).len(), 1);
     assert!(tx.mint.is_empty(), "extract mints nothing");
+}
+
+/// The address of `script` on `network` with the [LOGIC] preprod stake key:
+/// for the wallet contract on preprod, its staked form, which
+/// `address::wallet_contract` gave before 2c67e94c (0.5.0).
+fn staked_script_address(network: Network, script: [u8; 28]) -> ShelleyAddress {
+    ShelleyAddress::new(
+        network,
+        ShelleyPaymentPart::Script(ScriptHash::new(script)),
+        ShelleyDelegationPart::Key(StakeKeyHash::new(PREPROD_STAKE_HASH)),
+    )
+}
+
+/// A datum-less UTxO at `address`, as Koios's `utxo_info` lists one: the full
+/// bech32, the stake address apart.
+fn datum_less_utxo_at(address: &ShelleyAddress) -> UtxoResponse {
+    let mut utxo = empty_datum_utxo(50, 2_000_000, &[]);
+    utxo.address = address.to_bech32().expect("bech32");
+    utxo.stake_address = Some(
+        StakeAddress::try_from(address.clone())
+            .expect("stake address")
+            .to_bech32()
+            .expect("stake bech32"),
+    );
+    utxo
+}
+
+/// `util extract` rescues a datum-less UTxO at the contract's staked form,
+/// where every CLI up to 0.4.10 paid the contract. The deployed contract
+/// (5b82530, `validators/wallet.ak`) lets anyone spend a UTxO with no datum
+/// and never reads the delegation part: the payment credential is what makes
+/// a UTxO the contract's (chunk 51, r4#7).
+#[tokio::test]
+#[serial]
+async fn extract_rescues_a_datum_less_utxo_at_the_contracts_staked_form() {
+    let staked = staked_script_address(Network::Testnet, config().contract.wallet_contract_hash);
+    let Address::Shelley(enterprise) = wallet_address() else {
+        panic!("the wallet contract is a Shelley address");
+    };
+    // The same script: only the delegation part differs.
+    assert_eq!(staked.payment(), enterprise.payment());
+    assert_ne!(Address::from(staked.clone()), wallet_address());
+
+    let mut scenario = Scenario::start().await;
+    scenario
+        .mount_utxo_info(vec![datum_less_utxo_at(&staked)])
+        .await;
+    scenario
+        .mount_address_utxos(vec![
+            // a clean 5 ADA UTxO the command picks up as collateral
+            address_utxo(&external_address_bech32(), 51, 5_000_000, &[]),
+            address_utxo(&external_address_bech32(), 52, 10_000_000, &[]),
+        ])
+        .await;
+    scenario.mount_evaluate(1).await;
+    scenario.arm_web_capture();
+
+    run(
+        ExtractArgs {
+            utxo: format!("{}#0", tx_hash(50)),
+            address: external_address_bech32(),
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect("a datum-less UTxO at the contract's staked form is the contract's");
+
+    let params = protocol_params().await;
+    let tx = decode_tx(&scenario.captured_cbor());
+    assert_sound_transaction(&tx, &scenario, &params);
+
+    // The staked-form UTxO plus the funding UTxO are spent into one output.
+    let mut inputs = tx.inputs.clone();
+    inputs.sort();
+    assert_eq!(inputs, vec![(tx_hash(50), 0), (tx_hash(52), 0)]);
+    assert_eq!(tx.outputs.len(), 1);
+    assert_eq!(tx.outputs_to(&external_address()).len(), 1);
+    assert_eq!(tx.collateral, vec![(tx_hash(51), 0)]);
+}
+
+/// What isn't the contract's stays refused: a datum-less UTxO under another
+/// script, or under the contract's script on the other network.
+#[tokio::test]
+#[serial]
+async fn extract_refuses_a_utxo_that_isnt_the_contracts() {
+    for not_ours in [
+        staked_script_address(Network::Testnet, [0xab; 28]),
+        staked_script_address(Network::Mainnet, config().contract.wallet_contract_hash),
+    ] {
+        let mut scenario = Scenario::start().await;
+        scenario
+            .mount_utxo_info(vec![datum_less_utxo_at(&not_ours)])
+            .await;
+        scenario.arm_web_capture();
+        let refused = run(
+            ExtractArgs {
+                utxo: format!("{}#0", tx_hash(50)),
+                address: external_address_bech32(),
+            },
+            PREPROD,
+            VARIANT,
+        )
+        .await
+        .expect_err("not the contract's UTxO");
+        assert!(
+            refused.to_string().contains("UTxO not in wallet"),
+            "refused, as not the contract's: {refused:#}"
+        );
+    }
 }
 
 /// Run `extract` on `extracted` from an address holding `utxos`, at the

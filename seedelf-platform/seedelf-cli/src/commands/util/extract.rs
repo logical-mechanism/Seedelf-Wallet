@@ -62,9 +62,21 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
             }
             let utxo_addr: Address = Address::from_bech32(&utxo.address)
                 .map_err(|e| anyhow::anyhow!("UTxO address is not valid bech32: {e}"))?;
-            if utxo_addr
-                != address::wallet_contract(network_flag, config.contract.wallet_contract_hash)
-            {
+            // The contract is its payment credential: a UTxO at any of its
+            // addresses, the enterprise form or a staked one (where every CLI
+            // up to 0.4.10 paid it), is the contract's, and with no datum the
+            // contract lets anyone spend it (chunk 51, r4#7).
+            let at_contract = match (
+                &utxo_addr,
+                address::wallet_contract(network_flag, config.contract.wallet_contract_hash),
+            ) {
+                (Address::Shelley(utxo_addr), Address::Shelley(contract)) => {
+                    utxo_addr.network() == contract.network()
+                        && utxo_addr.payment() == contract.payment()
+                }
+                _ => false,
+            };
+            if !at_contract {
                 bail!("UTxO not in wallet");
             }
             if utxo.is_spent {
@@ -290,9 +302,9 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
 
     println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
-    // inject the tx cbor into the local webserver to prompt the wallet
-    display::webserver_address();
-    web_server::run_web_server(tx_cbor, network_flag).await;
+    // inject the tx cbor into the local webserver to prompt the wallet; it
+    // prints the page's address once it's serving
+    web_server::run_web_server(tx_cbor, network_flag).await?;
     text_coloring::display_purple("Server has stopped.");
 
     Ok(())

@@ -1,4 +1,4 @@
-use crate::commands::{fee, rows};
+use crate::commands::{rows, submit};
 use crate::setup;
 use anyhow::Result;
 use blstrs::Scalar;
@@ -11,7 +11,7 @@ use seedelf_core::{address, build, utxos};
 use seedelf_crypto::convert;
 use seedelf_crypto::register::Register;
 use seedelf_display::display;
-use seedelf_koios::koios::{UtxoResponse, epoch_params, submit_tx};
+use seedelf_koios::koios::{UtxoResponse, epoch_params};
 
 pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
     display::is_there_an_update().await;
@@ -69,21 +69,5 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
         hex::encode(signed_tx_cbor.tx_bytes.clone()).white()
     );
 
-    let response = submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await?;
-    let tx_hash = fee::parse_submit_response(&response)?;
-    println!("\nTransaction Successfully Submitted!");
-    println!("\nTx Hash: {}", tx_hash.bright_cyan());
-    if network_flag {
-        println!(
-            "{}",
-            format!("\nhttps://preprod.cardanoscan.io/transaction/{tx_hash}").bright_purple()
-        );
-    } else {
-        println!(
-            "{}",
-            format!("\nhttps://cardanoscan.io/transaction/{tx_hash}").bright_purple()
-        );
-    }
-
-    Ok(())
+    submit::submit(signed_tx_cbor.tx_bytes.as_ref(), network_flag).await
 }
