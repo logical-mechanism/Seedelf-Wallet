@@ -1227,8 +1227,12 @@ const CHECK_FUNDS: u64 = 20_000_000;
 /// datum inline at a Plutus V1 script, a script on it) would keep the swap's
 /// money where Stop can't bring it back. The session's funds and collateral
 /// are stand-ins of ADA alone at its address. A swap that can't be read is an
-/// error; anything about one order is that order's `why`.
+/// error, one nested too deep to decode among them, refused before it's
+/// decoded ([`crate::cbor::check_nesting`]: a DEX builds it, outside the
+/// wallet); anything about one order is that order's `why`.
 pub fn check_cancels(s: &SwapCheck) -> Result<Vec<CancelCheck>> {
+    // Here, not only in whatever read the swap first (chunk 51, r3b#1).
+    crate::cbor::check_nesting(s.tx_cbor)?;
     let tx = MultiEraTx::decode(s.tx_cbor).map_err(|e| anyhow!("The swap can't be read: {e}"))?;
     let swap = tx.hash();
     let fund = stand_in(s.address, &swap, 0, CHECK_FUNDS)?;

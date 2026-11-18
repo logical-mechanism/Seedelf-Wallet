@@ -4,8 +4,11 @@
 //! nesting, so a datum nested a few thousand levels deep (a few kilobytes on
 //! chain) overflows WebAssembly's stack. That's a trap, which kills the
 //! instance. Untrusted CBOR is walked here first, one item at a time with no
-//! recursion, and refused past [`MAX_DEPTH`].
+//! recursion, and refused past [`MAX_DEPTH`]: one item with [`within_depth`],
+//! a whole transaction, the CBOR its byte strings wrap included, with
+//! [`check_nesting`].
 
+use anyhow::{Result, bail};
 use pallas_codec::minicbor::{Decoder, data::Type};
 
 /// The deepest untrusted CBOR the wallet decodes, each array, map and tag
@@ -122,4 +125,162 @@ fn walk(cbor: &[u8], max: usize) -> Option<()> {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// A whole transaction from outside the wallet, before anything decodes it
+// ---------------------------------------------------------------------------
+
+/// Refuses a transaction from outside the wallet (a site's, a swap a DEX
+/// built) that nests deeper than [`MAX_DEPTH`], before anything decodes it:
+/// Pallas decodes its plutus data, metadata and native scripts recursively,
+/// the inline datums and reference scripts in its outputs' tagged byte
+/// strings too. Real transactions nest a few dozen levels at most.
+pub fn check_nesting(bytes: &[u8]) -> Result<()> {
+    if !nests_within(bytes, MAX_DEPTH) {
+        bail!(
+            "The wallet can't read this transaction: its data is nested more than {MAX_DEPTH} levels deep."
+        );
+    }
+    Ok(())
+}
+
+/// One open level in [`nests_within`]'s walk.
+enum Level {
+    /// An array or a map (its keys and values each an item), with the items
+    /// left to read: `None` until a break.
+    Items(Option<u64>),
+    /// A tag, before the one item it wraps.
+    Tag,
+    /// CBOR in a byte string a tag wraps, as an inline datum or a reference
+    /// script is: Pallas decodes that too. It ends at `end`, inside bytes
+    /// that end at `outer`.
+    Wrapped { end: usize, outer: usize },
+}
+
+/// A CBOR item's head at `pos`: its major type, its argument (`None` for an
+/// indefinite length), and where what follows the head starts.
+fn cbor_head(bytes: &[u8], pos: usize) -> Option<(u8, Option<u64>, usize)> {
+    let initial = *bytes.get(pos)?;
+    let wide = |n: usize| -> Option<(u64, usize)> {
+        let b = bytes.get(pos + 1..pos + 1 + n)?;
+        Some((
+            b.iter().fold(0u64, |a, x| (a << 8) | u64::from(*x)),
+            pos + 1 + n,
+        ))
+    };
+    let (argument, next) = match initial & 0x1f {
+        n @ 0..=23 => (Some(u64::from(n)), pos + 1),
+        24 => wide(1).map(|(a, p)| (Some(a), p))?,
+        25 => wide(2).map(|(a, p)| (Some(a), p))?,
+        26 => wide(4).map(|(a, p)| (Some(a), p))?,
+        27 => wide(8).map(|(a, p)| (Some(a), p))?,
+        31 => (None, pos + 1),
+        // 28–30 are reserved.
+        _ => return None,
+    };
+    Some((initial >> 5, argument, next))
+}
+
+/// Whether CBOR `bytes` stay within `max` levels: each array, map and tag is
+/// one, and so is the CBOR a tag wraps in a byte string. It walks the bytes
+/// without recursing, one head at a time.
+///
+/// What isn't well-formed ends the walk, as it ends any decoder there too.
+/// Inside a wrapped byte string it only means those bytes aren't CBOR (a big
+/// number's, say), and the walk goes on after them.
+pub fn nests_within(bytes: &[u8], max: usize) -> bool {
+    let mut levels = vec![Level::Items(Some(1))];
+    let mut pos = 0;
+    let mut limit = bytes.len();
+    while let Some(level) = levels.last() {
+        match *level {
+            Level::Items(Some(0)) => {
+                levels.pop();
+                continue;
+            }
+            Level::Wrapped { end, outer } => {
+                (pos, limit) = (end, outer);
+                levels.pop();
+                continue;
+            }
+            _ => {}
+        }
+        match cbor_step(bytes, pos, limit, &mut levels) {
+            Some(next) => (pos, limit) = next,
+            None => {
+                let Some(i) = levels
+                    .iter()
+                    .rposition(|l| matches!(l, Level::Wrapped { .. }))
+                else {
+                    return true;
+                };
+                let Level::Wrapped { end, outer } = levels[i] else {
+                    unreachable!("found as wrapped")
+                };
+                levels.truncate(i);
+                (pos, limit) = (end, outer);
+                continue;
+            }
+        }
+        // The first level is the whole item's, not a nesting.
+        if levels.len().saturating_sub(1) > max {
+            return false;
+        }
+    }
+    true
+}
+
+/// Reads the item at `pos` for the innermost open level, opening a level
+/// for an array, a map, a tag or a wrapped byte string, whose bytes end at
+/// `limit`. Where the walk goes next and where the bytes it's in end, or
+/// `None` for bytes that aren't well-formed CBOR.
+fn cbor_step(
+    bytes: &[u8],
+    pos: usize,
+    limit: usize,
+    levels: &mut Vec<Level>,
+) -> Option<(usize, usize)> {
+    let bytes = &bytes[..limit];
+    if *bytes.get(pos)? == 0xff {
+        // A break closes an indefinite array, map or string.
+        return match levels.last() {
+            Some(Level::Items(None)) => {
+                levels.pop();
+                Some((pos + 1, limit))
+            }
+            _ => None,
+        };
+    }
+    let after_tag = matches!(levels.last(), Some(Level::Tag));
+    match levels.last_mut() {
+        Some(Level::Items(Some(n))) => *n -= 1,
+        // The tag's level stays open until its item is read.
+        Some(level @ Level::Tag) => *level = Level::Items(Some(0)),
+        _ => {}
+    }
+    let (major, argument, next) = cbor_head(bytes, pos)?;
+    let opened = match (major, argument) {
+        (0 | 1 | 7, Some(_)) => None,
+        (2 | 3, Some(length)) => {
+            let end = usize::try_from(length)
+                .ok()
+                .and_then(|l| next.checked_add(l))
+                .filter(|end| *end <= limit)?;
+            if major == 2 && after_tag {
+                levels.push(Level::Wrapped { end, outer: limit });
+                levels.push(Level::Items(Some(1)));
+                return Some((next, end));
+            }
+            return Some((end, limit));
+        }
+        // An indefinite string's chunks, until a break.
+        (2 | 3, None) => Some(Level::Items(None)),
+        (4, length) => Some(Level::Items(length)),
+        (5, length) => Some(Level::Items(length.map(|n| n.saturating_mul(2)))),
+        (6, Some(_)) => Some(Level::Tag),
+        _ => return None,
+    };
+    levels.extend(opened);
+    Some((next, limit))
 }

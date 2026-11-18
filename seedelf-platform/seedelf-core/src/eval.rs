@@ -370,16 +370,20 @@ pub fn evaluate_with(
     }
 }
 
-/// `uplc` names purposes as the redeemer tags are spelled in Rust.
-fn ogmios_purpose(tag: &str) -> &'static str {
-    match tag.to_ascii_lowercase().as_str() {
-        "spend" => "spend",
-        "mint" => "mint",
-        "cert" => "publish",
-        "reward" | "withdraw" => "withdraw",
-        "vote" => "vote",
-        _ => "propose",
-    }
+/// Ogmios's name for the purpose `uplc` gives a failing script's redeemer, as
+/// [`purpose`] names a measured one's. `uplc` spells it with
+/// `redeemer_tag_to_string` ("Publish" for a certificate's, "Withdraw" for a
+/// reward's), or as the Rust variant is. A spelling it might use otherwise is
+/// passed on as it is, never taken for another purpose (chunk 51, r2b#3).
+fn ogmios_purpose(tag: &str) -> String {
+    use RedeemerTag::*;
+    [Spend, Mint, Cert, Reward, Vote, Propose]
+        .into_iter()
+        .find(|t| {
+            uplc::tx::redeemer_tag_to_string(t).eq_ignore_ascii_case(tag)
+                || format!("{t:?}").eq_ignore_ascii_case(tag)
+        })
+        .map_or_else(|| tag.to_ascii_lowercase(), |t| purpose(&t).to_string())
 }
 
 /// A built transaction's outputs as Ogmios v6 UTxOs, for
@@ -458,4 +462,33 @@ pub fn declared_covers(tx_cbor: &[u8], answer: &Value) -> Result<std::result::Re
     } else {
         Err("the network measures its scripts above what the wallet declared".to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Chunk 51, r2b#3: a failing script is labelled by the purpose `uplc`
+    /// names it by, as a measured one is: `uplc` 1.1.23 spells a certificate's
+    /// tag "Publish" and a reward's "Withdraw", not as the Rust variants are.
+    #[test]
+    fn a_failing_script_is_labelled_as_a_measured_one_of_its_purpose() {
+        use RedeemerTag::*;
+        for tag in [Spend, Mint, Cert, Reward, Vote, Propose] {
+            let named = uplc::tx::redeemer_tag_to_string(&tag);
+            assert_eq!(
+                ogmios_purpose(&named),
+                purpose(&tag),
+                "{tag:?}, named {named}"
+            );
+            // As the variant is spelled too, in any case.
+            let variant = format!("{tag:?}");
+            assert_eq!(ogmios_purpose(&variant), purpose(&tag), "{variant}");
+            assert_eq!(
+                ogmios_purpose(&variant.to_uppercase()),
+                purpose(&tag),
+                "{variant}"
+            );
+        }
+    }
 }

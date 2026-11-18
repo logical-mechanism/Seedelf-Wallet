@@ -1771,9 +1771,20 @@ pub fn check_width(width: usize) -> Result<()> {
 }
 
 /// [`mixes_per_box`] at `width` boxes a mix: `(width^depth − 1)/(width − 1)`,
-/// which leaves ours one of `width^depth`.
+/// which leaves ours one of `width^depth`. It's `1 + width + … +
+/// width^(depth − 1)`, a mix for each box of the fan-out but its leaves, and
+/// that's what it is for a width under 2 too, which no mix has
+/// ([`check_width`]). Past what a usize counts, the most it counts, which no
+/// ADA pays for: a figure for every depth and width, never a trap (chunk 51,
+/// r3a#2).
 pub fn mixes_per_box_at(depth: u32, width: usize) -> usize {
-    (width.pow(depth) - 1) / (width - 1)
+    match width {
+        0 => usize::from(depth > 0),
+        1 => usize::try_from(depth).unwrap_or(usize::MAX),
+        _ => width
+            .checked_pow(depth)
+            .map_or(usize::MAX, |leaves| (leaves - 1) / (width - 1)),
+    }
 }
 
 /// What the wallet plans on for a 3-box mix before measuring one: preprod's
@@ -1926,13 +1937,27 @@ fn funding(boxes: usize, per: Option<u64>) -> Result<u64> {
 /// What a box costs at `depth`: the box, and every mix of its fan-out. None
 /// past what a u64 holds.
 fn per_box(depth: u32, denom: u64) -> Option<u64> {
-    denom.checked_add(mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE)
+    per_box_again(depth).and_then(|mixes| denom.checked_add(mixes))
 }
 
 /// What mixing one of the wallet's boxes again costs at `depth`: every mix of
-/// its fan-out. It's in the pool already, so there's no box to pay for.
-fn per_box_again(depth: u32) -> u64 {
-    mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE
+/// its fan-out. It's in the pool already, so there's no box to pay for. None
+/// past what a u64 holds.
+fn per_box_again(depth: u32) -> Option<u64> {
+    mixes_cost(mixes_per_box(depth), MIX_FEE_ESTIMATE)
+}
+
+/// `mixes` mixes at `each`: none past what a u64 holds.
+fn mixes_cost(mixes: usize, each: u64) -> Option<u64> {
+    u64::try_from(mixes).ok()?.checked_mul(each)
+}
+
+/// What paying for `boxes` boxes' mixes at `per` each and the deposit's
+/// reserve takes: past what a u64 holds, the most it holds, which nothing pays.
+fn again_cost(boxes: usize, per: u64) -> u64 {
+    u64::try_from(boxes)
+        .map_or(u64::MAX, |boxes| boxes.saturating_mul(per))
+        .saturating_add(DEPOSIT_RESERVE)
 }
 
 /// [`per_box`] in `protocol`'s pool, `width` boxes a mix: its box's ADA, and
@@ -1940,15 +1965,24 @@ fn per_box_again(depth: u32) -> u64 {
 /// three is [`per_box`]'s. A token pool's token isn't counted: it's the
 /// token's, not ADA. Refused past what a u64 holds ([`MORE_THAN_THERE_IS`]).
 pub fn per_box_in(protocol: &Protocol, depth: u32, width: usize) -> Result<u64> {
-    protocol
-        .denom
-        .checked_add(per_box_again_in(protocol, depth, width))
+    again_in(protocol, depth, width)
+        .and_then(|mixes| protocol.denom.checked_add(mixes))
         .context(MORE_THAN_THERE_IS)
 }
 
-/// [`per_box_again`] in `protocol`'s pool, `width` boxes a mix.
+/// [`per_box_again`] in `protocol`'s pool, `width` boxes a mix: past what a
+/// u64 holds, the most it holds, which nothing pays.
 pub fn per_box_again_in(protocol: &Protocol, depth: u32, width: usize) -> u64 {
-    mixes_per_box_at(depth, width) as u64 * mix_fee_estimate(protocol, width)
+    again_in(protocol, depth, width).unwrap_or(u64::MAX)
+}
+
+/// [`per_box_again`] in `protocol`'s pool, `width` boxes a mix: none past
+/// what a u64 holds.
+fn again_in(protocol: &Protocol, depth: u32, width: usize) -> Option<u64> {
+    mixes_cost(
+        mixes_per_box_at(depth, width),
+        mix_fee_estimate(protocol, width),
+    )
 }
 
 /// [`boxes_affordable`] in `protocol`'s pool, `width` boxes a mix.
@@ -1963,16 +1997,12 @@ pub fn funding_for_in(boxes: usize, protocol: &Protocol, depth: u32, width: usiz
 
 /// [`again_affordable`] in `protocol`'s pool, `width` boxes a mix.
 pub fn again_affordable_in(spare: u64, protocol: &Protocol, depth: u32, width: usize) -> usize {
-    let per = per_box_again_in(protocol, depth, width);
-    if per == 0 {
-        return 0;
-    }
-    (spare.saturating_sub(DEPOSIT_RESERVE) / per) as usize
+    affordable(spare, again_in(protocol, depth, width))
 }
 
 /// [`again_funding`] in `protocol`'s pool, `width` boxes a mix.
 pub fn again_funding_in(boxes: usize, protocol: &Protocol, depth: u32, width: usize) -> u64 {
-    DEPOSIT_RESERVE + boxes as u64 * per_box_again_in(protocol, depth, width)
+    again_cost(boxes, per_box_again_in(protocol, depth, width))
 }
 
 /// One pool's part of a chain that spans pools, as it's planned: the pool,
@@ -2180,16 +2210,18 @@ pub fn bootstrap_most(
 }
 
 /// How many of the wallet's boxes `spare` lovelace mixes again at `depth`
-/// ([`again`]): none if it can't pay for one's mixes.
+/// ([`again`]): none if it can't pay for one's mixes, or there are none, at
+/// depth 0 (chunk 51, r3a#2).
 pub fn again_affordable(spare: u64, depth: u32) -> usize {
-    (spare.saturating_sub(DEPOSIT_RESERVE) / per_box_again(depth)) as usize
+    affordable(spare, per_box_again(depth))
 }
 
 /// What pays for mixing `boxes` of the wallet's boxes again at `depth`
 /// ([`again_affordable`]'s plan run backwards): every mix, and the change the
-/// last one leaves, which comes back.
+/// last one leaves, which comes back. Past what a u64 holds, the most it
+/// holds, which nothing pays.
 pub fn again_funding(boxes: usize, depth: u32) -> u64 {
-    DEPOSIT_RESERVE + boxes as u64 * per_box_again(depth)
+    again_cost(boxes, per_box_again(depth).unwrap_or(u64::MAX))
 }
 
 /// What pays for a chain: the key account's ADA-only `coins`, its
@@ -2528,6 +2560,9 @@ fn fresh_for(
     if !(0..=3).contains(&depth) {
         bail!("The fan-out is 0 to 3 waves deep");
     }
+    // Its callers check the width first; `width − 1` is held to it here too
+    // (chunk 51, r3a#2).
+    check_width(width)?;
     let mut fresh: Vec<PoolBox> = pool
         .iter()
         .filter(|b| !ours.iter().any(|o| o.utxo == b.utxo))

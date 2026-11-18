@@ -270,6 +270,67 @@ fn the_classic_pool_plans_three_wide_exactly_as_before() {
     assert_eq!(lovejoin::again_affordable_in(50_000_000, &classic, 0, 3), 0);
 }
 
+/// Chunk 51, r3a#2: the planner's helpers give a figure for every depth and width, never a trap, which in
+/// WebAssembly locks the wallet. Mixing again at depth 0 is no mix, so no box of it is paid for, as the per-pool
+/// helper says, where the classic one divided by zero. A fan-out too deep to count is more than any ADA pays for,
+/// and a width under 2, which no mix has, is the fan-out's sum all the same: 1 + width + … + width^(depth − 1).
+#[test]
+fn the_planners_helpers_never_trap_whatever_the_depth_or_width() {
+    let classic = Protocol::of(true).unwrap();
+    for spare in [0, 50_000_000, u64::MAX] {
+        assert_eq!(lovejoin::again_affordable(spare, 0), 0);
+        assert_eq!(lovejoin::again_affordable_in(spare, &classic, 0, 3), 0);
+    }
+    assert_eq!(
+        lovejoin::again_funding(2, 0),
+        lovejoin::again_funding_in(2, &classic, 0, 3)
+    );
+    // Too deep to count: the most a usize holds, which no ADA pays for.
+    let words = lovejoin::MORE_THAN_THERE_IS;
+    for depth in [41, 1_000, u32::MAX] {
+        for width in [3, 4] {
+            assert_eq!(lovejoin::mixes_per_box_at(depth, width), usize::MAX);
+            let per = lovejoin::per_box_in(&classic, depth, width);
+            assert_eq!(per.unwrap_err().to_string(), words);
+            let funding = lovejoin::funding_for_in(1, &classic, depth, width);
+            assert_eq!(funding.unwrap_err().to_string(), words);
+            assert_eq!(
+                lovejoin::boxes_affordable_in(u64::MAX, &classic, depth, width),
+                0
+            );
+            assert_eq!(
+                lovejoin::again_affordable_in(u64::MAX, &classic, depth, width),
+                0
+            );
+            assert_eq!(lovejoin::per_box_again_in(&classic, depth, width), u64::MAX);
+            assert_eq!(
+                lovejoin::again_funding_in(1, &classic, depth, width),
+                u64::MAX
+            );
+        }
+        assert_eq!(lovejoin::mixes_per_box(depth), usize::MAX);
+        let funding = lovejoin::funding_for(1, depth, classic.denom);
+        assert_eq!(funding.unwrap_err().to_string(), words);
+        assert_eq!(
+            lovejoin::boxes_affordable(u64::MAX, depth, classic.denom),
+            0
+        );
+        assert_eq!(lovejoin::again_affordable(u64::MAX, depth), 0);
+        assert_eq!(lovejoin::again_funding(1, depth), u64::MAX);
+    }
+    // Widths no mix has (check_width refuses them before anything is built).
+    for depth in [0, 1, 3, 1_000, u32::MAX] {
+        let ones = usize::try_from(depth).unwrap_or(usize::MAX);
+        assert_eq!(lovejoin::mixes_per_box_at(depth, 1), ones, "{depth}");
+        assert_eq!(
+            lovejoin::mixes_per_box_at(depth, 0),
+            usize::from(depth > 0),
+            "{depth}"
+        );
+    }
+    assert_eq!(lovejoin::mixes_per_box_at(3, 2), 7);
+}
+
 #[test]
 fn each_pool_plans_on_its_own_mix() {
     let classic = Protocol::of(true).unwrap();

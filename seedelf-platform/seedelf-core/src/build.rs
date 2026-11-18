@@ -2526,12 +2526,13 @@ fn holds_tokens(utxo: &UtxoResponse) -> bool {
 ///    class first; then by the purpose's order, its last resorts after the
 ///    rest, and boxes back from Lovejoin last of all, one at a time, so two
 ///    are spent together only when nothing else pays. When that runs into
-///    what a transaction can spend (too many inputs), the same without the
-///    purpose's order; then as few boxes as pay, none first, then one more
-///    at a time, each with the fewest other inputs (the largest first,
-///    tokens or not), or with UTxOs holding tokens last, for when their
-///    tokens make it too large; and at the last the CLI's own order, so
-///    nothing the CLI pays is refused.
+///    what a transaction can spend (too many inputs), or everything together
+///    is short (a UTxO whose tokens need more change than it holds costs more
+///    than it adds), the same without the purpose's order; then as few boxes
+///    as pay, none first, then one more at a time, each with the fewest other
+///    inputs (the largest first, tokens or not), or with UTxOs holding tokens
+///    last, for when their tokens make it too large; and at the last the
+///    CLI's own order, so nothing the CLI pays is refused.
 pub(crate) fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
@@ -2753,8 +2754,9 @@ fn apart<T>(
 
     // Then orders tried in turn, each grown one UTxO at a time. One that runs
     // into what more inputs can't mend (too much computation, too large) is
-    // left for the next; short with everything is short in any order
-    // (independent review M6).
+    // left for the next (independent review M6), and so is one short with
+    // everything: a UTxO whose tokens need more change than it holds costs
+    // more than it adds, so fewer may pay (chunk 51, r2a#2).
     //
     // a. As the CLI would, but the purpose's last resorts after the rest,
     //    and boxes after everything, one at a time; within each, by the
@@ -2823,6 +2825,8 @@ fn apart<T>(
     blind.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
     let mut failed = false;
     let mut boxes_fail = false;
+    // Whether an order grown whole was short: everything together.
+    let mut short_whole = false;
     let mut grown: Vec<Vec<&UtxoResponse>> = Vec::new();
     // Each order, and how many boxes it brings forward (none for a, b, d).
     let orders = [(by_history, 0), (by_tier, 0)]
@@ -2840,10 +2844,7 @@ fn apart<T>(
         let whole = order.len() == rest.len();
         match grow(&order, j, &mut try_with) {
             Grown::Built(built) => return Ok(built),
-            Grown::Short if whole => {
-                failed = false;
-                break;
-            }
+            Grown::Short if whole => short_whole = true,
             // Short without the other boxes: one more may pay.
             Grown::Short => {}
             Grown::Failed(at) => {
@@ -2855,7 +2856,9 @@ fn apart<T>(
             grown.push(order);
         }
     }
-    Err(match (failed, other, not_enough) {
+    // Short with everything is refused as short, whatever failed besides, as
+    // when the search ended there.
+    Err(match (failed && !short_whole, other, not_enough) {
         (true, Some(e), _) => e,
         (_, _, Some(e)) => e,
         (_, Some(e), None) => e,

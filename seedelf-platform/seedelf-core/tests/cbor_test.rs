@@ -4,7 +4,9 @@
 use hex_literal::hex;
 use pallas_addresses::Address;
 use pallas_codec::minicbor::{self, data::Tag};
-use seedelf_core::cbor::{MAX_DEPTH, output_within_depth, within_depth};
+use seedelf_core::cbor::{
+    MAX_DEPTH, check_nesting, nests_within, output_within_depth, within_depth,
+};
 use seedelf_core::eval;
 use seedelf_core::lovejoin::{PoolBox, Protocol, mix_datum};
 use seedelf_crypto::register::Register;
@@ -61,6 +63,49 @@ fn far_too_deep_is_refused_without_recursing() {
         assert!(!within_depth(&deep, MAX_DEPTH));
         // The walk itself doesn't recurse: with no limit, it reads to the end.
         assert!(within_depth(&deep, usize::MAX));
+    }
+}
+
+/// `cbor` in a byte string under tag 24, as an output's inline datum and its
+/// reference script sit.
+fn wrapped(cbor: &[u8]) -> Vec<u8> {
+    let mut e = minicbor::Encoder::new(Vec::new());
+    e.tag(Tag::new(24)).unwrap().bytes(cbor).unwrap();
+    e.into_writer()
+}
+
+/// Chunk 51, r3b#1: a whole transaction from outside the wallet (a site's, a
+/// swap a DEX built) is held to the limit with the CBOR its tagged byte
+/// strings hold, which Pallas decodes too and `within_depth` doesn't open.
+#[test]
+fn a_transactions_nesting_counts_what_its_tagged_bytes_hold() {
+    for nested in [lists, indefinite, maps, tags] {
+        assert!(nests_within(&nested(MAX_DEPTH), MAX_DEPTH));
+        assert!(!nests_within(&nested(MAX_DEPTH + 1), MAX_DEPTH));
+        // Far too deep is refused without recursing: with no limit, it walks to the end.
+        assert!(!nests_within(&nested(100_000), MAX_DEPTH));
+        assert!(nests_within(&nested(100_000), usize::MAX));
+    }
+    // The tag, its byte string and the item in it are a level each.
+    let deep = wrapped(&lists(100_000));
+    assert!(within_depth(&deep, MAX_DEPTH));
+    assert!(!nests_within(&deep, MAX_DEPTH));
+    assert!(nests_within(&wrapped(&lists(MAX_DEPTH - 3)), MAX_DEPTH));
+    assert!(!nests_within(&wrapped(&lists(MAX_DEPTH - 2)), MAX_DEPTH));
+    // Bytes under a tag that aren't CBOR (a big number's) are bytes, and the
+    // walk goes on after them.
+    let big = hex!("c2 49 ffffffffffffffffff");
+    let beside = |n: usize| [&hex!("82")[..], &big, &lists(n)].concat();
+    assert!(nests_within(&beside(MAX_DEPTH - 1), MAX_DEPTH));
+    assert!(!nests_within(&beside(MAX_DEPTH), MAX_DEPTH));
+
+    assert!(check_nesting(&lists(MAX_DEPTH)).is_ok());
+    assert!(check_nesting(&wrapped(&lists(MAX_DEPTH - 3))).is_ok());
+    for refused in [lists(MAX_DEPTH + 1), deep] {
+        assert_eq!(
+            check_nesting(&refused).unwrap_err().to_string(),
+            "The wallet can't read this transaction: its data is nested more than 128 levels deep."
+        );
     }
 }
 

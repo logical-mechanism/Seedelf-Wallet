@@ -1,4 +1,4 @@
-use seedelf_core::assets::{Asset, Assets};
+use seedelf_core::assets::{Asset, Assets, asset_id_to_asset};
 
 #[test]
 fn default_assets_is_new_assets() {
@@ -270,4 +270,38 @@ fn separate_present_token_subtracts() {
     let left: Assets = have.separate(want).unwrap();
     assert_eq!(left.items.len(), 1);
     assert_eq!(left.items[0].amount, 70);
+}
+
+/// Chunk 51, r2b#4: an asset id is read as its policy id and its token name's
+/// hex, and anything shorter, or with a character that isn't one byte where
+/// the policy id ends, is refused in words: never a panic, which is a trap in
+/// WebAssembly.
+#[test]
+fn an_asset_id_is_read_or_refused_never_a_panic() {
+    let asset = asset_id_to_asset(format!("{PID}536e656b6b6965")).unwrap();
+    assert_eq!(asset.policy_id.to_string(), PID);
+    assert_eq!(asset.token_name, b"Snekkie");
+    assert_eq!(asset.amount, 1);
+    // A token with no name.
+    assert!(
+        asset_id_to_asset(PID.to_string())
+            .unwrap()
+            .token_name
+            .is_empty()
+    );
+    let cut = &PID[..55];
+    for refused in [
+        String::new(),
+        cut.to_string(),
+        format!("{cut}\u{e9}00"),
+        format!("{cut}\u{20ac}"),
+        format!("{}zz", &PID[..54]),
+    ] {
+        let result = std::panic::catch_unwind(|| asset_id_to_asset(refused.clone()));
+        assert!(
+            matches!(result, Ok(Err(_))),
+            "{refused:?}: {:?}",
+            result.map(|r| r.map(|a| a.policy_id.to_string()))
+        );
+    }
 }

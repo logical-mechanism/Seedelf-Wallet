@@ -19,7 +19,7 @@ use pallas_primitives::{BoundedBytes, Fragment};
 use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::{BuildConway, Input, Output, ScriptKind, StagingTransaction};
 use seedelf_core::build::Budgets;
-use seedelf_core::cbor::MAX_DEPTH;
+use seedelf_core::cbor::{MAX_DEPTH, nests_within, within_depth};
 use seedelf_core::eval;
 use seedelf_core::orders::{
     self, Cancel, Credential, OrderToCancel, Protocol, Session, cancel_orders, read_order,
@@ -1886,4 +1886,95 @@ fn what_isnt_an_order_a_swap_places_never_checks_out() {
         })
         .is_err()
     );
+}
+
+/// Chunk 51, r3b#1: the swap a DEX builds comes from outside the wallet, and
+/// Pallas decodes its plutus data by recursion, so a datum a few thousand
+/// levels deep overflows WebAssembly's stack, which kills the module. The dry
+/// run refuses such a swap itself, before decoding it, wherever the datum
+/// sits: in the witnesses for its hash, or inline in an output, in tag 24's
+/// byte string, which Pallas decodes too and `within_depth` doesn't open. It
+/// was safe only because the worker's inspect read the same bytes first. The
+/// deep swaps run on a thread with a large stack, so that a decode of them
+/// fails here as an assertion rather than overflowing the test's own stack.
+#[test]
+fn a_swap_nested_too_deep_is_refused_by_the_cancel_check_itself() {
+    let run = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let s = Setup::of(&fixture("MinswapV2", "mainnet"));
+            // Minswap V2's order as a swap places it, and beside it an output
+            // at the session's address under a datum `deep` levels down: by
+            // its hash, the datum in the witnesses, or inline.
+            let swap = |deep: Option<(usize, bool)>| {
+                let Some((levels, inline)) = deep else {
+                    return swap_placing(&s.address, &s.order, &s.datum, true, None);
+                };
+                let mut order = Output::new(
+                    Address::from_bech32(&s.order.address).unwrap(),
+                    s.order.value.parse().unwrap(),
+                );
+                for a in s.order.asset_list.iter().flatten() {
+                    let policy: [u8; 28] = hex::decode(&a.policy_id).unwrap().try_into().unwrap();
+                    order = order
+                        .add_asset(
+                            Hash::new(policy),
+                            hex::decode(&a.asset_name).unwrap(),
+                            a.quantity.parse().unwrap(),
+                        )
+                        .unwrap();
+                }
+                let datum = nested_arrays(levels);
+                let beside = Output::new(s.address.clone(), 2_000_000);
+                let mut tx = StagingTransaction::new()
+                    .input(Input::new(Hash::new([0x77; 32]), 0))
+                    .output(Output::new(s.address.clone(), 3_000_000))
+                    .output(order.set_inline_datum(s.datum.clone()));
+                tx = if inline {
+                    tx.output(beside.set_inline_datum(datum))
+                } else {
+                    tx.output(beside.set_datum_hash(Hasher::<256>::hash(&datum)))
+                        .datum(datum)
+                };
+                tx.fee(200_000).build_conway_raw().unwrap().tx_bytes.0
+            };
+            let check = |tx: &[u8]| {
+                orders::check_cancels(&orders::SwapCheck {
+                    params: &s.params,
+                    network_flag: s.preprod,
+                    session: s.session,
+                    address: &s.address,
+                    tx_cbor: tx,
+                    orders: &[1],
+                    references: &s.references,
+                })
+            };
+
+            // The honest swap checks out, and so does one beside a datum real
+            // ones nest no deeper than.
+            for tx in [swap(None), swap(Some((20, true))), swap(Some((20, false)))] {
+                assert!(nests_within(&tx, MAX_DEPTH));
+                let checks = check(&tx).expect("an honest swap is read");
+                assert_eq!(checks.len(), 1);
+                assert_eq!(checks[0].why, None, "{:?}", checks[0]);
+                assert!(checks[0].fee.is_some(), "{:?}", checks[0]);
+            }
+            // 4,000 levels: past the few thousand that overflowed
+            // WebAssembly's stack, in about 4 KB.
+            for inline in [false, true] {
+                let tx = swap(Some((4_000, inline)));
+                // An inline datum is a byte string to a walk that doesn't open it.
+                assert_eq!(within_depth(&tx, MAX_DEPTH), inline);
+                let refused = check(&tx).map(|c| format!("{c:?}")).unwrap_err().to_string();
+                assert_eq!(
+                    refused,
+                    "The wallet can't read this transaction: its data is nested more than 128 levels deep.",
+                    "inline {inline}"
+                );
+            }
+        })
+        .unwrap();
+    if let Err(panic) = run.join() {
+        std::panic::resume_unwind(panic);
+    }
 }
