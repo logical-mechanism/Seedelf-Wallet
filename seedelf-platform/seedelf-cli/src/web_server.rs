@@ -1,7 +1,9 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
+use colored::Colorize;
 use mime_guess::MimeGuess;
 use rand_core::{OsRng, RngCore};
 use rust_embed::RustEmbed;
+use seedelf_core::build;
 use seedelf_display::display;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -81,23 +83,30 @@ fn serve_bytes(path: &'static str, data: Vec<u8>) -> impl warp::Reply {
         .body(data)
 }
 
-/// The signing page, with `message` (the tx CBOR) and the network in it.
-fn signing_page(message: &str, network_flag: bool) -> String {
-    let file = Asset::get("index.html").expect("index.html not found");
-    let html = String::from_utf8(file.data.into_owned()).expect("index.html is UTF-8");
-
-    // The message goes in a `<script type="application/json">` block.
-    // serde_json escapes its quotes and backslashes, so it can't leave the
-    // JSON string; `<`, `>` and `&` are escaped too, as JSON's unicode
-    // escapes, which JSON.parse reads back, so no `</script>` or `<!--` in it
-    // can end the block or start HTML (chunk 51, r4#9). Every caller passes
-    // hex.
-    let escaped = serde_json::to_string(message)
+/// `text` as a JSON string for a `<script type="application/json">` block.
+/// serde_json escapes its quotes and backslashes, so it can't leave the JSON
+/// string; `<`, `>` and `&` are escaped too, as JSON's unicode escapes, which
+/// JSON.parse reads back, so no `</script>` or `<!--` in it can end the block
+/// or start HTML (chunk 51, r4#9). Every caller passes hex.
+fn json_string(text: &str) -> String {
+    serde_json::to_string(text)
         .unwrap_or_else(|_| "\"\"".to_string())
         .replace('<', "\\u003c")
         .replace('>', "\\u003e")
-        .replace('&', "\\u0026");
-    let dyn_msg = format!(r#"{{ "message": {escaped} }}"#);
+        .replace('&', "\\u0026")
+}
+
+/// The signing page, with `message` (the tx CBOR), its id `tx_id`, and the
+/// network in it.
+fn signing_page(message: &str, tx_id: &str, network_flag: bool) -> String {
+    let file = Asset::get("index.html").expect("index.html not found");
+    let html = String::from_utf8(file.data.into_owned()).expect("index.html is UTF-8");
+
+    let dyn_msg = format!(
+        r#"{{ "message": {}, "id": {} }}"#,
+        json_string(message),
+        json_string(tx_id)
+    );
     let net_repl = if network_flag {
         r#"{ "network": "preprod." }"#
     } else {
@@ -115,6 +124,11 @@ fn signing_page(message: &str, network_flag: bool) -> String {
 /// stand in for this one, and a page from an earlier run, reloaded, gets
 /// nothing here (chunk 51, r4#5). A port another run holds is an error, said
 /// before any address is printed.
+///
+/// The transaction's id goes with it, printed here and shown on the page
+/// before the wallet signs: a submit the wallet doesn't confirm may have gone
+/// through all the same, and the id is what to look up before running the
+/// command again (chunk 51).
 pub(crate) async fn run_web_server(message: String, network_flag: bool) -> Result<()> {
     // Test seam: when armed, record the tx CBOR and return instead of serving
     // the signing site (which would block on Ctrl-C and hang the test).
@@ -123,13 +137,18 @@ pub(crate) async fn run_web_server(message: String, network_flag: bool) -> Resul
         return Ok(());
     }
 
+    // Its body's hash, which the wallet's signature doesn't change.
+    let tx_id: String = hex::encode(build::tx_id(
+        &hex::decode(&message).context("The transaction to sign isn't hex")?,
+    )?);
+
     let addr: SocketAddr = ADDRESS.into();
     let mut token = [0u8; 16];
     OsRng.fill_bytes(&mut token);
     let run: String = hex::encode(token);
     let home: String = format!("/{run}/");
     let url: String = format!("http://{addr}{home}");
-    let page: String = signing_page(&message, network_flag);
+    let page: String = signing_page(&message, &tx_id, network_flag);
 
     let own_host = warp::host::optional()
         .and_then(|authority: Option<Authority>| async move {
@@ -211,6 +230,7 @@ pub(crate) async fn run_web_server(message: String, network_flag: bool) -> Resul
 
     *SERVING.lock().expect("serving lock poisoned") = Some(url.clone());
     let _serving = Serving;
+    println!("\nTx Hash: {}", tx_id.bright_cyan());
     display::signing_page_address(&url);
     server.await;
     Ok(())
@@ -221,11 +241,13 @@ mod tests {
     use super::*;
 
     /// Whatever a message holds, it can't end its JSON block or start HTML,
-    /// and the page reads it back unchanged (chunk 51, r4#9).
+    /// and the page reads it back unchanged (chunk 51, r4#9), and its id
+    /// beside it.
     #[test]
     fn a_message_stays_inside_its_json_block() {
         let message = r#"84a0</script><script>alert("x")</script><!-- & \ "#;
-        let page = signing_page(message, false);
+        let id = "ab".repeat(32);
+        let page = signing_page(message, &id, false);
         let open = r#"<script id="injected-data" type="application/json">"#;
         let start = page.find(open).expect("the injected block") + open.len();
         let end = start + page[start..].find("</script>").expect("the block's end");
@@ -236,5 +258,6 @@ mod tests {
         );
         let read: serde_json::Value = serde_json::from_str(block).expect("the block is JSON");
         assert_eq!(read["message"], message);
+        assert_eq!(read["id"], id.as_str());
     }
 }

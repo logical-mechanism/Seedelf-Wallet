@@ -110,7 +110,7 @@ seedelf-cli create [OPTIONS] --address <ADDRESS>
 
 `<ADDRESS>` pays for the mint. It must belong to a browser wallet that supports CIP-30, the standard that lets a web page ask a Cardano browser wallet to sign. It must also hold a UTxO of exactly 5 ADA with no tokens, which the mint puts up as collateral; `create` refuses to build the transaction without one. To make one, send exactly 5 ADA from that wallet to that same address. The optional `--label` is a personal tag in plain text, which anyone can read: the token's name keeps its first 15 bytes, in hex.
 
-`create` then serves a page on your machine and prints its address once it's serving: `http://127.0.0.1:44203/` and a path of its own for each run, so the address it prints shows this run's transaction and no other. Open it in the browser that has your wallet, and pick the wallet from the dropdown in the top right corner. The page asks the wallet to sign, and the wallet submits the transaction. The page's `Transaction CBOR` section shows the transaction's CBOR. Stop the server with Ctrl-C when it's done. One run's page serves at a time: while another is serving, `create` says so and stops. A page left open from an earlier run still holds that run's transaction, so close it.
+`create` then serves a page on your machine and prints its address once it's serving: `http://127.0.0.1:44203/` and a path of its own for each run, so the address it prints shows this run's transaction and no other. Open it in the browser that has your wallet, and pick the wallet from the dropdown in the top right corner. The page asks the wallet to sign, and the wallet submits the transaction. The page shows the transaction's ID and CBOR before you sign, and the CLI prints the ID too. If the wallet doesn't confirm the submit, the transaction may still have gone through: look the ID up before you run the command again. Stop the server with Ctrl-C when it's done. One run's page serves at a time: while another is serving, `create` says so and stops. A page left open from an earlier run still holds that run's transaction, so close it.
 
 Once the mint lands, `seedelf-cli balance` shows your Seedelf by its full name: the 64-character hex string you give to anyone who pays you. From then on it can be paid from any CIP-30 wallet with `fund`, or from another Seedelf balance with `transfer`. `fund` pays your own Seedelf or anyone's.
 
@@ -131,7 +131,7 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 | `welcome` | Prints a short introduction. | |
 | `balance` | Your Seedelfs and your balance. | |
 | `create` | Mints a new Seedelf, paid by an address of a browser wallet, which signs it. | `-a, --address`, `-l, --label` |
-| `fund` | An address pays a Seedelf, yours or anyone's. The browser wallet signs it. | `-a, --address`, `-s, --seedelf`, `-l, --lovelace`, `--asset` |
+| `fund` | An address pays a Seedelf, yours or anyone's. The browser wallet signs it. It never spends a UTxO of exactly 5 ADA with no tokens: that's the collateral `create` and `util extract` put up. | `-a, --address`, `-s, --seedelf`, `-l, --lovelace`, `--asset` |
 | `transfer` | Your balance pays one or more Seedelfs. | `-s, --seedelfs`, `-l, --lovelaces`, `--asset`, `--utxo` |
 | `sweep` | Your balance pays an address. | `-a, --address` or `--ada-handle`; `-l, --lovelace` and `--asset`, or `--all`; `--utxo` |
 | `remove` | Burns one of your Seedelfs and sends the ADA it held to an address. | `-s, --seedelf`, `-a, --address` |

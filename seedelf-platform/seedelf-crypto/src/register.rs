@@ -133,7 +133,7 @@ impl Register {
                 .map_err(|e| anyhow::anyhow!("{e:?}"))?,
         )
         .into_option()
-        .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
+        .ok_or_else(|| anyhow!("Failed to decompress public value"))?;
 
         // Refuse to rerandomize a non-prime-order register — the on-chain
         // validator rejects torsion points, and writing one back to chain
@@ -215,7 +215,7 @@ impl Register {
                 .map_err(|e| anyhow::anyhow!("{e:?}"))?,
         )
         .into_option()
-        .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
+        .ok_or_else(|| anyhow!("Failed to decompress public value"))?;
 
         Ok(g1.is_on_curve().into()
             && g1.is_torsion_free().into()

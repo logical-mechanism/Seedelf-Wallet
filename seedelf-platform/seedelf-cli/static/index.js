@@ -18,6 +18,12 @@ async function initializePage() {
   const txCborElement = document.getElementById("tx_cbor");
   txCborElement.textContent = injectedData.message;
 
+  // the transaction's id, its body's hash, which signing doesn't change: shown
+  // before the wallet signs, it's what to look up when a submit isn't confirmed
+  const txId = injectedData.id;
+  const txUrl = "https://" + injectedNetwork.network + "cardanoscan.io/transaction/" + txId;
+  document.getElementById("tx_id").textContent = txId;
+
   // we need to wait for the wallet, enable it, then sign the injected data
   try {
     const walletObject = await waitForWallet();
@@ -40,25 +46,49 @@ async function initializePage() {
     // the wallet should be enabled and on the correct network
     statusElement.textContent = "Wallet connected successfully!";
 
+    let complete_tx;
     try {
       const sig_part = await wallet.signTx(injectedData.message);
 
       // add the wallet's witnesses to the transaction's own
-      const complete_tx = withWitnesses(injectedData.message, sig_part);
-
-      // submitTx can return an error here so we want to catch that else it returns the tx hash
-      const tx_hash = await wallet.submitTx(complete_tx);
-
-      txLinkElement.href = "https://" + injectedNetwork.network + "cardanoscan.io/transaction/" + tx_hash; // Set the href attribute
-      txLinkElement.textContent = "View Transaction On Cardanoscan";
-
-      statusElement.textContent = "Transaction successfully submitted! It will take a few moments to hit the chain. Please close this tab and stop the web server. The transaction can be viewed on Cardanoscan by clicking the View Transaction On Cardanoscan button.";
+      complete_tx = withWitnesses(injectedData.message, sig_part);
     } catch (error) {
-      statusElement.textContent = "Error: Sign and Submit Tx Failure. Message: " + error.message + ".  Refresh page and try again.";
+      // nothing went out
+      statusElement.textContent = "Error: Sign Tx Failure. Message: " + words(error) + ".  Refresh page and try again.";
+      return;
     }
+
+    // Once the wallet has it, a submit it doesn't confirm may have gone
+    // through all the same: look its id up before running the command again,
+    // the CLI's own advice for its own submits (chunk 51).
+    let unconfirmed;
+    try {
+      const tx_hash = await wallet.submitTx(complete_tx);
+      if (typeof tx_hash !== "string" || tx_hash.toLowerCase() !== txId) {
+        unconfirmed = "its answer isn't the transaction's id";
+      }
+    } catch (error) {
+      unconfirmed = words(error);
+    }
+    txLinkElement.href = txUrl;
+    if (unconfirmed !== undefined) {
+      txLinkElement.textContent = "Look It Up On Cardanoscan";
+      statusElement.textContent = "Transaction " + txId + " may have gone through: the wallet didn't confirm it (" + unconfirmed + "). Look it up on Cardanoscan before you run the command again.";
+      return;
+    }
+    txLinkElement.textContent = "View Transaction On Cardanoscan";
+
+    statusElement.textContent = "Transaction successfully submitted! It will take a few moments to hit the chain. Please close this tab and stop the web server. The transaction can be viewed on Cardanoscan by clicking the View Transaction On Cardanoscan button.";
   } catch (error) {
-    statusElement.textContent = "Error: Wallet Not Enable. Message: " + error.message + ".  Refresh page and try again.";
+    statusElement.textContent = "Error: Wallet Not Enable. Message: " + words(error) + ".  Refresh page and try again.";
   }
+}
+
+// What an error says. A CIP-30 wallet throws an object holding `info`, not an Error.
+function words(error) {
+  if (error && typeof error.info === "string") return error.info;
+  if (error && typeof error.message === "string") return error.message;
+  return String(error);
 }
 
 // The transaction is the CBOR array [body, witness set, valid, auxiliary data].

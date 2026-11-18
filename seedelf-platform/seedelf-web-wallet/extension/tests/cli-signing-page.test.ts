@@ -8,6 +8,11 @@
 // the witnesses written into it, and the node refused what the page submitted
 // (chunk 51, r4#3). It now finds the witness set by walking the CBOR.
 //
+// It also shows the transaction's id before the wallet signs, and names it
+// after a submit the wallet doesn't confirm, which may have gone through all
+// the same: look it up before running the command again, the CLI's own advice
+// for its own submits (chunk 51, r4#4's sibling on the page).
+//
 // This runs the page itself, its two injected blocks filled as web_server.rs
 // fills index.html's, against a fake CIP-30 wallet, and reads what it submits.
 
@@ -23,10 +28,17 @@ const cliStatic = (file: string) =>
 const pageScript = cliStatic("index.js");
 const pageHtml = cliStatic("index.html");
 
-/** index.html's two injected blocks, filled as web_server.rs fills them (mainnet). */
+/** A transaction's id, as web_server.rs computes it (seedelf-core's `build::tx_id`): its body's hash. */
+const idOf = (tx: string) => txId(bytes(tx));
+
+/**
+ * index.html's two injected blocks, filled as web_server.rs fills them
+ * (mainnet): the transaction and its id, and the network.
+ */
 function serve(message: string): { data: string; network: string } {
+  const data = `{ "message": ${JSON.stringify(message)}, "id": ${JSON.stringify(idOf(message))} }`;
   const filled = pageHtml
-    .replace('{ "message": "ACAB000000000000" }', `{ "message": ${JSON.stringify(message)} }`)
+    .replace('{ "message": "ACAB000000000000" }', data)
     .replace('{ "network": "FADECAFE00000000" }', '{ "network": "" }');
   const block = (id: string) => {
     const found = filled.match(new RegExp(`<script id="${id}" type="application/json">([\\s\\S]*?)</script>`));
@@ -62,33 +74,56 @@ const VKEYS = `d9010281825820${VKEY}5840${SIGNATURE}`;
 const WALLET_WITNESSES = `a100${VKEYS}`;
 
 /**
- * Runs the page on `unsigned`, with the wallet picked in the dropdown, whose
- * signTx returns `witnesses`; returns what it signed and submitted.
+ * The fake wallet: signTx returns `witnesses`, or throws `signError`; submitTx
+ * throws `submitError`, or answers `answer`, by default the id of what it was
+ * handed.
  */
-async function signOnThePage(
-  unsigned: string,
-  witnesses = WALLET_WITNESSES,
-): Promise<{ signed?: string; submitted?: string; status: string }> {
+interface FakeWallet {
+  witnesses?: string;
+  signError?: unknown;
+  submitError?: unknown;
+  answer?: unknown;
+}
+
+/** What a run of the page did and showed. */
+interface PageRun {
+  signed?: string;
+  submitted?: string;
+  status: string;
+  /** Where the page's Cardanoscan button leads, and what it says. */
+  link: { href: string; text: string };
+  /** The id the page showed when the wallet was asked to sign, and at the end. */
+  idWhenSigning?: string;
+  idShown: string;
+}
+
+/** Runs the page on `unsigned`, with the fake wallet picked in the dropdown. */
+async function signOnThePage(unsigned: string, wallet: FakeWallet = {}): Promise<PageRun> {
   const served = serve(unsigned);
   const elements: Record<string, FakeElement> = {
     "injected-data": element(served.data),
     "injected-network-data": element(served.network),
     status: element(),
     tx_link: element(),
+    tx_id: element(),
     tx_cbor: element(),
     wallet_dropdown: element(),
   };
   elements.wallet_dropdown!.value = "cliwallet";
-  const seen: { signed?: string; submitted?: string; onLoad?: () => Promise<void> } = {};
+  const seen: { signed?: string; submitted?: string; idWhenSigning?: string; onLoad?: () => Promise<void> } = {};
   const api = {
     getNetworkId: async () => 1,
     signTx: async (tx: string) => {
       seen.signed = tx;
-      return witnesses;
+      seen.idWhenSigning = elements.tx_id!.textContent;
+      if (wallet.signError !== undefined) throw wallet.signError;
+      return wallet.witnesses ?? WALLET_WITNESSES;
     },
     submitTx: async (tx: string) => {
       seen.submitted = tx;
-      return "ab".repeat(32);
+      if (wallet.submitError !== undefined) throw wallet.submitError;
+      if ("answer" in wallet) return wallet.answer;
+      return idOf(tx);
     },
   };
   const cardano = {
@@ -106,7 +141,14 @@ async function signOnThePage(
   });
   if (!seen.onLoad) throw new Error("index.js didn't wait for DOMContentLoaded");
   await seen.onLoad();
-  return { signed: seen.signed, submitted: seen.submitted, status: elements.status!.textContent };
+  return {
+    signed: seen.signed,
+    submitted: seen.submitted,
+    status: elements.status!.textContent,
+    link: { href: elements.tx_link!.href, text: elements.tx_link!.textContent },
+    idWhenSigning: seen.idWhenSigning,
+    idShown: elements.tx_id!.textContent,
+  };
 }
 
 const bytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
@@ -213,7 +255,7 @@ async function expectSignedAsBuilt(
     witnesses: tx.ours,
     after: "f5f6",
   });
-  const run = await signOnThePage(tx.unsigned, witnesses);
+  const run = await signOnThePage(tx.unsigned, { witnesses });
   expect(run.signed, run.status).toBe(tx.unsigned);
   expect(run.submitted, run.status).toBeDefined();
   expect(read(run.submitted!), `submitted ${run.submitted}`).toEqual({
@@ -267,5 +309,49 @@ describe("the CLI's signing page adds the wallet's witnesses to the transaction 
   it("reads a wallet's witness set written at indefinite length", async () => {
     await expectSignedAsBuilt(fundTx(), `bf00${VKEYS}ff`);
     await expectSignedAsBuilt(extractTx(), `bf00${VKEYS}ff`);
+  });
+});
+
+describe("the CLI's signing page names the transaction it serves", () => {
+  it("shows the transaction's id before the wallet signs, and links it once the wallet confirms the submit", async () => {
+    for (const tx of [fundTx(), extractTx()]) {
+      const id = idOf(tx.unsigned);
+      const run = await signOnThePage(tx.unsigned);
+      expect(run.idWhenSigning).toBe(id);
+      expect(run.idShown).toBe(id);
+      expect(run.status).toContain("successfully submitted");
+      expect(run.link).toEqual({ href: `https://cardanoscan.io/transaction/${id}`, text: "View Transaction On Cardanoscan" });
+    }
+  });
+
+  it("names the transaction to look up first after a submit the wallet doesn't confirm", async () => {
+    const tx = extractTx();
+    const id = idOf(tx.unsigned);
+    const unconfirmed: FakeWallet[] = [
+      // A CIP-30 TxSendError, as wallets throw them: an object, not an Error.
+      { submitError: { code: 2, info: "the network didn't answer in time" } },
+      { submitError: new Error("Failed to fetch") },
+      // An answer that isn't the transaction's id confirms nothing.
+      { answer: "ab".repeat(32) },
+      { answer: undefined },
+    ];
+    for (const wallet of unconfirmed) {
+      const run = await signOnThePage(tx.unsigned, wallet);
+      expect(run.submitted, run.status).toBeDefined();
+      expect(run.status).toContain(`Transaction ${id} may have gone through`);
+      expect(run.status).toContain("before you run the command again");
+      expect(run.status).not.toContain("successfully");
+      expect(run.link.href).toBe(`https://cardanoscan.io/transaction/${id}`);
+    }
+    const run = await signOnThePage(tx.unsigned, unconfirmed[0]);
+    expect(run.status).toContain("the network didn't answer in time");
+  });
+
+  it("says what the wallet said when it doesn't sign, where nothing went out", async () => {
+    const run = await signOnThePage(fundTx().unsigned, { signError: { code: 2, info: "user declined to sign" } });
+    expect(run.submitted).toBeUndefined();
+    expect(run.status).toContain("user declined to sign");
+    expect(run.status).not.toContain("may have gone through");
+    expect(run.link.href).toBe("");
   });
 });
