@@ -107,7 +107,7 @@ The code is `api/src/lovejoin/`. **Its checks are a copy of the wallet's:** this
 ### Held together with the wallet
 
 - `seedelf-platform/seedelf-core/tests/fixtures/lovejoin-pool-vectors.json`, which `seedelf-core`'s `lovejoin_vectors_test.rs` writes from its own derive, datum decoder and `cbor::within_depth`: ten seeds' four script hashes on each set (`v2` holds v2's), 32 datum encodings with what each reads as, and 28 script rows' datums with whether each is within the 128 levels (`scriptRowDatums`), which `datum.rs`' `within_depth` is held to.
-- `seedelf-platform/seedelf-core/tests/fixtures/lovejoin-box-spellings.json`: a box's datum spelled 252 ways, each with what the node reads it as (cardano-cli, offline; `record-box-spellings.py` beside it records it again, only for a deliberate change). `datum.rs`' `is_mix_datum` takes exactly the spellings the node reads as a box, as `seedelf-core`'s `PoolBox::from_row` does.
+- `seedelf-platform/seedelf-core/tests/fixtures/lovejoin-box-spellings.json`: a box's datum spelled many ways, each with what the node reads it as (cardano-cli, offline; `record-box-spellings.py` beside it records it again, only to add a spelling or for a new cardano-cli). `datum.rs`' `is_mix_datum` takes exactly the spellings the node reads as a box, as `seedelf-core`'s `PoolBox::from_row` does.
 - `seedelf-platform/seedelf-web-wallet/extension/tests/fixtures/lovejoin-shown.json`: the earliest-of-each-value scenarios, which the wallet's `lovejoin-pools.ts` is tested against too.
 
 ## The public routes

@@ -152,6 +152,16 @@ add("X-chunk65", TAG121["min"] + h("9f") + h("5f") + whole(A + A[:17]) + h("ff")
 # The general form's index is an unsigned integer: -1 and an empty byte string each have a head of argument 0.
 add("X-102-idx-neg1", TAG102["min"] + LEN2["min"] + h("20") + indef)
 add("X-102-idx-bytes0", TAG102["min"] + LEN2["min"] + h("40") + indef)
+# The general form's pair: one item with the fields after it, three items announced and two given, and an
+# indefinite pair whose break is missing.
+add("X-102-pair1-fields-after", TAG102["min"] + h("81") + IDX0["min"] + indef)
+add("X-102-pair3-short", TAG102["min"] + h("83") + IDX0["min"] + indef)
+add("X-102-pair-indef-no-break", TAG102["min"] + h("9f") + IDX0["min"] + indef + h("00"))
+# Data the node reads, but not this box: a third field, in either form and either list, and a twice.
+add("X-121-three-fields", TAG121["min"] + h("9f") + a + b + h("00ff"))
+add("X-102-three-fields", TAG102["min"] + LEN2["min"] + IDX0["min"] + h("9f") + a + b + h("00ff"))
+add("X-121-three-fields-def", TAG121["min"] + h("83") + a + b + h("40"))
+add("X-121-a-twice", TAG121["min"] + h("9f") + a + a + h("ff"))
 
 # ---- What the node reads each as ----
 
