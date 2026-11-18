@@ -184,9 +184,9 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## E8b (6 findings, 19 guards)
 
-- `e8b#1` low (stranger): A stranger's 5 ₳ carrying a reference script or an unreadable datum becomes the public account's collateral, public Lovejoin mixes then fail, and the Collateral page can only pick it again `coin-control.ts:184`
-- `e8b#2` low (user): The collateral payment's review doesn't show that it withdraws all the account's staking rewards `Collateral.tsx:194`
-- `e8b#3` low (user): Bring everything back: a session left out while the switch rebuilds is chosen again when the rebuild lands `ClaimAll.tsx:111`
+- `e8b#1` low (stranger): A stranger's 5 ₳ carrying a reference script or an unreadable datum becomes the public account's collateral, public Lovejoin mixes then fail, and the Collateral page can only pick it again `coin-control.ts:184` · verified **confirmed, low**
+- `e8b#2` low (user): The collateral payment's review doesn't show that it withdraws all the account's staking rewards `Collateral.tsx:194` · verified **confirmed, low**
+- `e8b#3` low (user): Bring everything back: a session left out while the switch rebuilds is chosen again when the rebuild lands `ClaimAll.tsx:111` · verified **confirmed, low**
 - `e8b#4` nit (user): Bring everything back's total counts a token once per session, not once per kind `ClaimAll.tsx:259`
 - `e8b#5` nit (user): Make private keeps a refusal on the form after the amount changes and after Back from its review, and Collateral keeps the review's error after Back `MoveIn.tsx:105`
 - `e8b#6` nit (user): A token picked from its details but not spendable (all in locked UTxOs) is dropped silently, and Review waits with no reason `Recipients.tsx:167` · merged into e9a#1
@@ -195,10 +195,10 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## E9a (6 findings, 16 guards)
 
-- `e9a#1` low (user): A token's details offer Send or Make private/public for a token with no spendable units, and the form silently drops it, with Review greyed and no reason `Home.tsx:572`
-- `e9a#2` low (user): Transaction details show an unlisted token in raw units, while the review above them and Home scale it by Koios's decimals `TxDetail.tsx:351`
-- `e9a#3` low (stranger): UTxO details call any address under payment key 0/0 'Your receive address, the one Receive shows', whatever its stake part `Utxos.tsx:411`
-- `e9a#4` low (user): Public activity's Save as CSV note says the file holds nothing the chain doesn't, but its rows name the user's own Make private and Make public `Activity.tsx:126`
+- `e9a#1` low (user): A token's details offer Send or Make private/public for a token with no spendable units, and the form silently drops it, with Review greyed and no reason `Home.tsx:572` · verified **confirmed, low**
+- `e9a#2` low (user): Transaction details show an unlisted token in raw units, while the review above them and Home scale it by Koios's decimals `TxDetail.tsx:351` · verified **confirmed, low**
+- `e9a#3` low (stranger): UTxO details call any address under payment key 0/0 'Your receive address, the one Receive shows', whatever its stake part `Utxos.tsx:411` · verified **confirmed, low**
+- `e9a#4` low (user): Public activity's Save as CSV note says the file holds nothing the chain doesn't, but its rows name the user's own Make private and Make public `Activity.tsx:126` · verified **confirmed, low**
 - `e9a#5` nit (user): Private activity's CSV includes a private payment still marked Pending, against exported()'s own promise `Activity.tsx:305`
 - `e9a#6` nit (user): Activity's details label a private session's funding or return, and a box back from Lovejoin, as 'Seedelf' `Activity.tsx:428`
 
@@ -206,19 +206,19 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## E9b (3 findings, 13 guards)
 
-- `e9b#1` low (stranger): Greek capitals Ν Μ Η Υ, and Cherokee or Lisu letters, slip past the check for tokens named like ADA or a listed token `format.ts:80`
-- `e9b#2` low (nobody): Anti-impersonation warnings in warning colour are left out of the accuracy-critical translation set `i18n-critical.mjs:84`
+- `e9b#1` low (stranger): Greek capitals Ν Μ Η Υ, and Cherokee or Lisu letters, slip past the check for tokens named like ADA or a listed token `format.ts:80` · verified **confirmed, low**
+- `e9b#2` low (nobody): Anti-impersonation warnings in warning colour are left out of the accuracy-critical translation set `i18n-critical.mjs:84` · verified **confirmed, low**
 - `e9b#3` nit (nobody): PlutusTree's Copy JSON isn't the detailed schema cardano-cli reads: ints are strings, and an unknown tag's constructor is null `PlutusTree.tsx:167`
 
 *Coverage:* Read in full: ui/format.ts, tokens.ts, App.tsx, view.ts, history.ts, activity.ts, background.ts, accounts.tsx, preferences.tsx, lovejoin-pools.ts, nft-images.ts, network.ts, sentence.ts and main.tsx; shared/open-in.ts; i18n/core.ts, index.tsx, i18next.d.ts and translations/index.ts. Also read in full every component not listed for E8a or E9a: MiddleEllipsis, PhraseGrid, PoolAvatar, ActionButton, CopyButton, Callout, NetworkBadge, CopyField, QrCode, GivemeNote, BuildStage, Choice, PasswordField, RefreshRow, Tabs, Clearable, Modal, AccountPicker, RadioCards, ExplorerLink, Splash, NetworkPicker, SetPassword, Hint, LockCountdown, NftImage, Contacts, PlutusTree, PhraseInput and Screen. Icons.tsx was skimmed (static SVG paths only).  Translations: read all 485 critical bases in en, es and ja (the _other or base form, plus every es _one). Mechanical scans with python over all 3,195 keys compare…
 
 ## B1 (5 findings, 9 guards)
 
-- `b1#1` low (user): The store zip's third-party notices sort in the builder's locale, so the same commit gives another zip in cs, sk, et, lt and lv `third-party.mjs:225`
-- `b1#2` low (user): build.sh never checks or records which Rust built the module, and the second build shares the first's shell, so the record's "same toolchain" can be false `build.sh:61`
-- `b1#3` low (nobody): release.yml's CLI build jobs hold the GPG release key, its passphrase and a write token beside every crate's build code `release.yml:24`
+- `b1#1` low (user): The store zip's third-party notices sort in the builder's locale, so the same commit gives another zip in cs, sk, et, lt and lv `third-party.mjs:225` · verified **confirmed, low**
+- `b1#2` low (user): build.sh never checks or records which Rust built the module, and the second build shares the first's shell, so the record's "same toolchain" can be false `build.sh:61` · verified **partly, low**
+- `b1#3` low (nobody): release.yml's CLI build jobs hold the GPG release key, its passphrase and a write token beside every crate's build code `release.yml:24` · verified **confirmed, low**
 - `b1#4` low (nobody): The Windows release job prints the armored GPG secret key into the public Actions log `release.yml:108`
-- `b1#5` low (nobody): Every workflow pins its third-party actions by tag or branch, never by commit, in the jobs that sign the CLI and build the data layer's binary too `release.yml:18`
+- `b1#5` low (nobody): Every workflow pins its third-party actions by tag or branch, never by commit, in the jobs that sign the CLI and build the data layer's binary too `release.yml:18` · verified **confirmed, low**
 
 *Coverage:* Read every line of these files: .github/workflows/web-wallet.yml, release.yml, continuous-integration.yml, data-layer.yml and data-layer-deploy.yml; wasm/build.sh; extension/scripts/package.mjs, third-party.mjs (+.d.mts), tokens.mjs, dreps.mjs, lovejoin-registry.mjs (+.d.mts), i18n-critical.mjs (all 1,327 lines, read for gaps rather than traced key by key) and i18n-critical.d.mts; extension/vite.config.ts, package.json, playwright.config.ts, tsconfig.json and index.html; seedelf-platform/Cargo.toml, rust-toolchain.toml and wasm/Cargo.toml; the .gitignore files in extension/, wasm/ and seedelf-platform/; development.md's release sections in full, plus releases.md and release-records.md' headers; SECURITY.md and RELEASE.md.  Followed out of those paths: src/manifest.ts, networks.ts, env.d.ts, the content scripts' imports, data-layer.ts's DEV path, sw.ts's and App.tsx's uses of the defines,…
 
@@ -249,30 +249,30 @@ Made by `tools/index.py` from `data/`. Severity is the finder's; *verified* give
 
 ## V3 (3 findings, 4 guards)
 
-- `v3#1` low (nobody): tally.py and Audit/count.py report a module ok from its last good build's trace after its rebuild fails `tally.py:68`
-- `v3#2` low (nobody): CI skips the proven-bytes test on a PR that changes only the proven .hex files it reads `web-wallet.yml:67`
+- `v3#1` low (nobody): tally.py and Audit/count.py report a module ok from its last good build's trace after its rebuild fails `tally.py:68` · verified **confirmed, low**
+- `v3#2` low (nobody): CI skips the proven-bytes test on a PR that changes only the proven .hex files it reads `web-wallet.yml:67` · verified **known, low**
 - `v3#3` nit (nobody): tally.py's docstring says check.sh's ok can't tell Valid from Undetermined, but since #372 check.sh can `tally.py:10`
 
 *Coverage:* Read in full: extract.sh, extract-lovejoin.sh, extract-lovejoin-v2.sh, the five Scripts.lean modules (Seedelf, Lovejoin, Lovejoin/V2, Lovejoin/Template, Slice/Slice), lakefile.lean, lake-manifest.json, lean-toolchain, Slice/lakefile.lean, Slice/lake-manifest.json, Slice/modules.txt, check.sh, tally.py, Audit/count.py, Audit/run-all.sh, and all nine gen-*.py. I also ran the nine generators in a scratch copy and diffed their output against the tree. The 13 .hex files were not read by eye: each was hashed and compared by script against 5b82530's contracts, references.rs, constants.rs, templates.rs (both sets), Lovejoin c1239fb's artifacts and lovejoin-pools.json. Followed out of my paths:\n- lovejoin_proven_bytes_test.rs (in full);\n- templates.rs (its code in full, its hex by script);\n- Protocol::of in lovejoin/mod.rs;\n- verify_pool's entry in pool.rs;\n- the frozen-template tests in lov…
 
 ## V4a (2 findings, 8 guards)
 
-- `v4a#1` low (nobody): The wallet's every-transaction Blaster families have no Falsified control: 307 Valid theorems with nothing that would flag a vacuous Valid `WalletAnyTx.lean:43`
+- `v4a#1` low (nobody): The wallet's every-transaction Blaster families have no Falsified control: 307 Valid theorems with nothing that would flag a vacuous Valid `WalletAnyTx.lean:43` · verified **partly, low**
 - `v4a#2` nit (nobody): PolicyLinesAnyTx's header says mints of six lines or more 'aren't proved', though PolicyLinesAll proves every length in the kernel `PolicyLinesAnyTx.lean:22`
 
 *Coverage:* **Read in full:** - Every top-level module in seedelf-verification/Seedelf/ (39 files): the root Seedelf.lean, Scripts, Scenario, Steps, Wallet, Policy, AlwaysFalse, WalletPurpose, WalletNoLock, WalletRegister, PolicyAmount, PolicyForeign, PolicyBurn, PolicyMint, AnyTx, AnyTxCover, AnyTxSteps, AlwaysFalseAnyTx, WalletPurposeAnyTx, WalletNoLockAnyTx, WalletRedeemerAnyTx, WalletAnyTx, WalletAnyTxTwo, WalletAnyTxThree, AnyTxShapes, PolicyAnyTx, PolicyAnyTxSteps, PolicyPurposeAnyTx, PolicyRedeemerAnyTx, PolicyLinesAnyTx, PolicyLinesFourAnyTx, LinesAllCek, LinesAllLoops, PolicyLinesAll, LinesAllAnyMint, PolicyShapes and Signers.lean. In PolicyLinesFiveAnyTx I read the header, guards, theorems and control by eye; its builders and examples were checked by script. - In Signers/: Keys.lean and Control128.lean in full; Signers4, 5, 9 and 128 by eye; all 125 by script, plus a regeneration diff. - I…
 
 ## V4b (2 findings, 11 guards)
 
-- `v4b#1` low (nobody): AnyTx's output, reference and launch failure families have no passing control on their own builders `MixOutputControls.lean:124`
+- `v4b#1` low (nobody): AnyTx's output, reference and launch failure families have no passing control on their own builders `MixOutputControls.lean:124` · verified **partly, low**
 - `v4b#2` nit (nobody): AnyTx README understates the ledger hypotheses of LogicBoxComposition and of the _valid forms `README.md:195`
 
 *Coverage:* Read in full: - All 25 classic top-level Lovejoin/*.lean files: Scripts, Box, Logic, Steps, Owner, ReferenceHolder, MixBox{Purpose,Gate,NoLock}, MixLogicPurpose, OwnClassic1-3 with Boxes, Passes, Spec and Steps. - V2's hand-written files: Scripts, Logic, Steps, Owner, Mix, MixSpec, MixSplit, MixChallenges, MixFirst, MixSecond, MixPasses, MixOutputs, MixDatums, Mix3 with Spec, Steps, First, Second, Third and Passes, MixAny with Spec, First, Second, Passes and Steps, MixAny3 with Spec, Box1, Passes and Steps, MixAnyOut with Outputs, Datums and OutSteps, and MixTok2 with Spec, Passes and Steps. - AnyTx: README.md, Common, CekCase, PurposesKernel, LogicPublishKernel, BoxPurposesAll, BoxSemantics, BoxCover, BoxInlineAll, BoxMalformed, BoxGate, BoxBoundary, BoxSuffix, BoxDatum, BoxControls, BoxAllControls, OwnerOne, OwnerControls, OwnerLayouts, OwnerTwo, Owner3, OwnerOtherInputs, OwnerIff, Own…
 
 ## V5 (3 findings, 2 guards)
 
-- `v5#1` low (nobody): CLAIMS.md's Blaster cross-check of the policy reads as covering every mint layout, but Blaster stops at five lines `CLAIMS.md:23`
-- `v5#2` low (nobody): README says the LinesAll kernel theorems list Lean's axioms alone, but nothing guards them, so a sorry there passes check.sh `README.md:86`
+- `v5#1` low (nobody): CLAIMS.md's Blaster cross-check of the policy reads as covering every mint layout, but Blaster stops at five lines `CLAIMS.md:23` · verified **confirmed, low**
+- `v5#2` low (nobody): README says the LinesAll kernel theorems list Lean's axioms alone, but nothing guards them, so a sorry there passes check.sh `README.md:86` · verified **confirmed, low**
 - `v5#3` nit (nobody): CLAIMS.md puts 'an input in every transaction' among Lovejoin's assumed ledger rules, but none of Lovejoin's theorems uses it `CLAIMS.md:31`
 
 *Coverage:* Read in full: seedelf-verification/CLAIMS.md, README.md, Seedelf/Every/README.md, Lovejoin/Every/README.md, Lovejoin/AnyTx/README.md and Audit/README.md; the root README.md; the wallet README. Also read in full: check.sh, lakefile.lean, both lake-manifest.json files, Seedelf.lean, and the cited theorem files: Seedelf/Every/Typed.lean, PolicyTyped.lean and AlwaysFalse.lean; Lovejoin/Every/Readable.lean, Typed.lean and MintTyped.lean; Lovejoin/AnyTx/BoxPurposesAll.lean, BoxSemantics.lean, PurposesKernel.lean and LogicPublishKernel.lean. Plus Lovejoin/Template/Scripts.lean, Lovejoin/Scripts.lean, Seedelf/Scripts.lean, extract.sh, extract-lovejoin.sh, Audit/Checks/FlatDecodeCheck.lean, the wasm crate's lovejoin_proven_bytes_test.rs, and templates.rs's first 240 lines. Diffed CLAIMS.md and README.md from chunk 48 (363acdf3) to HEAD, and traced each changed wording to its commit. Skimmed: Poli…
