@@ -39,6 +39,14 @@ For the lead, if a session ends or the machine reboots mid-run. `/tmp` is a tmpf
 - The fixers don't commit: the lead commits each group's files by path, rebuilds the WebAssembly after the Rust groups, and runs every check.
 - If a session ends mid-round: `git -C ../Seedelf-Wallet-chunk51-fixes status` shows what each fixer left; compare it with the groups' file lists in this round's prompts (FIX.md's rules), finish or revert per group, and run the checks before committing.
 
+## Where it stood, 2026-11-18 (later)
+
+- **Found:** 157 findings in 51 lanes (34 lanes, 5 lenses, T1b, the critic, two gap rounds of five); `INDEX.md` lists them. More from the other T1 agents (`wf_a209476a-a2d`) as they finish.
+- **Verified:** batches 1 to 6 (`data/verify-batch*.json`, `verify/`), severity tiebreaks (`data/severity-tiebreaks.json`; a second set running for the first gap round's four mediums), batch 7 running for the second gap round (`wf_34fd9251-aa5`).
+- **On the high-fix branches:** `web-wallet/lovejoin-box-datum-spelling` has r3a#1 and x2#1 (`e2b31e6f`, `fcdacc50`); `cli/stranger-rows` has every CLI fix (`027fc81b` to `343fb772`).
+- **On the fix branch** (`web-wallet/whole-review-fixes`, `../Seedelf-Wallet-chunk51-fixes`), committed by group: G1 core, G2 the CLI, G3 the WebAssembly, G6 keys and chain reads (`git log f87c3e77..HEAD`). Uncommitted there: G4's and G5's work (they share lovejoin.ts) and every fixer's edits to the shared files (the translations, `docs/i18n/*.json`, `rpc.ts`, `DappApprovals.tsx`, architecture.md, flows.md, privacy.md).
+- **Still to run:** G7 the screens, G8 docs, G9 CI, G10 the proofs; the WebAssembly rebuild and every check; the blind back-translation of the new critical strings (`dappUi.warn.deadRegister`, `dappUi.warn.hiddenChars`, and whatever G5 and G7 add); the review of the merged fixes; the last look; the live preprod runs; `FINDINGS.md` and the record.
+
 ## Next
 
 1. The lanes' answers into `lanes/`, one file each, and a first merge into `FINDINGS.md`.
