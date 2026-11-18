@@ -1,0 +1,194 @@
+# Lane gap G7
+
+Returned by the workflow's agent `aab22df12ff8da19c`, written here by the lead from its structured answer.
+
+## Findings (4)
+
+### gap-g7#1 · low · A DRep that names itself Always abstain (or Always no confidence, Not delegated, Your own DRep) reads as that choice on the vote review's main row, and in Activity and Delegations afterwards
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/ui/format.ts:438`
+- **Who:** stranger · **Since:** e7e6715d (chunk 13, in 1.0.0) for the review row; 2185c4b3 (1.0.0) for Activity; c505173d (1.6.0) for Delegations · **Confidence:** traced
+- **Needs the owner:** It changes what the vote review, Activity and Delegations show for a DRep, and adds a warning.
+
+**Scenario:**
+
+A stranger registers a mainnet DRep (500 ₳ deposit, refundable) whose CIP-119 givenName is "Always abstain". It can reach the user two ways. (1) The next release's `npm run dreps` bundles it, because nameOf strips only control characters. It then sorts 39th of 467 (one Show more down, PAGE is 20) and is the first hit for a search for "abstain". (2) The user pastes its ID, and the live read names it the same way.
+
+The user, in Voting, picks A DRep, then that row. The card does show a DRep: full ID, status, voting power, delegators. But Review's strong row then reads "Voting power to · Always abstain", word for word the row a delegation to the predefined Always Abstain shows. The only difference on the review is a separate "DRep ID" block further down. No shared-name warning fires, because sharedNames counts only names on the list.
+
+The signed certificate gives the account's whole stake as voting power to the stranger, who then votes Yes or No with it on every action. Afterwards these all say "Always abstain", exactly as for the real choice: Activity's line and its "Voting power" detail row (the ID is only in a tooltip), the CSV, and Delegations. Only Staking's "Delegated to" row and Voting's "now" line show a short ID.
+
+The same holds for "Always no confidence", "Not delegated" and "Your own DRep", and for Spanish and Japanese users with the es and ja labels ("Siempre abstenerse", "常に棄権", "Tu propio DRep", ...). No ADA moves, and rewards stay withdrawable. Today's bundled lists hold no such name: I checked every name's skeleton against all 12 labels.
+
+**Evidence:**
+
+- format.ts:434-439: `voteLabel(drep, name)` returns t("format.vote.abstain") for ALWAYS_ABSTAIN ("drep_always_abstain", rpc.ts:250) and `return name ?? shortId(drep);` for any DRep. So a DRep's name stands in the same place, with the same words, as the wallet's own label.
+- Staking.tsx:973: the review's strong row is `<Row label={t("staking.review.voteTo")} value={voteLabel(summary.drep, drepName)} title={summary.drep ?? undefined} strong />`. Its drepName comes from Voting.tsx:190, `pick === "drep" && drep?.name ? plainName(drep.name)`.
+- Staking.tsx:1069: `summary.drep?.startsWith("drep1") && <ReviewId .../>` is the only mitigation on the review.
+- Staking.tsx:1070 shows the shared warning only for `shared > 1`. sharedNames (format.ts:461-469) counts only list names, and drepSharing (Voting.tsx:444-449) adds only the DRep itself.
+- Afterwards, from the bundled list: activity.ts:118-129 (drepName, then voteOf, then voteLabel) feeds Activity.tsx:280 (stakingLine) and :342 ("Voting power" row, ID only in its title). activity.ts:232 feeds the CSV, and Delegations.tsx:68 `voteLabel(row.drep, drepName(network, row.drep))`.
+- Staking.tsx:218 and :594 pass a name only for the account's own DRep, so Staking shows the short ID.
+- Names pass both readers: dreps.mjs:65-75 and staking.ts:306-315 strip only `[\u0000-\u001f\u007f-\u009f]`.
+- Labels (en.json): format.vote.abstain 'Always abstain', format.vote.noConfidence 'Always no confidence', format.vote.notDelegated 'Not delegated', drep.yourOwn 'Your own DRep'; es and ja have their own.
+- The token side has exactly this guard: tokens.ts:105-121, where an unlisted name posing as ADA goes by its fingerprint with 'calls itself'.
+- Ran: a python -I scan of both lists (scratch g7_dreps_scan.py and an inline skeleton check) found no name folding to any label. A node sort placed 'Always abstain' 39 of 467.
+- The CIP-30 window isn't affected: ui/dapp.ts:200 `voteLabel(c.drep)` takes no name.
+
+**Fix:**
+
+Fix it once in voteLabel, the path all three surfaces share (the review, activity.ts voteOf, Delegations voteText). Treat a DRep's name whose nameSkeleton equals the skeleton of a predefined label or of drep.yourOwn, in any language the wallet speaks, the way tokens.ts treats a token named like ADA: show its short ID plus 'calls itself …'. Compare after the 64-character cut. Also count such a name as shared in drepSharing, so the card and the review warn. Simpler still: never let a DRep's own name stand alone on the review's strong row ('DRep · <name>').
+
+The same voteLabel path should apply plainName (gap-g7#3). Test (Vitest): voteLabel('drep1y…', 'Always abstain') must not equal voteLabel(ALWAYS_ABSTAIN), plus a StakingReview render of each.
+
+**Known check:**
+
+Searched backlog.md, docs/archive/plans/ and docs/plans/ for 'always abstain' near name/impersonat/pose/spoof/mimic, 'predefined', 'calls itself', and 'drep' near name/bidi/invisible/plainName/givenName. Found only:
+- launch-review.md:284 (#59: two DReps sharing '8Ball', fixed by flagging shared names and showing the ID);
+- chunk-36's row wording;
+- chunk-13's list design.
+INDEX.md's e7b#1-#4 aren't about names. SECURITY.md's social-engineering exclusion doesn't cover the list path, which needs no contact with the user.
+
+### gap-g7#2 · low · The wallet's own DRep list ignores CIP-119's doNotList, which the wallet's profile form turns on by default, so a user's DRep that asked directories not to list it is listed by name in every Seedelf Wallet
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/scripts/dreps.mjs:96`
+- **Who:** user · **Since:** 5969dd7a (chunk 21, first in 1.2.0): the form began writing doNotList, on by default. The generator (e8e43ec7, chunk 13, 1.0.0) never read it. · **Confidence:** traced
+- **Needs the owner:** It changes what the wallet's DRep list offers, and it's the owner's call whether the wallet's own directory honours CIP-119's doNotList.
+
+**Scenario:**
+
+A user makes their public account a DRep with a profile. The form's "Ask DRep directories not to list it" switch is on by default, and its note says "Directories for delegators are asked not to list yours". The user publishes the file, and the wallet has written `doNotList: true` into its body.
+
+At the next release, `npm run dreps` (a routine step every release) lists every registered DRep and asks drep_metadata for `meta_json->body->givenName` alone. doNotList is never read. So the user's DRep goes into src/dreps/mainnet.json by name. Every Seedelf Wallet's Voting page then lists it, in an empty search too, and anyone browsing can find and delegate to it. That is exactly what the user's profile, written by the wallet, asked directories not to do. The same goes for every other DRep that set doNotList. A pasted ID would still find any of them, as CIP-119 allows ("Anyone can still look it up").
+
+**Evidence:**
+
+- dreps.mjs:81 lists `registered=eq.true&select=drep_id`.
+- dreps.mjs:94-103 asks `query: "select=drep_id,meta_json->body->givenName"` and keeps any row with a name.
+- dreps.mjs:107-112 even keeps a committed name for a DRep no pass names.
+- Governance.tsx:561: `EMPTY_PROFILE … doNotList: true`; Governance.tsx:685-697 is the switch and its note (en.json drep.form.doNotListOn: 'Directories for delegators are asked not to list yours. Anyone can still look it up.').
+- wasm lib.rs:484-486: `if request.do_not_list { body.insert("doNotList".into(), true.into()); }`, with the JSON-LD context mapping 'doNotList': 'CIP119:doNotList' (lib.rs:514).
+- privacy.md:299: "'Ask DRep directories not to list it' (CIP-119's doNotList) is on by default".
+- ui/dreps.ts:1-4 and Voting.tsx:317-321: the bundled list is a directory searched by name; searchDreps('') returns every DRep (dreps.ts:37).
+- I made no network call. To size it today, look up drep_metadata for the bundled IDs with meta_json->body->doNotList.
+
+**Fix:**
+
+In dreps.mjs, select `meta_json->body->doNotList` beside givenName (JSON-LD's {'@value'} form too, as nameOf reads givenName). Leave out any DRep whose body says true. Never fall back to its committed name, and don't count it toward MAX_LOSS as Koios failing. Factor the row filter into a pure function and unit-test it. Pasting an ID keeps working, since the live read is unchanged. Then check the committed lists once against Koios.
+
+**Known check:**
+
+Searched backlog.md, docs/archive/plans/ (chunk-21-governance.md, chunk-13-staking.md, usability-review.md), docs/plans/ and privacy.md for 'doNotList', 'not to list', 'do not list' and 'director'. Found:
+- privacy.md:299 (on by default);
+- usability-review GV-9 (the switch's copy, fixed);
+- D1's checked line (the form's defaults).
+Nothing about the bundled list honouring it.
+
+### gap-g7#3 · nit · Activity and Delegations show the bundled DRep names without plainName, which Voting applies to the same entries; the generator keeps bidi and zero-width characters
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/ui/activity.ts:119`
+- **Who:** stranger · **Since:** 2185c4b3 (Activity, 1.0.0); c505173d (Delegations, 1.6.0) · **Confidence:** traced
+
+**Scenario:**
+
+A DRep registers a givenName holding U+202E (right-to-left override) or zero-width characters. The next release's list keeps it: nameOf strips only C0 and C1 controls, and tests/dreps.test.ts:27 checks only those. Voting's rows clean it (plainName). But Activity's staking line and its 'Voting power' row, and Delegations' rows, show it raw. An override then reverses the name and what follows it on the line, so the user's own past delegation reads differently than it did when they picked it. Nothing is signed on these rows. Today's lists hold no such character (scanned).
+
+**Evidence:**
+
+- activity.ts:118-119: `drepName(network, id) { return drepList(network).dreps.find((d) => d.id === id)?.name; }`, passed raw to voteLabel at activity.ts:129, and Delegations.tsx:68 does the same.
+- Voting.tsx:402: `const name = plainName(drep.name);` for the same list entries.
+- plainName (format.ts:86-88) removes \p{Cf} and Default_Ignorable characters.
+- dreps.mjs:72 and staking.ts:313: `replace(/[\u0000-\u001f\u007f-\u009f]/g, "")` only.
+- Ran: g7_dreps_scan.py over both lists found no Cf, bidi or zero-width characters and no lone surrogates today.
+
+**Fix:**
+
+Apply plainName in voteLabel's name path (one place, with gap-g7#1). Also strip \p{Cf} and Default_Ignorable in dreps.mjs nameOf and staking.ts drepName, and extend tests/dreps.test.ts:27 to refuse them. The critic's note on CIP-20 notes in Activity (noteOf, Activity.tsx:365) is the same class.
+
+**Known check:**
+
+Same searches as gap-g7#1, and INDEX.md for plainName/bidi: e3a#3 and e3b#1 cover the sign window only. The critic's uncovered list names Activity's CIP-20 note, not DRep names.
+
+### gap-g7#4 · nit · networks.ts's lovejoin.mixCost is read by nothing, and its doc still says it's for the settings' words
+
+- **Where:** `seedelf-platform/seedelf-web-wallet/extension/src/networks.ts:20`
+- **Who:** nobody · **Since:** d423b79a (chunk 23's usability fixes, first in 1.2.0), which moved depthCost to mixFeesText · **Confidence:** confirmed-by-run
+
+**Scenario:**
+
+Someone tunes mainnet's mixCost (825,000) or preprod's (877,000), expecting Settings' depth cost to change. Nothing changes: Settings has priced depths with mixFeesText since 1.2.0. The field only misleads a reader.
+
+**Evidence:**
+
+- networks.ts:19-20: `/** What a 3-box mix costs … for the settings' words, never for a build. */ mixCost: number;`, set at :58 and :73.
+- `rg -n '\bmixCost\b' src tests e2e scripts` finds only those three lines, plus Swaps.tsx:1314's unrelated local `const mixCost = summary.collateralReserve ? …`.
+- git show d423b79a on Settings.tsx: `- const lovelace = mixes * (NETWORKS[network].lovejoin?.mixCost ?? 0);` became `+ … mixFeesText(mixes)`.
+
+**Fix:**
+
+Drop the field (and the interface member), or say in its doc that it's a recorded measurement only.
+
+**Known check:**
+
+Searched backlog.md and docs/archive/plans/ for mixCost. It appears only in chunk-34's listing of networks.ts and in launch-review.md's 'matching networks.ts's mixCost', neither of which says it's unused.
+
+## Guards (11)
+
+| Where | What it stops | Test |
+|---|---|---|
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts:2927` | A pool whose verified mix_box is the classic pool's (networks.ts mixBox) being read or offered as a token pool beside the classic one | tests/lovejoin-pools.test.ts:225 ('leaves out a pool that doesn't verify, or the classic pool's own mix_box named again') |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin-pools.ts:530` | A pool whose scripts aren't at the holder, or whose token isn't on the list, being kept or shown, so no deposit into it is offered | tests/lovejoin-discovery.test.ts:183 (unlisted token) and :172 (scriptsInline 0) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin-pools.ts:543` | An ADA pool on the new scripts at the classic pool's 10 ₳ being shown | none found |
+| `seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin-pools.ts:388` | A device's old look height skipping earlier pools of a token an update newly lists (STATE-4) | tests/lovejoin-pools-head-start.test.ts:46 holds the bundled side (fingerprint equals the shipped list); no device-side test found by name |
+| `seedelf-platform/seedelf-web-wallet/extension/tests/lovejoin-pools-head-start.test.ts:26` | A bundled pool entry that doesn't verify from the templates, is a copy, has inline scripts or names the wrong set, shipping in the head start | itself (it does not compare boxLovelace or token with the verified view) |
+| `seedelf-platform/seedelf-web-wallet/extension/src/ui/tokens.ts:66` | A listed token's amount scaled by Koios's decimals on one screen and by the list's on another (one unit everywhere) | tests/tokens.test.ts:67 |
+| `seedelf-platform/seedelf-web-wallet/extension/src/ui/tokens.ts:105` | An unlisted token named like ADA or a listed token reading as it (it goes by its fingerprint and says what it calls itself) | tests/token-text.test.ts |
+| `seedelf-platform/seedelf-web-wallet/extension/scripts/tokens.mjs:87` | A registry entry whose ticker changed shipping under a listed unit's pinned ticker (nothing is written) | none (release script) |
+| `seedelf-platform/seedelf-web-wallet/extension/scripts/tokens.mjs:80` | Hand-typed decimals (`unregistered`) for a mainnet token | none (release script) |
+| `seedelf-platform/seedelf-web-wallet/wasm/src/cip30.rs:75` | A network name read with the wrong preprod flag, which would swap every per-network constant, or an unknown name being taken (copies at lib.rs:2072 and lovejoin.rs:63) | none found by name |
+| `seedelf-platform/seedelf-web-wallet/extension/src/ui/format.ts:134` | A site's transaction Expires date being shown past Date's range, or early (the end is rounded up) | tests/dapp-prompt.test.ts:389-401 |
+
+## Checked and holds
+
+- networks.ts's classic mix_box on both networks (67ffe4ed… preprod, c145c10f… mainnet) equals core's Protocol::of (lovejoin/mod.rs:218, :238) and Lovejoin cb5a5a3's artifacts/{preprod,mainnet}/addresses.json, read by git show. Core's mix_logic, NFT policy, fee script, max fee, seed and the three reference UTxOs per network match those artifacts too. Nothing is swapped between the networks.
+- The Shelley constants equal core's slot_config (eval.rs:258-264) and the genesis. Mainnet: epoch 208 at 1,596,059,091,000 ms = slot 4,492,800 = 208 × 21,600. Preprod: epoch 4 at 1,655,769,600,000 ms = slot 86,400 (genesis 2022-06-01 plus four 5-day Byron epochs).
+- EPOCH_MS (432e6) also holds for Byron epochs, so epochAt and epochStart are right before Shelley too. slotStart's Byron branch gives 2017-09-23T21:44:51Z for mainnet slot 0 and 2022-06-01T00:00:00Z for preprod slot 0.
+- slotText's range guard (8.64e15 ms) is reached at slot ≈ 8.6e12, below 2^53, so a u64 TTL is never shown with lost precision.
+- The Koios and giveme.my URLs per network equal seedelf-koios's koios_url and collateral_url (koios.rs:56-82).
+- Network polarity is consistent everywhere: the three network_flag copies, wasm's Network::flag(), every TypeScript `network === "mainnet"` ternary, CIP-30 getNetworkId (mainnet 1), the reward-address header (f1/f0) and core's collateral_input, stake_key and collateral_address. wasm's slotAt export takes the Network enum and has no TypeScript caller.
+- The TypeScript copies of the wallet contract hash, the Seedelf policy (balances.ts:81-82) and the ADA Handle policy (handles.ts:9) equal core's constants.rs.
+- The manifest's host permissions, CSP connect-src and data-origin rules follow networks.ts: Koios, giveme.my and CoinGecko are host grants; Minswap and the data layer go through CORS; IPFS only by grant; preprod has no data layer; a store build refuses VITE_DATA_ORIGIN.
+- lovejoin-pools.json, all 7 entries decoded (scratch g7_pools_check.py). Each reference datum gives the entry's own box lovelace and token; scripts[0] and scripts[1] are the datum's mix_box and mix_logic; the reference holds the id's 'lovejoin' NFT at holder 288fea77… on both networks, with address prefixes matching the network; launch tx and block equal the reference's.
+- lovejoin-pools.json, the list rules: both `listed` fingerprints recompute equal to tokens/list.json. Every pool is a listed token's, or ADA not at 10 ₳, and no two share values on a set, so launch.index never decides between bundled pools.
+- WebAssembly never trusts the bundled script sizes or bytes (protocol_of derives them from the templates), and readSet re-verifies every handed pool and uses the verified view's values (lovejoin.ts:2881-2935).
+- The classic box value is 10 ₳ in all five copies: pool.rs:48, lovejoin.ts:621, lovejoin-pools.ts:84, lovejoin-launch.ts:78, LovejoinLaunch.tsx:44.
+- tokens: all 32 mainnet and 2 preprod list units are in their registry under the pinned ticker, with no registry entry outside the list. Decimals are SNEK and HOSKY 0, AGIX 8, the rest 6 (preprod MIN's 6 agrees with its pools' 100 and 500 MIN boxes). Every logo is a WebP data URI; names are clean text.
+- DRep lists: 466 mainnet and 67 preprod CIP-129 IDs, each once, with no control, format, bidi or zero-width characters, no lone surrogates and names of at most 64 characters. Exact duplicate names (8Ball, Ravi Vaishnv, Vladimir Sinyakov; four on preprod) are flagged by Voting's shared-name rule. The two IDs on both lists carry different names, one key registered on both chains, not a swap.
+- feedOfTx's classic-only 'lovejoin' branch (feed.ts:173-174) misroutes nothing today. submitWatched's only callers are Seedelf spends (contract feed) and Make private (pays the contract), and Lovejoin's own sends set their watch (lovejoin.ts:5165, :7115).
+- The CIP-30 sign window names a delegated DRep by short ID only (ui/dapp.ts:200), and the CSV export guards a DRep name against formulas (activity.ts:232, csvCell with text=true).
+- private-index.ts:410's epochAt(row.created.time × 1000) is right: IndexPoint.time is Unix seconds.
+- The pool floor (30 mainnet, 0 preprod) is read the same way at every use: lovejoin.ts floorShort and floor (3547, 3561), collateralPoolTakes (4426), the status view (6384), Settings (794) and LovejoinLaunch (416).
+
+## Notes
+
+- What to look up (I made no network calls): drep_metadata for the bundled IDs with meta_json->body->doNotList, to count how many DReps in today's list asked not to be listed (gap-g7#2).
+- Not verifiable offline: MILK's 6 decimals and NIGHT's unit (the registry's word, copied by tokens.mjs), and the two Minswap aggregator URLs.
+- A listed token's registry name, unlike its ticker, isn't pinned. Its issuer can rename it in the Cardano token registry, and the next `npm run tokens` ships the new name as the token's sub-line and into the lookalike set, with only the release diff to catch it. These are vetted issuers, so this is a note, not a finding.
+- The head-start test (lovejoin-pools-head-start.test.ts:39) compares id, version and scriptsInline with WebAssembly's view, not boxLovelace or token. Discovery's shown rule reads those bundled values, so a hand edit could hide a pool. They agree today (every datum decoded), and the writer takes them from the view; a one-line extension of the test would hold them.
+- feedOfTx recognises only the classic pool's mix_box, which is retired since 1.8.0. It's harmless today (see checked_ok), but a future submitWatched flow paying a v2 box without `contract` would be watched through tx_status, DATA-1's class.
+- gap-g7#3 and the critic's note on CIP-20 notes shown raw in Activity (noteOf, Activity.tsx:365) are one class: text a stranger writes, shown in Activity without plainName. One fix covers both.
+
+## Coverage
+
+Read in full: networks.ts (203 lines), seedelf-core constants.rs (98), tokens/list.json, registry.preprod.json, scripts/dreps.mjs (131) and scripts/tokens.mjs (127).
+
+Checked by script, every entry: lovejoin-pools.json (each pool's datum decoded and cross-checked); registry.mainnet.json (every field; logos by type and size only, not viewed as images); dreps/mainnet.json and dreps/preprod.json (every ID and name, plus the head read by eye). Scripts: scratch r51/work/gap-G7/g7_pools_check.py and g7_dreps_scan.py, plus inline python -I and node checks.
+
+Followed out of the lane, read in the ranges that matter:
+- seedelf-core: lovejoin/mod.rs Protocol::of (150-330), eval.rs slot_config and slot_at (240-345), address.rs, transaction.rs collateral_input.
+- seedelf-koios: koios.rs URL builders (40-90).
+- wasm: the three network_flag copies, the Network enum, the slotAt export, lovejoin.rs protocol_of (150-330), lib.rs drep_profile (436-520).
+- extension: manifest.ts; background/lovejoin-pools.ts (1-260, 370-560); lovejoin.ts (640-720, 2860-2960, 3535-3580, 4415-4440, 6375-6395); feed.ts (1-200); pending.ts (120-140, 395-560); staking.ts drepName; private-index.ts (20-40, 395-415); sessions.ts (815-850); ui/tokens.ts and ui/dreps.ts (all); ui/activity.ts (100-245); format.ts (40-160, 434-479); Voting.tsx (80-502); Staking.tsx (560-600, 890-1110); Delegations.tsx (55-75); Activity.tsx (270-346); Rewards.tsx (1-135); Governance.tsx (556-700, 830-860); DappApprovals.tsx (1040-1100); App.tsx and sw.ts uses.
+- tests/lovejoin-pools-head-start.test.ts and tests/dreps.test.ts.
+- Lovejoin cb5a5a3's artifacts for both networks, via git show.
+
+Not reached: docs/i18n/*.json; the real token registry's decimals and logos, and the live hosts (offline); minswap.ts beyond its network switch; lovejoin-registry.mjs (B1's).
