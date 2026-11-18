@@ -879,6 +879,145 @@ describe("a site's funding review and its top-up's, counting what the summary th
   });
 });
 
+// Chunk 51, e3b#2: the connect window's private-session form reads the private balance itself (`balances`), and stated,
+// capped and offered its tokens against all of it, what the user locked included, where Home hands every other form the
+// unlocked side and the funding's build leaves a locked UTxO out: with 100 ₳ held and 60 ₳ of it locked with a token,
+// it said 100 ₳, took 50 ₳ with Review on and offered the token, and the build refused both. Its review's "after"
+// starts from Home's figure all the same, the locked ₳ in it.
+describe("the connect window's private session, held to what its funding can spend (chunk 51, e3b#2)", () => {
+  const token = { policyId: "16".repeat(28), assetName: "4f4e45", quantity: "1" };
+  /** The worker's reading: 100 ₳ over two UTxOs, 60 ₳ and a token in the one the user locked. */
+  const seedelf = { lovelace: "100000000", tokens: [token], utxos: 2, seedelfs: [], locked: { lovelace: "60000000", tokens: [token], utxos: 1 } };
+  const address = "addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz";
+  /** Its funding, built: 24 ₳ for the site, the 5 ₳ kept aside and a 0.23 ₳ fee, 29.23 ₳ in all. */
+  const funding = {
+    network: "preprod",
+    txHash: TX,
+    index: 0,
+    address,
+    payments: [
+      { address, lovelace: "24000000", tokens: [] },
+      { address, lovelace: "5000000", tokens: [] },
+    ],
+    max: false,
+    fee: { size: "200000", compute: "30000", scriptReference: "0", total: "230000" },
+    changeLovelace: "0",
+    changeTokens: 0,
+    changeOutputs: 0,
+    changeMinimum: "0",
+    inputs: 1,
+    left: 0,
+  };
+  /** The connect window with a private session chosen (the first state that starts undefined), its effects run. */
+  const connect = () => {
+    seam.effects.add("ConnectRequest");
+    answer("balances", { seedelf });
+    seedInitial(undefined, "private");
+    return render(
+      createElement(ConnectRequest, {
+        approval: { kind: "connect", id: "a1", origin: "https://example.org", title: "Example", password: false },
+        busy: false,
+        held: false,
+        onError: noop,
+        onAnswer: async () => false,
+      } as never),
+    );
+  };
+  /** Its form with `amount` typed: the state after the governance switch's and the private balance's. */
+  const form = (amount: string) => {
+    seam.seeds.push({ after: [false, undefined], initial: "", value: amount });
+    return connect();
+  };
+
+  it("states and caps the amount at what isn't locked, and offers no token held only in a locked UTxO", () => {
+    const free = formatAda("40000000");
+    const page = form("50");
+    expect(asked()).toContain("balances");
+    expect(words(/data-testid="dapp-private-held"[^>]*>(.*?)<\/p>/s.exec(page)?.[1] ?? "")).toBe(words(t("dappUi.heldAndCollateral", { ada: free })));
+    expect(words(page)).toContain(words(t("sites.topUp.tooMuch", { held: free })));
+    expect(page).toMatch(/<button type="submit" class="primary" disabled="">/);
+    expect(page).not.toContain('class="token-picker"');
+
+    seam.reset();
+    const fits = form("30");
+    expect(words(fits)).not.toContain(words(t("sites.topUp.tooMuch", { held: free })));
+    expect(fits).toMatch(/<button type="submit" class="primary">/);
+  });
+
+  it("counts its review's after from Home's figure, the locked ₳ in it, as every other review does", () => {
+    // The review: the state after the amount's and its tokens', both empty.
+    seed(["", {}], funding);
+    const page = connect();
+    expect(row(page, "dapp-funding-rows", t("review.after.private"))).toBe(ada((100_000_000n - 29_230_000n).toString()));
+  });
+});
+
+// Chunk 51, x1b#1: a site session's Bring it back review through Lovejoin opened Transaction details on its chain's last
+// transaction, the return, under the plain words, where every other chain review opens the chain's first, the deposit,
+// and names it (6bd936f4; flows.md, "A chain's review shows the transaction the money goes in through"). The return
+// spends the last mix's change, which nothing has sent yet. The worker's side is pinned already (chain-entry.test.ts):
+// the summary's `txHash` is the chain's last, its `lovejoin.entry` the first, and the view opens either by hash.
+describe("which transaction a session's return review opens (chunk 51, x1b#1)", () => {
+  /** The chain's first transaction, its deposit: where the session's money goes into the pool. */
+  const DEPOSIT = "d0".repeat(32);
+  /** The chain's last, the return. */
+  const RETURN = "ba".repeat(32);
+  const POOL = "5e".repeat(28);
+  const session = { index: 0, stage: "open", site: { origin: "https://example.org" }, txs: [], createdAt: NOW };
+  const seedelf = { lovelace: "50000000", tokens: [], utxos: 2, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+  /** A return of about 40 ₳ through Lovejoin (sessions.ts buildBack): six 5 ₳ boxes, a deposit, eight mixes, the return. */
+  const through = {
+    network: "preprod",
+    index: 0,
+    txHash: RETURN,
+    fee: "3900000",
+    lovelace: "6100000",
+    tokens: [],
+    depositOutputs: 1,
+    inputs: 2,
+    merged: 1,
+    lovejoin: { boxes: 6, depth: 2, mixes: 8, fees: "3900000", txs: 10, delay: "1-6", pool: POOL, values: { [POOL]: { lovelace: "5000000" } }, entry: DEPOSIT },
+  };
+  /** The same return coming back directly: one transaction, the return itself. */
+  const { lovejoin: _lovejoin, ...direct } = through;
+  /** What the review's button opens and says (`label`, none for "Transaction details"), and the page. */
+  const opened = (testId: string, page: () => string) => {
+    let button: Record<string, unknown> | undefined;
+    on((name, props) => name === "TxDetailButton" && props.testId === testId, (props) => (button = props));
+    const markup = page();
+    expect(button, `${testId} made`).toBeDefined();
+    return { txHash: button!.txHash, label: button!.label, words: words(markup) };
+  };
+  /** The site session's page, its return's review built: the state after which part shows. */
+  const site = (back: unknown) => () => {
+    seed(["main"], back);
+    return render(
+      createElement(SiteSession, { session, seedelf, reading: false, onRefresh: noop, onBack: noop, onPending: noop, onDisconnected: noop } as never),
+    );
+  };
+
+  it("a site's return through Lovejoin opens its chain's first transaction, the deposit, and names it", () => {
+    const { txHash, label, words: said } = opened("site-back-tx", site(through));
+    expect({ txHash, label }).toEqual({ txHash: DEPOSIT, label: t("tx.entry.deposit") });
+    expect(said).toContain(words(t("tx.entry.deposit")));
+    expect(said).not.toContain(words(t("tx.detailsButton")));
+  });
+
+  it("as the same return reviewed from a swap's page does (6bd936f4)", () => {
+    const { txHash, label } = opened("session-back-tx", () => {
+      seed([session, undefined, undefined], through);
+      return render(createElement(Session, { session, reading: false, onRefresh: noop, onBack: noop, onChanged: noop } as never));
+    });
+    expect({ txHash, label }).toEqual({ txHash: DEPOSIT, label: t("tx.entry.deposit") });
+  });
+
+  it("a site's return that comes back directly is one transaction: it opens that one, under the plain words", () => {
+    const { txHash, label, words: said } = opened("site-back-tx", site(direct));
+    expect({ txHash, label }).toEqual({ txHash: RETURN, label: undefined });
+    expect(said).toContain(words(t("tx.detailsButton")));
+  });
+});
+
 describe("Transaction details' stepper, through a payment's parts (1.7.0's release review: pr335#0, pr335#3, x-mut-ts#6)", () => {
   const [first, second] = ["a1".repeat(32), "b2".repeat(32)];
   /** What the worker hands back for transaction `txHash`: its body is made as nothing here, so only its id is read. */

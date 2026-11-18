@@ -801,6 +801,13 @@ export interface WithdrawDestination {
    * bounty report).
    */
   staked?: number;
+  /**
+   * When `own`: its stake part is none of this wallet's accounts' stake keys (someone else's, a pointer, or none, an
+   * enterprise address). What's paid there is the account's and comes back to its balance, but while it's there its
+   * stake earns, and votes, for whoever holds that part, or for nobody: never this wallet. The sign window says so of
+   * the same shape (`dappUi.warn.ownKey`; chunk 51, x1a#1).
+   */
+  stakeElsewhere?: true;
 }
 
 /** A finished withdrawal, waiting for the user to send it. Amounts are lovelace strings. */
@@ -878,6 +885,8 @@ export interface RemoveSummary {
   to: RemoveTo;
   /** What comes back: the ADA locked with it, less the fee. */
   lovelace: string;
+  /** And every other token its UTxO held, which comes back with it: anyone can mint a Seedelf beside tokens of theirs. */
+  tokens: TokenQuantity[];
   fee: { size: string; compute: string; scriptReference: string; total: string };
 }
 
@@ -1046,8 +1055,11 @@ export interface DappTxSummary {
     datum: "hash" | "inline" | null;
     /** A script's address: a contract holds what it's paid. */
     script: boolean;
-    /** Into Seedelf Wallet's contract: under a register, or with none (anyone could take it). */
-    seedelf: "register" | "none" | null;
+    /**
+     * Into Seedelf Wallet's contract: under a register only its key's holder can spend, with none or one anyone can
+     * prove (anyone could take it), or under one no proof can meet, "dead" (no one ever can).
+     */
+    seedelf: "register" | "none" | "dead" | null;
     /**
      * The account's payment key under a stake part that isn't its own, or
      * none: spendable by the account, but its stake counts for someone else,
@@ -1143,6 +1155,12 @@ export interface DappTxSummary {
   /** CIP-20's message lines. */
   note: string[] | null;
   metadata: boolean;
+  /**
+   * Beside `note`, its metadata holds more than the note's lines: another label, or anything else under 674, as
+   * Minswap's extraData. Added by the worker from the same bytes as Transaction details reads (dapp.ts), as `yours` is
+   * (chunk 51, x1a#3).
+   */
+  otherMetadata?: true;
   validFrom: number | null;
   validUntil: number | null;
   /** The account's keys that sign: `0/3`, `1/0`, `stake`, `drep` (CIP-95). */
@@ -1276,10 +1294,12 @@ export interface TxOutput {
 /**
  * An output that pays the user: one of the wallet's public accounts (by index), the private balance (the wallet
  * contract under the user's own register), a Seedelf of the user's (the same, holding its token), or a private
- * session's one-time account (by index).
+ * session's one-time account (by index). An account's under a stake part that's none of the accounts' stake keys
+ * (someone else's, a pointer, or none) is `stakeElsewhere`: the account's, but its stake earns and votes for whoever
+ * holds that part, or nobody (WithdrawDestination's; chunk 51, as x1a#1).
  */
 export type TxYours =
-  | { kind: "account"; account: number }
+  | { kind: "account"; account: number; stakeElsewhere?: true }
   | { kind: "private" }
   | { kind: "seedelf" }
   | { kind: "session"; index: number };
@@ -1502,7 +1522,8 @@ export type DappAsk =
   | {
       kind: "connect";
       password: boolean;
-      funding?: { index: number; txHash: string };
+      /** `network`: the one it was sent on, which a switch since leaves it on (its Cardanoscan link's; chunk 51, e3b#5). */
+      funding?: { index: number; txHash: string; network?: NetworkName };
       /** It asks for governance too (CIP-95): the public account's DRep key, to register and vote with. */
       governance?: boolean;
       /** Connected already: it asks for governance alone. */

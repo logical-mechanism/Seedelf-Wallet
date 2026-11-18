@@ -58,7 +58,7 @@ import { Screen } from "../components/Screen";
 import { SendButton } from "../components/SendButton";
 import { unsentWhyText } from "../components/SessionRefused";
 import { againOrForm, StaleFoot } from "../components/StaleReview";
-import { TxDetailButton } from "../components/TxDetail";
+import { entryLabel, TxDetailButton } from "../components/TxDetail";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
@@ -296,7 +296,13 @@ export function SiteSession({
           busy={busy}
           onChange={(unit, pool) => buildBack(true, { ...backPools, [unit]: pool })}
         />
-        <TxDetailButton txHash={back.txHash} testId="site-back-tx" />
+        {/* Through Lovejoin, its chain's first transaction, the deposit, named, as a swap's return review opens it:
+            `txHash` is the return, the last of the chain, which spends what isn't sent yet (chunk 51, x1b#1). */}
+        <TxDetailButton
+          txHash={back.lovejoin?.entry ?? back.txHash}
+          label={back.lovejoin && entryLabel(back.lovejoin)}
+          testId="site-back-tx"
+        />
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote back={back} />

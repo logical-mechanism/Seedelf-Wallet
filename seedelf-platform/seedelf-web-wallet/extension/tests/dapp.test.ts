@@ -942,6 +942,22 @@ describe("the dApp connector", SLOW, () => {
     await expect(binary).rejects.toMatchObject({ failure: { code: DataSignError.UserDeclined } });
   });
 
+  // Chunk 51, e3a#3: the window shows a message as what's signed reads, every character that doesn't show written as its
+  // code (ui/dapp.ts shownSiteText, dapp-prompt.test.ts), so it's handed every character the bytes hold: a direction
+  // override, a zero-width space, and a leading byte order mark, which TextDecoder dropped by default.
+  it("hands the window a message's every character, a leading byte order mark too", async () => {
+    const t = await on();
+    const s = await connected(t);
+    const [BOM, RLO, PDF, ZWSP] = [0xfeff, 0x202e, 0x202c, 0x200b].map((c) => String.fromCodePoint(c));
+    const message = `${BOM}Pay ${RLO}0001${PDF} ADA, nonce 4${ZWSP}2`;
+    const signing = t.dapp.call(s, "signData", [t.deps.wasm.cip30Address(OWN), hex(message)]);
+    await until(() => t.dapp.approvals().length === 1);
+    const asked = t.dapp.approvals()[0]!;
+    expect(asked).toMatchObject({ kind: "sign-data", payload: hex(message), text: message });
+    await t.dapp.answer(asked.id, false);
+    await expect(signing).rejects.toMatchObject({ failure: { code: DataSignError.UserDeclined } });
+  });
+
   it("needs the password to sign, even while unlocked: without it the site keeps waiting, and a wrong one counts", async () => {
     const t = await on();
     const s = await connected(t);
@@ -1194,13 +1210,17 @@ describe("private CIP-30: a site connected to a private session", SLOW, () => {
     return { dapp, sessions };
   }
 
-  /** A site connected to session 0, whose account holds the recorded swap's UTxO and its 5 ₳ collateral. */
-  async function connectedPrivately(t: T, dapp: DappService, s = site()) {
+  /**
+   * A site connected to session 0, whose account holds the recorded swap's UTxO and its 5 ₳ collateral, Koios listing
+   * `first` before them.
+   */
+  async function connectedPrivately(t: T, dapp: DappService, s = site(), first: KoiosUtxo[] = []) {
     const enabling = dapp.call(s, "enable", []);
     await until(() => dapp.approvals().length === 1);
     const out = await dapp.privateBuild(dapp.approvals()[0]!.id, "15000000", []);
     await dapp.answer(dapp.approvals()[0]!.id, true, PASSWORD, { txHash: out.txHash });
     t.koios.addedToAccounts.push(
+      ...first,
       atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value),
       atSession(out.txHash, 1, "5000000"),
     );
@@ -1237,8 +1257,9 @@ describe("private CIP-30: a site connected to a private session", SLOW, () => {
     expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([out.txHash]);
     expect(await dapp.sites()).toEqual([{ origin: s.origin, connectedAt: expect.any(Number), title: "Example", session: 0 }]);
 
-    // It waits for the money: the window shows it, the site hasn't heard, and closing the window doesn't undo it.
-    expect(dapp.approvals()).toMatchObject([{ kind: "connect", funding: { index: 0, txHash: out.txHash } }]);
+    // It waits for the money: the window shows it, the site hasn't heard, and closing the window doesn't undo it. With
+    // the network it went on, which its Cardanoscan link keeps across a switch (chunk 51, e3b#5).
+    expect(dapp.approvals()).toMatchObject([{ kind: "connect", funding: { index: 0, txHash: out.txHash, network: "preprod" } }]);
     t.dappWindow.open = false;
     await dapp.windowClosed();
     expect(dapp.approvals()).toHaveLength(1);
@@ -1358,6 +1379,32 @@ describe("private CIP-30: a site connected to a private session", SLOW, () => {
     };
     expect(await spends(`${out.txHash}#1`)).toMatchObject({ kind: "sign-tx", session: 0, collateralSpent: true });
     expect(await spends(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`)).not.toHaveProperty("collateralSpent");
+  });
+
+  // Chunk 51, e3a#2: the connector took the first 5 ₳ of ADA alone at the session's account as its collateral, a
+  // stranger's with a datum or a script too, which the session's return never puts up (sessions.ts collateralFits).
+  // Koios lists an account by transaction id (koios.ts paged), so a stranger's whose id sorts first stood in for the
+  // funding's: getCollateral offered it, getUtxos the funding's real 5 ₳, and a transaction spending that one went
+  // unflagged.
+  it.each<[string, Partial<KoiosUtxo>]>([
+    ["an inline datum", { inline_datum: { bytes: "d87980", value: {} } }],
+    ["a datum hash", { datum_hash: "ee".repeat(32) }],
+    ["a reference script", { reference_script: { hash: "ab".repeat(28), size: 6, type: "plutusV3", bytes: "450100002499" } }],
+  ])("keeps the funding's 5 ₳ as the session's collateral, never a stranger's 5 ₳ with %s listed before it", async (_kind, carries) => {
+    const t = await on();
+    const { dapp } = privately(t);
+    const stranger = { ...atSession("00".repeat(32), 0, "5000000"), ...carries };
+    const { s, out } = await connectedPrivately(t, dapp, site(), [stranger]);
+    const own = `${out.txHash}#1`;
+    // A CIP-30 TransactionUnspentOutput's outpoint, an index under 24.
+    const outpointOf = (utxo: string) => `${utxo.slice(8, 72)}#${parseInt(utxo.slice(72, 74), 16)}`;
+    expect(((await dapp.call(s, "getCollateral", [])) as string[]).map(outpointOf)).toEqual([own]);
+    expect(((await dapp.call(s, "getUtxos", [])) as string[]).map(outpointOf)).not.toContain(own);
+    const signing = dapp.call(s, "signTx", [siteTx({ inputs: [own] }), false]);
+    await until(() => dapp.approvals().length === 1);
+    expect(dapp.approvals()[0]).toMatchObject({ kind: "sign-tx", session: 0, collateralSpent: true });
+    await dapp.answer(dapp.approvals()[0]!.id, false);
+    await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
   });
 
   it("won't sign a site's transaction that spends what the session's return through Lovejoin still needs", async () => {

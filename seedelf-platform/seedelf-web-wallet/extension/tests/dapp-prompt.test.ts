@@ -3,6 +3,8 @@
 // its fingerprint, marked, and warned about, never as ADA or the listed
 // token. The address a message is signed for is shown whole.
 import { readFileSync } from "node:fs";
+import { blake2b } from "@noble/hashes/blake2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,7 +13,7 @@ import { criticalKeys } from "../scripts/i18n-critical.mjs";
 import { i18n } from "../src/i18n/core";
 import { epochStart, type NetworkName, slotStart } from "../src/networks";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
-import type { DappTxSummary, KnownAccount } from "../src/shared/rpc";
+import type { DappTxSummary, KnownAccount, TxDetail } from "../src/shared/rpc";
 import { AccountsContext } from "../src/ui/accounts";
 import { slotText } from "../src/ui/format";
 import { NetworkContext } from "../src/ui/network";
@@ -27,8 +29,9 @@ import {
   Site,
 } from "../src/ui/screens/DappApprovals";
 import { DeclinedSites, Disconnected, SiteRows } from "../src/ui/screens/ConnectedSites";
-import { releasesContractFunds } from "../src/ui/dapp";
+import { releasesContractFunds, shownSiteText } from "../src/ui/dapp";
 import { assetFingerprint } from "../src/ui/tokens";
+import { koiosPreprod, loadTestWasm, testBalances, vectors } from "./fakes";
 
 const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
 const STRANGER = "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9";
@@ -423,6 +426,161 @@ describe("a site's signing prompt", () => {
   });
 });
 
+// Chunk 51, e3a#3 (with e3b#1): a site's CIP-8 message, and its transaction's CIP-20 note, were shown as they came, so
+// a direction override or an invisible character still acted on the screen: "Pay U+202E 0001 U+202C ADA" read "Pay
+// 1000 ADA" over bytes that say 0001, and a zero-width space made two messages read the same. Now they're shown as
+// what's signed reads: each such character written as its code, as the transaction view writes the chain's text
+// (WebAssembly's decode.rs `shown`), with one short line saying so.
+describe("a site's own text in the window, as what's signed reads", () => {
+  const [RLO, PDF, ZWSP, BOM] = [0x202e, 0x202c, 0x200b, 0xfeff].map((c) => String.fromCodePoint(c));
+  /** What changes how text reads without showing (decode.rs hidden()'s set), but a tab and line breaks. */
+  const HIDDEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}\p{Cc}\p{Zl}\p{Zp}]/u;
+  const raw = (html: string) => [...html].filter((c) => HIDDEN.test(c) && !"\t\n\r".includes(c));
+  const shown = (html: string, testId: string) => new RegExp(`data-testid="${testId}">([\\s\\S]*?)</pre>`).exec(html)?.[1];
+  const message = (text?: string) =>
+    renderToStaticMarkup(createElement(SignData, { address: ADDRESS, signer: "payment", payload: "00", text }));
+
+  it("writes a direction override or an invisible character in a message as its code, and says so in one line", () => {
+    const html = message(`${BOM}Pay ${RLO}0001${PDF} ADA, nonce 4${ZWSP}2`);
+    expect(raw(html)).toEqual([]);
+    expect(shown(html, "dapp-data-message")).toBe(String.raw`\u{FEFF}Pay \u{202E}0001\u{202C} ADA, nonce 4\u{200B}2`);
+    expect(text(html)).toContain(i18n.t("dappUi.warn.hiddenChars"));
+    // Plain text, its lines, tabs and any script as they are, and hex where it isn't text: nothing to say.
+    for (const plain of ["Sign in to app.example\nNonce:\t42", "שלום 日本語 🙂 1,000 ₳"]) {
+      expect(shown(message(plain), "dapp-data-message")).toBe(plain);
+      expect(message(plain)).not.toContain('data-testid="dapp-data-escaped"');
+    }
+    expect(shown(message(), "dapp-data-message")).toBe("00");
+    expect(message()).not.toContain('data-testid="dapp-data-escaped"');
+  });
+
+  it("writes a transaction's note the same way", () => {
+    const html = render(summary({ note: [`Pay ${RLO}0001${PDF} ADA`, `order 7${ZWSP}7`] }));
+    expect(raw(html)).toEqual([]);
+    expect(shown(html, "dapp-note")).toBe(`${String.raw`Pay \u{202E}0001\u{202C} ADA`}\n${String.raw`order 7\u{200B}7`}`);
+    expect(text(html)).toContain(i18n.t("dappUi.warn.hiddenChars"));
+    expect(render(summary({ note: ["Thanks for your order"] }))).not.toContain('data-testid="dapp-note-escaped"');
+  });
+
+  it("writes each such character as the transaction view writes the chain's text, and every other as it is", () => {
+    const wasm = loadTestWasm();
+    // decode_test.rs's every_invisible_character_is_escaped, and more of what its set holds: C1 controls, a soft
+    // hyphen, a word joiner, an Arabic letter mark, a zero-width space.
+    const hidden = [
+      0x034f, 0x115f, 0x3164, 0xffa0, 0x180b, 0x17b4, 0x0890, 0xfff9, 0xe0041, 0xe0100, 0x200e, 0x202e, 0x2068, 0x2028, 0x2029,
+      0xfeff, 0x1bca0, 0x13430, 0x1d173, 0x0085, 0x009f, 0x00ad, 0x2060, 0x061c, 0x200b,
+    ];
+    const lines = [...hidden.map((c) => `a${String.fromCodePoint(c)}b`), "שלום", "日本語", "émoji 🙂", "1,000 ₳"];
+    // A transaction with them as its CIP-20 note's lines (label 674's "msg"), for the transaction view to read.
+    const tstr = (s: string) => {
+      const b = Buffer.from(s, "utf8");
+      return `${b.length < 24 ? (0x60 + b.length).toString(16) : `78${b.length.toString(16).padStart(2, "0")}`}${b.toString("hex")}`;
+    };
+    const body = `a30081825820${"00".repeat(32)}000181825839${wasm.cip30Address(ADDRESS)}1a003d0900021a00029810`;
+    expect(lines.length).toBeGreaterThanOrEqual(24);
+    const note = `a11902a2a1636d736798${lines.length.toString(16).padStart(2, "0")}${lines.map(tstr).join("")}`;
+    const viewed = (JSON.parse(wasm.decodeTx(wasm.Network.Preprod, `84${body}a0f5${note}`)) as TxDetail).note;
+    expect(viewed).toHaveLength(lines.length);
+    expect(lines.map((l) => shownSiteText(l).text)).toEqual(viewed);
+    expect(lines.map((l) => shownSiteText(l).escaped)).toEqual(lines.map((_, i) => i < hidden.length));
+    // But for what a message is laid out by, which the window keeps and the view's one-line values don't.
+    expect(shownSiteText("a\tb\r\nc")).toEqual({ text: "a\tb\r\nc", escaped: false });
+  });
+});
+
+// Chunk 51, x1a#3: a site's transaction with a CIP-20 note and other metadata beside it. The body commits to all of it
+// (its auxiliary data hash), so signing publishes all of it, under the account's signature, for good. The window said
+// "It carries metadata, which anyone can read." only with no note: beside one, it showed the note's lines and named
+// nothing else, though WebAssembly's summary says there's metadata. The worker reads the same bytes as Transaction
+// details does and says when there's more than the note (`otherMetadata`), and the window says so. Through the real
+// worker and WebAssembly, as the window gets the request.
+describe("a site's transaction's metadata beside its note (chunk 51, x1a#3)", () => {
+  const signer = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+  const OWN = signer.preprod.receive_0 as string;
+  const SITE = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!.preprod
+    .receive_0 as string;
+  const INPUT = "11".repeat(32);
+  /** A CBOR text string of fewer than 256 bytes. */
+  const cborText = (s: string) => {
+    const n = Buffer.byteLength(s, "utf8");
+    return `${n < 24 ? (0x60 + n).toString(16) : `78${n.toString(16).padStart(2, "0")}`}${hex(s)}`;
+  };
+  const NOTE = "Thanks for order 77";
+  /** CIP-20's message: 674 → {"msg": [NOTE]}. */
+  const note = `1902a2a1${cborText("msg")}81${cborText(NOTE)}`;
+  /** What else the site writes, under a label of its own: 1337 → {"email": "alice@example.com", "order": 77}. */
+  const other = `190539a2${cborText("email")}${cborText("alice@example.com")}${cborText("order")}184d`;
+  /** A site's transaction: the account's 10 ₳ pays it 4 ₳, with `metadata` (a CBOR map) and its hash in the body. */
+  const withMetadata = (metadata: string) => {
+    const wasm = loadTestWasm();
+    const digest = bytesToHex(blake2b(Buffer.from(metadata, "hex"), { dkLen: 32 }));
+    const body = `a40081825820${INPUT}00018182${`5839${wasm.cip30Address(SITE)}`}1a003d0900021a00029810075820${digest}`;
+    return `84${body}a0f5${metadata}`;
+  };
+  const LINE = () => i18n.t("dappUi.note.privacy.otherMetadata");
+  const METADATA = () => i18n.t("dappUi.note.metadata");
+
+  async function until(check: () => boolean) {
+    for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 0));
+    expect(check()).toBe(true);
+  }
+
+  /** The worker's request for a site's `txCbor`, spending `input` of the account's, and the window's words for it. */
+  async function signWindow(txCbor: string, input: { tx_hash: string; tx_index: number; value: string }) {
+    const t = testBalances();
+    await t.wallet.create(signer.phrase, "correct horse battery");
+    await t.preferences.set({ dappConnector: true, dappPassword: false, spendRewards: false });
+    const template = Object.values(koiosPreprod.accounts)
+      .flatMap((a) => a.account_utxos)
+      .find((u) => u.address === OWN)!;
+    t.koios.addedToAccounts.push({ ...template, ...input, asset_list: [], block_height: 1 });
+    const s = { id: `x1a3-${input.tx_hash.slice(0, 6)}`, origin: "https://app.example", title: "App" };
+    const enabling = t.dapp.call(s, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await enabling).toBe(true);
+    const signing = t.dapp.call(s, "signTx", [txCbor, false]).catch(() => undefined);
+    await until(() => t.dapp.approvals().length === 1);
+    const asked = t.dapp.approvals()[0]!;
+    if (asked.kind !== "sign-tx") throw new Error(`a sign-tx approval, not ${asked.kind}`);
+    await t.dapp.answer(asked.id, false);
+    await signing;
+    return { summary: asked.summary, page: text(render(asked.summary)) };
+  }
+  const ten = { tx_hash: INPUT, tx_index: 0, value: "10000000" };
+
+  it("says it carries metadata when there's no note, as it did", async () => {
+    const { summary, page } = await signWindow(withMetadata(`a1${other}`), ten);
+    expect(summary).toMatchObject({ metadata: true, note: null });
+    expect(page).toContain(METADATA());
+    expect(page).not.toContain(LINE());
+  }, 60_000);
+
+  it("names the metadata a site writes under another label beside its note", async () => {
+    const { summary, page } = await signWindow(withMetadata(`a2${note}${other}`), ten);
+    expect(summary).toMatchObject({ metadata: true, note: [NOTE], otherMetadata: true });
+    expect(page).toContain(`Its note, which anyone can read ${NOTE}`);
+    expect(page).toContain(LINE());
+  }, 60_000);
+
+  it("names the data Minswap's real preprod swap writes beside its note: the sender's address and the order", async () => {
+    const fixture = JSON.parse(
+      readFileSync(new URL("../../wasm/tests/fixtures/minswap-swap-preprod.json", import.meta.url), "utf8"),
+    ) as { cbor: string; input: { tx_hash: string; tx_index: number; value: string } };
+    const { summary, page } = await signWindow(fixture.cbor, fixture.input);
+    expect(summary).toMatchObject({ metadata: true, note: ["Minswap: Aggregator Market Order"], otherMetadata: true });
+    expect(page).toContain(LINE());
+  }, 60_000);
+
+  it("adds nothing beside a note that's all its metadata holds", async () => {
+    const { summary, page } = await signWindow(withMetadata(`a1${note}`), ten);
+    expect(summary).toMatchObject({ metadata: true, note: [NOTE] });
+    expect(summary.otherMetadata).toBeUndefined();
+    expect(page).not.toContain(LINE());
+    expect(page).not.toContain(METADATA());
+  }, 60_000);
+});
+
 describe("who's asking", () => {
   const site = (props: Parameters<typeof Site>[0]) => text(renderToStaticMarkup(createElement(Site, props)));
 
@@ -585,6 +743,29 @@ describe("a site's connect window", () => {
     expect(fundingPrivacy("0")).toBe(
       "This payment ties the private UTxOs it spends to the one-time account. Anyone can see it on chain, the site too.",
     );
+  });
+
+  // Chunk 51, e3b#5: a sent funding waits across a network switch (dapp.ts networkChanged), and the window, drawn again
+  // on the other network, linked to that network's Cardanoscan, which hasn't the funding.
+  it("links a sent funding on the network it went on, whichever network the window is on now", () => {
+    const tx = "ab".repeat(32);
+    const waiting = (network: NetworkName, sent?: NetworkName) =>
+      renderToStaticMarkup(
+        createElement(
+          NetworkContext.Provider,
+          { value: network },
+          createElement(ConnectRequest, {
+            approval: { kind: "connect", id: "a", origin: "https://app.example", password: false, funding: { index: 0, txHash: tx, ...(sent ? { network: sent } : {}) } },
+            busy: false,
+            held: false,
+            onError: () => undefined,
+            onAnswer: async () => true,
+          }),
+        ),
+      );
+    expect(waiting("preprod", "mainnet")).toContain(`href="https://cardanoscan.io/transaction/${tx}"`);
+    expect(waiting("mainnet", "preprod")).toContain(`href="https://preprod.cardanoscan.io/transaction/${tx}"`);
+    expect(waiting("preprod")).toContain(`href="https://preprod.cardanoscan.io/transaction/${tx}"`);
   });
 });
 
