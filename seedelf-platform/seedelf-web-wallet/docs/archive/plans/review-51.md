@@ -243,7 +243,7 @@ Each of these refuses something the ledger and the contracts take. Most were chu
 ## Left open
 
 In [backlog.md](../../backlog.md), from this review:
-- **The owner's calls above,** one ❓ line a group, with their IDs.
+- **The owner's calls above,** in six ❓ lines that name every ID.
 - ⬜ **Core's token sums are quadratic in their kinds** (l3cli#3's root): `fitting` and `Assets::add` clone the whole list for every token. The CLI's windows now bound what they hand core, but the web wallet's private sends still run it over every owned UTxO, so a stranger's many-token piles under the user's register slow each one. Not measured in the WebAssembly.
 - ⬜ **Two Lovejoin AnyTx modules no family builds** (l3tests#3's note): `Lovejoin.AnyTx.LogicOwnerParserReach` and `LogicOwnerPrefix` are in no `check.sh` list and no listed module imports them, so no run builds or judges them, and `tally.py` reads them not ok.
 - ⬜ **A swap keeps one skip reason** (l4worker#1's limits): a late leg's direct return after a swap's own return that had its own reason replaces it, so the page reads it as a later part's and the swap's own words are lost; and a direct return rebuilt under a new hash with no reason leaves the old hash named. A reason kept per return would close both.
