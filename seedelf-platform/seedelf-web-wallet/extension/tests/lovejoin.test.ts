@@ -2220,7 +2220,9 @@ describe("mixing from the tile", CHAINS, () => {
     expect(out.mix).toMatchObject({ boxes: 1, again: true, publicToo: true });
     await sessions.mixOutSubmit("preprod", out.txHash);
     const book = (await t.store.get<{ sessions: Array<{ mix?: unknown }> }>("sessions.preprod"))!;
-    expect(book.sessions[0]!.mix).toEqual({ boxes: 1, again: true, publicToo: true, pool: ADA });
+    // At the depth and the wait its review showed (Settings' then: two waves, 1 to 6 hours), whatever Settings says
+    // since (chunk 51, w3#1).
+    expect(book.sessions[0]!.mix).toEqual({ boxes: 1, again: true, publicToo: true, pool: ADA, depth: 2, delay: "1-6" });
   });
 
   it("mixes whatever Settings says of a session's return: a mix is what was asked for (privacy review §4.1)", async () => {
@@ -2262,7 +2264,7 @@ describe("mixing from the tile", CHAINS, () => {
     expect(t.koios.submitted.slice(before)).toHaveLength(1);
     const book = (await t.store.get<{ sessions: Array<{ txs: Array<{ kind: string }> }> }>("sessions.preprod"))!;
     expect(book.sessions[0]!.txs.map((x) => x.kind)).toEqual(["out", "back"]);
-    expect(view.mix).toEqual({ boxes: 1, pool: ADA, skipped: "you stopped it before its boxes went in" });
+    expect(view.mix).toEqual({ boxes: 1, pool: ADA, depth: 2, delay: "1-6", skipped: "you stopped it before its boxes went in" });
   });
 
   it("mixes what a deposit Koios never answered spent, once it's gone unseen, rather than bring back only the collateral (final review sessions-1)", async () => {
@@ -2323,7 +2325,7 @@ describe("mixing from the tile", CHAINS, () => {
     const sent = t.koios.submitted.slice(before);
     expect(sent).toHaveLength(3);
     expect(txInputs(sent[0]!)).toEqual([`${out.txHash}#0`, `${out.txHash}#1`]);
-    expect(view.mix).toEqual({ boxes: 1, again: true, pool: ADA, skipped: "none of your boxes is in Lovejoin's pool anymore" });
+    expect(view.mix).toEqual({ boxes: 1, again: true, pool: ADA, depth: 2, delay: "1-6", skipped: "none of your boxes is in Lovejoin's pool anymore" });
     expect(await sessions.mixingAgain("preprod")).toBe(false);
   });
 

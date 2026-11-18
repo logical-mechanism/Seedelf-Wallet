@@ -6,14 +6,17 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { receivedOf } from "../src/background/sessions";
 import type { SessionBackSummary, SessionOutSummary, SessionView, SwapLovejoin } from "../src/shared/rpc";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { isClaimable } from "../src/ui/screens/ClaimAll";
 import { CancelCollateralReview, neverAgain, nextStep, Session, SessionFoot, StopDialog, SwapRow, swapsOnly } from "../src/ui/screens/Swaps";
+import { lovejoinOf } from "./chain-fixtures";
 import { loadTestWasm, sessionSwap } from "./fakes";
-import { ASK, atSession, signing, unlocked } from "./swap-session";
+import { ASK, atSession, funded, fundingOutsSpent, MIN as MIN_UNIT, ordered, orderRow, signing, started, SWAP_TX, unlocked, type T } from "./swap-session";
+import { ADA_ROWS } from "./v2-pools";
 
 /** A page's text, as a person reads it. */
 function text(element: ReactElement): string {
@@ -181,6 +184,171 @@ describe("a swap's page once its order is filled, and once it's over (chunk 23's
     expect(line).toContain("Its funding was turned away before it went out, so the account is empty. Something it spends had changed since the review.");
     expect(line).toContain("Remove from list");
     expect(line).not.toContain("Forget it");
+  });
+});
+
+// Chunk 51, e2b#2: a later return of the same swap, of what a stranger paid its account before it closed, wrote over
+// what its page says once it's over. `received` was each return's own, so the closed swap said it received the
+// stranger's ADA alone, never its 906.5941 MIN; and that return's skip reason took the place of the swap's own return's,
+// which had gone through Lovejoin. Now every return that went counts, and a return of strangers' alone leaves the
+// swap's word on how its own came back as it was. The real runner and WebAssembly, Lovejoin v2's 5 ₳ pool, and the fakes
+// of Koios, giveme.my and Minswap, as sessions.test.ts and swap-lovejoin-way.test.ts run them.
+describe("a finished swap whose account a stranger paid before it closed (chunk 51, e2b#2)", () => {
+  /** Ogmios's answer when the network measures no more than a transaction declares. */
+  const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
+  /** A stranger's payment to session 0's account, made after the swap's own return went. */
+  const STRANGER = "c9".repeat(32);
+  /** The swap's proceeds, as a return's figures name them. */
+  const PROCEEDS = expect.objectContaining({ assetName: MIN_UNIT.slice(56), quantity: "906594100" });
+
+  type Figures = { lovelace: string; tokens: Array<{ assetName: string; quantity: string }> };
+  type Recorded = { txs: Array<{ kind: string; brought?: Figures }>; received?: Figures; lovejoinSkipped?: string };
+  const record = async (t: T) => (await t.store.get<{ sessions: Recorded[] }>("sessions.preprod"))!.sessions[0]!;
+  /** What the session's `n`th return brought back at once, as its record keeps it (before chunk 51: the latest's). */
+  const broughtBy = async (t: T, n: number) => {
+    const r = await record(t);
+    return r.txs.filter((x) => x.kind === "back")[n]?.brought ?? r.received!;
+  };
+  /** The session's page, as a person reads it, balances shown. */
+  const shown = (s: SessionView) =>
+    renderToStaticMarkup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+        createElement(
+          NetworkContext.Provider,
+          { value: "preprod" },
+          createElement(Session, { session: s, reading: false, onRefresh: () => undefined, onBack: () => undefined, onChanged: () => undefined }),
+        ),
+      ),
+    )
+      .replace(/<[^>]+>/g, " ")
+      .replaceAll("&#x27;", "'")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  it("says it received what every return brought back: its own proceeds, and the stranger's 2 ₳ after them", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    fundingOutsSpent(t);
+    // The funding landed: the runner places the order.
+    let view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+    // The order lands and a batcher fills it: everything at the account comes back in one return.
+    ordered(t);
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN_UNIT, "906594100"]]));
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+    const own = await broughtBy(t, 0);
+    expect(own.tokens).toContainEqual(PROCEEDS);
+    // That return lands. Before the runner's next look would close the session, someone pays its account 2 ₳: its
+    // address is on chain since the funding. The runner brings that back too, in a return of its own.
+    t.koios.spent.add(`${SWAP_TX}#1`).add(`${"aa".repeat(32)}#0`);
+    t.koios.addedToAccounts.push(atSession(STRANGER, 0, "2000000"));
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back", "back"]);
+    const theirs = await broughtBy(t, 1);
+    expect(theirs.tokens).toEqual([]);
+    // It lands, and the session is over: what it got is both returns' together, its proceeds among it.
+    t.koios.spent.add(`${STRANGER}#0`);
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.stage).toBe("closed");
+    expect(view.received).toEqual({ lovelace: (BigInt(own.lovelace) + BigInt(theirs.lovelace)).toString(), tokens: [PROCEEDS] });
+    expect(shown(view)).toMatch(/Received 906\.5941 MIN/);
+  });
+
+  it(
+    "never says Lovejoin was left out of its return, which went through Lovejoin, for the stranger's 2 ₳ that came back directly",
+    { timeout: 180_000 },
+    async () => {
+      const t = await unlocked();
+      t.koios.evaluation = AGREES;
+      t.koios.confirmations = 1;
+      const now = t.clock.now;
+      const out = "ab".repeat(32);
+      const fill = "aa".repeat(32);
+      const done = (kind: string, txHash: string, extra = {}) => ({ kind, txHash, at: now, confirmed: true, ...extra });
+      // A swap approved to come back through Lovejoin, one wave deep, its order placed and on chain.
+      await t.store.set("sessions.preprod", {
+        next: 1,
+        sessions: [
+          {
+            index: 0,
+            ownStake: true,
+            createdAt: now,
+            txs: [done("out", out), done("swap", SWAP_TX, { orders: [`${SWAP_TX}#0`] })],
+            swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+            auto: {
+              approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } },
+              direct: false,
+              lovejoin: { depth: 1, delay: "1-6", box: "5000000" },
+            },
+          },
+        ],
+      });
+      // Filled: the order is spent, and the account holds the proceeds, the swap's change and its 5 ₳ collateral.
+      t.koios.addedToAccounts.push(
+        orderRow(SWAP_TX, 0),
+        atSession(fill, 0, "2000000", [[MIN_UNIT, "906594100"]]),
+        atSession(SWAP_TX, 1, "12000000"),
+        atSession(out, 1, "5000000"),
+        ...ADA_ROWS,
+      );
+      t.koios.spent.add(`${SWAP_TX}#0`);
+      // Its collateral's own mix into the 5 ₳ pool is off: the return asked about here is its chain alone.
+      await t.deps.preferences.set({ lovejoinCollateral: false });
+      const sessions = signing(t, { lovejoin: lovejoinOf(t), sleep: async () => undefined });
+
+      // The runner sees the fill and brings it all back through Lovejoin, as approved: one chain, the return last.
+      await sessions.advance("preprod", 0, true);
+      let kept = await record(t);
+      const kinds = kept.txs.map((x) => x.kind);
+      expect(kinds.slice(0, 3)).toEqual(["out", "swap", "deposit"]);
+      expect(kinds.at(-1)).toBe("back");
+      expect(kept.lovejoinSkipped).toBeUndefined();
+      const own = await broughtBy(t, 0);
+      expect(own.tokens).toContainEqual(PROCEEDS);
+      // All of it is on chain. Before the runner's next look would close the session, a stranger pays its account
+      // 2 ₳, too little for a box: it comes back directly, in a return of its own.
+      t.koios.spent.add(`${fill}#0`).add(`${SWAP_TX}#1`).add(`${out}#1`);
+      t.koios.addedToAccounts.push(atSession(STRANGER, 0, "2000000"));
+      await sessions.advance("preprod", 0, true);
+      kept = await record(t);
+      expect(kept.txs.filter((x) => x.kind === "back")).toHaveLength(2);
+      // It lands, and the session is over, its chain gone in and finished: the last step reads "Through Lovejoin".
+      t.koios.spent.add(`${STRANGER}#0`);
+      const view = await sessions.advance("preprod", 0, true);
+      expect(view.stage).toBe("closed");
+      expect(view.chain).toMatchObject({ cut: false });
+      expect(view.chain?.stopped).toBeUndefined();
+      // The swap's own return went through Lovejoin: its page never says Lovejoin was left out of it, nor that it got
+      // the stranger's ADA alone.
+      expect(view.lovejoinSkipped).toBeUndefined();
+      const words = shown(view);
+      expect(words).not.toContain("Lovejoin was left out");
+      expect(view.received?.tokens).toEqual([PROCEEDS]);
+      expect(words).toMatch(/Received, besides its boxes in Lovejoin 906\.5941 MIN/);
+    },
+  );
+
+  it("adds up every return that went, a token's quantities by its unit, and counts the latest of those from before by the record", () => {
+    const min = (quantity: string) => ({ policyId: MIN_UNIT.slice(0, 56), assetName: MIN_UNIT.slice(56), quantity });
+    const back = (lovelace: string, tokens: ReturnType<typeof min>[] = []) => ({ kind: "back" as const, brought: { lovelace, tokens } });
+    const swap = { kind: "swap" as const };
+    expect(receivedOf({}, [swap, back("133411421", [min("906594100")]), back("1829439")])).toEqual({
+      received: { lovelace: "135240860", tokens: [min("906594100")] },
+    });
+    expect(receivedOf({}, [back("1000000", [min("5")]), back("2000000", [min("7")])]).received?.tokens).toEqual([min("12")]);
+    // A session from before: its record says what its latest return brought; one sent since counts beside it.
+    const before = { received: { lovelace: "3000000", tokens: [] } };
+    expect(receivedOf(before, [swap, { kind: "back" }])).toEqual(before);
+    expect(receivedOf(before, [{ kind: "back" }, back("2000000")]).received?.lovelace).toBe("5000000");
+    // Every return its own: the record's is none of theirs. No return: nothing to say.
+    expect(receivedOf(before, [back("2000000")]).received?.lovelace).toBe("2000000");
+    expect(receivedOf(before, [swap])).toEqual({});
   });
 });
 

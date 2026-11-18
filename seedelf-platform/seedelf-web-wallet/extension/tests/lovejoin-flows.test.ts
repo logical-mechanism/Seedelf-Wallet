@@ -217,6 +217,22 @@ describe("no pool read names the pool a mix goes into (chunk 34's §3, 34d's rev
 });
 
 describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
+  // Chunk 51, e8b#1's sibling: a Bootstrap passed the account's collateral to WebAssembly, which converted it at depth 0
+  // too, though a deposit alone spends no script. A collateral WebAssembly can't take (the user chose 5 ₳ of ADA alone
+  // whose datum is nested past what it reads, which the ledger takes for a site's transaction) then refused it.
+  it("puts up no collateral, so one WebAssembly can't take never stops it, where a mix still needs it", async () => {
+    const t = await wallet();
+    const lj = pooled(t, BOTH);
+    const deep = { ...atAccount("e5", "5000000"), inline_datum: { bytes: `${"81".repeat(200)}00`, value: null } } as KoiosUtxo;
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), deep, ...POOL, ...ADA_ROWS);
+    await t.balances.get("preprod");
+    expect(await t.coins.use("preprod", `${"e5".repeat(32)}#0`)).toMatchObject({ state: "set", by: "you" });
+    const summary = await lj.publicBuild("preprod", 1, { pool: ADA, bootstrap: true });
+    expect(summary).toMatchObject({ bootstrap: true, boxes: 1, depth: 0, mixes: 0, txs: 1 });
+    // A mix puts it up, and WebAssembly refuses it, as it did: the user's own choice stays theirs.
+    await expect(lj.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow(`UTxO ${"e5".repeat(32)}#0 holds a datum the wallet can't read`);
+  });
+
   it("puts a token pool's boxes in with no mixes, holds them, and caps a deposit at a token box's size", async () => {
     const t = await wallet();
     const lj = pooled(t);

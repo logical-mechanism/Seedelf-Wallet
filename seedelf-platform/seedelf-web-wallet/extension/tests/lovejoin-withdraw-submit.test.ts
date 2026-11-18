@@ -7,7 +7,7 @@
 // unlocked while it was built (L11). The real WebAssembly, v2's 5 ₳ pool
 // (the classic pool, retired, brings its boxes all back at the first run,
 // with no wait: chunk 44), and fakes of Koios and giveme.my.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
@@ -200,6 +200,68 @@ describe("a withdraw built across a lock and an unlock (independent review L11)"
     expect(t.koios.submitted).toHaveLength(submits);
     const [drawn] = (await kept(t)).due;
     expect(drawn).toBeGreaterThanOrEqual(unlocked + UNLOCK_WAIT_MS[0]);
+  });
+});
+
+// Chunk 51, x4#1: a due box's withdraw read the quiet after the wallet's own send (QUIET_AFTER_SEND_MS) once, before
+// its Koios reads and giveme.my's witness, and never again before its submit. A Send that went while giveme.my answered
+// was followed seconds later by the withdraw, the very pairing the rule is for ("a withdraw minutes after a payment says
+// both are one owner's"; privacy.md, *Timing*). The rule is read again once those calls are done, as the unlock is.
+describe("a withdraw built while the user's Send goes (chunk 51, x4#1)", { timeout: 120_000 }, () => {
+  /** The 15-word phrase's receive address: someone else's. */
+  const THEIRS = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!.preprod
+    .receive_0 as string;
+
+  it("isn't sent seconds after the Send: it keeps its due time, and goes once the quiet after the Send is over", async () => {
+    const { t, lovejoin } = await due();
+    // The user reviews a payment from the public account. Nothing has been sent for an hour.
+    const review = await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
+    expect(await t.wallet.sends()).toEqual({ sent: 0, forgotten: 0 });
+    const before = (await kept(t)).due;
+    const submits = t.koios.submitted.length;
+
+    // The alarm's run begins (runs.ts `since`), passes the quiet check, reads the pool's reward account, builds the
+    // withdraw and asks giveme.my to witness it. Three seconds in, while giveme.my answers, the user presses Send.
+    const since = t.clock.now;
+    const witness = t.collateral.fetch;
+    let paid: number | undefined;
+    t.collateral.fetch = async (url, init) => {
+      t.clock.now += 3_000;
+      paid = t.clock.now;
+      // writeAhead stamps a Send's inputs on the device's clock (pending.ts), which in the worker is the services' own
+      // (sw.ts `now: Date.now`). Here the services run on the test's clock, so the device's is set to it.
+      const wall = vi.spyOn(Date, "now").mockReturnValue(paid);
+      try {
+        await t.send.submit("preprod", review.txHash);
+      } finally {
+        wall.mockRestore();
+      }
+      return witness(url, init);
+    };
+    const went = await lovejoin.withdrawDue("preprod", false, since);
+    t.collateral.fetch = witness;
+
+    // giveme.my was asked: the run had passed the quiet check. And the Send went meanwhile, the wallet's last send.
+    expect(t.collateral.asked).toHaveLength(1);
+    expect(await t.wallet.withKeys(() => lastSpentAt(t.session, t.clock.now))).toBe(paid);
+    // Only the Send went out: no withdraw seconds after it, nor kept as on its way. Its box keeps its due time.
+    expect(t.koios.submitted.slice(submits).map(txIdOf)).toEqual([review.txHash]);
+    expect(went).toEqual([]);
+    expect((await kept(t)).withdrawing).toBeUndefined();
+    expect((await kept(t)).due).toHaveLength(before.length);
+
+    // A minute on, still within the quiet after the Send, it doesn't go either.
+    await busyFor(t, 60_000);
+    await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(t.koios.submitted).toHaveLength(submits + 1);
+
+    // Once it's due and the quiet after the Send is over, it goes.
+    const [at] = (await kept(t)).due;
+    await busyFor(t, Math.max(at!, paid! + QUIET_AFTER_SEND_MS) - t.clock.now);
+    const [back] = await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(back?.kind).toBe("lovejoin-withdraw");
+    expect(t.koios.submitted).toHaveLength(submits + 2);
+    expect(t.clock.now - paid!).toBeGreaterThanOrEqual(QUIET_AFTER_SEND_MS);
   });
 });
 

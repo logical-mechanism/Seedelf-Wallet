@@ -431,18 +431,25 @@ async function take(deps: PendingDeps, record: Watched, alongside?: () => Promis
  * withdraw brought back now, its mix from the public account), unless a
  * payment on that network may still go through: that one's watch stays.
  * `toAccount`: it spends or pays the public account too (a box the account
- * paid to bring back), so its landing reads both sides again. `watch`: the
- * feed it shows in, and its token pools (lovejoin.ts watchOf): the classic
- * pool's lists no token pool's box (1.6.0's release review, DATA-1). None:
- * the classic pool's, as Lovejoin's own were.
+ * paid to bring back), so its landing reads both sides again; `paysAccounts`,
+ * which of the user's accounts, so it reads that side again only while the
+ * wallet is on one of them, as a Seedelf spend's (paysActive; chunk 51, e5#2's
+ * sibling). `watch`: the feed it shows in, and its token pools (lovejoin.ts
+ * watchOf): the classic pool's lists no token pool's box (1.6.0's release
+ * review, DATA-1). None: the classic pool's, as Lovejoin's own were.
  */
 export async function watchSent(
   deps: PendingDeps,
   pending: PendingTx,
-  { toAccount, watch }: { toAccount?: true; watch?: { feed?: Feed; pools?: string[] } } = {},
+  {
+    toAccount,
+    paysAccounts,
+    watch,
+  }: { toAccount?: true; paysAccounts?: number[]; watch?: { feed?: Feed; pools?: string[] } } = {},
 ): Promise<void> {
   const on = { ...(watch?.feed ? { feed: watch.feed } : {}), ...(watch?.pools?.length ? { pools: watch.pools } : {}) };
-  await take(deps, { ...pending, ...(toAccount ? { toAccount } : {}), ...on });
+  const pays = paysAccounts?.length ? { paysAccounts } : toAccount ? { toAccount } : {};
+  await take(deps, { ...pending, ...pays, ...on });
 }
 
 /** The watched transaction as Home is shown it. */

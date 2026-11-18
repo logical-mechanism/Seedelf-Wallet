@@ -29,6 +29,7 @@ import {
   wayOver,
   withinDepth,
   type ChainProgress,
+  type LovejoinChain,
   type PoolRef,
 } from "../src/background/lovejoin";
 import { LovejoinLaunchService } from "../src/background/lovejoin-launch";
@@ -804,6 +805,72 @@ describe("four boxes a mix (chunk 34's D3)", SLOW, () => {
       expect(c.next).toBe(sent);
       expect(c.flying).toHaveLength(sent);
     }
+  });
+});
+
+// Chunk 51, w3#1 (with e8a#1): a mix from the Lovejoin tile, and Mix my boxes again, were built at Settings' depth and
+// wait as the runner built their chain, once the funding landed (or at the next unlock), not at the ones their review
+// showed and their funding paid for. Settings' depth turned from one wave to two meanwhile made a two-box mix one box
+// four mixes deep; Mix my boxes again's funding paid no mix at the new depth, so its boxes stayed unmixed. Their width
+// was kept (`mix.width`, above) and a swap's depth and wait are (independent review L21): so are a mix's now.
+describe("a mix keeps the depth and the wait its review showed, whatever Settings says since (chunk 51, w3#1)", SLOW, () => {
+  /** Mix session `index`'s funding `out` lands and the runner builds its chain: how deep, how many boxes, its mixes and its wait. */
+  async function built(t: T, lj: LovejoinService, sessions: SessionService, out: { txHash: string; payments: Array<{ lovelace: string }> }, index: number) {
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, out.payments[0]!.lovelace), atSession(out.txHash, 1, "5000000"));
+    t.koios.confirmations = 1;
+    const chain = vi.spyOn(lj, "chain");
+    await sessions.advance("preprod", index, true);
+    expect(chain).toHaveBeenCalledTimes(1);
+    const made = (await chain.mock.results[0]!.value) as LovejoinChain | undefined;
+    expect(made, "the runner built no chain for the mix").toBeDefined();
+    const record = (await t.store.get<{ chains: Array<{ session?: number; delay?: string }> }>("lovejoin.preprod"))!.chains.find(
+      (c) => c.session === index,
+    );
+    return { depth: made!.depth, boxes: made!.boxes, mixes: made!.txs.filter((x) => x.kind === "mix" && !x.tail).length, delay: record?.delay };
+  }
+
+  /** Session 0's mix, as its record keeps it. */
+  const mixOf = async (t: T) =>
+    (await t.store.get<{ sessions: Array<{ mix?: { depth?: number; delay?: string; skipped?: string } }> }>("sessions.preprod"))!.sessions[0]!.mix;
+
+  it("builds a tile's mix at the depth and the wait it was funded for, deeper or shallower than Settings' since", async () => {
+    for (const [reviewed, since] of [
+      [{ lovejoinDepth: 1, lovejoinDelay: "1-6" }, { lovejoinDepth: 2, lovejoinDelay: "6-24" }],
+      [{ lovejoinDepth: 2, lovejoinDelay: "6-24" }, { lovejoinDepth: 1, lovejoinDelay: "1-6" }],
+    ] as const) {
+      const t = await wallet();
+      await t.deps.preferences.set(reviewed);
+      const lj = pooled(t, [ADA_POOL]);
+      const sessions = runner(t, lj);
+      t.koios.addedToAccounts.push(...ADA_ROWS);
+      // Two boxes one wave deep (two mixes) or one box two waves deep (four), funded for exactly that.
+      const boxes = reviewed.lovejoinDepth === 1 ? 2 : 1;
+      const out = await sessions.mixOutBuild("preprod", boxes, { pool: ADA });
+      const mixes = boxes * (reviewed.lovejoinDepth === 1 ? 1 : 4);
+      expect(out.mix).toMatchObject({ boxes, depth: reviewed.lovejoinDepth, delay: reviewed.lovejoinDelay, mixes });
+      expect(out.mix.lovelace).toBe((1_500_000 + boxes * 5_000_000 + mixes * 950_000).toString());
+      const { index } = await sessions.mixOutSubmit("preprod", out.txHash);
+      // Sent. Before its funding lands, Settings says otherwise.
+      await t.deps.preferences.set(since);
+      expect(await built(t, lj, sessions, out, index)).toEqual({ depth: reviewed.lovejoinDepth, boxes, mixes, delay: reviewed.lovejoinDelay });
+      // Its record keeps them, for a chain built again (a lock cut it before its first send).
+      expect(await mixOf(t)).toMatchObject({ depth: reviewed.lovejoinDepth, delay: reviewed.lovejoinDelay });
+    }
+  });
+
+  it("mixes the wallet's boxes again at the depth and the wait their review showed", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1, lovejoinDelay: "1-6" });
+    const lj = pooled(t, [ADA_POOL]);
+    const sessions = runner(t, lj);
+    t.koios.addedToAccounts.push(...ADA_ROWS, await ownBox(t, "d6"), await ownBox(t, "d7"));
+    // Both boxes, one mix each: 2 × 0.95 ₳ and the 1.5 ₳ the chain's change needs, which two waves deep doesn't pay.
+    const out = await sessions.againBuild("preprod", false, ADA);
+    expect(out.mix).toMatchObject({ boxes: 2, again: true, depth: 1, delay: "1-6", mixes: 2, lovelace: "3400000" });
+    const { index } = await sessions.mixOutSubmit("preprod", out.txHash);
+    await t.deps.preferences.set({ lovejoinDepth: 2, lovejoinDelay: "6-24" });
+    expect(await built(t, lj, sessions, out, index)).toEqual({ depth: 1, boxes: 2, mixes: 2, delay: "1-6" });
+    expect((await mixOf(t))?.skipped).toBeUndefined();
   });
 });
 

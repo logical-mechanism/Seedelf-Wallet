@@ -18,7 +18,7 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, type PoolRef } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
-import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
+import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { t as tr } from "../src/i18n";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { LovejoinHeld } from "../src/shared/rpc";
@@ -319,6 +319,33 @@ describe("a box back that ties a public account to the private balance (1.6.0's 
     await t.balances.get("preprod");
     const pending = await lj.withdrawNow("preprod", { txHash: mine.tx_hash, txIndex: 0, pool: TOKEN }, false, true);
     expect((await historyOf(t, pending.txHash))?.origin).toEqual({ id: `box:${pending.txHash}+public:0`, origin: "own" });
+  });
+
+  // Chunk 51, e5#2's sibling: its watch said only that it pays "the public account" (`toAccount`), so it landing once
+  // the wallet was on another account dropped that one's reading, and Home asked Koios about it in the second the box
+  // landed, which ties the two by timing. It names the account that paid now (`paysAccounts`), as a Seedelf spend's.
+  it("reads again, as it lands, the account that paid to bring it back, and no other the wallet is on by then", async () => {
+    for (const on of [0, 1]) {
+      const t = await wallet();
+      const lj = pooled(t);
+      const mine = await tokenBox(t, "f1", true, 7);
+      t.koios.addedToAccounts.push(atAccount("e1", "20000000"), atAccount("e5", "5000000"), ...POOL, mine, ...(await strangers(t)));
+      t.koios.params = DEAR;
+      await t.accounts.add(1);
+      await t.balances.get("preprod");
+      // Brought back by account 0, as it's pressed there.
+      await lj.withdrawNow("preprod", { txHash: mine.tx_hash, txIndex: 0, pool: TOKEN }, false, true);
+      // On account `on` by the time it lands, Home's reading of it kept.
+      if (on) await t.accounts.use(on, ["preprod"]);
+      await t.balances.get("preprod");
+      expect(await t.session.get(SESSION_BALANCES_PREFIX + "preprod")).toBeDefined();
+      t.koios.confirmations = 1;
+      expect(await t.pending.pending("preprod")).toMatchObject({ kind: "lovejoin-withdraw", confirmations: 1 });
+      // On the account that paid, both sides are read again; on another, the private side alone.
+      const kept = (await t.session.get(SESSION_BALANCES_PREFIX + "preprod")) !== undefined;
+      expect(kept, `on account ${on}`).toBe(on !== 0);
+      expect(await t.session.get(SESSION_PRIVATE_STALE_PREFIX + "preprod"), `on account ${on}`).toBe(on !== 0 ? true : undefined);
+    }
   });
 
   it("records a public Bootstrap's box brought back from where its deposit put it as the account's too", async () => {
