@@ -245,3 +245,34 @@ async fn external_sweep_leaves_a_reference_script_it_cant_measure() {
 
     assert_eq!(tx.inputs, vec![(tx_hash(1), 0)]);
 }
+
+/// A token UTxO received with a key address's least ADA brings less than its
+/// deposit needs (the contract output's register costs about 0.43 ADA more),
+/// as a stranger's pile of tokens does. Only what the rest can't carry stays:
+/// the pile, while the user's NFT goes with the 20 ADA, which makes up its
+/// difference (chunk 51's review of r4#1's fix).
+#[tokio::test]
+#[serial]
+async fn external_sweep_takes_a_token_utxo_the_rest_can_carry_beside_a_pile() {
+    let nft = ("dd".repeat(28), hex::encode("NFT"), 1);
+    let (_, tx) = sweep_external(|dapp| {
+        vec![
+            address_utxo(dapp, 1, 20_000_000, &[]),
+            address_utxo(dapp, 2, 1_200_000, std::slice::from_ref(&nft)),
+            address_utxo(dapp, 3, 10_000_000, &pile(0xb0, 600)),
+        ]
+    })
+    .await;
+
+    assert_eq!(
+        sorted_inputs(&tx),
+        vec![(tx_hash(1), 0), (tx_hash(2), 0)],
+        "the NFT goes with the ADA; only the pile stays"
+    );
+    let swept: u64 = tx
+        .outputs
+        .iter()
+        .filter_map(|o| o.assets.get(&(nft.0.clone(), nft.1.clone())))
+        .sum();
+    assert_eq!(swept, 1);
+}
