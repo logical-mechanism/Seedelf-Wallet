@@ -6,7 +6,7 @@
   - `web-wallet/lovejoin-box-datum-spelling`: r3a#1 (high) and x2#1;
   - `cli/stranger-rows`: every CLI fix, for a CLI patch release.
 
-The working folder, `docs/plans/review-51/`, was compressed into this file. Its full text is in git at `TODO-FOLDER`:
+The working folder, `docs/plans/review-51/`, was compressed into this file. Its full text is in git at `009c4ab4`:
 - the agents' brief (`COMMON.md`), the lanes (`LANES.md`) and the fixers' brief (`FIX.md`);
 - every lane's and lens's report (`lanes/`), each finding's verdicts and the verifiers' tests (`verify/`);
 - `INDEX.md`, every finding on one line, and `FINDINGS.md`, every finding by what became of it;
@@ -151,7 +151,7 @@ When you choose, in order:
 
 ### ❓ Your calls
 
-Each finding below changes a default, a privacy promise or a rule the owner set, or something only the owner can change (repository settings, the published policy). None is fixed on the fix branch. Each has a recommendation. The verifiers' tests for these are in the folder's `verify/<id>.md` (in git at `TODO-FOLDER`), not on the fix branch. They're grouped so that most can be answered as a batch.
+Each finding below changes a default, a privacy promise or a rule the owner set, or something only the owner can change (repository settings, the published policy). None is fixed on the fix branch. Each has a recommendation. The verifiers' tests for these are in the folder's `verify/<id>.md` (in git at `009c4ab4`), not on the fix branch. They're grouped so that most can be answered as a batch.
 
 #### 1. Decide first: the four mediums
 
@@ -266,7 +266,7 @@ Recorded, not backlog lines:
 
 ## The IDs
 
-The code, the tests and the docs cite these by ID, as "chunk 51, <id>". Their full text is in git at `TODO-FOLDER`, under `seedelf-platform/seedelf-web-wallet/docs/plans/review-51/`: each family's report is `lanes/<lane>.md`, its data `data/<lane>.json`, and each verdict `verify/<id>.md`.
+The code, the tests and the docs cite these by ID, as "chunk 51, <id>". Their full text is in git at `009c4ab4`, under `seedelf-platform/seedelf-web-wallet/docs/plans/review-51/`: each family's report is `lanes/<lane>.md`, its data `data/<lane>.json`, and each verdict `verify/<id>.md`.
 
 | IDs | What |
 |---|---|
