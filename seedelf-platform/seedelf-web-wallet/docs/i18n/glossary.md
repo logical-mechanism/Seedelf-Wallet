@@ -2,7 +2,7 @@
 
 The words that must be the same everywhere, so a user reading Spanish or
 Japanese meets one wallet rather than three. Checked against **Lace 2.4.2**'s
-own `es.json` and `ja.json` (`_reference/lace`, pulled 2026-10-02) wherever Lace
+own `es.json` and `ja.json` (`_reference/lace`) wherever Lace
 says the same thing, because a Cardano user arriving from Lace should recognise
 the word.
 
@@ -17,9 +17,8 @@ the word.
 **Seedelf and Lovejoin are brands and are never transliterated** — not
 シードエルフ, not ラブジョイン. The two network names are Cardano's own and stay
 Latin in every language: the *sentence* around them is translated ("Preprod, la
-red de pruebas de Cardano"), the name is not. The owner asked for this
-explicitly (2026-10-03), and there is no Spanish or Japanese form of either
-brand that would make sense.
+red de pruebas de Cardano"), the name is not. There is no Spanish or Japanese
+form of either brand that would make sense.
 
 **The recovery phrase itself** is never translated: the 24 words are BIP39's
 English list and the derivation is frozen. The screens *about* the phrase are
@@ -33,7 +32,7 @@ translated; the words on them are not.
 | account | cuenta | アカウント | Lace's |
 | public account | cuenta pública | 公開アカウント | the wallet's own term |
 | private balance | saldo privado | プライベート残高 | the wallet's own term |
-| Receive | Recibir | 受取 | Lace has 受信, "receive a signal"; 受取 is what money does — we part from Lace here deliberately, as for Home's Send |
+| Receive | Recibir | 受取 | Lace has 受信, "receive a signal"; 受取 is what money does — this wallet parts from Lace here deliberately, as for Home's Send |
 | Send | Enviar | 送金 | Home's Send, which pays: 送金, where Lace has 送信. The review's Send button, which submits the transaction, keeps Lace's 送信 |
 | transaction | transacción | トランザクション | Lace's |
 | Collateral | Colateral | コラテラル | Lace's |
@@ -49,15 +48,15 @@ translated; the words on them are not.
 | script | script | スクリプト | |
 | token | token | トークン | |
 | make private / make public | hacer privado / hacer público | プライベートにする / 公開する | the wallet's own flow names |
-| the server (what the wallet reads Cardano through and sends to) | el servidor | サーバー | the owner's (2026-10-09): on mainnet the wallet's own answers first, on preprod Koios, so a screen names Koios only where Koios alone is meant: Chrome's access to it, the Koios-only switch, Settings' server status, a DRep profile Koios fetches |
+| the server (what the wallet reads Cardano through and sends to) | el servidor | サーバー | on mainnet the wallet's own data layer answers first, and on preprod Koios does, so a screen names Koios only where Koios alone is meant: Chrome's access to it, the Koios-only switch, Settings' server status, a DRep profile Koios fetches |
 
-## Chosen in the whole-locale review (2026-10-03)
+## Chosen in the whole-locale review
 
-Not the owner's decisions, like the table above: these are the words a Claude
-review settled when it read every Spanish and Japanese value end to end, each
-applied to every key that says it. It decided in this order: this file, then
-Lace where Lace says the same thing, then the reviewer, then the majority. Any
-of them is the owner's to overrule.
+Unlike the table above, which is settled, these are the words a Claude review
+chose when it read every Spanish and Japanese value end to end, each applied
+to every key that says it. It decided in this order: this file, then Lace
+where Lace says the same thing, then the reviewer, then the majority. The
+maintainer may overrule any of them.
 
 ### Spanish
 
@@ -72,7 +71,7 @@ of them is the owner's to overrule.
 | cost | costo | Lace's; "coste" is Spain's |
 | withdrawal | retiro | Lace's; the verb stays "retirar" |
 | treasury | tesoro | Lace's |
-| retire (a DRep), retirement | retirar tu DRep, retiro de DRep | Lace's "Retiro de DRep", for your own DRep and anyone's; one that has retired "se ha retirado", as a pool has. Never "dar de baja" or "retirarte como DRep" (chunk 23). Beside a withdrawal's "retiro", say whose: "Revisar el retiro del DRep" |
+| retire (a DRep), retirement | retirar tu DRep, retiro de DRep | Lace's "Retiro de DRep", for your own DRep and anyone's; one that has retired "se ha retirado", as a pool has. Never "dar de baja" or "retirarte como DRep". Beside a withdrawal's "retiro", say whose: "Revisar el retiro del DRep" |
 | no confidence (a governance action) | una moción de desconfianza | Lace's; the DRep vote option stays "Siempre sin confianza", as Lace's |
 | fill an order, place an order | ejecutar, enviar la orden | |
 | Max (the button) | Máx | Lace's, no period; sentences name it the same way |
@@ -83,7 +82,7 @@ of them is the owner's to overrule.
 | transaction ID | ID de transacción | always a capital "ID" |
 | quotation marks | “ ” | never « » |
 | about (an amount) | (aprox.) in a label, aproximadamente in a sentence | a label can't end in "unos" |
-| IPFS gateway; metadata (chunk 20) | pasarela IPFS; metadatos | "gestionada por Blockfrost", never "que gestiona Blockfrost", which reads as the gateway managing Blockfrost |
+| IPFS gateway; metadata | pasarela IPFS; metadatos | "gestionada por Blockfrost", never "que gestiona Blockfrost", which reads as the gateway managing Blockfrost |
 
 ### Japanese
 
@@ -93,7 +92,7 @@ of them is the owner's to overrule.
 | register (a Seedelf's) | レジスター | not レジスタ |
 | ADA Handle | ADA Handle | never a bare lowercase "handle" |
 | treasury | トレジャリー | Lace's; not 国庫 |
-| retire (a DRep) | 退任 | Lace's "DRep退任", for your own DRep and anyone's (chunk 23); a stake pool's retirement stays 引退 |
+| retire (a DRep) | 退任 | Lace's "DRep退任", for your own DRep and anyone's; a stake pool's retirement stays 引退 |
 | Max (named in a sentence) | 「最大」 | the button's own label |
 | funding (a private session's) | 資金提供 | 入金 is paying into the public account from outside; a site session's top-up is 追加入金 |
 | recipient; To (a row label) | 宛先 | 送り先 stays for where freed ADA or rewards go |
@@ -116,17 +115,14 @@ of them is the owner's to overrule.
 | not mixed yet | 未ミックス | not known to be mixed: ミックス未確認 |
 | Keep it (a modal's cancel) | そのままにする | |
 | your | あなたの, only where it says whose | dropped before 公開アカウント / プライベート残高 |
-| IPFS gateway; metadata; Show image (chunk 20) | IPFS ゲートウェイ; メタデータ; 画像を表示 | "either of them could" is どちらか一方だけでも: どちらも can read as the two together |
+| IPFS gateway; metadata; Show image | IPFS ゲートウェイ; メタデータ; 画像を表示 | "either of them could" is どちらか一方だけでも: どちらも can read as the two together |
 
-## Chosen for 1.6.0 (the release review, 2026-10-25)
+## Chosen for 1.6.0
 
 Lovejoin's token pools, Bootstrap, the collateral's mix and payments in parts
-came in 1.6.0. Each value's words were chosen as it was written, and recorded
-only in the notes of the verified files; the release review gathered them here
-as the values use them, and corrected the few values that strayed. A second
-pass (2026-10-26) read every key the review added or changed against this
-table, and added a box of its own, backs, a look and the space before ₳. Like
-the section above, these are Claude's choices, the owner's to overrule.
+came in 1.6.0. These are the words their values use, gathered from the notes
+of the verified files and checked against this table. Like the section above,
+these are Claude's choices, which the maintainer may overrule.
 
 | English | Spanish | Japanese | Note |
 |---|---|---|---|
@@ -148,13 +144,13 @@ the section above, these are Claude's choices, the owner's to overrule.
 | settled (a transaction that landed, or now can't) | resolverse | 確定するか、確定できなくなる | 確定 alone says it landed |
 | Bring every box back now | Traer todas las cajas de vuelta ahora | すべてのボックスを今すぐ戻す | |
 | change (what a transaction gives back) | el cambio | 釣り銭 | Lace has お釣り; おつり, in two values, says the same |
-| an amount in ₳ | a no-break space (U+00A0) before ₳ | the same | the house's rule in every language (usability review V-7); 15 of the keys 1.6.0's review added or changed had a plain space, in the English too |
+| an amount in ₳ | a no-break space (U+00A0) before ₳ | the same | the house's rule in every language, the English too (usability review V-7) |
 
-## Chosen for 1.8.0 (the release review, 2026-11-06)
+## Chosen for 1.8.0
 
-Lovejoin v2 came in 1.8.0 (chunk 44), and the pools on Lovejoin's older
-scripts were retired: withdraw-only. Like the sections above, these are
-Claude's choices, the owner's to overrule (1.8.0's release review, W11).
+Lovejoin v2 came in 1.8.0, and the pools on Lovejoin's older scripts were
+retired: withdraw-only. Like the sections above, these are Claude's choices,
+which the maintainer may overrule.
 
 | English | Spanish | Japanese | Note |
 |---|---|---|---|
@@ -168,7 +164,7 @@ Three files beside this one, one set per language:
 - **`<lang>-provenance.json`** — how each key's value was produced:
   `human`, `mtpe` (a machine draft checked and corrected value by value: the
   critical keys, by Claude's back-translation, as
-  `verified-critical-<lang>.json` names, and a handful of others, chunk 20's
+  `verified-critical-<lang>.json` names, and a handful of others, the
   NFT image messages among them), `exact-reuse` (the English is a name or a
   number and is reused on purpose), `verbatim`, or `machine` for a machine
   draft not checked value by value. The whole-locale review of 2026-10-03

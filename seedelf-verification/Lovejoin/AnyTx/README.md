@@ -204,10 +204,11 @@ branch after arbitrary valid proof and branch prefixes. `LogicLongControls` and
 `LogicWrongQuantityControls` exercise long proof lists and zero, one and multiple
 carriers; these are concrete evaluator checks and do not assert ledger validity.
 
-The complete Owner and Mix proofs still require general box-input filtering, proof
-verification, Mix output traversal, and their connection to the whole validator.
-Protocol-level composition, cryptographic assumptions, ledger routing and execution
-budgets also remain to be handled beyond the necessary-condition theorem above.
+Within this family, the complete Owner and Mix proofs would still need general box-input
+filtering, proof verification, Mix output traversal, and their connection to the whole
+validator; `Lovejoin/Every/` has them (above). Protocol-level composition, cryptographic
+assumptions, ledger routing and execution budgets remain beyond the necessary-condition
+theorem above.
 
 ## New scenarios
 
@@ -286,10 +287,11 @@ That program-level theorem still assumes that execution reaches the junction,
 that its environment has the specified values, and that its continuation rejects
 false; those hypotheses are not yet proved from full-validator execution.
 
-The launch seed and output search loops have unbounded subterm proofs, but the
-whole launch theorem remains open. A direct whole-launch seed attempt exceeded a
-16 GB memory limit; it needs further decomposition. Mix proof and output checks
-remain bounded to the stated layouts.
+The launch seed and output search loops have unbounded subterm proofs here; the
+whole launch is `one_shot_mint_accepts_iff`'s (above), not this family's. A direct
+whole-launch seed proof in one module needs more than 16 GB: it has to be split, as
+`Lovejoin/Every/`'s `Mint*` modules are. This family's Mix proof and output checks
+stay bounded to the stated layouts.
 
 ## Remaining safety work
 
@@ -349,3 +351,31 @@ The broader one-box Mix statement with an arbitrary proof was falsified when it 
 malformed context. `LogicControls` reconstructs that proof: the evaluator is still running
 at 5,000 steps and errors by 20,000. This illustrates the step bound for that instance; it
 does not prove that all arbitrary proof payloads are rejected.
+
+## When a property comes back Falsified
+
+The rule for every Lovejoin proof, this folder's and every other one under `Lovejoin/`:
+
+- **First, run the counterexample concretely,** with Aiken's evaluator on the deployed
+  bytes, as `concrete/` does.
+- **If Aiken agrees, it may be a flaw in a live pool.**
+  - Stop, and report it privately, as Lovejoin's own `SECURITY.md` says, and to no one else.
+  - Nothing that hints at it gets pushed or posted: no fork branch, no upstream comment,
+    no PR text.
+  - Disclosure is decided under that policy.
+  - The pool's scripts are frozen, so a fix is a new pool beside it.
+- **If Aiken disagrees, it's a gap in our spec or in the tools,** as the BLS12-381 operands
+  that made WalletRegister Falsified were ([the README](../../README.md)'s *Found along the
+  way*). Fix that, the same way.
+- **Tool fixes that say nothing about Lovejoin can go public,** for example #27's
+  `serialise_data` alias on our forks and upstream. A fix that a finding motivated waits
+  with the finding.
+
+## Plans and records
+
+- **Moving every proof off the forks** onto IOG's own tools:
+  [chunk 46's plan](../../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-46-verification-on-upstream.md).
+- **The records:** Lovejoin's verification in
+  [chunk 42](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-42-lovejoin-verification.md),
+  and the every-transaction proofs in
+  [chunk 45](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-45-lovejoin-every-tx.md).

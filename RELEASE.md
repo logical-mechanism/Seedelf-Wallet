@@ -1,11 +1,59 @@
 # Release
 
-This is the CLI's release: the Rust workspace and the contracts, on the `0.x.y` line, tagged `x.y.z`, which [release.yml](.github/workflows/release.yml) builds, signs and publishes. The Seedelf Wallet for Chrome is a separate `1.x` line with its own procedure in [development.md](seedelf-platform/seedelf-web-wallet/docs/development.md), tagged `web-wallet/<version>` on the commit its uploaded zip was built from. That tag must carry the slash, or release.yml ships signed CLI binaries off it.
+How to check a `seedelf-cli` release you've downloaded, and how the maintainers make one. The `seedelf-cli` is the terminal wallet for Seedelf, a stealth wallet for Cardano; the [README](README.md) explains how it works.
 
-Change the version, then run the command below in the parent folder.
+The CLI's releases are on the repository's [Releases](https://github.com/logical-mechanism/Seedelf-Wallet/releases) page. Each is tagged with its version number, such as `0.7.0`; the CLI and the [contracts](seedelf-contracts/README.md) share that `0.x.y` version line. For each tag, the GitHub Actions workflow [release.yml](.github/workflows/release.yml) builds the CLI for Linux, Windows and macOS on GitHub's runners, signs it with the release key (held as a GitHub Actions secret), and attaches the files to a release. The Seedelf Wallet for Chrome is released separately, on its own `1.x` line: its packages, their commits and their zip hashes are in [releases.md](seedelf-platform/seedelf-web-wallet/docs/releases.md).
+
+## Checking a release
+
+A release carries these files:
+
+| File | What it is |
+|------|------------|
+| `seedelf-cli-linux.tar.gz` | The Linux binary, `seedelf-cli.bin` |
+| `seedelf-cli-macos.tar.gz` | The macOS binary, `seedelf-cli.bin`, built for `x86_64-apple-darwin` |
+| `seedelf-cli-windows.zip` | The Windows binary, `seedelf-cli.exe` |
+| `*.asc` beside each archive | The archive's detached GPG signature |
+| `hashes.txt` | The SHA-256 of each binary and each archive |
+| `hashes.txt.asc` | The hashes file's detached GPG signature |
+
+Everything is signed with the release key, [util/pubkeys/seedelfwallet.asc](util/pubkeys/seedelfwallet.asc):
+
+| Name                        | Fingerprint                                       |
+|-----------------------------|---------------------------------------------------|
+| release@logicalmechanism.io | 759F 3952 BE14 AF01 AFEE 5861 A1A0 A20E 21B9 9053 |
+
+`hashes.txt` has two lines for each system, one for the binary and one for its archive:
+
+```
+Linux Binary: <sha256>  seedelf-cli.bin
+Linux Compressed File: <sha256>  seedelf-cli-linux.tar.gz
+Windows Binary: <SHA256>
+Windows Compressed File: <SHA256>
+macOS Binary: <sha256>  seedelf-cli.bin
+macOS Compressed File: <sha256>  seedelf-cli-macos.tar.gz
+```
+
+Import the key, check the signatures, then compare the archive's SHA-256 with its `Compressed File` line, by eye. For Linux:
 
 ```bash
-# set the version
+gpg --import seedelfwallet.asc
+gpg --fingerprint release@logicalmechanism.io
+gpg --verify seedelf-cli-linux.tar.gz.asc seedelf-cli-linux.tar.gz
+gpg --verify hashes.txt.asc hashes.txt
+sha256sum seedelf-cli-linux.tar.gz
+```
+
+Each `gpg --verify` should report a good signature from the release key, with the fingerprint above. After unpacking, the binary's SHA-256 should match its `Binary` line. On macOS, `shasum -a 256 seedelf-cli-macos.tar.gz` gives the hash. On Windows, PowerShell's `Get-FileHash seedelf-cli-windows.zip -Algorithm SHA256` gives it in capital letters, which is how `hashes.txt` writes Windows' lines.
+
+## Making a release
+
+This part is for the maintainers. A CLI release is the Rust workspace and the contracts, tagged `x.y.z`. release.yml runs on every tag that matches `*.*.*`, and a tag glob's `*` doesn't match a slash. So the Seedelf Wallet's tags contain a slash, `web-wallet/<version>`, and never start a CLI release; the wallet's own release procedure is in [development.md](seedelf-platform/seedelf-web-wallet/docs/development.md).
+
+Change the version, then run the command below in the repository's root.
+
+```bash
+# set the version being released
 version="0.7.0"
 # update the toml files
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
@@ -24,7 +72,7 @@ git tag ${version}
 git push origin ${version}
 ```
 
-Wait for all checks to pass, then edit the tagged release body for proper formatting. Update the release from draft to latest, then publish to crates.io with the command below in the parent folder.
+Wait for release.yml's jobs to pass. It creates the release as a draft: edit its body, then publish it as the latest release. Then publish to crates.io with the command below, in the repository's root.
 
 ```bash
 cd seedelf-platform
@@ -46,11 +94,11 @@ cd ..
 
 ## Recompiling
 
-Variant 1 is frozen on chain, so a rebuild that changes the contract hashes is deployed only as a new variant: put up its reference UTxOs, add it beside variant 1 in `seedelf-core`'s `constants.rs` and `references.rs` (variant 1 never changes), then list it in [seedelf-contracts/README.md](./seedelf-contracts/README.md) beside version 1.
+Version 1 of the contracts (variant 1 in `seedelf-core` and the CLI's `--variant` flag) is frozen on chain; its hashes and reference UTxOs are in [seedelf-contracts/README.md](./seedelf-contracts/README.md#deployed-contracts-version-1). So a rebuild that changes the contract hashes is deployed only as a new variant: put up its reference UTxOs, add it beside variant 1 in `seedelf-core`'s `constants.rs` and `references.rs` (variant 1 never changes), then list it in [seedelf-contracts/README.md](./seedelf-contracts/README.md) beside version 1.
 
 ## Re-releasing Tag
 
-Removing a tagged release involves deleting it locally and deleting the tagged branch.
+To redo a release, delete its tag locally and on GitHub, then tag and push it again as above. A version already published to crates.io can't be published again.
 
 ```bash
 version="0.7.0"

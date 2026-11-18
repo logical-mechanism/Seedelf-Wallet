@@ -4,15 +4,15 @@ Every Lovejoin mix the wallet makes takes three boxes (N = 3) by default: a sess
 
 ## The answer
 
-- **Four fits today, by about 1%.** On Lovejoin v2's scripts (29573c5), which every pool the wallet mixes in runs since 1.8.0 (chunk 44), a four-box mix uses 99.0% of the 10 billion CPU steps a transaction may use, leaving 100 million. Three uses 58.2%. Five never fits: it needs 15.1 billion.
-- **v2 is the thinnest deployment measured.** Its `mix_logic` checks both lengths in xor32, which costs 6 million steps more at N = 3, and 10.8 million at N = 4, than the same token pool on 8131b1d's scripts. On what the wallet mixed on before 1.8.0, four left 111 million (8131b1d's token pools, PR #163's generalized contracts, a box of ADA plus one token) to 118 million (the classic pool).
+- **Four fits today, by about 1%.** On Lovejoin v2's scripts (29573c5), which every pool the wallet mixes in runs since 1.8.0, a four-box mix uses 99.0% of the 10 billion CPU steps a transaction may use, leaving 100 million. Three uses 58.2%. Five never fits: it needs 15.1 billion.
+- **v2 leaves the least room of any deployment measured.** Its `mix_logic` checks both lengths in xor32, which costs 6 million steps more at N = 3, and 10.8 million at N = 4, than the same token pool on 8131b1d's scripts. On what the wallet mixed on before 1.8.0, four left 111 million (8131b1d's token pools, PR #163's generalized contracts, a box of ADA plus one token) to 118 million (the classic pool).
 - **CPU is the only limit that binds.** Even six boxes use 21% of a transaction's memory and 8.3 KB of its 16 KB.
 - **The margin doesn't wander, but it leaves no room.** A four-box mix of the wallet's always has the same shape, and the network measures it to the step as the wallet does. The only thing that moves its cost is where the fee input sorts among the boxes: 10 million steps between first and last at N = 4. So a four-box mix wouldn't fail at random. But it has no room for anything to change: whatever made a mix 1.1% dearer on v2 (a cost model that re-costs the BLS12-381 builtins, say) would make every one refuse to build. And a block holds only two of them, and only when nothing else in it runs scripts.
 - **The cost is quadratic.** Each of a mix's N proofs checks a branch for each of the N outputs, about 540 million steps a branch. Going from three to four is 16/9 of the work, not 4/3.
 
 **So the width stays three by default.** Four becomes comfortable once a transaction may use about **11 billion steps** (10% to spare). Five needs 15.07 billion. Six needs 21.32 billion, past the 20 billion a whole block may use today.
 
-**Since 1.6.0 four is a choice** (chunk 34's D3): Settings → *Lovejoin* → *Four boxes a mix*, off by default, on every pool. The Mix form and Mix my boxes again's review have the same switch, set as Settings has it until turned. Swaps' and sites' returns go at Settings' width.
+**Four is a choice:** Settings → *Lovejoin* → *Four boxes a mix*, off by default, on every pool. The Mix form and Mix my boxes again's review have the same switch, set as Settings has it until turned. Swaps' and sites' returns go at Settings' width.
 - **A chain that can't go four wide goes three, and says why:** the pool too short for four, a chain longer than one goes, four costing more than the ADA pays for, or four refused when it's built (`widthFor`, `wayOver`). A chain whose four-box build, or the network's check of its first mix, is refused is built again at three, never sent back unmixed. Where three takes no box either (the pool has room at neither width), `wayOver` gives no reason: a swap's approval then records the width asked, for its return to decide, and says only that the pool is short, while a chain still goes three, so its refusal quotes three's need (1.6.0's release review, 319-worker#0).
 - **The Mix form at four** stops its stepper at what fits four a mix, and says what three would take. Its build goes three only where the pool changed since, or four won't build.
 - **Mix my boxes again at four** takes as many of the wallet's boxes as fit four a mix, and leaves the rest for the next press. It goes three only where four takes none (`againWay`).
@@ -52,7 +52,7 @@ Each mix is measured with the wallet's own evaluator (`uplc`) under a limit far 
 
 The fee input first, the costliest place. "A block holds" is how many fit in a block's 20 billion steps. Fees past N = 4 are what the mix would cost if the ledger took it.
 
-**A token pool on Lovejoin v2's scripts** (29573c5, the scripts of every pool the wallet mixes in since 1.8.0; measured 2026-11-06 on the wallet's stand-in, `wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json`, offline alone, since it isn't on chain). v2's `mix_logic` checks both lengths in xor32, which costs 6 million steps at N = 3 and 10.8 million at N = 4. Four still fits, by 1.0%, and the fee estimates (0.95 ₳ and 1.35 ₳) still cover a mix: `every_width_measured` holds every mix of three and of four to them, on every deployment here, wherever the fee input sorts (1.8.0's release review, V5). v2's 5 ₳ ADA pool, where returns go, isn't measured here: its mixes run the same v2 templates, with no token in its boxes.
+**A token pool on Lovejoin v2's scripts** (29573c5, the scripts of every pool the wallet mixes in since 1.8.0; measured 2026-11-06 on the wallet's stand-in, `wasm/tests/fixtures/lovejoin-v2-token-pool-preprod.json`, offline alone, since it isn't on chain). v2's `mix_logic` checks both lengths in xor32, which costs 6 million steps at N = 3 and 10.8 million at N = 4. Four still fits, by 1.0%, and the fee estimates (0.95 ₳ and 1.35 ₳) still cover a mix: `every_width_measured` holds every mix of three and of four to them, on every deployment here, wherever the fee input sorts. v2's 5 ₳ ADA pool, where returns go, isn't measured here: its mixes run the same v2 templates, with no token in its boxes.
 
 | N | CPU steps | Of 10 billion | Left | Memory | Size | Fee | A block holds |
 |---|---|---|---|---|---|---|---|
@@ -62,7 +62,7 @@ The fee input first, the costliest place. "A block holds" is how many fit in a b
 | 5 | 15,068,082,012 | 150.7% | over by 5.1 billion | 2,621,353 | 6,130 B | (1.725 ₳) | 1 |
 | 6 | 21,320,490,769 | 213.2% | over by 11.3 billion | 3,467,455 | 8,280 B | (2.319 ₳) | 0 |
 
-**What the wallet mixed on before 1.8.0**, both retired since (chunk 44):
+**What the wallet mixed on before 1.8.0**, both retired since:
 
 **The classic pool on mainnet**, where returns went:
 
@@ -147,7 +147,7 @@ At the default depth, four wide gives 16 leaves for 6.15 ₳, between three wide
 
 ## What changing the width touches
 
-Chunk 34 (34e, 34f) did this for four. Kept as the list of what a fifth width, or a change of default, would touch.
+Adding four touched every place below. A fifth width, or a change of default, would touch the same ones.
 
 `lovejoin::mix` already takes any N ≥ 2, measures it, and refuses one over `build::MAX_TX_BUDGET` (10 billion steps, mainnet's limit), which five or more would need raised with the network's. So would the wallet's evaluator's own cap, `eval::MEASURE_LIMIT` (14 billion steps), which caps a transaction's scripts together, not each, since uplc runs each redeemer on what the ones before it left: `mix_logic` alone needs 14.9 billion at five boxes, so five fails measurement whatever `MAX_TX_BUDGET` says. The width lives in:
 - `seedelf-core/src/lovejoin/mod.rs`:

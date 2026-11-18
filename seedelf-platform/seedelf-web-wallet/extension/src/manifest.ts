@@ -26,9 +26,9 @@ const ICONS = Object.fromEntries([16, 32, 48, 128].map((n) => [String(n), `icons
  * holds them to the bundled ones.
  */
 export const SUMMARY: Record<"en" | "es" | "ja", string> = {
-  en: "A Cardano wallet with a private balance built in. Stake and send in public, or pay anyone privately through Seedelf.",
-  es: "Una billetera de Cardano con saldo privado integrado. Haz staking y envía en público, o paga a cualquiera en privado con Seedelf.",
-  ja: "プライベート残高を内蔵した Cardano ウォレット。公開アカウントでステーキングや送金を行うことも、Seedelf を通じて誰にでもプライベートに支払うこともできます。",
+  en: "A Cardano wallet with a private balance built in. Stake and send in public, or pay anyone's Seedelf privately.",
+  es: "Una billetera de Cardano con saldo privado integrado. Haz staking y envía en público, o paga en privado a cualquier Seedelf.",
+  ja: "プライベート残高を内蔵した Cardano ウォレット。公開アカウントでステーキングや送金を行うことも、どの Seedelf にもプライベートに支払うこともできます。",
 };
 
 /** Chrome's _locales/<language>/messages.json, by language: what the manifest's `__MSG_appDesc__` reads. */

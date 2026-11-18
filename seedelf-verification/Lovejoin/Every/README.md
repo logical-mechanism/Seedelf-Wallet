@@ -1,10 +1,10 @@
 # Lovejoin in every transaction
 
-Kernel-checked proofs of exactly when Lovejoin v2's mix_logic and one_shot_mint accept, in every transaction: no Blaster, no step limit, every list any length. What they state is in [`Lovejoin/AnyTx/README.md`](../AnyTx/README.md) (*Complete mix_logic and one_shot_mint behavior*), and what that lets us claim in [CLAIMS.md](../../CLAIMS.md). This page is for changing a proof: read it whole, then `Base.lean` (the tactics) and one finished region (`Carrier.lean`). How it was built, and the owner's calls, are [chunk 45](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-45-lovejoin-every-tx.md)'s record.
+Kernel-checked proofs of exactly when Lovejoin v2's mix_logic and one_shot_mint accept, in every transaction: no Blaster, no step limit, every list any length. What they state is in [`Lovejoin/AnyTx/README.md`](../AnyTx/README.md) (*Complete mix_logic and one_shot_mint behavior*), and what that lets us claim in [CLAIMS.md](../../CLAIMS.md). This page is for changing a proof: read it whole, then `Base.lean` (the tactics) and one finished region (`Carrier.lean`). If a statement turns out false, follow the rule in [`Lovejoin/AnyTx/README.md`](../AnyTx/README.md#when-a-property-comes-back-falsified). The record of how these proofs were built is in the archive: [chunk 45](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-45-lovejoin-every-tx.md). Moving them off the forks is [chunk 46's plan](../../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-46-verification-on-upstream.md).
 
 ## Building
 
-- **`./check.sh lovejoin-every`**, from `seedelf-verification/`: the 51 modules the proofs import from outside this folder, in import order, then the 25 here, each in its own scope at 16 GB and 30 minutes. One scope building several modules at once can pass 16 GB, which is why the imports are listed too. One of them, `Lovejoin.Template.AnyTxPurposes`, runs Blaster, so Z3 must be on `PATH` ([the README](../../README.md)'s *Running it*).
+- **`./check.sh lovejoin-every`**, from `seedelf-verification/`: the 51 modules the proofs import from outside this folder, in import order, then the 25 here, each in its own scope at 16 GB and 30 minutes. One scope building several modules at once can go past 16 GB, which is why the imports are listed too. One of them, `Lovejoin.Template.AnyTxPurposes`, runs Blaster, so Z3 must be on `PATH` ([the README](../../README.md)'s *Running it*).
 - **One module:** `./check.sh Lovejoin.Every.<M> …` gets the same 16 GB and 30 minutes. Build what it imports first, as the family does, or its scope builds that too. The default 8 GB kills six of the 25: Carrier, Collect (12.8 GB, the most), Walk, Withdraw, MintCheck and MintRoot.
 - **Iterating on one file:** run `lake env lean <file>` inside the same capped `systemd-run` scope `check.sh` uses, and read the scope's `memory.peak`. Its imports must be built first.
 - **A clean build** has no `sorry`, and the axiom guards (`#guard_msgs in #print axioms`, in `Lookup`, `Carrier`, `Typed`, `MintTyped` and `Readable`) see `[propext, Classical.choice, Quot.sound]` alone. The `CekMachine.lean:309: declaration uses 'sorry'` warning is PlutusCoreBlaster's own, and nothing here depends on it.
@@ -28,7 +28,7 @@ Kernel-checked proofs of exactly when Lovejoin v2's mix_logic and one_shot_mint 
 Don't relearn them.
 
 **In the CEK regions:**
-- **Case-split in evaluation order.** Example: a box `Constr _ [a]` evaluates `unBData a` before it finds field 1 missing. With `a` symbolic that branch can't close, and the leftover goal hijacks every following `rcases`. Split field 0, then its kind, then field 1. (`owner_pred` cost an hour on this.)
+- **Case-split in evaluation order.** Example: a box `Constr _ [a]` evaluates `unBData a` before it finds field 1 missing. With `a` symbolic that branch can't close, and the leftover goal hijacks every following `rcases`. Split field 0, then its kind, then field 1.
 - **Never let `lessThanInteger v q` reach whnf** with `v` symbolic and `q` the 255-bit field order: deciding it unfolds `Nat.sub` from `q` one unit at a time, until maximum recursion. Use `ap_lessThan _ _ _ h` (`Shared.lean`). It evaluates the builtin straight to the cased Bool.
 - **No `let` in a spec around a cased term.** `scalarOf`'s `let v` hid `lessThanInteger v q` from `cases`, so unification evaluated it.
 - **`safe_assumption` only closes slot equations with slot hypotheses.** Plain `assumption` once unified a builtin's `evaluateBuiltinFunction … = r` goal with a fact like `v < q = false`, which recursed.
@@ -37,7 +37,7 @@ Don't relearn them.
 - **A walk in tail position must return its result in the goal's own form:** `proofs_walk` rewrites `if a && b` into nested `if`s (`ite_and`) instead of splitting on `a`.
 - **The builtin's own forms:** `listData xs` is `PlutusCore.Data.listData xs`, so add `listData_eq` to the facts. `serialiseData` goes through `encodeDataOpaque`, so case on that.
 - **Constants come from the program** (`prefix01` by `match sub prefixAt with …`, with an `rfl` shape theorem). `q` is `Lovejoin.Classic.q` and unifies with the program's literal. A program constant such as `Constr 1 []` or `integerToByteString(True, 1, n)` holds `Int.ofNat 1`, which `rw` won't match against a spec's `1`: write `Int.ofNat 1` in the spec. A bytestring constant a fact must rewrite (`zero32`, `prefix03`) is a reducible `abbrev` of the literal, with an `rfl` shape theorem against the program.
-- **Paths:** never type one by hand. Generate them with `tools/lpath.py` from the tool's printed strings. `rcases` bracket counts were wrong twice: count one `⟩` per `⟨`.
+- **Paths:** never type one by hand. Generate them with `tools/lpath.py` from the tool's printed strings. In `rcases` brackets, count one `⟩` per `⟨`.
 - `#import_uplc` names are global (`mixLogicTemplate`, not `Lovejoin.Template.mixLogicTemplate`). `nftName` is in `Lovejoin.Template.Launch`.
 
 **In the launch (`Mint*.lean`):**
