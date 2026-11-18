@@ -1,17 +1,17 @@
 # The audit of the proofs
 
-A review of this folder's proofs, as of 2026-11-03. Seedelf is a stealth wallet on Cardano; the proofs also cover Lovejoin, the mixer the Seedelf Wallet uses. It asked whether each proved result (each ✅, as the Lean 4 builds print it) is real, and what the proofs and their docs leave out. It's the project's own review, done with AI review agents, not an independent audit.
+A review of this folder's proofs as they stood on 2026-11-03. The proofs are about Seedelf, a stealth wallet on Cardano, and Lovejoin, the mixer the Seedelf Wallet uses. The review asked whether each proved result (each ✅, as the Lean 4 builds print it) is real, and what the proofs and their docs leave out. It's the project's own review, done with AI review agents, not an independent audit.
 
-It covers the scenario proofs, each of which fixes the fields its script never reads. The every-transaction proofs, kernel and Blaster alike, are newer, and it doesn't cover them. The claim in [CLAIMS.md](../CLAIMS.md) rests on the kernel ones.
+It covers the scenario proofs, each of which fixes the fields its script never reads. The every-transaction proofs, kernel and Blaster alike, came after it, so it doesn't cover them, and that includes the kernel theorems the claim in [CLAIMS.md](../CLAIMS.md) rests on.
 
 ## What was reviewed
 
-- **The tools:** Blaster, IOG's Lean tactic that hands a goal to the Z3 solver, reviewed as trusted code at its pinned commit; and PlutusCoreBlaster, reviewed as the model of the machine Cardano runs scripts on.
+- **The tools:** Blaster, IOG's Lean tactic that hands a goal to the Z3 solver, reviewed, at its pinned commit, as code the proofs trust; and PlutusCoreBlaster, reviewed as the model of the machine Cardano runs scripts on.
 - **The inputs:** that the proved bytes are the deployed ones, and that the scenarios are real Plutus V3 script contexts.
 - **The proofs:** each theorem's statement, and the build's evidence for it; Seedelf's specs against their Aiken source; Lovejoin's classic pool, v2's Mix and its scenarios, and the templates.
 - **The docs:** each written claim against the proofs.
 
-Each critical and high finding was checked by two more reviewers, who tried to refute it (one on its evidence, one on its impact), and each medium by one. Lows and infos weren't checked. Each severity (critical, high, medium, low, info) is as it stood after those checks. Where a finding needed it, the review added theorems, mutant scripts and checks: the suites in this folder (*What's here*, below).
+Each critical and high finding was checked by two more reviewers, who tried to refute it (one on its evidence, one on its impact), and each medium by one. Lows and infos weren't checked. Severities (critical, high, medium, low, info) are as they stood after those checks. Where a finding needed it, the review added theorems, mutant scripts and checks: the suites in this folder (*What's here*, below).
 
 The record is [review/findings.md](review/findings.md), with the full evidence in `review/findings.json` beside it.
 

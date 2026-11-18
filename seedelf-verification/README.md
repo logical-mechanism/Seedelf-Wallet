@@ -23,7 +23,7 @@ Machine-checked proofs of exactly when each of Seedelf's on-chain scripts accept
 ## How it's proved
 
 - **The bytes.** The proofs are about the compiled scripts, not their Aiken source. Seedelf's are the bytes this repository's commit `5b82530` holds in `seedelf-contracts/contracts/`, which `extract.sh` checks against the hashes above. Lovejoin's are v2's templates, from Lovejoin's `main` at commit `29573c5`, and the proofs hold at any pool's parameters.
-- **The model.** Cardano runs a script as UPLC (Untyped Plutus Core) on a CEK machine, the evaluator the node uses. The proofs use IOG's model of both, in Lean 4: [PlutusCoreBlaster](https://github.com/input-output-hk/PlutusCoreBlaster) for UPLC and the machine, and [CardanoLedgerApiBlaster](https://github.com/input-output-hk/CardanoLedgerApiBlaster) for the ledger's types.
+- **The model.** Cardano runs a script as UPLC (Untyped Plutus Core) on a CEK machine, the evaluator the node uses. The proofs use IOG's model of both, in Lean 4: [PlutusCoreBlaster](https://github.com/input-output-hk/PlutusCoreBlaster) for UPLC and the machine, and [CardanoLedgerApiBlaster](https://github.com/input-output-hk/CardanoLedgerApiBlaster) for the ledger's types. The model isn't proved equal to the node, and its crypto builtins are `opaque`: a theorem holds for any interpretation of them, so it says what a script checks, not that the cryptography is hard to break (*What a ✅ is worth*).
 - **The checker.** Every theorem CLAIMS.md cites is checked by Lean's kernel, on Lean's own axioms alone. A second set is proved by [Blaster](https://github.com/input-output-hk/Lean-blaster), IOG's tactic that hands a goal to the Z3 solver, as a cross-check: Z3's word, not the kernel's (*What a ✅ is worth*, below).
 
 **All three Seedelf scripts are proved in Lean's kernel, with no Blaster** ([`Seedelf/Every/`](Seedelf/Every/README.md)). For every transaction, with no step limit, any number of signatories and any mint, each accepts exactly when a statement written in its Aiken source's terms holds (`walletAccepts`, `policyAccepts`); always_false never accepts. That those statements say what the source says rests on reading them, not on a proof (*Not proved, and why*). The Blaster modules below are a cross-check, by another route, of the same properties.
@@ -34,7 +34,7 @@ Lovejoin's proofs are here too, in `Lovejoin/`: v2's, and scenario proofs of its
 
 ### In Lean's kernel
 
-On the same bytes, for every V3 script context (any value of CardanoLedgerApiBlaster's type for the transaction, redeemer and purpose the ledger hands a Plutus V3 script), and for any context `Data` at all. Each theorem is about the deployed program's own run (`cekExecuteProgram`). When the condition holds, the run returns `()`, which is acceptance, after some number of steps; otherwise it reaches `Error` and never halts. No step limit, no layout, no ledger hypothesis, Lean's own axioms alone. [Seedelf/Every/README.md](Seedelf/Every/README.md) has the modules.
+On the same bytes, for every V3 script context (any value of CardanoLedgerApiBlaster's type for the transaction, redeemer and purpose the ledger hands a Plutus V3 script), and for any context `Data` at all. Each theorem is about the deployed program's own run (`cekExecuteProgram`). When the condition holds, the run returns `()` after some number of steps, which the ledger accepts if the transaction's execution budget covers it; otherwise it reaches `Error`, and at no step count does it return a value (`Halt`). No step limit, no layout, no ledger hypothesis, Lean's own axioms alone. [Seedelf/Every/README.md](Seedelf/Every/README.md) has the modules.
 
 | Script | Theorem | Accepts exactly when |
 |---|---|---|
@@ -53,7 +53,7 @@ On the same bytes, **in every transaction**. Every field a script doesn't read i
 | `AlwaysFalseAnyTx` | always_false reaches `Error` whatever its argument: every V3 context, and any other `Data` | 1 |
 | `WalletPurposeAnyTx` | The wallet is spend-only, with any TxInfo, redeemer and purpose payload | 5 |
 | `WalletRedeemerAnyTx` | A redeemer that isn't a proof, `Constr 0 [B _, B _, B _]`, reaches `Error`, with any TxInfo, output reference and datum. 22 shapes | 22 |
-| `WalletNoLockAnyTx` | No accidental locks: a UTxO whose datum isn't a Register returns unit, which the ledger accepts, with any well-formed proof, TxInfo and output reference. 18 shapes | 18 |
+| `WalletNoLockAnyTx` | A datum that isn't a Register locks nothing: a UTxO whose datum isn't a Register returns unit, which the ledger accepts, with any well-formed proof, TxInfo and output reference. 18 shapes | 18 |
 | `WalletAnyTx`, `…Two`, `…Three`, `Signers/Signers4` to `Signers128` | **The wallet's core property:** a Register UTxO moves iff the Schnorr check holds and `vkh` is among the signatories, for every count of them from none to 128, every other field any `Data`. Every run returns unit or reaches `Error` | 13 + 250 |
 | `AnyTxShapes` | Every V3 context is one of the wallet's scenarios: another purpose, a redeemer that isn't a proof, a datum that isn't a Register, or a Register with k signatories. Kernel-checked | 10 |
 | `PolicyPurposeAnyTx` | The policy is mint-only, with any TxInfo, redeemer and purpose payload | 5 |
@@ -65,17 +65,17 @@ On the same bytes, **in every transaction**. Every field a script doesn't read i
 
 So, for every transaction:
 - always_false never passes.
-- The wallet passes only a spend, and a redeemer that isn't a proof fails. With a proof, a UTxO whose datum isn't a Register moves. A Register UTxO moves exactly when the Schnorr check holds and `vkh` is among the signatories, however many (Blaster's cross-check stops at 128, where a 16,384-byte transaction holds at most 125: each needs its 30-byte hash and a 101-byte witness).
+- The wallet passes only a spend, and a redeemer that isn't a proof fails. A UTxO with no datum, or a datum that isn't a Register, moves for anyone whose redeemer has a proof's shape (three bytestrings, checked no further). A Register UTxO moves exactly when the Schnorr check holds and `vkh` is among the signatories, however many (Blaster's cross-check stops at 128, and a 16,384-byte transaction holds at most 125: each needs its 30-byte hash and a 101-byte witness).
 - The policy passes only a mint whose redeemer is a bytestring and whose mint is exactly one line, by its rule above.
 - **A burn fails, as a mint does, when the transaction's first input is output #256 or later:** the policy builds the token name from that index as one byte, for a burn too (`policy_accepts_iff`; `PolicyBurn` and `concrete/policy_burns.sh` cross-check it). Seedelf's software refuses such an input for a mint. A burn with one fails evaluation before it's sent, so nothing is lost, and the same Seedelf burns with other inputs.
 
-**The scenario modules** are narrower: each fixes the fields its script never reads (an empty transaction from `Scenario.lean`), and the modules above restate each of them in every transaction. `PolicyBurn` and `PolicyMint` fail on `BitVec` (see *Not proved, and why*); `Slice/` proves their success directions over an opaque slice instead (*What a ✅ is worth*).
+**The scenario modules** are narrower: each fixes the fields its script never reads (an empty transaction from `Scenario.lean`), and the modules above restate each of them in every transaction. The success theorems in `PolicyBurn` and `PolicyMint` don't build, since Blaster can't decide `Char`'s `BitVec` (*Not proved, and why*); `PolicyBurn`'s two failure theorems, below, do. `Slice/` proves the success directions over an opaque slice instead (*What a ✅ is worth*).
 
 | Module | Property | Theorems |
 |---|---|---|
 | `AlwaysFalse` | always_false reaches `Error`, for any purpose and redeemer | 1 |
 | `WalletPurpose` | The wallet is spend-only: minting, rewarding, certifying, voting and proposing reach `Error` | 5 |
-| `WalletNoLock` | No accidental locks: a UTxO whose datum isn't exactly `Some(Constr 0 [B _, B _])` is spendable with any well-formed proof. 18 datum shapes, which together cover every datum but a Register (listed in the module) | 18 |
+| `WalletNoLock` | A datum that isn't a Register locks nothing: a UTxO whose datum isn't exactly `Some(Constr 0 [B _, B _])` is spendable with any well-formed proof. 18 datum shapes, which together cover every datum but a Register (listed in the module) | 18 |
 | `WalletRegister` | **The wallet's core property:** a Register UTxO moves iff the Schnorr check holds and `vkh` signed. The check is the Aiken source's `prove`, in its order: z and c = blake2b_224(g ‖ g_r ‖ u ‖ vkh) decode into the scalar field, and g^z = g_r · u^c. One input and one signer; g, u, z, g_r, `vkh` and the signer all symbolic | 1 |
 | `PolicyAmount` | Any amount other than ±1 fails | 1 |
 | `PolicyForeign` | A mint or burn whose one line is another policy's fails | 2 |
@@ -90,7 +90,7 @@ What a ✅ is worth:
   - the wallet's signatories (one module a count, none to 128) and the shapes of its redeemer and datum;
   - the policy's purpose, its redeemer, its mint (one line, or one arrangement of up to five) and its first input.
 - **The covers tie those layouts to every context.** The wallet's needs no ledger hypothesis. The policy's assumes CardanoLedgerApiBlaster's model of two ledger rules: a transaction has an input, and its mint is well formed (`validMintValue`). `policy_ledger_hypotheses` derives both from its `validTxInfo`. The kernel theorems need neither a cover nor a hypothesis: they're stated over every typed context.
-- **More than 128 signatories** is ruled out by the transaction size limit (`maxTxSize`, 16,384), not by a theorem, for the Blaster modules. If the parameter rises past what 128 covers, they must grow with it. `wallet_accepts_iff` has no bound.
+- **More than 128 signatories:** for the Blaster modules, the transaction size limit (`maxTxSize`, 16,384) rules them out, not a theorem. If the parameter rises past what 128 covers, they must grow with it. `wallet_accepts_iff` has no bound.
 - **Bounded runs.** A Blaster property holds for runs within its module's step limit. Each limit sits above the longest concrete run that `Steps.lean`, `AnyTxSteps.lean` and the generators measure. Each family's returns-unit-or-error theorem shows that no symbolic run reaches it either.
 - **The slice package.** `Slice/` runs the same hex, `../Seedelf/Scripts/seedelf.hex`. Its builders are word-for-word copies of `PolicyAnyTx`'s, so `PolicyShapes` covers its layout too. Two workarounds shape it:
   - each first-input index from 0 to 255 is a theorem of its own (`gen-seedelf-slice.py`), with two more off a byte, put together in the kernel;
@@ -102,22 +102,22 @@ Kernel-checked in every transaction ([`Lovejoin/AnyTx/README.md`](Lovejoin/AnyTx
 
 ## Not proved, and why
 
-What the proofs leave out. [CLAIMS.md](CLAIMS.md)'s *Where it stops* adds the model's own limits: the machine, the decoder, the opaque crypto, the ledger rules assumed, and execution budgets.
+What the proofs leave out. The model's own limits (the machine, the decoder, the opaque crypto) are under *What a ✅ is worth* above; [CLAIMS.md](CLAIMS.md)'s *Where it stops* adds the ledger rules assumed and execution budgets.
 
 ### Out of the claim
 
 - **Lovejoin's fee_contract.** No Seedelf transaction uses it. It has only its rejected purposes and some fixed layouts here ([Lovejoin/AnyTx/README.md](Lovejoin/AnyTx/README.md)), no characterization.
-- **The retired Lovejoin pools' scripts,** which the wallet still runs to bring boxes back from those pools. The classic mainnet pool's have scenario proofs here (`./check.sh lovejoin`), outside the claim. The first token pools' (Lovejoin `8131b1d`) run a mix_logic other than v2's, which nothing here proves.
+- **The retired Lovejoin pools' scripts,** which the Seedelf Wallet still uses to bring boxes back from those pools. The classic mainnet pool's scripts have scenario proofs here (`./check.sh lovejoin`), outside the claim. The first token pools (Lovejoin `8131b1d`) run a mix_logic other than v2's, and nothing here proves it.
 
 ### Not proved yet
 
 - **That the statements say what the source means.** `walletAccepts`, `policyAccepts`, `mixLogicAccepts` and `oneShotMintAccepts` are written in their Aiken sources' terms, and each is proved equal to what the bytes do. That they say what Seedelf and Lovejoin mean is a reading, which no proof can check. No outside reader has checked them yet against `wallet.ak`, `schnorr.ak`, `seedelf.ak`, `token_name.ak` and Lovejoin's sources.
 - **That an honest owner can always spend.** The theorems say exactly what the wallet accepts. They don't prove that every Register the wallet makes, with a proof from its own key, meets that bar: that no Register UTxO is ever locked. `concrete/wallet_register.sh` checks one real proof, through Aiken's evaluator.
-- **A Register the wallet didn't make.** By `wallet_accepts_iff`, a Register whose points don't decompress never moves, and one whose public value is the identity point moves for anyone. Seedelf's software checks both before it pays a Register (seedelf-core's `build::is_payable`). A Register built another way can be locked for good, or anyone's.
+- **A Register the wallet didn't make.** By `wallet_accepts_iff`, a Register whose points don't decompress never moves. One whose public value is the identity point moves for anyone: the theorem reduces a spend to g^z = g_r · u^c, and BLS12-381's group law, which the proofs leave opaque, makes that hold for any z when u is the identity and g_r = g^z. Seedelf's software checks both before it pays a Register (seedelf-core's `build::is_payable`). A Register built another way can be locked for good, or spendable by anyone.
 
-### By Blaster alone
+### Proved in the kernel, not yet by Blaster
 
-These need Blaster or PlutusCoreBlaster to change, not our scripts. **In the kernel, nothing is left:** `Seedelf/Every/` proves the row below over PlutusCoreBlaster's own slice, since the kernel never has to decide anything about a slice, only carry it. `Upstream/` holds a minimal reproduction of each, with controls (`./check.sh upstream`).
+One property is proved in the kernel but not by Blaster, and closing that gap needs Blaster or PlutusCoreBlaster to change, not the scripts. `Seedelf/Every/` proves it over PlutusCoreBlaster's own slice, since the kernel never has to decide anything about a slice, only carry it. `Upstream/` holds a minimal reproduction of each, with controls (`./check.sh upstream`).
 
 | Property | Blocked by |
 |---|---|
@@ -127,11 +127,11 @@ These need Blaster or PlutusCoreBlaster to change, not our scripts. **In the ker
 
 You can re-run every proof yourself. It takes Linux with systemd, since `check.sh` caps each module's memory with `systemd-run --user`, and up to 16 GB of memory and 30 minutes a module.
 
-**What it needs.** [elan](https://github.com/leanprover/elan), which installs the Lean that `lean-toolchain` pins, 4.24.0. **Z3 5.3.1 or later** on `PATH`, for everything Blaster proves; `seedelf-every` needs no Z3. The pinned Blaster commit sends Z3 a simplifier (`recfun-finder`) that 5.3.0 introduced; PlutusCoreBlaster's README still says 4.15.2, which fails every proof that reaches Z3. Aiken, for `concrete/`'s cross-checks, and v1.1.24 for v2's extract.
+**What it needs.** [elan](https://github.com/leanprover/elan), which installs the Lean that `lean-toolchain` pins, 4.24.0. **Z3 5.3.1 or later** on `PATH`, for everything Blaster proves; `seedelf-every` needs no Z3. The pinned Blaster commit sends Z3 a simplifier (`recfun-finder`) that 5.3.0 introduced; PlutusCoreBlaster's README still says 4.15.2, which fails every proof that reaches Z3. Aiken, for the `concrete/` cross-checks; v2's extract needs Aiken v1.1.24.
 
 **The pins.** The proofs build on forks of Lean-blaster and PlutusCoreBlaster, at pinned commits, because fixes they need aren't all upstream yet. `lakefile.lean` pins all three tools, and `lake-manifest.json` holds the full hashes:
 
-- **Lean-blaster:** the fork [logicalmechanism/Lean-blaster](https://github.com/logicalmechanism/Lean-blaster) at `25c0ee0`, which is Lean-blaster's beta `46c8479` plus one fix, for a bug that declared a datatype with another type's parameter names, so that any goal with both `Except` and `Prod` failed (upstream [issue #454](https://github.com/input-output-hk/Lean-blaster/issues/454), still open; the fix is offered upstream as [PR #455](https://github.com/input-output-hk/Lean-blaster/pull/455), still open).
+- **Lean-blaster:** the fork [logicalmechanism/Lean-blaster](https://github.com/logicalmechanism/Lean-blaster) at `25c0ee0`, which is Lean-blaster's beta `46c8479` plus one fix, for a bug that declared a datatype with another type's parameter names, so that any goal with both `Except` and `Prod` failed (upstream [issue #454](https://github.com/input-output-hk/Lean-blaster/issues/454); the fix is offered upstream as [PR #455](https://github.com/input-output-hk/Lean-blaster/pull/455); both are open).
 - **PlutusCoreBlaster:** the fork [logicalmechanism/PlutusCoreBlaster](https://github.com/logicalmechanism/PlutusCoreBlaster) at `68c5399`, which is PlutusCoreBlaster's `main` at `1c23de8` plus five changes.
   - Three are merged upstream: an `opaque` `ByteStringToInteger` ([PR #71](https://github.com/input-output-hk/PlutusCoreBlaster/pull/71)), `Fq1.t` as a `Nat` ([PR #72](https://github.com/input-output-hk/PlutusCoreBlaster/pull/72)), and the BLS12-381 builtins' operands in order ([PR #73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73)).
   - Two aren't: an `opaque` `serialise_data`, as upstream's [PR #27](https://github.com/input-output-hk/PlutusCoreBlaster/pull/27) proposes, and an `opaque` `XorByteString`. Only Lovejoin's proofs use them.
@@ -170,7 +170,7 @@ To check the standard Lovejoin and Seedelf proof suites, including the separate 
 ./check.sh lovejoin && ./check.sh lovejoin-v2 && ./check.sh lovejoin-any-tx && ./check.sh lovejoin-every && ./check.sh seedelf-every && ./check.sh seedelf-slice && ./check.sh
 ```
 
-`lovejoin-every` builds the 51 modules its theorems import from elsewhere first, then its own 25, at 16 GB and 30 minutes a module. `./check.sh` goes last: PolicyBurn and PolicyMint fail on `BitVec` (*Not proved, and why*), so it ends nonzero, and nothing after it would run.
+`lovejoin-every` builds the 51 modules its theorems import from elsewhere first, then its own 25, at 16 GB and 30 minutes a module. `./check.sh` goes last because it always ends nonzero, and nothing after it would run: `PolicyBurn` and `PolicyMint` report `FAILED`, since their success theorems fail on `BitVec` (*Not proved, and why*). Any other failure needs a look.
 
 The runner returns a nonzero status if any module fails. It checks Lake builds, and a module that builds but logs a Blaster check as Undetermined fails too (`UNDETERM`). This command excludes the separate audit and upstream reproductions. For the longer audit and its warning counts, see [`Audit/README.md`](Audit/README.md).
 
@@ -194,9 +194,9 @@ How each family is built and changed, the plans and the records: [Seedelf/Every/
   - The fork fixes it (`BuiltinOperandOrder` test), and so does upstream's [PR #73](https://github.com/input-output-hk/PlutusCoreBlaster/pull/73).
 - **A symbolic first-input index breaks `#prep_uplc`.** `consByteString idx txid` makes the index's byte a `Char` from a `UInt8`, which is a `BitVec`.
   - Blaster rejects it over a symbolic index.
-  - The prepared prop comes back holding 18 `sorryAx` in the `Char`'s proofs (`declaration uses 'sorry'`). A prop like that must never be used. `check.sh` shows every `declaration uses 'sorry'` warning but PlutusCoreBlaster's own, at `CekMachine.lean:309`.
+  - The prepared prop comes back holding 18 `sorryAx` in the `Char`'s proofs (`declaration uses 'sorry'`). A prop like that must never be used. `check.sh` prints every `declaration uses 'sorry'` warning but PlutusCoreBlaster's own, at `CekMachine.lean:309`, and doesn't fail a module for one: read its output. The theorems [CLAIMS.md](CLAIMS.md) cites are guarded anyway: each carries a `#guard_msgs` check that its axioms are Lean's own (`propext`, `Classical.choice`, `Quot.sound`), so a `sorry` anywhere beneath one fails its build.
   - `Slice/` proves each index apart instead.
-  - The archived [chunk 40 record](../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-40-verification-upstream.md)'s "`consByteString`'s byte isn't a blocker" held for its own control, `cons_front` (`Upstream/ByteStrings.lean`), alone.
+  - On its own, `consByteString`'s byte is no blocker: `Upstream/ByteStrings.lean`'s control `cons_front` proves by Blaster for a symbolic index. It breaks only in `#prep_uplc`'s preparation of a whole script.
 - **A symbolic `ByteString` token name blows the policy's run past 8 GB,** even with every other value concrete. The same name as its `String`, or as `a ++ b`, takes 280 MB in two seconds, and it branches no more either way. The cause isn't isolated; `Slice/` quantifies over the `String`. Neither this nor the index has a minimal upstream reproduction yet.
 - **A burn fails when the transaction's first input is output #256 or later.** `xor(burn, mint)` takes both blocks, so a burn builds the mint's token name too, and `consByteString` refuses an index past a byte (`PolicyBurn`, `concrete/policy_burns.sh`). seedelf-core refuses such an input for a mint (`seedelf_token_name`), not for Remove's burn; local evaluation fails before submit, so nothing is lost, and the same Seedelf burns with other inputs. The contracts' [AUDIT.md](../seedelf-contracts/AUDIT.md) §3.4 (on a later revision of the source) covers mints only, and a 16 KB transaction fits about 400 small outputs, so #256 is reachable.
 - **The upstream issues behind *By Blaster alone*:** Lean-blaster [#153](https://github.com/input-output-hk/Lean-blaster/issues/153), [#69](https://github.com/input-output-hk/Lean-blaster/issues/69) and [#67](https://github.com/input-output-hk/Lean-blaster/issues/67) (`BitVec`, `Char`), [#138](https://github.com/input-output-hk/Lean-blaster/issues/138) and [#233](https://github.com/input-output-hk/Lean-blaster/issues/233) (`#prep_uplc` cost, symbolic list tails), and PlutusCoreBlaster [#27](https://github.com/input-output-hk/PlutusCoreBlaster/pull/27) (an `opaque` builtin as the stopgap).

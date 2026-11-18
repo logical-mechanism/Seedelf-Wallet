@@ -50,7 +50,7 @@ What you can do:
 • Stake the public account with a pool, from a list of every live pool, and spend or withdraw the rewards.
 • Delegate its voting power: always abstain, always no confidence, or a DRep you find by name.
 • Be your own DRep: register the public account, vote on the open governance actions, and retire to get the deposit back. Governance sites such as GovTool can connect too, when you allow it.
-• Create a Seedelf: an NFT whose name works like an ADA Handle, so anyone can pay you privately.
+• Create a Seedelf: an NFT whose name works like an ADA Handle, so anyone using Seedelf Wallet or the seedelf-cli can pay you privately.
 • Make ADA and tokens private: move them from the public account into your private balance.
 • Send privately to any Seedelf by its name, several at once.
 • Make money public: pay any Cardano address or ADA Handle from the private balance. You can also remove a Seedelf.
@@ -67,7 +67,7 @@ What it doesn't hide:
 • A Lovejoin box hides only among other people's boxes from the same pool that come back into a Seedelf around the same time: one of up to 9 at the default depth, and fewer while few people use that pool.
 • Privacy grows with the number of people who use Seedelf and Lovejoin, and today there are few.
 
-Private money earns no staking rewards: it has no staking part, which is what keeps your Seedelfs from being linked together. Money that sits can stay staked in the public account, and be made private when it should move privately.
+Private money earns no staking rewards: it has no staking part, which is what keeps your Seedelfs from being linked together. Money you're just holding can stay staked in the public account until you want to move it privately.
 
 How it works:
 • Everything is built and signed inside the extension. The cryptography and the transaction building are Rust, compiled to WebAssembly and shipped in the package.
@@ -138,7 +138,7 @@ Lo que puedes hacer:
 • Hacer staking con la cuenta pública en un pool, elegido de una lista con todos los pools activos, y gastar o retirar las recompensas.
 • Delegar el poder de voto de la cuenta pública: “Siempre abstenerse”, “Siempre sin confianza” o un DRep que encuentres por su nombre.
 • Ser tu propio DRep: registrar la cuenta pública, votar las acciones de gobernanza abiertas y retirar tu DRep para recuperar el depósito. Los sitios de gobernanza, como GovTool, también pueden conectarse, cuando lo permitas.
-• Crear un Seedelf: un NFT cuyo nombre funciona como un ADA Handle, para que cualquiera pueda pagarte en privado.
+• Crear un Seedelf: un NFT cuyo nombre funciona como un ADA Handle, para que cualquiera que use Seedelf Wallet o seedelf-cli pueda pagarte en privado.
 • Hacer privados ADA y tokens: moverlos de la cuenta pública a tu saldo privado.
 • Enviar en privado a cualquier Seedelf por su nombre, a varios a la vez.
 • Hacer público el dinero: pagar a cualquier dirección de Cardano o ADA Handle desde el saldo privado. También puedes eliminar un Seedelf.
@@ -155,7 +155,7 @@ Lo que no oculta:
 • Una caja de Lovejoin solo se oculta entre las cajas ajenas del mismo pool que vuelven a un Seedelf más o menos al mismo tiempo: es una de hasta 9 con la profundidad predeterminada, y una entre menos cajas mientras poca gente use ese pool.
 • La privacidad crece con el número de personas que usan Seedelf y Lovejoin, y hoy son pocas.
 
-El dinero privado no gana recompensas de staking: no tiene parte de staking, y eso es lo que impide que tus Seedelfs se vinculen entre sí. El dinero que no se mueve puede seguir en staking en la cuenta pública, y hacerse privado cuando deba moverse en privado.
+El dinero privado no gana recompensas de staking: no tiene parte de staking, y eso es lo que impide que tus Seedelfs se vinculen entre sí. El dinero que simplemente tienes guardado puede seguir en staking en la cuenta pública hasta que quieras moverlo en privado.
 
 Cómo funciona:
 • Todo se construye y se firma dentro de la extensión. La criptografía y la construcción de transacciones están escritas en Rust, compiladas a WebAssembly e incluidas en el paquete.
@@ -173,7 +173,7 @@ Código abierto (MIT): https://github.com/logical-mechanism/Seedelf-Wallet
 |---|---|---|
 | 1 | Dinero privado en Cardano | Tu saldo privado está en UTxOs que no dicen de quién son. |
 | 2 | Paga a un Seedelf por nombre | Pega el nombre y la billetera lo encuentra. El pago no se puede vincular con el Seedelf al que paga. |
-| 3 | Recibe en privado | Crea un Seedelf y comparte su nombre. Cualquiera puede pagarle, y ningún pago lleva hasta él. |
+| 3 | Recibe en privado | Crea un Seedelf y comparte su nombre. Cualquiera con Seedelf Wallet puede pagarle, y ningún pago se puede rastrear hasta tu Seedelf. |
 | 4 | Te dice qué vincula | Haz público tu dinero pagando a cualquier dirección o $handle. La billetera te avisa antes de que un pago vincule tus cuentas entre sí. |
 | 5 | Billetera completa de Cardano | Envía, haz staking con un pool y delega tu voto. Restaura una frase de Lace o Eternl, o crea una nueva. |
 
@@ -202,7 +202,7 @@ Seedelf は、お金の持ち主を隠します。Seedelf への支払いは 1 �
 • 稼働中のすべてのプールの一覧から選んで、公開アカウントをプールにステーキングし、報酬を使ったり引き出したりできます。
 • 公開アカウントの投票権を委任できます。委任先は「常に棄権」、「常に不信任」、または名前で探した DRep です。
 • 自分自身の DRep になれます。公開アカウントを DRep として登録し、投票受付中のガバナンスアクションに投票し、退任すればデポジットが戻ります。GovTool などのガバナンスサイトも、あなたが許可すればこのウォレットに接続できます。
-• Seedelf を作成できます。Seedelf は ADA Handle のように名前で使える NFT で、その名前を教えれば、誰でもあなたにプライベートに支払えます。
+• Seedelf を作成できます。Seedelf は ADA Handle のように名前で使える NFT です。その名前を教えれば、Seedelf Wallet または seedelf-cli を使う人なら誰でも、あなたにプライベートに支払えます。
 • ADA とトークンをプライベートにできます。公開アカウントからプライベート残高へ移します。
 • どの Seedelf にも、名前を指定してプライベートに送金できます。複数の宛先へまとめて送ることもできます。
 • プライベート残高から任意の Cardano アドレスや ADA Handle に支払って、お金を公開できます。Seedelf を削除することもできます。
@@ -219,7 +219,7 @@ Seedelf は、お金の持ち主を隠します。Seedelf への支払いは 1 �
 • Lovejoin のボックスが紛れ込める相手は、同じプールから同じころに Seedelf へ戻ってくるほかの人のボックスだけです。既定の深さでは最大 9 件のうちの 1 件になり、そのプールを使う人が少ないうちは、9 件より少なくなります。
 • プライバシーは、Seedelf と Lovejoin を使う人が増えるほど高まります。現在、使っている人はわずかです。
 
-プライベートなお金には、ステーキング報酬がつきません。ステーク部分を持たないためで、それによってあなたの Seedelf 同士が結び付かずに済んでいます。動かさないお金は公開アカウントでステーキングしたままにしておき、プライベートに動かす必要が出たときにプライベートにできます。
+プライベートなお金には、ステーキング報酬がつきません。ステーク部分を持たないためで、それによってあなたの Seedelf 同士が結び付かずに済んでいます。使わずに持っておくお金は、プライベートに動かしたくなるまで、公開アカウントでステーキングしたままにできます。
 
 仕組み:
 • すべては拡張機能の中で作成され、署名されます。暗号処理とトランザクションの作成は Rust で書かれ、WebAssembly にコンパイルされてパッケージに同梱されています。
@@ -237,7 +237,7 @@ Seedelf は、お金の持ち主を隠します。Seedelf への支払いは 1 �
 |---|---|---|
 | 1 | Cardano 上のプライベートなお金 | プライベート残高は、誰のものかを示さない UTxO の中にあります。 |
 | 2 | どの Seedelf にも名前で支払う | 名前を貼り付ければ、ウォレットがその Seedelf を見つけます。その支払いを支払先の Seedelf と結び付けることは、誰にもできません。 |
-| 3 | プライベートに受け取る | Seedelf を作成して、その名前を伝えましょう。誰でもそこに支払うことができ、どの支払いからもその Seedelf にはたどり着けません。 |
+| 3 | プライベートに受け取る | Seedelf を作成して、その名前を伝えましょう。Seedelf Wallet を使う人なら誰でもその名前あてに支払うことができ、どの支払いをたどってもあなたの Seedelf には行き着きません。 |
 | 4 | 結び付くものを示す | 任意のアドレスや $handle に支払って、お金を公開できます。支払いでアカウント同士が結び付く前に、ウォレットが警告します。 |
 | 5 | フル機能の Cardano ウォレット | 送金、プールへのステーキング、投票権の委任ができます。Lace や Eternl のフレーズから復元することも、新しいフレーズを作ることもできます。 |
 

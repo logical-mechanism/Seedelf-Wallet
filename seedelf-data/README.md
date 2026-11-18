@@ -2,13 +2,13 @@
 
 Seedelf Wallet reads Cardano mainnet through this API, at `https://mainnet.seedelf.logicalmechanism.io`. Seedelf Wallet is a Cardano wallet for Chrome with Seedelf built in; Seedelf is a stealth wallet that hides who receives and who spends ([what Seedelf is](../README.md)). The API sits in front of its own Cardano node, db-sync (the chain in a Postgres database) and Kupo (an index of only the outputs it's set to match).
 
-**Mainnet only.** On preprod the wallet reads Koios ([koios.rest](https://koios.rest), a public Cardano API), and so does mainnet with the wallet's Settings → *Read Cardano through Koios only* on.
+**Mainnet only.** On preprod the wallet reads Koios ([koios.rest](https://koios.rest), a public Cardano API). On mainnet it reads Koios alone when Settings → *Read Cardano through Koios only* is on.
 
-**The wallet falls back to Koios part by part.** Its public routes take Koios's own paths and JSON, so when a part of this API can't answer, the wallet reads that part from Koios instead. The parts are the ones the wallet's Settings name: the private balance, the public account, and sending.
+**The wallet falls back to Koios part by part.** When a part of this API can't answer, the wallet reads that part from Koios instead. The parts are the three the wallet's Settings name: the private balance, the public account, and sending. The public routes and the submit part take Koios's own paths and JSON, so for them the fallback is only a change of base URL.
 
 ## What it serves
 
-- **[The private index](#the-private-index)** of the Seedelf contract and of Lovejoin's classic mix box, for the private balance and Lovejoin's boxes. Lovejoin is the mixer the wallet uses: its boxes are a pool's equal-value UTxOs, held at the pool's mix box, and the classic pool is an ADA pool of 10 ₳ boxes with scripts of its own. Every answer is the same for whoever asks: none names a UTxO, a register (a Seedelf UTxO's datum, which only its owner can recognise) or an owner. The wallet decides which rows are its own.
+- **[The private index](#the-private-index)** of the Seedelf contract and of Lovejoin's classic mix box, for the private balance and Lovejoin's boxes. Lovejoin is the mixer the wallet uses. A Lovejoin pool holds equal-value UTxOs, its boxes, at the pool's mix box; the classic pool is an ADA pool of 10 ₳ boxes, with scripts of its own. No request names a UTxO, a register (a Seedelf UTxO's datum, which only its owner can recognise) or an owner, so every answer is the same for whoever asks, and the wallet picks out its own rows.
 - **[Lovejoin's token pools](#lovejoins-token-pools):** which pools are shown, each pool's crowd (how many deposits its boxes could have come from), and every shown pool's boxes in one feed.
 - **[The public routes](#the-public-routes):** the 24 other Koios endpoints the wallet uses, for the public account, staking and governance, under Koios's own `/api/v1/` paths and JSON. They take only the requests the wallet makes.
 - **[The submit part](#the-submit-part):** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to a cardano-submit-api and an Ogmios, for sending.
@@ -26,13 +26,13 @@ cargo run -p seedelf-data-api
 curl http://127.0.0.1:8099/health
 ```
 
-`cargo build --release -p seedelf-data-api` builds the binary. It reads its settings from the environment, or from a `.env` file in the folder it runs from or one above it:
+`cargo build --release -p seedelf-data-api` builds the binary. It reads its settings from the environment, or from a `.env` file in the folder it runs from or any folder above it:
 
 | Variable | What it is |
 |---|---|
 | `MAINNET_DATABASE_URL` | db-sync's Postgres, through a read-only role. The only one required. |
 | `MAINNET_KUPO_URL` | a Kupo that matches the contract and the mix box: the private index's second source. Without it, the private index reads db-sync alone. |
-| `MAINNET_SUBMIT_API_URL`, `MAINNET_OGMIOS_URL` | cardano-submit-api and Ogmios, for the submit part. Without both, it answers 503. |
+| `MAINNET_SUBMIT_API_URL`, `MAINNET_OGMIOS_URL` | cardano-submit-api and Ogmios, for the submit part. `submittx` needs both and `ogmios` needs Ogmios; a route missing one answers 503. |
 | `DATA_LISTEN` | where it listens: `127.0.0.1:8099` by default |
 | `DATA_ORIGINS`, `DATA_TRUST_PROXY`, `DATA_EGRESS_GB_MONTH`, `DATA_STATE_DIR` | the edge's settings ([below](#the-edge)) |
 | `RUST_LOG` | the log level: `info` by default |
@@ -71,9 +71,9 @@ What the code does is in this repository; what runs on the servers isn't somethi
 
 - **Your IP address,** as any server does. It's kept only in memory, for its bucket ([the edge](#the-edge), `api/src/edge.rs`), and forgotten once the bucket is full again.
 - **What a request names.** A public route's request names what it asks about, as a request to Koios would: stake keys, addresses, payment credentials, outputs, transactions, a pool, a DRep, a token. A submit carries the transaction. The private index's requests name nothing but a [cursor](#the-private-index), which shows roughly when the wallet last read.
-- **No logs of a request.** It logs its start and failed queries only, never a request's address, path or body. A failed query logs only its SQLSTATE, since a Postgres message can quote a value the request sent. The database driver and axum, which can log a request's contents, are held by a filter of their own, so no `RUST_LOG` directive can raise them (`api/src/main.rs`).
+- **No logs of a request.** It logs its start and failed queries only, never a request's address, path or body. A failed query logs only its SQLSTATE, since a Postgres message can quote a value the request sent. The database driver and axum, which can log a request's contents, sit behind a log filter of their own, so no `RUST_LOG` directive can turn them up (`api/src/main.rs`).
 - **The servers' own logs, as configured here:** Caddy keeps no access log, and its error log leaves out the loggers that name a client (`deploy/edge/Caddyfile`). Postgres's log holds no statement (`deploy/home/postgresql-seedelf.conf`), and Kupo's HTTP log, set to Warning, no request path (`deploy/home/kupo_seedelf.service`).
-- **Nothing about a submit:** not the transaction, not its ID (`api/src/submit.rs`).
+- **Nothing kept or logged about a submit:** not the transaction, not its ID (`api/src/submit.rs`).
 - **Answers the same for everyone are kept** for a time, in memory, and serve every wallet. **An answer about one user is never kept:** the *Kept* column of [the public routes](#the-public-routes) says which is which.
 - **Its one file** is the month's count of bytes sent (`egress.json`), so a restart doesn't forget it.
 - **Nothing in a browser's cache:** every answer but a CORS preflight carries `Cache-Control: no-store`.
@@ -86,7 +86,7 @@ What stands between the internet and the routes, in `api/src/edge.rs`. Caddy in 
 |---|---|
 | `DATA_ORIGINS` | the origins CORS lets read answers, comma-separated: the wallet's `chrome-extension://<id>`. The wallet then needs no host permission. `Retry-After` is exposed, and a 429 carries CORS too, so the wallet can read why it waits. None by default. |
 | `DATA_TRUST_PROXY=true` | behind Caddy on loopback: the client is the last `X-Forwarded-For` address. From anywhere else the header is ignored. Any value but `true` or `false` is refused at start. |
-| `DATA_EGRESS_GB_MONTH` | the API's own traffic a calendar month (UTC), in GB, before every route but `/health` answers 503. Each day gets an equal share of what's left, so a flood costs a day, not the rest of the month. The count is kept in `egress.json` in `DATA_STATE_DIR`, or systemd's `StateDirectory`, so a restart doesn't forget it; with neither, it starts again at each start. It counts response bodies alone: TLS and headers come on top. |
+| `DATA_EGRESS_GB_MONTH` | the API's own traffic a calendar month (UTC), in GB, before every route but `/health` answers 503. Each day gets an equal share of what's left, so a flood costs a day, not the rest of the month. The count is kept in `egress.json` in `DATA_STATE_DIR`, or systemd's `StateDirectory`, so a restart doesn't forget it; with neither, the count starts from zero at each restart. Unset, there's no ceiling. It counts response bodies alone: TLS and headers come on top. |
 
 **A bucket per client:** 300 units, refilled at 10 a second. IPv6 addresses are taken by their /64.
 
@@ -155,7 +155,7 @@ curl -s "$api/seedelf/v1/mainnet/contract/since/<cursor>"   # <cursor> from the 
 - Both know every block by slot and hash, so a cursor from one is answered by the other, and a wallet never sees a switch.
 - Their rows are the same, field for field and in the same order, with one exception: from Kupo, a box's `made_by.inputs` is `null`. Kupo indexes the outputs at the contract and the mix box, not who paid for a transaction. The live tests compare the two sources row for row (`api/tests/live_private.rs`).
 - A source whose tip hasn't reached a cursor passes it to the other. If neither can answer, the route gives 503 with `Retry-After`, and the wallet goes to Koios.
-- An answer Kupo makes from several reads is read again if Kupo's checkpoint moved between them (`X-Most-Recent-Checkpoint`), up to 3 times, then counts as failed, so it's always of one chain state.
+- An answer Kupo makes from several reads is always of one chain state. If Kupo's checkpoint (`X-Most-Recent-Checkpoint`) moves between the reads, they're made again, 3 tries in all; after that the read counts as failed.
 - Kupo keeps every block's checkpoint from its start, block 11,305,805, the contract's first output. A cursor from before that is a `reset` from Kupo.
 
 **Caching:** each source's answers are kept until its tip moves. Both tips are read every 2 s, so one set of reads per block serves every request.
@@ -165,7 +165,7 @@ curl -s "$api/seedelf/v1/mainnet/contract/since/<cursor>"   # <cursor> from the 
 
 ## Lovejoin's token pools
 
-Beside the classic pool, anyone can launch a Lovejoin pool, each with its own box value: ADA, or ADA and a token. These routes are under `/seedelf/v1/mainnet/lovejoin/` too, and db-sync alone answers them: Kupo indexes neither the pools nor the holder their launches use. While db-sync can't answer, they answer 503, the wallet reads the token pools from Koios, and the classic pool's routes go on answering from Kupo.
+Beside the classic pool, anyone can launch a Lovejoin pool, each with its own box value: ADA, or ADA and a token. These routes are under `/seedelf/v1/mainnet/lovejoin/` too, and db-sync alone answers them: Kupo indexes neither the pools nor the holder, where every launch puts its pool's reference UTxO (below). While db-sync can't answer, they answer 503, the wallet reads the token pools from Koios, and the classic pool's routes go on answering from Kupo.
 
 | Route | Answer |
 |---|---|
@@ -176,15 +176,15 @@ Beside the classic pool, anyone can launch a Lovejoin pool, each with its own bo
 
 **Two template sets:** the versions of Lovejoin's token-pool scripts the API recognises. `v2` is the one the wallet launches pools on. `tokenV1` is an older set: the wallet no longer launches on it, and only brings boxes back from its pools. They differ only in `mix_logic`, and a seed makes the same P on either, so a pool's datum's L says which set it runs.
 
-**A pool is shown when it's standard and, on its template set, the earliest launched of the standard pools with its values** (its box's ADA and token), ordered by block, then place in the block, then id. The sets are separate: a `v2` pool is never a copy of a `tokenV1` pool, and a `tokenV1` pool shown stays shown, for the boxes the wallet brings back from it. Standard means:
-- its reference UTxO is at the holder's enterprise address, with no reference script, holding one `lovejoin` NFT and ADA alone, and its datum decodes as `one_shot_mint` holds a launch to;
+**A pool is shown** (listed here, and offered by the wallet) **when it's standard and the earliest standard pool launched with its values on its template set** (its box's ADA and token), ordered by block, then place in the block, then id. A later standard pool with the same values on the same set is a copy, and isn't shown. The sets are separate: a `v2` pool is never a copy of a `tokenV1` pool, and a `tokenV1` pool shown stays shown, for the boxes the wallet brings back from it. Standard means:
+- its reference UTxO is at the holder's enterprise address, with no reference script, holding one `lovejoin` NFT and ADA alone, and its datum has the shape `one_shot_mint` requires of a launch;
 - its token is in the wallet's mainnet token list (`tokens/list.json`, built in), or it's an ADA pool at any amount but the classic pool's 10 ₳;
 - one of its launch's inputs, the seed, makes its NFT's policy, and the datum names exactly the scripts that seed makes on one of the two sets;
 - its launch transaction itself put `mix_box` and `mix_logic` at the holder, each under no datum or a datum nested at most 128 levels deep (the deepest the wallet reads), and registered L as a stake credential, unless L was registered in an earlier block. The wallet passes over a script row under a deeper datum and never shows its pool, so this rule leaves the pool out too; if the launch also put a readable copy of the script at the holder, that copy is the one listed.
 
 The rule is in `api/src/lovejoin/standard.rs`. None of it changes once it's on chain, so each candidate is checked once and its verdict kept in memory, and a pool shown stays shown. Everything at the holder is locked for good, so spam there is burned, and costs this server one check.
 
-**A pool's crowd** is its `boxes`, the `deposits` they could have come from, and how many of the boxes a mix made (`mixed`). A transaction that pays a pool's `mix_box` without spending from it is a deposit; one that spends from it is a mix, and each box it makes could have come from any deposit behind any of its inputs. The deposits counted are those some box in the pool now could have come from, worked backwards from the boxes through each mix. A box is an output holding exactly the box value, under a datum of two different 48-byte values meant as BLS12-381 G1 points; checking that they're on the curve is left to the wallet. The crowd is the same for everyone: the wallet takes its own out.
+**A pool's crowd** is its `boxes`, the `deposits` they could have come from, and how many of the boxes a mix made (`mixed`). A transaction that pays a pool's `mix_box` without spending from it is a deposit; one that spends from it is a mix, and each box it makes could have come from any deposit behind any of its inputs. The deposits counted are those some box in the pool now could have come from, worked backwards from the boxes through each mix. A box is an output holding exactly the box value, under a datum of two different 48-byte values meant as BLS12-381 G1 points; checking that they're on the curve is left to the wallet. The crowd is the same for everyone; the wallet leaves its own boxes out of the count it shows.
 
 For example, every shown pool and its crowd:
 
@@ -227,9 +227,9 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 
 **What one request may cost is bounded.** Any credential, address or stake key may be asked about, and some on mainnet hold hundreds of thousands of outputs. So a listing gathers at most 20,000 unspent outputs, and `account_txs` and `credential_txs` at most 200,000 outputs, with a page starting at most 10,000 transactions in. Past any of these, the answer is a 503, `{"error":"too large for this server"}`, with no `Retry-After`: it would be as large again, so the wallet reads Koios, for that request alone. They're set far above what one wallet's own accounts hold. Requests are also held to the wallet's own sizes (one account's standing, 20 keys probed).
 
-**Answers kept for a time are kept within their epoch,** since a pool's status, a DRep's activity and the live actions turn at an epoch's start. Not-found answers aren't kept: anyone can ask about made-up IDs. When the store is full, the answer due to expire soonest makes room.
+**Answers kept for a time are kept within their epoch,** since a pool's status, a DRep's activity and the live actions turn at an epoch's start. Not-found answers aren't kept: anyone can ask about made-up IDs. When the store is full, the answer due to expire soonest makes room. A request waits at most 5 s for a shared answer, its queue included, then gets a 503.
 
-**An ID has one spelling:** the bech32 the wallet sends, re-encoded exactly. The decoder also takes a Bech32m checksum and stray padding bits, which would let one pool be asked for, cached and worked out under several names.
+**An ID has one spelling:** the lowercase bech32 the wallet sends. The server re-encodes what it decodes and takes the ID only if the two match: the decoder alone would also take a Bech32m checksum and stray padding bits, which would let one pool be asked for, cached and worked out under several names.
 
 **Only the wallet's requests.** Each route takes exactly the query string and body the wallet's [koios.ts](../seedelf-platform/seedelf-web-wallet/extension/src/background/koios.ts) sends: its parameters, in its order, at its sizes. Anything else is a 400, `{"error":"not a request Seedelf Wallet makes"}`, before any query runs, so no caller can compose an expensive one. A POST's body is `application/json`. `api/tests/public_grammar.rs` holds a request each route takes, and ones it refuses. For example:
 
@@ -249,10 +249,8 @@ curl -s -X POST -H 'content-type: application/json' \
 curl -s "$api/api/v1/pool_history?_pool_bech32=pool1gaztx97t53k47fr7282d70tje8323vvzx8pshgts30t9krw62tm&select=epoch_no,active_stake,block_cnt,deleg_rewards&order=epoch_no.desc&limit=18"
 ```
 
-**Answers about one user are never cached.** Answers that are the same for everyone are kept for the time above. A request waits at most 5 s for a shared answer, its queue included, then gets a 503.
-
-**Koios's names and types,** for every field the wallet reads. **What it never reads is left out:**
-- the JSON of a datum or a script (`value` is null): the wallet drops both, registers come from the bytes, and anyone can nest a datum thousands of levels deep;
+**Answers use Koios's names and types** for every field the wallet reads. **Fields it never reads are left out:**
+- the JSON form of a datum or a script (`value` is null). The wallet drops both and reads registers from the bytes, and anyone can nest a datum thousands of levels deep;
 - from `tx_info`: collateral, reference inputs, mints, scripts and proposals, and every certificate but the seven an account's own transactions make.
 
 **The SQL is written after Koios's `grest` functions** ([koios-artifacts](https://github.com/cardano-community/koios-artifacts), CC-BY-4.0): an account's standing, a pool's state and live stake, a DRep's activity and delegators, a token's minting metadata. The live tests hold some answers to Koios's recorded ones: a token's metadata, a delegation history, a pool's history (`api/tests/live_public.rs`). CIP-129 DRep, committee and governance action IDs are made in Rust (`api/src/ids.rs`).
@@ -270,7 +268,7 @@ curl -s "$api/api/v1/pool_history?_pool_bech32=pool1gaztx97t53k47fr7282d70tje832
 **The public routes have their own connections:** 6, beside the private index's 2 and the tip's own 1, so a burst of them never holds the private index up.
 - A query that waits 2 s for a connection, or runs past 10 s, answers 503, so the wallet goes to Koios rather than queueing.
 - A connection that takes 3 s to open has failed, rather than waiting minutes on TCP.
-- **While db-sync is down** (two failed reads of its tip), every public route answers 503 at once, kept answers included.
+- **While db-sync is down** (two failed reads of its tip) **or behind** (its tip over 3 minutes old), every public route answers 503 at once, kept answers included.
 
 **The histories are read oldest first,** sorted in SQL by the order the wallet asks for, so the pages stay still while db-sync adds rows; the wallet shows them newest first.
 - **`account_reward_history`** is Koios's: every reward paid to the key, by a pool or not. The next epoch's rewards are listed before they're paid, as Koios's are.
@@ -301,7 +299,7 @@ curl -s "$api/api/v1/pool_history?_pool_bech32=pool1gaztx97t53k47fr7282d70tje832
     https://mainnet.seedelf.logicalmechanism.io/api/v1/ogmios
   ```
 - **It depends on the node and Ogmios alone,** so db-sync can be down.
-- **Only while the node is synced.** A node catching up after a restart refuses a valid spend of anything newer than its tip as spent, and Ogmios evaluates one as an unknown input: both answers the wallet would take as the node's own. So Ogmios's `/health` is read every 2 s, and both paths answer 503 `behind` with `Retry-After` while the node's tip is more than 3 minutes old, while Ogmios can't reach the node, or once `/health` has failed two reads in a row. The wallet then goes to Koios at once. Without an Ogmios configured, the node's sync is unknown, and the submit part answers 503.
+- **Only while the node is synced.** A node catching up after a restart rejects a valid spend of an output newer than its tip, as already spent, and Ogmios evaluates such a spend as having an unknown input. The wallet can't tell either answer from a real rejection. So Ogmios's `/health` is read every 2 s, and both paths answer 503 `behind` with `Retry-After` while the node's tip is more than 3 minutes old, while Ogmios can't reach the node, or once `/health` has failed two reads in a row. The wallet then goes to Koios at once. Without an Ogmios configured, the node's sync is unknown, and the submit part answers 503.
 - **Nothing is cached or logged:** not a transaction, not its ID, not an upstream's URL.
 
 ## A row
@@ -334,14 +332,14 @@ curl -s "$api/api/v1/pool_history?_pool_bech32=pool1gaztx97t53k47fr7282d70tje832
 - **Mainnet only.** Preprod reads Koios.
 - **Only the wallet's requests.** It isn't a general Koios: any other request is a 400.
 - **A request too large for it is a 503:** more than 20,000 unspent outputs, more than 200,000 outputs behind a transaction listing, or a page more than 10,000 transactions in. The wallet reads Koios for that request.
-- **A part that's down answers 503,** and the wallet reads that part from Koios for 5 minutes. While db-sync is down, the public routes and the token pools' routes answer 503; the private index answers from Kupo.
+- **A part that's down answers 503,** and the wallet reads that part from Koios for 5 minutes. While db-sync is down, or its tip is over 3 minutes old, the public routes and the token pools' routes answer 503; the private index answers from Kupo.
 - **The wallet trusts it to report the chain truthfully,** as it trusts Koios ([Data Layer Reliance](../README.md#data-layer-reliance)).
 - **Known slow cases** (the measurements are in [NOTES.md](NOTES.md#known-slow-cases)):
   - `drep_info` reads every account's latest vote delegation, then keeps the answer.
-  - **A pool's first look holds up whoever asks,** for up to 3 s, before the epoch's snapshot answers instead. Most of it is each delegator's reward history. The wallet asks for its own pool's details as its Home screen first loads, for a ticker.
+  - **A pool's first look holds up whoever asks,** for up to 3 s, before the epoch's snapshot answers instead. Most of that time goes on each delegator's reward history. The wallet asks for its own pool's details when its Home screen first loads, to show the pool's ticker.
   - **A credential at very many addresses costs one lookup per address.**
   - **A deep page of `account_txs` or `credential_txs` joins every newer transaction too,** so the deeper it starts, the more it costs. That's why none starts more than 10,000 in.
-- **A shared answer shows it was asked for.** A kept `drep_info` comes back far faster than one worked out, so a prober could tell someone asked about that DRep in the last 10 minutes. Sharing answers is what keeps the load on the services behind it flat, so this stands, as it does for every kept answer.
+- **A shared answer shows it was asked for.** A kept `drep_info` comes back far faster than one worked out, so a prober could tell someone asked about that DRep in the last 10 minutes. The same holds for every kept answer, and it's accepted: sharing answers is what keeps the load on the services behind the API flat.
 
 ## Help
 
@@ -350,4 +348,4 @@ For support and bugs, open a [GitHub issue](https://github.com/logical-mechanism
 ## For contributors
 
 - [NOTES.md](NOTES.md): the maintainers' notes: why each part is built as it is, the checks run against Koios and the chain, the query planner's measurements, and what the tests cover.
-- [deploy/README.md](deploy/README.md): the runbook for the VPS, the WireGuard tunnel, and "home": the maintainer's own machine, which runs the node, db-sync and Kupo. Deploys go through `.github/workflows/data-layer-deploy.yml` alone.
+- [deploy/README.md](deploy/README.md): the runbook for the VPS, the WireGuard tunnel, and "home", the separate machine that runs the node, db-sync and Kupo. Deploys go through `.github/workflows/data-layer-deploy.yml` alone.

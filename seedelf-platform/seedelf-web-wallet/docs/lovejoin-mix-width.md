@@ -5,7 +5,7 @@ Every Lovejoin mix the wallet makes takes three boxes (N = 3) by default: a sess
 ## The answer
 
 - **Four fits today, by about 1%.** On Lovejoin v2's scripts (29573c5), which every pool the wallet mixes in runs since 1.8.0, a four-box mix uses 99.0% of the 10 billion CPU steps a transaction may use, leaving 100 million. Three uses 58.2%. Five never fits: it needs 15.1 billion.
-- **v2 is the thinnest deployment measured.** Its `mix_logic` checks both lengths in xor32, which costs 6 million steps more at N = 3, and 10.8 million at N = 4, than the same token pool on 8131b1d's scripts. On what the wallet mixed on before 1.8.0, four left 111 million (8131b1d's token pools, PR #163's generalized contracts, a box of ADA plus one token) to 118 million (the classic pool).
+- **v2 leaves the least room of any deployment measured.** Its `mix_logic` checks both lengths in xor32, which costs 6 million steps more at N = 3, and 10.8 million at N = 4, than the same token pool on 8131b1d's scripts. On what the wallet mixed on before 1.8.0, four left 111 million (8131b1d's token pools, PR #163's generalized contracts, a box of ADA plus one token) to 118 million (the classic pool).
 - **CPU is the only limit that binds.** Even six boxes use 21% of a transaction's memory and 8.3 KB of its 16 KB.
 - **The margin doesn't wander, but it leaves no room.** A four-box mix of the wallet's always has the same shape, and the network measures it to the step as the wallet does. The only thing that moves its cost is where the fee input sorts among the boxes: 10 million steps between first and last at N = 4. So a four-box mix wouldn't fail at random. But it has no room for anything to change: whatever made a mix 1.1% dearer on v2 (a cost model that re-costs the BLS12-381 builtins, say) would make every one refuse to build. And a block holds only two of them, and only when nothing else in it runs scripts.
 - **The cost is quadratic.** Each of a mix's N proofs checks a branch for each of the N outputs, about 540 million steps a branch. Going from three to four is 16/9 of the work, not 4/3.
@@ -147,7 +147,7 @@ At the default depth, four wide gives 16 leaves for 6.15 ₳, between three wide
 
 ## What changing the width touches
 
-Four was added this way. This is the list of what a fifth width, or a change of default, would touch.
+Adding four touched every place below. A fifth width, or a change of default, would touch the same ones.
 
 `lovejoin::mix` already takes any N ≥ 2, measures it, and refuses one over `build::MAX_TX_BUDGET` (10 billion steps, mainnet's limit), which five or more would need raised with the network's. So would the wallet's evaluator's own cap, `eval::MEASURE_LIMIT` (14 billion steps), which caps a transaction's scripts together, not each, since uplc runs each redeemer on what the ones before it left: `mix_logic` alone needs 14.9 billion at five boxes, so five fails measurement whatever `MAX_TX_BUDGET` says. The width lives in:
 - `seedelf-core/src/lovejoin/mod.rs`:

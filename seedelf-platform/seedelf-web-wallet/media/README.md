@@ -30,7 +30,7 @@ Open an image's HTML in Chrome to work on it, then render it. Commit the PNG wit
 - **16:9, 1600×900:** X shows it whole in the timeline, uncropped, one image a post. Rendering at 2× keeps text sharp when it's opened.
 - **Text 22px or larger** at 1600 wide: on a phone the image is about 360 px wide, and anything smaller can't be read until it's opened. A footnote for the curious can be smaller.
 - **Give every image its alt text** (up to 1,000 characters), in its thread's `thread.md`.
-- **Made to sell, still true:** a thread is for someone who wants privacy, not the maths, and leaves the limits to the docs. Every claim on an image must hold as a claim in the docs must: check it against [flows.md](../docs/flows.md) and [privacy.md](../docs/privacy.md) before it's posted.
+- **Made to sell, still true:** a thread is for someone who wants privacy, not the maths, and leaves the limits to the docs. Every claim on an image must be as true as one in the docs: check it against [flows.md](../docs/flows.md) and [privacy.md](../docs/privacy.md) before it's posted.
 
 ## For contributors
 

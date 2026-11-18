@@ -48,7 +48,7 @@ translated; the words on them are not.
 | script | script | スクリプト | |
 | token | token | トークン | |
 | make private / make public | hacer privado / hacer público | プライベートにする / 公開する | the wallet's own flow names |
-| the server (what the wallet reads Cardano through and sends to) | el servidor | サーバー | on mainnet the wallet's own answers first, on preprod Koios, so a screen names Koios only where Koios alone is meant: Chrome's access to it, the Koios-only switch, Settings' server status, a DRep profile Koios fetches |
+| the server (what the wallet reads Cardano through and sends to) | el servidor | サーバー | on mainnet the wallet's own data layer answers first, and on preprod Koios does, so a screen names Koios only where Koios alone is meant: Chrome's access to it, the Koios-only switch, Settings' server status, a DRep profile Koios fetches |
 
 ## Chosen in the whole-locale review
 

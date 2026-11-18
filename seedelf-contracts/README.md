@@ -1,6 +1,6 @@
 # **seedelf-contracts**
 
-Seedelf's smart contracts, written in [Aiken](https://aiken-lang.org/). Seedelf is a stealth wallet for Cardano. There are three: the wallet contract, which holds every private UTxO (each payment to a Seedelf); the minting policy for Seedelfs, the `5eed0e1f…` NFTs a payer looks up; and an always-false script, which holds the reference scripts of the other two. The root [README](../README.md) explains how they work. This folder is for anyone who wants to read the contracts, check the deployed ones, or build them. To use Seedelf, use the [Seedelf Wallet](../seedelf-platform/seedelf-web-wallet/README.md) for Chrome or the [seedelf-cli](../seedelf-platform/README.md).
+The smart contracts of Seedelf, a stealth wallet for Cardano, written in [Aiken](https://aiken-lang.org/). There are three: the wallet contract, which holds every private UTxO (each payment to a Seedelf); the minting policy for Seedelfs, the `5eed0e1f…` NFTs a payer looks up; and an always-false script, which holds the reference scripts of the other two. The root [README](../README.md) explains how they work. This folder is for anyone who wants to read the contracts, check the deployed ones, or build them. To use Seedelf, use the [Seedelf Wallet](../seedelf-platform/seedelf-web-wallet/README.md) for Chrome or the [seedelf-cli](../seedelf-platform/README.md).
 
 The folder also holds the [happy path scripts](happy-path-scripts/README.md), a `cardano-cli` test harness for preprod. These files are used for testing purposes only.
 
@@ -27,15 +27,16 @@ always_false: 6777ba4dc8c3043377201624502d92636381144700d49983258b75db  # holds 
 To check the committed scripts' hashes without a build, run `cardano-cli conway transaction policyid` on each file, the same command the build script uses to write `hashes/`:
 
 ```bash
+dir=$(mktemp -d)
 for n in wallet seedelf always_false; do
-  git show 5b82530:seedelf-contracts/contracts/${n}_contract.plutus > ${n}_contract.plutus
-  cardano-cli conway transaction policyid --script-file ${n}_contract.plutus
+  git show 5b82530:seedelf-contracts/contracts/${n}_contract.plutus > "$dir/${n}_contract.plutus"
+  cardano-cli conway transaction policyid --script-file "$dir/${n}_contract.plutus"
 done
 ```
 
 Each should print its hash above. seedelf-verification, the formal proofs about version 1 (below), makes the same check in Python, in [`extract.sh`](../seedelf-verification/extract.sh), before its proofs read the scripts.
 
-To check the chain's copies: seedelf-core's [`tests/constants_test.rs`](../seedelf-platform/seedelf-core/tests/constants_test.rs) checks that the reference outputs carry scripts with these hashes and sizes, at the always-false script's address, on each network. [`src/references.rs`](../seedelf-platform/seedelf-core/src/references.rs) holds those outputs byte for byte, as they sit on chain. To compare with the chain yourself, look up the reference UTxOs above with a Cardano node or an explorer.
+seedelf-core keeps a copy of the reference outputs, byte for byte as they sit on chain, in [`src/references.rs`](../seedelf-platform/seedelf-core/src/references.rs). Its [`tests/constants_test.rs`](../seedelf-platform/seedelf-core/tests/constants_test.rs) checks that each carries a script with these hashes and sizes, at the always-false script's address, on each network. The test reads that copy, not the chain: to check the chain's copies, look up the reference UTxOs above with a Cardano node or an explorer.
 
 To rebuild with that commit's own build script, you need `aiken` v1.1.9 (which fetches stdlib v2.2.0 from GitHub itself), `cardano-cli`, `python3` and python's `cbor2` on your `PATH`. It writes `plutus.json`, `contracts/` and `hashes/`:
 

@@ -1,6 +1,6 @@
 # Seedelf - A Cardano Stealth Wallet
 
-**Seedelf** is a stealth wallet for Cardano: it hides the receiver and the spender of the funds inside it. It's for Cardano users who want to be paid, and to pay, without those payments being tied to them.
+**Seedelf** is a stealth wallet for Cardano: it hides the receiver and the spender of the funds inside it. It's for Cardano users who want to send and receive payments without each one pointing back to their address.
 
 Seedelf is a smart contract. Each payment goes into it under a fresh datum that looks random from the outside. A spend proves knowledge of the owner's secret key with a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation, instead of a signature from a known key. It should be computationally infeasible to deduce the intended receiver or spender of UTxOs inside this wallet. The amounts and tokens stay visible (see [Wallet Limitations](#wallet-limitations)).
 
@@ -8,16 +8,16 @@ Seedelf is a smart contract. Each payment goes into it under a fresh datum that 
 
 There are two ways to use it:
 
-- **The [Seedelf Wallet](./seedelf-platform/seedelf-web-wallet/README.md),** for Chrome: a Cardano wallet with Seedelf built in. Its public account is an ordinary Cardano account, and its private balance is Seedelf. **Install it from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp).**
+- **The [Seedelf Wallet](./seedelf-platform/seedelf-web-wallet/README.md),** for Chrome: a Cardano wallet with Seedelf built in. Its public account is an ordinary Cardano account, and its private balance is held in Seedelf. **Install it from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp).**
 - **The [seedelf-cli](./seedelf-platform/README.md),** a wallet for the terminal, on Linux, Windows, and macOS. Install it with `cargo install seedelf-cli`, or download a signed binary from the [latest release](https://github.com/logical-mechanism/Seedelf-Wallet/releases/latest) ([checking a release](./RELEASE.md#checking-a-release)).
 
-The rest of this page is the protocol behind both: what a Seedelf is, how a stealth address works, and what can break its privacy.
+The rest of this page explains the protocol behind both: what a Seedelf is, how a stealth address works, and what can break its privacy.
 
 ## What is a Seedelf?
 
-A Seedelf is an NFT that works like an ADA Handle for the wallet contract: anyone with its name can pay you. Every Seedelf's name starts with the same prefix, `5eed0e1f` ("seed elf"), which is where the wallet gets its name. The token sits in the contract under its owner's root datum, the public Register (see [Terminology](#terminology)), and a payer re-randomizes that Register into a fresh one for each payment (see [Stealth Address](#stealth-address)).
+A Seedelf is an NFT that works like an ADA Handle for the wallet contract: anyone who knows its name can pay you. Every Seedelf's name starts with the same prefix, `5eed0e1f` ("seed elf"), which is where the wallet gets its name.
 
-Its primary purpose is to locate the root datum for re-randomization. Alice can ask Bob to pay her Seedelf. Bob finds the UTxO inside the contract that holds Alice's Seedelf token, and uses its datum to re-randomize a new datum for Alice. Bob then sends the funds to the contract under this new datum.
+The token's job is to mark where your public Register is. It sits in the contract under that Register, your root datum (see [Terminology](#terminology)). When Alice asks Bob to pay her Seedelf, Bob finds the UTxO holding Alice's token, re-randomizes its datum into a fresh Register for Alice, and sends the funds to the contract under that new datum (see [Stealth Address](#stealth-address)).
 
 ### Seedelf Personalization
 
@@ -27,7 +27,7 @@ The token name scheme:
 5eed0e1f | personal | Idx | Tx
 ```
 
-The name is 32 bytes, 64 hex characters: 8 for the prefix, 30 for the personal tag, 2 for Tx#Idx, and 24 for Tx#Id. Tx#Id and Tx#Idx come from the output reference of the first input of the transaction that mints it. The personal tag is the minter's choice, cut to 15 bytes; a shorter tag leaves more of the Tx#Id in the name.
+The name is 32 bytes, 64 hex characters: 8 for the prefix, up to 30 for the personal tag, 2 for Tx#Idx, and the rest, at least 24, for Tx#Id. Tx#Id and Tx#Idx come from the output reference of the first input of the transaction that mints it. The personal tag is the minter's choice, cut to 15 bytes; a shorter tag leaves more of the Tx#Id in the name.
 
 **Note: Not all personal tags can be converted into ASCII.**
 
@@ -88,7 +88,7 @@ $$
 g^{z} = g^r u^c,
 $$
 
-where $z = r + c \cdot x$ and $u = g^{x}$. The value $g$ is the generator, and $u$ is the public value. The secret value is $x$. The value $r$ is a fresh secret integer, a nonce, the prover picks for each proof, and $c$ is the challenge. The current implementation uses the Fiat-Shamir heuristic for non-interactivity: $c$ is a hash of $g$, $g^{r}$, $u$ and the hash of a one-time signing key (see [Removing Funds](#removing-funds)).
+where $z = r + c \cdot x$ and $u = g^{x}$. The value $g$ is the generator, and $u$ is the public value. The secret value is $x$. The value $r$ is a secret random nonce the prover picks fresh for each proof, and $c$ is the challenge. The current implementation uses the Fiat-Shamir heuristic for non-interactivity: $c$ is a hash of $g$, $g^{r}$, $u$ and the hash of a one-time signing key (see [Removing Funds](#removing-funds)).
 
 #### Spendability Proof
 
@@ -190,7 +190,7 @@ The design of the wallet contract opens users to a troll attack: Alice pays Bob'
 
 The [De-Anonymizing Attacks](#de-anonymizing-attacks) above track a user directly, and they are not feasible as long as the privacy-preserving techniques there are followed. However, implicit tracking methods (ITMs) exist even under the assumption of privacy preservation.
 
-The first ITM is entering the wallet for the first time, as an ordinary Cardano wallet (a CIP-30 wallet for the CLI, the public account in the Seedelf Wallet) has to pay to mint the original Seedelf. This requirement means that an outside wallet, $\omega$, is now linked to a Seedelf, $\sigma$. The receivability and spendability of $\sigma$ remain hidden. Still, this linking will taint $\omega$ as a wallet that has interacted with the Seedelf protocol and is attempting to be stealthy. After funding $\sigma$, the user may use the CLI's `util mint` command to do a stealth Seedelf mint, paid from Seedelf funds, producing $\sigma^{'}$ with no link to $\omega$. The original $\sigma$ may be removed after $\sigma^{'}$ is minted.
+The first ITM is entering the wallet for the first time, as an ordinary Cardano wallet (a CIP-30 wallet for the CLI, the public account in the Seedelf Wallet) has to pay to mint the original Seedelf. This requirement means that an outside wallet, $\omega$, is now linked to a Seedelf, $\sigma$. The receivability and spendability of $\sigma$ remain hidden. Still, this linking will taint $\omega$ as a wallet that has interacted with the Seedelf protocol and is attempting to be stealthy. After funding $\sigma$, the user may use the CLI's `util mint` command to do a stealth Seedelf mint, paid from Seedelf funds, producing $\sigma^{'}$ (in the Seedelf Wallet, that's creating a Seedelf paid from the private balance). $\sigma^{'}$ has no link to $\omega$ only if the funds that paid for it came from other people's payments: funds the user moved in from $\omega$ lead back to it through the transaction graph. The original $\sigma$ may be removed after $\sigma^{'}$ is minted.
 
 The second ITM is the linkability of sequential UTxOs via the transaction fee. The owner is hidden and unknown during a transaction. Still, it is safe to assume that the UTxO that pays the transaction fee remains under the original owner's control. Thus, the ownership could be implicitly linked if the fee-paying UTxO chain returns to $\omega$. Entering and exiting with different wallets will break the linkability. Enter with $\omega$ then exit with $\omega^{'}$. Or even better, never leave Seedelf.
 

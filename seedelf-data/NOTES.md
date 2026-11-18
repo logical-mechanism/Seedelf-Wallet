@@ -1,6 +1,6 @@
 # seedelf-data: the maintainers' notes
 
-Why the data layer's API is built as it is, the checks run against Koios and the chain, and the query planner's measurements. Each measurement keeps what it ran on and its date. [README.md](README.md) is the API's reference, and [deploy/README.md](deploy/README.md) the runbook for home and the VPS. The record of the data layer's plan, with the first reasoning behind each choice, is [chunk-26-data-layer.md](../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md).
+Why the data layer's API is built as it is, the checks run against Koios and the chain, and the query planner's measurements. Each measurement says what it ran on, and when. [README.md](README.md) is the API's reference, and [deploy/README.md](deploy/README.md) the runbook for home and the VPS. The record of the data layer's plan, with the original reasoning behind each choice, is [chunk-26-data-layer.md](../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md).
 
 ## The workspace
 
@@ -42,7 +42,7 @@ Refresh it the way the wallet refreshes its token list: the script, a commit, a 
 
 **What the offline tests check,** beyond each module's own:
 - the private index against a scripted Kupo on loopback, with db-sync unreachable (`tests/scripted_kupo.rs`): a fork under a cursor answers `reset`, with no source fresh the index answers 503, and the token pools' routes answer 503 with a wait while the contract's answer from Kupo;
-- the token pools' checks against the wallet's own vectors and scenarios ([below](#held-together-with-the-wallet)), the depth walk of a script row's datum among them, and a launch as the wallet makes one standard, anything else refused with its reason;
+- the token pools' checks against the wallet's own vectors and scenarios ([below](#held-together-with-the-wallet)), the depth walk of a script row's datum among them; a launch made the way the wallet makes one passes as standard, and anything else is refused with its reason;
 - the whole app behind its edge (`tests/edge.rs`): CORS for the wallet's origin alone, a 429 the wallet can read, a bucket per client Caddy names, the month's ceiling, and `no-store` on every answer but a preflight.
 
 **What the live tests check:**
@@ -51,12 +51,12 @@ Refresh it the way the wallet refreshes its token list: the script, a commit, a 
   - the contract's and mix box's `credential_utxos` equal the private index, each row's tokens and decimals included;
   - a page after any outpoint is the rest;
   - every `tx_info` balances: inputs and withdrawals against outputs, fee, deposit and donation;
-  - an account's payment keys' `credential_txs` lists only transactions under them, and every one of its stake key's newest that is; its next page and its answer from a block carry on from it;
+  - an account's payment keys' `credential_txs` lists only transactions under those keys, and every one of its stake key's newest transactions that's under them; its next page, and its answer from a block, carry on from it;
   - the pool list's pages make one sorted list;
   - an NFT's `asset_info` equals Koios's recorded answer;
   - a rewards history's pages make one list in its order, for reward accounts many pools pay (six pages) and one the reserves and the treasury paid too, and what's been paid by now is `account_info`'s rewards available plus withdrawals;
   - a delegation history's pages make one list in its order, no row twice and no withdrawal, each row's time and epoch its slot's, and Koios's recorded answer is its start, row for row (`tests/fixtures/account-update-history.json`): for a key that registered and delegated in one transaction then delegated its vote, one that stopped and registered again four times, one delegated twice in one transaction, mainnet's busiest re-delegator (two pages), and a key never registered.
-  - a pool's history is newest first, 18 epochs at most, two epochs ago at most, every epoch paid (none with no blocks paid anything), and where the windows meet Koios's recorded answer, the same epochs, stake and blocks, and what it paid one of the values Koios's servers gave (`tests/fixtures/pool-history.json`, `record-pool-history.py`): for the pool with the most delegators, OctasPool and a pool of about 100; a pool db-sync doesn't know has none.
+  - a pool's history is newest first, 18 epochs at most, two epochs ago at most, every epoch paid (none with no blocks paid anything), and, where its window overlaps Koios's recorded answer, the same epochs, stake and blocks, with what each epoch paid one of the values Koios's servers gave (`tests/fixtures/pool-history.json`, `record-pool-history.py`): for the pool with the most delegators, OctasPool and a pool of about 100; a pool db-sync doesn't know has none.
 
 - **The private index, from each source** (`tests/live_private.rs`):
   - from cursors a day, two days and a month back, and from Kupo's first block, the snapshot plus the delta replays exactly to the rows unspent at the tip, for both credentials (db-sync also from before the contract existed);
@@ -98,11 +98,11 @@ The code is `api/src/lovejoin/`. **Its checks are a copy of the wallet's:** this
 **A launch's script row under a datum nested past the wallet's 128 levels** (`datum.rs` `MAX_DEPTH`, `seedelf-core`'s `cbor::MAX_DEPTH`) leaves its pool out, since the wallet passes such a row over and never shows the pool (314-wasm#0, 1.6.0's release review).
 
 **Verdicts are kept in memory** (`discovery.rs`, at most 200,000). Past that, a candidate is checked again at each request, and still shown when it's standard.
-- **The holder is read on, not again:** each read gathers only the holder's outputs above the highest output id and transaction id it has gathered by its block, candidates or not (a later block's have higher ids of both). Reading on from the last candidate alone would gather a launch's scripts, and anything paid to the holder, again at every cursor (321-lj-rust-data#0). All of them are read again every hour, so a block rolled back under the stable cursor is forgotten within it.
-- **A read on joins only the read it went on from:** one that finds it replaced meanwhile by an hourly read, perhaps of an older block, reads on again from that, so nothing between the two is missed (DATA-3). What's refused is dropped from what's kept, and read again only by the hourly read.
+- **The holder is read incrementally, not from the start each time:** each read gathers only the holder's outputs, candidates or not, above the highest output id and transaction id gathered so far, as of its block (a later block's outputs have higher ids of both). Going on from the last candidate alone would gather a launch's scripts, and anything paid to the holder, again at every cursor (321-lj-rust-data#0). Every hour the holder is read again from the start, so a block rolled back under the stable cursor is forgotten within the hour.
+- **An incremental read extends only the read it started from:** if an hourly read from the start, perhaps of an older block, has replaced that one meanwhile, it starts again from the new one, so nothing between the two is missed (DATA-3). What's refused is dropped from what's kept, and read again only by the hourly read.
 - **A launch's inputs are tried once each,** however many candidates it made.
 
-**`lovejoin/pools` answers by one 5 s deadline,** its cursor's read included: two waits of 5 s each took the wallet's 10 s, and a wallet that gets no answer holds its private part on Koios for 5 minutes (317-data#0). The stable cursor is read once a tip (317-data#2). A cursor read that fails or runs late answers the last list, which is most often this very cursor's (R3-15).
+**`lovejoin/pools` answers by one 5 s deadline,** its cursor's read included: two separate 5 s waits would use up the wallet's 10 s, and a wallet that gets no answer holds its private part on Koios for 5 minutes (317-data#0). The stable cursor is read once per tip (317-data#2). A cursor read that fails or runs late answers the last list, which is most often this very cursor's (R3-15).
 
 ### Held together with the wallet
 
@@ -172,7 +172,7 @@ The code is `api/src/lovejoin/`. **Its checks are a copy of the wallet's:** this
 ### Known slow cases
 
 The measurements behind the README's *Limits*:
-- `drep_info` reads `delegation_vote` whole, for every account's latest vote delegation: 260 ms for the DRep with the most delegators, then kept. A kept one comes back in under a millisecond instead of 200–400 ms, the timing the README's *Limits* names.
+- `drep_info` reads `delegation_vote` whole, for every account's latest vote delegation: 260 ms for the DRep with the most delegators, then kept. A kept one comes back in under a millisecond instead of 200–400 ms, the timing gap the README's *Limits* warns about.
 - **A pool's first look:** on a cold disk, a pool of 2,000 delegators took 1.6 s and the largest (35,000) took 7 s. Most of that is each delegator's reward history: 6.2 s cold and 1.1 s warm for the largest.
 - **A credential at very many addresses:** 160 ms for one at 95,000.
 - **A deep page's cost:** for a busy key, 60 ms for the deepest page (10,000 in) against 30 ms for its first (warm, at home, 2026-10-12).
@@ -183,6 +183,6 @@ The measurements behind the README's *Limits*:
 
 **Ogmios's `/health` gates both paths,** so an Ogmios restart sends submits to Koios for its few seconds.
 
-**Why the tip's own slot:** not `networkSynchronization`, a step of whose last decimal is about 48 minutes, nor `lastTipUpdate`, since a node catching up moves its tip every moment.
+**Why sync is judged by the tip's own slot:** `networkSynchronization` moves in steps of about 48 minutes in its last decimal place, far coarser than the 3-minute limit, and `lastTipUpdate` stays fresh on a node that's catching up, since its tip moves every moment.
 
 **Errors are logged by kind only:** reqwest's own error messages carry the upstream's URL, which names home.

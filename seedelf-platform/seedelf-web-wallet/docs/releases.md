@@ -1,6 +1,6 @@
 # Releases
 
-Every Seedelf Wallet package uploaded to the Chrome Web Store: the commit it was built from, the zip's SHA-256, and its tag. Seedelf Wallet is a Cardano wallet for Chrome with a private balance built in; this page is for anyone who wants to check that a package is what its commit builds. The source is at <https://github.com/logical-mechanism/Seedelf-Wallet>, and what each feature is, in the wallet's [README](../README.md) and [privacy.md](privacy.md).
+Every Seedelf Wallet package uploaded to the Chrome Web Store: the commit it was built from, the zip's SHA-256, and its tag. Seedelf Wallet is a Cardano wallet for Chrome with a private balance built in; this page is for anyone who wants to check that a package is what its commit builds. The source is at <https://github.com/logical-mechanism/Seedelf-Wallet>, and the wallet's [README](../README.md) and [privacy.md](privacy.md) explain each feature.
 
 From 1.6.0 on, each release is tagged `web-wallet/<version>` on its commit. The tags are plain git tags, not signed. [SECURITY.md](../../../SECURITY.md)'s bounty scope is the latest such tag.
 
@@ -27,7 +27,7 @@ From 1.6.0 on, each release is tagged `web-wallet/<version>` on its commit. The 
 
 ## Checking a package
 
-What you can check is that a release's commit builds the zip this table records. The table records the zip uploaded to the Chrome Web Store; Chrome installs the store's signed package, not that zip, and nothing in this repository describes comparing an installed copy with the table.
+What you can check is that a release's commit builds the zip this table records. The table records the zip uploaded to the Chrome Web Store; Chrome installs the store's signed package, not that zip, and this repository doesn't describe a way to compare an installed copy with the table.
 
 1. **Check out the release's tag**, or before 1.6.0 its commit, in a clean clone of <https://github.com/logical-mechanism/Seedelf-Wallet>.
 2. **Install the toolchain** the WebAssembly build needs (`seedelf-platform/seedelf-web-wallet/wasm/build.sh` says what's missing):

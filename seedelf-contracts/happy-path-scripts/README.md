@@ -30,7 +30,7 @@ The path to the cardano-cli and the cardano node socket must be defined in `path
 
 ## Using The Scripts
 
-Once, before the first run, make the Python environment the scripts in `seedelf/` use, `seedelf/backend/venv`:
+Before the first run, create the Python environment that the scripts in `seedelf/` use, `seedelf/backend/venv`:
 
 ```bash
 cd seedelf/backend && bash setup.sh
@@ -39,7 +39,7 @@ cd seedelf/backend && bash setup.sh
 Run the steps in this order.
 
 1. **Reference scripts.** From this folder, put the contracts' scripts on chain, held by the always-false script, with `00_createScriptReferences.sh`.
-2. **Two Seedelfs.** Go to the `seedelf/` folder and create a Seedelf token for each user with `01_createAddress.sh` (a Seedelf acts as an address people pay). The script takes a personal tag as its input, a string cut to 15 bytes; with none, the tag is empty.
+2. **Two Seedelfs.** Go to the `seedelf/` folder and create two Seedelfs, Alice's and Bob's, with `01_createAddress.sh` (a Seedelf acts as an address people pay); user 1's wallet pays for both. The script takes a personal tag as its input, a string cut to 15 bytes; with none, the tag is empty.
 
    ```bash
    ./01_createAddress.sh Alice
@@ -53,7 +53,7 @@ Run the steps in this order.
    ./03_sendToSeedElf.sh alice_seedelf_name 5000000
    ```
 
-4. **Spend from one Seedelf to another.** Spend from what Alice's Seedelf was paid to Bob's Seedelf. It needs Alice's file in `addrs/`, and the payment from step 3, which must hold more than the amount, in lovelace: the change and the fee come out of it too. It finds Bob's register on chain, by his Seedelf token.
+4. **Spend from one Seedelf to another.** Send part of Alice's payment on to Bob's Seedelf. It needs Alice's file in `addrs/`, and the payment from step 3, which must hold more than the amount, in lovelace: the change and the fee come out of it too. It finds Bob's register on chain, by his Seedelf token.
 
    ```bash
    ./04_spendFunds.sh alice_seedelf_name amount bob_seedelf_name
@@ -65,4 +65,4 @@ Run the steps in this order.
    ./02_burnAddress.sh seedelf_name_here
    ```
 
-At any step, `00_checkBalance.sh seedelf_name_here` shows what a Seedelf holds, beside the token itself. It prints the Seedelf's secret too.
+From `seedelf/`, at any step, `00_checkBalance.sh seedelf_name_here` shows what a Seedelf holds, leaving out the UTxO that holds its token. It prints the Seedelf's secret too.

@@ -1,6 +1,6 @@
 # Release
 
-How to check a `seedelf-cli` release you downloaded, and how the maintainers make one. The `seedelf-cli` is Seedelf's wallet for the terminal. Seedelf is a stealth wallet for Cardano (see the [README](README.md)).
+How to check a `seedelf-cli` release you've downloaded, and how the maintainers make one. The `seedelf-cli` is the terminal wallet for Seedelf, a stealth wallet for Cardano; the [README](README.md) explains how it works.
 
 The CLI's releases are on the repository's [Releases](https://github.com/logical-mechanism/Seedelf-Wallet/releases) page. Each is tagged with its version number, such as `0.7.0`; the CLI and the [contracts](seedelf-contracts/README.md) share that `0.x.y` version line. For each tag, the GitHub Actions workflow [release.yml](.github/workflows/release.yml) builds the CLI for Linux, Windows and macOS on GitHub's runners, signs it with the release key (held as a GitHub Actions secret), and attaches the files to a release. The Seedelf Wallet for Chrome is released separately, on its own `1.x` line: its packages, their commits and their zip hashes are in [releases.md](seedelf-platform/seedelf-web-wallet/docs/releases.md).
 

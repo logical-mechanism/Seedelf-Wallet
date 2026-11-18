@@ -112,7 +112,7 @@ The one-time key of a script spend is HKDF-SHA-256 of the Seedelf scalar (salt `
 
 The output is an ES module (`--target web`). Load it with `init()` or `initSync()`.
 
-The build is reproducible: it takes only the crates `Cargo.lock` records (`--locked`), and no path on the machine goes into the module, so the same commit and toolchain (the pinned Rust, wasm-bindgen, and clang) give the same bytes (launch review #61). Nothing pins clang, which compiles blst's C, so the script's last line names it (`C compiler: …`) for the release record.
+The build is reproducible: it takes only the crates `Cargo.lock` records (`--locked`), and no path on the machine goes into the module, so the same commit and toolchain (the pinned Rust and wasm-bindgen, and the same clang) give the same bytes (launch review #61). Nothing pins clang, which compiles blst's C, so the script's last line names it (`C compiler: …`) for the release record.
 
 **It's built for size** with the workspace's `wasm-release` profile (`opt-level = "z"`, LTO, one codegen unit, stripped). It checks integer overflow where core, crypto and koios compile their code, not where this crate does (a small call-free or generic core function compiled here wraps): where the line falls, and why no crate leans on it, is in [the workspace's CLAUDE.md](../../CLAUDE.md). The CLI keeps the plain release profile. `node bench.mjs [pkg-dir]` prints a build's size (raw, gzip, brotli), how long the module takes to compile, and the median time of a key derivation, the ownership check, a re-randomization, a proof, a transfer (`buildTransfer`) and a move-in.
 
@@ -121,7 +121,7 @@ The build is reproducible: it takes only the crates `Cargo.lock` records (`--loc
 | `release` | 7,100 KB | 1,474 KB | 1.8 ms | 51 ms |
 | `wasm-release` | 2,632 KB | 797 KB | 1.8 ms | 53 ms |
 
-Measured 2026-10-04, built with Rust 1.98.1 and wasm-bindgen 0.2.128, in Node 24.19.0's V8, the engine Chrome runs the worker in: the median of eight `bench.mjs` runs. `release` is `build.sh`'s build with `--profile release` in place of `wasm-release`. The transfer is `buildTransfer`, which proves the inputs and measures the scripts in the wallet. The figures are that day's module, under the profile before it checked overflow in core, crypto and koios. The module has grown since: `bench.mjs` gives today's.
+Measured 2026-10-04, built with Rust 1.98.1 and wasm-bindgen 0.2.128, in Node 24.19.0's V8, the engine Chrome runs the worker in: the median of eight `bench.mjs` runs. `release` is `build.sh`'s build with `--profile release` in place of `wasm-release`. The transfer is `buildTransfer`, which proves the inputs and measures the scripts in the wallet. The figures are for that day's module, built before the profile checked overflow in core, crypto and koios. The module has grown since: `bench.mjs` gives today's.
 
 `wasm-opt -Oz` isn't used. Measured once, on an earlier and smaller module, it made the build 9% smaller raw but 6% larger gzipped than `wasm-release` alone. It hasn't been measured since.
 
@@ -146,7 +146,7 @@ node --test "seedelf-web-wallet/wasm/tests/*.test.mjs"            # the built pa
 
 CI (`.github/workflows/web-wallet.yml`) runs both: the native tests within `cargo test --workspace --locked`, then the build and the JS tests. One native test is ignored: `session_test.rs`'s `record_the_extensions_session_swap_fixture`, which rewrites the extension's `tests/fixtures/session-swap.json`, so it runs only on purpose (`cargo test -p seedelf-wasm --test session_test -- --ignored`).
 
-Both suites check the same pinned vectors as `seedelf-crypto`, so the WebAssembly build is known to match native Rust byte for byte, and the same recorded preprod data:
+Both suites check the same pinned vectors as `seedelf-crypto`, and the same recorded preprod data, so the WebAssembly build is known to match native Rust byte for byte:
 
 - `seedelf-crypto`'s `random_register` vector
 - the frozen key-derivation vectors in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`

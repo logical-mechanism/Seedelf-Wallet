@@ -65,7 +65,7 @@ const CAPTIONS: Record<Language, Array<[string, string]>> = {
   en: [
     ["Private money on Cardano", "Your private balance sits in UTxOs that don't say who owns them."],
     ["Pay any Seedelf by name", "Paste the name and the wallet finds it. The payment can't be linked to the Seedelf it pays."],
-    ["Get paid privately", "Create a Seedelf and share its name. Anyone can pay it, and no payment points back to it."],
+    ["Get paid privately", "Create a Seedelf and share its name. Anyone with Seedelf Wallet can pay it, and no payment points back to it."],
     [
       "It says what links",
       "Make money public to any address or $handle. The wallet warns you before a payment ties your accounts together.",
@@ -75,7 +75,7 @@ const CAPTIONS: Record<Language, Array<[string, string]>> = {
   es: [
     ["Dinero privado en Cardano", "Tu saldo privado está en UTxOs que no dicen de quién son."],
     ["Paga a un Seedelf por nombre", "Pega el nombre y la billetera lo encuentra. El pago no se puede vincular con el Seedelf al que paga."],
-    ["Recibe en privado", "Crea un Seedelf y comparte su nombre. Cualquiera puede pagarle, y ningún pago lleva hasta él."],
+    ["Recibe en privado", "Crea un Seedelf y comparte su nombre. Cualquiera con Seedelf Wallet puede pagarle, y ningún pago se puede rastrear hasta tu Seedelf."],
     [
       "Te dice qué vincula",
       "Haz público tu dinero pagando a cualquier dirección o $handle. La billetera te avisa antes de que un pago vincule tus cuentas entre sí.",
@@ -90,7 +90,7 @@ const CAPTIONS: Record<Language, Array<[string, string]>> = {
     ],
     [
       "プライベートに受け取る",
-      "Seedelf を作成して、その名前を伝えましょう。誰でもそこに支払うことができ、どの支払いからもその Seedelf にはたどり着けません。",
+      "Seedelf を作成して、その名前を伝えましょう。Seedelf Wallet を使う人なら誰でもその名前あてに支払うことができ、どの支払いをたどってもあなたの Seedelf には行き着きません。",
     ],
     ["結び付くものを示す", "任意のアドレスや $handle に支払って、お金を公開できます。支払いでアカウント同士が結び付く前に、ウォレットが警告します。"],
     [

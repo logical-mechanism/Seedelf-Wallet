@@ -289,7 +289,7 @@ false; those hypotheses are not yet proved from full-validator execution.
 
 The launch seed and output search loops have unbounded subterm proofs here; the
 whole launch is `one_shot_mint_accepts_iff`'s (above), not this family's. A direct
-whole-launch seed proof in one module passes 16 GB: it needs decomposing, as
+whole-launch seed proof in one module needs more than 16 GB: it has to be split, as
 `Lovejoin/Every/`'s `Mint*` modules are. This family's Mix proof and output checks
 stay bounded to the stated layouts.
 
@@ -359,10 +359,10 @@ The rule for every Lovejoin proof, this folder's and every other one under `Love
 - **First, run the counterexample concretely,** with Aiken's evaluator on the deployed
   bytes, as `concrete/` does.
 - **If Aiken agrees, it may be a flaw in a live pool.**
-  - Stop, and tell the maintainer, privately, and no one else.
+  - Stop, and report it privately, as Lovejoin's own `SECURITY.md` says, and to no one else.
   - Nothing that hints at it gets pushed or posted: no fork branch, no upstream comment,
     no PR text.
-  - The maintainer decides on disclosure; Lovejoin has its own `SECURITY.md`.
+  - Disclosure is decided under that policy.
   - The pool's scripts are frozen, so a fix is a new pool beside it.
 - **If Aiken disagrees, it's a gap in our spec or in the tools,** as the BLS12-381 operands
   that made WalletRegister Falsified were ([the README](../../README.md)'s *Found along the

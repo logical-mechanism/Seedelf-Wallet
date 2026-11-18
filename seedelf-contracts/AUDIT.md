@@ -4,7 +4,7 @@ A security review of Seedelf's Aiken contracts: its findings, rated by severity,
 
 **Scope:** Aiken on-chain contracts in [seedelf-contracts/](.), as the source stood at commit `e350a0aa`, with package version 0.4.10 in `aiken.toml` (Aiken v1.1.19, Plutus v3, stdlib v3.0.0). The source has changed since only in formatting; `aiken.toml` now pins Aiken v1.1.24 and stdlib v4.0.0.
 
-**Not the deployed contracts.** What's on chain is version 1, an earlier revision: commit `5b82530`, built with Aiken v1.1.9 and stdlib v2.2.0. This review doesn't cover version 1's bytes. [README.md](README.md#deployed-contracts-version-1) has version 1's hashes and reference UTxOs.
+**Not the deployed contracts.** What's on chain is version 1, an earlier revision: commit `5b82530`, built with Aiken v1.1.9 and stdlib v2.2.0. This review covers neither version 1's source nor its bytes, and the later revision changed some of the logic (the policy's burn and mint branches, for one), so a finding here doesn't carry over to version 1 unchecked. [README.md](README.md#deployed-contracts-version-1) has version 1's hashes and reference UTxOs.
 
 **Terms.** Seedelf is a stealth wallet for Cardano; the repository's [README](../README.md) explains the protocol. A `Register` is the wallet contract's datum: a `generator` $g$ and a `public_value` $u = g^x$, both compressed BLS12-381 G1 points, where $x$ is the owner's secret. A spend's redeemer is a `Proof`: `g_r_b` is $g^r$ for a secret nonce $r$, `z_b` is $z = r + c \cdot x$, and `vkh` is the hash of the one-time key that must sign the transaction (the review calls it a one-time pad). $c$ is the Fiat-Shamir challenge, a hash of $g$, $g^r$, $u$ and `vkh`. A Seedelf token is the minting policy's `5eed0e1f`-prefixed NFT that locates a user's root Register, the one payers re-randomize. `seedelf-crypto` and `seedelf-core` are the Rust crates that build registers, proofs and transactions for the CLI and the Seedelf Wallet.
 
@@ -212,3 +212,11 @@ The datum (`Register`) is chosen by the *sender* of a UTxO, not the recipient. A
 ## Closing
 
 The contracts are small, purposeful, and coherent with the stated hyperstructure philosophy. All "unexpected input → spendable" branches are deliberate and documented. The one perma-lock (`always_false`) is appropriately narrow. Replay protection via the `vkh` one-time pad plus tx-body signatures is structurally correct. Residual risk is concentrated **off-chain**, where register construction must guarantee prime-order, non-identity G1 points — the on-chain code cannot compensate for an off-chain failure there, by design.
+
+## Errata (17 November 2026)
+
+Three statements above are wrong, checked against the code after the review. None changes what a bad register or a high index costs: a dead UTxO, or a transaction refused before anything is sent.
+
+- **§1.2 and §2.2: torsion points don't decompress.** `g1.decompress` (Plutus's `bls12_381_G1_uncompress`) refuses a point outside the prime-order subgroup, as `lib/schnorr.ak`'s expect-fail test `torsion_point` shows. A register with a torsion point is still dead, as §1.2 says, but because its points never decompress, not because the Schnorr relation fails.
+- **§1.2: an identity generator alone doesn't make proofs trivial.** With `g` the identity and `u` not, a proof needs `g_r = u^(−c)`, where `c` is a hash over `g_r` itself, which nobody can find, so the UTxO is dead. Only when `u` is the identity too can anyone spend it, as in the identity-`u` case.
+- **§3.4: a first input at output #256 or later isn't theoretical.** A 16 KB transaction fits about 400 small outputs, so such an input can exist today. It means a mint can't be built from it, and in version 1 a burn can't either ([seedelf-verification's README](../seedelf-verification/README.md)); the wallets refuse or fail to evaluate such a transaction before sending it, so nothing is lost.

@@ -6,7 +6,7 @@ The method is Lovejoin/Every's, so read [Lovejoin/Every/README.md](../../Lovejoi
 
 ## Building
 
-- **`./check.sh seedelf-every`**, from `seedelf-verification/`, builds the 14 modules here after the 14 they import from elsewhere, one per scope at 16 GB and 30 minutes. A clean build of the 14 takes about four and a half minutes. Two of them pass the default 8 GB: `Root` peaks near 8.8 GB, and `Mint` near 9.5 GB.
+- **`./check.sh seedelf-every`**, from `seedelf-verification/`, builds the 14 modules here after the 14 they import from elsewhere, one per scope at 16 GB and 30 minutes. A clean build of the 14 takes about four and a half minutes. Two of them go past the default 8 GB: `Root` peaks near 8.8 GB, and `Mint` near 9.5 GB.
 - **No Z3 is needed.** Nothing here calls Blaster, though `LinesAllLoops`' import chain runs `#prep_uplc`.
 - **The tactics are Lovejoin.Every.Base's, renamed** (`w_go`, `w_using`, `w_step`, `w_safe`), so that a module can import both families. `Base.lean` imports only `Lovejoin.AnyTx.CekCase`, which imports no Lovejoin script.
 
@@ -57,5 +57,5 @@ These are on top of Lovejoin's.
 ## Plans and records
 
 - **What's planned next for these proofs:** no locked Register UTxOs, the `.hex` files as Lake inputs, and an outside read of the statements, in [chunk 49's plan](../../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-49-no-locked-funds.md).
-- **Moving every proof off the forks** onto IOG's own Lean-blaster and PlutusCoreBlaster, with the upstream changes that affect it: [chunk 46's plan](../../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-46-verification-on-upstream.md). Each `require` in `lakefile.lean` moves to `input-output-hk` once nothing on its fork is needed. The PlutusCoreBlaster pin is the fork's `opaque-xor` branch, and `Slice/`'s its `opaque-slice`.
+- **Moving every proof off the forks** onto IOG's own Lean-blaster and PlutusCoreBlaster, with the upstream changes that affect it: [chunk 46's plan](../../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-46-verification-on-upstream.md). Each `require` in `lakefile.lean` moves to `input-output-hk` once nothing on its fork is needed. The PlutusCoreBlaster pin is the fork's `opaque-xor` branch, and `Slice/`'s pin is its `opaque-slice` branch.
 - **The records:** the forks and the upstream fixes in [chunk 41](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-41-blaster-fixes.md), and these proofs in [chunk 48](../../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-48-seedelf-every-tx-kernel.md).

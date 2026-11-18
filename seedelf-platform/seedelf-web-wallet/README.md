@@ -4,7 +4,7 @@ Seedelf Wallet is a Cardano wallet for Chrome with private payments built in. It
 
 **Get it** from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp), or build it from this repository and load it into Chrome yourself ([extension/README.md](extension/README.md#build-and-load-in-chrome)). It's free.
 
-It runs on Cardano mainnet. Preprod, Cardano's test network, is on the welcome screen and in Settings, for trying the wallet with test ADA that has no value.
+It runs on Cardano mainnet. To try it with test ADA that has no value, switch to preprod, Cardano's test network, from the welcome screen or Settings.
 
 ## What it is
 
@@ -13,14 +13,14 @@ One wallet on Cardano, with one recovery phrase and one password, and two sides,
 - **The public account** (the Cardano account) is a full Cardano wallet. Receive, send, stake with a pool, spend the rewards, and delegate your vote, as in Lace or Eternl. Restore a Lace or Yoroi phrase and it's the same account, so you don't need a second wallet.
 - **The private balance** is Seedelf, a stealth wallet on Cardano, where no UTxO says who owns it. Make money private, pay anyone's Seedelf, and make money public again to any address.
 
-**How the private side works.** Money in the private balance sits at the Seedelf wallet contract. Each UTxO there is locked to a fresh re-randomization of its owner's key, so the UTxO doesn't say whose it is, and it's spent with a Schnorr proof that only your recovery phrase can make. To be paid privately, you mint a **Seedelf**, an NFT whose name starts `5eed0e1f`. It works like an ADA Handle for the private balance: anyone with its name can pay you. The [root README](../../README.md) has the protocol and its maths.
+**How the private side works.** Money in the private balance sits at the Seedelf wallet contract. Each UTxO there is locked to a fresh re-randomization of its owner's key, so the UTxO doesn't say whose it is, and it's spent with a Schnorr proof that only the key from your recovery phrase can make. To be paid privately, you mint a **Seedelf**, an NFT whose name starts `5eed0e1f`. It works like an ADA Handle for the private balance: anyone with its name can pay you. The [root README](../../README.md) has the protocol and its maths.
 
 **Private money can't be staked,** by design:
 
 - Seedelf funds sit at a script address with no staking part, so they earn no rewards and carry no voting weight.
 - A per-user staking key would link all of a user's Seedelfs together.
 
-So money you're holding can stay in the public account, staked, and be made private when you want to move it privately.
+So money you're just holding can stay staked in the public account, and you make it private when you're ready to move it.
 
 ## What it does
 
@@ -30,9 +30,9 @@ Every screen, and what it does, is in [extension/README.md](extension/README.md#
 
 - **Create** a wallet (a new 24-word phrase) or **restore** one from 12, 15 or 24 words, then lock it with a password.
 - **See your balances,** on Home's two tabs: what the public account holds, and what the private balance holds with its Seedelfs. Tokens and NFTs are listed with a search; an NFT's image shows only when you ask for it.
-- **Several public accounts:** the recovery phrase's Cardano accounts, one at a time, with a picker as Home's Public heading ("Public account 2 ▾") and names of your own. Each has its own addresses, staking and collateral. There's one private balance for the whole phrase, but the money each account made private keeps a history of its own: a private payment avoids spending two accounts' money together, and when it can't, or when you send everything (Max), its review names the accounts it ties together.
+- **Several public accounts:** one recovery phrase holds many Cardano accounts. You use one at a time, switching with the picker in Home's Public heading ("Public account 2 ▾"), and you can name them. Each has its own addresses, staking and collateral. There's one private balance for the whole phrase, but the wallet remembers which account made each part of it private. A private payment avoids spending two accounts' money together; when it can't, or when you send everything (Max), its review names the accounts it ties together.
 - **Transaction details:** every review, and the connector's sign window, opens the transaction itself, decoded from the bytes about to be signed: inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata, with a tab for the raw bytes. Nothing is fetched to show it: no lookup, and a copy button instead of an explorer link.
-- **Also:** Contacts, a UTxOs screen on each side where a UTxO can be locked out of every payment, Activity on each side (saved as CSV if you want), hiding the balances, the lock time, a check of a written copy of the recovery phrase, and ADA's value in a currency on mainnet.
+- **Also:** Contacts; a UTxOs screen on each side, where you can lock a UTxO so no payment spends it; Activity on each side, which you can save as CSV; hiding the balances; how long the wallet waits before it locks itself; a check that your written copy of the recovery phrase restores this wallet; and ADA's value in a currency on mainnet.
 - **Three languages:** English, Spanish and Japanese, all bundled with the wallet, so choosing one fetches nothing.
 
 **The public account**
@@ -41,12 +41,12 @@ Every screen, and what it does, is in [extension/README.md](extension/README.md#
 - **Make private:** move ADA and tokens from the public account into your private balance.
 - **Staking:** stake with one pool, chosen from every live pool, each with its return on stake over its last 18 epochs. Rewards are spent along with anything the account pays, or withdrawn by hand. **Stop staking** returns the 2 ₳ deposit. **Rewards history** and **Delegation history** list what the stake key was paid and every change to it.
 - **Voting delegation:** Always abstain, Always no confidence, or a DRep, searched by name in a list that ships with the wallet, or by its ID. Cardano keeps staking rewards locked until the vote is delegated, and the wallet says so.
-- **Be your own DRep:** register the public account as a DRep, with its own vote behind it, and vote Yes, No or Abstain on the live governance actions, in the wallet's own screens. A profile only if you want one: the wallet writes the file, you publish it, and the wallet never fetches it. Retiring returns the 500 ₳ deposit. A DRep is public and tied to the account, and the screens say so. Governance sites such as GovTool work too, through CIP-95 in the dApp connector, once you allow it for that site.
-- **Collateral:** the public account's 5 ₳ collateral, which Cardano asks of a transaction that runs a script, such as a dApp's, and takes only if the script fails. It's set in Settings, and reclaimed there.
+- **Be your own DRep:** register the public account as a DRep, with its own vote behind it, and vote Yes, No or Abstain on the live governance actions, in the wallet's own screens. A profile is optional: the wallet writes the file, you publish it, and the wallet never fetches it. Retiring returns the 500 ₳ deposit. A DRep is public and tied to the account, and the screens say so. Governance sites such as GovTool work too, through CIP-95 in the dApp connector, once you allow it for that site.
+- **Collateral:** the public account's 5 ₳ collateral, which Cardano asks of a transaction that runs a script, such as a dApp's, and takes only if the script fails. You set it up in Settings, and reclaim it there.
 
 **The private balance**
 
-- **Create a Seedelf:** mint your Seedelf, with an optional tag of your own (public, and anyone can choose the same one), so others can pay you. Minting ties the Seedelf to whatever paid for it, so by default the public account pays for it, before any money is made private. Paying from the private balance instead is a stealth mint, which hides the payer only when that balance came from other people's payments.
+- **Create a Seedelf:** mint your Seedelf, with an optional tag of your own (public, and anyone can choose the same one), so others can pay you. Minting ties the Seedelf to whatever paid for it. So by default the public account pays, before you make any money private: that links the account to the Seedelf, but not to your private balance. Paying from the private balance instead is a stealth mint, which hides the payer only when that balance came from other people's payments.
 - **Send:** pay up to 20 Seedelfs privately, by their full names.
 - **Make public:** pay up to 20 Cardano addresses or ADA Handles from the private balance.
 - **Remove a Seedelf:** burn it and free the ADA it held, into the public account or the private balance. By default the ADA goes back to the side that paid for the Seedelf; when the wallet doesn't know which did (after a restore, or in another browser), you choose.
@@ -95,7 +95,7 @@ New features come from what users ask for.
 
 - **Amounts, tokens and timing are public.** Seedelf hides who owns a UTxO and who spends it, from people reading the chain. It doesn't hide how much moves, or when.
 - **Paying a Seedelf takes Seedelf Wallet or the seedelf-cli,** Seedelf's command-line wallet. Someone using another wallet pays your public account's address instead, in the open.
-- **Some links can't be avoided,** and the wallet says so where they happen. Making money private ties the public account to it. A Seedelf is tied to whatever paid for it. A private session's one-time account is public: anyone can follow its money, and money you made private leads back to your public account. [docs/privacy.md](docs/privacy.md) is the wallet's privacy model: what's hidden, what isn't, and [the known links](docs/privacy.md#known-links).
+- **Some links can't be avoided,** and the wallet says so where they happen. Making money private ties it to the public account it came from. A Seedelf is tied to whatever paid for it. A private session's one-time account is public: anyone can follow its money back into your private balance and, if you made that money private yourself, on to your public account. [docs/privacy.md](docs/privacy.md) is the wallet's privacy model: what's hidden, what isn't, and [the known links](docs/privacy.md#known-links).
 - **The services the wallet talks to see your IP address,** and can group what one address does, though the chain can't.
   - On mainnet it reads Cardano through its own server first, and through Koios, a public Cardano API, for any part that server can't answer. Settings → Network switches to Koios alone. Preprod always reads Koios.
   - Spends from the private balance also go to giveme.my, a collateral service. It puts up the collateral such a spend needs, the same for everyone, so no collateral of yours ties your private spends to you.
