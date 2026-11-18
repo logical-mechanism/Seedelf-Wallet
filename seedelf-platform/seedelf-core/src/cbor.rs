@@ -7,6 +7,9 @@
 //! recursion, and refused past [`MAX_DEPTH`]: one item with [`within_depth`],
 //! a whole transaction, the CBOR its byte strings wrap included, with
 //! [`check_nesting`].
+//!
+//! The same way, [`definite_pairs`] writes a datum's constructors in the
+//! general form so that Pallas reads them as the node does.
 
 use anyhow::{Result, bail};
 use pallas_codec::minicbor::{Decoder, data::Type};
@@ -283,4 +286,128 @@ fn cbor_step(
     };
     levels.extend(opened);
     Some((next, limit))
+}
+
+// ---------------------------------------------------------------------------
+// Constructors in the general form, written for Pallas to read
+// ---------------------------------------------------------------------------
+
+/// One open level in [`definite_pairs`]' walk.
+enum Open {
+    /// An array or a map (its keys and values each an item), with the items
+    /// left to read: `None` until a break.
+    Items(Option<u64>),
+    /// A tag, before the one item it wraps: `true` for 102, a constructor's
+    /// general form, whose item is its pair.
+    Tag(bool),
+    /// The general form's pair, written indefinite, with the items read so
+    /// far. It's written definite, so its break is dropped.
+    Pair(u64),
+    /// A string of indefinite length, of this major type: its chunks, each a
+    /// definite string of the same type, until a break.
+    Chunks(u8),
+}
+
+/// `datum`, one Plutus data item, with each constructor in the general form
+/// written with a definite pair: `102([_ i, fields])` as `102([i, fields])`,
+/// its break dropped, every other byte as it was. `None` where the general
+/// form's pair isn't exactly two items, which the node refuses, or the CBOR
+/// isn't one well-formed item with nothing after it.
+///
+/// Pallas 0.35.1's decoder (1.4.0's too) reads the pair's head but never an
+/// indefinite one's closing break (`Constr::decode`). At the top of a datum
+/// that's harmless; nested, the break ends the list around the constructor
+/// early, or fails the next read, though the node reads either pair as the
+/// same data. Contracts read data, never bytes, so whoever writes a datum (an
+/// order's executor, say) chooses (chunk 51, r3a#1's class). What this returns
+/// is for reading alone: a datum's hash, and a transaction carrying it, are of
+/// the bytes it was written in.
+///
+/// It walks token by token, one head at a time and never recursing, so a byte
+/// string is passed over whole, whatever it holds. A decoder of what it
+/// returns recurses: hold `datum` to [`within_depth`] first.
+pub fn definite_pairs(datum: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(datum.len());
+    let mut open: Vec<Open> = Vec::new();
+    let mut pos = 0;
+    loop {
+        let start = pos;
+        // The level this item opens, if it's an array, a map, a tag or a
+        // string in chunks; otherwise the item is done here.
+        let opens = if *datum.get(pos)? == 0xff {
+            pos += 1;
+            match open.pop()? {
+                Open::Items(None) | Open::Chunks(_) => out.push(0xff),
+                // Written definite, the pair has no break.
+                Open::Pair(2) => {}
+                _ => return None,
+            }
+            None
+        } else {
+            let (major, argument, next) = cbor_head(datum, pos)?;
+            pos = next;
+            if let Some(Open::Chunks(string)) = open.last()
+                && (major != *string || argument.is_none())
+            {
+                return None;
+            }
+            let general = matches!(open.last(), Some(Open::Tag(true)));
+            if !(general && major == 4 && argument.is_none()) {
+                out.extend_from_slice(&datum[start..next]);
+            }
+            match (major, argument) {
+                (4, None) if general => {
+                    out.push(0x82);
+                    Some(Open::Pair(0))
+                }
+                (4, Some(2)) if general => Some(Open::Items(Some(2))),
+                _ if general => return None,
+                (2 | 3, Some(length)) => {
+                    let end = usize::try_from(length)
+                        .ok()
+                        .and_then(|l| next.checked_add(l))
+                        .filter(|end| *end <= datum.len())?;
+                    out.extend_from_slice(&datum[next..end]);
+                    pos = end;
+                    None
+                }
+                (2 | 3, None) => Some(Open::Chunks(major)),
+                (4, Some(0)) | (5, Some(0)) => None,
+                (4, items) => Some(Open::Items(items)),
+                (5, Some(pairs)) => Some(Open::Items(Some(pairs.checked_mul(2)?))),
+                (5, None) => Some(Open::Items(None)),
+                (6, Some(tag)) => Some(Open::Tag(tag == 102)),
+                (0 | 1 | 7, Some(_)) => None,
+                _ => return None,
+            }
+        };
+        if let Some(level) = opens {
+            open.push(level);
+            continue;
+        }
+        // An item is done: it counts toward each open level it finishes.
+        loop {
+            match open.last_mut() {
+                None => return (pos == datum.len()).then_some(out),
+                Some(Open::Items(Some(left))) => {
+                    *left -= 1;
+                    if *left > 0 {
+                        break;
+                    }
+                    open.pop();
+                }
+                Some(Open::Items(None) | Open::Chunks(_)) => break,
+                Some(Open::Pair(read)) => {
+                    *read += 1;
+                    if *read > 2 {
+                        return None;
+                    }
+                    break;
+                }
+                Some(Open::Tag(_)) => {
+                    open.pop();
+                }
+            }
+        }
+    }
 }

@@ -2101,3 +2101,105 @@ fn a_cancel_never_spends_a_session_row_holding_a_datum_or_a_script() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Chunk 51, r3a#1's class (class#1): a constructor nested in an order's datum,
+// written in the general form with an indefinite pair.
+// ---------------------------------------------------------------------------
+
+/// `data` as Pallas writes it, but each constructor in the general form with
+/// an indefinite pair, `102([_ index, fields])`, which the node reads as the
+/// same data (cardano-cli 11.0.0.0, offline).
+fn general_form(data: &PlutusData, e: &mut minicbor::Encoder<Vec<u8>>) {
+    match data {
+        PlutusData::Constr(c) => {
+            e.tag(minicbor::data::Tag::new(102)).unwrap();
+            e.begin_array().unwrap().u64(c.constr_index()).unwrap();
+            e.array(c.fields.len() as u64).unwrap();
+            for field in c.fields.iter() {
+                general_form(field, e);
+            }
+            e.end().unwrap();
+        }
+        PlutusData::Array(items) => {
+            e.array(items.len() as u64).unwrap();
+            for item in items.iter() {
+                general_form(item, e);
+            }
+        }
+        PlutusData::Map(pairs) => {
+            e.map(pairs.len() as u64).unwrap();
+            for (key, value) in pairs.iter() {
+                general_form(key, e);
+                general_form(value, e);
+            }
+        }
+        other => {
+            e.encode(other).unwrap();
+        }
+    }
+}
+
+/// Chunk 51, r3a#1's class (class#1): whoever writes an order's datum chooses
+/// how it's spelled, and the order's script reads it as data, never as bytes.
+/// Each real order here, every constructor in its datum written
+/// `102([_ i, fields])`, reads as the order does. Pallas reads that pair's
+/// head but never its closing break, so nested, the break ended the list
+/// around it early, or failed the next read.
+#[test]
+fn every_order_reads_alike_with_its_constructors_in_the_general_form() {
+    let mut differ = Vec::new();
+    for f in fixtures() {
+        let p = protocol(f["protocol"].as_str().unwrap());
+        let datum = hex::decode(f["datum"].as_str().unwrap()).unwrap();
+        let mut e = minicbor::Encoder::new(Vec::new());
+        general_form(&PlutusData::decode_fragment(&datum).unwrap(), &mut e);
+        let general = e.into_writer();
+        let read = orders::read(p, &general).map_err(|e| e.to_string());
+        if read != orders::read(p, &datum).map_err(|e| e.to_string()) {
+            differ.push(format!("{} on {}: {read:?}", f["protocol"], f["network"]));
+        }
+    }
+    assert!(differ.is_empty(), "{differ:#?}");
+}
+
+/// Chunk 51, r3a#1's class (class#1): Splash fills an order in parts. Its
+/// executor spends the order and writes what's left as a new one where it sat,
+/// datum and all, and Splash's script reads that datum as data. Here the real
+/// Splash order with its input asset class respelled `102([_ 0, [policy,
+/// name]])`, as the executor may leave it: cardano-cli 11.0.0.0 reads it as
+/// exactly the order's data. Read as no order of the session's, the remnant
+/// was never cancelled by Stop, and the session could close with it open. It's
+/// the session's, and its cancel, run through Splash's real script, is the
+/// order's own, byte for byte.
+#[test]
+fn a_splash_remnant_its_executor_respelled_is_still_the_sessions_to_cancel() {
+    let s = Setup::of(&fixture("Splash", "mainnet"));
+    // Field 2: Constr 0 [policy, name], tag 121 and a definite list.
+    let asset = "d87982581c5d16cc1a177b5d9ba9cfa9793b07e60f1fb70fea1f8aef064415d11443494147";
+    let placed = hex::encode(&s.datum);
+    assert_eq!(placed.matches(asset).count(), 1);
+    let datum =
+        hex::decode(placed.replacen(asset, &format!("d8669f00{}ff", &asset[4..]), 1)).unwrap();
+
+    let read = orders::read(Protocol::Splash, &datum).map_err(|e| e.to_string());
+    assert_eq!(read, Ok(orders::read(Protocol::Splash, &s.datum).unwrap()));
+    // Where the worker looks for it: at the spent order's address.
+    let address = Address::from_bech32(&s.order.address).unwrap().to_vec();
+    let (_, found) = read_order(false, &address, &datum).unwrap().unwrap();
+    assert!(s.session.owns(&found));
+
+    // Stop's cancel of it, at the remnant's own outpoint.
+    let at = moved(&s.order, 0x5e);
+    let funds = vec![own(&s.address, 0xaa, 10_000_000)];
+    let collateral = own(&s.address, 0xbb, SESSION_COLLATERAL);
+    let cancel = |utxo: UtxoResponse, datum: Vec<u8>| {
+        s.cancel(&[OrderToCancel { utxo, datum }], &funds, &collateral)
+            .map_err(|e| format!("{e:#}"))
+    };
+    let remnant = cancel(with_datum(&at, &datum), datum).unwrap();
+    let as_placed = cancel(at.clone(), s.datum.clone()).unwrap();
+    assert_eq!(remnant.covers, vec![outpoint(&at)]);
+    assert_eq!(remnant.tx.tx_bytes.0, as_placed.tx.tx_bytes.0);
+    assert_eq!(remnant.budgets, as_placed.budgets);
+}

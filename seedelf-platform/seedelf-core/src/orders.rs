@@ -440,6 +440,12 @@ fn fills_once(d: &PlutusData) -> bool {
 /// decoder goes a call deeper for each level of nesting: a datum nested past
 /// [`crate::cbor::MAX_DEPTH`] (real orders' are 10 to 14 deep) is refused
 /// unread, before it can overflow WebAssembly's stack.
+///
+/// Whoever writes an order's datum chooses how it's spelled (Splash's executor
+/// writes a part-filled order's remnant), and its script reads it as data. So
+/// it's read as the node reads it, a constructor nested in the general form
+/// with an indefinite pair among the rest ([`crate::cbor::definite_pairs`]).
+/// Only the reading: a cancel carries and hashes the datum's own bytes.
 pub fn read(protocol: Protocol, datum: &[u8]) -> Result<OrderRead> {
     let unreadable = || {
         anyhow!(
@@ -450,7 +456,8 @@ pub fn read(protocol: Protocol, datum: &[u8]) -> Result<OrderRead> {
     if !crate::cbor::within_depth(datum, crate::cbor::MAX_DEPTH) {
         return Err(unreadable());
     }
-    let data = PlutusData::decode_fragment(datum).map_err(|_| unreadable())?;
+    let readable = crate::cbor::definite_pairs(datum).ok_or_else(unreadable)?;
+    let data = PlutusData::decode_fragment(&readable).map_err(|_| unreadable())?;
     let read = || -> Option<(Hash<28>, Vec<PlutusAddress>)> {
         let (0, fields) = constr(&data)? else {
             return None;

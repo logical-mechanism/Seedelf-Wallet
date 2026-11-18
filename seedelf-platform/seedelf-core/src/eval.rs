@@ -70,22 +70,39 @@ pub fn refusal(row: &UtxoResponse) -> Option<String> {
 }
 
 /// Why the wallet can't read `row`'s inline datum, in words, or `None` when it
-/// can or there's none: nested past [`cbor::MAX_DEPTH`], or not one CBOR item.
-/// The evaluator's decoder, and Pallas's, would overflow the stack on a datum
-/// a few thousand levels deep, which traps WebAssembly. Anyone can put one on
-/// a UTxO they make, beside a reference script too.
+/// can or there's none: nested past [`cbor::MAX_DEPTH`], not one CBOR item, or
+/// with a constructor in the general form whose pair isn't two items, which
+/// the node refuses too ([`readable`]). The evaluator's decoder, and Pallas's,
+/// would overflow the stack on a datum a few thousand levels deep, which traps
+/// WebAssembly. Anyone can put one on a UTxO they make, beside a reference
+/// script too.
 pub fn unreadable_datum(row: &UtxoResponse) -> Option<String> {
-    let too_deep = row
+    let unreadable = row
         .inline_datum
         .as_ref()
         .and_then(|d| hex::decode(&d.bytes).ok())
-        .is_some_and(|datum| !cbor::within_depth(&datum, cbor::MAX_DEPTH));
-    too_deep.then(|| {
+        .is_some_and(|datum| readable(&datum).is_none());
+    unreadable.then(|| {
         format!(
             "UTxO {}#{} holds a datum the wallet can't read",
             row.tx_hash, row.tx_index
         )
     })
+}
+
+/// An inline datum as the evaluator is handed it: held to [`cbor::MAX_DEPTH`],
+/// and with each constructor in the general form written with a definite pair
+/// ([`cbor::definite_pairs`]). The evaluator decodes it with Pallas, which
+/// misreads one nested with an indefinite pair, and whoever wrote the datum
+/// chose that (a part-filled Splash order's remnant is its executor's): this
+/// way the script sees the data the node gives it (chunk 51, r3a#1's class).
+/// The datum's bytes are only read here: nothing hashes or sends a resolved
+/// output.
+fn readable(datum: &[u8]) -> Option<Vec<u8>> {
+    if !cbor::within_depth(datum, cbor::MAX_DEPTH) {
+        return None;
+    }
+    cbor::definite_pairs(datum)
 }
 
 /// A Koios UTxO row as the evaluator needs it, unless it's one the evaluator
@@ -113,8 +130,8 @@ pub fn resolve_reference(row: &UtxoResponse, version: u8, script: &[u8]) -> Resu
     resolve(row, Some((version, script)))
 }
 
-/// `row`'s output as the ledger encodes it, with `script` as its reference
-/// script when given.
+/// `row`'s output as the ledger encodes it, its inline datum as the evaluator
+/// reads it ([`readable`]), with `script` as its reference script when given.
 fn resolve(row: &UtxoResponse, script: Option<(u8, &[u8])>) -> Result<Resolved> {
     let tx_hash: [u8; 32] = hex::decode(&row.tx_hash)?
         .try_into()
@@ -165,7 +182,14 @@ fn resolve(row: &UtxoResponse, script: Option<(u8, &[u8])>) -> Result<Resolved> 
     let inline = row
         .inline_datum
         .as_ref()
-        .map(|d| hex::decode(&d.bytes))
+        .map(|d| -> Result<Vec<u8>> {
+            readable(&hex::decode(&d.bytes)?).with_context(|| {
+                format!(
+                    "UTxO {}#{} holds a datum the wallet can't read",
+                    row.tx_hash, row.tx_index
+                )
+            })
+        })
         .transpose()?;
     let datum_hash = row.datum_hash.as_ref().map(hex::decode).transpose()?;
 
