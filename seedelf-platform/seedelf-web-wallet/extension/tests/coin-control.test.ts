@@ -15,6 +15,7 @@ import { SESSION_SENT_PREFIX, type SentTx } from "../src/background/sent-txs";
 import { SESSION_SPENT } from "../src/background/spent";
 import type { KoiosUtxo } from "../src/background/koios";
 import { SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
+import { t as tr } from "../src/i18n";
 import { LOCAL_ACCOUNT } from "../src/shared/preferences";
 import { account, CHAINS, publicFunded, type Tested } from "./chain-fixtures";
 import { accountMintPreprod, koiosPreprod, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
@@ -437,6 +438,26 @@ describe("a stranger's 5 ₳ the wallet can't put up (chunk 51, e8b#1)", CHAINS,
       expect(await t.coins.reclaim("preprod")).toEqual({ state: "none", reclaimed: true });
     },
   );
+
+  // Chunk 51, t1j#5: a 5 ₳ UTxO that holds a token too is no collateral: the ledger takes a collateral of ADA alone
+  // unless the transaction returns the rest, which a site's doesn't, so neither the wallet's pick, the page's candidate
+  // nor a choice may be one.
+  const TOKENED: Partial<KoiosUtxo> = {
+    asset_list: [{ policy_id: "aa".repeat(28), asset_name: "6a756e6b", quantity: "1", decimals: 0, fingerprint: "" }],
+  };
+
+  it("holding a token too, is never the collateral, nor offered, nor taken as a choice", async () => {
+    const t = await strangersOnly(TOKENED);
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "none", reclaimed: false });
+    await expect(t.coins.use("preprod", `${STRANGER}#0`)).rejects.toThrow(tr("worker.coins.exactlyFive"));
+  });
+
+  it("holding a token too, and older, leaves the account's own pure 5 ₳ the collateral", async () => {
+    const t = await publicFunded();
+    await strangers(t, TOKENED);
+    await t.balances.get("preprod", true);
+    expect(await t.coins.collateral("preprod")).toMatchObject({ state: "set", by: "wallet", utxo: { txHash: OWN_FIVE.slice(0, 64), index: 0 } });
+  });
 
   it("chosen by the user, is the collateral all the same: the ledger takes it", async () => {
     const t = await strangersOnly(SHAPES[0]![1]);

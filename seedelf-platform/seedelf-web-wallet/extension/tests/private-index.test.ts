@@ -4,9 +4,9 @@
 // cursor are never folded in; a rollback starts again from a snapshot; and
 // Koios's scan, the fallback, never moves the cursor.
 import type * as Wasm from "@seedelf/wasm";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { readContractView, SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
+import { OWNED_BATCH, readContractView, SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
 import { DataParts, DOWN_MS } from "../src/background/data-layer";
 import { privateIndexClient, utxoOf, type IndexRow } from "../src/background/private-index";
 import { outpoint, SESSION_SPENT } from "../src/background/spent";
@@ -390,5 +390,69 @@ describe("the private index's row at a KEY address with the contract's hash", ()
     const again = await t.deps.store.get<{ v: number; rows: IndexRow[] }>("contract.mainnet");
     expect(again?.v).not.toBe(1);
     expect((await record())?.rows.map((r) => r.ref)).not.toContain(planted.ref);
+  });
+});
+
+// Chunk 51's T1k lens: the names loop's checks and the batches' keys, which no test failed without.
+describe("the private index's names and batches: the guards no test pinned (chunk 51, T1k)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** The index's names answer, as the route gives it, changed by `change` before the wallet reads it. */
+  async function namesChanged(ix: Awaited<ReturnType<typeof onIndex>>, change: (names: Array<{ name: string; row: IndexRow }>) => void) {
+    const answer = (await (await ix.index.fetch("https://data.test/seedelf/v1/mainnet/names")).json()) as { names: Array<{ name: string; row: IndexRow }> };
+    change(answer.names);
+    const fetch = async (url: string) => (url.endsWith("/names") ? Response.json(answer) : ix.index.fetch(url));
+    return {
+      ...ix.deps,
+      index: privateIndexClient(
+        { koiosOnly: async () => false, parts: new DataParts(ix.t.session, () => ix.t.clock.now), fetch, limits: {} },
+        (n) => (n === "mainnet" ? "https://data.test" : undefined),
+      ),
+    };
+  }
+
+  // t1k#2: a name is located only at a row holding its token. One the answer pairs with another row was paid there:
+  // Send rebuilds the row with the name in it (seedelfRow), so WebAssembly's check that it holds the token passed.
+  it("locates a name only at a row holding it", async () => {
+    const ix = await onIndex();
+    let moved = "";
+    const deps = await namesChanged(ix, (names) => {
+      const entry = names[0]!;
+      moved = `5eed0e1f${"99".repeat(8)}`;
+      names.push({ name: moved, row: entry.row });
+    });
+    const view = await readContractView(deps, "mainnet");
+    expect(view.seedelfs[moved]).toBeUndefined();
+  });
+
+  // t1k#2: and never at one this wallet has spent, which the index's names answer still lists until it catches up: a
+  // Seedelf removed here kept its place, and paying its name paid the removed row's register.
+  it("never locates a name at a row this wallet has spent, which the index still lists", async () => {
+    const ix = await onIndex();
+    const first = await readContractView(ix.deps, "mainnet");
+    const [name, at] = Object.entries(first.seedelfs).find(([, u]) => OURS.includes(outpoint(u)))!;
+    await ix.t.session.set(SESSION_SPENT, [outpoint(at)]);
+    const view = await readContractView(ix.deps, "mainnet");
+    expect(view.seedelfs[name]).toBeUndefined();
+  });
+
+  // t1k#3, on the index path: a lock and an unlock between two batches of its ownership checks give the next batch
+  // other keys, as Remove wallet and a restore of another phrase do. The read ends, nothing of it sealed.
+  it("ends cleanly when the keys change between its batches: nothing of it sealed", async () => {
+    const ix = await onIndex();
+    const theirs = koiosPreprod.contract_utxos.find((u) => u.inline_datum?.bytes && !OURS.includes(outpoint(u)))!;
+    for (let i = 0; i < 3 * OWNED_BATCH; i++) {
+      ix.index.contract.push({ row: indexRowOf({ ...theirs, tx_hash: (i + 1).toString(16).padStart(64, "c"), tx_index: 0 }, ix.index.tip - 100_000) });
+    }
+    const wasm = loadTestWasm();
+    const isOwned = wasm.SeedelfKey.prototype.isOwned;
+    vi.spyOn(wasm.SeedelfKey.prototype, "isOwned").mockImplementationOnce(function (this: Wasm.SeedelfKey, register) {
+      void ix.t.wallet.lock();
+      void ix.t.wallet.unlock(PASSWORD);
+      return isOwned.call(this, register);
+    });
+    await expect(readContractView(ix.deps, "mainnet")).rejects.toBeInstanceOf(WalletLocked);
+    expect(await ix.t.wallet.state()).toBe("unlocked");
+    expect(await ix.record()).toBeUndefined();
   });
 });

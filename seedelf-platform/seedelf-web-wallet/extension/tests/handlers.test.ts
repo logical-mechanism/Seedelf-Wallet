@@ -4,7 +4,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { DOWN_MS } from "../src/background/data-layer";
-import { handle, type Context } from "../src/background/handlers";
+import { handle, SWITCH_AT_STAKE, type Context } from "../src/background/handlers";
 import { NetworkChoice } from "../src/background/preferences";
 import { SESSION_RESTORED } from "../src/background/wallet";
 import type { NetworkName } from "../src/networks";
@@ -301,6 +301,42 @@ describe("handlers", () => {
     // Back on preprod, it goes.
     await ask({ type: "network-set", network: "preprod" }, ctx);
     expect(await ask({ type: "send-submit", txHash: built.txHash }, ctx)).toMatchObject({ network: "preprod", txHash: built.txHash });
+  });
+
+  // Chunk 51, t1j#3: once Settings writes the network, the connector declines what sites asked on the one it left
+  // (dapp.ts `networkChanged`); a signature read for preprod was otherwise answered on mainnet's keys and reads.
+  it("tells the connector once the network is written, so sites asking on the one it left hear no", async () => {
+    const t = testBalances();
+    const ctx = context(t, ["mainnet", "preprod"]);
+    const told: unknown[] = [];
+    ctx.dapp.networkChanged = async () => {
+      told.push(await t.local.get("seedelf.network"));
+    };
+    await ask({ type: "network-set", network: "preprod" }, ctx);
+    await ask({ type: "network-set", network: "mainnet" }, ctx);
+    expect(told).toEqual(["preprod", "mainnet"]);
+  });
+
+  // Chunk 51, t1j#12: a switch while a payment Koios didn't answer may still go through would leave its watch on the
+  // account the user left (accounts.ts `use`); refused, as a public mix being sent is (lovejoin-planner.test.ts).
+  it("refuses a switch of public account while a payment from this one may still go through", async () => {
+    const t = testBalances();
+    const ctx = context(t);
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    await ask({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    await t.accounts.add(1);
+    const other = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!;
+    const summary = await t.send.build("preprod", [{ to: other.preprod.receive_0, lovelace: "2000000", tokens: [] }]);
+    const real = t.koios.fetch;
+    let left = 1;
+    t.koios.fetch = async (url, init) => {
+      const answer = await real(url, init);
+      if (url.endsWith("/submittx") && left-- > 0) throw new DOMException("signal timed out", "TimeoutError");
+      return answer;
+    };
+    expect(await t.send.submit("preprod", summary.txHash)).toMatchObject({ maybeSent: true });
+    await expect(ask({ type: "account-use", index: 1 }, ctx)).rejects.toThrow(SWITCH_AT_STAKE());
+    expect(await t.wallet.withKeys(({ account }) => account)).toBe(0);
   });
 
   it("keeps a preprod build on preprod", async () => {

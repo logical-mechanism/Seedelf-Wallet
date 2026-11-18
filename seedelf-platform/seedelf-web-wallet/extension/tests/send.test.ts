@@ -10,6 +10,8 @@ import { pendingKey } from "../src/background/pending";
 import { SESSION_SEND, SendService } from "../src/background/send";
 import { publicShort } from "../src/background/short";
 import { WalletLocked, WASM_BROKEN } from "../src/background/wallet";
+import { t as tr } from "../src/i18n";
+import { i18n } from "../src/i18n/core";
 import { MAX_RECIPIENTS } from "../src/shared/recipients";
 import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NOT_AN_ADDRESS } from "../src/shared/seedelf-name";
 import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
@@ -225,6 +227,31 @@ describe("send", () => {
     expect(t.koios.submitted).toHaveLength(1);
     // One never sent, and no longer kept, is still a stale review.
     await expect(t.send.submit("preprod", "00".repeat(32))).rejects.toBeInstanceOf(StaleReviewError);
+  });
+
+  // Chunk 51, t1j#14: a payment to no one, or to more than 20, is refused first, in the user's words. WebAssembly refuses
+  // the same counts again, but in English, and only after each $handle was looked up on Koios and the side read.
+  it("refuses a payment to no one or to more than 20 first, in the user's language, asking Koios nothing", async () => {
+    const t = await unlocked();
+    await i18n.changeLanguage("es");
+    try {
+      const none = tr("shared.recipients.none");
+      const tooMany = tr("shared.recipients.tooMany", { max: MAX_RECIPIENTS });
+      expect(none).not.toBe(i18n.t("shared.recipients.none", { lng: "en" }));
+      const before = t.koios.calls.length;
+      const many = Array.from({ length: MAX_RECIPIENTS + 1 }, () => ({ to: "$someone", lovelace: "2000000", tokens: [] }));
+      for (const [what, service] of [
+        ["Send", t.send],
+        ["Make public", t.withdraw],
+        ["the private balance's Send", t.transfer],
+      ] as const) {
+        await expect(service.build("preprod", []), what).rejects.toThrow(none);
+        await expect(service.build("preprod", many), what).rejects.toThrow(tooMany);
+      }
+      expect(t.koios.calls.length).toBe(before);
+    } finally {
+      await i18n.changeLanguage("en");
+    }
   });
 
   it("explains what stops a payment and needs the wallet unlocked", async () => {

@@ -17,6 +17,7 @@ import { CONTRACT_V1, ownedUtxos as ownedOf } from "../src/background/balances";
 import { registerOf } from "../src/background/chain";
 import { type KoiosUtxo, trimmed } from "../src/background/koios";
 import { outpoint, SESSION_SPENT } from "../src/background/spent";
+import { WalletLocked } from "../src/background/wallet";
 import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 
@@ -240,6 +241,21 @@ describe("the contract scan at scale", () => {
       expect(checks.mock.calls.length).toBeLessThanOrEqual(OWNED_BATCH);
       expect(await t.wallet.state()).toBe("locked");
       expect(t.session.data.size).toBe(0);
+    });
+
+    // Chunk 51, t1k#3: a lock alone ends the read by itself (a locked wallet's turn throws), so the case above passes
+    // without `same`'s check. A lock and an unlock between two batches give the next batch other keys, as Remove wallet
+    // and a restore of another phrase do: the read ends, nothing of it kept, rather than judge some rows with one set of
+    // keys and the rest with another.
+    it("ends cleanly when the keys change between its batches: nothing of it kept", async () => {
+      const { t, checks } = await manyRows((t) => {
+        void t.wallet.lock();
+        void t.wallet.unlock(PASSWORD);
+      });
+      await expect(readContractView(t.deps, "preprod")).rejects.toBeInstanceOf(WalletLocked);
+      expect(checks.mock.calls.length).toBeLessThanOrEqual(OWNED_BATCH);
+      expect(await t.wallet.state()).toBe("unlocked");
+      expect(await t.session.get(SESSION_CONTRACT_PREFIX + "preprod")).toBeUndefined();
     });
   });
 });

@@ -60,6 +60,15 @@ describe("registerOf", () => {
       `9f${field(g)}${field(u)}ff`, // no constructor
       "zz",
       "d8799",
+      // Chunk 51, t1k#1: well-formed data that realigns into two 48-byte runs, each refused by one check alone. A
+      // stranger who knew a register could grind one whose misread pair is theirs to pay: counted, never spendable.
+      `d879825831${g}408257${"11".repeat(23)}56${"22".repeat(22)}`, // a 49-byte string, then a list of 23 and 22 (the length check)
+      `d87982183081585f${"33".repeat(45)}${field(u)}`, // the number 48, then a list of one 95-byte string (the byte-string check)
+      // Ill-formed ones, each refused by one check alone.
+      `d879825f5817${g.slice(0, 46)}ff${field(u)}`, // a point of 23 bytes in chunks
+      `d8799f5f5f${field(g)}ff${field(u)}ff`, // a chunk that's itself in chunks
+      `d87981${field(g)}${field(u)}`, // a list of one holding two
+      `d8799f${field(g)}${field(u)}00`, // an indefinite list whose break is something else
     ]) {
       expect(registerOf(withDatum(bytes)), bytes).toBeUndefined();
     }

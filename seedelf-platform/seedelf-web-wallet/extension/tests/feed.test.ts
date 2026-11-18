@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DataParts, DOWN_MS } from "../src/background/data-layer";
-import { chainStatus, CURSOR_SPACING_MS, CURSORS_FOR_MS, feedOfTx, noteCursor, SESSION_FEED_PREFIX } from "../src/background/feed";
+import { chainStatus, cover, CURSOR_SPACING_MS, CURSORS_FOR_MS, feedOfTx, noteCursor, SESSION_FEED_PREFIX } from "../src/background/feed";
 import { pendingKey, PendingService } from "../src/background/pending";
 import { privateIndexClient } from "../src/background/private-index";
 import type { RecordName } from "../src/background/private-store";
@@ -267,5 +267,25 @@ describe("a cursor noted", () => {
     // path degrades; a watch with no cursor in hand asks tx_status instead.
     const full = { ...memoryArea(), set: async () => Promise.reject(new Error("Session storage quota bytes exceeded")) };
     await expect(noteCursor(full, "preprod", "contract", cursorAt(NOW_SLOT), 1_800_000_000_000)).resolves.toBeUndefined();
+  });
+});
+
+// Chunk 51, t1k#4: readings go on noting cursors while a watch waits, so a watch has cursors from before its send and
+// after it. Its feed is read from the newest one at or before the earliest send it covers: from a newer one, a
+// transaction that landed between the two is never in the answer, and the watch never sees it land from the feed.
+describe("which cursor a watch reads the feed from (chunk 51, t1k#4)", () => {
+  const cursors = [
+    { cursor: "older", got: 1_000 },
+    { cursor: "newer", got: 5_000 },
+  ];
+  it("is the newest at or before the earliest send it covers, never a newer one", () => {
+    expect(cover(cursors, [{ txHash: "aa", feed: "contract", sentAt: 3_000 }]).cursor).toBe("older");
+    expect(
+      cover(cursors, [
+        { txHash: "aa", feed: "contract", sentAt: 6_000 },
+        { txHash: "bb", feed: "contract", sentAt: 2_000 },
+      ]).cursor,
+    ).toBe("older");
+    expect(cover(cursors, [{ txHash: "cc", feed: "contract", sentAt: 6_000 }]).cursor).toBe("newer");
   });
 });
