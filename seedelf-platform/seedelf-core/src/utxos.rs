@@ -9,6 +9,7 @@ use seedelf_koios::koios::{
     ProtocolParameters, UtxoResponse, address_utxos, contains_policy_id, credential_utxos,
     extract_bytes_with_logging,
 };
+use std::cmp::Reverse;
 
 pub async fn get_credential_utxos(
     wallet_contract_hash: [u8; 28],
@@ -159,6 +160,10 @@ pub fn collect_address_utxos(utxos: Vec<UtxoResponse>) -> Result<Vec<UtxoRespons
     Ok(usable_utxos)
 }
 
+/// Where [`select`] takes a UTxO, the least first: not holding a token being
+/// sent, holding tokens, and the most lovelace first.
+type SelectOrder = (bool, bool, Reverse<u64>);
+
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
 // use largest first algo but account for change
 pub fn select(
@@ -184,28 +189,31 @@ fn do_select(
     // all the found assets
     let mut found_assets: Assets = Assets::new();
 
-    // Sort: no-token UTxOs first, then by descending lovelace value within
-    // each group. Koios reports a token-less outpoint as either `Some(vec![])`
-    // or `None`; both must group together.
+    // Sort: the UTxOs holding a token being sent first, then those with no
+    // tokens, then the other token UTxOs, each group by descending lovelace
+    // value. Koios reports a token-less outpoint as either `Some(vec![])` or
+    // `None`; both must group together. The loop below takes a UTxO holding
+    // none of the tokens only once they're all found, and never comes back to
+    // one it passed, so the tokens' holders go first: an address whose ADA
+    // sat in such a UTxO, sorted ahead of a smaller one holding the token,
+    // found nothing (chunk 51, r2b#2).
     //
     // Pre-parse the values once and bail on any malformed entry. An earlier
     // version used `Result::into_iter().cmp(...)`, which silently treated
     // parse failures as `Equal` and could break the largest-first invariant
     // the selector below depends on.
-    let mut sortable: Vec<(u64, UtxoResponse)> = utxos
+    let mut sortable: Vec<(SelectOrder, UtxoResponse)> = utxos
         .into_iter()
-        .map(|u| -> Result<(u64, UtxoResponse)> {
+        .map(|u| -> Result<_> {
             let v = string_to_u64(u.value.clone()).context("Invalid UTxO Value")?;
-            Ok((v, u))
+            let has_tokens = u.asset_list.as_ref().is_some_and(|list| !list.is_empty());
+            let holds_sent = has_tokens
+                && !tokens.is_empty()
+                && assets_of(vec![u.clone()])?.1.any(tokens.clone());
+            Ok(((!holds_sent, has_tokens, Reverse(v)), u))
         })
         .collect::<Result<Vec<_>>>()?;
-    sortable.sort_by(|(a_val, a), (b_val, b)| {
-        let a_has_tokens = a.asset_list.as_ref().is_some_and(|list| !list.is_empty());
-        let b_has_tokens = b.asset_list.as_ref().is_some_and(|list| !list.is_empty());
-        a_has_tokens
-            .cmp(&b_has_tokens)
-            .then_with(|| b_val.cmp(a_val))
-    });
+    sortable.sort_by_key(|(order, _)| *order);
     let utxos: Vec<UtxoResponse> = sortable.into_iter().map(|(_, u)| u).collect();
 
     for utxo in utxos.clone() {

@@ -6,9 +6,18 @@ use seedelf_koios::koios::{
     UtxoResponse, contains_policy_id, credential_utxos, extract_bytes_with_logging, tip,
 };
 
+#[deprecated(
+    note = "each run serves its signing page at an address of its own: use signing_page_address"
+)]
 pub fn webserver_address() {
+    signing_page_address("http://127.0.0.1:44203/");
+}
+
+/// Where a run's signing page is served, once the server holds its port:
+/// each run's is an address of its own.
+pub fn signing_page_address(url: &str) {
     display_cyan("Starting Web Server At:");
-    display_white("http://127.0.0.1:44203/");
+    display_white(url);
     display_yellow("Hit Ctrl-C To Stop Web Server");
 }
 

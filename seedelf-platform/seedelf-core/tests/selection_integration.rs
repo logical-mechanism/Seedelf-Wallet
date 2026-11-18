@@ -152,3 +152,51 @@ fn selection_refuses_when_change_min_unsatisfiable() {
         "no lovelace left for the bb change output — selection must decline",
     );
 }
+
+/// `fund`'s own steps (fund.rs: `collect_address_utxos`, which leaves out a
+/// pure 5 ₳ UTxO as the assumed collateral, then `select`) on an address whose
+/// ADA sits in a UTxO holding another token, larger than the one holding the
+/// token sent. `select` passed that UTxO for good while the token was still
+/// to find, so it picked nothing, and `fund` said "Not Enough
+/// Lovelace/Tokens" (chunk 51, r2b#2).
+#[test]
+fn fund_takes_ada_from_a_token_utxo_sorted_ahead_of_the_one_holding_the_token() {
+    const OTHER: &str = "22222222222222222222222222222222222222222222222222222222";
+    let params = fixture_params();
+    // A holds 50 ₳ and 1 of an unrelated token, B 1.5 ₳ and the 100 being
+    // sent, C is a pure 5 ₳ UTxO, left out: 51.5 ₳ and the token are usable.
+    let address = vec![
+        token_utxo(0x01, 50_000_000, &[(OTHER, "bb", 1)]),
+        token_utxo(0x02, 1_500_000, &[(PID, "aa", 100)]),
+        ada_utxo(0x03, 5_000_000),
+    ];
+    let usable = utxos::collect_address_utxos(address).unwrap();
+    assert_eq!(usable.len(), 2, "fund leaves out only the pure 5 ₳ UTxO");
+    let sent: Assets = Assets::new()
+        .add(Asset::new(PID.to_string(), "aa".to_string(), 100).unwrap())
+        .unwrap();
+
+    // `fund --lovelace 10000000 --asset <PID>.aa=100`, and the same with no
+    // --lovelace, where the goal is the token output's minimum.
+    let token_minimum = wallet_minimum_lovelace_with_assets(&params, sent.clone()).unwrap();
+    for goal in [10_000_000, token_minimum] {
+        let picked = utxos::select(&params, usable.clone(), goal, sent.clone()).unwrap();
+        assert!(
+            !picked.is_empty(),
+            "the address holds 51.5 ₳ and the token, yet nothing was picked for {goal} lovelace"
+        );
+        // What select promises when it picks: the token, the goal, and a
+        // change output at its minimum.
+        let (total, found) = utxos::assets_of(picked).unwrap();
+        assert!(
+            found.contains(sent.clone()),
+            "the pick holds the token sent"
+        );
+        let change = found.separate(sent.clone()).unwrap();
+        let change_minimum = wallet_minimum_lovelace_with_assets(&params, change).unwrap();
+        assert!(
+            total >= goal + change_minimum,
+            "picked {total} lovelace, short of the goal {goal} and the change's {change_minimum}"
+        );
+    }
+}

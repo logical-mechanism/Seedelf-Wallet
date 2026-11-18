@@ -288,9 +288,9 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
 
     println!("\nTx Cbor: {}", tx_cbor.clone().white());
 
-    // inject the tx cbor into the local webserver to prompt the wallet
-    display::webserver_address();
-    web_server::run_web_server(tx_cbor, network_flag).await;
+    // inject the tx cbor into the local webserver to prompt the wallet; it
+    // prints the page's address once it's serving
+    web_server::run_web_server(tx_cbor, network_flag).await?;
     text_coloring::display_purple("Server has stopped.");
 
     Ok(())

@@ -299,9 +299,11 @@ impl Ledger {
 // mock Koios server
 // ----------------------------------------------------------------------------
 
-/// Custom responder for `credential_utxos`, which the CLI paginates: it returns
-/// the canned UTxO set for `offset=0` and an empty page for any later offset so
-/// the pagination loop terminates.
+/// Custom responder for `credential_utxos`: the canned UTxO set for a request
+/// with no offset (or offset 0), and an empty page for any later offset. The
+/// CLI pages after the last row read, never by offset (seedelf-koios
+/// `utxo_pages`; tests/koios_pages.rs pins it), so a fixture shorter than a
+/// page is read in one request.
 struct PaginatedUtxos(Vec<UtxoResponse>);
 
 impl Respond for PaginatedUtxos {
