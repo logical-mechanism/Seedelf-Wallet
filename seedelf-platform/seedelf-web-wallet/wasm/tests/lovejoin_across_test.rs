@@ -515,3 +515,128 @@ fn a_requests_width_is_read_on_its_own_and_checked() {
         .unwrap()
     );
 }
+
+/// Chunk 51, r3a#2: a fan-out is 0 to 3 waves deep, or 1 to 3 to mix boxes again (a deposit may stop at its seed;
+/// mixing what's in the pool needs a wave). Funding and the account's chains always refused other depths in those
+/// words; a session's plan and chain, in one pool or across pools, took any depth and worked it out anyway.
+#[test]
+fn a_plan_or_a_sessions_chain_is_refused_past_its_waves() {
+    let sk = Scalar::from(51_002u64);
+    let (utxos, funding, fill) = filled();
+    let plan_again = |depth| PlanRequest {
+        again: true,
+        ..plan_request(utxos.clone(), depth)
+    };
+    let chain_request = |depth, again| ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: utxos.clone(),
+        collateral: Some(collateral()),
+        pool: others(&classic(), 0xc0, 8),
+        depth,
+        boxes: Some(1),
+        merge: Vec::new(),
+        again,
+        own: vec![funding.clone()],
+        collateral_pool: None,
+        collateral_boxes: vec![],
+        collateral_reserve: false,
+        rewards: Default::default(),
+    };
+    let deposit = "The fan-out is 0 to 3 waves deep";
+    let mix = "The fan-out is 1 to 3 waves deep";
+    let refused: Vec<(&str, String, &str)> = vec![
+        (
+            "a plan four waves deep",
+            wasm::plan_at(&accounts(), plan_request(utxos.clone(), 4), None, &[], 3)
+                .map(|_| "accepted".to_string())
+                .unwrap_or_else(|e| e.to_string()),
+            deposit,
+        ),
+        (
+            "a plan to mix again with no wave",
+            wasm::plan_at(&accounts(), plan_again(0), None, &[], 3)
+                .map(|_| "accepted".to_string())
+                .unwrap_or_else(|e| e.to_string()),
+            mix,
+        ),
+        (
+            "a plan across pools four waves deep",
+            wasm::plan_across_pools(
+                &accounts(),
+                plan_request(utxos.clone(), 4),
+                std::slice::from_ref(&funding),
+                &across(legs([None, None]), vec![fill.clone()]),
+                3,
+            )
+            .map(|_| "accepted".to_string())
+            .unwrap_or_else(|e| e.to_string()),
+            deposit,
+        ),
+        (
+            "a chain four waves deep",
+            wasm::chain_at(&accounts(), sk, chain_request(4, false), None, 3)
+                .map(|_| "accepted".to_string())
+                .unwrap_or_else(|e| e.to_string()),
+            deposit,
+        ),
+        (
+            "a chain to mix again with no wave",
+            wasm::chain_at(&accounts(), sk, chain_request(0, true), None, 3)
+                .map(|_| "accepted".to_string())
+                .unwrap_or_else(|e| e.to_string()),
+            mix,
+        ),
+        (
+            "a chain across pools four waves deep",
+            wasm::chain_across_pools(
+                &accounts(),
+                sk,
+                chain_request(4, false),
+                &across(legs([None, None]), vec![fill.clone()]),
+                3,
+            )
+            .map(|_| "accepted".to_string())
+            .unwrap_or_else(|e| e.to_string()),
+            deposit,
+        ),
+        (
+            "funding four waves deep, as before",
+            wasm::funding_at(
+                FundingRequest {
+                    network: "preprod".into(),
+                    boxes: 1,
+                    depth: 4,
+                    again: false,
+                },
+                None,
+                3,
+            )
+            .map(|_| "accepted".to_string())
+            .unwrap_or_else(|e| e.to_string()),
+            deposit,
+        ),
+    ];
+    let wrong: Vec<_> = refused
+        .iter()
+        .filter(|(_, said, wanted)| !said.contains(wanted))
+        .collect();
+    assert!(wrong.is_empty(), "not refused for its depth: {wrong:#?}");
+
+    // What the worker asks still plans: a Bootstrap's deposit alone (0), and the deepest, 3.
+    for depth in [0, 3] {
+        assert!(
+            wasm::plan_at(
+                &accounts(),
+                plan_request(utxos.clone(), depth),
+                None,
+                &[],
+                3
+            )
+            .is_ok(),
+            "depth {depth}"
+        );
+    }
+    assert!(wasm::plan_at(&accounts(), plan_again(1), None, &[], 3).is_ok());
+}

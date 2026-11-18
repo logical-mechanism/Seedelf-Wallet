@@ -1197,6 +1197,7 @@ pub fn plan_at(
     width: usize,
 ) -> Result<PlanResult> {
     lovejoin::check_width(width)?;
+    check_waves(request.depth, least_waves(request.again))?;
     let protocol = protocol_of(network_flag(&request.network)?, pool)?;
     let held = holdings(
         accounts,
@@ -1328,6 +1329,7 @@ pub fn plan_across_pools(
         bail!("Mixing again goes into one Lovejoin pool");
     }
     lovejoin::check_width(width)?;
+    check_waves(request.depth, least_waves(false))?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(
         across
@@ -1570,6 +1572,7 @@ pub fn chain_at(
     width: usize,
 ) -> Result<ChainResult> {
     lovejoin::check_width(width)?;
+    check_waves(request.depth, least_waves(request.again))?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = protocol_of(network_flag, pool_ref)?;
@@ -1721,6 +1724,7 @@ pub fn chain_across_pools(
         bail!("Mixing again goes into one Lovejoin pool");
     }
     lovejoin::check_width(width)?;
+    check_waves(request.depth, least_waves(false))?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocols = protocols_of(network_flag, &across.legs)?;
@@ -2048,10 +2052,23 @@ fn check_depth(boxes: usize, depth: u32, least: u32) -> Result<()> {
     if boxes == 0 {
         bail!("Mix at least one box");
     }
+    check_waves(depth, least)
+}
+
+/// How deep a fan-out goes: `least` (a deposit's 0, a mix's 1) to 3 waves.
+/// A plan or a session's chain, which works out its boxes itself, checks this
+/// alone, at a mix's 1 to mix again (chunk 51, r3a#2).
+fn check_waves(depth: u32, least: u32) -> Result<()> {
     if !(least..=3).contains(&depth) {
         bail!("The fan-out is {least} to 3 waves deep");
     }
     Ok(())
+}
+
+/// The fewest waves `again` takes: a mix's 1 to mix boxes again, a deposit's
+/// 0 otherwise ([`check_mix`], [`check_deposit`]).
+fn least_waves(again: bool) -> u32 {
+    u32::from(again)
 }
 
 /// What mixing `boxes` boxes at `depth` takes, before anything is built:

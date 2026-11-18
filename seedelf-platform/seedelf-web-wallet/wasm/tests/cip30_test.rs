@@ -556,6 +556,119 @@ fn a_stake_certificate_says_whose_stake_key_it_names() {
     assert!(json["certificates"][12]["credential"].is_null());
 }
 
+/// Chunk 51, w2#1: a certificate under a script's stake credential needs no
+/// key's signature. Conway asks a certificate for `credKeyHashWitness`, which a
+/// script hasn't, and Shelley's registration (certificate 0) asks no witness at
+/// all. So it leaves the transaction complete, as a script's zero withdrawal and
+/// a script DRep's certificate already did; counted as someone else's signature,
+/// it was refused without partialSign, and with it the window said others sign
+/// too. A committee member's cold credential is the same: a script's needs no
+/// key, a key's is someone else's. A pool's operator still signs.
+#[test]
+fn a_scripts_stake_certificate_needs_no_one_elses_signature() {
+    use conway::Certificate as C;
+    let script = || StakeCredential::ScriptHash(Hash::new([6; 28]));
+    let key = || StakeCredential::AddrKeyhash(Hash::new([8; 28]));
+    // The script's reward address on preprod: header 0xf0, then its hash.
+    let script_reward_account = || {
+        let mut bytes = vec![0xf0u8];
+        bytes.extend_from_slice(&[6; 28]);
+        Bytes::from(bytes)
+    };
+    let pool = Hash::new([7; 28]);
+    let cases: Vec<(&str, Vec<C>, Vec<(Bytes, u64)>, bool)> = vec![
+        (
+            "a script's zero withdrawal",
+            vec![],
+            vec![(script_reward_account(), 0)],
+            true,
+        ),
+        (
+            "a script DRep's registration",
+            vec![C::RegDRepCert(script(), 500_000_000, Nullable::Null)],
+            vec![],
+            true,
+        ),
+        (
+            "Shelley's registration, certificate 0",
+            vec![C::StakeRegistration(script())],
+            vec![],
+            true,
+        ),
+        (
+            "Conway's registration, certificate 7",
+            vec![C::Reg(script(), 2_000_000)],
+            vec![],
+            true,
+        ),
+        (
+            "a delegation",
+            vec![C::StakeDelegation(script(), pool)],
+            vec![],
+            true,
+        ),
+        (
+            "a vote delegation",
+            vec![C::VoteDeleg(script(), conway::DRep::Abstain)],
+            vec![],
+            true,
+        ),
+        (
+            "a hot key authorised by a script's cold credential",
+            vec![C::AuthCommitteeHot(script(), key())],
+            vec![],
+            true,
+        ),
+        (
+            "a resignation by a script's cold credential",
+            vec![C::ResignCommitteeCold(script(), Nullable::Null)],
+            vec![],
+            true,
+        ),
+        // Someone else's key still signs.
+        (
+            "a hot key authorised by a key's cold credential",
+            vec![C::AuthCommitteeHot(key(), script())],
+            vec![],
+            false,
+        ),
+        (
+            "a pool's retirement",
+            vec![C::PoolRetirement(pool, 300)],
+            vec![],
+            false,
+        ),
+    ];
+    for (name, certificates, withdrawals, complete) in cases {
+        let (_, rows) = swap();
+        let mut b = body(
+            vec![input(TX_A, 1)],
+            vec![out(&ours(Role::Receive, 0), 3_600_000, None)],
+        );
+        b.certificates = NonEmptySet::try_from(certificates).ok();
+        b.withdrawals = NonEmptyKeyValuePairs::try_from(withdrawals).ok();
+        let tx = tx_hex(b);
+        // Mesh's default: partialSign false.
+        let summary =
+            cip30::inspect_tx(&account(), &request(tx.clone(), rows.clone(), false)).unwrap();
+        assert_eq!(
+            (summary.others_sign, summary.complete),
+            (usize::from(!complete), complete),
+            "{name}"
+        );
+        let signed = cip30::sign_tx(&account(), &request(tx, rows, false));
+        if complete {
+            assert_eq!(signed.unwrap().summary.signs, vec!["0/2"], "{name}");
+        } else {
+            let e = signed.unwrap_err().to_string();
+            assert!(
+                e.contains("needs signatures the wallet can't give"),
+                "{name}: {e}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_pool_registration_names_its_reward_accounts_stake_key() {
     // A pool's reward account takes no signature of its key's, so it can be
@@ -1371,6 +1484,105 @@ fn a_byron_address_on_the_other_network_is_refused() {
     );
 }
 
+/// A UTxO row at a Byron address, as Koios and the data layer write one: in
+/// base58, as db-sync stores it, since a Byron address has no bech32 form.
+fn byron_row(tx: &str, index: u64, address: &Address, lovelace: u64) -> KoiosRow {
+    let Address::Byron(b) = address else {
+        panic!("a Byron address")
+    };
+    serde_json::from_value(serde_json::json!({
+        "tx_hash": tx,
+        "tx_index": index,
+        "address": b.to_base58(),
+        "value": lovelace.to_string(),
+        "asset_list": [],
+    }))
+    .unwrap()
+}
+
+/// Chunk 51, w2#6: a found input at a Byron address is someone else's, which
+/// its owner's bootstrap witness spends. Read as bech32 only, its row failed the
+/// whole read ("has an unreadable address"), so a site's trade spending a
+/// counterparty's Byron UTxO was refused, though the ledger takes it. Its
+/// network is its magic's, as an output's is.
+#[test]
+fn a_counterpartys_byron_input_is_someone_elses() {
+    let them = byron(None);
+    let mainnet = account().base_address(false, Role::Receive, 0).unwrap();
+    // A trade: the account's 5 ₳ and the counterparty's 10 ₳ in, 9.8 ₳ to the
+    // account and 5 ₳ to them.
+    let tx = tx_hex(body(
+        vec![input(TX_A, 0), input(TX_B, 0)],
+        vec![out(&mainnet, 9_800_000, None), out(&them, 5_000_000, None)],
+    ));
+    let rows = vec![
+        row(TX_A, 0, &mainnet, 5_000_000, &[]),
+        byron_row(TX_B, 0, &them, 10_000_000),
+    ];
+    let partial = on_mainnet(request(tx.clone(), rows.clone(), true));
+    let summary = cip30::inspect_tx(&account(), &partial)
+        .unwrap_or_else(|e| panic!("a found Byron input refused the whole read: {e}"));
+    assert!(summary.unknown_inputs.is_empty());
+    assert_eq!(summary.others_sign, 1, "its owner's bootstrap witness");
+    assert!(!summary.complete);
+    assert_eq!(summary.signs, vec!["0/0"]);
+    let signed = cip30::sign_tx(&account(), &partial).unwrap();
+    assert_eq!(signed.summary.signs, vec!["0/0"]);
+    // Without partialSign it needs a signature the wallet can't give.
+    let e = cip30::sign_tx(&account(), &on_mainnet(request(tx, rows, false)))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("needs signatures the wallet can't give"), "{e}");
+
+    // A Byron UTxO on the other network is refused, as a Shelley one is.
+    let (_, mut rows) = swap();
+    rows.push(byron_row(TX_B, 0, &byron(None), 10_000_000));
+    let tx = tx_hex(body(
+        vec![input(TX_A, 1), input(TX_B, 0)],
+        vec![out(&ours(Role::Receive, 0), 13_800_000, None)],
+    ));
+    let e = cip30::inspect_tx(&account(), &request(tx, rows, true))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("spends a UTxO on mainnet"), "{e}");
+    let tx = tx_hex(body(
+        vec![input(TX_A, 0), input(TX_B, 0)],
+        vec![out(&mainnet, 13_800_000, None)],
+    ));
+    let rows = vec![
+        row(TX_A, 0, &mainnet, 5_000_000, &[]),
+        byron_row(TX_B, 0, &byron(Some(1)), 10_000_000),
+    ];
+    let e = cip30::inspect_tx(&account(), &on_mainnet(request(tx, rows, true)))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("spends a UTxO on a test network"), "{e}");
+}
+
+/// Chunk 51, w2#6: a Byron payee is shown as its base58, the form it was given
+/// in and every explorer writes, never as its CBOR in hex.
+#[test]
+fn a_byron_payee_shows_as_its_base58() {
+    let them = byron(None);
+    let Address::Byron(b) = &them else {
+        unreachable!("a Byron address")
+    };
+    let mainnet = account().base_address(false, Role::Receive, 0).unwrap();
+    let tx = tx_hex(body(
+        vec![input(TX_A, 0)],
+        vec![out(&them, 4_800_000, None)],
+    ));
+    let rows = vec![row(TX_A, 0, &mainnet, 5_000_000, &[])];
+    let summary = cip30::inspect_tx(&account(), &on_mainnet(request(tx, rows, false))).unwrap();
+    assert_eq!(summary.paid.len(), 1);
+    assert_eq!(
+        summary.paid[0].address,
+        b.to_base58(),
+        "not its CBOR ({})",
+        them.to_hex()
+    );
+}
+
 #[test]
 fn a_payment_into_seedelf_says_whether_it_has_a_register() {
     let (_, rows) = swap();
@@ -1391,6 +1603,244 @@ fn a_payment_into_seedelf_says_whether_it_has_a_register() {
     let summary = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
     assert_eq!(summary.paid[0].seedelf.as_deref(), Some("register"));
     assert_eq!(summary.paid[1].seedelf.as_deref(), Some("none"));
+}
+
+/// Chunk 51, w2#2: Seedelf Wallet's contract is its script's address. A key
+/// address whose key hash is the contract's script hash is no contract, only a
+/// key no one holds: what's paid there is burned, so the window never calls it
+/// the contract's, under a register ("It pays a Seedelf") or without one
+/// ("anyone can take"). Transaction details reads it as a key's too.
+#[test]
+fn a_key_address_with_the_contracts_hash_is_not_seedelf_wallets_contract() {
+    let contract_hash = seedelf_core::constants::get_config(1, true)
+        .unwrap()
+        .contract
+        .wallet_contract_hash;
+    let contract = seedelf_core::address::wallet_contract(true, contract_hash);
+    // The same 28 bytes as a key payment part: an enterprise key address on preprod.
+    let burn = Address::Shelley(ShelleyAddress::new(
+        Network::Testnet,
+        ShelleyPaymentPart::Key(Hash::new(contract_hash)),
+        ShelleyDelegationPart::Null,
+    ));
+    assert_eq!(burn.to_vec()[0], 0x60);
+    let (_, rows) = swap();
+    let tx = tx_hex(body(
+        vec![input(TX_A, 1)],
+        vec![
+            out(&burn, 1_000_000, Some(REGISTER_DATUM)),
+            out(&burn, 1_000_000, None),
+            out(&contract, 1_000_000, Some(REGISTER_DATUM)),
+            out(&ours(Role::Change, 0), 800_000, None),
+        ],
+    ));
+    let detail = seedelf_wasm::decode::decode_tx("preprod", &tx).unwrap();
+    assert_eq!(detail.outputs[0].address.payment.as_deref(), Some("key"));
+    let seen: Vec<bool> = detail.outputs.iter().map(|o| o.address.seedelf).collect();
+    assert_eq!(seen, [false, false, true, false]);
+
+    let summary = cip30::inspect_tx(&account(), &request(tx, rows, false)).unwrap();
+    assert_eq!(summary.paid.len(), 3, "the change is the account's own");
+    let read: Vec<(bool, Option<&str>)> = summary
+        .paid
+        .iter()
+        .map(|p| (p.script, p.seedelf.as_deref()))
+        .collect();
+    assert_eq!(
+        read,
+        [(false, None), (false, None), (true, Some("register"))]
+    );
+}
+
+/// A compressed point on the curve but outside the prime-order subgroup, which
+/// the contract's `g1.decompress` refuses.
+fn torsion_point() -> String {
+    (1u8..=u8::MAX)
+        .find_map(|x| {
+            let mut bytes = [0u8; 48];
+            bytes[0] = 0x80;
+            bytes[47] = x;
+            let point = blstrs::G1Affine::from_compressed_unchecked(&bytes).into_option()?;
+            (!bool::from(point.is_torsion_free())).then(|| hex::encode(bytes))
+        })
+        .expect("a small x off the subgroup")
+}
+
+/// Constructor 0 holding `fields` as byte strings, in tag 121's spelling or,
+/// `general`, the form `102([0, fields])` the ledger reads the same.
+fn constr_0(fields: &[&str], general: bool) -> PlutusData {
+    let (tag, any_constructor) = if general { (102, Some(0)) } else { (121, None) };
+    PlutusData::Constr(pallas_primitives::Constr {
+        tag,
+        any_constructor,
+        fields: pallas_codec::utils::MaybeIndefArray::Indef(
+            fields
+                .iter()
+                .map(|f| PlutusData::BoundedBytes(hex::decode(f).unwrap().into()))
+                .collect(),
+        ),
+    })
+}
+
+/// Chunk 51, d1#3: who can take a payment into Seedelf Wallet's contract is the
+/// deployed contract's to say (wallet.ak at 5b82530). Any constructor 0 of two
+/// byte strings, in either spelling and of any length, is a register to it: it
+/// decompresses both points and checks the proof. So a register only its key's
+/// holder can prove is a Seedelf payment; no register, or an identity public
+/// value, lets anyone take it; and a point that isn't one of G1's (not 48 bytes,
+/// off the curve, outside the subgroup) or an identity generator locks it for
+/// good: "dead", where the window said "anyone can take".
+#[test]
+fn a_payment_into_seedelf_says_who_can_take_it() {
+    let contract = seedelf_core::address::wallet_contract(
+        true,
+        seedelf_core::constants::get_config(1, true)
+            .unwrap()
+            .contract
+            .wallet_contract_hash,
+    );
+    // The register in REGISTER_DATUM: the G1 generator and a test vector's public value.
+    let (g, u) = (&REGISTER_DATUM[10..106], &REGISTER_DATUM[110..206]);
+    assert_eq!(
+        hex::encode(constr_0(&[g, u], false).encode_fragment().unwrap()),
+        REGISTER_DATUM
+    );
+    let (identity, torsion, no_point) = (
+        format!("c0{}", "00".repeat(47)),
+        torsion_point(),
+        "00".repeat(48),
+    );
+    let (identity, torsion, no_point) = (identity.as_str(), torsion.as_str(), no_point.as_str());
+    let datum = |fields: &[&str], general: bool| Some(constr_0(fields, general));
+    let inline: Vec<(&str, Option<PlutusData>, &str)> = vec![
+        (
+            "a register only its key's holder can prove",
+            datum(&[g, u], false),
+            "register",
+        ),
+        (
+            "the same in constructor 0's general form",
+            datum(&[g, u], true),
+            "register",
+        ),
+        ("no datum", None, "none"),
+        (
+            "a datum that isn't a register",
+            PlutusData::decode_fragment(&[0xd8, 0x79, 0x80]).ok(),
+            "none",
+        ),
+        (
+            "constructor 0 of three byte strings",
+            datum(&[g, u, u], false),
+            "none",
+        ),
+        (
+            "an identity public value",
+            datum(&[g, identity], false),
+            "none",
+        ),
+        (
+            "both points the identity",
+            datum(&[identity, identity], false),
+            "none",
+        ),
+        (
+            "an identity generator",
+            datum(&[identity, u], false),
+            "dead",
+        ),
+        (
+            "a public value outside the subgroup",
+            datum(&[g, torsion], false),
+            "dead",
+        ),
+        (
+            "a generator outside the subgroup",
+            datum(&[torsion, u], false),
+            "dead",
+        ),
+        (
+            "48 bytes that are no point",
+            datum(&[no_point, u], false),
+            "dead",
+        ),
+        (
+            "a public value of 47 bytes",
+            datum(&[g, &u[..94]], false),
+            "dead",
+        ),
+        (
+            "an identity public value under a generator that's no point",
+            datum(&[no_point, identity], false),
+            "dead",
+        ),
+    ];
+    let outputs: Vec<conway::TransactionOutput> = inline
+        .iter()
+        .map(|(_, datum, _)| {
+            conway::PseudoTransactionOutput::PostAlonzo(conway::PostAlonzoTransactionOutput {
+                address: Bytes::from(contract.to_vec()),
+                value: conway::Value::Coin(1_000_000),
+                datum_option: datum
+                    .clone()
+                    .map(|d| conway::PseudoDatumOption::Data(CborWrap(d))),
+                script_ref: None,
+            })
+        })
+        .collect();
+    // Kept by hash: read from the witness set where the transaction carries the
+    // datum, and taken as anyone's where it doesn't.
+    let carried = [constr_0(&[g, u], false), constr_0(&[identity, u], false)];
+    let by_hash = |hash: Hash<32>| {
+        conway::PseudoTransactionOutput::PostAlonzo(conway::PostAlonzoTransactionOutput {
+            address: Bytes::from(contract.to_vec()),
+            value: conway::Value::Coin(1_000_000),
+            datum_option: Some(conway::PseudoDatumOption::Hash(hash)),
+            script_ref: None,
+        })
+    };
+    let hashed: Vec<(&str, Hash<32>, &str)> = vec![
+        (
+            "a register the witness set carries",
+            Hasher::<256>::hash(&carried[0].encode_fragment().unwrap()),
+            "register",
+        ),
+        (
+            "an identity generator the witness set carries",
+            Hasher::<256>::hash(&carried[1].encode_fragment().unwrap()),
+            "dead",
+        ),
+        (
+            "a datum the witness set doesn't carry",
+            Hash::new([0x44; 32]),
+            "none",
+        ),
+    ];
+    let rows = vec![row(TX_B, 0, &ours(Role::Receive, 0), 20_000_000, &[])];
+    let b = body(
+        vec![input(TX_B, 0)],
+        outputs
+            .into_iter()
+            .chain(hashed.iter().map(|(_, hash, _)| by_hash(*hash)))
+            .collect(),
+    );
+    let mut tx = conway::Tx::decode_fragment(&hex::decode(tx_hex(b)).unwrap()).unwrap();
+    tx.transaction_witness_set.plutus_data = NonEmptySet::try_from(carried.to_vec()).ok();
+    let cbor = hex::encode(tx.encode_fragment().unwrap());
+
+    let summary = cip30::inspect_tx(&account(), &request(cbor, rows, false)).unwrap();
+    let wanted: Vec<(&str, &str)> = inline
+        .iter()
+        .map(|(name, _, said)| (*name, *said))
+        .chain(hashed.iter().map(|(name, _, said)| (*name, *said)))
+        .collect();
+    assert_eq!(summary.paid.len(), wanted.len());
+    let read: Vec<(&str, &str)> = wanted
+        .iter()
+        .zip(&summary.paid)
+        .map(|((name, _), p)| (*name, p.seedelf.as_deref().unwrap_or("not the contract")))
+        .collect();
+    assert_eq!(read, wanted);
 }
 
 #[test]

@@ -5005,6 +5005,10 @@ pub mod api {
         pub to: Option<String>,
         /// What comes back: the ADA locked with it, less the fee.
         pub lovelace: String,
+        /// And every other token its UTxO held, which comes back with it:
+        /// anyone can mint a Seedelf beside tokens of theirs under a register
+        /// of ours (chunk 51, w1b#2). The burned Seedelf isn't among them.
+        pub tokens: Vec<TokenAmount>,
         pub fee: FeeOut,
         pub inputs: Vec<OutRef>,
     }
@@ -5072,6 +5076,7 @@ pub mod api {
             name: hex::encode(name),
             to: request.to.as_ref().map(|t| t.trim().to_string()),
             lovelace: built.change_lovelace.to_string(),
+            tokens: built.change_tokens.items.iter().map(token_amount).collect(),
             fee: fee_out(&built.fee),
             inputs: out_refs(spend),
         }

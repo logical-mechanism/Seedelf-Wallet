@@ -16,9 +16,10 @@ use pallas_addresses::{
 use pallas_codec::minicbor::{self, Encoder};
 use pallas_codec::utils::Nullable;
 use pallas_crypto::hash::{Hash, Hasher};
-use pallas_primitives::{Fragment, Metadatum, StakeCredential, conway};
+use pallas_primitives::{Fragment, Metadatum, PlutusData, StakeCredential, conway};
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
+use seedelf_core::cbor::check_nesting;
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::staking::{drep_id, pool_id};
 use seedelf_crypto::cardano::{CardanoAccount, Role};
@@ -293,15 +294,7 @@ pub fn utxo_cbor(row: &KoiosRow) -> Result<Vec<u8>> {
             row.tx_index
         );
     }
-    let address = Address::from_bech32(&row.address)
-        .map_err(|e| {
-            anyhow!(
-                "UTxO {}#{} has an unreadable address: {e}",
-                row.tx_hash,
-                row.tx_index
-            )
-        })?
-        .to_vec();
+    let address = row_address(row)?.to_vec();
     let amount = Amount::of_row(row)?;
     let inline = row
         .inline_datum
@@ -528,163 +521,10 @@ impl Keys {
 /// keeps a read well under a second.
 pub(crate) const MAX_TX_BYTES: usize = 64 * 1024;
 
-/// How deep a site's CBOR may nest. Pallas decodes plutus data, metadata and
-/// native scripts recursively, and a few thousand levels (a 3 KB
-/// transaction) overflow WebAssembly's stack. That leaves the instance dead:
-/// nothing works after it, not even Lock. Real transactions nest a few dozen
-/// levels at most.
-const MAX_NESTING: usize = 128;
-
-/// One open level in [`nests_within`]'s walk.
-enum Level {
-    /// An array or a map (its keys and values each an item), with the items
-    /// left to read: `None` until a break.
-    Items(Option<u64>),
-    /// A tag, before the one item it wraps.
-    Tag,
-    /// CBOR in a byte string a tag wraps, as an inline datum or a reference
-    /// script is: Pallas decodes that too. It ends at `end`, inside bytes
-    /// that end at `outer`.
-    Wrapped { end: usize, outer: usize },
-}
-
-/// A CBOR item's head at `pos`: its major type, its argument (`None` for an
-/// indefinite length), and where what follows the head starts.
-fn cbor_head(bytes: &[u8], pos: usize) -> Option<(u8, Option<u64>, usize)> {
-    let initial = *bytes.get(pos)?;
-    let wide = |n: usize| -> Option<(u64, usize)> {
-        let b = bytes.get(pos + 1..pos + 1 + n)?;
-        Some((
-            b.iter().fold(0u64, |a, x| (a << 8) | u64::from(*x)),
-            pos + 1 + n,
-        ))
-    };
-    let (argument, next) = match initial & 0x1f {
-        n @ 0..=23 => (Some(u64::from(n)), pos + 1),
-        24 => wide(1).map(|(a, p)| (Some(a), p))?,
-        25 => wide(2).map(|(a, p)| (Some(a), p))?,
-        26 => wide(4).map(|(a, p)| (Some(a), p))?,
-        27 => wide(8).map(|(a, p)| (Some(a), p))?,
-        31 => (None, pos + 1),
-        // 28–30 are reserved.
-        _ => return None,
-    };
-    Some((initial >> 5, argument, next))
-}
-
-/// Whether CBOR `bytes` stay within `max` levels: each array, map and tag is
-/// one, and so is the CBOR a tag wraps in a byte string. It walks the bytes
-/// without recursing, one head at a time.
-///
-/// What isn't well-formed ends the walk, as it ends any decoder there too.
-/// Inside a wrapped byte string it only means those bytes aren't CBOR (a big
-/// number's, say), and the walk goes on after them.
-fn nests_within(bytes: &[u8], max: usize) -> bool {
-    let mut levels = vec![Level::Items(Some(1))];
-    let mut pos = 0;
-    let mut limit = bytes.len();
-    while let Some(level) = levels.last() {
-        match *level {
-            Level::Items(Some(0)) => {
-                levels.pop();
-                continue;
-            }
-            Level::Wrapped { end, outer } => {
-                (pos, limit) = (end, outer);
-                levels.pop();
-                continue;
-            }
-            _ => {}
-        }
-        match cbor_step(bytes, pos, limit, &mut levels) {
-            Some(next) => (pos, limit) = next,
-            None => {
-                let Some(i) = levels
-                    .iter()
-                    .rposition(|l| matches!(l, Level::Wrapped { .. }))
-                else {
-                    return true;
-                };
-                let Level::Wrapped { end, outer } = levels[i] else {
-                    unreachable!("found as wrapped")
-                };
-                levels.truncate(i);
-                (pos, limit) = (end, outer);
-                continue;
-            }
-        }
-        // The first level is the whole item's, not a nesting.
-        if levels.len() > max + 1 {
-            return false;
-        }
-    }
-    true
-}
-
-/// Reads the item at `pos` for the innermost open level, opening a level
-/// for an array, a map, a tag or a wrapped byte string, whose bytes end at
-/// `limit`. Where the walk goes next and where the bytes it's in end, or
-/// `None` for bytes that aren't well-formed CBOR.
-fn cbor_step(
-    bytes: &[u8],
-    pos: usize,
-    limit: usize,
-    levels: &mut Vec<Level>,
-) -> Option<(usize, usize)> {
-    let bytes = &bytes[..limit];
-    if *bytes.get(pos)? == 0xff {
-        // A break closes an indefinite array, map or string.
-        return match levels.last() {
-            Some(Level::Items(None)) => {
-                levels.pop();
-                Some((pos + 1, limit))
-            }
-            _ => None,
-        };
-    }
-    let after_tag = matches!(levels.last(), Some(Level::Tag));
-    match levels.last_mut() {
-        Some(Level::Items(Some(n))) => *n -= 1,
-        // The tag's level stays open until its item is read.
-        Some(level @ Level::Tag) => *level = Level::Items(Some(0)),
-        _ => {}
-    }
-    let (major, argument, next) = cbor_head(bytes, pos)?;
-    let opened = match (major, argument) {
-        (0 | 1 | 7, Some(_)) => None,
-        (2 | 3, Some(length)) => {
-            let end = usize::try_from(length)
-                .ok()
-                .and_then(|l| next.checked_add(l))
-                .filter(|end| *end <= limit)?;
-            if major == 2 && after_tag {
-                levels.push(Level::Wrapped { end, outer: limit });
-                levels.push(Level::Items(Some(1)));
-                return Some((next, end));
-            }
-            return Some((end, limit));
-        }
-        // An indefinite string's chunks, until a break.
-        (2 | 3, None) => Some(Level::Items(None)),
-        (4, length) => Some(Level::Items(length)),
-        (5, length) => Some(Level::Items(length.map(|n| n.saturating_mul(2)))),
-        (6, Some(_)) => Some(Level::Tag),
-        _ => return None,
-    };
-    levels.extend(opened);
-    Some((next, limit))
-}
-
-/// Refuses a site's CBOR that nests deeper than [`MAX_NESTING`], before
-/// anything decodes it.
-pub(crate) fn check_nesting(bytes: &[u8]) -> Result<()> {
-    if !nests_within(bytes, MAX_NESTING) {
-        bail!(
-            "The wallet can't read this transaction: its data is nested more than {MAX_NESTING} levels deep."
-        );
-    }
-    Ok(())
-}
+// How deep a site's CBOR may nest is core's to say (`seedelf_core::cbor`:
+// `check_nesting`, `MAX_DEPTH`, 128 levels). It's one walk, run on every
+// transaction from outside the wallet before anything decodes it: a site's
+// here and in `decode`, a DEX's swap in `orders::check_cancels`.
 
 // ---------------------------------------------------------------------------
 // What a dApp's transaction does
@@ -750,8 +590,10 @@ pub struct Paid {
     pub datum: Option<String>,
     /// The address is a script's: a contract holds what it's paid.
     pub script: bool,
-    /// Into Seedelf Wallet's contract: "register" when its datum is a
-    /// register someone can spend, "none" when it isn't (anyone could take it).
+    /// Into Seedelf Wallet's contract ([`spender`]): "register" when its datum
+    /// is a register only its key's holder can spend, "none" when there's no
+    /// register or anyone can prove it (anyone could take it), and "dead" when
+    /// no proof can meet it (no one ever can).
     pub seedelf: Option<String>,
     /// The address has one of the account's payment keys, but someone
     /// else's staking part, or none: the account could spend what's there,
@@ -995,37 +837,75 @@ fn output_parts(out: &conway::TransactionOutput) -> Result<OutputParts> {
     })
 }
 
-/// Whether an inline datum is a register a Seedelf payment could go under:
-/// one [`register_datum`] reads that also passes `is_payable`.
-fn is_register_datum(datum_hex: &str) -> bool {
-    register_datum(datum_hex).is_some_and(|r| build::is_payable(&r))
+/// Who can spend what's paid into Seedelf Wallet's contract, as the deployed
+/// contract decides it (wallet.ak at 5b82530): under a datum it reads as a
+/// register the script asks for a proof of that register's key, and under
+/// anything else, or no datum, it lets anyone spend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Spender {
+    /// Whoever holds the register's key (`build::is_payable`): a Seedelf payment.
+    Owner,
+    /// Anyone: there's no register, or its public value is the identity,
+    /// `g^0`, whose proof anyone can make.
+    Anyone,
+    /// No one, ever: a point the contract can't decompress (not 48 bytes, off
+    /// the curve or outside the prime-order subgroup) fails the script, and an
+    /// identity generator leaves a proof no one can make.
+    Nobody,
 }
 
-/// The register an inline datum holds, if it is one: constructor 0 (tag 121)
-/// holding two 48-byte points, in a definite or indefinite list. It says
-/// nothing about whether a payment under it could be spent (`is_payable`).
-pub(crate) fn register_datum(datum_hex: &str) -> Option<Register> {
-    let bytes = hex::decode(datum_hex).ok()?;
-    let mut d = minicbor::Decoder::new(&bytes);
-    let points = (|| -> Result<(Vec<u8>, Vec<u8>), minicbor::decode::Error> {
-        if d.tag()? != minicbor::data::Tag::new(121) {
-            return Err(minicbor::decode::Error::message("not constructor 0"));
-        }
-        let length = d.array()?;
-        let generator = d.bytes()?.to_vec();
-        let public_value = d.bytes()?.to_vec();
-        match length {
-            Some(2) => {}
-            None if d.datatype()? == minicbor::data::Type::Break => {}
-            _ => return Err(minicbor::decode::Error::message("not two fields")),
-        }
-        Ok((generator, public_value))
-    })();
-    match points {
-        Ok((g, u)) if g.len() == 48 && u.len() == 48 => {
-            Some(Register::new(hex::encode(g), hex::encode(u)))
+/// The two fields of a datum the contract reads as a register (chunk 51,
+/// d1#3): constructor 0, in either spelling the ledger reads alike (tag 121,
+/// or the general form `102([0, fields])`), with exactly two fields, both
+/// byte strings of any length. It reads the data, not the bytes: how the CBOR
+/// writes the list or the strings makes no difference, as it makes none to
+/// the contract.
+pub(crate) fn register_fields(data: &PlutusData) -> Option<(&[u8], &[u8])> {
+    let PlutusData::Constr(c) = data else {
+        return None;
+    };
+    if !matches!((c.tag, c.any_constructor), (121, _) | (102, Some(0))) {
+        return None;
+    }
+    match c.fields.as_slice() {
+        [PlutusData::BoundedBytes(g), PlutusData::BoundedBytes(u)] => {
+            Some((g.as_slice(), u.as_slice()))
         }
         _ => None,
+    }
+}
+
+/// Who can spend a payment into the contract under `datum`: none is no datum,
+/// or one kept by a hash the transaction doesn't carry. That one can't be
+/// read, and the site that wrote it may hold it, so it's taken as anyone's.
+pub(crate) fn spender(datum: Option<&PlutusData>) -> Spender {
+    let Some((g, u)) = datum.and_then(register_fields) else {
+        return Spender::Anyone;
+    };
+    let register = Register::new(hex::encode(g), hex::encode(u));
+    if build::is_payable(&register) {
+        Spender::Owner
+    } else if is_identity(u) && register.is_valid().unwrap_or(false) {
+        // g^z = g^r · u^c holds for every c once u is the identity.
+        Spender::Anyone
+    } else {
+        Spender::Nobody
+    }
+}
+
+/// Whether a compressed G1 point is the identity: `c0`, then 47 zero bytes.
+fn is_identity(point: &[u8]) -> bool {
+    point.len() == 48 && point[0] == 0xc0 && point[1..].iter().all(|b| *b == 0)
+}
+
+/// The datum an output carries in itself, as data.
+fn inline_data(out: &conway::TransactionOutput) -> Option<&PlutusData> {
+    match out {
+        conway::PseudoTransactionOutput::PostAlonzo(o) => match &o.datum_option {
+            Some(conway::PseudoDatumOption::Data(d)) => Some(&d.0),
+            _ => None,
+        },
+        conway::PseudoTransactionOutput::Legacy(_) => None,
     }
 }
 
@@ -1072,9 +952,22 @@ fn stake_hash(cred: &StakeCredential) -> Option<&Hash<28>> {
     }
 }
 
+/// A UTxO row's address, as Koios and the data layer write it: bech32, or
+/// base58 for a Byron address, which has no bech32 form (chunk 51, w2#6).
+/// Pallas's `FromStr` reads either, and hex.
+fn row_address(row: &KoiosRow) -> Result<Address> {
+    row.address.parse::<Address>().map_err(|e| {
+        anyhow!(
+            "UTxO {}#{} has an unreadable address: {e}",
+            row.tx_hash,
+            row.tx_index
+        )
+    })
+}
+
 /// Whether a UTxO sits at a script's address.
 fn at_script(row: &KoiosRow) -> bool {
-    matches!(Address::from_bech32(&row.address), Ok(Address::Shelley(s)) if s.payment().is_script())
+    matches!(row_address(row), Ok(Address::Shelley(s)) if s.payment().is_script())
 }
 
 /// Whether a contract UTxO's datum names one of the account's keys: its 28-byte hash anywhere in the datum's bytes, in
@@ -1188,18 +1081,18 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     // stranger's, a site could take it with the stake key's witness, the
     // prompt showing nothing leaving).
     let mut owner = |row: &KoiosRow| -> Result<Option<Signer>> {
-        let address = Address::from_bech32(&row.address).map_err(|e| {
+        let address = row_address(row)?;
+        // The account's keys are the same on both networks, and a signature
+        // says nothing of the network: one over a UTxO on the other network
+        // would spend it there. It's never counted, as ours or anyone's. A
+        // Byron address's network is its magic's, as an output's is.
+        if network_of(&address).map_err(|e| {
             anyhow!(
                 "UTxO {}#{} has an unreadable address: {e}",
                 row.tx_hash,
                 row.tx_index
             )
-        })?;
-        // The account's keys are the same on both networks, and a signature
-        // says nothing of the network: one over a UTxO on the other network
-        // would spend it there. It's never counted, as ours or anyone's.
-        if let Address::Shelley(s) = &address
-            && s.network() != network
+        })? != network
         {
             bail!(
                 "This transaction spends a UTxO on {other_name} ({}#{}), and the wallet is on {network_name}.",
@@ -1218,8 +1111,14 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 }
                 ShelleyPaymentPart::Script(_) => None,
             },
-            // A Byron address needs a bootstrap witness this wallet never makes.
-            _ => {
+            // A Byron address needs its owner's bootstrap witness, which this
+            // wallet never makes: one for each root, the hash the address is of.
+            Address::Byron(b) => {
+                foreign_keys.insert(b.decode().map_err(|e| anyhow!("{e}"))?.root);
+                None
+            }
+            // No UTxO can sit at a reward address: whoever's, it isn't the account's.
+            Address::Stake(_) => {
                 foreign_keys.insert(Hash::new([0; 28]));
                 None
             }
@@ -1366,12 +1265,13 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 "This transaction pays an address on {other_name}, and the wallet is on {network_name}."
             );
         }
-        let bech32 = address.to_bech32().unwrap_or_else(|_| address.to_hex());
+        // Bech32, or base58 for a Byron address, as it was given to the user.
+        let shown = address.to_string();
         if let Some(path) = keys.own_address(&address) {
             returned.add(&amount)?;
             own_outputs.push(OwnOutput {
                 tx_index: i as u64,
-                address: bech32,
+                address: shown,
                 role: path.role,
                 index: path.index,
                 lovelace: amount.lovelace.to_string(),
@@ -1382,19 +1282,33 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             continue;
         }
         let script = matches!(&address, Address::Shelley(s) if s.payment().is_script());
+        // The contract is its script's address. A key address whose key hash
+        // is those same 28 bytes is no contract, only a key no one holds:
+        // what's paid there is burned (chunk 51, w2#2).
         let seedelf = match &address {
-            Address::Shelley(s) if *s.payment().as_hash() == contract_hash => Some(
-                if inline.as_deref().is_some_and(is_register_datum) {
-                    "register"
-                } else {
-                    "none"
-                }
-                .to_string(),
-            ),
+            Address::Shelley(s)
+                if s.payment().is_script() && *s.payment().as_hash() == contract_hash =>
+            {
+                // The datum the contract will read: the output's own, or the
+                // one the transaction carries under the output's hash.
+                let carried_datum = hash
+                    .as_ref()
+                    .and_then(|h| carried.get(h))
+                    .and_then(|bytes| PlutusData::decode_fragment(bytes).ok());
+                let datum = inline_data(out).or(carried_datum.as_ref());
+                Some(
+                    match spender(datum) {
+                        Spender::Owner => "register",
+                        Spender::Anyone => "none",
+                        Spender::Nobody => "dead",
+                    }
+                    .to_string(),
+                )
+            }
             _ => None,
         };
         paid.push(Paid {
-            address: bech32,
+            address: shown,
             lovelace: amount.lovelace.to_string(),
             tokens: amount.tokens_out(),
             datum: if inline.is_some() {
@@ -1545,8 +1459,14 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 },
                 true,
             ),
-            C::AuthCommitteeHot(..) | C::ResignCommitteeCold(..) => {
-                (None, cert_kind("committee"), true)
+            C::AuthCommitteeHot(cold, _) | C::ResignCommitteeCold(cold, _) => {
+                // The member's cold credential signs: a key this wallet doesn't
+                // hold, or a script, which no key signs for (chunk 51, w2#1).
+                if matches!(cold, StakeCredential::AddrKeyhash(_)) {
+                    others_sign += 1;
+                }
+                certificates.push(cert_kind("committee"));
+                continue;
             }
             C::RegDRepCert(..) | C::UnRegDRepCert(..) | C::UpdateDRepCert(..) => {
                 // A DRep's own: the account's, when governance was granted and
@@ -1594,20 +1514,23 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         };
         let hash = cred.and_then(stake_hash);
         c.credential = hash.map(hex::encode).or(c.credential.take());
-        match hash {
-            Some(h) if *h == keys.stake => {
+        match (cred, hash) {
+            (_, Some(h)) if *h == keys.stake => {
                 c.own = true;
                 if witnessed {
                     signers.insert(Signer::Stake);
                 }
             }
-            Some(h) if witnessed => {
+            (_, Some(h)) if witnessed => {
                 foreign_keys.insert(*h);
             }
-            // A script's stake credential, or a registration that needs no signature.
-            Some(_) => {}
-            // Pools, the committee and DReps sign with keys this wallet doesn't hold.
-            None => others_sign += 1,
+            // A key's registration that needs no signature (Shelley's certificate 0).
+            (_, Some(_)) => {}
+            // A script's stake credential: its script decides, and no key signs
+            // for it, as for a script's zero withdrawal (chunk 51, w2#1).
+            (Some(StakeCredential::ScriptHash(_)), None) => {}
+            // A pool's, which its operator signs with a key this wallet doesn't hold.
+            (_, None) => others_sign += 1,
         }
         if c.own {
             match cert {
@@ -1656,10 +1579,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                     // A script's: the "withdraw zero" many contracts use, no key needed.
                     StakePayload::Script(_) => false,
                 };
-                (
-                    own,
-                    address.to_bech32().unwrap_or_else(|_| address.to_hex()),
-                )
+                (own, address.to_string())
             }
             _ => bail!("A withdrawal isn't from a reward address."),
         };
@@ -1717,7 +1637,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         proposals.push(Proposal {
             action: crate::decode::action_kind(&proposal.gov_action).to_string(),
             deposit: proposal.deposit.to_string(),
-            address: address.to_bech32().unwrap_or_else(|_| address.to_hex()),
+            address: address.to_string(),
             own: key == Some(keys.stake),
             credential: key.map(hex::encode),
             recipients,
@@ -2214,7 +2134,7 @@ impl DataFor {
 
     fn shown(&self) -> String {
         match self {
-            DataFor::Address(a) => a.to_bech32().unwrap_or_else(|_| a.to_hex()),
+            DataFor::Address(a) => a.to_string(),
             DataFor::Drep(h) => drep_id(&conway::DRep::Key(*h)),
         }
     }

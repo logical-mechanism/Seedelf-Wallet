@@ -26,7 +26,8 @@
 //!    is a decimal string.** `coin`, `slot`, `epoch` and `ex_units` are `uint`
 //!    up to 2^64-1 or 2^63-1 there, and `JSON.parse` rounds past 2^53: a ttl of
 //!    2^60 would show as a different number. Only counts this module works out
-//!    itself are numbers.
+//!    itself are numbers. A Plutus integer past 128 bytes is a hex string
+//!    instead, since its decimal can take minutes to work out (`decimal`).
 //! 2. **Bytes that aren't the thing they should be are shown as themselves,
 //!    not refused.** The CDDL types an output's address and a withdrawal's
 //!    `reward_account` as plain `bytes`, so a transaction can carry bytes that
@@ -45,11 +46,12 @@ use pallas_codec::utils::{KeepRaw, Nullable};
 use pallas_crypto::hash::{Hash, Hasher};
 use pallas_primitives::{Fragment, Metadatum, PlutusData, Relay, StakeCredential, conway};
 use seedelf_core::address::wallet_contract;
+use seedelf_core::cbor::check_nesting;
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::staking::{drep_id, pool_id};
 use serde::Serialize;
 
-use crate::cip30::{MAX_TX_BYTES, check_nesting, network_flag, register_datum};
+use crate::cip30::{MAX_TX_BYTES, Spender, network_flag, register_fields, spender};
 
 /// A transaction input, as the body names it: nothing says what it holds, and
 /// finding out would cost a lookup per input on a transaction only being read.
@@ -78,7 +80,7 @@ pub struct DetailAsset {
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DetailAddress {
-    /// Bech32, or hex for a Byron address (which has no bech32 form).
+    /// Bech32, or base58 for a Byron address (which has no bech32 form).
     pub bech32: String,
     pub hex: String,
     /// "base", "enterprise", "pointer", "reward", "byron", or "unreadable"
@@ -95,15 +97,18 @@ pub struct DetailAddress {
     pub seedelf: bool,
 }
 
-/// A register a Seedelf UTxO's datum holds: the two points, and whether a
-/// payment under it could be spent by whoever knows its scalar
-/// (`build::is_payable`, which an identity point fails).
+/// A register a Seedelf UTxO's datum holds: the two points, and who could
+/// spend a payment under it ([`spender`]).
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DetailRegister {
     pub generator: String,
     pub public_value: String,
+    /// Whoever knows its scalar, and no one else (`build::is_payable`).
     pub payable: bool,
+    /// Anyone: its public value is the identity, whose proof anyone can make.
+    /// Neither this nor `payable`: no one ever can (chunk 51, d1#3).
+    pub anyone: bool,
 }
 
 /// A script carried in an output, a witness set or the auxiliary data.
@@ -135,8 +140,9 @@ pub struct DetailOutput {
     pub datum_hash: Option<String>,
     /// The register the datum holds, **only** where the address is Seedelf
     /// Wallet's own contract. Anyone's datum can be constructor 0 with two
-    /// 48-byte fields; what makes one a register is the contract that will read
+    /// byte strings; what makes one a register is the contract that will read
     /// it, and the address is the only thing that says which contract that is.
+    /// It's read as that contract reads one ([`register_fields`]).
     pub register: Option<DetailRegister>,
     /// A script the output carries for others to read.
     pub script_ref: Option<DetailScript>,
@@ -413,7 +419,7 @@ pub struct DetailPlutusEntry {
 /// nothing until someone asks for it.
 ///
 /// How deep it can go is the one thing not decided here. The whole transaction's
-/// CBOR is refused past `MAX_NESTING` (128) levels before any of it is decoded,
+/// CBOR is refused past `cbor::MAX_DEPTH` (128) levels before any of it is decoded,
 /// because Pallas decodes plutus data by recursion and a few thousand levels end
 /// the WebAssembly instance for good. That guard is the connector's too, so a
 /// datum this can't reach is one no part of the wallet can read.
@@ -465,8 +471,9 @@ fn constructor_of(c: &conway::Constr<PlutusData>) -> String {
     }
 }
 
-/// A Plutus integer as a decimal string, whichever way it was written. Tag 2
-/// holds a big number's bytes; tag 3 holds `-1 - n`, as CBOR says.
+/// A Plutus integer as a decimal string, whichever way it was written (or, past
+/// [`MOST_DECIMAL_BYTES`], as hex). Tag 2 holds a big number's bytes; tag 3
+/// holds `-1 - n`, as CBOR says.
 fn big_int_text(number: &conway::BigInt) -> String {
     match number {
         conway::BigInt::Int(i) => i128::from(*i).to_string(),
@@ -475,8 +482,18 @@ fn big_int_text(number: &conway::BigInt) -> String {
     }
 }
 
-/// Big-endian bytes as a decimal string. `less_one`: the bytes are CBOR's tag 3,
-/// which holds `-1 - n`, so the number is `-(n + 1)`.
+/// The longest big number, in bytes, worked out in decimal: about 300 digits,
+/// more than any Plutus number holds in practice. Each digit is a pass over
+/// every byte, so the work grows as the square of the length, and a site picks
+/// the length: 60,000 bytes, which a 64 KiB transaction holds, took 164 s
+/// natively (16,000 took 4.5 s), longer in WebAssembly, with the worker
+/// answering nothing all the while. A longer one is shown in hex, which costs
+/// a pass (chunk 51, w2#3).
+const MOST_DECIMAL_BYTES: usize = 128;
+
+/// Big-endian bytes as a decimal string, or as hex (`0x…`) past
+/// [`MOST_DECIMAL_BYTES`] of them, leading zeros aside. `less_one`: the bytes
+/// are CBOR's tag 3, which holds `-1 - n`, so the number is `-(n + 1)`.
 fn decimal(bytes: &[u8], less_one: bool) -> String {
     let mut n = bytes.to_vec();
     if less_one {
@@ -491,6 +508,13 @@ fn decimal(bytes: &[u8], less_one: bool) -> String {
         if carry {
             n.insert(0, 1);
         }
+    }
+    // Leading zero bytes add nothing to the number, only to the work.
+    let start = n.iter().position(|b| *b != 0).unwrap_or(n.len());
+    let n = &mut n[start..];
+    if n.len() > MOST_DECIMAL_BYTES {
+        let sign = if less_one { "-" } else { "" };
+        return format!("{sign}0x{}", hex::encode(n));
     }
     // Long division by ten, taking a digit each time round.
     let mut digits = Vec::new();
@@ -911,7 +935,7 @@ fn hidden(c: char) -> bool {
 /// transaction behind an error.
 fn reward_address(bytes: &[u8]) -> String {
     match Address::from_bytes(bytes) {
-        Ok(address) => address.to_bech32().unwrap_or_else(|_| address.to_hex()),
+        Ok(address) => address.to_string(),
         Err(_) => hex::encode(bytes),
     }
 }
@@ -1217,13 +1241,16 @@ fn witness_scripts(witnesses: &conway::MintedWitnessSet) -> Vec<DetailScript> {
     scripts
 }
 
-/// The register an inline datum or a witness datum holds, when it is one.
-fn register_detail(datum_hex: &str) -> Option<DetailRegister> {
-    let register = register_datum(datum_hex)?;
+/// The register a datum at Seedelf Wallet's contract holds, when the contract
+/// reads it as one, and who could spend what's under it.
+fn register_detail(data: &PlutusData) -> Option<DetailRegister> {
+    let (generator, public_value) = register_fields(data)?;
+    let who = spender(Some(data));
     Some(DetailRegister {
-        payable: seedelf_core::build::is_payable(&register),
-        generator: register.generator,
-        public_value: register.public_value,
+        generator: hex::encode(generator),
+        public_value: hex::encode(public_value),
+        payable: who == Spender::Owner,
+        anyone: who == Spender::Anyone,
     })
 }
 
@@ -1251,9 +1278,7 @@ fn output_detail(
         conway::PseudoTransactionOutput::PostAlonzo(o) => {
             let (lovelace, assets) = value(&o.value);
             let (inline, datum_hash) = match &o.datum_option {
-                Some(conway::PseudoDatumOption::Data(d)) => {
-                    (Some((hex::encode(d.0.raw_cbor()), plutus_tree(&d.0))), None)
-                }
+                Some(conway::PseudoDatumOption::Data(d)) => (Some(&d.0), None),
                 Some(conway::PseudoDatumOption::Hash(h)) => (None, Some(hex::encode(h.as_ref()))),
                 None => (None, None),
             };
@@ -1274,24 +1299,19 @@ fn output_detail(
             )
         }
     };
-    let (inline_datum, datum) = match inline {
-        Some((hex, tree)) => (Some(hex), Some(tree)),
-        None => (None, None),
-    };
     let address = address_detail(&address_bytes, flag, contract);
     // Only our own contract's datum is read as a register: see the field.
-    let register = address
-        .seedelf
-        .then(|| inline_datum.as_deref().and_then(register_detail))
-        .flatten();
+    let register = inline
+        .filter(|_| address.seedelf)
+        .and_then(|d| register_detail(d));
     Ok(DetailOutput {
         index,
         address,
         lovelace,
         assets,
         register,
-        inline_datum,
-        datum,
+        inline_datum: inline.map(|d| hex::encode(d.raw_cbor())),
+        datum: inline.map(|d| plutus_tree(d)),
         datum_hash,
         script_ref,
         form: form.to_string(),
@@ -1392,9 +1412,9 @@ fn address_detail(bytes: &[u8], flag: bool, contract: &Hash<28>) -> DetailAddres
         Address::Byron(_) => ("byron", None, None, None, false),
     };
     DetailAddress {
-        // A Byron address has no bech32 form; Pallas writes its base58 for
-        // `to_bech32`, which is what every explorer shows.
-        bech32: address.to_bech32().unwrap_or_else(|_| address.to_hex()),
+        // A Byron address has no bech32 form (`to_bech32` refuses it); Pallas's
+        // `Display` writes its base58, which is what every explorer shows.
+        bech32: address.to_string(),
         hex: address.to_hex(),
         kind: kind.to_string(),
         payment: payment.map(str::to_string),
