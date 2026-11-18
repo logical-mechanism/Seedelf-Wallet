@@ -407,6 +407,141 @@ fn a_return_merges_into_four_of_the_fundings_changes_at_most() {
     );
 }
 
+/// The least an output of ADA alone holds at `at`.
+fn ada_alone_least(at: &Address) -> u64 {
+    let p = ProtocolParameters::from_koios(&params()).unwrap();
+    seedelf_core::transaction::address_minimum_lovelace_with_assets(
+        &p,
+        &at.to_bech32().unwrap(),
+        seedelf_core::assets::Assets::new(),
+    )
+    .unwrap()
+}
+
+/// That `built`'s transaction is one the ledger takes as to its collateral: none (no script runs), or one that covers
+/// 3/2 of the fee and whose return holds an output's least. Its fee.
+fn collateral_holds(built: &api::SessionReturnResult, rows: &[UtxoResponse], least: u64) -> u64 {
+    let bytes = hex::decode(&built.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    let fee = tx.fee().unwrap();
+    assert_eq!(fee.to_string(), built.fee);
+    let put_up: u64 = tx
+        .collateral()
+        .iter()
+        .map(|i| {
+            rows.iter()
+                .find(|u| u.tx_hash == hex::encode(**i.hash()) && u.tx_index == i.index())
+                .expect("the collateral is one of the account's UTxOs")
+                .value
+                .parse::<u64>()
+                .unwrap()
+        })
+        .sum();
+    if put_up == 0 {
+        assert!(tx.collateral_return().is_none());
+        return fee;
+    }
+    let back = tx.collateral_return().map_or(0, |o| o.value().coin());
+    assert!(
+        back >= least,
+        "the collateral comes back as {back} lovelace, under an output's least ({least}): the ledger refuses it"
+    );
+    assert!(
+        2 * (put_up - back) >= 3 * fee,
+        "the collateral covers 3/2 of the fee"
+    );
+    fee
+}
+
+/// Chunk 51, r2money#1: a session's return merged into its funding's change, whose only collateral is
+/// `session_collateral`'s fallback (the largest ADA-only UTxO of 2 ₳ or more, the session's 5 ₳ being gone). A heavy
+/// return's fee takes 3/2 of it past an output's least, so the merged form can't be built, and nothing tried the plain
+/// sweep of the same UTxOs, which runs no script, puts up no collateral and builds: every Bring it back was refused
+/// while the shape held. Now the return is planned again without the merge, and comes back whole.
+#[test]
+fn a_merged_return_its_fallback_collateral_cant_carry_comes_back_as_the_plain_sweep() {
+    let accounts = accounts();
+    let at = session(3);
+    let least = ada_alone_least(&at);
+    let sk = random_scalar();
+    let change = funding_change(0xf0, 0, sk, 10_000_000);
+    // What a site's session can hold after a site's transaction the user approved spent its 5 ₳: 13 of the
+    // session's own UTxOs, each 20 NFTs (32-byte names, as CIP-68's) and 6 ₳, and one ADA-only UTxO of `ada`, the
+    // only one, which is session_collateral's fallback when it's 2 ₳ or more. All of them the session's own.
+    let names: Vec<Vec<String>> = (0..13u8)
+        .map(|i| {
+            (0..20u8)
+                .map(|j| {
+                    let mut name = [0x41u8; 32];
+                    name[0] = i;
+                    name[1] = j;
+                    hex::encode(name)
+                })
+                .collect()
+        })
+        .collect();
+    let account = |ada: u64| -> (Vec<UtxoResponse>, Vec<String>) {
+        let mut rows: Vec<UtxoResponse> = names
+            .iter()
+            .enumerate()
+            .map(|(i, nfts)| {
+                let tokens: Vec<(&str, &str, u64)> =
+                    nfts.iter().map(|n| (POLICY, n.as_str(), 1)).collect();
+                utxo(0x10 + i as u8, 0, &at, 6_000_000, &tokens)
+            })
+            .collect();
+        rows.push(utxo(0xc0, 0, &at, ada, &[]));
+        let own = rows.iter().map(|u| u.tx_hash.clone()).collect();
+        (rows, own)
+    };
+    let back = |rows: &[UtxoResponse], merge: &[UtxoResponse], own: &[String]| {
+        api::session_return(
+            &accounts,
+            sk,
+            SessionReturnRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 3,
+                utxos: rows.to_vec(),
+                merge: merge.to_vec(),
+                own: own.to_vec(),
+                collateral_pool: None,
+                collateral_boxes: vec![],
+                rewards: Default::default(),
+            },
+        )
+    };
+
+    // The account as the site left it: its only ADA-only UTxO is 2 ₳. Its plain sweep builds: no script, no
+    // collateral, every UTxO in one transaction.
+    let (rows, own) = account(2_000_000);
+    let sweep = back(&rows, &[], &own).expect("the plain sweep of the account's UTxOs builds");
+    assert_eq!((sweep.merged, sweep.inputs), (0, rows.len()));
+    assert!(sweep.left_out.is_empty());
+    let sweep_fee = collateral_holds(&sweep, &rows, least);
+
+    // With a 3 ₳ ADA-only UTxO instead, the return merges into the funding's change under that collateral; its fee
+    // takes 3/2 of a 2 ₳ one past an output's least, so 2 ₳ can't be this merged return's collateral.
+    let (roomy, roomy_own) = account(3_000_000);
+    let merged = back(&roomy, std::slice::from_ref(&change), &roomy_own)
+        .expect("with 3 ₳ up, the merged return builds");
+    assert_eq!(merged.merged, 1);
+    let merged_fee = collateral_holds(&merged, &roomy, least);
+    assert!(
+        2_000_000 < least + merged_fee * 3 / 2,
+        "the shape needs a merged return whose collateral a 2 ₳ one can't be"
+    );
+
+    // With the funding's change to merge into and only the 2 ₳ to put up: the plain sweep, whole, in a transaction
+    // the ledger takes.
+    let swept = back(&rows, std::slice::from_ref(&change), &own).unwrap_or_else(|e| {
+        panic!("the return is refused, though the plain sweep of the same UTxOs builds (fee {sweep_fee}): {e}")
+    });
+    assert_eq!((swept.merged, swept.inputs), (0, rows.len()));
+    assert!(swept.left_out.is_empty(), "{:?}", swept.left_out.len());
+    assert_eq!(collateral_holds(&swept, &rows, least), sweep_fee);
+}
+
 /// 2^63 − 1 of one token: three of these add up past what an output can hold.
 const JUNK: u64 = (1 << 63) - 1;
 const JUNK_POLICY: &str = "abababababababababababababababababababababababababababab";

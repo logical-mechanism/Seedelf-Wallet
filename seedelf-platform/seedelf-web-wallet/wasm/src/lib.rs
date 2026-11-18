@@ -979,9 +979,11 @@ pub mod api {
     pub const MAX_MERGE: usize = 4;
 
     /// The session's own collateral among its UTxOs: its 5 ₳ ADA-only one,
-    /// or else the largest ADA-only one that covers a script's collateral
-    /// and leaves its return a valid output. Never one the wallet's evaluator
-    /// can't take (`seedelf_core::eval::refusal`).
+    /// or else the largest ADA-only one of 2 ₳ or more. A heavy return's fee
+    /// can take 3/2 of that one under an output's least: core then refuses it
+    /// (`build::CollateralShort`), and the return goes as the plain sweep,
+    /// which puts up none ([`session_return`]; chunk 51, r2money#1). Never one
+    /// the wallet's evaluator can't take (`seedelf_core::eval::refusal`).
     pub(crate) fn session_collateral(utxos: &[UtxoResponse]) -> Option<&UtxoResponse> {
         let ada_only = utxos
             .iter()
@@ -1346,7 +1348,8 @@ pub mod api {
     /// The return of `rows`, UTxOs under session `index`'s key, merged into
     /// `merge` (the funding's Seedelf change, checked here to be this
     /// wallet's): one Seedelf spend proven with `sk`, with `collateral` (one
-    /// of `rows`) as its collateral. The proofs are bound to a new one-time
+    /// of `rows`) as its collateral, refused as [`build::CollateralShort`]
+    /// where that can't carry it. The proofs are bound to a new one-time
     /// key, as every Seedelf spend's (privacy rule 1), never the session's:
     /// a site connected to the session can ask its key to sign, so a proof
     /// bound to it could be replayed in what the site builds. Measured in the
@@ -1443,13 +1446,22 @@ pub mod api {
                     request.own.clone(),
                 ),
             };
-            let plan = plan_return(&params, &rows, merge, &own)?;
-            if plan.taken.is_empty() {
-                bail!(NOTHING_PAYS);
+            let built = |merge: &[UtxoResponse]| {
+                let plan = plan_return(&params, &rows, merge, &own)?;
+                if plan.taken.is_empty() {
+                    bail!(NOTHING_PAYS);
+                }
+                built_or_without_strangers(plan, |plan| {
+                    planned_return(accounts, sk, &request, &params, plan)
+                })
+            };
+            match built(merge) {
+                // The merged form its collateral can't carry (`session_collateral`'s fallback, under 5 ₳, beside a
+                // heavy return): planned again with no merge, the plain sweep, which puts up no collateral, as
+                // plan_return makes it for a UTxO the merge can't measure (chunk 51, r2money#1).
+                Err(e) if build::is_collateral_short(&e) => built(&[]),
+                other => other,
             }
-            built_or_without_strangers(plan, |plan| {
-                planned_return(accounts, sk, &request, &params, plan)
-            })
         };
         let ((mut result, _), tail) = match tail {
             Some(t) => match attempt(Some(&t)) {

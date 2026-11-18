@@ -1417,35 +1417,90 @@ mod account {
         assert!(mint(&p.seedelf).is_ok());
     }
 
+    /// An account-paid mint of 9 ₳ putting up a collateral of `lovelace` of
+    /// the account's own (chunk 51's collateral tests).
+    fn mint_with(p: &Payer, lovelace: u64) -> anyhow::Result<build::AccountMint> {
+        build::account_mint(
+            &p.chain,
+            &[at(p, 0x76, 0, 9_000_000, &[])],
+            Some(&at(p, 0x75, 0, lovelace, &[])),
+            "",
+            &p.seedelf,
+            &p.change,
+            &Staking::none(),
+            None,
+        )
+    }
+
     /// Chunk 51 (t1d#1's sibling, the account launch's): the collateral an
     /// account-paid mint puts up must come back as an output after 3/2 of
-    /// the fee. One too small is refused in words, where the node would refuse
-    /// the signed mint.
+    /// the fee it pays, finished with the policy's budget as Ogmios measured
+    /// it. One too small is refused in words, where the node would refuse the
+    /// signed mint.
     #[test]
     fn a_collateral_too_small_to_come_back_is_never_put_up() {
         let p = payer();
-        let mint = |lovelace: u64| {
-            let collateral = at(&p, 0x75, 0, lovelace, &[]);
-            build::account_mint(
-                &p.chain,
-                &[at(&p, 0x76, 0, 9_000_000, &[])],
-                Some(&collateral),
-                "",
-                &p.seedelf,
-                &p.change,
-                &Staking::none(),
-                None,
-            )
-            .map(|_| ())
+        let finished = |lovelace: u64| {
+            mint_with(&p, lovelace)
+                .and_then(|mint| mint.finalize(&recorded()))
+                .map(|built| built.fee.total)
         };
-        assert!(mint(5_000_000).is_ok());
+        assert!(finished(5_000_000).is_ok());
         for lovelace in [1_000_000, 1_200_000] {
-            let refused = mint(lovelace);
+            let refused = finished(lovelace);
             assert!(
-                matches!(&refused, Err(e) if e.to_string().contains("too small to put up as collateral")),
+                matches!(&refused, Err(e) if e.to_string().contains("too small to put up as collateral")
+                    && build::is_collateral_short(e)),
                 "{lovelace}: {refused:?}"
             );
         }
+    }
+
+    /// Chunk 51, r2money#2's sibling: that least is held at the fee the mint
+    /// pays, never at the estimate's guess (MINT_BUDGET_GUESS, the fee its
+    /// draft is staged at). Held to the guess, a collateral within 3/2 of its
+    /// extra compute over what it needs was refused: a mint the ledger takes.
+    /// With no 5 ₳ set aside, the wallet puts up its own pick, of any size.
+    #[test]
+    fn a_collateral_that_comes_back_with_its_least_at_the_fee_the_mint_pays_is_put_up() {
+        let p = payer();
+        let clear = mint_with(&p, 5_000_000).unwrap();
+        let fee = clear.finalize(&recorded()).unwrap().fee.total;
+        let guessed = MultiEraTx::decode(&clear.draft().unwrap().tx_bytes.0)
+            .unwrap()
+            .fee()
+            .unwrap();
+        let least = address_minimum_lovelace_with_assets(
+            &p.chain.params,
+            &at(&p, 0x75, 0, 0, &[]).address,
+            seedelf_core::assets::Assets::new(),
+        )
+        .unwrap();
+        // 1,000 lovelace over its least at the fee it pays, and under it at the guess's.
+        let collateral = least + fee * 3 / 2 + 1_000;
+        assert!(
+            collateral < least + guessed * 3 / 2,
+            "fee {fee}, guessed {guessed}"
+        );
+        let built = mint_with(&p, collateral)
+            .and_then(|mint| mint.finalize(&recorded()))
+            .unwrap_or_else(|e| {
+                panic!("refused: {e} (least {least}, fee {fee}, collateral {collateral})")
+            });
+        assert_eq!(built.fee.total, fee);
+        let tx = MultiEraTx::decode(&built.tx.tx_bytes.0).unwrap();
+        let back = tx.collateral_return().expect("a collateral return");
+        assert_eq!(back.value().coin(), collateral - fee * 3 / 2);
+        assert!(back.value().coin() >= least);
+        // Under that least at the fee it pays, it's refused.
+        let refused = mint_with(&p, least + fee * 3 / 2 - 1_000)
+            .and_then(|mint| mint.finalize(&recorded()))
+            .map(|built| built.fee.total);
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("too small to put up as collateral")
+                && build::is_collateral_short(e)),
+            "{refused:?}"
+        );
     }
 
     /// Chunk 51, t1a#11: an account-paid mint leaves out a UTxO whose tokens

@@ -516,6 +516,74 @@ fn a_bundle_that_costs_more_than_it_adds_never_stops_what_the_clis_order_pays() 
     assert!(build::sweep_many(&w.chain, &available, &pay(39_300_000), &w.owner, w.signer).is_err());
 }
 
+/// Chunk 51, r2tests#5 (r2a#2's other half): short with everything is refused
+/// as short, whatever another order ran into, as when the search ended there.
+/// A caller moves on only on a shortfall: the web wallet's build_transfer and
+/// withdraw try with more, and its parts planner splits on it. Here 20 ₳ of the
+/// user's own and a bundle of 200 tokens at its least on chain made public too,
+/// and a stranger's pile of 400 tokens with 200 ₳, which makes any transaction
+/// spending it too large. The purpose's order takes the bundle before the pile
+/// and is short at every step; the next takes the pile second and is too large.
+#[test]
+fn short_with_everything_stays_short_when_another_order_was_too_large() {
+    let w = world();
+    let a = owned(&w, 0x01, 0, 20 * ADA, &[]);
+    let names: Vec<Vec<u8>> = (0..200u16).map(|i| vec![i as u8]).collect();
+    let bundle = holding_names(owned(&w, 0xd0, 0, least_on_chain(&w, &names), &[]), &names);
+    let pile_names: Vec<String> = (0..400).map(|i| format!("{i:032}")).collect();
+    let pile_tokens: Vec<(&str, u64)> = pile_names.iter().map(|n| (n.as_str(), 1)).collect();
+    let pile = owned(&w, 0x39, 0, 200 * ADA, &pile_tokens);
+    let available = vec![a.clone(), bundle.clone(), pile.clone()];
+    let h = histories(
+        Purpose::Pay,
+        &[
+            (&a, class("public", Origin::Own)),
+            (&bundle, class("public", Origin::Own)),
+            (&pile, received(&pile)),
+        ],
+    );
+
+    // What the change needs for the pile's tokens, and for them with the
+    // bundle's: the bundle costs more than it adds beside the pile too.
+    let assets = |u: &UtxoResponse| {
+        u.asset_list.iter().flatten().fold(Assets::new(), |all, t| {
+            all.add(Asset::new(t.policy_id.clone(), t.asset_name.clone(), 1).unwrap())
+                .unwrap()
+        })
+    };
+    let pile_least = build::minimum_deposit(&w.chain.params, &assets(&pile)).unwrap();
+    let both_least = build::minimum_deposit(
+        &w.chain.params,
+        &assets(&pile).merge(assets(&bundle)).unwrap(),
+    )
+    .unwrap();
+    let held: u64 = bundle.value.parse().unwrap();
+    let cost = both_least - pile_least - held;
+    assert!(cost > 2 * ADA, "{cost}");
+    // So the user's ADA and the pile pay with half of that to spare, and all
+    // three are short by the other half.
+    let payment = pay(20 * ADA + 200 * ADA - pile_least - cost / 2);
+    let all = build::sweep_many_from(&w.chain, &available, &payment, &w.owner, w.signer)
+        .unwrap()
+        .estimate()
+        .err()
+        .expect("all three together are short");
+    assert!(build::is_short(&all), "{all}");
+    let paying = [a.clone(), pile.clone()];
+    let large = build::sweep_many_from(&w.chain, &paying, &payment, &w.owner, w.signer)
+        .unwrap()
+        .estimate()
+        .err()
+        .expect("the ADA and the pile are too large");
+    assert!(build::is_too_large(&large), "{large}");
+
+    let e = build::sweep_many_apart(&w.chain, &available, &h, &payment, &w.owner, w.signer)
+        .err()
+        .expect("nothing pays");
+    assert!(build::is_short(&e), "{e}");
+    assert!(e.to_string().contains("Not enough ADA"), "{e}");
+}
+
 /// Merging follows the purpose's order, not the size alone (independent
 /// review L39).
 #[test]
