@@ -267,33 +267,35 @@ impl Ever {
     }
 }
 
-/// Every output ever at any of `creds` by the block at slot `at`.
+/// `ever`'s query: `$1` the scripts' hashes, `$2` the slot.
+const EVER: &str = "with outs as materialized ( \
+       select o.id, o.tx_id, o.address_id, o.value, o.inline_datum_id, o.consumed_by_tx_id \
+       from address a join tx_out o on o.address_id = a.id \
+       where a.payment_cred = any($1::bytea[]) and a.has_script) \
+     select encode(a.payment_cred, 'hex') as cred, o.tx_id::bigint as made_by, \
+            o.value::text as lovelace, d.bytes as datum, \
+            (select coalesce(json_agg(json_build_array(encode(m.policy, 'hex'), \
+                    encode(m.name, 'hex'), mto.quantity::text)), '[]'::json)::text \
+               from ma_tx_out mto join multi_asset m on m.id = mto.ident \
+               where mto.tx_out_id = o.id) as assets, \
+            case when cb.slot_no <= $2 then o.consumed_by_tx_id::bigint end as spent_by \
+     from outs o \
+     join tx t on t.id = o.tx_id \
+     join block b on b.id = t.block_id \
+     join address a on a.id = o.address_id \
+     left join datum d on d.id = o.inline_datum_id \
+     left join tx ct on ct.id = o.consumed_by_tx_id \
+     left join block cb on cb.id = ct.block_id \
+     where b.slot_no <= $2";
+
+/// Every output ever at any of `creds`, scripts' hashes, by the block at slot
+/// `at`: at an address whose payment part is one of the scripts, whatever its
+/// stake part, as the wallet reads a pool's rows. db-sync's `payment_cred` is
+/// a key's hash too, and nothing can spend what's at the KEY address under a
+/// script's hash (chunk 51, x2#1).
 pub async fn ever(chain: &Chain, creds: &[Vec<u8>], at: i64) -> Result<Vec<Ever>> {
     let client = chain.private().await?;
-    let rows = client
-        .query(
-            "with outs as materialized ( \
-               select o.id, o.tx_id, o.address_id, o.value, o.inline_datum_id, o.consumed_by_tx_id \
-               from address a join tx_out o on o.address_id = a.id \
-               where a.payment_cred = any($1::bytea[])) \
-             select encode(a.payment_cred, 'hex') as cred, o.tx_id::bigint as made_by, \
-                    o.value::text as lovelace, d.bytes as datum, \
-                    (select coalesce(json_agg(json_build_array(encode(m.policy, 'hex'), \
-                            encode(m.name, 'hex'), mto.quantity::text)), '[]'::json)::text \
-                       from ma_tx_out mto join multi_asset m on m.id = mto.ident \
-                       where mto.tx_out_id = o.id) as assets, \
-                    case when cb.slot_no <= $2 then o.consumed_by_tx_id::bigint end as spent_by \
-             from outs o \
-             join tx t on t.id = o.tx_id \
-             join block b on b.id = t.block_id \
-             join address a on a.id = o.address_id \
-             left join datum d on d.id = o.inline_datum_id \
-             left join tx ct on ct.id = o.consumed_by_tx_id \
-             left join block cb on cb.id = ct.block_id \
-             where b.slot_no <= $2",
-            &[&creds, &at],
-        )
-        .await?;
+    let rows = client.query(EVER, &[&creds, &at]).await?;
     rows.iter()
         .map(|row| {
             Ok(Ever {
@@ -359,5 +361,26 @@ mod tests {
             "{gather}"
         );
         assert!(rest.contains("where b.slot_no <= $2 and exists"), "{rest}");
+    }
+
+    /// Chunk 51, x2#1 (the data layer's copy): db-sync's `address.payment_cred`
+    /// is a key address's key hash as well as a script address's script hash,
+    /// so the KEY address whose hash is a pool's `mix_box` hash came back with
+    /// the pool's outputs. A stranger's box value there, under a box's datum,
+    /// counted as a box nothing can spend, and its payment as a deposit. The
+    /// crowd gathers only what `mix_box` spends, as the wallet reads a pool's
+    /// rows: an address whose payment part is the script, whatever its stake part.
+    #[test]
+    fn the_crowd_gathers_only_what_mix_box_spends() {
+        let (gather, rest) = EVER.split_at(EVER.find(") select").expect("a gather"));
+        assert!(
+            gather
+                .trim_end()
+                .ends_with("where a.payment_cred = any($1::bytea[]) and a.has_script"),
+            "{gather}"
+        );
+        // Every output the crowd reads is one gathered there.
+        assert!(rest.contains("from outs o"), "{rest}");
+        assert!(!rest.contains(" tx_out "), "{rest}");
     }
 }
