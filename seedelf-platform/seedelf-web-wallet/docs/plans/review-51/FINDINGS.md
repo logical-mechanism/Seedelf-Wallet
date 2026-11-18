@@ -11,9 +11,9 @@ T1's findings are guards that no test pinned: a T1 agent reverted each in a copy
 | critical |  |  |  |  |  |  |  |  |  | 0 |
 | high | 3 |  |  |  |  |  |  |  |  | 3 |
 | medium | 3 | 4 |  |  |  |  |  |  | 1 | 8 |
-| low | 241 | 37 | 9 | 2 | 2 |  |  | 1 | 7 | 306 |
-| nit | 38 | 1 |  |  |  |  | 1 |  | 2 | 43 |
-| **All** | **285** | **42** | **9** | **2** | **2** | **0** | **1** | **1** | **10** | **360** |
+| low | 248 | 37 | 9 | 2 | 2 |  |  | 1 | 7 | 306 |
+| nit | 39 | 1 |  |  |  |  | 1 |  | 2 | 43 |
+| **All** | **293** | **42** | **9** | **2** | **2** | **0** | **1** | **1** | **10** | **360** |
 
 *fixed*: on the fix branch, or on its own branch for `main`, with a test that failed before. *owner*: below, not fixed. *covered*: another finding's test already pins it. *moot*, *unreachable*: no test can fail without the guard. *open*: for the second fix round. *merged*: the same as another finding, which carries it.
 
@@ -154,6 +154,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 ### The WebAssembly
 
 - `r2money#1` **low**: A session's merged return whose only collateral is the 2 ₳ fallback is refused at a heavy fee, and the plain sweep of the same UTxOs, which builds, is never tried `lib.rs:1479` · b3687869
+- `r2sign#1` **low**: The sign window now calls two register shapes a Seedelf payment, with no warning, though no Seedelf Wallet ever reads them: a datum kept by hash that the unsigned witness set carries, and the general form with an indefinite pair `cip30.rs:1288` · 53780f85, 81516188, 61a4d717
 - `w1b#2` **low**: Removing a Seedelf moves the other tokens in its UTxO, but neither the review nor the Seedelf list shows them `lib.rs:5074` · 36fbb96f
 - `w2#1` **low**: A certificate under a script's stake credential counts as another signer, so partialSign=false is refused and the window says others must sign `cip30.rs:1610` · 36fbb96f
 - `w2#2` **low**: A key address whose key hash equals the Seedelf contract's script hash is labelled Seedelf Wallet's contract, so a burn shows as a Seedelf payment `cip30.rs:1386` · 36fbb96f
@@ -179,8 +180,12 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g4#1` **low**: A split route's leg paid between the runner's two reads of the account comes back alone, in a later return, directly, though its approval sent it through Lovejoin `sessions.ts:3904` · 506e4ed2
 - `gap-g6#1` **low**: Kept verdicts carry no version of the rule that made them, so a fix to what counts as the wallet's never reaches rows and boxes an older release already judged `contract-scan.ts:264` · 4cbac01e, 506e4ed2
 - `gap-g6#2` **low**: After a restore, what made a box is kept with only the accounts then known, so a custom account's (index 24 or more) deposit boxes read as the private balance's for good `lovejoin.ts:6324` · e66a6a16
+- `r2sign#2` **low**: A second "msg" under label 674 is signed and published, but the window shows only the first and says nothing of the rest: x1a#3's otherMetadata check passes it as part of the note `dapp.ts:2996` · 61a4d717
 - `r2sign#3` **low**: Remove's new token rows show a token off the wallet's list in raw units: the decimals the Seedelf's UTxO carries never reach the review `withdraw.ts:188` · e4d97bea
+- `r2still#2` **low**: gap-g4#1 is fixed only for a leg the second listing holds; a leg both listings miss still comes back alone and directly, and since e2b#2's strangers rule the swap's page no longer says so `sessions.ts:4704` · ad8c3ce4
 - `r2tests#4` **low**: e4a#1's accounts.ts siblings: the merge's and check()'s phrase pins have no test, though the fixer's report says each sibling fails its own case `accounts.ts:288` · 459d4cf8
+- `r2time#1` **low**: Bring one back paid by the public account: the watch's paysAccounts is read at the press, but the build pays and signs with whichever account is active after the reward-account read `lovejoin.ts:7155` · ad8c3ce4
+- `r2time#2` **low**: e4a#1's class, left after the phrase-pin fix: the writes after a submit (the watch's take, Lovejoin's box-back history, a session return's landing) still go to whichever phrase is in when the network answers `lovejoin.ts:7814` · ad8c3ce4
 - `w3#1` **low**: A tile Mix's chain (and Mix my boxes again's) runs at Settings' depth when the runner builds it, not the depth its review showed and its funding paid for `sessions.ts:4667` · fdd3b8b2
 - `x1a#1` **low**: Send and Make public call the user's payment key under someone else's stake key "your own public account: it comes back", where the sign window says its staking rewards aren't yours `destination.ts:122` · 10a06db6, 6aea4fb8, 8fd738ff, d9e015fb
 - `x2#2` **low**: A UTxO at a KEY address whose hash is the Seedelf contract's, under the user's register, counts in the private balance, and any spend that takes it fails: Max always fails for wallets of up to 20 private UTxOs `balances.ts:489` · 03cf290e, 343fb772, 4cbac01e, 514c6579, 6aea4fb8
@@ -189,6 +194,7 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `e3a#4` **nit**: manifest.ts names the extension with a ternary whose two branches are the same `manifest.ts:59` · d9e015fb
 - `e7b#3` **nit**: KoiosProposal.expiration's doc says the opposite of how governance.ts reads it `koios.ts:289` · 2b3dfd80
 - `gap-g7#4` **nit**: networks.ts's lovejoin.mixCost is read by nothing, and its doc still says it's for the settings' words `networks.ts:20` · 8fd738ff
+- `r2tests#9` **nit**: e2b#2's 'nor clears' half (a strangers-only return leaves the skip reason alone) has no test `sessions.ts:5361` · ad8c3ce4
 - `x1b#2` **nit**: withdraw.ts says a shortfall's `most` is one transaction, but WebAssembly builds it in parts, up to 25 `withdraw.ts:104` · 853d5779
 - Guards now pinned by a test (T1): `t1g#1`, `t1g#2`, `t1g#3`, `t1g#4`, `t1g#5`, `t1g#6`, `t1g#7`, `t1g#8`, `t1g#9`, `t1g#10`, `t1g#11`, `t1g#12`, `t1g#13`, `t1g#14`, `t1h#1`, `t1h#2`, `t1h#3`, `t1h#4`, `t1h#5`, `t1h#6`, `t1h#7`, `t1h#8`, `t1h#9`, `t1h#10`, `t1h#12` · 506e4ed2
 - Guards now pinned by a test (T1): `t1h#11` · c8003eda
@@ -214,6 +220,8 @@ Each with a test that failed before its fix. The commits are on `web-wallet/whol
 - `gap-g10#2` **low** (in part, as verified): Activity cuts a counterparty's address to its first 3 to 10 characters and its last 6, and the last 6 are a bech32 checksum anyone can solve for `Activity.tsx:415` · 8fd738ff
 - `gap-g10#3` **low**: The Add tokens picker cuts a lookalike token's warning to "Calls itself SNEK, not on the…" in grey; Home's list shows it whole in amber (H-9), and the swap's picker cuts its mark too `TokenAmounts.tsx:269` · 8fd738ff
 - `gap-g2#3` **low**: The Mix and Bootstrap forms count public UTxOs the build refuses (any reference script, a datum too deep to read), so 'What Lovejoin can spend' and the stepper offer boxes Review then refuses `Lovejoin.tsx:410` · 8fd738ff, c8003eda
+- `r2screens#1` **low**: The connect window's private session now calls the unlocked side what's "in your private balance", with nothing about the lock `DappApprovals.tsx:994` · 61a4d717
+- `r2tests#1` **low**: d1#3's sign-window warning for a payment into Seedelf under a dead register has no test: drop it and the whole Vitest suite passes `DappApprovals.tsx:1212` · 61a4d717
 - `r2tests#2` **low**: x1a#1/e9a#3's form notes on Send and Make public (stake works elsewhere) have no test; only the reviews' lines are pinned `CardanoSend.tsx:312` · 5ba328e5
 - `r2tests#3` **low**: e8b#2's sibling: Create Seedelf's review line for withdrawn rewards has no test `CreateSeedelf.tsx:150` · 5ba328e5
 - `x1a#3` **low**: The sign window leaves out "It carries metadata" whenever a note is shown, so a site's other metadata beside a CIP-20 note is never mentioned `DappApprovals.tsx:1083` · d9e015fb

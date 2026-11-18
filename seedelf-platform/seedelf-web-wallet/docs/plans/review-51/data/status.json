@@ -458,5 +458,63 @@
    "af022a6f"
   ],
   "note": ""
+ },
+ "r2sign#1": {
+  "status": "fixed",
+  "commits": [
+   "53780f85",
+   "81516188",
+   "61a4d717"
+  ],
+  "note": "graded low by its tiebreak; fixed as the round's own regression: the readers widened, a datum kept by hash its own reading and warning"
+ },
+ "r2sign#2": {
+  "status": "fixed",
+  "commits": [
+   "61a4d717"
+  ],
+  "note": ""
+ },
+ "r2screens#1": {
+  "status": "fixed",
+  "commits": [
+   "61a4d717"
+  ],
+  "note": "sibling fixed: a session's top-up form"
+ },
+ "r2tests#1": {
+  "status": "fixed",
+  "commits": [
+   "61a4d717"
+  ],
+  "note": ""
+ },
+ "r2still#2": {
+  "status": "fixed",
+  "commits": [
+   "ad8c3ce4"
+  ],
+  "note": "the first return waits one runner step after every order reads spent; a rollback after the mark decides at once, as before"
+ },
+ "r2time#1": {
+  "status": "fixed",
+  "commits": [
+   "ad8c3ce4"
+  ],
+  "note": ""
+ },
+ "r2time#2": {
+  "status": "fixed",
+  "commits": [
+   "ad8c3ce4"
+  ],
+  "note": "pinned at the writers (activity, Lovejoin's update, the sessions queue, the payment watch)"
+ },
+ "r2tests#9": {
+  "status": "fixed",
+  "commits": [
+   "ad8c3ce4"
+  ],
+  "note": ""
  }
 }

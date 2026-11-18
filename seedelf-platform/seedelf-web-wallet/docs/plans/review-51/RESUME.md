@@ -63,6 +63,14 @@ For the lead, if a session ends or the machine reboots mid-run. `/tmp` is a tmpf
 - **The critic's two unchecked claims** are now checked ([verify/lead/weak-claims.md](verify/lead/weak-claims.md)): Conway's decoder refuses duplicate keys, and nothing traps under the 128-level guard.
 - **Open for round two** (FINDINGS.md lists them): the T1l guards G7b never got, G4's sessions guards t1i#6, t1i#7 and t1l#14, gap-g6#2 and x1b#2; then whatever the review of the merged fixes (`wf_b7ca6d1a-a0f`) confirms.
 
+## Where it stood, 2026-11-18 (late night)
+
+- **The review of the merged fixes** (`wf_b7ca6d1a-a0f`, nine lenses, lanes/R2*.md): 28 findings above a nit, all confirmed (batch 9, a tiebreak for r2sign#1, which settled at low), one high (r2cli#1), plus R2tests' ten untested fixes and six nits. All fixed in round two, by the same fixers, each committed by path: the fix branch's log from `02f73991` to `ad8c3ce4`. FINDINGS.md places all 360 findings; none is open.
+- **The CLI branch** `cli/stranger-rows` carries round two's CLI commits too (`02dbefc8`, `d8114f19`, `afc52463`); its checks pass (fix-branches.md).
+- **The live preprod runs** on round one's build passed (LIVE.md). Run them again on the final build: round two touched a session's return (`b3687869`), the swap runner (`ad8c3ce4`) and Bring one back (`ad8c3ce4`).
+- **Running:** every final check on `ad8c3ce4` (scratchpad `final/all.sh`: the Rust half, then the extension's), and the last look at round two's fix-ups (`wf_4274cfc7-8e1`, seven lenses).
+- **Still to do:** the last look's findings, if any; the live runs on the final build; `./check.sh`, `seedelf-every`, `lovejoin-every` (Lean changed: four control modules' docstrings, ddc17685), one at a time; the record; merge the fix branch into this one.
+
 ## Next
 
 1. The lanes' answers into `lanes/`, one file each, and a first merge into `FINDINGS.md`.
