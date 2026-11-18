@@ -101,7 +101,8 @@ export class WithdrawService {
     }
     progress?.("measuring");
     // In as many transactions as the UTxOs it spends need, each spending its own (the owner's test of 1.6.0): one
-    // when one does. A shortfall's `most` is one transaction, as it was.
+    // when one does. A shortfall's `most` is built so too, as Max is, in as many parts as it takes (up to MAX_PARTS)
+    // and added up (`whole`): what an amount in parts can pay.
     const measured = (r: typeof request & { most?: boolean }) =>
       measureLocally<{ parts: WithdrawResult[] }>(this.deps, r, (keys, json) => wasm.buildWithdrawParts(keys.seedelf, json)).then(
         (built) => built.parts,
