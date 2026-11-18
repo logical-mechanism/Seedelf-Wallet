@@ -281,7 +281,7 @@ const voteEntry = (drep: string): ActivityEntry => ({
 
 /** The CSV's Vote column for that entry. */
 function csvVote(drep: string): string {
-  const [header, row] = activityCsv(NETWORK, [voteEntry(drep)]).replace(/^﻿/, "").split("\r\n");
+  const [header, row] = activityCsv(NETWORK, [voteEntry(drep)]).replace(/^U+FEFF/, "").split("\r\n");
   const column = header!.split(",").indexOf(t("activity.csv.vote"));
   expect(column).toBeGreaterThan(0);
   return row!.split(",")[column]!;
