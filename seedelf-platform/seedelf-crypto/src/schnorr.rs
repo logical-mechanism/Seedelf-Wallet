@@ -62,16 +62,29 @@ pub fn random_scalar() -> Scalar {
 fn proof_nonce(sk: &Scalar, generator: &[u8], public_value: &[u8], vkh: &[u8]) -> Result<Scalar> {
     let mut aux = [0u8; 32];
     OsRng.fill_bytes(&mut aux);
+    let r = proof_nonce_with(sk, generator, public_value, vkh, &aux);
+    aux.zeroize();
+    r
+}
+
+/// [`proof_nonce`] with its 32 random bytes given, so a test can hold them
+/// still, as a failing source would.
+fn proof_nonce_with(
+    sk: &Scalar,
+    generator: &[u8],
+    public_value: &[u8],
+    vkh: &[u8],
+    aux: &[u8; 32],
+) -> Result<Scalar> {
     let mut key = sk.to_bytes_be();
     let mut mac = Hmac::new(Sha512::new(), &key);
-    for part in [NONCE_TAG, generator, public_value, vkh, &aux] {
+    for part in [NONCE_TAG, generator, public_value, vkh, aux] {
         mac.input(part);
     }
     let mut wide = [0u8; 64];
     mac.raw_result(&mut wide);
     let r = scalar_from_okm(&wide);
     key.zeroize();
-    aux.zeroize();
     wide.zeroize();
     r
 }
@@ -233,4 +246,49 @@ pub fn prove(
 
     // Verify g^z = g^r * u^c
     Ok(g_z == (G1Projective::from(g_r) + u_c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The nonce's hedge (chunk 51, t1a#6). With its 32 random bytes held
+    /// still, as a source that fails or repeats would hold them, the nonce
+    /// still follows the statement and the key: two statements never share
+    /// one, which would give `sk` away, and nobody without `sk` can work it out.
+    #[test]
+    fn a_stuck_random_source_still_gives_each_statement_and_key_its_own_nonce() {
+        let aux = [0x5a; 32];
+        let sk = Scalar::from(18446744073709551606u64);
+        let register = Register::create(sk).unwrap();
+        let other = register.clone().rerandomize().unwrap();
+        let bytes = |point: &str| hex::decode(point).unwrap();
+        let (g, u) = (bytes(&register.generator), bytes(&register.public_value));
+        let vkh = [0x11; 28];
+        let nonce = |sk: &Scalar, g: &[u8], u: &[u8], vkh: &[u8]| {
+            proof_nonce_with(sk, g, u, vkh, &aux).unwrap()
+        };
+        let r = nonce(&sk, &g, &u, &vkh);
+
+        // One key, one statement, one draw: one nonce. Only the draw makes it new.
+        assert_eq!(r, nonce(&sk, &g, &u, &vkh));
+        // Another statement, whichever part of it: another nonce.
+        assert_ne!(r, nonce(&sk, &g, &u, &[0x22; 28]), "another vkh");
+        assert_ne!(
+            r,
+            nonce(&sk, &bytes(&other.generator), &u, &vkh),
+            "another generator"
+        );
+        assert_ne!(
+            r,
+            nonce(&sk, &g, &bytes(&other.public_value), &vkh),
+            "another public value"
+        );
+        // Another key: another nonce, so a draw anyone can predict doesn't
+        // make the nonce theirs.
+        assert_ne!(r, nonce(&Scalar::from(2u64), &g, &u, &vkh), "another key");
+        // And another draw.
+        let drawn = proof_nonce_with(&sk, &g, &u, &vkh, &[0xa5; 32]).unwrap();
+        assert_ne!(r, drawn, "another draw");
+    }
 }

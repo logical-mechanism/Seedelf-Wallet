@@ -204,6 +204,8 @@ fn nothing_but_constructor_0_with_two_48_byte_fields_is_a_register() {
         ]
         .concat(),
         [&[0xd8, 0x79, 0x81, 0x58, 0x30][..], &g].concat(),
+        // One field, and the second after the list (chunk 51, t1a#13).
+        [&[0xd8, 0x79, 0x81, 0x58, 0x30][..], &g, &[0x58, 0x30], &u].concat(),
         // A field of 47 bytes, or 49.
         [
             &[0xd8, 0x79, 0x82, 0x58, 0x2f][..],
@@ -227,6 +229,15 @@ fn nothing_but_constructor_0_with_two_48_byte_fields_is_a_register() {
             &[0x58, 0x30],
             &u,
             &[0x00, 0xff],
+        ]
+        .concat(),
+        // Or a byte that isn't a break where it should be (chunk 51, t1a#13).
+        [
+            &[0xd8, 0x79, 0x9f, 0x58, 0x30][..],
+            &g,
+            &[0x58, 0x30],
+            &u,
+            &[0x00],
         ]
         .concat(),
         // Something after it, or cut short.
