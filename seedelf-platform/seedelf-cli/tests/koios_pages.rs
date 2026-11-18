@@ -21,7 +21,7 @@ use seedelf_core::constants::get_config;
 use seedelf_core::utxos::{assets_of, collect_all_wallet_utxos, get_credential_utxos};
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::random_scalar;
-use seedelf_koios::koios::{address_utxos, credential_transactions, override_endpoints};
+use seedelf_koios::koios::{address_utxos, override_endpoints, script_transactions};
 use serde_json::{Value, json};
 use serial_test::serial;
 use wiremock::matchers::{method, path};
@@ -326,8 +326,8 @@ async fn a_utxo_spent_between_two_pages_hides_no_other_utxo() {
         .await
         .expect("the contract's UTxOs");
     override_endpoints(None, None);
-    let owned = collect_all_wallet_utxos(user, &config.contract.seedelf_policy_id, read.clone())
-        .expect("owned UTxOs");
+    let owned =
+        collect_all_wallet_utxos(user, &config.contract, read.clone()).expect("owned UTxOs");
     let (lovelace, _) = assets_of(owned).expect("balance");
 
     let seen = counted(read.iter().map(|u| (u.tx_hash.as_str(), u.tx_index)));
@@ -470,7 +470,7 @@ async fn a_transaction_landing_between_two_history_pages_is_listed_once() {
         .mount(&server)
         .await;
 
-    let listed = credential_transactions(PREPROD, &"ab".repeat(28))
+    let listed = script_transactions(PREPROD, &"ab".repeat(28))
         .await
         .expect("the history");
     override_endpoints(None, None);
@@ -490,5 +490,75 @@ async fn a_transaction_landing_between_two_history_pages_is_listed_once() {
         "a transaction landed between the first and second requests ({:?}): of 100 \
          transactions the history missed {missing} and repeated {repeated:?}",
         asked(&server).await
+    );
+}
+
+/// `util history` reads by the contract's payment credential, and Koios lists
+/// the KEY address carrying the same 28 bytes with it: a register in an output
+/// there is no receipt of the contract's, nor one in an input a spend of it
+/// (chunk 51, x2#2). Only registers at the contract's script count.
+#[tokio::test]
+#[serial]
+async fn a_credentials_history_reads_registers_at_its_script_alone() {
+    let config = get_config(1, PREPROD).expect("variant 1 config");
+    let hash = config.contract.wallet_contract_hash;
+    let cred = hex::encode(hash);
+    let at_script = wallet_contract(PREPROD, hash)
+        .to_bech32()
+        .expect("script bech32");
+    let at_key = pallas_addresses::Address::from(pallas_addresses::ShelleyAddress::new(
+        pallas_addresses::Network::Testnet,
+        pallas_addresses::ShelleyPaymentPart::Key(pallas_addresses::PaymentKeyHash::new(hash)),
+        pallas_addresses::ShelleyDelegationPart::Null,
+    ))
+    .to_bech32()
+    .expect("key bech32");
+    let ours = Register::create(random_scalar())
+        .and_then(Register::rerandomize)
+        .expect("register");
+    let planted = Register::create(random_scalar())
+        .and_then(Register::rerandomize)
+        .expect("register");
+    let under = |register: &Register, address: &str| {
+        json!({
+            "payment_addr": {"bech32": address, "cred": cred},
+            "inline_datum": {"bytes": hex::encode(register.to_vec().expect("cbor")), "value": null}
+        })
+    };
+    let tx = hash_of(1);
+
+    let server = MockServer::start().await;
+    override_endpoints(Some(server.uri()), None);
+    Mock::given(method("POST"))
+        .and(path("/api/v1/credential_txs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"tx_hash": tx, "epoch_no": 290, "block_height": 7, "block_time": 1_700_000_000}
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/tx_info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "tx_hash": tx,
+            "block_height": 7,
+            "inputs": [under(&planted, &at_key)],
+            "outputs": [under(&ours, &at_script), under(&planted, &at_key)]
+        }])))
+        .mount(&server)
+        .await;
+    let listed = script_transactions(PREPROD, &cred)
+        .await
+        .expect("the history");
+    override_endpoints(None, None);
+
+    assert_eq!(listed.len(), 1, "one transaction");
+    assert_eq!(
+        listed[0].output_registers,
+        vec![ours],
+        "only the register paid to the contract's script"
+    );
+    assert!(
+        listed[0].input_registers.is_empty(),
+        "nothing spent from the contract's script"
     );
 }

@@ -148,7 +148,7 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(chain.config.contract.wallet_contract_hash, network_flag)
             .await?;
-    let policy_id: &str = &chain.config.contract.seedelf_policy_id;
+    let contract = &chain.config.contract;
 
     let key = OneTimeKey::new();
     let spend: build::ScriptSpend = if args.all {
@@ -157,7 +157,7 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         // or as many of them as one transaction holds, and the rest stays for
         // the next run (chunk 51, r4#2).
         let owned_utxos: Vec<UtxoResponse> =
-            utxos::collect_all_wallet_utxos(scalar, policy_id, every_utxo)?;
+            utxos::collect_all_wallet_utxos(scalar, contract, every_utxo)?;
         if owned_utxos.is_empty() {
             bail!("No Usuable UTxOs Found");
         }
@@ -178,7 +178,7 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         spend?
     } else {
         let owned_utxos: Vec<UtxoResponse> =
-            utxos::collect_wallet_utxos(scalar, policy_id, every_utxo)?;
+            utxos::collect_wallet_utxos(scalar, contract, every_utxo)?;
         let lovelace: u64 = args.lovelace.unwrap_or(address_minimum_lovelace);
         match args.utxos {
             None => build::sweep(

@@ -65,7 +65,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
         utxos::get_credential_utxos(chain.config.contract.wallet_contract_hash, network_flag)
             .await?;
     let owned_utxos: Vec<UtxoResponse> =
-        utxos::collect_wallet_utxos(scalar, &chain.config.contract.seedelf_policy_id, every_utxo)?;
+        utxos::collect_wallet_utxos(scalar, &chain.config.contract, every_utxo)?;
 
     // this is the new seedelf datum
     let seedelf: Register = if args.generator.is_none() && args.public_value.is_none() {

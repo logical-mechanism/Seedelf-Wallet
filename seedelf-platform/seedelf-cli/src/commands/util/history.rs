@@ -6,7 +6,7 @@ use colored::Colorize;
 use seedelf_core::constants::{Config, get_config};
 use seedelf_display::display;
 use seedelf_koios::koios::TxResponse;
-use seedelf_koios::koios::credential_transactions;
+use seedelf_koios::koios::script_transactions;
 
 /// Struct to hold command-specific arguments
 #[derive(Args)]
@@ -28,10 +28,10 @@ pub(crate) async fn run(args: HistoryArgs, network_flag: bool, variant: u64) -> 
     let config: Config = get_config(variant, network_flag)?;
 
     println!("\n{}\n", "Getting History..".bright_blue(),);
-    // By the contract's payment credential, not its address: what was paid to
-    // its staked form, as every CLI up to 0.4.10 paid it, is the contract's
-    // too (chunk 51).
-    let txs: Vec<TxResponse> = credential_transactions(
+    // By the contract's script, not its address: what was paid to its staked
+    // form, as every CLI up to 0.4.10 paid it, is the contract's too, and the
+    // KEY address carrying its hash isn't (chunk 51, r4#7 and x2#2).
+    let txs: Vec<TxResponse> = script_transactions(
         network_flag,
         &hex::encode(config.contract.wallet_contract_hash),
     )

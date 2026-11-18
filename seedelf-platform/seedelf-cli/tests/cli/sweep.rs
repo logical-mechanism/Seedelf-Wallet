@@ -268,3 +268,39 @@ async fn sweep_refuses_to_pay_a_script_stake_or_other_network_address() {
         }
     }
 }
+
+/// A stranger's row at the KEY address carrying the contract's hash, under
+/// the user's register, comes with the contract's rows (Koios asks by the 28
+/// bytes alone), and no key can spend it: `sweep --all` leaves it and sends
+/// the rest, where taking it, the node refused the whole spend (chunk 51,
+/// x2#2).
+#[tokio::test]
+#[serial]
+async fn sweep_all_leaves_a_row_at_the_key_address_carrying_the_contracts_hash() {
+    let mut scenario = Scenario::start().await;
+    let mut planted = wallet_utxo(scenario.scalar, 2, 1_340_000, &[]);
+    planted.address = key_address_with_the_contracts_hash();
+    scenario
+        .mount_credential_utxos(vec![
+            wallet_utxo(scenario.scalar, 1, 10_000_000, &[]),
+            planted,
+        ])
+        .await;
+    scenario.mount_evaluate(2).await;
+    scenario.mount_collateral().await;
+    scenario.mount_submit().await;
+
+    run(
+        sweep_args(external_address_bech32(), None, true),
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect("sweep --all sends what's at the contract");
+    let tx = decode_tx(&scenario.submitted_cbor().await);
+    assert_eq!(
+        tx.inputs,
+        vec![(tx_hash(1), 0)],
+        "only the contract's row is spent"
+    );
+}

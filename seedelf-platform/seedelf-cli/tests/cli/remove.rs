@@ -128,3 +128,39 @@ async fn remove_refuses_to_pay_a_script_stake_or_other_network_address() {
         );
     }
 }
+
+/// A Seedelf token sent to the KEY address carrying the contract's hash comes
+/// with the contract's rows, but no key can spend from there: `remove` says
+/// the Seedelf isn't on chain, where it built a spend the node refused
+/// (chunk 51, x2#2).
+#[tokio::test]
+#[serial]
+async fn remove_finds_no_seedelf_at_the_key_address_carrying_the_contracts_hash() {
+    let mut scenario = Scenario::start().await;
+    let mut held = seedelf_utxo(scenario.scalar, 1, 5_000_000, SAMPLE_SEEDELF);
+    held.address = key_address_with_the_contracts_hash();
+    scenario.mount_credential_utxos(vec![held]).await;
+    scenario.mount_evaluate_mint(1).await;
+    scenario.mount_collateral().await;
+    scenario.mount_submit().await;
+
+    let refused = run(
+        RemoveArgs {
+            seedelf: SAMPLE_SEEDELF.to_string(),
+            address: external_address_bech32(),
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect_err("no Seedelf at the contract");
+    assert!(
+        refused.to_string().contains("not found on chain"),
+        "{refused:#}"
+    );
+    assert_eq!(
+        scenario.requests_to("/api/v1/submittx").await,
+        0,
+        "nothing is sent"
+    );
+}
