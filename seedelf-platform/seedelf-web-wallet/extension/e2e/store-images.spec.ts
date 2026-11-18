@@ -64,8 +64,8 @@ const LANGUAGES: Language[] = ["en", "es", "ja"];
 const CAPTIONS: Record<Language, Array<[string, string]>> = {
   en: [
     ["Private money on Cardano", "Your private balance sits in UTxOs that don't say who owns them."],
-    ["Pay any Seedelf by name", "Paste the name and the wallet finds it. The payment can't be linked to the Seedelf it pays."],
-    ["Get paid privately", "Create a Seedelf and share its name. Anyone with Seedelf Wallet can pay it, and no payment points back to it."],
+    ["Pay any Seedelf by name", "Paste the name and the wallet finds it. The payment goes to a freshly randomized key, so it doesn't name the Seedelf it pays."],
+    ["Get paid privately", "Create a Seedelf and share its name. Anyone with Seedelf Wallet can pay it, and the payments don't say who they're for."],
     [
       "It says what links",
       "Make money public to any address or $handle. The wallet warns you before a payment ties your accounts together.",
@@ -74,8 +74,8 @@ const CAPTIONS: Record<Language, Array<[string, string]>> = {
   ],
   es: [
     ["Dinero privado en Cardano", "Tu saldo privado está en UTxOs que no dicen de quién son."],
-    ["Paga a un Seedelf por nombre", "Pega el nombre y la billetera lo encuentra. El pago no se puede vincular con el Seedelf al que paga."],
-    ["Recibe en privado", "Crea un Seedelf y comparte su nombre. Cualquiera con Seedelf Wallet puede pagarle, y ningún pago se puede rastrear hasta tu Seedelf."],
+    ["Paga a un Seedelf por nombre", "Pega el nombre y la billetera lo encuentra. El pago va a una clave nueva y aleatorizada, así que no nombra al Seedelf al que paga."],
+    ["Recibe en privado", "Crea un Seedelf y comparte su nombre. Cualquiera con Seedelf Wallet puede pagarle, y los pagos no dicen para quién son."],
     [
       "Te dice qué vincula",
       "Haz público tu dinero pagando a cualquier dirección o $handle. La billetera te avisa antes de que un pago vincule tus cuentas entre sí.",
@@ -86,11 +86,11 @@ const CAPTIONS: Record<Language, Array<[string, string]>> = {
     ["Cardano 上のプライベートなお金", "プライベート残高は、誰のものかを示さない UTxO の中にあります。"],
     [
       "どの Seedelf にも名前で支払う",
-      "名前を貼り付ければ、ウォレットがその Seedelf を見つけます。その支払いは、支払先の Seedelf と結び付けられません。",
+      "名前を貼り付ければ、ウォレットがその Seedelf を見つけます。支払いは鍵を新たにランダム化したもの宛てに届くため、支払先の Seedelf を示しません。",
     ],
     [
       "プライベートに受け取る",
-      "Seedelf を作成して、その名前を伝えましょう。Seedelf Wallet を使う人なら誰でもその名前あてに支払うことができ、どの支払いをたどってもあなたの Seedelf には行き着きません。",
+      "Seedelf を作成して、その名前を伝えましょう。Seedelf Wallet を使う人なら誰でもその Seedelf に支払うことができ、その支払いは誰あてのものかを示しません。",
     ],
     ["結び付くものを示す", "任意のアドレスや $handle に支払って、お金を公開できます。支払いでアカウント同士が結び付く前に、ウォレットが警告します。"],
     [

@@ -172,8 +172,8 @@ Código abierto (MIT): https://github.com/logical-mechanism/Seedelf-Wallet
 | # | Title | Line |
 |---|---|---|
 | 1 | Dinero privado en Cardano | Tu saldo privado está en UTxOs que no dicen de quién son. |
-| 2 | Paga a un Seedelf por nombre | Pega el nombre y la billetera lo encuentra. El pago no se puede vincular con el Seedelf al que paga. |
-| 3 | Recibe en privado | Crea un Seedelf y comparte su nombre. Cualquiera con Seedelf Wallet puede pagarle, y ningún pago se puede rastrear hasta tu Seedelf. |
+| 2 | Paga a un Seedelf por nombre | Pega el nombre y la billetera lo encuentra. El pago va a una clave nueva y aleatorizada, así que no nombra al Seedelf al que paga. |
+| 3 | Recibe en privado | Crea un Seedelf y comparte su nombre. Cualquiera con Seedelf Wallet puede pagarle, y los pagos no dicen para quién son. |
 | 4 | Te dice qué vincula | Haz público tu dinero pagando a cualquier dirección o $handle. La billetera te avisa antes de que un pago vincule tus cuentas entre sí. |
 | 5 | Billetera completa de Cardano | Envía, haz staking con un pool y delega tu voto. Restaura una frase de Lace o Eternl, o crea una nueva. |
 
@@ -236,8 +236,8 @@ Seedelf は、お金の持ち主を隠します。Seedelf への支払いは 1 �
 | # | Title | Line |
 |---|---|---|
 | 1 | Cardano 上のプライベートなお金 | プライベート残高は、誰のものかを示さない UTxO の中にあります。 |
-| 2 | どの Seedelf にも名前で支払う | 名前を貼り付ければ、ウォレットがその Seedelf を見つけます。その支払いは、支払先の Seedelf と結び付けられません。 |
-| 3 | プライベートに受け取る | Seedelf を作成して、その名前を伝えましょう。Seedelf Wallet を使う人なら誰でもその名前あてに支払うことができ、どの支払いをたどってもあなたの Seedelf には行き着きません。 |
+| 2 | どの Seedelf にも名前で支払う | 名前を貼り付ければ、ウォレットがその Seedelf を見つけます。支払いは鍵を新たにランダム化したもの宛てに届くため、支払先の Seedelf を示しません。 |
+| 3 | プライベートに受け取る | Seedelf を作成して、その名前を伝えましょう。Seedelf Wallet を使う人なら誰でもその Seedelf に支払うことができ、その支払いは誰あてのものかを示しません。 |
 | 4 | 結び付くものを示す | 任意のアドレスや $handle に支払って、お金を公開できます。支払いでアカウント同士が結び付く前に、ウォレットが警告します。 |
 | 5 | フル機能の Cardano ウォレット | 送金、プールへのステーキング、投票権の委任ができます。Lace や Eternl のフレーズから復元することも、新しいフレーズを作ることもできます。 |
 
