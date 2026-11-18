@@ -10,7 +10,9 @@ in this package or a dependency's (.lake/packages/), has a trace, and its log ho
 as many "✅ Valid" as its source has `blaster` proofs and plain `#blaster` checks, and "✅
 Expected Falsified" as `#blaster (solve-result: 1)` checks (comments and strings stripped). What
 this adds to check.sh's summary of one run: each module's ✅ held against its own source,
-whichever runs built it.
+whichever runs built it. check.sh dates each trace it reads to its run, a log Lake replayed too
+(Lake replays one only for the source it was built from), so a trace older than its source is one
+no run has read since the source was written: `./check.sh <module>` rebuilds it or reads it again.
 
 Lake writes a trace when a build ends and keeps the last good one when a rebuild fails, so
 check.sh removes a failed module's build, here or in the dependency that holds it: here it reads
@@ -117,14 +119,14 @@ for src in srcs:
         msgs = [(e.get("level"), e.get("message", ""))
                 for e in json.load(open(trace, encoding="utf-8")).get("log", [])]
     except (OSError, ValueError) as e:
-        bad.append(f"{mod}: its trace doesn't read ({type(e).__name__}): rebuild it")
+        bad.append(f"{mod}: its trace doesn't read ({type(e).__name__}): run ./check.sh on it")
         continue
     v = sum(m.count("✅ Valid") for _, m in msgs)
     f = sum(m.count("✅ Expected Falsified") for _, m in msgs)
     total_v += v; total_f += f
     under = hole(mod)
     problems = [p for p, hit in [
-        ("built before its source changed", os.path.getmtime(trace) < os.path.getmtime(src)),
+        ("a trace older than its source (run ./check.sh on it)", os.path.getmtime(trace) < os.path.getmtime(src)),
         (f"rests on {under}, which has no trace", under is not None),
         ("an error", any(l == "error" for l, _ in msgs)),
         ("a ❌", any("❌" in m for _, m in msgs)),

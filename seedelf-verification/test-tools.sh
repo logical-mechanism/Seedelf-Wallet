@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
 # The tools' own test, on fake packages and traces made in a temp dir: no Lean, no Lake, no
-# systemd, a few seconds. A stand-in `lake` prints a case's console and exits as Lake would; a
+# systemd, about ten seconds. A stand-in `lake` prints a case's console and exits as Lake would; a
 # stand-in `systemd-run` runs the command it's given; the traces are Lake's JSON.
 #   bash test-tools.sh                 the tools beside it
 #   TOOLS=<folder> bash test-tools.sh  another copy of check.sh, tally.py and Audit/
 # What it holds them to:
-# - check.sh decides SORRY and UNDETERM from the module's own trace, never from the console (which
-#   replays every import's log, a dependency's sorry included), and reads a wrapped
-#   `#print axioms` list whole;
+# - check.sh decides SORRY, UNDETERM and NO TRACE from the module's own trace, never from the
+#   console (which replays every import's log, a dependency's sorry included), reads a wrapped
+#   `#print axioms` list whole, takes no verdict from a reading that stops halfway, and exits 1
+#   for any of them;
+# - it reads each module of this package that a listed module imports and the run doesn't list,
+#   from its own trace, under its own name ("an import of"), and fails the run for one not ok; a
+#   listed import only under its own entry, and a dependency's module never;
+# - it dates each trace it reads to the build's start: a module Lake replays over a source
+#   written again since reads fresh, one whose source is written during the build doesn't;
 # - a failed build loses its old build files, the module's own or a dependency's (forget()), and a
 #   timeout's goes too;
 # - tally.py and Audit/count.py call a module not ok when it rests on one with no trace, here or
-#   in a dependency, and when its trace doesn't read or holds a sorry;
+#   in a dependency, when its trace is older than its source, and when its trace doesn't read or
+#   holds a sorry; count.py exits 1 then, and 0 when every module is ok;
+# - Audit/run-all.sh: a run of some families ends on their status alone, a full run on count.py's
+#   too;
 # - Audit/diag/scan-diag.py exits nonzero for a LOOK, an INCONCLUSIVE or a failed Lean run.
 # Exits 0 when every case holds, 1 otherwise.
 set -u
@@ -24,9 +33,11 @@ ok() { echo "ok   $1"; }
 no() { echo "FAIL $1"; fails=$((fails + 1)); }
 
 mkdir -p "$T/bin"
+# With TT_EDIT, the build writes that source while it runs, a moment after it starts.
 cat > "$T/bin/lake" <<'EOF'
 #!/usr/bin/env bash
 [ "$1" = build ] || exit 2
+if [ -n "${TT_EDIT:-}" ]; then sleep 0.05; touch "$TT_EDIT"; sleep 0.05; fi
 cat "$TT_CONSOLE"; exit "$TT_CODE"
 EOF
 cat > "$T/bin/systemd-run" <<'EOF'
@@ -34,7 +45,9 @@ cat > "$T/bin/systemd-run" <<'EOF'
 while [ $# -gt 0 ]; do case $1 in --user|--scope|-q) shift ;; -p) shift 2 ;; *) break ;; esac; done
 exec "$@"
 EOF
-chmod +x "$T/bin/lake" "$T/bin/systemd-run"
+# A python3 that stops after a module's own counts, as a judge that errors halfway would.
+mkdir -p "$T/halt"; printf '#!/usr/bin/env bash\necho "0 0"; exit 1\n' > "$T/halt/python3"
+chmod +x "$T/bin/lake" "$T/bin/systemd-run" "$T/halt/python3"
 
 # trace FILE [level message]...: a Lake trace whose log holds those entries.
 trace() {
@@ -67,13 +80,32 @@ make_pkg() {
   find "$P" -name '*.lean' -exec touch -d '2026-11-10 10:00' {} +
   find "$P/.lake" -type f -exec touch -d '2026-11-10 11:00' {} +
 }
-console() { printf '%s\n' "$@" > "$T/console"; }
-check() {  # lake's exit code, then the modules asked for: check.sh's output in $T/check.out
-  local code=$1; shift
-  (cd "$P" && TT_CONSOLE=$T/console TT_CODE=$code PATH="$T/bin:$PATH" TMPDIR=$T ./check.sh "$@") > "$T/check.out" 2>&1
+# The package, with Audit/run-all.sh, a stand-in diag that exits $TT_DIAG, and the full run's
+# eight families, each of Demo.Side alone.
+make_audit() {
+  make_pkg; cp "$TOOLS/Audit/run-all.sh" "$P/Audit/"; mkdir -p "$P/Audit/diag"
+  printf '#!/usr/bin/env bash\necho "diag: a stand-in"; exit "$TT_DIAG"\n' > "$P/Audit/diag/run-diag.sh"
+  for f in refresh quick seedelf v2 template classic gaps last; do echo Demo.Side > "$P/Audit/audit-$f.txt"; done
 }
-readers() { (cd "$P" && python3 -I tally.py Demo > "$T/tally.out" 2>&1; python3 -I Audit/count.py audit-t > "$T/count.out" 2>&1); }
-verdict() { grep -E "^[A-Za-z ]{10}$1 " "$T/check.out" | cut -c1-10 | tr -d ' '; }
+console() { printf '%s\n' "$@" > "$T/console"; }
+check() {  # lake's exit code, then the modules asked for: check.sh's output in $T/check.out, its status in $crc
+  local code=$1; shift
+  (cd "$P" && TT_EDIT=${TT_EDIT:-} TT_CONSOLE=$T/console TT_CODE=$code PATH="${TT_PATH:-}$T/bin:$PATH" TMPDIR=$T \
+    ./check.sh "$@") > "$T/check.out" 2>&1
+  crc=$?
+}
+readers() {  # tally.py's and count.py's output; count.py's status in $counted
+  (cd "$P" && python3 -I tally.py Demo > "$T/tally.out" 2>&1; python3 -I Audit/count.py audit-t > "$T/count.out" 2>&1)
+  counted=$?
+}
+run_all() {  # lake's exit code, then the families: run-all.sh's output in $T/run-all.out, its status in $arc
+  local code=$1; shift
+  (cd "$P" && TT_DIAG=${TT_DIAG:-0} TT_CONSOLE=$T/console TT_CODE=$code PATH="$T/bin:$PATH" TMPDIR=$T \
+    bash Audit/run-all.sh "$@") > "$T/run-all.out" 2>&1
+  arc=$?
+}
+verdict() { grep -E "^[A-Za-z ]{10}$1 " "$T/check.out" | grep -v '(an import of ' | cut -c1-10 | tr -d ' '; }
+import_verdict() { grep -E "^[A-Za-z ]{10}$1 \(an import of $2," "$T/check.out" | cut -c1-10 | tr -d ' '; }
 tally_says() { grep -q "^NOT OK   $1: .*$2" "$T/tally.out"; }
 tally_ok() { ! grep -q "^NOT OK   $1:" "$T/tally.out"; }
 count_says() { grep -qE "^  $2 +$1: .*$3" "$T/count.out"; }
@@ -82,6 +114,7 @@ echo "== the readers on a good build"
 make_pkg; readers
 tally_ok Demo.Top && tally_ok Demo.Down && tally_ok Demo.Side && grep -q '3 ok' "$T/count.out" \
   && ok "every module ok" || no "a good build doesn't read ok"
+[ "$counted" = 0 ] && ok "count.py exits 0" || no "count.py exits $counted on a good build"
 
 echo "== the readers: a module resting on one with no trace"
 make_pkg; rm "$P/.lake/build/lib/lean/Demo/Top.trace"; readers
@@ -90,6 +123,7 @@ tally_says Demo.Down 'rests on Demo.Top, which has no trace' && ok "tally.py: De
 count_says Demo.Down STALE 'rests on Demo.Top' && ok "count.py: Demo.Down is STALE" \
   || no "count.py reads Demo.Down ok over Demo.Top's missing trace"
 tally_ok Demo.Side && ok "tally.py: Demo.Side, resting on neither, still ok" || no "tally.py: Demo.Side isn't ok"
+[ "$counted" = 1 ] && ok "count.py exits 1 once a module isn't ok" || no "count.py exits $counted with a module not ok"
 
 echo "== the readers: a dependency's module with no trace"
 make_pkg; rm "$P/.lake/packages/Dep/.lake/build/lib/lean/Dep/Base.trace"; readers
@@ -132,13 +166,16 @@ make_pkg; console; check 124 Demo.Down; readers
   && ok "the module asked for goes" || no "a timed-out module keeps its old build"
 
 echo "== check.sh: verdicts from the module's own trace"
-make_pkg
+make_pkg; console; check 0 Demo.Top Demo.Down Demo.Side
+[ "$(verdict Demo.Top)$(verdict Demo.Down)$(verdict Demo.Side)" = okokok ] && [ "$crc" = 0 ] \
+  && ok "a good run: every module ok, exit 0" || no "a good run reads $(verdict Demo.Top) $(verdict Demo.Down) $(verdict Demo.Side), exit $crc"
 console "warning: PlutusCore/UPLC/CekMachine.lean:317:4: declaration uses 'sorry'" \
   'warning: Demo/Top.lean:4:0: ⚠️ Undetermined' "warning: Demo/Top.lean:6:8: declaration uses 'sorry'" \
   'info: Demo/Down.lean:4:0: ✅ Valid'
 check 0 Demo.Down
-[ "$(verdict Demo.Down)" = ok ] && ok "an import's replayed sorry and Undetermined, a dependency's at any line, aren't the module's" \
-  || no "Demo.Down reads $(verdict Demo.Down) for others' logs"
+[ "$(verdict Demo.Down)" = ok ] && [ "$(import_verdict Demo.Top Demo.Down)" = "" ] && [ "$crc" = 0 ] \
+  && ok "an import's replayed sorry and Undetermined, a dependency's at any line, are no one's but in their own traces" \
+  || no "Demo.Down reads $(verdict Demo.Down), exit $crc, for others' logs on the console"
 trace "$P/.lake/build/lib/lean/Demo/Top.trace" info "Demo/Top.lean:4:0: ✅ Valid" \
   info "Demo/Top.lean:9:0: 'Demo.top' depends on axioms: [propext,
  Classical.choice,
@@ -149,6 +186,72 @@ trace "$P/.lake/build/lib/lean/Demo/Side.trace" warning 'Demo/Side.lean:4:0: ⚠
 console; check 0 Demo.Top Demo.Side
 [ "$(verdict Demo.Top)" = SORRY ] && ok "a native_decide in a wrapped axiom list is SORRY" || no "a wrapped axiom list reads $(verdict Demo.Top)"
 [ "$(verdict Demo.Side)" = UNDETERM ] && ok "its own Undetermined is UNDETERM" || no "an Undetermined reads $(verdict Demo.Side)"
+[ "$crc" = 1 ] && ok "and the run exits 1" || no "a SORRY and an UNDETERM run exits $crc"
+make_pkg; trace "$P/.lake/build/lib/lean/Demo/Side.trace" info "Demo/Side.lean:4:0: ✅ Valid" \
+  warning "Demo/Side.lean:6:8: declaration uses 'sorry'"
+console; check 0 Demo.Side
+[ "$(verdict Demo.Side)" = SORRY ] && [ "$crc" = 1 ] && ok "its own sorry is SORRY, exit 1" \
+  || no "a module's own sorry reads $(verdict Demo.Side), exit $crc"
+rm "$P/.lake/build/lib/lean/Demo/Side.trace"; check 0 Demo.Side
+[ "$(verdict Demo.Side)" = NOTRACE ] && [ "$crc" = 1 ] && ok "a passed build with no trace to read is NO TRACE, exit 1" \
+  || no "a passed build with no trace reads $(verdict Demo.Side), exit $crc"
+make_pkg; console; TT_PATH=$T/halt: check 0 Demo.Down
+[ "$(verdict Demo.Down)" = NOTRACE ] && [ "$crc" = 1 ] && ok "a judge that stops halfway leaves no verdict: NO TRACE, exit 1" \
+  || no "a judge that stops halfway reads $(verdict Demo.Down), exit $crc"
+
+echo "== check.sh: an import the run doesn't list, from its own trace, under its own name"
+make_pkg; console; check 0 Demo.Down
+[ "$(import_verdict Demo.Top Demo.Down)" = "" ] && grep -q 'each read from its own trace: 1 of 1 ok' "$T/check.out" && [ "$crc" = 0 ] \
+  && ok "a clean import: counted ok, exit 0" || no "a clean import: '$(import_verdict Demo.Top Demo.Down)', exit $crc"
+trace "$P/.lake/build/lib/lean/Demo/Top.trace" info "Demo/Top.lean:4:0: ✅ Valid" warning "Demo/Top.lean:6:8: declaration uses 'sorry'"
+check 0 Demo.Down
+[ "$(verdict Demo.Down)" = ok ] && [ "$(import_verdict Demo.Top Demo.Down)" = SORRY ] && [ "$crc" = 1 ] \
+  && ok "its own sorry: SORRY Demo.Top (an import of Demo.Down), Demo.Down ok, exit 1" \
+  || no "an import's own sorry: Demo.Down $(verdict Demo.Down), Demo.Top '$(import_verdict Demo.Top Demo.Down)', exit $crc"
+trace "$P/.lake/build/lib/lean/Demo/Top.trace" warning 'Demo/Top.lean:4:0: ⚠️ Undetermined'
+check 0 Demo.Down
+[ "$(import_verdict Demo.Top Demo.Down)" = UNDETERM ] && [ "$crc" = 1 ] && ok "its own Undetermined: UNDETERM, exit 1" \
+  || no "an import's own Undetermined reads '$(import_verdict Demo.Top Demo.Down)', exit $crc"
+rm "$P/.lake/build/lib/lean/Demo/Top.trace"; check 0 Demo.Down
+[ "$(import_verdict Demo.Top Demo.Down)" = NOTRACE ] && [ "$crc" = 1 ] && ok "no trace to read: NO TRACE, exit 1" \
+  || no "an import with no trace reads '$(import_verdict Demo.Top Demo.Down)', exit $crc"
+make_pkg; trace "$P/.lake/build/lib/lean/Demo/Top.trace" warning "Demo/Top.lean:6:8: declaration uses 'sorry'"
+console; check 0 Demo.Down Demo.Top
+[ "$(verdict Demo.Top)" = SORRY ] && [ "$(import_verdict Demo.Top Demo.Down)" = "" ] \
+  && ok "an import the run lists reads under its own entry alone" || no "a listed import is read as an import too"
+make_pkg; trace "$P/.lake/packages/Dep/.lake/build/lib/lean/Dep/Base.trace" warning "Dep/Base.lean:1:0: declaration uses 'sorry'"
+console; check 0 Demo.Side
+[ "$(verdict Demo.Side)" = ok ] && [ "$crc" = 0 ] && ok "a dependency's module isn't judged" \
+  || no "a dependency's own sorry: Demo.Side $(verdict Demo.Side), exit $crc"
+
+echo "== check.sh dates each trace it reads to the build's start"
+make_pkg; touch -d '2026-11-12 10:00' "$P/Demo/Top.lean" "$P/Demo/Down.lean"; readers
+tally_says Demo.Down 'a trace older than its source (run ./check.sh on it)' \
+  && count_says Demo.Down STALE 'trace older than the source: run ./check.sh on it' \
+  && ok "sources written again after their build: both readers say to run check.sh" || no "a source newer than its trace reads ok"
+console '✔ [3/3] Replayed Demo.Down'; check 0 Demo.Down; readers
+tally_ok Demo.Down && tally_ok Demo.Top && count_says Demo.Down ok '' && count_says Demo.Top ok '' && [ "$counted" = 0 ] \
+  && ok "once check.sh replays Demo.Down, it and its import Demo.Top read ok" || no "a replayed module still reads stale"
+make_pkg; console; TT_EDIT=$P/Demo/Side.lean check 0 Demo.Side; readers
+tally_says Demo.Side 'a trace older than its source' && count_says Demo.Side STALE 'older than the source' \
+  && ok "a source written during its build reads stale after it" || no "a source written during its build reads fresh"
+
+echo "== run-all.sh's exit status"
+make_audit; console; run_all 0
+[ "$arc" = 0 ] && ok "a full run, every family and count.py clean, exits 0" || no "a clean full run exits $arc"
+# Demo.Side's source now expects two ✅ where its log has one: count.py's WRONG, no check.sh's.
+printf 'import Dep.Base\n\ntheorem Demo.side : True := by blaster\n\ntheorem Demo.side2 : True := by blaster\n' > "$P/Demo/Side.lean"
+touch -d '2026-11-10 10:00' "$P/Demo/Side.lean"
+run_all 0 audit-t
+[ "$arc" = 0 ] && grep -q WRONG "$P/Audit/logs/count.txt" \
+  && ok "a run of some families ends on theirs alone, count.py's WRONG aside" || no "a partial run exits $arc over count.py's WRONG"
+run_all 0
+[ "$arc" != 0 ] && grep -q WRONG "$P/Audit/logs/count.txt" && ok "a full run ends on count.py's status too" \
+  || no "a full run exits $arc over count.py's WRONG"
+make_audit; console '✖ [9/9] Building Demo.Top (2.1s)' 'error: build failed'; run_all 1 audit-t
+[ "$arc" != 0 ] && ok "a family's failed check.sh fails a run of some families" || no "a partial run passed over a failed family"
+make_audit; console; TT_DIAG=1 run_all 0
+[ "$arc" != 0 ] && ok "a diag scan that flags a row fails a full run" || no "a full run passed over a failed diag scan"
 
 echo "== the diag scan's exit status"
 S=$T/diag; mkdir -p "$S/clean" "$S/killed" "$S/selftest"

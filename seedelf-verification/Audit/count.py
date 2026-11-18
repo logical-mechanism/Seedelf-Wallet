@@ -11,13 +11,16 @@ What a module expects comes from its own source, comments and strings stripped:
 
 A module is ok only when its trace is newer than its source, every module it imports, directly or
 not, in this package or a dependency's (.lake/packages/), has a trace, its log has no error, no
-"❌", no "Undetermined" line and no `sorry`, and it holds exactly the expected counts. Blaster logs
-Undetermined as a warning only (Blaster/Smt/Env.lean:70): check.sh reports such a module as
-UNDETERM, not ok, and this also checks the counts. Lake keeps the last good trace when a rebuild
-fails, so check.sh removes a failed module's build, here or in the dependency that holds it: it
-reads here as NO TRACE, and a module resting on it as STALE. This reads the last builds only, as
-tally.py does: an import or a pin changed since one shows once check.sh rebuilds. It exits 1 when
-any module isn't ok."""
+"❌", no "Undetermined" line and no `sorry`, and it holds exactly the expected counts. check.sh
+dates each trace it reads to its run, a log Lake replayed too (Lake replays one only for the source
+it was built from), so a trace older than its source is one no run has read since the source was
+written: `./check.sh <module>` rebuilds it or reads it again. Blaster logs Undetermined as a
+warning only (Blaster/Smt/Env.lean:70): check.sh reports such a module as UNDETERM, not ok, and
+this also checks the counts. Lake keeps the last good trace when a rebuild fails, so check.sh
+removes a failed module's build, here or in the dependency that holds it: it reads here as NO
+TRACE, and a module resting on it as STALE. This reads the last builds only, as tally.py does: an
+import or a pin changed since one shows once check.sh rebuilds. It exits 1 when any module isn't
+ok."""
 import glob, json, os, re, sys
 
 SV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -112,14 +115,14 @@ def check(mod):
     if not os.path.exists(trace):
         return "NO TRACE", "never built, or its build failed: see check.sh's output", exp
     if os.path.getmtime(trace) < os.path.getmtime(src):
-        return "STALE", "trace older than the source: rebuild it", exp
+        return "STALE", "trace older than the source: run ./check.sh on it", exp
     under = hole(mod)
     if under:
         return "STALE", f"rests on {under}, which has no trace: see check.sh's output", exp
     try:
         log = json.load(open(trace, encoding="utf-8")).get("log", [])
     except (OSError, ValueError) as e:
-        return "STALE", f"its trace doesn't read ({type(e).__name__}): rebuild it", exp
+        return "STALE", f"its trace doesn't read ({type(e).__name__}): run ./check.sh on it", exp
     msgs = [(e.get("level", ""), e.get("message", "")) for e in log]
     got = {
         "valid": sum("✅ Valid" in m for _, m in msgs),
