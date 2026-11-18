@@ -357,33 +357,40 @@ pub fn extract_bytes_with_logging(inline_datum: &Option<InlineDatum>) -> Option<
 /// The register in a datum's CBOR: constructor 0 holding exactly two 48-byte
 /// byte strings, with nothing after, however the CBOR spells them (a definite
 /// or indefinite list, bytes whole or in chunks, constructor 0's general form
-/// `102([0, fields])`): the shapes Koios would show as constructor 0 with two
-/// fields. It's read token by token, never by a recursive decoder, so a deeply
+/// `102([0, fields])`, its pair definite or indefinite): the shapes Koios would
+/// show as constructor 0 with two fields, as the node reads every one of them
+/// alike. It's read token by token, never by a recursive decoder, so a deeply
 /// nested datum is only "not a register". Whether the points are valid is left
 /// to the caller.
 pub fn register_of_datum(cbor: &[u8]) -> Option<Register> {
     let mut d = Decoder::new(cbor);
-    match d.tag().ok()?.as_u64() {
-        121 => {}
+    // In the general form, whether its pair is an indefinite list, which a break must end after the fields: the node
+    // takes `102([_ 0, fields])` too (chunk 51, r2sign#1).
+    let open_pair = match d.tag().ok()?.as_u64() {
+        121 => false,
         102 => {
-            if d.array().ok()? != Some(2) || d.u64().ok()? != 0 {
+            let pair = d.array().ok()?;
+            if pair.is_some_and(|n| n != 2) || d.u64().ok()? != 0 {
                 return None;
             }
+            pair.is_none()
         }
         _ => return None,
-    }
+    };
     let fields = d.array().ok()?;
     if fields.is_some_and(|n| n != 2) {
         return None;
     }
     let generator = point_bytes(&mut d)?;
     let public_value = point_bytes(&mut d)?;
-    if fields.is_none() {
-        // An indefinite list: a break must end it after the two fields.
-        if d.datatype().ok()? != Type::Break {
-            return None;
+    // An indefinite list, the fields or the pair: a break must end each, after the two fields.
+    for open in [fields.is_none(), open_pair] {
+        if open {
+            if d.datatype().ok()? != Type::Break {
+                return None;
+            }
+            d.set_position(d.position() + 1);
         }
-        d.set_position(d.position() + 1);
     }
     (d.position() == cbor.len())
         .then(|| Register::new(hex::encode(generator), hex::encode(public_value)))
