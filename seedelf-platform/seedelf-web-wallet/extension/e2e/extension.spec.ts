@@ -52,6 +52,11 @@ import {
 // fingerprint, and says what it calls itself.
 const TUSDM = "asset13vxx…6fmzjw";
 const PRIVATE_TUSDM = "asset1synt…ctusdm";
+// The Add tokens picker reads a token passing for another out whole, its fingerprint and then what it calls itself
+// (chunk 51, gap-g10#3), so each is picked by that name.
+const LOOKALIKE = "Calls itself tUSDM, not on the wallet's list";
+const TUSDM_PICKED = `${TUSDM}, ${LOOKALIKE}`;
+const PRIVATE_TUSDM_PICKED = `${PRIVATE_TUSDM}, ${LOOKALIKE}`;
 
 /** The 5 ₳ of ADA alone a collateral payment from the 12-word phrase's account makes, at its own address. */
 function collateralMadeBy(txHash: string) {
@@ -1681,7 +1686,7 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await page.getByRole("button", { name: "Take SIRIUS-A off" }).click();
   await expect(page.getByLabel(/^Amount of /)).toHaveCount(1);
   await page.getByRole("button", { name: "Take SIRIUS-B off" }).click();
-  await addTokens(page, [TUSDM]);
+  await addTokens(page, [TUSDM_PICKED]);
 
   // Any amount of a token: Max fills in all of it.
   const tusdm = page.getByLabel(`Amount of ${TUSDM}`);
@@ -2090,7 +2095,7 @@ test("send from the public account: a token with only the ADA it needs, review, 
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
   await expect(page.getByTestId("review-wait")).toHaveText("Enter an amount.");
   await expect(page.getByTestId("minimum-hint")).toHaveCount(0);
-  await addTokens(page, [TUSDM]);
+  await addTokens(page, [TUSDM_PICKED]);
   await page.getByLabel(`Amount of ${TUSDM}`).fill("1000");
   await expect(page.getByTestId("minimum-hint")).toContainText("only the ADA the tokens need");
   await expect(page.getByLabel("Amount", { exact: true })).toHaveAttribute("placeholder", "Minimum");
@@ -2379,10 +2384,10 @@ test("several recipients: Send from the public account pays a handle and a Seede
   await expect(second.getByLabel("To", { exact: true })).toBeFocused();
 
   await first.getByLabel("Amount", { exact: true }).fill("3");
-  await addTokens(page, [TUSDM], first);
+  await addTokens(page, [TUSDM_PICKED], first);
   await first.getByLabel(`Amount of ${TUSDM}`).fill("1000");
   // The second recipient's tUSDM box offers only what the first left.
-  await addTokens(page, [TUSDM], second);
+  await addTokens(page, [TUSDM_PICKED], second);
   await expect(second.getByText("of 2,999,999,000", { exact: true })).toBeVisible();
   await second.getByRole("button", { name: `Take ${TUSDM} off` }).click();
   await second.getByLabel("To", { exact: true }).fill(transferPreprod.to);
@@ -2589,7 +2594,7 @@ test("send to a Seedelf: paste its name, see it found, review, and nothing sent 
 
   // 5 ₳ and 1 of the private tUSDM, of the 1,234.56 held.
   await page.getByLabel("Amount", { exact: true }).fill("5");
-  await addTokens(page, [PRIVATE_TUSDM]);
+  await addTokens(page, [PRIVATE_TUSDM_PICKED]);
   const tusdm = page.getByLabel(`Amount of ${PRIVATE_TUSDM}`);
   await tusdm.fill("2000");
   await expect(tusdm).toHaveValue("");
@@ -2706,7 +2711,7 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   await expect(page.getByTestId("withdraw-own")).toHaveCount(0);
 
   // Max hides the token amounts; an amount brings them back.
-  await addTokens(page, [PRIVATE_TUSDM]);
+  await addTokens(page, [PRIVATE_TUSDM_PICKED]);
   await page.getByRole("button", { name: "Max" }).click();
   await expect(page.getByTestId("withdraw-max-note")).toContainText("in as many transactions as that takes");
   await expect(page.getByLabel(`Amount of ${PRIVATE_TUSDM}`)).toHaveCount(0);
@@ -4956,7 +4961,7 @@ test("every wallet screen in the side panel, for the look", async ({ context, ko
   await back();
   await panel.getByRole("button", { name: "Make private" }).click();
   await panel.getByLabel("Amount", { exact: true }).fill("25.5");
-  await addTokens(panel, [TUSDM]);
+  await addTokens(panel, [TUSDM_PICKED]);
   await panel.getByLabel(`Amount of ${TUSDM}`).fill("1000");
   await shot("move-in");
   await panel.getByRole("button", { name: "Review" }).click();
@@ -4965,7 +4970,7 @@ test("every wallet screen in the side panel, for the look", async ({ context, ko
   await back();
   await back();
   await panel.getByRole("button", { name: "Send publicly" }).click();
-  await addTokens(panel, [TUSDM]);
+  await addTokens(panel, [TUSDM_PICKED]);
   await panel.getByLabel(`Amount of ${TUSDM}`).fill("1000");
   await shot("send");
   await back();
