@@ -21,7 +21,7 @@ use seedelf_core::build::{self, TooLarge};
 use seedelf_core::utxos;
 use seedelf_koios::koios::UtxoResponse;
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// What some rows hold together, for a balance to show.
 pub struct Totals {
@@ -195,10 +195,30 @@ pub(crate) fn sweepable(
     Ok(taken)
 }
 
+/// `row`'s lovelace and its tokens, read in one pass. A UTxO's value holds
+/// each token once, so there's nothing to add up: core's `assets_of` adds
+/// them one at a time, in time that grows with the square of the kinds, and
+/// anyone can pay a pile of them (chunk 51, l3cli#3).
+fn value_of(row: &UtxoResponse) -> Result<(u64, Assets)> {
+    let lovelace = string_to_u64(row.value.clone()).with_context(|| unreadable(row))?;
+    let items = row
+        .asset_list
+        .iter()
+        .flatten()
+        .map(|token| {
+            let quantity =
+                string_to_u64(token.quantity.clone()).with_context(|| unreadable(row))?;
+            Asset::new(token.policy_id.clone(), token.asset_name.clone(), quantity)
+                .with_context(|| unreadable(row))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((lovelace, Assets { items }))
+}
+
 /// What `row` brings to a sweep beyond the least ADA its own tokens' outputs
 /// need (`needs`): below zero for a pile of tokens holding less than that.
 fn worth(row: &UtxoResponse, needs: &impl Fn(&Assets) -> Result<u64>) -> Result<i128> {
-    let (lovelace, tokens) = utxos::assets_of(vec![row.clone()])?;
+    let (lovelace, tokens) = value_of(row)?;
     let needed = if tokens.is_empty() {
         0
     } else {
@@ -207,9 +227,12 @@ fn worth(row: &UtxoResponse, needs: &impl Fn(&Assets) -> Result<u64>) -> Result<
     Ok(i128::from(lovelace) - i128::from(needed))
 }
 
-/// `rows` in the order a sweep takes them: ADA alone first, then those
-/// holding tokens; each the most it brings first ([`worth`]), ties by
-/// outpoint. When fewer go, the last stay: piles of tokens that bring least.
+/// `rows` in the order a sweep takes them: the most each brings first
+/// ([`worth`]), whatever it holds, ADA alone first of those that bring the
+/// same, then by outpoint. When fewer go, the last stay: piles of tokens that
+/// bring least. Every UTxO of ADA alone came first, so 20 small ones, anyone's
+/// to send, shut out the ADA the user's own change keeps beside their tokens
+/// (chunk 51, l3cli#1 and l3money#2).
 pub(crate) fn by_worth(
     rows: Vec<UtxoResponse>,
     needs: &impl Fn(&Assets) -> Result<u64>,
@@ -218,7 +241,7 @@ pub(crate) fn by_worth(
         .into_iter()
         .map(|u| {
             let holds_tokens = u.asset_list.as_ref().is_some_and(|a| !a.is_empty());
-            Ok(((holds_tokens, std::cmp::Reverse(worth(&u, needs)?)), u))
+            Ok(((Reverse(worth(&u, needs)?), holds_tokens), u))
         })
         .collect::<Result<Vec<_>>>()?;
     keyed.sort_by(|(a_key, a), (b_key, b)| {
@@ -229,13 +252,89 @@ pub(crate) fn by_worth(
     Ok(keyed.into_iter().map(|(_, u)| u).collect())
 }
 
+/// Whether `row` holds any of `tokens`.
+fn holds_any(row: &UtxoResponse, tokens: &Assets) -> bool {
+    tokens.items.iter().any(|want| {
+        let (policy, name) = (hex::encode(want.policy_id), hex::encode(&want.token_name));
+        row.asset_list
+            .iter()
+            .flatten()
+            .any(|a| a.policy_id == policy && a.asset_name == name)
+    })
+}
+
+/// Of `rows`, in the order given, at most `at_most`, whose tokens come to no
+/// more than [`MOST_KINDS`] kinds together with `base`'s. Core adds up the
+/// tokens of all it's handed in time that grows with the square of the
+/// kinds, and anyone can pay a pile of them: handed every UTxO, 40 piles of
+/// 1,000 took 34 s (chunk 51, l3cli#3 and l3money#3). One past the kinds is
+/// skipped, and those after it still looked at, so a UTxO of ADA alone always
+/// has its place; no one transaction could carry them all anyway.
+pub(crate) fn within_kinds(
+    rows: impl IntoIterator<Item = UtxoResponse>,
+    base: &Assets,
+    at_most: usize,
+) -> Vec<UtxoResponse> {
+    let mut kinds: BTreeSet<(String, String)> = base
+        .items
+        .iter()
+        .map(|a| (hex::encode(a.policy_id), hex::encode(&a.token_name)))
+        .collect();
+    let mut kept = Vec::new();
+    for row in rows {
+        if kept.len() == at_most {
+            break;
+        }
+        let new: BTreeSet<(String, String)> = row
+            .asset_list
+            .iter()
+            .flatten()
+            .map(|a| (a.policy_id.clone(), a.asset_name.clone()))
+            .filter(|kind| !kinds.contains(kind))
+            .collect();
+        if kinds.len() + new.len() > MOST_KINDS {
+            continue;
+        }
+        kinds.extend(new);
+        kept.push(row);
+    }
+    kept
+}
+
+/// The UTxOs at a payer's address that `fund`, `create` and `util extract`
+/// hand core's selection, of `rows`: those holding a token `sent`, then those
+/// of ADA alone, then the rest, each the most lovelace first, within
+/// [`MOST_KINDS`] kinds with `base`'s ([`within_kinds`]). Anyone can pay that
+/// address a pile of tokens too.
+pub(crate) fn for_select(
+    rows: Vec<UtxoResponse>,
+    sent: &Assets,
+    base: &Assets,
+) -> Result<Vec<UtxoResponse>> {
+    let mut keyed = rows
+        .into_iter()
+        .map(|u| {
+            let lovelace = string_to_u64(u.value.clone()).with_context(|| unreadable(&u))?;
+            let holds_tokens = u.asset_list.as_ref().is_some_and(|a| !a.is_empty());
+            Ok(((!holds_any(&u, sent), holds_tokens, Reverse(lovelace)), u))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    keyed.sort_by_key(|(key, _)| *key);
+    Ok(within_kinds(
+        keyed.into_iter().map(|(_, u)| u),
+        base,
+        usize::MAX,
+    ))
+}
+
 /// The UTxOs a spend from the contract picks among (`transfer`, `sweep`,
 /// `util mint`): at most `at_most` of `rows`, every owned one. First those
 /// holding the tokens `needed`, as few as hold them; then the rest in the
 /// order a sweep takes them ([`by_worth`], with `needs` the least a UTxO's
 /// own tokens need back in the contract). What the spend would never pick
 /// takes no place (core's [`build::max_inputs_by`]: a reference script, or
-/// tokens past what one output holds with the rest's).
+/// tokens past what one output holds with the rest's), and core is handed no
+/// more than one transaction could take ([`within_kinds`]).
 ///
 /// Never Koios's order, nor any other a payer picks: anyone can pay the
 /// contract under one of your registers and grind the hash its transaction
@@ -247,17 +346,27 @@ pub(crate) fn window(
     needs: &impl Fn(&Assets) -> Result<u64>,
     at_most: usize,
 ) -> Result<Vec<UtxoResponse>> {
-    let ranked = by_worth(rows, needs)?;
-    let place: HashMap<(&str, u64), usize> = ranked
+    let evaluable: Vec<UtxoResponse> = rows
+        .into_iter()
+        .filter(|u| seedelf_core::eval::refusal(u).is_none())
+        .collect();
+    let ranked = by_worth(evaluable, needs)?;
+    let place: HashMap<(String, u64), usize> = ranked
         .iter()
         .enumerate()
-        .map(|(i, u)| ((u.tx_hash.as_str(), u.tx_index), i))
+        .map(|(i, u)| ((u.tx_hash.clone(), u.tx_index), i))
         .collect();
+    // Every holder of what's sent, for core's `holding` to pick from, then the
+    // first of the rest by rank.
+    let (holders, others): (Vec<_>, Vec<_>) =
+        ranked.into_iter().partition(|u| holds_any(u, needed));
+    let most = holders.len() + at_most;
+    let candidates = within_kinds(holders.into_iter().chain(others), &Assets::new(), most);
     // max_inputs_by takes the most first: here, the first by worth.
-    let (window, _) = build::max_inputs_by(&ranked, needed, at_most, |u| {
+    let (window, _) = build::max_inputs_by(&candidates, needed, at_most, |u| {
         Reverse(
             place
-                .get(&(u.tx_hash.as_str(), u.tx_index))
+                .get(&(u.tx_hash.clone(), u.tx_index))
                 .copied()
                 .unwrap_or(usize::MAX),
         )
@@ -463,6 +572,99 @@ mod tests {
                 .iter()
                 .all(|why| why.ends_with("(run sweep --all again)")),
             "{went:?}"
+        );
+    }
+
+    /// The parameters the CLI's tests run on, as preprod had them.
+    fn params() -> seedelf_koios::koios::ProtocolParameters {
+        seedelf_koios::koios::ProtocolParameters {
+            min_fee_a: 44,
+            min_fee_b: 155_381,
+            coins_per_utxo_size: 4_310,
+            key_deposit: 2_000_000,
+            drep_deposit: Some(500_000_000),
+            price_mem: 0.0577,
+            price_step: 0.0000721,
+            cost_model_v3: Vec::new(),
+            cost_model_v1: Vec::new(),
+            cost_model_v2: Vec::new(),
+            min_fee_ref_script_cost_per_byte: seedelf_koios::koios::Ratio::whole(15),
+        }
+    }
+
+    /// What a token UTxO needs back in the contract, as `transfer` asks.
+    fn deposit(tokens: &Assets) -> Result<u64> {
+        build::minimum_deposit(&params(), tokens)
+    }
+
+    /// A stranger's pile at outpoint `n`: 1,000 one-of tokens under a policy
+    /// of its own, two-byte names, about its least in ADA.
+    fn big_pile(n: u8) -> UtxoResponse {
+        let mut pile = row(n, 19_000_000, 0);
+        pile.asset_list = Some(
+            (0..1_000u16)
+                .map(|i| KoiosAsset {
+                    policy_id: hex::encode([n; 28]),
+                    asset_name: hex::encode(i.to_be_bytes()),
+                    quantity: "1".to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        pile
+    }
+
+    /// The 20 a spend draws on are picked in bounded time, however many piles
+    /// of tokens a stranger sends: core adds up the tokens of all it's handed
+    /// in time that grows with the square of the kinds, and it was handed every
+    /// owned UTxO, so 40 piles of 1,000 took 34 s in a release build (chunk 51,
+    /// l3cli#3 and l3money#3). Here they must take less than 60 s in a debug one.
+    #[test]
+    fn a_strangers_piles_dont_slow_the_window() {
+        let mut rows: Vec<UtxoResponse> = (0..40).map(|n| big_pile(0x40 + n)).collect();
+        rows.extend((0..3).map(|n| row(0x10 + n, 100_000_000, 0)));
+        let (done, picked) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(window(rows, &Assets::new(), &deposit, 20).map(|w| {
+                w.into_iter()
+                    .map(|u| (u.tx_hash, u.asset_list.map_or(0, |a| a.len())))
+                    .collect::<Vec<_>>()
+            }));
+        });
+        let window = picked
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the window was picked within 60 s")
+            .expect("a window");
+        let ours: Vec<String> = (0..3).map(|n| hex::encode([0x10 + n; 32])).collect();
+        assert!(
+            ours.iter()
+                .all(|hash| window.iter().any(|(h, _)| h == hash)),
+            "the user's three UTxOs of ADA alone are among them: {window:?}"
+        );
+    }
+
+    /// Core is handed no more kinds of token than one transaction could
+    /// carry, however many piles there are, and every UTxO of ADA alone still
+    /// has its place (chunk 51, l3cli#3).
+    #[test]
+    fn within_kinds_hands_core_no_more_than_one_transaction_carries() {
+        let mut rows: Vec<UtxoResponse> = (0..10).map(|n| big_pile(0x40 + n)).collect();
+        rows.extend((0..3).map(|n| row(0x10 + n, 100_000_000, 0)));
+        let kept = within_kinds(rows, &Assets::new(), usize::MAX);
+        let kinds: BTreeSet<(String, String)> = kept
+            .iter()
+            .flat_map(|u| u.asset_list.iter().flatten())
+            .map(|a| (a.policy_id.clone(), a.asset_name.clone()))
+            .collect();
+        assert_eq!(kinds.len(), MOST_KINDS, "4 piles of 1,000");
+        let alone = kept
+            .iter()
+            .filter(|u| u.asset_list.as_ref().is_some_and(|a| a.is_empty()))
+            .count();
+        assert_eq!(
+            (kept.len(), alone),
+            (7, 3),
+            "the 4 piles that fit, and the 3 of ADA alone"
         );
     }
 }

@@ -198,11 +198,54 @@ pub fn collect_address_utxos(utxos: Vec<UtxoResponse>) -> Result<Vec<UtxoRespons
     Ok(usable_utxos)
 }
 
+/// The least lovelace [`select`] keeps for change holding `tokens`: one
+/// output's least for all of them, times the outputs they take at
+/// `MAXIMUM_TOKENS_PER_UTXO` to an output.
+fn change_floor(params: &ProtocolParameters, tokens: &Assets) -> Result<u64> {
+    let kinds: u64 = tokens.len();
+    let minimum: u64 = wallet_minimum_lovelace_with_assets(params, tokens.clone())
+        .context("Invalid Minimum Lovelace")?;
+    // we need to calculate how many multiple change utxos we need
+    let multiplier: u64 = if kinds > MAXIMUM_TOKENS_PER_UTXO {
+        // add one due to floor division
+        (kinds / MAXIMUM_TOKENS_PER_UTXO) + 1
+    } else {
+        1
+    };
+    Ok(multiplier.saturating_mul(minimum))
+}
+
 /// As few of `held` (each UTxO's lovelace and tokens) as hold `tokens`
-/// together, as a script spend picks them (build.rs `holding`): for each
-/// token in turn, those holding the most of it first, until there's enough.
-/// Their places in `held`, in the order picked.
-fn holders_of(held: &[(u64, Assets)], tokens: &Assets) -> Vec<usize> {
+/// together: for each token in turn, those that bring most first, until
+/// there's enough. What a holder brings is its lovelace less what its other
+/// tokens, all bound for the change, need there ([`change_floor`]), so one
+/// that brings less than nothing comes last. By how much of a token each
+/// held, a UTxO of 2 ₳, 150 T and 40 NFTs led one of 50 ₳ and 100 T, and its
+/// NFTs put the change's floor past all the address held; a stranger's at
+/// the address, with more T than the user's, led too (chunk 51, l3money#1 and
+/// l3cli#2). Their places in `held`, in the order picked.
+fn holders_of(
+    params: &ProtocolParameters,
+    held: &[(u64, Assets)],
+    tokens: &Assets,
+) -> Result<Vec<usize>> {
+    let brings = |i: usize| -> Result<i128> {
+        let (lovelace, assets) = &held[i];
+        let others = Assets {
+            items: assets
+                .items
+                .iter()
+                .filter(|a| {
+                    !tokens
+                        .items
+                        .iter()
+                        .any(|t| t.policy_id == a.policy_id && t.token_name == a.token_name)
+                })
+                .cloned()
+                .collect(),
+        };
+        Ok(i128::from(*lovelace) - i128::from(change_floor(params, &others)?))
+    };
     let mut picked: Vec<usize> = Vec::new();
     for want in &tokens.items {
         let of = |i: usize| -> u64 {
@@ -214,11 +257,12 @@ fn holders_of(held: &[(u64, Assets)], tokens: &Assets) -> Vec<usize> {
                 .fold(0, |sum, a| sum.saturating_add(a.amount))
         };
         let mut have: u64 = picked.iter().fold(0, |sum, &i| sum.saturating_add(of(i)));
-        let mut holders: Vec<usize> = (0..held.len())
+        let mut holders: Vec<(Reverse<i128>, usize)> = (0..held.len())
             .filter(|i| !picked.contains(i) && of(*i) > 0)
-            .collect();
-        holders.sort_by_key(|&i| Reverse(of(i)));
-        for i in holders {
+            .map(|i| Ok((Reverse(brings(i)?), i)))
+            .collect::<Result<Vec<_>>>()?;
+        holders.sort_by_key(|(most, _)| *most);
+        for (_, i) in holders {
             if have >= want.amount {
                 break;
             }
@@ -226,7 +270,7 @@ fn holders_of(held: &[(u64, Assets)], tokens: &Assets) -> Vec<usize> {
             picked.push(i);
         }
     }
-    picked
+    Ok(picked)
 }
 
 // lets assume that the lovelace here initially accounts for the estimated fee, like 1 ada or something
@@ -256,9 +300,9 @@ fn do_select(
 
     // The order to take them in, as a script spend takes them when nothing is
     // known of their histories (build.rs `select_script_inputs`): the fewest
-    // holding the tokens being sent ([`holders_of`]), then those with no
-    // tokens, then every other token UTxO, each group the most lovelace
-    // first. Koios reports a token-less outpoint as either `Some(vec![])` or
+    // holding the tokens being sent, those that bring most first
+    // ([`holders_of`]), then those with no tokens, then every other token
+    // UTxO, each of these groups the most lovelace first. Koios reports a token-less outpoint as either `Some(vec![])` or
     // `None`; both must group together. The loop below takes a UTxO holding
     // none of the tokens only once they're all found, and never comes back to
     // one it passed, so the tokens' holders go first: an address whose ADA
@@ -278,7 +322,7 @@ fn do_select(
             Ok((v, assets_of(vec![u.clone()])?.1))
         })
         .collect::<Result<Vec<_>>>()?;
-    let front: Vec<usize> = holders_of(&held, &tokens);
+    let front: Vec<usize> = holders_of(params, &held, &tokens)?;
     let mut rest: Vec<usize> = (0..held.len()).filter(|i| !front.contains(i)).collect();
     rest.sort_by_key(|&i| (!held[i].1.is_empty(), Reverse(held[i].0)));
     let utxos: Vec<UtxoResponse> = front
@@ -350,22 +394,12 @@ fn do_select(
             let change_assets: Assets = found_assets
                 .separate(tokens.clone())
                 .context("Can't Separate Assets")?;
-            let number_of_change_assets: u64 = change_assets.len();
-            let minimum: u64 = wallet_minimum_lovelace_with_assets(params, change_assets.clone())
-                .context("Invalid Minimum Lovelace")?;
-            // we need to calculate how many multiple change utxos we need
-            let multiplier: u64 = if number_of_change_assets > MAXIMUM_TOKENS_PER_UTXO {
-                // add one due to floor division
-                (number_of_change_assets / MAXIMUM_TOKENS_PER_UTXO) + 1
-            } else {
-                1
-            };
             // we need lovelace for both the spend goal AND the change min-UTxO.
             // Compare via addition instead of subtraction — degenerate token
             // UTxOs (lots of accessory tokens, little ADA) can make the change
             // floor exceed gathered lovelace, which would underflow u64.
-            let change_floor: u64 = multiplier.saturating_mul(minimum);
-            let total_needed: u64 = lovelace_goal.saturating_add(change_floor);
+            let floor: u64 = change_floor(params, &change_assets)?;
+            let total_needed: u64 = lovelace_goal.saturating_add(floor);
             if current_lovelace_sum >= total_needed {
                 found_enough = true;
                 break;
@@ -374,7 +408,7 @@ fn do_select(
                 return do_select(
                     params,
                     utxos.clone(),
-                    lovelace.saturating_add(change_floor),
+                    lovelace.saturating_add(floor),
                     tokens.clone(),
                     lovelace_goal,
                 );

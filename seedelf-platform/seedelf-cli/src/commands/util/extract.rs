@@ -7,7 +7,7 @@ use seedelf_koios::koios::{
     UtxoResponse, address_utxos, epoch_params, evaluate_transaction, utxo_info,
 };
 
-use crate::commands::fee;
+use crate::commands::{fee, rows};
 use crate::web_server;
 use anyhow::{Result, bail};
 use seedelf_core::address;
@@ -140,7 +140,9 @@ pub async fn run(args: ExtractArgs, network_flag: bool, variant: u64) -> Result<
     all_utxos.retain(|utxo| utxo.reference_script.is_none());
     // Anyone can pay the address too: what would push a token's total past
     // what one output holds, with the extracted UTxO's, stays out of the
-    // selection (chunk 51).
+    // selection (chunk 51), and core is handed no more kinds of token than
+    // one transaction could carry, with the extracted UTxO's (l3cli#3).
+    let all_utxos = rows::for_select(all_utxos, &Assets::new(), &empty_utxo_tokens)?;
     let (all_utxos, _) = utxos::fitting(&all_utxos, &empty_utxo_tokens, |_| false)?;
     let usable_utxos: Vec<UtxoResponse> =
         utxos::select(&params, all_utxos, minimum_lovelace, Assets::new())?;

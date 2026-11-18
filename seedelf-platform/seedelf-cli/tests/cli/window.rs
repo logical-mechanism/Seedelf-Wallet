@@ -370,6 +370,92 @@ async fn a_strangers_piles_at_the_lowest_hashes_never_hold_back_the_users_own_ad
     );
 }
 
+/// One of the user's NFTs.
+fn nft(n: u8) -> TokenAmount {
+    (
+        format!("{:02x}", 0xa0 + n).repeat(28),
+        hex::encode("nft"),
+        1,
+    )
+}
+
+/// The UTxOs a spend draws on are those that bring most, whatever each
+/// holds (chunk 51, l3cli#1 and l3money#2). A CLI spend leaves the user's ADA
+/// beside their tokens: core's change puts the rest of it with the last 20.
+/// Every UTxO of ADA alone came first, so 20 small ones, a stranger's at the
+/// contract's least for 29 ₳ or the user's own receipts, filled the 20 and
+/// shut out 450 ₳: a transfer or a sweep of 100 ₳ was refused, and
+/// `sweep --all` sent the small ones and left the 450 ₳.
+#[tokio::test]
+#[serial]
+async fn what_brings_most_is_taken_whatever_it_holds() {
+    const HUNDRED_ADA: u64 = 100_000_000;
+    // The user's Seedelf, 300 ₳ beside 3 NFTs and 150 ₳ beside 1, then
+    // `alone` UTxOs of ADA alone of `each` lovelace.
+    let layout = |scalar, alone: u64, each: u64| {
+        let mut rows = vec![
+            seedelf_utxo(scalar, 1, 1_500_000, SAMPLE_SEEDELF),
+            wallet_utxo(scalar, 2, 300_000_000, &[nft(1), nft(2), nft(3)]),
+            wallet_utxo(scalar, 3, 150_000_000, &[nft(4)]),
+        ];
+        rows.extend((0..alone).map(|i| wallet_utxo(scalar, 100 + i, each, &[])));
+        rows
+    };
+    let token_change = [(tx_hash(2), 0), (tx_hash(3), 0)];
+    let mut wrong = Vec::new();
+    // A stranger's 20 at the contract's least, the user's own 25 receipts,
+    // and 19, which always paid.
+    for (alone, each) in [(20, 1_460_000), (25, 1_500_000), (19, 1_460_000)] {
+        for command in ["transfer", "sweep", "sweep --all"] {
+            let mut scenario = Scenario::start().await;
+            let rows = layout(scenario.scalar, alone, each);
+            scenario.mount_credential_utxos(rows).await;
+            scenario.mount_evaluate(20).await;
+            scenario.mount_collateral().await;
+            scenario.mount_submit().await;
+            let result = match command {
+                "transfer" => {
+                    transfer::run(
+                        TransforArgs {
+                            seedelfs: vec![SAMPLE_SEEDELF.to_string()],
+                            lovelaces: Some(vec![HUNDRED_ADA]),
+                            assets: vec![],
+                            utxos: None,
+                        },
+                        PREPROD,
+                        VARIANT,
+                    )
+                    .await
+                }
+                "sweep" => {
+                    sweep::run(sweep_args(Some(HUNDRED_ADA), false, None), PREPROD, VARIANT).await
+                }
+                _ => sweep::run(sweep_args(None, true, None), PREPROD, VARIANT).await,
+            };
+            let case = format!("{command}, {alone} x {each} lovelace of ADA alone");
+            if let Err(e) = result {
+                wrong.push(format!("{case}: {e:#}"));
+                continue;
+            }
+            let tx = decode_tx(&scenario.submitted_cbor().await);
+            assert_sound_transaction(&tx, &scenario, &protocol_params().await);
+            let spent = token_change
+                .iter()
+                .filter(|input| tx.inputs.contains(input))
+                .count();
+            // --all takes both; a payment of 100 ₳, one at least.
+            if spent == 0 || (command == "sweep --all" && spent < 2) {
+                wrong.push(format!("{case}: spent {:?}", tx.inputs));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "the 450 ₳ beside the user's NFTs is among the 20 a spend draws on:\n{}",
+        wrong.join("\n")
+    );
+}
+
 /// A token being sent is found wherever its UTxO sorts: those holding it
 /// lead the 20 a spend draws on. 25 UTxOs of ADA alone, each bringing more
 /// than the token's own, come first by what they bring, and Koios lists the

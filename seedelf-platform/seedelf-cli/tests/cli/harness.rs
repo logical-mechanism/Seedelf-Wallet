@@ -248,6 +248,44 @@ pub fn junk() -> TokenAmount {
     ("cc".repeat(28), hex::encode("JUNK"), i64::MAX as u64)
 }
 
+/// A stranger's big pile, the `n`th: 1,000 one-of tokens under a policy of
+/// its own, with two-byte names, about 19 ₳ at the ledger's least. Core adds
+/// up tokens in time that grows with the square of the kinds (chunk 51,
+/// l3cli#3).
+pub fn big_pile(n: u16) -> Vec<TokenAmount> {
+    (0..1_000u16)
+        .map(|i| {
+            (
+                format!("{n:04x}").repeat(14),
+                hex::encode(i.to_be_bytes()),
+                1,
+            )
+        })
+        .collect()
+}
+
+/// What `run` comes to, run on a thread of its own, or a failure once it has
+/// taken longer than `limit`: a run busy adding up tokens never yields, so it
+/// can't be timed out on the test's own thread.
+pub async fn within<F, T>(limit: std::time::Duration, run: impl FnOnce() -> F + Send + 'static) -> T
+where
+    F: std::future::Future<Output = T>,
+    T: Send + 'static,
+{
+    let (done, answer) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        let _ = done.send(runtime.block_on(run()));
+    });
+    tokio::time::timeout(limit, answer)
+        .await
+        .unwrap_or_else(|_| panic!("the run took longer than {limit:?}"))
+        .expect("the run's answer")
+}
+
 /// `count` distinct tokens, one of each, named by a single byte, 200 to a
 /// policy, the policies numbered from `first`: a pile of tokens, which takes
 /// more bytes and more ADA in the outputs a payment splits it into (20 tokens
