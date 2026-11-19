@@ -766,10 +766,11 @@ describe("staking transactions", () => {
     expect(takesDeposit({ kind: "drep-register", delegate: false }, true)).toBe(true);
   });
 
-  it("refuses the same choice again, locked rewards, and what's gone stale", async () => {
+  it("refuses locked rewards and what's gone stale, and builds the same choice again", async () => {
     const t = await unlocked();
-    await expect(t.staking.build("preprod", { kind: "delegate", pool: LOGIC })).rejects.toThrow("already staking with this pool");
-    await expect(t.staking.build("preprod", { kind: "vote", drep: "drep_always_abstain" })).rejects.toThrow("already delegated");
+    // The same pool or vote again is the ledger's to take, for a fee: built, not refused (chunk 51, e7b#1).
+    expect(await t.staking.build("preprod", { kind: "delegate", pool: LOGIC })).toMatchObject({ pool: LOGIC, deposit: "0" });
+    expect(await t.staking.build("preprod", { kind: "vote", drep: "drep_always_abstain" })).toMatchObject({ deposit: "0" });
 
     const info = stakingPreprod.account_info[0]!;
     t.koios.stakes.set(info.stake_address, { ...info, delegated_drep: null });

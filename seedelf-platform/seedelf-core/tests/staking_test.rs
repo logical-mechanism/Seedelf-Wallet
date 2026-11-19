@@ -1050,7 +1050,11 @@ fn an_anchor_is_an_address_and_a_hash() {
     let err = |url: &str, hash: &str| anchor(url, hash).unwrap_err().to_string();
     let hash = "ab".repeat(32);
     assert!(err("", &hash).contains("address"));
-    assert!(err("https://example.com/a b.json", &hash).contains("spaces"));
+    // A space is text the ledger takes, as any is within 128 bytes (chunk 51, e7b#2: tests/drep_anchor_test.rs).
+    assert_eq!(
+        anchor("https://example.com/a b.json", &hash).unwrap().url,
+        "https://example.com/a b.json"
+    );
     let long = format!("https://example.com/{}", "a".repeat(MAX_ANCHOR_URL));
     assert!(err(&long, &hash).contains("limit of 128"));
     let most = format!("https://example.com/{}", "a".repeat(MAX_ANCHOR_URL - 20));

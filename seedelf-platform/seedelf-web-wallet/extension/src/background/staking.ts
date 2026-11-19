@@ -504,7 +504,10 @@ export class StakingService {
   /**
    * Builds and signs `action` from the Cardano account, reading it and its
    * stake key fresh, and the account's DRep for a DRep action. The same pool
-   * or vote delegation again is refused: it would only cost a fee.
+   * or vote delegation again is built too: the ledger takes it, for a fee,
+   * and Koios's word can be older than the ledger's, which drops a delegation
+   * to a pool or DRep that retires with no certificate saying so (chunk 51,
+   * e7b#1). The screens say it's where it goes already.
    */
   async build(network: NetworkName, action: StakingAction): Promise<StakingSummary> {
     const { wasm, wallet } = this.deps;
@@ -539,12 +542,6 @@ export class StakingService {
       // can't pay it alone (chunk 23's second review, ST-9).
       const empty = takesDeposit(action, state.registered) ? "worker.staking.accountEmpty" : "worker.staking.accountEmptyFee";
       throw nothingInAccount(held, t(empty));
-    }
-    if (action.kind === "delegate" && state.registered && stake?.delegated_pool === wasm.poolId(action.pool)) {
-      throw new Error(t("worker.staking.samePool"));
-    }
-    if (action.kind === "vote" && state.drep === wasm.drepId(action.drep)) {
-      throw new Error(t("worker.staking.sameDrep"));
     }
 
     const request = {

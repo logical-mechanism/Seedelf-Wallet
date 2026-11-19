@@ -550,8 +550,10 @@ fn nullable(anchor: &Option<Anchor>) -> Nullable<Anchor> {
 pub const MAX_ANCHOR_URL: usize = 128;
 
 /// An anchor: where a document is published, and the blake2b-256 hash of its
-/// exact bytes (64 hex characters). The address is at most
-/// [`MAX_ANCHOR_URL`] bytes, with no spaces or control characters.
+/// exact bytes (64 hex characters). The address, trimmed, is at most
+/// [`MAX_ANCHOR_URL`] bytes: the ledger's one rule for it (`url = text .size
+/// (0 .. 128)`), so any text within it is the user's, a space or a scheme no
+/// form lists included (chunk 51, e7b#2).
 pub fn anchor(url: &str, hash: &str) -> Result<Anchor> {
     let url = url.trim();
     if url.is_empty() {
@@ -562,9 +564,6 @@ pub fn anchor(url: &str, hash: &str) -> Result<Anchor> {
             "That address is {} bytes, over the network's limit of {MAX_ANCHOR_URL}: use a shorter one",
             url.len()
         );
-    }
-    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        bail!("An address can't hold spaces or control characters");
     }
     let bytes: [u8; 32] = hex::decode(hash.trim())
         .ok()

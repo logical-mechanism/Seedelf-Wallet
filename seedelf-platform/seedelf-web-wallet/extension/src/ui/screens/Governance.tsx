@@ -156,13 +156,15 @@ export function readableUrl(url: string): string | undefined {
   return `${IPFS_GATEWAY}/ipfs/${[cid, ...parts].join("/")}`;
 }
 
-/** What a profile's address must be: one the ledger takes, with nothing to misread. Undefined when it's fine. */
+/**
+ * What a profile's address must be: given, and the ledger's one rule, at most 128 bytes of text once trimmed. Its
+ * scheme and any space in it are the user's, as the ledger takes any (chunk 51, e7b#2): the note under the field
+ * names the schemes tools read. Undefined when it's fine.
+ */
 export function anchorUrlProblem(url: string): I18nKey | undefined {
   const trimmed = url.trim();
   if (!trimmed) return "drep.form.urlNeeded";
-  if (/\s/.test(trimmed)) return "drep.form.urlSpaces";
   if (new TextEncoder().encode(trimmed).length > MAX_ANCHOR_URL) return "drep.form.urlTooLong";
-  if (!/^(https?|ipfs):\/\/\S+$/i.test(trimmed)) return "drep.form.urlScheme";
   return undefined;
 }
 
@@ -490,7 +492,10 @@ export function BecomeDrep({
   );
 }
 
-/** Changing the DRep's profile, or taking it away: an update keeps the DRep active, as a vote does. */
+/**
+ * Changing the DRep's profile, or taking it away, or, with none, an update that keeps none: an update keeps the DRep
+ * active, as a vote does.
+ */
 export function DrepProfileEdit({
   drep,
   blocked,
@@ -542,11 +547,13 @@ export function DrepProfileEdit({
         >
           {building === "review" ? t("common.building") : t("drep.update.review")}
         </button>
-        {drep.profile && (
-          <button type="button" className="secondary" onClick={() => onReview(undefined)} disabled={!!blocked || busy} title={blocked}>
-            {building === "remove-profile" ? t("common.building") : t("drep.update.remove")}
-          </button>
-        )}
+        {/* An update with no profile: it removes the one there is, or, with none, keeps it so, an update all the same,
+            which keeps the DRep active, as the ledger takes one with no anchor (chunk 51, e7b#1). */}
+        <button type="button" className="secondary" onClick={() => onReview(undefined)} disabled={!!blocked || busy} title={blocked}>
+          {building === "remove-profile"
+            ? t("common.building")
+            : t(drep.profile ? "drep.update.remove" : "drep.register.noProfile")}
+        </button>
       </div>
       {why && (
         <p className="note" data-testid="drep-update-why">
@@ -943,8 +950,10 @@ export function GovActions({
                   type="button"
                   className={v === mine ? "secondary" : "primary"}
                   onClick={() => onVote(open, v, mine)}
-                  // A vote on its way holds the others back until the list is read again (GV-6).
-                  disabled={closed || v === mine || !!coming || !!blocked || busy}
+                  // A vote on its way holds the others back until the list is read again (GV-6). The vote cast
+                  // already is marked, and can be cast again, as the ledger takes it: it keeps the DRep active, as any
+                  // vote does (chunk 51, e7b#1).
+                  disabled={closed || !!coming || !!blocked || busy}
                   title={blocked ?? (closed ? t("gov.closed") : v === mine ? t("gov.vote.already") : undefined)}
                 >
                   {/* The pressed one says so; the others keep their names (ST-1). */}

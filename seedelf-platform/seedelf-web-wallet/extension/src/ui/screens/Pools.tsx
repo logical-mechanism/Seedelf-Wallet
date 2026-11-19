@@ -367,31 +367,32 @@ export function PoolPage({
       backDisabled={busy}
       error={error}
       foot={
-        // Your own pool says so as a label, not as a button that can't be pressed (ST-12).
-        yours ? (
-          <p className="note center" data-testid="pool-yours">
-            {t("pools.alreadyYours")}
-          </p>
-        ) : (
-          <>
-            <button
-              type="button"
-              className="primary"
-              onClick={() => details && onStake(details, shared)}
-              disabled={!details || !!why || busy}
-              title={why}
-            >
-              {busy ? t("common.building") : t("pools.stakeWith", { label })}
-            </button>
-            {/* Why it can't be pressed, under it, not in a tooltip alone, which no touch screen or keyboard shows
-                (blind test T03's verifier). */}
-            {why && (
-              <p className="note foot-note" data-testid="pool-why">
-                {why}
-              </p>
-            )}
-          </>
-        )
+        <>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => details && onStake(details, shared)}
+            disabled={!details || !!why || busy}
+            title={why}
+          >
+            {busy ? t("common.building") : t("pools.stakeWith", { label })}
+          </button>
+          {/* Why it can't be pressed, under it, not in a tooltip alone, which no touch screen or keyboard shows
+              (blind test T03's verifier). */}
+          {why && (
+            <p className="note foot-note" data-testid="pool-why">
+              {why}
+            </p>
+          )}
+          {/* Your own pool says so, under a Stake that stakes with it again: the ledger takes that, for a fee, and
+              Koios can still name a delegation the ledger dropped when the pool retired, then came back (chunk 51,
+              e7b#1). It was a label in the button's place (ST-12). */}
+          {yours && (
+            <p className="note foot-note" data-testid="pool-yours">
+              {t("pools.alreadyYours")}
+            </p>
+          )}
+        </>
       }
     >
       <PoolFacts

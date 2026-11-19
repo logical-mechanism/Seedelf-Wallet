@@ -352,7 +352,10 @@ describe("a vote sent, once Home stops watching it (GV-6)", () => {
     const landed = page({ view: view({ [action.id]: "yes" }), waiting: false });
     expect(text(landed)).toContain("Your vote Yes");
     expect(text(landed)).not.toContain("on its way");
-    expect(buttons(landed)).toMatch(/class="secondary" disabled=""[^>]*>Yes<\/button>/);
+    // Marked as the vote, and live: casting it again is the ledger's to take, and keeps the DRep active (chunk 51,
+    // e7b#1).
+    expect(buttons(landed)).toMatch(/class="secondary" title="[^"]*"[^>]*>Yes<\/button>/);
+    expect(buttons(landed)).not.toContain('disabled=""');
     // Not on chain (dropped): the sent line went with it, where it sat over "Not voted".
     const dropped = page({ view: view(), waiting: false });
     expect(text(dropped)).toContain("Your vote Not voted");

@@ -267,11 +267,12 @@ describe("Become a DRep", () => {
     expect(anchorUrlProblem("ipfs://bafkreigzvg5nbyngh2hfxrptxmh2jturifcsq5v2gbaz7hfg6ccvhlzgxu")).toBeUndefined();
     expect(anchorUrlProblem("https://example.com/drep.jsonld")).toBeUndefined();
     expect(anchorUrlProblem(" ")).toBe("drep.form.urlNeeded");
-    expect(anchorUrlProblem("https://example.com/a b")).toBe("drep.form.urlSpaces");
     expect(anchorUrlProblem(`https://example.com/${"a".repeat(120)}`)).toBe("drep.form.urlTooLong");
     // Bytes, not characters: 40 three-byte characters are 120 bytes and more.
     expect(anchorUrlProblem(`https://e.com/${"あ".repeat(40)}`)).toBe("drep.form.urlTooLong");
-    expect(anchorUrlProblem("example.com/drep.jsonld")).toBe("drep.form.urlScheme");
+    // A space, or a scheme the note under the field doesn't name, is text the ledger takes (chunk 51, e7b#2).
+    expect(anchorUrlProblem("https://example.com/a b")).toBeUndefined();
+    expect(anchorUrlProblem("example.com/drep.jsonld")).toBeUndefined();
   });
 });
 
@@ -482,8 +483,10 @@ describe("Voting power, for an account that may be its own DRep", () => {
     const html = voting(ID, registered);
     expect(text(html)).toContain("Now: Your own DRep");
     expect(html).toMatch(/aria-checked="true"[^>]*>(?:(?!<\/button>).)*Your own DRep/s);
-    // Review can't be pressed for it, and says why under it, not in a tooltip alone (blind test T03's verifier).
-    expect(html).toMatch(/<p class="note foot-note" data-testid="vote-why">Your voting power already goes there<\/p>/);
+    // Said under Review, which delegates it there again, as the ledger takes, for a fee (chunk 51, e7b#1): it was a
+    // reason Review couldn't be pressed.
+    expect(html).toMatch(/<p class="note foot-note" data-testid="vote-already">Your voting power already goes there<\/p>/);
+    expect(html).toMatch(/<button type="button" class="primary">Review<\/button>/);
   });
 });
 
