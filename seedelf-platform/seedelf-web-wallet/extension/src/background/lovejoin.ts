@@ -110,6 +110,7 @@ import type {
 import {
   boxFrom,
   isHistoryClass,
+  knownBox,
   madePrivate,
   merged,
   mixedBox,
@@ -2430,6 +2431,26 @@ const depositsNamed = (s: Schedule) =>
     }),
     ...Object.keys(s.depositors ?? {}),
   ]);
+
+/** Whose a deposit was, as `depositors` keeps it, seen `now`: a private session's, or else a public account's. */
+const depositor = (session: number | undefined, account: number | undefined, now: number) =>
+  session === undefined ? { account: account ?? 0, seen: now } : { session, seen: now };
+
+/**
+ * Keeps whose deposit each open seed's or Bootstrap's entry names (`depositors`), its record gone already: 1.9.1 kept
+ * none for a private Bootstrap, whose record went 3 h after it ended, so its mix's count closing early left its box
+ * read as one a mix moved (chunk 51, l2still#2). Done on every write (`update`), before its change: a run that closes
+ * such an entry by count before any sortOut does (Bring every box back now, the retired pools' run, a withdraw maybe
+ * sent that settles first) left that deposit's box of unknown making (l3time#2). It keeps nothing the entry doesn't name
+ * already. A private one's id is its return's, never its deposit.
+ */
+function keepOpenDepositors(s: Schedule, now: number): void {
+  for (const e of entries(s)) {
+    if (!(e.bootstrap || e.seed) || s.chains.some((c) => c.id === e.id)) continue;
+    const deposit = e.deposit ?? (e.session === undefined ? e.id : undefined);
+    if (deposit) (s.depositors ??= {})[deposit] ??= depositor(e.session, e.account, now);
+  }
+}
 
 /** The transactions of chain `c` that mix the wallet's boxes: its mixes, and its collateral's (ChainRecord `tail`). */
 const mixesOf = (c: ChainRecord): string[] => [...c.mixes, ...(c.tail ? [c.tail.mix] : [])];
@@ -6370,20 +6391,11 @@ export class LovejoinService {
       // A deposit no mix followed, a seed's or a Bootstrap's, keeps whose it was, a public account's or a private
       // session's: its boxes still there tie that account, or that session, on their way back, whatever their mix's
       // count says by then (depositAccountOf, depositSessionOf; 316#1, and chunk 51, l2rank#3, for a session's). It
-      // goes as what made a box does, once no read has listed a box there for a while.
-      const whose = (session: number | undefined, account: number | undefined) =>
-        session === undefined ? { account: account ?? 0, seen: now } : { session, seen: now };
+      // goes as what made a box does, once no read has listed a box there for a while. One an open entry names, its
+      // record gone already, every write keeps before its change (keepOpenDepositors; chunk 51, l2still#2, l3time#2).
       for (const c of s.chains) {
         if (keep(c) || !c.deposit || c.mixes.length) continue;
-        (s.depositors ??= {})[c.deposit] ??= whose(c.session, c.account);
-      }
-      // So does one its open entry names, its record gone already: 1.9.1 kept none for a private Bootstrap, whose record
-      // went 3 h after it ended, so its mix's count closing early left its box read as one a mix moved (chunk 51,
-      // l2still#2). A private one's id is its return's, never its deposit.
-      for (const e of entries(s)) {
-        if (!(e.bootstrap || e.seed) || s.chains.some((c) => c.id === e.id)) continue;
-        const deposit = e.deposit ?? (e.session === undefined ? e.id : undefined);
-        if (deposit) (s.depositors ??= {})[deposit] ??= whose(e.session, e.account);
+        (s.depositors ??= {})[c.deposit] ??= depositor(c.session, c.account, now);
       }
       const depositors = Object.entries(s.depositors ?? {}).flatMap(([tx, d]): Array<[string, NonNullable<Schedule["depositors"]>[string]]> =>
         listedTxs.has(tx) ? [[tx, { ...d, seen: now }]] : now - d.seen < RECORD_KEEP_MS ? [[tx, d]] : [],
@@ -8121,15 +8133,17 @@ export class LovejoinService {
     } else if (paid === "private") {
       // The private balance pays (the owner's call 36): one of its UTxOs of ADA alone goes in beside the box, with its
       // own proof under a one-time key, and comes back with it in one private UTxO, under giveme.my's collateral as any
-      // Seedelf spend. Nothing locked or reserved; first one a box back from Lovejoin made, which ties no account; then
-      // one made private from no public account but the box's, where it's a public account's box: its deposit's (a
-      // Bootstrap's, a seed's), its mix's cut short, or its mix's leaf, as status's `fromPublic` has it. Another's,
-      // beside the box, would tie the two accounts, which the wallet never picks for the user where it needn't, and the
-      // questions say it avoids (1.6.0's release review, x-privacy#0, R3-2, R3-3); then the smallest. WebAssembly takes
-      // the first that pays. What its history ties (`ties`, below) is still the deposit's alone, as PRIV-3 has it.
+      // Seedelf spend. Nothing locked or reserved; first a box back from Lovejoin whose making the wallet knows, which
+      // ties no account (one of unknown making ties whoever put it in, so it goes with the rest); then one made private
+      // from no public account but the box's, where it's a public account's box: its deposit's (a Bootstrap's, a
+      // seed's), its mix's cut short, or its mix's leaf, as status's `fromPublic` has it. Another's, beside the box,
+      // would tie the two accounts, which the wallet never picks for the user where it needn't, and the questions say it
+      // avoids (1.6.0's release review, x-privacy#0, R3-2, R3-3); then the smallest. WebAssembly takes the first that
+      // pays. What its history ties (`ties`, below) is still the deposit's alone, as PRIV-3 has it.
       const { view, params, utxos, classes, returning, waiting } = await readContract(this.deps, network, known);
-      // A box a mix moved too (chunk 51, the owner's answer 4 to B15).
-      const fromLovejoin = (u: KoiosUtxo) => (["lovejoin", "mixed"].includes(classes[outpoint(u)]?.origin ?? "") ? 0 : 1);
+      // A box a mix moved too (chunk 51, the owner's answer 4 to B15), never a box of unknown making, a planted one's
+      // way back among them, which anyone reading the register it copied can follow (l3time#3, l3still#2).
+      const fromLovejoin = (u: KoiosUtxo) => (knownBox(classes[outpoint(u)]) ? 0 : 1);
       const schedule = await this.read(network);
       const owner = depositAccountOf(schedule, box) ?? accountOf(originOf(box, schedule));
       const another = (u: KoiosUtxo) => (owner !== undefined && accountsIn(classes[outpoint(u)]).some((a) => a !== owner) ? 1 : 0);
@@ -8646,6 +8660,9 @@ export class LovejoinService {
       const schedule = await this.read(network);
       // A record 1.5.0 kept has no list of mixes: it's made from its chains, before anything changes (entries).
       entries(schedule);
+      // Whose deposit an open entry names, its record gone, kept before a change can close the entry by count (chunk
+      // 51, l3time#2).
+      keepOpenDepositors(schedule, this.deps.now());
       change(schedule);
       // A due time's marks go with it, in whichever pool it is.
       const due = new Set(everyDue(schedule).map((d) => d.at));

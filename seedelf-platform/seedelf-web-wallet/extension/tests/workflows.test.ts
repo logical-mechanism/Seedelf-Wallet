@@ -2,7 +2,8 @@
 // secret may write to its log, which a public repository's Actions show anyone.
 
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -435,7 +436,8 @@ describe("the proofs' tools' own test", () => {
 // Chunk 51, docs#11. data-layer.yml started on any change under seedelf-data/, so a pull request that only edited its
 // README.md, NOTES.md or deploy/README.md ran the data layer's whole check: fmt, clippy and every test. Nothing it
 // builds or tests reads a Markdown file, so its Markdown starts nothing, as the platform's doesn't in web-wallet.yml.
-// This check reads the data layer's Rust, which covered takes for it (l2docs#1).
+// This check reads the data layer's Rust, which main's run checks; a pull request that changes only that Rust is held
+// to the same rule by data-layer.yml's own step, "No Markdown included" (chunk 51, l2docs#1, l3misc#1, l3still#3).
 describe("data-layer.yml's paths", () => {
   const DATA = fileURLToPath(new URL("../../../../seedelf-data/", import.meta.url));
 
@@ -522,18 +524,22 @@ describe("web-wallet.yml's covered filter", () => {
     expect(runs("seedelf-verification/Lovejoin/Template/Scripts.lean")).toBe(false);
     expect(runs("seedelf-verification/README.md")).toBe(false);
     expect(runs("seedelf-data/deploy/edge/seedelf-data-deploy")).toBe(false);
+    expect(runs("seedelf-data/api/src/main.rs")).toBe(false);
   });
 
   // Chunk 51, l2docs#1: two checks above read files outside seedelf-platform/ that covered left out. The proofs' tools'
   // reads test-tools.sh, and data-layer.yml's paths' reads every .rs file under seedelf-data/. A pull request that
   // changed only those, the one that could break either check, ran neither and merged green: main's run was the first
-  // to fail. They're covered now; their Markdown, and what the script reads but this file doesn't, stay out, so a docs
-  // or a Lean pull request stays fast.
-  it("runs the check for a pull request that changes only a file the proofs' tools' or the data layer's check reads", () => {
+  // to fail. The script is covered now. The data layer's Rust isn't: data-layer.yml, which every pull request changing
+  // it starts, holds it to that check's rule itself (l3misc#1, l3still#3, below), so such a pull request doesn't wait
+  // on the wallet's whole check. Their Markdown, and what the script reads but this file doesn't, stay out, so a docs or
+  // a Lean pull request stays fast.
+  it("runs the check for a pull request that changes only the proofs' tools' script, which a check above reads", () => {
     const data = rust(join(REPO, "seedelf-data")).map((path) => relative(REPO, path).split(sep).join("/"));
     // Not vacuous: the data layer's Rust is found.
     expect(data).toEqual(expect.arrayContaining(["seedelf-data/api/src/main.rs"]));
-    expect(["seedelf-verification/test-tools.sh", ...data].filter((path) => !runs(path))).toEqual([]);
+    expect(runs("seedelf-verification/test-tools.sh")).toBe(true);
+    expect(data.filter((path) => runs(path))).toEqual([]);
     for (const path of [
       "seedelf-data/README.md",
       "seedelf-data/deploy/README.md",
@@ -562,5 +568,80 @@ describe("web-wallet.yml's covered filter", () => {
       ]),
     );
     expect(outside.filter((path) => !runs(path))).toEqual([]);
+  });
+});
+
+// Chunk 51, l3misc#1 and l3still#3. Round three put every .rs file under seedelf-data/ in covered (l2docs#1) for one
+// check above that reads them, docs#11's: none of that Rust includes a Markdown file. So a pull request that changed
+// only the data layer's Rust, an API fix say, ran the wallet's five jobs, about 13 minutes on Web Wallet required, which
+// main's ruleset requires, though nothing else in that check reads the data layer. data-layer.yml starts on every such
+// pull request, so it makes that check itself, in seconds, and the data layer's pull requests stay out of the wallet's
+// check, as the CI-speed rule asks.
+describe("a pull request that changes only the data layer's Rust", () => {
+  const DATA = fileURLToPath(new URL("../../../../seedelf-data/", import.meta.url));
+  const RS = ["seedelf-data/api/src/public/utxos.rs", "seedelf-data/api/src/main.rs", "seedelf-data/api/tests/common/mod.rs"];
+
+  /** Every .rs file under `dir`, but build output: all the step below reads. */
+  function rust(dir: string): string[] {
+    return readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) return ["target", ".git"].includes(name) ? [] : rust(path);
+      return name.endsWith(".rs") ? [path] : [];
+    });
+  }
+
+  /** Whether web-wallet.yml's check runs for a pull request into main that changes only `path`: awk alone decides. */
+  function walletRuns(path: string): boolean {
+    const text = readFileSync(new URL("web-wallet.yml", WORKFLOWS), "utf8");
+    const from = text.indexOf("covered='") + "covered='".length;
+    const awk = spawnSync("awk", [text.slice(from, text.indexOf("'", from))], { input: `${path}\n`, encoding: "utf8" });
+    expect(awk.stderr).toBe("");
+    return awk.status === 0;
+  }
+
+  it("starts the data layer's check, not the wallet's", () => {
+    for (const path of RS) expect(startsOn("data-layer.yml", path), path).toBe(true);
+    expect(RS.filter((path) => walletRuns(path))).toEqual([]);
+  });
+
+  it("is held to docs#11's rule by a step of data-layer.yml, which fails on Rust that includes Markdown and passes on the tree", () => {
+    const steps = scripts().filter(
+      ({ where, lines }) => where.startsWith("data-layer.yml:") && lines.some((line) => !comment(line) && /include_/.test(line)),
+    );
+    expect(
+      steps.map(({ where }) => where),
+      "data-layer.yml's steps that read the includes",
+    ).toEqual([expect.any(String)]);
+    const step = steps[0]!;
+    // A block: YAML reads a plain `run: ! grep …` as a tag on the string `grep …`, and drops the `!`.
+    expect(step.lines.length > 1 || !/^!/.test(step.lines[0]!.trim()), `${step.where} is a plain scalar starting with !`).toBe(true);
+    // As a step with no shell: key runs on ubuntu (`bash -e {0}`), in the check job's working-directory, seedelf-data/.
+    const run = (cwd: string) => spawnSync("bash", ["-e", "-c", step.lines.join("\n")], { cwd, encoding: "utf8" }).status;
+    const tmp = mkdtempSync(join(tmpdir(), "seedelf-data-includes-"));
+    try {
+      for (const [name, source] of [
+        ["on one line", '#![doc = include_str!("../../README.md")]\n'],
+        // As rustfmt wraps a long include there (datum.rs, standard.rs, templates.rs, live_public.rs).
+        ["wrapped", 'const DOC: &str = include_str!(\n    "../../README.md"\n);\n'],
+        ["as bytes", 'const DOC: &[u8] = include_bytes!("../NOTES.md");\n'],
+      ] as const) {
+        const crate = join(tmp, name.replaceAll(" ", "-"), "seedelf-data");
+        mkdirSync(join(crate, "api/src"), { recursive: true });
+        writeFileSync(join(crate, "api/src/lib.rs"), source);
+        expect(run(crate), `${step.where} on a crate that includes Markdown ${name}`).not.toBe(0);
+      }
+      // The tree's own Rust, copied as it is: all the step reads, and nothing then runs in seedelf-data/ itself.
+      const tree = join(tmp, "tree", "seedelf-data");
+      const files = rust(DATA);
+      expect(files.length).toBeGreaterThan(0);
+      for (const file of files) {
+        const to = join(tree, relative(DATA, file));
+        mkdirSync(dirname(to), { recursive: true });
+        writeFileSync(to, readFileSync(file));
+      }
+      expect(run(tree), `${step.where} on the tree's Rust as it is`).toBe(0);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

@@ -18,14 +18,16 @@
 //   received:<tx>  a payment someone else made: one class each
 //   session:<n>    what private session n's funding left, and its return
 //   box:<tx>       a box back from Lovejoin: one class each. Its origin is
-//                  "mixed" where the wallet recorded a mix moving the box, on
-//                  its way back alone (`mixedBox`): only such a box goes first
-//                  for a stealth mint. Anything merged with it, a spend's
-//                  change included, reads "lovejoin", as every box brought
-//                  back before that record was kept (chunk 51, the owner's
-//                  answer 4 to B15). One whose making the wallet can't place
-//                  carries its own unknown:<tx> too (`unplacedBox`): still a
-//                  box, tagged Unknown beside (chunk 51, round three)
+//                  "mixed" where the wallet knows the box is mixed (its own
+//                  chain's last mix made it, or Koios said a mix did), on its
+//                  way back alone (`mixedBox`): only such a box goes first
+//                  for a stealth mint, and a funding and a Send take it before
+//                  any other box (l3rank#3). Anything merged with it, a
+//                  spend's change included, reads "lovejoin", as every box
+//                  brought back before that record was kept (chunk 51, the
+//                  owner's answer 4 to B15). One whose making the wallet can't
+//                  place carries its own unknown:<tx> too (`unplacedBox`):
+//                  still a box, tagged Unknown beside (chunk 51, round three)
 //   unknown        nothing on the device says (a restore, or older than it keeps)
 //   unknown:<tx>   the same, kept apart by the transaction that made it once
 //                  any other money's history is known (independent review L40)
@@ -39,8 +41,9 @@
 //                  it after money others paid and a box a mix brought back,
 //                  and, nothing fresher paying, before money made private:
 //                  origin "change", unless it names a public account, a
-//                  session or a spend made elsewhere, when it ranks with that
-//                  money, as a session's (`merged`); tagged Change (`leftBy`;
+//                  session or a spend made elsewhere, when it ranks as a
+//                  session's money, after money made private (`merged`);
+//                  tagged Change (`leftBy`;
 //                  chunk 51, the owner's answers 2 to B15 and of 2026-11-18,
 //                  l2rank#6). Change kept before the part was gets it as the
 //                  history is read (activity.ts classOf, l2time#2)
@@ -65,8 +68,9 @@ export const sessionClass = (index: number): HistoryClass => ({ id: `session:${i
 /** A box back from Lovejoin: each withdraw brings back one. */
 export const boxFrom = (txHash: string): HistoryClass => ({ id: `box:${txHash}`, origin: "lovejoin" });
 /**
- * The way back of a box the wallet recorded a mix moving, withdraw `txHash`, alone: the one a stealth mint takes first
- * (chunk 51, the owner's answer 4 to B15). Its id is a box's; merged with anything, it reads as one again (`merged`).
+ * The way back of a box the wallet knows is mixed (its own chain's last mix made it, or Koios said a mix did), withdraw
+ * `txHash`, alone: the one a stealth mint takes first (chunk 51, the owner's answer 4 to B15). Its id is a box's; merged
+ * with anything, it reads as one again (`merged`).
  */
 export const mixedBox = (txHash: string): HistoryClass => ({ id: `box:${txHash}`, origin: "mixed" });
 /** Money with no history, by the transaction that made it: kept apart from other such money while anything else's is known. */
@@ -143,8 +147,8 @@ const REACH: Origin[] = ["session", "own", "received", "lovejoin", "unknown"];
  * The origin of money whose history is `all` (each part once): the tie that reaches furthest (REACH), but "change" for
  * a spend's change that names no public account, no session and no spend made elsewhere, which a stealth mint, a pool's
  * start and a funding take before money made private, nothing fresher paying (chunk 51, the owner's answer of
- * 2026-11-18, l2rank#6). Change that names one of those ranks with that money, as a session's: after money made
- * private. WebAssembly's `merged_class` reads it the same way.
+ * 2026-11-18, l2rank#6). Change that names one of those ranks as a session's money: after money made private.
+ * WebAssembly's `merged_class` reads it the same way.
  */
 function originOfAll(all: string[]): Origin {
   const origins = all.map(originOf);
@@ -205,6 +209,15 @@ export function withoutBoxes(c: HistoryClass): HistoryClass | undefined {
   const rest = all.filter((p) => !p.startsWith("box:") && !ofABox.has(p));
   return rest.length ? merged(rest.map((id) => ({ id, origin: originOf(id) }))) : undefined;
 }
+
+/**
+ * Whether money of class `c` is a box back from Lovejoin whose making the wallet knows: one it knows is mixed
+ * (`mixedBox`), or boxes alone (`boxFrom`, or several merged), with no part of unknown making. Not a box of unknown
+ * making (`unplacedBox`), nor one merged with money of no history: either may tie whoever put that in, as a payment of
+ * theirs would (chunk 51, l3time#3, l3still#2).
+ */
+export const knownBox = (c: HistoryClass | undefined): boolean =>
+  c?.origin === "mixed" || (c?.origin === "lovejoin" && parts(c).every((p) => p.startsWith("box:")));
 
 /** The session indexes among `c`'s parts. */
 const sessionsIn = (c: HistoryClass) =>

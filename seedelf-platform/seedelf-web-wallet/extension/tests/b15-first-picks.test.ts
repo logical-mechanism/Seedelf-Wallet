@@ -1,7 +1,8 @@
 // Chunk 51, the owner's calls round, round two: what a stealth mint, a pool's start from the private balance and a
 // private session's funding take first (B15, the owner's answers of 2026-11-18). Core's Purpose::Mint takes first a box
-// the wallet recorded a mix moving (answer 4), then money others paid, and Purpose::Fund takes money others paid
-// first. So everything here is about the classes the worker seals and reads (shared/histories.ts):
+// the wallet knows is mixed (answer 4), then money others paid, and Purpose::Fund takes money others paid first, then
+// a box it knows is mixed before any other (l3rank#3). So everything here is about the classes the worker seals and
+// reads (shared/histories.ts):
 //
 // - A box's way back is classed by what put the box there when no mix moved it since: a private session's deposit (a
 //   Bootstrap's too) is that session's money, as a public account's deposit is that account's (PRIV-3); a box whose
@@ -378,7 +379,7 @@ describe("what a spend of the wallet's own leaves (chunk 51, money#2, own#1, the
   });
 });
 
-describe("a box the wallet has no record of a mix moving (chunk 51, the owner's answer 4)", () => {
+describe("a box the wallet doesn't know is mixed (chunk 51, the owner's answer 4)", () => {
   it("brought back before this round, it goes after a payment received for a stealth mint [needs the rebuild]", { timeout: 60_000 }, async () => {
     const t = await wallet();
     const old = await boxBack(t, "4800000", hash("bb"));

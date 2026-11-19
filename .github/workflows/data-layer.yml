@@ -8,9 +8,9 @@ on:
       - "seedelf-data/**"
       # But its Markdown, which nothing the check builds or tests reads, so a
       # docs pull request stays fast (chunk 51, docs#11). GitHub reads these in
-      # order, the last that matches a file deciding. workflows.test.ts fails a
-      # pull request whose Rust here comes to include one: web-wallet.yml runs
-      # it for any .rs file here (chunk 51, l2docs#1).
+      # order, the last that matches a file deciding. The check's "No Markdown
+      # included" step fails a pull request whose Rust here comes to include
+      # one (chunk 51, l2docs#1, l3misc#1, l3still#3).
       - "!seedelf-data/**/*.md"
       - ".github/workflows/data-layer.yml"
       # Every file beside it that its build reads (include_str!). What the token pools' checks read (web wallet
@@ -42,6 +42,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # Its paths leave its Markdown out (docs#11), so none of its Rust may include a .md file: this fails the pull
+      # request that adds one, on one line or wrapped as rustfmt wraps a long one, in seconds and before the toolchain.
+      # It is the one check of this Rust the wallet's workflows.test.ts makes, made here on the data layer's own pull
+      # requests, so one changing only this Rust doesn't wait on web-wallet.yml's whole check (chunk 51, l3misc#1,
+      # l3still#3). `-z` lets the match span lines; grep's own error (2) still fails it.
+      - name: No Markdown included
+        run: |
+          found=$(grep -rPzl --include='*.rs' --exclude-dir=target 'include_(str|bytes)!\(\s*"[^"]*\.md"' . || [ $? = 1 ])
+          [ -z "$found" ] || { echo "$found"; exit 1; }
 
       # The toolchain seedelf-data/rust-toolchain.toml pins: keep the two in
       # step, as data-layer-deploy.yml does.

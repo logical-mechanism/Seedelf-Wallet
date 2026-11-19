@@ -567,8 +567,10 @@ export class DappService {
    * unanswered (`gone`): that page's title and the network it asked on, for the decline the pages that spared it owe.
    * One of them asking itself, or a refusal, clears it; the last of them leaving before any asks lands the decline then
    * (chunk 51, l2sign#1: the owner's B7, a question left unanswered is a decline but while another page waits on it).
+   * So does the unlock, where only a wait for it was left: that window is answered (l3still#4). `question`: a page left
+   * a connect question, which no unlock answers.
    */
-  private readonly spared = new Map<string, { title?: string; network?: NetworkName }>();
+  private readonly spared = new Map<string, { title?: string; network?: NetworkName; question?: true }>();
   /** Where each private session's funding is, by `network:index`: the calls waiting on it share one read a poll (`funded`). */
   private readonly fundingReads = new Map<string, Promise<"landed" | "funding" | "short" | "never">>();
   /**
@@ -787,7 +789,12 @@ export class DappService {
       this.connectorOff();
     }
     if (!this.unlocking.length || state !== "unlocked") return;
-    for (const u of this.unlocking.splice(0)) u.resolve();
+    for (const u of this.unlocking.splice(0)) {
+      // The unlock window is answered: a page that left its wait for it owes its site no decline any more (`spared`).
+      // One that left a connect question still does, as no unlock answers that (chunk 51, l3still#4).
+      if (!this.spared.get(u.session.origin)?.question) this.spared.delete(u.session.origin);
+      u.resolve();
+    }
     this.deps.changed();
   }
 
@@ -935,7 +942,9 @@ export class DappService {
    * has an `enable()` running (`enabling`), waiting on that question or on its
    * way to it, or waits for the unlock itself: that one asks itself
    * (`enable`), and a refusal would turn it away (sign#3). If it leaves too
-   * before it asks, the decline lands then (`spared`; l2sign#1).
+   * before it asks, the decline lands then (`spared`; l2sign#1), unless the
+   * page that left it only waited for the unlock, and the wallet was unlocked
+   * since: that wait is answered (l3still#4).
    */
   gone(session: DappSession): void {
     if (this.pageCalls.has(session.id)) this.gonePages.add(session.id);
@@ -950,8 +959,16 @@ export class DappService {
     const question = waiting.find((w) => w.approval.kind === "connect" && !w.approval.connected && !w.approval.funding);
     if (question || unlocking.length) {
       const network = question?.network ?? unlocking[0]?.network;
+      // A question left once stays left: the unlock that answers a wait answers no question (l3still#4).
+      const questionLeft = !!question || !!this.spared.get(session.origin)?.question;
       if (!this.sharedBeyond(session)) this.refuseFor(session.origin, session.title, network);
-      else this.spared.set(session.origin, { title: session.title, ...(network ? { network } : {}) });
+      else {
+        this.spared.set(session.origin, {
+          title: session.title,
+          ...(network ? { network } : {}),
+          ...(questionLeft ? { question: true as const } : {}),
+        });
+      }
     }
     for (const w of waiting) {
       w.gone = true;

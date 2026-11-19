@@ -40,10 +40,13 @@ jobs:
   # export table). A test that comes to read another .md file, or a file
   # outside seedelf-platform/, names it here too: workflows.test.ts checks what
   # the Rust includes, and what its own checks read from outside, the proofs'
-  # tools' test-tools.sh and the data layer's Rust (chunk 51, l2docs#1). The
-  # proofs' Lean and every doc stay out, so their pull requests stay fast; the
-  # proofs' tools have a check of their own (verification-tools.yml; chunk 51,
-  # docs#7). It reads the pull request's
+  # tools' test-tools.sh (chunk 51, l2docs#1). The data layer's Rust, which
+  # its docs#11 check reads too, stays out: data-layer.yml, which every pull
+  # request changing it starts, holds it to that rule itself ("No Markdown
+  # included"), so the data layer's pull requests don't wait on this check
+  # (l3misc#1, l3still#3). The proofs' Lean and every doc stay out, so their
+  # pull requests stay fast; the proofs' tools have a check of their own
+  # (verification-tools.yml; chunk 51, docs#7). It reads the pull request's
   # files from the API, so nothing is checked out. A renamed file's old path
   # is read too, so a move out of the folder counts, and a list that can't be
   # trusted counts as touching it (1.7.0's release review): one the API cut
@@ -72,7 +75,7 @@ jobs:
           # A line a file: its path, and a renamed file's old one after a tab.
           rows=$(gh api --paginate "$FILES" --jq '.[] | [.filename, (.previous_filename // empty)] | @tsv')
           paths=$(tr '\t' '\n' <<<"$rows")
-          covered='/^\.github\/workflows\// || /^seedelf-verification\/Lovejoin\/(Template\/)?Scripts\// || /^seedelf-verification\/test-tools\.sh$/ || /^seedelf-data\/.*\.rs$/ || /^seedelf-platform\/seedelf-web-wallet\/wasm\/README\.md$/ || (/^seedelf-platform\// && !/\.md$/ && !/^seedelf-platform\/seedelf-web-wallet\/media\//) { hit = 1 } END { exit !hit }'
+          covered='/^\.github\/workflows\// || /^seedelf-verification\/Lovejoin\/(Template\/)?Scripts\// || /^seedelf-verification\/test-tools\.sh$/ || /^seedelf-platform\/seedelf-web-wallet\/wasm\/README\.md$/ || (/^seedelf-platform\// && !/\.md$/ && !/^seedelf-platform\/seedelf-web-wallet\/media\//) { hit = 1 } END { exit !hit }'
           if [ "$BASE" != main ] || [ "$(wc -l <<<"$rows")" -lt "$CHANGED" ] || awk "$covered" <<<"$paths"; then
             echo "platform=true" >> "$GITHUB_OUTPUT"
           else

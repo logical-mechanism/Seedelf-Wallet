@@ -10,9 +10,10 @@
 // seedelf  A stealth mint from the Seedelf balance (the CLI's `util mint`,
 //          `build::mint`). It only hides the payer when that balance came
 //          from other people's Seedelf payments or a mix, so it takes a box
-//          the wallet recorded a mix moving first, then received money, and
-//          what an earlier spend of its own left after those, when the sealed
-//          history says which that is (privacy review §2.3; chunk 51, B15).
+//          the wallet knows is mixed first, then received money, then any
+//          other box, and what an earlier spend of its own left after those,
+//          before money made private, when the sealed history says which that
+//          is (privacy review §2.3; chunk 51, B15, l2rank#6).
 //
 // Both are built by script-spend.ts's draft → Ogmios → finish, and kept in
 // session storage until Send: signed for the account, unsigned with its

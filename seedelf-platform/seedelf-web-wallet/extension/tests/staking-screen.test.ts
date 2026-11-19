@@ -255,6 +255,15 @@ describe("an account with nothing to pay a fee with (ST-9)", () => {
     );
     expect(noFundsReason(side(3, 3))).toContain("Everything in your public account is locked");
   });
+
+  // Chunk 51, l3misc#2, l3still#5: the account's locked total counts its collateral and every UTxO no build can price
+  // (a reference script no server gives, which anyone can send), as core spends neither. Neither has an Unlock on the
+  // UTxOs screen, so an account holding only those heard to unlock some there.
+  it("tells no one to unlock what nothing can unlock", () => {
+    const reason = noFundsReason(side(3, 3))!;
+    expect(reason).toContain("locked or can't be spent");
+    expect(reason).not.toMatch(/\bunlock/i);
+  });
 });
 
 describe("a governance action's text and a vote sent (GV-2, GV-6)", () => {

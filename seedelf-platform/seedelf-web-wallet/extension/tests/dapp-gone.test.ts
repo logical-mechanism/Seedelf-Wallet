@@ -569,5 +569,139 @@ describe("a site's page that leaves its connect question unanswered (chunk 51, G
       await enablingThird;
       expect(heard).toBe("connected");
     });
+
+    // Chunk 51, l3still#4: a page that left its wait for the unlock spared its site while another page of it waited
+    // for the unlock too, on any call. The unlock answered that wait but kept the mark, and with no enable() of the site
+    // ending to clear it, a later page of the site leaving mid-enable, even an hour on, landed a decline nobody owed.
+    // The unlock clears a mark that a page leaving its unlock wait set. One a page leaving its connect question set
+    // stays, since the unlock answered no question.
+    describe("and the unlock answers the wait the page that left spared it for (chunk 51, l3still#4)", () => {
+      type T = Awaited<ReturnType<typeof on>>;
+      const GONE = { info: "The page went away." };
+      const signData = (t: T, s: DappSession) =>
+        t.dapp
+          .call(s, "signData", [t.deps.wasm.cip30Address(account.preprod.receive_0 as string), "00"])
+          .catch((e: { failure: unknown }) => e.failure);
+
+      async function connect(t: T) {
+        const s = page();
+        const enabling = t.dapp.call(s, "enable", []);
+        await until(() => t.dapp.approvals().length === 1);
+        await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+        expect(await enabling).toBe(true);
+      }
+
+      /** A later page's enable(), held at its sealed read of the sites, its page leaving there: what that call heard. */
+      async function laterPageLeavesMidEnable(t: T): Promise<unknown> {
+        const hold = holdSites(t);
+        const later = page();
+        const enabling = t.dapp.call(later, "enable", []).catch((e: { failure: unknown }) => e.failure);
+        await until(() => hold.state.reads === 1);
+        t.dapp.gone(later);
+        hold.done();
+        return enabling;
+      }
+
+      /** What a signature meets with the wallet locked again: refused (what it heard), or "waits" for the unlock. */
+      async function lockedSignatureMeets(t: T): Promise<unknown> {
+        await t.wallet.lock();
+        await t.dapp.stateChanged();
+        const s = page();
+        const shown = t.dappWindow.shown;
+        let heard: unknown;
+        const signing = signData(t, s).then((v) => (heard = v));
+        for (let i = 0; i < 200 && heard === undefined && t.dappWindow.shown === shown; i++) await new Promise((r) => setTimeout(r, 0));
+        if (heard !== undefined) return heard;
+        t.dapp.gone(s);
+        await signing;
+        return "waits";
+      }
+
+      it("a connected site's page leaves its signature's unlock wait beside another's: no decline lands after the unlock", async () => {
+        const t = await on();
+        await connect(t);
+        await t.wallet.lock();
+        const [a, b] = [page(), page()];
+        const shown = t.dappWindow.shown;
+        const signingA = signData(t, a);
+        const signingB = signData(t, b);
+        await until(() => t.dappWindow.shown === shown + 2);
+        t.dapp.gone(a);
+        expect(await signingA).toMatchObject(GONE);
+        await t.wallet.unlock(PASSWORD);
+        await t.dapp.stateChanged();
+        await until(() => t.dapp.approvals().length === 1);
+        await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+        expect(await signingB).toMatchObject({ info: "The user declined." });
+        expect(await laterPageLeavesMidEnable(t), "a later page, connected, leaving mid-enable").toBe(true);
+        expect(await lockedSignatureMeets(t), "a signature, the wallet locked again within 10 s").toBe("waits");
+      });
+
+      it("a site not connected (an API kept from before): an hour after the unlock, a page leaving mid-enable turns it away no more", async () => {
+        const t = await on();
+        await t.wallet.lock();
+        const [a, b] = [page(), page()];
+        const shown = t.dappWindow.shown;
+        const signingA = signData(t, a);
+        const signingB = signData(t, b);
+        await until(() => t.dappWindow.shown === shown + 2);
+        t.dapp.gone(a);
+        expect(await signingA).toMatchObject(GONE);
+        await t.wallet.unlock(PASSWORD);
+        await t.dapp.stateChanged();
+        expect(await signingB).toMatchObject({ info: "This site isn't connected to Seedelf Wallet. Call enable() first." });
+        await busyFor(t, 60 * 60_000);
+        expect(await laterPageLeavesMidEnable(t)).toMatchObject(GONE);
+        expect.soft(await t.dapp.declined(), "the site listed as declined").toEqual([]);
+        expect(await enableMeets(t), "a reload's page, right after").toBe("asked");
+      });
+
+      it("a page's enable() leaves beside another's already waiting for the unlock, which leaves after it: no decline lands", async () => {
+        const t = await on();
+        await t.wallet.lock();
+        const [stays, leaves] = [page(), page()];
+        const shown = t.dappWindow.shown;
+        const enablingStays = t.dapp.call(stays, "enable", []).catch((e: { failure: unknown }) => e.failure);
+        await until(() => t.dappWindow.shown === shown + 1);
+        const enablingLeaves = t.dapp.call(leaves, "enable", []);
+        await until(() => t.dappWindow.shown === shown + 2);
+        t.dapp.gone(leaves);
+        await expect(enablingLeaves).rejects.toMatchObject({ failure: GONE });
+        await t.wallet.unlock(PASSWORD);
+        const hold = holdSites(t);
+        await t.dapp.stateChanged();
+        await until(() => hold.state.reads === 1);
+        t.dapp.gone(stays);
+        hold.done();
+        expect(await enablingStays).toMatchObject(GONE);
+        expect.soft(await t.dapp.declined(), "the site listed as declined").toEqual([]);
+        expect(await enableMeets(t), "a reload's page, right after").toBe("asked");
+      });
+
+      it("a connect question left unanswered while another page waits for the unlock is still owed after it (a pin)", async () => {
+        const t = await on();
+        const asks = page();
+        const enablingAsks = t.dapp.call(asks, "enable", []);
+        await until(() => t.dapp.approvals().length === 1);
+        await t.wallet.lock();
+        await t.dapp.stateChanged();
+        const waits = page();
+        const enablingWaits = t.dapp.call(waits, "enable", []).catch((e: { failure: unknown }) => e.failure);
+        await until(() => t.dapp.unlockingSites().length === 1);
+        t.dapp.gone(asks);
+        await expect(enablingAsks).rejects.toMatchObject({ failure: GONE });
+        await t.wallet.unlock(PASSWORD);
+        const hold = holdSites(t);
+        await t.dapp.stateChanged();
+        await until(() => hold.state.reads === 1);
+        t.dapp.gone(waits);
+        hold.done();
+        expect(await enablingWaits).toMatchObject(GONE);
+        expect.soft(await t.dapp.declined(), "the site listed as declined").toEqual([
+          { origin: ORIGIN, until: expect.any(Number), title: "Example" },
+        ]);
+        expect(await enableMeets(t), "a reload's page, right after").toEqual(DECLINED_WAIT);
+      });
+    });
   });
 });

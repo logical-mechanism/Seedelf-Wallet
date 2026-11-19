@@ -15,8 +15,8 @@
 // never Received: it takes that row's history (Unknown by its transaction when that row is Received too), so these
 // spends take it after a payment made properly. It catches only such an exact copy (d = 1), never a payer who reveals
 // another d. Part (b), the owner's call (B15): no payer knows a box back from Lovejoin, so a stealth mint takes one that
-// pays alone before money someone paid, where the wallet recorded a mix moving it (core's Purpose::Mint: Mixed 0,
-// Received 1; one with no such record goes after, the owner's answer 4: b15-first-picks.test.ts). Driven through the
+// pays alone before money someone paid, where the wallet knows it's mixed (core's Purpose::Mint: Mixed 0, Received 1;
+// any other box goes after, the owner's answer 4: b15-first-picks.test.ts). Driven through the
 // worker's services with the real WebAssembly, as mint.test.ts and history-classes.test.ts are; (b)'s case needs the
 // WebAssembly built with core's new ranks.
 
@@ -136,8 +136,8 @@ describe("chunk 51, gap-g1#1: a stranger's payment under one of the wallet's See
 
   it("(b) takes a box back from Lovejoin that pays alone before a payment received, for a stealth mint", { timeout: 60_000 }, async () => {
     const { t, fresh, paid } = await wallet();
-    // A box this wallet brought back, which it recorded a mix moving (its withdraw, written at submit: chunk 51, the
-    // owner's answer 4 to B15), and Bob's payment, made properly.
+    // A box this wallet brought back, which it knows is mixed (its withdraw, written at submit: chunk 51, the owner's
+    // answer 4 to B15), and Bob's payment, made properly.
     const box = paid("bb".repeat(32), "4800000", { bytes: await fresh(), value: null });
     const back: PendingTx = { kind: "lovejoin-withdraw", network: "preprod", txHash: box.tx_hash, submittedAt: t.clock.now, confirmations: null };
     await t.activity.sent("preprod", back, { lovelace: box.value, origin: mixedBox(box.tx_hash) });

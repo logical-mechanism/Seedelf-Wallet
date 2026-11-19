@@ -2422,17 +2422,18 @@ pub enum Origin {
     Received,
     /// What a private session's funding left, or its return.
     Session,
-    /// A box back from Lovejoin: each is a class of its own. One the wallet has no record of a mix moving: brought back
-    /// before it kept that record, so it may be one its deposit still ties to whatever paid for it, or a box's way
-    /// back merged with other money. The web wallet's way back of a box whose making it can't place is one too.
+    /// A box back from Lovejoin: each is a class of its own. One the wallet doesn't know is mixed: one brought back
+    /// before it kept that record, which its deposit may still tie to whatever paid for it, one a chain of its own left
+    /// short of its last mixes, or a box's way back merged with other money. The web wallet's way back of a box whose
+    /// making it can't place is one too.
     Lovejoin,
-    /// A box back from Lovejoin the wallet recorded a mix moving, its way back alone: no spend has touched it since
-    /// (chunk 51, the owner's answer 4 to B15, time#1).
+    /// A box back from Lovejoin the wallet knows is mixed (its own chain's last mix made it, or the server said a mix
+    /// did), its way back alone: no spend has touched it since (chunk 51, the owner's answer 4 to B15, time#1).
     Mixed,
     /// What an earlier private spend of the wallet's own left, its change, tied to that spend in the open, naming no
-    /// public account and no session: when nothing fresher pays, a stealth mint, a pool's start and a funding take it
-    /// before money made private (chunk 51, the owner's answer of 2026-11-18, l2rank#6). Change that names one ranks as
-    /// a session's money.
+    /// public account, no session and no spend made elsewhere: when nothing fresher pays, a stealth mint, a pool's
+    /// start and a funding take it before money made private (chunk 51, the owner's answer of 2026-11-18, l2rank#6).
+    /// Change that names one of those ranks as a session's money.
     Change,
 }
 
@@ -2467,7 +2468,8 @@ impl Class {
 /// What a spend is for, which orders the classes it would rather take.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Purpose {
-    /// Send or Make public: own money first, a box back from Lovejoin last.
+    /// Send or Make public: own money first, a box back from Lovejoin last, one the wallet knows is mixed before any
+    /// other box (chunk 51, l3rank#3).
     #[default]
     Pay,
     /// A stealth mint, and a pool's start from the Seedelf balance: the new
@@ -2479,10 +2481,11 @@ pub enum Purpose {
     /// goes before money made private, which ties it to the public account
     /// (`Origin::Change`, chunk 51, l2rank#6).
     Mint,
-    /// A private session's funding or top-up: received money, or a box that
-    /// pays alone, first; an earlier spend's change before money made private;
-    /// another session's money last. `session` is the session's own class,
-    /// whose money a top-up may take first.
+    /// A private session's funding or top-up: received money first, then a
+    /// box that pays alone, one the wallet knows is mixed before any other
+    /// (chunk 51, l3rank#3); an earlier spend's change before money made
+    /// private; another session's money last. `session` is the session's own
+    /// class, whose money a top-up may take first.
     Fund { session: Option<String> },
 }
 
@@ -2491,15 +2494,19 @@ impl Purpose {
     fn rank(&self, class: &Class) -> u8 {
         use Origin::*;
         match self {
+            // A box the wallet knows is mixed before any other, here and for a funding: any other may be one someone
+            // else put in under the wallet's key, a register copied as found among them, whose way back ties the spend
+            // to whoever reads that register's Seedelf, where a mixed box's ties it to nothing (chunk 51, l3rank#3).
             Purpose::Pay => match class.origin {
                 Own => 0,
                 Session | Change => 1,
                 Received => 2,
                 Unknown => 3,
-                Lovejoin | Mixed => 4,
+                Mixed => 4,
+                Lovejoin => 5,
             },
-            // Only a box the wallet recorded a mix moving goes first; one with no such record, as every box brought
-            // back before it kept one, after received money, as before B15 (chunk 51, the owner's answer 4). What a
+            // Only a box the wallet knows is mixed goes first; any other box, as every box brought back before it
+            // kept that record, after received money, as before B15 (chunk 51, the owner's answer 4). What a
             // spend of the wallet's own left is tied to that spend, after fresh money (answer 2), and, nothing
             // fresher paying, before money made private, which ties the new Seedelf to the public account; change
             // that names a public account or a session ranks as a session's, last (the owner's answer of 2026-11-18,
@@ -2519,11 +2526,12 @@ impl Purpose {
                 }
                 match class.origin {
                     Received => 1,
-                    Lovejoin | Mixed => 2,
-                    Unknown => 3,
-                    Change => 4,
-                    Own => 5,
-                    Session => 6,
+                    Mixed => 2,
+                    Lovejoin => 3,
+                    Unknown => 4,
+                    Change => 5,
+                    Own => 6,
+                    Session => 7,
                 }
             }
         }

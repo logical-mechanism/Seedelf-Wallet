@@ -2125,10 +2125,12 @@ pub mod api {
     /// A Seedelf UTxO's history, as the extension reads it from its sealed
     /// history (activity.ts): its class, and where its money came from:
     /// `own`, `received`, `session`, `change` (an earlier private spend's
-    /// change naming no public account and no session: chunk 51, l2rank#6),
-    /// `lovejoin`, `mixed` (a box's way back the worker recorded a mix moving:
-    /// chunk 51, the owner's answer 4 to B15) or `unknown`. Selection keeps
-    /// different classes apart where it can (`build::Histories`).
+    /// change naming no public account, no session and no spend made
+    /// elsewhere: chunk 51, l2rank#6), `lovejoin`, `mixed` (the way back of a
+    /// box the worker knows is mixed, its own chain's last mix having made it
+    /// or Koios having said a mix did: chunk 51, the owner's answer 4 to B15)
+    /// or `unknown`. Selection keeps different classes apart where it can
+    /// (`build::Histories`).
     #[derive(Deserialize, Clone, Debug)]
     pub struct ClassIn {
         pub id: String,
@@ -2262,9 +2264,9 @@ pub mod api {
             }
         }
 
-        /// Chunk 51, the owner's answer 4 to B15 (time#1): the worker marks a box's way back `mixed` where it recorded a
-        /// mix moving the box, and a stealth mint takes only such a box first. One it has no such record of, `lovejoin`
-        /// as every box brought back before, goes after received money. Both merge last, as every box does.
+        /// Chunk 51, the owner's answer 4 to B15 (time#1): the worker marks a box's way back `mixed` where it knows the
+        /// box is mixed, and a stealth mint takes only such a box first. Any other box, `lovejoin` as every box brought
+        /// back before, goes after received money. Both merge last, as every box does.
         #[test]
         fn a_box_a_mix_brought_back_is_read_apart_from_one_with_no_such_record() {
             let (mixed, old, received) = (at(0xb1), at(0xb0), at(0x02));
@@ -2284,6 +2286,36 @@ pub mod api {
             assert!(h.rank_of(&mixed) < h.rank_of(&received));
             assert!(h.rank_of(&received) < h.rank_of(&old));
             assert_eq!(h.tier_of(&mixed), h.tier_of(&old));
+        }
+
+        /// Chunk 51, l3rank#3: a funding, a top-up and a Send take a box the worker knows is mixed before any other box,
+        /// one of unknown making (`box:<w>+unknown:<w>`, what a box someone else put in comes back as) among them, so
+        /// no planted box's way back is picked over a mixed box on size. Both still merge last.
+        #[test]
+        fn a_funding_and_a_send_take_a_mixed_box_before_any_other_box() {
+            let (mixed, unplaced) = (at(0xb1), at(0xb2));
+            let w = &unplaced.tx_hash;
+            let classes: Classes = [
+                (&mixed, class(&format!("box:{}", mixed.tx_hash), "mixed")),
+                (
+                    &unplaced,
+                    class(&format!("box:{w}+unknown:{w}"), "lovejoin"),
+                ),
+            ]
+            .into_iter()
+            .map(|(u, c)| (format!("{}#0", u.tx_hash), c))
+            .collect();
+            for purpose in [
+                Purpose::Fund { session: None },
+                Purpose::Fund {
+                    session: Some("session:3".into()),
+                },
+                Purpose::Pay,
+            ] {
+                let h = histories(purpose.clone(), &classes).unwrap();
+                assert!(h.rank_of(&mixed) < h.rank_of(&unplaced), "{purpose:?}");
+                assert_eq!(h.tier_of(&mixed), h.tier_of(&unplaced), "{purpose:?}");
+            }
         }
 
         /// Chunk 51, the owner's answer 2 to B15 (money#2, own#1) and of 2026-11-18 (l2rank#6): what a spend of the

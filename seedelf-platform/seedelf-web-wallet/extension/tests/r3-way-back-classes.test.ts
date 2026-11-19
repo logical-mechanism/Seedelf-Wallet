@@ -1,6 +1,6 @@
 // Chunk 51, the owner's calls round, round three: a box's way back is classed by what the wallet knows, and nothing new
-// is asked of anyone for it (the owner's answers of 2026-11-18, e1a#1's approved design). A box the wallet recorded a
-// mix moving is marked so, `mixed`, and a stealth mint takes it first; a deposit's own box never is, a Bootstrap's or a
+// is asked of anyone for it (the owner's answers of 2026-11-18, e1a#1's approved design). A box the wallet knows is
+// mixed is marked so, `mixed`, and a stealth mint takes it first; a deposit's own box never is, a Bootstrap's or a
 // seed's, however its mix's count closed and whatever records are gone (l2rank#3, l2still#2). A box the user's own
 // session deposited is that session's money, a public account's deposit ties that account (PRIV-3). Anything else, a
 // box someone else put in (a register copied as found, d = 1, included), an unsure box, one whose making the wallet

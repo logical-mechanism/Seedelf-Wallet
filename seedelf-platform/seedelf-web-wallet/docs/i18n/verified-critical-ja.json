@@ -353,7 +353,6 @@
     "staking.review.warn.stopEnds",
     "staking.review.warn.stopRewards",
     "staking.review.warn.stopUnpaid",
-    "staking.warn.allLocked",
     "staking.warn.noFee",
     "staking.warn.retireOwnVote",
     "staking.warn.rewardsLocked",

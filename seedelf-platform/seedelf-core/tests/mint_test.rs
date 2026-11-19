@@ -2823,7 +2823,7 @@ mod apart {
             .collect()
     }
 
-    /// `boxes`, each one the extension recorded a mix moving (chunk 51, the owner's answer 4 to B15).
+    /// `boxes`, each one the extension knows is mixed (chunk 51, the owner's answer 4 to B15).
     fn mixed_boxes(w: &World, first: u8, n: u8) -> Vec<(UtxoResponse, Class)> {
         boxes(w, first, n)
             .into_iter()
@@ -2957,12 +2957,13 @@ mod apart {
     }
 
     /// Chunk 51, gap-g1#1 (b), the owner's B15: a stealth mint takes a box back
-    /// from Lovejoin that pays alone before received money. Whoever paid you
-    /// knows their payment, and a copy of a Seedelf's datum paid in (about 4 ₳)
-    /// shows it to everyone; no payer knows a box, but one who put it in under
-    /// the wallet's key and mixed it themselves: nothing tells that box from
-    /// the wallet's own (chunk 51, own#3). Received money still comes before
-    /// money moved in.
+    /// from Lovejoin that pays alone before received money, where the wallet
+    /// knows it's mixed (the owner's answer 4; any other box goes after
+    /// received money). Whoever paid you knows their payment, and a copy of a
+    /// Seedelf's datum paid in (about 4 ₳) shows it to everyone; no payer
+    /// knows a mixed box, but one who put it in under the wallet's key and
+    /// mixed it themselves: nothing tells that box from the wallet's own
+    /// (chunk 51, own#3). Received money still comes before money moved in.
     #[test]
     fn a_stealth_mint_takes_a_box_that_pays_alone_before_received_money() {
         let w = world();
@@ -3013,9 +3014,9 @@ mod apart {
         class(&format!("received:{}", u.tx_hash), Origin::Received)
     }
 
-    /// Chunk 51, the owner's answer 4 to B15 (time#1, still#1): a box back from Lovejoin the wallet has no record of a
-    /// mix moving, as every one brought back before that answer, goes after received money for a stealth mint, as
-    /// before B15. It may be a box its deposit still ties to whatever paid for it.
+    /// Chunk 51, the owner's answer 4 to B15 (time#1, still#1): a box back from Lovejoin the wallet doesn't know is
+    /// mixed, as every one brought back before that answer, goes after received money for a stealth mint, as before
+    /// B15. It may be a box its deposit still ties to whatever paid for it.
     #[test]
     fn a_box_not_recorded_as_mixed_goes_after_received_money() {
         let w = world();
@@ -3028,7 +3029,7 @@ mod apart {
             (&old.0, old.1.clone()),
         ];
         assert_eq!(minted(&w, &known), one(&received));
-        // A box it recorded a mix moving goes first, though larger than the payment.
+        // A box it knows is mixed goes first, though larger than the payment.
         let mixed = owned(&w, 0x20, 0, 30_000_000, &[]);
         let mut known = known.to_vec();
         known.push((
@@ -3349,8 +3350,8 @@ mod apart {
     }
 
     /// Chunk 51, round three's rule 1 (l2rank#1, l2time#1, l2time#3, l2still#1): the web wallet's way back of a box
-    /// whose making it can't place, `box:<w>+unknown:<w>`, reads as a box with no record of a mix moving it: a stealth
-    /// mint and a funding take money others paid before it, and selection still takes it last, one at a time.
+    /// whose making it can't place, `box:<w>+unknown:<w>`, reads as a box it doesn't know is mixed: a stealth mint and
+    /// a funding take money others paid before it, and selection still takes it last, one at a time.
     #[test]
     fn a_box_of_unknown_making_goes_after_money_others_paid_and_stays_a_box() {
         let w = world();
@@ -3461,6 +3462,120 @@ mod apart {
             .err()
             .unwrap();
         assert!(e.to_string().contains("Not enough ADA"), "{e}");
+    }
+
+    /// The two ways back of chunk 51's l3rank#3: W, a box's whose making the wallet can't place (`box:<w>+unknown:<w>`,
+    /// origin lovejoin, what the extension seals for a box someone else put in under Seedelf S1's register as found,
+    /// d = 1, brought back by Bring every box back now), and X, a box's it knows is mixed (`box:<x>`, origin mixed).
+    /// One of them is `less` lovelace smaller than the other: what two withdraws' fees differ by.
+    fn unplaced_and_mixed(
+        w: &World,
+        unplaced_smaller: bool,
+        less: u64,
+    ) -> [(UtxoResponse, Class); 2] {
+        let (unplaced_lovelace, mixed_lovelace) = if unplaced_smaller {
+            (BOX - less, BOX)
+        } else {
+            (BOX, BOX - less)
+        };
+        let unplaced = owned(w, 0x30, 0, unplaced_lovelace, &[]);
+        let mixed = owned(w, 0x40, 0, mixed_lovelace, &[]);
+        let unplaced_class = class(
+            &format!("box:{0}+unknown:{0}", unplaced.tx_hash),
+            Origin::Lovejoin,
+        );
+        let mixed_class = class(&format!("box:{}", mixed.tx_hash), Origin::Mixed);
+        [(unplaced, unplaced_class), (mixed, mixed_class)]
+    }
+
+    /// Chunk 51, round three's last look, l3rank#3: a funding, a top-up, a Send and a Make public that one box pays
+    /// ranked a box a mix moved level with a box of unknown making, and took the smaller, so a few hundred lovelace of
+    /// withdraw fee decided whether they spent a planted box's way back, which ties the spend to S1 for anyone who
+    /// reads its name, or the mixed one, which ties it to nothing. They take the mixed one first, whatever the sizes.
+    #[test]
+    fn one_box_paying_takes_a_mixed_box_before_one_of_unknown_making_whatever_the_sizes() {
+        let w = world();
+        let seedelf = Payment {
+            register: Register::create(random_scalar())
+                .unwrap()
+                .rerandomize()
+                .unwrap(),
+            lovelace: 3_000_000,
+            tokens: Assets::new(),
+        };
+        let to_address = |lovelace: u64| {
+            vec![AddressPayment {
+                to: key_address(),
+                lovelace,
+                tokens: Assets::new(),
+            }]
+        };
+        let spends = [
+            (
+                "a new session's funding of 2 ₳ and its 5 ₳ collateral",
+                Purpose::Fund {
+                    session: Some("session:7".into()),
+                },
+                funding(2_000_000),
+            ),
+            (
+                "a site's top-up of 2 ₳",
+                Purpose::Fund {
+                    session: Some("session:3".into()),
+                },
+                to_address(2_000_000),
+            ),
+            ("a Make public of 3 ₳", Purpose::Pay, to_address(3_000_000)),
+            ("a Send of 3 ₳ to a Seedelf", Purpose::Pay, Vec::new()),
+        ];
+        for (name, purpose, pay) in spends {
+            for unplaced_smaller in [true, false] {
+                let [(unplaced, unplaced_class), (mixed, mixed_class)] =
+                    unplaced_and_mixed(&w, unplaced_smaller, 300);
+                let known = [(&unplaced, unplaced_class), (&mixed, mixed_class)];
+                let available = [unplaced.clone(), mixed.clone()];
+                let h = histories(purpose.clone(), &known);
+                let inputs = if pay.is_empty() {
+                    build::transfer_apart(
+                        &w.chain,
+                        &available,
+                        &h,
+                        std::slice::from_ref(&seedelf),
+                        &w.owner,
+                        w.signer,
+                    )
+                    .unwrap()
+                    .inputs()
+                } else {
+                    build::sweep_many_apart(&w.chain, &available, &h, &pay, &w.owner, w.signer)
+                        .unwrap()
+                        .inputs()
+                };
+                assert_eq!(
+                    outpoints(&inputs),
+                    one(&mixed),
+                    "{name}, the box of unknown making smaller: {unplaced_smaller}; ranks: unknown making {}, mixed {}",
+                    h.rank_of(&unplaced),
+                    h.rank_of(&mixed),
+                );
+            }
+        }
+    }
+
+    /// A pin beside l3rank#3: a stealth mint took the box a mix moved first already, whatever the sizes.
+    #[test]
+    fn a_stealth_mint_takes_a_mixed_box_before_one_of_unknown_making_whatever_the_sizes() {
+        let w = world();
+        for unplaced_smaller in [true, false] {
+            let [(unplaced, unplaced_class), (mixed, mixed_class)] =
+                unplaced_and_mixed(&w, unplaced_smaller, 300);
+            let known = [(&unplaced, unplaced_class), (&mixed, mixed_class)];
+            assert_eq!(
+                minted(&w, &known),
+                one(&mixed),
+                "the box of unknown making smaller: {unplaced_smaller}"
+            );
+        }
     }
 
     #[test]
