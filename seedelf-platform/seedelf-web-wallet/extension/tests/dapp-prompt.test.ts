@@ -634,9 +634,12 @@ describe("a site's transaction's metadata beside its note (chunk 51, x1a#3)", ()
 // or one anyone can prove, anyone can take; one no proof can meet is locked for good; and no Seedelf Wallet finds a
 // payment that keeps its datum by hash, which the site may keep (never "anyone can take it", nor a register). The Pays
 // list says "Seedelf Wallet's contract" for all four, so each callout is the window's one word of it, and none had a
-// test: the dead one dropped, the whole suite passed (r2tests#1).
-describe("a payment into Seedelf Wallet's contract, by what's under it (chunk 51, r2tests#1, r2sign#1)", () => {
-  type Reading = "register" | "none" | "dead" | "hash";
+// test: the dead one dropped, the whole suite passed (r2tests#1). A register beside a reference script is its owner's,
+// but no Seedelf Wallet spends it yet, so it's warned of in the UTxOs page's words, never a Seedelf payment's note
+// (l3sign#1). The site writes the register, so no reading says whose it hides; one already on chain is warned of
+// (x1a#2).
+describe("a payment into Seedelf Wallet's contract, by what's under it (chunk 51, r2tests#1, r2sign#1, l3sign#1, x1a#2)", () => {
+  type Reading = "register" | "script-ref" | "none" | "dead" | "hash";
   /** The contract's preprod address (tests/fixtures/owned-utxos.json). */
   const CONTRACT = "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f";
   const CALLOUTS: Record<Reading, { testId: string; tone: "warn" | "privacy"; words: (session: boolean) => string }> = {
@@ -645,6 +648,7 @@ describe("a payment into Seedelf Wallet's contract, by what's under it (chunk 51
       tone: "privacy",
       words: (session) => i18n.t(session ? "dappUi.privacy.paysSeedelfSession" : "dappUi.privacy.paysSeedelfAccount"),
     },
+    "script-ref": { testId: "dapp-seedelf-script-ref", tone: "warn", words: () => i18n.t("dappUi.warn.seedelfScriptRef") },
     none: { testId: "dapp-seedelf-unsafe", tone: "warn", words: () => i18n.t("dappUi.warn.noRegister") },
     dead: { testId: "dapp-seedelf-dead", tone: "warn", words: () => i18n.t("dappUi.warn.deadRegister") },
     hash: { testId: "dapp-seedelf-hash", tone: "warn", words: () => i18n.t("dappUi.warn.datumByHash") },
@@ -680,11 +684,38 @@ describe("a payment into Seedelf Wallet's contract, by what's under it (chunk 51
 
   it("leaves the private balance out of signing's note only where nothing pays a Seedelf", () => {
     // The worker checked the wallet's other accounts and found none in it (`ties` []): the note says the private
-    // balance isn't in it, but where a Seedelf is paid, which may be the user's own.
+    // balance isn't in it, but where a Seedelf is paid, which may be the user's own, a reference script beside it or not.
     const out = i18n.t("dappUi.privacy.notPrivate");
     for (const reading of READINGS) {
-      expect(text(render(paying(reading), "preprod", { ties: [] })).includes(out), reading).toBe(reading !== "register");
+      const paysSeedelf = reading === "register" || reading === "script-ref";
+      expect(text(render(paying(reading), "preprod", { ties: [] })).includes(out), reading).toBe(!paysSeedelf);
     }
+  });
+
+  it("never says whose a register hides, the site's to write (x1a#2)", () => {
+    for (const session of [false, true]) {
+      for (const reading of READINGS) expect(text(render(paying(reading), "preprod", { session })), reading).not.toMatch(/says whose|stays hidden/i);
+    }
+  });
+
+  it("warns that anyone can see whose Seedelf it pays only where the worker found the register on chain (x1a#2)", () => {
+    const warning = i18n.t("dappUi.warn.registerOnChain");
+    const found = render({ ...paying("register"), registerOnChain: true });
+    expect(found).toContain('<div class="callout callout--warn" data-testid="dapp-seedelf-on-chain">');
+    expect(text(found)).toContain(warning);
+    // Beside the Seedelf payment's own note, which still says it leaves the account in the open.
+    expect(text(found)).toContain(i18n.t("dappUi.privacy.paysSeedelfAccount"));
+    for (const reading of READINGS) expect(text(render(paying(reading))), reading).not.toContain(warning);
+  });
+
+  it("warns, before its note, where the metadata isn't what the body commits to (G5's notes)", () => {
+    const warning = i18n.t("dappUi.warn.metadataHash");
+    const page = text(render(summary({ metadata: true, note: ["Thanks"], metadataMismatch: true })));
+    expect(page).toContain(warning);
+    expect(page.indexOf(warning)).toBeLessThan(page.indexOf(i18n.t("dappUi.itsNote")));
+    // A hash with no metadata at all: no note shown, the warning still is.
+    expect(text(render(summary({ metadataMismatch: true })))).toContain(warning);
+    expect(text(render(summary({ metadata: true, note: ["Thanks"] })))).not.toContain(warning);
   });
 });
 

@@ -647,6 +647,10 @@ export function ConnectRequest({
         error={error}
       >
         <div className="stack" data-testid="dapp-funding">
+          {/* What waits behind it, with Decline all, as on every other screen: it may wait minutes, and closing the
+              window, as the line below invites, declines them (chunk 51, e3b#3). Decline all leaves this funding be. */}
+          {queue}
+          <Changed change={change} />
           {site}
           <p className="dapp-waiting">
             <span className="spin">
@@ -807,6 +811,8 @@ export function ConnectRequest({
         }
       >
         <div className="stack" data-testid="dapp-funding-review">
+          {/* What waits behind it, as on the connect screen; Decline all declines this connect too (chunk 51, e3b#3). */}
+          {queue}
           <ReviewRows testId="dapp-funding-rows">
             <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: review.index + 1 })} strong />
             <Row label={tr("lovejoin.review.account")} value={shortHex(review.address, 16, 8)} title={review.address} />
@@ -1242,6 +1248,20 @@ export function SignTx({
           {tr("dappUi.warn.datumByHash")}
         </Callout>
       )}
+      {/* Beside a reference script, its register's owner's, but no Seedelf Wallet spends it yet and the private balance
+          leaves it out: the UTxOs page's words, in place of the Seedelf note (chunk 51, l3sign#1). */}
+      {s.paid.some((p) => p.seedelf === "script-ref") && (
+        <Callout tone="warn" testId="dapp-seedelf-script-ref">
+          {tr("dappUi.warn.seedelfScriptRef")}
+        </Callout>
+      )}
+      {/* The site writes the register, so the window never says it hides whose Seedelf this pays; one the kept view holds
+          already, beside a Seedelf's token or one of the wallet's own UTxOs, shows anyone (chunk 51, x1a#2). */}
+      {s.registerOnChain && (
+        <Callout tone="warn" testId="dapp-seedelf-on-chain">
+          {tr("dappUi.warn.registerOnChain")}
+        </Callout>
+      )}
       {s.paid.some((p) => p.seedelf === "register") && (
         <Callout tone="privacy" testId="dapp-seedelf-payment">
           {tr(session ? "dappUi.privacy.paysSeedelfSession" : "dappUi.privacy.paysSeedelfAccount")}
@@ -1331,6 +1351,13 @@ export function SignTx({
         </p>
       )}
 
+      {/* What it shows of its metadata, or that it shows none, isn't what the signature commits to: the site can send
+          other metadata, or none (chunk 51, G5's notes). Before the note, so it's read first. */}
+      {s.metadataMismatch && (
+        <Callout tone="warn" testId="dapp-metadata-hash">
+          {tr("dappUi.warn.metadataHash")}
+        </Callout>
+      )}
       {note && (
         <div className="stack-tight">
           <span className="note">{tr("dappUi.itsNote")}</span>
@@ -1376,7 +1403,7 @@ export function SignTx({
         {signingTies(
           ties && [...ties, ...(staked ?? []), ...(certified ?? [])],
           session,
-          s.paid.some((p) => p.seedelf === "register"),
+          s.paid.some((p) => p.seedelf === "register" || p.seedelf === "script-ref"),
         )}
       </Callout>
       {/* The site built these bytes, not the wallet: this is where reading them matters most. It asks the worker

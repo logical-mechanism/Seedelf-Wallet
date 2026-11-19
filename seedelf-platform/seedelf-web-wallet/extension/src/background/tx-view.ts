@@ -379,7 +379,10 @@ async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): P
       else if (key && sessions.has(key)) o.yours = { kind: "session", index: sessions.get(key)! };
       else if (o.address.seedelf && o.register?.payable && ownRegister(wasm, keys, o.register)) {
         const seedelf = o.assets.some((a) => a.policyId === CONTRACT_V1.seedelfPolicyId);
-        o.yours = { kind: seedelf ? "seedelf" : "private" };
+        // Beside a reference script it's the user's, but no Seedelf Wallet spend takes it yet and the private balance
+        // leaves it out (script-spend.ts `spendable`, core's `eval::refusal`): never "in your private balance", nor a
+        // Seedelf Remove can take (chunk 51, l3sign#1).
+        o.yours = o.scriptRef ? { kind: "unspendable" } : { kind: seedelf ? "seedelf" : "private" };
       }
     }
     if (rewards.length || d.requiredSigners.length) {

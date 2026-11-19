@@ -123,8 +123,9 @@ function tiedList(ties: DappTie[], named?: AccountNamer) {
  * review §2.12). That the wallet's other side isn't in it is said only when
  * the worker checked (`ties`, empty): otherwise it may not be true
  * (independent review M12). Nor is the private balance said to be out of
- * it when it pays a Seedelf (`seedelf`): nothing says whose, so it may be
- * the user's own.
+ * it when it pays a Seedelf (`seedelf`), a reference script beside it or
+ * not: the window doesn't say whose, so it may be the user's own (chunk 51,
+ * x1a#2, l3sign#1).
  */
 export function signingTies(ties: DappTie[] | undefined, session: boolean, seedelf = false): string {
   const checked = ties !== undefined && ties.length === 0;

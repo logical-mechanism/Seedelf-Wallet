@@ -230,3 +230,121 @@ fn every_reader_of_a_payments_register_reads_every_spelling_alike() {
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
+
+/// The fixture's reference scripts, each as an output's key 3 in hex, by name.
+fn reference_scripts() -> Vec<(String, String)> {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../extension/tests/fixtures/register-spellings.json"
+    ))
+    .unwrap();
+    fixture["referenceScripts"]["scripts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["name"].as_str().unwrap().to_string(),
+                s["scriptRef"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Chunk 51, l3sign#1: a payment under a register whose output carries a reference script too. Its register's owner
+/// can spend it, but the private balance leaves such a row out and no Seedelf Wallet spend takes it yet (core's
+/// `eval::refusal`), so the sign window never reads it as a Seedelf payment: "script-ref", in every spelling of the
+/// register, beside any script. Transaction details still reads its register and its script, which the extension's
+/// tx-view.ts tags as one Seedelf Wallet can't spend yet. Data that isn't a register, and a datum kept by hash, read as
+/// they do without the script. Before the fix, the window read "register" whatever the output carried.
+#[test]
+fn a_register_beside_a_reference_script_is_never_read_as_a_seedelf_payment() {
+    let (_, _, spellings) = spellings();
+    let scripts = reference_scripts();
+    assert!(scripts.len() > 1, "more than one kind of script");
+    let config = get_config(1, true).unwrap();
+    let contract =
+        seedelf_core::address::wallet_contract(true, config.contract.wallet_contract_hash);
+    let lovelace = 2_000_000u32;
+    // Each spelling beside each script: inline, then kept by hash.
+    let mut outputs = Vec::new();
+    let mut cases = Vec::new();
+    for (name, datum, is_register) in &spellings {
+        let hash = Hasher::<256>::hash(datum);
+        for (script, script_ref) in &scripts {
+            for datum_option in [
+                format!("8201d818{}", bstr(datum)),
+                format!("8200{}", bstr(hash.as_ref())),
+            ] {
+                outputs.push(format!(
+                    "a400{}011a{lovelace:08x}02{datum_option}03{script_ref}",
+                    bstr(&contract.to_vec())
+                ));
+            }
+            cases.push((format!("{name}, beside {script}"), *is_register));
+        }
+    }
+    let fee = 400_000u64;
+    let body = format!(
+        "a30081825820{TX_A}0001{}{}021a{fee:08x}",
+        head(4, outputs.len()),
+        outputs.concat()
+    );
+    let tx = format!("84{body}a0f5f6");
+    let funded = u64::from(lovelace) * outputs.len() as u64 + fee;
+    let input: KoiosRow = serde_json::from_value(json!({
+        "tx_hash": TX_A, "tx_index": 0,
+        "address": account().base_address(true, Role::Receive, 0).unwrap().to_bech32().unwrap(),
+        "value": funded.to_string(), "asset_list": [],
+    }))
+    .unwrap();
+    let request = TxRequest {
+        network: "preprod".into(),
+        tx_cbor: tx.clone(),
+        keys: vec![KeyPath { role: 0, index: 0 }],
+        inputs: vec![input],
+        partial_sign: false,
+        stake_index: 0,
+        stake_deposit: None,
+        governance: false,
+    };
+    let summary = cip30::inspect_tx(&account(), &request).unwrap();
+    assert_eq!(summary.paid.len(), outputs.len());
+    let detail = decode_tx("preprod", &tx).unwrap();
+    assert_eq!(detail.outputs.len(), outputs.len());
+
+    let mut wrong = Vec::new();
+    for (n, (name, is_register)) in cases.iter().enumerate() {
+        let (inline, hashed) = (2 * n, 2 * n + 1);
+        // The sign window: a register beside a script is a reading of its own, never a Seedelf payment's.
+        let window = summary.paid[inline].seedelf.as_deref();
+        let said = if *is_register { "script-ref" } else { "none" };
+        if window != Some(said) {
+            wrong.push(format!(
+                "sign window, inline {name}: {window:?}, not {said:?}"
+            ));
+        }
+        // Transaction details: the register as without the script, and the script beside it.
+        let out = &detail.outputs[inline];
+        let payable = out.register.as_ref().is_some_and(|r| r.payable);
+        if payable != *is_register || out.script_ref.is_none() {
+            wrong.push(format!(
+                "Transaction details, inline {name}: payable {payable}, script {}",
+                out.script_ref.is_some()
+            ));
+        }
+        // Kept by hash: as without the script, in both.
+        let window = summary.paid[hashed].seedelf.as_deref();
+        if window != Some("hash") {
+            wrong.push(format!(
+                "sign window, {name} kept by hash: {window:?}, not \"hash\""
+            ));
+        }
+        if detail.outputs[hashed].register.is_some() || detail.outputs[hashed].script_ref.is_none()
+        {
+            wrong.push(format!(
+                "Transaction details, {name} kept by hash: a register, or no script"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}

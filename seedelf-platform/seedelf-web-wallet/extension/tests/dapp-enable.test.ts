@@ -384,6 +384,9 @@ describe("pages of one site sharing a connect question", () => {
     expect(await Promise.all(three)).toEqual([GONE, GONE, GONE]);
     await settle();
     expect(t.dapp.approvals()).toEqual([]);
+    // Its question left unanswered counts as a decline (chunk 51, G6's note): its own calls sharing it are no other page.
+    expect((await t.dapp.declined()).map((d) => d.origin)).toEqual([STRANGER]);
+    await t.dapp.letAsk(STRANGER);
 
     // One page asks; another calls it twice on that question; then both go away, the second first.
     const [b, c] = [site(STRANGER), site(STRANGER)];
@@ -396,6 +399,9 @@ describe("pages of one site sharing a connect question", () => {
     expect(await Promise.all([asked, ...twice])).toEqual([GONE, GONE, GONE]);
     await settle();
     expect(t.dapp.approvals()).toEqual([]);
+    // No page of it is left waiting on that question, so that's a decline too; once the user lets it ask, it's asked.
+    expect((await t.dapp.declined()).map((d) => d.origin)).toEqual([STRANGER]);
+    await t.dapp.letAsk(STRANGER);
     // Nothing waits in the window, so closing it declines nobody, and the site is asked as ever.
     const d = site(STRANGER);
     const again = t.dapp.call(d, "enable", []);

@@ -804,6 +804,17 @@ function Output({
 function YoursTag({ yours, testId }: { yours: TxYours; testId: string }) {
   const tr = useT();
   const { accounts, several } = useAccounts();
+  // Under the user's register beside a reference script: theirs, but no Seedelf Wallet spends it yet and the private
+  // balance leaves it out, said in the warning's colour, as the UTxOs page marks such a row (chunk 51, l3sign#1).
+  if (yours.kind === "unspendable") {
+    return (
+      <span className="tx-detail__line tx-detail__line--wide">
+        <span className="utxo-tag utxo-tag--warn" data-testid={testId}>
+          {tr("tx.yours.warn.unspendable")}
+        </span>
+      </span>
+    );
+  }
   let words: string;
   if (yours.kind === "account") {
     words = several ? tr("tx.yours.named", { account: nameOf(accounts, yours.account) }) : tr("tx.yours.account");
