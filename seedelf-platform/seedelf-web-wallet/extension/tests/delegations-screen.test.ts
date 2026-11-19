@@ -96,7 +96,8 @@ describe("the page", () => {
     expect(rows).toHaveLength(12);
     const said = [
       "Voting power to your own DRep",
-      "Voting power to cogno drep",
+      // A DRep's name is said as a DRep's, so one can't pass for a choice (chunk 51, gap-g7#1).
+      "Voting power to DRep · cogno drep",
       "Stake key registered −2 ₳",
       "Staked with LOGIC",
       "Voting power to Always abstain",

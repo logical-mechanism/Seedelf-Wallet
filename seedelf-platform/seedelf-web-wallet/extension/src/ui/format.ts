@@ -508,12 +508,18 @@ export function poolLabel(pool: PoolRef): string {
   return pool.ticker ?? pool.name ?? shortId(pool.id);
 }
 
-/** Where the vote goes, in words: a pinned choice, the DRep's name or shortened ID, or nowhere. */
-export function voteLabel(drep: string | null, name?: string): string {
+/**
+ * Where the vote goes, in words: a pinned choice, the account's own DRep (`own`), a DRep by its `name` or its
+ * shortened ID, or nowhere. A DRep's name never stands alone ("DRep · 8Ball"): a DRep picks its own, and one called
+ * "Always abstain" read as that choice on the vote's review, in Activity, its CSV and Delegations. For the same
+ * reason the account's own DRep is a flag, never a name passed in (chunk 51, gap-g7#1).
+ */
+export function voteLabel(drep: string | null, { name, own = false }: { name?: string; own?: boolean } = {}): string {
   if (!drep) return t("format.vote.notDelegated");
   if (drep === ALWAYS_ABSTAIN) return t("format.vote.abstain");
   if (drep === ALWAYS_NO_CONFIDENCE) return t("format.vote.noConfidence");
-  return name ?? shortId(drep);
+  if (own) return t("drep.yourOwn");
+  return name ? t("format.vote.drep", { name }) : shortId(drep);
 }
 
 /** A governance action's kind in words, as Transaction details and a site's sign window say what a proposal proposes. */

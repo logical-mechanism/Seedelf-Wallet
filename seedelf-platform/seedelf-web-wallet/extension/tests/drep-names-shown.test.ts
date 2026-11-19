@@ -76,7 +76,8 @@ describe("the bundled DReps' names, as the screens show them (chunk 51, gap-g7#3
       }),
     );
     expect(HIDDEN.test(html)).toBe(false);
-    expect(text(html)).toContain("Voting power to Evil Drep");
+    // Said as a DRep's, so it can't pass for a choice (gap-g7#1).
+    expect(text(html)).toContain("Voting power to DRep · Evil Drep");
     expect(text(html)).toContain(`Voting power to ${BLANK.slice(0, 8)}`);
   });
 

@@ -1,12 +1,15 @@
 // The DReps the wallet knows by name, from its own list (src/dreps/, made by
 // `npm run dreps` at each release), searched on the device: nobody is asked
-// about a DRep until the user picks one. The list only misses DReps who
-// registered since the release; a pasted ID finds those.
+// about a DRep until the user picks one. The list misses DReps who registered
+// since the release, and leaves out those whose profile asks directories not
+// to list them (CIP-119's doNotList, chunk 51, gap-g7#2); a pasted ID finds
+// either.
 
+import { bundles, type I18nKey } from "../i18n/translations";
 import type { NetworkName } from "../networks";
 import mainnet from "../dreps/mainnet.json";
 import preprod from "../dreps/preprod.json";
-import { plainName } from "./format";
+import { nameSkeleton, plainName } from "./format";
 
 export interface DrepEntry {
   /** CIP-129, as Koios gives it. */
@@ -49,3 +52,33 @@ export function searchDreps(dreps: DrepEntry[], query: string): DrepEntry[] {
  * (release review C36).
  */
 export const isDrepId = (text: string) => /^drep(_vkh|_script)?1[02-9ac-hj-np-z]{50,}$/.test(text.trim().toLowerCase());
+
+/** What the wallet calls its own choices for the vote: the two pinned ones, none, and the account's own DRep. */
+const CHOICES = [
+  "format.vote.abstain",
+  "format.vote.noConfidence",
+  "format.vote.notDelegated",
+  "drep.yourOwn",
+  "vote.abstain.title",
+  "vote.noConfidence.title",
+] as const satisfies readonly I18nKey[];
+
+/** `CHOICES` as each language the wallet speaks writes them, by `nameSkeleton`: made once, when first asked. */
+let choices: Set<string> | undefined;
+
+/**
+ * Whether a DRep's name looks like one of the wallet's own choices ("Always abstain", "Your own DRep") as any
+ * language the wallet speaks writes it, by `nameSkeleton`, as a shared name is told. Every language's, not only
+ * the one chosen: the user may switch, and a name is anyone's to pick. This holds a stranger's name up to the
+ * wallet's own words, never the reverse, so it isn't the translated text the code mustn't compare (chunk 51,
+ * gap-g7#1).
+ */
+export function posesAsChoice(name: string | undefined): boolean {
+  if (!name) return false;
+  choices ??= new Set(
+    Object.values(bundles)
+      .flatMap((words) => CHOICES.map((key) => nameSkeleton((words as Record<string, string>)[key] ?? "")))
+      .filter((skeleton) => skeleton !== ""),
+  );
+  return choices.has(nameSkeleton(name));
+}

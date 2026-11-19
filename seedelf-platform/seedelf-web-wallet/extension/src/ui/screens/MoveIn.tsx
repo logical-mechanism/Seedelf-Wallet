@@ -18,7 +18,7 @@ import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { HandleWarning } from "../components/HandleWarning";
 import { LeftOutNote } from "../components/LeftOut";
-import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
+import { pickedAway, TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
 import { adaText, formatAda, lockedAside, rewardsAside, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
@@ -57,12 +57,21 @@ export function MoveIn({
   useEffect(() => setError(undefined), [amount, max, tokenAmounts]);
 
   const tokens = tokenChoices(network, cardano.tokens, tokenAmounts);
+  // A token picked from its details that the account can't move now, all of it locked or on its way: it holds Review,
+  // and says why, rather than move the ADA without it (chunk 51, e9a#1).
+  const away = pickedAway(cardano.tokens, tokenAmounts);
   const withTokens = tokens.sent.length > 0;
   const lovelace = max ? null : lovelaceToSend(amount, withTokens);
   // The builder decides exactly (fee, change, collateral UTxOs); this catches the obvious case early.
   const tooMuch = typeof lovelace === "string" && BigInt(lovelace) > BigInt(cardano.lovelace);
-  const ready = tokens.ok && (max || (typeof lovelace === "string" && !tooMuch));
-  const waiting = waitingFor({ amount, tokensPicked: Object.keys(tokenAmounts).length > 0, tokensOk: tokens.ok, max });
+  const ready = tokens.ok && !away.length && (max || (typeof lovelace === "string" && !tooMuch));
+  const waiting = waitingFor({
+    amount,
+    tokensPicked: withTokens || Object.keys(tokens.problems).length > 0,
+    tokensOk: tokens.ok,
+    tokensAway: away.length > 0,
+    max,
+  });
   // The form's balance lines, hidden with the balances; the review shows what moves in full (HM-9).
   const shown = useAmounts();
 

@@ -62,6 +62,8 @@ describe("Save as CSV's columns a stranger can choose (chunk 51, t1l#1)", () => 
     const cell = (key: Parameters<typeof t>[0]) => cells(row!)[columns.indexOf(t(key))]!;
     expect(cell("activity.csv.tokens")).toMatch(/^'=HYPERLINK\(1\) /);
     expect(cell("activity.csv.pool")).toBe(`'=1+1 ${POOL}`);
-    expect(cell("activity.csv.vote")).toBe("'@SUM(A1)");
+    // A DRep's name never leads its cell now: it's said as a DRep's, so it can't pass for a choice (gap-g7#1).
+    expect(cell("activity.csv.vote")).toBe("DRep · @SUM(A1)");
+    expect(cell("activity.csv.vote")).not.toMatch(/^[=+\-@\t\r]/);
   });
 });

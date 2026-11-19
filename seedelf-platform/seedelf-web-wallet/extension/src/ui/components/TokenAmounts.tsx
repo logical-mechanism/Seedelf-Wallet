@@ -80,6 +80,16 @@ export function tokenChoices(
 }
 
 /**
+ * The tokens picked that `held` doesn't hold: all of each locked, or still on its way, when a token's details started
+ * the payment, since Home lists both. The form draws no box for one, and `tokenChoices` passes it by, so a form holds
+ * Review while there's one and says why (chunk 51, e9a#1): it went on without the token, unsaid, once an amount was in.
+ */
+export function pickedAway(held: TokenAmount[], typed: Record<string, string>): string[] {
+  const holds = new Set(held.map(key));
+  return Object.keys(typed).filter((k) => !holds.has(k));
+}
+
+/**
  * The picked tokens are the keys of `typed` (an empty box is picked, and asks
  * for an amount before anything can be reviewed).
  */
