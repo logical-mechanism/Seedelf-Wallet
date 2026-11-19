@@ -940,10 +940,12 @@ export class DappService {
    * away for a while (`refuseFor`), so a page can't bring the window back by
    * reloading (chunk 51, G6's note). Unless another page of the same site
    * has an `enable()` running (`enabling`), waiting on that question or on its
-   * way to it, or waits for the unlock itself: that one asks itself
-   * (`enable`), and a refusal would turn it away (sign#3). If it leaves too
-   * before it asks, the decline lands then (`spared`; l2sign#1), unless the
-   * page that left it only waited for the unlock, and the wallet was unlocked
+   * way to it, the unlock among the way: that one asks itself (`enable`), and
+   * a refusal would turn it away (sign#3). A page waiting for the unlock to
+   * sign or send spares nothing: it asks nothing of the site's connection
+   * (the owner's B7, l4code#3). If the page that spared it leaves too before
+   * it asks, the decline lands then (`spared`; l2sign#1), unless the page
+   * that left it only waited for the unlock, and the wallet was unlocked
    * since: that wait is answered (l3still#4).
    */
   gone(session: DappSession): void {
@@ -980,14 +982,13 @@ export class DappService {
 
   /**
    * Whether another page of `session`'s site asks itself, so its leaving a question unanswered isn't the site's
-   * decline: one with an `enable()` running that hasn't gone (`enabling`), or one waiting for the unlock.
+   * decline: one with an `enable()` running that hasn't gone (`enabling`), its wait for the unlock included. Not one
+   * waiting for the unlock to sign or send: that asks nothing of the site's connection (chunk 51, the owner's B7,
+   * l4code#3).
    */
   private sharedBeyond(session: DappSession): boolean {
     const live = (id: string) => id !== session.id && !this.gonePages.has(id);
-    return (
-      [...(this.enabling.get(session.origin)?.keys() ?? [])].some(live) ||
-      this.unlocking.some((u) => u.session.origin === session.origin)
-    );
+    return [...(this.enabling.get(session.origin)?.keys() ?? [])].some(live);
   }
 
   /**

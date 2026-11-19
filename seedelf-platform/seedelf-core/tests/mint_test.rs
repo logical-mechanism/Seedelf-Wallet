@@ -3578,6 +3578,433 @@ mod apart {
         }
     }
 
+    /// What a Send of `seedelf` (`pay` empty) or a payment of `pay` over `known` spends, for `purpose`.
+    fn spent_by(
+        w: &World,
+        purpose: Purpose,
+        known: &[(&UtxoResponse, Class)],
+        seedelf: &Payment,
+        pay: &[AddressPayment],
+    ) -> Vec<UtxoResponse> {
+        let available: Vec<UtxoResponse> = known.iter().map(|(u, _)| (*u).clone()).collect();
+        let h = histories(purpose, known);
+        if pay.is_empty() {
+            build::transfer_apart(
+                &w.chain,
+                &available,
+                &h,
+                std::slice::from_ref(seedelf),
+                &w.owner,
+                w.signer,
+            )
+            .unwrap()
+            .inputs()
+        } else {
+            build::sweep_many_apart(&w.chain, &available, &h, pay, &w.owner, w.signer)
+                .unwrap()
+                .inputs()
+        }
+    }
+
+    fn paying(lovelace: u64) -> Payment {
+        Payment {
+            register: Register::create(random_scalar())
+                .unwrap()
+                .rerandomize()
+                .unwrap(),
+            lovelace,
+            tokens: Assets::new(),
+        }
+    }
+
+    fn to_address(lovelace: u64) -> Vec<AddressPayment> {
+        vec![AddressPayment {
+            to: key_address(),
+            lovelace,
+            tokens: Assets::new(),
+        }]
+    }
+
+    /// Chunk 51, l4code#1: round four ranked a box a mix moved before any other box when merging too, so a funding or a
+    /// Send that had to merge boxes took every mixed one before a larger box of another kind: four boxes where two pay,
+    /// each one more history merged and more fee. Merging spends as few boxes as pay, the largest first, and among
+    /// choices of as many, one with a box a mix moved. Four mixed ways back of 4.71 ₳ and two plain ones of 9.71 ₳
+    /// (1.9.1's, of the classic pool's 10 ₳ boxes): 15 ₳ out spends the two plain ones, the only two that pay; 12 ₳
+    /// out a plain one and a mixed one.
+    #[test]
+    fn a_merge_spends_as_few_boxes_as_pay_a_mixed_one_first_among_as_many() {
+        const SMALL: u64 = 4_710_000;
+        let w = world();
+        let mixed: Vec<(UtxoResponse, Class)> = (0..4u8)
+            .map(|i| {
+                let u = owned(&w, 0x50 + i, 0, SMALL, &[]);
+                let c = class(&format!("box:{}", u.tx_hash), Origin::Mixed);
+                (u, c)
+            })
+            .collect();
+        let plain: Vec<(UtxoResponse, Class)> = (0..2u8)
+            .map(|i| {
+                let u = owned(&w, 0x60 + i, 0, BOX, &[]);
+                let c = class(&format!("box:{}", u.tx_hash), Origin::Lovejoin);
+                (u, c)
+            })
+            .collect();
+        let known: Vec<(&UtxoResponse, Class)> = mixed
+            .iter()
+            .chain(&plain)
+            .map(|(u, c)| (u, c.clone()))
+            .collect();
+        let seedelf = paying(12_000_000);
+        // Each spend, and how many of the two boxes it spends are mixed.
+        let spends = [
+            (
+                "a new session's funding of 10 ₳ and its 5 ₳ collateral",
+                Purpose::Fund {
+                    session: Some("session:7".into()),
+                },
+                funding(10_000_000),
+                0,
+            ),
+            (
+                "a site's top-up of 15 ₳",
+                Purpose::Fund {
+                    session: Some("session:3".into()),
+                },
+                to_address(15_000_000),
+                0,
+            ),
+            (
+                "a Make public of 12 ₳",
+                Purpose::Pay,
+                to_address(12_000_000),
+                1,
+            ),
+            ("a Send of 12 ₳ to a Seedelf", Purpose::Pay, Vec::new(), 1),
+        ];
+        let mut wrong = Vec::new();
+        for (name, purpose, pay, of_mixed) in spends {
+            let spent = spent_by(&w, purpose, &known, &seedelf, &pay);
+            let mixed_in = spent
+                .iter()
+                .filter(|u| u.value == SMALL.to_string())
+                .count();
+            let line = format!("{name}: {} boxes, {mixed_in} of them mixed", spent.len());
+            println!("{line}");
+            if (spent.len(), mixed_in) != (2, of_mixed) {
+                wrong.push(line);
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "not as few boxes as pay, a mixed one among them where it pays:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Beside l4code#1, a pin: at the same count, a merge takes the boxes a mix moved, never two of unknown making
+    /// that are a few hundred lovelace larger.
+    #[test]
+    fn at_the_same_count_a_merge_takes_mixed_boxes_first() {
+        let w = world();
+        let mixed: Vec<(UtxoResponse, Class)> = (0..2u8)
+            .map(|i| {
+                let u = owned(&w, 0x50 + i, 0, 4_709_700, &[]);
+                let c = class(&format!("box:{}", u.tx_hash), Origin::Mixed);
+                (u, c)
+            })
+            .collect();
+        let unplaced: Vec<(UtxoResponse, Class)> = (0..2u8)
+            .map(|i| {
+                let u = owned(&w, 0x60 + i, 0, 4_710_000, &[]);
+                let c = class(&format!("box:{0}+unknown:{0}", u.tx_hash), Origin::Lovejoin);
+                (u, c)
+            })
+            .collect();
+        let known: Vec<(&UtxoResponse, Class)> = mixed
+            .iter()
+            .chain(&unplaced)
+            .map(|(u, c)| (u, c.clone()))
+            .collect();
+        let both_mixed = outpoints(&[mixed[0].0.clone(), mixed[1].0.clone()]);
+        let seedelf = paying(6_000_000);
+        for (name, purpose, pay) in [
+            (
+                "a new session's funding of 1 ₳ and its 5 ₳ collateral",
+                Purpose::Fund {
+                    session: Some("session:7".into()),
+                },
+                funding(1_000_000),
+            ),
+            ("a Make public of 6 ₳", Purpose::Pay, to_address(6_000_000)),
+            ("a Send of 6 ₳ to a Seedelf", Purpose::Pay, Vec::new()),
+        ] {
+            let spent = spent_by(&w, purpose, &known, &seedelf, &pay);
+            assert_eq!(outpoints(&spent), both_mixed, "{name}");
+        }
+    }
+
+    /// Chunk 51, the lead's call on l4code#1: a box of unknown making (`box:<w>+unknown:<w>`, a planted box's way
+    /// back among them) is merged after every other box, never ahead of one. Two boxes whose making the wallet knows,
+    /// of 4.71 ₳ (mixed or plain), and W of 9.71 ₳: 12 ₳ out takes all three, W last, where by size alone W and one
+    /// other paid.
+    #[test]
+    fn a_box_of_unknown_making_is_merged_after_every_other_box() {
+        let w = world();
+        let unplaced = owned(&w, 0x30, 0, BOX, &[]);
+        let unplaced_class = class(
+            &format!("box:{0}+unknown:{0}", unplaced.tx_hash),
+            Origin::Lovejoin,
+        );
+        let seedelf = paying(12_000_000);
+        let mut wrong = Vec::new();
+        for others_mixed in [[false, false], [true, false], [true, true]] {
+            let others: Vec<(UtxoResponse, Class)> = others_mixed
+                .iter()
+                .zip(0u8..)
+                .map(|(&mixed, i)| {
+                    let u = owned(&w, 0x40 + i, 0, 4_710_000, &[]);
+                    let origin = if mixed {
+                        Origin::Mixed
+                    } else {
+                        Origin::Lovejoin
+                    };
+                    (u.clone(), class(&format!("box:{}", u.tx_hash), origin))
+                })
+                .collect();
+            let mut known: Vec<(&UtxoResponse, Class)> =
+                others.iter().map(|(u, c)| (u, c.clone())).collect();
+            known.push((&unplaced, unplaced_class.clone()));
+            for (name, purpose, pay) in [
+                (
+                    "a new session's funding of 7 ₳ and its 5 ₳ collateral",
+                    Purpose::Fund {
+                        session: Some("session:7".into()),
+                    },
+                    funding(7_000_000),
+                ),
+                (
+                    "a Make public of 12 ₳",
+                    Purpose::Pay,
+                    to_address(12_000_000),
+                ),
+                ("a Send of 12 ₳ to a Seedelf", Purpose::Pay, Vec::new()),
+            ] {
+                let spent = outpoints(&spent_by(&w, purpose, &known, &seedelf, &pay));
+                let line = format!("{name}, the others mixed: {others_mixed:?}: spent {spent:?}");
+                println!("{line}");
+                let every_other = others.iter().all(|(u, _)| spent.contains(&one(u)[0]));
+                if spent.contains(&one(&unplaced)[0]) && !every_other {
+                    wrong.push(line);
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "a box of unknown making merged ahead of another box:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Chunk 51, l4docs#3: past what one transaction spends of the small UTxOs, merge order c (as few boxes as pay)
+    /// brought forward the largest box, whatever made it. It takes a box a mix moved before one of unknown making there
+    /// too. 25 UTxOs of 1.5 ₳ made private, and X (mixed) and W (unknown making) 300 lovelace apart, each way round.
+    #[test]
+    fn past_one_transactions_small_utxos_a_payment_takes_a_mixed_box_before_one_of_unknown_making()
+    {
+        let w = world();
+        const SMALL: u64 = 1_500_000;
+        let least = wallet_minimum_lovelace_with_assets(&w.chain.params, Assets::new()).unwrap();
+        assert!(
+            SMALL >= least,
+            "a small UTxO holds at least a Seedelf UTxO's least, {least}"
+        );
+        let small: Vec<UtxoResponse> = (0..25u64).map(|i| owned(&w, 0x50, i, SMALL, &[])).collect();
+        let seedelf = paying(34_000_000);
+        let send_from = |inputs: &[UtxoResponse]| {
+            build::transfer_from(
+                &w.chain,
+                inputs,
+                std::slice::from_ref(&seedelf),
+                &w.owner,
+                w.signer,
+            )
+            .and_then(|s| s.estimate())
+            .map(|_| ())
+        };
+        // Why orders a and b fail: 22 small can't pay 34 ₳, and 23 are more than one transaction spends.
+        assert!(build::is_short(&send_from(&small[..22]).unwrap_err()));
+        assert!(build::is_too_many(&send_from(&small[..23]).unwrap_err()));
+        let mut wrong = Vec::new();
+        for unplaced_smaller in [true, false] {
+            let [(unplaced, unplaced_class), (mixed, mixed_class)] =
+                unplaced_and_mixed(&w, unplaced_smaller, 300);
+            let mut known: Vec<(&UtxoResponse, Class)> = small
+                .iter()
+                .map(|u| (u, class("public:0", Origin::Own)))
+                .collect();
+            known.push((&unplaced, unplaced_class));
+            known.push((&mixed, mixed_class));
+            for (name, purpose, pay) in [
+                ("a Send of 34 ₳ to a Seedelf", Purpose::Pay, Vec::new()),
+                (
+                    "a Make public of 34 ₳",
+                    Purpose::Pay,
+                    to_address(34_000_000),
+                ),
+                (
+                    "a new session's funding of 29 ₳ and its 5 ₳ collateral",
+                    Purpose::Fund {
+                        session: Some("session:7".into()),
+                    },
+                    funding(29_000_000),
+                ),
+            ] {
+                let spent = outpoints(&spent_by(&w, purpose, &known, &seedelf, &pay));
+                let (u, x) = (&one(&unplaced)[0], &one(&mixed)[0]);
+                let line = format!(
+                    "{name}, W smaller: {unplaced_smaller}: {} inputs, spent W: {}, spent X: {}",
+                    spent.len(),
+                    spent.contains(u),
+                    spent.contains(x)
+                );
+                println!("{line}");
+                if spent.contains(u) || !spent.contains(x) {
+                    wrong.push(line);
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "a box of unknown making went before a mixed one:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Chunk 51, l4still#2: the same where the money others paid is many small UTxOs, so orders a and b run into what
+    /// one transaction spends: 25 received payments of 2 ₳, and X and W 300 lovelace apart, each way round.
+    #[test]
+    fn past_the_input_limit_a_mixed_box_still_goes_before_one_of_unknown_making() {
+        let w = world();
+        let received: Vec<(UtxoResponse, Class)> = (0..25u8)
+            .map(|i| {
+                let u = owned(&w, 0x50 + i, 0, 2_000_000, &[]);
+                let c = received_class(&u);
+                (u, c)
+            })
+            .collect();
+        let seedelf = paying(43_000_000);
+        let spends = [
+            ("a Send of 43 ₳ to a Seedelf", Purpose::Pay, Vec::new()),
+            (
+                "a Make public of 43 ₳",
+                Purpose::Pay,
+                to_address(43_000_000),
+            ),
+            (
+                "a new session's funding of 38 ₳ and its 5 ₳ collateral",
+                Purpose::Fund {
+                    session: Some("session:7".into()),
+                },
+                funding(38_000_000),
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (name, purpose, pay) in &spends {
+            // The premise: the money others paid, alone, can't pay within one transaction's limit.
+            let only: Vec<(&UtxoResponse, Class)> =
+                received.iter().map(|(u, c)| (u, c.clone())).collect();
+            let available: Vec<UtxoResponse> = only.iter().map(|(u, _)| (*u).clone()).collect();
+            let h = histories(purpose.clone(), &only);
+            let e = if pay.is_empty() {
+                build::transfer_apart(
+                    &w.chain,
+                    &available,
+                    &h,
+                    std::slice::from_ref(&seedelf),
+                    &w.owner,
+                    w.signer,
+                )
+                .err()
+            } else {
+                build::sweep_many_apart(&w.chain, &available, &h, pay, &w.owner, w.signer).err()
+            }
+            .unwrap_or_else(|| panic!("{name}: the received money alone pays"));
+            assert!(build::is_too_many(&e), "{name}: {e}");
+            for unplaced_smaller in [true, false] {
+                let [(unplaced, unplaced_class), (mixed, mixed_class)] =
+                    unplaced_and_mixed(&w, unplaced_smaller, 300);
+                let mut known: Vec<(&UtxoResponse, Class)> =
+                    vec![(&unplaced, unplaced_class), (&mixed, mixed_class)];
+                known.extend(received.iter().map(|(u, c)| (u, c.clone())));
+                let spent = outpoints(&spent_by(&w, purpose.clone(), &known, &seedelf, pay));
+                let (u, x) = (&one(&unplaced)[0], &one(&mixed)[0]);
+                let line = format!(
+                    "{name}, W smaller: {unplaced_smaller}: {} inputs, spent W: {}, spent X: {}",
+                    spent.len(),
+                    spent.contains(u),
+                    spent.contains(x)
+                );
+                println!("{line}");
+                if spent.contains(u) || !spent.contains(x) {
+                    wrong.push(line);
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "a box of unknown making went before a mixed one:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Beside l4still#2, the fewest boxes still come first there: X (mixed, 4.7 ₳) can't pay 47 ₳ beside the 21
+    /// payments of 2 ₳ one transaction still takes, and L (a plain way back, 9.71 ₳) can alone: L is spent alone, no
+    /// second box merged in.
+    #[test]
+    fn past_the_input_limit_one_box_still_pays_where_the_mixed_one_falls_short() {
+        let w = world();
+        let received: Vec<(UtxoResponse, Class)> = (0..25u8)
+            .map(|i| {
+                let u = owned(&w, 0x50 + i, 0, 2_000_000, &[]);
+                let c = received_class(&u);
+                (u, c)
+            })
+            .collect();
+        let plain = owned(&w, 0x30, 0, BOX, &[]);
+        let mixed = owned(&w, 0x40, 0, 4_700_000, &[]);
+        let mut known: Vec<(&UtxoResponse, Class)> = vec![
+            (
+                &plain,
+                class(&format!("box:{}", plain.tx_hash), Origin::Lovejoin),
+            ),
+            (
+                &mixed,
+                class(&format!("box:{}", mixed.tx_hash), Origin::Mixed),
+            ),
+        ];
+        known.extend(received.iter().map(|(u, c)| (u, c.clone())));
+        let seedelf = paying(47_000_000);
+        for purpose in [
+            Purpose::Pay,
+            Purpose::Fund {
+                session: Some("session:7".into()),
+            },
+        ] {
+            let spent = outpoints(&spent_by(
+                &w,
+                purpose.clone(),
+                &known,
+                &seedelf,
+                &to_address(47_000_000),
+            ));
+            assert!(spent.contains(&one(&plain)[0]), "{purpose:?}: {spent:?}");
+            assert!(
+                !spent.contains(&one(&mixed)[0]),
+                "{purpose:?}: two boxes merged"
+            );
+        }
+    }
+
     #[test]
     fn with_nothing_known_it_picks_as_the_cli_always_has() {
         let w = world();

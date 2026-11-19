@@ -2340,7 +2340,8 @@ pub mod api {
                 merged_class([class("unknown", "unknown"), class(&change, "change")].iter()).origin,
                 "change"
             );
-            // Naming money made private, a session, or a spend made elsewhere, it ranks with that money, as a session's.
+            // Naming money made private, a session, or a spend made elsewhere, it ranks as a session's: after money made
+            // private.
             for other in [
                 "public:0",
                 "public",
@@ -3608,8 +3609,8 @@ pub mod api {
         #[serde(default)]
         pub classes: Classes,
         /// A private session's funding or top-up, rather than a payment:
-        /// received money, or a box that pays alone, goes first, and another
-        /// session's money last.
+        /// received money first, then a box that pays alone, one a mix moved
+        /// before any other, and another session's money last.
         #[serde(default)]
         pub funding: Option<Funding>,
         /// With a single payment's `lovelace` null: the most a payment of its
@@ -4072,8 +4073,9 @@ pub mod api {
         /// fundings left ties nothing new to it.
         ///
         /// The order takes each history's UTxOs together, as one transaction merges them: boxes and the purpose's
-        /// last resorts last (its tiers), then a top-up's own, and the histories whose money alone pays; then by the
-        /// purpose's order, those with the most first; within each, those adding the most first. Ahead of all that,
+        /// last resorts last (its tiers), the boxes as one transaction takes them ([`build::boxes_to_merge`]); then a
+        /// top-up's own, and the histories whose money alone pays; then by the purpose's order, those with the most
+        /// first; within each, those adding the most first. Ahead of all that,
         /// those adding anything: a part of those adding nothing pays no fee; and those adding less than nothing after
         /// everything. `None` with one history or none known: the parts are [`Worth::of`]'s.
         fn apart(
@@ -4131,9 +4133,40 @@ pub mod api {
                         .collect()
                 })
                 .filter(|alone| alone.len() < utxos.len());
+            // Boxes back from Lovejoin, last, as one transaction merges them: as few as pay what the rest leaves owed,
+            // the largest first, of as many the most mixed, one of unknown making after every other box; those holding
+            // tokens after them (chunk 51, l4code#1).
+            let tier = |rows: &[&UtxoResponse]| histories.tier_of(rows[0]);
+            let ada_alone = |rows: &[&UtxoResponse]| {
+                !rows
+                    .iter()
+                    .any(|u| u.asset_list.as_ref().is_some_and(|a| !a.is_empty()))
+            };
+            let boxes: Vec<usize> = (0..classes.len())
+                .filter(|&i| tier(&classes[i].1) == 2 && ada_alone(&classes[i].1))
+                .collect();
+            let rest: i128 = classes
+                .iter()
+                .filter(|(_, rows, ..)| tier(rows) < 2)
+                .map(|(.., total)| *total)
+                .sum();
+            let gap = u128::from(owed).saturating_sub(u128::try_from(rest).unwrap_or(0));
+            let weights: Vec<(u128, u8)> = boxes
+                .iter()
+                .map(|&i| {
+                    let (c, _, _, total) = &classes[i];
+                    (u128::try_from(*total).unwrap_or(0), build::box_rank(c))
+                })
+                .collect();
+            let places: HashMap<String, usize> = build::boxes_to_merge(&weights, gap)
+                .into_iter()
+                .enumerate()
+                .map(|(at, i)| (classes[boxes[i]].0.id.clone(), at))
+                .collect();
             classes.sort_by_key(|(c, rows, alone, total)| {
                 (
-                    histories.tier_of(rows[0]),
+                    tier(rows),
+                    places.get(&c.id).copied().unwrap_or(usize::MAX),
                     !(*alone || is_own(c)),
                     histories.rank_of(rows[0]),
                     std::cmp::Reverse(*total),
@@ -4162,6 +4195,90 @@ pub mod api {
                 .get(&(u.tx_hash.clone(), u.tx_index))
                 .copied()
                 .unwrap_or((i8::MIN, 0, 0))
+        }
+    }
+
+    /// Chunk 51, l4code#1: a payment's parts took boxes back from Lovejoin by the purpose's order before their size, so
+    /// every box a mix moved went before a larger box of another kind, and a box of unknown making before a smaller one
+    /// whose making the wallet knows. They take them as one transaction merges them (`build::boxes_to_merge`).
+    #[cfg(test)]
+    mod box_order_tests {
+        use super::*;
+
+        fn row(tx: u8, lovelace: u64) -> UtxoResponse {
+            UtxoResponse {
+                tx_hash: hex::encode([tx; 32]),
+                tx_index: 0,
+                value: lovelace.to_string(),
+                ..Default::default()
+            }
+        }
+
+        /// The order `Worth::apart` takes `rows` in, for `purpose`, `owed` lovelace owed: each row's `tx` byte.
+        fn order(purpose: Purpose, rows: &[(UtxoResponse, &str)], owed: u64) -> Vec<u8> {
+            let params: serde_json::Value = serde_json::from_str::<serde_json::Value>(
+                include_str!("../../../seedelf-core/tests/fixtures/epoch_params.json"),
+            )
+            .unwrap()[0]
+                .clone();
+            let chain = chain_of("preprod", &params).unwrap();
+            let classes: Classes = rows
+                .iter()
+                .map(|(u, origin)| {
+                    let id = if *origin == "unplaced" {
+                        format!("box:{0}+unknown:{0}", u.tx_hash)
+                    } else {
+                        format!("box:{}", u.tx_hash)
+                    };
+                    let origin = if *origin == "mixed" {
+                        "mixed"
+                    } else {
+                        "lovejoin"
+                    };
+                    (
+                        format!("{}#0", u.tx_hash),
+                        ClassIn {
+                            id,
+                            origin: origin.into(),
+                        },
+                    )
+                })
+                .collect();
+            let utxos: Vec<UtxoResponse> = rows.iter().map(|(u, _)| u.clone()).collect();
+            let h = histories(purpose, &classes).unwrap();
+            let (worth, _) = Worth::apart(&chain, &utxos, &h, owed, &[], None).unwrap();
+            let mut taken = utxos.clone();
+            taken.sort_by_key(|u| std::cmp::Reverse(worth.of_utxo(u)));
+            taken
+                .iter()
+                .map(|u| hex::decode(&u.tx_hash).unwrap()[0])
+                .collect()
+        }
+
+        #[test]
+        fn a_payments_parts_merge_as_few_boxes_as_pay_a_box_of_unknown_making_last() {
+            // Four ways back a mix moved of 4.71 ₳ (0x51 to 0x54), two plain ones of 9.71 ₳ (0x61, 0x62), and one of
+            // unknown making of 9.8 ₳ (0x70).
+            let rows: Vec<(UtxoResponse, &str)> = [0x51, 0x52, 0x53, 0x54]
+                .map(|tx| (row(tx, 4_710_000), "mixed"))
+                .into_iter()
+                .chain([0x61, 0x62].map(|tx| (row(tx, 9_710_000), "plain")))
+                .chain([(row(0x70, 9_800_000), "unplaced")])
+                .collect();
+            for purpose in [Purpose::Pay, Purpose::Fund { session: None }] {
+                // 12 ₳: two boxes pay, one of them mixed.
+                assert_eq!(
+                    order(purpose.clone(), &rows, 12_000_000),
+                    [0x51, 0x61, 0x62, 0x52, 0x53, 0x54, 0x70],
+                    "{purpose:?}, 12 ₳"
+                );
+                // 15 ₳: only the two plain ones pay as two.
+                assert_eq!(
+                    order(purpose.clone(), &rows, 15_000_000),
+                    [0x61, 0x62, 0x51, 0x52, 0x53, 0x54, 0x70],
+                    "{purpose:?}, 15 ₳"
+                );
+            }
         }
     }
 

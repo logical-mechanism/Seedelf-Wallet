@@ -16,7 +16,8 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService } from "../src/background/lovejoin";
 import { SESSION_TOP_UP } from "../src/background/sessions";
 import { SESSION_TRANSFER } from "../src/background/transfer";
-import { historyTags, type HistoryClass } from "../src/shared/histories";
+import { boxFrom, historyTags, type HistoryClass } from "../src/shared/histories";
+import type { PendingTx } from "../src/shared/rpc";
 import { CHAINS, HOUR, withSession, type Tested } from "./chain-fixtures";
 import { preprodAddress } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
@@ -63,8 +64,11 @@ function witnessed(t: Tested) {
   });
 }
 
-/** X and W, both landed in the private balance, the way back of unknown making `wSmaller` or the mixed one smaller. */
-async function wAndX(wSmaller: boolean) {
+/**
+ * X and W, both landed in the private balance, the way back of unknown making `wSmaller` or the mixed one smaller: the
+ * smaller of `sizes`, and the larger.
+ */
+async function wAndX(wSmaller: boolean, sizes: readonly [string, string] = ["4700000", "4700300"]) {
   const { t, sessions } = await withSession("40000000");
   await t.balances.get("preprod");
   // X: a done chain's leaf, which other people's mixes moved to X#0, due now. Koios says a mix made it.
@@ -117,8 +121,8 @@ async function wAndX(wSmaller: boolean) {
   expect((await entryOf(t, wBack))?.origin, "W's way back").toEqual(unplaced(wBack));
   const withdraw = t.koios.submitted.find((bytes) => txIdOf(bytes) === wBack)!;
   expect(txInputs(withdraw)).toContain(`${C}#0`);
-  // Both land, about 4.7 ₳ each, 300 lovelace apart.
-  const [small, large] = ["4700000", "4700300"];
+  // Both land, about 4.7 ₳ each, 300 lovelace apart (unless `sizes` says otherwise).
+  const [small, large] = sizes;
   const w = await privateRow(t, wBack, wSmaller ? small : large);
   const x = await privateRow(t, xBack, wSmaller ? large : small);
   t.koios.added.push(w, x);
@@ -156,5 +160,28 @@ describe("a top-up and a Send that one box pays take a box a mix moved before on
       picks.push(`${wSmaller ? "W smaller" : "X smaller"}: spent ${which(spent, w, x)}`);
     }
     expect(picks).toEqual(["W smaller: spent X", "X smaller: spent X"]);
+  });
+});
+
+// Chunk 51, l4code#1, the lead's call: where boxes must merge, a spend takes as few as pay, the largest first, a mixed
+// one first among as many, and a box of unknown making after every other box (core's box_rank). Round four's ranks put
+// W, the larger, ahead of a plain box once the mixed one was in. The WebAssembly must be rebuilt with this round's core.
+describe("a Send that must merge boxes takes one of unknown making after every other box (chunk 51, l4code#1)", () => {
+  it("X (mixed) and P (plain), 4.7 ₳ each, pay a Send of 7 ₳ before W (unknown making, 6 ₳) [needs the rebuild]", CHAINS, async () => {
+    const { t, w, x } = await wAndX(false, ["4700000", "6000000"]);
+    // P: a way back as 1.9.1 kept it, with no record of what made its box, so a plain box.
+    const P = hash("5e");
+    const back: PendingTx = { kind: "lovejoin-withdraw", network: "preprod", txHash: P, submittedAt: t.clock.now - 3 * 86_400_000, confirmations: null };
+    await t.activity.sent("preprod", back, { lovelace: "4700000" });
+    const p = await privateRow(t, P, "4700000");
+    t.koios.added.push(p);
+    t.clock.now += 60_000;
+    await t.balances.get("preprod", true);
+    expect((await t.activity.classes("preprod", [p])).get(`${P}#0`)).toEqual(boxFrom(P));
+    const payable = ownedUtxos.filter((u) => !(u.asset_list ?? []).some((a) => a.policy_id === CONTRACT_V1.seedelfPolicyId));
+    for (const u of payable) await t.coins.setLocked("preprod", "seedelf", `${u.tx_hash}#${u.tx_index}`, true);
+    await t.transfer.build("preprod", [{ to: transferPreprod.to, lovelace: "7000000", tokens: [] }]);
+    const spent = inputsOf((await t.session.get<{ txCbor: string }>(SESSION_TRANSFER))!.txCbor);
+    expect([...spent].sort(), `W ${w}, X ${x}, P ${P}#0`).toEqual([x, `${P}#0`].sort());
   });
 });

@@ -3142,13 +3142,14 @@ export class SessionService {
 
   /**
    * A funding payment into `address` from the private balance (Make public's
-   * builder), measured and ready for Send. It takes received money, or a box
-   * back from Lovejoin that pays alone, first, and money another session
-   * left last; session `index`'s own (a top-up's) first of all (privacy
-   * review §2.3). `own`: the transactions whose outputs in the private
-   * balance are the session's whatever their history says, which a restore
-   * doesn't know (collateralTopUp, 1.5.0's release review, C36). `known`: the
-   * protocol parameters, when its caller read them already.
+   * builder), measured and ready for Send. It takes received money first,
+   * then a box back from Lovejoin that pays alone, one a mix moved before any
+   * other, and money another session left last; session `index`'s own (a
+   * top-up's) first of all (privacy review §2.3). `own`: the transactions
+   * whose outputs in the private balance are the session's whatever their
+   * history says, which a restore doesn't know (collateralTopUp, 1.5.0's
+   * release review, C36). `known`: the protocol parameters, when its caller
+   * read them already.
    */
   private async buildFunding(
     network: NetworkName,

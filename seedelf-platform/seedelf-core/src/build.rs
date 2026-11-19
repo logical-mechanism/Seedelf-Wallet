@@ -2424,8 +2424,8 @@ pub enum Origin {
     Session,
     /// A box back from Lovejoin: each is a class of its own. One the wallet doesn't know is mixed: one brought back
     /// before it kept that record, which its deposit may still tie to whatever paid for it, one a chain of its own left
-    /// short of its last mixes, or a box's way back merged with other money. The web wallet's way back of a box whose
-    /// making it can't place is one too.
+    /// short of its last mixes, or a box's way back merged with other boxes or with money of no history. The web
+    /// wallet's way back of a box whose making it can't place is one too ([`box_rank`]).
     Lovejoin,
     /// A box back from Lovejoin the wallet knows is mixed (its own chain's last mix made it, or the server said a mix
     /// did), its way back alone: no spend has touched it since (chunk 51, the owner's answer 4 to B15, time#1).
@@ -2468,8 +2468,8 @@ impl Class {
 /// What a spend is for, which orders the classes it would rather take.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Purpose {
-    /// Send or Make public: own money first, a box back from Lovejoin last, one the wallet knows is mixed before any
-    /// other box (chunk 51, l3rank#3).
+    /// Send or Make public: own money first, a box back from Lovejoin last; of boxes that pay alone, one the wallet
+    /// knows is mixed before any other (chunk 51, l3rank#3), and merging, as few as pay ([`box_rank`]).
     #[default]
     Pay,
     /// A stealth mint, and a pool's start from the Seedelf balance: the new
@@ -2484,8 +2484,9 @@ pub enum Purpose {
     /// A private session's funding or top-up: received money first, then a
     /// box that pays alone, one the wallet knows is mixed before any other
     /// (chunk 51, l3rank#3); an earlier spend's change before money made
-    /// private; another session's money last. `session` is the session's own
-    /// class, whose money a top-up may take first.
+    /// private; another session's money last; merging, boxes as few as pay
+    /// ([`box_rank`]). `session` is the session's own class, whose money a
+    /// top-up may take first.
     Fund { session: Option<String> },
 }
 
@@ -2494,9 +2495,10 @@ impl Purpose {
     fn rank(&self, class: &Class) -> u8 {
         use Origin::*;
         match self {
-            // A box the wallet knows is mixed before any other, here and for a funding: any other may be one someone
-            // else put in under the wallet's key, a register copied as found among them, whose way back ties the spend
-            // to whoever reads that register's Seedelf, where a mixed box's ties it to nothing (chunk 51, l3rank#3).
+            // Of boxes that pay alone, one the wallet knows is mixed before any other, here and for a funding: any
+            // other may be one someone else put in under the wallet's key, a register copied as found among them, whose
+            // way back ties the spend to whoever reads that register's Seedelf, where a mixed box's ties it to nothing
+            // (chunk 51, l3rank#3). Merging boxes goes by `box_rank` instead: as few as pay (l4code#1).
             Purpose::Pay => match class.origin {
                 Own => 0,
                 Session | Change => 1,
@@ -2539,8 +2541,9 @@ impl Purpose {
 
     /// When merging: 0 for what's taken first, 1 for what's taken only when
     /// nothing else pays (another session's money, for a funding), 2 for a
-    /// box, taken last and one at a time. An earlier spend's change is no
-    /// session's: 0, so a funding merges it before money made private too.
+    /// box, taken last and one at a time, as few as pay ([`box_rank`]). An
+    /// earlier spend's change is no session's: 0, so a funding merges it
+    /// before money made private too.
     fn tier(&self, class: &Class) -> u8 {
         match (self, class.origin) {
             (_, Origin::Lovejoin | Origin::Mixed) => 2,
@@ -2548,6 +2551,73 @@ impl Purpose {
             _ => 0,
         }
     }
+}
+
+/// How merging weighs a box back from Lovejoin (`class`), for every purpose (chunk 51, l4code#1, l4docs#3, l4still#2):
+/// 0, one the wallet knows is mixed, which ties nothing, taken first among choices of as many boxes; 1, any other
+/// whose making it knows (boxes alone, each part a `box:<tx>`); 2, one of unknown making (a part of another kind: the
+/// `unknown:<tx>` of a box someone else may have put in, or money of no history), after every other box, so none is
+/// merged ahead of another. Taking one box that pays alone still goes by [`Purpose`]'s order.
+pub fn box_rank(class: &Class) -> u8 {
+    if class.origin == Origin::Mixed {
+        0
+    } else if class.id.split('+').all(|p| p.starts_with("box:")) {
+        1
+    } else {
+        2
+    }
+}
+
+/// The order merging brings in boxes back from Lovejoin, each given as its lovelace and [`box_rank`]: every one whose
+/// making the wallet knows before any of unknown making, each the largest first, so no more are spent together than
+/// pay; among boxes as large, a mixed one first. Positions in `boxes`.
+fn boxes_largest_first(boxes: &[(u128, u8)]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    order.sort_by_key(|&i| (boxes[i].1 == 2, std::cmp::Reverse(boxes[i].0), boxes[i].1));
+    order
+}
+
+/// Choices of as many boxes as the first `j` of [`boxes_largest_first`], with more mixed ones (rank 0) among them, the
+/// most first: each the largest mixed boxes and the largest others whose making the wallet knows, so where some choice
+/// of `j` with that many mixed boxes pays, that one does. None where those `j` reach a box of unknown making: every
+/// other box is in already. Positions in `boxes`.
+fn more_mixed(boxes: &[(u128, u8)], j: usize) -> Vec<Vec<usize>> {
+    let order = boxes_largest_first(boxes);
+    let of = |rank: u8| -> Vec<usize> {
+        order
+            .iter()
+            .copied()
+            .filter(|&i| boxes[i].1 == rank)
+            .collect()
+    };
+    let (mixed, others) = (of(0), of(1));
+    if j > mixed.len() + others.len() {
+        return Vec::new();
+    }
+    // The first `j` take `had` mixed boxes and `j - had` others: a choice with more mixed ones takes fewer others.
+    let had = order[..j].iter().filter(|&&i| boxes[i].1 == 0).count();
+    (had + 1..=j.min(mixed.len()))
+        .rev()
+        .map(|m| mixed[..m].iter().chain(&others[..j - m]).copied().collect())
+        .collect()
+}
+
+/// The order a payment in parts takes boxes back from Lovejoin in, each given as its lovelace and [`box_rank`], where
+/// the rest leaves `gap` owed, as one transaction merges them: the fewest that add more than `gap` first, of those the
+/// choice with the most mixed boxes that does, then the others, those whose making the wallet knows the largest first,
+/// then those of unknown making. Positions in `boxes`.
+pub fn boxes_to_merge(boxes: &[(u128, u8)], gap: u128) -> Vec<usize> {
+    let order = boxes_largest_first(boxes);
+    let sum = |chosen: &[usize]| chosen.iter().map(|&i| boxes[i].0).sum::<u128>();
+    let Some(j) = (1..=order.len()).find(|&j| sum(&order[..j]) > gap) else {
+        return order;
+    };
+    let first = more_mixed(boxes, j)
+        .into_iter()
+        .find(|chosen| sum(chosen) > gap)
+        .unwrap_or_else(|| order[..j].to_vec());
+    let rest = order.iter().copied().filter(|i| !first.contains(i));
+    first.iter().copied().chain(rest).collect()
 }
 
 /// What selection knows of the UTxOs it picks from: each one's class, by
@@ -2585,7 +2655,8 @@ impl Histories {
     /// How much the spend would rather take `utxo`, by its class: lowest
     /// first ([`Purpose`]'s order). The web wallet's payments in parts order
     /// histories by it, after [`Histories::tier_of`], since a part that takes
-    /// all its room can't keep them apart.
+    /// all its room can't keep them apart; boxes as one transaction merges
+    /// them ([`boxes_to_merge`]).
     pub fn rank_of(&self, utxo: &UtxoResponse) -> u8 {
         self.purpose.rank(&self.class_of(utxo))
     }
@@ -2671,7 +2742,11 @@ fn less_than_nothing(
 ///    as pay, none first, then one more at a time, each with the fewest other
 ///    inputs (the largest first, tokens or not), or with UTxOs holding tokens
 ///    last, for when their tokens make it too large; and at the last the
-///    CLI's own order, so nothing the CLI pays is refused.
+///    CLI's own order, so nothing the CLI pays is refused. Every order but
+///    the CLI's merges boxes alike, for every purpose: the largest first, so
+///    as few as pay; where it pays with as many, more of them mixed; and one
+///    of unknown making after every other box ([`box_rank`]; chunk 51,
+///    l4code#1, l4docs#3, l4still#2).
 ///
 /// In every order, the CLI's too, a UTxO that adds less than nothing
 /// ([`adds`]: its tokens need more change than it holds) comes after
@@ -2782,7 +2857,8 @@ fn one_more<'a, T, K: Ord>(
 
 /// How growing one of [`apart`]'s merging orders ended.
 enum Grown<T> {
-    Built(T),
+    /// Its first `.1` built.
+    Built(T, usize),
     /// Everything in it together is short.
     Short,
     /// The choice of its first `.0` failed otherwise (too much computation,
@@ -2799,12 +2875,36 @@ fn grow<'a, T>(
 ) -> Grown<T> {
     for k in from.max(1)..=order.len() {
         match try_with(&order[..k]) {
-            Tried::Built(built) => return Grown::Built(built),
+            Tried::Built(built) => return Grown::Built(built, k),
             Tried::Failed => return Grown::Failed(k),
             _ => {}
         }
     }
     Grown::Short
+}
+
+/// Where one of [`apart`]'s orders built with `j` boxes ([`boxes_largest_first`]'s first `j` of `boxes`, each weighed
+/// as `weights` has it), its choices of as many boxes with more of them mixed ([`more_mixed`]), the most first: `head`,
+/// then the choice, then `tail` one at a time. The first that builds.
+fn more_mixed_built<'a, T>(
+    head: &[&'a UtxoResponse],
+    j: usize,
+    tail: &[&'a UtxoResponse],
+    (boxes, weights): (&[&'a UtxoResponse], &[(u128, u8)]),
+    try_with: &mut impl FnMut(&[&'a UtxoResponse]) -> Tried<T>,
+) -> Option<T> {
+    more_mixed(weights, j).into_iter().find_map(|chosen| {
+        let order: Vec<&UtxoResponse> = head
+            .iter()
+            .copied()
+            .chain(chosen.iter().map(|&i| boxes[i]))
+            .chain(tail.iter().copied())
+            .collect();
+        match grow(&order, head.len() + j, try_with) {
+            Grown::Built(built, _) => Some(built),
+            _ => None,
+        }
+    })
 }
 
 /// [`select_script_inputs`] with histories known: `base` are the UTxOs
@@ -2919,7 +3019,7 @@ fn apart<T>(
     //    purpose's order, the largest first (independent review L39).
     // b. The same without the purpose's order, pure ADA before tokens within
     //    each: what merging paid before a did is paid the same way.
-    // c. As few boxes as pay: the largest j of them, then the rest without
+    // c. As few boxes as pay: the first j of them, then the rest without
     //    the other boxes (the last resorts after the others), for j = 0, 1,
     //    2, …, so no more boxes are spent together than pay. For each j, the
     //    rest the largest first, tokens or not, for the fewest inputs; then
@@ -2928,15 +3028,52 @@ fn apart<T>(
     // d. The CLI's own order, boxes among the rest by size: never refused
     //    what the CLI would pay.
     //
+    // a, b and c take boxes in one order, whatever the purpose: those whose
+    // making the wallet knows the largest first, so as few as pay, then
+    // those of unknown making (`box_rank`). Where one builds with j boxes,
+    // the same with j boxes more of them mixed goes first, where it builds
+    // (chunk 51, l4code#1, l4docs#3, l4still#2): one box that pays alone,
+    // in 1, is the purpose's to choose.
+    //
     // In each, a UTxO that adds less than nothing comes after everything
     // else, boxes included (chunk 51, r2a#3). A box holds no tokens, so it
     // never does.
     let tier = |u: &UtxoResponse| purpose.tier(&class(u));
+    let is_box = |u: &UtxoResponse| tier(u) == 2 && !holds_tokens(u);
+    let box_list: Vec<&UtxoResponse> = rest.iter().filter(|u| is_box(u)).collect();
+    // One that adds no history to what the tokens sent bring is taken first among as many, as a mixed one is.
+    let weights: Vec<(u128, u8)> = box_list
+        .iter()
+        .map(|u| {
+            let ties_nothing = !base.is_empty() && joins_base(u);
+            (
+                lovelace_in(u),
+                if ties_nothing { 0 } else { box_rank(&class(u)) },
+            )
+        })
+        .collect();
+    let boxes: Vec<&UtxoResponse> = boxes_largest_first(&weights)
+        .into_iter()
+        .map(|i| box_list[i])
+        .collect();
+    let places: BTreeMap<(&str, u64), usize> = boxes
+        .iter()
+        .enumerate()
+        .map(|(at, u)| ((u.tx_hash.as_str(), u.tx_index), at))
+        .collect();
+    // Where a box comes in the boxes' order; anything else after them.
+    let place = |u: &UtxoResponse| {
+        places
+            .get(&(u.tx_hash.as_str(), u.tx_index))
+            .copied()
+            .unwrap_or(usize::MAX)
+    };
     let mut by_history: Vec<&UtxoResponse> = rest.iter().collect();
     by_history.sort_by_key(|u| {
         (
             last(u),
             tier(u),
+            place(u),
             !joins_base(u),
             purpose.rank(&class(u)),
             holds_tokens(u),
@@ -2948,14 +3085,14 @@ fn apart<T>(
         (
             last(u),
             tier(u),
+            place(u),
             !joins_base(u),
             holds_tokens(u),
             std::cmp::Reverse(lovelace_of(u)),
         )
     });
-    let is_box = |u: &UtxoResponse| tier(u) == 2 && !holds_tokens(u);
-    let mut boxes: Vec<&UtxoResponse> = rest.iter().filter(|u| is_box(u)).collect();
-    boxes.sort_by_key(|u| (!joins_base(u), std::cmp::Reverse(lovelace_of(u))));
+    // In a and b, the boxes come after everything of tiers 0 and 1 that adds something.
+    let ahead = rest.iter().filter(|u| !last(u) && tier(u) < 2).count();
     let mut largest: Vec<&UtxoResponse> = rest.iter().filter(|u| !is_box(u)).collect();
     largest.sort_by_key(|u| {
         (
@@ -2983,13 +3120,14 @@ fn apart<T>(
         rests.push(&tokens_last);
     }
     let (boxes, rests) = (&boxes, &rests);
-    // With nothing but boxes, a grew these already.
+    // With nothing but boxes, a grew these already: it takes them in the same order.
     let fewest_boxes = (0..=boxes.len())
         .filter(|_| !largest.is_empty())
         .flat_map(|j| {
-            rests
-                .iter()
-                .map(move |others| (boxes[..j].iter().chain(others.iter()).copied().collect(), j))
+            rests.iter().map(move |others| {
+                let order = boxes[..j].iter().chain(others.iter()).copied().collect();
+                (order, j, Some((0, j, true)))
+            })
         });
     let mut blind: Vec<&UtxoResponse> = rest.iter().collect();
     blind.sort_by_key(|u| (last(u), holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
@@ -2998,12 +3136,18 @@ fn apart<T>(
     // Whether an order grown whole was short: everything together.
     let mut short_whole = false;
     let mut grown: Vec<Vec<&UtxoResponse>> = Vec::new();
-    // Each order, and how many boxes it brings forward (none for a, b, d).
-    let orders = [(by_history, 0), (by_tier, 0)]
-        .into_iter()
-        .chain(fewest_boxes)
-        .chain([(blind, 0)]);
-    for (order, j) in orders {
+    // Each order, how many boxes it brings forward (none for a, b, d), and where its boxes are, for a choice of as
+    // many with more of them mixed: where they start, how many there are at most, and whether what follows them grows
+    // after that choice too (c's rest). None for d, the CLI's.
+    let after_the_rest = Some((ahead, boxes.len(), false));
+    let orders = [
+        (by_history, 0, after_the_rest),
+        (by_tier, 0, after_the_rest),
+    ]
+    .into_iter()
+    .chain(fewest_boxes)
+    .chain([(blind, 0, None)]);
+    for (order, j, at) in orders {
         // The same order again, or the start of one grown whole before (c's
         // without boxes, often), would fail the same way.
         let grown_before =
@@ -3013,7 +3157,16 @@ fn apart<T>(
         }
         let whole = order.len() == rest.len();
         match grow(&order, j, &mut try_with) {
-            Grown::Built(built) => return Ok(built),
+            Grown::Built(built, k) => {
+                // Built with the first `with` of the boxes: as many, more of them mixed, where that builds too.
+                let more = at.and_then(|(from, most, grows)| {
+                    let with = k.saturating_sub(from).min(most);
+                    let tail: &[&UtxoResponse] = if grows { &order[from + most..] } else { &[] };
+                    let weighed = (box_list.as_slice(), weights.as_slice());
+                    more_mixed_built(&order[..from], with, tail, weighed, &mut try_with)
+                });
+                return Ok(more.unwrap_or(built));
+            }
             Grown::Short if whole => short_whole = true,
             // Short without the other boxes: one more may pay.
             Grown::Short => {}

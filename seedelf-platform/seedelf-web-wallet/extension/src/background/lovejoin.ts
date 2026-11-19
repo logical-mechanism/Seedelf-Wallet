@@ -8134,16 +8134,23 @@ export class LovejoinService {
       // The private balance pays (the owner's call 36): one of its UTxOs of ADA alone goes in beside the box, with its
       // own proof under a one-time key, and comes back with it in one private UTxO, under giveme.my's collateral as any
       // Seedelf spend. Nothing locked or reserved; first a box back from Lovejoin whose making the wallet knows, which
-      // ties no account (one of unknown making ties whoever put it in, so it goes with the rest); then one made private
-      // from no public account but the box's, where it's a public account's box: its deposit's (a Bootstrap's, a
-      // seed's), its mix's cut short, or its mix's leaf, as status's `fromPublic` has it. Another's, beside the box,
-      // would tie the two accounts, which the wallet never picks for the user where it needn't, and the questions say it
-      // avoids (1.6.0's release review, x-privacy#0, R3-2, R3-3); then the smallest. WebAssembly takes the first that
-      // pays. What its history ties (`ties`, below) is still the deposit's alone, as PRIV-3 has it.
+      // ties no account (one of unknown making ties whoever put it in, so it goes with the rest): one a mix moved
+      // first, then other boxes alone; then one made private from no public account but the box's, where it's a public
+      // account's box: its deposit's (a Bootstrap's, a seed's), its mix's cut short, or its mix's leaf, as status's
+      // `fromPublic` has it. Another's, beside the box, would tie the two accounts, which the wallet never picks for the
+      // user where it needn't, and the questions say it avoids (1.6.0's release review, x-privacy#0, R3-2, R3-3); then
+      // the smallest. WebAssembly takes the first that pays. What its history ties (`ties`, below) is still the
+      // deposit's alone, as PRIV-3 has it.
       const { view, params, utxos, classes, returning, waiting } = await readContract(this.deps, network, known);
-      // A box a mix moved too (chunk 51, the owner's answer 4 to B15), never a box of unknown making, a planted one's
-      // way back among them, which anyone reading the register it copied can follow (l3time#3, l3still#2).
-      const fromLovejoin = (u: KoiosUtxo) => (knownBox(classes[outpoint(u)]) ? 0 : 1);
+      // A box a mix moved first, which ties nothing (chunk 51, the owner's answer 4 to B15), as a funding and a Send
+      // take one where one box pays (l3rank#3); then other boxes alone, a way back 1.9.1 kept with no record of what
+      // made the box among them, which may be a session's seed or a planted box (l4code#2); never a box of unknown
+      // making, a planted one's way back among them, which anyone reading the register it copied can follow (l3time#3,
+      // l3still#2).
+      const fromLovejoin = (u: KoiosUtxo) => {
+        const c = classes[outpoint(u)];
+        return c?.origin === "mixed" ? 0 : knownBox(c) ? 1 : 2;
+      };
       const schedule = await this.read(network);
       const owner = depositAccountOf(schedule, box) ?? accountOf(originOf(box, schedule));
       const another = (u: KoiosUtxo) => (owner !== undefined && accountsIn(classes[outpoint(u)]).some((a) => a !== owner) ? 1 : 0);
@@ -8223,9 +8230,10 @@ export class LovejoinService {
       // - one a mix of the wallet's own chains made short of its last mixes: a box, as PRIV-3 has a mix's output;
       // - anything else, one someone else put in under the wallet's key (a register copied as found included), one
       //   Koios hasn't said of, one nobody asked about (Bring every box back now and the retired pools' run ask
-      //   nothing), a 1.9.1 answer kept with no inputs: a box whose making the wallet can't place, which a stealth mint
-      //   and a funding take after money others paid, and selection still takes last, one at a time (unplacedBox;
-      //   e1a#1's approved (4), l2rank#1, l2time#1, l2time#3, l2still#1).
+      //   nothing), a 1.9.1 answer kept with no inputs that says a deposit no public account paid made the box: a box
+      //   whose making the wallet can't place, which a stealth mint and a funding take after money others paid, and
+      //   selection still takes last, one at a time, after every other box it merges (unplacedBox; e1a#1's approved
+      //   (4), l2rank#1, l2time#1, l2time#3, l2still#1, l4code#1), unless other money paid its way back (below).
       const session = depositSessionOf(s, box, oneTime);
       const own = mixedBoxOf(s, box)
         ? mixedBox(built.txHash)
@@ -8235,7 +8243,8 @@ export class LovejoinService {
             ? boxFrom(built.txHash)
             : unplacedBox(built.txHash);
       // The private UTxO that paid is in the one it comes back into: its history goes with the box's (call 36). Merged,
-      // a box a mix moved is a box no longer.
+      // a box a mix moved is marked mixed no longer, and the way back reads as the furthest tie it carries (`merged`):
+      // a box beside another box or money of no history, else as the money that paid (l3rank#2).
       const besides = [...(spent ? [spent.class] : []), ...(ties ?? []).map(madePrivate)];
       // Written but for a box's alone, which the history reads from the withdraw's kind (activity.ts classOf), the
       // accounts its way back ties added there (tiedOrigin). Unwritten, a box whose making the wallet can't place read

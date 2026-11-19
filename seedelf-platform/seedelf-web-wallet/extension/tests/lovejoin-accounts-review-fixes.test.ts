@@ -40,8 +40,11 @@ const read = (element: ReactElement, active = 1, several = true) => words(markup
 /** Each note of `element`, the payers' among them, as a person reads it. */
 const notes = (element: ReactElement, active = 1) => [...markup(element, active).matchAll(/<p class="note">(.*?)<\/p>/g)].map((m) => words(m[1]!));
 
-/** The private payer's note's last sentence, where the box is a public account's and the wallet has several. */
-const AVOIDS = "Where it can, the wallet takes one that came back from Lovejoin, else one that ties no other account.";
+/**
+ * The private payer's note's last sentence, where the box is a public account's and the wallet has several: first a
+ * way back the UTxOs screen marks Back from Lovejoin and nothing else (chunk 51, l4code#4, l4still#3).
+ */
+const AVOIDS = "Where it can, the wallet takes one marked only Back from Lovejoin, else one that ties no other account.";
 
 /** The public payer's note, where the box is another account's: `account`'s, paid from `active`. */
 const TIES = (active: string, account: string) =>

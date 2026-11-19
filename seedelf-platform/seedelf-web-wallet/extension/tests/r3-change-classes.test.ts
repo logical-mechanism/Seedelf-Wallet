@@ -101,11 +101,20 @@ async function funding(t: Tested): Promise<string[]> {
 
 const R0 = hash("c0");
 const paidByR0 = receivedIn(R0);
+/** The 12-word wallet's own account 0, on preprod: a Make public's payee that's the user's own. */
+const OWN = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!.preprod.receive_0 as string;
 
 describe("change a private spend left before this release reads its spend's part (chunk 51, l2time#2)", () => {
   it.each([
     ["a private Send", "transfer" as const, { payments: [{ to: "addr_test1", lovelace: "10000000", tokens: [] }] }],
     ["a Make public to someone else", "withdraw" as const, { payments: [{ address: "addr_test1", lovelace: "10000000", tokens: [] }] }],
+    // An earlier version noted no account a Make public paid, so one to the user's own reads as change too (chunk 51,
+    // l3rank#1; the pin l4still#7 asked for).
+    [
+      "a Make public to one of the user's own accounts, by an earlier version",
+      "withdraw" as const,
+      { payments: [{ address: OWN, own: true, ownAccount: 0, lovelace: "10000000", tokens: [] }] },
+    ],
     ["a stealth mint", "mint" as const, { label: "" }],
     ["a removal into the private balance", "remove" as const, { label: "", name: "5eed0e1f" }],
     ["a pool's start from the private balance", "lovejoin-launch" as const, { from: "private" }],
