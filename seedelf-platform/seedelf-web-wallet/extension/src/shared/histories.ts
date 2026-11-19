@@ -81,11 +81,11 @@ export const mixedBox = (txHash: string): HistoryClass => ({ id: `box:${txHash}`
 export const unknownIn = (txHash: string): HistoryClass => ({ id: `unknown:${txHash}`, origin: "unknown" });
 /**
  * The way back, withdraw `txHash`, of a box whose making the wallet can't place: one someone else put in (a register
- * copied as found included), one Koios hasn't said of, one nobody asked about. Still a box to selection, taken last and
- * one at a time, merged after every other box (core's box_rank, l4code#1), and after money others paid by a stealth
- * mint and a funding, tagged Back from Lovejoin and Unknown, and a box to a review (chunk 51, round three: l2rank#1,
- * l2time#1, l2time#3, l2still#1). Unless money of another history paid its way back, another box's or money of no
- * history aside: it reads as that money then (`merged`, l3rank#2).
+ * copied as found included), one Koios hasn't said of, one nobody asked about. Still a box to selection, taken last:
+ * merged only where the other boxes don't pay without it, and then beside as few as pay (core's box rule, box_rank,
+ * round six), and after money others paid by a stealth mint and a funding, tagged Back from Lovejoin and Unknown, and
+ * a box to a review (chunk 51, round three: l2rank#1, l2time#1, l2time#3, l2still#1). Unless money of another history
+ * paid its way back, another box's or money of no history aside: it reads as that money then (`merged`, l3rank#2).
  */
 export const unplacedBox = (txHash: string): HistoryClass => merged([boxFrom(txHash), unknownIn(txHash)]);
 /**
@@ -219,10 +219,10 @@ export function withoutBoxes(c: HistoryClass): HistoryClass | undefined {
 }
 
 /**
- * Whether money of class `c` is a box back from Lovejoin whose making the wallet knows: one it knows is mixed
- * (`mixedBox`), or boxes alone (`boxFrom`, or several merged), with no part of unknown making. Not a box of unknown
- * making (`unplacedBox`), nor one merged with money of no history: either may tie whoever put that in, as a payment of
- * theirs would (chunk 51, l3time#3, l3still#2).
+ * Whether money of class `c` is a box back from Lovejoin of no unknown making: one the wallet knows is mixed
+ * (`mixedBox`), or boxes alone (`boxFrom`, or several merged), whose making it knows or, kept by 1.9.1 with no record,
+ * can't tell (chunk 51, l5still#5). Not a box of unknown making (`unplacedBox`), nor one merged with money of no
+ * history: either may tie whoever put that in, as a payment of theirs would (chunk 51, l3time#3, l3still#2).
  */
 export const knownBox = (c: HistoryClass | undefined): boolean =>
   c?.origin === "mixed" || (c?.origin === "lovejoin" && parts(c).every((p) => p.startsWith("box:")));

@@ -8144,9 +8144,9 @@ export class LovejoinService {
       const { view, params, utxos, classes, returning, waiting } = await readContract(this.deps, network, known);
       // A box a mix moved first, which ties nothing (chunk 51, the owner's answer 4 to B15), as a funding and a Send
       // take one where one box pays (l3rank#3); then other boxes alone, a way back 1.9.1 kept with no record of what
-      // made the box among them, which may be a session's seed or a planted box (l4code#2); never a box of unknown
-      // making, a planted one's way back among them, which anyone reading the register it copied can follow (l3time#3,
-      // l3still#2).
+      // made the box among them, which may be a session's seed or a planted box (l4code#2); not first a box of unknown
+      // making, a planted one's way back among them, which anyone reading the register it copied can follow: it goes
+      // with the rest (l3time#3, l3still#2, l5still#5).
       const fromLovejoin = (u: KoiosUtxo) => {
         const c = classes[outpoint(u)];
         return c?.origin === "mixed" ? 0 : knownBox(c) ? 1 : 2;
@@ -8232,8 +8232,9 @@ export class LovejoinService {
       //   Koios hasn't said of, one nobody asked about (Bring every box back now and the retired pools' run ask
       //   nothing), a 1.9.1 answer kept with no inputs that says a deposit no public account paid made the box: a box
       //   whose making the wallet can't place, which a stealth mint and a funding take after money others paid, and
-      //   selection still takes last, one at a time, after every other box it merges (unplacedBox; e1a#1's approved
-      //   (4), l2rank#1, l2time#1, l2time#3, l2still#1, l4code#1), unless other money paid its way back (below).
+      //   selection still takes last, merging it only where the other boxes don't pay without it, and then beside as
+      //   few as pay (unplacedBox, core's box rule; e1a#1's approved (4), l2rank#1, l2time#1, l2time#3, l2still#1,
+      //   l4code#1), unless other money paid its way back (below).
       const session = depositSessionOf(s, box, oneTime);
       const own = mixedBoxOf(s, box)
         ? mixedBox(built.txHash)

@@ -2288,9 +2288,10 @@ pub mod api {
             assert_eq!(h.tier_of(&mixed), h.tier_of(&old));
         }
 
-        /// Chunk 51, l3rank#3: a funding, a top-up and a Send take a box the worker knows is mixed before any other box,
-        /// one of unknown making (`box:<w>+unknown:<w>`, what a box someone else put in comes back as) among them, so
-        /// no planted box's way back is picked over a mixed box on size. Both still merge last.
+        /// Chunk 51, l3rank#3: where one box pays alone, a funding, a top-up and a Send take a box the worker knows is
+        /// mixed before any other box, one of unknown making (`box:<w>+unknown:<w>`, what a box someone else put in
+        /// comes back as) among them, so no planted box's way back is picked over a mixed box on size (l5still#5).
+        /// Both still merge last.
         #[test]
         fn a_funding_and_a_send_take_a_mixed_box_before_any_other_box() {
             let (mixed, unplaced) = (at(0xb1), at(0xb2));
@@ -4133,17 +4134,13 @@ pub mod api {
                         .collect()
                 })
                 .filter(|alone| alone.len() < utxos.len());
-            // Boxes back from Lovejoin, last, as one transaction merges them: as few as pay what the rest leaves owed,
-            // the largest first, of as many the most mixed, one of unknown making after every other box; those holding
-            // tokens after them (chunk 51, l4code#1).
+            // Boxes back from Lovejoin, last, as one transaction merges them, by the box rule (`build::box_rank`):
+            // every one, a token pool's way back holding its token included, weighed by what it adds
+            // (`build::box_weight`, chunk 51, l5merge#1); first those that pay what the rest leaves owed, as few of
+            // unknown making as do, then as few boxes, of as many the most mixed (`build::boxes_to_merge`).
             let tier = |rows: &[&UtxoResponse]| histories.tier_of(rows[0]);
-            let ada_alone = |rows: &[&UtxoResponse]| {
-                !rows
-                    .iter()
-                    .any(|u| u.asset_list.as_ref().is_some_and(|a| !a.is_empty()))
-            };
             let boxes: Vec<usize> = (0..classes.len())
-                .filter(|&i| tier(&classes[i].1) == 2 && ada_alone(&classes[i].1))
+                .filter(|&i| tier(&classes[i].1) == 2)
                 .collect();
             let rest: i128 = classes
                 .iter()
@@ -4154,8 +4151,8 @@ pub mod api {
             let weights: Vec<(u128, u8)> = boxes
                 .iter()
                 .map(|&i| {
-                    let (c, _, _, total) = &classes[i];
-                    (u128::try_from(*total).unwrap_or(0), build::box_rank(c))
+                    let (c, rows, ..) = &classes[i];
+                    build::box_weight(&chain.params, c, rows)
                 })
                 .collect();
             let places: HashMap<String, usize> = build::boxes_to_merge(&weights, gap)
@@ -4279,6 +4276,200 @@ pub mod api {
                     "{purpose:?}, 15 ₳"
                 );
             }
+        }
+
+        fn with_token(mut u: UtxoResponse, name: &str) -> UtxoResponse {
+            u.asset_list = Some(vec![seedelf_koios::koios::Asset {
+                decimals: 0,
+                quantity: "1".into(),
+                policy_id: "c0".repeat(28),
+                asset_name: hex::encode(name),
+                fingerprint: String::new(),
+            }]);
+            u
+        }
+
+        /// The order `Worth::apart` takes `rows` in, each with its own class (`id`, `origin`), for `purpose`, `owed`
+        /// lovelace owed: each row's `tx` byte.
+        fn order_of(
+            chain: &Chain,
+            purpose: Purpose,
+            rows: &[(UtxoResponse, String, &str)],
+            owed: u64,
+        ) -> Option<Vec<u8>> {
+            let classes: Classes = rows
+                .iter()
+                .map(|(u, id, origin)| {
+                    (
+                        format!("{}#0", u.tx_hash),
+                        ClassIn {
+                            id: id.clone(),
+                            origin: (*origin).into(),
+                        },
+                    )
+                })
+                .collect();
+            let utxos: Vec<UtxoResponse> = rows.iter().map(|(u, ..)| u.clone()).collect();
+            let h = histories(purpose, &classes).unwrap();
+            let (worth, _) = Worth::apart(chain, &utxos, &h, owed, &[], None)?;
+            let mut taken = utxos.clone();
+            taken.sort_by_key(|u| std::cmp::Reverse(worth.of_utxo(u)));
+            Some(
+                taken
+                    .iter()
+                    .map(|u| hex::decode(&u.tx_hash).unwrap()[0])
+                    .collect(),
+            )
+        }
+
+        fn preprod() -> Chain {
+            let params: serde_json::Value = serde_json::from_str::<serde_json::Value>(
+                include_str!("../../../seedelf-core/tests/fixtures/epoch_params.json"),
+            )
+            .unwrap()[0]
+                .clone();
+            chain_of("preprod", &params).unwrap()
+        }
+
+        /// Chunk 51, l5merge#1: a payment's parts listed only histories of ADA alone among the boxes, so a token
+        /// pool's way back (here one a mix moved, 4.15 ₳ and its token) went after every box of ADA alone, one of
+        /// unknown making (0x30) included. It's a box, weighed by what it adds: with 5 ₳ made private and K, a plain
+        /// way back of 9.71 ₳, 16 ₳ owed takes K and T, then W.
+        #[test]
+        fn a_token_pools_way_back_is_a_box_to_a_payments_parts() {
+            let chain = preprod();
+            let rows = [
+                (row(0x01, 5_000_000), "public:0".to_string(), "own"),
+                (
+                    row(0x61, 9_710_000),
+                    format!("box:{}", hex::encode([0x61u8; 32])),
+                    "lovejoin",
+                ),
+                (
+                    row(0x30, 9_710_000),
+                    format!("box:{0}+unknown:{0}", hex::encode([0x30u8; 32])),
+                    "lovejoin",
+                ),
+                (
+                    with_token(row(0x70, 4_150_000), "pooltoken"),
+                    format!("box:{}", hex::encode([0x70u8; 32])),
+                    "mixed",
+                ),
+            ];
+            for purpose in [Purpose::Pay, Purpose::Fund { session: None }] {
+                let taken = order_of(&chain, purpose.clone(), &rows, 16_000_000).unwrap();
+                assert_eq!(taken, [0x01, 0x61, 0x70, 0x30], "{purpose:?}");
+            }
+        }
+
+        /// Chunk 51, round six: the boxes a payment's parts take first, to close the gap the rest leaves owed, are
+        /// those the box rule picks, held to a brute force over seeded sets of box histories (a mix's, plain, of
+        /// unknown making, a token pool's way back holding its token among them) beside a little other money: of the
+        /// sets that add more than the gap, as few of unknown making as pay, then as few boxes, then of as many the
+        /// most mixed.
+        #[test]
+        fn a_payments_parts_close_the_gap_with_the_boxes_the_box_rule_picks() {
+            let chain = preprod();
+            let mut state: u64 = 0x5eed_0e1f;
+            let mut below = |n: u64| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state % n
+            };
+            let mut wrong = Vec::new();
+            let mut checked = 0;
+            for _ in 0..400 {
+                let boxes = 1 + below(8) as usize;
+                // Each box: its row, its rank (0 mixed, 1 plain, 2 of unknown making) and its weight, what it adds.
+                let mut rows: Vec<(UtxoResponse, String, &str)> = Vec::new();
+                let mut weighed: Vec<(u8, u128)> = Vec::new();
+                for i in 0..boxes {
+                    let tx = 0x40 + i as u8;
+                    let hash = hex::encode([tx; 32]);
+                    let lovelace = [4_710_000, 7_500_000, 9_710_000, 14_500_000, 19_710_000]
+                        [below(5) as usize];
+                    let u = if below(4) == 0 {
+                        with_token(row(tx, lovelace), ["poolA", "poolB"][below(2) as usize])
+                    } else {
+                        row(tx, lovelace)
+                    };
+                    let rank = below(3) as u8;
+                    let (id, origin) = match rank {
+                        0 => (format!("box:{hash}"), "mixed"),
+                        1 => (format!("box:{hash}"), "lovejoin"),
+                        _ => (format!("box:{hash}+unknown:{hash}"), "lovejoin"),
+                    };
+                    let weight =
+                        u128::try_from(build::adds(&chain.params, &u).unwrap().max(0)).unwrap();
+                    weighed.push((rank, weight));
+                    rows.push((u, id, origin));
+                }
+                let mut rest: u128 = 0;
+                for i in 0..below(3) {
+                    let tx = 0x10 + i as u8;
+                    let lovelace = [1_500_000, 3_000_000, 5_000_000][below(3) as usize];
+                    rest += u128::from(lovelace);
+                    let (id, origin) = if i == 0 {
+                        ("public:0".to_string(), "own")
+                    } else {
+                        (format!("received:{}", hex::encode([tx; 32])), "received")
+                    };
+                    rows.push((row(tx, lovelace), id, origin));
+                }
+                let all: u128 = weighed.iter().map(|(_, w)| w).sum::<u128>() + rest;
+                let owed = 1_000_000 + below(u64::try_from(all).unwrap());
+                let purpose = if below(2) == 0 {
+                    Purpose::Pay
+                } else {
+                    Purpose::Fund { session: None }
+                };
+                let Some(taken) = order_of(&chain, purpose.clone(), &rows, owed) else {
+                    continue;
+                };
+                let gap = u128::from(owed).saturating_sub(rest);
+                let key = |chosen: &[usize]| {
+                    let of = |rank: u8| chosen.iter().filter(|&&i| weighed[i].0 == rank).count();
+                    (of(2), chosen.len(), std::cmp::Reverse(of(0)))
+                };
+                let closes =
+                    |chosen: &[usize]| chosen.iter().map(|&i| weighed[i].1).sum::<u128>() > gap;
+                let Some(best) = (1u32..(1 << boxes))
+                    .map(|mask| {
+                        (0..boxes)
+                            .filter(|i| mask & (1 << i) != 0)
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|chosen| closes(chosen))
+                    .map(|chosen| key(&chosen))
+                    .min()
+                else {
+                    continue;
+                };
+                // The boxes in the order the parts take them, as far as the first that close the gap.
+                let mut first: Vec<usize> = Vec::new();
+                for tx in taken.iter().filter(|&&tx| tx >= 0x40) {
+                    if closes(&first) {
+                        break;
+                    }
+                    first.push(usize::from(tx - 0x40));
+                }
+                checked += 1;
+                if key(&first) != best {
+                    wrong.push(format!(
+                        "{purpose:?}, {owed} owed, gap {gap}, boxes (rank, weight) {weighed:?}: took {first:?}, \
+                         {:?}, where {best:?} closes it",
+                        key(&first)
+                    ));
+                }
+            }
+            assert!(checked > 100, "{checked}");
+            assert!(
+                wrong.is_empty(),
+                "a payment's parts close the gap with other boxes than the box rule picks ({} of {checked}):\n{}",
+                wrong.len(),
+                wrong.join("\n")
+            );
         }
     }
 

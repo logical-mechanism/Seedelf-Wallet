@@ -3701,8 +3701,10 @@ mod apart {
         );
     }
 
-    /// Beside l4code#1, a pin: at the same count, a merge takes the boxes a mix moved, never two of unknown making
-    /// that are a few hundred lovelace larger.
+    /// Beside l4code#1, a pin: at the same count, a merge takes the boxes a mix moved, never two plain ones a few
+    /// hundred lovelace larger. Chunk 51, l5still#6: it pitted the mixed boxes against two of unknown making, which go
+    /// after them by that alone, so it passed with the same-count choice taken out; plain ones (1.9.1's ways back,
+    /// `box:<tx>`, origin lovejoin) come first by size, so only that choice puts the mixed ones first.
     #[test]
     fn at_the_same_count_a_merge_takes_mixed_boxes_first() {
         let w = world();
@@ -3713,16 +3715,16 @@ mod apart {
                 (u, c)
             })
             .collect();
-        let unplaced: Vec<(UtxoResponse, Class)> = (0..2u8)
+        let plain: Vec<(UtxoResponse, Class)> = (0..2u8)
             .map(|i| {
                 let u = owned(&w, 0x60 + i, 0, 4_710_000, &[]);
-                let c = class(&format!("box:{0}+unknown:{0}", u.tx_hash), Origin::Lovejoin);
+                let c = class(&format!("box:{}", u.tx_hash), Origin::Lovejoin);
                 (u, c)
             })
             .collect();
         let known: Vec<(&UtxoResponse, Class)> = mixed
             .iter()
-            .chain(&unplaced)
+            .chain(&plain)
             .map(|(u, c)| (u, c.clone()))
             .collect();
         let both_mixed = outpoints(&[mixed[0].0.clone(), mixed[1].0.clone()]);
@@ -3743,19 +3745,21 @@ mod apart {
         }
     }
 
-    /// Chunk 51, the lead's call on l4code#1: a box of unknown making (`box:<w>+unknown:<w>`, a planted box's way
-    /// back among them) is merged after every other box, never ahead of one. Two boxes whose making the wallet knows,
-    /// of 4.71 ₳ (mixed or plain), and W of 9.71 ₳: 12 ₳ out takes all three, W last, where by size alone W and one
-    /// other paid.
+    /// Chunk 51, the lead's call on l4code#1, as the owner's box rule of round six has it: a box of unknown making
+    /// (`box:<w>+unknown:<w>`, a planted box's way back among them) is merged only where the other boxes can't pay
+    /// without it, and then with as few others as pay, one a mix moved first (l5still#4's choice: round five took every
+    /// other box too, though W went either way). Two boxes whose making the wallet knows, of 4.71 ₳ (mixed or plain),
+    /// and W of 9.71 ₳: 12 ₳ out takes W and one other, the mixed one where there is one; 7 ₳ out, which the two pay,
+    /// never takes W.
     #[test]
-    fn a_box_of_unknown_making_is_merged_after_every_other_box() {
+    fn a_box_of_unknown_making_is_merged_only_where_the_others_cant_pay_and_then_beside_as_few_as_pay()
+     {
         let w = world();
         let unplaced = owned(&w, 0x30, 0, BOX, &[]);
         let unplaced_class = class(
             &format!("box:{0}+unknown:{0}", unplaced.tx_hash),
             Origin::Lovejoin,
         );
-        let seedelf = paying(12_000_000);
         let mut wrong = Vec::new();
         for others_mixed in [[false, false], [true, false], [true, true]] {
             let others: Vec<(UtxoResponse, Class)> = others_mixed
@@ -3771,36 +3775,93 @@ mod apart {
                     (u.clone(), class(&format!("box:{}", u.tx_hash), origin))
                 })
                 .collect();
-            let mut known: Vec<(&UtxoResponse, Class)> =
-                others.iter().map(|(u, c)| (u, c.clone())).collect();
-            known.push((&unplaced, unplaced_class.clone()));
-            for (name, purpose, pay) in [
+            // Beside W, one other, a mixed one where there is one.
+            let beside_w = |spent: &[String]| {
+                spent.len() == 2
+                    && spent.contains(&one(&unplaced)[0])
+                    && (!others_mixed.contains(&true)
+                        || others
+                            .iter()
+                            .zip(others_mixed)
+                            .any(|((u, _), mixed)| mixed && spent.contains(&one(u)[0])))
+            };
+            let both = outpoints(&[others[0].0.clone(), others[1].0.clone()]);
+            // W2, of unknown making too but smaller (4 ₳), where the two pay 6 ₳ out without it: never merged.
+            let smaller = owned(&w, 0x31, 0, 4_000_000, &[]);
+            let smaller_class = class(
+                &format!("box:{0}+unknown:{0}", smaller.tx_hash),
+                Origin::Lovejoin,
+            );
+            for (name, purpose, pay, seedelf, with_w) in [
                 (
                     "a new session's funding of 7 ₳ and its 5 ₳ collateral",
                     Purpose::Fund {
                         session: Some("session:7".into()),
                     },
                     funding(7_000_000),
+                    paying(12_000_000),
+                    true,
                 ),
                 (
                     "a Make public of 12 ₳",
                     Purpose::Pay,
                     to_address(12_000_000),
+                    paying(12_000_000),
+                    true,
                 ),
-                ("a Send of 12 ₳ to a Seedelf", Purpose::Pay, Vec::new()),
+                (
+                    "a Send of 12 ₳ to a Seedelf",
+                    Purpose::Pay,
+                    Vec::new(),
+                    paying(12_000_000),
+                    true,
+                ),
+                (
+                    "a new session's funding of 1 ₳ and its 5 ₳ collateral",
+                    Purpose::Fund {
+                        session: Some("session:7".into()),
+                    },
+                    funding(1_000_000),
+                    paying(6_000_000),
+                    false,
+                ),
+                (
+                    "a Make public of 6 ₳",
+                    Purpose::Pay,
+                    to_address(6_000_000),
+                    paying(6_000_000),
+                    false,
+                ),
+                (
+                    "a Send of 6 ₳ to a Seedelf",
+                    Purpose::Pay,
+                    Vec::new(),
+                    paying(6_000_000),
+                    false,
+                ),
             ] {
+                let mut known: Vec<(&UtxoResponse, Class)> =
+                    others.iter().map(|(u, c)| (u, c.clone())).collect();
+                if with_w {
+                    known.push((&unplaced, unplaced_class.clone()));
+                } else {
+                    known.push((&smaller, smaller_class.clone()));
+                }
                 let spent = outpoints(&spent_by(&w, purpose, &known, &seedelf, &pay));
                 let line = format!("{name}, the others mixed: {others_mixed:?}: spent {spent:?}");
                 println!("{line}");
-                let every_other = others.iter().all(|(u, _)| spent.contains(&one(u)[0]));
-                if spent.contains(&one(&unplaced)[0]) && !every_other {
+                if !(if with_w {
+                    beside_w(&spent)
+                } else {
+                    spent == both
+                }) {
                     wrong.push(line);
                 }
             }
         }
         assert!(
             wrong.is_empty(),
-            "a box of unknown making merged ahead of another box:\n{}",
+            "a box of unknown making merged where the others pay without it, or beside more boxes than pay:\n{}",
             wrong.join("\n")
         );
     }
@@ -4003,6 +4064,453 @@ mod apart {
                 "{purpose:?}: two boxes merged"
             );
         }
+    }
+
+    /// Whether exactly `inputs` pay a Send of `seedelf` (`pay` empty) or a payment of `pay`, as selection's attempt
+    /// asks it: built, and its computation estimated.
+    fn pays_with(
+        w: &World,
+        inputs: &[UtxoResponse],
+        seedelf: &Payment,
+        pay: &[AddressPayment],
+    ) -> anyhow::Result<()> {
+        if pay.is_empty() {
+            build::transfer_from(
+                &w.chain,
+                inputs,
+                std::slice::from_ref(seedelf),
+                &w.owner,
+                w.signer,
+            )
+        } else {
+            build::sweep_many_from(&w.chain, inputs, pay, &w.owner, w.signer)
+        }
+        .and_then(|s| s.estimate())
+        .map(|_| ())
+    }
+
+    /// Chunk 51, l5merge#1: a token pool's way back (`box:<t>`, holding its pool's token, here one a mix moved) was no
+    /// box to merging, so it went after every box of ADA alone, one of unknown making included: a funding, a Send or a
+    /// Make public merged W (unknown making) ahead of T, or two plain boxes where T alone paid beside the money made
+    /// private. It's a box, weighed by what it adds (its ADA less its token's least).
+    #[test]
+    fn a_token_pools_way_back_is_merged_as_a_box() {
+        let w = world();
+        let mut wrong = Vec::new();
+        // A. O 5 ₳ made private; K a plain way back of 9.71 ₳; W one of unknown making of 9.71 ₳; T a token pool's way
+        // back, mixed, 4.15 ₳ and its token. 16 ₳ out: O, K and T pay, as O, K and W do.
+        let o = owned(&w, 0x01, 0, 5_000_000, &[]);
+        let k = owned(&w, 0x61, 0, BOX, &[]);
+        let unplaced = owned(&w, 0x30, 0, BOX, &[]);
+        let t = owned(&w, 0x70, 0, 4_150_000, &[("pooltoken", 1)]);
+        assert!(
+            build::adds(&w.chain.params, &t).unwrap() > 0,
+            "T adds something"
+        );
+        let known: Vec<(&UtxoResponse, Class)> = vec![
+            (&o, class("public:0", Origin::Own)),
+            (&k, class(&format!("box:{}", k.tx_hash), Origin::Lovejoin)),
+            (
+                &unplaced,
+                class(
+                    &format!("box:{0}+unknown:{0}", unplaced.tx_hash),
+                    Origin::Lovejoin,
+                ),
+            ),
+            (&t, class(&format!("box:{}", t.tx_hash), Origin::Mixed)),
+        ];
+        let seedelf = paying(16_000_000);
+        let expected = outpoints(&[o.clone(), k.clone(), t.clone()]);
+        for (name, purpose, pay) in [
+            ("A: a Send of 16 ₳ to a Seedelf", Purpose::Pay, Vec::new()),
+            (
+                "A: a Make public of 16 ₳",
+                Purpose::Pay,
+                to_address(16_000_000),
+            ),
+            (
+                "A: a new session's funding of 11 ₳ and its 5 ₳ collateral",
+                Purpose::Fund {
+                    session: Some("session:7".into()),
+                },
+                funding(11_000_000),
+            ),
+        ] {
+            pays_with(&w, &[o.clone(), k.clone(), t.clone()], &seedelf, &pay)
+                .unwrap_or_else(|e| panic!("{name}: O, K and T pay: {e}"));
+            let spent = outpoints(&spent_by(&w, purpose, &known, &seedelf, &pay));
+            println!("{name}: spent {spent:?}");
+            if spent != expected {
+                wrong.push(format!("{name}: spent {spent:?}, not O, K and T"));
+            }
+        }
+        // B. O 5 ₳; K1, K2 plain ways back of 4.71 ₳; T a 9 ₳ token pool box's way back, mixed, 8.65 ₳ and its token.
+        // 11 ₳ out: O and T pay with one box.
+        let k1 = owned(&w, 0x62, 0, 4_710_000, &[]);
+        let k2 = owned(&w, 0x63, 0, 4_710_000, &[]);
+        let t = owned(&w, 0x71, 0, 8_650_000, &[("pooltoken", 1)]);
+        let known: Vec<(&UtxoResponse, Class)> = vec![
+            (&o, class("public:0", Origin::Own)),
+            (&k1, class(&format!("box:{}", k1.tx_hash), Origin::Lovejoin)),
+            (&k2, class(&format!("box:{}", k2.tx_hash), Origin::Lovejoin)),
+            (&t, class(&format!("box:{}", t.tx_hash), Origin::Mixed)),
+        ];
+        let seedelf = paying(11_000_000);
+        let one_box = outpoints(&[o.clone(), t.clone()]);
+        for (name, purpose, pay) in [
+            ("B: a Send of 11 ₳ to a Seedelf", Purpose::Pay, Vec::new()),
+            (
+                "B: a Make public of 11 ₳",
+                Purpose::Pay,
+                to_address(11_000_000),
+            ),
+            (
+                "B: a new session's funding of 6 ₳ and its 5 ₳ collateral",
+                Purpose::Fund {
+                    session: Some("session:7".into()),
+                },
+                funding(6_000_000),
+            ),
+        ] {
+            pays_with(&w, &[o.clone(), t.clone()], &seedelf, &pay)
+                .unwrap_or_else(|e| panic!("{name}: O and T pay: {e}"));
+            let spent = outpoints(&spent_by(&w, purpose, &known, &seedelf, &pay));
+            println!("{name}: spent {spent:?}");
+            if spent != one_box {
+                wrong.push(format!(
+                    "{name}: spent {spent:?}, two boxes where O and T, one, pay"
+                ));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "a token pool's way back left out of the box order:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Chunk 51, l5merge#2: with every box whose making the wallet knows before one of unknown making, a balance of U
+    /// (150 ₳ made private, with a token), W (199.7 ₳, a big box of unknown making) and 25 plain or mixed ways back of
+    /// 4.71 ₳ couldn't pay 300 ₳ in one transaction: U and the 25 fell short, and with W too were more inputs than one
+    /// transaction spends, so the Send went in parts merging 19 boxes, and two payments at once were refused, where
+    /// 1e1b0647 spent U and W. As few boxes of unknown making as pay, then as few boxes: U and W.
+    #[test]
+    fn a_spend_one_transaction_of_u_and_w_paid_still_goes_in_one() {
+        let w = world();
+        let u = owned(&w, 0x01, 0, 150_000_000, &[("tok", 5)]);
+        let big = owned(&w, 0x02, 0, 199_700_000, &[]);
+        let small: Vec<UtxoResponse> = (0..25u8)
+            .map(|i| owned(&w, 0x10 + i, 0, 4_710_000, &[]))
+            .collect();
+        let with = |first: &UtxoResponse, k: usize| -> Vec<UtxoResponse> {
+            std::iter::once(first.clone())
+                .chain(small[..k].iter().cloned())
+                .collect()
+        };
+        let one = paying(300_000_000);
+        let two = [paying(150_000_000), paying(150_000_000)];
+        let send_from = |inputs: &[UtxoResponse], payments: &[Payment]| {
+            build::transfer_from(&w.chain, inputs, payments, &w.owner, w.signer)
+                .and_then(|s| s.estimate())
+                .map(|_| ())
+        };
+        // The premises: U and W pay; U beside 21 of the small boxes is short, beside 22 more than one transaction
+        // spends.
+        for payments in [std::slice::from_ref(&one), &two[..]] {
+            send_from(&[u.clone(), big.clone()], payments).expect("U and W pay");
+            assert!(build::is_short(
+                &send_from(&with(&u, 21), payments).unwrap_err()
+            ));
+            assert!(build::is_too_many(
+                &send_from(&with(&u, 22), payments).unwrap_err()
+            ));
+        }
+        let mut wrong = Vec::new();
+        for small_origin in [Origin::Mixed, Origin::Lovejoin] {
+            let mut known: Vec<(&UtxoResponse, Class)> = vec![
+                (&u, class("public:0", Origin::Own)),
+                (
+                    &big,
+                    class(
+                        &format!("box:{0}+unknown:{0}", big.tx_hash),
+                        Origin::Lovejoin,
+                    ),
+                ),
+            ];
+            known.extend(
+                small
+                    .iter()
+                    .map(|k| (k, class(&format!("box:{}", k.tx_hash), small_origin))),
+            );
+            let available: Vec<UtxoResponse> = known.iter().map(|(u, _)| (*u).clone()).collect();
+            let h = histories(Purpose::Pay, &known);
+            let spends: [(&str, Vec<Payment>, Vec<AddressPayment>); 3] = [
+                (
+                    "a Send to one Seedelf, 300 ₳",
+                    vec![one.clone()],
+                    Vec::new(),
+                ),
+                (
+                    "a Send to two Seedelfs, 150 ₳ each",
+                    two.to_vec(),
+                    Vec::new(),
+                ),
+                (
+                    "a Make public of 300 ₳",
+                    Vec::new(),
+                    to_address(300_000_000),
+                ),
+            ];
+            for (name, payments, to) in spends {
+                let built = if to.is_empty() {
+                    build::transfer_apart(&w.chain, &available, &h, &payments, &w.owner, w.signer)
+                } else {
+                    build::sweep_many_apart(&w.chain, &available, &h, &to, &w.owner, w.signer)
+                };
+                let line = match built {
+                    Ok(spend)
+                        if outpoints(&spend.inputs()) == outpoints(&[u.clone(), big.clone()]) =>
+                    {
+                        continue;
+                    }
+                    Ok(spend) => format!(
+                        "{name}, the small boxes {small_origin:?}: built with {} inputs",
+                        spend.inputs().len()
+                    ),
+                    Err(e) => format!("{name}, the small boxes {small_origin:?}: refused: {e}"),
+                };
+                println!("{line}");
+                wrong.push(line);
+            }
+            let fund = histories(
+                Purpose::Fund {
+                    session: Some("session:7".into()),
+                },
+                &known,
+            );
+            let name = "a new session's funding of 295 ₳ and its 5 ₳ collateral";
+            match build::sweep_many_apart(
+                &w.chain,
+                &available,
+                &fund,
+                &funding(295_000_000),
+                &w.owner,
+                w.signer,
+            ) {
+                Ok(spend) if outpoints(&spend.inputs()) == outpoints(&[u.clone(), big.clone()]) => {
+                }
+                Ok(spend) => wrong.push(format!(
+                    "{name}, the small boxes {small_origin:?}: built with {} inputs",
+                    spend.inputs().len()
+                )),
+                Err(e) => wrong.push(format!(
+                    "{name}, the small boxes {small_origin:?}: refused: {e}"
+                )),
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "a spend U and W paid in one transaction no longer builds as one:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Chunk 51, l5merge#3 and l5still#2: where merge order c built with a plain box, its choice of as many boxes with
+    /// a mixed one regrew c's other inputs, so a mixed box smaller than the plain one took more of them: more payments
+    /// received merged (more payers tied, more fee), or, for a funding, another session's money the plain box's build
+    /// left alone. A mixed box goes first among as many only with no more of the other inputs. 25 payments received of
+    /// 2 ₳; L, a plain way back of 9.71 ₳, or P, a merged one of two boxes (`box:<a>+box:<b>`) of 19.42 ₳; X, mixed,
+    /// 4.71 ₳: 43 ₳ out takes L (or P) and as few payments as pay beside it, never X and more.
+    #[test]
+    fn at_the_same_box_count_a_mixed_box_takes_no_more_of_the_other_inputs() {
+        let w = world();
+        let received: Vec<(UtxoResponse, Class)> = (0..25u8)
+            .map(|i| {
+                let u = owned(&w, 0x50 + i, 0, 2_000_000, &[]);
+                let c = received_class(&u);
+                (u, c)
+            })
+            .collect();
+        let payments: Vec<UtxoResponse> = received.iter().map(|(u, _)| u.clone()).collect();
+        let mixed = owned(&w, 0x40, 0, 4_710_000, &[]);
+        let mixed_class = class(&format!("box:{}", mixed.tx_hash), Origin::Mixed);
+        let l = owned(&w, 0x30, 0, BOX, &[]);
+        let l_class = class(&format!("box:{}", l.tx_hash), Origin::Lovejoin);
+        let p = owned(&w, 0x31, 0, 2 * BOX, &[]);
+        let p_class = class(
+            &format!("box:{}+box:{}", p.tx_hash, hex::encode([0x32u8; 32])),
+            Origin::Lovejoin,
+        );
+        let with = |b: &UtxoResponse, others: &[UtxoResponse]| -> Vec<UtxoResponse> {
+            std::iter::once(b.clone())
+                .chain(others.iter().cloned())
+                .collect()
+        };
+        let mut wrong = Vec::new();
+        let seedelf = paying(43_000_000);
+        for (box_name, plain, plain_class) in [("L", &l, l_class), ("P", &p, p_class)] {
+            for (name, purpose, pay) in [
+                ("a Send of 43 ₳ to a Seedelf", Purpose::Pay, Vec::new()),
+                (
+                    "a Make public of 43 ₳",
+                    Purpose::Pay,
+                    to_address(43_000_000),
+                ),
+                (
+                    "a new session's funding of 38 ₳ and its 5 ₳ collateral",
+                    Purpose::Fund {
+                        session: Some("session:7".into()),
+                    },
+                    funding(38_000_000),
+                ),
+            ] {
+                // The premises: the payments alone run into the input limit, and X pays beside more of them than the
+                // plain box needs.
+                assert!(build::is_too_many(
+                    &pays_with(&w, &payments[..23], &seedelf, &pay).unwrap_err()
+                ));
+                let fewest = |b: &UtxoResponse| {
+                    (0..=21)
+                        .find(|&n| pays_with(&w, &with(b, &payments[..n]), &seedelf, &pay).is_ok())
+                };
+                let beside_plain = fewest(plain).expect("the plain box pays beside some");
+                assert!(fewest(&mixed).is_none_or(|n| n > beside_plain), "{name}");
+                let mut known: Vec<(&UtxoResponse, Class)> =
+                    vec![(plain, plain_class.clone()), (&mixed, mixed_class.clone())];
+                known.extend(received.iter().map(|(u, c)| (u, c.clone())));
+                let spent = outpoints(&spent_by(&w, purpose, &known, &seedelf, &pay));
+                let line = format!(
+                    "{name}, beside {box_name}: {box_name} pays beside {beside_plain} payments; spent {} inputs, \
+                     {box_name}: {}, X: {}",
+                    spent.len(),
+                    spent.contains(&one(plain)[0]),
+                    spent.contains(&one(&mixed)[0]),
+                );
+                println!("{line}");
+                if spent.len() > beside_plain + 1 || !spent.contains(&one(plain)[0]) {
+                    wrong.push(line);
+                }
+            }
+        }
+        // A new session's funding of 36 ₳ and its 5 ₳ collateral, beside 17 payments received of 2 ₳ and 6 UTxOs of
+        // another session's money of 1.5 ₳ (taken only where nothing else pays): L and the 17 pay, with none of it.
+        let others_session: Vec<(UtxoResponse, Class)> = (0..6u64)
+            .map(|i| {
+                let u = owned(&w, 0x90, i, 1_500_000, &[]);
+                (u, class("session:3", Origin::Session))
+            })
+            .collect();
+        let pay = funding(36_000_000);
+        let seventeen: Vec<UtxoResponse> = payments[..17].to_vec();
+        let mut by_count = seventeen.clone();
+        by_count.extend(others_session.iter().map(|(u, _)| u.clone()));
+        assert!(build::is_short(
+            &pays_with(&w, &by_count[..22], &seedelf, &pay).unwrap_err()
+        ));
+        assert!(build::is_too_many(
+            &pays_with(&w, &by_count[..23], &seedelf, &pay).unwrap_err()
+        ));
+        pays_with(&w, &with(&l, &seventeen), &seedelf, &pay).expect("L and the 17 pay");
+        assert!(build::is_short(
+            &pays_with(&w, &with(&mixed, &seventeen), &seedelf, &pay).unwrap_err()
+        ));
+        let mut known: Vec<(&UtxoResponse, Class)> = vec![
+            (&l, class(&format!("box:{}", l.tx_hash), Origin::Lovejoin)),
+            (&mixed, mixed_class.clone()),
+        ];
+        known.extend(received[..17].iter().map(|(u, c)| (u, c.clone())));
+        known.extend(others_session.iter().map(|(u, c)| (u, c.clone())));
+        let spent = spent_by(
+            &w,
+            Purpose::Fund {
+                session: Some("session:7".into()),
+            },
+            &known,
+            &seedelf,
+            &pay,
+        );
+        let sessions = spent
+            .iter()
+            .filter(|u| u.tx_hash == hex::encode([0x90u8; 32]))
+            .count();
+        let line = format!(
+            "a new session's funding of 36 ₳ and its 5 ₳ collateral: spent {} inputs, L: {}, X: {}, {sessions} of \
+             another session's money",
+            spent.len(),
+            outpoints(&spent).contains(&one(&l)[0]),
+            outpoints(&spent).contains(&one(&mixed)[0]),
+        );
+        println!("{line}");
+        if sessions > 0 {
+            wrong.push(line);
+        }
+        assert!(
+            wrong.is_empty(),
+            "a mixed box's choice took more of the other inputs than the plain box's build:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Chunk 51, l5still#3: one box that pays alone ranked P, a plain way back (`box:<p>`, origin lovejoin), level with
+    /// W, one of unknown making (`box:<w>+unknown:<w>`, origin lovejoin), and took the smaller, where merging and the
+    /// escape hatch take P first. A funding, a top-up, a Send and a Make public take P, whatever the sizes; a stealth
+    /// mint keeps its own order, which puts them level (l3rank#3, as decided).
+    #[test]
+    fn one_box_paying_takes_a_plain_box_before_one_of_unknown_making_whatever_the_sizes() {
+        let w = world();
+        let seedelf = paying(3_000_000);
+        let spends: Vec<(&str, Purpose, Vec<AddressPayment>)> = vec![
+            (
+                "a new session's funding of 2 ₳ and its 5 ₳ collateral",
+                Purpose::Fund {
+                    session: Some("session:7".into()),
+                },
+                funding(2_000_000),
+            ),
+            (
+                "a site's top-up of 2 ₳",
+                Purpose::Fund {
+                    session: Some("session:3".into()),
+                },
+                to_address(2_000_000),
+            ),
+            ("a Make public of 3 ₳", Purpose::Pay, to_address(3_000_000)),
+            ("a Send of 3 ₳ to a Seedelf", Purpose::Pay, Vec::new()),
+        ];
+        let mut wrong: Vec<String> = Vec::new();
+        for unplaced_smaller in [true, false] {
+            let (unplaced_lovelace, plain_lovelace) = if unplaced_smaller {
+                (BOX - 300, BOX)
+            } else {
+                (BOX, BOX - 300)
+            };
+            let unplaced = owned(&w, 0x30, 0, unplaced_lovelace, &[]);
+            let plain = owned(&w, 0x41, 0, plain_lovelace, &[]);
+            let unplaced_class = class(
+                &format!("box:{0}+unknown:{0}", unplaced.tx_hash),
+                Origin::Lovejoin,
+            );
+            let plain_class = class(&format!("box:{}", plain.tx_hash), Origin::Lovejoin);
+            let known = [(&unplaced, unplaced_class), (&plain, plain_class)];
+            for (name, purpose, pay) in &spends {
+                let spent = outpoints(&spent_by(&w, purpose.clone(), &known, &seedelf, pay));
+                println!(
+                    "{name}, W smaller: {unplaced_smaller}: spent W: {}, spent P: {}",
+                    spent == one(&unplaced),
+                    spent == one(&plain)
+                );
+                if spent != one(&plain) {
+                    wrong.push(format!(
+                        "{name}, W smaller: {unplaced_smaller}: spent {spent:?}"
+                    ));
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "spent W where P pays alone:\n{}",
+            wrong.join("\n")
+        );
     }
 
     #[test]

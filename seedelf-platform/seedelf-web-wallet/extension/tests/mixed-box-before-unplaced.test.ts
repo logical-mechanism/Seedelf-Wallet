@@ -163,10 +163,11 @@ describe("a top-up and a Send that one box pays take a box a mix moved before on
   });
 });
 
-// Chunk 51, l4code#1, the lead's call: where boxes must merge, a spend takes as few as pay, the largest first, a mixed
-// one first among as many, and a box of unknown making after every other box (core's box_rank). Round four's ranks put
-// W, the larger, ahead of a plain box once the mixed one was in. The WebAssembly must be rebuilt with this round's core.
-describe("a Send that must merge boxes takes one of unknown making after every other box (chunk 51, l4code#1)", () => {
+// Chunk 51, l4code#1, the lead's call, as round six's box rule has it: where boxes must merge, a spend takes a box of
+// unknown making only where the others don't pay without it, then as few boxes as pay, the largest first, a mixed one
+// first among as many (core's box_rank). Round four's ranks put W, the larger, ahead of a plain box once the mixed one
+// was in. The WebAssembly must be rebuilt with this round's core.
+describe("a Send that must merge boxes takes none of unknown making where the others pay (chunk 51, l4code#1)", () => {
   it("X (mixed) and P (plain), 4.7 ₳ each, pay a Send of 7 ₳ before W (unknown making, 6 ₳) [needs the rebuild]", CHAINS, async () => {
     const { t, w, x } = await wAndX(false, ["4700000", "6000000"]);
     // P: a way back as 1.9.1 kept it, with no record of what made its box, so a plain box.
