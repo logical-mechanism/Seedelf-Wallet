@@ -5,7 +5,7 @@
 // the balances, and where Staking offers it.
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { DelegationRow, StakeInfo } from "../src/shared/rpc";
@@ -14,6 +14,15 @@ import { PreferencesContext } from "../src/ui/preferences";
 import { DELEGATIONS_SHOWN, DelegationList, delegationYears, firstDelegations } from "../src/ui/screens/Delegations";
 import { Staking } from "../src/ui/screens/Staking";
 import { delegationsPreprod } from "./fakes";
+
+// The recorded vote's DRep, named as the list that ships with the wallet named it then. cogno drep left the list in
+// 1.9.2's refresh (it asks directories not to list it, CIP-119's doNotList), so the list here keeps it: the page's
+// words are what this tests, not who's on today's list.
+vi.mock("../src/dreps/preprod.json", async (original) => {
+  const list = (await original<{ default: { recorded: string; dreps: string[][] } }>()).default;
+  const cogno = ["drep1ytah77nvma8thq037ynn9sqf59rpsjfpnq2a0rtltfnyvjchvqhux", "cogno drep"];
+  return { default: { ...list, dreps: list.dreps.some(([id]) => id === cogno[0]) ? list.dreps : [...list.dreps, cogno] } };
+});
 
 const LOGIC = "pool1rccstu3l9ty3k0a5cd06fl3szsss9r34dcg5j38fqgq9kvng0tg";
 const GRADA = "pool1nmfr5j5rnqndprtazre802glpc3h865sy50mxdny65kfgf3e5eh";
