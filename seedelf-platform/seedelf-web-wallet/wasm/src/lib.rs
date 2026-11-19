@@ -1685,9 +1685,10 @@ pub mod api {
     }
 
     /// Builds and signs a payment from the Cardano account to each of
-    /// `request.payments`: key addresses, or Seedelfs, each under a fresh
-    /// re-randomization of its register (`build::account_send_many`). The
-    /// UTxOs are checked and signed for as for a move-in, inside this module.
+    /// `request.payments`: addresses on this network (`payable_address`), or
+    /// Seedelfs, each under a fresh re-randomization of its register
+    /// (`build::account_send_many`). The UTxOs are checked and signed for as
+    /// for a move-in, inside this module.
     pub fn account_send(account: &CardanoAccount, request: SendRequest) -> Result<SendResult> {
         let chain = chain_of(&request.network, &request.params)?;
         let network_flag = chain.network_flag;
@@ -2123,10 +2124,11 @@ pub mod api {
 
     /// A Seedelf UTxO's history, as the extension reads it from its sealed
     /// history (activity.ts): its class, and where its money came from:
-    /// `own`, `received`, `session`, `lovejoin`, `mixed` (a box's way back the
-    /// worker recorded a mix moving: chunk 51, the owner's answer 4 to B15) or
-    /// `unknown`. Selection keeps different classes apart where it can
-    /// (`build::Histories`).
+    /// `own`, `received`, `session`, `change` (an earlier private spend's
+    /// change naming no public account and no session: chunk 51, l2rank#6),
+    /// `lovejoin`, `mixed` (a box's way back the worker recorded a mix moving:
+    /// chunk 51, the owner's answer 4 to B15) or `unknown`. Selection keeps
+    /// different classes apart where it can (`build::Histories`).
     #[derive(Deserialize, Clone, Debug)]
     pub struct ClassIn {
         pub id: String,
@@ -2150,6 +2152,7 @@ pub mod api {
                     "own" => Origin::Own,
                     "received" => Origin::Received,
                     "session" => Origin::Session,
+                    "change" => Origin::Change,
                     "lovejoin" => Origin::Lovejoin,
                     "mixed" => Origin::Mixed,
                     "unknown" => Origin::Unknown,
@@ -2180,7 +2183,8 @@ pub mod api {
         {
             // `elsewhere:<tx>`: what a spend of the phrase's made in another profile left, ranked as a session's money
             // (chunk 51, gap-g9#1). `change:<tx>`: what a spend of the wallet's own left, tied to that spend in public
-            // (chunk 51, the owner's answer 2 to B15).
+            // (chunk 51, the owner's answer 2 to B15), which `merged_class` names `change` where nothing else it
+            // carries ranks it as a session's (l2rank#6).
             "session"
         } else if part.starts_with("box:") {
             "lovejoin"
@@ -2190,7 +2194,8 @@ pub mod api {
     }
 
     /// The history of money of `classes` spent together, spelled as the worker spells it (shared/histories.ts
-    /// `merged`): each history once, sorted, joined by `+`, its origin the tie that reaches furthest.
+    /// `merged`): each history once, sorted, joined by `+`, its origin the tie that reaches furthest, but `change` for
+    /// a spend's change that names no public account, no session and no spend made elsewhere (chunk 51, l2rank#6).
     fn merged_class<'a>(classes: impl Iterator<Item = &'a ClassIn>) -> ClassIn {
         let mut parts: Vec<&str> = classes.flat_map(|c| c.id.split('+')).collect();
         parts.sort_unstable();
@@ -2199,6 +2204,17 @@ pub mod api {
             .into_iter()
             .find(|o| parts.iter().any(|p| origin_of(p) == *o))
             .unwrap_or("unknown");
+        let later = |p: &&str| {
+            p.starts_with("session:") || p.starts_with("elsewhere:") || origin_of(p) == "own"
+        };
+        let origin = if origin == "session"
+            && parts.iter().any(|p| p.starts_with("change:"))
+            && !parts.iter().any(later)
+        {
+            "change"
+        } else {
+            origin
+        };
         ClassIn {
             id: if parts.is_empty() {
                 build::UNKNOWN_CLASS.to_string()
@@ -2270,19 +2286,71 @@ pub mod api {
             assert_eq!(h.tier_of(&mixed), h.tier_of(&old));
         }
 
-        /// Chunk 51, the owner's answer 2 to B15 (money#2, own#1): what a spend of the wallet's own left carries a
-        /// `change:<tx>` part, which ranks as a session's money, so a stealth mint or a funding takes it after money
-        /// others paid and a box back from a mix. A spend of a box back from a mix leaves no box a mix brought back.
+        /// Chunk 51, the owner's answer 2 to B15 (money#2, own#1) and of 2026-11-18 (l2rank#6): what a spend of the
+        /// wallet's own left carries a `change:<tx>` part, and reads `change` where it names no public account, no
+        /// session and no spend made elsewhere, as the worker merges it: a stealth mint or a funding takes it after
+        /// money others paid and a box back from a mix, and, nothing fresher paying, before money made private. A
+        /// spend of a box back from a mix leaves no box a mix brought back.
         #[test]
-        fn money_a_spend_of_the_wallets_left_merges_as_a_sessions() {
+        fn money_a_spend_of_the_wallets_left_merges_as_change() {
             let change = format!("change:{}", "c1".repeat(32));
-            assert_eq!(origin_of(&change), "session");
             let boxed = format!("box:{}", "b1".repeat(32));
             let merged = merged_class([class(&boxed, "mixed")].iter());
             assert_eq!(merged.origin, "lovejoin");
-            let merged = merged_class([class(&boxed, "mixed"), class(&change, "session")].iter());
+            let merged = merged_class([class(&boxed, "mixed"), class(&change, "change")].iter());
             assert_eq!(merged.id, format!("{boxed}+{change}"));
-            assert_eq!(merged.origin, "session");
+            assert_eq!(merged.origin, "change");
+            let received = format!("received:{}", "d1".repeat(32));
+            let merged =
+                merged_class([class(&change, "change"), class(&received, "received")].iter());
+            assert_eq!(merged.origin, "change");
+            assert_eq!(
+                merged_class([class("unknown", "unknown"), class(&change, "change")].iter()).origin,
+                "change"
+            );
+            // Naming money made private, a session, or a spend made elsewhere, it ranks with that money, as a session's.
+            for other in [
+                "public:0",
+                "public",
+                "session:1",
+                &format!("elsewhere:{}", "fb".repeat(32)),
+            ] {
+                let merged =
+                    merged_class([class(&change, "change"), class(other, "session")].iter());
+                assert_eq!(merged.origin, "session", "change with {other}");
+            }
+        }
+
+        /// Chunk 51, l2rank#6: `change` reads as Origin::Change, which a stealth mint and a funding take after money
+        /// others paid and before money made private, and a Send with a session's money.
+        #[test]
+        fn a_spends_change_ranks_before_money_made_private_for_a_mint_and_a_funding() {
+            let (change, own, received, session) = (at(0xc1), at(0x01), at(0x02), at(0x03));
+            let classes: Classes = [
+                (
+                    &change,
+                    class(&format!("change:{}", change.tx_hash), "change"),
+                ),
+                (&own, class("public:0", "own")),
+                (
+                    &received,
+                    class(&format!("received:{}", received.tx_hash), "received"),
+                ),
+                (&session, class("session:4", "session")),
+            ]
+            .into_iter()
+            .map(|(u, c)| (format!("{}#0", u.tx_hash), c))
+            .collect();
+            for purpose in [Purpose::Mint, Purpose::Fund { session: None }] {
+                let h = histories(purpose.clone(), &classes).unwrap();
+                assert_eq!(h.class_of(&change).origin, Origin::Change);
+                assert!(h.rank_of(&received) < h.rank_of(&change), "{purpose:?}");
+                assert!(h.rank_of(&change) < h.rank_of(&own), "{purpose:?}");
+                assert!(h.rank_of(&own) < h.rank_of(&session), "{purpose:?}");
+                assert_eq!(h.tier_of(&change), h.tier_of(&own), "{purpose:?}");
+            }
+            let h = histories(Purpose::Pay, &classes).unwrap();
+            assert_eq!(h.rank_of(&change), h.rank_of(&session));
         }
     }
 
@@ -5247,7 +5315,7 @@ pub mod api {
         pub params: serde_json::Value,
         /// The contract UTxO holding the seedelf, as Koios returns it.
         pub utxo: UtxoResponse,
-        /// Where its ADA goes: a bech32 key address, or `null` for the Seedelf balance.
+        /// Where its ADA goes: a bech32 address on this network (`payable_address`), or `null` for the Seedelf balance.
         pub to: Option<String>,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
