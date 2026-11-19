@@ -847,7 +847,9 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
       });
       await unseal(deps, w);
     });
-    if (w.summary) await deps.activity?.sent(w.network, shown(seen), w.summary).catch(() => undefined);
+    // Its history, pinned as the turns are: under another phrase by the time the history's queue reaches it, nothing
+    // is written (chunk 51, own#6).
+    if (w.summary) await deps.activity?.sent(w.network, shown(seen), w.summary, pin).catch(() => undefined);
     // A Bootstrap from the public account is its deposit alone: seen here, it went in, whatever a later pool read
     // lists there (MERGED-5). Telling it is never the watch's failure.
     if (w.kind === "lovejoin-mix") await deps.depositLanded?.(w.network, w.txHash).catch(() => undefined);
@@ -936,7 +938,7 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
           pin(keys);
           return dropKept(session, w);
         });
-        if (summary) await deps.activity?.sent(w.network, shown(current), summary).catch(() => undefined);
+        if (summary) await deps.activity?.sent(w.network, shown(current), summary, pin).catch(() => undefined);
       }
     } catch (e) {
       // Refused as spent: most likely this very one, on its way (so too after the data layer's connection was
