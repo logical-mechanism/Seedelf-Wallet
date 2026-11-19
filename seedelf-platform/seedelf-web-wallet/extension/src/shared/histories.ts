@@ -21,11 +21,15 @@
 //                  "mixed" where the wallet knows the box is mixed (its own
 //                  chain's last mix made it, or Koios said a mix did), on its
 //                  way back alone (`mixedBox`): only such a box goes first
-//                  for a stealth mint, and a funding and a Send take it before
-//                  any other box (l3rank#3). Anything merged with it, a
-//                  spend's change included, reads "lovejoin", as every box
-//                  brought back before that record was kept (chunk 51, the
-//                  owner's answer 4 to B15). One whose making the wallet can't
+//                  for a stealth mint, a funding and a Send take it before
+//                  any other box that pays alone (l3rank#3), and merging takes
+//                  it first among as many boxes (core's box_rank). Merged, a
+//                  box is named by the furthest tie it carries (`merged`):
+//                  beside other boxes or Unknown money it reads "lovejoin", as
+//                  every box brought back before that record was kept (chunk
+//                  51, the owner's answer 4 to B15); a spend's change of it
+//                  reads "change", and a way back a payment received paid,
+//                  "received" (l4docs#8). One whose making the wallet can't
 //                  place carries its own unknown:<tx> too (`unplacedBox`):
 //                  still a box, tagged Unknown beside (chunk 51, round three)
 //   unknown        nothing on the device says (a restore, or older than it keeps)
@@ -78,8 +82,10 @@ export const unknownIn = (txHash: string): HistoryClass => ({ id: `unknown:${txH
 /**
  * The way back, withdraw `txHash`, of a box whose making the wallet can't place: one someone else put in (a register
  * copied as found included), one Koios hasn't said of, one nobody asked about. Still a box to selection, taken last and
- * one at a time, and after money others paid by a stealth mint and a funding, tagged Back from Lovejoin and Unknown, and
- * a box to a review (chunk 51, round three: l2rank#1, l2time#1, l2time#3, l2still#1).
+ * one at a time, merged after every other box (core's box_rank, l4code#1), and after money others paid by a stealth
+ * mint and a funding, tagged Back from Lovejoin and Unknown, and a box to a review (chunk 51, round three: l2rank#1,
+ * l2time#1, l2time#3, l2still#1). Unless money of another history paid its way back, another box's or money of no
+ * history aside: it reads as that money then (`merged`, l3rank#2).
  */
 export const unplacedBox = (txHash: string): HistoryClass => merged([boxFrom(txHash), unknownIn(txHash)]);
 /**
@@ -93,7 +99,8 @@ export const spentElsewhere = (txHash: string): HistoryClass => ({ id: `elsewher
  * change: that money is tied in the open to what the spend paid (a new Seedelf, a pool's start, a payment), so a
  * stealth mint or a funding takes it after money others paid and a box a mix brought back (chunk 51, the owner's
  * answer 2 to B15), and, nothing fresher paying, before money made private (`merged`; the owner's answer of
- * 2026-11-18, l2rank#6). A Make public to one of the user's own accounts adds that account's instead.
+ * 2026-11-18, l2rank#6). A Make public to one of the user's own accounts adds that account's instead, from this release
+ * on: an earlier version noted no account, so its Make public reads as change whoever it paid (l3rank#1).
  */
 export const leftBy = (txHash: string): HistoryClass => ({ id: `change:${txHash}`, origin: "change" });
 
@@ -185,8 +192,9 @@ export function merged(classes: HistoryClass[]): HistoryClass {
  * What a private spend of the wallet's own, transaction `txHash`, left in the private balance reads as, its history
  * kept as `kept` (activity.ts classOf): with the spend's own part (`leftBy`) where that history was kept before the part
  * was, as every spend's before this release, so it ranks and is tagged as change; never where it names a public
- * account, which a Make public to one of the user's own accounts names instead of the part. Its origin is what `merged`
- * gives its parts today. Read so, it asks nothing and keeps nothing new (chunk 51, l2time#2, l2rank#6).
+ * account, which a Make public to one of the user's own accounts names instead of the part from this release on (one an
+ * earlier version sent names none, so it reads as change, l3rank#1). Its origin is what `merged` gives its parts
+ * today. Read so, it asks nothing and keeps nothing new (chunk 51, l2time#2, l2rank#6).
  */
 export function spendLeft(kept: HistoryClass, txHash: string): HistoryClass {
   const all = parts(kept);
