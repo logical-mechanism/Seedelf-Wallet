@@ -56,7 +56,7 @@ Change the version, then run the command below in the repository's root.
 
 ```bash
 # set the version being released
-version="0.7.0"
+version="0.7.1"
 # update the toml files
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-platform/Cargo.toml
@@ -103,7 +103,7 @@ Version 1 of the contracts (variant 1 in `seedelf-core` and the CLI's `--variant
 To redo a release, delete its tag locally and on GitHub, then tag and push it again as above. A version already published to crates.io can't be published again.
 
 ```bash
-version="0.7.0"
+version="0.7.1"
 git tag -d ${version}
 git push origin --delete ${version}
 ```
