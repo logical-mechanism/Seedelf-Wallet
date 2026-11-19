@@ -959,6 +959,7 @@ fn run(shape: &Shape, ask: &Ask, sk: blstrs::Scalar, withdraw: bool, recorded: &
             }],
             classes: Default::default(),
             carry: false,
+            most: false,
             seed: None,
             evaluation: None,
         };

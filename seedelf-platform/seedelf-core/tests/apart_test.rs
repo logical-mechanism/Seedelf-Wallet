@@ -516,16 +516,21 @@ fn a_bundle_that_costs_more_than_it_adds_never_stops_what_the_clis_order_pays() 
     assert!(build::sweep_many(&w.chain, &available, &pay(39_300_000), &w.owner, w.signer).is_err());
 }
 
-/// Chunk 51, r2tests#5 (r2a#2's other half): short with everything is refused
-/// as short, whatever another order ran into, as when the search ended there.
-/// A caller moves on only on a shortfall: the web wallet's build_transfer and
-/// withdraw try with more, and its parts planner splits on it. Here 20 ₳ of the
-/// user's own and a bundle of 200 tokens at its least on chain made public too,
-/// and a stranger's pile of 400 tokens with 200 ₳, which makes any transaction
-/// spending it too large. The purpose's order takes the bundle before the pile
-/// and is short at every step; the next takes the pile second and is too large.
+/// Chunk 51, r2tests#5 (r2a#2's other half), as r2a#3 leaves it. Short with
+/// everything is refused as short, whatever another order ran into, as when the
+/// search ended there: a caller moves on only on a shortfall (the web wallet's
+/// build_transfer and withdraw try with more), and splits a payment in parts on
+/// one too large. Here 20 ₳ of the user's own and a bundle of 200 tokens at its
+/// least on chain made public too, and a stranger's pile of 400 tokens with 200
+/// ₳, which makes any transaction spending it too large. The purpose's order
+/// took the bundle before the pile and was short at every step, so the payment
+/// was refused as short. The bundle adds less than nothing, so every order now
+/// takes it last, after the ADA and the pile, which pay but are too large: the
+/// refusal is their size, and the web wallet goes on to parts. With such a UTxO
+/// last, an order is short whole only where every choice is short, so this
+/// rule now matters only for rows no honest index gives.
 #[test]
-fn short_with_everything_stays_short_when_another_order_was_too_large() {
+fn a_payment_only_too_large_isnt_called_short_for_a_utxo_that_adds_less_than_nothing() {
     let w = world();
     let a = owned(&w, 0x01, 0, 20 * ADA, &[]);
     let names: Vec<Vec<u8>> = (0..200u16).map(|i| vec![i as u8]).collect();
@@ -560,6 +565,7 @@ fn short_with_everything_stays_short_when_another_order_was_too_large() {
     let held: u64 = bundle.value.parse().unwrap();
     let cost = both_least - pile_least - held;
     assert!(cost > 2 * ADA, "{cost}");
+    assert!(build::adds(&w.chain.params, &bundle).unwrap() < 0);
     // So the user's ADA and the pile pay with half of that to spare, and all
     // three are short by the other half.
     let payment = pay(20 * ADA + 200 * ADA - pile_least - cost / 2);
@@ -579,9 +585,117 @@ fn short_with_everything_stays_short_when_another_order_was_too_large() {
 
     let e = build::sweep_many_apart(&w.chain, &available, &h, &payment, &w.owner, w.signer)
         .err()
-        .expect("nothing pays");
-    assert!(build::is_short(&e), "{e}");
-    assert!(e.to_string().contains("Not enough ADA"), "{e}");
+        .expect("nothing pays in one transaction");
+    assert!(build::is_too_large(&e), "{e}");
+    assert!(!build::is_short(&e), "{e}");
+}
+
+/// Chunk 51, r2a#3 (its verifier's test, kept as stranger_token_pile_test.rs): a UTxO whose
+/// tokens need more change than it holds adds less than nothing (`build::adds`:
+/// its ADA less what its tokens need back in the Seedelf balance, 20 to an
+/// output), so every order takes it after everything else, boxes included. A
+/// stranger's 200 tokens at their least on chain (received, 4.07 ₳), 20 ₳ made
+/// private and four boxes back from Lovejoin, and 35 ₳ made public: the
+/// purpose's order put the payment received ahead of the boxes and spent all
+/// six, holding back 14.5 ₳ of the user's own ADA as the least of the
+/// stranger's tokens in 10 outputs, and merging four boxes where two pay. A
+/// session's funding ranks received money higher still, and did the same.
+#[test]
+fn a_utxo_that_adds_less_than_nothing_is_spent_after_everything_else() {
+    let w = world();
+    let names: Vec<Vec<u8>> = (0..200u16).map(|i| vec![i as u8]).collect();
+    let o1 = owned(&w, 0x01, 0, 20 * ADA, &[]);
+    let d = holding_names(owned(&w, 0xd0, 0, least_on_chain(&w, &names), &[]), &names);
+    let boxes: Vec<UtxoResponse> = (0..4).map(|i| owned(&w, 0xb0, i, BOX, &[])).collect();
+    let available: Vec<UtxoResponse> = [o1.clone(), d.clone()]
+        .into_iter()
+        .chain(boxes.iter().cloned())
+        .collect();
+    let mut known = vec![(&o1, class("public", Origin::Own)), (&d, received(&d))];
+    known.extend(boxes.iter().map(|b| (b, a_box(b))));
+    assert!(build::adds(&w.chain.params, &d).unwrap() < 0);
+    assert_eq!(
+        build::adds(&w.chain.params, &o1).unwrap(),
+        i128::from(20 * ADA)
+    );
+
+    for (purpose, payment) in [
+        (Purpose::Pay, pay(35 * ADA)),
+        (
+            Purpose::Fund { session: None },
+            funding(30 * ADA, Assets::new()),
+        ),
+    ] {
+        let h = histories(purpose.clone(), &known);
+        let spend = build::sweep_many_apart(&w.chain, &available, &h, &payment, &w.owner, w.signer)
+            .unwrap_or_else(|e| panic!("{purpose:?}: {e}"));
+        let spent = spend.inputs();
+        // The money made private and two boxes pay it, with change of ADA alone.
+        assert!(!spent.iter().any(|u| same(u, &d)), "{purpose:?}");
+        assert!(spent.iter().any(|u| same(u, &o1)), "{purpose:?}");
+        assert_eq!(boxes_in(&boxes, &spent), 2, "{purpose:?}");
+        let built = spend.estimate().unwrap();
+        assert!(built.change_tokens.is_empty(), "{purpose:?}");
+    }
+
+    // Still spent where its tokens are sent: it holds them.
+    let one: Vec<AddressPayment> = vec![AddressPayment {
+        to: key_address(),
+        lovelace: 30 * ADA,
+        tokens: Assets::new()
+            .add(Asset::new(TOKEN_POLICY.to_string(), hex::encode([7u8]), 1).unwrap())
+            .unwrap(),
+    }];
+    let spent = build::sweep_many_apart(
+        &w.chain,
+        &available,
+        &histories(Purpose::Pay, &known),
+        &one,
+        &w.owner,
+        w.signer,
+    )
+    .unwrap()
+    .inputs();
+    assert!(spent.iter().any(|u| same(u, &d)));
+}
+
+/// Chunk 51, r2a#3, the CLI's order (nothing known of any UTxO's history, a
+/// restored wallet's too): ADA alone first, then UTxOs holding tokens, the
+/// most ADA first, so a stranger's pile at more ADA than a UTxO holding one
+/// token came before it. With the pile, no set paid what 20 ₳ and that UTxO
+/// pay, and the payment was refused; keeping histories apart, the same. Now
+/// the pile comes last in both.
+#[test]
+fn the_clis_order_takes_a_utxo_that_adds_less_than_nothing_last() {
+    let w = world();
+    let names: Vec<Vec<u8>> = (0..200u16).map(|i| vec![i as u8]).collect();
+    let o1 = owned(&w, 0x01, 0, 20 * ADA, &[]);
+    let one_token = owned(&w, 0x02, 0, 3 * ADA, &[("nft", 1)]);
+    let d = holding_names(owned(&w, 0xd0, 0, least_on_chain(&w, &names), &[]), &names);
+    assert!(d.value.parse::<u64>().unwrap() > 3 * ADA);
+    let available = vec![o1.clone(), d.clone(), one_token.clone()];
+    let payment = pay(21 * ADA);
+    let paying = vec![o1.clone(), one_token.clone()];
+    build::sweep_many_from(&w.chain, &paying, &payment, &w.owner, w.signer)
+        .unwrap()
+        .estimate()
+        .expect("20 ₳ and the UTxO holding one token pay 21 ₳");
+
+    let blind = build::sweep_many(&w.chain, &available, &payment, &w.owner, w.signer)
+        .unwrap_or_else(|e| panic!("the CLI's order refused what two UTxOs pay: {e}"));
+    assert_eq!(outpoints(&blind.inputs()), outpoints(&paying));
+
+    let h = histories(
+        Purpose::Pay,
+        &[
+            (&o1, class("public", Origin::Own)),
+            (&d, received(&d)),
+            (&one_token, received(&one_token)),
+        ],
+    );
+    let apart = build::sweep_many_apart(&w.chain, &available, &h, &payment, &w.owner, w.signer)
+        .unwrap_or_else(|e| panic!("keeping histories apart refused what two UTxOs pay: {e}"));
+    assert_eq!(outpoints(&apart.inputs()), outpoints(&paying));
 }
 
 /// Merging follows the purpose's order, not the size alone (independent
