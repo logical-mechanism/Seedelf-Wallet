@@ -9,6 +9,15 @@
 | `seedelf_wallet_logo.png` | The same emblem and wordmark in one colour (navy `#011833`) | Print, or single-colour use |
 | `hooded_seed_elf_guardian_icon.png` | Rounded-square app icon with a background | The Chrome Web Store listing's icon ([docs/store/](../docs/store/README.md)) |
 
+**[`cardano-org/`](cardano-org/)** holds the images for Seedelf Wallet's entry in cardano.org's apps directory ([its rules](https://cardano.org/docs/get-involved/add-app/)). cardano.org keeps its own copies: changing them there takes a pull request to `cardano-foundation/cardano-org`.
+
+| File | What it is |
+|---|---|
+| `cardano-org/seedelf-wallet.webp` | The entry's screenshot, 2048 × 1440 px: the private balance, a payment to a Seedelf by name and the public account, side by side on a light background |
+| `cardano-org/seedelf-wallet.png` | The entry's icon: the emblem, centred in 512 × 512 px, transparent background |
+
+`npm run store:images` in `extension/` makes both, with the Chrome Web Store images (`e2e/store-images.spec.ts`).
+
 **Colours taken from the logo:** navy `#011833`, deep navy `#000c2c`, bright teal `#00c4bc`, mid teal `#00a8a0`, deep green-teal `#01836e`. The wallet's colours come from them.
 
 ## For contributors
