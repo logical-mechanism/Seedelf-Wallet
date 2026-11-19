@@ -729,6 +729,7 @@
   "histories.privacy.sessionNames_other": "プライベートセッション {{list}}",
   "histories.privacy.sessions_other": "{{sessions}} が残したお金を使うため、誰でもそのセッションをこのセッションと結び付けられます。",
   "histories.privacy.together": "{{lead}} {{kinds}}をまとめて使います。同じ持ち主のものだと誰にでも分かるため、互いに結び付きます{{lovejoin}}。",
+  "histories.tag.change": "おつり",
   "histories.tag.lovejoin": "Lovejoin から戻りました",
   "histories.tag.madePrivate": "プライベートにしました",
   "histories.tag.madePrivateFrom": "プライベートにしました（アカウント {{number}}）",

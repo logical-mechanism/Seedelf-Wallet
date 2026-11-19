@@ -17,6 +17,7 @@
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
+import { leftBy, madePrivate, merged } from "../shared/histories";
 import type {
   LeftOutUtxo,
   Paid,
@@ -144,11 +145,25 @@ export class WithdrawService {
         ...(histories ? { histories } : {}),
       };
     };
+    // A part's change is tied in the open to what it paid: paying one of the user's own public accounts, it's that
+    // account's money, as money made private from it is; paying anyone else, that part's own, which its recipients know.
+    // Either way the next stealth mint or a funding takes money others paid before it (chunk 51, money#2, own#1; the
+    // owner's answer 2 to B15).
+    const tiedBy = (p: WithdrawResult) => {
+      const to = p.payments.map((x) => destinations.find((d) => d.address === x.to));
+      const accounts = [...new Set(to.flatMap((d) => (d?.ownAccount !== undefined ? [d.ownAccount] : [])))];
+      return [...accounts.map(madePrivate), ...(to.some((d) => d?.ownAccount === undefined) ? [leftBy(p.txHash)] : [])];
+    };
     // Each part kept with its own figures, for the Seedelf history once it's sent; the review shows them added up.
     await keepParts(
       this.deps,
       SESSION_WITHDRAW,
-      parts.map((p) => ({ ...summaryOf(p), txCbor: p.txCbor, seed: p.seed, origin: changeHistory(seen, p.inputs) })),
+      parts.map((p) => ({
+        ...summaryOf(p),
+        txCbor: p.txCbor,
+        seed: p.seed,
+        origin: merged([changeHistory(seen, p.inputs), ...tiedBy(p)]),
+      })),
     );
     const summary = summaryOf(whole(parts, { classes: seen, utxos }));
     return parts.length > 1 ? { ...summary, parts: reviewParts(parts) } : summary;
@@ -198,9 +213,12 @@ export class WithdrawService {
       return d ? { ...token, decimals: d } : token;
     });
     const summary: RemoveSummary = { ...rest, tokens, network, label: seedelfLabel(seedelf), to };
-    // Its ADA back in the private balance has the history of what paid for the Seedelf.
-    const origin = (await classesOf(this.deps, network, [utxo]))[`${utxo.tx_hash}#${utxo.tx_index}`];
-    await keep(this.deps, SESSION_REMOVE, { ...summary, txCbor, seed, ...(origin ? { origin } : {}) });
+    // Its ADA back in the private balance has the history of what paid for the Seedelf, and is tied in the open to the
+    // Seedelf this removes, so the next stealth mint or a funding takes money others paid before it (chunk 51, the
+    // owner's answer 2 to B15).
+    const paidFor = (await classesOf(this.deps, network, [utxo]))[`${utxo.tx_hash}#${utxo.tx_index}`];
+    const origin = merged([...(paidFor ? [paidFor] : []), leftBy(rest.txHash)]);
+    await keep(this.deps, SESSION_REMOVE, { ...summary, txCbor, seed, origin });
     return summary;
   }
 

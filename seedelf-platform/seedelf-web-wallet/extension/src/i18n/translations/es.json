@@ -805,6 +805,7 @@
   "histories.privacy.sessions_one": "Gasta dinero que dejó {{sessions}}, así que cualquiera puede vincular esa sesión con esta.",
   "histories.privacy.sessions_other": "Gasta dinero que dejaron {{sessions}}, así que cualquiera puede vincular esas sesiones con esta.",
   "histories.privacy.together": "{{lead}} a la vez {{kinds}}. Cualquiera puede ver que hay un solo dueño detrás, lo que vincula entre sí todo lo gastado{{lovejoin}}.",
+  "histories.tag.change": "Cambio",
   "histories.tag.lovejoin": "De vuelta de Lovejoin",
   "histories.tag.madePrivate": "Hecho privado",
   "histories.tag.madePrivateFrom": "Hecho privado (cuenta {{number}})",

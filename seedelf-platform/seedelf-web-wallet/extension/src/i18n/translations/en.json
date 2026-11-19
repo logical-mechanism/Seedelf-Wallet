@@ -767,6 +767,7 @@
   "histories.privacy.sessions_one": "It spends money that {{sessions}} left, so anyone can tie that session to this one.",
   "histories.privacy.sessions_other": "It spends money that {{sessions}} left, so anyone can tie those sessions to this one.",
   "histories.privacy.together": "{{lead}} {{kinds}} together. Anyone can see they're one owner's, which ties them to each other{{lovejoin}}.",
+  "histories.tag.change": "Change",
   "histories.tag.lovejoin": "Back from Lovejoin",
   "histories.tag.madePrivate": "Made private",
   "histories.tag.madePrivateFrom": "Made private (account {{number}})",

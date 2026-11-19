@@ -68,6 +68,7 @@ const SHARED_WORDS: Record<string, string> = {
   "accounts.addIt": "a button's label, which the accounts' Koios note names the button by",
   "accounts.checkIt": "a button's label, which the accounts' Koios note names the button by",
   "accounts.lookForNext": "a button's label, which the accounts' Koios note names the button by",
+  "histories.tag.change": "where a UTxO's money came from, as the UTxOs list tags its row",
   "histories.tag.lovejoin": "where a UTxO's money came from, as the UTxOs list tags its row",
   "histories.tag.madePrivate": "where a UTxO's money came from, as the UTxOs list tags its row",
   "histories.tag.madePrivateFrom": "where a UTxO's money came from, as the UTxOs list tags its row",

@@ -1082,6 +1082,11 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     expect(summary).toMatchObject({ from: "private", locked: { deposit: "2000000" } });
     const [withCert, bare] = launch.builds.map((b) => b.built) as [LaunchBuilt, LaunchBuilt];
     expect(bare.pool.id).toBe(withCert.pool.id);
+    // Each build's change is tied to its start in the open, and the history it keeps names that start, so the next
+    // stealth mint or a funding takes money others paid first (chunk 51, money#2; the owner's answer 2 to B15).
+    const kept = (await t.session.get<{ origin?: { id: string }; bare?: { origin?: { id: string } } }>(SESSION_LOVEJOIN_LAUNCH))!;
+    expect(kept.origin?.id.split("+")).toContain(`change:${withCert.txHash}`);
+    expect(kept.bare?.origin?.id.split("+")).toContain(`change:${bare.txHash}`);
     // Without the certificate, it may spend only what the reviewed build does: needing 2 ₳ less, coin selection could
     // pick, and tie, UTxOs the review never showed (launch_apart; chunk 51, t1g#6).
     expect(launch.builds[1]!.utxos!.sort()).toEqual(withCert.inputs!.map((i) => `${i.txHash}#${i.txIndex}`).sort());

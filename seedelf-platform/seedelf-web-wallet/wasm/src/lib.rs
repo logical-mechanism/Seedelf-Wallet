@@ -2123,8 +2123,10 @@ pub mod api {
 
     /// A Seedelf UTxO's history, as the extension reads it from its sealed
     /// history (activity.ts): its class, and where its money came from:
-    /// `own`, `received`, `session`, `lovejoin` or `unknown`. Selection keeps
-    /// different classes apart where it can (`build::Histories`).
+    /// `own`, `received`, `session`, `lovejoin`, `mixed` (a box's way back the
+    /// worker recorded a mix moving: chunk 51, the owner's answer 4 to B15) or
+    /// `unknown`. Selection keeps different classes apart where it can
+    /// (`build::Histories`).
     #[derive(Deserialize, Clone, Debug)]
     pub struct ClassIn {
         pub id: String,
@@ -2149,6 +2151,7 @@ pub mod api {
                     "received" => Origin::Received,
                     "session" => Origin::Session,
                     "lovejoin" => Origin::Lovejoin,
+                    "mixed" => Origin::Mixed,
                     "unknown" => Origin::Unknown,
                     other => bail!("{other} isn't where a UTxO's money came from"),
                 };
@@ -2163,15 +2166,21 @@ pub mod api {
             })
     }
 
-    /// Where a part of a merged class's id came from, as the worker reads it (shared/histories.ts `originOf`).
+    /// Where a part of a merged class's id came from, as the worker reads it (shared/histories.ts `originOf`). None is
+    /// `mixed`: that names a box's way back alone, so anything merged with it, a spend's change included, is no box a
+    /// mix brought back.
     fn origin_of(part: &str) -> &'static str {
         if part == "public" || part.starts_with("public:") {
             "own"
         } else if part.starts_with("received:") {
             "received"
-        } else if part.starts_with("session:") || part.starts_with("elsewhere:") {
+        } else if part.starts_with("session:")
+            || part.starts_with("elsewhere:")
+            || part.starts_with("change:")
+        {
             // `elsewhere:<tx>`: what a spend of the phrase's made in another profile left, ranked as a session's money
-            // (chunk 51, gap-g9#1).
+            // (chunk 51, gap-g9#1). `change:<tx>`: what a spend of the wallet's own left, tied to that spend in public
+            // (chunk 51, the owner's answer 2 to B15).
             "session"
         } else if part.starts_with("box:") {
             "lovejoin"
@@ -2226,6 +2235,53 @@ pub mod api {
                 .iter(),
             );
             assert_eq!(merged.id, format!("{elsewhere}+public:0"));
+            assert_eq!(merged.origin, "session");
+        }
+
+        fn at(tx: u8) -> UtxoResponse {
+            UtxoResponse {
+                tx_hash: hex::encode([tx; 32]),
+                tx_index: 0,
+                ..Default::default()
+            }
+        }
+
+        /// Chunk 51, the owner's answer 4 to B15 (time#1): the worker marks a box's way back `mixed` where it recorded a
+        /// mix moving the box, and a stealth mint takes only such a box first. One it has no such record of, `lovejoin`
+        /// as every box brought back before, goes after received money. Both merge last, as every box does.
+        #[test]
+        fn a_box_a_mix_brought_back_is_read_apart_from_one_with_no_such_record() {
+            let (mixed, old, received) = (at(0xb1), at(0xb0), at(0x02));
+            let classes: Classes = [
+                (&mixed, class(&format!("box:{}", mixed.tx_hash), "mixed")),
+                (&old, class(&format!("box:{}", old.tx_hash), "lovejoin")),
+                (
+                    &received,
+                    class(&format!("received:{}", received.tx_hash), "received"),
+                ),
+            ]
+            .into_iter()
+            .map(|(u, c)| (format!("{}#0", u.tx_hash), c))
+            .collect();
+            let h = histories(Purpose::Mint, &classes).unwrap();
+            assert_eq!(h.class_of(&mixed).origin, Origin::Mixed);
+            assert!(h.rank_of(&mixed) < h.rank_of(&received));
+            assert!(h.rank_of(&received) < h.rank_of(&old));
+            assert_eq!(h.tier_of(&mixed), h.tier_of(&old));
+        }
+
+        /// Chunk 51, the owner's answer 2 to B15 (money#2, own#1): what a spend of the wallet's own left carries a
+        /// `change:<tx>` part, which ranks as a session's money, so a stealth mint or a funding takes it after money
+        /// others paid and a box back from a mix. A spend of a box back from a mix leaves no box a mix brought back.
+        #[test]
+        fn money_a_spend_of_the_wallets_left_merges_as_a_sessions() {
+            let change = format!("change:{}", "c1".repeat(32));
+            assert_eq!(origin_of(&change), "session");
+            let boxed = format!("box:{}", "b1".repeat(32));
+            let merged = merged_class([class(&boxed, "mixed")].iter());
+            assert_eq!(merged.origin, "lovejoin");
+            let merged = merged_class([class(&boxed, "mixed"), class(&change, "session")].iter());
+            assert_eq!(merged.id, format!("{boxed}+{change}"));
             assert_eq!(merged.origin, "session");
         }
     }

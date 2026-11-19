@@ -25,6 +25,7 @@
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
+import { leftBy, merged } from "../shared/histories";
 import type { LeftOutUtxo, PaymentAsk, PendingTx, SeedelfLookup, SeedelfPaid, TransferSummary, BuildStage } from "../shared/rpc";
 import { checkRecipients } from "../shared/recipients";
 import { SEEDELF_NAME_RULE, seedelfName } from "../shared/seedelf-name";
@@ -157,11 +158,18 @@ export class TransferService {
         ...(histories ? { histories } : {}),
       };
     };
-    // Each part kept with its own figures, for the Seedelf history once it's sent; the review shows them added up.
+    // Each part kept with its own figures, for the Seedelf history once it's sent; the review shows them added up. Its
+    // change is tied to that part's payments, which its recipients know: the next stealth mint or a funding takes money
+    // others paid before it (chunk 51, money#2, own#1; the owner's answer 2 to B15).
     await keepParts(
       this.deps,
       SESSION_TRANSFER,
-      parts.map((p) => ({ ...summaryOf(p), txCbor: p.txCbor, seed: p.seed, origin: changeHistory(seen, p.inputs) })),
+      parts.map((p) => ({
+        ...summaryOf(p),
+        txCbor: p.txCbor,
+        seed: p.seed,
+        origin: merged([changeHistory(seen, p.inputs), leftBy(p.txHash)]),
+      })),
     );
     const summary = summaryOf(whole(parts, { classes: seen, utxos }));
     return parts.length > 1 ? { ...summary, parts: reviewParts(parts) } : summary;

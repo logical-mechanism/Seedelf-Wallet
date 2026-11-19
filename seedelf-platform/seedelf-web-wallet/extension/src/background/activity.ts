@@ -460,9 +460,12 @@ export class ActivityService {
    * has, matched by its parsed points, is never Received: anyone can see the
    * two are one owner's. It takes that row's history, or, where that one is Received too,
    * is Unknown by its own transaction, so a stealth mint or a funding takes it
-   * after money paid properly. That's a payment written under a register
-   * copied as found (d = 1); a payer who reveals another d can't be told
-   * (chunk 51, gap-g1#1). Its own history, where it isn't Received, stands.
+   * after money paid properly. Unknown too where that history is a box's: the
+   * stealth mint takes a box a mix brought back first because no payer knows
+   * it, and whoever wrote the copy does (chunk 51, money#1, own#2). That's a
+   * payment written under a register copied as found (d = 1); a payer who
+   * reveals another d can't be told (chunk 51, gap-g1#1). Its own history,
+   * where it isn't Received, stands.
    */
   async classes(network: NetworkName, utxos: KoiosUtxo[], among: readonly KoiosUtxo[] = utxos): Promise<Map<string, HistoryClass>> {
     const history = await this.deps.store.get<History>(`history.${network}`);
@@ -490,7 +493,10 @@ export class ActivityService {
       const others = register ? (registers.get(registerKey(register)) ?? []).filter((o) => o.tx_hash !== u.tx_hash) : [];
       if (!others.length) continue;
       const tied = others.map((o) => base.get(outpoint(o)) ?? classOfRow(o, of(o))).filter((c) => c.origin !== "received");
-      classes.set(outpoint(u), tied.length ? merged(tied) : unknownIn(u.tx_hash));
+      // Never a box's, which a stealth mint takes before money paid properly: merged, a box a mix moved reads as any
+      // box, and both are the copy's own Unknown here (chunk 51, money#1, own#2).
+      const into = tied.length ? merged(tied) : undefined;
+      classes.set(outpoint(u), into && into.origin !== "lovejoin" && into.origin !== "mixed" ? into : unknownIn(u.tx_hash));
     }
     return classes;
   }

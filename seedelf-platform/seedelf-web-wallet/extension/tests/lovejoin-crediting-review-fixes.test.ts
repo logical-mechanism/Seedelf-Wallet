@@ -409,7 +409,10 @@ describe("a public deposit's box, its chain's record and its mix gone (1.6.0's r
       const { hash, origin } = await originOf(t, `${summary.entry}#${i}`);
       expect(origin, `box ${i}`).toEqual({ id: `box:${hash}+public:0`, origin: "own" });
     }
-    expect((await originOf(t, `${other}#0`)).origin).toBeUndefined();
+    // The other box a mix made, as Koios said: its way back is marked so, the box a stealth mint takes first (chunk 51,
+    // the owner's answer 4 to B15).
+    const back = await originOf(t, `${other}#0`);
+    expect(back.origin).toEqual({ id: `box:${back.hash}`, origin: "mixed" });
   });
 
   it("records both boxes of a 1.5.0 public seed as the account's, though an older box closed its mix's count first", async () => {

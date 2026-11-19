@@ -722,6 +722,7 @@
   "histories.privacy.sessionNames_other": "mtpe",
   "histories.privacy.sessions_other": "mtpe",
   "histories.privacy.together": "mtpe",
+  "histories.tag.change": "machine",
   "histories.tag.lovejoin": "machine",
   "histories.tag.madePrivate": "machine",
   "histories.tag.madePrivateFrom": "machine",

@@ -51,7 +51,7 @@
 
 import { t } from "../i18n";
 import { lovejoinOn, type NetworkName } from "../networks";
-import type { HistoryClass } from "../shared/histories";
+import { leftBy, merged, type HistoryClass } from "../shared/histories";
 import type { LovejoinLaunchSummary, LovejoinLaunchTerms, PendingTx, TokenQuantity } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import type { KoiosUtxo } from "./koios";
@@ -359,10 +359,13 @@ export class LovejoinLaunchService {
         },
       );
     });
+    // Its change is tied to the start in the open: the next stealth mint or a funding takes money others paid before it
+    // (chunk 51, money#2, own#1; the owner's answer 2 to B15).
+    const left = (b: Built) => merged([changeHistory(classes, b.inputs), leftBy(b.txHash)]);
     return {
       built,
       bare,
-      origins: { built: changeHistory(classes, built.inputs), bare: changeHistory(classes, bare.inputs) },
+      origins: { built: left(built), bare: left(bare) },
       // The registering build's, the one reviewed: the most the start can tie together.
       histories: spentHistories(classes, built.inputs, built.classesMixed),
     };

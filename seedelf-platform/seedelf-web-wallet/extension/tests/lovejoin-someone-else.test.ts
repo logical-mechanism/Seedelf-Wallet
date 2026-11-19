@@ -228,7 +228,7 @@ describe("a box someone else put in under the wallet's key (chunk 51, e1a#1)", C
     expect(row(await lj.held("preprod"))).toContain("1 not mixed yet: open Lovejoin to see what to do.");
   });
 
-  it("brings someone else's box back, asked to, as money received; the wallet's own deposit's as a box back from Lovejoin", async () => {
+  it("brings someone else's box back, asked to, as money received; the wallet's own session's deposit's as that session's money", async () => {
     const t = await publicFunded();
     const wasm = loadTestWasm();
     t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
@@ -253,8 +253,10 @@ describe("a box someone else put in under the wallet's key (chunk 51, e1a#1)", C
     // never as a box back from Lovejoin, which it takes first (gap-g1#1's part b).
     const theirs = await lj.withdrawNow("preprod", inAda(C), true);
     expect((await historyOf(t, theirs.txHash))?.origin).toEqual({ id: `received:${theirs.txHash}`, origin: "received" });
+    // Its own session's deposit, no mix since: anyone can follow it back to that session, so it's that session's money,
+    // never a box a mix moved, which the stealth mint takes first (chunk 51, still#1, own#4).
     const own = await lj.withdrawNow("preprod", inAda(A), true);
-    expect((await historyOf(t, own.txHash))?.origin).toBeUndefined();
+    expect((await historyOf(t, own.txHash))?.origin).toEqual({ id: `box:${own.txHash}+session:0`, origin: "session" });
   });
 
   it("asks once more what made a deposit's box whose answer an earlier version kept without its inputs, holding it meanwhile", async () => {

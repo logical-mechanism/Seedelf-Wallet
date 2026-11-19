@@ -129,9 +129,10 @@ describe("transfer", () => {
     expect(summary.inputs).toBe(2);
     expect(summary.histories).toEqual(expect.arrayContaining([{ id: "public:0", origin: "own" }, received]));
     expect(summary.histories).toHaveLength(2);
-    // Its change has both histories from now on.
+    // Its change has both histories from now on, and this Send's, which its recipient knows: ranked as a session's
+    // money (chunk 51, the owner's answer 2 to B15).
     const built = (await t.session.get<Stored & { origin: unknown }>(SESSION_TRANSFER))!;
-    expect(built.origin).toEqual({ id: `public:0+received:${ada.tx_hash}`, origin: "own" });
+    expect(built.origin).toEqual({ id: `change:${summary.txHash}+public:0+received:${ada.tx_hash}`, origin: "session" });
 
     // With one history, there's nothing to say.
     const own = await t.transfer.build("preprod", [{ to: MINE, lovelace: "2000000", tokens: [] }]);
