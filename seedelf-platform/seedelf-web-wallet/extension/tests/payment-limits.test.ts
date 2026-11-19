@@ -57,6 +57,21 @@ describe("how many recipients one payment pays (chunk 51, gap-g8#4)", () => {
     );
   });
 
+  // Chunk 51, still#8: any "over the network's limit of" was taken for TooLarge, so core's limit on reference scripts
+  // (build.rs `reference_script_fee`), whose own advice is to spend fewer UTxOs holding one, was said as too many tokens
+  // or recipients. Core's other limits keep their own words.
+  it("leaves core's other limits their own words", () => {
+    for (const english of [
+      "This transaction would use 213000 bytes of reference scripts, over the network's limit of 204800. Spend fewer UTxOs holding one at once",
+      "That address is 129 bytes, over the network's limit of 128: use a shorter one",
+    ]) {
+      for (const message of [english, `Building the payment: ${english}`]) {
+        const e = new Error(message);
+        expect(tooMany(e), message).toBe(e);
+      }
+    }
+  });
+
   it("says it so on Send from the public account too", async () => {
     const t = testBalances();
     await t.wallet.create(account(12).phrase, PASSWORD);

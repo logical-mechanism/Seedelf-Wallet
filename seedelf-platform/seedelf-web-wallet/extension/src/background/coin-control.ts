@@ -209,10 +209,11 @@ const oldestFirst = (a: KoiosUtxo, b: KoiosUtxo) =>
 
 /**
  * The account's collateral among `utxos`, and who chose it. `own`: for the wallet's own builds (readAccount), which
- * WebAssembly's evaluator puts it through: a choice that doesn't fit (`collateralFits`) counts as none there, and they
- * put up the oldest that does, or none. Only 1.9.1's Set could save one, from a stranger's 5 ₳ with a reference script
- * or a datum, and every public Lovejoin build failed on it. A site still gets the user's choice: the ledger takes it
- * (chunk 51, e8b#1's residue).
+ * WebAssembly's evaluator puts it through, and for what the wallet shows of them (the lists, Home's locked figure, the
+ * Collateral page): a choice that doesn't fit (`collateralFits`) counts as none there, and they put up the oldest that
+ * does, or none. Only 1.9.1's Set could save one, from a stranger's 5 ₳ with a reference script or a datum, and every
+ * public Lovejoin build failed on it. A site still gets the user's choice: the ledger takes it (chunk 51, e8b#1's
+ * residue; money#4, still#6).
  */
 export function collateralOf(
   choices: Choices,
@@ -266,8 +267,10 @@ export class CoinControlService {
 
   /**
    * The account's UTxOs that may be spent, and its collateral (never among them): `account`'s choices, as `choices`.
-   * `own`: the wallet's own builds' reading, where a chosen collateral that doesn't fit counts as none (collateralOf).
-   * The choice still stays out of their payments, as the Collateral page says of it: it's what sites get.
+   * `own`: the wallet's own builds' reading, where a chosen collateral that doesn't fit counts as none (collateralOf),
+   * so they spend it as any other UTxO, and hold only the one they put up: what Home and the forms count as held.
+   * Kept out as well, they held two 5 ₳ where the forms counted one, and Max paid 5 ₳ less than the form said
+   * (chunk 51, money#4, still#6).
    */
   async account(
     network: NetworkName,
@@ -277,9 +280,8 @@ export class CoinControlService {
   ): Promise<{ spendable: PathedUtxo[]; collateral?: PathedUtxo }> {
     const choices = await this.choices(network, account);
     const collateral = collateralOf(choices, utxos, own)?.utxo;
-    const chosen = own ? collateralOf(choices, utxos)?.utxo : collateral;
     const locked = new Set(choices.cardano);
-    const spendable = utxos.filter((p) => p !== collateral && p !== chosen && !locked.has(outpoint(p.utxo)));
+    const spendable = utxos.filter((p) => p !== collateral && !locked.has(outpoint(p.utxo)));
     return { spendable, collateral };
   }
 
@@ -345,7 +347,9 @@ export class CoinControlService {
     // contradicting its "off the list already" (pass two of the blind test's fix round, its cross-area review).
     const fresh = account.filter((p) => !spent.has(outpoint(p.utxo)));
     const ownedNow = owned.filter((u) => !spent.has(outpoint(u)));
-    const collateral = collateralOf(choices, fresh)?.utxo;
+    // The one the wallet's own builds put up (`own`), so what the lists hold, and Home and the forms count as held, is
+    // what those builds keep out of payments (chunk 51, money#4, still#6).
+    const collateral = collateralOf(choices, fresh, true)?.utxo;
 
     // A Seedelf spend can't take a UTxO holding a reference script yet (script-spend.ts `spendable`),
     // and the account can't price one whose script Koios doesn't give (`measurable`).

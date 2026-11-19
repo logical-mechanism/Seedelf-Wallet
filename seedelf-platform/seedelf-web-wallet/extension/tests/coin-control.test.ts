@@ -17,6 +17,7 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
 import { t as tr } from "../src/i18n";
 import { LOCAL_ACCOUNT } from "../src/shared/preferences";
+import { spentRewards, unlocked as unlockedSide, withRewards } from "../src/ui/format";
 import { account, AGREES, CHAINS, publicFunded, type Tested } from "./chain-fixtures";
 import { accountMintPreprod, koiosPreprod, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
 import { ADA, ADA_POOL, ADA_ROWS } from "./v2-pools";
@@ -459,9 +460,16 @@ describe("a stranger's 5 ₳ the wallet can't put up (chunk 51, e8b#1)", CHAINS,
     expect(await t.coins.collateral("preprod")).toMatchObject({ state: "set", by: "wallet", utxo: { txHash: OWN_FIVE.slice(0, 64), index: 0 } });
   });
 
-  it("chosen by the user, is the collateral all the same: the ledger takes it", async () => {
+  it("chosen by the user, is what a site gets all the same: the ledger takes it", async () => {
     const t = await strangersOnly(SHAPES[0]![1]);
-    expect(await t.coins.use("preprod", `${STRANGER}#0`)).toMatchObject({ state: "set", by: "you", utxo: { txHash: STRANGER, index: 0 } });
+    await t.coins.use("preprod", `${STRANGER}#0`);
+    expect((await t.coins.choices("preprod")).collateral).toBe(`${STRANGER}#0`);
+    const rows = (await readAccountUtxos(t.deps, "preprod", new Set())).utxos;
+    const site = await t.coins.account("preprod", rows, 0);
+    expect(site.collateral && at(site.collateral.utxo)).toBe(`${STRANGER}#0`);
+    // The wallet's own builds can't put it up, so for them it's no choice, and for the page, which says what they keep
+    // aside: none is set, and Set pays a new 5 ₳, as a public mix's refusal says (chunk 51, money#4).
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "none", reclaimed: false });
   });
 
   it.each(SHAPES)("with %s leaves a public mix the account's own 5 ₳ to put up", async (_, shape) => {
@@ -480,21 +488,23 @@ describe("a stranger's 5 ₳ the wallet can't put up (chunk 51, e8b#1)", CHAINS,
   // Chunk 51, e8b#1's residue: 1.9.1's Set took the page's candidate, which could be such a 5 ₳, and saved it as the
   // user's choice. The fix stops the page offering one, but a choice saved before stays the account's collateral, and
   // every public Lovejoin build kept failing on it. For the wallet's own builds (readAccount), a choice that doesn't fit
-  // counts as none: they put up the oldest that does. A site still gets what the user chose: the ledger takes it.
+  // counts as none: they put up the oldest that does, and spend the choice as any other UTxO, so one 5 ₳ is held, not
+  // two (chunk 51, money#4, still#6). A site still gets what the user chose: the ledger takes it.
   it.each(SHAPES)("with %s, chosen before 1.9.2, leaves a public mix the account's own 5 ₳ and a site the choice", async (_, shape) => {
     const t = await publicFunded();
     await strangers(t, shape);
     await t.balances.get("preprod", true);
     // As 1.9.1's Set saved it: use() takes any 5 ₳ of ADA alone, as the ledger does.
-    expect(await t.coins.use("preprod", `${STRANGER}#0`)).toMatchObject({ state: "set", by: "you", utxo: { txHash: STRANGER, index: 0 } });
+    await t.coins.use("preprod", `${STRANGER}#0`);
+    expect((await t.coins.choices("preprod")).collateral).toBe(`${STRANGER}#0`);
 
-    // The wallet's own builds: the account's own 5 ₳. Neither it nor the choice is a payment's input: the page says
-    // payments leave the collateral alone, and it's what a site gets.
+    // The wallet's own builds: the account's own 5 ₳, never a payment's input, as the page says of the collateral. The
+    // choice is no choice for them, so a payment may spend it.
     const own = await readAccount(t.deps, "preprod");
     expect(own.collateral && `${own.collateral.utxo.tx_hash}#${own.collateral.utxo.tx_index}`).toBe(OWN_FIVE);
     const inputs = own.utxos.map((p) => `${p.utxo.tx_hash}#${p.utxo.tx_index}`);
     expect(inputs).not.toContain(OWN_FIVE);
-    expect(inputs).not.toContain(`${STRANGER}#0`);
+    expect(inputs).toContain(`${STRANGER}#0`);
     const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
     expect(mix.mixes).toBeGreaterThan(0);
     const kept = await t.wallet.withKeys(() =>
@@ -504,11 +514,44 @@ describe("a stranger's 5 ₳ the wallet can't put up (chunk 51, e8b#1)", CHAINS,
       expect(bodyOutpoints(hexBytes(tx.txCbor), 13)).toEqual([OWN_FIVE]);
     }
 
-    // A site's: the user's choice, as it was. The Collateral page says so too.
+    // A site's: the user's choice, as it was.
     const rows = (await readAccountUtxos(t.deps, "preprod", new Set())).utxos;
     const site = await t.coins.account("preprod", rows, 0);
     expect(site.collateral && `${site.collateral.utxo.tx_hash}#${site.collateral.utxo.tx_index}`).toBe(`${STRANGER}#0`);
-    expect(await t.coins.collateral("preprod")).toMatchObject({ state: "set", by: "you", utxo: { txHash: STRANGER, index: 0 } });
+    // The Collateral page says what the wallet keeps aside, which payments leave alone: the 5 ₳ its builds put up, as
+    // the wallet set it (chunk 51, money#4, still#6).
+    expect(await t.coins.collateral("preprod")).toMatchObject({ state: "set", by: "wallet", utxo: { txHash: OWN_FIVE.slice(0, 64), index: 0 } });
+  });
+
+  // Chunk 51, money#4 and still#6: with such a choice, Home's locked figure and the forms' "Max, up to" counted the
+  // choice as the one 5 ₳ held and the 5 ₳ the builds put up as free, while the builds held both: Max paid 5 ₳ less
+  // than the form said, and an amount between the two passed the form to be refused. They count what the builds keep.
+  it.each(SHAPES)("with %s, chosen before 1.9.2, has Home and the forms count what the wallet's own builds spend", async (_, shape) => {
+    const t = await publicFunded();
+    await strangers(t, shape);
+    await t.balances.get("preprod", true);
+    await t.coins.use("preprod", `${STRANGER}#0`);
+    const b = await t.balances.get("preprod");
+    // What the public forms may spend, as Home.tsx works it out: CardanoSend's and MoveIn's "Max, up to".
+    const prefs = await t.deps.preferences.get();
+    const forms = BigInt(withRewards(unlockedSide(b.cardano), spentRewards(b.cardano.staking, prefs.spendRewards)).lovelace);
+    // What the wallet's own builds may spend (readAccount), with the rewards they withdraw.
+    const own = await readAccount(t.deps, "preprod");
+    const builds = own.utxos.reduce((sum, p) => sum + BigInt(p.utxo.value), BigInt(own.withdrawal ?? "0"));
+    expect.soft(forms, "the forms' figure").toBe(builds);
+    // One 5 ₳ held: the one the builds put up, the collateral, which the Mix form leaves out of its count too.
+    expect.soft(b.cardano.locked).toMatchObject({ lovelace: "5000000", utxos: 1 });
+    const listed = (await t.coins.lists("preprod")).cardano;
+    expect.soft(listed.filter((u) => u.locked).map(at), "held").toEqual([OWN_FIVE]);
+    expect.soft(listed.filter((u) => u.collateral).map(at), "the collateral").toEqual([OWN_FIVE]);
+    // Max spends every UTxO the builds may: what it pays, its fee and its change are that figure.
+    const max = await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    expect(max.inputs).toBe(own.utxos.length);
+    expect(BigInt(max.payments[0]!.lovelace) + BigInt(max.fee) + BigInt(max.changeLovelace)).toBe(builds);
+    // An amount 4 ₳ under the forms' figure goes, on Send and on Make private alike.
+    const asked = (forms - 4_000_000n).toString();
+    expect((await t.send.build("preprod", [{ to: THEIRS, lovelace: asked, tokens: [] }])).payments[0]!.lovelace).toBe(asked);
+    expect((await t.moveIn.build("preprod", asked, [])).lovelace).toBe(asked);
   });
 
   it("chosen before 1.9.2, with no 5 ₳ that fits beside it, has a public mix say it needs the account's collateral", async () => {
@@ -525,5 +568,9 @@ describe("a stranger's 5 ₳ the wallet can't put up (chunk 51, e8b#1)", CHAINS,
     await t.coins.use("preprod", `${STRANGER}#0`);
     // Named as the collateral it can't put up, never as a UTxO WebAssembly can't evaluate.
     await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow(tr("lj.needCollateral"));
+    // The Collateral page, where that refusal sends the user, says so too: none set, so Set pays a new 5 ₳. It said
+    // the choice was set, which no build of the wallet's puts up. Nothing is held (chunk 51, money#4).
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "none", reclaimed: false });
+    expect((await t.balances.get("preprod")).cardano.locked.utxos).toBe(0);
   });
 });

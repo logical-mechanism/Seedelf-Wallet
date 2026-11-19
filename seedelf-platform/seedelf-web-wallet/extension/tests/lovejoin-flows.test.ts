@@ -302,7 +302,10 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     const deep = { ...atAccount("e5", "5000000"), inline_datum: { bytes: `${"81".repeat(200)}00`, value: null } } as KoiosUtxo;
     t.koios.addedToAccounts.push(atAccount("e1", "40000000"), deep, ...POOL, ...ADA_ROWS);
     await t.balances.get("preprod");
-    expect(await t.coins.use("preprod", `${"e5".repeat(32)}#0`)).toMatchObject({ state: "set", by: "you" });
+    // The user's choice, what a site gets; for the wallet's own builds it's none, and a UTxO like any other (chunk 51,
+    // money#4).
+    await t.coins.use("preprod", `${"e5".repeat(32)}#0`);
+    expect((await t.coins.choices("preprod")).collateral).toBe(`${"e5".repeat(32)}#0`);
     const summary = await lj.publicBuild("preprod", 1, { pool: ADA, bootstrap: true });
     expect(summary).toMatchObject({ bootstrap: true, boxes: 1, depth: 0, mixes: 0, txs: 1 });
     // Nor does a mix: for the wallet's own builds a choice WebAssembly can't take counts as none, and with no other 5 ₳

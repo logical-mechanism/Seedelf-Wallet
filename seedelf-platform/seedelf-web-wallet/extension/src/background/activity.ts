@@ -840,7 +840,10 @@ export async function txInfoPaged(koios: Koios, hashes: string[]): Promise<Koios
 const merge = (a: ActivityEntry[], b: ActivityEntry[]) =>
   [...new Map([...a, ...b].map((e) => [e.txHash, e])).values()].sort(newestFirst);
 
-/** The most of someone's note an entry keeps. */
+/**
+ * The most of someone's note an entry keeps, in characters as core counts them (code points: note.rs MAX_NOTE_CHARS,
+ * the Send form's `[...note]`), of the lines' own text.
+ */
 const NOTE_MAX = 500;
 
 /** CIP-20's message in a transaction's metadata (label 674, `msg`): its lines joined, as other wallets show it. */
@@ -850,10 +853,27 @@ export function noteOf(metadata: KoiosTxInfo["metadata"]): string | undefined {
   const lines = Array.isArray(msg) ? msg : typeof msg === "string" ? [msg] : [];
   // The sender's words, in whatever language they wrote, cut into CIP-20's lines: never the wallet's sentences,
   // so a space joins them in every language (tests/i18n-assembly.test.ts lets this name through).
-  const noteLines = lines.filter((l): l is string => typeof l === "string");
+  // NOTE_MAX characters of the lines, never cut inside one, and not counting the spaces that join them, which aren't
+  // the sender's: core's cuts drop only a space, so a note the wallet wrote reads back whole. Counted in UTF-16 units
+  // with the spaces, a Japanese note or a link came back cut, and an emoji cut in half (chunk 51, still#5). An empty
+  // line would add only a space, so a stranger's thousands of them are left out.
+  const noteLines: string[] = [];
+  let left = NOTE_MAX;
+  let cut = false;
+  for (const line of lines) {
+    if (typeof line !== "string" || !line) continue;
+    const chars = Array.from(line);
+    if (chars.length > left) {
+      noteLines.push(chars.slice(0, left).join(""));
+      cut = true;
+      break;
+    }
+    noteLines.push(line);
+    left -= chars.length;
+  }
   const text = noteLines.join(" ").trim();
   if (!text) return undefined;
-  return text.length > NOTE_MAX ? `${text.slice(0, NOTE_MAX)}…` : text;
+  return cut ? `${text}…` : text;
 }
 
 /** A certificate's field as a string (Koios gives amounts as strings, or now and then as numbers). */

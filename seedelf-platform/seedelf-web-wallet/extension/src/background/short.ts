@@ -28,8 +28,10 @@ const TOO_MANY = /needs more computation than a transaction may use/;
 /**
  * Core's refusal of a transaction, or one of its outputs, bigger than the ledger takes (build.rs `TooLarge`: 16 KiB, or
  * 5,000 bytes of tokens in an output), where no split could send it either: several recipients go as one transaction.
+ * Its own words alone, as sessions.ts reads them: core's other limits (the reference scripts' 200 KiB, a DRep anchor's
+ * 128 bytes) say what to do about them, which isn't fewer tokens or recipients (chunk 51, still#8).
  */
-const TOO_LARGE = /over the network's limit of \d+/;
+const TOO_LARGE = /would be \d+ bytes, over the network's limit|would hold \d+ bytes of tokens, over the network's limit/;
 
 /**
  * More than the wallet sends at once, in the user's words: more UTxOs than one transaction spends (several recipients
