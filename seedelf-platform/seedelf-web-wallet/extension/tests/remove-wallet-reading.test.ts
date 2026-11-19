@@ -262,6 +262,40 @@ describe("a balance reading still running when the wallet is removed and another
     expect(await keptOf<Balances>(t, SESSION_BALANCES_PREFIX)).toBeUndefined();
   });
 
+  // Chunk 51, e4a#1's residue: the reading noted its arrivals in the Seedelf history after its own last turn, through
+  // the history's queue, with no pin (balances.ts read and readPrivate), so a write that reached the queue after Remove
+  // wallet and a restore sealed A's UTxOs into B's history, and used up its first-reading mark.
+  for (const side of ["whole", "private"] as const) {
+    it(`never seals its arrivals into B's history, however late the history's queue takes them (${side} reading)`, SLOW, async () => {
+      const { t, ctx, bOwn } = await walletA();
+      if (side === "private") {
+        // A's Home keeps a reading; then a private spend lands, and only the private side is read again (pending.ts).
+        await ask({ type: "balances" }, ctx);
+        await t.wallet.withKeys(() => t.session.set(SESSION_PRIVATE_STALE_PREFIX + "preprod", true));
+      }
+      // Every turn of the reading's own passes under A; its arrivals wait for the history's queue.
+      const arrived = t.activity.arrived.bind(t.activity);
+      const held = gate();
+      t.activity.arrived = async (...args: Parameters<typeof arrived>) => {
+        held.reached();
+        await held.open;
+        return arrived(...args);
+      };
+      const left = ask({ type: "balances" }, ctx);
+      await held.hit;
+      await removeAndRestoreB(ctx);
+      held.release();
+      await left.catch(() => undefined);
+      t.activity.arrived = arrived;
+
+      // Nothing of A's in B's sealed history, and B's own UTxO is still one from before this device's history began.
+      expect.soft((await historyOf(ctx)).map((e) => e.txHash), "B's sealed history").toEqual([]);
+      await ask({ type: "balances" }, ctx);
+      expect.soft((await historyOf(ctx)).map((e) => e.txHash), "B's private Activity: transactions").toEqual([bOwn.tx_hash]);
+      expect.soft((await historyOf(ctx)).find((e) => e.txHash === bOwn.tx_hash)?.origin, "B's own UTxO: its history").toEqual(UNKNOWN);
+    });
+  }
+
   it("control: one across a lock and an unlock of the same phrase is kept, as before", SLOW, async () => {
     const { t, ctx } = await walletA();
     const contractKept = watchContractKept(t);

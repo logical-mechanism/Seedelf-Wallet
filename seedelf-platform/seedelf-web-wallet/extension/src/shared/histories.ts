@@ -21,6 +21,10 @@
 //   unknown        nothing on the device says (a restore, or older than it keeps)
 //   unknown:<tx>   the same, kept apart by the transaction that made it once
 //                  any other money's history is known (independent review L40)
+//   elsewhere:<tx> what a spend of this phrase's made elsewhere (another
+//                  Chrome profile or device) left here: ranked as another
+//                  session's money, which it may be, and tagged Unknown, as
+//                  this device knows nothing more of it (chunk 51, gap-g9#1)
 // Money whose histories were merged names each, sorted, joined by "+".
 
 import { joinSentences, t } from "../i18n";
@@ -43,6 +47,12 @@ export const sessionClass = (index: number): HistoryClass => ({ id: `session:${i
 export const boxFrom = (txHash: string): HistoryClass => ({ id: `box:${txHash}`, origin: "lovejoin" });
 /** Money with no history, by the transaction that made it: kept apart from other such money while anything else's is known. */
 export const unknownIn = (txHash: string): HistoryClass => ({ id: `unknown:${txHash}`, origin: "unknown" });
+/**
+ * What transaction `txHash`, a spend of this phrase's made elsewhere, left here: one that spent the wallet's own rows,
+ * which only this phrase's key can, though this device sent nothing of it (chunk 51, gap-g9#1). A funding takes it
+ * last, as another session's money, which it may be.
+ */
+export const spentElsewhere = (txHash: string): HistoryClass => ({ id: `elsewhere:${txHash}`, origin: "session" });
 
 /**
  * The form `madePrivate` wrote before chunk 18, when there was one public
@@ -69,10 +79,13 @@ const accountIn = (part: string) => {
 
 const parts = (c: HistoryClass) => c.id.split("+").map(canonicalPart);
 
+/** A part `spentElsewhere` wrote: ranked as a session's money, but said as money of no history, since that's all it is here. */
+const elsewhere = (part: string) => part.startsWith("elsewhere:");
+
 function originOf(part: string): Origin {
   if (canonicalPart(part).startsWith("public:")) return "own";
   if (part.startsWith("received:")) return "received";
-  if (part.startsWith("session:")) return "session";
+  if (part.startsWith("session:") || elsewhere(part)) return "session";
   if (part.startsWith("box:")) return "lovejoin";
   return "unknown";
 }
@@ -124,6 +137,8 @@ export function historyTags(c: HistoryClass, accounts = 1): string[] {
       case "received":
         return t("histories.tag.received");
       case "session":
+        // Another profile's spend, perhaps its session's: this device knows no more of it (chunk 51, gap-g9#1).
+        if (elsewhere(p)) return t("histories.tag.unknown");
         return t("histories.tag.session", { number: Number(p.slice("session:".length)) + 1 });
       case "lovejoin":
         return t("histories.tag.lovejoin");
@@ -183,7 +198,8 @@ export function historiesNote(
   const all = [...new Set(classes.flatMap(parts))];
   const boxes = all.filter((p) => p.startsWith("box:")).length;
   const received = all.filter((p) => p.startsWith("received:")).length;
-  const unknown = all.filter((p) => originOf(p) === "unknown").length;
+  // What another profile's spend left is money the wallet has no history for, as its tag says (chunk 51, gap-g9#1).
+  const unknown = all.filter((p) => originOf(p) === "unknown" || elsewhere(p)).length;
   const sessions = [...new Set(classes.flatMap(sessionsIn))];
   const others = sessions.filter((i) => i !== session);
   // Which public accounts money was made private from: more than one, and

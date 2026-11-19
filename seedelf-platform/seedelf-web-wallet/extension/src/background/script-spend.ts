@@ -241,7 +241,9 @@ export async function readContract(
   const waiting = returning.filter((u) => parted.has(outpoint(u)));
   const free = all.filter((u) => !reserved.has(outpoint(u)));
   const utxos = await deps.coins.seedelf(network, free);
-  return { view, utxos, params, returning, waiting, classes: await classesOf(deps, network, utxos) };
+  // Against every row of the wallet's view, Seedelf rows too: one under a register another already has is no payment
+  // received (activity.ts `classes`; chunk 51, gap-g1#1).
+  return { view, utxos, params, returning, waiting, classes: await classesOf(deps, network, utxos, view.owned) };
 }
 
 /**
@@ -262,14 +264,16 @@ function sendingChains(
 
 /**
  * `readContract`'s `classes`. A history that won't open costs only the keeping apart: selection then picks as the CLI does.
- * Unknown money is left out, but for one kept apart by its transaction (independent review L40).
+ * Unknown money is left out, but for one kept apart by its transaction (independent review L40). `among`: the rows a
+ * UTxO's register is matched against (activity.ts `classes`), `utxos` by default.
  */
 export async function classesOf(
   deps: Pick<ScriptSpendDeps, "activity">,
   network: NetworkName,
   utxos: KoiosUtxo[],
+  among: readonly KoiosUtxo[] = utxos,
 ): Promise<Classes> {
-  const found = (await deps.activity?.classes(network, utxos).catch(() => undefined)) ?? new Map<string, HistoryClass>();
+  const found = (await deps.activity?.classes(network, utxos, among).catch(() => undefined)) ?? new Map<string, HistoryClass>();
   return Object.fromEntries([...found].filter(([, c]) => c.id !== UNKNOWN.id));
 }
 

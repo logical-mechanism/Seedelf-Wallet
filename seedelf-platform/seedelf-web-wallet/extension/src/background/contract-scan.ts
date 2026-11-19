@@ -9,7 +9,8 @@
 // WebAssembly, a batch of rows at a time so a lock or a page's request never
 // waits for the whole contract. What's kept, in chrome.storage.session (wiped
 // on lock), is only this wallet's own UTxOs and where each seedelf is (Send's
-// lookup), never the whole contract.
+// lookup), never the whole contract, and, from the private index, which
+// transactions spent this wallet's own UTxOs (`spentBy`).
 //
 // Session storage holds 10 MB for the whole extension, and anyone can add
 // seedelfs to the contract, each in a UTxO with as many tokens as it holds.
@@ -62,6 +63,12 @@ export interface ScanDeps {
   store?: PrivateStore;
 }
 
+/**
+ * Which of this wallet's own rows each transaction spent (`txhash#index`), by that transaction's hash: the private
+ * index names each spend's spender, which Koios's scan doesn't.
+ */
+export type SpentBy = Record<string, string[]>;
+
 /** What the wallet needs from the contract. */
 export interface ContractView {
   /** This wallet's UTxOs in the contract (its register), less what it has spent. */
@@ -72,6 +79,13 @@ export interface ContractView {
    * wallet's as only what paying it reads (`seedelfRow`).
    */
   seedelfs: Record<string, KoiosUtxo>;
+  /**
+   * The transactions the private index's answers named as spending this wallet's own rows, while unlocked
+   * (`SPENT_BY_KEPT`): a spend made with this phrase in another profile or on another device, whose change the balance
+   * reading then notes as the phrase's own, never as a payment received (activity.ts `arrived`; chunk 51, gap-g9#1).
+   * None from Koios, which names no spender.
+   */
+  spentBy?: SpentBy;
 }
 
 /** Where a seedelf is: all Send needs to pay it. */
@@ -90,6 +104,27 @@ interface Kept {
   height: number;
   /** When the contract was last read in full (ms since the epoch); 0 forces the next read to be full. */
   fullAt: number;
+  /**
+   * `ContractView`'s, gathered across reads: whichever read first gets the answer naming a spend folds it in, and a
+   * balance reading later still knows who made the change it finds (chunk 51, gap-g9#1).
+   */
+  spentBy?: SpentBy;
+}
+
+/** The most spending transactions the kept view remembers, the newest. */
+const SPENT_BY_KEPT = 100;
+const TX_HASH = /^[0-9a-f]{64}$/;
+
+/** `kept`, with `fresh`'s spenders: the newest SPENT_BY_KEPT, none when there are none. */
+function withSpentBy(kept: SpentBy | undefined, fresh: SpentBy): Pick<Kept, "spentBy"> {
+  const all = new Map(Object.entries(kept ?? {}));
+  for (const [by, refs] of Object.entries(fresh)) {
+    const had = all.get(by) ?? [];
+    all.delete(by);
+    all.set(by, [...new Set([...had, ...refs])]);
+  }
+  const newest = [...all].slice(-SPENT_BY_KEPT);
+  return newest.length ? { spentBy: Object.fromEntries(newest) } : {};
 }
 
 /** chrome.storage.session, per network. */
@@ -181,6 +216,8 @@ async function readKoiosView(deps: ScanDeps, network: NetworkName, { full = fals
       seedelfs,
       height,
       fullAt: catchUp ? kept.fullAt : now(),
+      // Koios names no spender: what the index's answers named stays.
+      ...withSpentBy(kept?.spentBy, {}),
     };
     await keep(session, key, next);
     return viewOf(next, contract);
@@ -316,6 +353,16 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
   // The view at the tip: the settled rows, plus what's made that's ours, less every spend.
   const gone = new Set([...changes.spent.map((s) => s.ref), ...changes.created.filter((r) => r.spent).map((r) => r.ref)]);
   const atTip = [...settled.rows, ...changes.created.filter((r) => checked[r.ref])].filter((r) => !gone.has(r.ref));
+  // Which transaction spent each of those that's ours: the answer names it, the same for everyone. Only this phrase's
+  // key spends them, so one this device didn't send was sent with the phrase elsewhere (chunk 51, gap-g9#1).
+  const ownRefs = new Set([...settled.rows, ...changes.created.filter((r) => checked[r.ref])].map((r) => r.ref));
+  const spentBy: SpentBy = {};
+  const spends = [...changes.spent, ...changes.created.flatMap((r) => (r.spent ? [{ ref: r.ref, by: r.spent.by }] : []))];
+  for (const { ref, by } of spends) {
+    // A transaction's hash, or nothing it could be matched by.
+    if (!ownRefs.has(ref) || typeof by !== "string" || !TX_HASH.test(by)) continue;
+    spentBy[by] = [...(spentBy[by] ?? []), ref];
+  }
 
   // Only what's at or below the answer's cursor is folded in; the rest comes again in the next answer.
   const cursor = slotOf(changes.cursor);
@@ -359,8 +406,10 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
       const name = seedelfTokenOf(u, contract.seedelfPolicyId);
       if (name) seedelfs[name] = locatorOf(u);
     }
-    // Kept for what reads the view without reading (keptContractView); a Koios read after it reads in full.
-    const view: Kept = { owned, seedelfs, height: 0, fullAt: 0 };
+    // Kept for what reads the view without reading (keptContractView); a Koios read after it reads in full. With the
+    // spenders read so far, so the balance reading that notes the change still knows who made it, whichever read
+    // folded the spend in first.
+    const view: Kept = { owned, seedelfs, height: 0, fullAt: 0, ...withSpentBy((await session.get<Kept>(key))?.spentBy, spentBy) };
     await keep(session, key, view);
     return viewOf(view, contract);
   });
@@ -427,7 +476,7 @@ function viewOf(kept: Kept, contract: ContractConfig): ContractView {
   for (const [name, at] of Object.entries(kept.seedelfs)) {
     seedelfs[name] = owned.get(`${at.txHash}#${at.txIndex}`) ?? seedelfRow(contract, name, at);
   }
-  return { owned: kept.owned, seedelfs };
+  return { owned: kept.owned, seedelfs, ...(kept.spentBy ? { spentBy: kept.spentBy } : {}) };
 }
 
 /**

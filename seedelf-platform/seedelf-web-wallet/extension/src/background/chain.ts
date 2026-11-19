@@ -120,6 +120,28 @@ export function registerOf(utxo: KoiosUtxo): RegisterHex | undefined {
 }
 
 /**
+ * A register as rows are matched by: its two points as `registerOf` reads them, never the datum's bytes, which the
+ * node takes in several spellings (r3a#1). Two rows with one key are under the same register, which anyone reading the
+ * chain can see (chunk 51, gap-g1#1, x1a#2).
+ */
+export const registerKey = (r: RegisterHex): string => `${r.generator}.${r.publicValue}`.toLowerCase();
+
+/** `rows` by their register (`registerKey`), each row once: a row whose datum is no register is left out. Asks no one. */
+export function byRegister(rows: readonly KoiosUtxo[]): Map<string, KoiosUtxo[]> {
+  const found = new Map<string, KoiosUtxo[]>();
+  const seen = new Set<string>();
+  for (const u of rows) {
+    const at = `${u.tx_hash}#${u.tx_index}`;
+    const register = seen.has(at) ? undefined : registerOf(u);
+    seen.add(at);
+    if (!register) continue;
+    const key = registerKey(register);
+    found.set(key, [...(found.get(key) ?? []), u]);
+  }
+  return found;
+}
+
+/**
  * Walks one address chain (receive or change) from index 0 until `gap`
  * addresses in a row are unused. Returns every address it looked at, so a
  * UTxO at any of them is recognized, and how many are used.

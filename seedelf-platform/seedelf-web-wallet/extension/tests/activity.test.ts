@@ -14,6 +14,7 @@ import {
   takePage,
   type AccountAddresses,
 } from "../src/background/activity";
+import { registerOf } from "../src/background/chain";
 import type { KoiosTxInfo, KoiosUtxo } from "../src/background/koios";
 import { pendingKey } from "../src/background/pending";
 import { LOCAL_POOLS_PREFIX } from "../src/background/staking";
@@ -130,7 +131,22 @@ describe("Seedelf activity", () => {
     const t = await unlocked();
     // The private history started before this money arrived: its first reading found none (independent review L38).
     await t.activity.arrived("preprod", []);
-    const at = (hex: string, index = 0) => ({ ...ownedUtxos[0]!, tx_hash: hex.repeat(32), tx_index: index });
+    // Each transaction's outputs under a register of their own, as every payer re-randomizes one: rows of two
+    // transactions under one register are one owner's for anyone to see, and never a payment received (chunk 51,
+    // gap-g1#1).
+    const { wasm } = t.deps;
+    const base = registerOf(ownedUtxos[0]!)!;
+    const datums = new Map<string, string>();
+    const datumOf = (hex: string) => {
+      if (!datums.has(hex)) datums.set(hex, Buffer.from(wasm.registerToDatum(wasm.rerandomize(new wasm.Register(base.generator, base.publicValue)))).toString("hex"));
+      return datums.get(hex)!;
+    };
+    const at = (hex: string, index = 0) => ({
+      ...ownedUtxos[0]!,
+      tx_hash: hex.repeat(32),
+      tx_index: index,
+      inline_datum: { bytes: datumOf(hex), value: null },
+    });
     const sent = (kind: PendingTx["kind"], hex: string, summary: object) =>
       t.activity.sent("preprod", { kind, network: "preprod", txHash: hex.repeat(32), submittedAt: 1, confirmations: null }, summary);
     await sent("move-in", "01", { lovelace: "25000000" });
