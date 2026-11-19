@@ -3,15 +3,16 @@
 // Withdraw and Send share it; each screen says what's special about its own
 // account. Send also takes a seedelf's whole name (`seedelfs`), found in the
 // wallet contract as Send to a seedelf finds it, never by asking Koios about
-// it; your own seedelfs are Move in's. With several recipients, each has its
-// own field (`DestinationInput`), which reports what it read.
+// it; one of your own is read as found too, and Send says the payment goes
+// into your private balance (chunk 51, gap-g8#2). With several recipients,
+// each has its own field (`DestinationInput`), which reports what it read.
 
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type { SeedelfLookup, WithdrawDestination } from "../../shared/rpc";
-import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NAME_RULE, SEEDELF_PREFIX, seedelfName } from "../../shared/seedelf-name";
+import { SEEDELF_NAME_RULE, SEEDELF_PREFIX, seedelfName } from "../../shared/seedelf-name";
 import { call } from "../background";
 import { shortCounterparty } from "../format";
 import { useNetwork } from "../network";
@@ -68,9 +69,7 @@ export function useDestination(to: string, { seedelfs = false, known }: { seedel
     setRead({ state: "reading" });
     const timer = setTimeout(() => {
       const reading: Promise<DestinationRead> = name
-        ? call("seedelf-lookup", { to: name }).then((s) =>
-            s.own ? { state: "error", message: OWN_SEEDELF_FROM_ACCOUNT() } : { state: "seedelf", seedelf: s },
-          )
+        ? call("seedelf-lookup", { to: name }).then((s) => ({ state: "seedelf", seedelf: s }))
         : call("resolve-destination", { to: destination }).then((d) => ({ state: "read", destination: d }));
       reading.then(
         (r) => current && setRead(r),
@@ -215,7 +214,9 @@ export function DestinationField({
             {read.seedelf.label && <><strong>{read.seedelf.label}</strong>{" ·\u00a0"}</>}
             {/* Cut to parts no one else can choose: its prefix and its last sixteen (chunk 51, gap-g10#2). */}
             <code title={read.seedelf.name}>{shortCounterparty(read.seedelf.name)}</code>
-            {saveLink}
+            {/* Your own isn't offered to Contacts, as your own address isn't (below), nor your own Seedelf on
+                Transfer's field. */}
+            {(savedAs || !read.seedelf.own) && saveLink}
           </p>
         ) : read.state === "read" ? (
           <p className="note">

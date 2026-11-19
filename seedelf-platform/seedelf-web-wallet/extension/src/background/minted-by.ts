@@ -9,13 +9,21 @@
 // private history, which is trimmed. A Seedelf minted before this was kept,
 // in another browser, or found after a restore isn't in it; then what the
 // wallet already holds decides, and Koios is never asked about the mint:
-// that would tell it which Seedelf is this wallet's. A Seedelf's UTxO is
-// only ever spent by its removal, so its transaction is the mint:
+// that would tell it which Seedelf is this wallet's. A Seedelf the wallet
+// made sits in its mint's output until its removal. But the policy is open
+// and checks no output, and every register is public through its Seedelf's
+// name, so anyone can mint a Seedelf of their own under the user's register,
+// or send one there, and pay the account in the same transaction (chunk 51,
+// e6#1). So the transaction that made the UTxO is taken for the mint, and
+// only what a stranger can't make says who paid:
 //
 // - another of the wallet's own contract UTxOs from it is a stealth mint's
-//   change, back in the private balance;
-// - one of the account's UTxOs from it, or the account's Activity listing
-//   it, is an account-paid mint's (its change goes to the account);
+//   change, back in the private balance (a stranger's second output under
+//   the user's register reads so too: a dust tag at most, left as it is);
+// - the account's Activity listing it as one the account spent in (its fee:
+//   an input under the account's payment keys, which needs its signature) is
+//   an account-paid mint's. One of the account's UTxOs from it, or a
+//   payment received in it, isn't: anyone's transaction can pay the account;
 // - otherwise it isn't known, and Remove asks.
 //
 // **Which account paid, not only which side** (chunk 18). The mint is public,
@@ -99,8 +107,8 @@ export async function rememberMint(
  * wallet already holds. Undefined when neither says.
  *
  * What the wallet holds is the account it is working on, so an answer worked
- * out that way is **that** account's (`activeAccount`): the mint's change is
- * in its UTxOs or its Activity, which no other account's would be.
+ * out that way is **that** account's (`activeAccount`): the mint is in its
+ * Activity as one it spent in, which no other account's would be.
  */
 export function paidByOf(
   utxo: Pick<KoiosUtxo, "tx_hash" | "tx_index">,
@@ -109,11 +117,14 @@ export function paidByOf(
     recorded: MintedBy;
     /** The wallet's own contract UTxOs, the Seedelfs' included. */
     owned: Array<Pick<KoiosUtxo, "tx_hash" | "tx_index">>;
-    /** The account's UTxOs. */
-    account: Array<Pick<KoiosUtxo, "tx_hash">>;
-    /** The account's transactions, as far as its Activity has read them. */
-    accountTxs: ReadonlySet<string>;
-    /** Which public account those UTxOs and transactions are. */
+    /**
+     * The account's transactions, as far as its Activity has read them. Only one with a fee says the account paid:
+     * Activity sets it only where an input is under the account's payment keys (activity.ts `describe`), which takes
+     * the account's signature. Its kind is worked out, never signed; and a transaction that only pays the account,
+     * which anyone can make, has none (chunk 51, e6#1).
+     */
+    accountActivity: ReadonlyArray<{ txHash: string; fee?: string }>;
+    /** Which public account those transactions are. */
     activeAccount?: number;
   },
 ): PaidByInfo | undefined {
@@ -121,7 +132,7 @@ export function paidByOf(
   if (recorded) return recorded;
   const mint = utxo.tx_hash;
   if (held.owned.some((u) => u.tx_hash === mint && u.tx_index !== utxo.tx_index)) return { side: "seedelf" };
-  if (held.account.some((u) => u.tx_hash === mint) || held.accountTxs.has(mint)) {
+  if (held.accountActivity.some((e) => e.txHash === mint && e.fee !== undefined)) {
     return { side: "account", account: held.activeAccount ?? 0 };
   }
   return undefined;
