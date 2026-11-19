@@ -403,3 +403,51 @@ async fn fund_refuses_a_fee_past_its_change() {
         );
     }
 }
+
+/// The paying address is checked by its payment part alone: a key address
+/// whose stake part is a script (`addr_test1y…`) signs with its payment key
+/// like any other, so `fund` pays from it. It refused one as "Supplied
+/// Address Is Incorrect", since Pallas's `has_script` counts the stake part
+/// too (chunk 51, r2a#1).
+#[tokio::test]
+#[serial]
+async fn fund_pays_from_a_key_address_staked_by_a_script() {
+    let payer = external_address_staked_by_a_script();
+    let from = payer.to_bech32().expect("bech32");
+    let mut scenario = Scenario::start().await;
+    scenario
+        .mount_credential_utxos(vec![seedelf_utxo(
+            scenario.scalar,
+            1,
+            1_500_000,
+            SAMPLE_SEEDELF,
+        )])
+        .await;
+    scenario
+        .mount_address_utxos(vec![address_utxo(&from, 2, 10_000_000, &[])])
+        .await;
+    scenario.arm_web_capture();
+
+    run(
+        FundArgs {
+            address: from,
+            seedelf: SAMPLE_SEEDELF.to_string(),
+            lovelace: Some(3_000_000),
+            assets: vec![],
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect("fund pays from a key address staked by a script");
+
+    let params = protocol_params().await;
+    let tx = decode_tx(&scenario.captured_cbor());
+    assert_sound_transaction(&tx, &scenario, &params);
+    assert_eq!(tx.outputs_to(&wallet_address()).len(), 1);
+    assert_eq!(
+        tx.outputs_to(&payer).len(),
+        1,
+        "change returns to the paying address"
+    );
+}

@@ -37,7 +37,7 @@ Every screen, and what it does, is in [extension/README.md](extension/README.md#
 
 **The public account**
 
-- **Send:** pay up to 20 addresses, ADA Handles (`$name`s) or Seedelfs at once, in the open, as any Cardano wallet does, with an optional note on chain (CIP-20), which is public.
+- **Send:** pay up to 100 addresses, ADA Handles (`$name`s) or Seedelfs at once, in the open, as any Cardano wallet does, with an optional note on chain (CIP-20), which is public.
 - **Make private:** move ADA and tokens from the public account into your private balance.
 - **Staking:** stake with one pool, chosen from every live pool, each with its return on stake over its last 18 epochs. Rewards are spent along with anything the account pays, or withdrawn by hand. **Stop staking** returns the 2 ₳ deposit. **Rewards history** and **Delegation history** list what the stake key was paid and every change to it.
 - **Voting delegation:** Always abstain, Always no confidence, or a DRep, searched by name in a list that ships with the wallet, or by its ID. Cardano keeps staking rewards locked until the vote is delegated, and the wallet says so.
@@ -47,8 +47,8 @@ Every screen, and what it does, is in [extension/README.md](extension/README.md#
 **The private balance**
 
 - **Create a Seedelf:** mint your Seedelf, with an optional tag of your own (public, and anyone can choose the same one), so others can pay you. Minting ties the Seedelf to whatever paid for it. So by default the public account pays, before you make any money private: that links the account to the Seedelf, but not to your private balance. Paying from the private balance instead is a stealth mint, which hides the payer only when that balance came from other people's payments.
-- **Send:** pay up to 20 Seedelfs privately, by their full names.
-- **Make public:** pay up to 20 Cardano addresses or ADA Handles from the private balance.
+- **Send:** pay up to 100 Seedelfs privately, by their full names.
+- **Make public:** pay up to 100 Cardano addresses or ADA Handles from the private balance.
 - **Remove a Seedelf:** burn it and free the ADA it held, into the public account or the private balance. By default the ADA goes back to the side that paid for the Seedelf; when the wallet doesn't know which did (after a restore, or in another browser), you choose.
 - **Large payments:** a payment too large for one transaction goes as several, one after another, and the review says how many.
 

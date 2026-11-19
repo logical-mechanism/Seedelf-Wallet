@@ -45,6 +45,7 @@ pub async fn run(args: RemoveArgs, network_flag: bool, variant: u64) -> Result<(
     if !build::is_payable_address(&addr, network_flag) {
         bail!("Supplied Address Is Incorrect");
     }
+    super::warn_if_a_script(&addr);
 
     // proves the seedelf's UTxO
     let scalar: Scalar = setup::unlock_wallet_interactive();

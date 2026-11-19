@@ -47,7 +47,9 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
     // we need to make sure that the network flag and the address provided makes sense here
     let addr: Address = Address::from_bech32(args.address.as_str())
         .map_err(|e| anyhow::anyhow!("Supplied Address Is Incorrect: {e}"))?;
-    if !(address::is_not_a_script(addr.clone())
+    // A key signs for it: its payment part says, whatever its stake part
+    // (chunk 51, r2a#1).
+    if !(address::is_key_address(&addr)
         && address::is_on_correct_network(addr.clone(), network_flag))
     {
         bail!("Supplied Address Is Incorrect");

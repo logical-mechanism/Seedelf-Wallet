@@ -73,7 +73,8 @@ export class ContactsService {
     }
     const { wasm } = this.deps;
     try {
-      // Why, in the user's words: the other network's, a stake address, a script's (chunk 23's second review, PY-10).
+      // Why, in the user's words: the other network's, a stake address, a Byron one (chunk 23's second review, PY-10).
+      // A script's address saves, as Send pays it, with Send's warning (chunk 51, r2a#1).
       checkPayable(wasm, network, trimmed);
     } catch (e) {
       // A trap is the instance broken, not the address: thrown as it is, so the wallet locks (destination.ts).

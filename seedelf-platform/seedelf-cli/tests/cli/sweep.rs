@@ -314,13 +314,13 @@ async fn sweep_all_leaves_tokens_the_rest_cant_carry() {
     assert!(tx.outputs.iter().all(|o| o.assets.is_empty()));
 }
 
-/// `sweep` refuses a script, stake or other-network address itself, before it
+/// `sweep` refuses a stake or other-network address itself, before it
 /// unlocks the wallet or reads the contract (chunk 51, t1b#9). Core's builders
-/// refuse them too, in their own words, once the contract is read: a payment
-/// with no datum to a script can lock for good there.
+/// refuse them too, in their own words, once the contract is read. A script's
+/// address the ledger takes, so `sweep` does, with a warning (r2a#1, below).
 #[tokio::test]
 #[serial]
-async fn sweep_refuses_to_pay_a_script_stake_or_other_network_address() {
+async fn sweep_refuses_to_pay_a_stake_or_other_network_address() {
     for address in not_payable_addresses() {
         for all in [false, true] {
             let mut scenario = Scenario::start().await;
@@ -349,6 +349,103 @@ async fn sweep_refuses_to_pay_a_script_stake_or_other_network_address() {
             assert_eq!(scenario.requests_to("/api/v1/submittx").await, 0);
         }
     }
+}
+
+/// The run [`sweep_pays_a_scripts_address_and_says_it_carries_no_datum`]
+/// reads, as its child process: `sweep` of 2 ADA to a multisig's address.
+/// Does nothing in the parent.
+#[tokio::test]
+#[serial]
+async fn sweep_to_a_scripts_address_in_a_child_process() {
+    if !is_child("sweep::sweep_to_a_scripts_address_in_a_child_process") {
+        return;
+    }
+    let mut scenario = Scenario::start().await;
+    scenario
+        .mount_credential_utxos(vec![wallet_utxo(scenario.scalar, 1, 10_000_000, &[])])
+        .await;
+    scenario.mount_evaluate(1).await;
+    scenario.mount_collateral().await;
+    scenario.mount_submit().await;
+    let to = a_multisig_address();
+    let swept = run(
+        sweep_args(to.to_bech32().expect("bech32"), Some(2_000_000), false),
+        PREPROD,
+        VARIANT,
+    )
+    .await;
+    match swept {
+        Ok(()) => println!("OUTCOME: sent"),
+        Err(e) => println!("OUTCOME: error: {e:#}"),
+    }
+    let tx = decode_tx(&scenario.submitted_cbor().await);
+    let paid: Vec<(u64, bool)> = tx
+        .outputs_to(&to)
+        .iter()
+        .map(|o| (o.lovelace, o.has_datum))
+        .collect();
+    println!("PAID: {paid:?}");
+}
+
+/// A script's address (its payment part a script: a multisig's, a
+/// contract's) is paid, as the ledger takes it, and `sweep` says first that
+/// the payment carries no datum, which some scripts can never spend and some
+/// let anyone take: it refused one as "Supplied Address Is Incorrect"
+/// (chunk 51, r2a#1; the owner's call of 2026-11-18, a warning rather than a
+/// refusal).
+#[test]
+#[serial]
+fn sweep_pays_a_scripts_address_and_says_it_carries_no_datum() {
+    let (stdout, stderr) = run_child(
+        "sweep::sweep_to_a_scripts_address_in_a_child_process",
+        std::time::Duration::from_secs(120),
+    );
+    assert_eq!(
+        line_after(&stdout, "OUTCOME: ").as_deref(),
+        Some("sent"),
+        "{stdout}\n{stderr}"
+    );
+    assert_eq!(
+        line_after(&stdout, "PAID: ").as_deref(),
+        Some("[(2000000, false)]"),
+        "one output pays it exactly, with no datum"
+    );
+    assert!(
+        stdout.contains(
+            "That's a script's address. This payment carries no datum: some scripts can never spend it, and some let anyone take it."
+        ),
+        "{stdout}"
+    );
+}
+
+/// A key address whose stake part is a script (`addr_test1y…`) is an
+/// ordinary payee: only its payment key spends what's paid there, with no
+/// datum. `sweep` refused it as a script's (chunk 51, r2a#1).
+#[tokio::test]
+#[serial]
+async fn sweep_pays_a_key_address_staked_by_a_script() {
+    let mut scenario = Scenario::start().await;
+    scenario
+        .mount_credential_utxos(vec![wallet_utxo(scenario.scalar, 1, 10_000_000, &[])])
+        .await;
+    scenario.mount_evaluate(1).await;
+    scenario.mount_collateral().await;
+    scenario.mount_submit().await;
+    let to = external_address_staked_by_a_script();
+    run(
+        sweep_args(to.to_bech32().expect("bech32"), Some(2_000_000), false),
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect("sweep pays a key address staked by a script");
+    let tx = decode_tx(&scenario.submitted_cbor().await);
+    let paid: Vec<(u64, bool)> = tx
+        .outputs_to(&to)
+        .iter()
+        .map(|o| (o.lovelace, o.has_datum))
+        .collect();
+    assert_eq!(paid, vec![(2_000_000, false)]);
 }
 
 /// A stranger's row at the KEY address carrying the contract's hash, under

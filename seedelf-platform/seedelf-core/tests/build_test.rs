@@ -999,11 +999,13 @@ fn send_refuses_what_would_lose_money() {
         .map(|e| e.to_string())
         .unwrap_or_default()
     };
-    // A script (the wallet contract itself: the output would carry no datum).
-    assert!(err(&w.wallet, 2_000_000).contains("normal preprod address"));
+    // A script's address, the wallet contract's own here, the ledger takes:
+    // the output carries no datum, which the wallet warns of rather than
+    // refuses (chunk 51, r2a#1; the owner's call of 2026-11-18).
+    assert_eq!(err(&w.wallet, 2_000_000), "");
     // Mainnet, from preprod.
     let mainnet = w.account.base_address(false, Role::Receive, 0).unwrap();
-    assert!(err(&mainnet, 2_000_000).contains("normal preprod address"));
+    assert!(err(&mainnet, 2_000_000).contains("Payments go to an address on preprod"));
     // Below the output's minimum.
     assert!(err(&elsewhere(), 500_000).contains("needs at least"));
     // More than there is.
@@ -1370,14 +1372,25 @@ fn several_recipients_refuse_max_too_much_and_no_one() {
         )])
         .contains("register isn't valid")
     );
+    // A script's address, the wallet contract's own, takes a payment as the
+    // ledger has it, with no datum (chunk 51, r2a#1); a stake address none.
     let script = Payee::Address(&w.wallet);
-    assert!(
+    assert_eq!(
         err(&[AccountPay::new(
             script,
             AccountAmount::Lovelace(2_000_000),
             &[]
+        )]),
+        ""
+    );
+    let stake = w.account.stake_address(true).unwrap();
+    assert!(
+        err(&[AccountPay::new(
+            Payee::Address(&stake),
+            AccountAmount::Lovelace(2_000_000),
+            &[]
         )])
-        .contains("normal preprod address")
+        .contains("Payments go to an address on preprod")
     );
 }
 

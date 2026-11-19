@@ -496,3 +496,43 @@ async fn extract_goes_when_a_strangers_tokens_at_the_address_total_past_a_u64() 
         ]
     );
 }
+
+/// The address receiving the funds, which pays the fee and puts up the
+/// collateral, is checked by its payment part alone: a key address whose
+/// stake part is a script (`addr_test1y…`) signs with its payment key like
+/// any other. `util extract` refused one as "Supplied Address Is Incorrect"
+/// (chunk 51, r2a#1).
+#[tokio::test]
+#[serial]
+async fn extract_pays_a_key_address_staked_by_a_script() {
+    let to = external_address_staked_by_a_script();
+    let address = to.to_bech32().expect("bech32");
+    let mut scenario = Scenario::start().await;
+    scenario
+        .mount_utxo_info(vec![empty_datum_utxo(50, 2_000_000, &[])])
+        .await;
+    scenario
+        .mount_address_utxos(vec![
+            address_utxo(&address, 51, 5_000_000, &[]),
+            address_utxo(&address, 52, 10_000_000, &[]),
+        ])
+        .await;
+    scenario.mount_evaluate(1).await;
+    scenario.arm_web_capture();
+
+    run(
+        ExtractArgs {
+            utxo: format!("{}#0", tx_hash(50)),
+            address,
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect("extract pays a key address staked by a script");
+
+    let params = protocol_params().await;
+    let tx = decode_tx(&scenario.captured_cbor());
+    assert_sound_transaction(&tx, &scenario, &params);
+    assert_eq!(tx.outputs_to(&to).len(), 1, "everything goes to it");
+}

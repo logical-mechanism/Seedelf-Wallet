@@ -10,7 +10,9 @@
 // can pair their own payment key with it (the 2026-11-02 bounty report). One
 // of its payment keys under a stake part none of its accounts' is the
 // account's, `stakeElsewhere`: its stake works for someone else meanwhile
-// (chunk 51, x1a#1). Nothing is asked of anyone for it.
+// (chunk 51, x1a#1). Nothing is asked of anyone for it. Any address on the
+// network is paid, a script's too, which is flagged `script`: its payment
+// carries no datum (chunk 51, r2a#1). A Byron address isn't.
 
 import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
@@ -70,19 +72,31 @@ export async function resolveDestination(
     ...(account !== undefined ? { ownAccount: account } : {}),
     ...(staked !== undefined ? { staked } : {}),
     ...(stakeElsewhere ? { stakeElsewhere } : {}),
+    ...(isScriptAddress(address) ? { script: true as const } : {}),
   };
   return handle ? { address, handle, ...mine } : { address, ...mine };
 }
 
-/** The text of WebAssembly's refusal of something that doesn't read as an address at all (api::payable_address). */
-const NOT_BECH32 = /isn't a Cardano address/;
+/**
+ * Whether `address`, one WebAssembly took, is a script's: its payment part a script (a multisig's, a contract's).
+ * CIP-19's header types 1, 3, 5 and 7 say so, and the header's top bits are the first character after the "1":
+ * `addr1z…`, `addr1x…`, `addr12…`, `addr1w…` (core's `address::is_script_address`). The ledger takes a payment
+ * there, so the wallet pays it, but with no datum, which some scripts can never spend and some let anyone take, the
+ * Seedelf contract's own address among them: the forms and reviews say so where the refusal was (chunk 51, r2a#1;
+ * the owner's call of 2026-11-18). The stake part says nothing of it: a key address staked by a script is a key's.
+ */
+export const isScriptAddress = (address: string): boolean => /^addr(_test)?1[zx2w]/.test(address.trim().toLowerCase());
+
+/** The text of WebAssembly's refusal of a Byron address, which the wallet doesn't pay (api::payable_address). */
+const BYRON = /can't pay a Byron address/;
 
 /**
  * Throws why `address` can't be paid on `network`, in the user's language and naming the thing that's wrong:
- * the other network's address, a stake address, a script's, or no address at all. WebAssembly's one English
- * sentence for all of them ("Payments go to a normal preprod address: not a script, stake or other network's
- * address") left the user to work out which (chunk 23's second review, PY-10). The prefix says the first two;
- * WebAssembly still checks the rest, and anything else it refuses on this network's prefix is a script.
+ * the other network's address, a stake address, a Byron one, or no address at all. WebAssembly's one English
+ * sentence for all of them left the user to work out which (chunk 23's second review, PY-10). The prefix says the
+ * first two; WebAssembly still checks the rest. A script's address is paid, with a warning (`isScriptAddress`), and a
+ * Byron address is refused in words of its own: "That isn't a Cardano address" was false of one (chunk 51, r2a#1).
+ * Anything else it refuses on this network's prefix doesn't read as an address.
  */
 export function checkPayable(wasm: typeof Wasm, network: NetworkName, address: string): void {
   const text = address.trim().toLowerCase();
@@ -97,7 +111,7 @@ export function checkPayable(wasm: typeof Wasm, network: NetworkName, address: s
     // A trap is the instance broken, not the address: thrown as it is, so the wallet locks (wasm.ts).
     if (isTrap(e)) throw e;
     const message = e instanceof Error ? e.message : String(e);
-    throw new Error(NOT_BECH32.test(message) ? t("worker.address.notAddress") : t("worker.address.script"));
+    throw new Error(BYRON.test(message) ? t("worker.address.byron") : t("worker.address.notAddress"));
   }
 }
 

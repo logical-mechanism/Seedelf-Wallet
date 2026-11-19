@@ -12,6 +12,7 @@
 // own stake key ties nothing new, and with one account it's always that one.
 // The reverse shape, the user's payment key under a stake part that isn't
 // theirs, is the user's own, and has a line of its own (`StakeElsewhereNote`).
+// So does a script's address, paid with no datum (`ScriptNote`).
 
 import { useT } from "../../i18n";
 import { useAccounts } from "../accounts";
@@ -61,6 +62,22 @@ export function StakeElsewhereNote({ side, nth }: { side: "send" | "withdraw"; n
   return (
     <Callout tone="warn" testId={`${side}-stake-elsewhere`}>
       {nth === undefined ? t("send.warn.stakeElsewhere") : t("send.warn.stakeElsewhereNth", { number: nth })}
+    </Callout>
+  );
+}
+
+/**
+ * A script's address: its payment part is a script, a multisig's or a contract's. The ledger takes a payment there, so
+ * Send and Make public make it (the wallet refuses only what the ledger or the contracts refuse), but with no datum,
+ * which some scripts can never spend and some let anyone take, the Seedelf contract's own address among them. It was
+ * refused; this one line is where the refusal was, on the form and the review, with Review live (chunk 51, r2a#1; the
+ * owner's call of 2026-11-18). One line for both forms. `nth`: which recipient, on a review that pays several (PY-5).
+ */
+export function ScriptNote({ side, nth }: { side: "send" | "withdraw"; nth?: number }) {
+  const t = useT();
+  return (
+    <Callout tone="warn" testId={`${side}-script`}>
+      {nth === undefined ? t("send.warn.script") : t("send.warn.scriptNth", { number: nth })}
     </Callout>
   );
 }

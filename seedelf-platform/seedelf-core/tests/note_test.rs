@@ -104,8 +104,11 @@ fn message_of(bytes: &[u8]) -> (Vec<String>, bool) {
     (lines, matches)
 }
 
+/// One line of at most 500 characters, what Activity keeps of a note: the
+/// ledger holds each of CIP-20's lines to 64 bytes, not a note to one line
+/// (chunk 51, gap-g8#3).
 #[test]
-fn a_note_is_one_line_of_at_most_64_characters() {
+fn a_note_is_one_line_of_at_most_500_characters() {
     assert_eq!(Note::new("").unwrap(), None);
     assert_eq!(Note::new("   ").unwrap(), None);
     let note = Note::new("  Invoice 42  ").unwrap().unwrap();
@@ -113,9 +116,14 @@ fn a_note_is_one_line_of_at_most_64_characters() {
     assert_eq!(note.text(), "Invoice 42");
 
     let full = "x".repeat(MAX_NOTE_CHARS);
-    assert_eq!(Note::new(&full).unwrap().unwrap().lines(), [full.as_str()]);
+    let lines = Note::new(&full).unwrap().unwrap().lines().to_vec();
+    assert_eq!(lines.len(), MAX_NOTE_CHARS.div_ceil(64));
+    assert_eq!(lines.concat(), full);
     let long = Note::new(&"x".repeat(MAX_NOTE_CHARS + 1)).unwrap_err();
-    assert_eq!(long.to_string(), "A note is at most 64 characters, not 65");
+    assert_eq!(
+        long.to_string(),
+        "A note is at most 500 characters, not 501"
+    );
 
     for text in ["two\nlines", "a\ttab", "bell\u{7}"] {
         let e = Note::new(text).unwrap_err().to_string();
@@ -134,7 +142,7 @@ fn a_note_over_64_bytes_is_split_into_lines_that_fit() {
     assert_eq!(note.text(), text, "rejoined at the spaces it was cut at");
 
     // No spaces: cut between characters, never inside one.
-    let dense = "é".repeat(MAX_NOTE_CHARS);
+    let dense = "é".repeat(64);
     let note = Note::new(&dense).unwrap().unwrap();
     let half = "é".repeat(32);
     assert_eq!(note.lines(), [half.as_str(), half.as_str()]);

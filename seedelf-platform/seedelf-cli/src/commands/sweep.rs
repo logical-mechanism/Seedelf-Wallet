@@ -140,6 +140,7 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     if !build::is_payable_address(&addr, network_flag) {
         bail!("Supplied Address Is Incorrect");
     }
+    super::warn_if_a_script(&addr);
 
     // proves the inputs, and re-randomizes the change
     let scalar: Scalar = setup::unlock_wallet_interactive();

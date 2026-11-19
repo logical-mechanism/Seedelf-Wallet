@@ -52,6 +52,11 @@ pub fn is_on_correct_network(addr: Address, network_flag: bool) -> bool {
 ///
 /// This function checks if the provided Cardano address does not contain a script.
 ///
+/// It counts the stake part too (Pallas's `has_script`), so a key address
+/// staked by a script reads as a script's here. Whether a key spends from an
+/// address, or a payment there needs no datum, is its payment part's to say:
+/// [`is_key_address`] and [`is_script_address`] (chunk 51, r2a#1).
+///
 /// # Arguments
 ///
 /// * `addr` - A Cardano address to verify.
@@ -62,6 +67,24 @@ pub fn is_on_correct_network(addr: Address, network_flag: bool) -> bool {
 /// * `false` if the address contains a script.
 pub fn is_not_a_script(addr: Address) -> bool {
     !Address::has_script(&addr)
+}
+
+/// Whether a key spends from `addr`: a Shelley address whose payment part is
+/// a key hash, whatever its stake part (a key's, a script's, a pointer or
+/// none). A key address staked by a script (CIP-19's type 2, `addr1y…`) is
+/// one: only its payment key spends what's there (chunk 51, r2a#1).
+pub fn is_key_address(addr: &Address) -> bool {
+    matches!(addr, Address::Shelley(s) if !s.payment().is_script())
+}
+
+/// Whether `addr` is a script's address: a Shelley address whose payment
+/// part is a script (CIP-19's types 1, 3, 5 and 7: `addr1z…`, `addr1x…`,
+/// `addr12…`, `addr1w…`), a multisig's or a contract's. The ledger takes a
+/// payment there; one this crate builds carries no datum, which some scripts
+/// can never spend and some let anyone take, the Seedelf contract's own
+/// address among them (chunk 51, r2a#1).
+pub fn is_script_address(addr: &Address) -> bool {
+    matches!(addr, Address::Shelley(s) if s.payment().is_script())
 }
 
 /// Generates the wallet contract address for the specified Cardano network.

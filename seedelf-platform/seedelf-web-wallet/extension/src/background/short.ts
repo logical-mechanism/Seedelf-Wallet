@@ -26,11 +26,22 @@ const PRIVATE_SHORT = /Not enough ADA in the Seedelf balance/;
 const TOO_MANY = /needs more computation than a transaction may use/;
 
 /**
- * More UTxOs than the wallet sends at once, in the user's words: several recipients at once, or past what its parts
- * spend (the owner's test of 1.6.0); any other error as it was.
+ * Core's refusal of a transaction, or one of its outputs, bigger than the ledger takes (build.rs `TooLarge`: 16 KiB, or
+ * 5,000 bytes of tokens in an output), where no split could send it either: several recipients go as one transaction.
+ */
+const TOO_LARGE = /over the network's limit of \d+/;
+
+/**
+ * More than the wallet sends at once, in the user's words: more UTxOs than one transaction spends (several recipients
+ * at once, or past what its parts spend; the owner's test of 1.6.0), or more than one transaction holds, which only
+ * the ledger's 16 KiB now bounds once the recipients are many (chunk 51, gap-g8#4: core's English reached es and ja
+ * users). Any other error as it was.
  */
 export function tooMany(e: unknown): unknown {
-  return e instanceof Error && TOO_MANY.test(e.message) ? new Error(t("worker.parts.tooMany")) : e;
+  if (!(e instanceof Error)) return e;
+  if (TOO_MANY.test(e.message)) return new Error(t("worker.parts.tooMany"));
+  if (TOO_LARGE.test(e.message)) return new Error(t("worker.parts.tooLarge"));
+  return e;
 }
 
 /** Whether `e` is core saying the public account can't pay. */

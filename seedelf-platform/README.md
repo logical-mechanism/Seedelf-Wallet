@@ -141,7 +141,7 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 | `util age` | How old a Seedelf is. | `-s, --seedelf` |
 | `util statistics` | Statistics about the Seedelf protocol. | |
 | `util history` | Your spends and receipts. | `--spend-only`, `--receive-only` |
-| `util mint` | Mints a new Seedelf paid from your balance, with no browser wallet. With `--generator` and `--public-value`, it mints a Seedelf for someone else, under the register they give you (theirs from `util base`). | `-l, --label`, `-g, --generator`, `-p, --public-value`, `--utxo` |
+| `util mint` | Mints a new Seedelf paid from your balance, with no browser wallet. With `--generator` and `--public-value`, it mints a Seedelf for someone else, under a fresh re-randomization of the register they give you (theirs from `util base`): still theirs, but no two Seedelfs minted for them share a datum. | `-l, --label`, `-g, --generator`, `-p, --public-value`, `--utxo` |
 | `util extract` | Sends a UTxO at the contract that has no datum to an address. A payment sent to the contract without a datum has no register, so the contract lets anyone spend it. The address pays the fee and needs a 5 ADA collateral UTxO, and its browser wallet signs. | `-u, --utxo`, `-a, --address` |
 | `util migrate` | For moving funds to a newer contract variant. Variant 1 is the only one, so it does nothing yet. | `--from-variant` |
 | `external balance` | The external wallet's address and balance (see below). | |
@@ -150,6 +150,7 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 - **Amounts:** `--lovelace` (`--lovelaces` for `transfer`) is in lovelace: 1 ADA is 1,000,000. `--asset` is `<policy_id>.<token_name>=<amount>`, both in hex. For `fund` and `sweep`, repeat it, or comma-separate several tokens in one; `transfer` takes one per Seedelf, below.
 - **Several Seedelfs at once:** `transfer` takes `-s` once for each Seedelf, `-l` once for each, in the same order, and `--asset` once for each if any has tokens, comma-separating that Seedelf's tokens (`--asset ""` for one that has none).
 - **`--utxo`** for `transfer`, `sweep` and `util mint` is `<tx_hash>#<index>`, repeatable: the UTxOs to spend, in place of the CLI's own pick. It picks among all your UTxOs that hold no Seedelf, and silently skips any other; `sweep --all` ignores it. `util extract`'s `-u, --utxo` is the one UTxO it extracts.
+- **Addresses:** `sweep` and `remove` pay any address on the network but a stake address. A script's address (a multisig's, a contract's) they pay too, as the ledger does, saying first that the payment carries no datum, which some scripts can never spend and some let anyone take. The browser wallet's address for `create`, `fund` and `util extract` needs a key's payment part, whatever its stake part.
 
 ### dApp Interactions: The Sweep-Fund Flow
 
@@ -193,6 +194,7 @@ Both flows keep the dApp apart from your Seedelf. The new wallet is funded from 
 - **A submit Koios doesn't confirm may still have gone through.** The CLI prints a transaction's id before it submits, and says so when Koios doesn't answer in time, answers with a server error, or answers with something other than the id. Look the id up before you run the command again: a second run builds and pays again.
 - **The CLI trusts Koios.** It runs no node. Koios can't spend your funds, since a spend needs your key's proof, but a Koios that lied could hide UTxOs, or report a wrong register for a Seedelf or a wrong address for an ADA Handle, and so redirect a payment.
 - **A spend draws on at most 20 of your UTxOs** that hold no Seedelf: any holding the tokens it sends, as few as hold them, then those that bring most, whatever they hold: each one's ADA beyond what its own tokens need. Anyone can pay your Seedelf, so a stranger's pile of tokens holding too little ADA comes last. `transfer`, `sweep` and `util mint` never pick a UTxO holding a reference script themselves, since spending one costs Conway's reference-script fee, but `--utxo` can name one. `sweep --all` sends the 20 that bring most that it can spend together, reference scripts included up to what one transaction may use, or as many of them as one transaction holds, and says what it left; run it again for the rest. When it sends nothing, it names the UTxOs whose tokens need more ADA than they hold. `external sweep` does the same, with no limit of 20.
+- **A stranger's tokens can take your ADA with them.** Anyone can pay your Seedelf, or the external wallet, a pile of tokens holding too little ADA. `sweep --all` and `external sweep` send everything they can spend together, such a pile too, and its tokens go on with your own ADA: about 1.5 ADA for each 20 of them, the least an output holding them must carry.
 
 The root README's [Wallet Limitations](https://github.com/logical-mechanism/Seedelf-Wallet#wallet-limitations) has the known attacks in full.
 

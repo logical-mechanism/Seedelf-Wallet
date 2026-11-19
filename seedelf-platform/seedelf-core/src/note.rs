@@ -19,11 +19,15 @@ use crate::build::tx_id;
 /// CIP-20's metadata label.
 pub const NOTE_LABEL: u64 = 674;
 
-/// The longest note, in characters: one of CIP-20's lines, as Lace allows.
-pub const MAX_NOTE_CHARS: usize = 64;
+/// The longest note, in characters: what the web wallet's Activity keeps of
+/// a note (activity.ts `NOTE_MAX`), so one it writes reads back there. The
+/// ledger holds each of CIP-20's lines to 64 bytes and takes as many as fit
+/// the transaction, which `settle` checks; 64 characters was one line, Lace's
+/// limit, not the ledger's (chunk 51, gap-g8#3).
+pub const MAX_NOTE_CHARS: usize = 500;
 
-/// The ledger's longest metadata text, in bytes. A note longer than this
-/// (possible outside ASCII) is split into several of CIP-20's lines.
+/// The ledger's longest metadata text, in bytes. A note longer than this is
+/// split into several of CIP-20's lines.
 const MAX_LINE_BYTES: usize = 64;
 
 /// A note: one line of text, at most [`MAX_NOTE_CHARS`] characters.
