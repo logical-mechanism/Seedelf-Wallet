@@ -10,12 +10,12 @@
 import { blake2b } from "@noble/hashes/blake2.js";
 import { describe, expect, it } from "vitest";
 
-import { skip, txId, txInputs } from "../src/background/cbor";
+import { bodyOutpoints, skip, txId, txInputs } from "../src/background/cbor";
 import { SESSION_DAPP_SIGNED, type DappError, type DappSession } from "../src/background/dapp";
 import { SESSION_SEND } from "../src/background/send";
 import { SESSION_SPENT_SITES } from "../src/background/spent";
 import { APIError, TxSignError } from "../src/shared/dapp";
-import { loadTestWasm, testBalances, vectors } from "./fakes";
+import { koiosPreprod, loadTestWasm, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const bytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
@@ -152,6 +152,101 @@ describe("gap-g8#5: a transaction written with indefinite lengths", { timeout: 3
       keptMap: { spent: true, record: true },
       // Sent, rather than refused unread.
       submitArray: { reachedKoios: true, refusedUnread: false },
+    });
+  });
+});
+
+// Chunk 51, sign#2 (its verifier's test): gap-g8#5 read the list and the body in either length, but each outpoint's own
+// pair stayed read as a definite one. The ledger reads `[_ txid, index]` too (TxIn's decodeRecordNamed), and so do
+// Pallas and decode.rs. cbor.ts read the next outpoint from the pair's break ("5820#2"), or stopped at it in an open
+// set: a site's signTx spending two of the account's UTxOs was refused as spending one the wallet can't find, and its
+// submitTx left the second out of what's kept as spent, so getUtxos handed it out again.
+describe("sign#2: an outpoint whose pair is written open-length", { timeout: 60_000 }, () => {
+  const A = "11".repeat(32);
+  const B = "22".repeat(32);
+  const outpoint = (id: string, index: string, open = false) => (open ? `9f5820${id}${index}ff` : `825820${id}${index}`);
+  const OWN = account(12).preprod.receive_0 as string;
+  const SITE = account(15).preprod.receive_0 as string;
+  /** A site's transaction spending A#0, written `[_ A, 0]`, and B#1, paying 4 ₳ to SITE for a 0.17 ₳ fee. */
+  const spendingBoth = () => {
+    const wasm = loadTestWasm();
+    const inputs = `82${outpoint(A, "00", true)}${outpoint(B, "01")}`;
+    return `84a300${inputs}018182${`5839${wasm.cip30Address(SITE)}`}1a003d0900021a00029810a0f5f6`;
+  };
+
+  /** A wallet with a site connected to the public account, which holds A#0 and B#1 at OWN. */
+  async function site() {
+    const t = testBalances();
+    await t.wallet.create(account(12).phrase, PASSWORD);
+    await t.preferences.set({ dappConnector: true, dappPassword: false, spendRewards: false });
+    const template = Object.values(koiosPreprod.accounts)
+      .flatMap((a) => a.account_utxos)
+      .find((u) => u.address === OWN)!;
+    for (const [tx_hash, tx_index] of [
+      [A, 0],
+      [B, 1],
+    ] as const) {
+      t.koios.addedToAccounts.push({ ...template, tx_hash, tx_index, value: "10000000", asset_list: [], block_height: 1 });
+    }
+    const s: DappSession = { id: "sign-2", origin: "https://app.example.com", title: "Example" };
+    const enabling = t.dapp.call(s, "enable", []);
+    for (let i = 0; i < 200 && t.dapp.approvals().length === 0; i++) await tick();
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await enabling).toBe(true);
+    return { t, s };
+  }
+
+  it("is read as WebAssembly and the ledger read it, in a definite, a tagged and an open set, as inputs and as collateral", () => {
+    const wasm = loadTestWasm();
+    const sets = {
+      definite: `82${outpoint(A, "00", true)}${outpoint(B, "01")}`,
+      tagged: `d9010282${outpoint(A, "00", true)}${outpoint(B, "01")}`,
+      open: `9f${outpoint(A, "00", true)}${outpoint(B, "01")}ff`,
+    };
+    const expected = [`${A}#0`, `${B}#1`];
+    type Outpoints = Array<{ txHash: string; index: string }>;
+    const listed = (outpoints: Outpoints) => outpoints.map((o) => `${o.txHash}#${o.index}`);
+    for (const [shape, set] of Object.entries(sets)) {
+      const asInputs = `84a300${set}0180021a00029810a0f5f6`;
+      const asCollateral = `84a40081${outpoint(A, "00")}0180021a000298100d${set}a0f5f6`;
+      // WebAssembly reads both as the ledger does, today.
+      const inputs = (JSON.parse(wasm.decodeTx(wasm.Network.Preprod, asInputs)) as { inputs: Outpoints }).inputs;
+      const collateral = (JSON.parse(wasm.decodeTx(wasm.Network.Preprod, asCollateral)) as { collateral: Outpoints })
+        .collateral;
+      expect({ inputs: listed(inputs), collateral: listed(collateral) }, shape).toEqual({ inputs: expected, collateral: expected });
+      expect(
+        { inputs: read(() => txInputs(bytes(asInputs))), collateral: read(() => bodyOutpoints(bytes(asCollateral), 13)) },
+        shape,
+      ).toEqual({ inputs: expected, collateral: expected });
+    }
+    // An item of the set that isn't a list is no outpoint: thrown, never read past.
+    expect(() => txInputs(bytes("84a30081000180021a00029810a0f5f6"))).toThrow();
+  });
+
+  it("reaches the user from a site's signTx spending two of the account's UTxOs, the first written open-length", async () => {
+    const { t, s } = await site();
+    let heard: unknown;
+    const signing = t.dapp.call(s, "signTx", [spendingBoth(), false]).then(
+      () => undefined,
+      (e: DappError) => void (heard = e.failure),
+    );
+    for (let i = 0; i < 2000 && t.dapp.approvals().length === 0 && heard === undefined; i++) await tick();
+    expect(heard, "refused before the user was asked").toBeUndefined();
+    const approval = t.dapp.approvals()[0]!;
+    if (approval.kind !== "sign-tx") throw new Error(approval.kind);
+    expect(approval.summary.ownInputs).toBe(2);
+    await t.dapp.answer(approval.id, false);
+    await signing;
+  });
+
+  it("keeps both inputs of a site's submitted transaction as spent, so getUtxos hands neither out again", async () => {
+    const { t, s } = await site();
+    await t.dapp.call(s, "submitTx", [spendingBoth()]);
+    const spent = (await t.session.get<Record<string, number>>(SESSION_SPENT_SITES)) ?? {};
+    const handed = ((await t.dapp.call(s, "getUtxos", [])) as string[]).map((u) => u.slice(8, 74));
+    expect({ kept: Object.keys(spent).sort(), handed: handed.filter((u) => u === `${A}00` || u === `${B}01`) }).toEqual({
+      kept: [`${A}#0`, `${B}#1`],
+      handed: [],
     });
   });
 });

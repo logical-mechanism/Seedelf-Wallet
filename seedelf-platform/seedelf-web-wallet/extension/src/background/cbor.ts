@@ -205,10 +205,14 @@ function outpoints(b: Uint8Array, pos: number): string[] {
   const found: string[] = [];
   let p = set.p;
   for (let i = 0; set.indefinite ? b[p] !== 0xff : i < set.n; i++) {
-    const id = head(b, head(b, p).p);
+    // Each outpoint is a pair, `[id, index]`, in either length, as the ledger reads it (TxIn's decodeRecordNamed): the
+    // next starts where the whole pair ends, its break included (chunk 51, sign#2).
+    const pair = head(b, p);
+    if (pair.major !== 4) throw new Error(t("worker.cbor.notWellFormed"));
+    const id = head(b, pair.p);
     const index = head(b, id.p + id.n);
     found.push(`${hex(b.subarray(id.p, id.p + id.n))}#${index.n}`);
-    p = index.p;
+    p = skip(b, p, 3);
   }
   return found;
 }

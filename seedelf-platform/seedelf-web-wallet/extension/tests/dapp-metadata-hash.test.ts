@@ -11,7 +11,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import type { DappError } from "../src/background/dapp";
 import { i18n } from "../src/i18n/core";
+import { APIError } from "../src/shared/dapp";
 import { NetworkContext } from "../src/ui/network";
 import { SignTx } from "../src/ui/screens/DappApprovals";
 import { koiosPreprod, loadTestWasm, testBalances, vectors } from "./fakes";
@@ -39,13 +41,14 @@ describe("a site's transaction whose metadata isn't what its body commits to (ch
 
   /**
    * A site's transaction: the account's 10 ₳ pays it 4 ₳. Its body commits to `committed` (its hash, key 7), none
-   * without; it carries `carried` as its auxiliary data, none (null) without.
+   * without; it carries `carried` as its auxiliary data, none (null) without, and `witnesses` as its witness set, the
+   * site's to write and unsigned (empty without).
    */
-  const tx = ({ committed, carried }: { committed?: string; carried?: string }) => {
+  const tx = ({ committed, carried, witnesses = "a0" }: { committed?: string; carried?: string; witnesses?: string }) => {
     const wasm = loadTestWasm();
     const fields = `0081825820${INPUT}00018182${`5839${wasm.cip30Address(SITE)}`}1a003d0900021a00029810`;
     const body = committed === undefined ? `a3${fields}` : `a4${fields}075820${digest(committed)}`;
-    return `84${body}a0f5${carried ?? "f6"}`;
+    return `84${body}${witnesses}f5${carried ?? "f6"}`;
   };
 
   async function until(check: () => boolean) {
@@ -53,8 +56,8 @@ describe("a site's transaction whose metadata isn't what its body commits to (ch
     expect(check()).toBe(true);
   }
 
-  /** The worker's request for a site's `txCbor`, and the window's words for it. */
-  async function signWindow(txCbor: string) {
+  /** The wallet, holding the 10 ₳, with a site connected to its public account. */
+  async function connected() {
     const t = testBalances();
     await t.wallet.create(signer.phrase, "correct horse battery");
     await t.preferences.set({ dappConnector: true, dappPassword: false, spendRewards: false });
@@ -67,6 +70,12 @@ describe("a site's transaction whose metadata isn't what its body commits to (ch
     await until(() => t.dapp.approvals().length === 1);
     await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
     expect(await enabling).toBe(true);
+    return { t, s };
+  }
+
+  /** The worker's request for a site's `txCbor`, and the window's words for it. */
+  async function signWindow(txCbor: string) {
+    const { t, s } = await connected();
     const signing = t.dapp.call(s, "signTx", [txCbor, false]).catch(() => undefined);
     await until(() => t.dapp.approvals().length === 1);
     const asked = t.dapp.approvals()[0]!;
@@ -102,5 +111,54 @@ describe("a site's transaction whose metadata isn't what its body commits to (ch
       expect(summary.metadataMismatch, JSON.stringify(made)).toBeUndefined();
       expect(page, JSON.stringify(made)).not.toContain(WARNING());
     }
+  }, 60_000);
+
+  // Chunk 51, sign#1. The check was read from Transaction details' decode, a second read beside the one WebAssembly
+  // signs from, and went silent wherever that one failed: one byte after the transaction's end failed it, and the
+  // bytes were read and signed all the same; so did a witness set only the signing read took, which is the site's to
+  // rewrite once it has the signature. Now a byte after the end is refused, as the node refuses it, and the check is
+  // the signing read's own (`metadataMismatch` from WebAssembly). Both need the WebAssembly rebuilt.
+  it("refuses a transaction with a byte after its end unread, as the node does (chunk 51, sign#1)", async () => {
+    const { t, s } = await connected();
+    const shown = t.dappWindow.shown;
+    let heard: unknown;
+    const signing = t.dapp.call(s, "signTx", [`${tx({ committed: COMMITTED, carried: SHOWN })}00`, false]).then(
+      () => (heard = "signed"),
+      (e: DappError) => (heard = e.failure),
+    );
+    for (let i = 0; i < 2000 && heard === undefined && t.dapp.approvals().length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const asked = t.dapp.approvals().length;
+    if (asked) await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+    await signing;
+    expect(asked, "the window asked about it").toBe(0);
+    expect(heard).toMatchObject({ code: APIError.InvalidRequest });
+    expect(String((heard as { info?: unknown }).info)).toMatch(/^The wallet can't read this transaction/);
+    expect(t.dappWindow.shown).toBe(shown);
+  }, 60_000);
+
+  it.each([
+    // [tag, index, more]: Pallas reads it, skipping the third; the ledger and Transaction details refuse it.
+    ["a redeemer key Transaction details can't read", "a105a1830000008200820000", false],
+    // [_ tag, index]: read by all three since sign#2.
+    ["a redeemer key written open-length", "a105a19f0000ff8200820000", true],
+  ])("still warns when its witness set holds %s (chunk 51, sign#1)", async (_, witnesses, details) => {
+    const made = tx({ committed: COMMITTED, carried: SHOWN, witnesses });
+    const wasm = loadTestWasm();
+    let read: string;
+    try {
+      read = (JSON.parse(wasm.decodeTx(wasm.Network.Preprod, made)) as { txHash: string }).txHash;
+    } catch (e) {
+      read = `throws: ${(e as Error).message}`;
+    }
+    expect(read.startsWith("throws"), read).toBe(!details);
+    const { summary, page } = await signWindow(made);
+    expect.soft(summary.metadataMismatch).toBe(true);
+    expect.soft(page).toContain(WARNING());
+    expect.soft(page).toContain("Thanks for order 77");
+    // What only Transaction details' read can say, whether the metadata holds more than the note, fails closed: unread,
+    // it's said to (x1a#3).
+    expect.soft(summary.otherMetadata).toBe(details ? undefined : true);
   }, 60_000);
 });

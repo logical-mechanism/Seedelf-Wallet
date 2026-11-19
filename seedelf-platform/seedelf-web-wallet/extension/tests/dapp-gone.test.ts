@@ -270,6 +270,123 @@ describe("a site's page that leaves its connect question unanswered (chunk 51, G
     expect(await enablingSecond).toBe(true);
   });
 
+  // Chunk 51, sign#3: another page counted as sharing the question only once its enable() reached it, after three
+  // awaits (preferences, the wallet's queue, its sealed read of the sites), each of which can sit behind a reading. The
+  // first page leaving in between turned the site away, and the second, on its way to that very question, heard
+  // "declined just now". A page counts from its enable()'s first line now.
+  describe("nor when another page's enable() is still on its way to that question (chunk 51, sign#3)", () => {
+    /** Lets the second page's enable() go on until it's asked, its question or its unlock wait, or hears something. */
+    async function onward(t: Awaited<ReturnType<typeof on>>, heard: () => unknown) {
+      const asked = () => t.dapp.approvals().length > 0 || t.dapp.unlockingSites().length > 0;
+      for (let i = 0; i < 200 && heard() === undefined && !asked(); i++) await new Promise((r) => setTimeout(r, 0));
+    }
+
+    it("held in its sealed read of the connected sites: it asks itself, and the site isn't turned away", async () => {
+      const t = await on();
+      const first = page();
+      const second = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.approvals().length === 1);
+      // Its read of the connected sites (`site`), a sealed record read on the wallet's queue, held.
+      const realGet = t.store.get.bind(t.store) as (name: string) => Promise<unknown>;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let held = 0;
+      t.store.get = (async (name: string) => {
+        if (name === "dapps") {
+          held++;
+          await gate;
+        }
+        return realGet(name);
+      }) as typeof t.store.get;
+      let heard: unknown;
+      const enablingSecond = t.dapp.call(second, "enable", []).then(
+        () => (heard = "connected"),
+        (e: { failure: unknown }) => (heard = e.failure),
+      );
+      await until(() => held === 1);
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      release();
+      await onward(t, () => heard);
+      t.store.get = realGet as typeof t.store.get;
+      expect.soft(heard, "what the second page heard").toBeUndefined();
+      expect.soft(t.dapp.approvals().map((a) => a.kind), "the second page's own question").toEqual(["connect"]);
+      expect.soft((await t.dapp.declined()).map((d) => d.origin), "the site listed as declined").toEqual([]);
+      if (t.dapp.approvals().length === 1) await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+      await enablingSecond;
+      expect(heard).toBe("connected");
+    });
+
+    it("held at the wallet's queue before its enable() is reached: asked, not turned away", async () => {
+      const t = await on();
+      const first = page();
+      const second = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.approvals().length === 1);
+      // The wallet's queue held, as a reading holds it: the second's call waits in `wallet.state()`.
+      let release!: () => void;
+      const reading = t.wallet.withKeys(() => new Promise<void>((r) => (release = r)));
+      let heard: unknown;
+      const enablingSecond = t.dapp.call(second, "enable", []).then(
+        () => (heard = "connected"),
+        (e: { failure: unknown }) => (heard = e.failure),
+      );
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+      expect(heard).toBeUndefined();
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      release();
+      await reading;
+      await onward(t, () => heard);
+      expect.soft(heard, "what the second page heard").toBeUndefined();
+      expect.soft(t.dapp.approvals().map((a) => a.kind), "the second page's own question").toEqual(["connect"]);
+      expect.soft((await t.dapp.declined()).map((d) => d.origin), "the site listed as declined").toEqual([]);
+      if (t.dapp.approvals().length === 1) await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+      await enablingSecond;
+      expect(heard).toBe("connected");
+    });
+
+    it("on its way to the unlock wait the first page leaves: it waits for the unlock itself", async () => {
+      const t = await on();
+      await t.wallet.lock();
+      const first = page();
+      const second = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.unlockingSites().length === 1);
+      // The second's first read, the connector's switch, held.
+      const realGet = t.preferences.get.bind(t.preferences);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let held = 0;
+      t.preferences.get = (async () => {
+        if (held++ === 0) await gate;
+        return realGet();
+      }) as typeof t.preferences.get;
+      let heard: unknown;
+      const enablingSecond = t.dapp.call(second, "enable", []).then(
+        () => (heard = "connected"),
+        (e: { failure: unknown }) => (heard = e.failure),
+      );
+      await until(() => held === 1);
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      release();
+      await onward(t, () => heard);
+      t.preferences.get = realGet;
+      expect.soft(heard, "what the second page heard").toBeUndefined();
+      expect.soft(t.dapp.unlockingSites(), "the second page waiting for the unlock").toEqual([ORIGIN]);
+      if (t.dapp.unlockingSites().length === 1) {
+        await t.wallet.unlock(PASSWORD);
+        await t.dapp.stateChanged();
+        await until(() => t.dapp.approvals().length === 1);
+        await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+      }
+      await enablingSecond;
+      expect(heard).toBe("connected");
+    });
+  });
+
   it("turns it away once every page that shared the question has gone", async () => {
     const t = await on();
     const first = page();

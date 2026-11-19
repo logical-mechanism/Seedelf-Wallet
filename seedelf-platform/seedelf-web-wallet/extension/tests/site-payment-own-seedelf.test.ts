@@ -97,11 +97,14 @@ async function connected() {
   return { t, s, fresh };
 }
 
-/** Signs the site's transaction paying `datum`, as the user approves it; returns its hash and the signed bytes. */
-async function signed(c: Awaited<ReturnType<typeof connected>>, datum: string, script = false) {
+/**
+ * Signs the site's transaction paying `datum`, as the user approves it; returns its hash and the signed bytes. `shown`:
+ * the witness set the site shows the wallet, unsigned and the site's to rewrite (empty without).
+ */
+async function signed(c: Awaited<ReturnType<typeof connected>>, datum: string, script = false, shown = "a0") {
   const { t, s } = c;
   const unsigned = body(datum, t.deps.wasm.cip30Address(OWN), script);
-  const signing = t.dapp.call(s, "signTx", [`84${unsigned}a0f5f6`, false]);
+  const signing = t.dapp.call(s, "signTx", [`84${unsigned}${shown}f5f6`, false]);
   await until(() => t.dapp.approvals().length === 1);
   const approval = t.dapp.approvals()[0]! as Extract<DappApproval, { kind: "sign-tx" }>;
   expect(approval.summary.paid.map((p) => [p.lovelace, p.datum, p.script])).toEqual([["20000000", "inline", true]]);
@@ -109,7 +112,7 @@ async function signed(c: Awaited<ReturnType<typeof connected>>, datum: string, s
   expect(await t.dapp.answer(approval.id, true, PASSWORD)).toEqual({});
   const witnesses = (await signing) as string;
   expect(witnesses.slice(0, 4)).toBe("a100");
-  return { id: approval.summary.txHash, tx: `84${unsigned}${witnesses}f5f6` };
+  return { id: approval.summary.txHash, tx: `84${unsigned}${witnesses}f5f6`, asked: `84${unsigned}${shown}f5f6` };
 }
 
 describe("a payment the user's public account makes into their own Seedelf through a site (chunk 51, gap-g1#2)", () => {
@@ -238,5 +241,31 @@ describe("a payment the user's public account makes into their own Seedelf throu
     // Never "Made private": the wallet can neither count nor spend it.
     expect(entry && activityTitle(entry)).not.toBe("Made private");
     expect((await t.activity.classes("preprod", [siteOut])).get(`${id}#0`)).not.toEqual(madePrivate(0));
+  });
+
+  // Chunk 51, sign#1: the note was read from Transaction details' decode, a second read beside the one WebAssembly
+  // signs from, so a witness set only the signing read took, which the site rewrites once it has the signature, left
+  // the payment unnoted: a payment received, which a stealth mint takes first. The note is read from the signed
+  // summary itself now (`paid[].register`, `txIndex`): needs the WebAssembly rebuilt.
+  it("notes it whatever witness set the site shows, which Transaction details may not read (chunk 51, sign#1)", { timeout: 120_000 }, async () => {
+    const c = await connected();
+    const { t } = c;
+    const ours = c.fresh();
+    // A redeemer key of three fields, [spend, 0, 0]: Pallas reads it, skipping the third; Transaction details doesn't.
+    const shown = "a105a1830000008200820000";
+    const { id, asked } = await signed(c, ours, false, shown);
+    expect(() => t.deps.wasm.decodeTx(t.deps.wasm.Network.Preprod, asked)).toThrow(/redeemer/);
+    // Landed, before a reading notes it: a spend reads the note.
+    const siteOut: KoiosUtxo = {
+      ...ownedUtxos[0]!,
+      tx_hash: id,
+      tx_index: 0,
+      value: PAID.toString(),
+      asset_list: [],
+      inline_datum: { bytes: ours, value: null },
+      block_height: 9_000_002,
+      block_time: Math.floor(t.clock.now / 1000) + 140,
+    };
+    expect((await t.activity.classes("preprod", [siteOut])).get(`${id}#0`)).toEqual(madePrivate(0));
   });
 });

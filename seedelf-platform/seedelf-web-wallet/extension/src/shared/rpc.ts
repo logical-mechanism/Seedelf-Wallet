@@ -1107,6 +1107,15 @@ export interface DappTxSummary {
      * balance leaves it out (chunk 51, l3sign#1).
      */
     seedelf: "register" | "script-ref" | "none" | "dead" | "hash" | null;
+    /** Which of the body's outputs it is. Absent from a summary WebAssembly read before chunk 51's sign#1. */
+    txIndex?: number;
+    /**
+     * Where `seedelf` is "register" or "script-ref", the register it's paid under, its two points in hex, as WebAssembly
+     * read them from the bytes it signs: the worker matches them against the kept contract view (`registerOnChain`) and
+     * notes a payment into the user's own Seedelf from them (dapp.ts `notePrivate`), never from a second decode a site
+     * can make fail (chunk 51, sign#1).
+     */
+    register?: { generator: string; publicValue: string } | null;
     /**
      * The account's payment key under a stake part that isn't its own, or
      * none: spendable by the account, but its stake counts for someone else,
@@ -1209,20 +1218,20 @@ export interface DappTxSummary {
   metadata: boolean;
   /**
    * Beside `note`, its metadata holds more than the note's lines: another label, or anything else under 674, as
-   * Minswap's extraData. Added by the worker from the same bytes as Transaction details reads (dapp.ts), as `yours` is
-   * (chunk 51, x1a#3).
+   * Minswap's extraData. Added by the worker from the same bytes as Transaction details reads (dapp.ts), as `yours` is,
+   * and wherever Transaction details can't read them (chunk 51, x1a#3, sign#1).
    */
   otherMetadata?: true;
   /**
    * Its metadata isn't what the body's hash commits to, which is what's signed: other metadata, or none, can go on
-   * chain with the signature. A hash with no metadata, or metadata with no hash, too. Read by the worker from the same
-   * bytes as Transaction details reads (`metadataHashMatches`; chunk 51, G5's notes).
+   * chain with the signature. A hash with no metadata, or metadata with no hash, too. WebAssembly's, from the bytes it
+   * signs, as Transaction details checks it (`metadataHashMatches`; chunk 51, G5's notes, sign#1).
    */
   metadataMismatch?: true;
   /**
-   * A register it pays into Seedelf Wallet's contract under is one the kept contract view holds already, matched by
-   * its points: beside a Seedelf's token, or one of the wallet's own UTxOs. The site wrote it, so anyone can see whose
-   * Seedelf it pays. Added by the worker, asking nobody (chunk 51, x1a#2).
+   * A register it pays into Seedelf Wallet's contract under (`paid[].register`) is one the kept contract view holds
+   * already, matched by its points: beside a Seedelf's token, or one of the wallet's own UTxOs. The site wrote it, so
+   * anyone can see whose Seedelf it pays. Added by the worker, asking nobody (chunk 51, x1a#2).
    */
   registerOnChain?: true;
   validFrom: number | null;

@@ -668,6 +668,26 @@ pub(crate) const MAX_TX_BYTES: usize = 64 * 1024;
 // decode, and on a DEX's swap (`orders::check_cancels`); `ogmiosUtxos`
 // decodes without it, behind the worker's `nestsWithin`.
 
+/// Refuses bytes that aren't one transaction and nothing after it, within
+/// core's nesting limit ([`check_nesting`]): before the connector reads a
+/// site's transaction to sign it ([`inspect_tx`], [`sign_tx`]), Transaction
+/// details decodes one (`decode::decode_tx`), or the wallet adds its
+/// witnesses to one ([`attach_witnesses`]). `<tx>00` is two items, not
+/// CIP-30's `cbor<transaction>`, and the node reads no bytes after a
+/// transaction's end. Pallas's decoders stop at the first item's end, so
+/// without this the connector read and signed a transaction every other
+/// reader refused, and the sign window's checks on Transaction details'
+/// decode went silent (chunk 51, sign#1).
+pub(crate) fn one_transaction(bytes: &[u8]) -> Result<()> {
+    check_nesting(bytes)?;
+    let mut whole = minicbor::Decoder::new(bytes);
+    match whole.skip() {
+        Ok(()) if whole.position() == bytes.len() => Ok(()),
+        Ok(()) => bail!("The wallet can't read this transaction: it has bytes after its end."),
+        Err(e) => bail!("The wallet can't read this transaction: {e}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // What a dApp's transaction does
 // ---------------------------------------------------------------------------
@@ -725,6 +745,8 @@ fn lovelace_or_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Paid {
+    /// Which of the body's outputs it is.
+    pub tx_index: u64,
     pub address: String,
     pub lovelace: String,
     pub tokens: Vec<Token>,
@@ -744,11 +766,27 @@ pub struct Paid {
     /// owner's, but no Seedelf Wallet spend takes it yet and the private
     /// balance leaves it out, so it's never read as a Seedelf payment.
     pub seedelf: Option<String>,
+    /// The register it's paid under, where `seedelf` is "register" or
+    /// "script-ref": one only its key's holder can spend. Read here, from the
+    /// bytes signed, so the worker matches it against the kept contract view
+    /// and notes a payment into the user's own Seedelf from what the
+    /// signature covers, never from a second decode a site can make fail
+    /// (chunk 51, sign#1).
+    pub register: Option<PaidRegister>,
     /// The address has one of the account's payment keys, but someone
     /// else's staking part, or none: the account could spend what's there,
     /// but its stake would earn and vote for whoever holds that part. So
     /// it's paid, not the account's.
     pub own_payment_key: bool,
+}
+
+/// A register's two points as its datum writes them (hex), each joined
+/// whole: its generator and its public value.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PaidRegister {
+    pub generator: String,
+    pub public_value: String,
 }
 
 /// One of the account's outputs, kept by the extension until it's on chain,
@@ -931,6 +969,14 @@ pub struct TxSummary {
     pub note: Option<Vec<String>>,
     /// Any metadata at all.
     pub metadata: bool,
+    /// The metadata it carries isn't what the body's hash commits to, and the
+    /// body is what's signed: a site can send other metadata with the
+    /// signature, or none. A hash with no metadata, or metadata with no hash,
+    /// too, and metadata whose bytes couldn't be read for the hash. Read here,
+    /// from the bytes signed (chunk 51, G5's notes; sign#1). Left out of the
+    /// JSON when false, as the worker's `metadataMismatch?: true` reads it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub metadata_mismatch: bool,
     pub valid_from: Option<u64>,
     pub valid_until: Option<u64>,
     /// The account's keys that sign: "0/3", "1/0", "stake".
@@ -1278,7 +1324,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         bail!("The wallet can't read this transaction: it's far larger than Cardano allows.");
     }
     let bytes = hex::decode(text).map_err(|_| anyhow!("The transaction isn't hex."))?;
-    check_nesting(&bytes)?;
+    one_transaction(&bytes)?;
     let tx = conway::Tx::decode_fragment(&bytes)
         .map_err(|e| anyhow!("The wallet can't read this transaction: {e}"))?;
     let tx_hash = build::tx_id(&bytes)?;
@@ -1386,6 +1432,20 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 .collect()
         })
         .unwrap_or_default();
+    // Whether the metadata is what the body's hash commits to, from the bytes it was written in, as Transaction details
+    // checks it (`decode::metadata_hash_matches`). Unread that way, it's a mismatch wherever there's metadata or a hash
+    // of some: the wallet can't say the two agree.
+    let metadata_mismatch = match &minted {
+        Some(m) => {
+            crate::decode::metadata_hash_matches(
+                m.transaction_body.auxiliary_data_hash.as_ref(),
+                &m.auxiliary_data,
+            ) == Some(false)
+        }
+        None => {
+            body.auxiliary_data_hash.is_some() || matches!(tx.auxiliary_data, Nullable::Some(_))
+        }
+    };
 
     let mut spent = Amount::default();
     let mut own_inputs = 0usize;
@@ -1565,7 +1625,20 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             }
             _ => None,
         };
+        // The points of a register only its key's holder can spend, as the contract reads them ([`register_fields`]).
+        let register = match seedelf.as_deref() {
+            Some("register" | "script-ref") => {
+                inline_data(out)
+                    .and_then(register_fields)
+                    .map(|(g, u)| PaidRegister {
+                        generator: hex::encode(g),
+                        public_value: hex::encode(u),
+                    })
+            }
+            _ => None,
+        };
         paid.push(Paid {
+            tx_index: i as u64,
             address: shown,
             lovelace: amount.lovelace.to_string(),
             tokens: amount.tokens_out(),
@@ -1576,6 +1649,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             },
             script,
             seedelf,
+            register,
             own_payment_key: keys.has_payment_key(&address),
         });
     }
@@ -2044,6 +2118,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         donation: body.donation.map(|d| u64::from(d).to_string()),
         note,
         metadata,
+        metadata_mismatch,
         valid_from: body.validity_interval_start,
         valid_until: body.ttl,
         signs: signers.iter().map(signer_name).collect(),
@@ -2191,8 +2266,9 @@ fn raw_item<'b>(d: &mut minicbor::Decoder<'b>) -> Result<&'b [u8]> {
 /// Whether a list or map of `count` items (`None`: indefinite) ends before
 /// its next item, `read` of them in: its count is reached, or a break is
 /// next, which this reads. The ledger reads either length, and so does the
-/// wallet (chunk 51, gap-g8#5).
-fn at_end(d: &mut minicbor::Decoder, count: Option<u64>, read: u64) -> Result<bool> {
+/// wallet (chunk 51, gap-g8#5), a redeemer's own lists too
+/// (`decode::redeemers`; sign#2).
+pub(crate) fn at_end(d: &mut minicbor::Decoder, count: Option<u64>, read: u64) -> Result<bool> {
     if let Some(count) = count {
         return Ok(read == count);
     }
@@ -2254,7 +2330,8 @@ fn raw_vkeys(value: &[u8]) -> Result<(bool, Vec<&[u8]>)> {
 pub fn attach_witnesses(tx_cbor: &str, witness_set: &str) -> Result<String> {
     let tx = hex::decode(tx_cbor.trim())?;
     let added = hex::decode(witness_set.trim())?;
-    check_nesting(&tx)?;
+    // One transaction and nothing after it (chunk 51, sign#1).
+    one_transaction(&tx)?;
     check_nesting(&added)?;
 
     let mut d = minicbor::Decoder::new(&tx);
@@ -2274,9 +2351,6 @@ pub fn attach_witnesses(tx_cbor: &str, witness_set: &str) -> Result<String> {
     let rest = &tx[start..d.position()];
     if items.is_none() && !at_end(&mut d, None, 4)? {
         return Err(four());
-    }
-    if d.position() != tx.len() {
-        bail!("the transaction has bytes after its end");
     }
 
     let new_vkeys = {

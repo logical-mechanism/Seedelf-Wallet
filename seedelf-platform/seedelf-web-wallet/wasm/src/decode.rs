@@ -46,12 +46,13 @@ use pallas_codec::utils::{KeepRaw, Nullable};
 use pallas_crypto::hash::{Hash, Hasher};
 use pallas_primitives::{Fragment, Metadatum, PlutusData, Relay, StakeCredential, conway};
 use seedelf_core::address::wallet_contract;
-use seedelf_core::cbor::check_nesting;
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::staking::{drep_id, pool_id};
 use serde::Serialize;
 
-use crate::cip30::{MAX_TX_BYTES, Spender, network_flag, register_fields, spender};
+use crate::cip30::{
+    MAX_TX_BYTES, Spender, at_end, network_flag, one_transaction, register_fields, spender,
+};
 
 /// A transaction input, as the body names it: nothing says what it holds, and
 /// finding out would cost a lookup per input on a transaction only being read.
@@ -648,15 +649,10 @@ pub fn decode_tx(network: &str, tx_cbor: &str) -> Result<TxDetail> {
         bail!("The wallet can't read this transaction: it's far larger than Cardano allows.");
     }
     let bytes = hex::decode(text).map_err(|_| anyhow!("The transaction isn't hex."))?;
-    check_nesting(&bytes)?;
     // Exactly one transaction and nothing after it, so the hex the view shows
-    // is the transaction and not a transaction with something appended.
-    let mut whole = minicbor::Decoder::new(&bytes);
-    match whole.skip() {
-        Ok(()) if whole.position() == bytes.len() => {}
-        Ok(()) => bail!("The wallet can't read this transaction: it has bytes after its end."),
-        Err(e) => bail!("The wallet can't read this transaction: {e}"),
-    }
+    // is the transaction and not a transaction with something appended: the
+    // check the connector's read shares (chunk 51, sign#1).
+    one_transaction(&bytes)?;
     let tx = conway::MintedTx::decode_fragment(&bytes)
         .map_err(|e| anyhow!("The wallet can't read this transaction: {e}"))?;
     let body = &tx.transaction_body;
@@ -832,8 +828,9 @@ const AUX_FIELDS: [u64; 5] = [0, 1, 2, 3, 4];
 
 /// Whether the body's hash of the auxiliary data is the hash of the auxiliary
 /// data the transaction carries. `None` when it carries neither; false when only
-/// one of the two is there, since each is nothing without the other.
-fn metadata_hash_matches(
+/// one of the two is there, since each is nothing without the other. The
+/// connector's read gives the sign window the same check (`cip30::inspect`).
+pub(crate) fn metadata_hash_matches(
     hash: Option<&pallas_codec::utils::Bytes>,
     aux: &Nullable<KeepRaw<'_, conway::AuxiliaryData>>,
 ) -> Option<bool> {
@@ -1437,7 +1434,11 @@ fn address_network(flag: bool) -> pallas_addresses::Network {
 
 /// The redeemers, read from the bytes as written so each argument's hex is the
 /// argument itself: a list of `[tag, index, data, [mem, steps]]`, or Conway's
-/// map from `[tag, index]` to `[data, [mem, steps]]`.
+/// map from `[tag, index]` to `[data, [mem, steps]]`. Each of those lists in
+/// either length, as the ledger and Pallas read them: to its count, or to its
+/// break, which is read with it, so an open list's next redeemer is read
+/// where it starts. One holding more than its fields is refused, as the
+/// ledger refuses it (chunk 51, sign#2).
 fn redeemers(raw: Option<&KeepRaw<'_, conway::Redeemers>>) -> Result<Vec<DetailRedeemer>> {
     let Some(raw) = raw else {
         return Ok(Vec::new());
@@ -1445,11 +1446,20 @@ fn redeemers(raw: Option<&KeepRaw<'_, conway::Redeemers>>) -> Result<Vec<DetailR
     let bytes = raw.raw_cbor();
     let mut d = minicbor::Decoder::new(bytes);
     let unreadable = |e: minicbor::decode::Error| anyhow!("a redeemer isn't readable: {e}");
+    // A list of `count` items (`None`: open-length) ends after its `fields`.
+    let close = |d: &mut minicbor::Decoder<'_>, count: Option<u64>, fields: u64| -> Result<()> {
+        if at_end(d, count, fields)? {
+            Ok(())
+        } else {
+            bail!("a redeemer isn't readable: one of its lists holds more than its {fields} fields")
+        }
+    };
     let mut out = Vec::new();
     let ex_units = |d: &mut minicbor::Decoder<'_>| -> Result<(u64, u64)> {
-        d.array().map_err(unreadable)?;
+        let count = d.array().map_err(unreadable)?;
         let mem = d.u64().map_err(unreadable)?;
         let steps = d.u64().map_err(unreadable)?;
+        close(d, count, 2)?;
         Ok((mem, steps))
     };
     match d.datatype().map_err(unreadable)? {
@@ -1463,12 +1473,14 @@ fn redeemers(raw: Option<&KeepRaw<'_, conway::Redeemers>>) -> Result<Vec<DetailR
                     d.skip().map_err(unreadable)?;
                     break;
                 }
-                d.array().map_err(unreadable)?;
+                let key = d.array().map_err(unreadable)?;
                 let tag = d.u64().map_err(unreadable)?;
                 let index = d.u64().map_err(unreadable)?;
-                d.array().map_err(unreadable)?;
+                close(&mut d, key, 2)?;
+                let value = d.array().map_err(unreadable)?;
                 let data = raw_next(&mut d)?;
                 let (mem, steps) = ex_units(&mut d)?;
+                close(&mut d, value, 2)?;
                 out.push(DetailRedeemer {
                     tag: redeemer_tag(tag),
                     index: index.to_string(),
@@ -1490,11 +1502,12 @@ fn redeemers(raw: Option<&KeepRaw<'_, conway::Redeemers>>) -> Result<Vec<DetailR
                     d.skip().map_err(unreadable)?;
                     break;
                 }
-                d.array().map_err(unreadable)?;
+                let record = d.array().map_err(unreadable)?;
                 let tag = d.u64().map_err(unreadable)?;
                 let index = d.u64().map_err(unreadable)?;
                 let data = raw_next(&mut d)?;
                 let (mem, steps) = ex_units(&mut d)?;
+                close(&mut d, record, 4)?;
                 out.push(DetailRedeemer {
                     tag: redeemer_tag(tag),
                     index: index.to_string(),

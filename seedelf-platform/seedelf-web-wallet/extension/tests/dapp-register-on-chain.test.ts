@@ -46,13 +46,14 @@ const CONTRACT = `70${CONTRACT_V1.walletContractHash}`;
 
 /**
  * A site's transaction: it spends FUNDS, pays 25 ₳ into the contract under the inline datum `datum` (CBOR, hex), and
- * the rest less its 0.17 ₳ fee back to `change` (CIP-30 hex). The wallet only reads it.
+ * the rest less its 0.17 ₳ fee back to `change` (CIP-30 hex). The wallet only reads it. `witnesses`: its witness set,
+ * the site's to write and unsigned (empty without).
  */
-function paysContract(datum: string, change: string) {
+function paysContract(datum: string, change: string, witnesses = "a0") {
   const inputs = `81825820${FUNDS.tx_hash}00`;
   const toContract = `a300${bytesOf(CONTRACT)}01${coin(PAID)}028201d818${bytesOf(datum)}`;
   const back = `82${bytesOf(change)}${coin(FUNDS.lovelace - PAID - FEE)}`;
-  return `84a300${inputs}0182${toContract}${back}02${coin(FEE)}a0f5f6`;
+  return `84a300${inputs}0182${toContract}${back}02${coin(FEE)}${witnesses}f5f6`;
 }
 
 /** The Seedelf token a contract row holds, if it holds one. */
@@ -165,5 +166,20 @@ describe("a site's payment into a Seedelf under a register already on chain (chu
     expect.soft(page).not.toContain(OLD_CLAIM);
     // The check reads the contract only as the last reading kept it: a site's request never has it read.
     expect(await keptContractView(t.session, "preprod")).toBeUndefined();
+  });
+
+  // Chunk 51, sign#1: the register came from Transaction details' decode, a second read beside the one WebAssembly signs
+  // from, so a witness set only the signing read took (the site's to rewrite once it has the signature) silenced the
+  // warning. It's the signing read's own now (`paid[].register`): needs the WebAssembly rebuilt.
+  it("still warns when Transaction details can't read the site's witness set (chunk 51, sign#1)", { timeout: 60_000 }, async () => {
+    const { t, s } = await connected();
+    await t.balances.get("preprod");
+    // A redeemer key of three fields, [spend, 0, 0]: Pallas reads it, skipping the third; Transaction details doesn't.
+    const made = paysContract(theirs.inline_datum!.bytes, t.deps.wasm.cip30Address(OWN), "a105a1830000008200820000");
+    expect(() => t.deps.wasm.decodeTx(t.deps.wasm.Network.Preprod, made)).toThrow(/redeemer/);
+    const { summary, page } = await asked(t, s, made);
+    expect(summary.paid.map((p) => p.seedelf)).toEqual(["register"]);
+    expect.soft(summary.registerOnChain).toBe(true);
+    expect.soft(page).toContain(i18n.t("dappUi.warn.registerOnChain"));
   });
 });
