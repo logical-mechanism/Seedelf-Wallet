@@ -4689,7 +4689,10 @@ test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async (
   await page.getByRole("button", { name: "Change who votes for you", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Voting power" })).toBeVisible();
   await expect(page.getByRole("radio", { name: /^Always abstain/ })).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  // The vote already goes to Always abstain. Delegating it there again is a fee-only no-op the ledger takes, so Review
+  // stays live and a note says so (chunk 51, e7b#1).
+  await expect(page.getByTestId("vote-already")).toHaveText("Your voting power already goes there");
+  await expect(page.getByRole("button", { name: "Review" })).toBeEnabled();
   const reads = koios.calls.length;
   await page.getByRole("radio", { name: /^A DRep/ }).click();
   const results = page.getByTestId("drep-results");
