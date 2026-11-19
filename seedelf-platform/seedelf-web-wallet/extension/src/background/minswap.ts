@@ -506,7 +506,8 @@ export interface BuiltOutput {
  * witness set, as Minswap's V1 orders do. Throws on bytes it can't read.
  */
 export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
-  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
+  // A list of four in either length, as the ledger reads one (chunk 51, gap-g8#5).
+  if (tx[0] !== 0x84 && tx[0] !== 0x9f) throw new Error(t("worker.cbor.notFourItems"));
   const witnesses = skip(tx, 1);
   const carried = new Map<string, string>();
   for (const [key, at] of entries(tx, witnesses)) {
@@ -560,7 +561,7 @@ export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
  * by its collateral's owner.
  */
 export function witnessedKeys(tx: Uint8Array): Set<string> {
-  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
+  if (tx[0] !== 0x84 && tx[0] !== 0x9f) throw new Error(t("worker.cbor.notFourItems"));
   const found = new Set<string>();
   for (const [key, at] of entries(tx, skip(tx, 1))) {
     if (key !== 0) continue;

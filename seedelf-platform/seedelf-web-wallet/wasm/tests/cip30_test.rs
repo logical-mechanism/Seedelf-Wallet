@@ -1086,17 +1086,22 @@ fn the_sites_collateral_beside_the_accounts_isnt_the_accounts() {
     );
 }
 
-/// Chunk 51, t1f#3: every sum of amounts the bytes or the rows decide is
-/// checked. The module has no overflow checks of its own (wasm-release), so an
-/// unchecked sum wraps: three of the account's UTxOs of 2^63 - 1 of a token
-/// (one mint holds that much) totalled 2^63 - 3, and the window understated
-/// what leaves by about 1.8 x 10^19 of it.
+/// Chunk 51, t1f#3: no sum of amounts the bytes or the rows decide wraps. The
+/// module has no overflow checks of its own (wasm-release), so an unchecked
+/// sum wraps: three of the account's UTxOs of 2^63 - 1 of a token (one mint
+/// holds that much) totalled 2^63 - 3, and the window understated what leaves
+/// by about 1.8 x 10^19 of it. ADA past a u64 is more than there is, and is
+/// refused. A token's total is a u128 (chunk 51, w2#5): the ledger takes a
+/// transaction spending all three, so it's read exactly, never refused.
 #[test]
-fn amounts_past_what_a_u64_holds_are_refused_never_wrapped() {
+fn amounts_past_what_a_u64_holds_are_never_wrapped() {
     const MOST_A_MINT_MAKES: u64 = 9_223_372_036_854_775_807;
     let said = |b: conway::TransactionBody, rows: Vec<KoiosRow>| {
         cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true))
-            .map(|s| format!("read: net {} lovelace", s.net_lovelace))
+            .map(|s| {
+                let tokens: Vec<_> = s.net_tokens.iter().map(|t| t.quantity.clone()).collect();
+                format!("read: net {} lovelace, {tokens:?}", s.net_lovelace)
+            })
             .unwrap_or_else(|e| e.to_string())
     };
 
@@ -1153,7 +1158,8 @@ fn amounts_past_what_a_u64_holds_are_refused_never_wrapped() {
     assert_eq!(
         [tokens.as_str(), ada.as_str(), staking.as_str()],
         [
-            "a token amount overflows",
+            // 3 × (2^63 - 1) of the token leaves: past a u64, exactly.
+            r#"read: net -6000000 lovelace, ["-27670116110564327421"]"#,
             "an ADA amount overflows",
             "an ADA amount overflows"
         ]
@@ -3014,7 +3020,8 @@ fn a_fee_far_over_any_real_one_isnt_allowed_for() {
 
 #[test]
 fn what_a_contract_utxo_holds_is_never_a_reason_to_refuse() {
-    // Two UTxOs of one token past a u64, and a row whose value can't be read: figures that are only shown.
+    // Two UTxOs of one token past a u64 together, and a row whose value can't be read: figures that are only shown,
+    // the token's exactly (a u128 since chunk 51's w2#5).
     let huge = (POLICY, "74657374", u64::MAX);
     let mut unreadable = row(TX_B, 2, &order_script(), 1, &[]);
     unreadable.value = "not a number".into();
@@ -3025,7 +3032,10 @@ fn what_a_contract_utxo_holds_is_never_a_reason_to_refuse() {
     ];
     let s = releasing(vec![out(&theirs(), 3_800_000, None)], rows);
     assert_eq!(s.contract_inputs, 3);
-    assert_eq!(s.contract_tokens[0].quantity, u64::MAX.to_string());
+    assert_eq!(
+        s.contract_tokens[0].quantity,
+        (2 * u128::from(u64::MAX)).to_string()
+    );
 }
 
 /// The bounty report's own shape: a Plutus order's cancel asks for the account's key, and its body has a script data

@@ -120,13 +120,20 @@ export function txInputs(tx: Uint8Array): string[] {
   return inputs;
 }
 
-/** Where the value under one key of a transaction's body starts, or undefined. */
+/**
+ * Whether a transaction starts as a list of four, in either length: `0x84`, or `0x9f` and a break after its items. The
+ * ledger reads either, and hashes the body as it's written; so does WebAssembly, and so a site's transaction written
+ * either way is read here too (chunk 51, gap-g8#5).
+ */
+const fourItems = (tx: Uint8Array) => tx[0] === 0x84 || tx[0] === 0x9f;
+
+/** Where the value under one key of a transaction's body starts, or undefined. The body is a map of either length. */
 function bodyField(tx: Uint8Array, field: number): number | undefined {
-  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
+  if (!fourItems(tx)) throw new Error(t("worker.cbor.notFourItems"));
   const body = head(tx, 1);
-  if (body.major !== 5 || body.indefinite) throw new Error(t("worker.cbor.bodyNotMap"));
+  if (body.major !== 5) throw new Error(t("worker.cbor.bodyNotMap"));
   let p = body.p;
-  for (let i = 0; i < body.n; i++) {
+  for (let i = 0; body.indefinite ? tx[p] !== 0xff : i < body.n; i++) {
     // The body's fields are two levels in: the transaction, then the body.
     const key = head(tx, p);
     const value = skip(tx, p, 2);
@@ -208,6 +215,6 @@ function outpoints(b: Uint8Array, pos: number): string[] {
 
 /** A transaction's id: the BLAKE2b-256 of its body, exactly as encoded. */
 export function txId(tx: Uint8Array): string {
-  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
+  if (!fourItems(tx)) throw new Error(t("worker.cbor.notFourItems"));
   return hex(blake2b(tx.subarray(1, skip(tx, 1, 1)), { dkLen: 32 }));
 }
