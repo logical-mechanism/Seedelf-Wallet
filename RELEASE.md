@@ -52,7 +52,7 @@ This part is for the maintainers. A CLI release is the Rust workspace and the co
 
 **The `release` environment** (Settings → Environments) is what holds the key: the maintainer as its required reviewer, with *Prevent self-review* off, since whoever pushes the tag approves the run; deployments from tags matching `*.*.*` alone; and `RELEASE_GPG_KEY` and `GPG_PASSPHRASE` as its secrets, never as the repository's. release.yml's build jobs get a read-only token and no secret, since they run every crate's build script; only its `sign-and-publish` job, which builds nothing, reads the key and can write.
 
-Change the version, then run the command below in the repository's root.
+Change the version, then run the command below in the repository's root, on `main` as GitHub has it: `git switch main && git pull --ff-only` first. On a stale `main` the push is refused, but the lines after it still tag and push a commit `main` doesn't hold, and release.yml builds that. Where `main` already has the version, as 0.8.0's PR set it, the `sed` and `cargo update` lines change nothing and `git commit` finds nothing to commit: the tag starts the release.
 
 ```bash
 # set the version being released
