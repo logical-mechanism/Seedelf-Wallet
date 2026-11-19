@@ -1362,7 +1362,7 @@
   "mint.source.account": "公開アカウント",
   "mint.source.seedelf": "プライベート残高",
   "mint.tagLabel": "タグ（任意・誰でも読めます）",
-  "mint.tagRules": "。半角の英数字と記号で最大 {{max}} 文字です（Seedelf Wallet が入力どおりに表示できるよう、アクセント付きの文字は不可）。",
+  "mint.tagRules": "。半角の英数字、スペース、記号で最大 {{max}} 文字です（Seedelf Wallet が入力どおりに表示できるよう、アクセント付きの文字は不可）。",
   "moveIn.bringTokens": "トークンもプライベートにする（任意）",
   "moveIn.maxNote": "手数料と、残すトークンに必要な分を除いたすべてです。コラテラルとロックした UTxO はそのまま残ります。",
   "moveIn.maxNoteRewards": "手数料と、残すトークンに必要な分を除いたすべてです（報酬を含む）。コラテラルとロックした UTxO はそのまま残ります。",
