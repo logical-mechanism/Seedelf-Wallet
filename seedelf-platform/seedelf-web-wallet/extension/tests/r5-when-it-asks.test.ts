@@ -139,7 +139,7 @@ describe("chunk 51, l4docs#2: a 1.9.1 deposit's answer, asked about once more", 
     expect(txInfoAsked(t)).toEqual([[A, M1, M2].sort()]);
   });
 
-  it("after a restore, while a box is held for Koios's answer, a later pool read asks about it together with a box someone else's mix moved since, as privacy.md says", async () => {
+  it("after a restore, while a box is held for Koios's answer, a later pool read asks about it together with a box someone else's mix moved since, as privacy.md and the policy say (l5words#1)", async () => {
     const t = await publicFunded();
     const lj = lovejoinOf(t, { sessionIndices: async () => [0] });
     const [F, U, M3] = [hash("f4"), hash("e4"), hash("d4")];
