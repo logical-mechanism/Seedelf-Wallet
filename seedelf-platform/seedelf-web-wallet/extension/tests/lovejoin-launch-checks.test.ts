@@ -145,9 +145,14 @@ const seedelf = { lovelace: "500000000", utxos: 3, seedelfs: [], locked: { lovel
 const SHOWN = { id: "f5".repeat(28), version: "v2", box: { lovelace: "25000000" }, others: 40, free: 40, floor: 30, boxes: [], lovelace: "0", due: [], notMixed: [], fromPublic: [] };
 let props: Parameters<typeof LovejoinLaunch>[0];
 
-/** What the worker answers of a box: 5 ₳ the least for ADA, and for a token 2 ₳ the least and 100 ₳ the most. */
+/**
+ * What the worker answers of a box: 5 ₳ the least for ADA and 1.5 ₳ its network minimum, and for a token 2 ₳ the least,
+ * 1.6 ₳ the minimum and 100 ₳ the most.
+ */
 const terms = (payload: unknown): LovejoinLaunchTerms =>
-  (payload as { token?: unknown }).token ? { least: "2000000", suggested: "2500000", most: "100000000", pools: [] } : { least: "5000000", suggested: "6000000", pools: [] };
+  (payload as { token?: unknown }).token
+    ? { least: "2000000", minimum: "1600000", suggested: "2500000", most: "100000000", pools: [] }
+    : { least: "5000000", minimum: "1500000", suggested: "6000000", pools: [] };
 
 beforeEach(() => {
   run.reset();
@@ -240,8 +245,14 @@ describe("Start a pool's checks before Review (chunk 51, t1l#20)", () => {
     expect(review(await typed(await adaForm(), "10"))).toEqual({ why: t("lj.launch.classicCopy"), disabled: true, built: false });
   });
 
-  it("a box under the least", async () => {
-    expect(review(await typed(await adaForm(), "4"))).toEqual({ why: t("lj.launch.tooLittle", { least: "5" }), disabled: true, built: false });
+  // Chunk 51, gap-g8#6 (the owner's B2): under S0d's least is a pool one_shot_mint takes, and its review says so; only a
+  // box under the network's minimum, which no mix could make, is refused.
+  it("a box under the least builds, and its review says so", async () => {
+    expect(review(await typed(await adaForm(), "4"))).toEqual({ why: undefined, disabled: false, built: true });
+  });
+
+  it("a box under the network's minimum", async () => {
+    expect(review(await typed(await adaForm(), "1.2"))).toEqual({ why: t("lj.launch.belowMinimum", { minimum: "1.5" }), disabled: true, built: false });
   });
 
   it("a copy of a pool shown already", async () => {

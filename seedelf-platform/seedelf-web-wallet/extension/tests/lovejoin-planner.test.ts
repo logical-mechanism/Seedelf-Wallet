@@ -250,8 +250,9 @@ describe("a return's tokens through their own pools (chunk 34's §7)", SLOW, () 
     expect(review.lovejoin?.parts?.[1]?.pool).toBe(ADA);
     expect(review.lovejoin!.parts![1]!.boxes).toBeGreaterThanOrEqual(1);
     expect(review.lovejoin!.boxes).toBe(2 + review.lovejoin!.parts![1]!.boxes);
+    // Its 2 ₳ box is under S0d's least: what comes back can't pay out part of itself alone, said (chunk 51, gap-g5#1).
     expect(review.lovejoin?.ways).toEqual([
-      { policyId: VIEW.token.policyId, assetName: VIEW.token.assetName, pool: TOKEN, quantity: Q.toString(), boxes: 2, pools: [TOKEN] },
+      { policyId: VIEW.token.policyId, assetName: VIEW.token.assetName, pool: TOKEN, quantity: Q.toString(), boxes: 2, pools: [TOKEN], cantPayPart: true },
     ]);
     // One deposit spends the token; each mix spends its own pool's boxes alone. Its collateral's deposit and mix go
     // last, into the 5 ₳ pool too, now shown (chunk 44).
@@ -1273,6 +1274,8 @@ describe("34e's review findings, each with a test", SLOW, () => {
         boxes: 0,
         pools: [TOKEN],
         skipped: tr("lj.tokens.skip.warn.failed"),
+        // Under S0d's least, as its pool's `stuck` would be said (chunk 51, gap-g5#1); shown only where boxes go in.
+        cantPayPart: true,
       },
     ]);
     // The token comes back with the return; no transaction of the chain draws a box of its pool.
@@ -1732,8 +1735,9 @@ describe("what the screens read of the planner (chunk 34's 34f)", SLOW, () => {
     );
     const review = await sessions.backBuild("preprod", 0);
     expect(review.lovejoin?.parts?.[0]).toEqual({ pool: TOKEN, boxes: 2 });
+    // And what Change's list says of each: the 2 ₳ box is under S0d's least (chunk 51, gap-g5#1).
     expect(review.lovejoin?.values).toEqual({
-      [TOKEN]: { lovelace: "2000000", token: VIEW.token },
+      [TOKEN]: { lovelace: "2000000", token: VIEW.token, cantPayPart: true },
       [ADA]: { lovelace: ADA_VIEW.boxLovelace },
     });
   });

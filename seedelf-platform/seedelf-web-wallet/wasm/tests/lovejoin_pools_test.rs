@@ -187,6 +187,7 @@ fn usable_says_why_a_pool_cant_take_a_mix() {
         pool_ref: None,
         registered: true,
         back_only: false,
+        alone: false,
     })
     .unwrap();
     assert!(classic.usable && classic.why.is_none());
@@ -196,6 +197,7 @@ fn usable_says_why_a_pool_cant_take_a_mix() {
         pool_ref: Some(lj_pool_ref(true)),
         registered: false,
         back_only: false,
+        alone: false,
     })
     .unwrap();
     assert!(!unregistered.usable);
@@ -206,6 +208,7 @@ fn usable_says_why_a_pool_cant_take_a_mix() {
         pool_ref: Some(lj_pool_ref(true)),
         registered: true,
         back_only: false,
+        alone: false,
     })
     .unwrap();
     assert!(lj.usable, "{lj:?}");

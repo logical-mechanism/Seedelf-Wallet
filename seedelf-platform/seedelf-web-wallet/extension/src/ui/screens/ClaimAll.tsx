@@ -20,7 +20,7 @@ import { useEffect, useState } from "react";
 import { joinSentences, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
-import type { SessionBackSummary, SessionView } from "../../shared/rpc";
+import type { LovejoinTokenWay, SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
@@ -282,14 +282,18 @@ export function ClaimReview({
   // pool as any other, and the review says so (the owner's call 34), by the token's name, once however many returns
   // take it there. A return's own review says it under its token's row (TokenWays); this one said nothing (session
   // 5's cross-area review, M2).
-  const stuckTokens = [
+  const tokensWhere = (said: (w: LovejoinTokenWay) => boolean | undefined) => [
     ...new Map(
       picked
         .flatMap((r) => r.lovejoin?.ways ?? [])
-        .filter((w) => w.stuck && w.pool && w.boxes > 0)
+        .filter((w) => said(w) && w.pool && w.boxes > 0)
         .map((w) => [`${w.policyId}${w.assetName}`, tokenText(network, w).label] as const),
     ).values(),
   ];
+  const stuckTokens = tokensWhere((w) => w.stuck);
+  // And one whose boxes come back, but can't then pay out part of themselves on their own: said the same way (chunk 51,
+  // gap-g5#1).
+  const partTokens = tokensWhere((w) => !w.stuck && w.cantPayPart);
 
   return (
     <>
@@ -385,6 +389,15 @@ export function ClaimReview({
           <div className="stack-tight">
             {stuckTokens.map((name) => (
               <span key={name}>{t("claim.warn.skippedItem", { name, why: withoutStop(t("lovejoin.ways.warn.stuck")) })}</span>
+            ))}
+          </div>
+        </Callout>
+      )}
+      {partTokens.length > 0 && (
+        <Callout tone="warn" testId="claim-lovejoin-part">
+          <div className="stack-tight">
+            {partTokens.map((name) => (
+              <span key={name}>{t("claim.warn.skippedItem", { name, why: withoutStop(t("lovejoin.pools.warn.cantPayPart")) })}</span>
             ))}
           </div>
         </Callout>

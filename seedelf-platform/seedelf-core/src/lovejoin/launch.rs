@@ -31,16 +31,21 @@
 //! the three outputs' ADA and the stake deposit ([`Locked`]).
 //!
 //! Before it's returned, the pool it would make is checked as any found pool
-//! is ([`super::verify_pool`]) and must be usable ([`super::usable`]); a
-//! finished launch is checked again from its own bytes ([`launched_pool`]).
+//! is ([`super::verify_pool`]) and measured as usable is ([`super::usable`]):
+//! refused only where a box would be under the network's minimum, which no
+//! mix could make. A box that can't pay its own way back is said
+//! ([`Launch::cant_come_back`]), never refused (the owner's call, chunk 51's
+//! gap-g8#6): `one_shot_mint` takes such a pool, and the wallet mixes into
+//! one someone else starts (call 34). A finished launch is checked again from
+//! its own bytes ([`launched_pool`]).
 
 use super::pool::{
-    CLASSIC_LOVELACE, ReferenceDatum, Rejected, candidate, holder_address, usable, verify_derived,
-    verify_pool,
+    CLASSIC_LOVELACE, ReferenceDatum, Rejected, Unusable, candidate, holder_address, usable,
+    verify_derived, verify_pool,
 };
 use super::templates::{self, Derived, NFT_NAME};
 use super::value::{BoxToken, BoxValue};
-use super::{Protocol, UNIT};
+use super::{CantPayBack, Protocol, UNIT};
 use crate::assets::{Asset, Assets};
 use crate::build::{
     Budgets, Chain, DRAFT_BUDGET, NotEnough, Patches, ScriptFee, ScriptSpend, account_collateral,
@@ -108,8 +113,13 @@ pub struct Launch {
     pub datum: ReferenceDatum,
     pub locked: Locked,
     /// The pool as it will be once on chain, its references standing in for
-    /// the outputs the launch makes: what [`super::usable`] passed.
+    /// the outputs the launch makes: what [`super::usable`] measured.
     pub pool: Protocol,
+    /// A box of it can't pay its own way back under the parameters it was
+    /// built under: what's left of one after the withdraw's fee, and what its
+    /// Seedelf output needs. Said on the review, never refused (chunk 51,
+    /// gap-g8#6): its boxes wait in the pool, as any such pool's do.
+    pub cant_come_back: Option<CantPayBack>,
 }
 
 /// What a launch spending `seed` makes, whoever pays for it.
@@ -125,6 +135,8 @@ struct Made {
     staking: Staking,
     locked: Locked,
     pool: Protocol,
+    /// What [`check_usable`] said of a box's way back; none until it's asked.
+    cant_come_back: Option<CantPayBack>,
 }
 
 /// An output at the holder with `lovelace` its least: the price of a byte
@@ -174,22 +186,30 @@ fn check_terms(terms: &Terms, seedelf_policy: &str) -> Result<()> {
 
 /// What a launch spending `seed` with `terms` makes, checked: its datum one
 /// `one_shot_mint` takes and the wallet reads, its pool one the wallet
-/// trusts, reading its scripts from the holder, and usable once its
-/// credential is registered. `register`: whether to register `mix_logic`'s
-/// credential (it isn't yet, by `account_info`).
+/// trusts, reading its scripts from the holder, and a box of it at least the
+/// ledger's minimum ([`check_usable`]). `register`: whether to register
+/// `mix_logic`'s credential (it isn't yet, by `account_info`).
 fn made(chain: &Chain, seed: ([u8; 32], u64), terms: &Terms, register: bool) -> Result<Made> {
-    let made = shaped(chain, seed, terms, register)?;
-    check_usable(&chain.params, &made.pool)?;
+    let mut made = shaped(chain, seed, terms, register)?;
+    made.cant_come_back = check_usable(&chain.params, &made.pool)?;
     Ok(made)
 }
 
 /// Whether the pool a launch makes could take a mix once its credential is
-/// registered: a box of it meets the ledger's minimum and pays its own way
-/// back, which is built, proven and measured ([`usable`]).
-fn check_usable(params: &ProtocolParameters, pool: &Protocol) -> Result<()> {
-    usable(params, pool, true)
-        .map_err(|e| anyhow!("The pool this would launch couldn't be used: {e}"))?;
-    Ok(())
+/// registered, measured as [`usable`] measures a found pool: a box of it
+/// meets the ledger's minimum, and pays its own way back, which is built,
+/// proven and measured. Refused only under the minimum, where no mix could
+/// make a box, or where the measure can't be built. A box that can't pay its
+/// own way back is a pool `one_shot_mint` takes, and one the wallet mixes
+/// into when someone else starts it (the owner's call 34): it's said, what's
+/// left of it after the fee and what it needs, never refused (the owner's
+/// call, chunk 51's gap-g8#6).
+fn check_usable(params: &ProtocolParameters, pool: &Protocol) -> Result<Option<CantPayBack>> {
+    match usable(params, pool, true) {
+        Ok(_) => Ok(None),
+        Err(Unusable::CantComeBack { has, needs }) => Ok(Some(CantPayBack { has, needs })),
+        Err(e) => Err(anyhow!("The pool this would launch couldn't be used: {e}")),
+    }
 }
 
 /// [`made`] but for whether its pool is usable, which only `terms` decide: a
@@ -278,6 +298,7 @@ fn shaped(chain: &Chain, seed: ([u8; 32], u64), terms: &Terms, register: bool) -
         staking,
         locked,
         pool,
+        cant_come_back: None,
     })
 }
 
@@ -348,6 +369,7 @@ fn spending(
         datum: made.datum,
         locked: made.locked,
         pool: made.pool,
+        cant_come_back: made.cant_come_back,
     })
 }
 
@@ -365,7 +387,8 @@ fn spending(
 /// decide whether it's usable, so that's measured once, on the pool chosen.
 /// The first seed's pool is made before anything is tried, which checks the
 /// terms, and what it locks, as every seed's launch does, is the least a
-/// choice must hold to be tried.
+/// choice must hold to be tried. A box that can't pay its own way back is
+/// said as [`launch`] says it ([`Launch::cant_come_back`]).
 pub fn launch_apart(
     chain: &Chain,
     available: &[UtxoResponse],
@@ -393,8 +416,13 @@ pub fn launch_apart(
         Some(seed) => made_for(seed)?.locked.total(),
         None => 0,
     };
-    let built =
-        crate::build::select_script_inputs(&ada, &Assets::new(), floor, histories, |inputs| {
+    let mut built = crate::build::select_script_inputs(
+        &chain.params,
+        &ada,
+        &Assets::new(),
+        floor,
+        histories,
+        |inputs| {
             let first = inputs
                 .first()
                 .context("A launch spends at least one UTxO")?;
@@ -402,8 +430,9 @@ pub fn launch_apart(
             let built = spending(chain, inputs, seed, made_for(seed)?, change_owner, signer)?;
             built.spend.estimate()?;
             Ok(built)
-        })?;
-    check_usable(&chain.params, &built.pool)?;
+        },
+    )?;
+    built.cant_come_back = check_usable(&chain.params, &built.pool)?;
     Ok(built)
 }
 
@@ -432,6 +461,8 @@ pub struct AccountLaunch {
     pub locked: Locked,
     /// The pool as it will be once on chain, as for [`Launch::pool`].
     pub pool: Protocol,
+    /// As for [`Launch::cant_come_back`].
+    pub cant_come_back: Option<CantPayBack>,
 }
 
 /// A finished account-paid launch: the unsigned transaction and what it does.
@@ -672,6 +703,7 @@ pub fn launch_from_account(
             datum: made.datum.clone(),
             locked: made.locked,
             pool: made.pool.clone(),
+            cant_come_back: made.cant_come_back.clone(),
         };
         match launch.estimate() {
             Ok(_) => return Ok(launch),

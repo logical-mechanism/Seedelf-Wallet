@@ -37,6 +37,9 @@ export const refusedByOf = (error: unknown): RefusedBy | undefined => (error ins
 /** A reviewed transaction that building again fixes: giveme.my refused it, or it waited too long. */
 export const isStale = (error: unknown) => error instanceof RpcError && error.code === "stale";
 
+/** The escape hatch's pick would tie an account its question didn't name: nothing was sent, ask again (chunk 51, gap-g2#2). */
+export const isAskAgain = (error: unknown) => error instanceof RpcError && error.code === "askAgain";
+
 /**
  * Asks the worker, on a port of its own that only the worker listens for
  * (background/ui-port.ts). runtime.sendMessage would hand the request, and a

@@ -491,8 +491,10 @@ describe("1.8.0's release review, O5: with no 5 ₳ pool shown, a return's token
     expect(review.lovejoinSkipped).toBeUndefined();
     expect(review.lovejoin?.parts).toEqual([{ pool: TOKEN, boxes: 2 }]);
     expect(review.lovejoin?.boxes).toBe(2);
+    // PR #163's twin holds 2 ₳ a box, under S0d's least: its boxes can't pay out part of themselves alone, said (chunk 51,
+    // gap-g5#1).
     expect(review.lovejoin?.ways).toEqual([
-      { policyId: VIEW.token.policyId, assetName: VIEW.token.assetName, pool: TOKEN, quantity: Q.toString(), boxes: 2, pools: [TOKEN] },
+      { policyId: VIEW.token.policyId, assetName: VIEW.token.assetName, pool: TOKEN, quantity: Q.toString(), boxes: 2, pools: [TOKEN], cantPayPart: true },
     ]);
     // Its ADA comes back with the return, its collateral too: no 5 ₳ pool to mix it in.
     expect(review.collateralTail).toBeUndefined();

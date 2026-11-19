@@ -5,9 +5,11 @@
 // form lists the token's pools already shown, with their crowds, so a creator
 // can join one rather than split it, and refuses a copy of one. The box's ADA
 // is suggested (the least a box needs to come back and pay part of itself on
-// its own, with a margin) and can be changed, never below that least nor, in
-// a token pool, above 9 ₳. The private balance pays by default; the public
-// account may, a switch, never a link, since it shows that link.
+// its own, with a margin) and can be changed, never below the network's
+// minimum for a box nor, in a token pool, above 9 ₳. Below that least, or
+// where a box can't come back at all, the review says so, never refused (the
+// owner's call, chunk 51's gap-g8#6). The private balance pays by default; the
+// public account may, a switch, never a link, since it shows that link.
 //
 // The worker checks it all again, builds it, and checks the pool it makes
 // from its own bytes (lovejoin-launch.ts); Send asks only whether the pool's
@@ -149,7 +151,8 @@ export function LovejoinLaunch({
     (p) => p.version === "v2" && !isCopy(p) && (token ? p.box.token && tokenKey(p.box.token) === unit : !p.box.token),
   );
   const copy = same.find((p) => p.box.lovelace === box && (!token || p.box.token?.quantity === q));
-  // Why Review can't be pressed yet, each before a build would say it.
+  // Why Review can't be pressed yet, each before a build would say it. Under S0d's least isn't one: its review says so
+  // (chunk 51, gap-g8#6); under the network's minimum for a box, no mix could make one.
   const why = !terms
     ? undefined
     : token && !q
@@ -158,8 +161,8 @@ export function LovejoinLaunch({
         ? tr("lovejoin.launch.needBox")
         : !token && box === CLASSIC_LOVELACE
           ? tr("lj.launch.classicCopy")
-          : BigInt(box) < BigInt(terms.least)
-            ? tr("lj.launch.tooLittle", { least: formatAda(terms.least) })
+          : terms.minimum !== undefined && BigInt(box) < BigInt(terms.minimum)
+            ? tr("lj.launch.belowMinimum", { minimum: formatAda(terms.minimum) })
             : terms.most !== undefined && BigInt(box) > BigInt(terms.most)
               ? tr("lj.launch.tooMuch", { most: formatAda(terms.most) })
               : copy
@@ -245,6 +248,7 @@ export function LovejoinLaunch({
           {tr("lovejoin.launch.warn.atMost", { deposit: formatAda(review.locked.deposit) })}
         </p>
         <LaunchStartedBefore review={review} />
+        <LaunchBoxNotes review={review} />
         <Callout tone="privacy" testId="lovejoin-launch-privacy">
           {tr(review.from === "private" ? "lovejoin.launch.privacy.private" : "lovejoin.launch.privacy.public")}
         </Callout>
@@ -433,6 +437,29 @@ export function LaunchStartedBefore({ review }: { review: Pick<LovejoinLaunchSum
   return (
     <Callout tone="warn" testId="lovejoin-launch-started-before">
       {tr("lovejoin.launch.warn.startedBefore")}
+    </Callout>
+  );
+}
+
+/**
+ * What a box of the pool a start makes can't do on its own under today's parameters, on its review (the owner's call,
+ * chunk 51's gap-g8#6): pay out part of what comes back, under S0d's least (`least`), the line a found pool's offer
+ * says; or come back at all (`cantComeBack`), in a found pool's callout's words. Said, never refused: one_shot_mint
+ * takes such a pool, and the wallet mixes into one someone else starts. Exported for its test.
+ */
+export function LaunchBoxNotes({ review }: { review: Pick<LovejoinLaunchSummary, "least" | "cantComeBack"> }) {
+  const tr = useT();
+  if (!review.least && !review.cantComeBack) return null;
+  return (
+    <Callout tone="warn" testId="lovejoin-launch-box">
+      <div className="stack-tight">
+        {review.least && <span>{tr("lovejoin.launch.warn.underLeast", { least: formatAda(review.least) })}</span>}
+        {review.cantComeBack && (
+          <span>
+            {tr("lovejoin.stuck.warn.lead", { has: formatAda(review.cantComeBack.has), needs: formatAda(review.cantComeBack.needs) })}
+          </span>
+        )}
+      </div>
     </Callout>
   );
 }

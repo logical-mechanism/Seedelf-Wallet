@@ -84,7 +84,7 @@ pub mod templates;
 mod value;
 
 pub use box_value::{
-    BOX_MARGIN, BOX_STEP, MAX_TOKEN_BOX_LOVELACE, Probe, WayBack, least_box_lovelace,
+    BOX_MARGIN, BOX_STEP, MAX_TOKEN_BOX_LOVELACE, Probe, WayBack, box_minimum, least_box_lovelace,
     suggested_box_lovelace, way_back,
 };
 pub use launch::{

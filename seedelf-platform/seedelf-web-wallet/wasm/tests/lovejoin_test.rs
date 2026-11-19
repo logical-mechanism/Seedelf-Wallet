@@ -1398,7 +1398,25 @@ fn the_public_account_mixes_its_own_boxes_again_signed_by_the_keys_it_spends() {
     each_pays_the_ledgers_minimum(result.txs.iter().map(|t| &t.tx_cbor), &rows, &protocol);
     assert!(result.returned.parse::<u64>().unwrap() > 1_000_000);
 
-    // No one UTxO pays for it, though two together would: it says so.
+    // Chunk 51, gap-g2#1: no one UTxO pays for both, though two together would. As many go as the largest pays
+    // for, paid from it alone, the rest left for another press, where the whole press was refused.
+    let one = seedelf_core::lovejoin::again_funding(1, 1);
+    let fewer = build(
+        vec![
+            public_utxo(0x61, Role::Receive, 4, one + 100_000),
+            public_utxo(0x62, Role::Change, 0, one),
+        ],
+        every.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        (fewer.boxes, fewer.leaves.len(), fewer.txs.len()),
+        (1, 1, 1)
+    );
+    let mix = hex::decode(&fewer.txs[0].tx_cbor).unwrap();
+    let mix = MultiEraTx::decode(&mix).unwrap();
+    assert!(spends(&mix, [0x61; 32], 0) && !spends(&mix, [0x62; 32], 0));
+    // None pays for even one box: it says so, of one box.
     let err = build(
         vec![
             public_utxo(0x61, Role::Receive, 4, funded / 2 + 1),
@@ -1409,7 +1427,7 @@ fn the_public_account_mixes_its_own_boxes_again_signed_by_the_keys_it_spends() {
     .unwrap_err();
     assert!(
         err.to_string()
-            .contains("doesn't pay for mixing 2 boxes again"),
+            .contains("doesn't pay for mixing a box again"),
         "{err}"
     );
     // None of the wallet's boxes in the pool: nothing to mix again.

@@ -863,6 +863,10 @@ pub struct UsableRequest {
     /// box's minimum is now, and whatever the registration.
     #[serde(default)]
     pub back_only: bool,
+    /// Also, where a box comes back, whether it then pays part of itself on
+    /// its own (`UsableResult::alone`).
+    #[serde(default)]
+    pub alone: bool,
 }
 
 #[derive(Serialize, Debug, Default)]
@@ -887,6 +891,13 @@ pub struct UsableResult {
     /// What a box brings back into the Seedelf, its token aside.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub back: Option<String>,
+    /// Asked (`UsableRequest::alone`), and a box comes back: whether what
+    /// comes back then pays part of itself on its own, S0d's steps built at
+    /// the pool's own box value (`lovejoin::way_back`, scripts by reference
+    /// as a standard pool's are). False under S0d's least: a payment of part
+    /// of a box back from it is spent with other money (chunk 51, gap-g5#1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alone: Option<bool>,
 }
 
 /// Whether a verified pool can take a new mix under today's parameters
@@ -907,6 +918,13 @@ pub fn usable(request: UsableRequest) -> Result<UsableResult> {
             box_minimum: Some(u.box_minimum.to_string()),
             withdraw_fee: Some(u.withdraw_fee.to_string()),
             back: Some(u.back.to_string()),
+            // A way back that can't be built at a step is one that doesn't pay: said, as a check a launch makes.
+            alone: if request.alone {
+                let probe = lovejoin::Probe::new(network_flag, true)?;
+                Some(lovejoin::way_back(&probe, &params, &pool.box_value()).is_ok())
+            } else {
+                None
+            },
             ..Default::default()
         },
         Err(why) => {
@@ -2471,7 +2489,8 @@ pub fn chain_from_account_at(
 /// session's again ([`chain`]), with no deposit and no return: its first mix
 /// spends the account's largest ADA-only UTxO (never the collateral, nor one
 /// carrying a reference script) and takes `boxes` of the wallet's boxes in
-/// `pool`'s order, each mix after it paid from the one before's change at
+/// `pool`'s order, or as many as that UTxO pays for where it's fewer (the
+/// result's `boxes`), each mix after it paid from the one before's change at
 /// the account's `0/0`, all put up against its collateral. The last change
 /// stays in the account (`returned`). Signed here: the first mix by the
 /// paying UTxO's key and the collateral's, the rest by the change's and the
@@ -2528,8 +2547,12 @@ pub fn again_from_account_at(
         bail!("None of this wallet's boxes is in Lovejoin's pool to mix again");
     }
 
-    // One UTxO pays for every mix: the largest of ADA alone.
-    let needed = lovejoin::again_funding_in(boxes, &protocol, request.depth, width);
+    // One UTxO pays for every mix: the largest of ADA alone. As many boxes go
+    // as it pays for, the rest left for another press, as the Mix form's count
+    // is held to the account's ADA (chunk 34's session 6): the whole press was
+    // refused whenever it paid for fewer than the pool had room for, though
+    // fewer would build (chunk 51, gap-g2#1). Refused only where it pays for
+    // none, in what one box takes.
     let lovelace = |p: &api::PathedUtxo| p.utxo.value.parse::<u64>().unwrap_or(0);
     let paying = request
         .utxos
@@ -2538,15 +2561,14 @@ pub fn again_from_account_at(
         .filter(|p| seedelf_core::eval::refusal(&p.utxo).is_none())
         .filter(|p| (p.utxo.tx_hash.clone(), p.utxo.tx_index) != collateral_ref)
         .max_by_key(|p| lovelace(p));
-    let Some(paying) = paying.filter(|p| lovelace(p) >= needed) else {
+    let pays = paying.map_or(0, |p| {
+        lovejoin::again_affordable_in(lovelace(p), &protocol, request.depth, width)
+    });
+    let boxes = boxes.min(pays);
+    let Some(paying) = paying.filter(|_| boxes > 0) else {
         bail!(
-            "Your public account's ADA doesn't pay for mixing {} again: that takes {} ₳ in one UTxO of ADA alone, besides the collateral",
-            if boxes == 1 {
-                "a box".to_string()
-            } else {
-                format!("{boxes} boxes")
-            },
-            needed.div_ceil(1_000_000)
+            "Your public account's ADA doesn't pay for mixing a box again: that takes {} ₳ in one UTxO of ADA alone, besides the collateral",
+            lovejoin::again_funding_in(1, &protocol, request.depth, width).div_ceil(1_000_000)
         );
     };
     let path_of = |u: &UtxoResponse| paths[&(u.tx_hash.clone(), u.tx_index)];
@@ -3006,8 +3028,12 @@ pub struct BoxValueRequest {
 #[serde(rename_all = "camelCase")]
 pub struct BoxValueResult {
     /// The least at which a box comes back and pays part of itself on its
-    /// own (`lovejoin::least_box_lovelace`): no launch goes below it.
+    /// own (`lovejoin::least_box_lovelace`): a launch under it says so on its
+    /// review, never refused (chunk 51, gap-g8#6).
     pub least: String,
+    /// The network's minimum for such a box (`lovejoin::box_minimum`), what
+    /// a mix's output must hold: the only value a launch is refused under.
+    pub minimum: String,
     /// What the launch form suggests: the least with a margin, rounded up to
     /// 0.5 ₳.
     pub suggested: String,
@@ -3032,7 +3058,8 @@ pub fn box_token(token: &api::TokenAmount) -> Result<lovejoin::BoxToken> {
 
 /// The least, the suggested and the most box value for a launch: about a
 /// dozen ways back built and measured here (`lovejoin::way_back`), scripts by
-/// reference, as every launch the wallet makes publishes them.
+/// reference, as every launch the wallet makes publishes them; and the
+/// network's minimum, under which a launch is refused.
 pub fn box_value(request: BoxValueRequest) -> Result<BoxValueResult> {
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
@@ -3041,6 +3068,7 @@ pub fn box_value(request: BoxValueRequest) -> Result<BoxValueResult> {
     let least = lovejoin::least_box_lovelace(&probe, &params, token.as_ref())?;
     Ok(BoxValueResult {
         least: least.to_string(),
+        minimum: lovejoin::box_minimum(&probe, &params, token.as_ref())?.to_string(),
         suggested: lovejoin::suggested_box_lovelace(least).to_string(),
         most: token
             .is_some()
