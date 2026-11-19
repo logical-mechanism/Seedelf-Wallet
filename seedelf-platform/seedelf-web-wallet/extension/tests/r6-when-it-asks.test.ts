@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { LovejoinService } from "../src/background/lovejoin";
+import { BRING_RUN_MS, LovejoinService } from "../src/background/lovejoin";
 import { NETWORKS } from "../src/networks";
 import { CHAINS, HOUR, lovejoinOf, POOL, publicFunded, withSession, type Tested } from "./chain-fixtures";
 import { preprodAddress } from "./fixtures/bech32";
@@ -155,7 +155,7 @@ describe("chunk 51, l5words#2: an ask Koios didn't answer is kept for the pool r
       await lovejoin.bringAllBack("preprod", pool);
       const before = txInfoAsked(t).length;
       await lovejoin.withdrawDue("preprod");
-      // The policy: "take a box without that question, and their pool reads don't ask it either".
+      // The policy: "take a box without that question, and their own pool reads don't ask it either".
       expect(withdrawn(t)).toEqual([`${U}#0`]);
       expect(txInfoAsked(t).slice(before)).toEqual([]);
     });
@@ -232,4 +232,87 @@ describe("chunk 51, l5words#1: while a box waits for Koios's answer, each pool r
     // The policy: "while it waits for that answer in one of Lovejoin's current pools": a retired pool's sweeps nothing.
     expect(txInfoAsked(t).slice(first)).toEqual([[U]]);
   });
+});
+
+/** When the pools are owed a read (`recheck`), if they are. */
+const recheckOf = async (t: Tested) => (await t.store.get<{ recheck?: number }>("lovejoin.preprod"))?.recheck;
+
+/** giveme.my's first witness takes a whole run (BRING_RUN_MS): a run of Bring every box back sends one box and ends there. */
+function slowFirstWitness(t: Tested) {
+  const fetch = t.collateral.fetch;
+  let first = true;
+  t.collateral.fetch = async (url, init) => {
+    if (first) {
+      first = false;
+      t.clock.now += BRING_RUN_MS;
+    }
+    return fetch(url, init);
+  };
+}
+
+// Chunk 51, l6words#4: the policy's lists of the pool reads that ask again left out the Lovejoin page's Refresh and its
+// read after each thing done there (Lovejoin.tsx `load`, the only `lovejoin-status` caller), and the read the alarm owes
+// once a run of Bring every box back stops (`recheck`, withdrawDueNow's `sortOut`), which asks as every pool read does.
+describe("chunk 51, l6words#4: the Lovejoin page's every read and the read owed once a run stops ask again", CHAINS, () => {
+  it("the Lovejoin page's Refresh, its next read, asks again about a box its first read asked about", async () => {
+    const { t } = await withSession("40000000");
+    const U = hash("e8");
+    t.koios.addedToAccounts.push(await adaOwned(t, U));
+    await t.lovejoin.status("preprod");
+    expect(Object.keys((await asking(t)) ?? {})).toEqual([U]);
+    const opened = txInfoAsked(t).length;
+    await busyFor(t, 60_000);
+    await t.lovejoin.status("preprod");
+    expect(txInfoAsked(t).slice(opened)).toEqual([[U]]);
+  });
+
+  for (const [run, pool, retired] of [
+    ["Bring every box back now", undefined, false],
+    ["Bring every box in this pool back now, the classic pool's", "classic", false],
+    ["the retired pools' run", undefined, true],
+  ] as const) {
+    it(`${run}, stopped after one withdraw: its own reads ask nothing, and the read owed 2 hours on asks again`, async () => {
+      const { t } = await withSession("40000000");
+      await retiredAlready(t.store);
+      // U waits for Koios's answer in the 5 ₳ pool. Beside it, for every pool's run, V waits too, so whichever the run
+      // leaves is asked of; for the classic pool's run and the retired pools', W, in the classic pool, a mix made.
+      const [U, V, W] = [hash("e9"), hash("d9"), hash("c9")];
+      t.koios.addedToAccounts.push(await adaOwned(t, U));
+      if (pool === undefined && !retired) t.koios.addedToAccounts.push(await adaOwned(t, V));
+      else {
+        t.koios.addedToAccounts.push(await classicOwned(t, W));
+        t.koios.txSpends.set(W, classicMix());
+      }
+      await t.lovejoin.status("preprod");
+      const waiting = Object.keys((await asking(t)) ?? {}).sort();
+      expect(waiting).toEqual(pool === undefined && !retired ? [U, V].sort() : [U]);
+      const lovejoin = witnessed(t);
+      await busyFor(t, 60_000);
+      await lovejoin.bringAllBack("preprod", pool, retired);
+      const before = txInfoAsked(t).length;
+      slowFirstWitness(t);
+      await lovejoin.withdrawDue("preprod");
+      const sent = withdrawn(t);
+      expect(sent).toHaveLength(1);
+      if (pool !== undefined || retired) expect(sent).toEqual([`${W}#0`]);
+      const left = waiting.filter((x) => `${x}#0` !== sent[0]);
+      expect(left).toHaveLength(1);
+      // The policy: "take a box without that question, and their own pool reads don't ask it either".
+      expect(txInfoAsked(t).slice(before)).toEqual([]);
+      await lovejoin.stopBringingAllBack("preprod");
+      expect(await recheckOf(t)).toBeGreaterThan(t.clock.now);
+      for (const box of sent) t.koios.spent.add(box);
+      for (let minute = 0; minute < 3; minute++) {
+        await busyFor(t, 60_000);
+        await lovejoin.withdrawDue("preprod");
+      }
+      expect(txInfoAsked(t).slice(before)).toEqual([]);
+      // No box due anywhere, and no unlock: only the read owed once the run stopped, which asks again, as every pool
+      // read that counts the boxes does (the policy's "and after … stops, or the retired pools' run ends").
+      await busyFor(t, 2 * HOUR);
+      await lovejoin.withdrawDue("preprod");
+      expect(txInfoAsked(t).slice(before)).toEqual([left]);
+      expect(await recheckOf(t)).toBeUndefined();
+    });
+  }
 });
