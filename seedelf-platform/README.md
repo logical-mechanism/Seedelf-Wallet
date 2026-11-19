@@ -120,7 +120,7 @@ seedelf-cli fund [OPTIONS] --address <ADDRESS> --seedelf <SEEDELF>
 
 The `<ADDRESS>` parameter used in the `fund` command is the address supplying the value and paying for the transaction. The `<SEEDELF>` parameter is the Seedelf receiving the funds, by its full token name in hex. `--lovelace` and `--asset` say what's sent; give at least one. The `fund` command is similar to the `create` command, as it serves a local page for the browser wallet to sign.
 
-From your balance, `transfer` pays other Seedelfs, and `sweep` pays a key address or an ADA Handle's address (an ADA Handle is a `$name` that points to a Cardano address). These spend through the contract: the CLI proves, signs and submits them itself, with no browser wallet.
+From your balance, `transfer` pays other Seedelfs, and `sweep` pays an address or an ADA Handle's address (an ADA Handle is a `$name` that points to a Cardano address). These spend through the contract: the CLI proves, signs and submits them itself, with no browser wallet.
 
 Use `seedelf-cli help` to view all available commands and the `--help` option to see more information about a specific command.
 
@@ -150,7 +150,7 @@ Use `seedelf-cli help` to view all available commands and the `--help` option to
 - **Amounts:** `--lovelace` (`--lovelaces` for `transfer`) is in lovelace: 1 ADA is 1,000,000. `--asset` is `<policy_id>.<token_name>=<amount>`, both in hex. For `fund` and `sweep`, repeat it, or comma-separate several tokens in one; `transfer` takes one per Seedelf, below.
 - **Several Seedelfs at once:** `transfer` takes `-s` once for each Seedelf, `-l` once for each, in the same order, and `--asset` once for each if any has tokens, comma-separating that Seedelf's tokens (`--asset ""` for one that has none).
 - **`--utxo`** for `transfer`, `sweep` and `util mint` is `<tx_hash>#<index>`, repeatable: the UTxOs to spend, in place of the CLI's own pick. It picks among all your UTxOs that hold no Seedelf, and silently skips any other; `sweep --all` ignores it. `util extract`'s `-u, --utxo` is the one UTxO it extracts.
-- **Addresses:** `sweep` and `remove` pay any address on the network but a stake address. A script's address (a multisig's, a contract's) they pay too, as the ledger does, saying first that the payment carries no datum, which some scripts can never spend and some let anyone take. The browser wallet's address for `create`, `fund` and `util extract` needs a key's payment part, whatever its stake part.
+- **Addresses:** `sweep` and `remove` pay any Shelley address on the network, never a stake address or a Byron one. A script's address (a multisig's, a contract's) they pay too, as the ledger does, saying first that the payment carries no datum, which some scripts can never spend and some let anyone take. The browser wallet's address for `create`, `fund` and `util extract` needs a key's payment part, whatever its stake part.
 
 ### dApp Interactions: The Sweep-Fund Flow
 

@@ -1,11 +1,19 @@
-//! `sweep` — a seedelf spends wallet UTxOs out to a plain address. Signs with
-//! a one-time key plus the collateral service and submits directly.
+//! `sweep` — a seedelf spends wallet UTxOs out to an address, or an ADA
+//! Handle's. Signs with a one-time key plus the collateral service and
+//! submits directly.
 
+use pallas_addresses::{Address, Network, ShelleyAddress, ShelleyDelegationPart, StakeKeyHash};
+use serde_json::json;
 use serial_test::serial;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
 
 use seedelf_cli::commands::sweep::{SweepArgs, run};
 
 use crate::harness::*;
+
+/// What `sweep` prints before it pays a script's address.
+const SCRIPT_WARNING: &str = "That's a script's address. This payment carries no datum: some scripts can never spend it, and some let anyone take it.";
 
 fn sweep_args(address: String, lovelace: Option<u64>, all: bool) -> SweepArgs {
     SweepArgs {
@@ -410,11 +418,141 @@ fn sweep_pays_a_scripts_address_and_says_it_carries_no_datum() {
         Some("[(2000000, false)]"),
         "one output pays it exactly, with no datum"
     );
-    assert!(
-        stdout.contains(
-            "That's a script's address. This payment carries no datum: some scripts can never spend it, and some let anyone take it."
-        ),
-        "{stdout}"
+    assert!(stdout.contains(SCRIPT_WARNING), "{stdout}");
+}
+
+/// The Seedelf contract's address with a stake key (`addr_test1z…`): the
+/// same script as [`wallet_address`], another string.
+fn the_contract_staked() -> Address {
+    let Address::Shelley(contract) = wallet_address() else {
+        panic!("the wallet contract is a Shelley address");
+    };
+    Address::from(ShelleyAddress::new(
+        Network::Testnet,
+        contract.payment().clone(),
+        ShelleyDelegationPart::Key(StakeKeyHash::new([0x22; 28])),
+    ))
+}
+
+/// The ways [`sweep_pays_the_contract_by_handle_as_by_address`] pays the
+/// Seedelf contract: `-a` its address, and `--ada-handle` a handle Koios
+/// says is held there, or at its staked form.
+const TO_THE_CONTRACT: [&str; 3] = ["address", "handle", "handle-staked"];
+
+/// The run [`sweep_pays_the_contract_by_handle_as_by_address`] reads, as its
+/// child process: `sweep` of 2 ADA each of [`TO_THE_CONTRACT`]'s ways. Does
+/// nothing in the parent.
+#[tokio::test]
+#[serial]
+async fn sweep_to_the_contract_by_handle_in_a_child_process() {
+    if !is_child("sweep::sweep_to_the_contract_by_handle_in_a_child_process") {
+        return;
+    }
+    for case in TO_THE_CONTRACT {
+        let to = if case == "handle-staked" {
+            the_contract_staked()
+        } else {
+            wallet_address()
+        };
+        let bech32 = to.to_bech32().expect("bech32");
+        let mut scenario = Scenario::start().await;
+        scenario
+            .mount_credential_utxos(vec![wallet_utxo(scenario.scalar, 1, 10_000_000, &[])])
+            .await;
+        scenario.mount_evaluate(1).await;
+        scenario.mount_collateral().await;
+        scenario.mount_submit().await;
+        let (address, ada_handle) = if case == "address" {
+            (Some(bech32), None)
+        } else {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/asset_nft_address"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!([{ "payment_address": bech32 }])),
+                )
+                .mount(&scenario.server)
+                .await;
+            (None, Some("friend".to_string()))
+        };
+        println!("BEGIN {case}");
+        let swept = run(
+            SweepArgs {
+                address,
+                lovelace: Some(2_000_000),
+                all: false,
+                assets: vec![],
+                ada_handle,
+                utxos: None,
+            },
+            PREPROD,
+            VARIANT,
+        )
+        .await;
+        match swept {
+            Ok(()) => println!("OUTCOME {case}: sent"),
+            Err(e) => println!("OUTCOME {case}: error: {e:#}"),
+        }
+        // The change goes back to the contract under a register: the
+        // payment is the output there with no datum.
+        let paid: Vec<u64> = if scenario.requests_to("/api/v1/submittx").await == 0 {
+            Vec::new()
+        } else {
+            decode_tx(&scenario.submitted_cbor().await)
+                .outputs_to(&to)
+                .iter()
+                .filter(|o| !o.has_datum)
+                .map(|o| o.lovelace)
+                .collect()
+        };
+        println!("PAID {case}: {paid:?}");
+        println!("END {case}");
+    }
+}
+
+/// A handle held at the Seedelf contract is paid as the contract's address
+/// is, with the warning that the payment carries no datum, which anyone can
+/// take there: the ledger takes it. `sweep --ada-handle` refused one at the
+/// contract's address as "ADA Handle Is In Wallet Address", and paid one at
+/// its staked form, by a string compare (chunk 51, cli#2; the owner's B16
+/// (2), a warning rather than a refusal for every script's address).
+#[test]
+#[serial]
+fn sweep_pays_the_contract_by_handle_as_by_address() {
+    let (stdout, stderr) = run_child(
+        "sweep::sweep_to_the_contract_by_handle_in_a_child_process",
+        std::time::Duration::from_secs(120),
+    );
+    let seen: Vec<(&str, Option<String>, Option<String>, bool)> = TO_THE_CONTRACT
+        .into_iter()
+        .map(|case| {
+            let begin = stdout
+                .find(&format!("BEGIN {case}\n"))
+                .unwrap_or_else(|| panic!("{case} never ran\n{stdout}\n{stderr}"));
+            let end = stdout[begin..]
+                .find(&format!("END {case}\n"))
+                .map_or(stdout.len(), |i| begin + i);
+            let run = &stdout[begin..end];
+            (
+                case,
+                line_after(run, &format!("OUTCOME {case}: ")),
+                line_after(run, &format!("PAID {case}: ")),
+                run.contains(SCRIPT_WARNING),
+            )
+        })
+        .collect();
+    let sent = |case| {
+        (
+            case,
+            Some("sent".to_string()),
+            Some("[2000000]".to_string()),
+            true,
+        )
+    };
+    assert_eq!(
+        seen,
+        TO_THE_CONTRACT.map(sent).to_vec(),
+        "each way: sent, 2 ADA paid with no datum, the warning printed\n{stdout}\n{stderr}"
     );
 }
 

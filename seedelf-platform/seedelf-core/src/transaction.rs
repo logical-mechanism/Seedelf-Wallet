@@ -237,7 +237,7 @@ pub fn wallet_minimum_lovelace_with_assets(
     calculate_min_required_utxo(staging_output, params)
 }
 
-/// Minimum lovelace for a non-script address output with assets.
+/// Minimum lovelace for an output at `address` with assets and no datum.
 pub fn address_minimum_lovelace_with_assets(
     params: &ProtocolParameters,
     address: &str,

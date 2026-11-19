@@ -5,7 +5,6 @@ use anyhow::{Result, bail};
 use blstrs::Scalar;
 use clap::Args;
 use pallas_addresses::Address;
-use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::build::{self, Chain};
 use seedelf_core::constants::{ADA_HANDLE_POLICY_ID, MAXIMUM_WALLET_UTXOS, get_config};
@@ -90,19 +89,18 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
         bail!("ADA Handle cannot be empty");
     }
 
+    // A handle's address is paid as one given with -a is: a script's, the
+    // Seedelf contract's included, after the warning below (chunk 51, cli#2).
     let outbound_address: String = if let Some(addr) = args.address {
         addr
     } else {
-        let wallet_addr: String =
-            address::wallet_contract(network_flag, chain.config.contract.wallet_contract_hash)
-                .to_bech32()
-                .map_err(|e| anyhow::anyhow!("Failed to encode wallet address: {e}"))?;
         match ada_handle_address(
             args.ada_handle.unwrap(),
             network_flag,
             false,
             variant,
-            wallet_addr,
+            // no longer read
+            String::new(),
             ADA_HANDLE_POLICY_ID,
         )
         .await

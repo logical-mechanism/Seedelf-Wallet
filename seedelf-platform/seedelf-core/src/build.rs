@@ -425,10 +425,10 @@ pub fn adds(params: &ProtocolParameters, utxo: &UtxoResponse) -> Result<i128> {
     Ok(i128::from(lovelace) - i128::from(minimum_deposit(params, &tokens)?))
 }
 
-/// Change outputs to a key address: `tokens` split `MAXIMUM_TOKENS_PER_UTXO`
-/// to an output, the last output carrying the rest of `lovelace`. No output at
-/// all when there's nothing to return. `short` is the error when the
-/// lovelace can't carry the tokens.
+/// Change outputs to `change_addr`, with no datum: `tokens` split
+/// `MAXIMUM_TOKENS_PER_UTXO` to an output, the last output carrying the rest
+/// of `lovelace`. No output at all when there's nothing to return. `short` is
+/// the error when the lovelace can't carry the tokens.
 pub(crate) fn change_outputs(
     params: &ProtocolParameters,
     change_addr: &Address,
@@ -670,7 +670,8 @@ pub enum Payee<'a> {
         owner: &'a Register,
         wallet_addr: &'a Address,
     },
-    /// A key address. Tokens go `MAXIMUM_TOKENS_PER_UTXO` to an output.
+    /// An address on this network ([`is_payable_address`]). Tokens go
+    /// `MAXIMUM_TOKENS_PER_UTXO` to an output.
     Address(&'a Address),
     /// No one: the transaction only does something with the stake key
     /// (certificates, a withdrawal), and everything comes back as change.
@@ -1716,9 +1717,10 @@ impl ScriptSpend {
         Ok(self)
     }
 
-    /// Sends what's left after the outputs and the fee to `addr`, a key
-    /// address, instead of back into the contract: everything, for sending
-    /// the lot, or a removed seedelf's ADA. Tokens go 20 to an output.
+    /// Sends what's left after the outputs and the fee to `addr`, an address
+    /// on this network ([`is_payable_address`], which the caller checks),
+    /// instead of back into the contract: everything, for sending the lot,
+    /// or a removed seedelf's ADA. Tokens go 20 to an output.
     pub fn change_to(mut self, addr: &Address) -> Self {
         self.change_addr = Some(addr.clone());
         self
@@ -3545,7 +3547,8 @@ pub fn sweep(
     sweep_many(chain, available, &[payment], change_owner, signer)
 }
 
-/// A payment to a key address from the Seedelf balance.
+/// A payment from the Seedelf balance to an address on this network
+/// ([`is_payable_address`]).
 #[derive(Debug, Clone)]
 pub struct AddressPayment {
     pub to: Address,
@@ -3626,9 +3629,10 @@ pub fn sweep_many_from(
     paying(chain, inputs, &outputs, change_owner, signer)
 }
 
-/// [`transfer_most`] to `to`, a key address: the most a withdrawal of
-/// `tokens` can pay from `inputs`, the other tokens staying in the Seedelf
-/// balance with the least ADA they need. ([`sweep_all`] sends every token.)
+/// [`transfer_most`] to `to`, an address on this network
+/// ([`is_payable_address`]): the most a withdrawal of `tokens` can pay from
+/// `inputs`, the other tokens staying in the Seedelf balance with the least
+/// ADA they need. ([`sweep_all`] sends every token.)
 pub fn sweep_most(
     chain: &Chain,
     inputs: &[UtxoResponse],
