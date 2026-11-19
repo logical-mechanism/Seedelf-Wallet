@@ -16,9 +16,16 @@
 // (support.ts), and each test token on screen stands in for one on the
 // wallet's mainnet list (MAINNET_TOKENS).
 //
-// npm run store:images (after a build) writes them to docs/store/images/.
+// It also makes the images for cardano.org's apps directory
+// (cardano.org/docs/get-involved/add-app), into brand/cardano-org/: a
+// 2048×1440 WebP of three of the screens above side by side, on a light
+// background with no caption, as cardano.org asks (the app's own UI, light
+// theme where it can, under 500 KB), and a 512×512 icon of the emblem.
+//
+// npm run store:images (after a build) writes them to docs/store/images/ and
+// brand/cardano-org/.
 
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { blake2b } from "@noble/hashes/blake2.js";
@@ -167,15 +174,63 @@ const storeIcon = page(
               top: ${(-21 * 96) / 1200}px; }`,
 );
 
-/** Renders `html` at exactly `width`×`height` pixels into the file at `path`. */
-async function render(compose: Page, html: string, width: number, height: number, path: string, transparent = false) {
+const listing = fileURLToPath(new URL("../../brand/cardano-org/", import.meta.url));
+const emblem = dataUri("image/png", asset("../../brand/mystical_seed_elf_emblem.png"));
+
+/**
+ * cardano.org's screenshot, 1024×720 drawn at 2×: three of the wallet's screens as they are, side by side. cardano.org
+ * asks for the app's own UI, in light theme where it can, with no marketing text. The wallet is dark only, so the
+ * background is light instead. Its /apps cards crop to a wide band across the middle, which the screens fill.
+ */
+const cardanoOrgShot = (popups: Buffer[]) =>
+  page(
+    `<main>${popups.map((popup) => `<img src="${dataUri("image/png", popup)}" alt="">`).join("")}</main>`,
+    `main { width: 1024px; height: 720px; display: flex; gap: 32px; justify-content: center; align-items: center;
+            background: radial-gradient(ellipse 70% 60% at 50% 50%, rgb(0 196 188 / 0.12), transparent 70%), #f3f6f8; }
+     img { width: 300px; height: 500px; border-radius: 14px;
+           box-shadow: 0 0 0 1px rgb(1 24 51 / 0.10), 0 18px 48px rgb(1 24 51 / 0.22); }`,
+  );
+
+// The emblem's artwork spans 1084×1189 from (73, 23) of its 1254² canvas
+// (ImageMagick's trim box). It's fitted into 472 px of a 512² square, centred,
+// on a transparent background: cardano.org's icons are square, at least 128 px.
+const EMBLEM_SCALE = 472 / 1189;
+const cardanoOrgIcon = page(
+  `<img src="${emblem}" alt="">`,
+  `body { background: transparent; }
+   img { position: absolute; width: ${1254 * EMBLEM_SCALE}px;
+         left: ${(512 - 1084 * EMBLEM_SCALE) / 2 - 73 * EMBLEM_SCALE}px;
+         top: ${(512 - 1189 * EMBLEM_SCALE) / 2 - 23 * EMBLEM_SCALE}px; }`,
+);
+
+/** Renders `html` at exactly `width`×`height` CSS pixels, into the file at `path` if one is given, and returns the PNG. */
+async function render(compose: Page, html: string, width: number, height: number, path?: string, transparent = false) {
   await compose.setViewportSize({ width, height });
   await compose.setContent(html);
   await compose.evaluate(async () => {
     await document.fonts.ready;
     await Promise.all([...document.images].map((img) => img.decode()));
   });
-  await compose.screenshot({ path, omitBackground: transparent });
+  return compose.screenshot({ path, omitBackground: transparent });
+}
+
+/** `png`'s pixels as a WebP at `quality` (0 to 1), encoded by Chromium's canvas. */
+async function webp(compose: Page, png: Buffer, quality: number): Promise<Buffer> {
+  const url = await compose.evaluate(
+    async ({ src, quality }) => {
+      const img = new Image();
+      img.src = src;
+      await img.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext("2d")!.drawImage(img, 0, 0);
+      return canvas.toDataURL("image/webp", quality);
+    },
+    { src: dataUri("image/png", png), quality },
+  );
+  expect(url.startsWith("data:image/webp;base64,"), "Chromium encoded a WebP").toBe(true);
+  return Buffer.from(url.slice(url.indexOf(",") + 1), "base64");
 }
 
 test.use({ scale: 2, network: "mainnet" });
@@ -260,6 +315,18 @@ test("the Web Store listing's images", async ({ context, koios }) => {
     }
     await render(compose, promoTile, 440, 280, `${out}promo-small-440x280.png`);
     await render(compose, storeIcon, 128, 128, `${out}icon-128.png`, true);
+
+    // cardano.org's: the private balance, a payment to a Seedelf by name, and the public account, in English.
+    mkdirSync(listing, { recursive: true });
+    const retina = await browser.newPage({ deviceScaleFactor: 2 });
+    const shot = await render(retina, cardanoOrgShot([shots[0]!.en, shots[1]!.en, shots[4]!.en]), 1024, 720);
+    // A PNG's width and height are its IHDR's first two words.
+    expect([shot.readUInt32BE(16), shot.readUInt32BE(20)]).toEqual([2048, 1440]);
+    const bytes = await webp(retina, shot, 0.8);
+    // cardano.org's build refuses a screenshot of 500 KB or more.
+    expect(bytes.length).toBeLessThan(500_000);
+    writeFileSync(`${listing}seedelf-wallet.webp`, bytes);
+    await render(compose, cardanoOrgIcon, 512, 512, `${listing}seedelf-wallet.png`, true);
   } finally {
     await browser.close();
   }
