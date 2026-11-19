@@ -3994,9 +3994,11 @@ pub mod api {
 
     /// The UTxOs of `rest` holding any of `tokens`, those holding the most of them first, `at_most` of them: a part's,
     /// where the tokens sent are in more UTxOs than one transaction spends (the owner's test of 1.6.0: a pool's boxes
-    /// brought back, a few of its token in each), or hold more than one output can. `rich`: those adding the most ADA
-    /// first ([`Worth`]), a chain's, which takes the ADA forward (test wallet A, 1.6.0: its 2,621 ADA sat with 19 of
-    /// the 400 tokens it sent, behind bundles of 20 holding only their least, and no part could pay its fee).
+    /// brought back, a few of its token in each), or hold more than one output can. `rich`: by [`Worth`]'s place
+    /// first, those adding ADA before those holding only their tokens' least, a chain's, which takes the ADA forward
+    /// (test wallet A, 1.6.0: its 2,621 ADA sat with 19 of the 400 tokens it sent, behind bundles of 20 holding only
+    /// their least, and no part could pay its fee); but [`Worth::of`]'s with a funding's histories puts its purpose's
+    /// order before that (chunk 51, l8words#2).
     fn token_group(
         rest: &[UtxoResponse],
         tokens: &[TokenAmount],
@@ -4037,7 +4039,9 @@ pub mod api {
     ///
     /// Each one's place, the highest first: whether it adds something (1), nothing (0) or less than nothing (-1: its
     /// tokens need more than it holds, a stranger's pile, say, which comes after everything else: chunk 51, r2a#3),
-    /// where its history comes, and what it adds, with its sign.
+    /// where its history comes, and what it adds, with its sign. [`Worth::of`] gives one that adds nothing 1, so its
+    /// history comes before whether it adds, and a funding's order there can take a bundle at its least before ADA
+    /// (chunk 51, l8words#2).
     struct Worth(HashMap<(String, u64), (i8, u32, i128)>);
 
     impl Worth {

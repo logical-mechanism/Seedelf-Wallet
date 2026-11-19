@@ -52,26 +52,38 @@ This part is for the maintainers. A CLI release is the Rust workspace and the co
 
 **The `release` environment** (Settings → Environments) is what holds the key: the maintainer as its required reviewer, with *Prevent self-review* off, since whoever pushes the tag approves the run; deployments from tags matching `*.*.*` alone; and `RELEASE_GPG_KEY` and `GPG_PASSPHRASE` as its secrets, never as the repository's. release.yml's build jobs get a read-only token and no secret, since they run every crate's build script; only its `sign-and-publish` job, which builds nothing, reads the key and can write.
 
-`main`'s ruleset requires the *Web Wallet required* check, with no bypass, so it refuses a commit pushed to `main` straight: the version reaches `main` by a PR, whose branch carries the command's `sed` and `cargo update` changes and its commit, as 0.7.0's (`cli/0.7.0`) did and as 0.8.0's PR set it. Once that PR is merged, run the command below in the repository's root, on `main` as GitHub has it (`git switch main && git pull --ff-only` first): its `sed` and `cargo update` lines change nothing, `git commit` finds nothing to commit and `git push origin main` nothing to push, and the tag starts the release. With a version commit to push (that PR not merged yet, or a stale `main` without it), the command makes the commit and `main` refuses the push, but the lines after it still tag that commit and push the tag, and release.yml builds a commit `main` doesn't hold; on a stale `main` that has the version, the tag goes on a commit older than `main`'s tip. Either way, delete the tag and its draft (*Re-releasing Tag*), and start again as above.
+`main`'s ruleset requires the *Web Wallet required* check, with no bypass, so it refuses a commit pushed to `main` straight: the version reaches `main` by a PR, as 0.7.0's (`cli/0.7.0`) did, and only then is it tagged. release.yml builds whatever commit the tag names, and checks nothing of where it sits, so a release is two commands, each run in the repository's root.
+
+The first makes the version's PR branch, `cli/<version>`, from `main` as GitHub has it: it moves the version (the toml files, `Cargo.lock`, this page's `version=` lines and the one the root CLAUDE.md gives as today's), commits it and pushes the branch, and tags nothing. Then open its PR into `main`. Skip it where `main` already holds the version, as it holds 0.8.0.
 
 ```bash
 # set the version being released
 version="0.8.0"
-# update the toml files
-sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
-sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-platform/Cargo.toml
-sed -i '0,/^seedelf-core = ".*"/s//seedelf-core = "'${version}'"/' seedelf-platform/Cargo.toml
-sed -i '0,/^seedelf-crypto = ".*"/s//seedelf-crypto = "'${version}'"/' seedelf-platform/Cargo.toml
-sed -i '0,/^seedelf-display = ".*"/s//seedelf-display = "'${version}'"/' seedelf-platform/Cargo.toml
-sed -i '0,/^seedelf-koios = ".*"/s//seedelf-koios = "'${version}'"/' seedelf-platform/Cargo.toml
-# Cargo.lock is tracked, and CI builds with --locked: move the workspace's own entries with it
-cargo update --workspace --manifest-path seedelf-platform/Cargo.toml
-# add, commit, and tag out
-git add seedelf-contracts/aiken.toml seedelf-platform/Cargo.toml seedelf-platform/Cargo.lock
-git commit -m "chore: tagging ${version} release"
-git push origin main
-git tag ${version}
-git push origin ${version}
+# a branch from main as GitHub has it; Cargo.lock is tracked, and CI builds with --locked, so it moves too; no tag
+git switch main && git pull --ff-only && git switch -c "cli/${version}" &&
+sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml &&
+sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-platform/Cargo.toml &&
+sed -i '0,/^seedelf-core = ".*"/s//seedelf-core = "'${version}'"/' seedelf-platform/Cargo.toml &&
+sed -i '0,/^seedelf-crypto = ".*"/s//seedelf-crypto = "'${version}'"/' seedelf-platform/Cargo.toml &&
+sed -i '0,/^seedelf-display = ".*"/s//seedelf-display = "'${version}'"/' seedelf-platform/Cargo.toml &&
+sed -i '0,/^seedelf-koios = ".*"/s//seedelf-koios = "'${version}'"/' seedelf-platform/Cargo.toml &&
+cargo update --workspace --manifest-path seedelf-platform/Cargo.toml &&
+sed -i 's/^version=".*"/version="'${version}'"/' RELEASE.md &&
+sed -i 's/([0-9]*\.[0-9]*\.[0-9]* today)/('${version}' today)/' CLAUDE.md &&
+git add seedelf-contracts/aiken.toml seedelf-platform/Cargo.toml seedelf-platform/Cargo.lock RELEASE.md CLAUDE.md &&
+git commit -m "chore: tagging ${version} release" &&
+git push -u origin "cli/${version}"
+```
+
+The second, once that PR is merged, tags `main`'s tip and pushes the tag, which starts release.yml. Where `main` doesn't hold the version yet (the PR still open, say), it stops and tags nothing. A tag pushed by mistake: *Re-releasing Tag*.
+
+```bash
+# the version's PR merged: tag main's tip
+version="0.8.0"
+git switch main && git pull --ff-only &&
+grep -m1 '^version = ' seedelf-platform/Cargo.toml | grep -qx "version = \"${version}\"" &&
+git tag "${version}" && git push origin "${version}" ||
+echo "No tag pushed: main doesn't hold ${version} yet, or a step above failed"
 ```
 
 Wait for release.yml's three builds to pass, then approve its `sign-and-publish` job (*Review deployments* on the run's page). It signs the archives and `hashes.txt` and creates the release as a draft: edit its body, then publish it as the latest release. Then publish to crates.io with the command below, in the repository's root.
@@ -100,7 +112,7 @@ Version 1 of the contracts (variant 1 in `seedelf-core` and the CLI's `--variant
 
 ## Re-releasing Tag
 
-To redo a release, delete its tag locally and on GitHub, and its release on the Releases page, draft or not, since each run of `sign-and-publish` makes a new draft. Then tag and push it again as above. A version already published to crates.io can't be published again.
+To redo a release, delete its tag locally and on GitHub, and its release on the Releases page, draft or not, since each run of `sign-and-publish` makes a new draft. Then run the second command of *Making a release* again. A version already published to crates.io can't be published again.
 
 ```bash
 version="0.8.0"

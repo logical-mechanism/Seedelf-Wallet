@@ -308,7 +308,8 @@ describe("chunk 51, l6words#4: the Lovejoin page's every read and the read owed 
       }
       expect(txInfoAsked(t).slice(before)).toEqual([]);
       // No box due anywhere, and no unlock: only the read owed once the run stopped, which asks again, as every pool
-      // read that counts the boxes does (the policy's "and after … stops, or the retired pools' run ends").
+      // read that counts the boxes does (the policy's "2 hours after **Bring every box back now**, **Bring every box in
+      // this pool back now** or the retired pools' run stops having sent a box"; chunk 51, l8words#8).
       await busyFor(t, 2 * HOUR);
       await lovejoin.withdrawDue("preprod");
       expect(txInfoAsked(t).slice(before)).toEqual([left]);
@@ -330,8 +331,11 @@ async function threeHours(t: Tested, lovejoin: LovejoinService) {
 
 // Chunk 51, l7words#2: the policy's list of the reads that ask again named reads that come only sometimes as if they
 // always came. Those the wallet owes once a run of Bring every box back is over come only where the list now says: 2
-// hours after a run that sent a box stops (l6words#4's pins, above), and once the retired pools' run ends or stops where
-// it let go 1.7's count of boxes not mixed yet, or a 1.7 Bootstrap (retireOnce's `recheck`). Elsewhere none is owed.
+// hours after a run that sent a box stops (l6words#4's pins, above), but for the retired pools' run where it let go
+// 1.7's count of boxes not mixed yet, or a 1.7 Bootstrap, at the next run once it ends or stops instead, whatever it
+// sent (retireOnce's `recheck`, owed at once). Elsewhere none is owed. The cases below end by themselves, and their
+// read is asked for at the next run, not only within three hours (chunk 51, l8words#3); a stop's is
+// lovejoin-round2-retire's (r2-critic#0).
 describe("chunk 51, l7words#2: a read owed once a run of Bring every box back is over comes only where the list says", CHAINS, () => {
   it("Bring every box back now, stopped having sent nothing: no read is owed, and none asks in the 3 hours after", async () => {
     const { t } = await withSession("40000000");
@@ -354,18 +358,29 @@ describe("chunk 51, l7words#2: a read owed once a run of Bring every box back is
     expect(txInfoAsked(t).slice(before)).toEqual([]);
   });
 
-  for (const counted of [false, true]) {
-    it(`the retired pools' run, ${counted ? "where it let go 1.7's count of boxes not mixed yet: the read comes once it ends, and asks again" : "where it let go nothing of 1.7's: no read is owed as it ends, and none asks in the 3 hours after"}`, async () => {
+  for (const letGo of ["nothing", "count", "bootstrap"] as const) {
+    const owed = letGo !== "nothing";
+    const what = letGo === "count" ? "1.7's count of boxes not mixed yet" : "a 1.7 Bootstrap";
+    it(`the retired pools' run, ${owed ? `where it let go ${what}: the read comes at the next run once it ends, asks again, and nothing more asks in the 3 hours after` : "where it let go nothing of 1.7's: no read is owed as it ends, and none asks in the 3 hours after"}`, async () => {
       const { t } = await withSession("40000000");
-      // U waits for Koios's answer in the 5 ₳ pool; W, in the retired classic pool, a mix made, has its due time.
+      // U waits for Koios's answer in the 5 ₳ pool. W, in the retired classic pool, has its due time: a mix made it,
+      // or it's a 1.7 Bootstrap's deposit's box (lovejoin-round2-retire's bootstrapBy17), which a retired pool doesn't
+      // hold (sortOut's `waits`), though the Bootstrap isn't let go until the first run.
       const [U, W] = [hash("e7"), hash("c7")];
       t.koios.addedToAccounts.push(await adaOwned(t, U), await classicOwned(t, W));
-      t.koios.txSpends.set(W, classicMix());
+      if (letGo === "bootstrap") {
+        t.koios.txSpends.set(W, paidBy("ab".repeat(28)));
+        await t.store.set("lovejoin.preprod", {
+          due: [],
+          chains: [],
+          mixes: [{ id: W, deposit: W, at: t.clock.now - HOUR, account: 0, bootstrap: true, found: true, shares: [{ boxes: 1 }] }],
+        });
+      } else t.koios.txSpends.set(W, classicMix());
       await t.lovejoin.status("preprod");
       const read = await sealed(t);
       expect(Object.keys(read.asking ?? {})).toEqual([U]);
       expect(read.due).toHaveLength(1);
-      if (counted) await t.store.set("lovejoin.preprod", { ...read, notMixed: 1 });
+      if (letGo === "count") await t.store.set("lovejoin.preprod", { ...read, notMixed: 1 });
       const lovejoin = witnessed(t);
       await busyFor(t, 60_000);
       const before = txInfoAsked(t).length;
@@ -373,14 +388,23 @@ describe("chunk 51, l7words#2: a read owed once a run of Bring every box back is
       await lovejoin.withdrawDue("preprod");
       expect((await sealed(t)).bringing).toMatchObject({ retired: true, back: 1 });
       expect(withdrawn(t)).toEqual([`${W}#0`]);
+      // retireOnce owes the read at once where it let go 1.7's, and none where it didn't.
+      if (owed) expect(await recheckOf(t)).toBeLessThanOrEqual(t.clock.now);
+      else expect(await recheckOf(t)).toBeUndefined();
       t.koios.spent.add(`${W}#0`);
       for (let run = 0; run < 5 && (await sealed(t)).bringing; run++) {
         await busyFor(t, 60_000);
         await lovejoin.withdrawDue("preprod");
       }
       expect((await sealed(t)).bringing).toBeUndefined();
+      // Its own reads asked nothing. The read owed comes at the next run, a minute after it ended, not 2 hours on.
+      expect(txInfoAsked(t).slice(before)).toEqual([]);
+      await busyFor(t, 60_000);
+      await lovejoin.withdrawDue("preprod");
+      expect(txInfoAsked(t).slice(before)).toEqual(owed ? [[U]] : []);
+      expect(await recheckOf(t)).toBeUndefined();
       await threeHours(t, lovejoin);
-      expect(txInfoAsked(t).slice(before)).toEqual(counted ? [[U]] : []);
+      expect(txInfoAsked(t).slice(before)).toEqual(owed ? [[U]] : []);
     });
   }
 });

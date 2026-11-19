@@ -8232,9 +8232,9 @@ export class LovejoinService {
       //   Koios hasn't said of, one nobody asked about (Bring every box back now and the retired pools' run ask
       //   nothing), a 1.9.1 answer kept with no inputs that says a deposit no public account paid made the box: a box
       //   whose making the wallet can't place, which a stealth mint and a funding take after money others paid, and
-      //   selection still takes last, merging it only where the other boxes don't pay without it, and then beside as
-      //   few as pay, but within the weights' margins box_rank's doc names (unplacedBox, core's box rule; l7words#1;
-      //   e1a#1's approved (4), l2rank#1, l2time#1, l2time#3, l2still#1,
+      //   selection still takes last, merging it only where none of the choices the box rule tries pays without it,
+      //   and then beside as few as pay, within the margins box_rank's doc names (unplacedBox, core's box rule;
+      //   l7words#1, l8words#1; e1a#1's approved (4), l2rank#1, l2time#1, l2time#3, l2still#1,
       //   l4code#1), unless other money paid its way back (below).
       const session = depositSessionOf(s, box, oneTime);
       const own = mixedBoxOf(s, box)
