@@ -316,3 +316,71 @@ describe("chunk 51, l6words#4: the Lovejoin page's every read and the read owed 
     });
   }
 });
+
+type Sealed = { asking?: Record<string, number>; bringing?: { back: number; retired?: true }; due?: number[] };
+const sealed = async (t: Tested) => (await t.store.get<Sealed>("lovejoin.preprod"))!;
+
+/** Three hours of the alarm's runs, one every ten minutes, with no unlock among them. */
+async function threeHours(t: Tested, lovejoin: LovejoinService) {
+  for (let run = 0; run < 18; run++) {
+    await busyFor(t, 10 * 60_000);
+    await lovejoin.withdrawDue("preprod");
+  }
+}
+
+// Chunk 51, l7words#2: the policy's list of the reads that ask again named reads that come only sometimes as if they
+// always came. Those the wallet owes once a run of Bring every box back is over come only where the list now says: 2
+// hours after a run that sent a box stops (l6words#4's pins, above), and once the retired pools' run ends or stops where
+// it let go 1.7's count of boxes not mixed yet, or a 1.7 Bootstrap (retireOnce's `recheck`). Elsewhere none is owed.
+describe("chunk 51, l7words#2: a read owed once a run of Bring every box back is over comes only where the list says", CHAINS, () => {
+  it("Bring every box back now, stopped having sent nothing: no read is owed, and none asks in the 3 hours after", async () => {
+    const { t } = await withSession("40000000");
+    await retiredAlready(t.store);
+    const [U, V] = [hash("e9"), hash("d9")];
+    t.koios.addedToAccounts.push(await adaOwned(t, U), await adaOwned(t, V));
+    await t.lovejoin.status("preprod");
+    expect(Object.keys((await asking(t)) ?? {}).sort()).toEqual([U, V].sort());
+    const lovejoin = witnessed(t);
+    // giveme.my at its limit: the run sends nothing.
+    t.collateral.answer = { status: 429, body: {} };
+    await busyFor(t, 60_000);
+    await lovejoin.bringAllBack("preprod");
+    const before = txInfoAsked(t).length;
+    await lovejoin.withdrawDue("preprod");
+    expect((await sealed(t)).bringing?.back).toBe(0);
+    await lovejoin.stopBringingAllBack("preprod");
+    expect(await recheckOf(t)).toBeUndefined();
+    await threeHours(t, lovejoin);
+    expect(txInfoAsked(t).slice(before)).toEqual([]);
+  });
+
+  for (const counted of [false, true]) {
+    it(`the retired pools' run, ${counted ? "where it let go 1.7's count of boxes not mixed yet: the read comes once it ends, and asks again" : "where it let go nothing of 1.7's: no read is owed as it ends, and none asks in the 3 hours after"}`, async () => {
+      const { t } = await withSession("40000000");
+      // U waits for Koios's answer in the 5 ₳ pool; W, in the retired classic pool, a mix made, has its due time.
+      const [U, W] = [hash("e7"), hash("c7")];
+      t.koios.addedToAccounts.push(await adaOwned(t, U), await classicOwned(t, W));
+      t.koios.txSpends.set(W, classicMix());
+      await t.lovejoin.status("preprod");
+      const read = await sealed(t);
+      expect(Object.keys(read.asking ?? {})).toEqual([U]);
+      expect(read.due).toHaveLength(1);
+      if (counted) await t.store.set("lovejoin.preprod", { ...read, notMixed: 1 });
+      const lovejoin = witnessed(t);
+      await busyFor(t, 60_000);
+      const before = txInfoAsked(t).length;
+      // The first run on 1.8.0 or later retires the classic pool and brings W back.
+      await lovejoin.withdrawDue("preprod");
+      expect((await sealed(t)).bringing).toMatchObject({ retired: true, back: 1 });
+      expect(withdrawn(t)).toEqual([`${W}#0`]);
+      t.koios.spent.add(`${W}#0`);
+      for (let run = 0; run < 5 && (await sealed(t)).bringing; run++) {
+        await busyFor(t, 60_000);
+        await lovejoin.withdrawDue("preprod");
+      }
+      expect((await sealed(t)).bringing).toBeUndefined();
+      await threeHours(t, lovejoin);
+      expect(txInfoAsked(t).slice(before)).toEqual(counted ? [[U]] : []);
+    });
+  }
+});

@@ -82,10 +82,11 @@ export const unknownIn = (txHash: string): HistoryClass => ({ id: `unknown:${txH
 /**
  * The way back, withdraw `txHash`, of a box whose making the wallet can't place: one someone else put in (a register
  * copied as found included), one Koios hasn't said of, one nobody asked about. Still a box to selection, taken last:
- * merged only where the other boxes don't pay without it, and then beside as few as pay (core's box rule, box_rank,
- * round six), and after money others paid by a stealth mint and a funding, tagged Back from Lovejoin and Unknown, and
- * a box to a review (chunk 51, round three: l2rank#1, l2time#1, l2time#3, l2still#1). Unless money of another history
- * paid its way back, another box's or money of no history aside: it reads as that money then (`merged`, l3rank#2).
+ * merged only where the other boxes don't pay without it, and then beside as few as pay, but within the weights'
+ * margins box_rank's doc names (core's box rule, box_rank, round six; chunk 51, l7words#1), and after money others
+ * paid by a stealth mint and a funding, tagged Back from Lovejoin and Unknown, and a box to a review (chunk 51, round
+ * three: l2rank#1, l2time#1, l2time#3, l2still#1). Unless money of another history paid its way back, another box's or
+ * money of no history aside: it reads as that money then (`merged`, l3rank#2).
  */
 export const unplacedBox = (txHash: string): HistoryClass => merged([boxFrom(txHash), unknownIn(txHash)]);
 /**
