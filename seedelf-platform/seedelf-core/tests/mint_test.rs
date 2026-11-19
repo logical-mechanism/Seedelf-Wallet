@@ -2823,6 +2823,22 @@ mod apart {
             .collect()
     }
 
+    /// `boxes`, each one the extension recorded a mix moving (chunk 51, the owner's answer 4 to B15).
+    fn mixed_boxes(w: &World, first: u8, n: u8) -> Vec<(UtxoResponse, Class)> {
+        boxes(w, first, n)
+            .into_iter()
+            .map(|(u, c)| {
+                (
+                    u,
+                    Class {
+                        origin: Origin::Mixed,
+                        ..c
+                    },
+                )
+            })
+            .collect()
+    }
+
     fn key_address() -> Address {
         ShelleyAddress::new(
             Network::Testnet,
@@ -2943,14 +2959,16 @@ mod apart {
     /// Chunk 51, gap-g1#1 (b), the owner's B15: a stealth mint takes a box back
     /// from Lovejoin that pays alone before received money. Whoever paid you
     /// knows their payment, and a copy of a Seedelf's datum paid in (about 4 ₳)
-    /// shows it to everyone; no payer knows a box. Received money still comes
-    /// before money moved in.
+    /// shows it to everyone; no payer knows a box, but one who put it in under
+    /// the wallet's key and mixed it themselves: nothing tells that box from
+    /// the wallet's own (chunk 51, own#3). Received money still comes before
+    /// money moved in.
     #[test]
     fn a_stealth_mint_takes_a_box_that_pays_alone_before_received_money() {
         let w = world();
         let received = owned(&w, 0x02, 0, 4_000_000, &[]);
         let moved_in = owned(&w, 0x01, 0, 1_000_000_000, &[]);
-        let back = boxes(&w, 0x10, 2);
+        let back = mixed_boxes(&w, 0x10, 2);
         let available: Vec<UtxoResponse> = [received.clone(), moved_in.clone()]
             .into_iter()
             .chain(back.iter().map(|(u, _)| u.clone()))
@@ -2979,6 +2997,170 @@ mod apart {
         let minted =
             build::mint_apart(&w.chain, &without, &h, "", &seedelf, &w.owner, w.signer).unwrap();
         assert_eq!(outpoints(&minted.spend.inputs()), one(&received));
+    }
+
+    /// What a stealth mint over `known` spends.
+    fn minted(w: &World, known: &[(&UtxoResponse, Class)]) -> Vec<String> {
+        let available: Vec<UtxoResponse> = known.iter().map(|(u, _)| (*u).clone()).collect();
+        let h = histories(Purpose::Mint, known);
+        let seedelf = w.owner.clone().rerandomize().unwrap();
+        let minted =
+            build::mint_apart(&w.chain, &available, &h, "", &seedelf, &w.owner, w.signer).unwrap();
+        outpoints(&minted.spend.inputs())
+    }
+
+    fn received_class(u: &UtxoResponse) -> Class {
+        class(&format!("received:{}", u.tx_hash), Origin::Received)
+    }
+
+    /// Chunk 51, the owner's answer 4 to B15 (time#1, still#1): a box back from Lovejoin the wallet has no record of a
+    /// mix moving, as every one brought back before that answer, goes after received money for a stealth mint, as
+    /// before B15. It may be a box its deposit still ties to whatever paid for it.
+    #[test]
+    fn a_box_not_recorded_as_mixed_goes_after_received_money() {
+        let w = world();
+        let received = owned(&w, 0x02, 0, 20_000_000, &[]);
+        let moved_in = owned(&w, 0x01, 0, 1_000_000_000, &[]);
+        let old = boxes(&w, 0x10, 1).remove(0);
+        let known = [
+            (&moved_in, class("public:0", Origin::Own)),
+            (&received, received_class(&received)),
+            (&old.0, old.1.clone()),
+        ];
+        assert_eq!(minted(&w, &known), one(&received));
+        // A box it recorded a mix moving goes first, though larger than the payment.
+        let mixed = owned(&w, 0x20, 0, 30_000_000, &[]);
+        let mut known = known.to_vec();
+        known.push((
+            &mixed,
+            class(&format!("box:{}", mixed.tx_hash), Origin::Mixed),
+        ));
+        assert_eq!(minted(&w, &known), one(&mixed));
+    }
+
+    /// Chunk 51, still#1, own#4, money#3: a box the wallet's own private session deposited, brought back before a mix
+    /// moved it, is that session's money (`box:<tx>+session:<n>`): anyone can follow it from the deposit to the session
+    /// and its funding. A stealth mint takes received money that pays alone before it.
+    #[test]
+    fn a_box_its_own_session_deposited_goes_after_received_money() {
+        let w = world();
+        let received = owned(&w, 0x02, 0, 20_000_000, &[]);
+        let moved_in = owned(&w, 0x01, 0, 1_000_000_000, &[]);
+        let unmixed = owned(&w, 0x10, 0, BOX, &[]);
+        let known = [
+            (&moved_in, class("public:0", Origin::Own)),
+            (&received, received_class(&received)),
+            (
+                &unmixed,
+                class(
+                    &format!("box:{}+session:0", unmixed.tx_hash),
+                    Origin::Session,
+                ),
+            ),
+        ];
+        assert_eq!(minted(&w, &known), one(&received));
+    }
+
+    /// Chunk 51, money#2, own#1, the owner's answer 2 to B15: what a stealth mint left is tied in public to that mint,
+    /// so the next stealth mint takes received money that pays alone before it. The worker seals that change with its
+    /// inputs' history and a part naming the mint (`change:<tx>`, a session's money to selection). Sealed with its
+    /// inputs' history alone, as before that answer, a box-paid mint's change ranked as a box.
+    #[test]
+    fn a_second_stealth_mint_takes_received_money_before_the_first_ones_change() {
+        let w = world();
+        let change = owned(&w, 0x0c, 1, 7_600_000, &[]);
+        let received = owned(&w, 0x02, 0, 50_000_000, &[]);
+        let first = hex::encode([0x0c; 32]);
+        let tied = class(
+            &format!("box:{}+change:{first}", hex::encode([0x0b; 32])),
+            Origin::Session,
+        );
+        assert_eq!(
+            minted(
+                &w,
+                &[(&change, tied), (&received, received_class(&received))]
+            ),
+            one(&received)
+        );
+        // Sealed as a box-paid mint's change was before: a box's history alone.
+        let untied = class(
+            &format!("box:{}", hex::encode([0x0b; 32])),
+            Origin::Lovejoin,
+        );
+        assert_eq!(
+            minted(
+                &w,
+                &[(&change, untied), (&received, received_class(&received))]
+            ),
+            one(&received)
+        );
+    }
+
+    /// Chunk 51, money#1, own#2: a stranger's copy (d = 1) of a Seedelf minted from a box back from Lovejoin takes that
+    /// Seedelf's history, or Unknown where that history is a box's. Either way the next stealth mint takes the boxes
+    /// before it, however small the copy.
+    #[test]
+    fn a_copy_of_a_box_paid_seedelfs_register_goes_after_the_boxes() {
+        let w = world();
+        let copy = owned(&w, 0xc0, 0, 4_000_000, &[]);
+        let genuine = mixed_boxes(&w, 0x10, 2);
+        let seedelf_tx = hex::encode([0x5e; 32]);
+        for copied in [
+            class(&format!("unknown:{}", copy.tx_hash), Origin::Unknown),
+            class(
+                &format!("box:{}+change:{seedelf_tx}", hex::encode([0xb1; 32])),
+                Origin::Session,
+            ),
+            // As a Seedelf minted before the answer reads: its box's history alone.
+            class(
+                &format!("box:{}", hex::encode([0xb1; 32])),
+                Origin::Lovejoin,
+            ),
+        ] {
+            let mut known = vec![(&copy, copied.clone())];
+            known.extend(genuine.iter().map(|(u, c)| (u, c.clone())));
+            let spent = minted(&w, &known);
+            assert!(
+                genuine.iter().any(|(b, _)| spent == one(b)),
+                "a stealth mint spent {spent:?} with the copy classed {copied:?}"
+            );
+        }
+    }
+
+    /// Chunk 51, the owner's answer 2 to B15: a Make public to one of the user's own public accounts ties its change to
+    /// that account in the open, so its change is money made private from it, which a funding takes after received
+    /// money.
+    #[test]
+    fn a_funding_takes_received_money_before_a_make_publics_change() {
+        let w = world();
+        let change = owned(&w, 0x0d, 1, 40_000_000, &[]);
+        let received = owned(&w, 0x02, 0, 50_000_000, &[]);
+        let available = [change.clone(), received.clone()];
+        let h = histories(
+            Purpose::Fund {
+                session: Some("session:3".into()),
+            },
+            &[
+                (
+                    &change,
+                    class(
+                        &format!("public:0+received:{}", hex::encode([0x0e; 32])),
+                        Origin::Own,
+                    ),
+                ),
+                (&received, received_class(&received)),
+            ],
+        );
+        let spend = build::sweep_many_apart(
+            &w.chain,
+            &available,
+            &h,
+            &funding(30_000_000),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        assert_eq!(outpoints(&spend.inputs()), one(&received));
     }
 
     #[test]

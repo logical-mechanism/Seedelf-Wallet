@@ -107,7 +107,18 @@ import type {
   PendingTx,
   TokenQuantity,
 } from "../shared/rpc";
-import { boxFrom, isHistoryClass, madePrivate, merged, receivedIn, UNKNOWN, type HistoryClass } from "../shared/histories";
+import {
+  boxFrom,
+  isHistoryClass,
+  madePrivate,
+  merged,
+  mixedBox,
+  receivedIn,
+  sessionClass,
+  UNKNOWN,
+  unknownIn,
+  type HistoryClass,
+} from "../shared/histories";
 import { nothingInAccount, readAccount } from "./account";
 import { MAX_PROBE } from "./accounts";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
@@ -1297,7 +1308,9 @@ interface Withdrawing {
    * from, the box's way back merged with the UTxO that paid, and any account `ties` names (tiedOrigin), as withdrawOne
    * wrote it. `lovelace` is then what came in: the output less that UTxO, which was private already. Its box someone
    * else, or another device, put in under the wallet's key, the way back is money received, paid or not (someoneElses;
-   * chunk 51, e1a#1).
+   * chunk 51, e1a#1). Or, paid or not, what put the box there: a private session's deposit, its session's money; a box
+   * whose making the wallet can't tell, Unknown; a box a mix moved, marked so (chunk 51, time#1, still#1; the owner's
+   * answer 4 to B15).
    */
   origin?: HistoryClass;
   /**
@@ -2376,6 +2389,48 @@ function depositAccountOf(s: Schedule, b: OutRef): number | undefined {
 }
 
 /**
+ * The private session whose deposit put box `b` where it is, when one did and no mix has moved it since, as
+ * depositAccountOf finds a public account's: a session's chain's deposit, its collateral's too (Tail `deposit`), or a
+ * private Bootstrap's; after a restore, a deposit Koios said one of the phrase's one-time keys paid (`oneTime`: each
+ * key, lower case, with its session index). A deposit's only, never a mix's: a mix a session's one-time account paid
+ * has that key among its inputs too, and its boxes stay boxes, as PRIV-3 has a public mix's. The box's way back ties
+ * that session to the private UTxO it makes, on chain (chunk 51, time#1, still#1, own#4, money#3).
+ */
+function depositSessionOf(s: Schedule, b: OutRef, oneTime: ReadonlyMap<string, number>): number | undefined {
+  const chain = s.chains.find((c) => c.deposit === b.txHash || c.tail?.deposit === b.txHash);
+  if (chain) return chain.session;
+  const entry = (s.mixes ?? []).find((e) => (e.deposit ?? (e.bootstrap || e.seed ? e.id : undefined)) === b.txHash);
+  if (entry) return entry.session;
+  const told = s.origins?.[b.txHash];
+  if (!told || told.public || mixedFor(told, poolOf(b)) !== false) return undefined;
+  return told.inputs?.map((k) => (k.cred === undefined ? undefined : oneTime.get(k.cred.toLowerCase()))).find((i) => i !== undefined);
+}
+
+/** The deposits the wallet's records name: its chains' and their collaterals', its mixes' kept in the list, and a public one's kept after its record went. */
+const depositsNamed = (s: Schedule) =>
+  new Set([
+    ...s.chains.flatMap((c) => [...(c.deposit ? [c.deposit] : []), ...(c.tail ? [c.tail.deposit] : [])]),
+    ...(s.mixes ?? []).flatMap((e) => {
+      const d = e.deposit ?? (e.bootstrap || e.seed ? e.id : undefined);
+      return d ? [d] : [];
+    }),
+    ...Object.keys(s.depositors ?? {}),
+  ]);
+
+/**
+ * Whether box `b` is where a mix put it, as the wallet's records or Koios's answer say: a leaf one of its chains' mixes
+ * made, kept with its record or after it (`leaves`), or, with no record of it, one Koios said a mix in its pool made.
+ * Never a deposit's box, a Bootstrap's or a seed's leaves included, nor one a chain of its own made short of its last
+ * mixes, which it holds as not mixed yet (unmixedOf). Its way back alone is what a stealth mint takes first (chunk 51,
+ * the owner's answer 4 to B15).
+ */
+function mixedBoxOf(s: Schedule, b: OutRef): boolean {
+  if (depositsNamed(s).has(b.txHash)) return false;
+  if (ownLeaves(s).has(ref(b))) return true;
+  return !recorded(s)(b) && mixedFor(s.origins?.[b.txHash], poolOf(b)) === true;
+}
+
+/**
  * What a box back from Lovejoin, withdraw `txHash`, leaves in the private balance's history (activity.ts `origin`):
  * a box's own, merged with each public account in `ties` (Withdrawing `ties`), as money made private from it is. Coin
  * selection then keeps it apart from what isn't that account's, and a review that spends it beside other money says
@@ -2672,9 +2727,11 @@ function bootstrapOf(s: Schedule, owned: OutRef[]): OutRef[] {
  * more, its box held as unsure meanwhile, so Mix my boxes again waits for the answer rather than call a deposit of the
  * wallet's own someone else's and leave it out (chunk 51, time#4). Only in a retired pool, never asked again, does it
  * read as someone else's here, which classes its box brought back as money received. Another device's session past
- * the book's indices reads as someone else's too, which only leaves its box out of Mix my boxes again.
+ * the book's indices reads as someone else's too, which only leaves its box out of Mix my boxes again. A box a mix
+ * made is never one: a mix's box inputs aren't traced, so one its depositor mixed themselves reads as the wallet's own,
+ * and they can still follow it (chunk 51, own#3, the owner's call).
  */
-function someoneElsesOf(s: Schedule, owned: OutRef[], oneTime: ReadonlySet<string>, origins: Record<string, Origin> = s.origins ?? {}): OutRef[] {
+function someoneElsesOf(s: Schedule, owned: OutRef[], oneTime: Pick<ReadonlySet<string>, "has">, origins: Record<string, Origin> = s.origins ?? {}): OutRef[] {
   const named = new Set([...(s.mixes ?? []).map((e) => depositOf(s, e)), ...Object.keys(s.depositors ?? {})]);
   const ours = (o: Origin | undefined) => !!o?.inputs?.some((k) => k.cred !== undefined && oneTime.has(k.cred.toLowerCase()));
   return depositsOf(s, owned, origins).filter((b) => !origins[b.txHash]?.public && !named.has(b.txHash) && !ours(origins[b.txHash]));
@@ -6649,15 +6706,16 @@ export class LovejoinService {
   }
 
   /**
-   * The phrase's one-time accounts' payment keys (hex, lower case), as a deposit's inputs name them: every private
-   * session index the book knows (`sessionIndices`), and GAP_LIMIT past the highest, as a restore's scan looks past
-   * the last one used. Derived on the device, asking nobody (chunk 51, e1a#1).
+   * The phrase's one-time accounts' payment keys (hex, lower case), as a deposit's inputs name them, each with its
+   * session index: every private session index the book knows (`sessionIndices`), and GAP_LIMIT past the highest, as a
+   * restore's scan looks past the last one used. Derived on the device, asking nobody (chunk 51, e1a#1; which session's,
+   * still#1).
    */
-  private async oneTimeKeys(network: NetworkName): Promise<Set<string>> {
+  private async oneTimeKeys(network: NetworkName): Promise<Map<string, number>> {
     const known = (await this.deps.sessionIndices?.(network).catch(() => [])) ?? [];
     const next = known.length ? Math.max(...known) + 1 : 0;
     const indices = [...new Set([...known, ...Array.from({ length: GAP_LIMIT }, (_, i) => next + i)])];
-    return this.deps.wallet.withKeys((keys) => new Set(indices.map((i) => keys.oneTime.keyHash(i).toLowerCase())));
+    return this.deps.wallet.withKeys((keys) => new Map(indices.map((i) => [keys.oneTime.keyHash(i).toLowerCase(), i] as const)));
   }
 
   /**
@@ -8023,7 +8081,8 @@ export class LovejoinService {
       // questions say it avoids (1.6.0's release review, x-privacy#0, R3-2, R3-3); then the smallest. WebAssembly takes
       // the first that pays. What its history ties (`ties`, below) is still the deposit's alone, as PRIV-3 has it.
       const { view, params, utxos, classes, returning, waiting } = await readContract(this.deps, network, known);
-      const fromLovejoin = (u: KoiosUtxo) => (classes[outpoint(u)]?.origin === "lovejoin" ? 0 : 1);
+      // A box a mix moved too (chunk 51, the owner's answer 4 to B15).
+      const fromLovejoin = (u: KoiosUtxo) => (["lovejoin", "mixed"].includes(classes[outpoint(u)]?.origin ?? "") ? 0 : 1);
       const schedule = await this.read(network);
       const owner = depositAccountOf(schedule, box) ?? accountOf(originOf(box, schedule));
       const another = (u: KoiosUtxo) => (owner !== undefined && accountsIn(classes[outpoint(u)]).some((a) => a !== owner) ? 1 : 0);
@@ -8084,7 +8143,12 @@ export class LovejoinService {
     // it in can follow it, as a payer can a payment, so the stealth mint and a funding take it as they'd take a payment
     // from them, never as a box back from Lovejoin, which the stealth mint takes first (chunk 51, e1a#1, with
     // gap-g1#1's part b).
-    const received = (await this.someoneElses(network, await this.read(network), [box])).length > 0;
+    const before = await this.read(network);
+    const received = (await this.someoneElses(network, before, [box])).length > 0;
+    // A deposit Koios said one of the phrase's one-time keys paid, after a restore: which session's is told by the key,
+    // derived on the device for such a box alone (chunk 51, still#1).
+    const told = before.origins?.[box.txHash];
+    const oneTime = !received && told && !told.public && mixedFor(told, poolOf(box)) === false ? await this.oneTimeKeys(network) : new Map<string, number>();
     let origin: HistoryClass | undefined;
     await this.update(network, (s) => {
       const time = takeDue(s, due, pool.id);
@@ -8093,9 +8157,25 @@ export class LovejoinService {
       const deposited = depositAccountOf(s, box);
       const tied = [...new Set([payer, deposited].filter((a): a is number => a !== undefined))].sort((a, b) => a - b);
       ties = tied.length ? tied : undefined;
-      // The private UTxO that paid is in the one it comes back into: its history goes with the box's (call 36).
-      const own = received ? receivedIn(built.txHash) : boxFrom(built.txHash);
-      origin = spent || received ? merged([own, ...(spent ? [spent.class] : []), ...(ties ?? []).map(madePrivate)]) : undefined;
+      // A private session's deposit that no mix moved since makes it that session's money, as a public account's makes
+      // it that account's: anyone can follow it back to the session and what funded it. One whose making the wallet
+      // can't tell is Unknown. Only a box a mix moved, as its records or Koios say, is marked so, its way back alone:
+      // the box a stealth mint takes first. Any other box's ranks as one brought back before that mark was kept, after
+      // money others paid (chunk 51, time#1, still#1, own#4, money#3; the owner's answer 4 to B15).
+      const session = received ? undefined : depositSessionOf(s, box, oneTime);
+      const own = received
+        ? receivedIn(built.txHash)
+        : session !== undefined
+          ? merged([boxFrom(built.txHash), sessionClass(session)])
+          : !knownOf(s)(box) && !depositsNamed(s).has(box.txHash)
+            ? unknownIn(built.txHash)
+            : mixedBoxOf(s, box)
+              ? mixedBox(built.txHash)
+              : boxFrom(built.txHash);
+      // The private UTxO that paid is in the one it comes back into: its history goes with the box's (call 36). Merged,
+      // a box a mix moved is a box no longer.
+      const besides = [...(spent ? [spent.class] : []), ...(ties ?? []).map(madePrivate)];
+      origin = spent || received || own.origin !== "lovejoin" ? (besides.length ? merged([own, ...besides]) : own) : undefined;
       s.withdrawing = {
         txHash: built.txHash,
         txCbor: finished.txCbor,

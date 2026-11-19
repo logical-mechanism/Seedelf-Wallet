@@ -2422,8 +2422,13 @@ pub enum Origin {
     Received,
     /// What a private session's funding left, or its return.
     Session,
-    /// A box back from Lovejoin: each is a class of its own.
+    /// A box back from Lovejoin: each is a class of its own. One the wallet has no record of a mix moving: brought back
+    /// before it kept that record, so it may be one its deposit still ties to whatever paid for it, or a box's way
+    /// back merged with other money.
     Lovejoin,
+    /// A box back from Lovejoin the wallet recorded a mix moving, its way back alone: no spend has touched it since
+    /// (chunk 51, the owner's answer 4 to B15, time#1).
+    Mixed,
 }
 
 /// The class every UTxO with no history is in.
@@ -2461,8 +2466,10 @@ pub enum Purpose {
     #[default]
     Pay,
     /// A stealth mint, and a pool's start from the Seedelf balance: the new
-    /// Seedelf is tied to whatever pays for it, so a box back from Lovejoin
-    /// first, which no payer knows, then received money, which its payer does
+    /// Seedelf is tied to whatever pays for it, so a box back from a mix
+    /// (`Origin::Mixed`) first, which no payer knows but one who put it in under the wallet's key
+    /// and mixed it themselves, since nothing tells that box from the wallet's
+    /// own (chunk 51, own#3), then received money, which its payer does
     /// (chunk 51, gap-g1#1 (b), the owner's B15).
     Mint,
     /// A private session's funding or top-up: received money, or a box that
@@ -2481,14 +2488,18 @@ impl Purpose {
                 Session => 1,
                 Received => 2,
                 Unknown => 3,
-                Lovejoin => 4,
+                Lovejoin | Mixed => 4,
             },
+            // Only a box the wallet recorded a mix moving goes first; one with no such record, as every box brought
+            // back before it kept one, after received money, as before B15 (chunk 51, the owner's answer 4). What a
+            // spend of the wallet's own left is tied to that spend, and ranks as a session's money (answer 2).
             Purpose::Mint => match class.origin {
-                Lovejoin => 0,
+                Mixed => 0,
                 Received => 1,
-                Unknown => 2,
-                Own => 3,
-                Session => 4,
+                Lovejoin => 2,
+                Unknown => 3,
+                Own => 4,
+                Session => 5,
             },
             Purpose::Fund { session } => {
                 if session.as_deref().is_some_and(|s| class.has(s)) {
@@ -2496,7 +2507,7 @@ impl Purpose {
                 }
                 match class.origin {
                     Received => 1,
-                    Lovejoin => 2,
+                    Lovejoin | Mixed => 2,
                     Unknown => 3,
                     Own => 4,
                     Session => 5,
@@ -2510,7 +2521,7 @@ impl Purpose {
     /// box, taken last and one at a time.
     fn tier(&self, class: &Class) -> u8 {
         match (self, class.origin) {
-            (_, Origin::Lovejoin) => 2,
+            (_, Origin::Lovejoin | Origin::Mixed) => 2,
             (Purpose::Fund { .. }, Origin::Session) if self.rank(class) > 0 => 1,
             _ => 0,
         }
