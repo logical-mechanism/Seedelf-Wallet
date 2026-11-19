@@ -4135,9 +4135,10 @@ pub mod api {
                 })
                 .filter(|alone| alone.len() < utxos.len());
             // Boxes back from Lovejoin, last, as one transaction merges them, by the box rule (`build::box_rank`):
-            // every one, a token pool's way back holding its token included, weighed by what it adds
-            // (`build::box_weight`, chunk 51, l5merge#1); first those that pay what the rest leaves owed, as few of
-            // unknown making as do, then as few boxes, of as many the most mixed (`build::boxes_to_merge`).
+            // every one, a token pool's way back holding its token included, weighed by what it adds, its ADA less its
+            // tokens' whole least, as a part leaves the tokens it keeps with just their least (`build::box_weight`,
+            // `Weighed::InParts`; chunk 51, l5merge#1, l6still#1); first those that pay what the rest leaves owed, as
+            // few of unknown making as do, then as few boxes, of as many the most mixed (`build::boxes_to_merge`).
             let tier = |rows: &[&UtxoResponse]| histories.tier_of(rows[0]);
             let boxes: Vec<usize> = (0..classes.len())
                 .filter(|&i| tier(&classes[i].1) == 2)
@@ -4152,7 +4153,7 @@ pub mod api {
                 .iter()
                 .map(|&i| {
                     let (c, rows, ..) = &classes[i];
-                    build::box_weight(&chain.params, c, rows)
+                    build::box_weight(&chain.params, c, rows, build::Weighed::InParts)
                 })
                 .collect();
             let places: HashMap<String, usize> = build::boxes_to_merge(&weights, gap)
@@ -4253,7 +4254,8 @@ pub mod api {
         }
 
         #[test]
-        fn a_payments_parts_merge_as_few_boxes_as_pay_a_box_of_unknown_making_last() {
+        fn a_payments_parts_merge_as_few_boxes_as_pay_none_of_unknown_making_where_the_others_pay()
+        {
             // Four ways back a mix moved of 4.71 ₳ (0x51 to 0x54), two plain ones of 9.71 ₳ (0x61, 0x62), and one of
             // unknown making of 9.8 ₳ (0x70).
             let rows: Vec<(UtxoResponse, &str)> = [0x51, 0x52, 0x53, 0x54]
