@@ -1,8 +1,9 @@
-// Withdraw: pay normal addresses, or ADA Handles, from the Seedelf balance,
-// up to 20 at once: each an amount with optional tokens (with tokens, the
-// amount may stay empty: only the ADA they need goes); or everything (Max)
-// to a single one. Each destination is read as it's typed, and flagged when
-// it's this wallet's own Cardano account. The worker builds the withdrawal,
+// Withdraw: pay addresses on the network, or ADA Handles, from the Seedelf
+// balance, up to 100 at once: each an amount with optional tokens (with
+// tokens, the amount may stay empty: only the ADA they need goes); or
+// everything (Max) to a single one. Each destination is read as it's typed,
+// and flagged when it's this wallet's own Cardano account, or a script's,
+// whose payment carries no datum. The worker builds the withdrawal,
 // with Ogmios measuring its spends, and nothing is sent until the user has
 // reviewed it and pressed Send.
 
@@ -36,7 +37,7 @@ import {
 } from "../components/Recipients";
 import { Row } from "../components/ReviewRows";
 import { againOrForm, RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
-import { StakedWarning, StakeElsewhereNote } from "../components/StakedWarning";
+import { ScriptNote, StakedWarning, StakeElsewhereNote } from "../components/StakedWarning";
 import { TotalRows } from "../components/ReviewTotals";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
@@ -105,8 +106,9 @@ export function Withdraw({
     waitingFor({
       to: toState(e.draft),
       amount: e.draft.amount,
-      tokensPicked: Object.keys(e.draft.tokens).length > 0,
+      tokensPicked: e.picked,
       tokensOk: e.tokens.ok,
+      tokensAway: e.away.length > 0,
       max: maxed,
     }),
   );
@@ -258,6 +260,8 @@ export function Withdraw({
             )
           ),
         )}
+        {/* A script's address, by its number with several: its payment carries no datum (chunk 51, r2a#1). */}
+        {summary.payments.map((p, i) => p.script && <ScriptNote key={i} side="withdraw" nth={several ? i + 1 : undefined} />)}
         <p className="note">{t("send.review.confirmTime")}</p>
         <GivemeNote />
       </Screen>
@@ -325,6 +329,8 @@ export function Withdraw({
             {read.state === "read" && !read.destination.own && read.destination.staked !== undefined && (
               <StakedWarning side="withdraw" account={read.destination.staked} />
             )}
+            {/* A script's address: paid, with no datum, and said where the refusal was (chunk 51, r2a#1). */}
+            {read.state === "read" && read.destination.script && <ScriptNote side="withdraw" />}
 
             <div className="field">
               <label htmlFor={fieldId("withdraw-amount", d, i)}>{t("common.amount")}</label>

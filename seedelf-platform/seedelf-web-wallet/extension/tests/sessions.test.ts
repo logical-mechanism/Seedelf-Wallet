@@ -179,8 +179,11 @@ describe("a session's funding", () => {
     const t = await unlocked();
     // The private history started before this money arrived: its first reading found none (independent review L38).
     await t.activity.arrived("preprod", []);
-    // Session 5's funding left 40 ₳, the largest: written down when it was sent.
-    const theirs = { ...ownedUtxos[0]!, tx_hash: "05".repeat(32), value: "40000000", block_height: 9_000_005 };
+    // Session 5's funding left 40 ₳, the largest: written down when it was sent. Under a register of its own, as the
+    // wallet writes every output: under the 25 ₳'s, anyone could see the two are one owner's (chunk 51, gap-g1#1).
+    const wasm = loadTestWasm();
+    const datum = await t.wallet.withKeys((keys) => Buffer.from(wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister()))).toString("hex"));
+    const theirs = { ...ownedUtxos[0]!, tx_hash: "05".repeat(32), value: "40000000", block_height: 9_000_005, inline_datum: { bytes: datum, value: null } };
     t.koios.added.push(theirs);
     await t.activity.sent(
       "preprod",
@@ -256,7 +259,8 @@ describe("a swap's quote", () => {
     });
   });
 
-  it("is verified only for ADA, a token the wallet lists, or one Minswap verifies by its ID; the wallet won't fund one that isn't", async () => {
+  // Its confirmed half, "Swap into it anyway" on, funds it: tests/swap-unverified-anyway.test.ts (chunk 51, gap-g8#8).
+  it("is verified only for ADA, a token the wallet lists, or one Minswap verifies by its ID; unconfirmed, the wallet won't fund one that isn't", async () => {
     const t = await unlocked();
     // MIN is on the wallet's own list: nothing more is asked.
     expect(await t.sessions.quote("preprod", ASK)).toMatchObject({ verified: true });
@@ -276,13 +280,13 @@ describe("a swap's quote", () => {
     const spoofed = await t.sessions.quote("preprod", { ...ASK, tokenOut: fake });
     expect(spoofed.verified).toBe(false);
     expect(t.minswap.calls.at(-1)).toMatchObject({ path: "tokens", body: { query: fake, only_verified: true } });
-    await expect(t.sessions.outBuild("preprod", spoofed)).rejects.toThrow("won't swap into it");
+    await expect(t.sessions.outBuild("preprod", spoofed)).rejects.toThrow("turn on Swap into it anyway");
     expect(t.koios.calls.some((c) => c.path === "account_addresses")).toBe(false);
     // Listed by its own ID but marked unverified, against Minswap's own filter: no more verified (chunk 51, t1k#8).
     verified.push({ token_id: fake, ticker: "SNEK", is_verified: false });
     const unverified = await t.sessions.quote("preprod", { ...ASK, tokenOut: fake });
     expect(unverified.verified).toBe(false);
-    await expect(t.sessions.outBuild("preprod", unverified)).rejects.toThrow("won't swap into it");
+    await expect(t.sessions.outBuild("preprod", unverified)).rejects.toThrow("turn on Swap into it anyway");
 
     // The real one, by its ID: verified.
     expect((await t.sessions.quote("preprod", { ...ASK, tokenOut: real })).verified).toBe(true);
@@ -385,7 +389,9 @@ describe("a swap's quote", () => {
     expect(() => checkAsk({ ...ASK, amount: "1.5" })).toThrow("Enter an amount");
     expect(() => checkAsk({ ...ASK, tokenOut: "lovelace" })).toThrow("two different tokens");
     expect(() => checkAsk({ ...ASK, tokenOut: "zz" })).toThrow("isn't a token");
-    expect(() => checkAsk({ ...ASK, slippage: 50 })).toThrow("Slippage");
+    // Only none or all of it: the form's own range (chunk 51, gap-g8#7).
+    expect(() => checkAsk({ ...ASK, slippage: 100 })).toThrow("Slippage");
+    expect(() => checkAsk({ ...ASK, slippage: 0 })).toThrow("Slippage");
   });
 });
 

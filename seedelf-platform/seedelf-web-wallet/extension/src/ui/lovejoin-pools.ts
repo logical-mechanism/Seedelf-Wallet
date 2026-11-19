@@ -62,9 +62,11 @@ export function poolsOf(status: LovejoinStatus | undefined): ShownPool[] {
     notMixed: status.notMixed,
     ...(status.unsure ? { unsure: status.unsure } : {}),
     ...(status.deposits ? { deposits: status.deposits } : {}),
+    ...(status.someoneElse ? { someoneElse: status.someoneElse } : {}),
     fromPublic: status.fromPublic,
     ...(status.otherAccounts ? { otherAccounts: status.otherAccounts } : {}),
     ...(status.bootstrap ? { bootstrap: status.bootstrap } : {}),
+    ...(status.reserved ? { reserved: status.reserved } : {}),
     ...(status.crowd ? { crowd: status.crowd } : {}),
     ...(status.unusable ? { unusable: status.unusable } : {}),
   };

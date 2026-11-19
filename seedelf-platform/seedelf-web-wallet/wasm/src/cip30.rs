@@ -19,7 +19,7 @@ use pallas_crypto::hash::{Hash, Hasher};
 use pallas_primitives::{Fragment, Metadatum, PlutusData, StakeCredential, conway};
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
-use seedelf_core::cbor::check_nesting;
+use seedelf_core::cbor::{MAX_DEPTH, check_nesting, within_depth};
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::staking::{drep_id, pool_id};
 use seedelf_crypto::cardano::{CardanoAccount, Role};
@@ -57,6 +57,44 @@ pub struct KoiosRow {
     pub inline_datum: Option<InlineDatum>,
     #[serde(default)]
     pub asset_list: Option<Vec<KoiosAsset>>,
+    /// The reference script it carries: a site prices spending it from what it's handed, so it's handed over too
+    /// ([`utxo_cbor`]; chunk 51, w2#4). Read in any shape, never a reason to refuse the row ([`script_of_row`]).
+    #[serde(default, deserialize_with = "script_of_row")]
+    pub reference_script: Option<KoiosScript>,
+}
+
+/// A reference script as Koios and the data layer give one, and as the worker keeps it (koios.ts `trimmed`): its
+/// hash, its size, its type (`timelock` or `multisig` for a native script, `plutusV1` to `plutusV3`) and its bytes, as
+/// the ledger hashes and prices them: a native script's CBOR, or a Plutus script's own bytes (its byte string's
+/// content). Both sources give a Plutus script's that way (checked on a real row, 2026-11-18), and no native script's
+/// bytes or size at all, only its JSON, which the worker drops.
+#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct KoiosScript {
+    pub hash: Option<String>,
+    pub size: Option<u64>,
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub bytes: Option<String>,
+}
+
+/// A row's `reference_script`, whatever its shape: null is none, and anything else is a script, each field read where
+/// it's what Koios writes there. One in another shape is a script that can't be handed over, as `trimmed` never cuts a
+/// script to nothing, never a row refused.
+fn script_of_row<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<KoiosScript>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(value.map(|v| {
+        let text = |key: &str| {
+            v.get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        };
+        KoiosScript {
+            hash: text("hash"),
+            size: v.get("size").and_then(serde_json::Value::as_u64),
+            kind: text("type"),
+            bytes: text("bytes"),
+        }
+    }))
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -127,15 +165,18 @@ fn cbor(
 // Amounts
 // ---------------------------------------------------------------------------
 
-/// ADA and tokens, keyed by (policy, name) in bytes.
+/// ADA and tokens, keyed by (policy, name) in bytes. A token's total is a u128: the ledger holds at most a u64 of a
+/// token in one output, but not in several together, so a site's transaction spending a stranger's three mints of
+/// 2^63 − 1 of one, which the ledger takes, is read exactly, never refused (chunk 51, w2#5). ADA's stays a u64, which
+/// holds 400 times all of it.
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct Amount {
     pub lovelace: u64,
-    pub tokens: BTreeMap<(Vec<u8>, Vec<u8>), u64>,
+    pub tokens: BTreeMap<(Vec<u8>, Vec<u8>), u128>,
 }
 
 impl Amount {
-    fn add_token(&mut self, policy: Vec<u8>, name: Vec<u8>, quantity: u64) -> Result<()> {
+    fn add_token(&mut self, policy: Vec<u8>, name: Vec<u8>, quantity: u128) -> Result<()> {
         let held = self.tokens.entry((policy, name)).or_default();
         *held = held
             .checked_add(quantity)
@@ -175,14 +216,15 @@ impl Amount {
             tokens: BTreeMap::new(),
         };
         for a in row.asset_list.iter().flatten() {
-            let quantity = a
+            // One output holds a u64 of a token at most.
+            let quantity: u64 = a
                 .quantity
                 .parse()
                 .map_err(|_| anyhow!("a token quantity isn't a whole number: {:?}", a.quantity))?;
             amount.add_token(
                 hex::decode(&a.policy_id)?,
                 hex::decode(&a.asset_name)?,
-                quantity,
+                u128::from(quantity),
             )?;
         }
         Ok(amount)
@@ -196,7 +238,11 @@ impl Amount {
                 amount.lovelace = *c;
                 for (policy, names) in assets.iter() {
                     for (name, q) in names.iter() {
-                        amount.add_token(policy.to_vec(), name.to_vec(), u64::from(q))?;
+                        amount.add_token(
+                            policy.to_vec(),
+                            name.to_vec(),
+                            u128::from(u64::from(q)),
+                        )?;
                     }
                 }
             }
@@ -212,7 +258,7 @@ impl Amount {
                 amount.lovelace = *c;
                 for (policy, names) in assets.iter() {
                     for (name, q) in names.iter() {
-                        amount.add_token(policy.to_vec(), name.to_vec(), *q)?;
+                        amount.add_token(policy.to_vec(), name.to_vec(), u128::from(*q))?;
                     }
                 }
             }
@@ -232,7 +278,9 @@ impl Amount {
     }
 
     /// CIP-30's `Value`: the coin alone, or `[coin, multiasset]`, in
-    /// canonical order (policies by bytes, names by length, then bytes).
+    /// canonical order (policies by bytes, names by length, then bytes). A
+    /// token's total past a u64, which no `Value` holds, is written as
+    /// u64::MAX, CIP-30's own ceiling (chunk 51, w2#5).
     fn encode(&self, e: &mut Enc) -> Result<(), minicbor::encode::Error<std::convert::Infallible>> {
         let nonzero: Vec<_> = self.tokens.iter().filter(|(_, q)| **q > 0).collect();
         if nonzero.is_empty() {
@@ -242,10 +290,10 @@ impl Amount {
         // Names by (length, bytes): CBOR's canonical order for byte-string keys.
         let mut policies: BTreeMap<&[u8], BTreeMap<NameKey, u64>> = BTreeMap::new();
         for ((p, n), q) in nonzero {
-            policies
-                .entry(p.as_slice())
-                .or_default()
-                .insert((n.len(), n.as_slice()), *q);
+            policies.entry(p.as_slice()).or_default().insert(
+                (n.len(), n.as_slice()),
+                u64::try_from(*q).unwrap_or(u64::MAX),
+            );
         }
         e.array(2)?.u64(self.lovelace)?.map(policies.len() as u64)?;
         for (policy, names) in policies {
@@ -263,11 +311,12 @@ impl Amount {
 fn difference(before: &Amount, after: &Amount) -> (i128, Vec<Token>) {
     let lovelace = i128::from(after.lovelace) - i128::from(before.lovelace);
     let keys: BTreeSet<_> = before.tokens.keys().chain(after.tokens.keys()).collect();
+    // A total is a sum of a transaction's u64s, far under i128::MAX, so the difference is exact.
+    let signed = |q: Option<&u128>| i128::try_from(*q.unwrap_or(&0)).unwrap_or(i128::MAX);
     let tokens = keys
         .into_iter()
         .filter_map(|k| {
-            let d = i128::from(*after.tokens.get(k).unwrap_or(&0))
-                - i128::from(*before.tokens.get(k).unwrap_or(&0));
+            let d = signed(after.tokens.get(k)) - signed(before.tokens.get(k));
             (d != 0).then(|| Token {
                 policy_id: hex::encode(&k.0),
                 asset_name: hex::encode(&k.1),
@@ -282,9 +331,13 @@ fn difference(before: &Amount, after: &Amount) -> (i128, Vec<Token>) {
 // What a dApp is shown (getBalance, getUtxos, the addresses)
 // ---------------------------------------------------------------------------
 
-/// A UTxO as CIP-30's `TransactionUnspentOutput`: `[input, output]`. The
-/// output is the legacy array unless it holds an inline datum. A reference
-/// script on one of the account's own UTxOs isn't passed on.
+/// A UTxO as CIP-30's `TransactionUnspentOutput`: `[input, output]`, the
+/// output as the ledger holds it. The legacy array, unless it holds an inline
+/// datum or a reference script, which only the map form carries: the script
+/// too, since Conway's fee counts one on a spent input, and a site that
+/// prices its fee from what it's handed would come up short (chunk 51, w2#4).
+/// One whose script can't be written ([`script_ref`]) is refused, never
+/// handed over without it.
 pub fn utxo_cbor(row: &KoiosRow) -> Result<Vec<u8>> {
     let tx_hash = hex::decode(&row.tx_hash)?;
     if tx_hash.len() != 32 {
@@ -302,34 +355,120 @@ pub fn utxo_cbor(row: &KoiosRow) -> Result<Vec<u8>> {
         .map(|d| hex::decode(&d.bytes))
         .transpose()?;
     let datum_hash = row.datum_hash.as_ref().map(hex::decode).transpose()?;
+    let script = script_ref(row)?;
     Ok(cbor(|e| {
         e.array(2)?.array(2)?.bytes(&tx_hash)?.u64(row.tx_index)?;
-        match (inline, datum_hash) {
-            (Some(datum), _) => {
-                e.map(3)?.u8(0)?.bytes(&address)?.u8(1)?;
-                amount.encode(e)?;
-                // [1, #6.24(bytes .cbor plutus_data)]
-                e.u8(2)?
-                    .array(2)?
-                    .u8(1)?
-                    .tag(minicbor::data::Tag::new(24))?
-                    .bytes(&datum)?;
-            }
-            (None, Some(hash)) => {
+        match (inline, datum_hash, script) {
+            (None, Some(hash), None) => {
                 e.array(3)?.bytes(&address)?;
                 amount.encode(e)?;
                 e.bytes(&hash)?;
             }
-            (None, None) => {
+            (None, None, None) => {
                 e.array(2)?.bytes(&address)?;
                 amount.encode(e)?;
+            }
+            (inline, hash, script) => {
+                let datum = inline.is_some() || hash.is_some();
+                e.map(2 + u64::from(datum) + u64::from(script.is_some()))?
+                    .u8(0)?
+                    .bytes(&address)?
+                    .u8(1)?;
+                amount.encode(e)?;
+                match (inline, hash) {
+                    // [1, #6.24(bytes .cbor plutus_data)]
+                    (Some(datum), _) => {
+                        e.u8(2)?
+                            .array(2)?
+                            .u8(1)?
+                            .tag(minicbor::data::Tag::new(24))?
+                            .bytes(&datum)?;
+                    }
+                    // [0, datum hash]
+                    (None, Some(hash)) => {
+                        e.u8(2)?.array(2)?.u8(0)?.bytes(&hash)?;
+                    }
+                    (None, None) => {}
+                }
+                // #6.24(bytes .cbor script)
+                if let Some(script) = script {
+                    e.u8(3)?.tag(minicbor::data::Tag::new(24))?.bytes(&script)?;
+                }
             }
         }
         Ok(())
     }))
 }
 
-/// A balance as CIP-30's `Value`.
+/// A row's reference script as an output holds it, `[kind, script]`, which
+/// the output wraps in `#6.24(bytes)`: kind 0 with a native script's CBOR as
+/// it is, or 1 to 3 with a Plutus V1 to V3 script's bytes as a byte string.
+/// None for a row without one. One that can't be written as the ledger holds
+/// it is refused: no bytes (Koios and the data layer give none for a native
+/// script), bytes that aren't hex or that disagree with the size or the hash
+/// given, a type the ledger has no script of, or a native script that isn't
+/// one CBOR item within `MAX_DEPTH` levels, which a site's decoder reads by
+/// recursion, as Pallas does (chunk 51, w2#4).
+fn script_ref(row: &KoiosRow) -> Result<Option<Vec<u8>>> {
+    let Some(script) = &row.reference_script else {
+        return Ok(None);
+    };
+    let cant = || {
+        anyhow!(
+            "UTxO {}#{} holds a reference script the wallet can't hand over whole",
+            row.tx_hash,
+            row.tx_index
+        )
+    };
+    let kind: u8 = match script.kind.as_deref() {
+        Some("timelock" | "multisig") => 0,
+        Some("plutusV1") => 1,
+        Some("plutusV2") => 2,
+        Some("plutusV3") => 3,
+        _ => return Err(cant()),
+    };
+    let bytes = script
+        .bytes
+        .as_deref()
+        .and_then(|b| hex::decode(b).ok())
+        .filter(|b| !b.is_empty())
+        .ok_or_else(cant)?;
+    let sized = script.size.is_none_or(|size| size == bytes.len() as u64);
+    let hashed = script.hash.as_deref().is_none_or(|hash| {
+        hash.eq_ignore_ascii_case(&hex::encode(Hasher::<224>::hash_tagged(&bytes, kind)))
+    });
+    let whole = kind != 0 || within_depth(&bytes, MAX_DEPTH);
+    if !(sized && hashed && whole) {
+        return Err(cant());
+    }
+    Ok(Some(cbor(|e| {
+        e.array(2)?.u8(kind)?;
+        if kind == 0 {
+            e.writer_mut().extend_from_slice(&bytes);
+        } else {
+            e.bytes(&bytes)?;
+        }
+        Ok(())
+    })))
+}
+
+/// The account's UTxOs as CIP-30's `TransactionUnspentOutput`s
+/// ([`utxo_cbor`]), leaving out each whose reference script can't be written
+/// ([`script_ref`]): a site would price spending it short (chunk 51, w2#4).
+/// The worker leaves out the same ones first (dapp.ts `available`), so
+/// getBalance counts what getUtxos hands over.
+pub fn utxos_cbor(rows: &[KoiosRow]) -> Result<Vec<Vec<u8>>> {
+    rows.iter()
+        .filter(|row| script_ref(row).is_ok())
+        .map(utxo_cbor)
+        .collect()
+}
+
+/// A balance as CIP-30's `Value`. The worker sums each token exactly, and a
+/// stranger's three mints of one to the account pass a u64 together: such a
+/// total is written as u64::MAX, CIP-30's own ceiling ([`Amount::encode`]),
+/// so one stranger's token can't fail the whole call for every site (chunk
+/// 51, w2#5). One that isn't a whole number is still refused.
 pub fn value_cbor(lovelace: &str, tokens: &[Token]) -> Result<Vec<u8>> {
     let mut amount = Amount {
         lovelace: lovelace
@@ -338,15 +477,17 @@ pub fn value_cbor(lovelace: &str, tokens: &[Token]) -> Result<Vec<u8>> {
         tokens: BTreeMap::new(),
     };
     for t in tokens {
-        let quantity = t
-            .quantity
-            .parse()
-            .map_err(|_| anyhow!("a token quantity isn't a whole number: {:?}", t.quantity))?;
-        amount.add_token(
-            hex::decode(&t.policy_id)?,
-            hex::decode(&t.asset_name)?,
-            quantity,
-        )?;
+        let quantity = match t.quantity.parse::<u128>() {
+            Ok(quantity) => quantity,
+            // A whole number past even a u128 is as far past what a Value holds.
+            Err(e) if *e.kind() == std::num::IntErrorKind::PosOverflow => u128::MAX,
+            Err(_) => bail!("a token quantity isn't a whole number: {:?}", t.quantity),
+        };
+        let held = amount
+            .tokens
+            .entry((hex::decode(&t.policy_id)?, hex::decode(&t.asset_name)?))
+            .or_default();
+        *held = held.saturating_add(quantity);
     }
     Ok(cbor(|e| amount.encode(e)))
 }
@@ -598,6 +739,10 @@ pub struct Paid {
     /// ever can). "hash" for a datum kept by hash, whatever the witness set
     /// carries (chunk 51, r2sign#1): no Seedelf Wallet ever finds or spends
     /// such a payment, and who can take it is the preimage's to decide.
+    /// "script-ref" for a register only its key's holder can spend on an
+    /// output that carries a reference script too (chunk 51, l3sign#1): its
+    /// owner's, but no Seedelf Wallet spend takes it yet and the private
+    /// balance leaves it out, so it's never read as a Seedelf payment.
     pub seedelf: Option<String>,
     /// The address has one of the account's payment keys, but someone
     /// else's staking part, or none: the account could spend what's there,
@@ -619,6 +764,32 @@ pub struct OwnOutput {
     pub tokens: Vec<Token>,
     pub inline_datum: Option<String>,
     pub datum_hash: Option<String>,
+    /// The reference script it carries, as Koios gives one, so a site's next
+    /// transaction is handed it with the output (chunk 51, w2#4): the bytes
+    /// the transaction writes ([`script_of`]). One that couldn't be read has
+    /// no type, and the worker leaves it out of what sites are handed.
+    pub reference_script: Option<KoiosScript>,
+}
+
+/// An output's reference script as Koios gives one ([`KoiosScript`]), read
+/// from the transaction as it's written: a native script's own bytes, never
+/// Pallas's encoding of them, so its hash and size are the chain's.
+fn script_of(out: &conway::MintedTransactionOutput) -> Option<KoiosScript> {
+    let conway::PseudoTransactionOutput::PostAlonzo(o) = out else {
+        return None;
+    };
+    let (kind, tag, bytes) = match &o.script_ref.as_ref()?.0 {
+        conway::PseudoScript::NativeScript(s) => ("timelock", 0, s.raw_cbor()),
+        conway::PseudoScript::PlutusV1Script(s) => ("plutusV1", 1, s.as_ref()),
+        conway::PseudoScript::PlutusV2Script(s) => ("plutusV2", 2, s.as_ref()),
+        conway::PseudoScript::PlutusV3Script(s) => ("plutusV3", 3, s.as_ref()),
+    };
+    Some(KoiosScript {
+        hash: Some(hex::encode(Hasher::<224>::hash_tagged(bytes, tag))),
+        size: Some(bytes.len() as u64),
+        kind: Some(kind.to_string()),
+        bytes: Some(hex::encode(bytes)),
+    })
 }
 
 /// A certificate, in words the extension turns into a sentence.
@@ -905,6 +1076,13 @@ fn is_identity(point: &[u8]) -> bool {
     point.len() == 48 && point[0] == 0xc0 && point[1..].iter().all(|b| *b == 0)
 }
 
+/// Whether an output carries a reference script (key 3): a Seedelf UTxO with one is its register's owner's, but the
+/// wallet's evaluator can't spend it yet (core's `eval::refusal`), so the private balance leaves it out (chunk 51,
+/// l3sign#1). Only the CLI's `sweep --all` brings it back.
+fn carries_script(out: &conway::TransactionOutput) -> bool {
+    matches!(out, conway::PseudoTransactionOutput::PostAlonzo(o) if o.script_ref.is_some())
+}
+
 /// The datum an output carries in itself, as data.
 fn inline_data(out: &conway::TransactionOutput) -> Option<&PlutusData> {
     match out {
@@ -1188,8 +1366,11 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
 
     // The datums the transaction carries, by hash: a contract UTxO keeping its datum by hash has it here. `tx` has
     // lost the bytes they were written in, which the hash is of. Unreadable this way, there's only less to say: a
-    // reading of who a UTxO likely belongs to is never a reason to refuse.
-    let carried: HashMap<String, Vec<u8>> = conway::MintedTx::decode_fragment(&bytes)
+    // reading of who a UTxO likely belongs to is never a reason to refuse. The same reading gives an own output's
+    // reference script as written ([`script_of`]).
+    let minted = conway::MintedTx::decode_fragment(&bytes).ok();
+    let carried: HashMap<String, Vec<u8>> = minted
+        .as_ref()
         .map(|minted| {
             minted
                 .transaction_witness_set
@@ -1341,6 +1522,14 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 tokens: amount.tokens_out(),
                 inline_datum: inline,
                 datum_hash: hash,
+                reference_script: matches!(out, conway::PseudoTransactionOutput::PostAlonzo(o) if o.script_ref.is_some())
+                    .then(|| {
+                    minted
+                        .as_ref()
+                        .and_then(|m| m.transaction_body.outputs.get(i))
+                        .and_then(script_of)
+                        .unwrap_or_default()
+                }),
             });
             continue;
         }
@@ -1362,6 +1551,10 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                         "hash"
                     } else {
                         match spender(inline_data(out)) {
+                            // Its register's owner's, but beside a reference script no Seedelf Wallet spends it yet,
+                            // and the private balance leaves it out: never read as a Seedelf payment (chunk 51,
+                            // l3sign#1).
+                            Spender::Owner if carries_script(out) => "script-ref",
                             Spender::Owner => "register",
                             Spender::Anyone => "none",
                             Spender::Nobody => "dead",
@@ -1747,7 +1940,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         for (name, q) in names.iter() {
             let q = i64::from(q);
             let target = if q > 0 { &mut mint } else { &mut burn };
-            target.add_token(policy.to_vec(), name.to_vec(), q.unsigned_abs())?;
+            target.add_token(policy.to_vec(), name.to_vec(), u128::from(q.unsigned_abs()))?;
         }
     }
     let (_, minted) = difference(&burn, &mint);
@@ -1995,16 +2188,32 @@ fn raw_item<'b>(d: &mut minicbor::Decoder<'b>) -> Result<&'b [u8]> {
     Ok(&d.input()[start..d.position()])
 }
 
-/// A definite-length map's `(key, raw value)` entries, keys as numbers.
+/// Whether a list or map of `count` items (`None`: indefinite) ends before
+/// its next item, `read` of them in: its count is reached, or a break is
+/// next, which this reads. The ledger reads either length, and so does the
+/// wallet (chunk 51, gap-g8#5).
+fn at_end(d: &mut minicbor::Decoder, count: Option<u64>, read: u64) -> Result<bool> {
+    if let Some(count) = count {
+        return Ok(read == count);
+    }
+    let next = d
+        .datatype()
+        .map_err(|e| anyhow!("the transaction isn't valid CBOR: {e}"))?;
+    if next == Type::Break {
+        d.set_position(d.position() + 1);
+    }
+    Ok(next == Type::Break)
+}
+
+/// A map's `(key, raw value)` entries, keys as numbers, of either length.
 fn raw_map<'b>(d: &mut minicbor::Decoder<'b>) -> Result<Vec<(u64, &'b [u8])>> {
     let entries = d
         .map()
-        .map_err(|e| anyhow!("a witness set is a map: {e}"))?
-        .ok_or_else(|| anyhow!("an indefinite-length witness set isn't supported"))?;
+        .map_err(|e| anyhow!("a witness set is a map: {e}"))?;
     // Not sized by `entries`: whoever wrote the bytes chose it, and a huge
     // one would abort WebAssembly. Each entry needs bytes to be read.
     let mut out = Vec::new();
-    for _ in 0..entries {
+    while !at_end(d, entries, out.len() as u64)? {
         let key = d
             .u64()
             .map_err(|e| anyhow!("a witness set's keys are numbers: {e}"))?;
@@ -2014,7 +2223,7 @@ fn raw_map<'b>(d: &mut minicbor::Decoder<'b>) -> Result<Vec<(u64, &'b [u8])>> {
 }
 
 /// The vkey witnesses in a witness set's key 0, each raw, and whether the
-/// list is a tagged set (`#6.258`).
+/// list is a tagged set (`#6.258`). The list is of either length.
 fn raw_vkeys(value: &[u8]) -> Result<(bool, Vec<&[u8]>)> {
     let mut d = minicbor::Decoder::new(value);
     let tagged = d.datatype().ok() == Some(minicbor::data::Type::Tag);
@@ -2023,10 +2232,9 @@ fn raw_vkeys(value: &[u8]) -> Result<(bool, Vec<&[u8]>)> {
     }
     let n = d
         .array()
-        .map_err(|e| anyhow!("vkey witnesses are a list: {e}"))?
-        .ok_or_else(|| anyhow!("an indefinite-length witness list isn't supported"))?;
+        .map_err(|e| anyhow!("vkey witnesses are a list: {e}"))?;
     let mut items = Vec::new();
-    for _ in 0..n {
+    while !at_end(&mut d, n, items.len() as u64)? {
         items.push(raw_item(&mut d)?);
     }
     Ok((tagged, items))
@@ -2039,7 +2247,10 @@ fn raw_vkeys(value: &[u8]) -> Result<(bool, Vec<&[u8]>)> {
 /// Everything else is copied byte for byte: the body, so the transaction's
 /// id is unchanged, and the witness set's other entries, so a datum the
 /// builder put there still has the hash its output names. Witnesses already
-/// there stay; one for the same key isn't added twice.
+/// there stay; one for the same key isn't added twice. The transaction's list
+/// and its witness set are read in either length, as the ledger reads them,
+/// and written with definite ones, which the id doesn't cover (chunk 51,
+/// gap-g8#5).
 pub fn attach_witnesses(tx_cbor: &str, witness_set: &str) -> Result<String> {
     let tx = hex::decode(tx_cbor.trim())?;
     let added = hex::decode(witness_set.trim())?;
@@ -2047,20 +2258,24 @@ pub fn attach_witnesses(tx_cbor: &str, witness_set: &str) -> Result<String> {
     check_nesting(&added)?;
 
     let mut d = minicbor::Decoder::new(&tx);
-    if d.array()
-        .map_err(|e| anyhow!("a transaction is a list: {e}"))?
-        != Some(4)
-    {
-        bail!("a transaction is a list of four: body, witnesses, validity, metadata");
+    let four = || anyhow!("a transaction is a list of four: body, witnesses, validity, metadata");
+    let items = d
+        .array()
+        .map_err(|e| anyhow!("a transaction is a list: {e}"))?;
+    if items.is_some_and(|n| n != 4) {
+        return Err(four());
     }
     let body = raw_item(&mut d)?;
     let mut own = raw_map(&mut d)?;
-    let rest = &tx[d.position()..];
     // The validity flag and the metadata, as they were.
-    let mut tail = minicbor::Decoder::new(rest);
-    raw_item(&mut tail)?;
-    raw_item(&mut tail)?;
-    if tail.position() != rest.len() {
+    let start = d.position();
+    raw_item(&mut d)?;
+    raw_item(&mut d)?;
+    let rest = &tx[start..d.position()];
+    if items.is_none() && !at_end(&mut d, None, 4)? {
+        return Err(four());
+    }
+    if d.position() != tx.len() {
         bail!("the transaction has bytes after its end");
     }
 

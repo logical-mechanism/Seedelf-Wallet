@@ -34,9 +34,11 @@
 // by itself, since it still shows where it went in. Mixing again takes
 // those first; Bring it back anyway takes one as it is, after a warning.
 // After a restore, with no records, the worker asks Koios what made each
-// box: one a deposit made is not mixed yet too, said as Koios said it (whose
-// deposit, and why no mix followed, the wallet can't know), and one Koios
-// hasn't said of waits the same way until it has (independent review M14).
+// box: one a deposit made is not mixed yet too, said as Koios said it (why no
+// mix followed, the wallet can't know), and one Koios hasn't said of waits the
+// same way until it has (independent review M14). A deposit none of the
+// phrase's keys paid is someone else's, or another device's: said apart, left
+// out of Mix my boxes again, and flagged nowhere (chunk 51, e1a#1).
 // The chains that aren't all sent are listed: being sent (no box comes back
 // meanwhile), or stopped partway, and why; read again from the device every
 // few seconds while one is being sent. A mix from the private balance
@@ -71,7 +73,7 @@ import type {
   UtxoInfo,
 } from "../../shared/rpc";
 import { nameOf, publicAccountName, useAccounts } from "../accounts";
-import { call } from "../background";
+import { call, isAskAgain } from "../background";
 import { BringAllBack } from "../components/BringAllBack";
 import { Callout } from "../components/Callout";
 import { ExplorerLink } from "../components/ExplorerLink";
@@ -1071,10 +1073,12 @@ export const anywayBox = (status?: Pick<LovejoinStatus, "notMixed" | "unsure">) 
  * (session 5, call 34's check of every state's words). A box another public
  * account's deposit put in is said as that account's (`account`, its name):
  * "your public account" read as the one on screen, whose Mix again from my
- * public account doesn't take it (1.6.0's release review, x-privacy#0).
+ * public account doesn't take it (1.6.0's release review, x-privacy#0). One
+ * someone else, or another device, put in (`someoneElse`) has no button that
+ * hides it first: Mix my boxes again leaves it out (chunk 51, e1a#1).
  */
 export function anywayWarning(
-  status?: Pick<LovejoinStatus, "notMixed" | "unsure" | "deposits" | "fromPublic">,
+  status?: Pick<LovejoinStatus, "notMixed" | "unsure" | "deposits" | "fromPublic" | "someoneElse">,
   againOff = false,
   account?: string,
 ): string {
@@ -1097,7 +1101,7 @@ export function anywayWarning(
   }
   return joinSentences([
     t(found ? "lovejoin.anyway.privacy.deposit" : "lovejoin.anyway.privacy.stopped"),
-    !againOff && t("lovejoin.anyway.privacy.hides"),
+    !againOff && !has(status?.someoneElse) && t("lovejoin.anyway.privacy.hides"),
   ]);
 }
 
@@ -1127,19 +1131,27 @@ export function heldRequest(pool: Pick<ShownPool, "bootstrap">, paid?: Payer) {
   return box ? { box, ...(paid ? { paid } : {}) } : undefined;
 }
 
-/** What the escape hatch asks the worker for: one of the pool's boxes, paid by the payer its question's button named. */
-export const hatchRequest = (pool: Pick<ShownPool, "id">, paid: Payer) => ({ pool: pool.id ?? CLASSIC_ID, paid });
+/**
+ * What the escape hatch asks the worker for: one of the pool's boxes, paid by the payer its question's button named,
+ * and the account the question named as the one whose box it takes (hatchAccountOf), so a pick that would tie another
+ * is asked again, never sent (chunk 51, gap-g2#2).
+ */
+export const hatchRequest = (pool: Pick<ShownPool, "id" | "boxes" | "notMixed" | "unsure" | "bootstrap" | "otherAccounts" | "reserved">, paid: Payer) => {
+  const account = hatchAccountOf(pool);
+  return { pool: pool.id ?? CLASSIC_ID, paid, ...(account !== undefined ? { account } : {}) };
+};
 
 /**
  * Whose box the escape hatch takes, where every box it can take is another public account's (`otherAccounts`): the
  * worker takes the account on screen's own, and those no public account put in, first, then another account's, the
  * lowest first (its hatchOrder). Its question names that account then (1.6.0's release review, R3-3). None while it may
- * take one of the others. It never takes a box not mixed yet, one Koios hasn't said the making of, or a Bootstrap's.
- * Exported for its test.
+ * take one of the others. It never takes a box not mixed yet, one Koios hasn't said the making of, or a Bootstrap's,
+ * nor one a chain built and kept for Send will spend (`reserved`), which the worker leaves out: counted, the question
+ * named nobody while the worker took another account's box (chunk 51, gap-g2#2). Exported for its test.
  */
-export function hatchAccountOf(pool: Pick<ShownPool, "boxes" | "notMixed" | "unsure" | "bootstrap" | "otherAccounts">): number | undefined {
+export function hatchAccountOf(pool: Pick<ShownPool, "boxes" | "notMixed" | "unsure" | "bootstrap" | "otherAccounts" | "reserved">): number | undefined {
   const key = (b: { txHash: string; txIndex: number }) => `${b.txHash}#${b.txIndex}`;
-  const never = new Set([...pool.notMixed, ...(pool.unsure ?? []), ...(pool.bootstrap ?? [])].map(key));
+  const never = new Set([...pool.notMixed, ...(pool.unsure ?? []), ...(pool.bootstrap ?? []), ...(pool.reserved ?? [])].map(key));
   const others = new Map((pool.otherAccounts ?? []).map((b) => [key(b), b.account]));
   const accounts = pool.boxes.filter((b) => !never.has(key(b))).map((b) => others.get(key(b)));
   return accounts.length && accounts.every((a) => a !== undefined) ? Math.min(...(accounts as number[])) : undefined;
@@ -1206,7 +1218,7 @@ export function AnywayQuestion({
   onKeep,
   onConfirm,
 }: {
-  pool: Pick<LovejoinStatus, "notMixed" | "unsure" | "deposits" | "fromPublic" | "otherAccounts">;
+  pool: Pick<LovejoinStatus, "notMixed" | "unsure" | "deposits" | "fromPublic" | "otherAccounts" | "someoneElse">;
   stuck: boolean;
   againOff?: boolean;
   onKeep: () => void;
@@ -1297,7 +1309,10 @@ export function againRefused(pool: Pick<LovejoinPoolStatus, "unusable">): Lovejo
  * says which account to switch to (OtherAccounts). Bring it back anyway
  * takes one as it is. After a restore, a box whose making Koios hasn't said
  * of yet (`unsure` of them) waits too, until it has, and Mix my boxes again
- * refuses meanwhile (independent review M14).
+ * refuses meanwhile (independent review M14). Those of `deposits` someone
+ * else, or another device, put in under the wallet's key (`someoneElse`) are
+ * said in a sentence of their own: Mix my boxes again leaves them out, and
+ * nothing waits for it (chunk 51, e1a#1).
  */
 export function NotMixed({
   count,
@@ -1305,6 +1320,7 @@ export function NotMixed({
   elsewhere = 0,
   unsure = 0,
   deposits = 0,
+  someoneElse = 0,
   againOff = false,
   busy,
   onAnyway,
@@ -1314,6 +1330,7 @@ export function NotMixed({
   elsewhere?: number;
   unsure?: number;
   deposits?: number;
+  someoneElse?: number;
   /** Mixing again is refused in the pool now (againRefused): no word sends the user to it (SCREENS-3). */
   againOff?: boolean;
   busy: boolean;
@@ -1322,15 +1339,36 @@ export function NotMixed({
   const amounts = useAmounts();
   const tr = useT();
   if (!count) return null;
-  // Those known not to be mixed, said first; the others (`unsure`) may be, and are said apart (independent review M14).
-  const known = count - Math.min(unsure, count);
-  const first = known || count;
+  // Someone else's, or another device's: never the user's own deposit, nor taken first (chunk 51, e1a#1).
+  const theirs = Math.min(someoneElse, count, deposits);
+  const others =
+    theirs > 0
+      ? amounts.hidden
+        ? tr("lovejoin.warn.notMixed.someoneElseHidden")
+        : tr("lovejoin.warn.notMixed.someoneElse", { count: theirs })
+      : undefined;
+  if (theirs === count) {
+    return (
+      <Callout tone="warn" testId="lovejoin-not-mixed">
+        <div className="stack-tight">
+          <span>{others}</span>
+          <button type="button" className="link align-start" onClick={onAnyway} disabled={busy} data-testid="lovejoin-anyway">
+            {tr("lovejoin.notMixed.anyway")}
+          </button>
+        </div>
+      </Callout>
+    );
+  }
+  // The rest are said as before: those known not to be mixed, said first; the others (`unsure`) may be, and are said
+  // apart (independent review M14).
+  const known = count - theirs - Math.min(unsure, count - theirs);
+  const first = known || count - theirs;
   // How many is an amount too: while balances are hidden, it's "some" (privacy review §2.16).
   const many = amounts.hidden || first > 1;
   // What the sentences agree with: a hidden amount reads as several, however many it is.
   const agree = many ? 2 : 1;
   // After a restore, those a deposit made: as Koios said, never a stopped chain's or the user's deposit (M14).
-  const found = Math.min(deposits, known);
+  const found = Math.min(deposits - theirs, known);
   const stopped = known - found;
   const why = !found
     ? tr("lovejoin.warn.notMixed.why.stopped", { count: agree })
@@ -1364,7 +1402,9 @@ export function NotMixed({
   return (
     <Callout tone="warn" testId="lovejoin-not-mixed">
       <div className="stack-tight">
-        <span>{!known ? joinSentences([lead, asks]) : joinSentences([lead, takes, unsure > 0 && tail, unsure > 0 && asks])}</span>
+        <span>
+          {!known ? joinSentences([lead, asks, others]) : joinSentences([lead, takes, unsure > 0 && tail, unsure > 0 && asks, others])}
+        </span>
         <button type="button" className="link align-start" onClick={onAnyway} disabled={busy} data-testid="lovejoin-anyway">
           {tr("lovejoin.notMixed.anyway")}
         </button>
@@ -1538,6 +1578,19 @@ export function anywayAccountsOf(pool: Pick<ShownPool, "fromPublic" | "otherAcco
 }
 
 /**
+ * What Pay from my private balance anyway takes that Mix my boxes again leaves out, as the pool's read has it, never a
+ * box a Bootstrap holds: a public account's boxes (`accounts`), and boxes someone else, or another device, put in under
+ * the wallet's key (`someoneElse`; chunk 51, e1a#1). Its question and its review say what each ties, where it's taken
+ * and only there. Exported for its test.
+ */
+export function anywayTakes(pool: Pick<ShownPool, "fromPublic" | "someoneElse" | "bootstrap">): { accounts: boolean; someoneElse: boolean } {
+  const key = (b: { txHash: string; txIndex: number }) => `${b.txHash}#${b.txIndex}`;
+  const holds = new Set((pool.bootstrap ?? []).map(key));
+  const unheld = (boxes: Array<{ txHash: string; txIndex: number }> | undefined) => (boxes ?? []).some((b) => !holds.has(key(b)));
+  return { accounts: unheld(pool.fromPublic), someoneElse: unheld(pool.someoneElse) };
+}
+
+/**
  * What paying the mixes of public accounts' boxes from the private balance ties, in Pay from my private balance
  * anyway's question (`question`) or in its review: "your public account" where no other account's box goes in; the
  * accounts by name where one does (`accounts`, anywayAccountsOf), as "your public account" read as the one on screen,
@@ -1619,7 +1672,12 @@ export function AgainActions({
   const unheld = (set: Set<string>) => [...set].filter((k) => !holds.has(k)).length;
   const fromAccount = unheld(ownPublic);
   const anyAccount = unheld(theirs);
-  const privately = pool.boxes.filter((b) => !theirs.has(key(b)) && !holds.has(key(b))).length;
+  // Those someone else, or another device, put in under the wallet's key: Mix my boxes again leaves them out, as it
+  // does a public account's, and they never make it the first button; Pay from my private balance anyway takes them
+  // (chunk 51, e1a#1).
+  const elsewhere = new Set((pool.someoneElse ?? []).map(key));
+  const someoneElse = unheld(elsewhere);
+  const privately = pool.boxes.filter((b) => !theirs.has(key(b)) && !elsewhere.has(key(b)) && !holds.has(key(b))).length;
   // A pool that takes no new box: mixing again makes new boxes there too, so the worker refuses it (MONEY-3; since the
   // owner's call 34, only a box below the network's minimum: one whose boxes can't pay their own way back takes them).
   // But not in a copy: mixing again the boxes already in it makes no deposit, so nothing new goes in, and the worker
@@ -1657,7 +1715,7 @@ export function AgainActions({
       {privately > 0 && (
         <button
           type="button"
-          className={notMixed > publicNotMixed ? "primary" : "secondary"}
+          className={notMixed > publicNotMixed + notMixedOf(elsewhere) ? "primary" : "secondary"}
           disabled={busy || mixingAgain || !!unusable}
           onClick={onAgain}
           data-testid="lovejoin-again"
@@ -1666,7 +1724,7 @@ export function AgainActions({
         </button>
       )}
       {/* Why no way of mixing again can be pressed, under them, as Mix says it under Review (MERGED-4). */}
-      {unusable && (fromAccount > 0 || privately > 0 || anyAccount > 0) && (
+      {unusable && (fromAccount > 0 || privately > 0 || anyAccount > 0 || someoneElse > 0) && (
         <p className="field-note" data-testid="lovejoin-again-why">
           {unusable}
         </p>
@@ -1677,7 +1735,7 @@ export function AgainActions({
           {pressed === "now" ? tr("lovejoin.working") : tr("lovejoin.bringBackNow")}
         </button>
       )}
-      {anyAccount > 0 && (
+      {(anyAccount > 0 || someoneElse > 0) && (
         <button
           type="button"
           className="link align-start"
@@ -2336,13 +2394,19 @@ export function PoolGroupList({
           // A copy or a retired pool takes no box to start it with: never said to be being started beside the line saying
           // so (MERGED-1; chunk 44).
           const progress = isCopy(p) || isRetired(p) ? undefined : bootstrapProgress(p);
+          // Not those someone else put in under the wallet's key: there's nothing to do for them, as Home says (chunk 51,
+          // e1a#1). Their page says what they are.
+          const waiting = p.notMixed.length - (p.someoneElse?.length ?? 0);
           const flags = [
             progress && tr("lovejoin.pools.starting", { have: progress.have, floor: progress.floor }),
-            p.notMixed.length > 0 && tr("lovejoin.pools.flag.notMixed", { n: amounts.hidden ? tr("home.lovejoin.some") : p.notMixed.length }),
+            waiting > 0 && tr("lovejoin.pools.flag.notMixed", { n: amounts.hidden ? tr("home.lovejoin.some") : waiting }),
             (p.bootstrap?.length ?? 0) > 0 && tr("lovejoin.pools.flag.held", { n: amounts.hidden ? tr("home.lovejoin.some") : p.bootstrap!.length }),
             // Whether or not the wallet has boxes there: a new box still goes in, and waits (the owner's call 34). Its
             // page says so before Review; the row said it only for the wallet's boxes.
             p.cantComeBack && tr("lovejoin.pools.warn.stuck"),
+            // Its boxes come back, but can't then pay out part of themselves on their own: used as any pool, and said
+            // (chunk 51, gap-g5#1).
+            p.cantPayPart && withoutStop(tr("lovejoin.pools.warn.cantPayPart")),
             p.mine && tr("lovejoin.pools.flag.mine"),
           ].filter((f): f is string => !!f);
           return (
@@ -2359,7 +2423,7 @@ export function PoolGroupList({
                 <span className="token-row__sub">{crowdText(p)}</span>
                 {flags.length > 0 && (
                   <span
-                    className={`token-row__detail${p.notMixed.length || p.cantComeBack ? "" : " token-row__detail--plain"}`}
+                    className={`token-row__detail${waiting > 0 || p.cantComeBack || p.cantPayPart ? "" : " token-row__detail--plain"}`}
                     data-testid="lovejoin-pool-flags"
                   >
                     {flags.join(tr("lovejoin.pools.flagJoin"))}
@@ -2975,12 +3039,20 @@ export function PoolPage({
   /**
    * The escape hatch (chunk 34's §2): one of this pool's boxes back, paid from the private balance or the public
    * account, as its question's button named (the owner's call 36), which ties what pays to the box. Its question says
-   * so first.
+   * so first. Where the worker's pick would tie an account the question didn't name, nothing was sent: the pool is read
+   * again and the question asked again, which names it (chunk 51, gap-g2#2).
    */
   const paid = (by: Payer) => {
     setAsking(undefined);
     void act(async () => {
-      onPending(await call("lovejoin-withdraw-now", hatchRequest(pool, by)));
+      try {
+        onPending(await call("lovejoin-withdraw-now", hatchRequest(pool, by)));
+      } catch (e) {
+        if (!isAskAgain(e)) throw e;
+        await onRefresh();
+        setAsking({ paid: true });
+        return;
+      }
       await onRefresh();
     }, "paid");
   };
@@ -3106,6 +3178,16 @@ export function PoolPage({
     setError(undefined);
   };
 
+  /**
+   * Back from a review: left, and the pool read again. A review kept for Send holds the boxes it spends for ten
+   * minutes, which the page's read must say before the escape hatch's question names whose box it takes (chunk 51,
+   * gap-g2#2).
+   */
+  const backFromReview = () => {
+    leaveReview();
+    void onRefresh();
+  };
+
   if (collateralOpen) {
     const back = () => {
       setCollateralOpen(false);
@@ -3131,7 +3213,7 @@ export function PoolPage({
         review
         hint={reviewHint(review, pool.cantComeBack)}
         hintTestId="lovejoin-review-note"
-        onBack={leaveReview}
+        onBack={backFromReview}
         backDisabled={busy}
         aside={tr(isBootstrap ? "lovejoin.review.nothingSentBootstrap" : "lovejoin.review.nothingSent")}
         error={error}
@@ -3170,6 +3252,7 @@ export function PoolPage({
             box={pool.box}
             cantComeBack={pool.cantComeBack}
             anywayAccounts={anywayAccountsOf(pool, active)}
+            anyway={anywayTakes(pool)}
           />
         ) : (
           // "Public account after" in the pools new in 1.6.0 only: the classic pool's screens read byte for byte as
@@ -3214,8 +3297,11 @@ export function PoolPage({
   const cantComeBack = pool.cantComeBack;
   const stuck = !!cantComeBack && owned > 0;
   // The escape hatch takes a box known to be mixed that no Bootstrap holds, as the worker picks one: with none, it
-  // was offered and refused, pointing at buttons that can't work there (SCREENS-1). Those boxes have their own.
-  const hatchless = new Set([...pool.notMixed, ...(pool.unsure ?? []), ...(pool.bootstrap ?? [])].map((b) => `${b.txHash}#${b.txIndex}`));
+  // was offered and refused, pointing at buttons that can't work there (SCREENS-1). Those boxes have their own. Nor
+  // one a chain built and kept for Send will spend, which the worker leaves out (chunk 51, gap-g2#2).
+  const hatchless = new Set(
+    [...pool.notMixed, ...(pool.unsure ?? []), ...(pool.bootstrap ?? []), ...(pool.reserved ?? [])].map((b) => `${b.txHash}#${b.txIndex}`),
+  );
   const hatchTakes = pool.boxes.some((b) => !hatchless.has(`${b.txHash}#${b.txIndex}`));
   // The pool can't be mixed in yet: a Bootstrap is the only thing that starts one. It's offered whatever the pool
   // holds (chunk 34's D2: "Bootstrap a pool, any time"), and leads the page while the pool is short. Never in a copy or
@@ -3603,12 +3689,20 @@ export function PoolPage({
           </div>
         </Callout>
       )}
+      {/* Its boxes come back, but can't then pay out part of themselves on their own (under S0d's least): said before
+          Review, the wallet's boxes there or not, as above (chunk 51, gap-g5#1). */}
+      {!cantComeBack && pool.cantPayPart && (
+        <Callout tone="warn" testId="lovejoin-part-short">
+          {tr("lovejoin.pools.warn.cantPayPart")}
+        </Callout>
+      )}
       <NotMixed
         count={notMixed}
         fromPublic={ownNotMixed}
         elsewhere={publicNotMixed - ownNotMixed}
         unsure={unsure.size}
         deposits={pool.deposits?.length ?? 0}
+        someoneElse={pool.someoneElse?.length ?? 0}
         againOff={!!againRefused(pool)}
         busy={busy || mixingAgain}
         onAnyway={() => setAsking({ anyway: true })}
@@ -3698,8 +3792,10 @@ export function PoolPage({
             </>
           }
         >
-          {/* The accounts whose boxes it takes, by name, where another's are among them (e8a#3). */}
-          <p className="note">{privateTies(true, anywayAccountsOf(pool, active), accounts)}</p>
+          {/* The accounts whose boxes it takes, by name, where another's are among them (e8a#3); and that mixing a box
+              someone else put in ties the mix to them, where one is among them (chunk 51, e1a#1). */}
+          {anywayTakes(pool).accounts && <p className="note">{privateTies(true, anywayAccountsOf(pool, active), accounts)}</p>}
+          {anywayTakes(pool).someoneElse && <p className="note">{tr("lovejoin.privateAnyway.privacy.someoneElse")}</p>}
         </Modal>
       )}
       {/* Bringing back a Bootstrap's box: what one nobody has mixed shows, said first (chunk 34's 34a′, for 34d). */}
@@ -3887,7 +3983,8 @@ const lessReserve = (lovelace: string, summary: SessionOutSummary) =>
  * its pool holds (the classic pool's 10 ₳ when none is given). `cantComeBack`: the pool's boxes can't pay their own
  * way back today, said first, and no row promises a box back after its wait (session 5's cross-area review, M1).
  * `anywayAccounts`: the public accounts whose boxes Pay from my private balance anyway takes, which its review names
- * (anywayAccountsOf; chunk 51, e8a#3).
+ * (anywayAccountsOf; chunk 51, e8a#3). `anyway`: what else it takes, which its review says it ties (anywayTakes; none,
+ * a public account's boxes alone, as before chunk 51's e1a#1).
  */
 export function PrivateReview({
   summary,
@@ -3895,18 +3992,22 @@ export function PrivateReview({
   box = CLASSIC_BOX,
   cantComeBack,
   anywayAccounts = [],
+  anyway,
 }: {
   summary: SessionOutSummary & { mix: LovejoinFunding };
   before?: string;
   box?: BoxValue;
   cantComeBack?: CantComeBack;
   anywayAccounts?: number[];
+  anyway?: { accounts: boolean; someoneElse: boolean };
 }) {
   const tr = useT();
   const network = useNetwork();
   const [boxesPart, collateral] = summary.payments;
   const { mix } = summary;
-  if (mix.again) return <AgainReview summary={summary} before={before} cantComeBack={cantComeBack} anywayAccounts={anywayAccounts} />;
+  if (mix.again) {
+    return <AgainReview summary={summary} before={before} cantComeBack={cantComeBack} anywayAccounts={anywayAccounts} anyway={anyway} />;
+  }
   return (
     <>
       <StuckReviewNote cantComeBack={cantComeBack} />
@@ -3983,18 +4084,21 @@ function CollateralMixNote({ summary }: { summary: Pick<SessionOutSummary, "coll
 
 /**
  * Mix my boxes again: the one-time account's funding, then the fan-out of the boxes in the pool. Paid from the private
- * balance anyway (`publicToo`), what that ties, to the accounts by name where another's boxes go in (`anywayAccounts`).
+ * balance anyway (`publicToo`), what that ties, to the accounts by name where another's boxes go in (`anywayAccounts`),
+ * and to whoever put a box in under the wallet's key where one goes in (`anyway`; chunk 51, e1a#1).
  */
 function AgainReview({
   summary,
   before,
   cantComeBack,
   anywayAccounts,
+  anyway = { accounts: true, someoneElse: false },
 }: {
   summary: SessionOutSummary & { mix: LovejoinFunding };
   before?: string;
   cantComeBack?: CantComeBack;
   anywayAccounts: number[];
+  anyway?: { accounts: boolean; someoneElse: boolean };
 }) {
   const tr = useT();
   const { accounts } = useAccounts();
@@ -4039,7 +4143,8 @@ function AgainReview({
         {joinSentences([
           tr("lovejoin.review.privacy.again"),
           lovejoinHides(mix.depth, mix.width),
-          mix.publicToo && privateTies(false, anywayAccounts, accounts),
+          mix.publicToo && anyway.accounts && privateTies(false, anywayAccounts, accounts),
+          mix.publicToo && anyway.someoneElse && tr("lovejoin.privateAnyway.privacy.someoneElse"),
         ])}
       </Callout>
       {summary.parts && (
@@ -4157,9 +4262,19 @@ function PublicBootstrapReview({
 }
 
 /**
+ * What Mix again from my public account's review says of the account's boxes that don't go this time, if any: the
+ * pool's room at the depth, or what the account's largest UTxO of ADA alone pays for, since one pays every mix (chunk
+ * 51, gap-g2#1); and to mix the rest once this is done. Exported for its test.
+ */
+export function publicAgainRest(summary: Pick<LovejoinPublicSummary, "owned" | "boxes" | "adaShort">): string | undefined {
+  if (!summary.owned || summary.owned <= summary.boxes) return undefined;
+  return t(summary.adaShort ? "lovejoin.review.asManyAsAdaPays" : "lovejoin.review.asManyAsOneGo", { count: summary.boxes });
+}
+
+/**
  * Mix again from my public account: the boxes a mix from it put in, each mix paid by it, sent now (§2.10). Where the
- * account has more there than the pool has room for at the depth (`owned`), how many of them go, and to mix the rest
- * once this is done, as Mix my boxes again's review says it: it said only how many go (chunk 51, gap-g2#4).
+ * account has more there than go this time (`owned`), how many of them go, and to mix the rest once this is done, as
+ * Mix my boxes again's review says it: it said only how many go (chunk 51, gap-g2#4); and why (publicAgainRest).
  */
 function PublicAgainReview({
   summary,
@@ -4174,6 +4289,7 @@ function PublicAgainReview({
 }) {
   const tr = useT();
   const some = !!summary.owned && summary.owned > summary.boxes;
+  const rest = publicAgainRest(summary);
   return (
     <>
       <StuckReviewNote cantComeBack={cantComeBack} />
@@ -4195,9 +4311,9 @@ function PublicAgainReview({
         {!cantComeBack && <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} stack />}
       </ReviewRows>
       <WidthNote fellBack={summary.fellBack} />
-      {some && (
+      {rest && (
         <p className="note" data-testid="lovejoin-public-again-rest">
-          {tr("lovejoin.review.asManyAsOneGo", { count: summary.boxes })}
+          {rest}
         </p>
       )}
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.publicAgain"), PUBLIC_MIX_WAY_BACK()])}</Callout>

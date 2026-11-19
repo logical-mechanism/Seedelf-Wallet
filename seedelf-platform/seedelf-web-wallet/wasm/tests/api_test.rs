@@ -448,6 +448,25 @@ mod move_in {
         }
     }
 
+    /// A testnet Byron address (Pallas's own vector), as base58.
+    const BYRON: &str = "37btjrVyb4KDXBNC4haBVPCrro8AQPHwvCMp3RFhhSVWwfFmZ6wwzSK6JK1hY6wHNmtrpTf1kdbva8TCneM2YsiXT7mrzT21EacHnPpz5YyUdj64na";
+
+    /// Each output's address, lovelace, and whether it carries a datum.
+    fn outputs_with_datums(tx_cbor: &str) -> Vec<(String, u64, bool)> {
+        let bytes = hex::decode(tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        tx.outputs()
+            .iter()
+            .map(|o| {
+                (
+                    o.address().unwrap().to_bech32().unwrap(),
+                    o.value().coin(),
+                    o.datum().is_some(),
+                )
+            })
+            .collect()
+    }
+
     /// An output's address, lovelace and tokens, `policy.name` → quantity.
     type Paid = (String, u64, Vec<(String, u64)>);
 
@@ -614,14 +633,15 @@ mod move_in {
                 .is_none()
         );
 
-        // A note that can't go on a transaction is refused, in words.
+        // A note that can't go on a transaction is refused, in words: past 500
+        // characters, what Activity keeps of one (chunk 51, gap-g8#3).
         let mut request = send(account_utxos(&account), &to, Some("3000000"), vec![]);
-        request.note = Some("x".repeat(65));
+        request.note = Some("x".repeat(501));
         let e = api::account_send(&account, request)
             .err()
             .unwrap()
             .to_string();
-        assert_eq!(e, "A note is at most 64 characters, not 65");
+        assert_eq!(e, "A note is at most 500 characters, not 501");
     }
 
     #[test]
@@ -675,7 +695,7 @@ mod move_in {
         let mut crowd = send(account_utxos(&account), &to, Some("2000000"), vec![]);
         crowd.payments = vec![crowd.payments[0].clone(); api::MAX_RECIPIENTS + 1];
         let e = api::account_send(&account, crowd).unwrap_err().to_string();
-        assert!(e.contains("at most 20 recipients"), "{e}");
+        assert!(e.contains("at most 100 recipients"), "{e}");
         let mut nobody = send(account_utxos(&account), &to, Some("2000000"), vec![]);
         nobody.payments.clear();
         let e = api::account_send(&account, nobody).unwrap_err().to_string();
@@ -705,13 +725,35 @@ mod move_in {
             .to_bech32()
             .unwrap();
         let stake = account.stake_address(true).unwrap().to_bech32().unwrap();
-        for bad in [contract.as_str(), mainnet.as_str(), stake.as_str()] {
+        for bad in [mainnet.as_str(), stake.as_str()] {
             assert!(
-                err(bad, "2000000").contains("normal preprod address"),
+                err(bad, "2000000").contains("Payments go to an address on preprod"),
                 "{bad}"
             );
         }
         assert!(err("nope", "2000000").contains("isn't a Cardano address"));
+        // A Byron address isn't paid, said as it is (chunk 51, r2a#1; the
+        // owner's call of 2026-11-18): "isn't a Cardano address" was false.
+        assert_eq!(
+            err(BYRON, "2000000"),
+            "Seedelf Wallet can't pay a Byron address"
+        );
+        // The contract's own address is a script's: the ledger takes a
+        // payment there, with no datum, so the wallet pays it and the screens
+        // warn that anyone can take it (chunk 51, r2a#1, w1b#1).
+        let paid = api::account_send(
+            &account,
+            send(account_utxos(&account), &contract, Some("2000000"), vec![]),
+        )
+        .unwrap();
+        let out = outputs_with_datums(&paid.tx_cbor);
+        assert_eq!(
+            out.iter()
+                .filter(|(a, ..)| *a == contract)
+                .map(|(_, l, d)| (*l, *d))
+                .collect::<Vec<_>>(),
+            vec![(2_000_000, false)]
+        );
         assert!(err(&theirs(), "999999999999999").contains("for this payment"));
 
         let mut moved = account_utxos(&account);
@@ -1385,6 +1427,7 @@ mod transfer {
             }],
             classes: Default::default(),
             carry: false,
+            most: false,
             seed: None,
             evaluation: None,
         }
@@ -1750,7 +1793,7 @@ mod transfer {
         let mut crowd = request();
         crowd.payments = vec![crowd.payments[0].clone(); api::MAX_RECIPIENTS + 1];
         let e = api::draft_transfer(sk, crowd).unwrap_err().to_string();
-        assert!(e.contains("at most 20 recipients"), "{e}");
+        assert!(e.contains("at most 100 recipients"), "{e}");
         let mut none = request();
         none.payments.clear();
         let e = api::draft_transfer(sk, none).unwrap_err().to_string();
@@ -2996,13 +3039,22 @@ mod withdraw {
             r
         };
 
-        // Only a normal preprod key address.
+        // Only an address on preprod that a payment can go to: not a stake
+        // address, another network's or a Byron one, which the wallet can't
+        // pay (chunk 51, r2a#1). A script's address the ledger takes, with no
+        // datum, the contract's own included: the screens warn of it.
         assert!(err(to("nope")).contains("isn't a Cardano address"));
         let stake = "stake_test1urj40zgr2gy4788kl54h6x3gu0pukq5lfr8nflufpg5dzas324ywz";
-        for bad in [contract(), mainnet(), stake.to_string()] {
+        for bad in [mainnet(), stake.to_string()] {
             let e = err(to(&bad));
-            assert!(e.contains("normal preprod address"), "{bad}: {e}");
+            assert!(
+                e.contains("Payments go to an address on preprod"),
+                "{bad}: {e}"
+            );
         }
+        let byron = "37btjrVyb4KDXBNC4haBVPCrro8AQPHwvCMp3RFhhSVWwfFmZ6wwzSK6JK1hY6wHNmtrpTf1kdbva8TCneM2YsiXT7mrzT21EacHnPpz5YyUdj64na";
+        assert_eq!(err(to(byron)), "Seedelf Wallet can't pay a Byron address");
+        assert!(api::draft_withdraw(sk, to(&contract())).is_ok());
 
         // Max takes no token amounts; spends only this wallet's UTxOs, never a seedelf's.
         assert!(err(request("amount").tap_max()).contains("takes no token amounts"));
@@ -3037,12 +3089,12 @@ mod withdraw {
                 .to_string()
                 .contains("exactly one Seedelf")
         );
-        let r = removal(Some(contract()));
+        let r = removal(Some(mainnet()));
         assert!(
             api::draft_remove(sk, r)
                 .unwrap_err()
                 .to_string()
-                .contains("normal preprod address")
+                .contains("Payments go to an address on preprod")
         );
         let e = api::finish_remove(sk, removal(None))
             .unwrap_err()
@@ -4088,6 +4140,7 @@ mod parts_of_any_shape {
             }],
             classes: Default::default(),
             carry: false,
+            most: false,
             seed: None,
             evaluation: None,
         }

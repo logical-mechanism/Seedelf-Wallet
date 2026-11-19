@@ -1545,9 +1545,13 @@ pub mod api {
         })
     }
 
-    /// The most recipients one payment pays. The transaction must also fit
-    /// 16 KiB, which core checks (`build::MAX_TX_SIZE`).
-    pub const MAX_RECIPIENTS: usize = 20;
+    /// The most recipients one payment pays, the extension's
+    /// `MAX_RECIPIENTS` too: a sane card list, well past use. The transaction
+    /// must also fit 16 KiB, the ledger's own limit, which core checks
+    /// (`build::MAX_TX_SIZE`, `TooLarge`): about 200 addresses or 90
+    /// Seedelfs with no tokens. It was 20, refusing what the ledger takes
+    /// (chunk 51, gap-g8#4).
+    pub const MAX_RECIPIENTS: usize = 100;
 
     fn check_recipients(n: usize) -> Result<()> {
         if n == 0 {
@@ -1574,7 +1578,7 @@ pub mod api {
         #[serde(default)]
         pub withdrawal: Option<String>,
         /// A note on the transaction, CIP-20's message, which anyone can
-        /// read: one line, at most 64 characters (see [`Note::new`]).
+        /// read: one line, at most 500 characters (see [`Note::new`]).
         #[serde(default)]
         pub note: Option<String>,
         /// As for a move-in: see [`MoveInRequest::invalid_hereafter`].
@@ -1586,8 +1590,8 @@ pub mod api {
     #[derive(Deserialize, Clone)]
     #[serde(rename_all = "camelCase")]
     pub struct SendPayment {
-        /// A bech32 key address on this network, or a Seedelf's full token
-        /// name, lowercase hex.
+        /// A bech32 address on this network ([`payable_address`]), or a
+        /// Seedelf's full token name, lowercase hex.
         pub to: String,
         /// For a Seedelf: the contract UTxO holding it, as Koios returns it.
         /// Its register is the one paid; see [`recipient_register`].
@@ -1649,8 +1653,8 @@ pub mod api {
     }
 
     impl SendTo {
-        /// A key address on this network, or (a Seedelf's name, with the
-        /// UTxO holding it) that Seedelf's register.
+        /// An address on this network ([`payable_address`]), or (a
+        /// Seedelf's name, with the UTxO holding it) that Seedelf's register.
         fn read(chain: &Chain, payment: &SendPayment) -> Result<SendTo> {
             let to = payment.to.trim();
             if !is_seedelf_name(to) {
@@ -2165,7 +2169,9 @@ pub mod api {
             "own"
         } else if part.starts_with("received:") {
             "received"
-        } else if part.starts_with("session:") {
+        } else if part.starts_with("session:") || part.starts_with("elsewhere:") {
+            // `elsewhere:<tx>`: what a spend of the phrase's made in another profile left, ranked as a session's money
+            // (chunk 51, gap-g9#1).
             "session"
         } else if part.starts_with("box:") {
             "lovejoin"
@@ -2191,6 +2197,36 @@ pub mod api {
                 parts.join("+")
             },
             origin: origin.into(),
+        }
+    }
+
+    /// The worker spells what a spend of the phrase's made in another profile left as an `elsewhere:<tx>` part, which
+    /// ranks as a session's money (shared/histories.ts `spentElsewhere`): a carry of a part that spent it is too, as
+    /// the worker reads that carry (script-spend.ts `carried`; chunk 51, gap-g9#1).
+    #[cfg(test)]
+    mod class_spelling_tests {
+        use super::*;
+
+        fn class(id: &str, origin: &str) -> ClassIn {
+            ClassIn {
+                id: id.into(),
+                origin: origin.into(),
+            }
+        }
+
+        #[test]
+        fn money_a_spend_made_elsewhere_left_merges_as_a_sessions() {
+            let elsewhere = format!("elsewhere:{}", "fb".repeat(32));
+            assert_eq!(origin_of(&elsewhere), "session");
+            let merged = merged_class(
+                [
+                    class("public:0", "own"),
+                    class(&format!("{elsewhere}+public:0"), "session"),
+                ]
+                .iter(),
+            );
+            assert_eq!(merged.id, format!("{elsewhere}+public:0"));
+            assert_eq!(merged.origin, "session");
         }
     }
 
@@ -2591,6 +2627,29 @@ pub mod api {
         /// `mix_logic`'s reward account (bech32): the worker asks
         /// `account_info` whether something registered it meanwhile.
         pub mix_logic_stake: String,
+        /// A box of the pool it makes can't pay its own way back now: said on
+        /// the review, never refused (chunk 51, gap-g8#6).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cant_come_back: Option<CantComeBackOut>,
+    }
+
+    /// What's left of a box after its withdraw's fee, and what its Seedelf
+    /// output needs, where that's less (core's `CantPayBack`), in lovelace.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct CantComeBackOut {
+        pub has: String,
+        pub needs: String,
+    }
+
+    /// [`CantComeBackOut`] of what a launch said, if anything.
+    fn cant_come_back_of(
+        said: Option<&seedelf_core::lovejoin::CantPayBack>,
+    ) -> Option<CantComeBackOut> {
+        said.map(|c| CantComeBackOut {
+            has: c.has.to_string(),
+            needs: c.needs.to_string(),
+        })
     }
 
     /// A launch's terms as a request names them.
@@ -2681,6 +2740,7 @@ pub mod api {
             change_tokens: built.change_tokens.items.len(),
             inputs: launch.inputs().iter().map(out_ref).collect(),
             collateral: out_ref(launch.collateral()),
+            cant_come_back: cant_come_back_of(launch.cant_come_back.as_ref()),
         })
     }
 
@@ -2715,6 +2775,9 @@ pub mod api {
         /// `mix_logic`'s reward account (bech32): the worker asks
         /// `account_info` whether something registered it meanwhile.
         pub mix_logic_stake: String,
+        /// As [`AccountLaunchResult::cant_come_back`].
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cant_come_back: Option<CantComeBackOut>,
     }
 
     /// Starting a pool in one step: picks the Seedelf UTxOs that pay,
@@ -2766,6 +2829,7 @@ pub mod api {
             change_lovelace: built.change_lovelace.to_string(),
             inputs: out_refs(&spend),
             classes_mixed: classes_mixed(&request.classes, &spend)?,
+            cant_come_back: cant_come_back_of(launch.cant_come_back.as_ref()),
         })
     }
 
@@ -2940,6 +3004,11 @@ pub mod api {
         /// (`ScriptSpend::carry`) for the next part, which has no ADA of its own to pay with.
         #[serde(default)]
         pub carry: bool,
+        /// With a single payment's `lovelace` null: the most an amount can be, which the worker says when one is too
+        /// much (`privateShortOf`), rather than Max. Max over the UTxOs an amount takes, so never one that adds less
+        /// than nothing but for a token it sends ([`adding`]; chunk 51, r2a#3). Max itself spends every UTxO.
+        #[serde(default)]
+        pub most: bool,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
         /// Ogmios's answer to evaluating the draft.
@@ -3223,16 +3292,17 @@ pub mod api {
                     .payments
                     .iter()
                     .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
-                let (spend, built) = measured_or_more(short, &request.utxos, &needed, |inputs| {
-                    let spend = build::transfer_from(
-                        &plan.chain,
-                        inputs,
-                        &plan.payments,
-                        &plan.owner,
-                        plan.signer,
-                    )?;
-                    prove_with(sk, spend)
-                })?;
+                let (spend, built) =
+                    measured_or_more(short, &plan.chain, &request.utxos, &needed, |inputs| {
+                        let spend = build::transfer_from(
+                            &plan.chain,
+                            inputs,
+                            &plan.payments,
+                            &plan.owner,
+                            plan.signer,
+                        )?;
+                        prove_with(sk, spend)
+                    })?;
                 (spend, 0, built)
             }
             Err(e) => return Err(e),
@@ -3242,17 +3312,46 @@ pub mod api {
 
     /// When picking found nothing that pays by the guessed budgets (`short`):
     /// the largest UTxOs together, the ones holding `needed` first
-    /// ([`build::max_inputs`]), spent by `spend` and measured. The guess runs
-    /// above what the scripts use, so they may pay; if they don't, `short`.
+    /// ([`build::max_inputs_by`]), spent by `spend` and measured. The guess
+    /// runs above what the scripts use, so they may pay; if they don't,
+    /// `short`. One that adds less than nothing comes last, as picking takes
+    /// it ([`build::adds`]): they're measured without it first, unless it
+    /// holds a token sent, then with it, so an amount up to what a shortfall
+    /// says ([`adding`]) goes (chunk 51, r2a#3).
     fn measured_or_more(
         short: anyhow::Error,
+        chain: &Chain,
         utxos: &[UtxoResponse],
         needed: &Assets,
-        spend: impl FnOnce(&[UtxoResponse]) -> Result<ScriptSpend>,
+        spend: impl Fn(&[UtxoResponse]) -> Result<ScriptSpend>,
     ) -> Result<(ScriptSpend, build::FinalSpend)> {
-        let Ok((inputs, _)) = build::max_inputs(utxos, needed, MAX_WITHDRAW_UTXOS) else {
+        // Each priced once: a sort asks for each many times.
+        let adding_something: HashMap<(&str, u64), bool> = utxos
+            .iter()
+            .map(|u| {
+                let adds = build::adds(&chain.params, u).unwrap_or(0);
+                ((u.tx_hash.as_str(), u.tx_index), adds >= 0)
+            })
+            .collect();
+        let worth = |u: &UtxoResponse| {
+            let something = adding_something
+                .get(&(u.tx_hash.as_str(), u.tx_index))
+                .copied()
+                .unwrap_or(true);
+            (something, u.value.parse::<u64>().unwrap_or(0))
+        };
+        let Ok((inputs, _)) = build::max_inputs_by(utxos, needed, MAX_WITHDRAW_UTXOS, worth) else {
             return Err(short);
         };
+        let sent: Vec<TokenAmount> = needed.items.iter().map(token_amount).collect();
+        let first = adding(chain, &inputs, &sent);
+        if !first.is_empty() && first.len() < inputs.len() {
+            match spend(&first).and_then(|spend| measured(&spend).map(|built| (spend, built))) {
+                Ok(built) => return Ok(built),
+                Err(e) if build::is_short(&e) => {}
+                Err(e) => return Err(e),
+            }
+        }
         let spend = spend(&inputs)?;
         match measured(&spend) {
             Ok(built) => Ok((spend, built)),
@@ -3308,17 +3407,33 @@ pub mod api {
     pub const MAX_WITHDRAW_UTXOS: usize = 20;
 
     /// A destination address from the extension: bech32, and one a
-    /// withdrawal or a send can pay (`build::is_payable_address`).
+    /// withdrawal or a send can pay (`build::is_payable_address`): any
+    /// Shelley address on this network, a script's too, with no datum (the
+    /// extension warns of that). A Byron address (base58) is refused in
+    /// words of its own: the wallet doesn't pay one, and a script spend can't
+    /// (the ledger refuses a Byron output where a Plutus script runs, and
+    /// `uplc` can't put one in a script's context). It read as "That isn't a
+    /// Cardano address" (chunk 51, r2a#1).
     pub fn payable_address(network_flag: bool, to: &str) -> Result<Address> {
-        let addr =
-            Address::from_bech32(to.trim()).map_err(|_| anyhow!("That isn't a Cardano address"))?;
+        let to = to.trim();
+        let addr = match Address::from_bech32(to) {
+            Ok(addr) => addr,
+            Err(_) if is_byron(to) => bail!("Seedelf Wallet can't pay a Byron address"),
+            Err(_) => bail!("That isn't a Cardano address"),
+        };
         if !build::is_payable_address(&addr, network_flag) {
             let network = if network_flag { "preprod" } else { "mainnet" };
             bail!(
-                "Payments go to a normal {network} address: not a script, stake or other network's address"
+                "Payments go to an address on {network}: not a stake, Byron or other network's address"
             );
         }
         Ok(addr)
+    }
+
+    /// Whether `text` is a Byron address: base58 whose bytes are one, with a
+    /// payload that reads.
+    fn is_byron(text: &str) -> bool {
+        pallas_addresses::ByronAddress::from_base58(text).is_ok_and(|byron| byron.decode().is_ok())
     }
 
     /// Paying addresses from the Seedelf balance, as JSON from the extension.
@@ -3345,7 +3460,9 @@ pub mod api {
         /// tokens can be, the other tokens staying with the least ADA they
         /// need (`build::sweep_most`), rather than everything with every
         /// token (Max). The worker asks it to say how much an amount that's
-        /// too much could be (blind test T05).
+        /// too much could be (blind test T05). Over the UTxOs an amount
+        /// takes, so never one that adds less than nothing but for a token
+        /// it sends ([`adding`]; chunk 51, r2a#3).
         #[serde(default)]
         pub most: bool,
         /// A part of a payment in a chain ([`build_withdraw_parts`]), as [`TransferRequest::carry`]: exactly `utxos`,
@@ -3371,7 +3488,7 @@ pub mod api {
     #[derive(Deserialize, Clone)]
     #[serde(rename_all = "camelCase")]
     pub struct WithdrawPayment {
-        /// A bech32 key address on this network.
+        /// A bech32 address on this network ([`payable_address`]).
         pub to: String,
         /// Lovelace as a decimal string, raised to the least the payment
         /// needs (so "0" sends only that); `null` sends everything (Max), to
@@ -3626,10 +3743,11 @@ pub mod api {
                     .iter()
                     .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
                 let owner = Register::create(sk)?;
-                let (spend, built) = measured_or_more(short, &request.utxos, &needed, |inputs| {
-                    let spend = build::sweep_many_from(&chain, inputs, to_pay, &owner, signer)?;
-                    prove_with(sk, spend)
-                })?;
+                let (spend, built) =
+                    measured_or_more(short, &chain, &request.utxos, &needed, |inputs| {
+                        let spend = build::sweep_many_from(&chain, inputs, to_pay, &owner, signer)?;
+                        prove_with(sk, spend)
+                    })?;
                 (spend, 0, built)
             }
             Err(e) => return Err(e),
@@ -3679,6 +3797,18 @@ pub mod api {
                 .iter()
                 .any(|t| t.policy_id == a.policy_id && t.asset_name == a.asset_name)
         })
+    }
+
+    /// Of `utxos`, those an amount takes for its ADA: all but one that adds less than nothing ([`build::adds`]: its
+    /// tokens need more than it holds, a stranger's pile, say), unless it holds one of `tokens`, which are sent.
+    /// Selection takes such a UTxO only where nothing else pays, and it never pays more, so the most an amount can be
+    /// is Max over these (`most`, the shortfall's figure; chunk 51, r2a#3).
+    fn adding(chain: &Chain, utxos: &[UtxoResponse], tokens: &[TokenAmount]) -> Vec<UtxoResponse> {
+        utxos
+            .iter()
+            .filter(|u| holds_any(u, tokens) || !build::adds(&chain.params, u).is_ok_and(|a| a < 0))
+            .cloned()
+            .collect()
     }
 
     /// Whether `utxos` together hold `lovelace`: an amount more than they do can't go in any number of parts, and
@@ -3747,8 +3877,10 @@ pub mod api {
     /// ([`by_history_first`]), a session's funding by its purpose's order first (`histories`,
     /// [`build::Histories::rank_of`]). Max takes them by what each adds alone: it spends every UTxO either way.
     ///
-    /// Each one's place, the highest first: whether it adds anything, where its history comes, and what it adds.
-    struct Worth(HashMap<(String, u64), (bool, u32, u64)>);
+    /// Each one's place, the highest first: whether it adds something (1), nothing (0) or less than nothing (-1: its
+    /// tokens need more than it holds, a stranger's pile, say, which comes after everything else: chunk 51, r2a#3),
+    /// where its history comes, and what it adds, with its sign.
+    struct Worth(HashMap<(String, u64), (i8, u32, i128)>);
 
     impl Worth {
         fn of(chain: &Chain, utxos: &[UtxoResponse], histories: Option<&Histories>) -> Self {
@@ -3757,27 +3889,21 @@ pub mod api {
                     .iter()
                     .map(|u| {
                         let first = u8::MAX - histories.map_or(0, |h| h.rank_of(u));
+                        let adds = Self::adds(chain, u);
+                        let standing = if adds < 0 { -1 } else { 1 };
                         (
                             (u.tx_hash.clone(), u.tx_index),
-                            (true, u32::from(first), Self::adds(chain, u)),
+                            (standing, u32::from(first), adds),
                         )
                     })
                     .collect(),
             )
         }
 
-        /// What `u` adds to a payment: its ADA less the least its own tokens need.
-        fn adds(chain: &Chain, u: &UtxoResponse) -> u64 {
-            seedelf_core::utxos::assets_of(vec![u.clone()])
-                .ok()
-                .and_then(|(lovelace, tokens)| {
-                    if tokens.is_empty() {
-                        return Some(lovelace);
-                    }
-                    let kept = build::minimum_deposit(&chain.params, &tokens).ok()?;
-                    Some(lovelace.saturating_sub(kept))
-                })
-                .unwrap_or(0)
+        /// What `u` adds to a payment: its ADA less the least its own tokens need, with its sign
+        /// ([`build::adds`]); nothing where its value can't be read.
+        fn adds(chain: &Chain, u: &UtxoResponse) -> i128 {
+            build::adds(&chain.params, u).unwrap_or(0)
         }
 
         /// An amount's parts by history (`histories`, the spend's purpose's), so that, where money of one history
@@ -3792,8 +3918,8 @@ pub mod api {
         /// The order takes each history's UTxOs together, as one transaction merges them: boxes and the purpose's
         /// last resorts last (its tiers), then a top-up's own, and the histories whose money alone pays; then by the
         /// purpose's order, those with the most first; within each, those adding the most first. Ahead of all that,
-        /// those adding anything: a part of those adding nothing pays no fee. `None` with one history or none known:
-        /// the parts are [`Worth::of`]'s.
+        /// those adding anything: a part of those adding nothing pays no fee; and those adding less than nothing after
+        /// everything. `None` with one history or none known: the parts are [`Worth::of`]'s.
         fn apart(
             chain: &Chain,
             utxos: &[UtxoResponse],
@@ -3814,12 +3940,13 @@ pub mod api {
                 return None;
             }
             let is_own = |c: &Class| own.is_some_and(|s| c.has(s));
-            // Each history, whether its money alone pays, and how much it adds.
-            let mut classes: Vec<(Class, Vec<&UtxoResponse>, bool, u64)> = classes
+            // Each history, whether its money alone pays, and how much it adds: what adds less than nothing is never
+            // needed for ADA, so it takes nothing away.
+            let mut classes: Vec<(Class, Vec<&UtxoResponse>, bool, i128)> = classes
                 .into_iter()
                 .map(|(c, rows)| {
-                    let total: u64 = rows.iter().map(|u| Self::adds(chain, u)).sum();
-                    let alone = total >= owed
+                    let total: i128 = rows.iter().map(|u| Self::adds(chain, u).max(0)).sum();
+                    let alone = total >= i128::from(owed)
                         && tokens.iter().all(|t| {
                             let held: u128 = rows.iter().map(|u| quantity_of(u, t)).sum();
                             held >= t.quantity.parse::<u128>().unwrap_or(0)
@@ -3865,7 +3992,8 @@ pub mod api {
                     .flat_map(|((_, rows, ..), n)| {
                         rows.iter().map(move |u| {
                             let adds = Self::adds(chain, u);
-                            ((u.tx_hash.clone(), u.tx_index), (adds > 0, last - n, adds))
+                            let standing = adds.signum() as i8;
+                            ((u.tx_hash.clone(), u.tx_index), (standing, last - n, adds))
                         })
                     })
                     .collect(),
@@ -3873,11 +4001,11 @@ pub mod api {
             Some((order, alone))
         }
 
-        fn of_utxo(&self, u: &UtxoResponse) -> (bool, u32, u64) {
+        fn of_utxo(&self, u: &UtxoResponse) -> (i8, u32, i128) {
             self.0
                 .get(&(u.tx_hash.clone(), u.tx_index))
                 .copied()
-                .unwrap_or((false, 0, 0))
+                .unwrap_or((i8::MIN, 0, 0))
         }
     }
 
@@ -4060,6 +4188,20 @@ pub mod api {
             .collect()
     }
 
+    /// A part of a payment that found nothing to spend: none of what's left holds the tokens still owed ([`fit_part`]).
+    /// It's neither too little ADA nor tokens too many for one output, so Max in parts never puts what it leaves down
+    /// to either: it's refused, and Max asks first that its UTxOs hold what it sends (chunk 51, w1a#1).
+    #[derive(Debug)]
+    struct NothingToPick;
+
+    impl std::fmt::Display for NothingToPick {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("None of the Seedelf balance's UTxOs left holds the tokens this payment still sends")
+        }
+    }
+
+    impl std::error::Error for NothingToPick {}
+
     /// How a part of a chain fills its room ([`fit_part`]).
     #[derive(Clone, Copy, PartialEq)]
     enum Fill {
@@ -4109,7 +4251,7 @@ pub mod api {
                 picks.insert(0, carried.clone());
             }
             if picks.is_empty() {
-                bail!("Not enough ADA in the Seedelf balance for this payment and its fees");
+                bail!(NothingToPick);
             }
             let built = build(picks, share.clone(), more);
             let next = match &built {
@@ -4544,6 +4686,11 @@ pub mod api {
                 break;
             }
         }
+        // A part that found nothing to spend: what's left doesn't hold the tokens still sent. Refused, never left put
+        // down to tokens that won't fit or to the fee (chunk 51, w1a#1).
+        if let Some(e) = failed.take_if(|e| e.is::<NothingToPick>()) {
+            return Err(e);
+        }
         // Why what's left stays, where something does: the parts went as the most a payment goes as; or no part could
         // take it with the rest (a part that failed for anything but its fee, a chain's last part).
         let mut why = if parts.len() == MAX_PARTS {
@@ -4682,8 +4829,20 @@ pub mod api {
         if let [only] = request.payments.as_slice()
             && only.lovelace.is_none()
         {
+            // Asked for more of a token than the UTxOs hold, refused in core's words, as one transaction's Max is: its
+            // parts sent what they held, and left the rest put down to tokens, or refused it as short of ADA (chunk 51,
+            // w1a#1).
+            if !only.tokens.is_empty() {
+                build::max_inputs(&request.utxos, &assets_of(&only.tokens)?, usize::MAX)?;
+            }
+            // The most an amount can be: over what an amount takes (chunk 51, r2a#3).
+            let utxos = if request.most {
+                adding(&chain, &request.utxos, &only.tokens)
+            } else {
+                request.utxos.clone()
+            };
             return max_in_parts(
-                &request.utxos,
+                &utxos,
                 only.tokens.clone(),
                 &worth,
                 |r: &mut TransferResult| (&mut r.left, &mut r.left_why),
@@ -4814,20 +4973,20 @@ pub mod api {
             && only.lovelace.is_none()
             && !funding
         {
-            let worth = Worth::of(
-                &chain_of(&request.network, &request.params)?,
-                &request.utxos,
-                None,
-            );
-            // Everything sends every token; `most`, those named, the others staying.
+            let chain = chain_of(&request.network, &request.params)?;
+            let worth = Worth::of(&chain, &request.utxos, None);
+            // Everything sends every token; `most`, those named, the others staying, over what an amount takes
+            // (chunk 51, r2a#3).
             let most = request.most;
-            let tokens = if most {
-                only.tokens.clone()
+            let (tokens, utxos) = if most {
+                let tokens = only.tokens.clone();
+                let utxos = adding(&chain, &request.utxos, &tokens);
+                (tokens, utxos)
             } else {
-                Vec::new()
+                (Vec::new(), request.utxos.clone())
             };
             return max_in_parts(
-                &request.utxos,
+                &utxos,
                 tokens,
                 &worth,
                 |r: &mut WithdrawResult| (&mut r.left, &mut r.left_why),
@@ -6999,7 +7158,7 @@ pub fn build_move_in(
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Builds and signs a payment from the Cardano account to a key address or a
+/// Builds and signs a payment from the Cardano account to an address or a
 /// seedelf. `request` is JSON (see `api::SendRequest`); the result is JSON
 /// (`api::SendResult`) holding the signed transaction and what it does. The
 /// payment keys never leave WebAssembly.
@@ -7152,8 +7311,9 @@ pub fn build_withdraw_parts(key: &SeedelfKey, request: &str) -> Result<String, J
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Checks a withdrawal's or a send's destination: a normal key address on
-/// `network`. Throws the reason to show the user.
+/// Checks a withdrawal's or a send's destination: an address on `network`
+/// that a payment can go to, a script's included (`api::payable_address`).
+/// Throws the reason to show the user.
 #[wasm_bindgen(js_name = checkPayableAddress)]
 pub fn check_payable_address(address: &str, network: Network) -> Result<(), JsError> {
     api::payable_address(network.flag(), address)
@@ -7233,13 +7393,17 @@ fn to_json<T: serde::Serialize>(value: &T) -> Result<String, JsError> {
     serde_json::to_string(value).map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// UTxOs (Koios rows, JSON) as CIP-30's `TransactionUnspentOutput`s, hex.
+/// UTxOs (Koios rows, JSON) as CIP-30's `TransactionUnspentOutput`s, hex,
+/// each with its reference script; one whose script can't be written is left
+/// out (`cip30::utxos_cbor`; chunk 51, w2#4).
 #[wasm_bindgen(js_name = cip30Utxos)]
 pub fn cip30_utxos(rows: &str) -> Result<Vec<String>, JsError> {
     let rows: Vec<cip30::KoiosRow> = from_json(rows)?;
-    rows.iter()
-        .map(|r| cip30::utxo_cbor(r).map(hex::encode).map_err(js_error))
-        .collect()
+    Ok(cip30::utxos_cbor(&rows)
+        .map_err(js_error)?
+        .iter()
+        .map(hex::encode)
+        .collect())
 }
 
 /// A balance (lovelace, and tokens as JSON `[{ policyId, assetName, quantity }]`) as CIP-30's `Value`, hex.

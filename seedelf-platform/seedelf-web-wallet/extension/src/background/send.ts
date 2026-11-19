@@ -1,6 +1,7 @@
-// Send: pay any normal address, or an ADA Handle, from the Cardano account,
-// as any Cardano wallet does; or someone's seedelf, by its full name. One
-// payment pays up to 20 of them, each its own amount and tokens, with an
+// Send: pay any address on the network, or an ADA Handle, from the Cardano
+// account, as any Cardano wallet does (a script's with a warning that it
+// carries no datum; chunk 51, r2a#1); or someone's seedelf, by its full name.
+// One payment pays up to 100 of them, each its own amount and tokens, with an
 // optional note (CIP-20's message, which anyone can read). It's paid in the
 // open, and the Cardano account's Activity lists it from Koios.
 //
@@ -11,10 +12,13 @@
 //         never by asking Koios about its token, and paid like a move-in but
 //         under a fresh copy of its register: only
 //         its owner can spend it, and nothing on chain ties it to their
-//         seedelf. The signed transaction waits in session storage until the
-//         user confirms it.
+//         seedelf. One of the user's own is paid the same way, into their
+//         private balance (chunk 51, gap-g8#2). The signed transaction waits
+//         in session storage until the user confirms it.
 // submit  sends exactly that transaction (script-spend.ts `send`), then hands
-//         it to the pending watch.
+//         it to the pending watch. What it paid into the user's own Seedelfs
+//         is noted in the Seedelf history as made private from the account
+//         that paid, as a move-in's is (activity.ts `sent`).
 //
 // Setting a collateral (coin-control.ts) is one of these too: 5 ₳ paid to the
 // account's own `0/0`, whose output (the first: the payment comes before the
@@ -23,8 +27,9 @@
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import type { Paid, PaymentAsk, PendingTx, SendPaid, SendSummary, WithdrawDestination, BuildStage } from "../shared/rpc";
+import { madePrivate } from "../shared/histories";
 import { checkRecipients } from "../shared/recipients";
-import { OWN_SEEDELF_FROM_ACCOUNT, seedelfName } from "../shared/seedelf-name";
+import { seedelfName } from "../shared/seedelf-name";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import { seedelfLabel } from "./chain";
 import { COLLATERAL_LOVELACE } from "./coin-control";
@@ -33,7 +38,7 @@ import { destinationResolver } from "./destination";
 import type { KoiosUtxo } from "./koios";
 import { settleMaybeSent } from "./pending";
 import { keep, send, type Kept, type ScriptSpendDeps } from "./script-spend";
-import { isPublicShort, publicShort, severalShort } from "./short";
+import { isPublicShort, publicShort, severalShort, tooMany } from "./short";
 import { holdsOwn, seedelfUtxo } from "./transfer";
 
 /** chrome.storage.session: the payment built last, until it's sent or replaced. */
@@ -137,12 +142,18 @@ export class SendService {
       note: note || undefined,
       invalidHereafter,
     };
+    // The public account whose keys build and sign it, in the same turn: what it pays into the user's own Seedelfs is
+    // money made private from that account, whichever is active by its submit (move-in.ts).
+    let from = 0;
     const result = await wallet.withKeys((keys) => {
+      from = keys.account;
       const build = (r: typeof request) => JSON.parse(wasm.buildAccountSend(keys.cardano, JSON.stringify(r))) as SendResult;
       try {
         return build(request);
       } catch (e) {
-        if (!isPublicShort(e)) throw e;
+        // More than one transaction holds, the ledger's 16 KiB (many recipients, or many tokens), in the user's
+        // words rather than core's English (chunk 51, gap-g8#4).
+        if (!isPublicShort(e)) throw tooMany(e);
         // Too much for one recipient: how much could go, by building it as Max would (PY-10). Not for the
         // collateral's 5 ₳, which has no Max. Or what the payments leave is too little to stay: said so, never
         // "up to" an amount at least what was asked (chunk 23's second review, fix round).
@@ -168,15 +179,23 @@ export class SendService {
         return { ...shown, ...p };
       }),
     };
-    await keep(this.deps, key, { ...summary, txCbor, invalidHereafter: request.invalidHereafter });
+    // Kept with it for its submit to note in the Seedelf history, as Make private's is: unnoted, the scan read what it
+    // pays into the user's own Seedelfs as money received, which the stealth mint and the fundings take first, tying
+    // them to this account in the open (chunk 51, gap-g8#2; gap-g1#2's link).
+    const into = summary.payments.some((p) => p.seedelf?.own) ? { origin: madePrivate(from) } : {};
+    await keep(this.deps, key, { ...summary, txCbor, invalidHereafter: request.invalidHereafter, ...into });
     return summary;
   }
 }
 
-/** Someone else's seedelf, found in the wallet contract. Your own is a move-in, so it's refused. */
+/**
+ * A seedelf, found in the wallet contract. One of the user's own is paid like anyone's, into their private balance,
+ * and marked so: the review says it, and its submit notes it as made private (chunk 51, gap-g8#2). It was refused,
+ * pointing to Make private, which a payment to others beside it can't use.
+ */
 function seedelf(view: ContractView, network: NetworkName, name: string): Destination {
   const recipient = seedelfUtxo(view, name, network);
-  if (holdsOwn(view, recipient)) throw new Error(OWN_SEEDELF_FROM_ACCOUNT());
   const label = seedelfLabel(name);
-  return { address: recipient.address, own: false, seedelf: label ? { name, label } : { name }, recipient };
+  const own = holdsOwn(view, recipient) ? { own: true as const } : {};
+  return { address: recipient.address, own: false, seedelf: { name, ...(label ? { label } : {}), ...own }, recipient };
 }

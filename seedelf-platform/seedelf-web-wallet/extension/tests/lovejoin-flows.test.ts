@@ -305,8 +305,10 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     expect(await t.coins.use("preprod", `${"e5".repeat(32)}#0`)).toMatchObject({ state: "set", by: "you" });
     const summary = await lj.publicBuild("preprod", 1, { pool: ADA, bootstrap: true });
     expect(summary).toMatchObject({ bootstrap: true, boxes: 1, depth: 0, mixes: 0, txs: 1 });
-    // A mix puts it up, and WebAssembly refuses it, as it did: the user's own choice stays theirs.
-    await expect(lj.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow(`UTxO ${"e5".repeat(32)}#0 holds a datum the wallet can't read`);
+    // Nor does a mix: for the wallet's own builds a choice WebAssembly can't take counts as none, and with no other 5 ₳
+    // that fits, the mix says it needs the account's collateral, never a UTxO WebAssembly can't read. The choice stays
+    // the user's, what a site gets (chunk 51, e8b#1's residue).
+    await expect(lj.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow(tr("lj.needCollateral"));
   });
 
   it("puts a token pool's boxes in with no mixes, holds them, and caps a deposit at a token box's size", async () => {
@@ -946,10 +948,13 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     const reads = t.koios.calls.length;
     await expect(build({ boxLovelace: "10000000" })).rejects.toThrow("classic pool's value");
     expect(t.koios.calls.length).toBe(reads);
-    // Too little to come back, too much for a token pool.
-    await expect(build({ token: min, quantity: "1000", boxLovelace: "2000000" })).rejects.toThrow("at least");
+    // Under the network's minimum for a box, which no mix could make; too much for a token pool. A box under S0d's least
+    // isn't refused: its review says so (chunk 51, gap-g8#6), so a 2 ₳ box of 1000 MIN, refused here before, is built.
+    await expect(build({ token: min, quantity: "1000", boxLovelace: "1000000" })).rejects.toThrow("at least");
     await expect(build({ token: min, quantity: "1000", boxLovelace: "9500000" })).rejects.toThrow("at most 9");
     expect(launch.builds).toEqual([]);
+    expect((await build({ token: min, quantity: "1000", boxLovelace: "2000000" })).least).toBeDefined();
+    launch.builds.length = 0;
     // A retired pool's values aren't a copy's: that start is built.
     await build({ token: min, quantity: "2000", boxLovelace: "4500000" });
     expect(launch.builds.length).toBeGreaterThan(0);

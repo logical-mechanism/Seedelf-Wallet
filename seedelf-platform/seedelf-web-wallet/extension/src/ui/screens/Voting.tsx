@@ -19,7 +19,7 @@ import { Callout } from "../components/Callout";
 import { CheckIcon, LandmarkIcon, SearchIcon, UsersIcon, WalletIcon, WarnIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { drepList, isDrepId, searchDreps, type DrepEntry } from "../dreps";
+import { drepList, isDrepId, posesAsChoice, searchDreps, type DrepEntry } from "../dreps";
 import { formatAda, nameSkeleton, plainName, sharedNames, sharing, shortId, voteLabel } from "../format";
 import { useNetwork } from "../network";
 import { initials, tint } from "../tokens";
@@ -125,6 +125,8 @@ export function Voting({
         : pick === "own"
           ? registeredOwn?.id
           : drep?.id;
+  // Where the vote goes already: said, and delegated there again on Review, which the ledger takes for a fee, and Koios
+  // can still name a delegation the ledger dropped when the DRep retired, then registered again (chunk 51, e7b#1).
   const same = chosen !== undefined && chosen === current;
   // Koios's words: a DRep that has retired, or one that never registered, can't be voted to.
   const unregistered = pick === "drep" && drep !== undefined && drep.status !== "registered";
@@ -134,14 +136,9 @@ export function Voting({
   const becomeFirst = pick === "own" && own !== undefined && !ownRegistered;
   const why =
     blocked ??
-    (same
-      ? t("vote.alreadyThere")
-      : unregistered
-        ? drep.status === "deregistered"
-          ? t("vote.drepRetired")
-          : t("vote.drepNotRegistered")
-        : undefined);
-  const ownName = own && current === own.id ? t("drep.yourOwn") : undefined;
+    (unregistered ? (drep.status === "deregistered" ? t("vote.drepRetired") : t("vote.drepNotRegistered")) : undefined);
+  // The vote is on the account's own DRep: said as that by a flag, never a name (chunk 51, gap-g7#1).
+  const ownVote = !!own && current === own.id;
 
   async function lookUp(id: string) {
     if (!id || looking) return;
@@ -171,7 +168,7 @@ export function Voting({
       hint={t("vote.note")}
       hintTestId="vote-note"
       backDisabled={busy}
-      aside={t("vote.now", { what: voteLabel(current, ownName) })}
+      aside={t("vote.now", { what: voteLabel(current, { own: ownVote }) })}
       error={error}
       foot={
         <>
@@ -187,7 +184,8 @@ export function Voting({
                 chosen &&
                 onVote(
                   chosen,
-                  pick === "own" ? t("drep.yourOwn") : pick === "drep" && drep?.name ? plainName(drep.name) : undefined,
+                  // The account's own DRep has no name here: the review knows it by its ID (gap-g7#1).
+                  pick === "drep" && drep?.name ? plainName(drep.name) : undefined,
                   pick === "drep" ? drepShared : undefined,
                   pick === "drep" && drep !== undefined && drep.status === "registered" && !drep.active,
                 )
@@ -198,11 +196,16 @@ export function Voting({
               {busy ? t("common.building") : t("common.review")}
             </button>
           )}
-          {/* Why it can't be pressed, under it: the tooltip alone reached no touch screen or keyboard, and choosing
-              where the vote already goes greyed Review unsaid (blind test T03's verifier). */}
+          {/* Why it can't be pressed, under it: the tooltip alone reached no touch screen or keyboard (blind test
+              T03's verifier). */}
           {(becomeFirst ? blocked : chosen && why) && (
             <p className="note foot-note" data-testid="vote-why">
               {becomeFirst ? blocked : why}
+            </p>
+          )}
+          {!becomeFirst && same && (
+            <p className="note foot-note" data-testid="vote-already">
+              {t("vote.alreadyThere")}
             </p>
           )}
         </>
@@ -494,11 +497,28 @@ export function DrepCard({ drep, shared = 0, listed = true }: { drep: DrepDetail
       <p className="note mono-id" data-testid="drep-id">
         {drep.id}
       </p>
+      <DrepCallsItself name={drep.name} />
       {shared > 1 && (
         <Callout tone="warn" testId="drep-shared-name">
           {t("vote.warn.sharedName", { shared: sharedDrepName({ shared, listed }) })}
         </Callout>
       )}
     </div>
+  );
+}
+
+/**
+ * A DRep named like one of the wallet's own choices (`posesAsChoice`: "Always abstain", "Your own DRep", in any
+ * language the wallet speaks), on its card and its vote's review. Its name is shown as "DRep · name" wherever the
+ * vote is said, and warned of here in words of its own: no other DRep need share it, so the shared-name words, "N
+ * DReps on the wallet's list use this name", would be false (chunk 51, gap-g7#1).
+ */
+export function DrepCallsItself({ name }: { name?: string }) {
+  const t = useT();
+  if (!posesAsChoice(name)) return null;
+  return (
+    <Callout tone="warn" testId="drep-calls-itself">
+      {t("vote.warn.callsItself")}
+    </Callout>
   );
 }

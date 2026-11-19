@@ -132,6 +132,7 @@
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
+import { madePrivate, sessionClass } from "../shared/histories";
 import {
   APIError,
   DataSignError,
@@ -158,12 +159,13 @@ import type {
   TxMetadatum,
 } from "../shared/rpc";
 import { readAccountUtxos, type AccountDeps, type KeyPath, type PathedUtxo } from "./account";
-import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
-import { bodyOutpoints, certificateKinds, nestsWithin, txId } from "./cbor";
-import { fartherKeys, GAP_LIMIT } from "./chain";
+import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses, type ActivityService } from "./activity";
+import { bodyOutpoints, certificateKinds, nestsWithin, skip, txId } from "./cbor";
+import { byRegister, fartherKeys, GAP_LIMIT, registerKey } from "./chain";
 import type { CoinControlService } from "./coin-control";
 import { CollateralRefusedError, refusedBy, StaleReviewError } from "./collateral";
-import { KoiosBusyError, KoiosError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
+import { keptContractView } from "./contract-scan";
+import { KoiosBusyError, KoiosError, measurable, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { chainOwner, type ChainReservation, type LovejoinService } from "./lovejoin";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
@@ -302,6 +304,8 @@ export interface DappDeps extends AccountDeps {
   coins: CoinControlService;
   preferences: PreferencesService;
   store: PrivateStore;
+  /** The Seedelf history: what a site's transaction pays into the user's own Seedelf is noted there as it's signed. */
+  activity?: Pick<ActivityService, "signedInto">;
   /** Private sessions: a site connected to one reads and signs its account. */
   sessions: SessionService;
   /**
@@ -432,12 +436,19 @@ interface Waiting {
    * "gone", when its page went away first.
    */
   settled?: Promise<DappError | "gone" | undefined>;
+  /**
+   * A connect question's: the other pages of its site waiting on it (`enable`), by session id. Its page going away
+   * isn't then the site's decline: one of them asks itself (`gone`; chunk 51, G6's note).
+   */
+  sharedBy?: Set<string>;
 }
 
 interface Unlocking {
   session: DappSession;
   /** An `enable()`: a site's take one place in the window's queue together (`unlockPlaces`). */
   enable: boolean;
+  /** The network the wallet was on as it began to wait: where a refusal for it is listed (`gone`). */
+  network?: NetworkName;
   resolve: () => void;
   reject: (error: DappError) => void;
 }
@@ -885,6 +896,13 @@ export class DappService {
    * still on their way ask nothing more (`gonePages`). A private session's
    * funding already sent isn't undone: the site finds itself connected next
    * time.
+   *
+   * Its connect question, or its wait for the unlock, left unanswered counts
+   * as closing the window on it does (`windowClosed`): the site is turned
+   * away for a while (`refuseFor`), so a page can't bring the window back by
+   * reloading (chunk 51, G6's note). Unless another page of the same site
+   * still waits on it: that one asks itself (`enable`), and a refusal would
+   * turn it away.
    */
   gone(session: DappSession): void {
     if (this.pageCalls.has(session.id)) this.gonePages.add(session.id);
@@ -893,6 +911,13 @@ export class DappService {
     if (!waiting.length && !unlocking.length) return;
     remove(this.waiting, (w) => waiting.includes(w));
     remove(this.unlocking, (u) => unlocking.includes(u));
+    const question = waiting.find((w) => w.approval.kind === "connect" && !w.approval.connected && !w.approval.funding);
+    if (question || unlocking.length) {
+      const live = (id: string) => id !== session.id && !this.gonePages.has(id);
+      const shared =
+        [...(question?.sharedBy ?? [])].some(live) || this.unlocking.some((u) => u.session.origin === session.origin);
+      if (!shared) this.refuseFor(session.origin, session.title, question?.network ?? unlocking[0]?.network);
+    }
     for (const w of waiting) {
       w.gone = true;
       w.reject(refused(PAGE_GONE));
@@ -1090,7 +1115,10 @@ export class DappService {
     // Nothing is awaited from here until it's asked, so two pages can't both ask.
     const asking = this.waiting.find((w) => w.approval.kind === "connect" && w.session.origin === origin && w.network === network);
     if (asking) {
-      const settled = await asking.settled;
+      // While this page waits on it, that page going away isn't the site's decline: this one asks itself (`gone`).
+      const sharers = (asking.sharedBy ??= new Set());
+      sharers.add(session.id);
+      const settled = await asking.settled?.finally(() => sharers.delete(session.id));
       // This page went away too: nothing is asked for it.
       if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
       if (settled === "gone") return this.run(session, "enable", [params]) as Promise<true>;
@@ -1538,7 +1566,8 @@ export class DappService {
     // the wallet is locked (independent review L36): a signature or a send
     // hears what a site that isn't connected does; `enable()` from one, that
     // it was declined. A connected site's `enable()` still opens the window.
-    const known = !!this.lastSites.get(await this.deps.network())?.has(origin);
+    const network = await this.deps.network();
+    const known = !!this.lastSites.get(network)?.has(origin);
     if (this.refusing(origin) && (method !== "enable" || !known)) {
       if (method === "enable") this.askedAgain(origin);
       throw refused(method === "enable" ? this.declinedWait(origin) : NOT_CONNECTED);
@@ -1554,7 +1583,9 @@ export class DappService {
       throw refused(enable || known ? BUSY : NOT_CONNECTED);
     }
     let waiter: Unlocking | undefined;
-    const unlocked = new Promise<void>((resolve, reject) => this.unlocking.push((waiter = { session, enable, resolve, reject })));
+    const unlocked = new Promise<void>((resolve, reject) =>
+      this.unlocking.push((waiter = { session, enable, network, resolve, reject })),
+    );
     try {
       await this.deps.window.show();
     } catch (e) {
@@ -1700,7 +1731,9 @@ export class DappService {
    * What a site may spend: the account less what's locked and the
    * collateral, plus what sent transactions return that isn't on chain yet:
    * the dApp account's own locks and collateral, and its own transactions'.
-   * `account`: which public account that was, the reading's.
+   * Each as the ledger holds it, or not at all (`handedWhole`), so getBalance
+   * counts what getUtxos hands over. `account`: which public account that
+   * was, the reading's.
    */
   private async available(
     network: NetworkName,
@@ -1720,7 +1753,10 @@ export class DappService {
       .filter((s) => s.submittedAt !== undefined && s.submittedAt > since && ofAccount(s, view))
       .flatMap((s) => s.outputs)
       .filter((p) => !seen.has(outpoint(p.utxo)) && !spent.has(outpoint(p.utxo)));
-    return { utxos: [...spendable, ...inflight], collateral, account: view.account ?? 0 };
+    const utxos = [...spendable, ...inflight].filter((p) => handedWhole(p.utxo));
+    // A collateral the user chose may carry a script too: handed over whole, or getCollateral has none.
+    const whole = collateral && handedWhole(collateral.utxo) ? collateral : undefined;
+    return { utxos, ...(whole ? { collateral: whole } : {}), account: view.account ?? 0 };
   }
 
   private async balance(network: NetworkName, holder: Holder): Promise<string> {
@@ -2170,12 +2206,18 @@ export class DappService {
         throw refuse(TxSignError.ProofGeneration, (lng) => t("dapp.lovejoinRewards", { lng }));
       }
     }
-    // Beside a note, the window shows only its lines of the metadata, which signing publishes whole: whether there's
-    // more, another label or anything else under 674 (Minswap's extraData names the sender's address), read from the
-    // bytes as Transaction details reads them (chunk 51, x1a#3).
-    if (summary.metadata && summary.note && this.besideNote(network, (tx as string).trim())) {
+    // What the window says from the bytes as Transaction details reads them, decoded once, whatever the transaction
+    // carries. Beside a note, the window shows only its lines of the metadata, which signing publishes whole: whether
+    // there's more, another label or anything else under 674 (Minswap's extraData names the sender's address; chunk 51,
+    // x1a#3), and unread, that there is. Whether that metadata is what the body's hash commits to, which is what's
+    // signed: a hash with none, too, so a site can't show one note and send another (G5's notes). And whether a
+    // register it pays the contract under is one already on chain, which the site wrote (x1a#2).
+    const detail = this.decoded(network, (tx as string).trim());
+    if (summary.metadata && summary.note && (!detail || moreThanNote(detail.metadata))) {
       summary = { ...summary, otherMetadata: true };
     }
+    if (detail?.metadataHashMatches === false) summary = { ...summary, metadataMismatch: true };
+    if (detail && (await this.registerOnChain(network, detail))) summary = { ...summary, registerOnChain: true };
     // Each token in the units Koios gives it, from the rows this reading resolved and those the device keeps, as
     // Transaction details scales it (tx-view.ts `heldDecimals`, the same map for both): WebAssembly's token lists carry
     // no decimals, and the window showed a token off the wallet's list in raw units, 10^6 apart from its own view for
@@ -2190,19 +2232,72 @@ export class DappService {
     return { request, summary: withTokenDecimals(summary, decimals), collateralSpent, view, rows, decimals };
   }
 
-  /**
-   * Whether a site's transaction's metadata holds more than its CIP-20 note's lines (`moreThanNote`), as WebAssembly's
-   * transaction view reads it. Unread, it says there is: the window then says the transaction carries metadata.
-   */
-  private besideNote(network: NetworkName, txCbor: string): boolean {
+  /** A site's transaction as WebAssembly's transaction view reads it (`decodeTx`): undefined where it can't. */
+  private decoded(network: NetworkName, txCbor: string): TxDetail | undefined {
     const { wasm } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     try {
-      return moreThanNote((JSON.parse(wasm.decodeTx(net, txCbor)) as TxDetail).metadata);
+      return JSON.parse(wasm.decodeTx(net, txCbor)) as TxDetail;
     } catch (e) {
       if (isTrap(e)) throw e;
-      return true;
+      return undefined;
     }
+  }
+
+  /**
+   * Whether a register a site's transaction pays Seedelf Wallet's contract under, one only its key's holder can spend,
+   * is one the kept contract view holds already: beside a Seedelf's token, or under one of the wallet's own UTxOs.
+   * Matched by its points (`registerKey`), whatever the spelling, asking nobody: the view as the last reading left it.
+   * With none kept, nothing is said either way. It can't catch a register re-randomized by a small d, nor a copy of a
+   * stranger's UTxO holding no token, which the view doesn't keep, so the window never says the others hide whose
+   * Seedelf it is (chunk 51, x1a#2).
+   */
+  private async registerOnChain(network: NetworkName, detail: TxDetail): Promise<boolean> {
+    const paid = detail.outputs.flatMap((o) => (o.address.seedelf && o.register?.payable ? [registerKey(o.register)] : []));
+    if (!paid.length) return false;
+    const view = await this.deps.wallet
+      .withKeys(() => keptContractView(this.deps.session, network))
+      .catch((e: unknown) => {
+        if (isTrap(e)) throw e;
+        return undefined;
+      });
+    if (!view) return false;
+    const kept = byRegister([...view.owned, ...Object.values(view.seedelfs)]);
+    return paid.some((k) => kept.has(k));
+  }
+
+  /**
+   * Notes, in the sealed Seedelf history, what a site's transaction the user just signed pays into their own Seedelf
+   * (activity.ts `SignedNote`): its outputs under the user's own register, but one carrying a reference script, which
+   * the wallet can't spend (l3sign#1), as money made private from the public account that signed (`account`), or as
+   * the private session's (chunk 51, gap-g1#2). Unnoted, the reading that finds them took them for payments received,
+   * which a stealth mint or a funding takes first, tying the new Seedelf or session to the account in the open. Under
+   * the phrase whose keys find them, and nothing at all for a transaction that pays no register of the user's.
+   */
+  private async notePrivate(network: NetworkName, holder: Holder, txCbor: string, account: number): Promise<void> {
+    const { activity, wasm, wallet } = this.deps;
+    const detail = activity ? this.decoded(network, txCbor) : undefined;
+    const paid = detail?.outputs.filter((o) => o.address.seedelf && o.register?.payable && !o.scriptRef) ?? [];
+    if (!activity || !detail || !paid.length) return;
+    const pin = phrasePin();
+    const outputs = await wallet.withKeys((keys) => {
+      pin(keys);
+      return paid.flatMap((o) => {
+        const register = new wasm.Register(o.register!.generator, o.register!.publicValue);
+        try {
+          return keys.seedelf.isOwned(register) ? [o.index] : [];
+        } catch (e) {
+          // Points that don't decode, or aren't in the prime-order subgroup, can't be the user's.
+          if (isTrap(e)) throw e;
+          return [];
+        } finally {
+          register.free();
+        }
+      });
+    });
+    if (!outputs.length) return;
+    const origin = holder ? sessionClass(holder.index) : madePrivate(account);
+    await activity.signedInto(network, { txHash: detail.txHash, outputs, origin, ...(holder ? { session: holder.index } : {}) }, pin);
   }
 
   /** CIP-95's `getPubDRepKey`: the dApp account's DRep key, its public key in hex, for a site given governance. */
@@ -2296,6 +2391,9 @@ export class DappService {
         // What it pays the session's account, recorded before the site has the signature (independent review M4).
         if (holder) await this.deps.sessions.siteSigned(network, holder.index, (tx as string).trim(), signed.summary);
         await this.remember(network, holder, signed.summary, (tx as string).trim(), holder ? undefined : account);
+        // And what it pays into the user's own Seedelf, noted as that account's or session's money, never a payment
+        // received: before the site has the signature, since it may send it itself (chunk 51, gap-g1#2).
+        await this.notePrivate(network, holder, (tx as string).trim(), account);
         return signed.witnessSet;
       },
       (tx as string).trim(),
@@ -2543,9 +2641,10 @@ export class DappService {
 
   /**
    * Keeps a signed transaction's outputs for the site's next transaction:
-   * those to the account for it to spend, and every one (the first 64) for a
-   * while, so one built on it can be read before it's on chain. `account`:
-   * the public account that signed it.
+   * those to the account for it to spend, each with the reference script it
+   * carries, as a site is handed it (chunk 51, w2#4), and every one (the first
+   * 64) for a while, so one built on it can be read before it's on chain.
+   * `account`: the public account that signed it.
    */
   private async remember(
     network: NetworkName,
@@ -2567,6 +2666,7 @@ export class DappService {
         block_height: null,
         inline_datum: o.inlineDatum ? { bytes: o.inlineDatum, value: null } : null,
         datum_hash: o.datumHash,
+        ...(o.referenceScript ? { reference_script: o.referenceScript } : {}),
         asset_list: o.tokens.map((t) => ({
           policy_id: t.policyId,
           asset_name: t.assetName,
@@ -2901,6 +3001,29 @@ function sessionCollateral(utxos: PathedUtxo[]): { spendable: PathedUtxo[]; coll
       BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script && !u.inline_datum && !u.datum_hash,
   );
   return { spendable: utxos.filter((p) => p !== collateral), ...(collateral ? { collateral } : {}) };
+}
+
+/** The script types the ledger has, as Koios names them: a native script's, then Plutus V1 to V3. */
+const SCRIPT_TYPES = new Set(["timelock", "multisig", "plutusV1", "plutusV2", "plutusV3"]);
+
+/**
+ * Whether a UTxO can be handed to a site as the ledger holds it, as WebAssembly writes it (cip30.rs `script_ref`): with
+ * no reference script, or with one whose bytes the data source gives, in a type the ledger has, agreeing with its size
+ * (`measurable`), a native script's within `MAX_DEPTH` levels. Conway's fee counts the script on a spent input, so
+ * handed over without it, a site would price spending it short and the node would refuse the transaction. Koios and the
+ * data layer give no native script's bytes: a UTxO holding one is left out of getUtxos and getBalance (chunk 51, w2#4).
+ */
+function handedWhole(u: KoiosUtxo): boolean {
+  const script = u.reference_script;
+  if (!script) return true;
+  if (!measurable(u) || !SCRIPT_TYPES.has(script.type ?? "")) return false;
+  if (script.type !== "timelock" && script.type !== "multisig") return true;
+  const bytes = hexBytes(script.bytes ?? "");
+  try {
+    return skip(bytes, 0) === bytes.length;
+  } catch {
+    return false;
+  }
 }
 
 function remove<T>(list: T[], drop: (item: T) => boolean): void {

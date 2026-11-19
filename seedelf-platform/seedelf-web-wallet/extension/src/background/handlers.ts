@@ -476,6 +476,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         message.display,
         poolChoice(message.pools),
         typeof message.through === "boolean" ? message.through : undefined,
+        message.anyway === true,
       );
     case "session-out-submit":
       return ctx.sessions.outSubmit(ctx.network, message.txHash, message.direct);
@@ -573,6 +574,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         message.anyway ?? false,
         message.paid === "private" ? "private" : message.paid === true,
         typeof message.pool === "string" ? message.pool : undefined,
+        // The account the escape hatch's question named, if any (chunk 51, gap-g2#2).
+        Number.isInteger(message.account) ? message.account : undefined,
       );
     case "lovejoin-mixes":
       return ctx.lovejoin.mixes(ctx.network);

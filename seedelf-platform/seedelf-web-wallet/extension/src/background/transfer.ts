@@ -1,4 +1,4 @@
-// Transfer: pay seedelfs from the Seedelf balance, up to 20 in one
+// Transfer: pay seedelfs from the Seedelf balance, up to 100 in one
 // transaction. The equivalent of the CLI's `transfer`, built by the same core
 // code (`build::transfer`) through WebAssembly, and sent like every Seedelf
 // spend (script-spend.ts).
@@ -114,15 +114,18 @@ export class TransferService {
     progress?.("measuring");
     // In as many transactions as the UTxOs it spends need, each spending its own (the owner's test of 1.6.0): one
     // when one does.
-    const measured = (r: typeof request) =>
+    const measured = (r: typeof request & { most?: boolean }) =>
       measureLocally<{ parts: TransferResult[] }>(this.deps, r, (keys, json) => wasm.buildTransferParts(keys.seedelf, json)).then(
         (built) => built.parts,
       );
     // Core's shortfall in the user's words, with what has to stay and the most that can go: Max's, built again on
-    // the same UTxOs (blind test §4.4, T05; chunk 23's second review, PY-10), every part of it.
+    // the same UTxOs (blind test §4.4, T05; chunk 23's second review, PY-10), every part of it. `most`: over what an
+    // amount takes, never a UTxO adding less than nothing, a stranger's pile of tokens, which Max spends (chunk 51,
+    // r2a#3).
     const parts = await measured(request).catch(async (e: unknown) => {
       const available = utxos.reduce((sum, u) => sum + BigInt(u.value), 0n);
-      const most = async () => whole(await measured({ ...request, payments: [{ ...request.payments[0]!, lovelace: null }] }));
+      const most = async () =>
+        whole(await measured({ ...request, most: true, payments: [{ ...request.payments[0]!, lovelace: null }] }));
       throw tooMany(await privateShortOf(e, request.payments.map((p) => p.lovelace), most, available));
     });
     // A chained part's carry has the history of what the part before it spent.

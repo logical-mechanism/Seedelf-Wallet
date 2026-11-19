@@ -1,5 +1,5 @@
 // Send, on the private side: pay seedelfs from the private (Seedelf) balance,
-// up to 20 at once, or the most possible (Max) to one, as the other Sends and
+// up to 100 at once, or the most possible (Max) to one, as the other Sends and
 // Make public do (blind test §9.6).
 // Each recipient is pasted by full name (tags aren't unique), looked up in the
 // wallet contract, and shown before anything is built. With tokens, an amount
@@ -121,8 +121,9 @@ export function Transfer({
     waitingFor({
       to: toState(e.draft.id, e.draft.to),
       amount: e.draft.amount,
-      tokensPicked: Object.keys(e.draft.tokens).length > 0,
+      tokensPicked: e.picked,
       tokensOk: e.tokens.ok,
+      tokensAway: e.away.length > 0,
       max: maxed,
       emptyTo: "review.why.seedelf",
     }),

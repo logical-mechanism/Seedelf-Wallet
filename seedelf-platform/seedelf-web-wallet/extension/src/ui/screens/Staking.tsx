@@ -57,7 +57,7 @@ import {
 import { NEW_POOLS_VIEW, Pools, SharedTicker, type PoolsView } from "./Pools";
 import { Delegations } from "./Delegations";
 import { Rewards } from "./Rewards";
-import { sharedDrepName, Voting, type VoteView } from "./Voting";
+import { DrepCallsItself, sharedDrepName, Voting, type VoteView } from "./Voting";
 
 /** What a review shows besides the summary: the pool's or DRep's name, and how many others share it. */
 interface Chosen {
@@ -66,6 +66,8 @@ interface Chosen {
   /** Staking with another pool, not a first one: rewards don't stop meanwhile (chunk 23's second review, ST-7). */
   switching?: boolean;
   drepName?: string;
+  /** The vote goes to the account's own DRep: said as that, never passed as a DRep's name (chunk 51, gap-g7#1). */
+  ownDrep?: boolean;
   /** Live pools using the pool's ticker, or DReps using the DRep's name (Voting.tsx `drepSharing`). */
   shared?: number;
   /** The list has the DRep under that name; when it doesn't, `shared` counts it too. */
@@ -75,6 +77,21 @@ interface Chosen {
   /** A vote's governance action, and the DRep's vote on it before, if any. */
   govAction?: GovAction;
   before?: GovVote;
+  /**
+   * The pool or the vote is where the page read the account delegated already: the ledger takes it again, for a fee,
+   * so the review says so rather than anything refusing it (chunk 51, e7b#1).
+   */
+  already?: boolean;
+  /** An update with no profile from a DRep that has none: it removes nothing, so it's said as an update (e7b#1). */
+  noProfile?: boolean;
+}
+
+/**
+ * What a delegation's review is told of the pool picked, against the pool the page read the account staking with:
+ * another pool is a change of pool (ST-7), and the same one again is said so, not a change (chunk 51, e7b#1).
+ */
+export function poolChosen(current: StakeInfo["pool"], pool: PoolDetails, shared: number): Chosen {
+  return { pool, shared, switching: !!current && current.id !== pool.id, already: current?.id === pool.id };
 }
 
 /**
@@ -215,7 +232,8 @@ export function Staking({
     call("drep-own", {}).then(setDrep, (e: Error) => setDrepError(e.message));
   };
   useEffect(readDrep, []);
-  const ownDrepName = drep && staking.drep === drep.id ? t("drep.yourOwn") : undefined;
+  // The vote is on the account's own DRep: said as that by a flag, never a name (chunk 51, gap-g7#1).
+  const ownVote = !!drep && staking.drep === drep.id;
 
   // Why nothing can be built: a transaction on its way, or nothing in the account to pay a fee with.
   const free = account && unlocked(account);
@@ -368,7 +386,7 @@ export function Staking({
         onBack={back("overview")}
         onStake={(p, shared) => {
           setPoolsView((v) => ({ ...v, details: p }));
-          void build({ kind: "delegate", pool: p.id }, { pool: p, shared, switching: !!staking.pool });
+          void build({ kind: "delegate", pool: p.id }, poolChosen(staking.pool, p, shared));
         }}
       />
     );
@@ -400,7 +418,12 @@ export function Staking({
         onView={setDrepView}
         onBack={leaveDrepForm("overview")}
         onReview={(anchor) =>
-          void build({ kind: "drep-update", ...(anchor ? { anchor } : {}) }, {}, anchor ? "review" : "remove-profile")
+          void build(
+            { kind: "drep-update", ...(anchor ? { anchor } : {}) },
+            // With none to remove, an update with no profile keeps the DRep active all the same (chunk 51, e7b#1).
+            anchor || drep.profile ? {} : { noProfile: true },
+            anchor ? "review" : "remove-profile",
+          )
         }
       />
     );
@@ -445,10 +468,17 @@ export function Staking({
         view={voteView}
         onView={setVoteView}
         onBack={back("overview")}
-        onVote={(drep, drepName, shared, inactive) =>
+        onVote={(id, drepName, shared, inactive) =>
           void build(
-            { kind: "vote", drep },
-            { drepName, shared: shared?.shared, drepListed: shared?.listed, drepInactive: inactive },
+            { kind: "vote", drep: id },
+            {
+              drepName,
+              ownDrep: drep !== undefined && id === drep.id,
+              already: id === staking.drep,
+              shared: shared?.shared,
+              drepListed: shared?.listed,
+              drepInactive: inactive,
+            },
           )
         }
         own={drep}
@@ -591,7 +621,7 @@ export function Staking({
           <h2 id="vote-title">{t("activity.row.votingPower")}</h2>
         </Hinted>
         <ReviewRows testId="vote-now">
-          <Row label={t("staking.delegatedTo")} value={voteLabel(staking.drep, ownDrepName)} title={staking.drep ?? undefined} strong />
+          <Row label={t("staking.delegatedTo")} value={voteLabel(staking.drep, { own: ownVote })} title={staking.drep ?? undefined} strong />
         </ReviewRows>
         {locked && (
           <Callout tone="warn" testId="rewards-locked">
@@ -615,7 +645,7 @@ export function Staking({
         onProfile={back("drep-profile")}
         onRetire={() => void build({ kind: "drep-retire" }, {}, "retire")}
         onDelegateOwn={() =>
-          drep && void build({ kind: "vote", drep: drep.id }, { drepName: t("drep.yourOwn") }, "delegate-own")
+          drep && void build({ kind: "vote", drep: drep.id }, { ownDrep: true }, "delegate-own")
         }
       />
 
@@ -897,11 +927,14 @@ export function StakingReview({
   pool,
   switching = false,
   drepName,
+  ownDrep = false,
   shared = 0,
   drepListed = true,
   drepInactive = false,
   govAction,
   before,
+  already = false,
+  noProfile = false,
   total,
   busy,
   error,
@@ -940,7 +973,7 @@ export function StakingReview({
             : action.kind === "drep-register"
               ? t("staking.send.drepRegister")
               : action.kind === "drep-update"
-                ? t(action.anchor ? "staking.send.drepUpdate" : "drep.update.remove")
+                ? t(action.anchor || noProfile ? "staking.send.drepUpdate" : "drep.update.remove")
                 : action.kind === "drep-retire"
                   ? t("drep.retire")
                   : t("staking.send.drepVote", { vote: voteOf(action.votes[0]!.vote) });
@@ -970,7 +1003,12 @@ export function StakingReview({
           <Row label={t("staking.review.stakeWith")} value={poolLabel(pool ?? { id: action.pool })} title={summary.pool ?? undefined} strong />
         )}
         {action.kind === "vote" && (
-          <Row label={t("staking.review.voteTo")} value={voteLabel(summary.drep, drepName)} title={summary.drep ?? undefined} strong />
+          <Row
+            label={t("staking.review.voteTo")}
+            value={voteLabel(summary.drep, { name: drepName, own: ownDrep })}
+            title={summary.drep ?? undefined}
+            strong
+          />
         )}
         {action.kind === "stop" && <Row label={t("staking.title")} value={t("staking.stops")} strong />}
         {drepAction && summary.drep && <Row label={t("staking.review.drep")} value={shortId(summary.drep)} title={summary.drep} />}
@@ -1022,6 +1060,12 @@ export function StakingReview({
           />
         )}
       </ReviewRows>
+      {/* The same pool or vote again, which the ledger takes: said, as the page said it (chunk 51, e7b#1). */}
+      {already && (action.kind === "delegate" || action.kind === "vote") && (
+        <p className="note" data-testid="staking-review-already">
+          {t(action.kind === "delegate" ? "pools.alreadyYours" : "vote.alreadyThere")}
+        </p>
+      )}
       {/* Rewards withdrawn read as a gain, then a smaller balance after (ST-6). */}
       {action.kind === "withdraw" && (
         <p className="note" data-testid="staking-withdraw-note">
@@ -1067,6 +1111,8 @@ export function StakingReview({
         </Callout>
       )}
       {action.kind === "vote" && summary.drep?.startsWith("drep1") && <ReviewId label={t("staking.drepId")} id={summary.drep} />}
+      {/* A DRep named like one of the wallet's own choices: not a shared name, so in words of its own (gap-g7#1). */}
+      {action.kind === "vote" && !ownDrep && <DrepCallsItself name={drepName} />}
       {action.kind === "vote" && shared > 1 && (
         <Callout tone="warn" testId="drep-shared-name">
           {t("staking.warn.sharedDrepName", { shared: sharedDrepName({ shared, listed: drepListed }) })}

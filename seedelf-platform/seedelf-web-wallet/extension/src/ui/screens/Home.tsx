@@ -1267,7 +1267,7 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
                     : t("home.staking.notEarn")}
               </span>
               <span className="menu-row__sub menu-row__sub--wrap" data-testid="staking-row-vote">
-                {t("home.votingPower", { what: voteLabel(staking.drep, staking.ownDrep ? t("drep.yourOwn") : undefined) })}
+                {t("home.votingPower", { what: voteLabel(staking.drep, { own: staking.ownDrep }) })}
               </span>
             </span>
             <ChevronRightIcon size={16} />
@@ -1514,9 +1514,12 @@ export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: num
         // How many aren't mixed yet is an amount too: said without the number while balances are hidden (privacy
         // review §2.16). Those Koios hasn't said the making of yet, after a restore, may be mixed: said apart (M14).
         const unsure = Math.min(f.unsure ?? 0, f.notMixed);
+        // Not those someone else, or another device, put in under the wallet's key: there's nothing to do for them, and
+        // the Lovejoin page says what they are (chunk 51, e1a#1).
+        const waiting = f.notMixed - unsure - Math.min(f.someoneElse ?? 0, f.notMixed - unsure);
         const some = t("home.lovejoin.some");
         const flags = [
-          f.notMixed > unsure ? t("home.lovejoin.flag.notMixed", { n: amounts.hidden ? some : f.notMixed - unsure }) : "",
+          waiting > 0 ? t("home.lovejoin.flag.notMixed", { n: amounts.hidden ? some : waiting }) : "",
           unsure ? t("home.lovejoin.flag.unsure", { n: amounts.hidden ? some : unsure }) : "",
           i === 0 ? stoppedFlag : "",
         ].filter(Boolean);

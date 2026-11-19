@@ -2631,7 +2631,27 @@ mod withdraw {
         };
         let none = Assets::new();
 
-        // Only a normal address on this network.
+        // Only an address on this network that takes a payment: never a stake
+        // address or another network's.
+        let stake = Address::from_bech32(
+            "stake_test1urj40zgr2gy4788kl54h6x3gu0pukq5lfr8nflufpg5dzas324ywz",
+        )
+        .unwrap();
+        for bad in [&stake, &key_address(Network::Mainnet)] {
+            assert!(!build::is_payable_address(bad, true));
+            assert!(
+                err(bad, 2_000_000, &none).contains("Payments go to an address on preprod"),
+                "{bad:?}"
+            );
+            assert!(build::sweep_all(&w.chain, &available, bad, &w.owner, w.signer).is_err());
+        }
+        let to = key_address(Network::Testnet);
+        assert!(build::is_payable_address(&to, true));
+        assert!(build::is_payable_address(&collateral_address(true), true));
+        // A key address staked by a script is a key address, and a script's
+        // address takes a payment too, as the ledger has it: with no datum,
+        // which the wallet warns of (chunk 51, r2a#1; the owner's call of
+        // 2026-11-18). The contract's own address is a script's.
         let script: Address = ShelleyAddress::new(
             Network::Testnet,
             ShelleyPaymentPart::Script(ScriptHash::new([9; 28])),
@@ -2644,27 +2664,15 @@ mod withdraw {
             ShelleyDelegationPart::Script(ScriptHash::new([9; 28])),
         )
         .into();
-        let stake = Address::from_bech32(
-            "stake_test1urj40zgr2gy4788kl54h6x3gu0pukq5lfr8nflufpg5dzas324ywz",
-        )
-        .unwrap();
-        for bad in [
-            &w.wallet,
-            &script,
-            &script_stake,
-            &stake,
-            &key_address(Network::Mainnet),
-        ] {
-            assert!(!build::is_payable_address(bad, true));
-            assert!(
-                err(bad, 2_000_000, &none).contains("normal preprod address"),
-                "{bad:?}"
-            );
-            assert!(build::sweep_all(&w.chain, &available, bad, &w.owner, w.signer).is_err());
+        for payee in [&script_stake, &script, &w.wallet] {
+            assert!(build::is_payable_address(payee, true), "{payee:?}");
+            build::sweep(
+                &w.chain, &available, payee, 2_000_000, &none, &w.owner, w.signer,
+            )
+            .unwrap_or_else(|e| panic!("{payee:?}: {e}"));
+            build::sweep_all(&w.chain, &available, payee, &w.owner, w.signer)
+                .unwrap_or_else(|e| panic!("{payee:?}: {e}"));
         }
-        let to = key_address(Network::Testnet);
-        assert!(build::is_payable_address(&to, true));
-        assert!(build::is_payable_address(&collateral_address(true), true));
 
         // Amounts.
         assert!(err(&to, 500_000, &none).contains("needs at least"));
@@ -2930,6 +2938,47 @@ mod apart {
         let minted =
             build::mint_apart(&w.chain, &available, &h, "", &seedelf, &w.owner, w.signer).unwrap();
         assert_eq!(outpoints(&minted.spend.inputs()), outpoints(&[received]));
+    }
+
+    /// Chunk 51, gap-g1#1 (b), the owner's B15: a stealth mint takes a box back
+    /// from Lovejoin that pays alone before received money. Whoever paid you
+    /// knows their payment, and a copy of a Seedelf's datum paid in (about 4 ₳)
+    /// shows it to everyone; no payer knows a box. Received money still comes
+    /// before money moved in.
+    #[test]
+    fn a_stealth_mint_takes_a_box_that_pays_alone_before_received_money() {
+        let w = world();
+        let received = owned(&w, 0x02, 0, 4_000_000, &[]);
+        let moved_in = owned(&w, 0x01, 0, 1_000_000_000, &[]);
+        let back = boxes(&w, 0x10, 2);
+        let available: Vec<UtxoResponse> = [received.clone(), moved_in.clone()]
+            .into_iter()
+            .chain(back.iter().map(|(u, _)| u.clone()))
+            .collect();
+        let mut known = vec![
+            (&moved_in, class("public", Origin::Own)),
+            (
+                &received,
+                class(&format!("received:{}", received.tx_hash), Origin::Received),
+            ),
+        ];
+        known.extend(back.iter().map(|(u, c)| (u, c.clone())));
+        let seedelf = w.owner.clone().rerandomize().unwrap();
+        let h = histories(Purpose::Mint, &known);
+        let minted =
+            build::mint_apart(&w.chain, &available, &h, "", &seedelf, &w.owner, w.signer).unwrap();
+        let spent = minted.spend.inputs();
+        assert!(
+            back.iter().any(|(b, _)| outpoints(&spent) == one(b)),
+            "a stealth mint spent {:?}, not a box alone",
+            outpoints(&spent)
+        );
+
+        // With no box, received money, as before.
+        let without = [received.clone(), moved_in.clone()];
+        let minted =
+            build::mint_apart(&w.chain, &without, &h, "", &seedelf, &w.owner, w.signer).unwrap();
+        assert_eq!(outpoints(&minted.spend.inputs()), one(&received));
     }
 
     #[test]

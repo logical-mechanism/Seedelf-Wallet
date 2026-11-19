@@ -255,12 +255,16 @@ export class BalanceService {
    * which is why `activeAccount` is passed in rather than read here: taking
    * the wallet's lock again from under it would deadlock.
    *
-   * `account` and the Activity are the account the wallet is working on, so a
-   * mint worked out from them is that account's (minted-by.ts).
+   * The Activity is the account the wallet is working on, so a mint worked
+   * out from it is that account's (minted-by.ts). Its entries go whole: only
+   * one with the account's fee says the account paid. The account's UTxOs say
+   * nothing, since anyone's transaction can pay it (chunk 51, e6#1).
    */
-  private async held(network: NetworkName, recorded: MintedBy, account: KoiosUtxo[], activeAccount: number): Promise<Held> {
-    const activity = await this.deps.session.get<{ entries: Array<{ txHash: string }> }>(SESSION_ACCOUNT_ACTIVITY_PREFIX + network);
-    return { recorded, account, accountTxs: new Set(activity?.entries.map((e) => e.txHash)), activeAccount };
+  private async held(network: NetworkName, recorded: MintedBy, activeAccount: number): Promise<Held> {
+    const activity = await this.deps.session.get<{ entries: Array<{ txHash: string; fee?: string }> }>(
+      SESSION_ACCOUNT_ACTIVITY_PREFIX + network,
+    );
+    return { recorded, accountActivity: activity?.entries ?? [], activeAccount };
   }
 
   /**
@@ -279,12 +283,7 @@ export class BalanceService {
       // The wallet removed and another phrase restored while it read: nothing of it is that phrase's (`read`).
       pin(keys);
       const utxos = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
-      const held = await this.held(
-        network,
-        recorded,
-        utxos.map((p) => p.utxo),
-        account,
-      );
+      const held = await this.held(network, recorded, account);
       const balances: Balances = { ...cached, seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId, held) };
       // The user switched account while it read: `cached` is the account left, never to be kept as the new one's.
       if (keys.account !== account) return { balances };
@@ -299,8 +298,10 @@ export class BalanceService {
         return { balances, unkept: { owned: view.owned, account: utxos, updatedAt: balances.updatedAt } };
       }
     });
-    // The history never holds up, or breaks, a balance reading.
-    await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);
+    // The history never holds up, or breaks, a balance reading. Pinned to the reading's phrase, as its own turns are: its
+    // write waits its turn in the history's queue, which a Remove wallet and a restore can come before (chunk 51,
+    // e4a#1's residue). With who spent the wallet's own rows, where the private index says (chunk 51, gap-g9#1).
+    await this.deps.activity?.arrived(network, view.owned, pin, view.spentBy).catch(() => undefined);
     return reading;
   }
 
@@ -412,12 +413,7 @@ export class BalanceService {
     // The result is cached only while still unlocked, on the phrase it began under and the account it read.
     const reading = await wallet.withKeys(async (keys): Promise<Reading> => {
       pin(keys);
-      const held = await this.held(
-        network,
-        recorded,
-        utxos.map((p) => p.utxo),
-        index,
-      );
+      const held = await this.held(network, recorded, index);
       const balances: Balances = {
         network,
         updatedAt: now(),
@@ -433,8 +429,10 @@ export class BalanceService {
       if (await keep(session, network, balances, utxos, addresses)) return { balances };
       return { balances, unkept };
     });
-    // The history never holds up, or breaks, a balance reading.
-    await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);
+    // The history never holds up, or breaks, a balance reading. Pinned to the reading's phrase, as its own turns are: its
+    // write waits its turn in the history's queue, which a Remove wallet and a restore can come before (chunk 51,
+    // e4a#1's residue). With who spent the wallet's own rows, where the private index says (chunk 51, gap-g9#1).
+    await this.deps.activity?.arrived(network, view.owned, pin, view.spentBy).catch(() => undefined);
     return reading;
   }
 

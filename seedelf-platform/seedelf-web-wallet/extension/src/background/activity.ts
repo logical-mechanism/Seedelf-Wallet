@@ -45,6 +45,7 @@ import {
   merged,
   receivedIn,
   sessionClass,
+  spentElsewhere,
   UNKNOWN,
   unknownIn,
   type HistoryClass,
@@ -54,7 +55,8 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { PathedUtxo } from "./account";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
-import { seedelfTokenOf } from "./chain";
+import { byRegister, registerKey, registerOf, seedelfTokenOf } from "./chain";
+import type { SpentBy } from "./contract-scan";
 import { collateralPayments, SESSION_ACCOUNT_UTXOS_PREFIX } from "./coin-control";
 import { ownDrepId } from "./governance";
 import { pendingEntries, rewardAccountHex } from "./incoming";
@@ -104,6 +106,45 @@ interface History {
    * the history began: it's received, as any later arrival is.
    */
   startedAt?: number;
+  /** The site transactions the user signed that pay their own Seedelf, not seen landing yet (`SignedNote`). */
+  signed?: SignedNote[];
+}
+
+/**
+ * A site's transaction the user signed that pays their own Seedelf, noted as it's signed (dapp.ts `notePrivate`), since
+ * a site may send it itself (chunk 51, gap-g1#2): its outputs under the user's own register, none carrying a reference
+ * script (l3sign#1), and whose money they are: the public account that signed, made private (`madePrivate`), or the
+ * private session's (`sessionClass`, `session`). Without it, the reading that finds them noted them as payments
+ * received, which a stealth mint or a funding takes first. Nothing shows in Activity until a balance reading sees one
+ * land (`arrived`), which notes it from this, and the note goes; one that never lands goes after SIGNED_KEEP_MS.
+ */
+export interface SignedNote {
+  txHash: string;
+  outputs: number[];
+  origin: HistoryClass;
+  /** The private session that signed it, from 0. */
+  session?: number;
+  /** When it was signed, by this device's clock (ms). */
+  at: number;
+}
+
+/** The most site transactions noted at once (`SignedNote`), the newest, and how long one waits to land. */
+const SIGNED_KEEP = 50;
+const SIGNED_KEEP_MS = 30 * 24 * 60 * 60_000;
+
+/** `h`'s notes still waiting to land at `now`. */
+const liveNotes = (h: Pick<History, "signed"> | undefined, now: number) => (h?.signed ?? []).filter((n) => now - n.at <= SIGNED_KEEP_MS);
+
+/**
+ * The entry a note makes when its outputs land, at `at`: Made private, or Back from a private session. A public
+ * account's is read from the chain on its Activity, as a public Send's own-Seedelf part is (`bySend`): a site's
+ * transaction may pay others too.
+ */
+function notedEntry(note: SignedNote, at: number): ActivityEntry {
+  const shared = { txHash: note.txHash, at, direction: "in" as const, lovelace: "0", tokens: 0, origin: note.origin };
+  return note.session !== undefined
+    ? { ...shared, kind: "session-back", session: note.session }
+    : { ...shared, kind: "move-in", bySend: true };
 }
 
 export interface AccountAddresses {
@@ -305,7 +346,33 @@ export class ActivityService {
    * counted again as arrivals. `pin`: the phrase it was sent under (update).
    */
   sent(network: NetworkName, pending: PendingTx, summary: object, pin?: PhrasePin): Promise<void> {
-    // A payment or a staking change on the Cardano account isn't Seedelf's: its Activity comes from Koios.
+    // A payment or a staking change on the Cardano account isn't Seedelf's: its Activity comes from Koios. What a
+    // public Send paid into the user's own Seedelfs came into the private balance, though: noted as Make private notes
+    // its own, what went in, from the account that paid (send.ts). Unnoted, `arrived` read it as money received, which
+    // the stealth mint and the fundings take first (chunk 51, gap-g8#2). Public activity still reads the Send itself
+    // from the chain (`bySend`).
+    if (pending.kind === "send") {
+      const sendSummary = summary as Record<string, any>;
+      const into: Array<Record<string, any>> = (Array.isArray(sendSummary.payments) ? sendSummary.payments : []).filter(
+        (p: Record<string, any>) => p?.seedelf?.own === true,
+      );
+      if (!into.length) return Promise.resolve();
+      const assets = signedAssets(into.flatMap((p) => (Array.isArray(p.tokens) ? p.tokens : [])), 1n);
+      const origin = readClass(sendSummary.origin);
+      const entry: ActivityEntry = {
+        txHash: pending.txHash,
+        at: pending.submittedAt,
+        kind: "move-in",
+        direction: "in",
+        lovelace: into.reduce((sum, p) => sum + BigInt(p.lovelace ?? "0"), 0n).toString(),
+        tokens: assets.length,
+        fee: feeOf(sendSummary.fee),
+        ...(assets.length ? { assets } : {}),
+        ...(origin ? { origin } : {}),
+        bySend: true,
+      };
+      return this.update(network, (h) => ({ ...h, entries: [...h.entries.filter((e) => e.txHash !== entry.txHash), entry] }), pin);
+    }
     if (!SEEDELF_KINDS.has(pending.kind)) return Promise.resolve();
     const s = summary as Record<string, any>;
     // A Lovejoin pool the public account paid to start is that account's too (lovejoin-launch.ts).
@@ -384,37 +451,66 @@ export class ActivityService {
    * are kept apart, and merging them is said, as for payments received
    * (independent review L40). With none known, all of it is one Unknown, and
    * selection picks as the CLI does. A private session's money, what each
-   * of its fundings left and its return, is one class.
+   * of its fundings left and its return, is one class. A site's payment into
+   * the user's own Seedelf that landed before a reading noted it is its note's
+   * (`SignedNote`).
+   *
+   * A UTxO under a register another transaction's row of the wallet's own in
+   * `among` (its whole view, Seedelf rows too: `utxos` by default) already
+   * has, matched by its parsed points, is never Received: anyone can see the
+   * two are one owner's. It takes that row's history, or, where that one is Received too,
+   * is Unknown by its own transaction, so a stealth mint or a funding takes it
+   * after money paid properly. That's a payment written under a register
+   * copied as found (d = 1); a payer who reveals another d can't be told
+   * (chunk 51, gap-g1#1). Its own history, where it isn't Received, stands.
    */
-  async classes(network: NetworkName, utxos: KoiosUtxo[]): Promise<Map<string, HistoryClass>> {
+  async classes(network: NetworkName, utxos: KoiosUtxo[], among: readonly KoiosUtxo[] = utxos): Promise<Map<string, HistoryClass>> {
     const history = await this.deps.store.get<History>(`history.${network}`);
     const entries = history?.entries ?? [];
-    const byTx = new Map(entries.map((e) => [e.txHash, e]));
-    // Every funding and top-up of a session paid its account, and its return came from there: on chain, what
-    // each funding's change and the return carry is already one owner's. So they're one history, all of theirs
-    // merged: spending two of them together ties nothing new, and selection takes them together before it
-    // merges anything else (independent review L41).
-    const bySession = new Map<number, HistoryClass[]>();
-    for (const e of entries) {
-      const n = entrySession(e);
-      if (n === undefined) continue;
-      const classes = bySession.get(n) ?? [];
-      classes.push(classOf(e));
-      bySession.set(n, classes);
-    }
-    const sessions = new Map([...bySession].map(([n, classes]) => [n, merged(classes)]));
-    const of = (e: ActivityEntry | undefined) => {
-      const n = e && entrySession(e);
-      return n !== undefined ? sessions.get(n)! : classOf(e);
-    };
-    const found = utxos.map((u) => [u, of(byTx.get(u.tx_hash))] as const);
+    const recorded = new Set(entries.map((e) => e.txHash));
+    // Notes of site transactions not seen landing yet, read as their entries will be: only their noted outputs.
+    const pending = liveNotes(history, (this.deps.now ?? Date.now)()).filter((n) => !recorded.has(n.txHash));
+    const noted = new Set(pending.flatMap((n) => n.outputs.map((i) => `${n.txHash}#${i}`)));
+    const historyOf = historiesByTx([...entries, ...pending.map((n) => notedEntry(n, n.at))]);
+    const pendingTx = new Set(pending.map((n) => n.txHash));
+    const of = (u: KoiosUtxo) => (pendingTx.has(u.tx_hash) && !noted.has(outpoint(u)) ? UNKNOWN : historyOf(u.tx_hash));
+    const found = utxos.map((u) => [u, of(u)] as const);
     const known = found.some(([, c]) => c.origin !== "unknown");
-    return new Map(
-      found.map(([u, c]): [string, HistoryClass] => {
-        if (c.origin !== "unknown") return [outpoint(u), c];
-        if (!known) return [outpoint(u), UNKNOWN];
-        return [outpoint(u), c.id === UNKNOWN.id ? unknownIn(u.tx_hash) : c];
-      }),
+    const classOfRow = (u: KoiosUtxo, c: HistoryClass) =>
+      c.origin !== "unknown" ? c : !known ? UNKNOWN : c.id === UNKNOWN.id ? unknownIn(u.tx_hash) : c;
+    const base = new Map(found.map(([u, c]): [string, HistoryClass] => [outpoint(u), classOfRow(u, c)]));
+    const received = utxos.filter((u) => base.get(outpoint(u))!.origin === "received");
+    if (!received.length) return base;
+    // Matched by the points registerOf reads, never the datum's bytes: the node reads several spellings alike.
+    const registers = byRegister([...among, ...utxos]);
+    const classes = new Map(base);
+    for (const u of received) {
+      const register = registerOf(u);
+      // Another transaction's: a payment's own outputs under one register are one payment, which ties nothing more.
+      const others = register ? (registers.get(registerKey(register)) ?? []).filter((o) => o.tx_hash !== u.tx_hash) : [];
+      if (!others.length) continue;
+      const tied = others.map((o) => base.get(outpoint(o)) ?? classOfRow(o, of(o))).filter((c) => c.origin !== "received");
+      classes.set(outpoint(u), tied.length ? merged(tied) : unknownIn(u.tx_hash));
+    }
+    return classes;
+  }
+
+  /**
+   * Notes a site's transaction the user just signed that pays their own Seedelf (`SignedNote`), before the site has
+   * the signature (dapp.ts). Nothing shows in Activity until a balance reading sees it land. `pin`: the phrase it was
+   * signed under (update).
+   */
+  signedInto(network: NetworkName, note: Omit<SignedNote, "at">, pin?: PhrasePin): Promise<void> {
+    const at = (this.deps.now ?? Date.now)();
+    return this.update(
+      network,
+      (h) => {
+        // In the history already: it landed, or the wallet sent it itself.
+        if (h.entries.some((e) => e.txHash === note.txHash)) return undefined;
+        const signed = [...liveNotes(h, at).filter((n) => n.txHash !== note.txHash), { ...note, at }].slice(-SIGNED_KEEP);
+        return { ...h, signed };
+      },
+      pin,
     );
   }
 
@@ -424,9 +520,19 @@ export class ActivityService {
    * a UTxO holding a seedelf is a name, not a payment. What the history's
    * first reading finds was there before it: its origin is Unknown. `pin`:
    * the phrase the reading was made under (update).
+   *
+   * Two more aren't payments received. A site's transaction the user signed
+   * that pays their own Seedelf is noted as it's signed (`SignedNote`):
+   * Made private, or Back from a private session (chunk 51, gap-g1#2). And
+   * one that spent the wallet's own rows (`spentBy`, the private index's
+   * spenders) was sent with this phrase elsewhere, another Chrome profile or
+   * device: Already in your private balance, carrying the history of what it
+   * spent, and ranked as another session's money (`spentElsewhere`; chunk 51,
+   * gap-g9#1). Koios names no spender: there, it's received.
    */
-  arrived(network: NetworkName, owned: KoiosUtxo[], pin?: PhrasePin): Promise<void> {
+  arrived(network: NetworkName, owned: KoiosUtxo[], pin?: PhrasePin, spentBy: SpentBy = {}): Promise<void> {
     const { contract = CONTRACT_V1 } = this.deps;
+    const now = (this.deps.now ?? Date.now)();
     return this.update(network, (h) => {
       const seen = new Set(h.seen);
       const ours = new Set(h.entries.filter((e) => e.kind !== "received").map((e) => e.txHash));
@@ -437,18 +543,34 @@ export class ActivityService {
       // that: then it arrived since, while earlier readings failed (independent review L38).
       const before = (u: KoiosUtxo) =>
         h.startedAt === undefined || u.block_time === undefined || u.block_time * 1000 < h.startedAt + STARTED_MARGIN_MS;
+      const notes = new Map(liveNotes(h, now).map((n) => [n.txHash, n]));
+      // What a spend made elsewhere left here is its inputs' change: their histories, merged (privacy.md, Co-spending),
+      // with its own part, which a funding takes last. One of no history here is kept apart by its transaction.
+      const historyOf = historiesByTx(h.entries);
+      const spentFrom = (ref: string) => {
+        const tx = ref.slice(0, ref.lastIndexOf("#"));
+        const c = historyOf(tx);
+        return c.id === UNKNOWN.id ? unknownIn(tx) : c;
+      };
+      const elsewhere = (u: KoiosUtxo) => {
+        const spent = spentBy[u.tx_hash] ?? [];
+        return spent.length ? { origin: merged([...spent.map(spentFrom), spentElsewhere(u.tx_hash)]) } : {};
+      };
       const byTx = new Map<string, ActivityEntry>();
       for (const u of fresh) {
         if (ours.has(u.tx_hash) || seedelfTokenOf(u, contract.seedelfPolicyId)) continue;
-        const entry = byTx.get(u.tx_hash) ?? {
+        const note = notes.get(u.tx_hash);
+        // Only what it noted: an output carrying a reference script, which the wallet can't spend, is left out (l3sign#1).
+        if (note && !note.outputs.includes(u.tx_index)) continue;
+        const entry = byTx.get(u.tx_hash) ?? (note ? notedEntry(note, (u.block_time ?? 0) * 1000) : {
           txHash: u.tx_hash,
           at: (u.block_time ?? 0) * 1000,
           kind: "received" as const,
           direction: "in" as const,
           lovelace: "0",
           tokens: 0,
-          ...(h.first && before(u) ? { origin: UNKNOWN } : {}),
-        };
+          ...(h.first && before(u) ? { origin: UNKNOWN } : elsewhere(u)),
+        });
         entry.lovelace = (BigInt(entry.lovelace) + BigInt(u.value)).toString();
         const came = (u.asset_list ?? []).map((a) => ({ policyId: a.policy_id, assetName: a.asset_name, quantity: a.quantity }));
         // Everything here arrived: the quantities are all positive.
@@ -464,9 +586,12 @@ export class ActivityService {
       const holding = new Set(owned.map((u) => u.tx_hash));
       const all = [...h.entries, ...added].sort(newestFirst);
       let room = KEEP_ENTRIES - all.filter((e) => holding.has(e.txHash)).length;
+      // A note goes once what it noted is in: its entry says it from now on.
+      const signed = liveNotes(h, now).filter((n) => !byTx.has(n.txHash));
       return {
         entries: all.filter((e) => holding.has(e.txHash) || room-- > 0),
         seen: [...h.seen, ...fresh.map(outpoint)].slice(-KEEP_SEEN),
+        ...(signed.length ? { signed } : {}),
       };
     }, pin);
   }
@@ -489,8 +614,12 @@ export class ActivityService {
     const koios = this.deps.koios(network);
     const ours = accountMatcher(account);
     // What the private side noted as received says nothing of what the account did in it: after a restore,
-    // that's also the account's own move-ins from before (independent review L38).
-    const own = new Map((await this.seedelf(network)).filter((e) => e.kind !== "received").map((e) => [e.txHash, e]));
+    // that's also the account's own move-ins from before (independent review L38). Nor does what a public Send paid
+    // into the user's own Seedelfs: the Send is read from the chain, a payment, whoever else it paid (chunk 51,
+    // gap-g8#2).
+    const own = new Map(
+      (await this.seedelf(network)).filter((e) => e.kind !== "received" && !e.bySend).map((e) => [e.txHash, e]),
+    );
     // The account's DRep, from its key: its certificates and votes are named for what they did.
     const drep = await ownDrepId(this.deps).catch(() => undefined);
     // Every pool's mix box the wallet reads, the classic pool's at least (chunk 34): from the device, no request. A read
@@ -677,6 +806,28 @@ function classOf(entry: ActivityEntry | undefined): HistoryClass {
       // A payment's change from before the history kept where money came from: its inputs aren't known.
       return UNKNOWN;
   }
+}
+
+/**
+ * Each transaction's history as `entries` have it, by its hash: UNKNOWN for one they don't record. Every funding and
+ * top-up of a session paid its account, and its return came from there: on chain, what each funding's change and the
+ * return carry is already one owner's. So they're one history, all of theirs merged: spending two of them together
+ * ties nothing new, and selection takes them together before it merges anything else (independent review L41).
+ */
+function historiesByTx(entries: ActivityEntry[]): (txHash: string) => HistoryClass {
+  const byTx = new Map(entries.map((e) => [e.txHash, e]));
+  const bySession = new Map<number, HistoryClass[]>();
+  for (const e of entries) {
+    const n = entrySession(e);
+    if (n === undefined) continue;
+    bySession.set(n, [...(bySession.get(n) ?? []), classOf(e)]);
+  }
+  const sessions = new Map([...bySession].map(([n, classes]) => [n, merged(classes)]));
+  return (txHash) => {
+    const e = byTx.get(txHash);
+    const n = e && entrySession(e);
+    return n !== undefined ? sessions.get(n)! : classOf(e);
+  };
 }
 
 /** tx_info, 20 at a time. */

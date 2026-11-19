@@ -1,8 +1,9 @@
 // Withdraw: take money out of the Seedelf balance. Both are Seedelf script
 // spends, built and sent by script-spend.ts:
 //
-// send    to any normal addresses or ADA Handles (the CLI's `sweep`), up to
-//         20 in one transaction: an amount with optional tokens for each, or
+// send    to any addresses on the network (a script's with a warning) or
+//         ADA Handles (the CLI's `sweep`), up to 100 in one transaction (chunk
+//         51, r2a#1 and gap-g8#4): an amount with optional tokens for each, or
 //         everything to a single one (Max: every UTxO, in parts of 20 at
 //         most, saying how many it left and why, `leftWhy`). The change goes
 //         back into the Seedelf balance.
@@ -109,8 +110,9 @@ export class WithdrawService {
         (built) => built.parts,
       );
     // Core's shortfall in the user's words, with what has to stay and the most an amount can be, the tokens not
-    // sent staying: built again on the same UTxOs (blind test §4.4, T05; chunk 23's second review, PY-10). Max
-    // itself sends every token, so that isn't its figure when a token stays.
+    // sent staying: built again on the same UTxOs (blind test §4.4, T05; chunk 23's second review, PY-10), over what
+    // an amount takes, never a UTxO adding less than nothing (chunk 51, r2a#3). Max itself sends every token, so
+    // that isn't its figure when a token stays.
     const parts = await measured(request).catch(async (e: unknown) => {
       const available = utxos.reduce((sum, u) => sum + BigInt(u.value), 0n);
       const most = async () => whole(await measured({ ...request, most: true, payments: [{ ...request.payments[0]!, lovelace: null }] }));

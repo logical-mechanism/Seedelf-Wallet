@@ -131,6 +131,16 @@ export interface ActivityEntry {
    * UTxOs screen (shared/histories.ts). Absent, it's read from `kind`.
    */
   origin?: HistoryClass;
+  /**
+   * The Seedelf history's only: what a public Send paid into the user's own
+   * Seedelfs, noted at its submit as made private from the account that paid
+   * (chunk 51, gap-g8#2), or what a site's transaction the account signed paid
+   * there, once it lands (background/activity.ts `notedEntry`, gap-g1#2). The
+   * account's Activity reads that transaction from the chain, as the payment
+   * it was, since it may have paid others too: this entry never names its row
+   * there.
+   */
+  bySend?: true;
 }
 
 /**
@@ -826,6 +836,13 @@ export interface WithdrawDestination {
    * the same shape (`dappUi.warn.ownKey`; chunk 51, x1a#1).
    */
   stakeElsewhere?: true;
+  /**
+   * A script's address: its payment part is a script (a multisig's, a contract's). The ledger takes the payment, so the
+   * wallet makes it, but with no datum, which some scripts can never spend and some let anyone take, the Seedelf
+   * contract's own address among them. The forms and the reviews say so in one line where the refusal was (chunk 51,
+   * r2a#1; the owner's call of 2026-11-18). A key address whose stake part is a script isn't one.
+   */
+  script?: true;
 }
 
 /** A finished withdrawal, waiting for the user to send it. Amounts are lovelace strings. */
@@ -864,8 +881,11 @@ export interface WithdrawSummary {
 
 /** One recipient of a send from the Cardano account: an address (found by `$handle`, maybe), or someone's seedelf. */
 export interface SendPaid extends WithdrawDestination, Paid {
-  /** Paying someone's seedelf: its full token name, and its tag when it reads as text. `address` is then the wallet contract's. */
-  seedelf?: { name: string; label?: string };
+  /**
+   * Paying someone's seedelf: its full token name, and its tag when it reads as text. `address` is then the wallet
+   * contract's. `own`: one of the user's own, so the payment goes into their private balance (chunk 51, gap-g8#2).
+   */
+  seedelf?: { name: string; label?: string; own?: true };
 }
 
 /** A built and signed payment from the Cardano account, waiting for the user to send it. Amounts are lovelace strings. */
@@ -1082,9 +1102,11 @@ export interface DappTxSummary {
      * Into Seedelf Wallet's contract, by its inline datum: under a register only its key's holder can spend, with none
      * or one anyone can prove (anyone could take it), or under one no proof can meet, "dead" (no one ever can). "hash"
      * for a datum kept by hash, carried or not: no Seedelf Wallet finds or spends such a payment, and the site may keep
-     * its datum (cip30.rs `inspect`; chunk 51, r2sign#1).
+     * its datum (cip30.rs `inspect`; chunk 51, r2sign#1). "script-ref" for a register only its key's holder can spend
+     * on an output carrying a reference script too: its owner's, but no Seedelf Wallet spends it yet and the private
+     * balance leaves it out (chunk 51, l3sign#1).
      */
-    seedelf: "register" | "none" | "dead" | "hash" | null;
+    seedelf: "register" | "script-ref" | "none" | "dead" | "hash" | null;
     /**
      * The account's payment key under a stake part that isn't its own, or
      * none: spendable by the account, but its stake counts for someone else,
@@ -1108,6 +1130,11 @@ export interface DappTxSummary {
     tokens: DappToken[];
     inlineDatum: string | null;
     datumHash: string | null;
+    /**
+     * The reference script it carries, as Koios gives one (cip30.rs `script_of`): kept with the output for a site's
+     * next transaction, which is handed it whole (chunk 51, w2#4). Absent from a summary WebAssembly read before.
+     */
+    referenceScript?: { hash: string | null; size: number | null; type: string | null; bytes: string | null } | null;
   }>;
   /** Minted (positive) or burned. */
   mint: DappToken[];
@@ -1186,6 +1213,18 @@ export interface DappTxSummary {
    * (chunk 51, x1a#3).
    */
   otherMetadata?: true;
+  /**
+   * Its metadata isn't what the body's hash commits to, which is what's signed: other metadata, or none, can go on
+   * chain with the signature. A hash with no metadata, or metadata with no hash, too. Read by the worker from the same
+   * bytes as Transaction details reads (`metadataHashMatches`; chunk 51, G5's notes).
+   */
+  metadataMismatch?: true;
+  /**
+   * A register it pays into Seedelf Wallet's contract under is one the kept contract view holds already, matched by
+   * its points: beside a Seedelf's token, or one of the wallet's own UTxOs. The site wrote it, so anyone can see whose
+   * Seedelf it pays. Added by the worker, asking nobody (chunk 51, x1a#2).
+   */
+  registerOnChain?: true;
   validFrom: number | null;
   validUntil: number | null;
   /** The account's keys that sign: `0/3`, `1/0`, `stake`, `drep` (CIP-95). */
@@ -1337,6 +1376,8 @@ export type TxYours =
   | { kind: "account"; account: number; stakeElsewhere?: true }
   | { kind: "private" }
   | { kind: "seedelf" }
+  /** Under the user's register with a reference script beside it: theirs, but no Seedelf Wallet spends it yet (chunk 51, l3sign#1). */
+  | { kind: "unspendable" }
   | { kind: "session"; index: number };
 
 export interface TxCredential {
@@ -1717,9 +1758,10 @@ export interface SwapQuote {
   /** Also moved: the account's own collateral, in lovelace. It comes back with the rest. */
   collateral: string;
   /**
-   * Whether the token it gets is one the wallet swaps into: ADA, one on the
-   * wallet's own list, or one Minswap's verified list has, by its ID. Anyone
-   * can name a token like a known one: false, and the wallet won't fund it.
+   * Whether the token it gets is one the wallet swaps into as it is: ADA, one
+   * on the wallet's own list, or one Minswap's verified list has, by its ID.
+   * Anyone can name a token like a known one: false, and the wallet funds it
+   * only once the user turns on "Swap into it anyway" (chunk 51, gap-g8#8).
    */
   verified?: boolean;
   /** Where Lovejoin is on, what bringing the session back through it is expected to take. */
@@ -1808,6 +1850,12 @@ export interface SwapLovejoin {
 export interface LovejoinBoxValue {
   lovelace: string;
   token?: TokenQuantity;
+  /**
+   * A review's, of a pool it offers: its boxes can't pay their own way back today (`stuck`), or come back and can't
+   * pay out part of themselves on its own (`cantPayPart`), so Change's list says so beside it (chunk 51, gap-g5#1).
+   */
+  stuck?: true;
+  cantPayPart?: true;
 }
 
 /** A transaction the wallet built or signed for a session. `confirmed` once the chain has it. */
@@ -2260,6 +2308,11 @@ export interface LovejoinTokenWay {
    * come back by Bring one back. Chosen as any pool, and said (the owner's call 34, 2026-10-19).
    */
   stuck?: true;
+  /**
+   * The pool chosen for it has boxes that come back but can't then pay out part of themselves on their own (under
+   * S0d's least): chosen as any pool, and said, as `stuck` is (chunk 51, gap-g5#1). None where `stuck` says more.
+   */
+  cantPayPart?: true;
 }
 
 /** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */
@@ -2359,6 +2412,11 @@ export interface LovejoinPublicSummary {
   fellBack?: string;
   /** Mixing again four a mix, where four takes fewer of the account's boxes than three would: how many three would. */
   atThree?: number;
+  /**
+   * Mixing again: fewer of the account's boxes go than the pool has room for, as many as the account's largest UTxO of
+   * ADA alone pays for, since one pays every mix (chunk 51, gap-g2#1). Its review says so, and that the rest wait.
+   */
+  adaShort?: true;
 }
 
 /** The wallet's boxes in Lovejoin's pool, and when each is due back (ms). */
@@ -2400,6 +2458,12 @@ export interface LovejoinStatus {
    */
   deposits?: Array<{ txHash: string; txIndex: number }>;
   /**
+   * Of `deposits`: boxes a deposit no key of the phrase paid put in under its key, someone else's or another device's
+   * session the wallet doesn't know (chunk 51, e1a#1). Mix my boxes again leaves them out, as it leaves `fromPublic`
+   * out; Pay from my private balance anyway takes them, which ties the mix to whoever put them in.
+   */
+  someoneElse?: Array<{ txHash: string; txIndex: number }>;
+  /**
    * Its boxes a mix from any of its public accounts put where they are: that
    * account's, which paid for it in the open. Mixed again, that account pays,
    * or the private balance ties itself to it (privacy review §2.10).
@@ -2417,6 +2481,12 @@ export interface LovejoinStatus {
    * in its own `pools` entry.
    */
   bootstrap?: Array<{ txHash: string; txIndex: number }>;
+  /**
+   * Of `boxes`, those a chain the wallet built and keeps for Send will spend (its reservation, until it's sent or ten
+   * minutes pass): none of them comes back meanwhile, so the escape hatch's question counts only the others, as the
+   * worker picks among them (chunk 51, gap-g2#2). The classic pool's; each token pool's in its own `pools` entry.
+   */
+  reserved?: Array<{ txHash: string; txIndex: number }>;
   /** Its chains that aren't all sent: being sent (no withdraw meanwhile), or stopped partway. */
   chains: LovejoinChainView[];
   /**
@@ -2466,9 +2536,12 @@ export interface LovejoinPoolStatus {
   notMixed: Array<{ txHash: string; txIndex: number; pool?: string }>;
   unsure?: Array<{ txHash: string; txIndex: number; pool?: string }>;
   deposits?: Array<{ txHash: string; txIndex: number; pool?: string }>;
+  someoneElse?: Array<{ txHash: string; txIndex: number; pool?: string }>;
   fromPublic: Array<{ txHash: string; txIndex: number; pool?: string }>;
   otherAccounts?: Array<{ txHash: string; txIndex: number; pool?: string; account: number }>;
   bootstrap?: Array<{ txHash: string; txIndex: number; pool?: string }>;
+  /** As LovejoinStatus's `reserved` (chunk 51, gap-g2#2). */
+  reserved?: Array<{ txHash: string; txIndex: number; pool?: string }>;
   /**
    * A box of it can't pay its own way back under today's parameters (chunk 34's escape hatch): what's left after
    * the withdraw's fee, and what the Seedelf output needs. Said whether or not the wallet has boxes there: a new box
@@ -2476,6 +2549,13 @@ export interface LovejoinPoolStatus {
    * Bring one back, paid from the private balance or the public account, does (`lovejoin-withdraw-now`'s `paid`).
    */
   cantComeBack?: { has: string; needs: string };
+  /**
+   * A box of it comes back, but then can't pay out part of itself on its own under today's parameters: it's under
+   * S0d's least, so a payment of part of one is spent with other money, which ties the two. Used as any pool, and
+   * said wherever it's offered (chunk 51, gap-g5#1, as the owner's call 34 has it for `cantComeBack`). None where
+   * `cantComeBack` says more.
+   */
+  cantPayPart?: true;
   /**
    * It takes no new box under today's parameters, and why (chunk 34's §2, usable): a mix, a Bootstrap and mixing again
    * into it are refused, from either side, whether or not the wallet has boxes there. Measured once an epoch (1.6.0's
@@ -2515,8 +2595,13 @@ export interface LovejoinUnusable {
  * it. Amounts in lovelace.
  */
 export interface LovejoinLaunchTerms {
-  /** The least a box may hold: one comes back and pays part of itself on its own. */
+  /**
+   * S0d's least: a box of at least this comes back and pays part of itself on its own. A start under it says so on
+   * its review, never refused (chunk 51, gap-g8#6).
+   */
   least: string;
+  /** The network's minimum for such a box, what a mix's output must hold: the only value a start is refused under. */
+  minimum?: string;
   /** What the form suggests: the least with a margin, rounded up to 0.5 ₳. */
   suggested: string;
   /** The most a token pool's box may hold; none for an ADA pool. */
@@ -2552,6 +2637,16 @@ export interface LovejoinLaunchSummary {
    * said on the review, never refused (lovejoin-launch.ts; 1.6.0's release review, 318-worker#1).
    */
   startedBefore?: { txHash: string; at: number };
+  /**
+   * Its box is under S0d's least under the parameters it was built under (`terms`' least): a box back from the pool
+   * can't pay out part of itself on its own. Said on the review, never refused (the owner's call, chunk 51's gap-g8#6).
+   */
+  least?: string;
+  /**
+   * A box of the pool can't even pay its own way back: what's left after the withdraw's fee, and what coming back
+   * needs, as a found pool's `cantComeBack` says it. Said on the review, never refused (gap-g8#6).
+   */
+  cantComeBack?: { has: string; needs: string };
 }
 
 /** A chain through Lovejoin the wallet sent that isn't all sent. */
@@ -2630,7 +2725,9 @@ export interface LovejoinChainTx {
  * `notMixed`: how many the last pool read found not mixed yet (they wait for
  * Mix my boxes again); `unsure`: of those, how many only because Koios
  * hasn't said yet how they went in, after a restore (independent review
- * M14); `stopped`: how many chains stopped partway.
+ * M14); `someoneElse`: of those, how many someone else, or another device,
+ * put in under the wallet's key, which Home doesn't flag (chunk 51, e1a#1);
+ * `stopped`: how many chains stopped partway.
  */
 export interface LovejoinHeld {
   boxes: number;
@@ -2638,6 +2735,7 @@ export interface LovejoinHeld {
   next: number | null;
   notMixed: number;
   unsure?: number;
+  someoneElse?: number;
   stopped: number;
   /**
    * How many of the wallet's boxes its open Bootstraps hold in the pool (chunk 34's D2: Home shows them apart): they
@@ -2658,6 +2756,7 @@ export interface LovejoinHeld {
     next: number | null;
     notMixed: number;
     unsure?: number;
+    someoneElse?: number;
     /** Its boxes a Bootstrap holds, as `bootstrap` is the classic pool's. */
     bootstrap?: number;
     /** What each of its boxes holds, as the read set has it; none when the pool isn't read this time (34f). */
@@ -2971,9 +3070,16 @@ export interface Requests {
     /**
      * `pools`: Change on its review, the pool for the token it gets by the token's unit, null for none (chunk 34's 34e).
      * `through`: the approval's switch, built the way it's set (chunk 34's 34f): off, the token's boxes aren't funded,
-     * as it all comes back directly. None: Settings'.
+     * as it all comes back directly. None: Settings'. `anyway`: the form's "Swap into it anyway", for a token that
+     * isn't `verified`; without it, such a swap is refused (chunk 51, gap-g8#8).
      */
-    payload: { quote: SwapQuote; display?: { in: SwapSide; out: SwapSide }; pools?: Record<string, string | null>; through?: boolean };
+    payload: {
+      quote: SwapQuote;
+      display?: { in: SwapSide; out: SwapSide };
+      pools?: Record<string, string | null>;
+      through?: boolean;
+      anyway?: boolean;
+    };
     /** `lovejoin`: the quote's, checked against Lovejoin's pool as it is now (privacy review §2.7). */
     result: SessionOutSummary & { lovejoin?: SwapLovejoin };
   };
@@ -3115,8 +3221,19 @@ export interface Requests {
    * pays, which ties the box to the account.
    */
   /** `pool`: with no `box`, the one of this pool's boxes that has waited longest (none: any pool's). */
+  /**
+   * `account`: the escape hatch's, the public account its question named as the one whose box it takes
+   * (hatchAccountOf); none where it named none. A pick that would tie an account it didn't name is asked again
+   * (`askAgain`), never sent (chunk 51, gap-g2#2).
+   */
   "lovejoin-withdraw-now": {
-    payload: { box?: { txHash: string; txIndex: number; pool?: string }; anyway?: boolean; paid?: boolean | "private"; pool?: string };
+    payload: {
+      box?: { txHash: string; txIndex: number; pool?: string };
+      anyway?: boolean;
+      paid?: boolean | "private";
+      pool?: string;
+      account?: number;
+    };
     result: PendingTx;
   };
   /** Every mix in Lovejoin's list, from the device alone (chunk 34's session 1, 5): the hub's (34f). */
@@ -3192,9 +3309,12 @@ export type Message = {
 /**
  * What a refusal is, where a screen acts on it rather than only saying it.
  * `stale`: a reviewed transaction that building again from the chain fixes
- * (background/collateral.ts StaleReviewError).
+ * (background/collateral.ts StaleReviewError). `askAgain`: the escape hatch's
+ * pick would tie an account its question didn't name, so nothing was sent and
+ * the page asks again from a fresh read (lovejoin.ts AskAgainError; chunk 51,
+ * gap-g2#2).
  */
-export type ReplyCode = "stale";
+export type ReplyCode = "stale" | "askAgain";
 
 /**
  * Who turned a `stale` refusal away, where the device can tell (blind test

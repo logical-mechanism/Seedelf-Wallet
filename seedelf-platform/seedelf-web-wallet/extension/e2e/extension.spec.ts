@@ -2326,16 +2326,18 @@ test("send from the public account to a Seedelf: paste its name, see it found, r
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Send publicly" }).click();
 
-  // A whole name only; your own seedelf is Move in's.
+  // A whole name only; your own Seedelf is found and said, never refused (chunk 51, gap-g8#2).
   const to = page.getByLabel("To", { exact: true });
   const note = page.getByTestId("send-to-note");
   await expect(to).toHaveAttribute("placeholder", "addr_test1…, $handle or a Seedelf name");
   await to.fill(theirs.slice(0, 40));
   await expect(note).toContainText("64 characters long, only 0–9 and a–f, and starts 5eed0e1f");
   await to.fill(mine);
-  await expect(note).toContainText("That Seedelf is yours. To put money into your private balance, use Make private.");
+  await expect(note).toContainText("Found: web-wallet");
+  await expect(page.getByTestId("send-own-seedelf")).toHaveText("This Seedelf is yours: the payment goes into your private balance.");
   await to.fill(` ${theirs.slice(0, 32).toUpperCase()} ${theirs.slice(32)} `);
   await expect(note).toContainText("Found: This is a test.");
+  await expect(page.getByTestId("send-own-seedelf")).toHaveCount(0);
   await expect(page.getByText("went from your public account to a private balance, though not whose")).toBeVisible();
   await page.getByLabel("Amount", { exact: true }).fill("5");
   await snap(page, "send-seedelf-form");
@@ -2503,7 +2505,9 @@ test("create a Seedelf from the private balance: tag rules, review, and nothing 
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await page.getByRole("button", { name: "Create a Seedelf" }).click();
   await page.getByRole("radio", { name: "Private balance" }).click();
-  await expect(page.getByTestId("mint-from-note")).toContainText("Only money others paid you keeps the Seedelf apart from your public account");
+  await expect(page.getByTestId("mint-from-note")).toContainText(
+    "Only boxes back from Lovejoin and money others paid you keep the Seedelf apart from your public account",
+  );
 
   // The tag: printable ASCII, 15 characters at most, previewed as it will read.
   const tag = page.getByLabel("Tag (optional, anyone can read it)");
@@ -2511,7 +2515,8 @@ test("create a Seedelf from the private balance: tag rules, review, and nothing 
   await expect(page.getByTestId("mint-preview")).toContainText("With no tag, it's listed by its name alone");
   await expect(page.getByTestId("mint-preview")).not.toContainText("Unnamed");
   await tag.fill("héllo");
-  await expect(page.getByRole("alert")).toContainText("A tag can't use “é”");
+  // The wallet's rule, said as its own: the chain takes any bytes (chunk 51, gap-g8#1).
+  await expect(page.getByRole("alert")).toContainText("Seedelf Wallet can't show “é” in a tag");
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
   await tag.fill("a tag far too long for it");
   await expect(tag).toHaveValue("a tag far too l");
@@ -2807,8 +2812,9 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   // Slippage: its own setting, and a quote to match.
   await page.getByRole("button", { name: "Slippage: 1%" }).click();
   const settings = page.getByRole("dialog", { name: "Slippage" });
-  await settings.getByLabel("Your own").fill("30");
-  await expect(settings).toContainText("Between 0.1% and 20%");
+  // Anything over none and under all of it (chunk 51, gap-g8#7).
+  await settings.getByLabel("Your own").fill("100");
+  await expect(settings).toContainText("Between 0.01% and 99.99%");
   await settings.getByLabel("Your own").fill("2");
   await settings.getByRole("button", { name: "Done" }).click();
   await expect(quote).toContainText("Slippage2%");
@@ -4006,7 +4012,7 @@ test("a private swap paused by a price move, then stopped: everything comes back
   expect(swaps.calls.map((c) => c.path)).not.toContain("build-tx");
 });
 
-test("a private swap into a token neither listed nor verified by Minswap: the picker keeps it apart, and it can't be reviewed", async ({
+test("a private swap into a token neither listed nor verified by Minswap: the picker keeps it apart, and it's reviewed only behind the switch", async ({
   context,
   koios,
   swaps,
@@ -4030,17 +4036,29 @@ test("a private swap into a token neither listed nor verified by Minswap: the pi
   await snap(page, "swap-picker-unverified");
   await held.click();
 
-  // Minswap's verified list doesn't have it by its ID: the quote says so, and Review stays off.
+  // Minswap's verified list doesn't have it by its ID: the quote says so, with the ID to check, and Review waits for
+  // "Swap into it anyway", off to begin with (chunk 51, gap-g8#8).
+  const id = `${ownedUtxos[1].asset_list[0].policy_id}${ownedUtxos[1].asset_list[0].asset_name}`;
   const unverified = page.getByTestId("swap-unverified");
   await expect(unverified).toContainText("Not verified by Minswap");
-  await expect(unverified).toContainText("so the wallet won't swap into it");
+  await expect(unverified).toContainText("so check the ID before you swap into it");
+  await expect(unverified).toContainText(id);
   await expect(page.getByTestId("swap-out")).not.toBeEmpty();
   await expect(page.getByRole("button", { name: "Not verified by Minswap" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Review swap" })).toHaveCount(0);
+  const anyway = page.getByRole("switch", { name: "Swap into it anyway" });
+  await expect(anyway).toHaveAttribute("aria-checked", "false");
   await snap(page, "swap-unverified");
   // Asked about by its ID alone; nothing was built or sent.
-  const id = `${ownedUtxos[1].asset_list[0].policy_id}${ownedUtxos[1].asset_list[0].asset_name}`;
   expect(swaps.calls.filter((c) => c.path === "tokens").map((c) => c.body.query)).toContain(id);
+  expect(swaps.calls.map((c) => c.path)).not.toContain("build-tx");
+  expect(koios.submitted).toHaveLength(0);
+
+  // Turned on, Review builds the funding: reviewed, nothing sent.
+  await anyway.click();
+  await expect(anyway).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("button", { name: "Review swap" }).click();
+  await expect(page.getByTestId("swap-summary")).toBeVisible();
   expect(swaps.calls.map((c) => c.path)).not.toContain("build-tx");
   expect(koios.submitted).toHaveLength(0);
 });
@@ -4703,7 +4721,8 @@ test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async (
   expect(koios.calls.slice(lookups).sort()).toEqual(["drep_info", "drep_metadata"]);
   await snap(page, "voting");
   await page.getByRole("button", { name: "Review" }).click();
-  await expect(page.getByTestId("staking-review")).toContainText("Voting power toLogical Mechanism dRep");
+  // Said as a DRep's, so a name can't pass for a choice (chunk 51, gap-g7#1).
+  await expect(page.getByTestId("staking-review")).toContainText("Voting power toDRep · Logical Mechanism dRep");
   // The DRep's inactive warning stays on its review (GV-5), and Back finds the choice as it was (ST-11).
   await expect(page.getByTestId("drep-inactive-review")).toContainText("hasn't voted lately");
   await page.getByRole("button", { name: "Back", exact: true }).click();
@@ -4931,11 +4950,12 @@ test("send from the public account with a note: its count, the review, and what 
   await page.getByLabel("Amount", { exact: true }).fill("3");
   const note = page.getByLabel("Note (optional)");
   await note.fill("Invoice 42");
-  await expect(page.getByTestId("send-note-hint")).toHaveText("10/64. Anyone can read it, for good.");
-  // At most 64 characters, and a longer one pasted says it was cut (chunk 23's second review, PY-12).
-  await note.fill("x".repeat(80));
-  await expect(note).toHaveValue("x".repeat(64));
-  await expect(page.getByTestId("send-note-cut")).toHaveText("Cut to 64 characters, the most a note can hold.");
+  await expect(page.getByTestId("send-note-hint")).toHaveText("10/500. Anyone can read it, for good.");
+  // At most 500 characters, what Activity keeps of a note (chunk 51, gap-g8#3), and a longer one pasted says it was cut
+  // (chunk 23's second review, PY-12).
+  await note.fill("x".repeat(520));
+  await expect(note).toHaveValue("x".repeat(500));
+  await expect(page.getByTestId("send-note-cut")).toHaveText("Cut to 500 characters, the most a note can hold.");
   await note.fill("Invoice 42");
   await expect(page.getByTestId("send-note-cut")).toHaveCount(0);
   await page.getByRole("button", { name: "Review" }).click();

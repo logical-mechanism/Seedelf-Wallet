@@ -28,8 +28,9 @@ export function activityTitle(e: ActivityEntry): string {
   switch (e.kind) {
     case "received":
       // Found by the private history's first reading (a restore, another profile): who paid isn't known
-      // (independent review L38).
-      return t(e.origin?.origin === "unknown" ? "activity.title.alreadyPrivate" : "activity.title.received");
+      // (independent review L38). Or made by a spend of this phrase's in another profile, which spent the wallet's
+      // own UTxOs and so carries their history: no one else paid it (chunk 51, gap-g9#1).
+      return t(e.origin && e.origin.origin !== "received" ? "activity.title.alreadyPrivate" : "activity.title.received");
     case "sent":
       return t("activity.title.sent");
     case "move-in":
@@ -124,9 +125,9 @@ export function poolOf(s: ActivityStaking): string | undefined {
   return s.pool ? (s.ticker ?? shortHex(s.pool, 10, 6)) : undefined;
 }
 
-/** The vote delegated, in words. */
+/** The vote delegated, in words: a DRep's name from the list, as "DRep · name" (voteLabel). */
 export function voteOf(network: NetworkName, s: ActivityStaking): string | undefined {
-  return s.drep ? voteLabel(s.drep, drepName(network, s.drep)) : undefined;
+  return s.drep ? voteLabel(s.drep, { name: drepName(network, s.drep) }) : undefined;
 }
 
 /** A staking entry's line under its title: "LOGIC", "Always abstain", "LOGIC · Always abstain", "2 governance actions". */

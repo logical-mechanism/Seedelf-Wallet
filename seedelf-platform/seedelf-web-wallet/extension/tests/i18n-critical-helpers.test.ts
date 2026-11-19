@@ -51,6 +51,9 @@ const SHARED_WORDS: Record<string, string> = {
   "format.vote.abstain": "a vote option, by the label the Voting screen offers it with",
   "format.vote.noConfidence": "a vote option, by the label the Voting screen offers it with",
   "format.vote.notDelegated": "a vote, by the label the Staking screen shows it with",
+  // voteLabel's, since chunk 51 (gap-g7#1): a site's certificate warnings call it with neither a name nor the flag.
+  "format.vote.drep": "a DRep, by the label every screen says the vote with",
+  "drep.yourOwn": "the account's own DRep, by the label the Voting screen offers it with",
   "tx.proposal.hardFork": "a governance action's kind, as Transaction details names a proposal's",
   "tx.proposal.information": "a governance action's kind, as Transaction details names a proposal's",
   "tx.proposal.newConstitution": "a governance action's kind, as Transaction details names a proposal's",
@@ -112,7 +115,6 @@ describe("a warning's words from outside its own JSX", () => {
     ["swaps.back.privacy.neverAgain", "after", "ui/components/LovejoinReturn.tsx"],
     // A state: what each alert's own screen sets it to, Screen's through its `error` prop.
     ["shared.seedelf.warn.nameRule", "read", "ui/components/Destination.tsx"],
-    ["shared.seedelf.warn.ownFromAccount", "read", "ui/components/Destination.tsx"],
     ["unlock.warn.wrongPassword", "error", "ui/screens/Unlock.tsx"],
     ["create.warn.wordMismatch", "error", "ui/components/Screen.tsx"],
     ["settings.password.warn.currentFirst", "error", "ui/components/Screen.tsx"],

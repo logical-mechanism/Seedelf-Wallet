@@ -23,7 +23,7 @@ use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse, extract_bytes_with_logging};
 use serde_json::Value;
 
-use crate::address::{collateral_address, is_not_a_script, is_on_correct_network, wallet_contract};
+use crate::address::{collateral_address, is_on_correct_network, wallet_contract};
 use crate::assets::{Asset, Assets};
 use crate::constants::{COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO};
 use crate::data_structures::{create_mint_redeemer, create_spend_redeemer};
@@ -410,6 +410,21 @@ pub fn minimum_deposit(params: &ProtocolParameters, tokens: &Assets) -> Result<u
         .sum()
 }
 
+/// What `utxo` adds to a spend from the Seedelf balance: its ADA less the
+/// least its own tokens need back there as change ([`minimum_deposit`], 20 to
+/// an output), with its sign. A stranger's pile of tokens at their least on
+/// chain needs more than it holds: it adds less than nothing, so selection
+/// takes it after everything else (chunk 51, r2a#3), as a session's return
+/// leaves such a UTxO behind (`plan_return`, independent review H1). An error
+/// where its value can't be read.
+pub fn adds(params: &ProtocolParameters, utxo: &UtxoResponse) -> Result<i128> {
+    let (lovelace, tokens) = crate::utxos::assets_of(vec![utxo.clone()])?;
+    if tokens.is_empty() {
+        return Ok(i128::from(lovelace));
+    }
+    Ok(i128::from(lovelace) - i128::from(minimum_deposit(params, &tokens)?))
+}
+
 /// Change outputs to a key address: `tokens` split `MAXIMUM_TOKENS_PER_UTXO`
 /// to an output, the last output carrying the rest of `lovelace`. No output at
 /// all when there's nothing to return. `short` is the error when the
@@ -783,10 +798,11 @@ pub fn move_in(
     )
 }
 
-/// Send: the Cardano account pays `to`, a key address on this network
-/// (`network_flag`: `true` is preprod), its tokens `MAXIMUM_TOKENS_PER_UTXO`
-/// to an output ([`Payee::Address`]). The UTxOs are chosen, the change made,
-/// and `staking` and `invalid_hereafter` carried, as for [`move_in`].
+/// Send: the Cardano account pays `to`, an address on this network
+/// ([`is_payable_address`]; `network_flag`: `true` is preprod), its tokens
+/// `MAXIMUM_TOKENS_PER_UTXO` to an output ([`Payee::Address`]). The UTxOs
+/// are chosen, the change made, and `staking` and `invalid_hereafter`
+/// carried, as for [`move_in`].
 #[allow(clippy::too_many_arguments)]
 pub fn account_send(
     params: &ProtocolParameters,
@@ -813,8 +829,9 @@ pub fn account_send(
 }
 
 /// Send to several: the Cardano account pays each of `recipients`, in the
-/// order given, then the change. Each is a key address on this network or a
-/// Seedelf (see [`Payee::Seedelf`]), with its own amount and tokens. Max pays a
+/// order given, then the change. Each is an address on this network
+/// ([`is_payable_address`]) or a Seedelf (see [`Payee::Seedelf`]), with its
+/// own amount and tokens. Max pays a
 /// single recipient. The UTxOs are chosen, the change made, and `staking`
 /// and `invalid_hereafter` carried, as for [`move_in`]. A `note` goes on the
 /// transaction as CIP-20's message, which anyone can read; the fee pays for
@@ -1538,7 +1555,7 @@ pub enum RestTo {
     /// re-randomization of its register, which must be [`is_payable`]. Tokens
     /// go `MAXIMUM_TOKENS_PER_UTXO` to an output ([`deposit_outputs`]).
     Seedelf(Register),
-    /// A key address on this network ([`is_payable_address`]). Tokens go
+    /// An address on this network ([`is_payable_address`]). Tokens go
     /// `MAXIMUM_TOKENS_PER_UTXO` to an output.
     Address(Address),
 }
@@ -2441,8 +2458,10 @@ pub enum Purpose {
     /// Send or Make public: own money first, a box back from Lovejoin last.
     #[default]
     Pay,
-    /// A stealth mint: received money first, since the new Seedelf is tied to
-    /// whatever pays for it.
+    /// A stealth mint, and a pool's start from the Seedelf balance: the new
+    /// Seedelf is tied to whatever pays for it, so a box back from Lovejoin
+    /// first, which no payer knows, then received money, which its payer does
+    /// (chunk 51, gap-g1#1 (b), the owner's B15).
     Mint,
     /// A private session's funding or top-up: received money, or a box that
     /// pays alone, first; another session's money last. `session` is the
@@ -2463,8 +2482,8 @@ impl Purpose {
                 Lovejoin => 4,
             },
             Purpose::Mint => match class.origin {
-                Received => 0,
-                Lovejoin => 1,
+                Lovejoin => 0,
+                Received => 1,
                 Unknown => 2,
                 Own => 3,
                 Session => 4,
@@ -2577,6 +2596,20 @@ fn holds_tokens(utxo: &UtxoResponse) -> bool {
     utxo.asset_list.as_ref().is_some_and(|a| !a.is_empty())
 }
 
+/// The outpoints of `utxos` that add less than nothing to a spend ([`adds`]):
+/// a stranger's pile of tokens at their least on chain, say. One whose value
+/// can't be read keeps its place.
+fn less_than_nothing(
+    params: &ProtocolParameters,
+    utxos: &[UtxoResponse],
+) -> BTreeSet<(String, u64)> {
+    utxos
+        .iter()
+        .filter(|u| adds(params, u).is_ok_and(|a| a < 0))
+        .map(|u| (u.tx_hash.clone(), u.tx_index))
+        .collect()
+}
+
 /// Picks as few of `available` as it can, keeping different histories apart
 /// when it can (see the section comment above), and hands each choice to
 /// `attempt` until one succeeds. Only "not enough" failures move on. Never
@@ -2604,7 +2637,17 @@ fn holds_tokens(utxo: &UtxoResponse) -> bool {
 ///    inputs (the largest first, tokens or not), or with UTxOs holding tokens
 ///    last, for when their tokens make it too large; and at the last the
 ///    CLI's own order, so nothing the CLI pays is refused.
+///
+/// In every order, the CLI's too, a UTxO that adds less than nothing
+/// ([`adds`]: its tokens need more change than it holds) comes after
+/// everything else, boxes included, everything else keeping its place. So
+/// it's spent only for a token it holds that's being sent, or when nothing
+/// else pays, never refused: a stranger's pile of tokens no longer ties the
+/// user's ADA to it as its change's least, nor merges more boxes than a
+/// payment needs (chunk 51, r2a#3; `plan_return`'s rule for a session's
+/// return, independent review H1, ranked rather than left out).
 pub(crate) fn select_script_inputs<T>(
+    params: &ProtocolParameters,
     available: &[UtxoResponse],
     needed: &Assets,
     floor: u64,
@@ -2633,10 +2676,12 @@ pub(crate) fn select_script_inputs<T>(
         .filter(|u| !mandatory.iter().any(|m| same_utxo(m, u)))
         .cloned()
         .collect();
+    let piles = less_than_nothing(params, &rest);
+    let last = |u: &UtxoResponse| piles.contains(&(u.tx_hash.clone(), u.tx_index));
     if !histories.blind(available) {
-        return apart(mandatory, rest, floor, histories, attempt);
+        return apart(mandatory, rest, floor, histories, last, attempt);
     }
-    rest.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
+    rest.sort_by_key(|u| (last(u), holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
     let mut last_error = None;
     for k in 0..=rest.len() {
         let selected: Vec<UtxoResponse> = mandatory.iter().chain(&rest[..k]).cloned().collect();
@@ -2672,9 +2717,9 @@ enum Tried<T> {
 /// the smallest first. One of ADA alone that was short says no smaller one
 /// of ADA alone will do, and only [`MAX_TOKEN_SINGLES`] holding tokens are
 /// tried.
-fn one_more<'a, T>(
+fn one_more<'a, T, K: Ord>(
     mut candidates: Vec<&'a UtxoResponse>,
-    rank: impl Fn(&UtxoResponse) -> u8,
+    rank: impl Fn(&UtxoResponse) -> K,
     try_with: &mut impl FnMut(&[&'a UtxoResponse]) -> Tried<T>,
 ) -> Option<T> {
     candidates.sort_by_key(|u| (rank(u), lovelace_of(u)));
@@ -2728,12 +2773,15 @@ fn grow<'a, T>(
 }
 
 /// [`select_script_inputs`] with histories known: `base` are the UTxOs
-/// holding the tokens sent, which every choice spends, and `rest` the others.
+/// holding the tokens sent, which every choice spends, and `rest` the others,
+/// of which those `last` says add less than nothing come after everything
+/// else in every step and order.
 fn apart<T>(
     base: Vec<UtxoResponse>,
     rest: Vec<UtxoResponse>,
     floor: u64,
     histories: &Histories,
+    last: impl Fn(&UtxoResponse) -> bool,
     mut attempt: impl FnMut(&[UtxoResponse]) -> Result<T>,
 ) -> Result<T> {
     let purpose = &histories.purpose;
@@ -2777,9 +2825,11 @@ fn apart<T>(
         return Ok(built);
     }
 
-    // 1. One more UTxO: by the purpose's order, the smallest first.
+    // 1. One more UTxO: by the purpose's order, the smallest first; one that
+    // adds less than nothing last, here and in every step and order below.
+    let ranked = |u: &UtxoResponse| (last(u), purpose.rank(&class(u)));
     let singles: Vec<&UtxoResponse> = rest.iter().filter(|u| joins_base(u)).collect();
-    if let Some(built) = one_more(singles, |u| purpose.rank(&class(u)), &mut try_with) {
+    if let Some(built) = one_more(singles, ranked, &mut try_with) {
         return Ok(built);
     }
 
@@ -2799,7 +2849,7 @@ fn apart<T>(
         (purpose.rank(c), std::cmp::Reverse(total), c.id.clone())
     });
     for (_, rows) in &mut classes {
-        rows.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
+        rows.sort_by_key(|u| (last(u), holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
         for k in 2..=rows.len() {
             match try_with(&rows[..k]) {
                 Tried::Built(built) => return Ok(built),
@@ -2818,7 +2868,7 @@ fn apart<T>(
             .iter()
             .filter(|u| !joins_base(u) && purpose.tier(&class(u)) == 0)
             .collect();
-        if let Some(built) = one_more(others, |u| purpose.rank(&class(u)), &mut try_with) {
+        if let Some(built) = one_more(others, ranked, &mut try_with) {
             return Ok(built);
         }
     }
@@ -2842,10 +2892,15 @@ fn apart<T>(
     //    Boxes that fail alone fail with more.
     // d. The CLI's own order, boxes among the rest by size: never refused
     //    what the CLI would pay.
+    //
+    // In each, a UTxO that adds less than nothing comes after everything
+    // else, boxes included (chunk 51, r2a#3). A box holds no tokens, so it
+    // never does.
     let tier = |u: &UtxoResponse| purpose.tier(&class(u));
     let mut by_history: Vec<&UtxoResponse> = rest.iter().collect();
     by_history.sort_by_key(|u| {
         (
+            last(u),
             tier(u),
             !joins_base(u),
             purpose.rank(&class(u)),
@@ -2856,6 +2911,7 @@ fn apart<T>(
     let mut by_tier: Vec<&UtxoResponse> = rest.iter().collect();
     by_tier.sort_by_key(|u| {
         (
+            last(u),
             tier(u),
             !joins_base(u),
             holds_tokens(u),
@@ -2866,10 +2922,18 @@ fn apart<T>(
     let mut boxes: Vec<&UtxoResponse> = rest.iter().filter(|u| is_box(u)).collect();
     boxes.sort_by_key(|u| (!joins_base(u), std::cmp::Reverse(lovelace_of(u))));
     let mut largest: Vec<&UtxoResponse> = rest.iter().filter(|u| !is_box(u)).collect();
-    largest.sort_by_key(|u| (tier(u), !joins_base(u), std::cmp::Reverse(lovelace_of(u))));
+    largest.sort_by_key(|u| {
+        (
+            last(u),
+            tier(u),
+            !joins_base(u),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
     let mut tokens_last: Vec<&UtxoResponse> = rest.iter().filter(|u| !is_box(u)).collect();
     tokens_last.sort_by_key(|u| {
         (
+            last(u),
             holds_tokens(u),
             tier(u),
             !joins_base(u),
@@ -2893,7 +2957,7 @@ fn apart<T>(
                 .map(move |others| (boxes[..j].iter().chain(others.iter()).copied().collect(), j))
         });
     let mut blind: Vec<&UtxoResponse> = rest.iter().collect();
-    blind.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
+    blind.sort_by_key(|u| (last(u), holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
     let mut failed = false;
     let mut boxes_fail = false;
     // Whether an order grown whole was short: everything together.
@@ -3093,11 +3157,18 @@ pub fn mint_apart(
     signer: Hash<28>,
 ) -> Result<SeedelfMint> {
     let floor = seedelf_minimum_lovelace(&chain.params)?;
-    select_script_inputs(available, &Assets::new(), floor, histories, |inputs| {
-        let built = mint_from(chain, inputs, label, seedelf, change_owner, signer)?;
-        built.spend.estimate()?;
-        Ok(built)
-    })
+    select_script_inputs(
+        &chain.params,
+        available,
+        &Assets::new(),
+        floor,
+        histories,
+        |inputs| {
+            let built = mint_from(chain, inputs, label, seedelf, change_owner, signer)?;
+            built.spend.estimate()?;
+            Ok(built)
+        },
+    )
 }
 
 /// A seedelf mint spending exactly `inputs`.
@@ -3222,6 +3293,7 @@ pub fn transfer_apart(
         .iter()
         .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
     select_script_inputs(
+        &chain.params,
         available,
         &needed,
         paid_out(&outputs),
@@ -3348,13 +3420,17 @@ fn ada(lovelace: u64) -> String {
 // contract, or to an address with `ScriptSpend::change_to`.
 // ---------------------------------------------------------------------------
 
-/// Whether a withdrawal can pay `addr`: a Shelley address on this network
-/// with no script in it. A script output would carry no datum, which locks
-/// it at most scripts.
+/// Whether a payment can go to `addr`: a Shelley address on this network,
+/// as the ledger takes one, whatever its parts. A stake address, a Byron
+/// address and another network's can't be paid here. A key address staked by
+/// a script (`addr1y…`) is an ordinary payee: only its payment key spends it.
+/// A script's address ([`crate::address::is_script_address`]) takes a payment
+/// too, with no datum, which some scripts can never spend and some let anyone
+/// take, the Seedelf contract's own address among them: the callers say so,
+/// the ledger refusing neither (chunk 51, r2a#1; the owner's call of
+/// 2026-11-18).
 pub fn is_payable_address(addr: &Address, network_flag: bool) -> bool {
-    matches!(addr, Address::Shelley(_))
-        && is_not_a_script(addr.clone())
-        && is_on_correct_network(addr.clone(), network_flag)
+    matches!(addr, Address::Shelley(_)) && is_on_correct_network(addr.clone(), network_flag)
 }
 
 fn check_address(chain: &Chain, addr: &Address) -> Result<()> {
@@ -3365,7 +3441,7 @@ fn check_payable(addr: &Address, network_flag: bool) -> Result<()> {
     if !is_payable_address(addr, network_flag) {
         let network = if network_flag { "preprod" } else { "mainnet" };
         bail!(
-            "Payments go to a normal {network} address: not a script, stake or other network's address"
+            "Payments go to an address on {network}: not a stake, Byron or other network's address"
         );
     }
     Ok(())
@@ -3511,6 +3587,7 @@ pub fn sweep_many_apart(
         .iter()
         .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
     select_script_inputs(
+        &chain.params,
         available,
         &needed,
         paid_out(&outputs),

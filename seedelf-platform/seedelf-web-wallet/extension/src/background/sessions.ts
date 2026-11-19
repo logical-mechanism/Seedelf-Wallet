@@ -95,6 +95,7 @@ import {
   type LovejoinDepth,
   type LovejoinWidth,
 } from "../shared/preferences";
+import { SLIPPAGE_MAX, SLIPPAGE_MIN, slippageTaken } from "../shared/slippage";
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId, txInputs, txWithdrawals } from "./cbor";
 import { collateralFits } from "./coin-control";
@@ -163,6 +164,7 @@ import {
   type LovejoinChain,
   type LovejoinPool,
   type LovejoinService,
+  type PoolSaid,
   REWARDS_MOVED,
   REWARDS_MOVED_REVIEW,
 } from "./lovejoin";
@@ -237,6 +239,11 @@ interface TokenChoice {
   rooms?: Map<string, { others: number; free: number }>;
   /** The chosen pool's boxes can't pay their own way back today: chosen as any pool, and said (the owner's call 34). */
   stuck?: true;
+  /**
+   * What the review says of each pool it offers (LovejoinService said): its token's way says the chosen one's, and
+   * Change's list each one's (chunk 51, gap-g5#1). Only at Review, as `stuck`.
+   */
+  said?: ReadonlyMap<string, PoolSaid>;
 }
 /** About what bringing one Lovejoin box back costs, paid from the box: a 1-box withdraw measured 0.2897 ₳ on mainnet. */
 export const LOVEJOIN_WITHDRAW_ESTIMATE = 300_000n;
@@ -872,16 +879,19 @@ const LISTED: Record<NetworkName, ReadonlySet<string>> = {
   mainnet: new Set(tokenList.mainnet.map((t) => t.policy + t.name)),
 };
 
-/** Why a swap into a token that isn't verified isn't funded. */
+/** Why a swap into a token that isn't verified isn't funded, unless the user turned on "Swap into it anyway" (outBuild). */
 const UNVERIFIED = () => t("sess.unverified");
 
-/** An ask as the user typed it, checked before Minswap sees it. */
+/**
+ * An ask as the user typed it, checked before Minswap sees it. Its slippage by the form's own range (shared/slippage.ts):
+ * an order takes any minimum, so only none or all of it is refused (chunk 51, gap-g8#7).
+ */
 export function checkAsk(ask: SwapAsk): SwapAsk {
   const token = (id: string) => id === "lovelace" || /^[0-9a-f]{56}([0-9a-f]{2}){0,32}$/.test(id);
   if (!/^[1-9][0-9]*$/.test(ask.amount)) throw new Error(t("sess.enterAmount"));
   if (!token(ask.tokenIn) || !token(ask.tokenOut)) throw new Error(t("sess.notSwappable"));
   if (ask.tokenIn === ask.tokenOut) throw new Error(t("sess.twoDifferent"));
-  if (!(ask.slippage >= 0.1 && ask.slippage <= 20)) throw new Error(t("sess.slippageRange"));
+  if (!slippageTaken(ask.slippage)) throw new Error(t("sess.slippageRange", { min: `${SLIPPAGE_MIN}%`, max: `${SLIPPAGE_MAX}%` }));
   return { amount: ask.amount, tokenIn: ask.tokenIn, tokenOut: ask.tokenOut, slippage: ask.slippage };
 }
 
@@ -1368,8 +1378,16 @@ function mixingAgain(s: SessionRecord): boolean {
  * on with (`from`), though it stopped before any of its own was sent: its
  * next return is a plain one, never a chain built afresh, whose reason a mix
  * would keep as why it never went in (1.6.0's release review, 323-worker#8).
+ *
+ * `done`: a mix whose own return went, its chain in and finished, or straight
+ * back with Lovejoin left out (a return of it, sent and not given up). What
+ * reaches its account after is a stranger's: it comes back directly, never in
+ * a chain over the mix's settings nor with its 5 ₳ mixed as the session's
+ * collateral, and the mix's word on how its own came back stays (`mix.skipped`).
+ * A flag of its own: read as `started`, a finished chain would be marked cut
+ * and its tail resumed (chunk 51, e2b#1).
  */
-function chainSoFar(record: SessionRecord | undefined): { sent: RecordedTx[]; started: boolean } {
+function chainSoFar(record: SessionRecord | undefined): { sent: RecordedTx[]; started: boolean; done: boolean } {
   const chain = record?.chain;
   const since = (at?: number) => (record?.txs ?? []).filter((t) => !t.unsent && (at === undefined || t.at >= at));
   const sent = since(chain?.at);
@@ -1377,7 +1395,9 @@ function chainSoFar(record: SessionRecord | undefined): { sent: RecordedTx[]; st
     !!chain &&
     sent.some((t) => t.txHash === chain.last || (!record?.mix && t.kind === "back" && t.confirmed && !t.replaced));
   const went = chain?.from !== undefined ? since(chain.from) : sent;
-  return { sent, started: !finished && went.some((t) => t.kind === "deposit" || t.kind === "mix") };
+  const wentIn = went.some((t) => t.kind === "deposit" || t.kind === "mix");
+  const backAlready = (record?.txs ?? []).some((t) => t.kind === "back" && !t.unsent && !t.replaced);
+  return { sent, started: !finished && wentIn, done: !!record?.mix && ((finished && wentIn) || backAlready) };
 }
 
 /** Whether a session's record holds `txHash`, not turned away: it went out, or may have. */
@@ -1759,8 +1779,11 @@ export class SessionService {
       ...(skipped ? { skipped } : {}),
       ...(more ? { ifStopped: stopped } : {}),
       ...(token ? { ways: [token.way], ...(funded > 0n ? { fund: token.fund } : {}) } : {}),
-      // What a box holds in each pool the token could go into, for the approval's names and Change (34f).
-      ...(choice?.works.length || choice?.chosen ? { values: valuesOf([...choice.works, ...(choice.chosen ? [choice.chosen] : [])]) } : {}),
+      // What a box holds in each pool the token could go into, for the approval's names and Change (34f), and what its
+      // boxes can't do today, for Change to say (chunk 51, gap-g5#1).
+      ...(choice?.works.length || choice?.chosen
+        ? { values: valuesOf([...choice.works, ...(choice.chosen ? [choice.chosen] : [])], choice.said) }
+        : {}),
     };
   }
 
@@ -1793,7 +1816,10 @@ export class SessionService {
     const named = pools?.[unit];
     const chosen = named === null ? undefined : named === undefined ? works[0] : works.find((p) => p.id === named);
     const stuck = pool && chosen && (await lovejoin.stuck(network, chosen, params));
-    return { unit, works, named, chosen, rooms, ...(stuck ? { stuck: true as const } : {}) };
+    // What its boxes can't do today, of each pool it offers: the token's way says the chosen one's, Change's list each
+    // one's (chunk 51, gap-g5#1). At Review, as `stuck`; from the same measure, once an epoch.
+    const said = pool ? await lovejoin.said(network, works, params) : undefined;
+    return { unit, works, named, chosen, rooms, ...(stuck ? { stuck: true as const } : {}), ...(said ? { said } : {}) };
   }
 
   /**
@@ -1806,7 +1832,7 @@ export class SessionService {
   private async tokenAt(
     network: NetworkName,
     quote: SwapQuote,
-    { unit, works, named, chosen, rooms, stuck }: TokenChoice,
+    { unit, works, named, chosen, rooms, stuck, said }: TokenChoice,
     depth: number,
     width: LovejoinWidth,
     short?: string,
@@ -1834,7 +1860,7 @@ export class SessionService {
         ...(named === null ? { direct: true as const } : {}),
         pools: works.map((p) => p.id),
         ...(skipped ? { skipped } : {}),
-        ...(stuck ? { stuck } : {}),
+        ...(stuck ? { stuck } : chosen && said?.get(chosen.id)?.cantPayPart ? { cantPayPart: true as const } : {}),
         mixes: funding?.mixes ?? 0,
         mixFees: funding?.mixFees ?? "0",
         withdrawFees: ((funding ? BigInt(boxes) : 0n) * LOVEJOIN_WITHDRAW_ESTIMATE).toString(),
@@ -1977,7 +2003,9 @@ export class SessionService {
 
   /**
    * Builds the payment that funds a new session for `quote`: the swap and its costs, and the account's collateral.
-   * `through`: the approval's switch, when the user moved it (chunk 34's 34f); none, Settings'.
+   * `through`: the approval's switch, when the user moved it (chunk 34's 34f); none, Settings'. `anyway`: the form's
+   * "Swap into it anyway", turned on for a token neither listed nor verified by Minswap, which a DEX's order takes all
+   * the same: without it such a swap is refused, the form having said why (chunk 51, gap-g8#8).
    */
   async outBuild(
     network: NetworkName,
@@ -1985,9 +2013,10 @@ export class SessionService {
     display?: { in: SwapSide; out: SwapSide },
     pools?: Record<string, string | null>,
     through?: boolean,
+    anyway?: boolean,
   ): Promise<SessionOutSummary & { lovejoin?: SwapLovejoin }> {
     const ask = checkAsk(quote.ask);
-    if (!(await this.verified(network, ask.tokenOut))) throw new Error(UNVERIFIED());
+    if (!anyway && !(await this.verified(network, ask.tokenOut))) throw new Error(UNVERIFIED());
     const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     // The parameters, once: for the funding, and whether a pool of the token it gets takes a box (34e's review, 9).
@@ -4751,8 +4780,9 @@ export class SessionService {
     // mixes (they're in `recovered.own` alone), so what another browser's chain left at its account goes
     // through Lovejoin as any other session's would, in a chain of its own that never draws the wallet's
     // boxes; its review's switch brings it back directly (1.5.0's release review, C51). The offer of 5 ₳ for a
-    // return's collateral reads it the same way (chainSoFar, lovejoinWantsCollateral).
-    const { sent, started } = chainSoFar(record);
+    // return's collateral reads it the same way (chainSoFar, lovejoinWantsCollateral). A mix whose own return went
+    // (`done`) brings what reaches its account after back directly: a stranger's, never mixed in its name (e2b#1).
+    const { sent, started, done } = chainSoFar(record);
     if (started && record?.chain && !record.chain.stopped) {
       // Nothing is sending the rest: the wallet locked, or the browser closed, partway.
       await this.update(network, index, (r) => {
@@ -4800,9 +4830,11 @@ export class SessionService {
     // as it's built, as Settings' Lovejoin is for any session but a swap. WebAssembly brings it back with the rest
     // where what's left can't pay for that. Nor is the pool read where the account holds no 5 ₳ to mix. Never a
     // Bootstrap's, nor a seed's: their chain is a deposit alone, which runs no script, so their collateral was never
-    // put up, and it comes back with the rest (the owner, 2026-10-23).
+    // put up, and it comes back with the rest (the owner, 2026-10-23). Nor once a mix's own return went: a 5 ₳ at its
+    // account then is a stranger's, not the session's collateral (chunk 51, e2b#1).
     const intoPool =
       !direct &&
+      !done &&
       !depositOnly(record) &&
       rows.some(collateralFits) &&
       lovejoin?.available(network) &&
@@ -4853,7 +4885,7 @@ export class SessionService {
         };
       }
     }
-    if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
+    if (!direct && !started && !done && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
       // Its own collateral, the one its funding paid, else any 5 ₳ of ADA alone at the account (privacy review
       // §2.15). Never a stranger's 5 ₳ carrying a reference script or a datum: the mixes can't put it up. None for a
       // Bootstrap funded with none: taken, 5 ₳ of ADA alone, its own funding in a pool whose boxes make it so, would be
@@ -4974,8 +5006,9 @@ export class SessionService {
         };
       }
     }
-    // A mix stopped before its boxes went in: it's all coming back, unmixed.
-    if (direct && !started && record?.mix && !record.mix.skipped) {
+    // A mix stopped before its boxes went in: it's all coming back, unmixed. Never one whose own return went: Stop on
+    // it brings back only what reached its account after (chunk 51, e2b#1).
+    if (direct && !started && !done && record?.mix && !record.mix.skipped) {
       skipped = t("sess.skip.warn.mixStopped");
       await this.update(network, index, (r) => {
         r.mix!.skipped = skipped;
@@ -5201,13 +5234,15 @@ export class SessionService {
    * through Lovejoin but for the collateral its mixes put up, as buildBack
    * decides it: Lovejoin is here, the return goes through it
    * (throughLovejoin: Settings', for a session brought back by hand), no
-   * chain of it went in partly (chainSoFar), and it wants that collateral
+   * chain of it went in partly, nor is it a mix whose own return went
+   * (chainSoFar's `started`, `done`), and it wants that collateral
    * alone (collateralWanted). The offer of 5 ₳ for it asks the same, so the
    * two agree (1.5.0's release review, C53). `ask`: as a return's build asks
    * (the offer's top-up); the session list's view asks nobody.
    */
   private async lovejoinWantsCollateral(network: NetworkName, s: SessionRecord, rows: KoiosUtxo[], ask = false): Promise<boolean> {
-    if (!this.deps.lovejoin?.available(network) || chainSoFar(s).started || !(await this.throughLovejoin(s))) return false;
+    const so = chainSoFar(s);
+    if (!this.deps.lovejoin?.available(network) || so.started || so.done || !(await this.throughLovejoin(s))) return false;
     // buildBack's own rows, so the two read the same. It changes nothing here: every UTxO WebAssembly can't measure
     // carries a reference script, which neither collateralFits nor spareOf counts (cross-area review X15).
     return (await this.collateralWanted(network, s, rows.filter(measurable), ask)) === true;
