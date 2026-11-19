@@ -274,6 +274,9 @@ describe("a box someone else put in under the wallet's key (chunk 51, e1a#1)", C
     const down = flakyTxInfo(t);
     const held = adaOf(await lj.status("preprod"));
     expect(refs(held.unsure)).toEqual(refs([A, C].map(inAda)));
+    // Neither is called someone else's while the answer is awaited: A, the usual case, is the phrase's own (chunk 51,
+    // time#4, the path kept).
+    expect(refs(held.someoneElse)).toEqual([]);
     await expect(lj.againBoxes("preprod", false, ADA)).rejects.toThrow("The server hasn't said how some of your boxes went in yet");
     // Koios answers: each is told apart by the keys it spent, once.
     down.on = false;
