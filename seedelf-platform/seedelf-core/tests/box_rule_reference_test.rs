@@ -8,7 +8,8 @@
 //! it, and the best by the rule is the one selection must match:
 //!
 //! - rule 1: nothing 1e1b0647's selection sent as one transaction is refused (its selection is copied below, `old`, and
-//!   run over the same balance), and nothing is refused where any set pays;
+//!   run over the same balance), and nothing is refused where any set pays (what `old` built, some set pays, so it only
+//!   names the failure the second check makes: l7reference#1);
 //! - one UTxO that pays alone: by the purpose's rank, from this file's own table, and among boxes of one rank a box a
 //!   mix moved, then a plain one, then one of unknown making (read from each class's origin and tags), before size; a
 //!   stealth mint ranks those boxes alike (l5still#3, l6reference#9);
@@ -18,13 +19,22 @@
 //!   this file's own: the boxes the rule weighs largest (a box of ADA alone by its ADA, one holding tokens by its ADA
 //!   less what its tokens add to an ADA change's least, from the ledger's own least), beside all the other money where
 //!   one transaction takes that, else beside as few of it as pay, the largest first with a funding's last resort
-//!   (another session's money) after the rest, then the largest first whatever the tier (l6reference#1).
+//!   (another session's money) after the rest, then the largest first whatever the tier (l6reference#1). No balance's
+//!   other money holds a token and no spend sends one, so every change here keeps none and that weight is the one
+//!   beside what a change keeps (l7merge#2); mint_test pins that weight beside tokens, and token_holders_test the rule
+//!   beside the UTxOs holding a token sent (l7reference#4).
 //!
 //! Its balances reach the windows round six's last look found: another session's money beside more payments than one
 //! transaction spends (l6reference#1); a box of ADA alone weighing between a token pool's way back's ADA less its
 //! token's whole least and what that box pays beside a change (l6reference#2); token pools' ways back near their least
 //! beside 21 payments at the input limit (l6still#1); boxes of unknown making that a set without them pays
-//! (l6reference#3).
+//! (l6reference#3). And those round seven's found: a box of ADA alone between what a token pool's way back pays beside
+//! a change and the ADA it holds, which a weight by its ADA can't tell apart (BAND, l7reference#2); two ways back of
+//! one pool beside such boxes at the input limit, where only 1e1b0647's own orders build what pays, and with boxes of
+//! unknown making, where those orders must run before the first of them (`pair_band`, l7reference#1, l7still#1,
+//! l7still#2), checked there within the rule's stated margin: none of unknown making where a set without one pays,
+//! strictly, and past one, one more of them than pays at most; one box more than the fewest that pay at most; rules 4
+//! and 5 unasked.
 //!
 //! The default runs a handful of balances in seconds: `cargo test -p seedelf-core --test box_rule_reference_test`.
 //! A sweep of many more: the same with `-- --ignored --nocapture` (a minute or two in release).
@@ -588,6 +598,45 @@ fn plain_choice(
 
 /// What the brute force says of one Spend over one balance, or why selection's pick isn't as good.
 fn check(w: &World, balance: &Balance, spend: &Spend, tally: &mut Tally) -> Result<(), String> {
+    check_with(w, balance, spend, tally, false)
+}
+
+/// Whether a set of boxes at `level` (of unknown making, in all) that pays holds two of one token pool.
+fn pair_pays_at(
+    balance: &Balance,
+    spend: &Spend,
+    paying: &mut Paying,
+    level: (usize, usize),
+) -> bool {
+    let pool = |i: usize| {
+        balance.items[i]
+            .0
+            .asset_list
+            .iter()
+            .flatten()
+            .map(|a| a.asset_name.clone())
+            .next()
+    };
+    (0..(1u32 << balance.boxes))
+        .filter(|&mask| {
+            let b = boxes_in(mask, balance);
+            let (bu, bn, _) = boxes_key(&b, balance);
+            let pools: Vec<String> = b.iter().filter_map(|&i| pool(i)).collect();
+            (bu, bn) == level && (1..pools.len()).any(|j| pools[..j].contains(&pools[j]))
+        })
+        .any(|mask| pays_beside(balance, spend, paying, mask))
+}
+
+/// [`check`], and with `margin`, where a set holding two ways back of one token pool pays at the best level, the
+/// rule's stated margin there (build.rs's `Weighed::InOne`): none of unknown making where a set without one pays,
+/// strictly, and past one, as few as pay or one more; of boxes, the fewest that pay or one more; rules 4 and 5 unasked.
+fn check_with(
+    w: &World,
+    balance: &Balance,
+    spend: &Spend,
+    tally: &mut Tally,
+    margin: bool,
+) -> Result<(), String> {
     let available: Vec<UtxoResponse> = balance.items.iter().map(|(u, _)| u.clone()).collect();
     let purpose = spend.purpose();
     let h = balance.histories(purpose.clone(), true);
@@ -661,6 +710,20 @@ fn check(w: &World, balance: &Balance, spend: &Spend, tally: &mut Tally) -> Resu
     let picked_others: BTreeSet<usize> =
         at.iter().copied().filter(|&i| i >= balance.boxes).collect();
     let (u, n, m) = boxes_key(&picked_boxes, balance);
+    if margin && pair_pays_at(balance, spend, &mut paying, best) {
+        tally.builds += paying.builds;
+        tally.pair += 1;
+        let unknown_ok = u == best.0 || (best.0 > 0 && u == best.0 + 1);
+        tally.one_more_unknown += usize::from(u > best.0);
+        return if unknown_ok && (n == best.1 || n == best.1 + 1) {
+            Ok(())
+        } else {
+            Err(said(format!(
+                "{u} of unknown making and {n} boxes, where (of unknown making, boxes) {best:?} pay, two ways back of \
+                 one pool among them"
+            )))
+        };
+    }
     if (u, n) != best {
         tally.builds += paying.builds;
         return Err(said(format!(
@@ -769,6 +832,10 @@ struct Tally {
     merged: usize,
     past_the_limit: usize,
     old_built: usize,
+    /// Checked within the margin, where two ways back of one pool pay at the best level.
+    pair: usize,
+    /// Of those, the picks with one box of unknown making more than pay, past the first (the rule's stated margin).
+    one_more_unknown: usize,
     builds: usize,
     apart_ms: u128,
     reference_ms: u128,
@@ -805,10 +872,20 @@ const SPACED: Sizes = Sizes {
 
 /// Round seven's (l6reference#2, l6still#1): boxes of ADA alone between a token pool's way back's ADA less its token's
 /// whole least and what it pays beside a change (6.6 ₳ beside 7.5 ₳, 13.6 ₳ beside 14.5 ₳, 4.71 ₳ beside 6 ₳), where
-/// those two weights disagree; clear of the few hundredths of an ADA a second token adds to a change's least, the
-/// rule's per-box weight's own margin.
+/// those two weights disagree; clear of the per-box weight's own margin, the token's share of a change's least that two
+/// ways back of one pool pay once and their weights count twice (172,400 lovelace here; 142,230 for two pools of one
+/// policy, whose second token adds 30,170).
 const WINDOW: Sizes = Sizes {
     ada: &[4_710_000, 6_600_000, 9_710_000, 13_600_000],
+    token: &[6_000_000, 7_500_000, 14_500_000],
+};
+
+/// Round eight's (l7reference#2): boxes of ADA alone between what a token pool's way back pays beside a change and the
+/// ADA it holds (5.9 ₳ beside 6 ₳, 7.4 ₳ beside 7.5 ₳, 14.4 ₳ beside 14.5 ₳), 72,400 lovelace over what it pays, where
+/// its one-transaction weight and its ADA order them apart; 5.9 ₳ beside 7.5 ₳ is in WINDOW's window too, where that
+/// weight and what a box adds disagree.
+const BAND: Sizes = Sizes {
+    ada: &[5_900_000, 7_400_000, 14_400_000],
     token: &[6_000_000, 7_500_000, 14_500_000],
 };
 
@@ -825,6 +902,9 @@ struct Shape {
     other_session: bool,
     /// The amounts are drawn near what one box and the other money pay, where weights and the input limit decide.
     near: bool,
+    /// Every balance holds exactly one token pool's way back, somewhere among its boxes, so no two boxes share a token's
+    /// share of the change's least, the per-box weight's margin (l7reference#2).
+    one_token_box: bool,
 }
 
 const DEFAULT: Shape = Shape {
@@ -834,6 +914,7 @@ const DEFAULT: Shape = Shape {
     small: 2 * ADA,
     other_session: false,
     near: false,
+    one_token_box: false,
 };
 
 /// A balance and four spends over it, from `seed`.
@@ -846,14 +927,19 @@ fn balance(w: &World, seed: u64, shape: Shape) -> (Balance, Vec<Spend>) {
     };
     let boxes = 1 + rng.below(shape.most_boxes) as usize;
     let mut items: Vec<(UtxoResponse, Kind)> = Vec::new();
-    for _ in 0..boxes {
+    // Drawn only where the shape asks, so the other parts' balances stay as they were.
+    let token_at = shape
+        .one_token_box
+        .then(|| rng.below(boxes as u64) as usize);
+    for i in 0..boxes {
         let kind = match rng.below(100) {
             0..40 => Kind::Mixed,
             40..75 => Kind::Plain,
             _ => Kind::Unknown,
         };
         let sizes = shape.sizes;
-        let u = if rng.below(5) == 0 {
+        let token = rng.below(5) == 0;
+        let u = if token_at.map_or(token, |at| i == at) {
             let lovelace = sizes.token[rng.below(sizes.token.len() as u64) as usize];
             let pool = ["poolA", "poolB"][rng.below(2) as usize];
             utxo(w, next(), lovelace, Some(pool))
@@ -958,6 +1044,132 @@ fn sweep(seeds: std::ops::Range<u64>, shape: Shape) -> Tally {
     tally
 }
 
+/// The most `make` pays with exactly `inputs`, to 1,000 lovelace.
+fn most_paid_by(w: &World, make: &dyn Fn(u64) -> Spend, inputs: &[&UtxoResponse]) -> u64 {
+    let pays = |l: u64| Paying::new(w, &make(l)).verdict(inputs) == Verdict::Pays;
+    let mut hi: u64 = inputs.iter().map(|u| lovelace_of(u)).sum();
+    let mut lo = hi / 2;
+    assert!(
+        pays(lo) && !pays(hi),
+        "the set pays half of what it holds and not all"
+    );
+    while hi - lo > 1_000 {
+        let mid = lo + (hi - lo) / 2;
+        if pays(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// Round eight's (l7reference#1, l7still#2): where two ways back of one token pool pay their token's share of the
+/// change's least once and their weights count it twice, beside boxes of ADA alone that weigh more than either and pay
+/// less (5.9 ₳ beside 6 ₳ and poolA's token, or 7.4 ₳ beside 7.5 ₳), at the input limit: the pair, maybe one more box
+/// of 4.71 ₳, maybe one other UTxO, 18 to 25 payments received of 10 ₳. A Send, a Make public and a funding, each up
+/// to 0.09 ₳ under the most the pair, the other UTxO and as many payments as one transaction spends beside them pay,
+/// where the rule's own orders can miss the set that pays and 1e1b0647's build it (pass d). With `unknown`, a box may
+/// be of unknown making, so the pass before the first of them is reached too.
+fn pair_band(w: &World, seed: u64, unknown: bool) -> (Balance, Vec<Spend>) {
+    let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+    let mut n = u32::try_from(seed % 100_000).unwrap() * 64;
+    let mut next = || {
+        n += 1;
+        n
+    };
+    let band = rng.below(2) as usize;
+    let (pair, beside) = ([6_000_000, 7_500_000][band], [5_900_000, 7_400_000][band]);
+    let kind = |rng: &mut Rng| match rng.below(100) {
+        0..40 => Kind::Mixed,
+        40..75 => Kind::Plain,
+        _ if unknown => Kind::Unknown,
+        _ => Kind::Plain,
+    };
+    let mut boxes: Vec<(UtxoResponse, Kind)> = Vec::new();
+    for _ in 0..2 {
+        let k = kind(&mut rng);
+        boxes.push((utxo(w, next(), pair, Some("poolA")), k));
+    }
+    for _ in 0..1 + rng.below(2) {
+        let k = kind(&mut rng);
+        boxes.push((utxo(w, next(), beside, None), k));
+    }
+    if rng.below(2) == 0 {
+        let k = kind(&mut rng);
+        boxes.push((utxo(w, next(), 4_710_000, None), k));
+    }
+    for i in (1..boxes.len()).rev() {
+        let j = rng.below(i as u64 + 1) as usize;
+        boxes.swap(i, j);
+    }
+    let nb = boxes.len();
+    let mut items = boxes;
+    let distinct = rng.below(2) as usize;
+    let mut kinds = vec![
+        Kind::Own,
+        Kind::Received,
+        Kind::OwnSession,
+        Kind::OtherSession,
+    ];
+    for _ in 0..distinct {
+        let k = kinds.remove(rng.below(kinds.len() as u64) as usize);
+        let lovelace = [1_500_000, 2_000_000, 3_000_000][rng.below(3) as usize];
+        items.push((utxo(w, next(), lovelace, None), k));
+    }
+    let smalls = 18 + rng.below(8) as usize;
+    for _ in 0..smalls {
+        items.push((utxo(w, next(), 10 * ADA, None), Kind::Received));
+    }
+    let balance = Balance {
+        items,
+        boxes: nb,
+        distinct,
+        smalls,
+        small: 10 * ADA,
+    };
+    let fit = (22 - 2 - distinct).min(smalls);
+    let target: Vec<&UtxoResponse> = (0..nb)
+        .filter(|&i| holds_tokens(&balance.items[i].0))
+        .map(|i| &balance.items[i].0)
+        .chain(
+            balance.items[nb..nb + distinct + fit]
+                .iter()
+                .map(|(u, _)| u),
+        )
+        .collect();
+    let mut near =
+        |make: &dyn Fn(u64) -> Spend| most_paid_by(w, make, &target) - rng.below(10) * (ADA / 100);
+    let (send, public, fund) = (near(&Spend::Send), near(&Spend::Public), near(&Spend::Fund));
+    (
+        balance,
+        vec![Spend::Send(send), Spend::Public(public), Spend::Fund(fund)],
+    )
+}
+
+/// [`sweep`] over [`pair_band`]'s balances, checked within the rule's stated margin.
+fn pair_sweep(seeds: std::ops::Range<u64>, unknown: bool) -> Tally {
+    let w = world();
+    let mut tally = Tally::default();
+    let mut wrong = Vec::new();
+    for seed in seeds {
+        let (balance, spends) = pair_band(&w, seed, unknown);
+        for spend in &spends {
+            if let Err(e) = check_with(&w, &balance, spend, &mut tally, true) {
+                wrong.push(format!("seed {seed}: {e}"));
+            }
+        }
+    }
+    println!("{tally:?}");
+    assert!(
+        wrong.is_empty(),
+        "selection's pick isn't the best by the box rule ({} of them):\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+    tally
+}
+
 /// The default, in parts run side by side: balances of up to six boxes, some past what one transaction spends.
 #[test]
 fn selection_picks_the_best_set_by_the_box_rule_first() {
@@ -1041,6 +1253,49 @@ fn selection_picks_the_best_set_by_the_box_rule_with_token_boxes_at_the_input_li
     assert!(tally.merged > 0 && tally.past_the_limit > 0, "{tally:?}");
 }
 
+/// Chunk 51, round eight (l7reference#2): one token pool's way back to a balance beside boxes of ADA alone between what
+/// it pays beside a change and the ADA it holds, amounts near what one box and the other money pay. Weighed by its
+/// ADA, or by what it adds, a token pool's way back goes on the wrong side of such a box (where two of one pool would
+/// share their token's least, the margin of the parts below).
+#[test]
+fn selection_picks_the_best_set_by_the_box_rule_where_a_weight_could_disagree_with_the_ada_a_box_holds()
+ {
+    let tally = sweep(650..670, BAND_SHAPE);
+    assert!(tally.merged > 0, "{tally:?}");
+}
+
+#[test]
+fn selection_picks_the_best_set_by_the_box_rule_where_a_weight_could_disagree_with_the_ada_a_box_holds_too()
+ {
+    let tally = sweep(670..690, BAND_SHAPE);
+    assert!(tally.merged > 0, "{tally:?}");
+}
+
+const BAND_SHAPE: Shape = Shape {
+    sizes: BAND,
+    near: true,
+    one_token_box: true,
+    ..DEFAULT
+};
+
+/// Chunk 51, round eight (l7reference#1, l7still#2): two ways back of one token pool beside boxes of ADA alone that
+/// weigh more than either at the input limit, where only 1e1b0647's own orders (pass d) build what pays: never refused
+/// where a set pays, and within the rule's stated margin.
+#[test]
+fn selection_picks_the_best_set_by_the_box_rule_beside_two_ways_back_of_one_pool() {
+    let tally = pair_sweep(7_000..7_012, false);
+    assert!(tally.pair > 0 && tally.past_the_limit > 0, "{tally:?}");
+}
+
+/// The same with boxes of unknown making among them (l7merge#1, l7still#1): where the rule's orders without one build
+/// nothing, 1e1b0647's over the rest without any go before the first, so as few of unknown making as pay, strictly.
+#[test]
+fn selection_picks_the_best_set_by_the_box_rule_beside_two_ways_back_of_one_pool_and_boxes_of_unknown_making()
+ {
+    let tally = pair_sweep(7_012..7_024, true);
+    assert!(tally.pair > 0 && tally.past_the_limit > 0, "{tally:?}");
+}
+
 /// The sweep: many more balances, of up to eight boxes, of every shape above.
 #[test]
 #[ignore]
@@ -1076,25 +1331,47 @@ fn selection_picks_the_best_set_by_the_box_rule_over_many_balances() {
             near: true,
             ..DEFAULT
         },
+        Shape {
+            most_boxes: 8,
+            ..BAND_SHAPE
+        },
+        Shape {
+            most_boxes: 8,
+            past_the_limit: true,
+            small: 5 * ADA,
+            ..BAND_SHAPE
+        },
     ];
     let mut all = Tally::default();
     let mut failed = Vec::new();
+    let mut add = |t: Tally| {
+        all.unpaid += t.unpaid;
+        all.alone += t.alone;
+        all.merged += t.merged;
+        all.past_the_limit += t.past_the_limit;
+        all.old_built += t.old_built;
+        all.pair += t.pair;
+        all.one_more_unknown += t.one_more_unknown;
+        all.builds += t.builds;
+    };
     for (i, shape) in shapes.into_iter().enumerate() {
         let from = 1_000 + 1_000 * i as u64;
         match std::panic::catch_unwind(|| sweep(from..from + 300, shape)) {
-            Ok(t) => {
-                all.unpaid += t.unpaid;
-                all.alone += t.alone;
-                all.merged += t.merged;
-                all.past_the_limit += t.past_the_limit;
-                all.old_built += t.old_built;
-                all.builds += t.builds;
-            }
-            Err(_) => failed.push(i),
+            Ok(t) => add(t),
+            Err(_) => failed.push(format!("shape {i}")),
+        }
+    }
+    for unknown in [false, true] {
+        let from = if unknown { 7_300 } else { 7_100 };
+        match std::panic::catch_unwind(|| pair_sweep(from..from + 150, unknown)) {
+            Ok(t) => add(t),
+            Err(_) => failed.push(format!(
+                "two ways back of one pool, unknown making {unknown}"
+            )),
         }
     }
     println!("all: {all:?}");
-    assert!(failed.is_empty(), "shapes {failed:?} failed (above)");
+    assert!(failed.is_empty(), "{failed:?} failed (above)");
     assert!(
         all.merged > 0 && all.alone > 0 && all.past_the_limit > 0,
         "{all:?}"
@@ -1103,8 +1380,8 @@ fn selection_picks_the_best_set_by_the_box_rule_over_many_balances() {
 
 /// Chunk 51, round six: the box rule's search stays polynomial in the boxes. Five hundred boxes back from Lovejoin, a
 /// mix's, plain and of unknown making, with and without more small payments than one transaction spends: a payment
-/// that builds, one only boxes of unknown making pay, and one too large for one transaction, each in seconds at most
-/// (about a second in release).
+/// that builds, one only boxes of unknown making pay, and one too large for one transaction, each in a fraction of a
+/// second.
 #[test]
 fn five_hundred_boxes_build_a_spend_in_seconds() {
     let w = world();
@@ -1201,7 +1478,10 @@ fn five_hundred_boxes_build_a_spend_in_seconds() {
         );
         assert_eq!(picked.is_ok(), builds, "{name}");
     }
-    assert!(worst < std::time::Duration::from_secs(30), "{worst:?}");
+    // Round eight's slowest case took about 0.16 s in a debug build beside the other parts, 0.035 s in release
+    // (l7reference#3).
+    let bound = if cfg!(debug_assertions) { 3 } else { 1 };
+    assert!(worst < std::time::Duration::from_secs(bound), "{worst:?}");
 }
 
 /// Chunk 51, round seven (l6merge#1): round six's search parsed every UTxO's lovelace again on each try and walked
@@ -1217,20 +1497,26 @@ fn boxes_of_both_kinds_beside_hundreds_of_payments_plan_in_about_1e1b0647s_time(
     println!(
         "100 + 100 boxes, 400 payments, a Send of 1,200 ₳: one selection {took:?}; {count} reruns {reruns:?}"
     );
-    // Release takes about a tenth of a second for the one and one for the reruns, as 1e1b0647; round six's took 1.2 s
-    // and 8 s there, ten times as long in a debug build.
-    let bound = if cfg!(debug_assertions) { 8 } else { 1 };
+    // This test's own figures, on one machine (chunk 51, l7reference#3): round six's code took about 10 s and 44 to 50 s
+    // in a debug build, 1.1 to 1.4 s and 5.3 to 7.3 s in release; round seven's 0.5 to 0.9 s and 3.5 to 6 s, 0.1 s and
+    // 0.8 to 1 s; round eight's, which makes no choice its count alone refuses (l7merge#3), 0.05 s and 0.8 s, 0.01 s and
+    // 0.1 s, beside the other parts. The bounds sit three times under round six's, with room for a loaded runner.
+    let (one, all) = if cfg!(debug_assertions) {
+        (3_000, 15_000)
+    } else {
+        (300, 1_500)
+    };
     assert!(
-        took < std::time::Duration::from_secs(bound),
+        took < std::time::Duration::from_millis(one),
         "one selection took {took:?}"
     );
     assert!(
-        reruns < std::time::Duration::from_secs(bound * 6),
+        reruns < std::time::Duration::from_millis(all),
         "the reruns took {reruns:?}"
     );
 }
 
-/// The same with 200 + 200 boxes beside 600 payments, a Send of 2,000 ₳ (its reruns take tens of seconds in debug).
+/// The same with 200 + 200 boxes beside 600 payments, a Send of 2,000 ₳.
 #[test]
 #[ignore]
 fn more_boxes_of_both_kinds_beside_more_payments_plan_in_about_1e1b0647s_time() {
@@ -1239,13 +1525,18 @@ fn more_boxes_of_both_kinds_beside_more_payments_plan_in_about_1e1b0647s_time() 
     println!(
         "200 + 200 boxes, 600 payments, a Send of 2,000 ₳: one selection {took:?}; {count} reruns {reruns:?}"
     );
-    let bound = if cfg!(debug_assertions) { 20 } else { 2 };
+    // Round seven's took 0.27 s and 3.5 s in release, round eight's 0.015 s and 0.25 s.
+    let (one, all) = if cfg!(debug_assertions) {
+        (5_000, 25_000)
+    } else {
+        (500, 2_500)
+    };
     assert!(
-        took < std::time::Duration::from_secs(bound),
+        took < std::time::Duration::from_millis(one),
         "one selection took {took:?}"
     );
     assert!(
-        reruns < std::time::Duration::from_secs(bound * 8),
+        reruns < std::time::Duration::from_millis(all),
         "the reruns took {reruns:?}"
     );
 }

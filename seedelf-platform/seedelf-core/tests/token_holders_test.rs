@@ -2,8 +2,9 @@
 //! made them (`holding`), a token pool's way back of unknown making among them; the box rule and the purpose's order
 //! are for what pays beside them. privacy.md's *Selection*, architecture.md's *Picking inputs*, flows.md's Send, the
 //! WebAssembly's README and the privacy policy's 18 November entry say so (round seven's words: the lead's call, words
-//! only in 1.9.2). These pin it. The backlog's line for choosing the holders by history too would change them, and
-//! those words with them.
+//! only in 1.9.2). These pin it: the holders' own order, money made private beside them before any box, and the box
+//! rule among the boxes beside them (l7reference#4, l7words#5). The backlog's line for choosing the holders by history
+//! too would change them, and those words with them.
 
 use pallas_addresses::{
     Address, Network, PaymentKeyHash, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
@@ -262,7 +263,7 @@ fn money_made_private_holding_the_token_goes_after_a_box_holding_more() {
 }
 
 #[test]
-fn beside_the_holders_the_purposes_order_and_the_box_rule_still_pick() {
+fn beside_the_holders_money_made_private_goes_before_any_box() {
     let w = world();
     let rows: Vec<Row> = vec![
         (
@@ -288,5 +289,122 @@ fn beside_the_holders_the_purposes_order_and_the_box_rule_still_pick() {
     assert_eq!(
         picked(&w, &rows, &seedelfs, &[]),
         vec![rows[3].0, rows[0].0]
+    );
+}
+
+/// Chunk 51, l7reference#4, l7words#5: with no money made private beside the holder, the box rule picks what pays
+/// beside it. W, the token's only holder, of unknown making, 2.5 ₳ and 2,000 TOK; U, a box of unknown making of 20.5
+/// ₳; K, a plain one of 20 ₳. W and U pay, and so do W and K: W and K, as few of unknown making as pay, though U is
+/// the larger.
+#[test]
+fn beside_the_holders_the_box_rule_takes_no_box_of_unknown_making_where_another_pays() {
+    let w = world();
+    let rows: Vec<Row> = vec![
+        (
+            "W, of unknown making, 2,000 TOK",
+            utxo(&w, 0x0b, 2_500_000, 2_000),
+            Made::Unknown,
+        ),
+        (
+            "U, of unknown making, 20.5 ₳",
+            utxo(&w, 0x0c, 20_500_000, 0),
+            Made::Unknown,
+        ),
+        ("K, plain, 20 ₳", utxo(&w, 0x0f, 20 * ADA, 0), Made::Plain),
+    ];
+    let (seedelfs, addresses) = (send(&w, 800, 10 * ADA), public(&w, 800));
+    let spends: [(&str, &[Payment], &[AddressPayment]); 2] =
+        [("Send", &seedelfs, &[]), ("Make public", &[], &addresses)];
+    for (spend, seedelfs, addresses) in spends {
+        assert!(
+            !pays(&w, &[&rows[0].1], seedelfs, addresses),
+            "{spend}: W alone is short"
+        );
+        assert!(
+            pays(&w, &[&rows[0].1, &rows[1].1], seedelfs, addresses),
+            "{spend}: W and U pay"
+        );
+        assert!(
+            pays(&w, &[&rows[0].1, &rows[2].1], seedelfs, addresses),
+            "{spend}: W and K pay"
+        );
+        assert_eq!(
+            picked(&w, &rows, seedelfs, addresses),
+            vec![rows[2].0, rows[0].0],
+            "{spend}"
+        );
+    }
+}
+
+/// Chunk 51, l7reference#4: beside the holder, of as many boxes the one a mix moved. W as above; K, a plain box of
+/// 20.5 ₳; X, a mixed one of 20 ₳. W and K pay, and so do W and X: W and X, though K is the larger.
+#[test]
+fn beside_the_holders_the_box_rule_takes_a_mixed_box_among_as_many() {
+    let w = world();
+    let rows: Vec<Row> = vec![
+        (
+            "W, of unknown making, 2,000 TOK",
+            utxo(&w, 0x0b, 2_500_000, 2_000),
+            Made::Unknown,
+        ),
+        (
+            "K, plain, 20.5 ₳",
+            utxo(&w, 0x0f, 20_500_000, 0),
+            Made::Plain,
+        ),
+        ("X, mixed, 20 ₳", utxo(&w, 0x0a, 20 * ADA, 0), Made::Mixed),
+    ];
+    let (seedelfs, addresses) = (send(&w, 800, 10 * ADA), public(&w, 800));
+    let spends: [(&str, &[Payment], &[AddressPayment]); 2] =
+        [("Send", &seedelfs, &[]), ("Make public", &[], &addresses)];
+    for (spend, seedelfs, addresses) in spends {
+        assert!(
+            !pays(&w, &[&rows[0].1], seedelfs, addresses),
+            "{spend}: W alone is short"
+        );
+        assert!(
+            pays(&w, &[&rows[0].1, &rows[1].1], seedelfs, addresses),
+            "{spend}: W and K pay"
+        );
+        assert!(
+            pays(&w, &[&rows[0].1, &rows[2].1], seedelfs, addresses),
+            "{spend}: W and X pay"
+        );
+        assert_eq!(
+            picked(&w, &rows, seedelfs, addresses),
+            vec![rows[0].0, rows[2].0],
+            "{spend}"
+        );
+    }
+}
+
+/// Chunk 51, l7reference#4: beside the holders, a box of their own class adds no history, so it goes first among as
+/// many, as a mixed one does (architecture.md: with tokens sent, a box of their UTxOs' own class counts as mixed). W as
+/// above; V, W's withdraw's other way back (its transaction, so its class), 4 ₳; K1 and K2, plain boxes of 6 ₳. W and V
+/// are short, W and K1 too; W, V and K1 pay, and so do W, K1 and K2: W, V and K1.
+#[test]
+fn beside_the_holders_a_box_of_their_own_history_goes_first_among_as_many() {
+    let w = world();
+    let mut v = utxo(&w, 0x0b, 4 * ADA, 0);
+    v.tx_index = 1;
+    let rows: Vec<Row> = vec![
+        (
+            "W, of unknown making, 2,000 TOK",
+            utxo(&w, 0x0b, 2_500_000, 2_000),
+            Made::Unknown,
+        ),
+        ("K1, plain, 6 ₳", utxo(&w, 0x0f, 6 * ADA, 0), Made::Plain),
+        ("K2, plain, 6 ₳", utxo(&w, 0x0e, 6 * ADA, 0), Made::Plain),
+        ("V, W's withdraw's other way back, 4 ₳", v, Made::Unknown),
+    ];
+    let seedelfs = send(&w, 800, 10 * ADA);
+    let [wb, k1, k2, vb] = [&rows[0].1, &rows[1].1, &rows[2].1, &rows[3].1];
+    assert!(!pays(&w, &[wb, vb], &seedelfs, &[]), "W and V are short");
+    assert!(!pays(&w, &[wb, k1], &seedelfs, &[]), "W and K1 are short");
+    assert!(pays(&w, &[wb, vb, k1], &seedelfs, &[]), "W, V and K1 pay");
+    assert!(pays(&w, &[wb, k1, k2], &seedelfs, &[]), "W, K1 and K2 pay");
+    assert_eq!(
+        picked(&w, &rows, &seedelfs, &[]),
+        vec![rows[1].0, rows[3].0, rows[0].0]
     );
 }
