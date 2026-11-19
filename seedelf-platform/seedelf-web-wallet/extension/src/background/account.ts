@@ -195,7 +195,8 @@ export async function readAccount(
     known ?? koios.epochParams(),
     readStake || spendRewards ? koios.accountInfo(stakeAddress) : undefined,
   ]);
-  const { spendable, collateral } = await deps.coins.account(network, utxos, account);
+  // The wallet's own builds' reading: a chosen collateral WebAssembly can't put up counts as none here (chunk 51, e8b#1).
+  const { spendable, collateral } = await deps.coins.account(network, utxos, account, true);
   // Not the rewards one of the wallet's own transactions on its way withdraws: Koios reports them until its block,
   // its change holds them, and only one withdrawal of them can land. Home's forms leave them out too (balances.ts,
   // blind test §9.1).

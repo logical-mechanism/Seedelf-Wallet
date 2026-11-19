@@ -101,12 +101,16 @@ describe("the swap form", () => {
     expect(impactLevel(5)).toBe("high");
   });
 
-  it("takes a slippage from 0.1% to 20%", () => {
+  // Chunk 51, gap-g8#7: a DEX's order takes any minimum, and Minswap's estimate took 0.05% and 25% (2026-11-18), so the
+  // form takes anything over none and under all of it, two places at most, as the worker's checkAsk does.
+  it("takes a slippage over 0% and under 100%", () => {
     expect(parseSlippage("1.5")).toBe(1.5);
     expect(parseSlippage("2 %")).toBe(2);
     expect(parseSlippage(".5")).toBe(0.5);
-    expect(parseSlippage("0.05")).toBeUndefined();
-    expect(parseSlippage("25")).toBeUndefined();
+    expect(parseSlippage("0.05")).toBe(0.05);
+    expect(parseSlippage("25")).toBe(25);
+    expect(parseSlippage("0")).toBeUndefined();
+    expect(parseSlippage("100")).toBeUndefined();
     expect(parseSlippage("1.234")).toBeUndefined();
     expect(parseSlippage("abc")).toBeUndefined();
   });

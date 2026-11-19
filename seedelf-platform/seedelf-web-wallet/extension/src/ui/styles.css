@@ -3887,8 +3887,9 @@ button.dapp-tile:hover {
   border-color: var(--warn-line);
 }
 
-/* A token's whole fingerprint, where a swap names one the wallet won't swap
-   into (Swaps.tsx Unverified): its own line, and it wraps. */
+/* A token's whole fingerprint and ID, where a swap names one neither listed
+   nor verified by Minswap (Swaps.tsx Unverified): each its own line, and it
+   wraps. */
 
 .swap-token-id {
   font-family: var(--mono);

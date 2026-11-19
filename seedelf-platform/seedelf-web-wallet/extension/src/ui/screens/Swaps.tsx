@@ -130,6 +130,8 @@ import {
   SLIPPAGE_HIGH,
   SLIPPAGE_MAX,
   SLIPPAGE_MIN,
+  SLIPPAGE_VERY_HIGH,
+  slippageLoss,
   SESSION_FEE_ESTIMATE,
   swapCosts,
   toCents,
@@ -784,8 +786,12 @@ export function NewSwap({
   const max = wholeUnits(pay.id === "lovelace" ? maxAdaIn(held, quoted?.quote) : held, pay.side.decimals);
   const half = wholeUnits(halfOf(held, max), pay.side.decimals);
   // A token that's neither on the wallet's list nor verified by Minswap: anyone can name one like a known one (#20).
+  // A DEX's order takes it all the same, so Review waits behind "Swap into it anyway", off for each token it gets, as
+  // the sign window's switch is for each request (chunk 51, gap-g8#8).
   const unverified = current?.verified === false;
-  const ready = !!current && !tooMuch && !short && !unverified && !quoteError;
+  const [anywayFor, setAnywayFor] = useState<string>();
+  const anyway = !!getId && anywayFor === getId;
+  const ready = !!current && !tooMuch && !short && (!unverified || anyway) && !quoteError;
   const level = shown ? impactLevel(shown.priceImpact) : "ok";
 
   const setTyped = (value: string) => {
@@ -849,11 +855,14 @@ export function NewSwap({
     }
     const wantThrough = way?.through ?? (keepWay ? through : undefined);
     const wantPools = way?.pools ?? (keepWay ? pools : {});
+    // A token Minswap doesn't verify goes only with "Swap into it anyway" on for it, which the worker checks (gap-g8#8).
+    const confirmed = quote.verified === false && anywayFor === from.get.id;
     const { lovejoin, ...summary } = await call("session-out-build", {
       quote,
       display: { in: from.pay.side, out: from.get.side },
       ...(wantThrough !== undefined ? { through: wantThrough } : {}),
       ...(Object.keys(wantPools).length ? { pools: wantPools } : {}),
+      ...(confirmed ? { anyway: true } : {}),
     });
     setThrough(wantThrough ?? lovejoin?.on ?? false);
     setPools(wantPools);
@@ -988,7 +997,7 @@ export function NewSwap({
         ? tr("swaps.cta.notEnough", { token: nameOf(pay) })
         : !current
           ? tr("swaps.cta.quoting")
-          : unverified
+          : unverified && !anyway
             ? tr("swaps.cta.unverified")
             : short
               ? tr("swaps.cta.notEnoughAda")
@@ -1011,9 +1020,26 @@ export function NewSwap({
             {tr("common.tryAgain")}
           </button>
         ) : (
-          <button type="submit" className="primary" disabled={!ready || busy}>
-            {cta}
-          </button>
+          <>
+            {/* Over the button it unlocks, as the sign window's switch is: off for each token it gets (gap-g8#8). */}
+            {unverified && getId && (
+              <div className="setting-row" data-testid="swap-unverified-anyway">
+                <span id="swap-unverified-anyway-label">{tr("swaps.warn.unverifiedAnyway")}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  className="switch"
+                  aria-checked={anyway}
+                  aria-labelledby="swap-unverified-anyway-label"
+                  onClick={() => setAnywayFor(anyway ? undefined : getId)}
+                  disabled={busy}
+                />
+              </div>
+            )}
+            <button type="submit" className="primary" disabled={!ready || busy}>
+              {cta}
+            </button>
+          </>
         )
       }
     >
@@ -1259,11 +1285,7 @@ export function NewSwap({
         </Callout>
       )}
       {/* On the form too, not only in the slippage's dialog (DX-4). */}
-      {slippage >= SLIPPAGE_HIGH && (
-        <Callout tone="warn" testId="swap-slippage-high">
-          {tr("swaps.slippage.warn.high", { percent: formatPercent(slippage) })}
-        </Callout>
-      )}
+      <SlippageWarning slippage={slippage} testId="swap-slippage-high" />
       <Callout tone="privacy" testId="swap-quote-privacy">{tr("swaps.privacy.quote")}</Callout>
       {picking && (
         <TokenSelect
@@ -1391,11 +1413,7 @@ export function SwapApproval({
           {tr("swaps.review.warn.minimum", { least: amountOf(quote.minAmountOut, get) })}
         </Callout>
       )}
-      {quote.ask.slippage >= SLIPPAGE_HIGH && (
-        <Callout tone="warn" testId="swap-slippage-high">
-          {tr("swaps.slippage.warn.high", { percent: formatPercent(quote.ask.slippage) })}
-        </Callout>
-      )}
+      <SlippageWarning slippage={quote.ask.slippage} testId="swap-slippage-high" />
       <h2>{tr("lovejoin.review.firstFunded")}</h2>
       <ReviewRows testId="swap-fund-review">
         <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: summary.index + 1 })} strong />
@@ -1749,9 +1767,11 @@ export function LovejoinCost({ lovejoin: l, ada = true }: { lovejoin: SwapLovejo
 }
 
 /**
- * A quote for a token the wallet won't swap into (#20): neither on its list
- * nor verified by Minswap, by its ID. It's named by its fingerprint, and
- * Review stays off: the worker refuses to fund it.
+ * A quote for a token neither on the wallet's list nor verified by Minswap,
+ * by its ID (#20). It's named by its fingerprint and its full ID, to check,
+ * and Review waits for the foot's "Swap into it anyway", which the worker
+ * checks too: a DEX's order takes the token all the same (chunk 51,
+ * gap-g8#8).
  */
 export function Unverified({ pick }: { pick: Pick }) {
   const tr = useT();
@@ -1762,6 +1782,7 @@ export function Unverified({ pick }: { pick: Pick }) {
         <strong>{tr("swaps.cta.unverified")}</strong>
         <span>{tr("swaps.warn.unverified", { token: text.label })}</span>
         <code className="swap-token-id">{text.fingerprint}</code>
+        <code className="swap-token-id">{pick.id}</code>
       </div>
     </Callout>
   );
@@ -2100,12 +2121,27 @@ function SlippageSettings({
           </p>
         )}
       </div>
-      {value >= SLIPPAGE_HIGH && (
-        <Callout tone="warn" testId="swap-slippage-warning">
-          {tr("swaps.slippage.warn.high", { percent: formatPercent(value) })}
-        </Callout>
-      )}
+      <SlippageWarning slippage={value} testId="swap-slippage-warning" />
     </Modal>
+  );
+}
+
+/**
+ * A high slippage's warning, from SLIPPAGE_HIGH, on the form, the review and the slippage's dialog alike: how much less
+ * than the quote the order may fill for, Minswap's minimum being amount_out / (1 + slippage%) (slippageLoss: 20%
+ * allows 16.67% less, never 20%), and past SLIPPAGE_VERY_HIGH why that's rarely wise (chunk 51, gap-g8#7). Exported
+ * for its test.
+ */
+export function SlippageWarning({ slippage, testId }: { slippage: number; testId: string }) {
+  const tr = useT();
+  if (slippage < SLIPPAGE_HIGH) return null;
+  return (
+    <Callout tone="warn" testId={testId}>
+      {joinSentences([
+        tr("swaps.slippage.warn.high", { percent: formatPercent(slippageLoss(slippage)) }),
+        slippage > SLIPPAGE_VERY_HIGH && tr("swaps.slippage.warn.veryHigh", { percent: formatPercent(SLIPPAGE_VERY_HIGH) }),
+      ])}
+    </Callout>
   );
 }
 
@@ -2159,8 +2195,8 @@ export function Session({
   // Change on its review (chunk 34's 34e): the pool each token goes into, by its unit, null for back directly.
   const [backPools, setBackPools] = useState<Record<string, string | null>>({});
   const [stopping, setStopping] = useState(false);
-  // What Stop brings back through Lovejoin, read as its dialog opens: null, directly.
-  const [stopCost, setStopCost] = useState<SwapLovejoin | null>();
+  // What Stop brings back through Lovejoin, read as its dialog opens: null, directly; "failed", not known (StopDialog).
+  const [stopCost, setStopCost] = useState<StopCost>();
   // Stop's switch: through Lovejoin, as the swap was approved, until the user turns it off.
   const [stopThrough, setStopThrough] = useState(true);
   // Whether an order has gone out, as the record says as Stop's dialog opens: the page's last reading may be
@@ -2487,8 +2523,9 @@ export function Session({
         },
         () => undefined,
       );
-      // A pool read the worker keeps five minutes; without it, Stop says only what it always did.
-      call("session-stop-cost", { index: s.index }).then(setStopCost, () => setStopCost(null));
+      // A pool read the worker keeps five minutes. One it couldn't answer says nothing of which way, never null's
+      // "directly": Stop brings it back as approved, which may be through Lovejoin (chunk 51, e7a#2).
+      call("session-stop-cost", { index: s.index }).then(setStopCost, () => setStopCost("failed"));
     };
     return (
       <Screen
@@ -2871,14 +2908,21 @@ export function ForgetSwap({ busy, onKeep, onForget }: { busy: boolean; onKeep: 
 const IF_ORDERED = () => t("swaps.stop.ifOrdered");
 const IF_SWAPPING = () => t("swaps.stop.ifSwapping");
 
+/** What Stop's dialog knows of its way back: the worker's cost, null for directly, "failed" for a read it couldn't make. */
+export type StopCost = SwapLovejoin | null | "failed";
+
 /**
  * Stop's dialog (privacy review §2.8, §4.1): what stopping does, and when it
  * would come back through Lovejoin (`cost`, as the worker works it out now:
- * undefined while it's read, null when it comes back directly anyway), the
- * approval's switch again, first, on as approved (`through`), with what each
- * way takes. Stop says which way it goes. The way back directly was a link
- * under the costs, and the owner, stopping a real swap after a price drop,
- * never saw it (2026-10-05).
+ * undefined while it's read, null when it comes back directly anyway,
+ * "failed" when the worker couldn't say), the approval's switch again,
+ * first, on as approved (`through`), with what each way takes. Stop says
+ * which way it goes. The way back directly was a link under the costs, and
+ * the owner, stopping a real swap after a price drop, never saw it
+ * (2026-10-05). Not known yet, or not known at all, it names no way and no
+ * fee as the only one: Stop then brings it back as approved, which may be
+ * through Lovejoin, and the direct way's words were false for that (chunk
+ * 51, e7a#2).
  */
 export function StopDialog({
   placed,
@@ -2893,7 +2937,7 @@ export function StopDialog({
   placed: boolean;
   /** Against a DEX's pools, as approved: there's no order to cancel, and one going out lands as it is (release review C13). */
   pools?: boolean;
-  cost?: SwapLovejoin | null;
+  cost?: StopCost;
   through: boolean;
   onThrough: (through: boolean) => void;
   busy: boolean;
@@ -2901,7 +2945,10 @@ export function StopDialog({
   onClose: () => void;
 }) {
   const tr = useT();
-  const mixes = !!cost && !cost.skipped && cost.boxes > 0;
+  // Not known yet (undefined), or not known at all ("failed"): the words true either way (e7a#2).
+  const unknown = cost === undefined || cost === "failed";
+  const known = cost === undefined || cost === "failed" ? undefined : cost;
+  const mixes = !!known && !known.skipped && known.boxes > 0;
   const lovejoin = mixes && through;
   // A swap against the pools has no order to cancel: before it goes out, Stop keeps it from going.
   const ordered = placed && !pools;
@@ -2909,12 +2956,13 @@ export function StopDialog({
   // What it says of its collateral's mix, by the worker's one rule (`collateralMix`), wherever Stop doesn't bring it back
   // directly: with no box there's no switch, and it isn't (1.6.0's release review, L1; its review of the fixes,
   // fx-promise).
-  const mix = through || !mixes ? cost?.collateralMix : undefined;
+  const mix = through || !mixes ? known?.collateralMix : undefined;
   // No box: where its return mixes the collateral first, all but that 5 ₳ comes back, which comes back later, as the
   // approval says it, never everything for the return's fee alone (the last look, LW-1). Where it may, everything comes
-  // back, no fee named as the only one, and the line under says when that 5 ₳ is mixed.
+  // back, no fee named as the only one, and the line under says when that 5 ₳ is mixed. So too while the way back isn't
+  // known: the dialog's own hedged words, already true either way (e7a#2).
   const mixedBack = mix === "mixed" && !mixes;
-  const mayMixBack = mix === "ifLeft" && !mixes;
+  const hedged = (mix === "ifLeft" && !mixes) || unknown;
   return (
     <Modal
       title={tr("swaps.stop.title")}
@@ -2958,15 +3006,15 @@ export function StopDialog({
               tr(ordered ? "swaps.stop.cancelled" : pools ? "swaps.stop.notSwapped" : "swaps.stop.notPlaced"),
               !ordered && ifGoing(),
               tr("swaps.stop.throughCost", {
-                boxes: boxesText(cost),
-                mixFees: formatAda(cost.mixFees),
-                backFees: formatAda(cost.withdrawFees),
-                delay: delayText(cost.delay),
+                boxes: boxesText(known),
+                mixFees: formatAda(known.mixFees),
+                backFees: formatAda(known.withdrawFees),
+                delay: delayText(known.delay),
               }),
               ordered && tr("swaps.stop.cancelFeeToo"),
             ])
           : ordered
-            ? mayMixBack
+            ? hedged
               ? joinSentences([tr("swaps.stop.cancelled"), tr("swaps.stop.cancelFeeToo")])
               : tr(mixedBack ? "swaps.stop.cancelledMixed" : "swaps.stop.cancelledDirect")
             : joinSentences([
@@ -2974,25 +3022,25 @@ export function StopDialog({
                   pools
                     ? mixedBack
                       ? "swaps.stop.notSwappedMixed"
-                      : mayMixBack
+                      : hedged
                         ? "swaps.stop.notSwapped"
                         : "swaps.stop.notSwappedDirect"
                     : mixedBack
                       ? "swaps.stop.notPlacedMixed"
-                      : mayMixBack
+                      : hedged
                         ? "swaps.stop.notPlaced"
                         : "swaps.stop.notPlacedDirect",
                 ),
                 ifGoing(),
               ])}
       </p>
-      {cost?.skipped && (
+      {known?.skipped && (
         <p className="note" data-testid="session-stop-pool">
-          {tr("swaps.stop.poolShort", { why: opening(cost.skipped) })}
+          {tr("swaps.stop.poolShort", { why: opening(known.skipped) })}
         </p>
       )}
       {/* Four boxes a mix asked, and it would go three: why (chunk 34's D3). */}
-      {lovejoin && <WidthNote fellBack={cost.fellBack} testId="session-stop-width" />}
+      {lovejoin && <WidthNote fellBack={known.fellBack} testId="session-stop-width" />}
       {/* Its collateral mixed first, under giveme.my's collateral, or mixed only if enough is left, as the approval says
           it (1.6.0's release review, L1; fx-promise). Mixed, in its own words: the approval's "too" points at GivemeNote,
           which this dialog doesn't have (the last look, LW-1). */}

@@ -4,7 +4,7 @@
 // Koios anything, and the choices are sealed on the device.
 import { describe, expect, it } from "vitest";
 
-import { VALID_FOR_MS } from "../src/background/account";
+import { readAccount, readAccountUtxos, VALID_FOR_MS } from "../src/background/account";
 import { bodyOutpoints } from "../src/background/cbor";
 import { choicesOf, COLLATERAL_PAID_KEPT, collateralPayments } from "../src/background/coin-control";
 import { forgetContractView } from "../src/background/contract-scan";
@@ -17,9 +17,9 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
 import { t as tr } from "../src/i18n";
 import { LOCAL_ACCOUNT } from "../src/shared/preferences";
-import { account, CHAINS, publicFunded, type Tested } from "./chain-fixtures";
+import { account, AGREES, CHAINS, publicFunded, type Tested } from "./chain-fixtures";
 import { accountMintPreprod, koiosPreprod, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
-import { ADA } from "./v2-pools";
+import { ADA, ADA_POOL, ADA_ROWS } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const phrase = (words: number) =>
@@ -475,5 +475,55 @@ describe("a stranger's 5 ₳ the wallet can't put up (chunk 51, e8b#1)", CHAINS,
     for (const tx of kept!.chain.filter((x) => x.kind === "mix")) {
       expect(bodyOutpoints(hexBytes(tx.txCbor), 13)).toEqual([OWN_FIVE]);
     }
+  });
+
+  // Chunk 51, e8b#1's residue: 1.9.1's Set took the page's candidate, which could be such a 5 ₳, and saved it as the
+  // user's choice. The fix stops the page offering one, but a choice saved before stays the account's collateral, and
+  // every public Lovejoin build kept failing on it. For the wallet's own builds (readAccount), a choice that doesn't fit
+  // counts as none: they put up the oldest that does. A site still gets what the user chose: the ledger takes it.
+  it.each(SHAPES)("with %s, chosen before 1.9.2, leaves a public mix the account's own 5 ₳ and a site the choice", async (_, shape) => {
+    const t = await publicFunded();
+    await strangers(t, shape);
+    await t.balances.get("preprod", true);
+    // As 1.9.1's Set saved it: use() takes any 5 ₳ of ADA alone, as the ledger does.
+    expect(await t.coins.use("preprod", `${STRANGER}#0`)).toMatchObject({ state: "set", by: "you", utxo: { txHash: STRANGER, index: 0 } });
+
+    // The wallet's own builds: the account's own 5 ₳. Neither it nor the choice is a payment's input: the page says
+    // payments leave the collateral alone, and it's what a site gets.
+    const own = await readAccount(t.deps, "preprod");
+    expect(own.collateral && `${own.collateral.utxo.tx_hash}#${own.collateral.utxo.tx_index}`).toBe(OWN_FIVE);
+    const inputs = own.utxos.map((p) => `${p.utxo.tx_hash}#${p.utxo.tx_index}`);
+    expect(inputs).not.toContain(OWN_FIVE);
+    expect(inputs).not.toContain(`${STRANGER}#0`);
+    const mix = await t.lovejoin.publicBuild("preprod", 1, { pool: ADA });
+    expect(mix.mixes).toBeGreaterThan(0);
+    const kept = await t.wallet.withKeys(() =>
+      t.session.get<{ chain: Array<{ kind: string; txCbor: string }> }>(SESSION_LOVEJOIN_PUBLIC),
+    );
+    for (const tx of kept!.chain.filter((x) => x.kind === "mix")) {
+      expect(bodyOutpoints(hexBytes(tx.txCbor), 13)).toEqual([OWN_FIVE]);
+    }
+
+    // A site's: the user's choice, as it was. The Collateral page says so too.
+    const rows = (await readAccountUtxos(t.deps, "preprod", new Set())).utxos;
+    const site = await t.coins.account("preprod", rows, 0);
+    expect(site.collateral && `${site.collateral.utxo.tx_hash}#${site.collateral.utxo.tx_index}`).toBe(`${STRANGER}#0`);
+    expect(await t.coins.collateral("preprod")).toMatchObject({ state: "set", by: "you", utxo: { txHash: STRANGER, index: 0 } });
+  });
+
+  it("chosen before 1.9.2, with no 5 ₳ that fits beside it, has a public mix say it needs the account's collateral", async () => {
+    // publicFunded's 60 ₳ of ADA alone and none of its own 5 ₳, the stranger's, and the 5 ₳ pool.
+    const t = testBalances({ pools: [ADA_POOL] });
+    await t.wallet.create(account(12).phrase, PASSWORD);
+    t.koios.evaluation = AGREES;
+    t.koios.addedToAccounts.push(...ADA_ROWS);
+    const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
+    const keyHash = await t.wallet.withKeys((keys) => keys.cardano.paymentKeyHash(0, 0));
+    t.koios.addedToAccounts.push({ ...first!, tx_hash: "e6".repeat(32), tx_index: 0, value: "60000000", payment_cred: keyHash, asset_list: [] });
+    await strangers(t, SHAPES[0]![1]);
+    await t.balances.get("preprod", true);
+    await t.coins.use("preprod", `${STRANGER}#0`);
+    // Named as the collateral it can't put up, never as a UTxO WebAssembly can't evaluate.
+    await expect(t.lovejoin.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow(tr("lj.needCollateral"));
   });
 });

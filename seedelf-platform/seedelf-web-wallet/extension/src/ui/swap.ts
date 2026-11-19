@@ -7,6 +7,7 @@
 // swap against a DEX's pools puts into them, as its review says it.
 
 import type { DappToken, DappTxSummary, SwapAsk, SwapQuote } from "../shared/rpc";
+import { slippageTaken } from "../shared/slippage";
 import { formatAda, formatQuantity, tokenKey } from "./format";
 
 /**
@@ -206,14 +207,19 @@ export function impactLevel(percent: number): "ok" | "warn" | "high" {
   return percent >= 5 ? "high" : percent >= 3 ? "warn" : "ok";
 }
 
-/** The least and most slippage the wallet takes, in percent (sessions.ts checkAsk). */
-export const SLIPPAGE_MIN = 0.1;
-export const SLIPPAGE_MAX = 20;
+/** The least and most slippage the wallet takes, in percent: the worker's own (sessions.ts checkAsk; chunk 51, gap-g8#7). */
+export { SLIPPAGE_MAX, SLIPPAGE_MIN, slippageLoss } from "../shared/slippage";
 /**
  * From here a slippage is warned of on the form and the review, not only in
  * its dialog, and its chip turns amber (chunk 23's second review, DX-4).
  */
 export const SLIPPAGE_HIGH = 5;
+/**
+ * Past here a second line says why it's rarely wise: the order's minimum is so far under the quote that someone
+ * trading just before it can have it fill near that minimum (chunk 51, gap-g8#7). 20%, the most the wallet took
+ * before.
+ */
+export const SLIPPAGE_VERY_HIGH = 20;
 
 /**
  * What a swap's funding pays for, line by line, so the review's rows add up
@@ -261,10 +267,10 @@ export function intoPools(
   return { lovelace: (lovelace > 0n ? lovelace : 0n).toString(), tokens };
 }
 
-/** A slippage typed in percent ("1.5", "2%"), if it's one the wallet takes: 0.1% to 20%, two places at most. */
+/** A slippage typed in percent ("1.5", "2%"), if it's one the wallet takes (slippageTaken), two places at most. */
 export function parseSlippage(text: string): number | undefined {
   const t = text.trim().replace(/\s*%$/, "");
   if (!/^\d+(\.\d{1,2})?$/.test(t) && !/^\.\d{1,2}$/.test(t)) return undefined;
   const n = Number(t);
-  return n >= SLIPPAGE_MIN && n <= SLIPPAGE_MAX ? n : undefined;
+  return slippageTaken(n) ? n : undefined;
 }

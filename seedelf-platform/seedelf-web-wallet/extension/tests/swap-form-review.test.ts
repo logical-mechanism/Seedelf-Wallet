@@ -504,6 +504,46 @@ describe.runIf(__MAINNET_ENABLED__)("Review swap is pressed only where the fundi
     expect(foot(tree)).toEqual({ label: "Not verified by Minswap", disabled: true });
   });
 
+  // Chunk 51, gap-g8#8: a DEX's order takes the token all the same, so Review waits behind a switch over it, as the
+  // sign window's does, off for each token the swap gets; the build asks the worker with it, which refuses without.
+  it("is on once Swap into it anyway is, for that token alone, and its build carries the switch", async () => {
+    verified = false;
+    let tree = await formForAdaToMin();
+    const anyway = () => find(tree.props.foot, (el) => el.type === "button" && el.props.role === "switch");
+    expect(anyway()?.props["aria-checked"]).toBe(false);
+    expect(markup(tree.props.foot as ReactNode)).toContain("Swap into it anyway");
+    expect(reviewSwap(tree)).toBe(false);
+    expect(press(anyway())).toBe(true);
+    tree = draw();
+    expect(anyway()?.props["aria-checked"]).toBe(true);
+    expect(foot(tree)).toEqual({ label: "Review swap", disabled: false });
+
+    // Another token: off again.
+    expect(press(tokenButton(tree, "swap-to"))).toBe(true);
+    tree = draw();
+    expect(pick(tree, SNEK)).toBe(true);
+    tree = draw();
+    tree = await quoteLands();
+    expect(anyway()?.props["aria-checked"]).toBe(false);
+    expect(foot(tree)).toEqual({ label: "Not verified by Minswap", disabled: true });
+    expect(press(anyway())).toBe(true);
+    tree = draw();
+
+    expect(reviewSwap(tree)).toBe(true);
+    tree = await settle();
+    const asked = payloads("session-out-build") as Array<BuildAsked & { anyway?: boolean }>;
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!).toMatchObject({ anyway: true, quote: { ask: { tokenOut: SNEK }, verified: false } });
+  });
+
+  it("asks the worker with no switch for a token Minswap verifies", async () => {
+    const tree = await formFor100AdaToMin();
+    expect(find(tree.props.foot, (el) => el.type === "button" && el.props.role === "switch")).toBeUndefined();
+    expect(reviewSwap(tree)).toBe(true);
+    await settle();
+    expect(payloads("session-out-build")[0]).not.toHaveProperty("anyway");
+  });
+
   it("builds nothing on a quote asked again at Review that the balance can't pay, and says so", async () => {
     // 112 ₳ held pays the quote shown (109 ₳ in all); a minute later Minswap's costs are up 4 ₳, to 113 ₳ in all.
     props = { ...props, seedelf: balance("112000000") };

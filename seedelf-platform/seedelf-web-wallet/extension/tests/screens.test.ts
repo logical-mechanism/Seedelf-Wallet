@@ -309,12 +309,15 @@ describe("a swap's tokens (launch review #18, #20)", () => {
     expect(localMatches("preprod", own, "", "pay").listed).toEqual([]);
   });
 
-  it("says a quote's token isn't verified by Minswap, with its fingerprint", () => {
+  it("says a quote's token isn't verified by Minswap, with its fingerprint and its ID to check", () => {
     const id = STRANGER + hex("SNEK");
     const line = text(createElement(Unverified, { pick: { id, side: { label: "SNEK", decimals: 0 } } }));
     expect(line).toContain("Not verified by Minswap");
-    expect(line).toContain("Minswap doesn't verify its ID, so the wallet won't swap into it. Anyone can copy a known token's name.");
+    // It goes behind "Swap into it anyway" now, never "won't swap into it" (chunk 51, gap-g8#8).
+    expect(line).toContain("Minswap doesn't verify its ID. Anyone can copy a known token's name, so check the ID before you swap into it.");
+    expect(line).not.toContain("won't swap into it");
     expect(line).toMatch(/asset1\w{38}/);
+    expect(line).toContain(id);
   });
 });
 
@@ -505,7 +508,8 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
         busy: false,
       }),
     );
-    expect(high).toContain("High slippage: the order can fill for up to 12% less than the quote.");
+    // What Minswap's minimum allows, amount_out / 1.12: 10.71% less, never 12% (chunk 51, gap-g8#7).
+    expect(high).toContain("High slippage: the order can fill for up to 10.71% less than the quote.");
   });
 
   it("says the pool takes nothing now, and doesn't promise Lovejoin", () => {

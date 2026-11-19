@@ -207,15 +207,22 @@ const oldestFirst = (a: KoiosUtxo, b: KoiosUtxo) =>
   (a.block_time ?? 0) - (b.block_time ?? 0) ||
   outpoint(a).localeCompare(outpoint(b));
 
-/** The account's collateral among `utxos`, and who chose it. */
+/**
+ * The account's collateral among `utxos`, and who chose it. `own`: for the wallet's own builds (readAccount), which
+ * WebAssembly's evaluator puts it through: a choice that doesn't fit (`collateralFits`) counts as none there, and they
+ * put up the oldest that does, or none. Only 1.9.1's Set could save one, from a stranger's 5 ₳ with a reference script
+ * or a datum, and every public Lovejoin build failed on it. A site still gets the user's choice: the ledger takes it
+ * (chunk 51, e8b#1's residue).
+ */
 export function collateralOf(
   choices: Choices,
   utxos: PathedUtxo[],
+  own = false,
 ): { utxo: PathedUtxo; by: "you" | "wallet" } | undefined {
   if (choices.collateral === null) return undefined;
   if (choices.collateral) {
     const chosen = utxos.find((p) => outpoint(p.utxo) === choices.collateral);
-    if (chosen) return { utxo: chosen, by: "you" };
+    if (chosen && (!own || collateralFits(chosen.utxo))) return { utxo: chosen, by: "you" };
   }
   const oldest = utxos.map((p) => p.utxo).filter(collateralFits).sort(oldestFirst)[0];
   const utxo = oldest && utxos.find((p) => p.utxo === oldest);
@@ -257,16 +264,22 @@ export class CoinControlService {
     return choicesOf(stored, index);
   }
 
-  /** The account's UTxOs that may be spent, and its collateral (never among them): `account`'s choices, as `choices`. */
+  /**
+   * The account's UTxOs that may be spent, and its collateral (never among them): `account`'s choices, as `choices`.
+   * `own`: the wallet's own builds' reading, where a chosen collateral that doesn't fit counts as none (collateralOf).
+   * The choice still stays out of their payments, as the Collateral page says of it: it's what sites get.
+   */
   async account(
     network: NetworkName,
     utxos: PathedUtxo[],
     account?: number,
+    own = false,
   ): Promise<{ spendable: PathedUtxo[]; collateral?: PathedUtxo }> {
     const choices = await this.choices(network, account);
-    const collateral = collateralOf(choices, utxos)?.utxo;
+    const collateral = collateralOf(choices, utxos, own)?.utxo;
+    const chosen = own ? collateralOf(choices, utxos)?.utxo : collateral;
     const locked = new Set(choices.cardano);
-    const spendable = utxos.filter((p) => p !== collateral && !locked.has(outpoint(p.utxo)));
+    const spendable = utxos.filter((p) => p !== collateral && p !== chosen && !locked.has(outpoint(p.utxo)));
     return { spendable, collateral };
   }
 
