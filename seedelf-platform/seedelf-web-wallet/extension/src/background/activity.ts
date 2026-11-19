@@ -45,9 +45,11 @@ import {
   merged,
   receivedIn,
   sessionClass,
+  spendLeft,
   spentElsewhere,
   UNKNOWN,
   unknownIn,
+  withoutBoxes,
   type HistoryClass,
 } from "../shared/histories";
 import { entrySession, type ActivityEntry, type ActivityStaking, type Balances, type PendingTx, type TokenQuantity } from "../shared/rpc";
@@ -460,9 +462,10 @@ export class ActivityService {
    * has, matched by its parsed points, is never Received: anyone can see the
    * two are one owner's. It takes that row's history, or, where that one is Received too,
    * is Unknown by its own transaction, so a stealth mint or a funding takes it
-   * after money paid properly. Unknown too where that history is a box's: the
-   * stealth mint takes a box a mix brought back first because no payer knows
-   * it, and whoever wrote the copy does (chunk 51, money#1, own#2). That's a
+   * after money paid properly. Never a box that history names: the stealth mint
+   * takes a box a mix brought back first because no payer knows it, and whoever
+   * wrote the copy does. In the box's place, its own Unknown, the rest kept, a
+   * box-paid Seedelf's mint's change, say (chunk 51, money#1, own#2, l2rank#4). That's a
    * payment written under a register copied as found (d = 1); a payer who
    * reveals another d can't be told (chunk 51, gap-g1#1). Its own history,
    * where it isn't Received, stands.
@@ -493,10 +496,12 @@ export class ActivityService {
       const others = register ? (registers.get(registerKey(register)) ?? []).filter((o) => o.tx_hash !== u.tx_hash) : [];
       if (!others.length) continue;
       const tied = others.map((o) => base.get(outpoint(o)) ?? classOfRow(o, of(o))).filter((c) => c.origin !== "received");
-      // Never a box's, which a stealth mint takes before money paid properly: merged, a box a mix moved reads as any
-      // box, and both are the copy's own Unknown here (chunk 51, money#1, own#2).
+      // Never a box, whatever the history it copies, which a stealth mint takes before money paid properly: in its place,
+      // the copy's own Unknown, the rest of that history kept, so it ranks as the tie it carries, a box-paid Seedelf's
+      // mint's change, say (chunk 51, money#1, own#2, l2rank#4).
       const into = tied.length ? merged(tied) : undefined;
-      classes.set(outpoint(u), into && into.origin !== "lovejoin" && into.origin !== "mixed" ? into : unknownIn(u.tx_hash));
+      const rest = into && withoutBoxes(into);
+      classes.set(outpoint(u), !into || !rest ? unknownIn(u.tx_hash) : rest === into ? into : merged([rest, unknownIn(u.tx_hash)]));
     }
     return classes;
   }
@@ -787,11 +792,22 @@ export class ActivityService {
   }
 }
 
-/** The history of what the transaction `entry` records made, if any. */
+/**
+ * The spends of the wallet's own that leave change in the private balance: a private Send, a Make public, a stealth
+ * mint (an account's mint keeps its account's history, and leaves none there), a removal into it, a pool's start from
+ * it (the history keeps no other).
+ */
+const LEAVES_CHANGE: ReadonlySet<ActivityEntry["kind"]> = new Set(["transfer", "withdraw", "mint", "remove", "lovejoin-launch"]);
+
+/**
+ * The history of what the transaction `entry` records made, if any. What a spend of the wallet's own left is tied to
+ * that spend: kept before its part was, it gets it as it's read, unless its history names a public account (shared/
+ * histories.ts `spendLeft`; chunk 51, l2time#2).
+ */
 function classOf(entry: ActivityEntry | undefined): HistoryClass {
   if (!entry) return UNKNOWN;
   const stored = readClass(entry.origin);
-  if (stored) return stored;
+  if (stored) return LEAVES_CHANGE.has(entry.kind) ? spendLeft(stored, entry.txHash) : stored;
   switch (entry.kind) {
     // A move-in records which account it came from (move-in.ts, mint.ts), so
     // this is only ever reached for one written before several accounts —

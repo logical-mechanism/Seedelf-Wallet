@@ -23,7 +23,9 @@
 //                  for a stealth mint. Anything merged with it, a spend's
 //                  change included, reads "lovejoin", as every box brought
 //                  back before that record was kept (chunk 51, the owner's
-//                  answer 4 to B15)
+//                  answer 4 to B15). One whose making the wallet can't place
+//                  carries its own unknown:<tx> too (`unplacedBox`): still a
+//                  box, tagged Unknown beside (chunk 51, round three)
 //   unknown        nothing on the device says (a restore, or older than it keeps)
 //   unknown:<tx>   the same, kept apart by the transaction that made it once
 //                  any other money's history is known (independent review L40)
@@ -33,15 +35,20 @@
 //                  this device knows nothing more of it (chunk 51, gap-g9#1)
 //   change:<tx>    what a spend of the wallet's own, transaction <tx>, left in
 //                  the private balance: tied in the open to what that spend
-//                  paid, so ranked as another session's money, which a stealth
-//                  mint or a funding takes after money others paid and a box a
-//                  mix brought back; tagged Change (`leftBy`; chunk 51, the
-//                  owner's answer 2 to B15)
+//                  paid, so a stealth mint, a pool's start or a funding takes
+//                  it after money others paid and a box a mix brought back,
+//                  and, nothing fresher paying, before money made private:
+//                  origin "change", unless it names a public account, a
+//                  session or a spend made elsewhere, when it ranks with that
+//                  money, as a session's (`merged`); tagged Change (`leftBy`;
+//                  chunk 51, the owner's answers 2 to B15 and of 2026-11-18,
+//                  l2rank#6). Change kept before the part was gets it as the
+//                  history is read (activity.ts classOf, l2time#2)
 // Money whose histories were merged names each, sorted, joined by "+".
 
 import { joinSentences, t } from "../i18n";
 /** Where a UTxO's money came from, as WebAssembly reads it. */
-export type Origin = "own" | "received" | "session" | "lovejoin" | "mixed" | "unknown";
+export type Origin = "own" | "received" | "session" | "change" | "lovejoin" | "mixed" | "unknown";
 
 /** A UTxO's history: UTxOs of one class share it, and spending them together ties nothing new. */
 export interface HistoryClass {
@@ -65,6 +72,13 @@ export const mixedBox = (txHash: string): HistoryClass => ({ id: `box:${txHash}`
 /** Money with no history, by the transaction that made it: kept apart from other such money while anything else's is known. */
 export const unknownIn = (txHash: string): HistoryClass => ({ id: `unknown:${txHash}`, origin: "unknown" });
 /**
+ * The way back, withdraw `txHash`, of a box whose making the wallet can't place: one someone else put in (a register
+ * copied as found included), one Koios hasn't said of, one nobody asked about. Still a box to selection, taken last and
+ * one at a time, and after money others paid by a stealth mint and a funding, tagged Back from Lovejoin and Unknown, and
+ * a box to a review (chunk 51, round three: l2rank#1, l2time#1, l2time#3, l2still#1).
+ */
+export const unplacedBox = (txHash: string): HistoryClass => merged([boxFrom(txHash), unknownIn(txHash)]);
+/**
  * What transaction `txHash`, a spend of this phrase's made elsewhere, left here: one that spent the wallet's own rows,
  * which only this phrase's key can, though this device sent nothing of it (chunk 51, gap-g9#1). A funding takes it
  * last, as another session's money, which it may be.
@@ -73,10 +87,11 @@ export const spentElsewhere = (txHash: string): HistoryClass => ({ id: `elsewher
 /**
  * The part a spend of the wallet's own, transaction `txHash`, adds to what it leaves in the private balance, its
  * change: that money is tied in the open to what the spend paid (a new Seedelf, a pool's start, a payment), so a
- * stealth mint or a funding takes it after money others paid and a box a mix brought back, as another session's money
- * (chunk 51, the owner's answer 2 to B15). A Make public to one of the user's own accounts adds that account's instead.
+ * stealth mint or a funding takes it after money others paid and a box a mix brought back (chunk 51, the owner's
+ * answer 2 to B15), and, nothing fresher paying, before money made private (`merged`; the owner's answer of
+ * 2026-11-18, l2rank#6). A Make public to one of the user's own accounts adds that account's instead.
  */
-export const leftBy = (txHash: string): HistoryClass => ({ id: `change:${txHash}`, origin: "session" });
+export const leftBy = (txHash: string): HistoryClass => ({ id: `change:${txHash}`, origin: "change" });
 
 /**
  * The form `madePrivate` wrote before chunk 18, when there was one public
@@ -108,7 +123,11 @@ const elsewhere = (part: string) => part.startsWith("elsewhere:");
 /** A part `leftBy` wrote: ranked as a session's money, and said as change. */
 const left = (part: string) => part.startsWith("change:");
 
-/** Where a part came from. None reads "mixed": that names a box's way back alone (`mixedBox`), never merged money. */
+/**
+ * Where a part came from. None reads "mixed": that names a box's way back alone (`mixedBox`), never merged money. Nor
+ * "change": a spend's change reads as a session's here, and `merged` names it change where nothing else it carries
+ * ranks it later.
+ */
 function originOf(part: string): Origin {
   if (canonicalPart(part).startsWith("public:")) return "own";
   if (part.startsWith("received:")) return "received";
@@ -120,10 +139,24 @@ function originOf(part: string): Origin {
 /** When merged money is ranked for selection, the tie that reaches furthest names it. */
 const REACH: Origin[] = ["session", "own", "received", "lovejoin", "unknown"];
 
-/** Whether `value` reads as a class: of any origin, a box a mix moved too (`mixedBox`). */
+/**
+ * The origin of money whose history is `all` (each part once): the tie that reaches furthest (REACH), but "change" for
+ * a spend's change that names no public account, no session and no spend made elsewhere, which a stealth mint, a pool's
+ * start and a funding take before money made private, nothing fresher paying (chunk 51, the owner's answer of
+ * 2026-11-18, l2rank#6). Change that names one of those ranks with that money, as a session's: after money made
+ * private. WebAssembly's `merged_class` reads it the same way.
+ */
+function originOfAll(all: string[]): Origin {
+  const origins = all.map(originOf);
+  const origin = REACH.find((o) => origins.includes(o)) ?? "unknown";
+  const later = (p: string) => p.startsWith("session:") || elsewhere(p) || accountIn(p) !== undefined;
+  return origin === "session" && all.some(left) && !all.some(later) ? "change" : origin;
+}
+
+/** Whether `value` reads as a class: of any origin, a box a mix moved too (`mixedBox`), and a spend's change (`merged`). */
 export function isHistoryClass(value: unknown): value is HistoryClass {
   const c = value as HistoryClass | undefined;
-  return typeof c?.id === "string" && c.id !== "" && (REACH.includes(c.origin) || c.origin === "mixed");
+  return typeof c?.id === "string" && c.id !== "" && (REACH.includes(c.origin) || c.origin === "mixed" || c.origin === "change");
 }
 
 /**
@@ -141,8 +174,36 @@ export function readClass(value: unknown): HistoryClass | undefined {
 export function merged(classes: HistoryClass[]): HistoryClass {
   const all = [...new Set(classes.flatMap(parts))].sort();
   if (!all.length) return UNKNOWN;
-  const origins = all.map(originOf);
-  return { id: all.join("+"), origin: REACH.find((o) => origins.includes(o))! };
+  return { id: all.join("+"), origin: originOfAll(all) };
+}
+
+/**
+ * What a private spend of the wallet's own, transaction `txHash`, left in the private balance reads as, its history
+ * kept as `kept` (activity.ts classOf): with the spend's own part (`leftBy`) where that history was kept before the part
+ * was, as every spend's before this release, so it ranks and is tagged as change; never where it names a public
+ * account, which a Make public to one of the user's own accounts names instead of the part. Its origin is what `merged`
+ * gives its parts today. Read so, it asks nothing and keeps nothing new (chunk 51, l2time#2, l2rank#6).
+ */
+export function spendLeft(kept: HistoryClass, txHash: string): HistoryClass {
+  const all = parts(kept);
+  if (all.some(left)) return merged([kept]);
+  if (all.some((p) => accountIn(p) !== undefined)) return kept;
+  return merged([kept, leftBy(txHash)]);
+}
+
+/**
+ * `c` less its boxes: each `box:<tx>` part, and the `unknown:<tx>` a box whose making the wallet can't place carries
+ * (`unplacedBox`). `c` itself when it names no box; undefined when nothing else is left. What a stranger's copy of a
+ * register already on chain takes of the row it copies, its own Unknown in the box's place: whoever wrote the copy
+ * knows it, and no box is what a payer knows (activity.ts classes; chunk 51, money#1, own#2, l2rank#4).
+ */
+export function withoutBoxes(c: HistoryClass): HistoryClass | undefined {
+  const all = parts(c);
+  const boxes = all.filter((p) => p.startsWith("box:"));
+  if (!boxes.length) return c;
+  const ofABox = new Set(boxes.map((p) => `unknown:${p.slice("box:".length)}`));
+  const rest = all.filter((p) => !p.startsWith("box:") && !ofABox.has(p));
+  return rest.length ? merged(rest.map((id) => ({ id, origin: originOf(id) }))) : undefined;
 }
 
 /** The session indexes among `c`'s parts. */
@@ -225,10 +286,18 @@ export function historiesNote(
   // it merges none.
   const classes = [...new Map(spent.map((c) => [parts(c).join("+"), c])).values()];
   const all = [...new Set(classes.flatMap(parts))];
-  const boxes = all.filter((p) => p.startsWith("box:")).length;
+  const box = (p: string) => p.startsWith("box:");
+  // A box an earlier spend took is that spend's change now, said as change: no box back from Lovejoin here, nor any
+  // of a mix to undo (chunk 51, l2rank#5).
+  const boxes = new Set(classes.flatMap((c) => (parts(c).some(left) ? [] : parts(c).filter(box)))).size;
   const received = all.filter((p) => p.startsWith("received:")).length;
+  // What an earlier spend of the wallet's own left (`leftBy`), by that spend (chunk 51, l2rank#5).
+  const changes = all.filter(left).length;
+  // A box whose making the wallet can't place carries its own unknown:<tx> (`unplacedBox`): that's the box, said as
+  // one, never money of another transaction (chunk 51, round three).
+  const ofABox = new Set(all.filter(box).map((p) => `unknown:${p.slice("box:".length)}`));
   // What another profile's spend left is money the wallet has no history for, as its tag says (chunk 51, gap-g9#1).
-  const unknown = all.filter((p) => originOf(p) === "unknown" || elsewhere(p)).length;
+  const unknown = all.filter((p) => (originOf(p) === "unknown" || elsewhere(p)) && !ofABox.has(p)).length;
   const sessions = [...new Set(classes.flatMap(sessionsIn))];
   const others = sessions.filter((i) => i !== session);
   // Which public accounts money was made private from: more than one, and
@@ -239,6 +308,7 @@ export function historiesNote(
     const kinds = [
       ...(boxes ? [t("histories.kind.privacy.boxes", { count: boxes })] : []),
       ...(received ? [t("histories.kind.privacy.received", { count: received })] : []),
+      ...(changes ? [t("histories.kind.privacy.change", { count: changes })] : []),
       ...(accounts.length
         ? [
             accounts.length > 1 || accounts[0] !== 0
@@ -253,7 +323,8 @@ export function historiesNote(
     // What's spent together, as a fact: another choice might have paid, merging other histories (independent review L39).
     const lead = t(max ? "histories.privacy.leadMax" : "histories.privacy.lead");
     const lovejoin = boxes ? t("histories.privacy.lovejoinUndone", { count: boxes }) : "";
-    said.push(t("histories.privacy.together", { lead, kinds: listed(kinds), lovejoin }));
+    // Never with nothing to name: "This spends  together" (chunk 51, l2rank#5).
+    if (kinds.length) said.push(t("histories.privacy.together", { lead, kinds: listed(kinds), lovejoin }));
   }
   if (accounts.length > 1) {
     said.push(t("histories.privacy.accounts", { accounts: accountNames(accounts) }));

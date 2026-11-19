@@ -712,6 +712,7 @@
   "hint.hide": "説明を隠す",
   "hint.show": "説明を表示",
   "histories.kind.privacy.boxes_other": "Lovejoin から戻った {{count}} 件のボックス",
+  "histories.kind.privacy.change_other": "以前の {{count}} 件の支払いのおつり",
   "histories.kind.privacy.madePrivate": "あなたがプライベートにしたお金",
   "histories.kind.privacy.madePrivateFrom": "{{accounts}} からあなたがプライベートにしたお金",
   "histories.kind.privacy.received_other": "あなたが受け取った {{count}} 件の支払い",

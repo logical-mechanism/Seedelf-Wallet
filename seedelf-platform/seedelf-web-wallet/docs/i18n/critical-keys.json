@@ -126,6 +126,7 @@
   "handleWarning.note",
   "handleWarning.returning",
   "histories.kind.privacy.boxes",
+  "histories.kind.privacy.change",
   "histories.kind.privacy.madePrivate",
   "histories.kind.privacy.madePrivateFrom",
   "histories.kind.privacy.received",

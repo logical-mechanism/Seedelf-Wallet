@@ -113,10 +113,9 @@ import {
   madePrivate,
   merged,
   mixedBox,
-  receivedIn,
   sessionClass,
   UNKNOWN,
-  unknownIn,
+  unplacedBox,
   type HistoryClass,
 } from "../shared/histories";
 import { nothingInAccount, readAccount } from "./account";
@@ -1006,17 +1005,26 @@ interface Schedule {
    * moved since (backOrder, privacy review §3.6).
    */
   leaves?: Record<string, string>;
+  /**
+   * Of `leaves`, those a mix of their chain made, as its record said when it went: a box a mix moved, which a stealth
+   * mint takes first (mixedBoxOf). A Bootstrap's or a seed's leaves are its deposit's own boxes, never here. Nor is a
+   * leaf kept before chunk 51's round three, when nothing said which: it reads as a box whose making the wallet can't
+   * place (chunk 51, l2rank#3, l2still#2). Kept while `leaves` keeps it.
+   */
+  mixedLeaves?: string[];
   /** What made each box no record accounts for, as Koios said, by the transaction that made it (found). */
   origins?: Record<string, Origin>;
   /**
-   * The public account whose deposit put boxes where they still are, by that deposit, once its chain's record went: a
-   * seed's or a Bootstrap's, no mix after it, whose leaves are the deposit's own boxes. Such a box's way back ties that
-   * account to the private UTxO it makes (depositAccountOf), whatever its mix's count says by then: entries close by
-   * count, and another box counted first closes one early (1.6.0's release review, 316#1). Kept as an Origin is, while
-   * a read lists a box there and RECORD_KEEP_MS after. No rule of how boxes come back reads it, as an Origin's `mixed`
-   * would be: a Bootstrap's held box would read as not mixed yet too.
+   * The public account, or the private session, whose deposit put boxes where they still are, by that deposit, once
+   * its chain's record went: a seed's or a Bootstrap's, no mix after it, whose leaves are the deposit's own boxes. Such
+   * a box's way back ties that account, or that session, to the private UTxO it makes (depositAccountOf,
+   * depositSessionOf), whatever its mix's count says by then: entries close by count, and another box counted first
+   * closes one early (1.6.0's release review, 316#1; chunk 51, l2rank#3, l2still#2: a private one's too, and one an
+   * open entry still names after 1.9.1 dropped its record). Kept as an Origin is, while a read lists a box there and
+   * RECORD_KEEP_MS after. No rule of how boxes come back reads it, as an Origin's `mixed` would be: a Bootstrap's held
+   * box would read as not mixed yet too.
    */
-  depositors?: Record<string, { account: number; seen: number }>;
+  depositors?: Record<string, { account?: number; session?: number; seen: number }>;
   /**
    * The transactions that made boxes no record accounts for that a pool read
    * asked Koios of and it didn't answer for, or didn't know: each is asked
@@ -1306,11 +1314,10 @@ interface Withdrawing {
   /**
    * The private balance paid its fee (the owner's call 36): what its history says the private UTxO it makes came
    * from, the box's way back merged with the UTxO that paid, and any account `ties` names (tiedOrigin), as withdrawOne
-   * wrote it. `lovelace` is then what came in: the output less that UTxO, which was private already. Its box someone
-   * else, or another device, put in under the wallet's key, the way back is money received, paid or not (someoneElses;
-   * chunk 51, e1a#1). Or, paid or not, what put the box there: a private session's deposit, its session's money; a box
-   * whose making the wallet can't tell, Unknown; a box a mix moved, marked so (chunk 51, time#1, still#1; the owner's
-   * answer 4 to B15).
+   * wrote it. `lovelace` is then what came in: the output less that UTxO, which was private already. Or, paid or not,
+   * what the wallet knows put the box there: a box a mix moved, marked so; a private session's deposit, its session's
+   * money; anything else the wallet can't place, someone else's box under its key included, a box of unknown making
+   * (unplacedBox; chunk 51, time#1, still#1, e1a#1, round three; the owner's answer 4 to B15).
    */
   origin?: HistoryClass;
   /**
@@ -2148,7 +2155,10 @@ const notMixedYet = (s: Schedule, owned: OutRef[]) => [...unmixedOf(s.chains, ow
  * Only the pool reads go by it (status, and withdrawDue's schedule): a count
  * can miss a box, a chain's last mix a node dropped after it was all sent
  * leaving its due time to one a restore found, say. Where a box is taken, it
- * isn't relied on: what made each is asked of then (made).
+ * isn't relied on: what made each is asked of then (made). Not by Bring every
+ * box back now, nor the retired pools' run, which take every box and ask
+ * nothing: one no record names comes back as a box whose making the wallet
+ * can't place (withdrawOne; chunk 51, l2time#1).
  */
 function moreThanDue(s: Schedule, owned: OutRef[], listed: OutRef[], p = CLASSIC, retired = false): boolean {
   // Per pool, each pool's boxes against its own due times: `owned` and `listed` are pool `p`'s. A Bootstrap's boxes
@@ -2391,7 +2401,8 @@ function depositAccountOf(s: Schedule, b: OutRef): number | undefined {
 /**
  * The private session whose deposit put box `b` where it is, when one did and no mix has moved it since, as
  * depositAccountOf finds a public account's: a session's chain's deposit, its collateral's too (Tail `deposit`), or a
- * private Bootstrap's; after a restore, a deposit Koios said one of the phrase's one-time keys paid (`oneTime`: each
+ * private Bootstrap's, kept by its deposit once its record and its mix went (`depositors`, chunk 51, l2rank#3,
+ * l2still#2); after a restore, a deposit Koios said one of the phrase's one-time keys paid (`oneTime`: each
  * key, lower case, with its session index). A deposit's only, never a mix's: a mix a session's one-time account paid
  * has that key among its inputs too, and its boxes stay boxes, as PRIV-3 has a public mix's. The box's way back ties
  * that session to the private UTxO it makes, on chain (chunk 51, time#1, still#1, own#4, money#3).
@@ -2401,12 +2412,15 @@ function depositSessionOf(s: Schedule, b: OutRef, oneTime: ReadonlyMap<string, n
   if (chain) return chain.session;
   const entry = (s.mixes ?? []).find((e) => (e.deposit ?? (e.bootstrap || e.seed ? e.id : undefined)) === b.txHash);
   if (entry) return entry.session;
+  // Its entry closed too, by count, with this box still out: whose deposit it was, kept by that deposit (l2rank#3).
+  const kept = s.depositors?.[b.txHash];
+  if (kept) return kept.session;
   const told = s.origins?.[b.txHash];
   if (!told || told.public || mixedFor(told, poolOf(b)) !== false) return undefined;
   return told.inputs?.map((k) => (k.cred === undefined ? undefined : oneTime.get(k.cred.toLowerCase()))).find((i) => i !== undefined);
 }
 
-/** The deposits the wallet's records name: its chains' and their collaterals', its mixes' kept in the list, and a public one's kept after its record went. */
+/** The deposits the wallet's records name: its chains' and their collaterals', its mixes' kept in the list, and a seed's or a Bootstrap's kept after its record went (`depositors`). */
 const depositsNamed = (s: Schedule) =>
   new Set([
     ...s.chains.flatMap((c) => [...(c.deposit ? [c.deposit] : []), ...(c.tail ? [c.tail.deposit] : [])]),
@@ -2417,18 +2431,30 @@ const depositsNamed = (s: Schedule) =>
     ...Object.keys(s.depositors ?? {}),
   ]);
 
+/** The transactions of chain `c` that mix the wallet's boxes: its mixes, and its collateral's (ChainRecord `tail`). */
+const mixesOf = (c: ChainRecord): string[] => [...c.mixes, ...(c.tail ? [c.tail.mix] : [])];
+
 /**
  * Whether box `b` is where a mix put it, as the wallet's records or Koios's answer say: a leaf one of its chains' mixes
- * made, kept with its record or after it (`leaves`), or, with no record of it, one Koios said a mix in its pool made.
- * Never a deposit's box, a Bootstrap's or a seed's leaves included, nor one a chain of its own made short of its last
- * mixes, which it holds as not mixed yet (unmixedOf). Its way back alone is what a stealth mint takes first (chunk 51,
- * the owner's answer 4 to B15).
+ * made, kept with its record, or after it where the record said a mix made it (`mixedLeaves`), or, with no record of
+ * it, one Koios said a mix in its pool made. Never a deposit's box, a Bootstrap's or a seed's leaves included, whether
+ * its mix's count closed and whatever records of it went (chunk 51, l2rank#3, l2still#2), nor one a chain of its own
+ * made short of its last mixes, which it holds as not mixed yet (unmixedOf). A leaf kept before the record said, which
+ * may be either, isn't one either. Its way back alone is what a stealth mint takes first (chunk 51, the owner's answer
+ * 4 to B15).
  */
 function mixedBoxOf(s: Schedule, b: OutRef): boolean {
   if (depositsNamed(s).has(b.txHash)) return false;
-  if (ownLeaves(s).has(ref(b))) return true;
+  if (s.chains.some((c) => mixesOf(c).includes(b.txHash) && c.leaves.some((l) => ref(l) === ref(b)))) return true;
+  if (s.mixedLeaves?.includes(ref(b))) return true;
   return !recorded(s)(b) && mixedFor(s.origins?.[b.txHash], poolOf(b)) === true;
 }
+
+/**
+ * Whether box `b` is one a mix of the wallet's own recorded chains made short of its last mixes (unmixedOf): no box a
+ * mix moved all the way, but a box whose making the wallet knows, as PRIV-3 has a mix's output.
+ */
+const ownMixOf = (s: Schedule, b: OutRef): boolean => s.chains.some((c) => mixesOf(c).includes(b.txHash));
 
 /**
  * What a box back from Lovejoin, withdraw `txHash`, leaves in the private balance's history (activity.ts `origin`):
@@ -2484,6 +2510,7 @@ const empty = (s: Schedule) =>
   !s.notMixed &&
   !s.withdrawing &&
   !Object.keys(s.leaves ?? {}).length &&
+  !s.mixedLeaves?.length &&
   !Object.keys(s.origins ?? {}).length &&
   !Object.keys(s.depositors ?? {}).length &&
   !Object.keys(s.asking ?? {}).length &&
@@ -2726,10 +2753,11 @@ function bootstrapOf(s: Schedule, owned: OutRef[]): OutRef[] {
  * name's. One kept before origins kept their inputs (1.9.1's) can't be told either way: rejudge has it asked about once
  * more, its box held as unsure meanwhile, so Mix my boxes again waits for the answer rather than call a deposit of the
  * wallet's own someone else's and leave it out (chunk 51, time#4). Only in a retired pool, never asked again, does it
- * read as someone else's here, which classes its box brought back as money received. Another device's session past
- * the book's indices reads as someone else's too, which only leaves its box out of Mix my boxes again. A box a mix
- * made is never one: a mix's box inputs aren't traced, so one its depositor mixed themselves reads as the wallet's own,
- * and they can still follow it (chunk 51, own#3, the owner's call).
+ * read as someone else's here. Another device's session past the book's indices reads as someone else's too. Each is
+ * left out of Mix my boxes again, and brought back, comes back as every box whose making the wallet can't place does,
+ * after money others paid (withdrawOne, unplacedBox; chunk 51, l2rank#1, l2time#3). A box a mix made is never one: a
+ * mix's box inputs aren't traced, so one its depositor mixed themselves reads as the wallet's own, and they can still
+ * follow it (chunk 51, own#3, the owner's call).
  */
 function someoneElsesOf(s: Schedule, owned: OutRef[], oneTime: Pick<ReadonlySet<string>, "has">, origins: Record<string, Origin> = s.origins ?? {}): OutRef[] {
   const named = new Set([...(s.mixes ?? []).map((e) => depositOf(s, e)), ...Object.keys(s.depositors ?? {})]);
@@ -6255,7 +6283,8 @@ export class LovejoinService {
   }> {
     const now = this.deps.now();
     // What made a box, judged against the accounts the wallet knows now (chunk 51, gap-g6#2), and a deposit's kept
-    // without its inputs asked about once more (e1a#1), but in a retired pool, where what made a box decides nothing.
+    // without its inputs asked about once more (e1a#1), but in a retired pool, where every box comes back whatever made
+    // it: one never asked again comes back as a box of unknown making (withdrawOne; chunk 51, l2time#3).
     await this.rejudge(network, owned.filter((b) => !old.has(poolOf(b))));
     const before = await this.read(network);
     const { chains } = before;
@@ -6326,19 +6355,37 @@ export class LovejoinService {
         if (!c?.ended || c.maybe || keep(c) || !e.shares.every((x) => pools.includes(poolOf(x)))) continue;
         for (const share of e.shares) share.back = Math.max(0, share.boxes - (share.moved ?? 0));
       }
-      // Each with whose chain it was, a public one's account too (ownerOf).
-      const gone = s.chains.filter((c) => !keep(c)).flatMap((c) => c.leaves.map((l) => [ref(l), ownerOf(c)] as const));
+      // Each with whose chain it was, a public one's account too (ownerOf), and, apart, those a mix of it made: a box
+      // a mix moved, which a Bootstrap's or a seed's leaves, its deposit's own boxes, are not (mixedBoxOf; chunk 51,
+      // l2rank#3, l2still#2).
+      const goes = s.chains.filter((c) => !keep(c));
+      const gone = goes.flatMap((c) => c.leaves.map((l) => [ref(l), ownerOf(c)] as const));
       const leaves = Object.entries({ ...s.leaves, ...Object.fromEntries(gone) }).filter(([r]) => there.has(r));
       if (leaves.length) s.leaves = Object.fromEntries(leaves);
       else delete s.leaves;
-      // A public deposit no mix followed, a seed's or a Bootstrap's, keeps whose it was: its boxes still there tie that
-      // account on their way back, whatever their mix's count says by then (depositAccountOf, 316#1). It goes as what
-      // made a box does, once no read has listed a box there for a while.
+      const mixedGone = goes.flatMap((c) => c.leaves.filter((l) => mixesOf(c).includes(l.txHash)).map(ref));
+      const mixedLeaves = [...new Set([...(s.mixedLeaves ?? []), ...mixedGone])].filter((r) => s.leaves?.[r] !== undefined);
+      if (mixedLeaves.length) s.mixedLeaves = mixedLeaves;
+      else delete s.mixedLeaves;
+      // A deposit no mix followed, a seed's or a Bootstrap's, keeps whose it was, a public account's or a private
+      // session's: its boxes still there tie that account, or that session, on their way back, whatever their mix's
+      // count says by then (depositAccountOf, depositSessionOf; 316#1, and chunk 51, l2rank#3, for a session's). It
+      // goes as what made a box does, once no read has listed a box there for a while.
+      const whose = (session: number | undefined, account: number | undefined) =>
+        session === undefined ? { account: account ?? 0, seen: now } : { session, seen: now };
       for (const c of s.chains) {
-        if (keep(c) || c.session !== undefined || !c.deposit || c.mixes.length) continue;
-        (s.depositors ??= {})[c.deposit] ??= { account: c.account ?? 0, seen: now };
+        if (keep(c) || !c.deposit || c.mixes.length) continue;
+        (s.depositors ??= {})[c.deposit] ??= whose(c.session, c.account);
       }
-      const depositors = Object.entries(s.depositors ?? {}).flatMap(([tx, d]): Array<[string, { account: number; seen: number }]> =>
+      // So does one its open entry names, its record gone already: 1.9.1 kept none for a private Bootstrap, whose record
+      // went 3 h after it ended, so its mix's count closing early left its box read as one a mix moved (chunk 51,
+      // l2still#2). A private one's id is its return's, never its deposit.
+      for (const e of entries(s)) {
+        if (!(e.bootstrap || e.seed) || s.chains.some((c) => c.id === e.id)) continue;
+        const deposit = e.deposit ?? (e.session === undefined ? e.id : undefined);
+        if (deposit) (s.depositors ??= {})[deposit] ??= whose(e.session, e.account);
+      }
+      const depositors = Object.entries(s.depositors ?? {}).flatMap(([tx, d]): Array<[string, NonNullable<Schedule["depositors"]>[string]]> =>
         listedTxs.has(tx) ? [[tx, { ...d, seen: now }]] : now - d.seen < RECORD_KEEP_MS ? [[tx, d]] : [],
       );
       if (depositors.length) s.depositors = Object.fromEntries(depositors);
@@ -8139,16 +8186,12 @@ export class LovejoinService {
     let ties: number[] | undefined;
     // Paid from the private balance, what came in is the box's own: the UTxO that paid was private already.
     const lovelace = spent ? (BigInt(built.lovelace) - BigInt(spent.lovelace)).toString() : built.lovelace;
-    // A box someone else, or another device, put in under the wallet's key comes back as money received: whoever put
-    // it in can follow it, as a payer can a payment, so the stealth mint and a funding take it as they'd take a payment
-    // from them, never as a box back from Lovejoin, which the stealth mint takes first (chunk 51, e1a#1, with
-    // gap-g1#1's part b).
+    // What made the box, as the wallet's records and what Koios said already have it: nothing more is asked for its
+    // class. A deposit Koios said one of the phrase's one-time keys paid, after a restore: which session's is told by
+    // the key, derived on the device for such a box alone (chunk 51, still#1).
     const before = await this.read(network);
-    const received = (await this.someoneElses(network, before, [box])).length > 0;
-    // A deposit Koios said one of the phrase's one-time keys paid, after a restore: which session's is told by the key,
-    // derived on the device for such a box alone (chunk 51, still#1).
     const told = before.origins?.[box.txHash];
-    const oneTime = !received && told && !told.public && mixedFor(told, poolOf(box)) === false ? await this.oneTimeKeys(network) : new Map<string, number>();
+    const oneTime = told && !told.public && mixedFor(told, poolOf(box)) === false ? await this.oneTimeKeys(network) : new Map<string, number>();
     let origin: HistoryClass | undefined;
     await this.update(network, (s) => {
       const time = takeDue(s, due, pool.id);
@@ -8157,25 +8200,34 @@ export class LovejoinService {
       const deposited = depositAccountOf(s, box);
       const tied = [...new Set([payer, deposited].filter((a): a is number => a !== undefined))].sort((a, b) => a - b);
       ties = tied.length ? tied : undefined;
-      // A private session's deposit that no mix moved since makes it that session's money, as a public account's makes
-      // it that account's: anyone can follow it back to the session and what funded it. One whose making the wallet
-      // can't tell is Unknown. Only a box a mix moved, as its records or Koios say, is marked so, its way back alone:
-      // the box a stealth mint takes first. Any other box's ranks as one brought back before that mark was kept, after
-      // money others paid (chunk 51, time#1, still#1, own#4, money#3; the owner's answer 4 to B15).
-      const session = received ? undefined : depositSessionOf(s, box, oneTime);
-      const own = received
-        ? receivedIn(built.txHash)
+      // Classed by what the wallet knows of the box (chunk 51, round three; the owner's answers of 2026-11-18):
+      // - one a mix moved, as its records or Koios say, never a deposit's own box: marked so, its way back alone, the
+      //   box a stealth mint takes first (answer 4 to B15, time#1; l2rank#3, l2still#2);
+      // - one a private session deposited, no mix since: that session's money, which anyone can follow back to the
+      //   session and what funded it, as a public account's deposit ties that account (`ties`, PRIV-3; still#1, own#4,
+      //   money#3);
+      // - one a mix of the wallet's own chains made short of its last mixes: a box, as PRIV-3 has a mix's output;
+      // - anything else, one someone else put in under the wallet's key (a register copied as found included), one
+      //   Koios hasn't said of, one nobody asked about (Bring every box back now and the retired pools' run ask
+      //   nothing), a 1.9.1 answer kept with no inputs: a box whose making the wallet can't place, which a stealth mint
+      //   and a funding take after money others paid, and selection still takes last, one at a time (unplacedBox;
+      //   e1a#1's approved (4), l2rank#1, l2time#1, l2time#3, l2still#1).
+      const session = depositSessionOf(s, box, oneTime);
+      const own = mixedBoxOf(s, box)
+        ? mixedBox(built.txHash)
         : session !== undefined
           ? merged([boxFrom(built.txHash), sessionClass(session)])
-          : !knownOf(s)(box) && !depositsNamed(s).has(box.txHash)
-            ? unknownIn(built.txHash)
-            : mixedBoxOf(s, box)
-              ? mixedBox(built.txHash)
-              : boxFrom(built.txHash);
+          : deposited !== undefined || ownMixOf(s, box)
+            ? boxFrom(built.txHash)
+            : unplacedBox(built.txHash);
       // The private UTxO that paid is in the one it comes back into: its history goes with the box's (call 36). Merged,
       // a box a mix moved is a box no longer.
       const besides = [...(spent ? [spent.class] : []), ...(ties ?? []).map(madePrivate)];
-      origin = spent || received || own.origin !== "lovejoin" ? (besides.length ? merged([own, ...besides]) : own) : undefined;
+      // Written but for a box's alone, which the history reads from the withdraw's kind (activity.ts classOf), the
+      // accounts its way back ties added there (tiedOrigin). Unwritten, a box whose making the wallet can't place read
+      // as a box alone (l2still#1).
+      const plain = own.origin === "lovejoin" && own.id === boxFrom(built.txHash).id;
+      origin = spent || !plain ? (besides.length ? merged([own, ...besides]) : own) : undefined;
       s.withdrawing = {
         txHash: built.txHash,
         txCbor: finished.txCbor,
@@ -8483,14 +8535,19 @@ export class LovejoinService {
             ),
           }
         : {}),
-      // Kept before a deposit's account was (316#1): none. One that doesn't read as one is left out.
+      // Kept before a deposit's account was (316#1): none. One that doesn't read as one is left out: an account's, or,
+      // since chunk 51's round three, a private session's (l2rank#3).
       ...(record(kept?.depositors)
         ? {
             depositors: Object.fromEntries(
-              Object.entries(kept!.depositors!).filter(([, d]) => record(d) && Number.isInteger(d.account) && typeof d.seen === "number"),
+              Object.entries(kept!.depositors!).filter(
+                ([, d]) => record(d) && (Number.isInteger(d.account) || Number.isInteger(d.session)) && typeof d.seen === "number",
+              ),
             ),
           }
         : {}),
+      // Kept before the leaves a mix made were (chunk 51, l2rank#3): none, and those kept read as either.
+      ...(Array.isArray(kept?.mixedLeaves) ? { mixedLeaves: kept.mixedLeaves.filter((r) => typeof r === "string") } : {}),
       ...(record(kept?.asking)
         ? { asking: Object.fromEntries(Object.entries(kept!.asking!).filter(([, seen]) => typeof seen === "number")) }
         : {}),

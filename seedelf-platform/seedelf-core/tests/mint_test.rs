@@ -3071,9 +3071,25 @@ mod apart {
         let change = owned(&w, 0x0c, 1, 7_600_000, &[]);
         let received = owned(&w, 0x02, 0, 50_000_000, &[]);
         let first = hex::encode([0x0c; 32]);
+        // As the worker reads it since chunk 51's round three: an earlier spend's change (l2rank#6).
         let tied = class(
             &format!("box:{}+change:{first}", hex::encode([0x0b; 32])),
-            Origin::Session,
+            Origin::Change,
+        );
+        let mixed = owned(&w, 0x20, 0, 30_000_000, &[]);
+        assert_eq!(
+            minted(
+                &w,
+                &[
+                    (&change, tied.clone()),
+                    (
+                        &mixed,
+                        class(&format!("box:{}", mixed.tx_hash), Origin::Mixed)
+                    )
+                ]
+            ),
+            one(&mixed),
+            "a box a mix moved goes before an earlier spend's change, however larger"
         );
         assert_eq!(
             minted(
@@ -3096,9 +3112,9 @@ mod apart {
         );
     }
 
-    /// Chunk 51, money#1, own#2: a stranger's copy (d = 1) of a Seedelf minted from a box back from Lovejoin takes that
-    /// Seedelf's history, or Unknown where that history is a box's. Either way the next stealth mint takes the boxes
-    /// before it, however small the copy.
+    /// Chunk 51, money#1, own#2, l2rank#4: a stranger's copy (d = 1) of a Seedelf minted from a box back from Lovejoin
+    /// takes that Seedelf's history less the box, its own Unknown in the box's place, or Unknown alone where that
+    /// history is a box's. Either way the next stealth mint takes the boxes before it, however small the copy.
     #[test]
     fn a_copy_of_a_box_paid_seedelfs_register_goes_after_the_boxes() {
         let w = world();
@@ -3107,6 +3123,11 @@ mod apart {
         let seedelf_tx = hex::encode([0x5e; 32]);
         for copied in [
             class(&format!("unknown:{}", copy.tx_hash), Origin::Unknown),
+            class(
+                &format!("change:{seedelf_tx}+unknown:{}", copy.tx_hash),
+                Origin::Change,
+            ),
+            // As round two read it, the box kept.
             class(
                 &format!("box:{}+change:{seedelf_tx}", hex::encode([0xb1; 32])),
                 Origin::Session,
@@ -3212,6 +3233,156 @@ mod apart {
             fund(&histories(top_up, &of), &available),
             outpoints(&[change])
         );
+    }
+
+    /// What a new private session's funding of `lovelace` and its 5 ₳ collateral over `known` spends.
+    fn funded(w: &World, known: &[(&UtxoResponse, Class)], lovelace: u64) -> Vec<String> {
+        let available: Vec<UtxoResponse> = known.iter().map(|(u, _)| (*u).clone()).collect();
+        let h = histories(
+            Purpose::Fund {
+                session: Some("session:7".into()),
+            },
+            known,
+        );
+        let spend = build::sweep_many_apart(
+            &w.chain,
+            &available,
+            &h,
+            &funding(lovelace),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        outpoints(&spend.inputs())
+    }
+
+    /// Chunk 51, l2rank#6, the owner's answer of 2026-11-18 ("earlier change first"): nothing fresher paying (no box a
+    /// mix moved, no money others paid), a stealth mint, a pool's start and a funding take an earlier private spend's
+    /// change, which ties the new Seedelf or session to that spend, before money made private, which ties it to the
+    /// public account. The worker reads such change `change` (Origin::Change). Change whose history names a public
+    /// account or a session reads as a session's, and stays after that money: never the smaller one taken first, its
+    /// spend's tie on top of the account's.
+    #[test]
+    fn an_earlier_spends_change_goes_before_money_made_private() {
+        let w = world();
+        let moved_in = owned(&w, 0x01, 0, 50_000_000, &[]);
+        let change = owned(&w, 0x0c, 1, 40_000_000, &[]);
+        let first = hex::encode([0x0c; 32]);
+        let made_private = class("public:0", Origin::Own);
+        for (paid_by, tied) in [
+            (
+                "a box a mix moved",
+                class(
+                    &format!("box:{}+change:{first}", hex::encode([0x0b; 32])),
+                    Origin::Change,
+                ),
+            ),
+            (
+                "Bob's payment",
+                class(
+                    &format!("change:{first}+received:{}", hex::encode([0xb0; 32])),
+                    Origin::Change,
+                ),
+            ),
+            (
+                "money of no history",
+                class(&format!("change:{first}+unknown"), Origin::Change),
+            ),
+        ] {
+            let known = [(&moved_in, made_private.clone()), (&change, tied)];
+            assert_eq!(
+                minted(&w, &known),
+                one(&change),
+                "a stealth mint, the first spend paid by {paid_by}"
+            );
+            assert_eq!(
+                funded(&w, &known, 30_000_000),
+                one(&change),
+                "a funding, the first spend paid by {paid_by}"
+            );
+        }
+        for named in [
+            class(&format!("change:{first}+public:0"), Origin::Session),
+            class(&format!("change:{first}+session:1"), Origin::Session),
+        ] {
+            let known = [(&moved_in, made_private.clone()), (&change, named.clone())];
+            assert_eq!(
+                minted(&w, &known),
+                one(&moved_in),
+                "a stealth mint, {named:?}"
+            );
+            assert_eq!(
+                funded(&w, &known, 30_000_000),
+                one(&moved_in),
+                "a funding, {named:?}"
+            );
+        }
+    }
+
+    /// Chunk 51, l2rank#6: merging for a funding too, an earlier spend's change comes before money made private: it
+    /// takes the change and one account's money, never two accounts' together.
+    #[test]
+    fn a_funding_merges_an_earlier_spends_change_before_money_made_private() {
+        let w = world();
+        let change = owned(&w, 0x0c, 1, 30_000_000, &[]);
+        let first_account = owned(&w, 0x01, 0, 30_000_000, &[]);
+        let second_account = owned(&w, 0x02, 0, 30_000_000, &[]);
+        let tied = class(
+            &format!(
+                "change:{}+received:{}",
+                hex::encode([0x0c; 32]),
+                hex::encode([0xb0; 32])
+            ),
+            Origin::Change,
+        );
+        let known = [
+            (&change, tied),
+            (&first_account, class("public:0", Origin::Own)),
+            (&second_account, class("public:1", Origin::Own)),
+        ];
+        let spent = funded(&w, &known, 45_000_000);
+        assert_eq!(spent.len(), 2, "{spent:?}");
+        assert!(
+            spent.contains(&format!("{}#1", change.tx_hash)),
+            "the funding spent {spent:?}, two accounts' money, not the change"
+        );
+    }
+
+    /// Chunk 51, round three's rule 1 (l2rank#1, l2time#1, l2time#3, l2still#1): the web wallet's way back of a box
+    /// whose making it can't place, `box:<w>+unknown:<w>`, reads as a box with no record of a mix moving it: a stealth
+    /// mint and a funding take money others paid before it, and selection still takes it last, one at a time.
+    #[test]
+    fn a_box_of_unknown_making_goes_after_money_others_paid_and_stays_a_box() {
+        let w = world();
+        let received = owned(&w, 0x02, 0, 40_000_000, &[]);
+        let unplaced: Vec<(UtxoResponse, Class)> = (0..2u8)
+            .map(|i| {
+                let u = owned(&w, 0x30 + i, 0, BOX, &[]);
+                let c = class(&format!("box:{0}+unknown:{0}", u.tx_hash), Origin::Lovejoin);
+                (u, c)
+            })
+            .collect();
+        let mut known = vec![(&received, received_class(&received))];
+        known.extend(unplaced.iter().map(|(u, c)| (u, c.clone())));
+        assert_eq!(minted(&w, &known), one(&received));
+        assert_eq!(funded(&w, &known, 30_000_000), one(&received));
+        // With money of the user's own that a box tops up: one box, not two.
+        let mine = owned(&w, 0x01, 0, 8_000_000, &[]);
+        let mut known: Vec<(&UtxoResponse, Class)> =
+            unplaced.iter().map(|(u, c)| (u, c.clone())).collect();
+        known.push((&mine, class("public:0", Origin::Own)));
+        let available: Vec<UtxoResponse> = known.iter().map(|(u, _)| (*u).clone()).collect();
+        let h = histories(Purpose::Pay, &known);
+        let pay = [AddressPayment {
+            to: key_address(),
+            lovelace: 15_000_000,
+            tokens: Assets::new(),
+        }];
+        let spent = build::sweep_many_apart(&w.chain, &available, &h, &pay, &w.owner, w.signer)
+            .unwrap()
+            .inputs();
+        assert_eq!(spent.len(), 2);
+        assert!(outpoints(&spent).contains(&format!("{}#0", mine.tx_hash)));
     }
 
     #[test]

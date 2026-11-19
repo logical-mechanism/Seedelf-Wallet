@@ -745,6 +745,8 @@
   "hint.show": "What this means",
   "histories.kind.privacy.boxes_one": "a box back from Lovejoin",
   "histories.kind.privacy.boxes_other": "{{count}} boxes back from Lovejoin",
+  "histories.kind.privacy.change_one": "change from an earlier spend",
+  "histories.kind.privacy.change_other": "change from {{count}} earlier spends",
   "histories.kind.privacy.madePrivate": "money you made private",
   "histories.kind.privacy.madePrivateFrom": "money you made private from {{accounts}}",
   "histories.kind.privacy.received_one": "a payment you received",

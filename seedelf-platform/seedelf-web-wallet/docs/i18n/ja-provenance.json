@@ -705,6 +705,7 @@
   "hint.hide": "machine",
   "hint.show": "machine",
   "histories.kind.privacy.boxes_other": "mtpe",
+  "histories.kind.privacy.change_other": "machine",
   "histories.kind.privacy.madePrivate": "mtpe",
   "histories.kind.privacy.madePrivateFrom": "mtpe",
   "histories.kind.privacy.received_other": "mtpe",

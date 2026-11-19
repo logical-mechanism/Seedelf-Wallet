@@ -5,12 +5,14 @@
 //
 // - A box's way back is classed by what put the box there when no mix moved it since: a private session's deposit (a
 //   Bootstrap's too) is that session's money, as a public account's deposit is that account's (PRIV-3); a box whose
-//   maker the wallet can't tell is Unknown; a box a mix moved, by the wallet's records or Koios's answer, is marked so,
-//   and only it goes first for a stealth mint (time#1, still#1, own#4, money#3).
-// - A stranger's copy (d = 1) of a register already on chain never takes a box's class (money#1, own#2).
+//   maker the wallet can't place is a box of unknown making, `box:<w>+unknown:<w>` (round three, l2still#1); a box a
+//   mix moved, by the wallet's records or Koios's answer, is marked so, and only it goes first for a stealth mint
+//   (time#1, still#1, own#4, money#3).
+// - A stranger's copy (d = 1) of a register already on chain never takes a box (money#1, own#2, l2rank#4).
 // - What a spend of the wallet's own leaves is tied to that spend in the open: a part naming it, `change:<tx>`, or the
 //   account's for a Make public to one of the user's own accounts, so a stealth mint and a funding take money others
-//   paid first (money#2, own#1, the owner's answer 2).
+//   paid first (money#2, own#1, the owner's answer 2), and, nothing fresher paying, before money made private: its
+//   origin reads `change` (round three, l2rank#6).
 //
 // Driven through the worker's services with the real WebAssembly. The cases marked so need it built with core's ranks
 // of this round (Origin::Mixed): the package from before reads a `mixed` origin as no origin at all.
@@ -162,7 +164,7 @@ describe("a box's way back, classed by what put the box there (chunk 51, time#1,
     expect(entry.origin).toEqual({ id: `box:${back.txHash}+session:3`, origin: "session" });
   });
 
-  it("one whose making the wallet can't tell, brought back anyway, is Unknown", async () => {
+  it("one whose making the wallet can't tell, brought back anyway, is a box of unknown making (chunk 51, l2still#1)", async () => {
     const { t } = await withSession("40000000");
     const C = hash("c7");
     t.koios.addedToAccounts.push(adaBox(C, await ownDatum(t.wallet), t.clock.now));
@@ -172,7 +174,7 @@ describe("a box's way back, classed by what put the box there (chunk 51, time#1,
     const lj = witnessed(t);
     expect((await lj.status("preprod")).pools!.find((p) => p.id === ADA)!.unsure).toEqual([inAda(C)]);
     const { back, entry } = await bringBack(t, lj, C);
-    expect(entry.origin).toEqual({ id: `unknown:${back.txHash}`, origin: "unknown" });
+    expect(entry.origin).toEqual({ id: `box:${back.txHash}+unknown:${back.txHash}`, origin: "lovejoin" });
   });
 
   it("one a chain's last mix left is marked as a box a mix moved", async () => {
@@ -247,10 +249,11 @@ async function sent(t: Tested, key: string, kind: PendingTx["kind"]): Promise<{ 
 }
 
 describe("a stranger's copy of a register already on chain (chunk 51, money#1, own#2)", () => {
-  it("never takes a box's class: a Seedelf minted from a box, copied, is Unknown, and the stealth mint takes a box [needs the rebuild]", { timeout: 60_000 }, async () => {
+  it("never takes a box: a Seedelf minted from a box, copied, takes its mint's tie less the box, and the stealth mint takes a box [needs the rebuild]", { timeout: 60_000 }, async () => {
     const t = await wallet();
     const seedelfA = ownedUtxos.find((u) => (u.asset_list ?? []).some((a) => a.policy_id === CONTRACT_V1.seedelfPolicyId))!;
-    // Seedelf A was minted from box B before this round: its mint's history is the box's alone (mint.ts).
+    // Seedelf A was minted from box B before this round: its mint's history is the box's alone (mint.ts), and it reads
+    // the mint's part now (activity.ts classOf; chunk 51, l2time#2). The copy takes that less the box (l2rank#4).
     const mint: PendingTx = { kind: "mint", network: "preprod", txHash: seedelfA.tx_hash, submittedAt: t.clock.now, confirmations: null };
     await t.activity.sent("preprod", mint, { lovelace: seedelfA.value, label: "", origin: { id: `box:${hash("bb")}`, origin: "lovejoin" } });
     const boxC = await boxBack(t, "4800000", hash("cc"), mixed(hash("cc")));
@@ -263,10 +266,10 @@ describe("a stranger's copy of a register already on chain (chunk 51, money#1, o
     t.clock.now += 60_000;
     await t.balances.get("preprod", true);
     const classes = await t.activity.classes("preprod", [boxC, boxD, bob, mallory], [...ownedUtxos, boxC, boxD, bob, mallory]);
-    expect.soft(classes.get(M)).toEqual({ id: `unknown:${mallory.tx_hash}`, origin: "unknown" });
+    expect.soft(classes.get(M)).toEqual({ id: `change:${seedelfA.tx_hash}+unknown:${mallory.tx_hash}`, origin: "change" });
     const { seedelf: rows } = await t.coins.lists("preprod");
     const tagged = rows.find((u) => u.txHash === mallory.tx_hash)?.history;
-    expect.soft(tagged && historyTags(tagged)).toEqual(["Unknown"]);
+    expect.soft(tagged && historyTags(tagged)).toEqual(["Change", "Unknown"]);
     await t.mint.build("preprod", "", "seedelf");
     const spent = inputsOf((await t.session.get<{ txCbor: string }>(SESSION_MINT))!.txCbor);
     expect([[`${boxC.tx_hash}#0`], [`${boxD.tx_hash}#0`]]).toContainEqual(spent);
@@ -285,13 +288,13 @@ describe("a stranger's copy of a register already on chain (chunk 51, money#1, o
 });
 
 describe("what a spend of the wallet's own leaves (chunk 51, money#2, own#1, the owner's answer 2)", () => {
-  it("a stealth mint's change names the mint: the next stealth mint takes a payment received first", { timeout: 60_000 }, async () => {
+  it("a stealth mint's change names the mint: the next stealth mint takes a payment received first [needs the rebuild]", { timeout: 60_000 }, async () => {
     const t = await wallet();
     const bob = await privateRow(t, hash("b0"), "20000000");
     const carol = await privateRow(t, hash("c0"), "30000000");
     expect(await stealthMint(t, [bob, carol])).toEqual([`${bob.tx_hash}#0`]);
     const first = await sent(t, SESSION_MINT, "mint");
-    expect.soft(first.origin).toEqual({ id: `change:${first.txHash}+received:${bob.tx_hash}`, origin: "session" });
+    expect.soft(first.origin).toEqual({ id: `change:${first.txHash}+received:${bob.tx_hash}`, origin: "change" });
     // It lands: Bob's payment spent, the mint's change (about 18 ₳) in its place.
     t.koios.added.splice(t.koios.added.indexOf(bob), 1);
     t.koios.spent.add(`${bob.tx_hash}#0`);
@@ -305,7 +308,7 @@ describe("what a spend of the wallet's own leaves (chunk 51, money#2, own#1, the
     const carol = await privateRow(t, hash("c0"), "30000000");
     expect(await stealthMint(t, [b1, carol])).toEqual([`${b1.tx_hash}#0`]);
     const first = await sent(t, SESSION_MINT, "mint");
-    expect.soft(first.origin).toEqual({ id: `box:${b1.tx_hash}+change:${first.txHash}`, origin: "session" });
+    expect.soft(first.origin).toEqual({ id: `box:${b1.tx_hash}+change:${first.txHash}`, origin: "change" });
     t.koios.added.splice(t.koios.added.indexOf(b1), 1);
     t.koios.spent.add(`${b1.tx_hash}#0`);
     const change = await privateRow(t, first.txHash, "7700000", 1);
@@ -347,10 +350,10 @@ describe("what a spend of the wallet's own leaves (chunk 51, money#2, own#1, the
     await t.balances.get("preprod", true);
     await t.withdraw.build("preprod", [{ to: preprodAddress("ee".repeat(28)), lovelace: "10000000", tokens: [] }]);
     const made = (await t.session.get<{ txHash: string; origin?: HistoryClass }>(SESSION_WITHDRAW))!;
-    expect.soft(made.origin).toEqual({ id: `change:${made.txHash}+received:${bob.tx_hash}`, origin: "session" });
+    expect.soft(made.origin).toEqual({ id: `change:${made.txHash}+received:${bob.tx_hash}`, origin: "change" });
     await t.transfer.build("preprod", [{ to: transferPreprod.to, lovelace: "10000000", tokens: [] }]);
     const paid = (await t.session.get<{ txHash: string; origin?: HistoryClass }>(SESSION_TRANSFER))!;
-    expect(paid.origin).toEqual({ id: `change:${paid.txHash}+received:${bob.tx_hash}`, origin: "session" });
+    expect(paid.origin).toEqual({ id: `change:${paid.txHash}+received:${bob.tx_hash}`, origin: "change" });
   });
 
   it("a Seedelf removed into the private balance leaves what it held naming the removal", { timeout: 60_000 }, async () => {
@@ -367,7 +370,11 @@ describe("what a spend of the wallet's own leaves (chunk 51, money#2, own#1, the
     await t.balances.get("preprod", true);
     await t.withdraw.buildRemove("preprod", name, "seedelf");
     const removed = (await t.session.get<{ txHash: string; origin?: HistoryClass }>(SESSION_REMOVE))!;
-    expect(removed.origin).toEqual({ id: `change:${removed.txHash}+received:${hash("b0")}`, origin: "session" });
+    // Its mint, kept before the mint's part was, reads it now (chunk 51, l2time#2): the removal carries both spends'.
+    expect(removed.origin).toEqual({
+      id: [`change:${removed.txHash}`, `change:${seedelf.tx_hash}`].sort().join("+") + `+received:${hash("b0")}`,
+      origin: "change",
+    });
   });
 });
 

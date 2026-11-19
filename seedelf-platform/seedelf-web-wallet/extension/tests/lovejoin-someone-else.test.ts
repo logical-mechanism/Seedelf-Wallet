@@ -7,8 +7,8 @@
 // private balance never takes such a box (its mix, its funding and its change would tell whoever put it in that they're
 // the name's), never puts it first, and never makes itself the page's first button for it; Pay from my private balance
 // anyway still takes it, saying what that ties. Home doesn't flag it, since there's nothing to do. Bring one back anyway
-// stays its way out: what comes back is classed as money received, so the stealth mint and a funding take it as they
-// take a payment from whoever put it in, never as a box back from Lovejoin, which the stealth mint takes first.
+// stays its way out: what comes back is a box whose making the wallet can't place, which the stealth mint and a funding
+// take after money others paid, never as a box a mix moved, which the stealth mint takes first (chunk 51, l2rank#1).
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -195,7 +195,8 @@ describe("a box someone else put in under the wallet's key (chunk 51, e1a#1)", C
     t.koios.txSpends.set(D, paidBy(await t.wallet.withKeys((k) => k.cardano.paymentKeyHash(0, 0))));
     const first = adaOf(await lj.status("preprod"));
     // The book knows session 0 alone: 25 is past the 20 looked at beyond it, as a restore's scan doesn't reach it, so
-    // its box reads as someone else's too, which only leaves it out of Mix my boxes again (fails safe).
+    // its box reads as someone else's too, which leaves it out of Mix my boxes again, and brings it back as a box of
+    // unknown making (fails safe; chunk 51, l2rank#1).
     expect(await lj.againBoxes("preprod", false, ADA)).toMatchObject({ owned: 1 });
     expect(refs(first.notMixed)).toEqual(refs([A, B, C, D].map(inAda)));
     expect(refs(first.fromPublic)).toEqual([ref(inAda(D))]);
@@ -228,7 +229,7 @@ describe("a box someone else put in under the wallet's key (chunk 51, e1a#1)", C
     expect(row(await lj.held("preprod"))).toContain("1 not mixed yet: open Lovejoin to see what to do.");
   });
 
-  it("brings someone else's box back, asked to, as money received; the wallet's own session's deposit's as that session's money", async () => {
+  it("brings someone else's box back, asked to, as a box of unknown making; the wallet's own session's deposit's as that session's money", async () => {
     const t = await publicFunded();
     const wasm = loadTestWasm();
     t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
@@ -249,10 +250,11 @@ describe("a box someone else put in under the wallet's key (chunk 51, e1a#1)", C
     t.koios.txSpends.set(C, paidBy("ee".repeat(28)));
     // The page's pool read: Koios is asked what made each box.
     await lj.status("preprod");
-    // Whoever put it in can follow it, as a payer can a payment: the stealth mint takes it as it takes such a payment,
-    // never as a box back from Lovejoin, which it takes first (gap-g1#1's part b).
+    // Whoever put it in can follow it, as a payer can a payment, and one under a register copied as found shows it to
+    // everyone: the stealth mint and a funding take money others paid before it, never as a box a mix moved, which the
+    // stealth mint takes first (gap-g1#1's part b; chunk 51, l2rank#1, e1a#1's approved (4)).
     const theirs = await lj.withdrawNow("preprod", inAda(C), true);
-    expect((await historyOf(t, theirs.txHash))?.origin).toEqual({ id: `received:${theirs.txHash}`, origin: "received" });
+    expect((await historyOf(t, theirs.txHash))?.origin).toEqual({ id: `box:${theirs.txHash}+unknown:${theirs.txHash}`, origin: "lovejoin" });
     // Its own session's deposit, no mix since: anyone can follow it back to that session, so it's that session's money,
     // never a box a mix moved, which the stealth mint takes first (chunk 51, still#1, own#4).
     const own = await lj.withdrawNow("preprod", inAda(A), true);

@@ -2424,11 +2424,16 @@ pub enum Origin {
     Session,
     /// A box back from Lovejoin: each is a class of its own. One the wallet has no record of a mix moving: brought back
     /// before it kept that record, so it may be one its deposit still ties to whatever paid for it, or a box's way
-    /// back merged with other money.
+    /// back merged with other money. The web wallet's way back of a box whose making it can't place is one too.
     Lovejoin,
     /// A box back from Lovejoin the wallet recorded a mix moving, its way back alone: no spend has touched it since
     /// (chunk 51, the owner's answer 4 to B15, time#1).
     Mixed,
+    /// What an earlier private spend of the wallet's own left, its change, tied to that spend in the open, naming no
+    /// public account and no session: when nothing fresher pays, a stealth mint, a pool's start and a funding take it
+    /// before money made private (chunk 51, the owner's answer of 2026-11-18, l2rank#6). Change that names one ranks as
+    /// a session's money.
+    Change,
 }
 
 /// The class every UTxO with no history is in.
@@ -2470,11 +2475,14 @@ pub enum Purpose {
     /// (`Origin::Mixed`) first, which no payer knows but one who put it in under the wallet's key
     /// and mixed it themselves, since nothing tells that box from the wallet's
     /// own (chunk 51, own#3), then received money, which its payer does
-    /// (chunk 51, gap-g1#1 (b), the owner's B15).
+    /// (chunk 51, gap-g1#1 (b), the owner's B15). An earlier spend's change
+    /// goes before money made private, which ties it to the public account
+    /// (`Origin::Change`, chunk 51, l2rank#6).
     Mint,
     /// A private session's funding or top-up: received money, or a box that
-    /// pays alone, first; another session's money last. `session` is the
-    /// session's own class, whose money a top-up may take first.
+    /// pays alone, first; an earlier spend's change before money made private;
+    /// another session's money last. `session` is the session's own class,
+    /// whose money a top-up may take first.
     Fund { session: Option<String> },
 }
 
@@ -2485,21 +2493,25 @@ impl Purpose {
         match self {
             Purpose::Pay => match class.origin {
                 Own => 0,
-                Session => 1,
+                Session | Change => 1,
                 Received => 2,
                 Unknown => 3,
                 Lovejoin | Mixed => 4,
             },
             // Only a box the wallet recorded a mix moving goes first; one with no such record, as every box brought
             // back before it kept one, after received money, as before B15 (chunk 51, the owner's answer 4). What a
-            // spend of the wallet's own left is tied to that spend, and ranks as a session's money (answer 2).
+            // spend of the wallet's own left is tied to that spend, after fresh money (answer 2), and, nothing
+            // fresher paying, before money made private, which ties the new Seedelf to the public account; change
+            // that names a public account or a session ranks as a session's, last (the owner's answer of 2026-11-18,
+            // l2rank#6).
             Purpose::Mint => match class.origin {
                 Mixed => 0,
                 Received => 1,
                 Lovejoin => 2,
                 Unknown => 3,
-                Own => 4,
-                Session => 5,
+                Change => 4,
+                Own => 5,
+                Session => 6,
             },
             Purpose::Fund { session } => {
                 if session.as_deref().is_some_and(|s| class.has(s)) {
@@ -2509,8 +2521,9 @@ impl Purpose {
                     Received => 1,
                     Lovejoin | Mixed => 2,
                     Unknown => 3,
-                    Own => 4,
-                    Session => 5,
+                    Change => 4,
+                    Own => 5,
+                    Session => 6,
                 }
             }
         }
@@ -2518,7 +2531,8 @@ impl Purpose {
 
     /// When merging: 0 for what's taken first, 1 for what's taken only when
     /// nothing else pays (another session's money, for a funding), 2 for a
-    /// box, taken last and one at a time.
+    /// box, taken last and one at a time. An earlier spend's change is no
+    /// session's: 0, so a funding merges it before money made private too.
     fn tier(&self, class: &Class) -> u8 {
         match (self, class.origin) {
             (_, Origin::Lovejoin | Origin::Mixed) => 2,
