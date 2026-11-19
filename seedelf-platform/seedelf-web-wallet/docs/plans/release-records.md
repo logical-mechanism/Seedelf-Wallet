@@ -15,7 +15,7 @@ The release's record PR, after the upload ([development.md](../development.md#re
 - **The lists** each release refreshes: the tokens, the DReps, the Lovejoin pools' head start and their Cardanoscan names, and the data layer's token decimals; what changed, or that nothing did.
 - **The translations** that changed, and how each was checked; and the privacy policy's entry, if it owed one.
 - **The checks** run on the merged tree, and whether the data layer's API was deployed, and from which commit.
-- **The package:** the commit it was built from, the zip's SHA-256, its size, and the `C compiler`, Node and zlib lines the build printed; and that a second build of the same commit gave the same bytes.
+- **The package:** the commit it was built from, the zip's SHA-256, its size, and the `Rust`, `C compiler`, Node and zlib lines the build printed; and that a second build of the same commit, in a clean environment, gave the same bytes.
 - **The tag**, and anything that surprised the release: what a later session would lose time over without it.
 - **What it left open** goes into [backlog.md](../backlog.md) as a line, not here.
 

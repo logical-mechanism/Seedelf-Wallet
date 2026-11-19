@@ -1,7 +1,10 @@
 // The repository's GitHub workflows (.github/workflows/), read as text: what each runs, and what a step that holds a
 // secret may write to its log, which a public repository's Actions show anyone.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -92,8 +95,267 @@ describe("the workflows", () => {
         }
       }
     }
-    // Not vacuous: the release key's imports are among the steps read, Windows' with them.
-    expect(holding.filter((s) => s.startsWith("release.yml: - name: Import GPG Key"))).toHaveLength(4);
+    // Not vacuous: the release key's import is among the steps read. Since b1#3 there's one, in the signing job, where
+    // there were four, a build job's each and the release's.
+    expect(holding.filter((s) => s.startsWith("release.yml: - name: Import GPG Key"))).toHaveLength(1);
     expect(prints).toEqual([]);
+  });
+});
+
+const indentOf = (line: string) => line.length - line.trimStart().length;
+const comment = (line: string) => line.trimStart().startsWith("#");
+const blank = (line: string) => line.trim() === "" || comment(line);
+
+/** The lines under the key on line `i`: up to the next line, not blank or a comment, as shallow as it or shallower. */
+function under(lines: string[], i: number): string[] {
+  const base = indentOf(lines[i] ?? "");
+  const found: string[] = [];
+  for (let j = i + 1; j < lines.length; j++) {
+    const line = lines[j] ?? "";
+    if (!blank(line) && indentOf(line) <= base) break;
+    found.push(line);
+  }
+  return found;
+}
+
+type Job = { file: string; name: string; body: string[] };
+
+/** Every job of every workflow, with the lines under its key. */
+function jobs(): Job[] {
+  return workflows().flatMap(({ file, lines }) => {
+    const at = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+    if (at < 0) return [];
+    const body = under(lines, at);
+    return body.flatMap((line, k) => {
+      const name = /^ {2}([\w-]+):\s*$/.exec(line)?.[1];
+      return name ? [{ file, name, body: under(body, k) }] : [];
+    });
+  });
+}
+
+/** A job's lines but its comments. */
+const code = (job: Job) => job.body.filter((line) => !comment(line));
+
+/** The job's token: its own `permissions:`, else its workflow's, else null, the repository's default (write here). */
+function tokenOf(job: Job): string | null {
+  const own = job.body.findIndex((line) => /^ {4}permissions:/.test(line));
+  if (own >= 0) return [job.body[own], ...under(job.body, own)].filter((line) => line && !blank(line)).join("\n");
+  const lines = workflows().find((w) => w.file === job.file)?.lines ?? [];
+  const top = lines.findIndex((line) => /^permissions:/.test(line));
+  return top < 0 ? null : [lines[top], ...under(lines, top)].filter((line) => line && !blank(line)).join("\n");
+}
+const writes = (job: Job) => /\bwrite\b/.test(tokenOf(job) ?? "write");
+
+/** Runs code from outside the repository's own: a compiler, a package manager, or an action that sets one up. */
+const BUILD_RUN = /\b(?:cargo|rustup|npm|npx|aiken|wasm-bindgen)\b|\bbuild\.sh\b/;
+const BUILD_USES = /uses:\s*["']?(?:dtolnay\/rust-toolchain|Swatinem\/rust-cache|aiken-lang\/setup-aiken|actions\/setup-node)@/;
+const builds = (job: Job) => code(job).some((line) => BUILD_RUN.test(line) || BUILD_USES.test(line));
+const SECRET = /\bsecrets\.\w/;
+
+/** Each step's script, as it runs: a `run:` line's text, or the block under it, with the file:line it starts on. */
+function scripts(): Array<{ where: string; lines: string[] }> {
+  return workflows().flatMap(({ file, lines }) =>
+    lines.flatMap((line, i) => {
+      const rest = /^\s*(?:-\s+)?run:\s*(.*)$/.exec(line)?.[1];
+      if (rest === undefined || comment(line)) return [];
+      const key = line.indexOf("run:");
+      if (!/^[|>][-+]?\d*\s*(?:#.*)?$/.test(rest)) return [{ where: `${file}:${i + 1}`, lines: [rest] }];
+      const block: string[] = [];
+      for (let j = i + 1; j < lines.length; j++) {
+        const next = lines[j] ?? "";
+        if (next.trim() !== "" && indentOf(next) <= key) break;
+        block.push(next);
+      }
+      return [{ where: `${file}:${i + 1}`, lines: block }];
+    }),
+  );
+}
+
+describe("the workflows' tokens and secrets", () => {
+  // Chunk 51, b1#3. release.yml's three build jobs ran `cargo build` (every crate's build script and proc macro) and
+  // dtolnay/rust-toolchain, then took RELEASE_GPG_KEY and GPG_PASSPHRASE into the same job, written into the steps'
+  // scripts and onto gpg's command line, beside the write token actions/checkout leaves in .git/config: the
+  // workflow had no `permissions:`, so every job had the repository's default, write. A process build code starts
+  // outlives its step, and reads what comes after. So, as web-wallet.yml and the data layer's workflows already do:
+  // every job's token is declared, a checkout leaves none behind, and a job that builds holds no secret and can't
+  // write. The key goes to one job that builds nothing (below). continuous-integration.yml is the family: Aiken ran
+  // with a persisted write token, and no secret.
+  it("declare every job's token, never the repository's default, which is write", () => {
+    const all = jobs();
+    // Not vacuous: every workflow's jobs were read, release.yml's builds and continuous-integration.yml's among them.
+    expect(all.length).toBeGreaterThan(10);
+    expect(all.some((j) => j.file === "continuous-integration.yml" && j.name === "build")).toBe(true);
+    expect(all.filter((j) => tokenOf(j) === null).map((j) => `${j.file}: ${j.name}`)).toEqual([]);
+  });
+
+  it("leave no token in .git: every checkout says persist-credentials: false", () => {
+    const checkouts: string[] = [];
+    const left: string[] = [];
+    for (const { file, lines } of workflows()) {
+      for (const step of steps(lines)) {
+        if (!step.some((line) => /uses:\s*["']?actions\/checkout@/.test(line))) continue;
+        checkouts.push(file);
+        if (!step.some((line) => /^\s*persist-credentials:\s*false\b/.test(line))) left.push(`${file}: ${step[0]?.trim()}`);
+      }
+    }
+    expect(checkouts.filter((f) => f === "release.yml")).toHaveLength(3);
+    expect(left).toEqual([]);
+  });
+
+  it("let no job that builds hold a secret or a token that can write", () => {
+    const building = jobs().filter(builds);
+    // Not vacuous: the CLI's three builds, Aiken's check, the data layer's and the web wallet's builds are read.
+    const cli = building.filter((j) => j.file === "release.yml").map((j) => j.name);
+    expect(cli).toEqual(["build-linux", "build-windows", "build-mac"]);
+    expect(building.some((j) => j.file === "continuous-integration.yml")).toBe(true);
+    expect(building.some((j) => j.file === "data-layer-deploy.yml" && j.name === "build")).toBe(true);
+    const exposed = building.flatMap((j) => [
+      ...(code(j).some((line) => SECRET.test(line)) ? [`${j.file}: ${j.name} holds a secret`] : []),
+      ...(writes(j) ? [`${j.file}: ${j.name} can write`] : []),
+    ]);
+    expect(exposed).toEqual([]);
+  });
+
+  // An expression in a step's `run:` is written into its script's file before it runs: a secret lands in that file's
+  // text, and a value someone else chose (a tag, a branch's name) becomes code. Through `env:`, it stays a value.
+  it("write no expression into a step's script: a secret or a value reaches it through env:", () => {
+    const all = scripts();
+    expect(all.some((s) => s.where.startsWith("release.yml:"))).toBe(true);
+    const written = all.flatMap(({ where, lines }) =>
+      lines.filter((line) => line.includes("${{")).map((line) => `${where}: ${line.trim()}`),
+    );
+    expect(written).toEqual([]);
+  });
+});
+
+describe("release.yml's signature", () => {
+  const release = () => jobs().filter((j) => j.file === "release.yml");
+  const KEYS = /\bsecrets\.(?:RELEASE_GPG_KEY|GPG_PASSPHRASE)\b/;
+
+  // Chunk 51, b1#3. The release key signs every seedelf-cli that RELEASE.md's checks pass, so only one job reads it:
+  // one that builds nothing, after the builds, in the `release` environment, which the owner approves each run of and
+  // which holds the key, and the only job whose token can write, to publish the release.
+  it("is made in one job that builds nothing, in the release environment, the only one that can write", () => {
+    const signing = release().filter((j) => code(j).some((line) => KEYS.test(line)));
+    expect(signing.map((j) => j.name)).toEqual(["sign-and-publish"]);
+    const job = signing[0]!;
+    expect(builds(job)).toBe(false);
+    const environment = code(job).findIndex((line) => /^ {4}environment:/.test(line));
+    const named = [code(job)[environment] ?? "", ...under(code(job), environment)].join("\n");
+    expect(named).toMatch(/^ {4}environment:\s*(?:release|\n\s+name:\s*release)\s*$/m);
+    expect(tokenOf(job)).toMatch(/contents:\s*write/);
+    expect(release().filter((j) => j.name !== job.name && writes(j)).map((j) => j.name)).toEqual([]);
+    expect(code(job).some((line) => /^ {4}needs:/.test(line))).toBe(true);
+  });
+
+  it("takes the key on stdin and the passphrase on a file descriptor, never on gpg's command line", () => {
+    const lines = workflows().flatMap(({ file, lines }) => lines.map((line, i) => ({ where: `${file}:${i + 1}`, line })));
+    const argv = lines.filter(({ line }) => /--passphrase(?:\s|=)/.test(line)).map(({ where, line }) => `${where}: ${line.trim()}`);
+    expect(argv).toEqual([]);
+    const job = release().find((j) => j.name === "sign-and-publish");
+    expect(job).toBeDefined();
+    const text = code(job!).join("\n");
+    expect(text).toMatch(/\|\s*gpg\b[^\n]*--import/);
+    expect(text).toMatch(/--passphrase-fd\s+0\b/);
+  });
+
+  it("goes with every file the release publishes", () => {
+    const job = release().find((j) => j.name === "sign-and-publish");
+    expect(job).toBeDefined();
+    const body = code(job!);
+    const at = body.findIndex((line) => /^\s*files:\s*\|/.test(line));
+    const files = under(body, at).map((line) => line.trim()).filter(Boolean);
+    const signed = files.filter((f) => !f.endsWith(".asc"));
+    // The three archives and hashes.txt, as RELEASE.md lists them, each beside its detached signature.
+    expect(signed.map((f) => f.split("/").at(-1))).toEqual([
+      "seedelf-cli-linux.tar.gz",
+      "seedelf-cli-windows.zip",
+      "seedelf-cli-macos.tar.gz",
+      "hashes.txt",
+    ]);
+    expect(signed.filter((f) => !files.includes(`${f}.asc`))).toEqual([]);
+    for (const f of signed) expect(body.join("\n")).toContain(f.split("/").at(-1));
+    expect(body.join("\n")).toMatch(/--detach-sign/);
+  });
+});
+
+// Chunk 51, v3#2 and G8's notes. web-wallet.yml's changes job decides with one awk program, `covered`, whether a pull
+// request touches what the check covers. One that doesn't skips every job, and Web Wallet required still passes, so a
+// file a test reads must be covered, or a pull request changing only that file goes untested until main's run. Two
+// sets sat outside it: every workflow, which this file reads (only web-wallet.yml was covered), and the Lovejoin
+// scripts' .hex files seedelf-verification proves, which lovejoin_proven_bytes_test.rs includes (1.8.1's review left
+// that to the owner). Markdown and the proofs' Lean stay outside, so a docs or a Lean pull request stays fast.
+describe("web-wallet.yml's covered filter", () => {
+  const PLATFORM = fileURLToPath(new URL("../../../", import.meta.url));
+  const REPO = resolve(PLATFORM, "..");
+
+  /** The changes step's awk program, as bash's single quotes hand it to awk. */
+  function covered(): string {
+    const text = readFileSync(new URL("web-wallet.yml", WORKFLOWS), "utf8");
+    const start = text.indexOf("covered='");
+    expect(start).toBeGreaterThan(0);
+    const from = start + "covered='".length;
+    return text.slice(from, text.indexOf("'", from));
+  }
+
+  /** Whether a pull request into main changing only `path` runs the check: with one file listed, awk alone decides. */
+  function runs(path: string): boolean {
+    const awk = spawnSync("awk", [covered()], { input: `${path}\n`, encoding: "utf8" });
+    expect(awk.error).toBeUndefined();
+    expect(awk.stderr).toBe("");
+    return awk.status === 0;
+  }
+
+  /** Every .rs file under `dir`, but build output, dependencies and the gitignored reference clone. */
+  function rust(dir: string): string[] {
+    return readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) {
+        return ["target", "node_modules", "dist", "pkg", ".git", "_reference", "release"].includes(name) ? [] : rust(path);
+      }
+      return name.endsWith(".rs") ? [path] : [];
+    });
+  }
+
+  /** Each file outside seedelf-platform/ a Rust source includes (include_str!, include_bytes!), from the repository's root. */
+  function includedFromOutside(): string[] {
+    const outside = new Set<string>();
+    for (const file of rust(PLATFORM)) {
+      for (const [, target] of readFileSync(file, "utf8").matchAll(/include_(?:str|bytes)!\(\s*"([^"]+)"/g)) {
+        const path = resolve(dirname(file), target!);
+        if (!path.startsWith(PLATFORM)) outside.add(relative(REPO, path).split(sep).join("/"));
+      }
+    }
+    return [...outside].sort();
+  }
+
+  it("is read as the workflow runs it: code and wasm/README.md run the check, Markdown and the proofs' Lean don't", () => {
+    expect(runs("seedelf-platform/seedelf-core/src/lovejoin/templates.rs")).toBe(true);
+    expect(runs("seedelf-platform/seedelf-web-wallet/wasm/README.md")).toBe(true);
+    expect(runs("seedelf-platform/seedelf-web-wallet/docs/privacy.md")).toBe(false);
+    expect(runs("seedelf-platform/seedelf-web-wallet/media/post.png")).toBe(false);
+    expect(runs("seedelf-verification/Lovejoin/Template/Scripts.lean")).toBe(false);
+    expect(runs("seedelf-verification/README.md")).toBe(false);
+    expect(runs("seedelf-data/api/src/main.rs")).toBe(false);
+  });
+
+  it("runs the check for a pull request that changes only a workflow, which this file reads", () => {
+    const all = workflows().map(({ file }) => `.github/workflows/${file}`);
+    expect(all).toContain(".github/workflows/release.yml");
+    expect(all.filter((path) => !runs(path))).toEqual([]);
+  });
+
+  it("runs the check for a pull request that changes only a file a Rust test includes from outside seedelf-platform/", () => {
+    const outside = includedFromOutside();
+    // Not vacuous: the scan finds what lovejoin_proven_bytes_test.rs reads.
+    expect(outside).toEqual(
+      expect.arrayContaining([
+        "seedelf-verification/Lovejoin/Template/Scripts/mix_logic.hex",
+        "seedelf-verification/Lovejoin/Template/Scripts/mix_box.hex",
+        "seedelf-verification/Lovejoin/Template/Scripts/one_shot_mint.hex",
+        "seedelf-verification/Lovejoin/Scripts/reference_holder.hex",
+      ]),
+    );
+    expect(outside.filter((path) => !runs(path))).toEqual([]);
   });
 });

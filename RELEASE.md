@@ -2,7 +2,7 @@
 
 How to check a `seedelf-cli` release you've downloaded, and how the maintainers make one. The `seedelf-cli` is the terminal wallet for Seedelf, a stealth wallet for Cardano; the [README](README.md) explains how it works.
 
-The CLI's releases are on the repository's [Releases](https://github.com/logical-mechanism/Seedelf-Wallet/releases) page. Each is tagged with its version number, such as `0.7.0`; the CLI and the [contracts](seedelf-contracts/README.md) share that `0.x.y` version line. For each tag, the GitHub Actions workflow [release.yml](.github/workflows/release.yml) builds the CLI for Linux, Windows and macOS on GitHub's runners, signs it with the release key (held as a GitHub Actions secret), and attaches the files to a release. The Seedelf Wallet for Chrome is released separately, on its own `1.x` line: its packages, their commits and their zip hashes are in [releases.md](seedelf-platform/seedelf-web-wallet/docs/releases.md).
+The CLI's releases are on the repository's [Releases](https://github.com/logical-mechanism/Seedelf-Wallet/releases) page. Each is tagged with its version number, such as `0.7.0`; the CLI and the [contracts](seedelf-contracts/README.md) share that `0.x.y` version line. For each tag, the GitHub Actions workflow [release.yml](.github/workflows/release.yml) builds the CLI for Linux, Windows and macOS on GitHub's runners; then one job, which builds nothing, signs what they built with the release key and attaches the files to a release. Only that job reads the key, which is held in the repository's `release` environment, and only once a maintainer approves it. The Seedelf Wallet for Chrome is released separately, on its own `1.x` line: its packages, their commits and their zip hashes are in [releases.md](seedelf-platform/seedelf-web-wallet/docs/releases.md).
 
 ## Checking a release
 
@@ -50,6 +50,8 @@ Each `gpg --verify` should report a good signature from the release key, with th
 
 This part is for the maintainers. A CLI release is the Rust workspace and the contracts, tagged `x.y.z`. release.yml runs on every tag that matches `*.*.*`, and a tag glob's `*` doesn't match a slash. So the Seedelf Wallet's tags contain a slash, `web-wallet/<version>`, and never start a CLI release; the wallet's own release procedure is in [development.md](seedelf-platform/seedelf-web-wallet/docs/development.md).
 
+**The `release` environment** (Settings → Environments) is what holds the key: the maintainer as its required reviewer, with *Prevent self-review* off, since whoever pushes the tag approves the run; deployments from tags matching `*.*.*` alone; and `RELEASE_GPG_KEY` and `GPG_PASSPHRASE` as its secrets, never as the repository's. release.yml's build jobs get a read-only token and no secret, since they run every crate's build script; only its `sign-and-publish` job, which builds nothing, reads the key and can write.
+
 Change the version, then run the command below in the repository's root.
 
 ```bash
@@ -72,7 +74,7 @@ git tag ${version}
 git push origin ${version}
 ```
 
-Wait for release.yml's jobs to pass. It creates the release as a draft: edit its body, then publish it as the latest release. Then publish to crates.io with the command below, in the repository's root.
+Wait for release.yml's three builds to pass, then approve its `sign-and-publish` job (*Review deployments* on the run's page). It signs the archives and `hashes.txt` and creates the release as a draft: edit its body, then publish it as the latest release. Then publish to crates.io with the command below, in the repository's root.
 
 ```bash
 cd seedelf-platform
