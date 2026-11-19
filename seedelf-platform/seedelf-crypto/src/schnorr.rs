@@ -154,7 +154,10 @@ pub fn create_proof(datum: Register, sk: Scalar, vkh: String) -> Result<(String,
     ))
 }
 
-/// Used for testing
+/// Whether `z_b` and `g_r_b` prove knowledge of the register's secret, bound
+/// to `vkh`, as the deployed wallet validator decides it (5b82530
+/// lib/schnorr.ak `prove`). Used by the tests, and exported to WebAssembly as
+/// `verifyProof`. An error when a point or a hex string can't be read.
 pub fn prove(
     generator: &str,
     public_value: &str,
@@ -180,7 +183,7 @@ pub fn prove(
             .map_err(|e| anyhow::anyhow!("{e:?}"))?,
     )
     .into_option()
-    .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
+    .ok_or_else(|| anyhow!("Failed to decompress public value"))?;
 
     // Decode and decompress g_r_b
     let g_r: G1Affine = G1Affine::from_compressed(
@@ -190,15 +193,22 @@ pub fn prove(
             .map_err(|e| anyhow::anyhow!("{e:?}"))?,
     )
     .into_option()
-    .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
+    .ok_or_else(|| anyhow!("Failed to decompress g_r"))?;
 
-    // Convert z_b to Scalar
+    // z as the validator reads it, `scalar.from_bytearray_big_endian(z_b)`:
+    // big-endian, any length, and a scalar only when its value is below the
+    // group order. Past that, the validator's `expect` fails: no proof
+    // (chunk 51, r1#3).
     let z_bytes: Vec<u8> = hex::decode(z_b).context("Failed to decode z_b hex")?;
+    let significant: &[u8] = &z_bytes[z_bytes.iter().take_while(|b| **b == 0).count()..];
+    if significant.len() > 32 {
+        return Ok(false);
+    }
     let mut z_array: [u8; 32] = [0u8; 32];
-    z_array[(32 - z_bytes.len())..].copy_from_slice(&z_bytes);
-    let z: Scalar = Scalar::from_bytes_be(&z_array)
-        .into_option()
-        .ok_or_else(|| anyhow!("Failed to Convert To Scalar"))?;
+    z_array[32 - significant.len()..].copy_from_slice(significant);
+    let Some(z) = Scalar::from_bytes_be(&z_array).into_option() else {
+        return Ok(false);
+    };
 
     // Compute g^z = g1 * z
     let g_z: G1Projective = g1 * z; // Convert to G1Affine for comparison

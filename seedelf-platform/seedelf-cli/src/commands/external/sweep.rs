@@ -1,16 +1,17 @@
-use crate::commands::fee;
+use crate::commands::{rows, submit};
 use crate::setup;
 use anyhow::Result;
 use blstrs::Scalar;
 use colored::Colorize;
 use pallas_addresses::Address;
 use pallas_txbuilder::BuiltTransaction;
+use seedelf_core::assets::Assets;
 use seedelf_core::constants::{Config, get_config};
 use seedelf_core::{address, build, utxos};
 use seedelf_crypto::convert;
 use seedelf_crypto::register::Register;
 use seedelf_display::display;
-use seedelf_koios::koios::{UtxoResponse, epoch_params, submit_tx};
+use seedelf_koios::koios::{UtxoResponse, epoch_params};
 
 pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
     display::is_there_an_update().await;
@@ -37,13 +38,23 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
             .try_into()
             .map_err(|_| anyhow::anyhow!("The dApp key hash must be 28 bytes"))?,
     );
-    let (tx, tx_fee): (BuiltTransaction, u64) = build::external_sweep(
-        &params,
-        &all_utxos,
-        &Register::create(scalar)?,
-        &wallet_addr,
-        signer,
+    let owner: Register = Register::create(scalar)?;
+
+    // Anyone can pay this address, so the sweep takes what one transaction
+    // can, and the rest stays for the next (chunk 51, r4#1).
+    let deposit = |tokens: &Assets| build::minimum_deposit(&params, tokens);
+    let mut stayed = Vec::new();
+    let rows = rows::sweepable(
+        rows::by_worth(all_utxos, &deposit)?,
+        0,
+        usize::MAX,
+        &mut stayed,
     )?;
+    let swept = rows::most_that_fit(rows, &deposit, &mut stayed, |rows| {
+        build::external_sweep(&params, rows, &owner, &wallet_addr, signer)
+    });
+    rows::print_stayed(&stayed, swept.is_ok().then_some("external sweep"));
+    let (tx, tx_fee): (BuiltTransaction, u64) = swept?;
     println!(
         "{} {}",
         "\nTx Fee:".bright_blue(),
@@ -58,21 +69,5 @@ pub async fn run(network_flag: bool, variant: u64) -> Result<()> {
         hex::encode(signed_tx_cbor.tx_bytes.clone()).white()
     );
 
-    let response = submit_tx(hex::encode(signed_tx_cbor.tx_bytes), network_flag).await?;
-    let tx_hash = fee::parse_submit_response(&response)?;
-    println!("\nTransaction Successfully Submitted!");
-    println!("\nTx Hash: {}", tx_hash.bright_cyan());
-    if network_flag {
-        println!(
-            "{}",
-            format!("\nhttps://preprod.cardanoscan.io/transaction/{tx_hash}").bright_purple()
-        );
-    } else {
-        println!(
-            "{}",
-            format!("\nhttps://cardanoscan.io/transaction/{tx_hash}").bright_purple()
-        );
-    }
-
-    Ok(())
+    submit::submit(signed_tx_cbor.tx_bytes.as_ref(), network_flag).await
 }

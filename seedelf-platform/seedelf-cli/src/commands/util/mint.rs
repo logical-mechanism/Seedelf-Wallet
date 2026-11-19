@@ -1,11 +1,13 @@
+use crate::commands::rows;
 use crate::commands::spend::{self, OneTimeKey};
 use crate::setup;
 use anyhow::{Result, bail};
 use blstrs::Scalar;
 use clap::Args;
 use colored::Colorize;
+use seedelf_core::assets::Assets;
 use seedelf_core::build::{self, Chain};
-use seedelf_core::constants::get_config;
+use seedelf_core::constants::{MAXIMUM_WALLET_UTXOS, get_config};
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
 use seedelf_display::display;
@@ -65,7 +67,7 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
         utxos::get_credential_utxos(chain.config.contract.wallet_contract_hash, network_flag)
             .await?;
     let owned_utxos: Vec<UtxoResponse> =
-        utxos::collect_wallet_utxos(scalar, &chain.config.contract.seedelf_policy_id, every_utxo)?;
+        utxos::collect_all_wallet_utxos(scalar, &chain.config.contract, every_utxo)?;
 
     // this is the new seedelf datum
     let seedelf: Register = if args.generator.is_none() && args.public_value.is_none() {
@@ -88,9 +90,21 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
     let signer = key.hash;
 
     let minted: build::SeedelfMint = match args.utxos {
-        None => build::mint(&chain, &owned_utxos, &label, &seedelf, &owner, signer)?,
+        None => {
+            // the 20 a mint picks among: never Koios's order, which a payer
+            // picks (chunk 51, r2cli#1)
+            let deposit = |tokens: &Assets| build::minimum_deposit(&chain.params, tokens);
+            let window = rows::window(
+                owned_utxos,
+                &Assets::new(),
+                &deposit,
+                MAXIMUM_WALLET_UTXOS as usize,
+            )?;
+            build::mint(&chain, &window, &label, &seedelf, &owner, signer)?
+        }
         Some(selected) => {
-            // assumes the utxos hold the correct tokens else it will error downstream
+            // assumes the utxos hold the correct tokens else it will error
+            // downstream; any owned UTxO, in the window or not (r2cli#1)
             let usable_utxos: Vec<UtxoResponse> =
                 utxos::filter_utxos(owned_utxos, utxos::parse_tx_utxos(selected)?);
             if usable_utxos.is_empty() {

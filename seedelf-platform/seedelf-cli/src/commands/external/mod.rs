@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 
-pub(crate) mod balance;
+pub mod balance;
 pub mod sweep;
 
 #[derive(Subcommand)]

@@ -1,3 +1,4 @@
+use crate::commands::rows;
 use crate::commands::spend::{self, OneTimeKey};
 use crate::setup;
 use anyhow::{Result, bail};
@@ -7,7 +8,7 @@ use pallas_addresses::Address;
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
 use seedelf_core::build::{self, Chain};
-use seedelf_core::constants::{ADA_HANDLE_POLICY_ID, get_config};
+use seedelf_core::constants::{ADA_HANDLE_POLICY_ID, MAXIMUM_WALLET_UTXOS, get_config};
 use seedelf_core::transaction::address_minimum_lovelace_with_assets;
 use seedelf_core::utxos;
 use seedelf_crypto::register::Register;
@@ -147,29 +148,59 @@ pub async fn run(args: SweepArgs, network_flag: bool, variant: u64) -> Result<()
     let every_utxo: Vec<UtxoResponse> =
         utxos::get_credential_utxos(chain.config.contract.wallet_contract_hash, network_flag)
             .await?;
+    let contract = &chain.config.contract;
     let owned_utxos: Vec<UtxoResponse> =
-        utxos::collect_wallet_utxos(scalar, &chain.config.contract.seedelf_policy_id, every_utxo)?;
+        utxos::collect_all_wallet_utxos(scalar, contract, every_utxo)?;
 
     let key = OneTimeKey::new();
     let spend: build::ScriptSpend = if args.all {
+        // Anyone can pay the contract under a re-randomization of your
+        // register, so --all sends the 20 UTxOs that bring most that it can
+        // spend together, or as many of them as one transaction holds, and
+        // the rest stays for the next run (chunk 51, r4#2). By what each
+        // brings, never Koios's order: a payer picks its hash (r2cli#1).
         if owned_utxos.is_empty() {
             bail!("No Usuable UTxOs Found");
         }
-        build::sweep_all(&chain, &owned_utxos, &addr, &owner, key.hash)?
+        let paid = |tokens: &Assets| build::minimum_address_payment(&chain.params, &addr, tokens);
+        let mut stayed = Vec::new();
+        let rows = rows::sweepable(
+            rows::by_worth(owned_utxos, &paid)?,
+            chain.config.contract.wallet_contract_size,
+            MAXIMUM_WALLET_UTXOS as usize,
+            &mut stayed,
+        )?;
+        let spend = rows::most_that_fit(rows, &paid, &mut stayed, |rows| {
+            let spend = build::sweep_all(&chain, rows, &addr, &owner, key.hash)?;
+            spend.estimate()?;
+            Ok(spend)
+        });
+        rows::print_stayed(&stayed, spend.is_ok().then_some("sweep --all"));
+        spend?
     } else {
         let lovelace: u64 = args.lovelace.unwrap_or(address_minimum_lovelace);
         match args.utxos {
-            None => build::sweep(
-                &chain,
-                &owned_utxos,
-                &addr,
-                lovelace,
-                &selected_tokens,
-                &owner,
-                key.hash,
-            )?,
+            None => {
+                let deposit = |tokens: &Assets| build::minimum_deposit(&chain.params, tokens);
+                let window = rows::window(
+                    owned_utxos,
+                    &selected_tokens,
+                    &deposit,
+                    MAXIMUM_WALLET_UTXOS as usize,
+                )?;
+                build::sweep(
+                    &chain,
+                    &window,
+                    &addr,
+                    lovelace,
+                    &selected_tokens,
+                    &owner,
+                    key.hash,
+                )?
+            }
             Some(selected) => {
-                // assumes the utxos hold the correct tokens else it will error downstream
+                // assumes the utxos hold the correct tokens else it will error
+                // downstream; any owned UTxO, in the window or not (r2cli#1)
                 let usable_utxos: Vec<UtxoResponse> =
                     utxos::filter_utxos(owned_utxos, utxos::parse_tx_utxos(selected)?);
                 if usable_utxos.is_empty() {

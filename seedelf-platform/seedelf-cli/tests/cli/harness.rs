@@ -15,17 +15,21 @@
 use std::collections::BTreeMap;
 
 use blstrs::Scalar;
-use pallas_addresses::Address;
+use pallas_addresses::{
+    Address, Network, PaymentKeyHash, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+    StakeAddress,
+};
+use pallas_crypto::hash::Hasher;
 use pallas_primitives::alonzo::{MaybeIndefArray, PlutusData};
-use pallas_primitives::conway::DatumOption;
+use pallas_primitives::conway::{DatumOption, RedeemerTag};
 use pallas_traverse::{MultiEraOutput, MultiEraTx};
 use seedelf_core::assets::{Asset as CoreAsset, Assets};
-use seedelf_core::constants::{Config, get_config};
+use seedelf_core::constants::{COLLATERAL_HASH, Config, get_config};
 use seedelf_core::transaction::{
     address_minimum_lovelace_with_assets, wallet_minimum_lovelace_with_assets,
 };
 use seedelf_crypto::register::Register;
-use seedelf_crypto::schnorr::random_scalar;
+use seedelf_crypto::schnorr::{prove, random_scalar};
 use seedelf_koios::koios::{Asset, InlineDatum, ProtocolParameters, ReferenceScript, UtxoResponse};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -62,6 +66,19 @@ pub fn wallet_address() -> Address {
 
 pub fn wallet_address_bech32() -> String {
     wallet_address().to_bech32().expect("wallet bech32")
+}
+
+/// The KEY address carrying the wallet contract's hash: Koios lists its UTxOs
+/// with the contract's, since it asks by the 28 bytes alone, and no key can
+/// spend from it (chunk 51, x2#2).
+pub fn key_address_with_the_contracts_hash() -> String {
+    Address::from(ShelleyAddress::new(
+        Network::Testnet,
+        ShelleyPaymentPart::Key(PaymentKeyHash::new(config().contract.wallet_contract_hash)),
+        ShelleyDelegationPart::Null,
+    ))
+    .to_bech32()
+    .expect("key address bech32")
 }
 
 /// A deterministic, non-script preprod address usable as a payer / payee.
@@ -223,6 +240,122 @@ pub fn with_reference_script(mut utxo: UtxoResponse, size: usize) -> UtxoRespons
     utxo
 }
 
+/// A stranger's junk token, 2^63 − 1 of it: the most one mint makes. Anyone can
+/// send it to any address, or to the contract under a re-randomization of
+/// someone's register, and three UTxOs of it total more than a u64, and so one
+/// output, can hold (chunk 51, r4#1 and r4#2).
+pub fn junk() -> TokenAmount {
+    ("cc".repeat(28), hex::encode("JUNK"), i64::MAX as u64)
+}
+
+/// `tokens` as core holds them.
+pub fn as_assets(tokens: &[TokenAmount]) -> Assets {
+    tokens
+        .iter()
+        .fold(Assets::new(), |all, (policy, name, qty)| {
+            all.add(CoreAsset::new(policy.clone(), name.clone(), *qty).expect("asset"))
+                .expect("assets")
+        })
+}
+
+/// One of the user's NFTs.
+pub fn nft(n: u8) -> TokenAmount {
+    (
+        format!("{:02x}", 0xa0 + n).repeat(28),
+        hex::encode("nft"),
+        1,
+    )
+}
+
+/// A fungible token anyone can buy, and so put in a pile of their own.
+pub const SNEK: &str = "279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f";
+
+/// `quantity` of [`SNEK`].
+pub fn snek(quantity: u64) -> TokenAmount {
+    (SNEK.to_string(), hex::encode("SNEK"), quantity)
+}
+
+/// `--asset` for `quantity` of [`SNEK`].
+pub fn snek_spec(quantity: u64) -> String {
+    format!("{SNEK}.{}={quantity}", hex::encode("SNEK"))
+}
+
+/// A stranger's four piles, the kinds of token core is handed at most
+/// (rows.rs `MOST_KINDS`, 4,000) between them: each one SNEK beside a
+/// thousand one-of tokens of a policy of its own, the first 999 (chunk 51,
+/// l4cli#1).
+pub fn four_snek_piles() -> Vec<Vec<TokenAmount>> {
+    [(1u16, 999u16), (2, 1_000), (3, 1_000), (4, 1_000)]
+        .into_iter()
+        .map(|(n, junk)| {
+            let mut pile = vec![snek(1)];
+            pile.extend((0..junk).map(|i| {
+                (
+                    format!("{:04x}", 0xf000 + n).repeat(14),
+                    hex::encode(i.to_be_bytes()),
+                    1,
+                )
+            }));
+            pile
+        })
+        .collect()
+}
+
+/// A stranger's big pile, the `n`th: 1,000 one-of tokens under a policy of
+/// its own, with two-byte names, about 19 ₳ at the ledger's least. Core adds
+/// up tokens in time that grows with the square of the kinds (chunk 51,
+/// l3cli#3).
+pub fn big_pile(n: u16) -> Vec<TokenAmount> {
+    (0..1_000u16)
+        .map(|i| {
+            (
+                format!("{n:04x}").repeat(14),
+                hex::encode(i.to_be_bytes()),
+                1,
+            )
+        })
+        .collect()
+}
+
+/// What `run` comes to, run on a thread of its own, or a failure once it has
+/// taken longer than `limit`: a run busy adding up tokens never yields, so it
+/// can't be timed out on the test's own thread.
+pub async fn within<F, T>(limit: std::time::Duration, run: impl FnOnce() -> F + Send + 'static) -> T
+where
+    F: std::future::Future<Output = T>,
+    T: Send + 'static,
+{
+    let (done, answer) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        let _ = done.send(runtime.block_on(run()));
+    });
+    tokio::time::timeout(limit, answer)
+        .await
+        .unwrap_or_else(|_| panic!("the run took longer than {limit:?}"))
+        .expect("the run's answer")
+}
+
+/// `count` distinct tokens, one of each, named by a single byte, 200 to a
+/// policy, the policies numbered from `first`: a pile of tokens, which takes
+/// more bytes and more ADA in the outputs a payment splits it into (20 tokens
+/// to an output) than in the one UTxO it came in.
+pub fn pile(first: u8, count: usize) -> Vec<TokenAmount> {
+    (0..count)
+        .map(|i| {
+            let policy = first + (i / 200) as u8;
+            (
+                format!("{policy:02x}").repeat(28),
+                format!("{:02x}", i % 200),
+                1,
+            )
+        })
+        .collect()
+}
+
 // ----------------------------------------------------------------------------
 // fixture ledger — resolves the values behind a transaction's inputs
 // ----------------------------------------------------------------------------
@@ -233,6 +366,8 @@ pub struct ResolvedValue {
     pub lovelace: u64,
     /// `(policy_id_hex, token_name_hex) -> quantity`.
     pub assets: BTreeMap<(String, String), u64>,
+    /// The register its inline datum holds, if it holds one.
+    pub register: Option<Register>,
 }
 
 /// Maps every fixture outpoint to its value so a decoded transaction's inputs
@@ -247,6 +382,9 @@ impl Ledger {
         for utxo in utxos {
             let mut value = ResolvedValue {
                 lovelace: utxo.value.parse().expect("utxo lovelace"),
+                register: utxo.inline_datum.as_ref().and_then(|datum| {
+                    seedelf_koios::koios::register_of_datum(&hex::decode(&datum.bytes).ok()?)
+                }),
                 ..ResolvedValue::default()
             };
             if let Some(list) = &utxo.asset_list {
@@ -274,9 +412,11 @@ impl Ledger {
 // mock Koios server
 // ----------------------------------------------------------------------------
 
-/// Custom responder for `credential_utxos`, which the CLI paginates: it returns
-/// the canned UTxO set for `offset=0` and an empty page for any later offset so
-/// the pagination loop terminates.
+/// Custom responder for `credential_utxos`: the canned UTxO set for a request
+/// with no offset (or offset 0), and an empty page for any later offset. The
+/// CLI pages after the last row read, never by offset (seedelf-koios
+/// `utxo_pages`; tests/koios_pages.rs pins it), so a fixture shorter than a
+/// page is read in one request.
 struct PaginatedUtxos(Vec<UtxoResponse>);
 
 impl Respond for PaginatedUtxos {
@@ -342,8 +482,15 @@ impl Scenario {
     /// Serve `epoch_params` with the reference-script price set to `per_byte`
     /// lovelace, over the recorded preprod value (15).
     pub async fn mount_reference_script_price(&self, per_byte: u64) {
+        self.mount_params(|params| params["min_fee_ref_script_cost_per_byte"] = json!(per_byte))
+            .await;
+    }
+
+    /// Serve `epoch_params` as recorded, with `change` made to its one row:
+    /// a fee parameter raised, say.
+    pub async fn mount_params(&self, change: impl FnOnce(&mut Value)) {
         let mut params: Value = serde_json::from_str(EPOCH_PARAMS_FIXTURE).expect("epoch params");
-        params[0]["min_fee_ref_script_cost_per_byte"] = json!(per_byte);
+        change(&mut params[0]);
         Mock::given(method("GET"))
             .and(path("/api/v1/epoch_params"))
             .respond_with(ResponseTemplate::new(200).set_body_json(params))
@@ -351,6 +498,17 @@ impl Scenario {
             .with_priority(1)
             .mount(&self.server)
             .await;
+    }
+
+    /// How many requests the mock was sent for `path` (`/api/v1/ogmios`, say).
+    pub async fn requests_to(&self, path: &str) -> usize {
+        self.server
+            .received_requests()
+            .await
+            .expect("request recording enabled")
+            .iter()
+            .filter(|r| r.url.path() == path)
+            .count()
     }
 
     /// Mount `credential_utxos` (the wallet-contract UTxO set) and record the
@@ -387,11 +545,20 @@ impl Scenario {
     /// Mount the Ogmios `evaluateTransaction` endpoint with `n` canned
     /// execution-unit budgets.
     pub async fn mount_evaluate(&self, n: usize) {
-        let budgets: Vec<Value> = (0..n)
-            .map(|i| {
+        self.mount_evaluate_budgets(&vec![(250_000_000, 800_000); n])
+            .await;
+    }
+
+    /// Mount the Ogmios `evaluateTransaction` endpoint with these budgets,
+    /// `(cpu, memory)` for spends 0, 1, … in turn.
+    pub async fn mount_evaluate_budgets(&self, budgets: &[(u64, u64)]) {
+        let budgets: Vec<Value> = budgets
+            .iter()
+            .enumerate()
+            .map(|(i, (cpu, memory))| {
                 json!({
                     "validator": {"index": i, "purpose": "spend"},
-                    "budget": {"cpu": 250_000_000u64, "memory": 800_000u64}
+                    "budget": {"cpu": cpu, "memory": memory}
                 })
             })
             .collect();
@@ -405,17 +572,33 @@ impl Scenario {
     /// Mount Ogmios `evaluateTransaction` for a mint: one budget per spent
     /// input, plus the seedelf policy's, as Ogmios labels them.
     pub async fn mount_evaluate_mint(&self, spends: usize) {
+        self.mount_evaluate_with(spends, (250_000_000, 800_000), (90_000_000, 300_000))
+            .await;
+    }
+
+    /// [`Scenario::mount_evaluate_mint`] at what Ogmios measured on preprod
+    /// (seedelf-core build.rs `SPEND_BUDGET_GUESS`, `MINT_BUDGET_GUESS`), for
+    /// spends that pay with little to spare: the usual 800,000 memory a spend
+    /// is about ten times the real, and past the guess a spend is picked by.
+    pub async fn mount_evaluate_as_measured(&self, spends: usize) {
+        self.mount_evaluate_with(spends, (337_845_799, 76_043), (21_396_182, 72_836))
+            .await;
+    }
+
+    /// Ogmios `evaluateTransaction` answering `spend`'s `(cpu, memory)` for
+    /// each of `spends` spends, and `mint`'s for the seedelf policy.
+    async fn mount_evaluate_with(&self, spends: usize, spend: (u64, u64), mint: (u64, u64)) {
         let mut budgets: Vec<Value> = (0..spends)
             .map(|i| {
                 json!({
                     "validator": {"index": i, "purpose": "spend"},
-                    "budget": {"cpu": 250_000_000u64, "memory": 800_000u64}
+                    "budget": {"cpu": spend.0, "memory": spend.1}
                 })
             })
             .collect();
         budgets.push(json!({
             "validator": {"index": 0, "purpose": "mint"},
-            "budget": {"cpu": 90_000_000u64, "memory": 300_000u64}
+            "budget": {"cpu": mint.0, "memory": mint.1}
         }));
         Mock::given(method("POST"))
             .and(path("/api/v1/ogmios"))
@@ -484,6 +667,13 @@ impl Drop for Scenario {
         seedelf_cli::setup::inject_wallet_scalar(None);
         seedelf_cli::web_server::take_captured_cbor();
     }
+}
+
+/// The recorded preprod parameters the mock serves, read as the CLI reads
+/// them, with no mock running.
+pub fn recorded_params() -> ProtocolParameters {
+    let params: Value = serde_json::from_str(EPOCH_PARAMS_FIXTURE).expect("epoch params");
+    ProtocolParameters::from_koios(&params[0]).expect("the recorded parameters")
 }
 
 /// Fetch protocol parameters through the mock — the exact params the command
@@ -732,4 +922,207 @@ pub fn assert_sound_transaction(tx: &DecodedTx, scenario: &Scenario, params: &Pr
     assert_value_conserved(tx, &scenario.ledger);
     assert_no_sub_min_outputs(tx, params);
     assert_wallet_output_datums(tx, scenario.scalar);
+}
+
+/// The collateral a transaction puts up, the address's 5 ADA less its
+/// return, covers the ledger's 150% of its fee: the fee is even, so 3/2 of it
+/// is whole. An odd fee's ⌊3/2 × fee⌋ falls half a lovelace short, and the
+/// node refuses the transaction (chunk 51, t1b#5).
+pub fn assert_collateral_covers_the_fee(tx: &DecodedTx) {
+    let back = tx.collateral_return.as_ref().expect("a collateral return");
+    let put_up = 5_000_000 - back.lovelace;
+    assert!(
+        tx.fee.is_multiple_of(2) && 2 * put_up >= 3 * tx.fee,
+        "the fee must be even and the collateral cover 150% of it: a fee of {}, a collateral of {put_up}",
+        tx.fee
+    );
+}
+
+/// The one-time key a Seedelf spend is signed with, hex, after asserting
+/// what binds the spend to it (chunk 51, t1b#12): it's the one required
+/// signer besides the collateral service, it signs, and every spent input's
+/// redeemer names it and carries a proof that verifies for that input's
+/// register. The deployed contract takes a proof whose key is among the
+/// signers, so a key anyone could know would let anyone replay the proofs.
+pub fn one_time_key_of(cbor_hex: &str, ledger: &Ledger) -> String {
+    let bytes = hex::decode(cbor_hex).expect("tx cbor hex");
+    let tx = MultiEraTx::decode(&bytes).expect("decode transaction");
+
+    let collateral = hex::encode(COLLATERAL_HASH);
+    let signers: Vec<String> = tx
+        .required_signers()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|signer| signer.to_string())
+        .collect();
+    assert!(
+        signers.contains(&collateral),
+        "the collateral service is a required signer: {signers:?}"
+    );
+    let others: Vec<&String> = signers.iter().filter(|s| **s != collateral).collect();
+    assert_eq!(
+        others.len(),
+        1,
+        "one key signs beside the collateral service: {signers:?}"
+    );
+    let key = others[0].clone();
+    let witnesses: Vec<String> = tx
+        .vkey_witnesses()
+        .iter()
+        .map(|w| Hasher::<224>::hash(&w.vkey).to_string())
+        .collect();
+    assert!(
+        witnesses.contains(&key),
+        "the one-time key {key} signs: {witnesses:?}"
+    );
+
+    let inputs = tx.inputs_sorted_set();
+    let mut proven = 0;
+    for redeemer in tx.redeemers() {
+        if !matches!(redeemer.tag(), RedeemerTag::Spend) {
+            continue;
+        }
+        let input = &inputs[redeemer.index() as usize];
+        let register = ledger
+            .resolve(&hex::encode(*input.hash()), input.index())
+            .register
+            .expect("a spent input's register");
+        let PlutusData::Constr(proof) = redeemer.data() else {
+            panic!("a spend's redeemer is a proof");
+        };
+        let fields: Vec<String> = match &proof.fields {
+            MaybeIndefArray::Def(v) | MaybeIndefArray::Indef(v) => v,
+        }
+        .iter()
+        .map(|field| match field {
+            PlutusData::BoundedBytes(b) => {
+                let slice: &[u8] = b;
+                hex::encode(slice)
+            }
+            other => panic!("a proof's fields are bytes: {other:?}"),
+        })
+        .collect();
+        let [z, g_r, vkh] = fields.as_slice() else {
+            panic!("a proof is z, g_r and the key's hash: {fields:?}");
+        };
+        assert_eq!(
+            vkh,
+            &key,
+            "input {}'s proof names the one-time key",
+            redeemer.index()
+        );
+        assert!(
+            prove(&register.generator, &register.public_value, z, g_r, vkh).expect("a proof"),
+            "input {}'s proof verifies for its register, bound to the one-time key",
+            redeemer.index()
+        );
+        proven += 1;
+    }
+    assert_eq!(proven, inputs.len(), "every input spent is proven");
+    key
+}
+
+/// Addresses no payment goes to: a script's (the wallet contract's own), a
+/// stake address, and a key address on the other network (mainnet). A
+/// payment there with no datum can lock for good, or never arrives.
+pub fn not_payable_addresses() -> Vec<String> {
+    let Address::Shelley(external) = external_address() else {
+        panic!("the external address is a Shelley address");
+    };
+    vec![
+        wallet_address_bech32(),
+        StakeAddress::try_from(external)
+            .expect("its stake address")
+            .to_bech32()
+            .expect("stake bech32"),
+        seedelf_core::address::dapp_address("11".repeat(28), false)
+            .expect("a mainnet address")
+            .to_bech32()
+            .expect("mainnet bech32"),
+    ]
+}
+
+// ----------------------------------------------------------------------------
+// a run in a child process, read as a user reads the terminal
+// ----------------------------------------------------------------------------
+
+/// Set in a child process to the name of the test it runs ([`run_child`]).
+pub const CHILD: &str = "SEEDELF_TEST_CHILD";
+
+/// Whether this process is the child [`run_child`] started to run `test`. A
+/// child test does nothing in any other run.
+pub fn is_child(test: &str) -> bool {
+    std::env::var(CHILD).is_ok_and(|name| name == test)
+}
+
+/// Runs this test binary's test `test` in a child process, stopped after
+/// `within`: what it printed to stdout and to stderr, colours stripped. What
+/// a command prints, a test in its own process can't read.
+pub fn run_child(test: &str, within: std::time::Duration) -> (String, String) {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(std::env::current_exe().expect("the test binary"))
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(CHILD, test)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("start {test}: {e}"));
+    let mut out = child.stdout.take().expect("stdout");
+    let mut err = child.stderr.take().expect("stderr");
+    let out_reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = out.read_to_string(&mut s);
+        s
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = err.read_to_string(&mut s);
+        s
+    });
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        if child.try_wait().expect("wait for the child").is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    (
+        strip_ansi(&out_reader.join().expect("stdout reader")),
+        strip_ansi(&err_reader.join().expect("stderr reader")),
+    )
+}
+
+/// What follows `prefix` on the first line of `text` that starts with it.
+pub fn line_after(text: &str, prefix: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find_map(|l| l.strip_prefix(prefix).map(|rest| rest.trim().to_string()))
+}
+
+/// `s` without its terminal colour codes.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            for n in chars.by_ref() {
+                if n.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+    }
+    out
 }

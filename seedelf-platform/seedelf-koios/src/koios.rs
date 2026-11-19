@@ -1,11 +1,12 @@
 use anyhow::{Context, Result, anyhow};
 use hex;
 use pallas_codec::minicbor::{Decoder, data::Type};
-use reqwest::{Client, Error, Response};
+use reqwest::{Client, Error, Response, StatusCode};
 use seedelf_crypto::register::Register;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
+use std::collections::HashSet;
 use std::sync::{LazyLock, RwLock};
 
 /// Shared HTTP client with sane timeouts. Reuses TCP connections across calls.
@@ -206,10 +207,59 @@ pub struct UtxoResponse {
     pub is_spent: bool,
 }
 
+/// The most rows Koios answers one request with (its PostgREST max-rows).
+const PAGE_SIZE: usize = 1000;
+
+/// Every UTxO a Koios query over UTxOs answers (`credential_utxos`,
+/// `address_utxos`), each once, 1,000 a request. A page starts after the last
+/// row of the one before, in a fixed order, never at an offset: the UTxOs
+/// change between requests, and one spent ahead of an offset shifts the rest,
+/// so the row at the page's edge is never read, as one added would repeat a
+/// row (chunk 51, r1#1). The web wallet's koios.ts `paged` reads them the same
+/// way.
+async fn utxo_pages(url: &str, payload: &Value) -> Result<Vec<UtxoResponse>, Error> {
+    let mut rows: Vec<UtxoResponse> = Vec::new();
+    let mut seen: HashSet<(String, u64)> = HashSet::new();
+    let mut last: Option<(String, u64)> = None;
+    loop {
+        // Written as koios.ts writes it, PostgREST's syntax unencoded: a
+        // transaction's hash is hex.
+        let mut query = format!("order=tx_hash.asc,tx_index.asc&limit={PAGE_SIZE}");
+        if let Some((tx_hash, tx_index)) = &last {
+            query.push_str(&format!(
+                "&or=(tx_hash.gt.{tx_hash},and(tx_hash.eq.{tx_hash},tx_index.gt.{tx_index}))"
+            ));
+        }
+        let page: Vec<UtxoResponse> = HTTP_CLIENT
+            .post(format!("{url}?{query}"))
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .json(payload)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let known = rows.len();
+        let full = page.len() >= PAGE_SIZE;
+        last = page.last().map(|row| (row.tx_hash.clone(), row.tx_index));
+        for row in page {
+            if seen.insert((row.tx_hash.clone(), row.tx_index)) {
+                rows.push(row);
+            }
+        }
+        // A short page is the last. One with nothing new can't lead anywhere either.
+        if !full || rows.len() == known {
+            return Ok(rows);
+        }
+    }
+}
+
 /// Fetches the UTXOs associated with a given payment credential from the Koios API.
 ///
 /// This function collects all UTXOs (Unspent Transaction Outputs) related to the specified
-/// payment credential by paginating through the Koios API results.
+/// payment credential, whatever their addresses' delegation parts, paging through the
+/// Koios API results.
 ///
 /// # Arguments
 ///
@@ -225,8 +275,8 @@ pub struct UtxoResponse {
 ///
 /// # Behavior
 ///
-/// The function paginates through the UTXO results, starting with an offset of zero
-/// and incrementing by 1000 until no further results are returned.
+/// The function pages through the UTXOs 1,000 at a time, each page after the last row
+/// of the one before (see [`utxo_pages`]), so each UTxO is read once.
 pub async fn credential_utxos(
     payment_credential: &str,
     network_flag: bool,
@@ -240,41 +290,14 @@ pub async fn credential_utxos(
         "_extended": true
     });
 
-    let mut all_utxos: Vec<UtxoResponse> = Vec::new();
-    let mut offset: i32 = 0;
-
-    loop {
-        // Make the POST request
-        let response: Response = HTTP_CLIENT
-            .post(url.clone())
-            .header("accept", "application/json")
-            .header("content-type", "application/json")
-            .query(&[("offset", offset.to_string())])
-            .json(&payload)
-            .send()
-            .await?
-            .error_for_status()?;
-
-        let mut utxos: Vec<UtxoResponse> = response.json().await?;
-        // Break the loop if no more results
-        if utxos.is_empty() {
-            break;
-        }
-
-        // Append the retrieved UTXOs to the main list
-        all_utxos.append(&mut utxos);
-
-        // Increment the offset by 1000 (page size)
-        offset += 1000;
-    }
-
-    Ok(all_utxos)
+    utxo_pages(&url, &payload).await
 }
 
 /// Fetches the UTXOs associated with a specific address from the Koios API.
 ///
-/// This function retrieves up to 1000 UTXOs for the given address. The `_extended` flag
-/// is enabled in the payload to include detailed UTXO information.
+/// This function retrieves every UTxO at the given address, paged as
+/// [`credential_utxos`] is. The `_extended` flag is enabled in the payload to
+/// include detailed UTXO information.
 ///
 /// # Arguments
 ///
@@ -287,15 +310,7 @@ pub async fn credential_utxos(
 ///
 /// * `Ok(Vec<UtxoResponse>)` - A vector containing the UTXOs associated with the given address.
 /// * `Err(Error)` - If the API request or JSON parsing fails.
-///
-/// # Notes
-///
-/// The function assumes a maximum of 1000 UTXOs per address, as per CIP-30 wallets.
-/// If an address exceeds this limit, the wallet is likely mismanaged.
 pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<UtxoResponse>, Error> {
-    // this will limit to 1000 utxos which is ok for an address as that is a cip30 wallet
-    // if you have 1000 utxos in that wallets that cannot pay for anything then something
-    // is wrong in that wallet
     let url: String = koios_url(network_flag, "address_utxos");
 
     // Prepare the request payload
@@ -304,19 +319,7 @@ pub async fn address_utxos(address: &str, network_flag: bool) -> Result<Vec<Utxo
         "_extended": true
     });
 
-    // Make the POST request
-    let response: Response = HTTP_CLIENT
-        .post(url)
-        .header("accept", "application/json")
-        .header("content-type", "application/json")
-        .json(&payload)
-        .send()
-        .await?
-        .error_for_status()?;
-
-    let utxos: Vec<UtxoResponse> = response.json().await?;
-
-    Ok(utxos)
+    utxo_pages(&url, &payload).await
 }
 
 /// Extracts the `Register` from an `InlineDatum` with logging.
@@ -354,33 +357,40 @@ pub fn extract_bytes_with_logging(inline_datum: &Option<InlineDatum>) -> Option<
 /// The register in a datum's CBOR: constructor 0 holding exactly two 48-byte
 /// byte strings, with nothing after, however the CBOR spells them (a definite
 /// or indefinite list, bytes whole or in chunks, constructor 0's general form
-/// `102([0, fields])`): the shapes Koios would show as constructor 0 with two
-/// fields. It's read token by token, never by a recursive decoder, so a deeply
+/// `102([0, fields])`, its pair definite or indefinite): the shapes Koios would
+/// show as constructor 0 with two fields, as the node reads every one of them
+/// alike. It's read token by token, never by a recursive decoder, so a deeply
 /// nested datum is only "not a register". Whether the points are valid is left
 /// to the caller.
 pub fn register_of_datum(cbor: &[u8]) -> Option<Register> {
     let mut d = Decoder::new(cbor);
-    match d.tag().ok()?.as_u64() {
-        121 => {}
+    // In the general form, whether its pair is an indefinite list, which a break must end after the fields: the node
+    // takes `102([_ 0, fields])` too (chunk 51, r2sign#1).
+    let open_pair = match d.tag().ok()?.as_u64() {
+        121 => false,
         102 => {
-            if d.array().ok()? != Some(2) || d.u64().ok()? != 0 {
+            let pair = d.array().ok()?;
+            if pair.is_some_and(|n| n != 2) || d.u64().ok()? != 0 {
                 return None;
             }
+            pair.is_none()
         }
         _ => return None,
-    }
+    };
     let fields = d.array().ok()?;
     if fields.is_some_and(|n| n != 2) {
         return None;
     }
     let generator = point_bytes(&mut d)?;
     let public_value = point_bytes(&mut d)?;
-    if fields.is_none() {
-        // An indefinite list: a break must end it after the two fields.
-        if d.datatype().ok()? != Type::Break {
-            return None;
+    // An indefinite list, the fields or the pair: a break must end each, after the two fields.
+    for open in [fields.is_none(), open_pair] {
+        if open {
+            if d.datatype().ok()? != Type::Break {
+                return None;
+            }
+            d.set_position(d.position() + 1);
         }
-        d.set_position(d.position() + 1);
     }
     (d.position() == cbor.len())
         .then(|| Register::new(hex::encode(generator), hex::encode(public_value)))
@@ -522,6 +532,80 @@ pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<V
     response.json().await
 }
 
+/// Why a submit didn't go through, or may have: the error [`submit_tx`]
+/// returns, to downcast to. Only [`SubmitError::MaybeSent`] means the
+/// transaction may be on its way: sending it again is safe (the ledger takes
+/// it once), but building and paying again, as running a command again does,
+/// may pay twice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmitError {
+    /// Nothing reached the network: the connection never opened, Koios asked
+    /// to slow down (429), or its node was down.
+    NotSent(String),
+    /// Refused, in Koios's or the node's words: it didn't go.
+    Refused(String),
+    /// Refused because an input it spends is already spent: by an earlier
+    /// copy of it that went through, maybe, or by another transaction.
+    Spent(String),
+    /// Koios had it and never said it went through: no answer in time, the
+    /// connection lost, a server error (5xx), or an answer that isn't its id.
+    /// It may have gone through (chunk 51, r4#4).
+    MaybeSent(String),
+}
+
+impl std::fmt::Display for SubmitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SubmitError::NotSent(why) => write!(f, "Nothing was sent: {why}"),
+            SubmitError::Refused(why) => write!(f, "The transaction was refused: {why}"),
+            SubmitError::Spent(why) => write!(
+                f,
+                "The transaction was refused, as an input it spends is already spent: {why}"
+            ),
+            SubmitError::MaybeSent(why) => write!(
+                f,
+                "The transaction may have gone through, though Koios didn't confirm it: {why}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SubmitError {}
+
+/// Whether a request that failed sent nothing: the connection never opened,
+/// so the request never left. Anything else may have reached Koios.
+fn never_sent(error: &Error) -> bool {
+    // reqwest's browser client can't tell (it's never used to submit).
+    #[cfg(not(target_arch = "wasm32"))]
+    if error.is_connect() {
+        return true;
+    }
+    error.is_builder()
+}
+
+/// An error with what caused it, on one line: reqwest's own words leave out
+/// the cause ("operation timed out", "Connection refused").
+fn with_causes(error: &Error) -> String {
+    let mut line = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        line.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    line
+}
+
+/// What Koios answered, for a message: its status, and its words unless
+/// they're a gateway's page, at most 500 characters of them.
+fn answered(status: StatusCode, body: &str) -> String {
+    let words = body.trim();
+    if words.is_empty() || words.starts_with('<') {
+        return format!("Koios answered {status}");
+    }
+    let cut: String = words.chars().take(500).collect();
+    format!("Koios answered {status}: {cut}")
+}
+
 /// Submits a CBOR-encoded transaction to the Koios API.
 ///
 /// This function decodes the provided CBOR-encoded transaction from a hex string into binary
@@ -537,8 +621,10 @@ pub async fn witness_collateral(tx_cbor: String, network_flag: bool) -> Result<V
 ///
 /// # Returns
 ///
-/// * `Ok(Value)` - A JSON response from the API indicating the result of the transaction submission.
-/// * `Err(Error)` - If the API request fails or the response JSON parsing fails.
+/// * `Ok(Value)` - Koios's answer: the transaction's id, as a JSON string.
+/// * `Err(Error)` - A [`SubmitError`] when it didn't go through, or may have:
+///   only [`SubmitError::MaybeSent`] may have gone, so a caller must never
+///   take a failed submit for one that wasn't sent.
 ///
 /// # Behavior
 ///
@@ -550,20 +636,67 @@ pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value> {
     // Decode the hex string into binary data
     let data: Vec<u8> = hex::decode(&tx_cbor).context("Invalid hex in tx cbor")?;
 
-    let response: Response = HTTP_CLIENT
+    let response: Response = match HTTP_CLIENT
         .post(url)
         .header("Content-Type", "application/cbor")
         .body(data) // Send the raw binary data as the body of the request
         .send()
         .await
-        .context("Failed to submit transaction")?
-        .error_for_status()
-        .context("Koios rejected the transaction")?;
-
-    response
-        .json()
-        .await
-        .context("Failed to parse submit_tx response")
+    {
+        Ok(response) => response,
+        Err(e) if never_sent(&e) => {
+            let why = format!("Koios couldn't be reached: {}", with_causes(&e));
+            return Err(SubmitError::NotSent(why).into());
+        }
+        // A timeout or a connection lost once the request went: Koios may
+        // have passed it on.
+        Err(e) => {
+            let why = format!("no answer: {}", with_causes(&e));
+            return Err(SubmitError::MaybeSent(why).into());
+        }
+    };
+    let status: StatusCode = response.status();
+    // Koios's gateway answers a 429 before passing anything on.
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return Err(
+            SubmitError::NotSent(format!("Koios answered {status}: try again later")).into(),
+        );
+    }
+    if status.is_server_error() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(SubmitError::MaybeSent(answered(status, &body)).into());
+    }
+    let text: String = match response.text().await {
+        Ok(text) => text,
+        Err(e) if !status.is_client_error() => {
+            return Err(SubmitError::MaybeSent(format!(
+                "Koios answered {status}, and its answer can't be read: {}",
+                with_causes(&e)
+            ))
+            .into());
+        }
+        // A refusal whose words were lost is a refusal still.
+        Err(_) => String::new(),
+    };
+    if status.is_client_error() {
+        // A Koios instance whose node was down answered: it never reached
+        // the network.
+        if text.contains("TxSubmitConnectionError") {
+            return Err(SubmitError::NotSent(answered(status, &text)).into());
+        }
+        // Newer nodes say so from their mempool, before the ledger would,
+        // when every input is spent.
+        if text.contains("BadInputsUTxO") || text.contains("All inputs are spent") {
+            return Err(SubmitError::Spent(answered(status, &text)).into());
+        }
+        return Err(SubmitError::Refused(answered(status, &text)).into());
+    }
+    match serde_json::from_str::<Value>(&text) {
+        Ok(id) if status.is_success() && id.is_string() => Ok(id),
+        // Taken, with an answer that isn't a transaction's id: it may well
+        // be on its way.
+        _ => Err(SubmitError::MaybeSent(answered(status, &text)).into()),
+    }
 }
 
 pub async fn ada_handle_address(
@@ -764,13 +897,25 @@ struct TxInfoResponse {
     outputs: Vec<TxInfoOutput>,
 }
 
-/// An input or output in `tx_info`: only its inline datum is kept. Every
-/// other field, a reference script's JSON among them, is skipped unread, so
-/// its depth can't make the response unreadable.
+/// An input or output in `tx_info`: only its address and its inline datum are
+/// kept. Every other field, a reference script's JSON among them, is skipped
+/// unread, so its depth can't make the response unreadable.
 #[derive(Debug, Deserialize, Clone, Default)]
 struct TxInfoOutput {
     #[serde(default)]
+    payment_addr: Option<PaymentAddr>,
+    #[serde(default)]
     inline_datum: Option<InlineDatum>,
+}
+
+/// An input's or output's address in `tx_info`: bech32, and its payment
+/// credential's hash, hex.
+#[derive(Debug, Deserialize, Clone, Default)]
+struct PaymentAddr {
+    #[serde(default)]
+    bech32: Option<String>,
+    #[serde(default)]
+    cred: Option<String>,
 }
 
 impl TxInfoOutput {
@@ -779,6 +924,32 @@ impl TxInfoOutput {
     fn register(&self) -> Option<Register> {
         let cbor = hex::decode(&self.inline_datum.as_ref()?.bytes).ok()?;
         register_of_datum(&cbor)
+    }
+
+    /// Whether it sits at the script whose hash is `script` (hex), with any
+    /// stake part or none: its payment credential is those 28 bytes, and its
+    /// address's header says a script holds them. A Shelley address's first
+    /// bech32 character after the separator is its header's type, doubled
+    /// (the network's bits follow): `z`, `x`, `2` and `w` are the four types
+    /// whose payment part is a script's (base with a key's or a script's
+    /// stake, pointer, enterprise), and `q`, `y`, `g` and `v` a key's. Koios
+    /// lists the KEY address carrying a script's hash with the script's own
+    /// (chunk 51, x2#2).
+    fn at_script(&self, script: &str) -> bool {
+        let Some(address) = &self.payment_addr else {
+            return false;
+        };
+        let held_by_a_script = address
+            .bech32
+            .as_deref()
+            .and_then(|bech32| bech32.rsplit_once('1'))
+            .and_then(|(_, data)| data.chars().next())
+            .is_some_and(|kind| matches!(kind, 'z' | 'x' | '2' | 'w'));
+        held_by_a_script
+            && address
+                .cred
+                .as_deref()
+                .is_some_and(|cred| cred.eq_ignore_ascii_case(script))
     }
 }
 
@@ -791,16 +962,19 @@ pub struct TxResponse {
 }
 
 impl TxResponse {
-    fn from_info_response(info: TxInfoResponse) -> Self {
+    /// The registers under `info`'s inputs and outputs, of those `kept` keeps.
+    fn from_info_response(info: TxInfoResponse, kept: &impl Fn(&TxInfoOutput) -> bool) -> Self {
         let input_registers = info
             .inputs
             .iter()
+            .filter(|input| kept(input))
             .filter_map(TxInfoOutput::register)
             .collect();
 
         let output_registers = info
             .outputs
             .iter()
+            .filter(|output| kept(output))
             .filter_map(TxInfoOutput::register)
             .collect();
 
@@ -818,68 +992,108 @@ pub async fn address_transactions(
     network_flag: bool,
     address: String,
 ) -> Result<Vec<TxResponse>, Error> {
-    let address_tx_url: String = koios_url(network_flag, "address_txs");
+    let payload: Value = serde_json::json!({
+        "_addresses": [address],
+    });
+    transaction_pages(network_flag, "address_txs", &payload, &|_| true).await
+}
+
+/// Return the transaction history of a script (its hash, hex): every
+/// transaction that made or spent an output at it, whatever its address's
+/// delegation part, with the registers there alone. The wallet contract's is
+/// what `util history` reads, so it finds what was paid to the contract's
+/// staked form too, where every CLI up to 0.4.10 paid it (chunk 51). Koios
+/// lists a credential's transactions by its 28 bytes, so the KEY address
+/// carrying the script's hash comes too: no key spends from it, and a
+/// register there is no one's receipt (chunk 51, x2#2).
+pub async fn script_transactions(
+    network_flag: bool,
+    script_hash: &str,
+) -> Result<Vec<TxResponse>, Error> {
+    let payload: Value = serde_json::json!({
+        "_payment_credentials": [script_hash],
+    });
+    let at_the_script = |place: &TxInfoOutput| place.at_script(script_hash);
+    transaction_pages(network_flag, "credential_txs", &payload, &at_the_script).await
+}
+
+/// Every transaction a Koios transaction list (`address_txs`,
+/// `credential_txs`) answers, newest first, each once, with the registers
+/// under its inputs and outputs that `kept` keeps. The list is read 65 at a
+/// time in a fixed order: a transaction that lands between two requests moves
+/// the rest down one, so a page can repeat the last row of the one before,
+/// and that row is kept once (chunk 51, r1#1).
+async fn transaction_pages(
+    network_flag: bool,
+    list: &str,
+    payload: &Value,
+    kept: &impl Fn(&TxInfoOutput) -> bool,
+) -> Result<Vec<TxResponse>, Error> {
+    let address_tx_url: String = koios_url(network_flag, list);
 
     let tx_info_url: String = koios_url(network_flag, "tx_info");
 
-    // Prepare the request payload
-    let address_payload: Value = serde_json::json!({
-        "_addresses": [address],
-    });
-
     let mut all_txs: Vec<TxResponse> = Vec::new();
-    let mut offset: i32 = 0;
-    let shift: i32 = 65;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut offset: usize = 0;
+    let shift: usize = 65;
 
     loop {
+        // The order koios.ts asks `credential_txs` for, written as it writes it.
         let address_response: Response = HTTP_CLIENT
-            .post(address_tx_url.clone())
+            .post(format!(
+                "{address_tx_url}?order=block_height.desc,tx_hash.asc&offset={offset}&limit={shift}"
+            ))
             .header("accept", "application/json")
             .header("content-type", "application/json")
-            .query(&[("offset", offset.to_string()), ("limit", shift.to_string())])
-            .json(&address_payload)
+            .json(payload)
             .send()
             .await?
             .error_for_status()?;
 
-        let utxos: Vec<History> = address_response.json().await?;
-        // Break the loop if no more results
-        if utxos.is_empty() {
-            break;
-        }
-
-        let tx_hashes: Vec<String> = utxos.iter().map(|h| h.tx_hash.clone()).collect();
-
-        let tx_info_payload: Value = serde_json::json!({
-            "_tx_hashes": tx_hashes,
-            "_inputs": true,
-            "_metadata": false,
-            "_assets": false,
-            "_withdrawals": false,
-            "_certs": false,
-            "_scripts": true,
-            "_bytecode": false
-        });
-
-        let tx_info_response: Response = HTTP_CLIENT
-            .post(tx_info_url.clone())
-            .header("accept", "application/json")
-            .header("content-type", "application/json")
-            .json(&tx_info_payload)
-            .send()
-            .await?
-            .error_for_status()?;
-
-        let txs: Vec<TxInfoResponse> = tx_info_response.json().await?;
-        let mut tx_responses: Vec<TxResponse> = txs
-            .into_iter()
-            .map(TxResponse::from_info_response)
+        let history: Vec<History> = address_response.json().await?;
+        // Each transaction once: one a page repeats is left out.
+        let tx_hashes: Vec<String> = history
+            .iter()
+            .map(|h| h.tx_hash.clone())
+            .filter(|tx_hash| seen.insert(tx_hash.clone()))
             .collect();
 
-        // Append the retrieved UTXOs to the main list
-        all_txs.append(&mut tx_responses);
+        if !tx_hashes.is_empty() {
+            let tx_info_payload: Value = serde_json::json!({
+                "_tx_hashes": tx_hashes,
+                "_inputs": true,
+                "_metadata": false,
+                "_assets": false,
+                "_withdrawals": false,
+                "_certs": false,
+                "_scripts": true,
+                "_bytecode": false
+            });
 
-        // Increment the offset by shift
+            let tx_info_response: Response = HTTP_CLIENT
+                .post(tx_info_url.clone())
+                .header("accept", "application/json")
+                .header("content-type", "application/json")
+                .json(&tx_info_payload)
+                .send()
+                .await?
+                .error_for_status()?;
+
+            let txs: Vec<TxInfoResponse> = tx_info_response.json().await?;
+            let mut tx_responses: Vec<TxResponse> = txs
+                .into_iter()
+                .map(|info| TxResponse::from_info_response(info, kept))
+                .collect();
+
+            // Append the retrieved transactions to the main list
+            all_txs.append(&mut tx_responses);
+        }
+
+        // A short page is the last.
+        if history.len() < shift {
+            break;
+        }
         offset += shift;
     }
 
@@ -1145,8 +1359,48 @@ mod tests {
             r#"[{{"tx_hash":"00","block_height":7,"inputs":[{{"inline_datum":{deep_datum},"reference_script":null}},{{"inline_datum":null}}],"outputs":[{{"inline_datum":{ours},"reference_script":{deep_script}}}],"plutus_contracts":[{{"input":{{"redeemer":{{"datum":{{"value":{deep_datum}}}}}}}}}]}}]"#
         );
         let txs: Vec<TxInfoResponse> = serde_json::from_str(&page).unwrap();
-        let tx = TxResponse::from_info_response(txs.into_iter().next().unwrap());
+        let tx = TxResponse::from_info_response(txs.into_iter().next().unwrap(), &|_| true);
         assert!(tx.input_registers.is_empty());
         assert_eq!(tx.output_registers, vec![register]);
+    }
+
+    /// `tx_info` gives an input's or output's address and its payment
+    /// credential: it's at a script only where its address's header is one
+    /// of the four types whose payment part is a script's, and the credential
+    /// is that script's. Koios lists the KEY address carrying a script's hash
+    /// with the script's (chunk 51, x2#2).
+    #[test]
+    fn a_place_is_at_a_script_only_where_a_script_holds_its_credential() {
+        let script = "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469";
+        let place = |bech32: &str, cred: &str| TxInfoOutput {
+            payment_addr: Some(PaymentAddr {
+                bech32: Some(bech32.to_string()),
+                cred: Some(cred.to_string()),
+            }),
+            inline_datum: None,
+        };
+        // The wallet contract on preprod, and the KEY address with its hash.
+        let contract = "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f";
+        let key = "addr_test1vz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6ghn7njf";
+        assert!(place(contract, script).at_script(script));
+        assert!(place(contract, &script.to_uppercase()).at_script(script));
+        assert!(!place(key, script).at_script(script));
+        // Each header type by its address's first character: a script's
+        // payment part, then a key's.
+        for kind in ['z', 'x', '2', 'w'] {
+            assert!(
+                place(&format!("addr1{kind}2te2wq"), script).at_script(script),
+                "{kind}"
+            );
+        }
+        for kind in ['q', 'y', 'g', 'v'] {
+            assert!(
+                !place(&format!("addr1{kind}2te2wq"), script).at_script(script),
+                "{kind}"
+            );
+        }
+        // Another script's credential, and no address at all.
+        assert!(!place(contract, &"ab".repeat(28)).at_script(script));
+        assert!(!TxInfoOutput::default().at_script(script));
     }
 }
