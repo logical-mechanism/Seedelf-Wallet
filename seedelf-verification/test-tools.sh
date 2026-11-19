@@ -3,7 +3,8 @@
 # systemd, about ten seconds. A stand-in `lake` prints a case's console and exits as Lake would; a
 # stand-in `systemd-run` runs the command it's given; the traces are Lake's JSON.
 #   bash test-tools.sh                 the tools beside it
-#   TOOLS=<folder> bash test-tools.sh  another copy of check.sh, tally.py and Audit/
+#   TOOLS=<folder> bash test-tools.sh  another copy of check.sh, tally.py, expected-failures.txt and
+#                                      Audit/, beside Seedelf/PolicyBurn.lean and PolicyMint.lean
 # What it holds them to:
 # - check.sh decides SORRY, UNDETERM and NO TRACE from the module's own trace, never from the
 #   console (which replays every import's log, a dependency's sorry included): a sorry, or a
@@ -19,6 +20,11 @@
 #   is written during the build doesn't, nor does an import's after a build that times out or fails;
 # - a failed build loses its old build files, the module's own or a dependency's (forget()), and a
 #   timeout's goes too;
+# - a build that fails just as expected-failures.txt records is EXPECTED, exit 0, and its imports
+#   are read as a passing build's; any other failure there is FAILED, saying what differs: a counted
+#   theorem Undetermined, Falsified or missing its ✅, a listed one passing or failing on another
+#   error, a sorry, another module failing, an entry with no when; a timeout stays TIMEOUT. The
+#   folder's own list holds on PolicyBurn's and PolicyMint's console from the default run;
 # - tally.py and Audit/count.py call a module not ok when it rests on one with no trace, here or
 #   in a dependency, when its trace is older than its source, and when its trace doesn't read or
 #   holds a sorry; count.py exits 1 then, and 0 when every module is ok;
@@ -26,7 +32,10 @@
 #   for Slice/'s;
 # - Audit/run-all.sh: a run of some families ends on their status alone, a full run on count.py's
 #   too;
-# - Audit/diag/scan-diag.py exits nonzero for a LOOK, an INCONCLUSIVE or a failed Lean run.
+# - Audit/diag/scan-diag.py exits nonzero for a LOOK, an INCONCLUSIVE or a failed Lean run. A
+#   recursion over Nat whose function accepted.txt lists, with a why and a when, is no LOOK; a Nat
+#   recursion not listed, or any other flag beside a listed one, still fails. The folder's list
+#   passes Nat.log2 and itobs_be_loop, and not bstoi_be_loop.
 # Exits 0 when every case holds, 1 otherwise.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -293,6 +302,88 @@ console; check 0 seedelf-slice Slice.Rule; (cd "$P" && python3 -I tally.py Slice
 [ "$(verdict Slice.Rule)" = ok ] && ! grep -q '^NOT OK' "$T/slice.out" && ok "and that step reads Slice.Rule again: ok" \
   || no "./check.sh seedelf-slice Slice.Rule leaves it $(verdict Slice.Rule), tally.py $(tail -1 "$T/slice.out")"
 
+echo "== check.sh: a module that fails just as expected-failures.txt records (chunk 51, the diag LOOK rows' call)"
+# Demo.Burn's first two theorems fail on BitVec by design, as Seedelf.PolicyBurn's do, and the
+# package's expected-failures.txt records them; its other two are counted. Its console is Lake's,
+# as the default run printed PolicyBurn's on 2026-11-18. Its old build is there to be forgotten.
+make_burn() {
+  make_pkg
+  printf '%s\n' 'import Demo.Leaf' '' '/-- Fails on BitVec. -/' 'theorem burn0 : True := by blaster' '' \
+    '/-- Fails on BitVec. -/' 'theorem burn255 : True := by blaster' '' '/-- Counted. -/' \
+    'theorem burn256_fails : True := by blaster' '' '/-- Counted. -/' 'theorem burnNeg_fails : True := by blaster' \
+    > "$P/Demo/Burn.lean"
+  touch -d '2026-11-10 10:00' "$P/Demo/Burn.lean"
+  for e in olean trace; do echo old > "$P/.lake/build/lib/lean/Demo/Burn.$e"; done
+  printf '%s\n' '# a test list' '' 'Demo.Burn' '  fails: burn0 burn255' \
+    '  with:  Inductive datatype with instance parameters not supported: `BitVec' \
+    '  why:   Blaster cannot decide BitVec' '  when:  2026-11-18, test-tools.sh' > "$P/expected-failures.txt"
+}
+BITVEC='Inductive datatype with instance parameters not supported: `BitVec'
+B0="error: Demo/Burn.lean:4:35: $BITVEC"; B1="error: Demo/Burn.lean:7:37: $BITVEC"
+V2="info: Demo/Burn.lean:10:43: ✅ Valid"; W2="warning: Demo/Burn.lean:10:43: declaration uses 'blasterProven' (SMT-verified, no proof term)"
+V3="info: Demo/Burn.lean:13:43: ✅ Valid"; W3="warning: Demo/Burn.lean:13:43: declaration uses 'blasterProven' (SMT-verified, no proof term)"
+burn_console() { console '✖ [9/9] Building Demo.Burn (1.8s)' "$@" 'error: Lean exited with code 1' \
+  'Some required targets logged failures:' '- Demo.Burn' 'error: build failed'; }
+make_burn; burn_console "$B0" "$B1" "$V2" "$W2" "$V3" "$W3"; check 1 Demo.Burn
+[ "$(verdict Demo.Burn)" = EXPECTED ] && [ "$crc" = 0 ] && ok "as recorded: EXPECTED, exit 0" \
+  || no "a failure just as recorded reads $(verdict Demo.Burn), exit $crc"
+[ -z "$(ls "$P"/.lake/build/lib/lean/Demo/Burn.* 2>/dev/null)" ] && ok "and its old build goes, as any failed build's" \
+  || no "an expected failure kept its old build"
+trace "$P/.lake/build/lib/lean/Demo/Leaf.trace" info "Demo/Leaf.lean:1:0: ✅ Valid" warning "Demo/Leaf.lean:1:8: declaration uses 'sorry'"
+check 1 Demo.Burn
+[ "$(verdict Demo.Burn)" = EXPECTED ] && [ "$(import_verdict Demo.Leaf Demo.Burn)" = SORRY ] && [ "$crc" = 1 ] \
+  && ok "its imports read as a passing build's: SORRY Demo.Leaf (an import of Demo.Burn), exit 1" \
+  || no "an expected failure's import with a sorry: Demo.Burn $(verdict Demo.Burn), Demo.Leaf '$(import_verdict Demo.Leaf Demo.Burn)', exit $crc"
+xf_case() {  # what the case is, then Demo.Burn's own lines: FAILED, exit 1
+  local what=$1; shift; make_burn; burn_console "$@"; check 1 Demo.Burn
+  [ "$(verdict Demo.Burn)" = FAILED ] && [ "$crc" = 1 ] && ok "$what: FAILED, exit 1" \
+    || no "$what reads $(verdict Demo.Burn), exit $crc"
+}
+xf_case "a counted theorem Undetermined" "$B0" "$B1" "warning: Demo/Burn.lean:10:43: ⚠️ Undetermined" "$V3" "$W3"
+grep -q '^FAILED    Demo.Burn (exit 1, .*not as expected-failures.txt records: .*burn256_fails' "$T/check.out" \
+  && ok "and its line says why: burn256_fails" || no "the FAILED line doesn't say what differs: $(grep '^FAILED    Demo.Burn' "$T/check.out")"
+xf_case "a counted theorem Falsified" "$B0" "$B1" "error: Demo/Burn.lean:10:43: ❌ Falsified" "$V3" "$W3"
+xf_case "a listed theorem failing on another error" "error: Demo/Burn.lean:4:35: ❌ Falsified" "$B1" "$V2" "$W2" "$V3" "$W3"
+xf_case "a listed theorem that no longer fails" "info: Demo/Burn.lean:4:35: ✅ Valid" "$B1" "$V2" "$W2" "$V3" "$W3"
+xf_case "a counted theorem's ✅ missing" "$B0" "$B1" "$V3" "$W3"
+xf_case "a sorry in the module" "$B0" "$B1" "$V2" "$W2" "$V3" "$W3" "warning: Demo/Burn.lean:13:8: declaration uses 'sorry'"
+xf_case "another module failing in its build" '✖ [8/9] Building Demo.Leaf (0.5s)' \
+  "error: Demo/Leaf.lean:1:0: unknown identifier 'x'" "$B0" "$B1" "$V2" "$W2" "$V3" "$W3"
+make_burn; burn_console "$B0" "$B1" "$V2" "$W2" "$V3" "$W3"; check 124 Demo.Burn
+[ "$(verdict Demo.Burn)" = TIMEOUT ] && [ "$crc" = 1 ] && ok "a timeout, its console as recorded: TIMEOUT, exit 1" \
+  || no "a timeout reads $(verdict Demo.Burn), exit $crc"
+make_burn; printf '# nothing listed\n' > "$P/expected-failures.txt"; burn_console "$B0" "$B1" "$V2" "$W2" "$V3" "$W3"; check 1 Demo.Burn
+[ "$(verdict Demo.Burn)" = FAILED ] && [ "$crc" = 1 ] && ok "a module the list doesn't name: FAILED, exit 1" \
+  || no "an unlisted failure reads $(verdict Demo.Burn), exit $crc"
+make_burn; grep -v 'when:' "$P/expected-failures.txt" > "$T/xf"; mv "$T/xf" "$P/expected-failures.txt"
+burn_console "$B0" "$B1" "$V2" "$W2" "$V3" "$W3"; check 1 Demo.Burn
+[ "$(verdict Demo.Burn)" = FAILED ] && [ "$crc" = 1 ] && ok "an entry with no when counts for nothing: FAILED, exit 1" \
+  || no "an entry with no when reads $(verdict Demo.Burn), exit $crc"
+
+echo "== check.sh: the folder's expected-failures.txt on the default run's console (2026-11-18)"
+# Seedelf.PolicyBurn's and PolicyMint's own sources and the folder's own list, against what Lake
+# printed for them in chunk 51's default runs.
+make_pkg; cp "$TOOLS/expected-failures.txt" "$P/"; cp "$TOOLS/Seedelf/PolicyBurn.lean" "$TOOLS/Seedelf/PolicyMint.lean" "$P/Seedelf/"
+PB1="error: Seedelf/PolicyBurn.lean:28:89: $BITVEC"; PB2="error: Seedelf/PolicyBurn.lean:31:93: $BITVEC"
+PB3='info: Seedelf/PolicyBurn.lean:34:101: ✅ Valid'
+PB4="warning: Seedelf/PolicyBurn.lean:34:101: declaration uses 'blasterProven' (SMT-verified, no proof term)"
+PB5='info: Seedelf/PolicyBurn.lean:37:103: ✅ Valid'
+PB6="warning: Seedelf/PolicyBurn.lean:37:103: declaration uses 'blasterProven' (SMT-verified, no proof term)"
+pb_console() { console '✖ [565/565] Building Seedelf.PolicyBurn (1.8s)' "$@" 'error: Lean exited with code 1' \
+  'Some required targets logged failures:' '- Seedelf.PolicyBurn' 'error: build failed'; }
+pb_console "$PB1" "$PB2" "$PB3" "$PB4" "$PB5" "$PB6"; check 1 Seedelf.PolicyBurn
+[ "$(verdict Seedelf.PolicyBurn)" = EXPECTED ] && [ "$crc" = 0 ] && ok "Seedelf.PolicyBurn: EXPECTED, exit 0" \
+  || no "Seedelf.PolicyBurn's recorded failure reads $(verdict Seedelf.PolicyBurn), exit $crc"
+console '✖ [565/565] Building Seedelf.PolicyMint (2.4s)' "error: Seedelf/PolicyMint.lean:32:99: $BITVEC" \
+  "error: Seedelf/PolicyMint.lean:37:101: $BITVEC" 'error: Lean exited with code 1' \
+  'Some required targets logged failures:' '- Seedelf.PolicyMint' 'error: build failed'
+check 1 Seedelf.PolicyMint
+[ "$(verdict Seedelf.PolicyMint)" = EXPECTED ] && [ "$crc" = 0 ] && ok "Seedelf.PolicyMint: EXPECTED, exit 0" \
+  || no "Seedelf.PolicyMint's recorded failure reads $(verdict Seedelf.PolicyMint), exit $crc"
+pb_console "$PB1" "$PB2" 'warning: Seedelf/PolicyBurn.lean:34:101: ⚠️ Undetermined' "$PB5" "$PB6"; check 1 Seedelf.PolicyBurn
+[ "$(verdict Seedelf.PolicyBurn)" = FAILED ] && [ "$crc" = 1 ] && ok "burn_at_256_fails Undetermined: FAILED, exit 1" \
+  || no "PolicyBurn with burn_at_256_fails Undetermined reads $(verdict Seedelf.PolicyBurn), exit $crc"
+
 echo "== run-all.sh's exit status"
 make_audit; console; run_all 0
 [ "$arc" = 0 ] && ok "a full run, every family and count.py clean, exits 0" || no "a clean full run exits $arc"
@@ -320,6 +411,71 @@ python3 -I "$TOOLS/Audit/diag/scan-diag.py" "$S/killed" --no-z3 > "$S/out" 2>&1 
   && no "a killed Lean run scans clean" || ok "a killed Lean run is FAILED, exit 1"
 python3 -I "$TOOLS/Audit/diag/scan-diag.py" "$S/selftest" --no-z3 > "$S/out" 2>&1 \
   && no "the self-test's LOOK and FAILED rows scan clean" || ok "the self-test's LOOK and FAILED rows exit 1"
+
+echo "== the diag scan: a recursion over Nat the audit checked by hand (chunk 51, the diag LOOK rows' call)"
+# A copy of the scan beside a list of its own, and a stand-in z3 that answers each replay as told
+# (TT_FULL, TT_BG, TT_PREM, TT_ALT). Each dump is in Blaster's form: a recursive function's
+# @<name>_LRec bridge over Nat, or a lambda's definition (LAMBDA).
+A=$T/acc; mkdir -p "$A/scan" "$A/zbin"; cp "$TOOLS/Audit/diag/scan-diag.py" "$A/scan/"
+printf '%s\n' '# a test list' '' 'Demo.loop' '  why:  structural on its fuel,' '        which never reaches -1' \
+  '  when: 2026-11-18, test-tools.sh' 'Demo.half' '  why:  an entry with no when' > "$A/scan/accepted.txt"
+printf '%s\n' '#!/usr/bin/env bash' 'case $2 in *.full.smt2) echo "${TT_FULL:-unsat}" ;; *.bg.smt2) echo "${TT_BG:-sat}" ;;' \
+  '  *.prem.smt2) echo "${TT_PREM:-sat}" ;; *.alt.smt2) echo "${TT_ALT:-unsat}" ;; *) echo unknown ;; esac' > "$A/zbin/z3"
+chmod +x "$A/zbin/z3"
+dump() {  # dump DIR THEOREM FUNCTION...: a Z3 row whose query recurses over Nat through each function
+  local d=$1 n=$2; shift 2; mkdir -p "$d"
+  { echo 'Smt Query:'; echo '(set-option :print-success true)'; echo '(define-sort Nat () Int)'
+    for f in "$@"; do
+      if [ "$f" = LAMBDA ]; then
+        echo '(declare-fun @lambda1 (Nat) Bool)'
+        echo '(assert (forall ((x Nat)) (! (= (@lambda1 x) (< x 3)) :qid @lambda1_def_cstr)))'
+      else
+        echo "(declare-fun @$f (Nat) Nat)"
+        echo "(define-fun @${f}_LRec ((\$0 Nat)) Nat (ite (< \$0 2) 0 (+ 1 (@$f (div \$0 2)))))"
+        echo "(assert (forall ((\$0 Nat)) (! (= (@$f \$0) (@${f}_LRec \$0)) :pattern ((@$f \$0)))))"
+      fi
+    done
+    echo '(declare-const $1 Nat)'; echo '(assert (not (=> (>= $1 2) (>= $1 0))))'
+    echo "Audit/diag/lean/$n.lean:3:0: warning: ⚠️ Undetermined"; echo 'rc=0'; } > "$d/$n.txt"
+}
+scan() {  # scan DIR [OPTION...] with the copy: its output in $A/out, its status in $drc
+  (PATH="$A/zbin:$PATH" python3 -I "$A/scan/scan-diag.py" "$@") > "$A/out" 2>&1; drc=$?
+}
+dump "$A/listed" R1 Demo.loop; scan "$A/listed" --no-z3
+[ "$drc" = 0 ] && ! grep -q 'LOOK' "$A/out" && grep -q 'rec over Nat: @Demo.loop_LRec .*accepted' "$A/out" \
+  && ok "a row whose one flag is a listed Nat recursion: clean, and named as accepted, exit 0" \
+  || no "a listed Nat recursion: exit $drc, $(grep -E 'R1|rec over' "$A/out" | tr '\n' ' ')"
+dump "$A/unlisted" R2 Demo.walk; scan "$A/unlisted" --no-z3
+[ "$drc" = 1 ] && grep -q 'R2 .*<-- LOOK' "$A/out" && ok "a Nat recursion the list doesn't hold: LOOK, exit 1" \
+  || no "an unlisted Nat recursion: exit $drc"
+dump "$A/both" R3 Demo.loop Demo.walk; scan "$A/both" --no-z3
+[ "$drc" = 1 ] && grep -q 'R3 .*<-- LOOK' "$A/out" && ok "one listed and one not: LOOK, exit 1" || no "a row with an unlisted one too: exit $drc"
+dump "$A/nowhen" R4 Demo.half; scan "$A/nowhen" --no-z3
+[ "$drc" = 1 ] && grep -q 'R4 .*<-- LOOK' "$A/out" && grep -q 'Demo.half.*counts for nothing' "$A/out" \
+  && ok "an entry with no when counts for nothing, and the scan says so: LOOK, exit 1" || no "an entry with no when: exit $drc"
+dump "$A/lambda" R5 Demo.loop LAMBDA; scan "$A/lambda" --no-z3
+[ "$drc" = 1 ] && grep -q 'R5 .*lam=1.*<-- LOOK' "$A/out" && ok "a listed Nat recursion beside a lambda's definition: LOOK, exit 1" \
+  || no "a lambda beside a listed recursion: exit $drc"
+dump "$A/replay" R6 Demo.loop; scan "$A/replay" --alt "$A/zbin/z3"
+[ "$drc" = 0 ] && grep -q 'R6 .*full=unsat bg=sat prem=sat alt=unsat$' "$A/out" \
+  && ok "replayed, every replay as it should be: clean, exit 0" || no "a clean replay of a listed recursion: exit $drc, $(grep R6 "$A/out")"
+for c in TT_FULL=sat TT_BG=unsat TT_PREM=unsat TT_ALT=sat; do
+  export "${c?}"; scan "$A/replay" --alt "$A/zbin/z3"; unset "${c%%=*}"
+  [ "$drc" = 1 ] && grep -q 'R6 .*<-- LOOK' "$A/out" && ok "a listed recursion, $c: LOOK, exit 1" || no "a listed recursion, $c: exit $drc"
+done
+export TT_PREM=timeout; scan "$A/replay" --alt "$A/zbin/z3"; unset TT_PREM
+[ "$drc" = 1 ] && grep -q 'R6 .*<-- INCONCLUSIVE' "$A/out" && ok "a listed recursion, its premises unsettled: INCONCLUSIVE, exit 1" \
+  || no "a listed recursion with a premise timeout: exit $drc"
+# The folder's own list: the two functions the audit checked by hand pass, a third doesn't.
+dump "$A/real" N1 Nat.log2; dump "$A/real" N2 PlutusCore.Bitwise.BitwiseInternal.itobs_be_loop
+python3 -I "$TOOLS/Audit/diag/scan-diag.py" "$A/real" --no-z3 > "$A/out" 2>&1; drc=$?
+[ "$drc" = 0 ] && ! grep -q 'counts for nothing' "$A/out" \
+  && ok "accepted.txt: Nat.log2 and itobs_be_loop, each with a why and a when, pass, exit 0" \
+  || no "the folder's list on Nat.log2 and itobs_be_loop: exit $drc, $(grep -E 'N1|N2|nothing' "$A/out" | tr '\n' ' ')"
+dump "$A/real3" N3 PlutusCore.Bitwise.BitwiseInternal.bstoi_be_loop
+python3 -I "$TOOLS/Audit/diag/scan-diag.py" "$A/real3" --no-z3 > "$A/out" 2>&1
+[ $? = 1 ] && grep -q 'N3 .*<-- LOOK' "$A/out" && ok "accepted.txt: a Nat recursion it doesn't list, LOOK, exit 1" \
+  || no "the folder's list passes bstoi_be_loop"
 
 echo
 [ "$fails" = 0 ] && echo "PASS: the tools hold" || echo "$fails FAILED"
