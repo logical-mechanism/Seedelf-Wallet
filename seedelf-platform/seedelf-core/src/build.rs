@@ -2573,28 +2573,34 @@ impl Purpose {
 ///
 /// The box rule, the one every spend merges boxes by (chunk 51, round six's rule, after l4code#1, l5merge#1,
 /// l5merge#2, l5merge#3, l5still#2 and l5still#4, with round seven's l6reference#1, l6reference#2, l6still#1 and
-/// l6words#3, and round eight's l7merge#1, l7merge#2 and l7still#1). It orders what pays beside the UTxOs holding the
-/// tokens a spend sends, which [`holding`] takes first, by how much of each token they hold, whatever made them
-/// (l6words#1). The boxes are every box back from Lovejoin that adds something, a token pool's way back holding its
-/// token included, each weighed by [`box_weight`]: in one transaction by what it pays beside the change its order makes
-/// anyway ([`Weighed::InOne`], whose margin says where a merge can miss the best), a box of ADA alone by its ADA. Of the
-/// choices that build, in one strict order:
+/// l6words#3, round eight's l7merge#1, l7merge#2 and l7still#1, and round nine's l8merge#2). It orders what pays beside
+/// the UTxOs holding the tokens a spend sends, which [`holding`] takes first, by how much of each token they hold,
+/// whatever made them (l6words#1). The boxes are every box back from Lovejoin that adds something, a token pool's way
+/// back holding its token included, each weighed by [`box_weight`]: in one transaction by what it pays beside the
+/// change its order makes anyway ([`Weighed::InOne`]), a box of ADA alone by its ADA. Of the choices its orders try, in
+/// one strict order:
 ///
 /// 1. nothing 1e1b0647's selection sent as one transaction is refused or sent in parts: where none of the rule's own
 ///    orders builds, 1e1b0647's own orders run before the CLI's, and that pass is what makes this hold (l5merge#2,
 ///    l6still#1, l6words#3);
-/// 2. as few boxes of unknown making as pay: none where the others pay without one, and with one, as few of them. So
-///    before the first box of unknown making, 1e1b0647's orders run too, over the rest without any (l7merge#1,
-///    l7still#1); past one, within the weight's margin, a merge can take more of them than pay;
-/// 3. as few boxes as pay;
-/// 4. of as many, the most a mix moved;
-/// 5. never at the cost of more of the other inputs than the plain choice's build takes (l5merge#3, l5still#2);
+/// 2. as few boxes of unknown making as pay: one goes in only where none of the orders the search tries builds without
+///    one, and another only where none builds with fewer; before the first, 1e1b0647's orders run over everything else
+///    too (l7merge#1, l7still#1);
+/// 3. as few boxes as pay, among the orders tried;
+/// 4. of as many, the most a mix moved, among the orders tried;
+/// 5. never at the cost of more of the other inputs than the plain choice's build takes (l5merge#3, l5still#2).
 ///
-/// then the purpose's order and size: where one transaction takes it, all the other money before any box, a funding's
-/// last resort (another session's money) after the rest; past that, as few of it as pay, the last resorts after the
-/// rest and then among it by size, so one goes in before a box where it pays (l6reference#1, l6words#2). One box that
-/// pays alone goes by [`Purpose`]'s order, and among boxes it ranks alike by this one, before size (l5still#3); a
-/// stealth mint and a pool's start keep their own order there (l6reference#9).
+/// The margins, since each box is weighed by itself where a set's boxes share their change's outputs (how much,
+/// [`Weighed::InOne`] says; chunk 51, round eight's last look): near the input limit, beside token boxes, a merge can
+/// take a box of unknown making, or one more of them, where a set the search doesn't try pays without it, as beside two
+/// ways back of one pool, or a token that shares or opens a change output (l8merge#1, l8still#2); and it can take a box
+/// more than pays, or a plain box where a mixed one pays.
+///
+/// After those, the purpose's order and size: where one transaction takes it, all the other money before any box, a
+/// funding's last resort (another session's money) after the rest; past that, as few of it as pay, the last resorts
+/// after the rest and then among it by size, so one goes in before a box where it pays (l6reference#1, l6words#2). One
+/// box that pays alone goes by [`Purpose`]'s order, and among boxes it ranks alike by this one, before size
+/// (l5still#3); a stealth mint and a pool's start keep their own order there (l6reference#9).
 pub fn box_rank(class: &Class) -> u8 {
     if class.origin == Origin::Mixed {
         0
@@ -2613,21 +2619,27 @@ pub enum Weighed<'a> {
     /// less what its tokens add to that change's least, none below nothing: change goes 20 kinds of token to an output,
     /// so a token that opens another output costs that output's whole least (chunk 51, l6reference#2, l6still#1,
     /// l7merge#2). Orders a and b take all the other money before any box, so their change keeps the holders' tokens
-    /// less those sent and all the other money's; order c, which takes as few of it as pay after its boxes, tries the
-    /// boxes weighed beside a change of ADA alone and beside that one too.
+    /// less those sent and all the other money's; where they build with more than one box whose making the wallet
+    /// knows, fewer, the largest by the weight beside a change of ADA alone, go instead where they build (l8merge#2).
+    /// Order c, which takes as few of the other money as pay after its boxes, tries the boxes weighed beside a change
+    /// of ADA alone and beside a's too.
     ///
-    /// Each box is weighed by itself, which leaves a margin: beside another box holding the same token, or another of
-    /// its policy (two ways back of one pool), a box pays up to that policy's share of the change's least more than it
-    /// weighs, about 0.2 ADA where the change keeps none of it and a few hundredths where it does; two boxes whose
-    /// tokens each fit the change's last output can open another together; and where c keeps only some of the other
-    /// money's tokens, what a box pays is between its two weights. Within that a merge can take more boxes than pay
-    /// (rule 3), fewer a mix moved than as many could hold (rule 4), and more boxes of unknown making than pay where
-    /// only a choice of fewer of them beside more of the others does (rule 2, past the first).
+    /// Each box is weighed by itself, though the boxes a set takes share their change's outputs, so a set's weight
+    /// isn't what it pays. A box's token share of the change's least is about 0.2 ADA where the token joins an output
+    /// with room, and up to an output's whole least, about 1.6 ADA, where the change's last output is full; a little
+    /// more for a long token name. Boxes of one token, or whose tokens share the output they open, pay that share once;
+    /// boxes whose tokens each fit the change's last output can open another together; and c's change keeps only the
+    /// other money c takes, so a box there can pay up to an output's least more or less than either weight (chunk 51,
+    /// l8merge#3, l8still#1). So the orders can miss the best: near the input limit, beside token boxes, a merge can
+    /// take a box of unknown making, or one more of them, where a set the search doesn't try pays without it (rule 2:
+    /// two ways back of one pool, or a token that shares or opens a change output; l8merge#1, l8still#2); and it can
+    /// take a box more than pays (rule 3), or a plain box where a mixed one pays (rule 4).
     InOne(&'a Kept),
     /// In a payment's parts (the web wallet's `Worth::apart`): what it adds ([`adds`]: its ADA less its tokens' whole
     /// least), since a part pays all but its fee and leaves the tokens it keeps with just their least. Each box is
-    /// weighed alone here too, so boxes whose tokens share one output of a part's change pay up to that output's least
-    /// more than counted, and a part's plan can take more boxes than it needs.
+    /// weighed alone here too, so boxes whose tokens share one output of a part's change pay up to that output's least,
+    /// about 1.6 ADA, more than counted, and a part's plan can take more boxes than it needs, or one of unknown making
+    /// where those whose making the wallet knows pay.
     InParts,
 }
 
@@ -2912,11 +2924,12 @@ fn less_than_nothing(
 /// 2. UTxOs of one class, by the purpose's order, the largest first;
 /// 3. merging classes: with tokens sent, their UTxOs and one of another
 ///    class first; then the boxes back from Lovejoin by the box rule
-///    ([`box_rank`]), for every purpose: as few of unknown making as pay,
-///    none where the others pay without one, then as few boxes as pay, of as
-///    many the most a mix moved, with no more of the other inputs than the
-///    plain choice takes, each box weighed by what it pays beside the change
-///    its order makes anyway. Beside them the other money by the purpose's
+///    ([`box_rank`]), for every purpose, among the orders it tries and within
+///    the margins it names: as few of unknown making as pay, none where an
+///    order without one builds, then as few boxes as pay, of as many the most
+///    a mix moved, with no more of the other inputs than the plain choice
+///    takes, each box weighed by what it pays beside the change its order
+///    makes anyway. Beside them the other money by the purpose's
 ///    order, its last resorts after the rest, all of it before any box where
 ///    one transaction takes that; where that runs into what a transaction
 ///    can spend (too many inputs), or everything together is short (a UTxO
@@ -3135,6 +3148,40 @@ fn more_mixed_built<'a, T>(
                 _ => None,
             }
         })
+}
+
+/// Where [`apart`]'s order a or b built with `j` boxes whose making the wallet knows, the largest by the weight beside
+/// the change it keeps, after `head` (all the other money, and a's boxes of unknown making): the first of fewer, the
+/// largest `jj` by the weight beside a change of ADA alone (`boxes`, in that order), that builds after the same `head`,
+/// the fewest first, where they're other boxes than the first `jj` by its own weight (`same_first`). So the swap keeps
+/// the other inputs and those of unknown making and takes fewer boxes, as c tries both weights at each count (chunk
+/// 51, l8merge#2: beside a change whose last output is full, two token boxes that share the output they open pay up to
+/// its least more than they weigh). None where none of them builds.
+fn fewer_built<'a, T>(
+    head: &[&'a UtxoResponse],
+    j: usize,
+    (boxes, same_first): (&[&'a UtxoResponse], &[bool]),
+    grown: &GrownWhole<'a>,
+    run: &mut impl FnMut(
+        Vec<&'a UtxoResponse>,
+        usize,
+        Option<Known>,
+        &GrownWhole<'a>,
+    ) -> Option<Grown<T>>,
+) -> Option<T> {
+    (1..j).filter(|&jj| !same_first[jj]).find_map(|jj| {
+        let order: Vec<&UtxoResponse> = head.iter().chain(&boxes[..jj]).copied().collect();
+        let at = Known {
+            at: head.len(),
+            most: jj,
+            follow: false,
+            kept: false,
+        };
+        match run(order, head.len() + jj, Some(at), grown) {
+            Some(Grown::Built(built, _)) => Some(built),
+            _ => None,
+        }
+    })
 }
 
 /// Where the boxes whose making the wallet knows are in one of [`apart`]'s orders, for a choice of as many with more
@@ -3521,19 +3568,22 @@ fn apart<T>(
         }
     }
 
-    // Then the merge, by the box rule ([`box_rank`]): of the choices that build, as few boxes of unknown making as
-    // pay, none where the others pay without one; then as few boxes as pay; of as many, the most a mix moved, with no
-    // more of the other inputs than the plain choice's build; then the purpose's order and size. Each box is weighed by
-    // what it pays beside the change its order makes anyway ([`Weighed::InOne`]). So for u = 0, 1, 2, … boxes of
-    // unknown making, the largest u, in turn:
+    // Then the merge, by the box rule ([`box_rank`]): of the choices its orders try, within the margins it names, as
+    // few boxes of unknown making as pay, one only where no order tried builds without it; then as few boxes as pay; of
+    // as many, the most a mix moved, with no more of the other inputs than the plain choice's build; then the purpose's
+    // order and size. Each box is weighed by what it pays beside the change its order makes anyway
+    // ([`Weighed::InOne`]). So for u = 0, 1, 2, … boxes of unknown making, the largest u, in turn:
     //
     // a. As the CLI would, but the purpose's last resorts after the rest and the boxes after everything: the other
     //    money that adds something by the purpose's order (independent review L39), then the u, then those whose
     //    making the wallet knows, the largest first, one at a time, as few as pay. Its change keeps what the tokens' own
     //    UTxOs hold beyond what's sent and all the other money's tokens, so its boxes are weighed beside those (chunk
-    //    51, l7merge#2).
-    // b. (u = 0) The same without the purpose's order, pure ADA before tokens: what merging paid before a did is paid
-    //    the same way.
+    //    51, l7merge#2). Where it builds with more than one of them, fewer, the largest by the weight beside a change
+    //    of ADA alone, go instead where they build beside the same other money and the same u, the fewest first, as c
+    //    tries both weights at each count (`fewer_built`, l8merge#2): two token boxes that share the output they open
+    //    pay up to its least more than they weigh.
+    // b. (u = 0) The same without the purpose's order, pure ADA before tokens, fewer by the other weight too: what
+    //    merging paid before a did is paid the same way.
     // c. Where a and b run into what one transaction spends: the u and the largest k of those whose making the wallet
     //    knows, for k = 0, 1, 2, …, then the fewest of the other money that pay, the largest first, tokens or not, or
     //    with UTxOs holding tokens last, for when their tokens make it too large; in each of those the last resorts
@@ -3558,10 +3608,11 @@ fn apart<T>(
     //    `where_only_1e1b0647s_a_takes_mixed_boxes_first_it_still_goes_in_one` and
     //    `where_the_box_rules_orders_build_nothing_1e1b0647s_own_still_send_it_in_one`); its b, which no balance found
     //    needs, replays 1e1b0647 whole (l7still#2). The same orders run once before the first box of unknown making
-    //    too, over the rest without any (l7merge#1, l7still#1): a set they build holds none, so rule 2 puts it before
-    //    anything the orders with one or more build, and that is the one choice they change. Neither pass promises rules
-    //    3 to 5 for what it builds, and past one box of unknown making there's no such pass: within the weight's margin
-    //    a merge can take two of them where one beside more of the others pays.
+    //    too, over everything else (l7merge#1, l7still#1): a set they build holds none, so it goes before anything the
+    //    orders with one or more build, and that is the one choice they change. A set neither they nor the rule's
+    //    orders try can still pay without one: near the input limit, beside token boxes, a merge can then take one
+    //    (l8merge#1, l8still#2), and past one, with no such pass between one and two, one more of them than pays.
+    //    Neither pass promises rules 3 to 5 for what it builds.
     // e. The CLI's own order: never refused what the CLI would pay.
     //
     // Each order is grown one UTxO at a time, from its first start that holds more than the spend pays out. One that
@@ -3864,7 +3915,8 @@ fn apart<T>(
     let mut ahead_fail = false;
     for u in 0..=unknown.len() {
         // Before the first box of unknown making, once, where none of u = 0's orders built: 1e1b0647's own orders over
-        // the rest without any (d's, chunk 51, l7merge#1, l7still#1).
+        // everything else (d's, chunk 51, l7merge#1, l7still#1). What they build holds none; a set that neither they
+        // nor u = 0's orders try can still pay without one (l8merge#1, l8still#2).
         if u == 1 {
             let unknown_box = |x: &UtxoResponse| unknown_boxes.iter().any(|b| std::ptr::eq(*b, x));
             let without = old.get_or_insert_with(&old_orders).without(unknown_box);
@@ -3910,7 +3962,18 @@ fn apart<T>(
                     run(a, from, Some(at), &grown)
                 });
             match ran {
-                Some(Grown::Built(built, _)) => return Ok(built),
+                // With more than one box whose making the wallet knows, fewer by the other weight where they build
+                // (l8merge#2).
+                Some(Grown::Built(built, k)) => {
+                    let j = k.saturating_sub(ahead + u);
+                    let fewer = (j > 1).then(|| {
+                        let head: Vec<&UtxoResponse> =
+                            by_history.iter().chain(besides_kept).copied().collect();
+                        let weighed = (known_boxes.as_slice(), same_first.as_slice());
+                        fewer_built(&head, j, weighed, &grown, &mut run)
+                    });
+                    return Ok(fewer.flatten().unwrap_or(built));
+                }
                 Some(Grown::Failed(at)) => ahead_fail = (u > 0 && at == ahead + u) || at <= ahead,
                 _ => {}
             }
@@ -3922,12 +3985,17 @@ fn apart<T>(
                     follow: false,
                     kept: true,
                 };
-                if let Some(Grown::Built(built, _)) = run(b, 0, Some(at), &grown) {
-                    return Ok(built);
+                if let Some(Grown::Built(built, k)) = run(b, 0, Some(at), &grown) {
+                    let j = k.saturating_sub(ahead);
+                    let weighed = (known_boxes.as_slice(), same_first.as_slice());
+                    let fewer =
+                        (j > 1).then(|| fewer_built(&by_tier, j, weighed, &grown, &mut run));
+                    return Ok(fewer.flatten().unwrap_or(built));
                 }
             }
         }
-        // c. With no other money, a grew these already: it takes them in the same order.
+        // c. With no other money, a grew these already: by c's second weight, beside all the change keeps there, and
+        // where it built, fewer by c's first (chunk 51, l8still#4).
         if largest.is_empty() {
             continue;
         }
@@ -5301,6 +5369,61 @@ mod too_many_by_count {
         assert_eq!(
             doomed, 0,
             "choices made in full though their count alone is too many"
+        );
+    }
+
+    /// Chunk 51, l8reference#2: only an order of every UTxO marks a spend short (`short_whole`). The pass before the
+    /// first box of unknown making grows 1e1b0647's orders whole over the rest without any, which is short where
+    /// everything isn't. 22 plain boxes of 13.19 ₳ beside 10 of unknown making of 10 ₳, a Send of 290 ₳: the 22 plain
+    /// ones hold more than it pays out and are short by its fee, every other set of 22 holds less, and every set of 23
+    /// is too many. So it's refused as too many for one transaction, which the wallet's parts take, not as short.
+    #[test]
+    fn a_send_short_beside_all_but_the_boxes_of_unknown_making_stays_too_many_for_one_transaction()
+    {
+        let w = world();
+        let (all, h) = balance(
+            &w,
+            Purpose::Pay,
+            &[
+                (22, 13_190_000, None, Made::Plain),
+                (10, 10 * ADA, None, Made::Unknown),
+            ],
+        );
+        let pay = [Payment {
+            register: w.owner.clone().rerandomize().unwrap(),
+            lovelace: 290 * ADA,
+            tokens: Assets::new(),
+        }];
+        let outputs = payment_outputs(&w.chain, &pay).unwrap();
+        let plain = &all[..22];
+        assert!(
+            plain.iter().map(lovelace_of).sum::<u64>() > paid_out(&outputs),
+            "the 22 plain ones hold more than the Send pays out, so that pass asks them"
+        );
+        let alone = paying(&w.chain, plain, &outputs, &w.owner, w.signer)
+            .and_then(|spend| spend.estimate().map(|_| ()));
+        assert!(
+            alone.as_ref().is_err_and(is_short),
+            "the 22 plain ones are short by the fee: {alone:?}"
+        );
+        let picked = select_script_inputs(
+            &w.chain.params,
+            &all,
+            &Assets::new(),
+            paid_out(&outputs),
+            &h,
+            |inputs| {
+                let spend = paying(&w.chain, inputs, &outputs, &w.owner, w.signer)?;
+                spend.estimate()?;
+                Ok(spend)
+            },
+        );
+        let e = picked
+            .map(|spend| spend.inputs().len())
+            .expect_err("no set of 22 or fewer pays");
+        assert!(
+            is_too_many(&e),
+            "refused as too many for one transaction, so the wallet's parts take it: {e}"
         );
     }
 }

@@ -4821,8 +4821,9 @@ mod apart {
     /// less its token's whole least, though beside the change a spend makes anyway its token adds only that change's
     /// extra least; so a box of ADA alone weighing more on paper, and paying less, went first, and a merge took two
     /// boxes where the token box alone paid beside the money made private, two of unknown making where one paid. One
-    /// transaction weighs a box holding tokens by what it pays beside that change, its ADA less what its tokens add to
-    /// an ADA change's least, and a box of ADA alone by its ADA: not by the ADA a box holds either (the last case).
+    /// transaction weighs a box holding tokens by what it pays beside the change its order keeps (`Kept`, here one of
+    /// ADA alone), its ADA less what its tokens add to that change's least, and a box of ADA alone by its ADA: not by
+    /// the ADA a box holds either (the last case; chunk 51, l8still#4).
     #[test]
     fn one_transaction_weighs_a_box_by_what_it_pays_beside_the_change() {
         let w = world();
@@ -5601,16 +5602,19 @@ mod apart {
         }
     }
 
-    /// Chunk 51, l7merge#1: rule 2 inside the weight's margin, at the input limit. A: T1 and T2, two plain ways back of
-    /// one token pool, 6 ₳ and its token each, weigh less than A, a plain way back of 5.9 ₳, though together they pay
-    /// more than A beside either (their change carries the token once); U, a way back of unknown making of 6.5 ₳; 20
-    /// payments received of 10 ₳. Just under the most T1, T2 and the 20 pay in 22 inputs, A and one of them beside the
-    /// 20 are short and all 23 too many: the rule's own orders build nothing without U, and U, A and the 20 pay. Before
-    /// the first box of unknown making, 1e1b0647's orders over the rest without one send T1, T2 and the 20. B: a Send
-    /// or Make public of one pool token, B (2 ₳, ten of it) its holder, so the change carries it anyway; T, a way back
-    /// holding one more, 6 ₳: B, T and the 20, never U.
+    /// Chunk 51, l7merge#1: rule 2 at the input limit beside two ways back of one pool, where an order the search tries
+    /// pays without the box of unknown making. A: T1 and T2, two plain ways back of one token pool, 6 ₳ and its token
+    /// each, weigh less than A, a plain way back of 5.9 ₳, though together they pay more than A beside either (their
+    /// change carries the token once); U, a way back of unknown making of 6.5 ₳; 20 payments received of 10 ₳. Just
+    /// under the most T1, T2 and the 20 pay in 22 inputs, A and one of them beside the 20 are short and all 23 too
+    /// many: the rule's own orders build nothing without U, and U, A and the 20 pay. Before the first box of unknown
+    /// making, 1e1b0647's orders over everything else send T1, T2 and the 20. B: a Send or Make public of one pool
+    /// token, B (2 ₳, ten of it) its holder, so the change carries it anyway; T, a way back holding one more, 6 ₳: B, T
+    /// and the 20, never U. Add a small payment received to A's balance and those orders try no such set, so U goes in:
+    /// the rule's margin (l8merge#1).
     #[test]
-    fn inside_the_weights_margin_a_box_of_unknown_making_stays_out_where_the_others_pay() {
+    fn a_box_of_unknown_making_stays_out_where_the_orders_tried_pay_without_it_beside_one_pools_ways_back()
+     {
         let w = world();
         let a = owned(&w, 0x31, 0, 5_900_000, &[]);
         let t1 = owned(&w, 0x70, 0, 6_000_000, &[("pooltoken", 1)]);
@@ -5719,14 +5723,16 @@ mod apart {
         );
     }
 
-    /// Chunk 51, l7still#1: rule 2 beside two ways back of one token pool at the input limit, whatever a mix moved. T1
-    /// and T2, 6 ₳ and the pool's token each; A, a way back of 5.9 ₳, which weighs more than either; U, one of unknown
-    /// making of 10 ₳; 20 payments received of 10 ₳. Just under the most T1, T2 and the 20 pay, A and T1 beside the 20
-    /// are short, and U, A and the 20 pay: T1, T2 and the 20, never U, with T and A plain (1e1b0647's c builds it), T
-    /// mixed beside a plain A (its a) and both mixed (its c).
+    /// Chunk 51, l7still#1: rule 2 beside two ways back of one token pool at the input limit, whatever a mix moved,
+    /// where 1e1b0647's orders over everything but the box of unknown making find the set without it. T1 and T2, 6 ₳
+    /// and the pool's token each; A, a way back of 5.9 ₳, which weighs more than either; U, one of unknown making of
+    /// 10 ₳; 20 payments received of 10 ₳. Just under the most T1, T2 and the 20 pay, A and T1 beside the 20 are short,
+    /// and U, A and the 20 pay: T1, T2 and the 20, never U, with T and A plain (1e1b0647's c builds it), T mixed beside
+    /// a plain A (its a) and both mixed (its c). Beside a third token box a little larger than T1, those orders try no
+    /// such set and U goes in: the rule's margin (l8still#2).
     #[test]
-    fn beside_two_ways_back_of_one_token_pool_a_box_of_unknown_making_stays_out_at_the_input_limit()
-    {
+    fn beside_two_ways_back_of_one_token_pool_1e1b0647s_orders_keep_a_box_of_unknown_making_out_at_the_input_limit()
+     {
         let w = world();
         let a = owned(&w, 0x31, 0, 5_900_000, &[]);
         let t1 = owned(&w, 0x70, 0, 6_000_000, &[("pooltoken", 1)]);
@@ -5958,6 +5964,316 @@ mod apart {
         assert!(
             wrong.is_empty(),
             "two boxes merged where a token box beside the other money's token pays alone:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Chunk 51, l8merge#2, l8still#1: beside a change whose last output is full, orders a and b weigh each token box
+    /// as opening another output, at its whole least, about 1.6 ₳; two whose tokens share that output pay it once, so a
+    /// box of ADA alone weighing more than either went in beside them or in one's place, three boxes where two pay.
+    /// Where a or b builds with more than one box whose making the wallet knows, fewer, the largest by the weight
+    /// beside a change of ADA alone, now go instead where they build beside the same other money. M, money made private
+    /// holding 20 kinds of token, at its least and 0.5 ₳ or at its least; T1 and T2, ways back of token pools, a token
+    /// each (one token, two names of one policy, or two policies); A and B, plain ways back of ADA alone. Just under
+    /// the most M, T1 and T2 pay, M beside A and B, or beside A or B and one T, is short: M, T1 and T2. E: A alone,
+    /// 6.5 ₳, beside T1 and T2 of 7.5 ₳ and the pool's token each, M's 20 kinds of their policy or another. H: a Send
+    /// or Make public of one of a token H holds (2.5 ₳, 19 kinds and ten of it), which leaves its change 20 kinds: H,
+    /// T1 and T2.
+    #[test]
+    fn beside_a_full_change_two_token_boxes_sharing_the_output_they_open_go_before_a_box_more() {
+        const OTHER_POLICY: &str = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0";
+        let w = world();
+        let of_other_policy = |mut u: UtxoResponse| {
+            for asset in u.asset_list.iter_mut().flatten() {
+                asset.policy_id = OTHER_POLICY.to_string();
+            }
+            u
+        };
+        let bundle_names: Vec<String> = (0..20).map(|i| format!("m{i:02}")).collect();
+        let bundle: Vec<(&str, u64)> = bundle_names.iter().map(|n| (n.as_str(), 1)).collect();
+        let least20 = build::minimum_deposit(&w.chain.params, &tokens_of(&bundle)).unwrap();
+        let set = |us: &[&UtxoResponse]| -> Vec<UtxoResponse> {
+            us.iter().map(|u| (*u).clone()).collect()
+        };
+        let mut wrong = Vec::new();
+        // The shape the last look found (l8merge#2).
+        for (m_ada, t_ada, a_ada) in [
+            (least20 + 500_000, 6_500_000, 5_500_000),
+            (least20, 6_500_000, 5_500_000),
+            (least20 + 500_000, 11_000_000, BOX),
+            (least20, 11_000_000, BOX),
+        ] {
+            for (tokens, t1_name, t2_name, other) in [
+                ("one token", "pooltoken", "pooltoken", false),
+                ("two names of one policy", "poolA", "poolB", false),
+                ("two policies", "poolA", "poolB", true),
+            ] {
+                let m = owned(&w, 0x23, 0, m_ada, &bundle);
+                let t1 = owned(&w, 0x70, 0, t_ada, &[(t1_name, 1)]);
+                let t2 = owned(&w, 0x71, 0, t_ada, &[(t2_name, 1)]);
+                let t2 = if other { of_other_policy(t2) } else { t2 };
+                let a = owned(&w, 0x31, 0, a_ada, &[]);
+                let b = owned(&w, 0x32, 0, a_ada, &[]);
+                let names = [(&m, "M"), (&t1, "T1"), (&t2, "T2"), (&a, "A"), (&b, "B")];
+                let target = set(&[&m, &t1, &t2]);
+                for out in [Out::Send, Out::Public, Out::Fund] {
+                    let most = most_paid(6_100_000, 40_000_000, |l| {
+                        pays_out(&w, &target, out, l).is_ok()
+                    });
+                    let lovelace = most - 20_000;
+                    for (what, inputs) in [
+                        ("M, A and B", set(&[&m, &a, &b])),
+                        ("M, A and T1", set(&[&m, &a, &t1])),
+                        ("M, B and T1", set(&[&m, &b, &t1])),
+                        ("M, A and T2", set(&[&m, &a, &t2])),
+                        ("M, B and T2", set(&[&m, &b, &t2])),
+                    ] {
+                        let e = pays_out(&w, &inputs, out, lovelace).unwrap_err();
+                        assert!(
+                            build::is_short(&e),
+                            "{tokens}, M {m_ada}, {out:?}: {what}: {e}"
+                        );
+                    }
+                    let known: Vec<(&UtxoResponse, Class)> = vec![
+                        (&m, class("public:0", Origin::Own)),
+                        (&t1, box_class(&t1, Origin::Lovejoin)),
+                        (&t2, box_class(&t2, Origin::Lovejoin)),
+                        (&a, box_class(&a, Origin::Lovejoin)),
+                        (&b, box_class(&b, Origin::Lovejoin)),
+                    ];
+                    let line = format!(
+                        "{tokens}, M {m_ada}, T {t_ada}, A = B {a_ada}: {out:?} of {lovelace} (M, T1 and T2 pay up \
+                         to {most})"
+                    );
+                    match picked_out(&w, &known, out, lovelace) {
+                        Ok(s) if outpoints(&s) == outpoints(&target) => {}
+                        Ok(s) => wrong.push(format!("{line}: spent {}", named(&s, &names))),
+                        Err(e) => wrong.push(format!("{line}: refused: {e}")),
+                    }
+                }
+            }
+        }
+        // E (l8still#1).
+        for other in [false, true] {
+            let m = owned(&w, 0x24, 0, least20 + 500_000, &bundle);
+            let m = if other { of_other_policy(m) } else { m };
+            let t1 = owned(&w, 0x72, 0, 7_500_000, &[("pooltoken", 1)]);
+            let t2 = owned(&w, 0x73, 0, 7_500_000, &[("pooltoken", 1)]);
+            let a = owned(&w, 0x33, 0, 6_500_000, &[]);
+            let names = [(&m, "M"), (&t1, "T1"), (&t2, "T2"), (&a, "A")];
+            let target = set(&[&m, &t1, &t2]);
+            for out in [Out::Send, Out::Public, Out::Fund] {
+                let most = most_paid(6_100_000, 40_000_000, |l| {
+                    pays_out(&w, &target, out, l).is_ok()
+                });
+                let lovelace = most - 20_000;
+                for (what, inputs) in [
+                    ("M, A and T1", set(&[&m, &a, &t1])),
+                    ("M, A and T2", set(&[&m, &a, &t2])),
+                ] {
+                    let e = pays_out(&w, &inputs, out, lovelace).unwrap_err();
+                    assert!(
+                        build::is_short(&e),
+                        "E, other policy {other}, {out:?}: {what}: {e}"
+                    );
+                }
+                let known: Vec<(&UtxoResponse, Class)> = vec![
+                    (&m, class("public:0", Origin::Own)),
+                    (&t1, box_class(&t1, Origin::Lovejoin)),
+                    (&t2, box_class(&t2, Origin::Lovejoin)),
+                    (&a, box_class(&a, Origin::Lovejoin)),
+                ];
+                let line = format!(
+                    "E, M's kinds of another policy {other}: {out:?} of {lovelace} (M, T1 and T2 pay up to {most})"
+                );
+                match picked_out(&w, &known, out, lovelace) {
+                    Ok(s) if outpoints(&s) == outpoints(&target) => {}
+                    Ok(s) => wrong.push(format!("{line}: spent {}", named(&s, &names))),
+                    Err(e) => wrong.push(format!("{line}: refused: {e}")),
+                }
+            }
+        }
+        // H (l8still#1): the 20 kinds the holder of a token sent keeps.
+        let mut held: Vec<(&str, u64)> = bundle[..19].to_vec();
+        held.push(("sendme", 10));
+        let h = owned(&w, 0x25, 0, 2_500_000, &held);
+        let t1 = owned(&w, 0x74, 0, 7_500_000, &[("pooltoken", 1)]);
+        let t2 = owned(&w, 0x75, 0, 7_500_000, &[("pooltoken", 1)]);
+        let a = owned(&w, 0x34, 0, 6_500_000, &[]);
+        let sendme = tokens_of(&[("sendme", 1)]);
+        let names = [(&h, "H"), (&t1, "T1"), (&t2, "T2"), (&a, "A")];
+        let target = set(&[&h, &t1, &t2]);
+        for public in [false, true] {
+            let pays = |inputs: &[UtxoResponse], lovelace: u64| {
+                let (seedelfs, pay) = sending(public, lovelace, &sendme);
+                pays_many(&w, inputs, &seedelfs, &pay)
+            };
+            let lovelace = most_paid(2_000_000, 40_000_000, |l| pays(&target, l).is_ok()) - 20_000;
+            for (what, inputs) in [
+                ("H, A and T1", set(&[&h, &a, &t1])),
+                ("H, A and T2", set(&[&h, &a, &t2])),
+            ] {
+                let e = pays(&inputs, lovelace).unwrap_err();
+                assert!(build::is_short(&e), "H, public {public}: {what}: {e}");
+            }
+            let known: Vec<(&UtxoResponse, Class)> = vec![
+                (&h, received_class(&h)),
+                (&t1, box_class(&t1, Origin::Lovejoin)),
+                (&t2, box_class(&t2, Origin::Lovejoin)),
+                (&a, box_class(&a, Origin::Lovejoin)),
+            ];
+            let (seedelfs, pay) = sending(public, lovelace, &sendme);
+            let line = format!("H: public {public}, 1 sendme and {lovelace}");
+            match picked_by(&w, Purpose::Pay, &known, &seedelfs, &pay) {
+                Ok(s) if outpoints(&s) == outpoints(&target) => {}
+                Ok(s) => wrong.push(format!("{line}: spent {}", named(&s, &names))),
+                Err(e) => wrong.push(format!("{line}: refused: {e}")),
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "three boxes merged where two token boxes that share the change output they open pay:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Chunk 51, l8reference#1: an order hands `more_mixed_built` the weights it took its boxes by (`Known.kept`): read
+    /// by the other weight, a box it took can count as one it didn't. A: M, money made private, 10 ₳ and a pool's
+    /// token, which a's change keeps; T, a plain way back of that pool, 6.5 ₳ and its token, which beside that change
+    /// pays all its ADA and beside one of ADA alone weighs less than X, a mixed way back of 6.4 ₳ of ADA alone. Just
+    /// under the most M and X pay, M and T pay too and each alone is short: M and X (rule 4), where by the other weight
+    /// X counts as taken and M and T go.
+    #[test]
+    fn of_as_many_boxes_order_a_swaps_in_a_mixed_one_by_the_weight_it_took_its_boxes_by() {
+        let w = world();
+        let p = &w.chain.params;
+        let m = owned(&w, 0x25, 0, 10_000_000, &[("pooltoken", 1)]);
+        let t = owned(&w, 0x76, 0, 6_500_000, &[("pooltoken", 1)]);
+        let x = owned(&w, 0x35, 0, 6_400_000, &[]);
+        let weight = |kept: &build::Kept| {
+            build::box_weight(
+                p,
+                &box_class(&t, Origin::Lovejoin),
+                &[&t],
+                build::Weighed::InOne(kept),
+            )
+            .0
+        };
+        let (by_ada, by_kept) = (
+            weight(&build::Kept::nothing(p)),
+            weight(&build::Kept::new(p, tokens_of(&[("pooltoken", 1)]))),
+        );
+        assert!(
+            by_ada < 6_400_000 && 6_400_000 < by_kept,
+            "X's ADA between T's two weights: {by_ada}, {by_kept}"
+        );
+        let names = [(&m, "M"), (&t, "T"), (&x, "X")];
+        let (mx, mt) = (vec![m.clone(), x.clone()], vec![m.clone(), t.clone()]);
+        let mut wrong = Vec::new();
+        for out in [Out::Send, Out::Public, Out::Fund] {
+            let lo = if matches!(out, Out::Fund) {
+                6_100_000
+            } else {
+                2_000_000
+            };
+            let most = most_paid(lo, 30_000_000, |l| pays_out(&w, &mx, out, l).is_ok());
+            let lovelace = most - 50_000;
+            pays_out(&w, &mt, out, lovelace)
+                .unwrap_or_else(|e| panic!("{out:?}: M and T pay: {e}"));
+            for (alone, name) in names {
+                let e = pays_out(&w, std::slice::from_ref(alone), out, lovelace).unwrap_err();
+                assert!(build::is_short(&e), "{out:?}: {name} alone: {e}");
+            }
+            let known: Vec<(&UtxoResponse, Class)> = vec![
+                (&m, class("public:0", Origin::Own)),
+                (&t, box_class(&t, Origin::Lovejoin)),
+                (&x, box_class(&x, Origin::Mixed)),
+            ];
+            match picked_out(&w, &known, out, lovelace) {
+                Ok(s) if outpoints(&s) == outpoints(&mx) => {}
+                Ok(s) => wrong.push(format!(
+                    "{out:?} of {lovelace} (M and X pay up to {most}): spent {}",
+                    named(&s, &names)
+                )),
+                Err(e) => wrong.push(format!("{out:?} of {lovelace}: refused: {e}")),
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "of as many boxes beside a's change, a plain one where a mixed one pays:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Chunk 51, l8reference#1: the same past the input limit, in c's first order, which weighs its boxes beside a
+    /// change of ADA alone. M, money made private, 10 ₳ and 20 kinds of token; T, a plain way back of 6.5 ₳ and a
+    /// pool's token, which opens a second output beside M's 20 kinds; X, a mixed way back of 6 ₳ of ADA alone; 25
+    /// payments received of 4.5 ₳. Just under the most T, M and 20 of them pay, X, M and 20 pay, X, M and 19 and M and
+    /// 21 are short, and M and 22 are too many: X, M and 20, where by the other weight X counts as taken and T goes.
+    #[test]
+    fn past_the_input_limit_order_c_swaps_in_a_mixed_one_by_the_weight_it_took_its_boxes_by() {
+        let w = world();
+        let p = &w.chain.params;
+        let kinds: Vec<String> = (0..20).map(|i| format!("m{i:02}")).collect();
+        let twenty: Vec<(&str, u64)> = kinds.iter().map(|n| (n.as_str(), 1)).collect();
+        let m = owned(&w, 0x26, 0, 10_000_000, &twenty);
+        let t = owned(&w, 0x77, 0, 6_500_000, &[("pooltoken", 1)]);
+        let x = owned(&w, 0x36, 0, 6_000_000, &[]);
+        let payments: Vec<UtxoResponse> = (0..25u8)
+            .map(|i| owned(&w, 0x90 + i, 0, 4_500_000, &[]))
+            .collect();
+        let weight = |kept: &build::Kept| {
+            build::box_weight(
+                p,
+                &box_class(&t, Origin::Lovejoin),
+                &[&t],
+                build::Weighed::InOne(kept),
+            )
+            .0
+        };
+        let (by_ada, by_kept) = (
+            weight(&build::Kept::nothing(p)),
+            weight(&build::Kept::new(p, tokens_of(&twenty))),
+        );
+        assert!(
+            by_kept < 6_000_000 && 6_000_000 < by_ada,
+            "X's ADA between T's two weights: {by_kept}, {by_ada}"
+        );
+        let names = [(&m, "M"), (&t, "T"), (&x, "X")];
+        let plain = with_first(&[&t, &m], &payments, 20);
+        let target = with_first(&[&x, &m], &payments, 20);
+        let mut wrong = Vec::new();
+        for out in [Out::Send, Out::Public, Out::Fund] {
+            let most = most_paid(60_000_000, 160_000_000, |l| {
+                pays_out(&w, &plain, out, l).is_ok()
+            });
+            let lovelace = most - 50_000;
+            pays_out(&w, &target, out, lovelace)
+                .unwrap_or_else(|e| panic!("{out:?}: X, M and 20 pay: {e}"));
+            let e = pays_out(&w, &with_first(&[&x, &m], &payments, 19), out, lovelace).unwrap_err();
+            assert!(build::is_short(&e), "{out:?}: X, M and 19: {e}");
+            let e = pays_out(&w, &with_first(&[&m], &payments, 21), out, lovelace).unwrap_err();
+            assert!(build::is_short(&e), "{out:?}: M and 21: {e}");
+            let e = pays_out(&w, &with_first(&[&m], &payments, 22), out, lovelace).unwrap_err();
+            assert!(build::is_too_many(&e), "{out:?}: M and 22: {e}");
+            let mut known: Vec<(&UtxoResponse, Class)> = vec![
+                (&m, class("public:0", Origin::Own)),
+                (&t, box_class(&t, Origin::Lovejoin)),
+                (&x, box_class(&x, Origin::Mixed)),
+            ];
+            known.extend(payments.iter().map(|p| (p, received_class(p))));
+            match picked_out(&w, &known, out, lovelace) {
+                Ok(s) if outpoints(&s) == outpoints(&target) => {}
+                Ok(s) => wrong.push(format!(
+                    "{out:?} of {lovelace} (T, M and 20 pay up to {most}): spent {}",
+                    named(&s, &names)
+                )),
+                Err(e) => wrong.push(format!("{out:?} of {lovelace}: refused: {e}")),
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "past the input limit, of as many boxes beside as many others, a plain one where a mixed one pays:\n{}",
             wrong.join("\n")
         );
     }

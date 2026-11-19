@@ -5,7 +5,8 @@
 //! token, beside a few other UTxOs (money made private, payments received, the funding's own session's money, another
 //! session's) and in some more small payments than one transaction spends. For a Send, a Make public, a session's
 //! funding and a stealth mint over each, every set of the UTxOs that pays is built, as selection's own attempt builds
-//! it, and the best by the rule is the one selection must match:
+//! it, and the best by the rule is the one selection must match, on balances drawn clear of the margins build.rs's
+//! `box_rank` names (`pair_band`'s are checked within them, below):
 //!
 //! - rule 1: nothing 1e1b0647's selection sent as one transaction is refused (its selection is copied below, `old`, and
 //!   run over the same balance), and nothing is refused where any set pays (what `old` built, some set pays, so it only
@@ -32,9 +33,11 @@
 //! a change and the ADA it holds, which a weight by its ADA can't tell apart (BAND, l7reference#2); two ways back of
 //! one pool beside such boxes at the input limit, where only 1e1b0647's own orders build what pays, and with boxes of
 //! unknown making, where those orders must run before the first of them (`pair_band`, l7reference#1, l7still#1,
-//! l7still#2), checked there within the rule's stated margin: none of unknown making where a set without one pays,
-//! strictly, and past one, one more of them than pays at most; one box more than the fewest that pay at most; rules 4
-//! and 5 unasked.
+//! l7still#2), and where that first box is at stake in every check (l8reference#3). Checked there within the rule's
+//! stated margin: past the first of unknown making, one more of them than pays at most; one box more than the fewest
+//! that pay at most; rules 4 and 5 unasked. The first is checked strictly, none where a set without one pays: those
+//! draws hold none of the margin's shapes for it (small money beside the pair outside the set that pays, a third token
+//! box).
 //!
 //! The default runs a handful of balances in seconds: `cargo test -p seedelf-core --test box_rule_reference_test`.
 //! A sweep of many more: the same with `-- --ignored --nocapture` (a minute or two in release).
@@ -627,9 +630,21 @@ fn pair_pays_at(
         .any(|mask| pays_beside(balance, spend, paying, mask))
 }
 
+/// Whether a set holding one box of unknown making, of at most `most` boxes, pays.
+fn one_unknown_pays(balance: &Balance, spend: &Spend, paying: &mut Paying, most: usize) -> bool {
+    (0..(1u32 << balance.boxes))
+        .filter(|&mask| {
+            let (u, n, _) = boxes_key(&boxes_in(mask, balance), balance);
+            u == 1 && n <= most
+        })
+        .any(|mask| pays_beside(balance, spend, paying, mask))
+}
+
 /// [`check`], and with `margin`, where a set holding two ways back of one token pool pays at the best level, the
-/// rule's stated margin there (build.rs's `Weighed::InOne`): none of unknown making where a set without one pays,
-/// strictly, and past one, as few as pay or one more; of boxes, the fewest that pay or one more; rules 4 and 5 unasked.
+/// rule's stated margin there (build.rs's `Weighed::InOne`): past the first box of unknown making, as few as pay or one
+/// more; of boxes, the fewest that pay or one more; rules 4 and 5 unasked. The first is held strictly, none where a set
+/// without one pays, since [`pair_band`] draws none of the margin's shapes for it. With `margin`, it counts where the
+/// first is at stake (`Tally::at_stake`).
 fn check_with(
     w: &World,
     balance: &Balance,
@@ -703,6 +718,9 @@ fn check_with(
         };
     }
     tally.merged += 1;
+    if margin && best.0 == 0 && one_unknown_pays(balance, spend, &mut paying, best.1) {
+        tally.at_stake += 1;
+    }
 
     // Merging: the fewest of unknown making, then the fewest boxes, over every set that pays.
     let at: BTreeSet<usize> = picked.iter().map(|u| balance.position(u)).collect();
@@ -836,6 +854,9 @@ struct Tally {
     pair: usize,
     /// Of those, the picks with one box of unknown making more than pay, past the first (the rule's stated margin).
     one_more_unknown: usize,
+    /// Of the merges a pair part checks, those whose best set holds none of unknown making where a set holding one,
+    /// of no more boxes, pays too: where the first of them is at stake (l8reference#3).
+    at_stake: usize,
     builds: usize,
     apart_ms: u128,
     reference_ms: u128,
@@ -1064,14 +1085,29 @@ fn most_paid_by(w: &World, make: &dyn Fn(u64) -> Spend, inputs: &[&UtxoResponse]
     lo
 }
 
+/// What [`pair_band`]'s boxes beside the pair are made of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pair {
+    /// Each a mix's way back or a plain one.
+    Known,
+    /// Each a mix's, a plain one or one of unknown making, so the pass before the first of them is reached too.
+    Unknown,
+    /// The pair and one box of ADA alone of the band's size, each a mix's or plain; one of unknown making of that size
+    /// or larger (0.6 ₳ more, or 10 ₳); maybe a box of 4.71 ₳; 20 other UTxOs; each spend 0.03 to 0.09 ₳ under the
+    /// most the pair and the 20 pay. A set holding the box of unknown making, of no more boxes, pays beside them, so
+    /// the pass before the first of them decides (chunk 51, l8reference#3: the part of `Unknown` reached that in one
+    /// of its 36 checks).
+    AtStake,
+}
+
 /// Round eight's (l7reference#1, l7still#2): where two ways back of one token pool pay their token's share of the
 /// change's least once and their weights count it twice, beside boxes of ADA alone that weigh more than either and pay
 /// less (5.9 ₳ beside 6 ₳ and poolA's token, or 7.4 ₳ beside 7.5 ₳), at the input limit: the pair, maybe one more box
 /// of 4.71 ₳, maybe one other UTxO, 18 to 25 payments received of 10 ₳. A Send, a Make public and a funding, each up
 /// to 0.09 ₳ under the most the pair, the other UTxO and as many payments as one transaction spends beside them pay,
-/// where the rule's own orders can miss the set that pays and 1e1b0647's build it (pass d). With `unknown`, a box may
-/// be of unknown making, so the pass before the first of them is reached too.
-fn pair_band(w: &World, seed: u64, unknown: bool) -> (Balance, Vec<Spend>) {
+/// where the rule's own orders can miss the set that pays and 1e1b0647's build it (pass d). What the other boxes are
+/// made of, `draw` says.
+fn pair_band(w: &World, seed: u64, draw: Pair) -> (Balance, Vec<Spend>) {
     let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let mut n = u32::try_from(seed % 100_000).unwrap() * 64;
     let mut next = || {
@@ -1083,7 +1119,7 @@ fn pair_band(w: &World, seed: u64, unknown: bool) -> (Balance, Vec<Spend>) {
     let kind = |rng: &mut Rng| match rng.below(100) {
         0..40 => Kind::Mixed,
         40..75 => Kind::Plain,
-        _ if unknown => Kind::Unknown,
+        _ if draw == Pair::Unknown => Kind::Unknown,
         _ => Kind::Plain,
     };
     let mut boxes: Vec<(UtxoResponse, Kind)> = Vec::new();
@@ -1091,9 +1127,16 @@ fn pair_band(w: &World, seed: u64, unknown: bool) -> (Balance, Vec<Spend>) {
         let k = kind(&mut rng);
         boxes.push((utxo(w, next(), pair, Some("poolA")), k));
     }
-    for _ in 0..1 + rng.below(2) {
+    if draw == Pair::AtStake {
         let k = kind(&mut rng);
         boxes.push((utxo(w, next(), beside, None), k));
+        let lovelace = [beside, beside + 600_000, 10 * ADA][rng.below(3) as usize];
+        boxes.push((utxo(w, next(), lovelace, None), Kind::Unknown));
+    } else {
+        for _ in 0..1 + rng.below(2) {
+            let k = kind(&mut rng);
+            boxes.push((utxo(w, next(), beside, None), k));
+        }
     }
     if rng.below(2) == 0 {
         let k = kind(&mut rng);
@@ -1117,7 +1160,11 @@ fn pair_band(w: &World, seed: u64, unknown: bool) -> (Balance, Vec<Spend>) {
         let lovelace = [1_500_000, 2_000_000, 3_000_000][rng.below(3) as usize];
         items.push((utxo(w, next(), lovelace, None), k));
     }
-    let smalls = 18 + rng.below(8) as usize;
+    let smalls = if draw == Pair::AtStake {
+        20 - distinct
+    } else {
+        18 + rng.below(8) as usize
+    };
     for _ in 0..smalls {
         items.push((utxo(w, next(), 10 * ADA, None), Kind::Received));
     }
@@ -1138,8 +1185,14 @@ fn pair_band(w: &World, seed: u64, unknown: bool) -> (Balance, Vec<Spend>) {
                 .map(|(u, _)| u),
         )
         .collect();
-    let mut near =
-        |make: &dyn Fn(u64) -> Spend| most_paid_by(w, make, &target) - rng.below(10) * (ADA / 100);
+    let mut near = |make: &dyn Fn(u64) -> Spend| {
+        let under = if draw == Pair::AtStake {
+            3 + rng.below(7)
+        } else {
+            rng.below(10)
+        };
+        most_paid_by(w, make, &target) - under * (ADA / 100)
+    };
     let (send, public, fund) = (near(&Spend::Send), near(&Spend::Public), near(&Spend::Fund));
     (
         balance,
@@ -1148,12 +1201,12 @@ fn pair_band(w: &World, seed: u64, unknown: bool) -> (Balance, Vec<Spend>) {
 }
 
 /// [`sweep`] over [`pair_band`]'s balances, checked within the rule's stated margin.
-fn pair_sweep(seeds: std::ops::Range<u64>, unknown: bool) -> Tally {
+fn pair_sweep(seeds: std::ops::Range<u64>, draw: Pair) -> Tally {
     let w = world();
     let mut tally = Tally::default();
     let mut wrong = Vec::new();
     for seed in seeds {
-        let (balance, spends) = pair_band(&w, seed, unknown);
+        let (balance, spends) = pair_band(&w, seed, draw);
         for spend in &spends {
             if let Err(e) = check_with(&w, &balance, spend, &mut tally, true) {
                 wrong.push(format!("seed {seed}: {e}"));
@@ -1283,17 +1336,31 @@ const BAND_SHAPE: Shape = Shape {
 /// where a set pays, and within the rule's stated margin.
 #[test]
 fn selection_picks_the_best_set_by_the_box_rule_beside_two_ways_back_of_one_pool() {
-    let tally = pair_sweep(7_000..7_012, false);
+    let tally = pair_sweep(7_000..7_012, Pair::Known);
     assert!(tally.pair > 0 && tally.past_the_limit > 0, "{tally:?}");
 }
 
 /// The same with boxes of unknown making among them (l7merge#1, l7still#1): where the rule's orders without one build
-/// nothing, 1e1b0647's over the rest without any go before the first, so as few of unknown making as pay, strictly.
+/// nothing, 1e1b0647's over the rest without any go before the first. Checked strictly at the first: these draws hold
+/// no small money beside the pair outside the set that pays, nor a third token box, where the rule's margin lets a
+/// merge take one where a set the search doesn't try pays without it.
 #[test]
 fn selection_picks_the_best_set_by_the_box_rule_beside_two_ways_back_of_one_pool_and_boxes_of_unknown_making()
  {
-    let tally = pair_sweep(7_012..7_024, true);
-    assert!(tally.pair > 0 && tally.past_the_limit > 0, "{tally:?}");
+    let tally = pair_sweep(7_012..7_024, Pair::Unknown);
+    assert!(
+        tally.pair > 0 && tally.past_the_limit > 0 && tally.at_stake > 0,
+        "{tally:?}"
+    );
+}
+
+/// Chunk 51, l8reference#3: the same where the first box of unknown making is at stake ([`Pair::AtStake`]): a set
+/// holding it, of no more boxes, pays beside the pair that pays without it, and the pass before it decides.
+#[test]
+fn selection_picks_the_best_set_by_the_box_rule_where_the_first_box_of_unknown_making_is_at_stake()
+{
+    let tally = pair_sweep(7_024..7_036, Pair::AtStake);
+    assert!(tally.pair > 0 && tally.at_stake > 0, "{tally:?}");
 }
 
 /// The sweep: many more balances, of up to eight boxes, of every shape above.
@@ -1352,6 +1419,7 @@ fn selection_picks_the_best_set_by_the_box_rule_over_many_balances() {
         all.old_built += t.old_built;
         all.pair += t.pair;
         all.one_more_unknown += t.one_more_unknown;
+        all.at_stake += t.at_stake;
         all.builds += t.builds;
     };
     for (i, shape) in shapes.into_iter().enumerate() {
@@ -1361,13 +1429,14 @@ fn selection_picks_the_best_set_by_the_box_rule_over_many_balances() {
             Err(_) => failed.push(format!("shape {i}")),
         }
     }
-    for unknown in [false, true] {
-        let from = if unknown { 7_300 } else { 7_100 };
-        match std::panic::catch_unwind(|| pair_sweep(from..from + 150, unknown)) {
+    for (from, draw) in [
+        (7_100, Pair::Known),
+        (7_300, Pair::Unknown),
+        (7_500, Pair::AtStake),
+    ] {
+        match std::panic::catch_unwind(|| pair_sweep(from..from + 150, draw)) {
             Ok(t) => add(t),
-            Err(_) => failed.push(format!(
-                "two ways back of one pool, unknown making {unknown}"
-            )),
+            Err(_) => failed.push(format!("two ways back of one pool, {draw:?}")),
         }
     }
     println!("all: {all:?}");
@@ -1538,6 +1607,92 @@ fn more_boxes_of_both_kinds_beside_more_payments_plan_in_about_1e1b0647s_time() 
     assert!(
         reruns < std::time::Duration::from_millis(all),
         "the reruns took {reruns:?}"
+    );
+}
+
+/// Chunk 51, l8merge#4: where the other money holds tokens, a merge weighs every box beside a change of ADA alone and
+/// beside the change a and b keep (l7merge#2), each least it works out making the sizing datum again, and no timing
+/// test held other money with tokens. 500 boxes, 250 of unknown making holding a pool's token each and 250 plain of ADA
+/// alone, beside 20 UTxOs of money made private holding 20 kinds of token each, 400 in all: a Send, a funding, one too
+/// large for one transaction and a Make public, each in a fraction of a second.
+#[test]
+fn token_boxes_beside_money_holding_many_kinds_plan_in_a_fraction_of_a_second() {
+    let w = world();
+    let p = &w.chain.params;
+    let mut n = 0x2000_0000u32;
+    let mut items: Vec<(UtxoResponse, Kind)> = Vec::new();
+    for i in 0..500u32 {
+        n += 1;
+        let lovelace = [4_710_000, 9_710_000, 19_710_000, 24_710_000][(n % 4) as usize];
+        let (token, kind) = if i < 250 {
+            (Some(format!("pool{i}")), Kind::Unknown)
+        } else {
+            (None, Kind::Plain)
+        };
+        items.push((utxo(&w, n, lovelace, token.as_deref()), kind));
+    }
+    for k in 0..20u32 {
+        n += 1;
+        let mut u = utxo(&w, n, 0, None);
+        u.asset_list = Some(
+            (0..20)
+                .map(|i| Asset {
+                    decimals: 0,
+                    quantity: "1".into(),
+                    policy_id: format!("{:02x}", 0x20 + k).repeat(28),
+                    asset_name: hex::encode(format!("k{k}m{i:02}")),
+                    fingerprint: String::new(),
+                })
+                .collect(),
+        );
+        let (_, kinds) = seedelf_core::utxos::assets_of(vec![u.clone()]).unwrap();
+        u.value = (build::minimum_deposit(p, &kinds).unwrap() + ADA / 2).to_string();
+        items.push((u, Kind::Own));
+    }
+    let balance = Balance {
+        boxes: 500,
+        distinct: 20,
+        smalls: 0,
+        small: 2 * ADA,
+        items,
+    };
+    let available: Vec<UtxoResponse> = balance.items.iter().map(|(u, _)| u.clone()).collect();
+    let mut worst = std::time::Duration::ZERO;
+    for (spend, builds) in [
+        (Spend::Send(100 * ADA), true),
+        (Spend::Fund(95 * ADA), true),
+        (Spend::Send(2_000 * ADA), false),
+        (Spend::Public(400 * ADA), true),
+    ] {
+        let paying = Paying::new(&w, &spend);
+        let h = balance.histories(spend.purpose(), true);
+        // The best of three, so a load spike on a shared runner doesn't decide it.
+        let (took, picked) = (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                let picked = paying.apart(&available, &h);
+                (started.elapsed(), picked)
+            })
+            .min_by_key(|(took, _)| *took)
+            .unwrap();
+        worst = worst.max(took);
+        println!(
+            "{spend:?}: {} in {took:?}",
+            match &picked {
+                Ok(inputs) => format!("{} inputs", inputs.len()),
+                Err(e) => format!("refused ({e})"),
+            }
+        );
+        assert_eq!(picked.is_ok(), builds, "{spend:?}");
+    }
+    // This test's own figures, the slowest spend, the best of three, on one machine (chunk 51, l8merge#4): round
+    // seven's code 0.31 to 0.34 s in a debug build and 0.17 to 0.23 s in release; round eight's 0.39 to 0.44 s and 0.22
+    // to 0.48 s, at load 1 to 14, and round nine's the same. The bounds sit about five times over round eight's, with
+    // room for a loaded runner.
+    let bound = if cfg!(debug_assertions) { 2_000 } else { 1_000 };
+    assert!(
+        worst < std::time::Duration::from_millis(bound),
+        "the slowest selection took {worst:?}"
     );
 }
 
