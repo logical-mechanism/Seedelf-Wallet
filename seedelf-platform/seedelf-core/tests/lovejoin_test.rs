@@ -628,6 +628,218 @@ fn the_box_datum_is_canonical_and_reads_back() {
     assert!(matches!(c.fields, MaybeIndefArray::Indef(_)));
 }
 
+/// Constructor 0 under the general form's tag, `102([index, fields])`: its pair
+/// and its fields each definite or indefinite, as the ledger takes either.
+fn box_datum_102(
+    a: &[u8; 48],
+    b: &[u8; 48],
+    pair_indef: bool,
+    fields_indef: bool,
+    index: u8,
+) -> Vec<u8> {
+    let mut e = minicbor::Encoder::new(Vec::new());
+    e.tag(minicbor::data::Tag::new(102)).unwrap();
+    if pair_indef {
+        e.begin_array().unwrap();
+    } else {
+        e.array(2).unwrap();
+    }
+    e.u8(index).unwrap();
+    if fields_indef {
+        e.begin_array().unwrap();
+    } else {
+        e.array(2).unwrap();
+    }
+    e.bytes(a).unwrap().bytes(b).unwrap();
+    if fields_indef {
+        e.end().unwrap();
+    }
+    if pair_indef {
+        e.end().unwrap();
+    }
+    e.into_writer()
+}
+
+/// A pool row as Koios or the private index lists one: the box value at
+/// `mix_box`, with the inline datum's bytes as the transaction wrote them.
+fn box_row(protocol: &Protocol, datum: &[u8]) -> seedelf_koios::koios::UtxoResponse {
+    serde_json::from_value(json!({
+        "tx_hash": hex::encode([0x51; 32]), "tx_index": 0,
+        "address": protocol.mix_box_address().to_bech32().unwrap(),
+        "value": protocol.denom.to_string(), "stake_address": null,
+        "payment_cred": hex::encode(protocol.mix_box_hash), "epoch_no": 0,
+        "block_height": 0, "block_time": 0, "datum_hash": null,
+        "inline_datum": { "bytes": hex::encode(datum), "value": null },
+        "reference_script": null, "asset_list": [], "is_spent": false,
+    }))
+    .unwrap()
+}
+
+/// Chunk 51, r3a#1: whoever builds a mix writes its outputs, and mix_logic reads
+/// a box's datum as data, never as bytes. So a stranger's mix of this wallet's
+/// box can leave it as `Constr 0 [a, b]` in the general form, which the ledger
+/// reads as the same data. It's still the wallet's box, to find, mix and bring
+/// back; read only in the wallet's own spelling, it dropped out of every list.
+#[test]
+fn a_box_in_constructor_0s_general_form_is_still_the_wallets() {
+    let sk = seedelf_crypto::schnorr::random_scalar();
+    let moved = Register::create(sk).unwrap().rerandomize().unwrap();
+    let a: [u8; 48] = hex::decode(&moved.generator).unwrap().try_into().unwrap();
+    let b: [u8; 48] = hex::decode(&moved.public_value)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let canonical = lovejoin::mix_datum(&a, &b);
+    for protocol in [Protocol::of(true).unwrap(), Protocol::of(false).unwrap()] {
+        let ours = PoolBox::from_row(&box_row(&protocol, &canonical), &protocol).unwrap();
+        assert!(ours.is_owned(&sk));
+        for (pair_indef, fields_indef) in
+            [(false, true), (false, false), (true, true), (true, false)]
+        {
+            let general = box_datum_102(&a, &b, pair_indef, fields_indef, 0);
+            assert_eq!(
+                PlutusData::decode_fragment(&general).unwrap(),
+                PlutusData::decode_fragment(&canonical).unwrap()
+            );
+            let found = PoolBox::from_row(&box_row(&protocol, &general), &protocol);
+            let found = found.unwrap_or_else(|| {
+                panic!(
+                    "pair indefinite {pair_indef}, fields indefinite {fields_indef}: not read as a box"
+                )
+            });
+            assert!(found.is_owned(&sk));
+            assert_eq!((found.a, found.b), (a, b));
+        }
+        // Another constructor, in either spelling, is still no box.
+        let mut tag_122 = canonical.clone();
+        tag_122[1] = 0x7a;
+        for other in [box_datum_102(&a, &b, false, true, 1), tag_122] {
+            assert_eq!(
+                PoolBox::from_row(&box_row(&protocol, &other), &protocol),
+                None
+            );
+        }
+    }
+}
+
+/// Chunk 51, x2#1: Koios lists a credential's UTxOs by its 28 bytes, a key's and a
+/// script's alike, so a stranger's 5 ₳ at the KEY address whose hash is
+/// mix_box's script hash comes back with the pool's own rows. No mix can spend
+/// it (mix_box reads an input's payment part as a script), so read as a box it
+/// was counted toward the pool's floor and drawn, and every chain that drew it
+/// failed. Only an address whose payment part is mix_box's script holds a box,
+/// whatever its stake part, as the contract reads it.
+#[test]
+fn a_key_address_carrying_mix_box_s_hash_holds_no_box() {
+    let sk = seedelf_crypto::schnorr::random_scalar();
+    let owner = Register::create(sk).unwrap().rerandomize().unwrap();
+    let a: [u8; 48] = hex::decode(&owner.generator).unwrap().try_into().unwrap();
+    let b: [u8; 48] = hex::decode(&owner.public_value)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let datum = lovejoin::mix_datum(&a, &b);
+    for protocol in [Protocol::of(true).unwrap(), Protocol::of(false).unwrap()] {
+        let net = if protocol.network_flag { 0 } else { 1 };
+        let bech32 = |bytes: Vec<u8>| {
+            pallas_addresses::Address::from_bytes(&bytes)
+                .unwrap()
+                .to_bech32()
+                .unwrap()
+        };
+        let at = |address: String| {
+            let mut row = box_row(&protocol, &datum);
+            row.address = address;
+            PoolBox::from_row(&row, &protocol)
+        };
+        // The key address: header 0b0110 (a key, no stake part), then the hash.
+        let twin = bech32([vec![0x60 | net], protocol.mix_box_hash.to_vec()].concat());
+        assert_eq!(at(twin.clone()), None, "{twin} is no box");
+        // Its base form too (a key, with a stake key).
+        let twin_staked =
+            bech32([vec![net], protocol.mix_box_hash.to_vec(), vec![0x77; 28]].concat());
+        assert_eq!(at(twin_staked.clone()), None, "{twin_staked} is no box");
+        // mix_box's own address holds one, and so does its form with a stake
+        // part (0b0001: a script, with a stake key), which the contract also spends.
+        assert!(at(protocol.mix_box_address().to_bech32().unwrap()).is_some());
+        let staked = bech32(
+            [
+                vec![0x10 | net],
+                protocol.mix_box_hash.to_vec(),
+                vec![0x77; 28],
+            ]
+            .concat(),
+        );
+        assert!(at(staked).is_some_and(|b| b.is_owned(&sk)));
+    }
+}
+
+/// `b` with its inline datum spelled `102([0, [_ a, b]])` in its output's bytes,
+/// as a stranger's mix may leave a box. The datum sits in tag 24's byte string
+/// (`d8 18 58 <length>`), whichever spelling it had before.
+fn respelled(b: &PoolBox, protocol: &Protocol) -> PoolBox {
+    let general = box_datum_102(&b.a, &b.b, false, true, 0);
+    let out = &b.utxo.output;
+    let at = out
+        .windows(3)
+        .position(|w| w == [0xd8, 0x18, 0x58])
+        .expect("the box's inline datum, as tag 24's byte string");
+    let length = out[at + 3] as usize;
+    let datum = &out[at + 4..at + 4 + length];
+    assert_eq!(
+        PlutusData::decode_fragment(datum).unwrap(),
+        PlutusData::decode_fragment(&general).unwrap()
+    );
+    let mut output = out.clone();
+    let to = [vec![0xd8, 0x18, 0x58, general.len() as u8], general].concat();
+    output.splice(at..at + 4 + length, to);
+    let utxo = Resolved {
+        output,
+        ..b.utxo.clone()
+    };
+    PoolBox::from_resolved(utxo, protocol).expect("still a box")
+}
+
+/// r3a#1's other half: a box in the general form isn't only listed, it mixes
+/// and it comes back. mix_logic hashes the outputs' datums, which the wallet
+/// writes in its own spelling, and reads the inputs' as data.
+#[test]
+fn a_box_in_the_general_form_mixes_and_comes_back() {
+    let protocol = Protocol::of(true).unwrap();
+    let mut boxes = pool_boxes(&protocol);
+    boxes[0] = respelled(&boxes[0], &protocol);
+    let mix = lovejoin::mix(
+        &params(),
+        &protocol,
+        &boxes,
+        &payer(20_000_000),
+        &mut Rewards::none(),
+    )
+    .unwrap();
+    assert_eq!(mix.outputs.len(), 3);
+    for out in &mix.outputs {
+        assert!(PoolBox::from_resolved(out.utxo.clone(), &protocol).is_some());
+    }
+
+    let sk = Scalar::from(31_415u64);
+    let ours: Vec<PoolBox> = our_boxes(sk, 1)
+        .iter()
+        .map(|b| respelled(b, &protocol))
+        .collect();
+    assert!(ours[0].is_owned(&sk));
+    let destination = Register::create(sk).unwrap().rerandomize().unwrap();
+    let back = lovejoin::withdraw(
+        &params(),
+        &protocol,
+        &ours,
+        &sk,
+        destination,
+        &mut Rewards::none(),
+    )
+    .unwrap();
+    assert_eq!(back.lovelace, protocol.denom - back.fee);
+}
+
 #[test]
 fn lovejoin_is_on_preprod_and_mainnet() {
     let preprod = Protocol::of(true).unwrap();

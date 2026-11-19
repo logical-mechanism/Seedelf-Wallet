@@ -10,7 +10,7 @@ import type { KoiosUtxo } from "../src/background/koios";
 import type { PoolRef } from "../src/background/lovejoin";
 import type { PrivateStore } from "../src/background/private-store";
 import type { Wallet } from "../src/background/wallet";
-import { bech32 } from "./fixtures/bech32";
+import { bech32, bech32Bytes } from "./fixtures/bech32";
 import { loadTestWasm, type FakeKoios } from "./fakes";
 
 const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-v2-ada-pool-preprod.json", import.meta.url), "utf8")) as {
@@ -35,6 +35,18 @@ export const ADA = ADA_VIEW.id;
 
 /** Where its boxes sit. */
 export const ADA_ADDRESS = bech32("addr_test", Uint8Array.from([0x70, ...Buffer.from(ADA_VIEW.mixBoxHash, "hex")]));
+
+/**
+ * `rows` as mainnet lists them: each at the same payment and stake parts, on mainnet (CIP-19's header, its network 1).
+ * A box is read by its address, on its own network, and a contract row is spent only at the contract's address there
+ * (chunk 51, x2#1): a preprod address in a mainnet listing is a row no chain has.
+ */
+export function onMainnet(rows: KoiosUtxo[]): KoiosUtxo[] {
+  return rows.map((r) => {
+    const bytes = bech32Bytes(r.address);
+    return { ...r, address: bech32("addr", Uint8Array.from([(bytes[0]! & 0xf0) | 1, ...bytes.slice(1)])) };
+  });
+}
 
 /** What every box of it holds. */
 export const ADA_BOX = 5_000_000n;

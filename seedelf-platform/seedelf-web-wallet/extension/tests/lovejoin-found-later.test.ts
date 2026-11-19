@@ -40,7 +40,7 @@ import { fakeIndex, indexRowOf } from "./fake-index";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { epochParams, loadTestWasm, memoryArea, minswapEstimate, ownedUtxos, testBalances } from "./fakes";
-import { ADA, ADA_ROWS, ADA_VIEW, adaBox, adaStrangers, madeByAdaMix, ownDatum, retiredAlready } from "./v2-pools";
+import { ADA, ADA_ROWS, ADA_VIEW, adaBox, adaStrangers, madeByAdaMix, onMainnet, ownDatum, retiredAlready } from "./v2-pools";
 
 const SLOW = { timeout: 300_000 };
 const wasm = loadTestWasm();
@@ -326,7 +326,7 @@ describe("a 5 ₳ pool launched after the head start, found where a return asks 
   });
 
   it("mainnet, Koios only: the ask and the collateral's pick find it at the holder, and the data layer is never asked", async () => {
-    const d = await device({ mode: "koios only", strangers: adaStrangers(32) });
+    const d = await device({ mode: "koios only", strangers: onMainnet(adaStrangers(32)) });
     expect((await d.lovejoin.adaPool("mainnet", true))?.id).toBe(ADA);
     expect(asked(d.holders.mainnet)).toEqual({ credential_utxos: 1, tx_info: 1, other: 0 });
     expect((await d.lovejoin.collateralPool("mainnet", epochParams[0]))?.pool.id).toBe(ADA);
@@ -336,7 +336,7 @@ describe("a 5 ₳ pool launched after the head start, found where a return asks 
 
   it("mainnet, the data layer marked down: found at the holder; but not while its last answer is under REFRESH_MS old", async () => {
     // Its list answered a minute ago, without the pool: a look then reads that answer, and Koios isn't asked.
-    const d = await device({ mode: "not listed", strangers: adaStrangers(32) });
+    const d = await device({ mode: "not listed", strangers: onMainnet(adaStrangers(32)) });
     expect(await d.lovejoin.adaPool("mainnet", true)).toBeUndefined();
     expect(d.listAsked()).toBe(1);
     d.t.clock.now += 60_000;
@@ -352,14 +352,14 @@ describe("a 5 ₳ pool launched after the head start, found where a return asks 
   });
 
   it("mainnet, the data layer down from the start: the same, from Koios", async () => {
-    const d = await device({ mode: "data layer down", strangers: adaStrangers(32) });
+    const d = await device({ mode: "data layer down", strangers: onMainnet(adaStrangers(32)) });
     expect((await d.lovejoin.collateralPool("mainnet", epochParams[0]))?.pool.id).toBe(ADA);
     expect(asked(d.holders.mainnet)).toEqual({ credential_utxos: 1, tx_info: 1, other: 0 });
     expect(d.idx.calls).toEqual([]);
   });
 
   it("mainnet, the data layer up: listed, found on its list; not listed, none; Koios is never asked either way", async () => {
-    const listed = await device({ mode: "data layer up", strangers: adaStrangers(32) });
+    const listed = await device({ mode: "data layer up", strangers: onMainnet(adaStrangers(32)) });
     expect((await listed.lovejoin.adaPool("mainnet", true))?.id).toBe(ADA);
     expect((await listed.lovejoin.collateralPool("mainnet", epochParams[0]))?.pool.id).toBe(ADA);
     expect(listed.listAsked()).toBe(1);
@@ -659,7 +659,7 @@ describe("a return whose 5 ₳ collateral is gone, brought back by hand (O2, cri
         next: 1,
         sessions: [{ index: 0, ownStake: true, createdAt: now, txs: [{ kind: "out", txHash: "ab".repeat(32), at: now, confirmed: true }] }],
       });
-      d.t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"));
+      d.t.koios.addedToAccounts.push(...onMainnet([atSession("c1".repeat(32), 0, "40000000")]));
       expect(await d.lovejoin.lookForPools("mainnet"), mode).toEqual({ grew: true });
       const [view] = await d.sessions.list("mainnet", true);
       expect(poolReads(d.t), mode).toBe(0);
