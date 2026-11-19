@@ -217,6 +217,9 @@ test("the Web Store listing's images", async ({ context, koios }) => {
 
   await expect(popup.getByTestId("seedelf-tokens")).toContainText("USDM");
   await expect(popup.getByTestId("test-network")).toHaveCount(0);
+  // Home's text is there under the splash, which a slow first reading shows for at least 600 ms and then fades: wait
+  // for it to go, or the first image is the splash (1.9.2's first run on a loaded machine).
+  await expect(popup.getByTestId("splash")).toHaveCount(0);
   await expect(popup.getByTestId("updated")).toHaveText("Updated just now");
   shots.push(await shoot());
 
