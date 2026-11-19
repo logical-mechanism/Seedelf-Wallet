@@ -95,6 +95,25 @@ describe("chunk 51 w2#4: what a site is handed of a UTxO carrying a reference sc
     expect(BigInt((await balance()).lovelace)).toBe(BigInt(before.lovelace) + 3_000_000n);
   });
 
+  // Chunk 51, still#11: WebAssembly leaves out a script whose given hash isn't its bytes' (cip30.rs `script_ref`), and
+  // the worker's filter didn't check the hash, so getBalance counted what getUtxos left out.
+  it("leaves out one whose script's given hash isn't its bytes', from getUtxos and getBalance alike", SLOW, async () => {
+    const { t, planted, utxos, balance } = await connected();
+    const before = await balance();
+    const misHashed = planted(7, { hash: "ab".repeat(28), size: PLUTUS.length / 2, type: "plutusV3", bytes: PLUTUS });
+    // The hash in capitals is the same hash, and one not given is nothing to check against: both handed over.
+    const capitals = planted(8, { hash: plutusHash.toUpperCase(), size: PLUTUS.length / 2, type: "plutusV3", bytes: PLUTUS });
+    const unhashed = planted(9, { hash: null, size: null, type: "plutusV3", bytes: PLUTUS });
+    t.koios.addedToAccounts.push(misHashed, capitals, unhashed);
+    t.clock.now += 31_000;
+
+    const handed = await utxos();
+    expect(handed(misHashed.tx_hash, 0)).toBeUndefined();
+    expect(handed(capitals.tx_hash, 0)).toBeDefined();
+    expect(handed(unhashed.tx_hash, 0)).toBeDefined();
+    expect(BigInt((await balance()).lovelace)).toBe(BigInt(before.lovelace) + 6_000_000n);
+  });
+
   it("offers no site a collateral the user chose whose script it can't hand over whole", SLOW, async () => {
     const { t, s, planted } = await connected();
     // 5 ₳ of ADA alone carrying a native script, as Koios gives one: the user may make it the collateral.
@@ -102,7 +121,10 @@ describe("chunk 51 w2#4: what a site is handed of a UTxO carrying a reference sc
     t.koios.addedToAccounts.push(chosen);
     t.clock.now += 31_000;
     await t.balances.get("preprod", true);
-    expect(await t.coins.use("preprod", `${chosen.tx_hash}#0`)).toMatchObject({ state: "set", by: "you" });
+    // The user's choice, what a site gets. The wallet's own builds can't put it up, so for them, and the Collateral
+    // page, it's no choice (chunk 51, money#4).
+    await t.coins.use("preprod", `${chosen.tx_hash}#0`);
+    expect((await t.coins.choices("preprod")).collateral).toBe(`${chosen.tx_hash}#0`);
     expect(await t.dapp.call(s, "getCollateral", [])).toBeNull();
   });
 

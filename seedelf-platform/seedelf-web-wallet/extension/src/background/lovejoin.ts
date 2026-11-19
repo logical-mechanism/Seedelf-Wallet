@@ -2101,7 +2101,10 @@ function depositsOf(
   return owned.filter((b) => !known(b) && mixedFor(origins[b.txHash], poolOf(b)) === false);
 }
 
-/** The wallet's boxes not mixed yet, as its records and what Koios said of the others have them: mixing again takes them first. */
+/**
+ * The wallet's boxes not mixed yet, as its records and what Koios said of the others have them: mixing again takes them
+ * first, but from the private balance never one someone else put in under its key (someoneElsesOf; chunk 51, e1a#1).
+ */
 const notMixedYet = (s: Schedule, owned: OutRef[]) => [...unmixedOf(s.chains, owned), ...depositsOf(s, owned)];
 
 /**
@@ -2665,8 +2668,11 @@ function bootstrapOf(s: Schedule, owned: OutRef[]): OutRef[] {
  * under a key of the phrase's: a public account's payment key (Origin `public`: fromPublic), or one of `oneTime`, its
  * one-time accounts' (oneTimeKeys). Anyone can deposit a box under a Seedelf's register, read off its name: one a
  * stranger put in, mixed again from the private balance, tells them that mix, its funding and its change are the
- * name's. One kept before origins kept their inputs is someone else's until it's asked about once more (rejudge);
- * another device's session past the book's indices reads so too, which only leaves its box out of Mix my boxes again.
+ * name's. One kept before origins kept their inputs (1.9.1's) can't be told either way: rejudge has it asked about once
+ * more, its box held as unsure meanwhile, so Mix my boxes again waits for the answer rather than call a deposit of the
+ * wallet's own someone else's and leave it out (chunk 51, time#4). Only in a retired pool, never asked again, does it
+ * read as someone else's here, which classes its box brought back as money received. Another device's session past
+ * the book's indices reads as someone else's too, which only leaves its box out of Mix my boxes again.
  */
 function someoneElsesOf(s: Schedule, owned: OutRef[], oneTime: ReadonlySet<string>, origins: Record<string, Origin> = s.origins ?? {}): OutRef[] {
   const named = new Set([...(s.mixes ?? []).map((e) => depositOf(s, e)), ...Object.keys(s.depositors ?? {})]);
@@ -7387,7 +7393,11 @@ export class LovejoinService {
     const of = (boxes: OutRef[]) => (pool === undefined ? boxes : inPool(boxes, pool));
     // What made the box it may take, when no record of the wallet's accounts for it and Koios hasn't said, is asked
     // of now, in the pool read's request, whatever its count says (independent review M14): the box asked for, or
-    // those backOrder puts ahead of the first whose making is known. `anyway`: the user's call, taken as it is.
+    // those ahead of the first whose making is known, in the order the pick below takes them: backOrder's, and paid
+    // for, hatchOrder's. Asked of in backOrder's alone, a box no record names, which ties no account, that a mix moved
+    // minutes ago went unasked behind another account's known box: the pick, which takes it first, had that one only,
+    // and asked again at each press until it had waited the delay's least (chunk 51, time#2). `anyway`: the user's
+    // call, taken as it is.
     let force: OutRef[] = [];
     if (box) {
       chosen = owned.find((b) => ref(b) === ref(box));
@@ -7398,8 +7408,9 @@ export class LovejoinService {
       // Held but in a retired pool, whose boxes all come back (sortOut).
       const held = new Set([...notMixedYet(before, owned), ...bootstrapOf(before, owned)].filter((b) => !old.has(poolOf(b))).map(ref));
       const order = backOrder(free(of(owned).filter((b) => !held.has(ref(b))), reserved), rows, ownLeaves(before), least, this.deps.now());
-      const first = order.findIndex(known);
-      force = first < 0 ? order : order.slice(0, first);
+      const ranked = paid && pressedOn !== undefined ? hatchOrder(order, before, pressedOn) : order;
+      const first = ranked.findIndex(known);
+      force = first < 0 ? ranked : ranked.slice(0, first);
     }
     const { unmixed, free: back, unsure, deposits, untold, bootstrap } = await this.sortOut(network, owned, listed, force, pools, old);
     // The box asked for.
@@ -7459,7 +7470,8 @@ export class LovejoinService {
       // where every box it can take is another account's (hatchAccountOf), from the page's own read. Another account's
       // box it didn't name, that read gone stale meanwhile (a review kept for Send holding the account's own), would tie
       // that account to what pays, after a question that never said so: nothing is sent, and the page asks again from a
-      // fresh read, which names it.
+      // fresh read, which names it. So where a box no record named, asked of above, was a deposit's or another
+      // account's: the answer is kept, and that read holds it so (time#2).
       const whose = paid && pressedOn !== undefined ? accountOf(originOf(chosen, after)) : undefined;
       if (whose !== undefined && whose !== pressedOn && whose !== named) throw new AskAgainError(t("lj.boxReserved"));
     }
