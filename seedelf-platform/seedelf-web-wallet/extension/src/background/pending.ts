@@ -583,7 +583,9 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
   };
   try {
     // Under another phrase by now, nothing of it is taken or written: it throws as a lock does (`pinned`, checked in
-    // the take's own turn).
+    // the take's own turn and in the history's). Its history first: the take unseals the copy written ahead, and a
+    // lock between the two lost the entry for good (chunk 51, l2time#4).
+    await writeSent(deps, s.network, pending, s.summary, pinned);
     await take(
       deps,
       watched,
@@ -595,16 +597,29 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
     );
   } catch (e) {
     // Koios took it: what stopped the watch taking it over (a lock, session storage full) leaves it as written
-    // ahead, maybe sent and sealed, and it's settled as any such one is. A lock is said; nothing else is thrown,
-    // so no caller takes one that went out for one refused, as a session's funding marked unsent would be
-    // (chunk 23's second review, fix round).
+    // ahead, maybe sent and sealed, and it's settled as any such one is, its history with it. A lock is said; nothing
+    // else is thrown, so no caller takes one that went out for one refused, as a session's funding marked unsent
+    // would be (chunk 23's second review, fix round).
     if (e instanceof WalletLocked) throw e;
   }
-  await deps.activity?.sent(s.network, pending, s.summary, pinned).catch(() => undefined);
   return pending;
 }
 
 const slot = (s: { invalidHereafter?: number }) => (s.invalidHereafter === undefined ? {} : { invalidHereafter: s.invalidHereafter });
+
+/**
+ * Writes a payment's Seedelf history (activity.ts `sent`), before its submit or settle lets its sealed copy go. A lock,
+ * or another phrase's keys there (which its pin says as a lock), is thrown, so the sealed copy stays and the next
+ * unlock's settle writes it; anything else is let go, a throw before the write's first await too, since a history that
+ * can't be written must never hold a payment's watch (chunk 51, l2time#4).
+ */
+async function writeSent(deps: PendingDeps, network: NetworkName, pending: PendingTx, summary: object, pin?: PhrasePin): Promise<void> {
+  try {
+    await deps.activity?.sent(network, pending, summary, pin);
+  } catch (e) {
+    if (e instanceof WalletLocked) throw e;
+  }
+}
 /** The feed a transaction that isn't a Seedelf spend shows in, by what it pays (feed.ts). */
 const paysFeed = (s: Sending, bytes: Uint8Array) => {
   const feed = s.contract ? undefined : feedOfTx(bytes, s.network);
@@ -837,6 +852,12 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
   const { confirmations, tip, fed } = await lookFor(deps, w);
   if (confirmations !== null) {
     const { maybeSent: _maybeSent, ...seen } = { ...w, confirmations };
+    // Its history, pinned as the turns are: under another phrase by the time the history's queue reaches it, nothing
+    // is written (chunk 51, own#6). Written before its watch and its sealed copy go, so a lock or a stopped worker
+    // first leaves the sealed copy, the next unlock puts the watch back, and its settle writes it then. After them, a
+    // lock while the history's queue was busy lost it for good, and its change read as a payment received (chunk 51,
+    // l2time#4). Only a lock stops the settle here (`writeSent`).
+    if (w.summary) await writeSent(deps, w.network, shown(seen), w.summary, pin);
     await turn(async () => {
       await wallet.withKeys(async (keys) => {
         pin(keys);
@@ -847,9 +868,6 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
       });
       await unseal(deps, w);
     });
-    // Its history, pinned as the turns are: under another phrase by the time the history's queue reaches it, nothing
-    // is written (chunk 51, own#6).
-    if (w.summary) await deps.activity?.sent(w.network, shown(seen), w.summary, pin).catch(() => undefined);
     // A Bootstrap from the public account is its deposit alone: seen here, it went in, whatever a later pool read
     // lists there (MERGED-5). Telling it is never the watch's failure.
     if (w.kind === "lovejoin-mix") await deps.depositLanded?.(w.network, w.txHash).catch(() => undefined);
@@ -938,9 +956,14 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
           pin(keys);
           return dropKept(session, w);
         });
-        if (summary) await deps.activity?.sent(w.network, shown(current), summary, pin).catch(() => undefined);
+        // Its history before the turn below unseals it (`writeSent`; chunk 51, l2time#4).
+        if (summary) await writeSent(deps, w.network, shown(current), summary, pin);
       }
     } catch (e) {
+      // Locked meanwhile, or another phrase's keys there: nothing more is done with it. It stays sealed as maybe sent,
+      // put back at the next unlock and settled then, its history with it, never unsealed by a lock and an unlock both
+      // landing before the turn below (chunk 51, l2time#4).
+      if (e instanceof WalletLocked) throw e;
       // Refused as spent: most likely this very one, on its way (so too after the data layer's connection was
       // lost). Unanswered again: keep watching.
       if (e instanceof SpentInputError || e instanceof SpentMaybeSentError) current = await mempool(koios, current);

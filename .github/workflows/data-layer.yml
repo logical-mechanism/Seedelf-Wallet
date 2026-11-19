@@ -8,7 +8,9 @@ on:
       - "seedelf-data/**"
       # But its Markdown, which nothing the check builds or tests reads, so a
       # docs pull request stays fast (chunk 51, docs#11). GitHub reads these in
-      # order, the last that matches a file deciding.
+      # order, the last that matches a file deciding. workflows.test.ts fails a
+      # pull request whose Rust here comes to include one: web-wallet.yml runs
+      # it for any .rs file here (chunk 51, l2docs#1).
       - "!seedelf-data/**/*.md"
       - ".github/workflows/data-layer.yml"
       # Every file beside it that its build reads (include_str!). What the token pools' checks read (web wallet

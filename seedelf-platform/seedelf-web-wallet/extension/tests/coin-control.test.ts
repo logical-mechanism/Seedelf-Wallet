@@ -13,7 +13,7 @@ import { SESSION_MINT } from "../src/background/mint";
 import { SESSION_COLLATERAL } from "../src/background/send";
 import { SESSION_SENT_PREFIX, type SentTx } from "../src/background/sent-txs";
 import { SESSION_SPENT } from "../src/background/spent";
-import type { KoiosUtxo } from "../src/background/koios";
+import { measurable, type KoiosUtxo } from "../src/background/koios";
 import { SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
 import { t as tr } from "../src/i18n";
 import { LOCAL_ACCOUNT } from "../src/shared/preferences";
@@ -395,14 +395,18 @@ describe("a stranger's 5 ₳ the wallet can't put up (chunk 51, e8b#1)", CHAINS,
   const STRANGER = "d7".repeat(32);
   const OWN_FIVE = `${"e5".repeat(32)}#0`; // publicFunded's own 5 ₳
 
-  /** What a stranger can put on an output of 5 ₳ alone: a reference script (one the wallet can measure), or a deep datum. */
+  /**
+   * What a stranger can put on an output of 5 ₳ alone: a reference script, one the wallet can measure or a native one
+   * as Koios and the data layer give it, with no bytes, which no build of the wallet's can price; or a deep datum.
+   */
   const SHAPES: Array<[string, Partial<KoiosUtxo>]> = [
     ["a reference script", { reference_script: { hash: "ab".repeat(28), size: 3, type: "timelock", bytes: "820080" } }],
+    ["a native reference script, no bytes", { reference_script: { hash: "ab".repeat(28), size: null, type: "timelock", bytes: null } }],
     ["an inline datum 200 levels deep", { inline_datum: { bytes: `${"81".repeat(200)}00`, value: null } }],
   ];
 
-  /** The stranger's 5 ₳ at the 12-word account's 0/0, a block older than publicFunded's own 5 ₳. */
-  async function strangers(t: Tested, shape: Partial<KoiosUtxo>): Promise<void> {
+  /** The stranger's 5 ₳ (or `value`) at the 12-word account's 0/0, a block older than publicFunded's own 5 ₳. */
+  async function strangers(t: Tested, shape: Partial<KoiosUtxo>, value = "5000000"): Promise<void> {
     const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
     const keyHash = await t.wallet.withKeys((keys) => keys.cardano.paymentKeyHash(0, 0));
     t.koios.addedToAccounts.push({
@@ -410,7 +414,7 @@ describe("a stranger's 5 ₳ the wallet can't put up (chunk 51, e8b#1)", CHAINS,
       tx_hash: STRANGER,
       tx_index: 0,
       address: account(12).preprod.receive_0,
-      value: "5000000",
+      value,
       payment_cred: keyHash,
       asset_list: [],
       block_height: first!.block_height! - 1,
@@ -523,35 +527,68 @@ describe("a stranger's 5 ₳ the wallet can't put up (chunk 51, e8b#1)", CHAINS,
     expect(await t.coins.collateral("preprod")).toMatchObject({ state: "set", by: "wallet", utxo: { txHash: OWN_FIVE.slice(0, 64), index: 0 } });
   });
 
+  /** What the public forms may spend, as Home.tsx works it out: CardanoSend's and MoveIn's "Max, up to". */
+  async function formsFigure(t: Tested) {
+    const b = await t.balances.get("preprod");
+    const prefs = await t.deps.preferences.get();
+    return { b, forms: BigInt(withRewards(unlockedSide(b.cardano), spentRewards(b.cardano.staking, prefs.spendRewards)).lovelace) };
+  }
+
+  /**
+   * What the wallet's own builds may spend, with the rewards they withdraw: readAccount's rows less those no build can
+   * price (`measurable`), which core leaves out of every payment it builds, Max included (build.rs `priced`).
+   */
+  async function buildsFigure(t: Tested) {
+    const own = await readAccount(t.deps, "preprod");
+    const priced = own.utxos.filter((p) => measurable(p.utxo));
+    const unpriced = own.utxos.filter((p) => !measurable(p.utxo));
+    const builds = priced.reduce((sum, p) => sum + BigInt(p.utxo.value), BigInt(own.withdrawal ?? "0"));
+    return { own, priced, unpriced, builds };
+  }
+
   // Chunk 51, money#4 and still#6: with such a choice, Home's locked figure and the forms' "Max, up to" counted the
   // choice as the one 5 ₳ held and the 5 ₳ the builds put up as free, while the builds held both: Max paid 5 ₳ less
   // than the form said, and an amount between the two passed the form to be refused. They count what the builds keep.
+  // Chunk 51, l2still#3: a choice with a native reference script, which no build can price, still counted as free.
   it.each(SHAPES)("with %s, chosen before 1.9.2, has Home and the forms count what the wallet's own builds spend", async (_, shape) => {
     const t = await publicFunded();
     await strangers(t, shape);
     await t.balances.get("preprod", true);
     await t.coins.use("preprod", `${STRANGER}#0`);
-    const b = await t.balances.get("preprod");
-    // What the public forms may spend, as Home.tsx works it out: CardanoSend's and MoveIn's "Max, up to".
-    const prefs = await t.deps.preferences.get();
-    const forms = BigInt(withRewards(unlockedSide(b.cardano), spentRewards(b.cardano.staking, prefs.spendRewards)).lovelace);
-    // What the wallet's own builds may spend (readAccount), with the rewards they withdraw.
-    const own = await readAccount(t.deps, "preprod");
-    const builds = own.utxos.reduce((sum, p) => sum + BigInt(p.utxo.value), BigInt(own.withdrawal ?? "0"));
+    const { b, forms } = await formsFigure(t);
+    const { priced, unpriced, builds } = await buildsFigure(t);
     expect.soft(forms, "the forms' figure").toBe(builds);
-    // One 5 ₳ held: the one the builds put up, the collateral, which the Mix form leaves out of its count too.
-    expect.soft(b.cardano.locked).toMatchObject({ lovelace: "5000000", utxos: 1 });
+    // Held: the 5 ₳ the builds put up, the collateral, which the Mix form leaves out of its count too, and what no build
+    // can price.
+    const out = unpriced.reduce((sum, p) => sum + BigInt(p.utxo.value), 0n);
+    expect.soft(b.cardano.locked).toMatchObject({ lovelace: (5_000_000n + out).toString(), utxos: 1 + unpriced.length });
     const listed = (await t.coins.lists("preprod")).cardano;
     expect.soft(listed.filter((u) => u.locked).map(at), "held").toEqual([OWN_FIVE]);
     expect.soft(listed.filter((u) => u.collateral).map(at), "the collateral").toEqual([OWN_FIVE]);
     // Max spends every UTxO the builds may: what it pays, its fee and its change are that figure.
     const max = await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
-    expect(max.inputs).toBe(own.utxos.length);
+    expect(max.inputs).toBe(priced.length);
     expect(BigInt(max.payments[0]!.lovelace) + BigInt(max.fee) + BigInt(max.changeLovelace)).toBe(builds);
     // An amount 4 ₳ under the forms' figure goes, on Send and on Make private alike.
     const asked = (forms - 4_000_000n).toString();
     expect((await t.send.build("preprod", [{ to: THEIRS, lovelace: asked, tokens: [] }])).payments[0]!.lovelace).toBe(asked);
     expect((await t.moveIn.build("preprod", asked, [])).lovelace).toBe(asked);
+  });
+
+  // Chunk 51, l2still#3: no choice is needed. A stranger's UTxO with a native reference script, 5 ₳ or any other value,
+  // is one no build can price: Home and the forms counted it as free, and Max paid that much less than "Max, up to".
+  it.each(["5000000", "10000000"])("of %s lovelace with a native reference script, no choice, is held in the forms' figure", async (value) => {
+    const t = await publicFunded();
+    await strangers(t, SHAPES[1]![1], value);
+    await t.balances.get("preprod", true);
+    const { b, forms } = await formsFigure(t);
+    const { unpriced, builds } = await buildsFigure(t);
+    expect(unpriced.map((p) => `${p.utxo.tx_hash}#${p.utxo.tx_index}`)).toEqual([`${STRANGER}#0`]);
+    expect.soft(forms, "the forms' figure").toBe(builds);
+    expect.soft(b.cardano.locked).toMatchObject({ lovelace: (5_000_000n + BigInt(value)).toString(), utxos: 2 });
+    const max = await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    expect.soft(max.leftOut).toEqual([{ txHash: STRANGER, txIndex: 0, reason: "script" }]);
+    expect(BigInt(max.payments[0]!.lovelace) + BigInt(max.fee) + BigInt(max.changeLovelace)).toBe(forms);
   });
 
   it("chosen before 1.9.2, with no 5 ₳ that fits beside it, has a public mix say it needs the account's collateral", async () => {

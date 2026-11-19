@@ -7,7 +7,9 @@ name: Proofs' tools
 # so a Lean or a docs pull request stays fast, and nothing else ran the
 # script: a pull request that changed only one of its files merged with no
 # check (chunk 51, docs#7). So this runs on every pull request that changes
-# the script or a file it reads, which workflows.test.ts checks.
+# the script or a file it reads, which workflows.test.ts checks: on every pull
+# request that changes this file or the script, since web-wallet.yml's check
+# runs for those two (chunk 51, l2docs#1).
 #
 # Never make it a required check: a workflow a path filter skips never
 # reports, and a required check that never reports holds the pull request for

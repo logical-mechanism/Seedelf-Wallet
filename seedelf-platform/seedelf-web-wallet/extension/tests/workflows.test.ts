@@ -373,7 +373,8 @@ function startsOn(file: string, path: string): boolean {
 // checks to 80, and it reads Seedelf/PolicyBurn.lean and PolicyMint.lean against a console recorded by line and column.
 // web-wallet.yml's covered filter leaves seedelf-verification/ out, so the proofs' pull requests stay fast, and no
 // workflow ran the script: a pull request that changed only one of those files merged with no check. So a workflow of
-// its own runs it on every pull request that changes the script or a file it reads (verification-tools.yml).
+// its own runs it on every pull request that changes the script or a file it reads (verification-tools.yml). This
+// check reads the script, which covered takes for it (l2docs#1).
 describe("the proofs' tools' own test", () => {
   const VERIFICATION = fileURLToPath(new URL("../../../../seedelf-verification/", import.meta.url));
 
@@ -392,6 +393,9 @@ describe("the proofs' tools' own test", () => {
       }
       const re = glob(name);
       for (const f of readdirSync(join(VERIFICATION, folder))) if (re.test(f)) found.add(`${folder}/${f}`);
+      // And a file it could match tomorrow: the glob is held to its pattern, not to the files there today, so one added
+      // beside them is checked with no change to the script, which alone web-wallet.yml covers (chunk 51, l2docs#1).
+      found.add(`${folder}/${name.replaceAll("*", "new")}`);
     }
     return [...found].map((f) => `seedelf-verification/${f}`).sort();
   }
@@ -431,6 +435,7 @@ describe("the proofs' tools' own test", () => {
 // Chunk 51, docs#11. data-layer.yml started on any change under seedelf-data/, so a pull request that only edited its
 // README.md, NOTES.md or deploy/README.md ran the data layer's whole check: fmt, clippy and every test. Nothing it
 // builds or tests reads a Markdown file, so its Markdown starts nothing, as the platform's doesn't in web-wallet.yml.
+// This check reads the data layer's Rust, which covered takes for it (l2docs#1).
 describe("data-layer.yml's paths", () => {
   const DATA = fileURLToPath(new URL("../../../../seedelf-data/", import.meta.url));
 
@@ -516,7 +521,27 @@ describe("web-wallet.yml's covered filter", () => {
     expect(runs("seedelf-platform/seedelf-web-wallet/media/post.png")).toBe(false);
     expect(runs("seedelf-verification/Lovejoin/Template/Scripts.lean")).toBe(false);
     expect(runs("seedelf-verification/README.md")).toBe(false);
-    expect(runs("seedelf-data/api/src/main.rs")).toBe(false);
+    expect(runs("seedelf-data/deploy/edge/seedelf-data-deploy")).toBe(false);
+  });
+
+  // Chunk 51, l2docs#1: two checks above read files outside seedelf-platform/ that covered left out. The proofs' tools'
+  // reads test-tools.sh, and data-layer.yml's paths' reads every .rs file under seedelf-data/. A pull request that
+  // changed only those, the one that could break either check, ran neither and merged green: main's run was the first
+  // to fail. They're covered now; their Markdown, and what the script reads but this file doesn't, stay out, so a docs
+  // or a Lean pull request stays fast.
+  it("runs the check for a pull request that changes only a file the proofs' tools' or the data layer's check reads", () => {
+    const data = rust(join(REPO, "seedelf-data")).map((path) => relative(REPO, path).split(sep).join("/"));
+    // Not vacuous: the data layer's Rust is found.
+    expect(data).toEqual(expect.arrayContaining(["seedelf-data/api/src/main.rs"]));
+    expect(["seedelf-verification/test-tools.sh", ...data].filter((path) => !runs(path))).toEqual([]);
+    for (const path of [
+      "seedelf-data/README.md",
+      "seedelf-data/deploy/README.md",
+      "seedelf-verification/check.sh",
+      "seedelf-verification/Seedelf/PolicyBurn.lean",
+    ]) {
+      expect(runs(path), path).toBe(false);
+    }
   });
 
   it("runs the check for a pull request that changes only a workflow, which this file reads", () => {

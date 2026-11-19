@@ -246,7 +246,10 @@ export interface SeedelfInfo {
   paidByAccount?: number;
 }
 
-/** What's kept out of every payment on one side: locked UTxOs, and the Cardano account's collateral. */
+/**
+ * What's kept out of every payment on one side: locked UTxOs, and the Cardano account's collateral and the UTxOs there
+ * no payment can price (a reference script the wallet can't read; chunk 51, l2still#3).
+ */
 export interface Locked {
   lovelace: string;
   tokens: TokenAmount[];

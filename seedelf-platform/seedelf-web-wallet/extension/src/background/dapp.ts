@@ -562,6 +562,13 @@ export class DappService {
    * (`gone`; chunk 51, G6's note, sign#3).
    */
   private readonly enabling = new Map<string, Map<string, number>>();
+  /**
+   * The sites another page spared, by origin, when one of theirs left its connect question or its wait for the unlock
+   * unanswered (`gone`): that page's title and the network it asked on, for the decline the pages that spared it owe.
+   * One of them asking itself, or a refusal, clears it; the last of them leaving before any asks lands the decline then
+   * (chunk 51, l2sign#1: the owner's B7, a question left unanswered is a decline but while another page waits on it).
+   */
+  private readonly spared = new Map<string, { title?: string; network?: NetworkName }>();
   /** Where each private session's funding is, by `network:index`: the calls waiting on it share one read a poll (`funded`). */
   private readonly fundingReads = new Map<string, Promise<"landed" | "funding" | "short" | "never">>();
   /**
@@ -606,8 +613,13 @@ export class DappService {
     const left = (pages.get(session.id) ?? 0) + by;
     if (left > 0) pages.set(session.id, left);
     else pages.delete(session.id);
-    if (pages.size) this.enabling.set(session.origin, pages);
-    else this.enabling.delete(session.origin);
+    if (pages.size) {
+      this.enabling.set(session.origin, pages);
+    } else {
+      this.enabling.delete(session.origin);
+      // None of its pages is on its way to ask any more: nothing is owed by one leaving (`spared`).
+      this.spared.delete(session.origin);
+    }
   }
 
   private async run(session: DappSession, method: DappMethod, args: unknown[]): Promise<unknown> {
@@ -887,6 +899,8 @@ export class DappService {
    * on the dApps page (independent review L33).
    */
   connectorOff(): void {
+    // Nothing more is asked: no page on its way owes a decline (`spared`).
+    this.spared.clear();
     const unlocking = this.unlocking.splice(0);
     for (const u of unlocking) u.reject(refused(OFF));
     if (!this.decline(() => true, OFF) && unlocking.length) this.deps.changed();
@@ -920,28 +934,58 @@ export class DappService {
    * reloading (chunk 51, G6's note). Unless another page of the same site
    * has an `enable()` running (`enabling`), waiting on that question or on its
    * way to it, or waits for the unlock itself: that one asks itself
-   * (`enable`), and a refusal would turn it away (sign#3).
+   * (`enable`), and a refusal would turn it away (sign#3). If it leaves too
+   * before it asks, the decline lands then (`spared`; l2sign#1).
    */
   gone(session: DappSession): void {
     if (this.pageCalls.has(session.id)) this.gonePages.add(session.id);
     const waiting = this.waiting.filter((w) => w.session.id === session.id);
     const unlocking = this.unlocking.filter((u) => u.session.id === session.id);
-    if (!waiting.length && !unlocking.length) return;
+    if (!waiting.length && !unlocking.length) {
+      this.sparedNoMore(session);
+      return;
+    }
     remove(this.waiting, (w) => waiting.includes(w));
     remove(this.unlocking, (u) => unlocking.includes(u));
     const question = waiting.find((w) => w.approval.kind === "connect" && !w.approval.connected && !w.approval.funding);
     if (question || unlocking.length) {
-      const live = (id: string) => id !== session.id && !this.gonePages.has(id);
-      const shared =
-        [...(this.enabling.get(session.origin)?.keys() ?? [])].some(live) ||
-        this.unlocking.some((u) => u.session.origin === session.origin);
-      if (!shared) this.refuseFor(session.origin, session.title, question?.network ?? unlocking[0]?.network);
+      const network = question?.network ?? unlocking[0]?.network;
+      if (!this.sharedBeyond(session)) this.refuseFor(session.origin, session.title, network);
+      else this.spared.set(session.origin, { title: session.title, ...(network ? { network } : {}) });
     }
     for (const w of waiting) {
       w.gone = true;
       w.reject(refused(PAGE_GONE));
     }
     for (const u of unlocking) u.reject(refused(PAGE_GONE));
+    this.deps.changed();
+  }
+
+  /**
+   * Whether another page of `session`'s site asks itself, so its leaving a question unanswered isn't the site's
+   * decline: one with an `enable()` running that hasn't gone (`enabling`), or one waiting for the unlock.
+   */
+  private sharedBeyond(session: DappSession): boolean {
+    const live = (id: string) => id !== session.id && !this.gonePages.has(id);
+    return (
+      [...(this.enabling.get(session.origin)?.keys() ?? [])].some(live) ||
+      this.unlocking.some((u) => u.session.origin === session.origin)
+    );
+  }
+
+  /**
+   * A page with nothing waiting left: if its `enable()` was on its way to its site's question, and spared the site when
+   * another page left that question unanswered (`spared`), the decline lands now, unless another page still asks itself
+   * or a connect question of the site's waits. It never asked: closing a window holding both pages, or a site's two
+   * tabs reloading in turn, kept the window coming back at once (chunk 51, l2sign#1).
+   */
+  private sparedNoMore(session: DappSession): void {
+    const { origin } = session;
+    const spared = this.spared.get(origin);
+    if (!spared || !this.enabling.get(origin)?.has(session.id) || this.sharedBeyond(session)) return;
+    if (this.waiting.some((w) => w.session.origin === origin && w.approval.kind === "connect")) return;
+    this.refuseFor(origin, spared.title, spared.network);
+    // The dApps page and Connected sites list it now.
     this.deps.changed();
   }
 
@@ -1148,6 +1192,9 @@ export class DappService {
       }
       return true;
     }
+    // Its page went away on its way here: nothing is asked for it, nor said of it, as asking again would be (chunk 51,
+    // l2sign#1: its leaving may be what turned the site away).
+    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
     if (this.refusing(origin)) {
       this.askedAgain(origin);
       throw refused(this.declinedWait(origin));
@@ -1183,6 +1230,8 @@ export class DappService {
    * the one it asked on, where the list shows it.
    */
   private refuseFor(origin: string, title?: string, network?: NetworkName): number {
+    // Whatever another page's leaving spared it, this refusal is that decline (`spared`).
+    this.spared.delete(origin);
     const { count, ms } = this.nextRefusal(origin);
     const named = siteTitle(title) ?? this.refusedUntil.get(origin)?.title;
     this.refusedUntil.set(origin, {
@@ -1586,12 +1635,13 @@ export class DappService {
     // it was declined. A connected site's `enable()` still opens the window.
     const network = await this.deps.network();
     const known = !!this.lastSites.get(network)?.has(origin);
+    // Its page went away while this call was on its way: nobody would answer it (independent review L31). Looked at
+    // before the refusal, so a page that left never reads as one that asked again (chunk 51, l2sign#1).
+    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
     if (this.refusing(origin) && (method !== "enable" || !known)) {
       if (method === "enable") this.askedAgain(origin);
       throw refused(method === "enable" ? this.declinedWait(origin) : NOT_CONNECTED);
     }
-    // Its page went away while this call was on its way: nobody would answer it (independent review L31).
-    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
     // Another of its pages' `enable()` waits already: this one shares its
     // place, as it will its connect question, so a site open in several tabs
     // is never refused for it (independent review L35).
@@ -1604,6 +1654,8 @@ export class DappService {
     const unlocked = new Promise<void>((resolve, reject) =>
       this.unlocking.push((waiter = { session, enable, network, resolve, reject })),
     );
+    // Its page asks itself, in the unlock window: another's leaving is spared no more (`spared`; chunk 51, l2sign#1).
+    if (enable) this.spared.delete(origin);
     try {
       await this.deps.window.show();
     } catch (e) {
@@ -1653,6 +1705,9 @@ export class DappService {
       };
       this.waiting.push(entry);
     });
+    // A connect question of its own: its page asks itself, so another's leaving is spared no more (`spared`; chunk 51,
+    // l2sign#1).
+    if (request.kind === "connect" && !request.connected) this.spared.delete(session.origin);
     entry.settled = answered.then(
       () => undefined,
       (e: unknown) => (entry.gone ? "gone" : e instanceof DappError ? e : new DappError({ code: APIError.InternalError, info: String(e) })),

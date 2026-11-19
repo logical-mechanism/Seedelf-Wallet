@@ -268,7 +268,8 @@ export class CoinControlService {
   /**
    * The account's UTxOs that may be spent, and its collateral (never among them): `account`'s choices, as `choices`.
    * `own`: the wallet's own builds' reading, where a chosen collateral that doesn't fit counts as none (collateralOf),
-   * so they spend it as any other UTxO, and hold only the one they put up: what Home and the forms count as held.
+   * so they spend it as any other UTxO, and hold only the one they put up: what Home and the forms count as held,
+   * beside what no build can price (`locked`).
    * Kept out as well, they held two 5 ₳ where the forms counted one, and Max paid 5 ₳ less than the form said
    * (chunk 51, money#4, still#6).
    */
@@ -291,15 +292,21 @@ export class CoinControlService {
     return utxos.filter((u) => !locked.has(outpoint(u)));
   }
 
-  /** What's kept out of payments on each side, from the last reading, or `from` one too large to keep. */
+  /**
+   * What's kept out of payments on each side, from the last reading, or `from` one too large to keep. On the account,
+   * besides what's held, every UTxO no build of the wallet's can price (`unspendable`: a reference script whose bytes no
+   * server gives, a native script's), which core leaves out of every payment, Max included. Counted as free, Home's
+   * figure and the forms' "Max, up to" said that much more than any payment could spend, a 1.9.1 choice of such a 5 ₳
+   * too (chunk 51, l2still#3). The private side's balance leaves its own out already (balances.ts `spendableOwned`).
+   */
   async locked(network: NetworkName, from?: ReadingUtxos): Promise<{ seedelf: Locked; cardano: Locked }> {
     const lists = await this.lists(network, from, false);
-    const sum = (list: UtxoInfo[]): Locked => {
-      const kept = list.filter((u) => u.locked && !u.seedelf);
-      const { lovelace, tokens } = sumValue(kept.map(asKoios));
-      return { lovelace: lovelace.toString(), tokens, utxos: kept.length };
+    const sum = (list: UtxoInfo[], kept: (u: UtxoInfo) => boolean): Locked => {
+      const out = list.filter((u) => kept(u) && !u.seedelf);
+      const { lovelace, tokens } = sumValue(out.map(asKoios));
+      return { lovelace: lovelace.toString(), tokens, utxos: out.length };
     };
-    return { seedelf: sum(lists.seedelf), cardano: sum(lists.cardano) };
+    return { seedelf: sum(lists.seedelf, (u) => u.locked), cardano: sum(lists.cardano, (u) => u.locked || !!u.unspendable) };
   }
 
   /**
@@ -352,7 +359,8 @@ export class CoinControlService {
     const collateral = collateralOf(choices, fresh, true)?.utxo;
 
     // A Seedelf spend can't take a UTxO holding a reference script yet (script-spend.ts `spendable`),
-    // and the account can't price one whose script Koios doesn't give (`measurable`).
+    // and the account can't price one whose script Koios doesn't give (`measurable`): Home and the forms count that one
+    // with what's held (`locked`; chunk 51, l2still#3).
     const script = { unspendable: "script" } as const;
     const classes = histories ? await this.deps.activity?.classes(network, ownedNow).catch(() => undefined) : undefined;
     const seedelf = ownedNow.map((u): UtxoInfo => {
