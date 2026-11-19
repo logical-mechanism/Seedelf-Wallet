@@ -65,6 +65,9 @@ pub fn is_on_correct_network(addr: Address, network_flag: bool) -> bool {
 ///
 /// * `true` if the address does not contain a script.
 /// * `false` if the address contains a script.
+#[deprecated(
+    note = "counts the stake part too, so a key address staked by a script reads as a script's: use is_key_address or is_script_address"
+)]
 pub fn is_not_a_script(addr: Address) -> bool {
     !Address::has_script(&addr)
 }
