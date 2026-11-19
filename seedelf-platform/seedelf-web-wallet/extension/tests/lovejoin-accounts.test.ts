@@ -14,7 +14,7 @@ import { txInputs } from "../src/background/cbor";
 import { CHAIN_CUT, SESSION_LOVEJOIN_PUBLIC } from "../src/background/lovejoin";
 import { HOUR, PASSWORD, publicFunded, type Tested } from "./chain-fixtures";
 import { koiosPreprod } from "./fakes";
-import { ADA, adaBox, ownDatum } from "./v2-pools";
+import { ADA, ADA_ADDRESS, ADA_VIEW, adaBox, ownDatum } from "./v2-pools";
 
 /** Real chains, built and measured in WebAssembly, two in a test. */
 const CHAINS = { timeout: 180_000 };
@@ -321,8 +321,12 @@ describe("a restore's box a deposit from a custom account made, that account add
     await t.accounts.recordFirst();
     const D = "de".repeat(32);
     const boxes = await restored(t, D);
-    // As an earlier version kept it: a deposit made them, no account named, nothing to judge it again from.
-    await t.store.set("lovejoin.preprod", { due: [], chains: [], origins: { [D]: { mixed: false, seen: t.clock.now } } });
+    // A mix in the 5 ₳ pool account 30 paid for made them. A deposit's answer kept before is asked about once more
+    // whatever accounts are known, since whose deposit it was can't be told without its inputs (chunk 51, e1a#1:
+    // lovejoin-someone-else.test.ts); a mix's waits for an account it may have missed, as here.
+    t.koios.txSpends.set(D, [{ payment_addr: { bech32: ADA_ADDRESS, cred: ADA_VIEW.mixBoxHash } }, ...t.koios.txSpends.get(D)!]);
+    // As an earlier version kept it: a mix made them, no account named, nothing to judge it again from.
+    await t.store.set("lovejoin.preprod", { due: [], chains: [], origins: { [D]: { mixed: false, mixedIn: [ADA], seen: t.clock.now } } });
     // Every account known is among the first 24, which it was judged against: it stands, and nobody is asked.
     const asks = asked(t);
     expect((await inAda(t)).fromPublic).toEqual([]);

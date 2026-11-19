@@ -243,6 +243,8 @@ function getContext(): Promise<Worker> {
       store,
       preferences,
       mixingAgain: (n) => sessions.mixingAgain(n),
+      // The session indexes whose one-time accounts' deposits are the phrase's own (chunk 51, e1a#1).
+      sessionIndices: (n) => sessions.indices(n),
       alarm: sessionsAlarm,
       // The pools handed over, each copy named one, and the copies a pool read reads once (lovejoin-pools.ts; the
       // merged fixes' review, MERGED-1).

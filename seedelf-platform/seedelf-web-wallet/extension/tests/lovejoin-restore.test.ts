@@ -765,8 +765,11 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     expect(status.fromPublic).toEqual([]);
     expect(status.notMixed).toEqual([inAda(P)]);
     expect(await origins(t)).toEqual({ [P]: { mixed: false, seen: t.clock.now, inputs: [{ cred: stranger, stake }], judged: PROBED } });
-    // A deposit's box, mixed again from the private balance as any is.
-    expect(await t.lovejoin.againBoxes("preprod", false, ADA)).toEqual({ boxes: 1, owned: 1 });
+    // A deposit no key of the phrase paid: someone else's, so Mix my boxes again from the private balance leaves it out,
+    // and only Pay from my private balance anyway takes it (chunk 51, e1a#1).
+    expect(status.someoneElse).toEqual([inAda(P)]);
+    await expect(t.lovejoin.againBoxes("preprod", false, ADA)).rejects.toThrow("Someone else, or another device, put these boxes in");
+    expect(await t.lovejoin.againBoxes("preprod", true, ADA)).toEqual({ boxes: 1, owned: 1 });
     // Read from its address alone, as a Koios without `cred` gives it: the same.
     const Q = hash("ba");
     t.koios.addedToAccounts.push(await adaOwned(t, Q));
