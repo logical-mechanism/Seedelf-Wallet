@@ -1,35 +1,42 @@
 // Cardanoscan's labels for Lovejoin's token pools. Cardanoscan names a script
 // only by its hash, from Strica's cardano-contracts-registry, where Lovejoin's
 // entries are `projects/lovejoin.json` (the owner's fork of it, beside this
-// repository). Every token pool has four scripts of its own, made from one of
-// the pinned template sets (seedelf-core's lovejoin/templates.rs: 8131b1d's,
-// retired, and v2's, 29573c5, chunk 44) and its launch's seed: its reference
-// token's policy (P, the pool's id), mix_logic, mix_box and fee_contract. So a
-// pool stays unnamed there until its four hashes are added.
+// repository). The same registry tells cardano.org's transaction leaderboard
+// which transactions are Lovejoin's. Every token pool has four scripts of its
+// own, made from one of the pinned template sets (seedelf-core's
+// lovejoin/templates.rs) and its launch's seed: its reference token's policy
+// (P, the pool's id), mix_logic, mix_box and fee_contract. So a pool stays
+// unnamed there until its four hashes are added.
 // Run at each release, after `npm run lovejoin-pools`: it reads that bundled
-// list, which holds only the pools the wallet shows, so only those are named.
+// list, which holds only the pools the wallet shows.
 //
 //   node scripts/lovejoin-registry.mjs                  print the entries mainnet's pools make
 //   node scripts/lovejoin-registry.mjs <lovejoin.json>  add the new ones to the fork's file
 //
+// Only v2's pools (29573c5, chunk 44) are named: the registry tracks the pools
+// people should use, and every new pool is v2 (the owner, 2026-11-19). A pool on
+// a retired set (8131b1d's, `tokenV1`) is skipped, and a line says so. The head
+// start still lists one, so a wallet finds its boxes there to bring them back,
+// but the registry never names it. Strica's file dropped the classic pool's
+// entries and never took the 8131b1d pool's (Strica's PR #74, 2026-11-19). It
+// keeps the reference holder, which holds every pool's reference token, v2's
+// included.
+//
 // Each pool is verified again through WebAssembly (lovejoinVerifyPool, so
 // wasm/pkg must be built), which derives its four scripts from its seed on the
-// set its datum names. Its entries are named for its value and its set: the
-// box's token and ADA ("Mix Box (1,000 SNEK + 4 ADA)"), or its ADA alone, with
-// v2's in a v2 pool's ("Mix Box v2 (5 ADA)"). The shown rule shows one pool of
-// each value on each set, so a v2 pool can hold an 8131b1d pool's value: named
-// for its value alone, v2's 5 ₳ pool took the 8131b1d 5 ₳ pool's four names,
-// which the file then refused as taken (1.8.0's release review, D3). Each set's
-// entries carry its own version in the registry and link its own commit's
-// contracts: v2's mix_logic is 29573c5's, never 8131b1d's.
+// set its datum names. Its entries are named for its value, with v2's: the
+// box's token and ADA ("Mix Box v2 (1,000 SNEK + 4 ADA)"), or its ADA alone
+// ("Mix Box v2 (5 ADA)"), as version 3 in the registry, and link 29573c5's
+// contracts. The "v2" and the version 3 are what Strica's file already holds,
+// from when 8131b1d's pools were named too (1.8.0's release review, D3).
 //
-// The file is only added to. The entries written by hand (the project, the
-// classic pool's, the reference holder's) are left alone, and an entry already
-// there stays as it is, even once its pool is no longer listed (its token left
-// the list): it's named in a warning, never removed, as its label is still
-// true. With no new pool, the file isn't touched. A pool that doesn't verify,
-// one on a set this doesn't name, a token with no ticker, or a name over the
-// registry's limits stops it with nothing written.
+// The file is only added to. The entries written by hand (the project and the
+// reference holder) are left alone, and an entry already there stays as it
+// is, even once its pool is no longer listed (its token left the list): it's
+// named in a warning, never removed, as its label is still true. With no new
+// pool, the file isn't touched. A pool that doesn't verify, one on a set this
+// neither names nor knows as retired, a token with no ticker, or a name over
+// the registry's limits stops it with nothing written.
 //
 // What names a pool is exported for tests/lovejoin-registry.test.ts, which
 // never runs this: the rest runs only when node runs this file.
@@ -47,14 +54,16 @@ export const MAX_NAME = 45;
 export const MAX_DESCRIPTION = 140;
 
 /**
- * The template sets a token pool may run, by the version WebAssembly verifies it as (`lovejoin::PoolView`): the
+ * The template sets whose pools are named, by the version WebAssembly verifies a pool as (`lovejoin::PoolView`): the
  * constant in templates.rs that pins its commit, what its entries' names add to the pool's value, and its version in
- * the registry, where the classic pool's scripts are 1. 8131b1d's names add nothing, as every entry before v2's did.
+ * the registry. v2's alone.
  */
 export const SETS = {
-  tokenV1: { commit: "COMMIT", label: "", version: 2 },
   v2: { commit: "COMMIT_V2", label: " v2", version: 3 },
 };
+
+/** The retired sets: a pool on one is skipped, never named. 8131b1d's, withdraw-only since 1.8.0. */
+export const RETIRED = ["tokenV1"];
 
 /** Each set's commit, by set, read from templates.rs's source (`source`). */
 export function commitsOf(source) {
@@ -88,7 +97,8 @@ export function valueOf(view, tokens) {
 /**
  * A pool's four entries, worded as the classic pool's are: named for `value` and the pool's set, at that set's
  * version, linked to its contracts at the commit core pins it to (`commits`, commitsOf's). The full id would take the
- * link past the registry's 100. A pool on a set SETS doesn't name stops it.
+ * link past the registry's 100. A pool on a set SETS doesn't name stops it, a retired one too: the run skips those
+ * before it gets here.
  */
 export function entriesOf(view, value, commits) {
   const set = Object.hasOwn(SETS, view.version) ? SETS[view.version] : undefined;
@@ -122,6 +132,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const tokens = JSON.parse(readFileSync(TOKENS, "utf8"));
   // In launch order, so each release's additions go at the end.
   const launched = [...pools].sort((a, b) => a.launch.block - b.launch.block || a.launch.index - b.launch.index);
+  // The pools on a retired set: listed so wallets find their boxes, never named.
+  const skipped = [];
   const wanted = launched.flatMap((pool) => {
     let view;
     try {
@@ -129,9 +141,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     } catch (e) {
       throw new Error(`${pool.id} doesn't verify: ${e?.message ?? e}. Nothing written.`);
     }
+    if (view.id === pool.id && RETIRED.includes(view.version)) {
+      skipped.push(view);
+      return [];
+    }
     if (view.id !== pool.id || !Object.hasOwn(SETS, view.version)) throw new Error(`${pool.id} verifies as ${view.version} pool ${view.id}. Nothing written.`);
     return entriesOf(view, valueOf(view, tokens), commits);
   });
+  const skips = () => {
+    for (const view of skipped) console.log(`  skipped, a retired ${view.version} pool, never named: ${view.id}`);
+  };
   for (const c of wanted) {
     if (c.name.length > MAX_NAME) throw new Error(`"${c.name}" is over the registry's ${MAX_NAME} characters. Nothing written.`);
     if (c.description.length > MAX_DESCRIPTION) throw new Error(`${c.name}'s description is over ${MAX_DESCRIPTION} characters. Nothing written.`);
@@ -142,6 +161,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!target) {
     console.log(JSON.stringify(wanted, null, 2));
     console.log(`${listed}, ${wanted.length} entries. Give the fork's projects/lovejoin.json to add the new ones.`);
+    skips();
   } else {
     if (!existsSync(target)) throw new Error(`No ${target}: the owner's fork of StricaHQ/cardano-contracts-registry isn't there.`);
     const registry = JSON.parse(readFileSync(target, "utf8"));
@@ -153,7 +173,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       if (names.has(c.name)) throw new Error(`"${c.name}" already labels another script in ${target}. Nothing written.`);
       names.add(c.name);
     }
-    // Every token pool's entries, whichever set: those of a pool no longer listed are named, never removed.
+    // The named sets' entries: those of a pool no longer listed are named here, never removed.
     const versions = new Set(Object.values(SETS).map((s) => s.version));
     const current = new Set(wanted.map((c) => c.scriptHash));
     const unlisted = registry.contracts.filter((c) => versions.has(c.version) && !current.has(c.scriptHash));
@@ -165,6 +185,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     else console.log(`${listed}: ${added.length} entries added, ${wanted.length - added.length} already there -> ${target}`);
     for (const c of added) console.log(`  + ${c.name}  ${c.scriptHash}`);
     for (const c of unlisted) console.warn(`  kept, its pool no longer listed: ${c.name}  ${c.scriptHash}`);
+    skips();
     if (added.length) console.log("Next, in the fork: npm run validate, commit, open the PR, and message Cardanoscan the link.");
   }
 }

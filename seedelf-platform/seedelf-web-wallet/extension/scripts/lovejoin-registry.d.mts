@@ -25,8 +25,10 @@ export interface Contract {
   description: string;
 }
 
-/** The set names WebAssembly verifies a token pool as. */
-export type SetName = "tokenV1" | "v2";
+/** The set whose pools are named: v2's alone. */
+export type SetName = "v2";
+/** The retired sets: WebAssembly still verifies a pool as one, and the run skips it. */
+export type RetiredName = "tokenV1";
 
 export declare const NETWORK: "mainnet";
 /** seedelf-core's `lovejoin/templates.rs`, which pins each set's commit. */
@@ -34,10 +36,12 @@ export declare const TEMPLATES: URL;
 export declare const MAX_NAME: number;
 export declare const MAX_DESCRIPTION: number;
 
-/** Each set's templates.rs constant, what its names add, and its registry version. */
+/** Each named set's templates.rs constant, what its names add, and its registry version. */
 export declare const SETS: Record<SetName, { commit: string; label: string; version: number }>;
+/** The retired sets, never named. */
+export declare const RETIRED: RetiredName[];
 
-/** Each set's commit, read from templates.rs's source. */
+/** Each named set's commit, read from templates.rs's source. */
 export declare function commitsOf(source: string): Record<SetName, string>;
 
 /** `units` with `decimals` places, as the wallet writes amounts. */
@@ -46,5 +50,5 @@ export declare function amount(units: string, decimals: number): string;
 /** What a pool's boxes each hold, by the token registry's tickers and decimals. */
 export declare function valueOf(view: PoolView, tokens: Record<string, { ticker?: string; decimals?: number }>): string;
 
-/** A pool's four entries, named for `value` and its set; throws for a set SETS doesn't name. */
+/** A pool's four entries, named for `value` and its set; throws for a set SETS doesn't name, a retired one too. */
 export declare function entriesOf(view: PoolView, value: string, commits: Record<string, string>): Contract[];
