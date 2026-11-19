@@ -100,7 +100,7 @@ Version 1 of the contracts (variant 1 in `seedelf-core` and the CLI's `--variant
 
 ## Re-releasing Tag
 
-To redo a release, delete its tag locally and on GitHub, then tag and push it again as above. A version already published to crates.io can't be published again.
+To redo a release, delete its tag locally and on GitHub, and its release on the Releases page, draft or not, since each run of `sign-and-publish` makes a new draft. Then tag and push it again as above. A version already published to crates.io can't be published again.
 
 ```bash
 version="0.7.1"

@@ -263,8 +263,16 @@ describe("release.yml's signature", () => {
     const job = release().find((j) => j.name === "sign-and-publish");
     expect(job).toBeDefined();
     const body = code(job!);
-    const at = body.findIndex((line) => /^\s*files:\s*\|/.test(line));
-    const files = under(body, at).map((line) => line.trim()).filter(Boolean);
+    // What `gh release create` uploads: its arguments, the lines a `\` continues joined (chunk 51, docs#5).
+    const gh = (line: string) => /\bgh release create\b/.test(line);
+    const publish = scripts().find(({ where, lines }) => where.startsWith("release.yml:") && lines.some(gh));
+    expect(publish).toBeDefined();
+    const command = publish!.lines.join("\n").replace(/\\\n/g, " ");
+    const files = command
+      .slice(command.indexOf("gh release create"))
+      .split(/\s+/)
+      .filter((arg) => /^(?:seedelf-platform\/[\w.-]+|hashes\.txt(?:\.asc)?)$/.test(arg));
+    expect(body.join("\n")).toMatch(/\bgh release create\b/);
     const signed = files.filter((f) => !f.endsWith(".asc"));
     // The three archives and hashes.txt, as RELEASE.md lists them, each beside its detached signature.
     expect(signed.map((f) => f.split("/").at(-1))).toEqual([
@@ -276,6 +284,178 @@ describe("release.yml's signature", () => {
     expect(signed.filter((f) => !files.includes(`${f}.asc`))).toEqual([]);
     for (const f of signed) expect(body.join("\n")).toContain(f.split("/").at(-1));
     expect(body.join("\n")).toMatch(/--detach-sign/);
+  });
+
+  // Chunk 51, docs#5. sign-and-publish imported the key, signed with its passphrase, then ran
+  // softprops/action-gh-release, third-party JavaScript, with the write token: in the same job, as the same user,
+  // beside gpg's agent, which kept the unlocked key for its cache time (ten minutes), and with the runner's sudo,
+  // beside the job's secrets themselves. A bad commit reaching its pin through a Dependabot bump could have signed a
+  // swapped archive that RELEASE.md's checks pass. So no job that holds a secret, the job's own token aside, runs a
+  // third-party action: GitHub's own `gh`, on the runner already, publishes the release. And the signing step stops
+  // the agent once it has signed, so nothing after it signs without the passphrase.
+  it("runs no third-party action in a job that holds a secret, and forgets the unlocked key once it has signed", () => {
+    const OTHER = /\bsecrets\.(?!GITHUB_TOKEN\b)\w/;
+    const holding = jobs().filter((j) => code(j).some((line) => OTHER.test(line)));
+    // Not vacuous: the release key's job, and the data layer's deploy, which holds its SSH key.
+    expect(holding.map((j) => `${j.file}: ${j.name}`)).toEqual(
+      expect.arrayContaining(["release.yml: sign-and-publish", "data-layer-deploy.yml: vps"]),
+    );
+    const beside = holding.flatMap((j) =>
+      code(j).flatMap((line) => {
+        const ref = /^\s*(?:-\s+)?uses:\s*["']?([^"'\s#]+)/.exec(line)?.[1];
+        const third = ref && !ref.startsWith("./") && !FIRST_PARTY.has(ref.split("/")[0] ?? "");
+        return third ? [`${j.file}: ${j.name} runs ${ref}`] : [];
+      }),
+    );
+    expect(beside).toEqual([]);
+    const signing = scripts().find(
+      ({ where, lines }) => where.startsWith("release.yml:") && lines.some((line) => line.includes("--detach-sign")),
+    );
+    expect(signing).toBeDefined();
+    expect(signing!.lines.filter((line) => !blank(line)).at(-1)?.trim()).toBe("gpgconf --kill gpg-agent");
+  });
+});
+
+/** GitHub's paths syntax: `**` any characters, `/` included, `*` any but `/`. */
+function glob(pattern: string): RegExp {
+  const escape = (s: string) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  let re = "";
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern.startsWith("**/", i)) {
+      re += "(?:.*/)?";
+      i += 2;
+    } else if (pattern.startsWith("**", i)) {
+      re += ".*";
+      i += 1;
+    } else re += pattern[i] === "*" ? "[^/]*" : escape(pattern[i]!);
+  }
+  return new RegExp(`^${re}$`);
+}
+
+/**
+ * Whether a pull request that changes only `path` starts workflow `file`: pull_request in its `on:` with no paths
+ * filter, or one that takes the path (GitHub reads them in order, the last that matches deciding, a `!` one leaving it
+ * out), or paths-ignore that doesn't.
+ */
+function startsOn(file: string, path: string): boolean {
+  const lines = workflows().find((w) => w.file === file)?.lines ?? [];
+  const at = lines.findIndex((line) => /^on:/.test(line));
+  if (at < 0) return false;
+  const inline = /^on:\s*([^#]*)/.exec(lines[at]!)?.[1]?.trim();
+  if (inline) return /\bpull_request\b/.test(inline);
+  const body = under(lines, at);
+  const pr = body.findIndex((line) => /^\s+pull_request:/.test(line));
+  if (pr < 0) return false;
+  const filter = under(body, pr);
+  const list = (key: string) => {
+    const k = filter.findIndex((line) => new RegExp(`^\\s+${key}:`).test(line));
+    if (k < 0) return null;
+    return under(filter, k)
+      .filter((line) => !blank(line))
+      .map((line) => line.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, ""));
+  };
+  const paths = list("paths");
+  if (paths) {
+    let hit = false;
+    for (const p of paths) {
+      if (p.startsWith("!")) {
+        if (glob(p.slice(1)).test(path)) hit = false;
+      } else if (glob(p).test(path)) hit = true;
+    }
+    return hit;
+  }
+  return !(list("paths-ignore") ?? []).some((p) => glob(p).test(path));
+}
+
+// Chunk 51, docs#7. seedelf-verification/test-tools.sh holds the proofs' tools to their rules on fake packages, with
+// no Lean or Lake, in about ten seconds: check.sh and, since this round, its EXPECTED verdict (expected-failures.txt),
+// tally.py, Audit/'s count.py and run-all.sh, and the diag scan with its accepted list. The round grew it from 50
+// checks to 80, and it reads Seedelf/PolicyBurn.lean and PolicyMint.lean against a console recorded by line and column.
+// web-wallet.yml's covered filter leaves seedelf-verification/ out, so the proofs' pull requests stay fast, and no
+// workflow ran the script: a pull request that changed only one of those files merged with no check. So a workflow of
+// its own runs it on every pull request that changes the script or a file it reads (verification-tools.yml).
+describe("the proofs' tools' own test", () => {
+  const VERIFICATION = fileURLToPath(new URL("../../../../seedelf-verification/", import.meta.url));
+
+  /** The script and each file it reads from its folder (`$TOOLS/…`, a glob expanded), and the diag scan's
+   * accepted.txt, which the scan reads beside itself. */
+  function read(): string[] {
+    const text = readFileSync(join(VERIFICATION, "test-tools.sh"), "utf8");
+    const found = new Set(["test-tools.sh", "Audit/diag/accepted.txt"]);
+    for (const [, path] of text.matchAll(/"?\$TOOLS"?\/([\w./*-]+)/g)) {
+      const slash = path!.lastIndexOf("/");
+      const folder = slash < 0 ? "" : path!.slice(0, slash);
+      const name = path!.slice(slash + 1);
+      if (!name.includes("*")) {
+        found.add(path!);
+        continue;
+      }
+      const re = glob(name);
+      for (const f of readdirSync(join(VERIFICATION, folder))) if (re.test(f)) found.add(`${folder}/${f}`);
+    }
+    return [...found].map((f) => `seedelf-verification/${f}`).sort();
+  }
+
+  it("runs on every pull request that changes the script or a file it reads", () => {
+    const files = read();
+    // Not vacuous: the files this round's verdicts live in, and the two sources read by line and column.
+    expect(files).toEqual(
+      expect.arrayContaining([
+        "seedelf-verification/check.sh",
+        "seedelf-verification/expected-failures.txt",
+        "seedelf-verification/Audit/diag/scan-diag.py",
+        "seedelf-verification/Audit/diag/accepted.txt",
+        "seedelf-verification/Seedelf/PolicyBurn.lean",
+        "seedelf-verification/Seedelf/PolicyMint.lean",
+      ]),
+    );
+    // Not vacuous: the triggers read as GitHub reads them.
+    expect(startsOn("data-layer.yml", "seedelf-data/api/src/main.rs")).toBe(true);
+    expect(startsOn("data-layer.yml", "seedelf-verification/check.sh")).toBe(false);
+    expect(startsOn("release.yml", "seedelf-verification/check.sh")).toBe(false);
+    expect(startsOn("continuous-integration.yml", "seedelf-verification/check.sh")).toBe(true);
+
+    // The workflows with a step whose script runs test-tools.sh.
+    const running = [
+      ...new Set(
+        scripts()
+          .filter(({ lines }) => lines.some((line) => !comment(line) && /\btest-tools\.sh\b/.test(line)))
+          .map(({ where }) => where.split(":")[0]!),
+      ),
+    ];
+    const untested = files.filter((path) => !running.some((file) => startsOn(file, path)));
+    expect({ running, untested }).toEqual({ running: expect.arrayContaining([expect.any(String)]), untested: [] });
+  });
+});
+
+// Chunk 51, docs#11. data-layer.yml started on any change under seedelf-data/, so a pull request that only edited its
+// README.md, NOTES.md or deploy/README.md ran the data layer's whole check: fmt, clippy and every test. Nothing it
+// builds or tests reads a Markdown file, so its Markdown starts nothing, as the platform's doesn't in web-wallet.yml.
+describe("data-layer.yml's paths", () => {
+  const DATA = fileURLToPath(new URL("../../../../seedelf-data/", import.meta.url));
+
+  /** Every .rs file under `dir`, but build output. */
+  function rust(dir: string): string[] {
+    return readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) return ["target", ".git"].includes(name) ? [] : rust(path);
+      return name.endsWith(".rs") ? [path] : [];
+    });
+  }
+
+  it("skip a pull request that changes only Markdown under seedelf-data/, which nothing it checks reads", () => {
+    expect(startsOn("data-layer.yml", "seedelf-data/api/src/main.rs")).toBe(true);
+    expect(startsOn("data-layer.yml", "seedelf-data/deploy/edge/seedelf-data-deploy")).toBe(true);
+    expect(startsOn("data-layer.yml", "seedelf-platform/seedelf-core/src/constants.rs")).toBe(true);
+    for (const doc of ["seedelf-data/README.md", "seedelf-data/NOTES.md", "seedelf-data/deploy/README.md"]) {
+      expect(startsOn("data-layer.yml", doc), doc).toBe(false);
+    }
+    // What its Rust includes (include_str!, include_bytes!) is never Markdown, so the skip leaves no input out.
+    const included = rust(DATA).flatMap((file) =>
+      [...readFileSync(file, "utf8").matchAll(/include_(?:str|bytes)!\(\s*"([^"]+)"/g)].map(([, target]) => target!),
+    );
+    expect(included.length).toBeGreaterThan(0);
+    expect(included.filter((target) => /\.md$/i.test(target))).toEqual([]);
   });
 });
 

@@ -6,6 +6,10 @@ on:
   pull_request:
     paths:
       - "seedelf-data/**"
+      # But its Markdown, which nothing the check builds or tests reads, so a
+      # docs pull request stays fast (chunk 51, docs#11). GitHub reads these in
+      # order, the last that matches a file deciding.
+      - "!seedelf-data/**/*.md"
       - ".github/workflows/data-layer.yml"
       # Every file beside it that its build reads (include_str!). What the token pools' checks read (web wallet
       # chunk 34's 34c): the wallet's token list, built in, and the vectors, the node's box spellings (chunk 51,

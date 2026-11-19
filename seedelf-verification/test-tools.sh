@@ -362,7 +362,9 @@ burn_console "$B0" "$B1" "$V2" "$W2" "$V3" "$W3"; check 1 Demo.Burn
 
 echo "== check.sh: the folder's expected-failures.txt on the default run's console (2026-11-18)"
 # Seedelf.PolicyBurn's and PolicyMint's own sources and the folder's own list, against what Lake
-# printed for them in chunk 51's default runs.
+# printed for them in chunk 51's default runs. A change that moves a theorem in either source makes
+# this console stale, and CI says so (verification-tools.yml): record it again from the next default
+# run's console.
 make_pkg; cp "$TOOLS/expected-failures.txt" "$P/"; cp "$TOOLS/Seedelf/PolicyBurn.lean" "$TOOLS/Seedelf/PolicyMint.lean" "$P/Seedelf/"
 PB1="error: Seedelf/PolicyBurn.lean:28:89: $BITVEC"; PB2="error: Seedelf/PolicyBurn.lean:31:93: $BITVEC"
 PB3='info: Seedelf/PolicyBurn.lean:34:101: ✅ Valid'
