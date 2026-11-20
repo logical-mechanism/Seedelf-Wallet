@@ -857,8 +857,12 @@ export const runningKey = (mixes: SessionView[]) =>
     .map((m) => m.index)
     .join(",");
 
-/** A mix of the wallet's boxes again that may still spend them: no box comes back meanwhile. */
-const isMixingAgain = (s: SessionView) => !!s.mix?.again && !isOver(s) && !s.txs.some((t) => t.kind === "back");
+/**
+ * A mix of the wallet's boxes again that may still spend them: no box comes back meanwhile. The worker's word
+ * (SessionView `mixingAgain`), never a copy: the page's held the boxes after a cut chain, which spends none of them
+ * again, and let go of them where the worker still refused (the owner, 2026-11-20). Exported for its test.
+ */
+export const isMixingAgain = (s: SessionView) => !!s.mixingAgain;
 
 /** A mix whose funding the chain hasn't shown, but which may still land: it can be looked for again. */
 const unseen = (s: SessionView) => s.stage === "failed" && !s.unsent;
