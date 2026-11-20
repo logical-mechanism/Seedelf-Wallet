@@ -1,0 +1,98 @@
+--- seedelf-platform/seedelf-core/src/build.rs	2026-11-19 09:49:28.857006263 -0800
++++ seedelf-platform/seedelf-core/src/build.rs	2026-11-19 11:07:28.845055415 -0800
+@@ -3105,6 +3105,16 @@
+     Some(Some(Grown::Failed(at)))
+ }
+ 
++/// Review scratch (l7reference#1): 0 entered d, 1 built by d's singles, 2 by d's a or b, 3 by d's c, 4 by d's c at j = 0,
++/// 5 built by e after d, 6 refused after d.
++pub static REVIEW_D: [std::sync::atomic::AtomicUsize; 8] = [const { std::sync::atomic::AtomicUsize::new(0) }; 8];
++fn review_count(i: usize) {
++    REVIEW_D[i].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++}
++fn review_env(name: &str) -> bool {
++    std::env::var_os(name).is_some()
++}
++
+ /// [`select_script_inputs`] with histories known: `base` are the UTxOs
+ /// holding the tokens sent, which every choice spends, and `rest` the others,
+ /// of which those `last` says add less than nothing come after everything
+@@ -3564,6 +3574,8 @@
+     }
+ 
+     // d. 1e1b0647's own orders, as it grew them, its whole ones kept apart from the rule's.
++    review_count(0);
++    let d_off = review_env("SEEDELF_NO_PASS_D");
+     let grown_old: GrownWhole = RefCell::new(Vec::new());
+     // Its step 1 asked the first of its singles holding tokens, by the purpose's order, the smallest first, as many as
+     // its cap, counting those holding too little to be asked; those step 1 here passed by for its own cap.
+@@ -3577,9 +3589,12 @@
+         .collect();
+     // Asked as its step 1 asked them, outside any order: how they end says nothing of the orders' own (`failed`).
+     let orders_failed = failed.get();
+-    for u in old_asked {
+-        if let Some(Grown::Built(built, _)) = run(vec![u], 1, None, &grown_old) {
+-            return Ok(built);
++    if !d_off && !review_env("SEEDELF_NO_D_SINGLES") {
++        for u in old_asked {
++            if let Some(Grown::Built(built, _)) = run(vec![u], 1, None, &grown_old) {
++                review_count(1);
++                return Ok(built);
++            }
+         }
+     }
+     failed.set(orders_failed);
+@@ -3604,9 +3619,12 @@
+             std::cmp::Reverse(lovelace_of(u)),
+         )
+     });
+-    for order in [old_a, old_b] {
+-        if let Some(Grown::Built(built, _)) = run(order, 0, None, &grown_old) {
+-            return Ok(built);
++    if !d_off && !review_env("SEEDELF_NO_D_AB") {
++        for order in [old_a, old_b] {
++            if let Some(Grown::Built(built, _)) = run(order, 0, None, &grown_old) {
++                review_count(2);
++                return Ok(built);
++            }
+         }
+     }
+     // Its c: its boxes were those of ADA alone; a token pool's way back was other money, after the rest.
+@@ -3642,7 +3660,8 @@
+     // The fewest of those boxes that failed alone: as many or more fail too (a count, so a pass never skips one
+     // smaller than the fewest that failed; l5merge#2).
+     let mut old_fail: Option<usize> = None;
+-    if !old_largest.is_empty() {
++    let eager = review_env("SEEDELF_EAGER_D_PRUNE");
++    if !d_off && !old_largest.is_empty() {
+         'boxes: for j in 0..=old_boxes.len() {
+             for (money, starts) in old_rests.iter().zip(&old_rests_held) {
+                 if j > 0 && old_fail.is_some_and(|fewest| j >= fewest) {
+@@ -3666,8 +3685,14 @@
+                     run(c, j, None, &grown_old)
+                 });
+                 match ran {
+-                    Some(Grown::Built(built, _)) => return Ok(built),
+-                    Some(Grown::Failed(at)) if j > 0 && at == j => {
++                    Some(Grown::Built(built, _)) => {
++                        review_count(3);
++                        if j == 0 {
++                            review_count(4);
++                        }
++                        return Ok(built);
++                    }
++                    Some(Grown::Failed(at)) if j > 0 && (at == j || eager) => {
+                         old_fail = Some(old_fail.map_or(j, |fewest| fewest.min(j)));
+                     }
+                     _ => {}
+@@ -3678,8 +3703,10 @@
+ 
+     // e.
+     if let Some(Grown::Built(built, _)) = run(blind, 0, None, &grown) {
++        review_count(5);
+         return Ok(built);
+     }
++    review_count(6);
+     drop(run);
+     // Short with everything is refused as short, whatever failed besides, as
+     // when the search ended there.

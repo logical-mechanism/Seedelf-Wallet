@@ -1,0 +1,204 @@
+--- seedelf-platform/seedelf-core/tests/box_rule_reference_test.rs	2026-11-19 06:41:59.541180980 -0800
++++ seedelf-platform/seedelf-core/tests/box_rule_reference_test.rs	2026-11-19 07:58:42.516615798 -0800
+@@ -652,10 +652,14 @@
+     } else {
+         0
+     };
+-    let mut kinds = vec![Kind::Own, Kind::Received, Kind::Received, Kind::OwnSession];
+-    if smalls == 0 {
+-        kinds.push(Kind::OtherSession);
+-    }
++    // l6reference#1's check: another session's money may sit beside more payments than one transaction spends.
++    let mut kinds = vec![
++        Kind::Own,
++        Kind::Received,
++        Kind::Received,
++        Kind::OwnSession,
++        Kind::OtherSession,
++    ];
+     let distinct = rng.below(4) as usize;
+     for _ in 0..distinct {
+         let kind = kinds.remove(rng.below(kinds.len() as u64) as usize);
+--- seedelf-platform/seedelf-core/tests/mint_test.rs	2026-11-19 06:45:05.348971307 -0800
++++ seedelf-platform/seedelf-core/tests/mint_test.rs	2026-11-19 07:59:54.363317242 -0800
+@@ -4540,6 +4540,180 @@
+             blind.estimate().unwrap().fee.total
+         );
+     }
++
++    /// l6reference#1 (trace check): past the input limit, merge order c sorts a funding's other money by tier before
++    /// size (build.rs:3208-3215), so another session's money (tier 1) comes after every payment received (tier 0) and
++    /// is never reached within 22 inputs. A box, one of unknown making among them, is merged where a set without it
++    /// pays; within the limit order a takes that money before any box.
++    #[test]
++    fn l6reference_1_past_the_limit_a_funding_merges_no_box_the_session_money_pays_without() {
++        let w = world();
++        let fund = || Purpose::Fund {
++            session: Some("session:7".into()),
++        };
++        let seedelf = paying(1_000_000);
++        let mut wrong = Vec::new();
++
++        // A. L, a plain 9.71 ₳ box; two 8 ₳ UTxOs of another session's money; 25 payments received of 2 ₳.
++        let received: Vec<(UtxoResponse, Class)> = (0..25u8)
++            .map(|i| {
++                let u = owned(&w, 0x50 + i, 0, 2_000_000, &[]);
++                let c = received_class(&u);
++                (u, c)
++            })
++            .collect();
++        let payments: Vec<UtxoResponse> = received.iter().map(|(u, _)| u.clone()).collect();
++        let l = owned(&w, 0x30, 0, BOX, &[]);
++        let l_class = class(&format!("box:{}", l.tx_hash), Origin::Lovejoin);
++        let session: Vec<(UtxoResponse, Class)> = (0..2u64)
++            .map(|i| {
++                (
++                    owned(&w, 0x90, i, 8_000_000, &[]),
++                    class("session:3", Origin::Session),
++                )
++            })
++            .collect();
++        let session_utxos: Vec<UtxoResponse> = session.iter().map(|(u, _)| u.clone()).collect();
++        let with = |b: &[UtxoResponse], n: usize| -> Vec<UtxoResponse> {
++            b.iter().cloned().chain(payments[..n].iter().cloned()).collect()
++        };
++        for (lovelace, beside_session) in [
++            (44_500_000u64, 19usize),
++            (44_000_000, 18),
++            (43_000_000, 18),
++        ] {
++            let pay = funding(lovelace);
++            // The premises: L and 21 payments (22 inputs) don't pay 44.5 ₳; both 8 ₳ and the payments, no box, do.
++            if lovelace == 44_500_000 {
++                assert!(build::is_short(
++                    &pays_with(&w, &with(std::slice::from_ref(&l), 21), &seedelf, &pay)
++                        .unwrap_err()
++                ));
++            }
++            pays_with(&w, &with(&session_utxos, beside_session), &seedelf, &pay)
++                .expect("both 8 ₳ and the payments, no box, pay");
++            let mut known: Vec<(&UtxoResponse, Class)> = vec![(&l, l_class.clone())];
++            known.extend(session.iter().map(|(u, c)| (u, c.clone())));
++            known.extend(received.iter().map(|(u, c)| (u, c.clone())));
++            let spent = outpoints(&spent_by(&w, fund(), &known, &seedelf, &pay));
++            let sessions = session_utxos
++                .iter()
++                .filter(|u| spent.contains(&one(u)[0]))
++                .count();
++            let line = format!(
++                "A: a new session's funding of {} ₳ and its 5 ₳ collateral, 25 payments: spent {} inputs, L: {}, \
++                 {sessions} of another session's money; both 8 ₳ and {beside_session} payments pay with no box",
++                lovelace as f64 / 1e6,
++                spent.len(),
++                spent.contains(&one(&l)[0]),
++            );
++            println!("{line}");
++            if spent.contains(&one(&l)[0]) {
++                wrong.push(line);
++            }
++        }
++
++        // B. Within the input limit, order a takes that money before the box: 15 payments, a 32 ₳ funding.
++        {
++            let pay = funding(32_000_000);
++            pays_with(&w, &with(std::slice::from_ref(&l), 15), &seedelf, &pay)
++                .expect("L and the 15 pay");
++            let mut known: Vec<(&UtxoResponse, Class)> = vec![(&l, l_class.clone())];
++            known.extend(session.iter().map(|(u, c)| (u, c.clone())));
++            known.extend(received[..15].iter().map(|(u, c)| (u, c.clone())));
++            let spent = outpoints(&spent_by(&w, fund(), &known, &seedelf, &pay));
++            let sessions = session_utxos
++                .iter()
++                .filter(|u| spent.contains(&one(u)[0]))
++                .count();
++            println!(
++                "B (within the limit): a funding of 32 ₳, 15 payments: spent {} inputs, L: {}, {sessions} of another \
++                 session's money",
++                spent.len(),
++                spent.contains(&one(&l)[0]),
++            );
++            assert!(
++                !spent.contains(&one(&l)[0]) && sessions == 2,
++                "within the limit the session's money goes before the box"
++            );
++        }
++
++        // C. Seed 1245's shape: plain 24.71 ₳, mixed 9.71 ₳, one of unknown making of 4.71 ₳, a mixed token pool's way
++        // back of 14.5 ₳, plain 4.71 ₳, mixed 4.71 ₳; 5 ₳ of another session's money; a 5 ₳ payment received and 23
++        // of 2 ₳. A funding of 90.1 ₳ and its 5 ₳ collateral.
++        {
++            let boxed = |n: u8, lovelace: u64, origin: Origin, unknown: bool, token: bool| {
++                let tokens: &[(&str, u64)] = if token { &[("poolA", 1)] } else { &[] };
++                let u = owned(&w, n, 0, lovelace, tokens);
++                let id = if unknown {
++                    format!("box:{0}+unknown:{0}", u.tx_hash)
++                } else {
++                    format!("box:{}", u.tx_hash)
++                };
++                (u, class(&id, origin))
++            };
++            let boxes = [
++                boxed(0xa0, 24_710_000, Origin::Lovejoin, false, false),
++                boxed(0xa1, 9_710_000, Origin::Mixed, false, false),
++                boxed(0xa2, 4_710_000, Origin::Lovejoin, true, false),
++                boxed(0xa3, 14_500_000, Origin::Mixed, false, true),
++                boxed(0xa4, 4_710_000, Origin::Lovejoin, false, false),
++                boxed(0xa5, 4_710_000, Origin::Mixed, false, false),
++            ];
++            let unknown = boxes[2].0.clone();
++            let other_session = (
++                owned(&w, 0xb0, 0, 5_000_000, &[]),
++                class("session:3", Origin::Session),
++            );
++            let five = owned(&w, 0xb1, 0, 5_000_000, &[]);
++            let five = (five.clone(), received_class(&five));
++            let smalls: Vec<(UtxoResponse, Class)> = (0..23u8)
++                .map(|i| {
++                    let u = owned(&w, 0xc0 + i, 0, 2_000_000, &[]);
++                    let c = received_class(&u);
++                    (u, c)
++                })
++                .collect();
++            let pay = funding(90_100_000);
++            // The premise: the five other boxes, the session's 5 ₳, the 5 ₳ payment and 15 of 2 ₳ (22 inputs) pay.
++            let without: Vec<UtxoResponse> = boxes
++                .iter()
++                .filter(|(u, _)| u.tx_hash != unknown.tx_hash)
++                .map(|(u, _)| u.clone())
++                .chain([other_session.0.clone(), five.0.clone()])
++                .chain(smalls[..15].iter().map(|(u, _)| u.clone()))
++                .collect();
++            assert_eq!(without.len(), 22);
++            pays_with(&w, &without, &seedelf, &pay)
++                .expect("the five other boxes, the session's 5 ₳, the 5 ₳ payment and 15 of 2 ₳ pay");
++            let mut known: Vec<(&UtxoResponse, Class)> =
++                boxes.iter().map(|(u, c)| (u, c.clone())).collect();
++            known.push((&other_session.0, other_session.1.clone()));
++            known.push((&five.0, five.1.clone()));
++            known.extend(smalls.iter().map(|(u, c)| (u, c.clone())));
++            let spent = outpoints(&spent_by(&w, fund(), &known, &seedelf, &pay));
++            let line = format!(
++                "C (seed 1245's shape): a funding of 90.1 ₳ and its 5 ₳ collateral: spent {} inputs, the box of \
++                 unknown making: {}, the other session's 5 ₳: {}, boxes: {}",
++                spent.len(),
++                spent.contains(&one(&unknown)[0]),
++                spent.contains(&one(&other_session.0)[0]),
++                boxes
++                    .iter()
++                    .filter(|(u, _)| spent.contains(&one(u)[0]))
++                    .count(),
++            );
++            println!("{line}");
++            if spent.contains(&one(&unknown)[0]) {
++                wrong.push(line);
++            }
++        }
++        assert!(
++            wrong.is_empty(),
++            "a funding past the input limit merged a box a set without it pays:\n{}",
++            wrong.join("\n")
++        );
++    }
+ }
+ 
+ /// Where a Seedelf spend puts its change (privacy review §3.7).

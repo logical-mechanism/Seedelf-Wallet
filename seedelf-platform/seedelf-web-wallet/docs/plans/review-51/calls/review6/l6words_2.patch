@@ -1,0 +1,173 @@
+--- a/seedelf-core/src/build.rs
++++ b/seedelf-core/src/build.rs
+@@ -3226,9 +3226,17 @@
+     let same = |a: &[&UtxoResponse], b: &[&UtxoResponse]| {
+         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| std::ptr::eq(*x, *y))
+     };
++    // l6words#2 (trial fix): the other money by size alone too, its last resorts and the tokens' class among the rest,
++    // so past what one transaction spends a last resort that lets the rest pay is found before a box.
++    let mut by_size = others.clone();
++    by_size.sort_by_key(|u| (last(u), std::cmp::Reverse(lovelace_of(u))));
++    let mut by_size_tokens_last = others.clone();
++    by_size_tokens_last.sort_by_key(|u| (last(u), holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
+     let mut rests = vec![&largest];
+-    if !same(&largest, &tokens_last) {
+-        rests.push(&tokens_last);
++    for order in [&tokens_last, &by_size, &by_size_tokens_last] {
++        if !rests.iter().any(|r| same(r, order)) {
++            rests.push(order);
++        }
+     }
+     let mut blind: Vec<&UtxoResponse> = rest.iter().collect();
+     blind.sort_by_key(|u| (last(u), holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
+--- a/seedelf-core/tests/box_rule_reference_test.rs
++++ b/seedelf-core/tests/box_rule_reference_test.rs
+@@ -652,10 +652,9 @@
+     } else {
+         0
+     };
+-    let mut kinds = vec![Kind::Own, Kind::Received, Kind::Received, Kind::OwnSession];
+-    if smalls == 0 {
+-        kinds.push(Kind::OtherSession);
+-    }
++    // l6words#2: another session's money beside the small payments too.
++    let kinds_all = vec![Kind::Own, Kind::Received, Kind::Received, Kind::OwnSession, Kind::OtherSession];
++    let mut kinds = kinds_all;
+     let distinct = rng.below(4) as usize;
+     for _ in 0..distinct {
+         let kind = kinds.remove(rng.below(kinds.len() as u64) as usize);
+@@ -855,3 +854,134 @@
+     }
+     assert!(worst < std::time::Duration::from_secs(30), "{worst:?}");
+ }
++
++/// l6words#2 (round six's focused last look): one box `box_kind` of `box_lovelace`, S (another session's money, 40 ₳)
++/// and 25 payments received of 2 ₳: more small payments than one transaction spends beside a funding's last resort.
++fn l6words_2_balance(w: &World, box_kind: Kind, box_lovelace: u64, small_kind: Kind) -> Balance {
++    let mut n = 7_000_000u32;
++    let mut next = || {
++        n += 1;
++        n
++    };
++    let mut items = vec![
++        (utxo(w, next(), box_lovelace, None), box_kind),
++        (utxo(w, next(), 40 * ADA, None), Kind::OtherSession),
++    ];
++    for _ in 0..25 {
++        items.push((utxo(w, next(), 2 * ADA, None), small_kind));
++    }
++    Balance {
++        items,
++        boxes: 1,
++        distinct: 1,
++        smalls: 25,
++    }
++}
++
++/// A new session's funding of 45 ₳ and its 5 ₳ collateral. No UTxO pays alone, and no set without S pays in one
++/// transaction (22 inputs); S and a few payments do. By the box rule, the box of unknown making goes in only where the
++/// others can't pay without it (rule 2), and a box at all only where none pays (rule 3), before the purpose's order.
++#[test]
++fn l6words_2_a_funding_merges_no_box_the_others_pay_without() {
++    let w = world();
++    let spend = Spend::Fund(45 * ADA);
++    let mut wrong = Vec::new();
++    for (box_kind, box_lovelace, small_kind) in [
++        (Kind::Unknown, 4_710_000, Kind::Received),
++        (Kind::Unknown, 4_710_000, Kind::Own),
++        (Kind::Unknown, 40 * ADA, Kind::Received),
++        (Kind::Plain, 4_710_000, Kind::Received),
++    ] {
++        let balance = l6words_2_balance(&w, box_kind, box_lovelace, small_kind);
++        let available: Vec<UtxoResponse> = balance.items.iter().map(|(u, _)| u.clone()).collect();
++        let h = balance.histories(spend.purpose(), true);
++        let mut paying = Paying::new(&w, &spend);
++        // Without the box: S and the fewest payments that pay.
++        let s = &balance.items[1].0;
++        let smalls: Vec<&UtxoResponse> = balance.items[2..].iter().map(|(u, _)| u).collect();
++        let fewest = (0..=21).find(|&k| {
++            let inputs: Vec<&UtxoResponse> = std::iter::once(s).chain(smalls[..k].iter().copied()).collect();
++            paying.verdict(&inputs) == Verdict::Pays
++        });
++        let picked = paying.apart(&available, &h);
++        let box_in = picked
++            .as_ref()
++            .map(|inputs| inputs.iter().any(|u| u.tx_hash == balance.items[0].0.tx_hash));
++        println!(
++            "{box_kind:?} box of {}, 25 {small_kind:?} of 2 ₳: S and {fewest:?} of them pay without it; selection picked {}",
++            ada(box_lovelace),
++            match &picked {
++                Ok(inputs) => describe_inputs(&balance, inputs),
++                Err(e) => format!("nothing: {e}"),
++            }
++        );
++        let mut tally = Tally::default();
++        if let Err(e) = check(&w, &balance, &spend, &mut tally) {
++            wrong.push(format!(
++                "{box_kind:?} box of {}, smalls {small_kind:?} (box spent: {box_in:?}): {e}",
++                ada(box_lovelace)
++            ));
++        }
++    }
++    assert!(
++        wrong.is_empty(),
++        "the box rule breaks where a funding's last resort lets the rest pay ({} of 4):\n{}",
++        wrong.len(),
++        wrong.join("\n")
++    );
++}
++
++/// l6words#2's sibling, not the finding: c's other money sorts "joins the tokens' class" before size too. A Send of a
++/// token from B (2 ₳ and the token, money made private) and 45 ₳, beside 25 more UTxOs made private of 2 ₳ (B's class),
++/// Y (a payment received of 40 ₳) and K (a plain box of 4.71 ₳): B, Y and a few pay with no box (rule 3).
++#[test]
++fn l6words_2_sibling_a_token_send_merges_no_box_the_others_pay_without() {
++    let w = world();
++    let mut n = 7_100_000u32;
++    let mut next = || {
++        n += 1;
++        n
++    };
++    let mut items = vec![
++        (utxo(&w, next(), 4_710_000, None), Kind::Plain),
++        (utxo(&w, next(), 40 * ADA, None), Kind::Received),
++        (utxo(&w, next(), 2 * ADA, Some("tok")), Kind::Own),
++    ];
++    for _ in 0..25 {
++        items.push((utxo(&w, next(), 2 * ADA, None), Kind::Own));
++    }
++    let balance = Balance {
++        items,
++        boxes: 1,
++        distinct: 2,
++        smalls: 25,
++    };
++    let token = seedelf_core::assets::Asset::new(TOKEN_POLICY.to_string(), hex::encode("tok"), 1).unwrap();
++    let mut paying = Paying {
++        w: &w,
++        seedelfs: vec![Payment {
++            register: w.owner.clone().rerandomize().unwrap(),
++            lovelace: 45 * ADA,
++            tokens: Assets::new().add(token).unwrap(),
++        }],
++        addresses: Vec::new(),
++        known: BTreeMap::new(),
++        builds: 0,
++    };
++    let available: Vec<UtxoResponse> = balance.items.iter().map(|(u, _)| u.clone()).collect();
++    let h = balance.histories(Purpose::Pay, true);
++    let (y, b) = (&balance.items[1].0, &balance.items[2].0);
++    let smalls: Vec<&UtxoResponse> = balance.items[3..].iter().map(|(u, _)| u).collect();
++    let fewest = (0..=20).find(|&k| {
++        let inputs: Vec<&UtxoResponse> = [b, y].into_iter().chain(smalls[..k].iter().copied()).collect();
++        paying.verdict(&inputs) == Verdict::Pays
++    });
++    let picked = paying.apart(&available, &h).expect("it pays");
++    let text = describe_inputs(&balance, &picked);
++    println!("B, Y and {fewest:?} more pay with no box; selection picked {text}");
++    assert!(fewest.is_some(), "B, Y and a few should pay");
++    assert!(
++        !picked.iter().any(|u| u.tx_hash == balance.items[0].0.tx_hash),
++        "a box merged where B, Y and {fewest:?} more pay without one: {text}"
++    );
++}

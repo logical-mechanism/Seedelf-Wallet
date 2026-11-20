@@ -1,0 +1,325 @@
+{
+ "mutation": "token-boxes-not-boxes",
+ "box_rule_reference_test": {
+  "failed": [
+   "selection_picks_the_best_set_by_the_box_rule_first",
+   "selection_picks_the_best_set_by_the_box_rule_fourth",
+   "selection_picks_the_best_set_by_the_box_rule_past_the_input_limit",
+   "selection_picks_the_best_set_by_the_box_rule_second",
+   "selection_picks_the_best_set_by_the_box_rule_third"
+  ],
+  "summary": [
+   "test result: FAILED. 1 passed; 5 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.56s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.24s"
+  ]
+ }
+}
+{
+ "mutation": "core-raw-weight",
+ "box_rule_reference_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.82s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.40s"
+  ]
+ }
+}
+{
+ "mutation": "box-weight-raw",
+ "box_rule_reference_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.64s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.25s"
+  ]
+ },
+ "wasm": {
+  "failed": [
+   "api::box_order_tests::a_payments_parts_close_the_gap_with_the_boxes_the_box_rule_picks"
+  ],
+  "summary": [
+   "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.45s"
+  ]
+ }
+}
+{
+ "mutation": "no-same-count",
+ "box_rule_reference_test": {
+  "failed": [
+   "selection_picks_the_best_set_by_the_box_rule_second",
+   "selection_picks_the_best_set_by_the_box_rule_third"
+  ],
+  "summary": [
+   "test result: FAILED. 4 passed; 2 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.72s"
+  ]
+ },
+ "mint_test": {
+  "failed": [
+   "apart::a_merge_spends_as_few_boxes_as_pay_a_mixed_one_first_among_as_many",
+   "apart::at_the_same_count_a_merge_takes_mixed_boxes_first"
+  ],
+  "summary": [
+   "test result: FAILED. 67 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s"
+  ]
+ }
+}
+{
+ "mutation": "uncapped-tail",
+ "box_rule_reference_test": {
+  "failed": [
+   "selection_picks_the_best_set_by_the_box_rule_past_the_input_limit"
+  ],
+  "summary": [
+   "test result: FAILED. 5 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.64s"
+  ]
+ },
+ "mint_test": {
+  "failed": [
+   "apart::at_the_same_box_count_a_mixed_box_takes_no_more_of_the_other_inputs"
+  ],
+  "summary": [
+   "test result: FAILED. 68 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.42s"
+  ]
+ }
+}
+{
+ "mutation": "c-no-swap",
+ "box_rule_reference_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.64s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.49s"
+  ]
+ }
+}
+{
+ "mutation": "no-step1-box-rank",
+ "box_rule_reference_test": {
+  "failed": [
+   "selection_picks_the_best_set_by_the_box_rule_third"
+  ],
+  "summary": [
+   "test result: FAILED. 5 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.74s"
+  ]
+ },
+ "mint_test": {
+  "failed": [
+   "apart::one_box_paying_takes_a_plain_box_before_one_of_unknown_making_whatever_the_sizes"
+  ],
+  "summary": [
+   "test result: FAILED. 68 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s"
+  ]
+ }
+}
+{
+ "mutation": "mint-own-order-dropped",
+ "box_rule_reference_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.57s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.19s"
+  ]
+ }
+}
+{
+ "mutation": "shared-token-cap",
+ "box_rule_reference_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.54s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.31s"
+  ]
+ }
+}
+{
+ "mutation": "unknown-as-known",
+ "box_rule_reference_test": {
+  "failed": [
+   "selection_picks_the_best_set_by_the_box_rule_first",
+   "selection_picks_the_best_set_by_the_box_rule_fourth",
+   "selection_picks_the_best_set_by_the_box_rule_past_the_input_limit",
+   "selection_picks_the_best_set_by_the_box_rule_second",
+   "selection_picks_the_best_set_by_the_box_rule_third"
+  ],
+  "summary": [
+   "test result: FAILED. 1 passed; 5 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.53s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.36s"
+  ]
+ },
+ "wasm": {
+  "failed": [
+   "api::box_order_tests::a_payments_parts_close_the_gap_with_the_boxes_the_box_rule_picks",
+   "api::box_order_tests::a_payments_parts_merge_as_few_boxes_as_pay_a_box_of_unknown_making_last",
+   "api::box_order_tests::a_token_pools_way_back_is_a_box_to_a_payments_parts"
+  ],
+  "summary": [
+   "test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.58s"
+  ]
+ }
+}
+{
+ "mutation": "too-many-off-by-one",
+ "box_rule_reference_test": {
+  "failed": [
+   "selection_picks_the_best_set_by_the_box_rule_second"
+  ],
+  "summary": [
+   "test result: FAILED. 5 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.79s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.35s"
+  ]
+ }
+}
+{
+ "mutation": "unknown-first-u-loop",
+ "box_rule_reference_test": {
+  "failed": [
+   "selection_picks_the_best_set_by_the_box_rule_first",
+   "selection_picks_the_best_set_by_the_box_rule_fourth",
+   "selection_picks_the_best_set_by_the_box_rule_past_the_input_limit",
+   "selection_picks_the_best_set_by_the_box_rule_second",
+   "selection_picks_the_best_set_by_the_box_rule_third"
+  ],
+  "summary": [
+   "test result: FAILED. 1 passed; 5 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.21s"
+  ]
+ },
+ "mint_test": {
+  "failed": [
+   "apart::a_box_of_unknown_making_goes_after_money_others_paid_and_stays_a_box",
+   "apart::a_box_of_unknown_making_is_merged_only_where_the_others_cant_pay_and_then_beside_as_few_as_pay",
+   "apart::a_token_pools_way_back_is_merged_as_a_box",
+   "apart::past_one_transactions_small_utxos_a_payment_takes_a_mixed_box_before_one_of_unknown_making",
+   "apart::past_the_input_limit_a_mixed_box_still_goes_before_one_of_unknown_making"
+  ],
+  "summary": [
+   "test result: FAILED. 64 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.35s"
+  ]
+ }
+}
+{
+ "mutation": "wasm-ada-alone",
+ "box_rule_reference_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.81s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.23s"
+  ]
+ },
+ "wasm": {
+  "failed": [
+   "api::box_order_tests::a_payments_parts_close_the_gap_with_the_boxes_the_box_rule_picks",
+   "api::box_order_tests::a_token_pools_way_back_is_a_box_to_a_payments_parts"
+  ],
+  "summary": [
+   "test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.43s"
+  ]
+ }
+}
+{
+ "mutation": "wasm-raw-weight",
+ "box_rule_reference_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.09s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.62s"
+  ]
+ },
+ "wasm": {
+  "failed": [
+   "api::box_order_tests::a_payments_parts_close_the_gap_with_the_boxes_the_box_rule_picks"
+  ],
+  "summary": [
+   "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.43s"
+  ]
+ }
+}
+{
+ "mutation": "merge-u-ignores-known",
+ "box_rule_reference_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.55s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.22s"
+  ]
+ },
+ "wasm": {
+  "failed": [
+   "api::box_order_tests::a_payments_parts_close_the_gap_with_the_boxes_the_box_rule_picks",
+   "api::box_order_tests::a_payments_parts_merge_as_few_boxes_as_pay_a_box_of_unknown_making_last",
+   "api::box_order_tests::a_token_pools_way_back_is_a_box_to_a_payments_parts"
+  ],
+  "summary": [
+   "test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.54s"
+  ]
+ }
+}
+{
+ "mutation": "known-fail-zero",
+ "box_rule_reference_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.70s"
+  ]
+ },
+ "mint_test": {
+  "failed": [],
+  "summary": [
+   "test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.23s"
+  ]
+ }
+}

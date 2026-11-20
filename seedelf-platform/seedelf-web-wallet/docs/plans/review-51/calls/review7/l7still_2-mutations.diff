@@ -1,0 +1,81 @@
+--- seedelf-platform/seedelf-core/src/build.rs	2026-11-19 09:49:28.857006263 -0800
++++ seedelf-platform/seedelf-core/src/build.rs	2026-11-19 11:40:26.419808035 -0800
+@@ -3105,6 +3105,18 @@
+     Some(Some(Grown::Failed(at)))
+ }
+ 
++/// Review scratch only (l7still#2): a mutation of pass d, named in `L7S2_MUT` (comma-separated).
++fn l7s2_mut(name: &str) -> bool {
++    std::env::var("L7S2_MUT").is_ok_and(|v| v.split(',').any(|p| p == name))
++}
++
++/// Review scratch only (l7still#2): which step built, with `L7S2_TRACE` set.
++fn l7s2_trace(what: &str) {
++    if std::env::var("L7S2_TRACE").is_ok() {
++        eprintln!("l7s2: {what}");
++    }
++}
++
+ /// [`select_script_inputs`] with histories known: `base` are the UTxOs
+ /// holding the tokens sent, which every choice spends, and `rest` the others,
+ /// of which those `last` says add less than nothing come after everything
+@@ -3577,8 +3589,13 @@
+         .collect();
+     // Asked as its step 1 asked them, outside any order: how they end says nothing of the orders' own (`failed`).
+     let orders_failed = failed.get();
++    l7s2_trace("reached pass d");
+     for u in old_asked {
++        if l7s2_mut("singles") || l7s2_mut("d") {
++            continue;
++        }
+         if let Some(Grown::Built(built, _)) = run(vec![u], 1, None, &grown_old) {
++            l7s2_trace("built by d's singles");
+             return Ok(built);
+         }
+     }
+@@ -3604,8 +3621,12 @@
+             std::cmp::Reverse(lovelace_of(u)),
+         )
+     });
+-    for order in [old_a, old_b] {
++    for (i, order) in [old_a, old_b].into_iter().enumerate() {
++        if l7s2_mut("d") || l7s2_mut("ab") || (i == 0 && l7s2_mut("a")) || (i == 1 && l7s2_mut("b")) {
++            continue;
++        }
+         if let Some(Grown::Built(built, _)) = run(order, 0, None, &grown_old) {
++            l7s2_trace(if i == 0 { "built by d's a" } else { "built by d's b" });
+             return Ok(built);
+         }
+     }
+@@ -3642,7 +3663,7 @@
+     // The fewest of those boxes that failed alone: as many or more fail too (a count, so a pass never skips one
+     // smaller than the fewest that failed; l5merge#2).
+     let mut old_fail: Option<usize> = None;
+-    if !old_largest.is_empty() {
++    if !old_largest.is_empty() && !l7s2_mut("d") && !l7s2_mut("c") {
+         'boxes: for j in 0..=old_boxes.len() {
+             for (money, starts) in old_rests.iter().zip(&old_rests_held) {
+                 if j > 0 && old_fail.is_some_and(|fewest| j >= fewest) {
+@@ -3666,7 +3687,10 @@
+                     run(c, j, None, &grown_old)
+                 });
+                 match ran {
+-                    Some(Grown::Built(built, _)) => return Ok(built),
++                    Some(Grown::Built(built, _)) => {
++                        l7s2_trace(&format!("built by d's c at j = {j}"));
++                        return Ok(built);
++                    }
+                     Some(Grown::Failed(at)) if j > 0 && at == j => {
+                         old_fail = Some(old_fail.map_or(j, |fewest| fewest.min(j)));
+                     }
+@@ -3678,8 +3702,10 @@
+ 
+     // e.
+     if let Some(Grown::Built(built, _)) = run(blind, 0, None, &grown) {
++        l7s2_trace("built by e");
+         return Ok(built);
+     }
++    l7s2_trace("refused after e");
+     drop(run);
+     // Short with everything is refused as short, whatever failed besides, as
+     // when the search ended there.

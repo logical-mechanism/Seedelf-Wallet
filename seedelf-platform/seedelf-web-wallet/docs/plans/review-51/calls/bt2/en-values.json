@@ -1,0 +1,4 @@
+{
+ "histories.kind.privacy.change_one": "change from an earlier spend",
+ "histories.kind.privacy.change_other": "change from {{count}} earlier spends"
+}

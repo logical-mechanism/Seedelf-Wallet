@@ -1,0 +1,21 @@
+--- a/seedelf-core/src/build.rs
++++ b/seedelf-core/src/build.rs
+@@ -3300,6 +3300,18 @@
+         .iter()
+         .map(|u| {
+             let (weight, rank) = box_weight(params, &class(u), &[u], Weighed::InOne);
++            // Review scratch (l7reference#2): L7R2_W=ada weighs a box by its ADA, adds by what it adds (the
++            // parts' weight), seedelf by adds plus seedelf_minimum_lovelace, never more than its ADA.
++            let weight = match std::env::var("L7R2_W").as_deref() {
++                Ok("ada") => lovelace_in(u),
++                Ok("adds") => box_weight(params, &class(u), &[u], Weighed::InParts).0,
++                Ok("seedelf") if holds_tokens(u) => {
++                    let added = box_weight(params, &class(u), &[u], Weighed::InParts).0;
++                    let least = u128::from(seedelf_minimum_lovelace(params).unwrap());
++                    (added + least).min(lovelace_in(u))
++                }
++                _ => weight,
++            };
+             // One that adds no history to what the tokens sent bring is taken first among as many, as a mixed one is.
+             (
+                 weight,

@@ -1,0 +1,4 @@
+{
+ "lovejoin.stuck.privacy.private": "Paid from your private balance, one of its UTxOs of ADA alone goes into the box's own transaction, and its ADA comes back with the box, less the fee, so anyone can tie that UTxO, and where it came from, to the box. Where it can, the wallet takes one marked only Back from Lovejoin.",
+ "lovejoin.stuck.privacy.privateNamed": "Paid from your private balance, one of its UTxOs of ADA alone goes into the box's own transaction, and its ADA comes back with the box, less the fee, so anyone can tie that UTxO, and where it came from, to the box. Where it can, the wallet takes one marked only Back from Lovejoin, else one that ties no other account."
+}

@@ -1,0 +1,70 @@
+--- seedelf-platform/seedelf-core/src/build.rs	2026-11-19 13:06:39.152630951 -0800
++++ seedelf-platform/seedelf-core/src/build.rs	2026-11-19 13:56:33.735837170 -0800
+@@ -3875,6 +3875,67 @@
+             {
+                 return Ok(built);
+             }
++            // SCRATCH PROTOTYPE (l8words#1 verifier), off unless L8W_FIX is set.
++            match std::env::var("L8W_FIX").as_deref() {
++                // The finder's sketch: the other money, then the known token boxes by weight, then those of ADA alone.
++                Ok("finder") => {
++                    let (tok, ada): (Vec<&UtxoResponse>, Vec<&UtxoResponse>) =
++                        known_boxes_kept.iter().copied().partition(|b| holds_tokens(b));
++                    let order: Vec<&UtxoResponse> =
++                        by_history.iter().chain(&tok).chain(&ada).copied().collect();
++                    if let Some(Grown::Built(built, _)) = run(order, 0, None, &grown) {
++                        return Ok(built);
++                    }
++                }
++                // Each known box weighed beside a change that also keeps the tokens another known box holds, then a
++                // and c over that order.
++                Ok("shared") => {
++                    let held_by_box: Vec<Assets> = known
++                        .iter()
++                        .map(|&i| assets_of(vec![box_list[i].clone()]).map_or_else(|_| Assets::new(), |(_, t)| t))
++                        .collect();
++                    let mut shared = Assets::new();
++                    for (n, own) in held_by_box.iter().enumerate() {
++                        for item in &own.items {
++                            let same = |x: &Asset| x.policy_id == item.policy_id && x.token_name == item.token_name;
++                            let elsewhere = held_by_box
++                                .iter()
++                                .enumerate()
++                                .any(|(m, other)| m != n && other.items.iter().any(same));
++                            if elsewhere && !shared.items.iter().any(same) {
++                                shared = shared
++                                    .add(Asset {
++                                        amount: 1,
++                                        ..item.clone()
++                                    })
++                                    .unwrap_or_else(|_| shared.clone());
++                            }
++                        }
++                    }
++                    if !shared.is_empty() {
++                        let beside = Kept::new(
++                            params,
++                            kept.tokens.merge(shared).unwrap_or_else(|_| kept.tokens.clone()),
++                        );
++                        let weights_shared = weigh(&beside);
++                        let boxes_shared = of(&known_largest_first(&weights_shared));
++                        let a2: Vec<&UtxoResponse> = by_history.iter().chain(&boxes_shared).copied().collect();
++                        if let Some(Grown::Built(built, _)) = run(a2, 0, None, &grown) {
++                            return Ok(built);
++                        }
++                        for k in 1..=boxes_shared.len() {
++                            for money in rests.iter() {
++                                let c2: Vec<&UtxoResponse> =
++                                    boxes_shared[..k].iter().chain(money.iter()).copied().collect();
++                                if let Some(Grown::Built(built, _)) = run(c2, k, None, &grown) {
++                                    return Ok(built);
++                                }
++                            }
++                        }
++                    }
++                }
++                _ => {}
++            }
+         }
+         // a, and b with none of unknown making, the boxes weighed beside what their change keeps.
+         let besides_kept = &unknown_boxes_kept[..u];

@@ -1,0 +1,57 @@
+--- seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs	2026-11-19 04:22:26.169505020 -0800
++++ seedelf-web-wallet/wasm/src/lib.rs	2026-11-19 05:23:01.857024813 -0800
+@@ -4280,6 +4280,54 @@
+                 );
+             }
+         }
++
++        /// l5words#3 (a), wasm/README.md:56 "as few as pay ... in one transaction or in parts": five mixed ways back of
++        /// 4.71 ₳ (0x51 to 0x55) and one of unknown making of 24.71 ₳ (0x70); 26 ₳ owed: 0x70 and one other pay as two.
++        #[test]
++        fn l5words_3a_parts_as_few_boxes_as_pay_with_a_larger_box_of_unknown_making() {
++            let rows: Vec<(UtxoResponse, &str)> = [0x51, 0x52, 0x53, 0x54, 0x55]
++                .map(|tx| (row(tx, 4_710_000), "mixed"))
++                .into_iter()
++                .chain([(row(0x70, 24_710_000), "unplaced")])
++                .collect();
++            for purpose in [Purpose::Pay, Purpose::Fund { session: None }] {
++                let taken = order(purpose.clone(), &rows, 26_000_000);
++                println!("{purpose:?}: {taken:x?}");
++                assert!(
++                    taken[..2].contains(&0x70),
++                    "{purpose:?}: {taken:x?}: the first two that pay are not first"
++                );
++            }
++        }
++
++        /// l5words#3 (b), wasm/README.md:56 "one of unknown making ... after every other": K, a plain way back of
++        /// 4.71 ₳ (0x41); W, one of unknown making of 9.71 ₳ (0x30); X, a token pool's way back marked mixed, 9.71 ₳
++        /// and its pool's token (0x60). 12 ₳ owed.
++        #[test]
++        fn l5words_3b_parts_a_box_of_unknown_making_goes_after_a_token_pools_mixed_way_back() {
++            let mut token_box = row(0x60, 9_710_000);
++            token_box.asset_list = Some(vec![seedelf_koios::koios::Asset {
++                decimals: 0,
++                quantity: "1000".into(),
++                policy_id: "c0".repeat(28),
++                asset_name: hex::encode("tok"),
++                fingerprint: String::new(),
++            }]);
++            let rows: Vec<(UtxoResponse, &str)> = vec![
++                (row(0x41, 4_710_000), "plain"),
++                (row(0x30, 9_710_000), "unplaced"),
++                (token_box, "mixed"),
++            ];
++            for purpose in [Purpose::Pay, Purpose::Fund { session: None }] {
++                let taken = order(purpose.clone(), &rows, 12_000_000);
++                println!("{purpose:?}: {taken:x?}");
++                let at = |tx: u8| taken.iter().position(|&t| t == tx).unwrap();
++                assert!(
++                    at(0x60) < at(0x30),
++                    "{purpose:?}: {taken:x?}: the box of unknown making before the mixed one"
++                );
++            }
++        }
+     }
+ 
+     /// A payment's parts ([`in_parts`], `plan` of the UTxOs it may spend, their order, and whether it may chain) by

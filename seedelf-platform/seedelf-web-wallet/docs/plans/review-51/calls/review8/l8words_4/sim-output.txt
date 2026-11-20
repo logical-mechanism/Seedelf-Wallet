@@ -1,0 +1,126 @@
+== the block as extracted from RELEASE.md (cargo update stubbed)
+   # set the version being released
+   version="0.8.0"
+   # update the toml files
+   sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
+   sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-platform/Cargo.toml
+   sed -i '0,/^seedelf-core = ".*"/s//seedelf-core = "'${version}'"/' seedelf-platform/Cargo.toml
+   sed -i '0,/^seedelf-crypto = ".*"/s//seedelf-crypto = "'${version}'"/' seedelf-platform/Cargo.toml
+   sed -i '0,/^seedelf-display = ".*"/s//seedelf-display = "'${version}'"/' seedelf-platform/Cargo.toml
+   sed -i '0,/^seedelf-koios = ".*"/s//seedelf-koios = "'${version}'"/' seedelf-platform/Cargo.toml
+   # Cargo.lock is tracked, and CI builds with --locked: move the workspace's own entries with it
+   : cargo update skipped in the sim
+   # add, commit, and tag out
+   git add seedelf-contracts/aiken.toml seedelf-platform/Cargo.toml seedelf-platform/Cargo.lock
+   git commit -m "chore: tagging ${version} release"
+   git push origin main
+   git tag ${version}
+   git push origin ${version}
+
+== F: the finding. Fresh main, branch cli/0.9.0, the block pasted there (version 0.9.0)
+    | [cli/0.9.0 7f3b262] chore: tagging 0.9.0 release
+    |  2 files changed, 6 insertions(+), 6 deletions(-)
+    | Everything up-to-date
+    | To calls/review8/l8words_4/run/F/remote.git
+    |  * [new tag]         0.9.0 -> 0.9.0
+  remote branches: main 
+  remote: main=150a380e (M0: main at 0.8.0); tag 0.9.0=7f3b2626 (chore: tagging 0.9.0 release)
+  tag's Cargo.toml: version = "0.9.0"
+  => release.yml builds a commit main DOESN'T hold
+
+== F2: F, then the branch pushed, another PR lands, the version PR merges, and the page's
+       post-merge step is followed: git switch main && git pull --ff-only, then the block
+    | On branch main
+    | Your branch is up to date with 'origin/main'.
+    | 
+    | nothing to commit, working tree clean
+    | Everything up-to-date
+    | fatal: tag '0.9.0' already exists
+    | Everything up-to-date
+  remote branches: cli/0.9.0 main 
+  remote: main=6541de33 (Merge pull request #400 from logical-mechanism/cli/0.9.0); tag 0.9.0=7f3b2626 (chore: tagging 0.9.0 release)
+  tag's Cargo.toml: version = "0.9.0"
+  => release.yml builds a commit main holds, but not main's tip (NOT main's tip's tree)
+
+== G: the fix sketch. Block 1 (branch, no tag), the PR merges, block 2 on main
+    | Already on 'main'
+    | Your branch is up to date with 'origin/main'.
+    | Already up to date.
+    | Switched to a new branch 'cli/0.9.0'
+    | [cli/0.9.0 7f3b262] chore: tagging 0.9.0 release
+    |  2 files changed, 6 insertions(+), 6 deletions(-)
+    | To calls/review8/l8words_4/run/G/remote.git
+    |  * [new branch]      cli/0.9.0 -> cli/0.9.0
+    | branch 'cli/0.9.0' set up to track 'origin/cli/0.9.0'.
+  -- after block 1:
+  remote branches: cli/0.9.0 main 
+  remote: main=150a380e, no tag 0.9.0 => release.yml doesn't run
+    | Switched to branch 'main'
+    | Your branch is up to date with 'origin/main'.
+    | From calls/review8/l8words_4/run/G/remote
+    |    150a380..6541de3  main       -> origin/main
+    | Updating 150a380..6541de3
+    | Fast-forward
+    |  LATER                        |  1 +
+    |  seedelf-contracts/aiken.toml |  2 +-
+    |  seedelf-platform/Cargo.toml  | 10 +++++-----
+    |  3 files changed, 7 insertions(+), 6 deletions(-)
+    |  create mode 100644 LATER
+    | To calls/review8/l8words_4/run/G/remote.git
+    |  * [new tag]         0.9.0 -> 0.9.0
+  -- after the merge and block 2:
+  remote branches: cli/0.9.0 main 
+  remote: main=6541de33 (Merge pull request #400 from logical-mechanism/cli/0.9.0); tag 0.9.0=6541de33 (Merge pull request #400 from logical-mechanism/cli/0.9.0)
+  tag's Cargo.toml: version = "0.9.0"
+  => release.yml (on: push: tags '*.*.*') builds main's tip
+
+== H: the fix sketch's block 2 pasted before the PR merges (block 1 done, PR open)
+    | Switched to branch 'main'
+    | Your branch is up to date with 'origin/main'.
+    | Already up to date.
+    | To calls/review8/l8words_4/run/H/remote.git
+    |  * [new tag]         0.9.0 -> 0.9.0
+  remote branches: cli/0.9.0 main 
+  remote: main=150a380e (M0: main at 0.8.0); tag 0.9.0=150a380e (M0: main at 0.8.0)
+  tag's Cargo.toml: version = "0.8.0"
+  => release.yml (on: push: tags '*.*.*') builds main's tip
+
+== H2: as H, with block 2 guarded on main's Cargo.toml holding the version
+    | Switched to branch 'main'
+    | Your branch is up to date with 'origin/main'.
+    | Already up to date.
+    | STOP: no tag pushed (main doesn't hold 0.9.0, or a step above failed)
+  remote branches: cli/0.9.0 main 
+  remote: main=70a7eb56, no tag 0.9.0 => release.yml doesn't run
+  -- then the PR merges and the guarded block 2 is pasted again:
+    | Already on 'main'
+    | Your branch is up to date with 'origin/main'.
+    | From calls/review8/l8words_4/run/H2/remote
+    |    70a7eb5..f4c4214  main       -> origin/main
+    | Updating 70a7eb5..f4c4214
+    | Fast-forward
+    |  seedelf-contracts/aiken.toml |  2 +-
+    |  seedelf-platform/Cargo.toml  | 10 +++++-----
+    |  2 files changed, 6 insertions(+), 6 deletions(-)
+    | To calls/review8/l8words_4/run/H2/remote.git
+    |  * [new tag]         0.9.0 -> 0.9.0
+  remote branches: cli/0.9.0 main 
+  remote: main=f4c4214e (Merge pull request #400 from logical-mechanism/cli/0.9.0); tag 0.9.0=f4c4214e (Merge pull request #400 from logical-mechanism/cli/0.9.0)
+  tag's Cargo.toml: version = "0.9.0"
+  => release.yml (on: push: tags '*.*.*') builds main's tip
+
+== J: the fix sketch's block 2 in a new terminal, without its own version line (version unset), after the merge
+    | Switched to branch 'main'
+    | Your branch is up to date with 'origin/main'.
+    | From calls/review8/l8words_4/run/J/remote
+    |    70a7eb5..f4c4214  main       -> origin/main
+    | Updating 70a7eb5..f4c4214
+    | Fast-forward
+    |  seedelf-contracts/aiken.toml |  2 +-
+    |  seedelf-platform/Cargo.toml  | 10 +++++-----
+    |  2 files changed, 6 insertions(+), 6 deletions(-)
+    | 0.8.0
+    | Everything up-to-date
+    | exit 0
+  remote branches: cli/0.9.0 main 
+  remote: main=f4c4214e, no tag 0.9.0 => release.yml doesn't run

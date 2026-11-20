@@ -1,0 +1,3 @@
+{
+ "staking.warn.allLocked": "Everything in your public account is locked or can't be spent, so nothing can pay the fee. See UTxOs."
+}

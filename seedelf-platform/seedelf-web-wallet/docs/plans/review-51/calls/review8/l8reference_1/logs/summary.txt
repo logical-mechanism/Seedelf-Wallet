@@ -1,0 +1,6 @@
+== unset: exit 0, passed 496, failed 0, ignored 8 (60 s)
+== false: exit 101, passed 495, failed 1, ignored 8 (22 s)
+   apart::l8ref1_of_as_many_boxes_beside_what_as_change_keeps_the_mixed_one_goes ... FAILED
+== true: exit 101, passed 495, failed 1, ignored 8 (21 s)
+   apart::l8ref1_past_the_input_limit_of_as_many_boxes_cs_first_order_takes_the_mixed_one ... FAILED
+== done

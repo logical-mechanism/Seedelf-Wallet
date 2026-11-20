@@ -1,0 +1,5 @@
+{
+ "histories.kind.privacy.change_many": "cambio de {{count}} gastos anteriores",
+ "histories.kind.privacy.change_one": "cambio de un gasto anterior",
+ "histories.kind.privacy.change_other": "cambio de {{count}} gastos anteriores"
+}

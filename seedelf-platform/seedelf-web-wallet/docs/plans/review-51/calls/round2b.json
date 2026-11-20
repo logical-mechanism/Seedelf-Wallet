@@ -1,0 +1,194 @@
+[
+ {
+  "group": "R2-b15",
+  "items": [
+   {
+    "id": "money#1",
+    "status": "done",
+    "what": "A stranger's copy (d = 1) of a register already on chain never takes a box's class: activity.ts:493-499 (classes) gives it unknownIn(its tx) where the matched rows' merged class is a box's (origin lovejoin or mixed), so it ranks after boxes and received money and the UTxOs screen tags it Unknown. Doc comment activity.ts:458-468. Core ranks (build.rs:2491-2524) put only a box recorded as mixed first, so even an inherited plain box:<tx> no longer leads. Sibling covered by the same guard: a copy of a box's own way back.",
+    "test": "extension tests/b15-first-picks.test.ts 'never takes a box's class: a Seedelf minted from a box, copied, is Unknown, and the stealth mint takes a box [needs the rebuild]' and 'a copy of a box's own way back is Unknown too, never that box'; core seedelf-core/tests/mint_test.rs apart::a_copy_of_a_box_paid_seedelfs_register_goes_after_the_boxes (:3103)",
+    "failing_before": "HEAD (scratch copy of HEAD's extension, same 17:16 WebAssembly package): copy classed {box:bb…, lovejoin} (:266), tagged ['Back from Lovejoin'] (:269), and the stealth mint spent Mallory's 4.5 ₳ copy e7…#0 instead of box cc…/cd… (:272); a box's own copy classed box:cc… (:283). Core on HEAD: FAILED 'a stealth mint spent [c0c0…#0] with the copy classed Class { id: box:b1b1…, origin: Lovejoin }'.",
+    "passing_after": "Copy classed {unknown:e7…, unknown}, tagged ['Unknown'] (passes now); the mint's pick of box cc/cd needs the rebuilt WebAssembly (today's package refuses the 'mixed' origin). Core: passes (12/12 in mod apart).",
+    "left": "The e2e pick assertion runs only after the WebAssembly rebuild."
+   },
+   {
+    "id": "own#2",
+    "status": "done",
+    "what": "Same fix as money#1 (activity.ts:493-499). Also own#1's source fix: a box-paid stealth mint's Seedelf row and change now carry change:<mint> (origin session), so a copy of such a Seedelf inherits a session-origin class (Mint rank 5), never a box's.",
+    "test": "same tests as money#1; core mint_test a_copy_of_a_box_paid_seedelfs_register_goes_after_the_boxes covers copies classed unknown:<tx>, box:<b>+change:<mint> (Session) and an old box:<b> (Lovejoin) beside two mixed boxes",
+    "failing_before": "as money#1",
+    "passing_after": "as money#1",
+    "left": "Nothing beyond the rebuild-dependent e2e assertion."
+   },
+   {
+    "id": "money#3",
+    "status": "done",
+    "what": "A box's way back is classed by what put the box there when no mix moved it since. lovejoin.ts:2399-2408 depositSessionOf (a session chain's deposit or its collateral's tail deposit, a private Bootstrap's MixEntry, or after a restore the session whose one-time key paid a deposit Koios said made it; mixedFor === false is required so a session-paid mix's boxes never count), :2410-2419 depositsNamed, withdrawOne :8146-8178 merges sessionClass(n) (box:<w>+session:<n>, origin session) as PRIV-3 merges public:<n>; an unsure box, or one whose maker isn't known, gets unknownIn(w); the class is written whenever it isn't a plain box, so settleWithdrawing writes the same. oneTimeKeys (:6714) now returns key -> session index; someoneElsesOf takes anything with has().",
+    "test": "tests/b15-first-picks.test.ts 'one a private session deposited, its chain cut, is that session's money: a stealth mint takes a payment first', 'one a session's collateral deposited…', 'one a private Bootstrap holds…', 'after a restore, one a deposit of one of the phrase's one-time keys put in…' (key 3 -> session:3), 'one whose making the wallet can't tell, brought back anyway, is Unknown'; core mint_test apart::a_box_its_own_session_deposited_goes_after_received_money (:3045); flipped pin lovejoin-someone-else.test.ts:256-259",
+    "failing_before": "HEAD: each way back's origin undefined (:114, :134, :150, :162, :175), and the stealth mint spent the session box's way back 2f80…#0 instead of Bob's 60 ₳ b0…#0 (:116). Core test passes on HEAD (pins core's side).",
+    "passing_after": "origins box:<w>+session:2 / +session:0 / +session:4 / +session:3 and unknown:<w>; the stealth mint spends Bob's payment, with today's WebAssembly package too.",
+    "left": "Entries written before this round (1.8.x retired-pool runs, earlier anyway presses) stay box:<tx> and, by answer 4, rank after received money."
+   },
+   {
+    "id": "own#4",
+    "status": "done",
+    "what": "Same fix as money#3, including the collateral tail box (depositAccountOf's c.deposit-only gap is not copied), the restore case by one-time key index, and the unsure box (unknownIn alone, never merged with boxFrom).",
+    "test": "as money#3; lovejoin-someone-else.test.ts own-deposit case now expects {id: box:<own>+session:0, origin: session}",
+    "failing_before": "as money#3; lovejoin-someone-else pinned origin undefined",
+    "passing_after": "as money#3",
+    "left": "Trade-off the verifiers named: an Unknown way back is Pay rank 3, tier 0, so a Send may merge it sooner than it would a box."
+   },
+   {
+    "id": "time#1",
+    "status": "done",
+    "what": "Answer 4: only a box recorded as mixed ranks first. Core build.rs:2431 new Origin::Mixed; Purpose::Mint (:2494-2504) Mixed 0, Received 1, Lovejoin 2, Unknown 3, Own 4, Session 5 (plain boxes after Received, as before B15); Pay and Fund rank Mixed with Lovejoin (:2491, :2510); tier() unchanged in effect (:2524, both 2). WebAssembly lib.rs:2154 reads origin 'mixed'. Worker: histories.ts:64 mixedBox (id box:<w>, origin mixed; merged() never yields it, so any merge or spend's change reads lovejoin again), isHistoryClass accepts it (:126); lovejoin.ts:2427-2432 mixedBoxOf (a chain's leaf made by a mix, a kept leaf, or no record and Koios said a mix made it; never a deposit's box, a Bootstrap's/seed's leaves included, never a chain's own box short of its leaves); withdrawOne writes mixedBox for it; the hatch's private payer (:8085) takes mixed boxes first as it did boxes.",
+    "test": "tests/b15-first-picks.test.ts 'one a chain's last mix left is marked as a box a mix moved', 'one Koios says a mix made, with no record of the wallet's, is marked…', 'one a chain's own mix made short of its last mixes is a box with no such mark' (pin), 'brought back before this round, it goes after a payment received for a stealth mint [needs the rebuild]'; copied-register-payment (b) now records the box as mixed; core apart::a_box_not_recorded_as_mixed_goes_after_received_money (:3020); WebAssembly api::class_spelling_tests::a_box_a_mix_brought_back_is_read_apart_from_one_with_no_such_record",
+    "failing_before": "HEAD: leaf and Koios-mixed way backs had no origin (:190, :200); the old box was the stealth mint's pick bb…#0 over Bob's (:361). Core HEAD: FAILED left [1010…#0] (old box) right [0202…#0]. WebAssembly HEAD: FAILED 'mixed isn't where a UTxO's money came from'.",
+    "passing_after": "Leaf and Koios-mixed way backs are {box:<w>, mixed}; core and WebAssembly tests pass; the two e2e mint picks need the rebuild.",
+    "left": "Old box:<tx> entries can't be told apart: they rank after received money (answer 4)."
+   },
+   {
+    "id": "still#1",
+    "status": "done",
+    "what": "Same root and fix as time#1 and money#3: a never-mixed own box comes back as its session's money (or Unknown), and only a box recorded as mixed ranks first for Purpose::Mint. A chain's own box short of its leaves stays a plain box with no mark (as PRIV-3 keeps a public mix's outputs), so it ranks after received money.",
+    "test": "as time#1 and money#3; core apart::a_box_its_own_session_deposited_goes_after_received_money",
+    "failing_before": "as time#1 / money#3",
+    "passing_after": "as time#1 / money#3",
+    "left": "The verifiers leaned to classing a chain's own short-of-leaves box as session money; the spec said deposits only, so it's a plain box (Mint rank 2)."
+   },
+   {
+    "id": "money#2",
+    "status": "done",
+    "what": "Answer 2: each wallet spend's change carries the link it made. histories.ts:79 leftBy(tx) = part change:<tx>, origin session (no new core origin), tagged Change (:170, histories.tag.change); originOf maps change: to session (:115), and WebAssembly origin_of does the same (lib.rs:2177-2181). Written in mint.ts:135 (stealth mint, so its Seedelf row too), lovejoin-launch.ts:364 (both builds of a private start), transfer.ts:171 (each part of a private Send), withdraw.ts:152-167 (Make public: public:<n> for each of the user's own accounts paid, change:<tx> where anyone else is paid) and withdraw.ts:220 (a removal into the private balance). A funding's already carried sessionClass; a public Send into the user's own Seedelf already keeps madePrivate(from) (send.ts:185). Carries between parts are unchanged.",
+    "test": "tests/b15-first-picks.test.ts 'a stealth mint's change names the mint: the next stealth mint takes a payment received first', 'after a stealth mint from a box a mix brought back, the next takes another such box, then a payment, never its change [needs the rebuild]', 'a Make public to someone else's address, and a private Send, leave change naming their spend', 'a Seedelf removed into the private balance leaves what it held naming the removal'; lovejoin-flows.test.ts 'starts a pool from the private balance…' (kept origin and bare origin name their build); core apart::a_second_stealth_mint_takes_received_money_before_the_first_ones_change; WebAssembly money_a_spend_of_the_wallets_left_merges_as_a_sessions",
+    "failing_before": "HEAD: mint #2 spent mint #1's change 4917…#1 instead of Carol's c0…#0 (:299); kept origins had no change part (:294, :308, :349, :352, removal :370); lovejoin-flows: expected ['unknown'] to include 'change:4e81…'. Core HEAD: FAILED left [0c0c…#1] (change classed box:0b…). WebAssembly HEAD: origin_of('change:…') = 'unknown'.",
+    "passing_after": "All pass but the box-paid e2e case, which needs the rebuild.",
+    "left": "Change written before this round keeps its inputs' history only (received-paid change ranks as received, as in 1.9.1). The review note counts no 'change' kind: two classes that differ only by change parts get a note naming just their shared kinds (true, clumsy); a kind of its own would need a new .privacy. string."
+   },
+   {
+    "id": "own#1",
+    "status": "done",
+    "what": "Same fix as money#2; a Make public to the user's own account adds that account's tie (madePrivate(n), origin own), so Mint and Fund rank its change with money made private (Mint 4, Fund 4).",
+    "test": "tests/b15-first-picks.test.ts 'a Make public to the user's own account leaves that account's money: a funding takes a payment received first'; core apart::a_funding_takes_received_money_before_a_make_publics_change (:3134); transfer.test.ts and payment-parts-review-fixes.test.ts pins updated to include change:<tx>",
+    "failing_before": "HEAD: kept origin {received:c0…, received} (:329) and the swap's funding spent the Make public's change f075…#1 instead of Bob's 60 ₳ (:338). Core test passes on HEAD (pins core's side).",
+    "passing_after": "origin {public:0+received:c0…, own}; the funding spends Bob's payment (today's package too).",
+    "left": "Nothing."
+   }
+  ],
+  "strings": [
+   {
+    "key": "histories.tag.change",
+    "en": "Change",
+    "es": "Cambio",
+    "ja": "おつり",
+    "critical": false,
+    "change": "new"
+   }
+  ],
+  "policy_facts": [
+   "The sealed Seedelf history now keeps, for what each spend of the wallet's own leaves in the private balance (a stealth mint's change and its Seedelf, a private pool start's change, a Send's or Make public's change, a removed Seedelf's ADA), a part naming that spend's transaction (change:<tx>). For a Make public to one of the user's own public accounts, it keeps that account (public:<n>) instead.",
+   "For a box's way back (a lovejoin-withdraw entry), the history now keeps whether the wallet recorded a mix moving that box (origin 'mixed'). Otherwise it keeps what put the box there: the private session whose deposit did (session:<n>), or Unknown (unknown:<tx>) where the wallet can't tell. After a restore the session comes from which of the phrase's one-time keys paid the deposit, derived on the device.",
+   "Nothing new is sent and no request is added. Only on-device sealed values change, so a stealth mint, a pool start and a funding take money others paid, and a box a mix moved, before such change.",
+   "Written as two sentences in the 18 November 2026 entry, privacy-policy.md:93, right after the site-signed-note sentence (no new date). privacy.md is updated at :81, :168, :171, :172, :175, :176, the new Lovejoin bullet at :434, and :467."
+  ],
+  "needs_wasm_rebuild": [
+   "seedelf-platform/seedelf-web-wallet/extension/tests/b15-first-picks.test.ts: 'never takes a box's class: a Seedelf minted from a box, copied, is Unknown, and the stealth mint takes a box [needs the rebuild]'",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/b15-first-picks.test.ts: 'after a stealth mint from a box a mix brought back, the next takes another such box, then a payment, never its change [needs the rebuild]'",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/b15-first-picks.test.ts: 'brought back before this round, it goes after a payment received for a stealth mint [needs the rebuild]'",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/copied-register-payment.test.ts: '(b) takes a box back from Lovejoin that pays alone before a payment received, for a stealth mint'"
+  ],
+  "files": [
+   "seedelf-platform/seedelf-core/src/build.rs",
+   "seedelf-platform/seedelf-core/tests/mint_test.rs",
+   "seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs",
+   "seedelf-platform/seedelf-web-wallet/wasm/README.md",
+   "seedelf-platform/seedelf-web-wallet/extension/src/shared/histories.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/activity.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/mint.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/transfer.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/withdraw.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin-launch.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/i18n/translations/en.json",
+   "seedelf-platform/seedelf-web-wallet/extension/src/i18n/translations/es.json",
+   "seedelf-platform/seedelf-web-wallet/extension/src/i18n/translations/ja.json",
+   "seedelf-platform/seedelf-web-wallet/docs/i18n/es-provenance.json",
+   "seedelf-platform/seedelf-web-wallet/docs/i18n/ja-provenance.json",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/b15-first-picks.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/copied-register-payment.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/lovejoin-someone-else.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/lovejoin-crediting-review-fixes.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/lovejoin-flows.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/transfer.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/payment-parts-review-fixes.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/i18n-critical-helpers.test.ts",
+   "seedelf-platform/seedelf-web-wallet/docs/privacy.md",
+   "seedelf-platform/seedelf-web-wallet/docs/architecture.md",
+   "seedelf-platform/seedelf-web-wallet/docs/flows.md",
+   "seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md"
+  ],
+  "notes": "Representations chosen, picked for the least new surface:\n(1) Answer 4, a box a mix moved: a new origin, 'mixed' (core Origin::Mixed, WebAssembly histories() maps it). The id stays box:<w>, so the tags, the review notes' box count and every box: check keep working. The origin is set only on the way back itself (mixedBox). merged() and WebAssembly merged_class work the origin out from the id's parts and never yield 'mixed', so any merge or spend's change of such a box reads lovejoin again. Plain box:<tx>, as in every older entry, is Mint rank 2, after Received. tier() still merges both last.\n(2) Answer 2, the change a spend leaves: no new core origin. A part change:<tx> with origin session (Mint 5; Fund 5 at tier 1; Pay 1), as elsewhere:<tx> already does. A Make public to the user's own account uses that account's madePrivate(n) instead. The UTxOs screen gets a 'Change' tag (new key histories.tag.change, a shared tag word like the others, listed in i18n-critical-helpers' SHARED_WORDS, provenance 'machine').\n\nEvidence:\n- Rust (stage 1 on HEAD's code): 3 core apart:: tests and 2 WebAssembly class_spelling_tests failed; after the fix they pass.\n- Core suite: 440 passed, 0 failed. WebAssembly crate: 378 passed, 0 failed. clippy -D warnings is clean on core and the WebAssembly; rustfmt --check is clean on build.rs, mint_test.rs and lib.rs; seedelf-cli still checks.\n- TypeScript before: run against HEAD's extension source in a scratch copy, with the same WebAssembly package; logs are in the scratchpad's calls/work/R2-b15 folder.\n- tsc is clean. The 14 touched files run the same in the default build and with VITE_ENABLE_MAINNET=false: 308 pass, only the 4 rebuild-dependent tests fail.\n- Full Vitest suite: 3829 passed, 14 failed. Those 14 are my 4 rebuild tests plus 10 in dapp-metadata-hash, dapp-register-on-chain and site-payment-own-seedelf. Those 10 fail the same way on HEAD's code: they are R2-sign's sign#1 tests waiting for the rebuild, not mine.\n\nShared files with other fixers' hunks (anchored edits only):\n- lovejoin.ts: own#3's comment on someoneElsesOf is another fixer's.\n- build.rs: R2-words rewrote the Purpose::Mint doc; I changed only 'a box back from Lovejoin' to 'a box back from a mix (Origin::Mixed)'.\n- privacy.md, architecture.md, flows.md, privacy-policy.md and wasm/README.md hold others' edits too.\n- contract-scan.ts, pending.ts and two untracked tests in the tree are not mine.\n\nFor the lead:\n- Core's public Origin enum gains a variant, inside the unreleased 0.8.0 API change. Versions are untouched.\n- Residue:\n  - Entries written before this round can't be re-classed without a lookup. Old box:<tx> ranks after Received, by answer 4. Old change keeps its inputs' history only.\n  - The review note names no 'change' kind: two classes that differ only by change parts read as their shared kinds (true, but clumsy).\n  - An Unknown way back is Pay tier 0, so a Send merges it sooner than it would a box.\n- privacy.md:107 and mint.privacy.fromPrivate are R2-words' sentences and I left them as they are."
+ },
+ {
+  "group": "R2-words",
+  "items": [
+   {
+    "id": "own#3",
+    "status": "done",
+    "what": "Words only, per the owner's answer (3). Every promise that a box back from a mix can't be followed now says what holds: if someone puts a box in under your key and then mixes it themselves, the wallet reads it as your own mixed box, so they can still follow it. Each edit is anchored to the claim alone, and the rank clauses are left to R2-b15. (1) privacy.md:107 now reads \"No payer knows a box back from a mix, but one who put it in under your key and mixed it themselves (*Lovejoin*), so…\". (2) privacy.md:407 (What it hides) adds \"nor from whoever put a box in under your key and mixed it themselves (below)\". (3) privacy.md:412 drops \"so no mix of yours is tied to them by it\" and now reads \"Mix my boxes again leaves such a box out (…), but not once they've mixed it themselves: it then reads as your own mixed box, so they can still follow it, into Mix my boxes again, back into your private balance and on to whatever it pays for.\" (4) privacy.md:464 adds \"One they've mixed themselves since reads as yours, and is taken.\" (5) privacy-policy.md:93, the 18 November entry with its date kept, adds after \"…takes it too.\": \"One they then mix themselves reads as yours, though, so they can still follow it.\" (6) privacy-policy.md:69, the Lovejoin paragraph, makes the same promise and gets the same sentence. (7) architecture.md:137 adds \"which no payer knows but one who put it in under the wallet's key and mixed it themselves (own#3)\". (8) architecture.md:707 (\"none: a deposit made it\") adds a sentence: all of it holds only while no mix has moved the box; nothing traces a mix's box inputs, so the box the depositor's own mix makes is read as any mixed box, Mix my boxes again takes it, it comes back as a box, and they can follow it. (9) architecture.md:741 adds \"that no mix has moved since (…; one they mixed themselves reads as the wallet's own, own#3)\". (10) flows.md:518 adds \"with no mix since\" and \"; one its depositor mixed themselves reads as the wallet's own, and is taken (own#3)\". (11) flows.md:519 adds the same limit. (12) build.rs:2468-2473, the Purpose::Mint doc, now reads \"which no payer knows but one who put it in under the wallet's key and mixed it themselves, since nothing tells that box from the wallet's own (chunk 51, own#3)\". (13) mint_test.rs:2959-2965, the B15 test's doc comment, gets the same qualifier. Sibling: the doc comment of someoneElsesOf in lovejoin.ts (now about :2728-2730) adds that a box a mix made is never one of these. No UI string changed, because none is false: the lovejoin.warn.notMixed.someoneElse_*, lj.privacy.someoneElse and lovejoin.privateAnyway.privacy.someoneElse keys describe only boxes the wallet shows as someone else's. mint.privacy.fromPrivate is about the public account. lovejoin.privacy.seen is a general line about the user's own boxes and stays; the docs carry the exception.",
+    "test": "None: words only. I checked them against the code on this tree. madeBy marks a box a mix made as mixed and keeps none of that mix's box inputs. depositsOf requires mixedFor === false, so someoneElsesOf never names such a box. withdrawOne then classes its way back as a box. R2-b15's new Origin::Mixed, ranked 0 for Mint, is a class such a box can get. The new words (\"reads as your own mixed box… on to whatever it pays for\") hold whichever rank R2-b15 settles on. rustfmt --check passed on build.rs and mint_test.rs, and clippy -p seedelf-core --all-targets -D warnings passed with R2-b15's work in progress in the tree.",
+    "failing_before": "n/a (words only)",
+    "passing_after": "n/a (words only). tsc --noEmit passes, and the full extension suite is unaffected.",
+    "left": "If R2-b15 rewrites the Purpose::Mint doc, the rank clause at privacy.md:107 or architecture.md:137 for answers 2 and 4, the own#3 qualifier must stay in. Each hunk of mine is the clause quoted above."
+   },
+   {
+    "id": "own#5",
+    "status": "done",
+    "what": "Took the finding's first option cleanly, so the session cache of spenders is gone and nothing new is kept. In contract-scan.ts, readIndexView pins the phrase in its first turn (phrasePin, :274). Then, when its answer names a spend of the wallet's own rows at or below the answer's cursor (one this read folds in and no later answer will name), it reads the view's own rows in one more turn of the wallet's queue (`same`-checked, via the new ownedAtTip at :344) and calls deps.activity.arrived(network, owned, pin, spentBy) (:372-383). It does this before sealing the cursor, so a lock in between fails the seal too and the next answer names the spend again. Removed: Kept.spentBy, SPENT_BY_KEPT, withSpentBy and the Koios read's carry of it. viewOf no longer returns it. ContractView.spentBy is now this answer's only (:413), and balances.ts still hands it to its own arrived(). ScanDeps gains activity?: Pick<ActivityService, \"arrived\"> (:68), which every production caller's deps already carry (BalanceService, the spends deps, sessions, Lovejoin). The header comment is updated. Docs: architecture.md:148 says how it works now, architecture.md:420's storage row for seedelf.contract.<network> is back to its wording before the cache, and flows.md:110 now says what another profile's spend left is noted by whichever index read takes that spend in for good. privacy.md:177 and the policy are now true as written.",
+    "test": "tests/spender-across-lock.test.ts: \"still knows who made the change after the lock, and keeps no record of who spent the wallet's rows\", plus a control with no lock. The fold test that G6a's another-profile-spend.test.ts pins (\"still knows who made the change when another read folded the spend in before the balance reading\") still reads another profile's spend as the phrase's own with the cache gone. Both run in the default build and with VITE_ENABLE_MAINNET=false.",
+    "failing_before": "× still knows who made the change after the lock…: 'nothing about the spenders is kept in the session's copy of the view: expected { …(1) } to be undefined'; 'Activity … expected Received to be Already in your private balance'; 'C is ranked … expected received to be session'; 'the UTxOs screen … expected [ Received ] to not include Received'; 'the stealth mint … expected fb…#2 to be e3…#0'. Tests 1 failed | 1 passed (2).",
+    "passing_after": "Tests 5 passed (5), this file with another-profile-spend.test.ts, in both builds. Also passing: contract-scan, private-index, balances, feed, restore-scan, remove-wallet-reading, incoming, copied-register-payment and history-classes (156 passed), and 13 Lovejoin and sessions files (359 passed). Full suite: 3816 passed, 10 failed. All 10 failures are in R2-sign's three files that wait for the WebAssembly rebuild: dapp-metadata-hash 6, dapp-register-on-chain 2, site-payment-own-seedelf 2. The pkg was built at 17:16, before 0f1d9d27.",
+    "left": "Nothing. One narrow residue: if arrived()'s sealed write fails for a reason other than a lock and the seal then succeeds, that one spender is lost. A store that refuses the one almost always refuses the other. contract-scan.ts now calls activity.arrived too, so if R2-b15 changes arrived()'s signature, that call needs the same change. It hasn't changed as of the end of my run."
+   },
+   {
+    "id": "docs#3",
+    "status": "done",
+    "what": "Settled by own#5's first option. The session-storage record of who spent the wallet's UTxOs, which docs#3 found undisclosed, no longer exists. Nothing new is kept, so the decision's \"no record\" holds. No policy clause, no change to row 16, and nothing for privacy.md's On this device. architecture.md's storage row for seedelf.contract.<network> is restored (no spentBy, no newest 100).",
+    "test": "In tests/spender-across-lock.test.ts, the assertion \"nothing about the spenders is kept in the session's copy of the view\": seedelf.contract.preprod holds no spentBy after the read that named F_B.",
+    "failing_before": "expected { …(1) } to be undefined (the session view held {fb…: [a5…#0]})",
+    "passing_after": "passes, in the default build and with VITE_ENABLE_MAINNET=false",
+    "left": "none"
+   },
+   {
+    "id": "own#6",
+    "status": "done",
+    "what": "pending.ts:850-852 and :941: when a maybe-sent payment settles, seen on chain or sent again and taken, both Seedelf history writes now pass settleNow's `pin` to activity.sent, so they're pinned like the settle's turns. That covers gap-g8#2's move-in for a Send to the user's own Seedelf and every Seedelf kind. Under another phrase, update() throws WalletLocked, the existing catch swallows it, and nothing is written. The comment at :830-832 is now true. Siblings: every other history write was already pinned (balances' two arrived calls, pending:603, dapp's signedInto, sessions' three, Lovejoin's two), and contract-scan's new arrived call is pinned too.",
+    "test": "tests/settle-history-pinned.test.ts: \"seen on chain: its move-in is never sealed into the next phrase's history\" and \"sent again and taken: its move-in is never sealed into the next phrase's history\", plus a control under the payment's own phrase.",
+    "failing_before": "× seen on chain… × sent again and taken…: \"A's move-in in B's sealed history: expected [ { kind: 'move-in', lovelace: '50000000', fee: '178349', origin: { id: 'public:0', origin: 'own' }, bySend: true, … } ] to deeply equal []\". Tests 2 failed | 1 passed (3).",
+    "passing_after": "Tests 3 passed (3), in the default build and with VITE_ENABLE_MAINNET=false. maybe-sent, remove-wallet, remove-wallet-reading, send-own-seedelf and settle-across-lock pass, as does the full suite apart from R2-sign's rebuild-pending files.",
+    "left": "none"
+   }
+  ],
+  "strings": [],
+  "policy_facts": [
+   "own#3, words only (owner's answer 3): the privacy policy now says, in the 18 November 2026 Changes entry (date unchanged) and in the Lovejoin paragraph (line 69), that a box someone put in under your Seedelf's key and then mixed themselves reads as yours, so they can still follow it. The task told me to narrow the entry, so I wrote both sentences myself. Nothing the wallet sends or keeps changed.",
+   "own#5 and docs#3: nothing new is kept. gap-g9#1's session-storage cache of which transactions spent your private UTxOs (never released) is removed. The read that takes such a spend in now notes its change in the sealed Seedelf history, which the policy already covers. No Changes line is needed, and row 16 (Which Seedelf UTxOs are yours) stays as it is.",
+   "own#6: no change to what the wallet sends, keeps or reveals. A settled payment's history entry is just no longer written under another phrase."
+  ],
+  "needs_wasm_rebuild": [],
+  "files": [
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/pending.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/contract-scan.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/settle-history-pinned.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/spender-across-lock.test.ts",
+   "seedelf-platform/seedelf-web-wallet/docs/privacy.md",
+   "seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md",
+   "seedelf-platform/seedelf-web-wallet/docs/architecture.md",
+   "seedelf-platform/seedelf-web-wallet/docs/flows.md",
+   "seedelf-platform/seedelf-core/src/build.rs",
+   "seedelf-platform/seedelf-core/tests/mint_test.rs"
+  ],
+  "notes": "All four items are done, and no UI string changed. pending.ts, contract-scan.ts and the two new test files are mine alone. The other seven files also hold R2-b15's in-progress hunks, so commit by hunk. Mine are: build.rs, the Purpose::Mint doc lines only (Origin::Mixed and the rank changes are R2-b15's); mint_test.rs, only the doc comment of a_stealth_mint_takes_a_box_that_pays_alone_before_received_money; lovejoin.ts, only someoneElsesOf's doc comment (about :2728); privacy.md :107 (its first clause), :407, :412 and :464; privacy-policy.md, the two sentences \\\"One they then mix themselves reads as yours, though, so they can still follow it.\\\" in the 18 November entry and the Lovejoin paragraph; architecture.md :137 (one clause), :148, the :420 storage row, :707 (one sentence) and :741 (one clause); flows.md :110, :518 and :519. Every edit was anchored, and every own#3 hunk was still in place at the end of my run. contract-scan.ts now calls activity.arrived(network, owned, pin, spentBy) as well; R2-b15 had not changed arrived()'s signature by the end. Checks: tsc --noEmit passes on the current shared tree. rustfmt --check and clippy -p seedelf-core --all-targets --locked -D warnings pass; my Rust edits are comments only. Full vitest run: 3816 passed, 10 failed, and all 10 are R2-sign's tests waiting for the WebAssembly rebuild (dapp-metadata-hash 6, dapp-register-on-chain 2, site-payment-own-seedelf 2), matching R2-sign's own list. Run logs are in calls/work/R2-words/ (own6-before.txt, own5-before.txt, own5-after.txt, related1.txt, related2.txt, full-default.txt, clippy-core.txt). Nothing committed.\""
+ }
+]

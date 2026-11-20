@@ -1,0 +1,4 @@
+{
+ "lovejoin.stuck.privacy.private": "Si pagas con tu saldo privado, uno de sus UTxO solo de ADA entra en la propia transacción de la caja, y su ADA vuelve con la caja, menos la comisión, así que cualquiera puede vincular ese UTxO, y de dónde vino, con la caja. Siempre que puede, la billetera usa uno marcado solo como “De vuelta de Lovejoin”.",
+ "lovejoin.stuck.privacy.privateNamed": "Si pagas con tu saldo privado, uno de sus UTxO solo de ADA entra en la propia transacción de la caja, y su ADA vuelve con la caja, menos la comisión, así que cualquiera puede vincular ese UTxO, y de dónde vino, con la caja. Siempre que puede, la billetera usa uno marcado solo como “De vuelta de Lovejoin”; si no, uno que no vincule ninguna otra cuenta."
+}

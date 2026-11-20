@@ -1,0 +1,3 @@
+{
+ "staking.warn.allLocked": "Todo lo que hay en tu cuenta pública está bloqueado o no se puede gastar, así que nada puede pagar la comisión. Revísalo en UTxOs."
+}

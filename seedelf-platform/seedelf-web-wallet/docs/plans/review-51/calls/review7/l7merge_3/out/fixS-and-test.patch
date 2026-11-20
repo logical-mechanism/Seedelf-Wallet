@@ -1,0 +1,340 @@
+--- seedelf-platform/seedelf-core/src/build.rs	2026-11-19 09:49:28.857006263 -0800
++++ seedelf-platform/seedelf-core/src/build.rs	2026-11-19 11:22:53.205861936 -0800
+@@ -3161,6 +3161,10 @@
+     // since every input's computation is guessed alike, so none is built again (chunk 51, round six: the box rule's
+     // orders reach that count often where a payment is too large for one transaction).
+     let too_many_at: Cell<Option<usize>> = Cell::new(None);
++    // L7FIX: every caller's attempt prices each input at SPEND_BUDGET_GUESS (`estimate`), so more inputs than that
++    // fits are refused as TooMany by their count alone: refused so here, as the attempt would, without building them.
++    let guessed_most = (MAX_TX_BUDGET.steps / SPEND_BUDGET_GUESS.steps)
++        .min(MAX_TX_BUDGET.mem / SPEND_BUDGET_GUESS.mem) as usize;
+     let mut try_with = |extra: &[&UtxoResponse]| -> Tried<T> {
+         let lovelace = extra.iter().map(|u| lovelace_in(u)).sum::<u128>();
+         if !asked(lovelace) || (base.is_empty() && extra.is_empty()) {
+@@ -3169,12 +3173,18 @@
+         if too_many_at.get().is_some_and(|at| extra.len() >= at) {
+             return Tried::Failed;
+         }
+-        let selected: Vec<UtxoResponse> = base
+-            .iter()
+-            .cloned()
+-            .chain(extra.iter().map(|u| (*u).clone()))
+-            .collect();
+-        match attempt(&selected) {
++        let count = base.len() + extra.len();
++        let tried = if count > guessed_most {
++            Err(TooMany(count).into())
++        } else {
++            let selected: Vec<UtxoResponse> = base
++                .iter()
++                .cloned()
++                .chain(extra.iter().map(|u| (*u).clone()))
++                .collect();
++            attempt(&selected)
++        };
++        match tried {
+             Ok(built) => Tried::Built(built),
+             Err(e) if e.downcast_ref::<NotEnough>().is_some() => {
+                 not_enough = Some(e);
+@@ -4772,3 +4782,301 @@
+     }
+     Err(last_error.unwrap_or_else(|| ACCOUNT_MINT_SHORT.into()))
+ }
++
++/// Chunk 51, round seven's last look (l7merge#3): a payment too large for one transaction, over hundreds of small
++/// UTxOs, is refused as too many only after hundreds of attempts that the guessed budgets refuse by their count alone.
++/// Each input is guessed at [`SPEND_BUDGET_GUESS`], so no choice of more than 22 fits [`MAX_TX_BUDGET`]; yet each of
++/// `apart`'s orders is built at its first start that holds what the spend pays out, hundreds of inputs, until the
++/// count `too_many_at` keeps settles there. A payment's parts run the search again over what's left before each part.
++/// The refusal must stay `TooMany`, so the wallet's parts still take the payment.
++#[cfg(test)]
++mod l7merge_3 {
++    use super::*;
++    use pallas_addresses::{
++        Network, PaymentKeyHash, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
++    };
++    use seedelf_crypto::schnorr::random_scalar;
++    use seedelf_koios::koios::{Asset as KoiosAsset, InlineDatum};
++    use serde_json::json;
++
++    const ADA: u64 = 1_000_000;
++    const TOKEN_POLICY: &str = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0";
++
++    struct World {
++        chain: Chain,
++        owner: Register,
++        signer: Hash<28>,
++        to: Address,
++    }
++
++    fn world() -> World {
++        let rows: Value =
++            serde_json::from_str(include_str!("../tests/fixtures/epoch_params.json")).unwrap();
++        World {
++            chain: Chain {
++                params: ProtocolParameters::from_koios(&rows[0]).unwrap(),
++                network_flag: true,
++                config: crate::constants::get_config(1, true).unwrap(),
++            },
++            owner: Register::create(random_scalar()).unwrap(),
++            signer: Hasher::<224>::hash(fake_signer().public_key().as_ref()),
++            to: ShelleyAddress::new(
++                Network::Testnet,
++                ShelleyPaymentPart::Key(PaymentKeyHash::new([7; 28])),
++                ShelleyDelegationPart::Null,
++            )
++            .into(),
++        }
++    }
++
++    /// A wallet-contract UTxO of `w`'s, made by transaction `n`, with one of `token` where given.
++    fn utxo(w: &World, n: u32, lovelace: u64, token: Option<&str>) -> UtxoResponse {
++        let register = w.owner.clone().rerandomize().unwrap();
++        UtxoResponse {
++            tx_hash: format!("{n:08x}").repeat(8),
++            tx_index: 0,
++            address: wallet_contract(true, w.chain.config.contract.wallet_contract_hash)
++                .to_bech32()
++                .unwrap(),
++            value: lovelace.to_string(),
++            payment_cred: hex::encode(w.chain.config.contract.wallet_contract_hash),
++            inline_datum: Some(InlineDatum {
++                bytes: hex::encode(register.to_vec().unwrap()),
++                value: json!({
++                    "constructor": 0,
++                    "fields": [{"bytes": register.generator}, {"bytes": register.public_value}]
++                }),
++            }),
++            asset_list: Some(
++                token
++                    .map(|name| KoiosAsset {
++                        decimals: 0,
++                        quantity: "1".into(),
++                        policy_id: TOKEN_POLICY.to_string(),
++                        asset_name: hex::encode(name),
++                        fingerprint: String::new(),
++                    })
++                    .into_iter()
++                    .collect(),
++            ),
++            ..Default::default()
++        }
++    }
++
++    #[derive(Clone, Copy)]
++    enum Made {
++        Unknown,
++        Plain,
++        Received,
++        OtherSession,
++    }
++
++    fn class(made: Made, tx: &str) -> Class {
++        let (id, origin) = match made {
++            Made::Unknown => (format!("box:{tx}+unknown:{tx}"), Origin::Lovejoin),
++            Made::Plain => (format!("box:{tx}"), Origin::Lovejoin),
++            Made::Received => (format!("received:{tx}"), Origin::Received),
++            Made::OtherSession => ("session:3".to_string(), Origin::Session),
++        };
++        Class { id, origin }
++    }
++
++    /// The most inputs the guessed budgets let one transaction spend: 22.
++    fn guessed_most() -> usize {
++        (MAX_TX_BUDGET.steps / SPEND_BUDGET_GUESS.steps)
++            .min(MAX_TX_BUDGET.mem / SPEND_BUDGET_GUESS.mem) as usize
++    }
++
++    /// What one selection asked of its attempt: how many choices it built, and of them how many, and how many inputs
++    /// in all, held more than the guessed budgets let one transaction spend.
++    #[derive(Default, Debug, Clone, Copy)]
++    struct Tally {
++        attempts: usize,
++        doomed: usize,
++        doomed_inputs: usize,
++    }
++
++    enum Pays {
++        /// A Send of this much to a Seedelf (`transfer_apart`).
++        Seedelf(u64),
++        /// A session's funding of this much and its 5 ₳ collateral (`sweep_many_apart`).
++        Funding(u64),
++    }
++
++    /// Selection over `available`, with `transfer_apart`'s or `sweep_many_apart`'s own attempt, counted.
++    fn select(
++        w: &World,
++        available: &[UtxoResponse],
++        h: &Histories,
++        pays: &Pays,
++    ) -> (Result<ScriptSpend>, Tally, std::time::Duration) {
++        let none = Assets::new;
++        let outputs = match pays {
++            Pays::Seedelf(l) => payment_outputs(
++                &w.chain,
++                &[Payment {
++                    register: w.owner.clone().rerandomize().unwrap(),
++                    lovelace: *l,
++                    tokens: none(),
++                }],
++            ),
++            Pays::Funding(l) => address_outputs(
++                &w.chain,
++                &[
++                    AddressPayment {
++                        to: w.to.clone(),
++                        lovelace: *l,
++                        tokens: none(),
++                    },
++                    AddressPayment {
++                        to: w.to.clone(),
++                        lovelace: 5 * ADA,
++                        tokens: none(),
++                    },
++                ],
++            ),
++        }
++        .unwrap();
++        let most = guessed_most();
++        let mut tally = Tally::default();
++        let started = std::time::Instant::now();
++        let picked = select_script_inputs(
++            &w.chain.params,
++            available,
++            &none(),
++            paid_out(&outputs),
++            h,
++            |inputs| {
++                tally.attempts += 1;
++                if inputs.len() > most {
++                    tally.doomed += 1;
++                    tally.doomed_inputs += inputs.len();
++                }
++                let spend = paying(&w.chain, inputs, &outputs, &w.owner, w.signer)?;
++                spend.estimate()?;
++                Ok(spend)
++            },
++        );
++        (picked, tally, started.elapsed())
++    }
++
++    fn balance(
++        w: &World,
++        purpose: Purpose,
++        shape: &[(usize, u64, Option<&str>, Made)],
++    ) -> (Vec<UtxoResponse>, Histories) {
++        let mut n = 0x1000_0000u32;
++        let mut utxos = Vec::new();
++        let mut h = Histories::new(purpose);
++        for &(count, lovelace, token, made) in shape {
++            for _ in 0..count {
++                n += 1;
++                let u = utxo(w, n, lovelace, token);
++                h = h.with(&u.tx_hash, u.tx_index, class(made, &u.tx_hash));
++                utxos.push(u);
++            }
++        }
++        (utxos, h)
++    }
++
++    fn refused_as_too_many(picked: Result<ScriptSpend>) -> anyhow::Error {
++        match picked {
++            Ok(spend) => panic!("built with {} inputs", spend.inputs().len()),
++            Err(e) => {
++                assert!(is_too_many(&e), "refused otherwise, so the wallet's parts wouldn't take it: {e}");
++                e
++            }
++        }
++    }
++
++    /// Round seven's own parts shape (its r7_parts_timing harness): 200 boxes of unknown making and 200 plain of 10 ₳
++    /// beside 600 payments received of 2 ₳, a Send of 2,000 ₳; then the reruns a payment's parts make over what's
++    /// left, 20 UTxOs a part, the boxes first as the parts take the largest.
++    #[test]
++    fn a_send_too_large_for_one_transaction_builds_no_choice_the_guessed_budgets_refuse_by_its_count() {
++        let w = world();
++        let (all, h) = balance(
++            &w,
++            Purpose::Pay,
++            &[
++                (200, 10 * ADA, None, Made::Unknown),
++                (200, 10 * ADA, None, Made::Plain),
++                (600, 2 * ADA, None, Made::Received),
++            ],
++        );
++        let (picked, one, took) = select(&w, &all, &h, &Pays::Seedelf(2_000 * ADA));
++        let e = refused_as_too_many(picked);
++        println!(
++            "one transaction: {} attempts, {} of them over {} inputs ({} inputs in all), {took:?}: {e}",
++            one.attempts,
++            one.doomed,
++            guessed_most(),
++            one.doomed_inputs
++        );
++        let mut rest = all.clone();
++        let (mut owed, mut reruns, mut doomed, mut doomed_inputs, mut time) =
++            (2_000 * ADA, 0, 0, 0, std::time::Duration::ZERO);
++        while !rest.is_empty() {
++            let taken: Vec<UtxoResponse> = rest.drain(..20.min(rest.len())).collect();
++            let paid = taken.iter().map(lovelace_of).sum::<u64>() - 400_000;
++            owed = owed.saturating_sub(paid);
++            if owed == 0 || rest.is_empty() {
++                break;
++            }
++            let (picked, tally, took) = select(&w, &rest, &h, &Pays::Seedelf(owed));
++            reruns += 1;
++            doomed += tally.doomed;
++            doomed_inputs += tally.doomed_inputs;
++            time += took;
++            if picked.is_ok() {
++                break;
++            }
++        }
++        println!(
++            "the parts' {reruns} reruns: {doomed} attempts over {} inputs ({doomed_inputs} inputs in all), {time:?}",
++            guessed_most()
++        );
++        assert_eq!(
++            (one.doomed, doomed),
++            (0, 0),
++            "attempts the guessed budgets refuse by their count alone, in one transaction and in the parts' reruns"
++        );
++    }
++
++    /// The finder's funding shape: 250 boxes of unknown making and 250 plain ones of 10 ₳ (125 of them a token
++    /// pool's way back holding its token), 500 payments received of 2 ₳, or 2.5 ₳ with a token, and 500 UTxOs of
++    /// another session's money at 3 ₳; a funding of 2,000 ₳, then one of 3,000 ₳.
++    #[test]
++    fn a_funding_too_large_for_one_transaction_builds_no_choice_the_guessed_budgets_refuse_by_its_count() {
++        let w = world();
++        let (all, h) = balance(
++            &w,
++            Purpose::Fund {
++                session: Some("session:7".into()),
++            },
++            &[
++                (250, 10 * ADA, None, Made::Unknown),
++                (125, 10 * ADA, None, Made::Plain),
++                (125, 10 * ADA, Some("poolA"), Made::Plain),
++                (250, 2 * ADA, None, Made::Received),
++                (250, 2_500_000, Some("gift"), Made::Received),
++                (500, 3 * ADA, None, Made::OtherSession),
++            ],
++        );
++        let mut seen = Vec::new();
++        for funding in [2_000 * ADA, 3_000 * ADA] {
++            let (picked, tally, took) = select(&w, &all, &h, &Pays::Funding(funding));
++            let e = refused_as_too_many(picked);
++            println!(
++                "a funding of {} ₳: {} attempts, {} of them over {} inputs ({} inputs in all), {took:?}: {e}",
++                funding / ADA,
++                tally.attempts,
++                tally.doomed,
++                guessed_most(),
++                tally.doomed_inputs
++            );
++            seen.push(tally.doomed);
++        }
++        assert_eq!(seen, [0, 0], "attempts the guessed budgets refuse by their count alone");
++    }
++}

@@ -1,0 +1,183 @@
+--- seedelf-platform/seedelf-core/tests/mint_test.rs	2026-11-19 09:28:56.938013341 -0800
++++ seedelf-platform/seedelf-core/tests/mint_test.rs	2026-11-19 11:11:57.866177342 -0800
+@@ -5483,6 +5483,180 @@
+             wrong.join("\n")
+         );
+     }
++
++    /// Review seven, l7merge#1: rule 2 inside the weight's margin. Shape A: T1 and T2, two plain ways back of one
++    /// token pool, 6 ₳ and its token each, weigh 5.81 ₳ each, under A, a plain way back of 5.9 ₳ of ADA alone, though
++    /// together they pay 0.1 ₳ more than A and T1 (their change carries the token once). U, a way back of unknown
++    /// making, 6.5 ₳ of ADA alone; 20 payments received of 10 ₳. Just under the most T1, T2 and the 20 pay: A and one
++    /// of them beside the 20 are short, all 23 too many, so T1, T2 and the 20 are the one set with no box of unknown
++    /// making that pays. Shape B: a Send or Make public of one pool token, B (2 ₳, ten of it) its holder, so the change
++    /// carries it anyway; T, a way back holding one more, 6 ₳: B, T and the 20 are that set.
++    #[test]
++    fn inside_the_weights_margin_a_box_of_unknown_making_stays_out_where_the_others_pay() {
++        let w = world();
++        let a = owned(&w, 0x31, 0, 5_900_000, &[]);
++        let t1 = owned(&w, 0x70, 0, 6_000_000, &[("pooltoken", 1)]);
++        let t2 = owned(&w, 0x71, 0, 6_000_000, &[("pooltoken", 1)]);
++        let u = owned(&w, 0x90, 0, 6_500_000, &[]);
++        let payments: Vec<UtxoResponse> = (0..20u8)
++            .map(|i| owned(&w, 0x50 + i, 0, 10_000_000, &[]))
++            .collect();
++        let mut wrong = Vec::new();
++        let mut check =
++            |name: String, spent: anyhow::Result<Vec<UtxoResponse>>, want: &[UtxoResponse]| {
++                let (line, right) = match spent {
++                    Ok(spent) => (
++                        format!(
++                            "{name}: spent {} inputs, U among them: {}, A among them: {}",
++                            spent.len(),
++                            outpoints(&spent).contains(&one(&u)[0]),
++                            outpoints(&spent).contains(&one(&a)[0]),
++                        ),
++                        outpoints(&spent) == outpoints(want),
++                    ),
++                    Err(e) => (format!("{name}: refused: {e}"), false),
++                };
++                println!("{line}");
++                if !right {
++                    wrong.push(line);
++                }
++            };
++        // Shape A.
++        let both = with_first(&[&t1, &t2], &payments, 20);
++        for out in [Out::Send, Out::Public, Out::Fund] {
++            let most = most_paid(150_000_000, 230_000_000, |l| {
++                pays_out(&w, &both, out, l).is_ok()
++            });
++            let lovelace = most - 50_000;
++            pays_out(&w, &both, out, lovelace).expect("T1, T2 and the 20 pay");
++            for (what, inputs) in [
++                ("A, T1 and the 20", with_first(&[&a, &t1], &payments, 20)),
++                ("A, T2 and the 20", with_first(&[&a, &t2], &payments, 20)),
++                (
++                    "A, T1, T2 and 19",
++                    with_first(&[&a, &t1, &t2], &payments, 19),
++                ),
++                ("U and the 20", with_first(&[&u], &payments, 20)),
++            ] {
++                let e = pays_out(&w, &inputs, out, lovelace).unwrap_err();
++                assert!(build::is_short(&e), "{out:?}: {what}: {e}");
++            }
++            let e = pays_out(
++                &w,
++                &with_first(&[&a, &t1, &t2], &payments, 20),
++                out,
++                lovelace,
++            )
++            .unwrap_err();
++            assert!(build::is_too_many(&e), "{out:?}: A, T1, T2 and the 20: {e}");
++            pays_out(&w, &with_first(&[&u, &a], &payments, 20), out, lovelace)
++                .expect("U, A and the 20 pay");
++            let mut known: Vec<(&UtxoResponse, Class)> = vec![
++                (&a, box_class(&a, Origin::Lovejoin)),
++                (&t1, box_class(&t1, Origin::Lovejoin)),
++                (&t2, box_class(&t2, Origin::Lovejoin)),
++            ];
++            known.extend(payments.iter().map(|p| (p, received_class(p))));
++            // With U absent, pass d sends T1, T2 and the 20 (the existing pin, where_the_box_rules_orders_...).
++            let without = picked_out(&w, &known, out, lovelace);
++            check(
++                format!("A without U, {out:?} of {lovelace}"),
++                without,
++                &both,
++            );
++            known.push((&u, unknown_class(&u)));
++            let with = picked_out(&w, &known, out, lovelace);
++            check(
++                format!("A with U, {out:?} of {lovelace} (T1, T2 and the 20 pay up to {most})"),
++                with,
++                &both,
++            );
++        }
++        // Shape B.
++        let b = owned(&w, 0x21, 0, 2_000_000, &[("pooltoken", 10)]);
++        let t = owned(&w, 0x72, 0, 6_000_000, &[("pooltoken", 1)]);
++        let token = Assets::new()
++            .add(
++                seedelf_core::assets::Asset::new(
++                    TOKEN_POLICY.to_string(),
++                    hex::encode("pooltoken"),
++                    1,
++                )
++                .unwrap(),
++            )
++            .unwrap();
++        let outs = |public: bool, lovelace: u64| -> (Vec<Payment>, Vec<AddressPayment>) {
++            if public {
++                let to = AddressPayment {
++                    to: key_address(),
++                    lovelace,
++                    tokens: token.clone(),
++                };
++                (Vec::new(), vec![to])
++            } else {
++                let to = Payment {
++                    register: Register::create(random_scalar())
++                        .unwrap()
++                        .rerandomize()
++                        .unwrap(),
++                    lovelace,
++                    tokens: token.clone(),
++                };
++                (vec![to], Vec::new())
++            }
++        };
++        let bt = with_first(&[&b, &t], &payments, 20);
++        for public in [false, true] {
++            let pays = |inputs: &[UtxoResponse], lovelace: u64| {
++                let (seedelfs, pay) = outs(public, lovelace);
++                pays_many(&w, inputs, &seedelfs, &pay)
++            };
++            let most = most_paid(150_000_000, 230_000_000, |l| pays(&bt, l).is_ok());
++            let lovelace = most - 50_000;
++            pays(&bt, lovelace).expect("B, T and the 20 pay");
++            for (what, inputs) in [
++                ("B, A and the 20", with_first(&[&b, &a], &payments, 20)),
++                ("B, A, T and 19", with_first(&[&b, &a, &t], &payments, 19)),
++                ("B and the 20", with_first(&[&b], &payments, 20)),
++            ] {
++                let e = pays(&inputs, lovelace).unwrap_err();
++                assert!(build::is_short(&e), "B, public {public}: {what}: {e}");
++            }
++            let e = pays(&with_first(&[&b, &a, &t], &payments, 20), lovelace).unwrap_err();
++            assert!(
++                build::is_too_many(&e),
++                "B, public {public}: B, A, T and the 20: {e}"
++            );
++            pays(&with_first(&[&b, &u], &payments, 20), lovelace).expect("B, U and the 20 pay");
++            let mut known: Vec<(&UtxoResponse, Class)> = vec![
++                (&b, received_class(&b)),
++                (&a, box_class(&a, Origin::Lovejoin)),
++                (&t, box_class(&t, Origin::Lovejoin)),
++            ];
++            known.extend(payments.iter().map(|p| (p, received_class(p))));
++            let (seedelfs, pay) = outs(public, lovelace);
++            let without = picked_by(&w, Purpose::Pay, &known, &seedelfs, &pay);
++            check(
++                format!("B without U, public {public}, of {lovelace}"),
++                without,
++                &bt,
++            );
++            known.push((&u, unknown_class(&u)));
++            let with = picked_by(&w, Purpose::Pay, &known, &seedelfs, &pay);
++            check(
++                format!(
++                    "B with U, public {public}, of {lovelace} (B, T and the 20 pay up to {most})"
++                ),
++                with,
++                &bt,
++            );
++        }
++        assert!(
++            wrong.is_empty(),
++            "a box of unknown making merged where the other boxes pay without one:\n{}",
++            wrong.join("\n")
++        );
++    }
+ }
+ 
+ /// Where a Seedelf spend puts its change (privacy review §3.7).

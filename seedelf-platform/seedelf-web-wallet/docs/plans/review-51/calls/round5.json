@@ -1,0 +1,280 @@
+[
+ {
+  "group": "R5-code",
+  "items": [
+   {
+    "id": "l4code#1",
+    "status": "done",
+    "what": "Merging now spends as few boxes as pay, the largest first. Among choices with the same box count, the one with a box a mix moved wins. A box of unknown making always goes after every other box. Round four's Fund and Pay ranks still pick the one box that pays alone (step 1); they no longer order merges. The rule lives in one place in seedelf-core/src/build.rs: `box_rank` (:2561, pub) gives 0 for mixed, 1 for boxes alone, 2 for unknown making. `boxes_largest_first` (:2574) is the static order: known boxes largest first, then unknown making. `more_mixed` (:2584) lists the same-count choices with more mixed boxes, most first. `boxes_to_merge` (:2609, pub) is the parts' order for a gap. In `apart`, orders a and b (by_history, by_tier) and c (fewest_boxes) all place boxes by that one order (`place`, :3045-3095). `grow` now reports where it built (`Grown::Built(T, usize)`, :2861). After any of a, b or c builds with j boxes, `more_mixed_built` (:2889, called at :3160) tries the same count with more mixed boxes first, regrowing c's other inputs; the first that builds wins, else the original build, so nothing new is refused. The CLI's blind order d is unchanged. With tokens sent, a box of the tokens' own class counts as mixed (it adds no history). Mint follows the same box order. In the WebAssembly (wasm/src/lib.rs:4135-4176), Worth::apart orders its tier-2, token-free classes by `build::boxes_to_merge`, with gap = owed minus what the non-box histories add; tier-2 classes holding tokens come after them. Docs updated: Origin::Lovejoin, Purpose::Pay and Fund, rank()'s comment, tier(), rank_of, select_script_inputs step 3, the orders comment, the stale 'a grew these already' line (:3120), and Worth::apart's doc.",
+    "test": "Core: seedelf-core/tests/mint_test.rs mod apart: a_merge_spends_as_few_boxes_as_pay_a_mixed_one_first_among_as_many (the lead's pin: four mixed 4.71 ₳ and two plain 9.71 ₳; 15 ₳ out spends 2 plain, a 12 ₳ Send and Make public spend 1 plain + 1 mixed), a_box_of_unknown_making_is_merged_after_every_other_box (a planted box's way back is never merged ahead of another box), at_the_same_count_a_merge_takes_mixed_boxes_first (a guard), plus l3rank#3's one-box pins. WebAssembly: lib.rs api::box_order_tests::a_payments_parts_merge_as_few_boxes_as_pay_a_box_of_unknown_making_last. End to end, needs the rebuild: extension/tests/mixed-box-before-unplaced.test.ts 'X (mixed) and P (plain), 4.7 ₳ each, pay a Send of 7 ₳ before W (unknown making, 6 ₳) [needs the rebuild]'.",
+    "failing_before": "cargo test -p seedelf-core --test mint_test on HEAD's build.rs: 'test result: FAILED. 4 passed; 4 failed'. The pin printed: 'a new session's funding of 10 ₳ and its 5 ₳ collateral: 4 boxes, 4 of them mixed / a site's top-up of 15 ₳: 4 boxes, 4 of them mixed / a Make public of 12 ₳: 3 boxes, 3 of them mixed / a Send of 12 ₳ to a Seedelf: 3 boxes, 3 of them mixed'. a_box_of_unknown_making_is_merged_after_every_other_box failed: 'a box of unknown making merged ahead of another box' (W and one 4.71 box spent, the other left) for the [plain, plain] and [mixed, plain] balances. The wasm test failed: 'left: [81, 82, 83, 84, 112, 97, 98] right: [81, 97, 98, 82, 83, 84, 112]' (every mixed box first, then the 9.8 ₳ box of unknown making ahead of the plain ones). The e2e case fails on the current pkg in both builds: it spends X and W, not X and P.",
+    "passing_after": "The same 8 tests: 'test result: ok. 8 passed' ('funding 10+5: 2 boxes, 0 of them mixed; top-up 15: 2, 0; Make public 12: 2 boxes, 1 of them mixed; Send 12: 2, 1'). mint_test 65 passed; every seedelf-core binary ok (apart_test 17, merge_test 6, selection_integration 8, proptest_core 8, ...). seedelf-wasm: --lib 21 passed, and every native test binary ok. cargo clippy --workspace --all-targets -D warnings is clean; cargo fmt --all --check is clean.",
+    "left": "The e2e case passes only after the lead's WebAssembly rebuild. Two small behavior shifts in edge cases: in orders a and b, tier-2 UTxOs holding tokens now come after the pure-ADA boxes (before, they were interleaved by rank); and a box of the tokens' own class is now 'first among as many' rather than always first. All suites pass with both. Docs wording is R5-docs's; architecture.md:144 already describes this order."
+   },
+   {
+    "id": "l4docs#3",
+    "status": "done",
+    "what": "Order c (fewest boxes) now takes boxes in the same box order (build.rs `boxes`, from `boxes_largest_first`), so its first j boxes are the largest known ones and a box of unknown making only comes after them. Where c builds, more mixed boxes at the same count are tried first (`more_mixed_built` with c's rest regrown). Same change as l4code#1.",
+    "test": "mint_test.rs past_one_transactions_small_utxos_a_payment_takes_a_mixed_box_before_one_of_unknown_making (the verifier's test: 25 × 1.5 ₳ made private, X mixed and W unplaced 300 lovelace apart each way round; Send, Make public and funding of 34 ₳ out).",
+    "failing_before": "On HEAD: 'a Send of 34 ₳ to a Seedelf, W smaller: false: 19 inputs, spent W: true, spent X: false', and the same for 'a Make public of 34 ₳' and 'a new session's funding of 29 ₳ and its 5 ₳ collateral'. FAILED.",
+    "passing_after": "All six cases: '19 inputs, spent W: false, spent X: true'. ok.",
+    "left": "Nothing."
+   },
+   {
+    "id": "l4still#2",
+    "status": "done",
+    "what": "Orders b and c now take boxes in the shared box order instead of by size alone (by_tier's key gains `place`, and c uses `boxes`), and each runs the same-count mixed refinement. Same change as l4code#1.",
+    "test": "mint_test.rs past_the_input_limit_a_mixed_box_still_goes_before_one_of_unknown_making (25 received 2 ₳ payments; the premise asserts the received money alone is TooMany), and past_the_input_limit_one_box_still_pays_where_the_mixed_one_falls_short (a guard). The verifier's guard used W, a box of unknown making; I rewrote it with L, a plain box, because under the lead's rule W goes after every other box.",
+    "failing_before": "On HEAD: 'a Send of 43 ₳ to a Seedelf, W smaller: false: 19 inputs, spent W: true, spent X: false', and the same for 'a Make public of 43 ₳' and 'a new session's funding of 38 ₳ and its 5 ₳ collateral'. FAILED. The guard passed on HEAD too.",
+    "passing_after": "All six cases: 'spent W: false, spent X: true' (19 inputs). The guard spends L alone (no second box). ok.",
+    "left": "Nothing."
+   },
+   {
+    "id": "l4code#2",
+    "status": "done",
+    "what": "extension/src/background/lovejoin.ts:8150: the hatch's private payer orders a box a mix moved (origin mixed) 0, other boxes alone (`knownBox`: plain `box:<tx>`, 1.9.1-era ways back among them, merged boxes) 1, and everything else 2. Then `another`, then the smallest. Comments at :8134-8149 rewritten to say so.",
+    "test": "New: extension/tests/escape-hatch-mixed-before-plain.test.ts (the verifier's file, my header citing chunk 51, l4code#2). Two cases: Bring one back's question paid privately, and Bring every box back now's stuck path. P, a 1.9.1 plain way back, sits 300 lovelace either side of X, a mixed one.",
+    "failing_before": "Default build and VITE_ENABLE_MAINNET=false: 'P smaller (P 9710088, X 9710388): spent P; X smaller (P 9710688, X 9710388): spent X: expected [ 'P smaller: spent P', …(1) ] to deeply equal [ 'P smaller: spent X', …(1) ]', Tests 2 failed (2).",
+    "passing_after": "2 passed in both builds; the escape-hatch* files 10 passed. The wider run (lovejoin*, escape-hatch*, b15, r3-*, mixed-box, copied-register, history*, words, i18n*, screens-wiring, sessions, transfer, withdraw; 96 files): 1517 passed in both builds, the only failures being the two expected verified-critical gates.",
+    "left": "Nothing. The TS sort needs no rebuild."
+   },
+   {
+    "id": "l4code#3",
+    "status": "done",
+    "what": "extension/src/background/dapp.ts:989 `sharedBeyond`: only another live page with an enable() running spares the site (`enabling`, whose unlock wait counts). A page waiting for the unlock to sign or send no longer spares it. The docs of gone() (:938-949) and sharedBeyond (:982-986) now say so (the owner's B7). The stateChanged clear is unchanged.",
+    "test": "dapp-gone.test.ts, new describe 'but when another page only waits for the unlock to sign (chunk 51, l4code#3, the owner's B7)' with three cases: a connect question left beside another page's signData unlock wait is turned away; a wait for the unlock left beside another's is turned away; a page reloaded in its enable()'s unlock wait brings the window back once, then gets DECLINED_WAIT. I flipped and renamed the l3still#4 pin, now 'a connected site's page leaves its signature's unlock wait beside another's: turned away then, nothing owed after the unlock': within 10 s a locked signature hears NOT_CONNECTED, and after busyFor 10 s it 'waits'. I also renamed 'nor when another page's enable() of the same site still waits for the unlock'.",
+    "failing_before": "On HEAD's dapp.ts: 3 failed | 23 passed. 'the site listed as declined: expected [] to deeply equal [ 'https://app.example.com' ]'; 'a reload's page, after the unlock: expected 'asked' to deeply equal { code: -3, …(1) }'; 'expected [ Array(4) ] to deeply equal [ 'window shown', …(3) ]'. With VITE_ENABLE_MAINNET=false the same three fail, and so does the flipped pin.",
+    "passing_after": "dapp-gone 26 passed. tests/dapp* (32 files): 307 passed in the default build and with VITE_ENABLE_MAINNET=false. tsc --noEmit is clean.",
+    "left": "Nothing. As since round one, a page leaving any unlock wait (a signature's too) still counts as a decline; only the sparing condition changed."
+   },
+   {
+    "id": "l4code#4",
+    "status": "done",
+    "what": "The two hatch notes, in en, es and ja: 'one that came back from Lovejoin' becomes 'one marked only Back from Lovejoin' (es: 'uno marcado solo como “De vuelta de Lovejoin”', ja: '「Lovejoin から戻りました」とだけ表示された UTxO'). The tag words are histories.tag.lovejoin's in each language. Both keys come off verified-critical-es.json and -ja.json so the gate holds them until the lead back-translates. AVOIDS in tests/lovejoin-accounts-review-fixes.test.ts:44 is updated.",
+    "test": "New: extension/tests/stuck-note-payer-tags.test.ts (the l4still#3 verifier's file). Three code cases pin the payer: W of unknown making is passed over for 3 ₳ made private; W pays where nothing smaller does; knownBox is exactly 'tagged Back from Lovejoin alone', across 10 class shapes. One words case renders PaidQuestion in en, es and ja, with one account and with several. How I checked the words: knownBox (histories.ts) is true exactly when historyTags is [Back from Lovejoin], which the third case pins, and withdrawOne's sort puts those first, then `another`, then size.",
+    "failing_before": "Words case, default build and mainnet off: 'AssertionError: en, one account: \"... Where it can, the wallet takes one that came back from Lovejoin.\" … es … ja …: expected [ …(6) ] to deeply equal []' (1 failed | 3 passed).",
+    "passing_after": "4 passed in both builds. lovejoin-accounts-review-fixes, lovejoin-release-rules, lovejoin-merged-screens, screens-wiring-review-fixes, lovejoin-session5-screens and words pass. i18n.test.ts fails only on the expected gate: 'es.json/ja.json has no unchecked machine draft' with these 2 keys each.",
+    "left": "The blind back-translation of lovejoin.stuck.privacy.private and lovejoin.stuck.privacy.privateNamed (es, ja); the lead re-adds them to the verified lists afterwards."
+   },
+   {
+    "id": "l4still#3",
+    "status": "done",
+    "what": "The same string change as l4code#4. The note now names the UTxOs screen's own tag ('marked only Back from Lovejoin'), which also excludes the box+session, box+received and box+Unknown ways back the payer passes over.",
+    "test": "stuck-note-payer-tags.test.ts (as for l4code#4).",
+    "failing_before": "As for l4code#4.",
+    "passing_after": "As for l4code#4.",
+    "left": "The back-translation, as for l4code#4."
+   },
+   {
+    "id": "l4code#5",
+    "status": "done",
+    "what": "build.rs Origin::Lovejoin doc (:2425-2428): 'merged with other money' becomes 'merged with other boxes or with money of no history'. The histories.ts header sentence (lines 21-35) was already rewritten by R5-docs under l4docs#8 in the shared tree. I checked its words against the code and left them as they are.",
+    "test": "Words, checked against the code: merged([mixedBox, boxFrom]) and merged([mixedBox, UNKNOWN]) read lovejoin (REACH puts lovejoin before unknown); merged([mixedBox, leftBy]) reads change (originOfAll's change rule; lib.rs merged_class asserts it); merged with receivedIn reads received. These are histories.ts REACH/originOfAll and the wasm's merged_class.",
+    "failing_before": "n/a (words)",
+    "passing_after": "n/a (words)",
+    "left": "The lead commits the histories.ts header hunk with R5-docs's files (it's theirs, l4docs#8)."
+   },
+   {
+    "id": "l4still#4",
+    "status": "done",
+    "what": "Stale comments fixed:\n- histories.ts unplacedBox doc (:83-89): it is merged after every other box (core's box_rank, l4code#1); and a way back that money of another history paid reads as that money (l3rank#2).\n- histories.ts leftBy doc (:102-103) and spendLeft doc (:195-197): a Make public to one of the user's own accounts names that account only from this release on; an earlier version's reads as change (l3rank#1).\n- lovejoin.ts way-back classing (:8233-8236): the 1.9.1 answer case is narrowed to 'a deposit no public account paid' (checked in depositAccountOf, depositSessionOf and mixedBoxOf), adds 'after every other box it merges' and the paid-way-back exception.\n- lovejoin.ts :8246-8248: 'Merged, a box a mix moved is marked mixed no longer, and the way back reads as the furthest tie it carries'.\n- wasm lib.rs:2343: 'ranks as a session's: after money made private'.\n- lib.rs:3611-3613 and sessions.ts:3144-3152: a funding takes received money first, then a box that pays alone, a mixed one before any other.\nThe histories.ts:25-27 sentence is R5-docs's (see l4code#5).",
+    "test": "Words: each checked against the code it describes. originOfAll and merged_class for merges; withdraw.ts tiedBy for the own-account Make public; Purpose::Fund ranks (Received 1, Mixed 2, Lovejoin 3) for the funding order. The l3rank#1 claim is pinned by l4still#7's new case.",
+    "failing_before": "n/a (comments)",
+    "passing_after": "n/a (comments). tsc and the affected suites pass.",
+    "left": "Nothing."
+   },
+   {
+    "id": "l4still#7",
+    "status": "done",
+    "what": "tests/r3-change-classes.test.ts: a new it.each row, 'a Make public to one of the user's own accounts, by an earlier version'. It pays the 12-word wallet's own receive_0 (own: true, ownAccount: 0) with origin received:R0 and no account noted, and expects { change:S+received:R0, change }, tagged [Change, Received]. The 'to someone else' row keeps its name. The case's comment cites chunk 51, l3rank#1 and l4still#7.",
+    "test": "r3-change-classes.test.ts 'a Make public to one of the user's own accounts, by an earlier version, kept with its inputs' history alone, is tied to that spend: tagged Change, ranked as change'.",
+    "failing_before": "A pin of current behavior: it passes on HEAD too (no code change was asked for).",
+    "passing_after": "10 passed | 14 skipped in its describe.",
+    "left": "Nothing."
+   }
+  ],
+  "strings": [
+   {
+    "key": "lovejoin.stuck.privacy.private",
+    "en": "Paid from your private balance, one of its UTxOs of ADA alone goes into the box's own transaction, and its ADA comes back with the box, less the fee, so anyone can tie that UTxO, and where it came from, to the box. Where it can, the wallet takes one marked only Back from Lovejoin.",
+    "es": "Si pagas con tu saldo privado, uno de sus UTxO solo de ADA entra en la propia transacción de la caja, y su ADA vuelve con la caja, menos la comisión, así que cualquiera puede vincular ese UTxO, y de dónde vino, con la caja. Siempre que puede, la billetera usa uno marcado solo como “De vuelta de Lovejoin”.",
+    "ja": "プライベート残高で支払う場合、残高のうち ADA だけの UTxO の 1 つがボックス自体のトランザクションに入り、その ADA は手数料を引いてボックスと一緒に戻ります。そのため誰でも、その UTxO とその出どころを、そのボックスに結び付けることができます。可能な場合、ウォレットは「Lovejoin から戻りました」とだけ表示された UTxO を使います。",
+    "critical": true,
+    "change": "changed"
+   },
+   {
+    "key": "lovejoin.stuck.privacy.privateNamed",
+    "en": "Paid from your private balance, one of its UTxOs of ADA alone goes into the box's own transaction, and its ADA comes back with the box, less the fee, so anyone can tie that UTxO, and where it came from, to the box. Where it can, the wallet takes one marked only Back from Lovejoin, else one that ties no other account.",
+    "es": "Si pagas con tu saldo privado, uno de sus UTxO solo de ADA entra en la propia transacción de la caja, y su ADA vuelve con la caja, menos la comisión, así que cualquiera puede vincular ese UTxO, y de dónde vino, con la caja. Siempre que puede, la billetera usa uno marcado solo como “De vuelta de Lovejoin”; si no, uno que no vincule ninguna otra cuenta.",
+    "ja": "プライベート残高で支払う場合、残高のうち ADA だけの UTxO の 1 つがボックス自体のトランザクションに入り、その ADA は手数料を引いてボックスと一緒に戻ります。そのため誰でも、その UTxO とその出どころを、そのボックスに結び付けることができます。可能な場合、ウォレットは「Lovejoin から戻りました」とだけ表示された UTxO を使い、なければほかのアカウントを結び付けない UTxO を使います。",
+    "critical": true,
+    "change": "changed"
+   }
+  ],
+  "policy_facts": [
+   "Merging boxes (a funding, a top-up, a Send, a Make public, a stealth mint, a pool's start, and a payment's parts): the wallet spends as few boxes as pay, the largest first. Among choices of as many boxes, it takes the one with a box it knows a mix moved. A box it can't tell the making of (tagged Unknown too, a planted box's way back among them) goes after every other box, even where that merges more boxes. Choosing one box that pays alone is unchanged: for a funding and a private payment, a box it knows is mixed before any other. So the 18 November sentence ('takes a box it knows is mixed before one it can't tell the making of') holds for one box; for merging it should say 'as few as pay, a mixed one first among as many, one it can't tell the making of after every other box'. Nothing new is sent or kept.",
+   "Escape hatch, paid from the private balance: the payer is a box a mix moved first, then another box whose making the wallet knows (a way back 1.9.1 kept with no record among them), then the rest. Of the rest, where the box is a public account's, one made private from no other public account comes first; then the smallest that pays. The note under the payer now says 'one marked only Back from Lovejoin'. Nothing new is sent or kept.",
+   "B7: a site whose page leaves its connect question, or its wait for the unlock, unanswered is now always kept with the sites declined (session storage) and waits out the back-off. The one exception: another of its pages has enable() running, waiting on that question, on the unlock before it, or still on its way to it. Another page waiting for the unlock to sign or send no longer spares it. The policy's 'unless another of its pages is asking to connect too' now holds as written. No new kind of data is kept: only the decline records the policy already describes, which these cases now also write."
+  ],
+  "needs_wasm_rebuild": [
+   "seedelf-platform/seedelf-core/src/build.rs: the shared box order in apart (box_rank, boxes_largest_first, more_mixed, more_mixed_built) and boxes_to_merge",
+   "seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs: Worth::apart's tier-2 box order through build::boxes_to_merge",
+   "Test to run after the rebuild: extension/tests/mixed-box-before-unplaced.test.ts, 'X (mixed) and P (plain), 4.7 ₳ each, pay a Send of 7 ₳ before W (unknown making, 6 ₳) [needs the rebuild]'. On the current pkg it fails in both builds (it spends X and W); after the rebuild it should spend X and P. The file's other two cases are one-box picks and should still pass."
+  ],
+  "files": [
+   "seedelf-platform/seedelf-core/src/build.rs",
+   "seedelf-platform/seedelf-core/tests/mint_test.rs",
+   "seedelf-platform/seedelf-web-wallet/wasm/src/lib.rs",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/lovejoin.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/dapp.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/background/sessions.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/shared/histories.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/src/i18n/translations/en.json",
+   "seedelf-platform/seedelf-web-wallet/extension/src/i18n/translations/es.json",
+   "seedelf-platform/seedelf-web-wallet/extension/src/i18n/translations/ja.json",
+   "seedelf-platform/seedelf-web-wallet/docs/i18n/verified-critical-es.json",
+   "seedelf-platform/seedelf-web-wallet/docs/i18n/verified-critical-ja.json",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/escape-hatch-mixed-before-plain.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/stuck-note-payer-tags.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/dapp-gone.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/lovejoin-accounts-review-fixes.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/r3-change-classes.test.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/mixed-box-before-unplaced.test.ts"
+  ],
+  "notes": "Every Rust suite passes: seedelf-core all binaries, mint_test 65; seedelf-wasm --lib 21 and every native test binary. cargo clippy --workspace --all-targets -D warnings and cargo fmt --all --check are clean; rustfmt touched only my hunks. Extension: tsc --noEmit is clean. The tests near the changes (96 files, 1521 tests) pass in the default build and with VITE_ENABLE_MAINNET=false. The only failures are i18n.test.ts's expected verified-critical gates: es and ja, each for the two changed keys. tests/dapp*: 307/307 in both builds. I ran every new TS test's failing side in both builds by swapping my changed lines back with a scratch script, then forward again. The tree is restored and verified.\n\nShared-file notes for the lead's commit:\n(1) histories.ts holds R5-docs's header hunk (lines 21-35, cited l4docs#8) beside my three doc hunks (unplacedBox, leftBy, spendLeft). I checked R5-docs's words against the code; they hold.\n(2) The verified-critical-es.json and -ja.json edits are mine: the two lovejoin.stuck.privacy.private* keys come off the lists until the blind back-translation.\n(3) These are not mine: docs/*.md, docs/store/privacy-policy.md, wasm/README.md, and the untracked tests/r5-when-it-asks.test.ts.\n\nFacts for R5-docs (their architecture.md:144, :565, privacy.md:173, :432 and flows.md:377, :526 already match the code):\n- Final merge order. Orders a, b and c take boxes in one order for every purpose, Mint included. First come boxes whose making the wallet knows (origin mixed, or every id part `box:`), largest first, so as few as pay. Where an order builds with j of them, the choice of j with the most mixed boxes that also builds goes instead; c's other inputs are regrown for it. Then boxes of unknown making (any id part other than `box:`), largest first, after every other box. With tokens sent, a box of the tokens' own class counts as mixed. Step 1, one UTxO alone, is unchanged and is the purpose's rank. A payment's parts (Worth::apart) order the token-free tier-2 classes by boxes_to_merge(gap = owed minus what the non-box histories add): the fewest that cover the gap, of those the most mixed, then the other known boxes largest first, then those of unknown making; tier-2 classes holding tokens come after them.\n- The hatch's order. A box a mix moved first. Then other boxes alone (knownBox, 1.9.1-era plain ways back among them). Then the rest, where the box is a public account's, one naming no other public account first. Then the smallest. The WebAssembly spends the first that pays.\n- The spare rule. Only another live page with an enable() running spares the site (`enabling`: waiting on the question, on the unlock before it, or on its way to it). Any other unlock wait spares nothing. Leaving any unlock wait still counts as a decline. The unlock still clears a mark set by a page leaving its unlock wait, and keeps one set by a page leaving its connect question.\n\nSiblings:\n- The verifier's l4still#2 guard expected W (unknown making) to be spent alone where X falls short. That contradicts the lead's 'after every other box', so I wrote the guard with a plain box instead.\n- The verifier's l4code#1 test asserted no more boxes than the CLI's order. I pinned the lead's exact expectations instead: 2 boxes, and the mixed count.\n\nScratch (backups, the swap script, the before-run log) is in calls/work/R5-code/. Nothing is committed."
+ },
+ {
+  "group": "R5-docs",
+  "items": [
+   {
+    "id": "l4docs#1",
+    "status": "done",
+    "what": "Words, as the lead called them. Policy :28 (the Lovejoin row): a new item in the exact list, \"again at each later pool read that counts your boxes (opening Lovejoin's page, or pressing a **Bring one back** button, say), about one the Cardano server hasn't answered for yet, until it answers\". The old \"without that question\" sentence is now two: Bring every box back now in Settings, Bring every box in this pool back now on a pool's page, the retired pools' run and Pay from my private balance anyway take a box without that question. Then: \"**Bring one back anyway** takes the box it's pressed for without that question, and a box comes back by itself from a retired pool without it, but the pool read before each asks again about any box the Cardano server hasn't answered for yet, which is the box Bring one back anyway takes first where there is one.\" Policy :44 (the Koios bullet): \"and again at each later pool read that counts your boxes, **Bring one back anyway**'s included, about one it hasn't answered for yet, until it does\". Policy :93 (the 18 November entry, no new date): the list gains the same item, and its \"never\" now reads \"never before Bring every box back now, the retired pools' run or Pay from my private balance anyway takes it; and before Bring one back anyway takes it, or it comes back by itself from a retired pool, only at the pool read before each, about one the server hasn't answered for yet\". privacy.md:475: \"since neither asks\" is gone. Bring every box back now \"asks nothing\", Bring one back anyway \"puts no box in the ask\", and the re-ask happens \"at every pool read that counts the boxes until it does, Bring one back anyway's too, which takes such a box first where there is one\". architecture.md:717 (When it asks): lists the pool reads that go through sortOut, including every withdrawNowNow press (Bring one back now, Bring one back anyway, a Bootstrap's Bring one back, the escape hatch). It says `asking` is asked again whatever the count, in every pool (`found`), and that Bring one back anyway forces nothing while its press's sortOut still asks again about `asking`, where the box anywayBox takes first sits. Siblings in my files: architecture.md:154 no longer lists Bring one back anyway among takers of \"one nobody asked about\" (its box is always known or in `asking`), and architecture.md:714 says \"every pool read that counts the boxes (`sortOut`)\". How I traced it: Lovejoin.tsx:1064 anywayBox (an unsure box first), then :1119 anywayRequest, handlers.ts:570, lovejoin.ts withdrawNowNow (:7523 anyway means no force; :7532 calls sortOut unconditionally), found :6492 (the asking branch, whatever the count), lookUp :6544/:6554, inputsOf :6710-6714 (koiosAlone().txSpends), and only then withdrawOne :7607. For the \"never\" group: bringAllBackNow :7718 reads with ours() and never sortOut, retireOnce :4574 asks nothing, and againBoxes(publicToo) :3761 and fanOut :4056 skip made(), while split :7988 only lists.",
+    "test": "Words: calls/work/R5-docs/check_words5.py, which runs ABSENT and PRESENT checks over the five docs; I ran it on HEAD's copies (head-tree/) and on the tree. Behaviour pin: extension/tests/r5-when-it-asks.test.ts, \"after a restore, Bring one back anyway takes the box Koios hasn't answered for first, and its press's pool read asks Koios about it again before it takes it\". It expects tx_info [[N]] during the press, then N#0 withdrawn.",
+    "failing_before": "check_words5.py on HEAD's docs: \"3 of 53 checks pass\". Among the failures: \"FAIL l4docs#1: privacy-policy.md:93 still says \"never before **Bring every box back now**, the retired pools' run, **Bring one back anyway** or **Pay…\"\", \"FAIL l4docs#1: privacy.md:475 still says 'as one Bring every box back now or Bring one back anyway takes does, since neither asks'\" and \"FAIL l4docs#1: architecture.md:715 still says \"Bring every box back now, the retired pools' run and Bring one back anyway don't ask about a box befor…\"\". The behaviour behind the old words, from the verifier's test on HEAD: \"PRESS SENT KOIOS: credential_utxos -> tx_info[c7c7] -> account_info -> epoch_params -> submittx ... AssertionError: expected [ [ …(2) ], …(1) ] to deeply equal [ [ …(2) ] ]\".",
+    "passing_after": "check_words5.py on the tree: \"53 of 53 checks pass\". r5-when-it-asks.test.ts: \"Test Files 1 passed (1), Tests 5 passed (5)\" in the default build and with VITE_ENABLE_MAINNET=false, both on HEAD's code and on the tree with R5-code's changes in. No code changes for this item, by the lead's call.",
+    "left": "Nothing."
+   },
+   {
+    "id": "l4still#1",
+    "status": "done",
+    "what": "The same fix as l4docs#1, plus the retired-pool sibling the finding named. Policy :28 and :93: a box that comes back by itself from a retired pool is taken without that question, but the pool read before it asks again about a box not yet answered for (wording in l4docs#1). privacy.md:460: \"One coming back by itself isn't asked of Koios first, but for the pool read before it, which asks again about one Koios hasn't answered for, as every pool read that counts the boxes does; a pool read after a restore, or Bring one back now's choice of box, may also ask...\". privacy.md:253 (Network): \"...each transaction once, and every pool read that counts the boxes asks again about one Koios hasn't answered for\". architecture.md:717: \"but in a retired pool, where it isn't asked about (`isRetired(read.pool)`), though its run's pool read asks again about `asking` (above)\". How I traced it: withdrawDueNow :7276 runs sortOut before the isRetired skip at :7383. In a retired pool an unsure box is free (sortOut's `waits`, :6316), so it gets a due time, and found :6492 asks it again at every run that reads the pools.",
+    "test": "Pin in extension/tests/r5-when-it-asks.test.ts: \"on a device that retired its pools already, a retired pool's box Koios hasn't answered for is asked about again by the run that brings it back, at its pool read, and by no lookup of its own\". Each run asks either nothing (it reads no pool) or [[N]]; the run that brings the box back asks [[N]]; then N#0 comes back. Words: check_words5.py.",
+    "failing_before": "check_words5.py on HEAD: \"FAIL l4still#1: privacy.md:460 still says \"One coming back by itself isn't asked of Koios first; a pool read after a restore\"\", \"FAIL l4still#1: privacy.md:253 still says \"each transaction once, or again at each read while Koios hasn't answered\"\" and \"FAIL l4still#1: architecture.md:715 still says \"a pool read (the Lovejoin page, Bring one back now, a due box's run, the unlock scan) asks only\"\". The verifier's case (c) on HEAD expected [] and got [[\"cfcf…\"],[\"cfcf…\"]]. My first draft of the pin assumed every run reads the pools and failed (\"AssertionError: expected [] to deeply equal [ Array(1) ]\"): a run with nothing due, no unlock and no recheck reads nothing. That matches the words (\"the pool read before it\"), so the pin now allows that.",
+    "passing_after": "check_words5.py: 53 of 53. r5-when-it-asks.test.ts: 5 passed, in both builds.",
+    "left": "Nothing."
+   },
+   {
+    "id": "l4docs#2",
+    "status": "done",
+    "what": "Words, as the lead called them. Policy :93: \"...asked about that transaction once more where the answer says a deposit made a box still in one of Lovejoin's current pools, together with that pool's other boxes of yours the wallet has no record or answer for, or where the wallet knows an account...\". privacy.md:475: \"...its boxes held meanwhile, and with it, where a deposit made the box, the pool's other boxes no record or answer names, in the same request\". It also covers the restore case of the same count: \"While its box is held for that answer, with no due time, each such read asks about the pool's other boxes no record or answer names too, together.\" architecture.md:717 gives the mechanism: \"That count (`moreThanDue`) holds a box not mixed yet and a Bootstrap's, never one held for an answer (`unsure`), so one with no due time (after a restore, or a 1.9.1 deposit's answer `rejudge` asks about once more) puts it over: while it's held, each such read asks about the pool's other boxes no record or answer names too, in the same request (chunk 51, l4docs#2).\" How I traced it: rejudge :6643 (`blind`: deposit answers kept without inputs, current pools only), then :6673-6674 deletes the answer and adds it to `asking`. In found, `unknown` holds A. moreThanDue :2167-2169 holds only notMixedYet and bootstrapOf, and A is no longer a deposit by `origins`, so back > due and :6492 returns every unknown box of the pool, all asked in one lookUp. The sweep needs the box to have no due time, so I put it on the deposit case only (a re-asked mix answer keeps its due time).",
+    "test": "Pins in extension/tests/r5-when-it-asks.test.ts, describe \"chunk 51, l4docs#2\": \"takes in the pool's other boxes no record or answer names, in the same request, as the policy's 18 November entry says\" ([[A, M1, M2]]); \"after a restore, while a box is held for Koios's answer, a later pool read asks about it together with a box someone else's mix moved since, as privacy.md says\" ([[M3, U]]); and a control where the answer is kept as this version keeps it, with inputs and judged against the first 24 ([]).",
+    "failing_before": "check_words5.py on HEAD: \"FAIL l4docs#2: privacy-policy.md lacks \"together with that pool's other boxes of yours the wallet has no record or answer for\"\", \"FAIL l4docs#2: privacy.md lacks \"and with it, where a deposit made the box, the pool's other boxes no record or answer names, in the same reque\"\" and \"FAIL l4docs#2: architecture.md lacks '(chunk 51, l4docs#2)'\". The verifier's test of the old words (\"once more\" alone) on HEAD: \"tx_info requests: [[\"A\",\"M1\",\"M2\"]] ... later tx_info requests: [[\"M3\",\"U\"]] ... Tests 3 failed | 1 passed (4)\".",
+    "passing_after": "check_words5.py: 53 of 53. The pins pass, 5 of 5, in both builds.",
+    "left": "Nothing."
+   },
+   {
+    "id": "l4docs#4",
+    "status": "done",
+    "what": "The spare rule, written to the owner's B7 as R5-code coded it. architecture.md:565 now reads: \"unless another page of the same site has an `enable()` running, waiting on that question, on the unlock before it or still on its way to it (`enabling`, counted from the call's first line, before anything it awaits), which asks itself and a refusal would turn away (chunk 51, G6's note, sign#3). A page waiting for the unlock to sign, or to send, spares nothing (`sharedBeyond`: chunk 51, the owner's B7, l4code#3).\" \"or waits for the unlock itself\" is gone. As the lead said, policy :29 and :93, privacy.md:350 and flows.md:436 already state the rule (\"unless another of its pages is asking to connect too\"), so they are unchanged. I checked this against R5-code's dapp.ts in the tree. sharedBeyond now returns only `[...(this.enabling.get(origin)?.keys() ?? [])].some(live)`. An enable() is in `enabling` from call()'s first lines through its unlock wait. stateChanged's clear (:792-797) stays, so the closing clause still holds (\"...unless the page that left only waited for the unlock and the wallet was unlocked since..., and a connect question left stays owed\"): the sparing page is now always an enable(), and countEnabling's drop or sparedNoMore settles the mark.",
+    "test": "Words: check_words5.py. ABSENT: \"or waits for the unlock itself, which asks itself and a refusal would turn away\". PRESENT: \"A page waiting for the unlock to sign, or to send, spares nothing\", plus the policy's and privacy.md's \"unless another of its pages is asking to connect too\". The behaviour test is R5-code's (dapp-gone.test.ts, l4code#3).",
+    "failing_before": "check_words5.py on HEAD: \"FAIL l4docs#4: architecture.md:563 still says 'or waits for the unlock itself, which asks itself and a refusal would turn away'\" and \"FAIL l4code#3: architecture.md lacks 'A page waiting for the unlock to sign, or to send, spares nothing'\".",
+    "passing_after": "check_words5.py: 53 of 53, with R5-code's sharedBeyond change in the tree.",
+    "left": "Nothing. The words depend on R5-code's dapp.ts change (now in the tree); if it were reverted, architecture.md:565 would need its old clause back."
+   },
+   {
+    "id": "l4still#6",
+    "status": "done",
+    "what": "The same as l4docs#4: architecture.md:565 states the B7 rule (only another page's running enable(), its unlock wait included, spares the site; a page waiting for the unlock to sign or send spares nothing). The policy's :29 and :93 wording stands, as the lead called it.",
+    "test": "check_words5.py (the l4docs#4 and l4code#3 checks).",
+    "failing_before": "\"FAIL l4docs#4: architecture.md:563 still says 'or waits for the unlock itself, which asks itself and a refusal would turn away'\"",
+    "passing_after": "53 of 53.",
+    "left": "Nothing."
+   },
+   {
+    "id": "l4docs#5",
+    "status": "done",
+    "what": "development.md:13 now reads \"touches `wasm/README.md`, which a test reads, any workflow or `seedelf-verification/test-tools.sh`, which `extension/tests/workflows.test.ts` reads, or the Lovejoin scripts' `.hex` files...\"; the `seedelf-data/` trigger is gone. I added one sentence: \"A PR that changes only the data layer's Rust doesn't run the check: [data-layer.yml](../../../.github/workflows/data-layer.yml)'s *No Markdown included* step makes the one check of that Rust that `workflows.test.ts` makes.\" I checked it against web-wallet.yml:78 (`covered` has no seedelf-data term), data-layer.yml:45-54 (paths, and the step's grep), workflows.test.ts:527 and :602-604 (a seedelf-data .rs file doesn't run the wallet's check), and the relative link from docs/.",
+    "test": "check_words5.py. ABSENT: \"or a Rust file under `seedelf-data/`\". PRESENT: the new trigger list and \"*No Markdown included*\".",
+    "failing_before": "\"FAIL l4docs#5: development.md:13 still says 'or a Rust file under `seedelf-data/`'\" and \"FAIL l4docs#5: development.md lacks '*No Markdown included*'\".",
+    "passing_after": "53 of 53.",
+    "left": "I didn't add l4still#5's \"main's ruleset requires only Web Wallet required\": the ruleset can't be checked offline, and the line already says the ruleset requires that job."
+   },
+   {
+    "id": "l4still#5",
+    "status": "done",
+    "what": "The same edit as l4docs#5 (development.md:13).",
+    "test": "check_words5.py (the l4docs#5 checks).",
+    "failing_before": "\"FAIL l4docs#5: development.md:13 still says 'or a Rust file under `seedelf-data/`'\"",
+    "passing_after": "53 of 53.",
+    "left": "Nothing."
+   },
+   {
+    "id": "l4docs#6",
+    "status": "done",
+    "what": "The exceptions to \"a box goes as a box\" now read the same everywhere, in the exact form merged() gives. privacy.md:173: \"one whose way back money of a known history but another box paid, as that money\". privacy.md:81 and :107 gain the same exception beside the deposit one. flows.md:377: \"...and one whose way back money of a known history but another box paid, as that money (l3rank#2)\". architecture.md:712: \"merging takes it after every other box (*Transaction building*, the box order), unless money of a known history but another box paid its way back, which then goes as that money (l3rank#2, l4docs#6)\". In :81, :107 and flows.md I used the general rule rather than the finding's \"a payment received\" alone, because a way back paid by money made private, a session's money or change also goes as that money, while one paid by another box or by Unknown money stays a box. I checked this against histories.ts:139 (box: → lovejoin), :144 REACH and :153-158 originOfAll, and lovejoin.ts:8239-8244 (`besides` merged into the way back).",
+    "test": "check_words5.py: ABSENT on the old phrases at privacy.md:173 and architecture.md:710; PRESENT on the five new ones.",
+    "failing_before": "\"FAIL l4docs#6: privacy.md:173 still says 'and one whose way back money of a known history paid, as that money'\" and \"FAIL l4docs#6: architecture.md:710 still says 'merging takes it last, one at a time, unless the private balance paid its way back'\", among 7 l4docs#6 failures.",
+    "passing_after": "53 of 53.",
+    "left": "Nothing."
+   },
+   {
+    "id": "l4docs#7",
+    "status": "done",
+    "what": "Policy :28: \"**Bring every box back now** in Settings, **Bring every box in this pool back now** on a pool's page\". Those are en.json settings.lovejoin.bring and lovejoin.bring.button, chosen at BringAllBack.tsx:313. architecture.md:717: a Bootstrap's Bring one back \"asks about that box where no record or answer names it (`knownOf`; chunk 51, l3time#1, l4docs#7)\", from lovejoin.ts:7507 (known = knownOf(before)), :7523 and :2092-2095 (records or `origins`).",
+    "test": "check_words5.py (the l4docs#7 ABSENT and PRESENT checks).",
+    "failing_before": "\"FAIL l4docs#7: privacy-policy.md:28 still says \"**Bring every box back now** (in Settings or on a pool's page)\"\" and \"FAIL l4docs#7: architecture.md:715 still says 'asks about that box where no record names it (chunk 51, l3time#1)'\".",
+    "passing_after": "53 of 53.",
+    "left": "Nothing."
+   },
+   {
+    "id": "l4docs#8",
+    "status": "done",
+    "what": "The histories.ts header, lines 20 to 34, comment only: \"...a funding and a Send take it before any other box that pays alone (l3rank#3), and merging takes it first among as many boxes (core's box_rank). Merged, a box is named by the furthest tie it carries (`merged`): beside other boxes or Unknown money it reads \"lovejoin\", as every box brought back before that record was kept (chunk 51, the owner's answer 4 to B15); a spend's change of it reads \"change\", and a way back a payment received paid, \"received\" (l4docs#8).\" This is the same sentence as R5-code's l4code#5. They hadn't touched those lines when I edited (Edit tool, anchored). Their later histories.ts edits (unplacedBox's and leftBy's docs, l4still#4) left mine intact. I checked it against histories.ts:144-158 and against r3-change-classes.test.ts:314-315, which already pins that a box's or a mixed box's spend change reads \"change\".",
+    "test": "Comment only, no new test. I ran shown-text, i18n-assembly and history-classes (the source-scanning and class tests: 30 passed), then r3-change-classes and r3-way-back-classes (36 passed). tsc --noEmit is clean (exit 0, no output).",
+    "failing_before": "The header said \"Anything merged with it, a spend's change included, reads \"lovejoin\"\", which merged() contradicts: merged([mixedBox(B), leftBy(A)]).origin is \"change\" (r3-change-classes.test.ts:315).",
+    "passing_after": "The header now matches merged(). The tests above pass, and tsc is clean.",
+    "left": "R5-code's l4code#5 is covered by this edit; tell them, so they don't edit the same sentence again."
+   },
+   {
+    "id": "l4code#1/l4docs#3/l4still#2 (docs)",
+    "status": "done",
+    "what": "The merge order in the docs, as the lead called it and as R5-code's build.rs and lib.rs in the tree code it. privacy.md:173: \"when it must merge, boxes back from Lovejoin come last, as few as pay, the largest first: among as many, one the wallet knows is mixed first, and one tagged Unknown too after every other box\". Send's box-first rule is now scoped to \"where one pays alone\". flows.md:377 says the same, with step 1's rank stated where it applies (\"money you made private first and boxes last, a box the wallet knows is mixed before any other\"), and the fallbacks take \"the boxes in the same order\". architecture.md:137 scopes the Pay and Fund rank to where one box pays alone. architecture.md:139-141 has orders 1 to 3 take \"the boxes in the box order\" (3: \"the first j boxes in the box order\"). A new paragraph at architecture.md:144, **The box order**, names box_rank, boxes_largest_first and more_mixed, and boxes_to_merge through WebAssembly's Worth::apart. It says: known boxes largest first, so as few as pay; where that pays, the choice of as many with the most mixed boxes that pays too; a box of unknown making after every other box; with tokens sent, a box of their own class counts as mixed; the purpose's rank picks only the one box that pays alone. architecture.md:154 notes that a box beside Unknown money merges last, by box_rank. wasm/README.md:56 gains the merge clause. I wrote \"tagged Unknown too\" rather than \"whose making it can't tell\": box_rank 2 is any non-box part, which in a box's class can only be Unknown money.",
+    "test": "check_words5.py (the l4code#1 checks). Checked against R5-code's diffs of build.rs (box_rank, boxes_largest_first, more_mixed, more_mixed_built, boxes_to_merge, and place() in orders a and b) and wasm/src/lib.rs (Worth::apart's places). I replayed the README test's export check in Python: 95 exports, none missing.",
+    "failing_before": "\"FAIL l4code#1: privacy.md:173 still says 'when it must merge, boxes back from Lovejoin come last, one at a time.'\", \"FAIL l4code#1: architecture.md:141 still says '3. for j = 0, 1, 2 …, the j largest boxes, then every other UTxO'\" and \"FAIL l4code#1: flows.md:377 still says 'boxes back from Lovejoin last, one at a time, a box the wallet knows is mixed before any other (chunk 51, l3r…'\".",
+    "passing_after": "53 of 53.",
+    "left": "architecture.md:144 names R5-code's helpers as they stand in the tree; a rename means a matching docs edit."
+   },
+   {
+    "id": "l4code#2 (docs)",
+    "status": "done",
+    "what": "The hatch's private payer order: a box marked mixed first, then boxes alone, then the rest. privacy.md:432: \"A box the wallet knows is mixed goes first, then one back from Lovejoin with no other history, since neither ties an account (the note under this payer says one marked only Back from Lovejoin): not one whose making...\". flows.md:526 and architecture.md:759 say the same: \"a box marked mixed first (origin `mixed`, as a funding and a Send take one where one box pays alone: chunk 51, l4code#2), then one back from Lovejoin with no other history (`knownBox`: boxes alone; ...)\". Policy :93: \"A session's funding and a private payment, too, take a box it knows is mixed before one it can't tell the making of, and so does bringing a box back paid from your private balance.\" I checked it against R5-code's fromLovejoin in lovejoin.ts: mixed 0, knownBox 1, else 2.",
+    "test": "check_words5.py (the l4code#2 checks, policy included).",
+    "failing_before": "\"FAIL l4code#2: privacy.md:432 still says 'One back from Lovejoin with no other history goes first, since it ties no account'\", \"FAIL l4code#2: flows.md:526 still says 'one back from Lovejoin with no other history first, which ties no account'\" and \"FAIL l4code#2: privacy-policy.md lacks \"A session's funding and a private payment, too, take a box it knows is mixed...\"\".",
+    "passing_after": "53 of 53.",
+    "left": "privacy.md:432 quotes R5-code's new en words (\"marked only Back from Lovejoin\"); if the lead changes that string, update the quote."
+   }
+  ],
+  "strings": [],
+  "policy_facts": [
+   "This round I own the policy and wrote it myself. Every change sits inside the unshipped 18 November 2026 entry and the two body passages it describes (the Lovejoin row :28 and the Koios bullet :44). The Effective line is unchanged and there is no new date.",
+   "Nothing new is sent or kept by these words. They say what the code at 1e1b0647 already does: each later pool read that counts your boxes (opening Lovejoin's page, any Bring one back press, the wallet's own runs at an unlock or a due time) asks again about a box the Cardano server hasn't answered for yet, until it answers. Koios gets the request; our server answers from its listing.",
+   "Bring one back anyway takes the box it's pressed for without that question, and so does a box coming back by itself from a retired pool. But the pool read before each asks again about any box not answered for yet, and that is the box Bring one back anyway takes first where there is one.",
+   "Bring every box back now in Settings, Bring every box in this pool back now on a pool's page, the retired pools' run and Pay from my private balance anyway take a box without that question.",
+   "For a 1.9.1 answer saying a deposit made a box still in a current pool, the once-more ask takes in, in the same request, that pool's other boxes of yours the wallet has no record or answer for. privacy.md also says the restore-case form: while a box is held for an answer, each such read asks about the pool's other unrecorded boxes too.",
+   "Bringing a box back paid from the private balance takes a box the wallet knows is mixed before one it can't tell the making of, as a session's funding and a private payment do (R5-code's l4code#2, now in the 18 November entry)."
+  ],
+  "needs_wasm_rebuild": [],
+  "files": [
+   "seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md",
+   "seedelf-platform/seedelf-web-wallet/docs/privacy.md",
+   "seedelf-platform/seedelf-web-wallet/docs/architecture.md",
+   "seedelf-platform/seedelf-web-wallet/docs/flows.md",
+   "seedelf-platform/seedelf-web-wallet/docs/development.md",
+   "seedelf-platform/seedelf-web-wallet/wasm/README.md",
+   "seedelf-platform/seedelf-web-wallet/extension/src/shared/histories.ts",
+   "seedelf-platform/seedelf-web-wallet/extension/tests/r5-when-it-asks.test.ts"
+  ],
+  "notes": "Edited only in FIXTREE, using anchored edits. Nothing is committed. Every hunk in the six doc files is mine. histories.ts is shared with R5-code: mine is only the header, lines 20 to 34 (l4docs#8, the same sentence as their l4code#5). Their own histories.ts edits came after mine and left it intact.\n\n1. Round four's words checker (work/R4-docs/check_words4.py) now passes 42 of 54. The 12 failing pins are all sentences round five rewrote on purpose, and every one of its ABSENT checks still holds:\n- l3time#1 ×2, l3docs#2 and l3still#1: the policy's ask lists (l4docs#1, l4still#1, l4docs#7).\n- l3rank#3: the policy's funding sentence (l4code#2), and architecture.md's \\\"a box marked mixed before any other (chunk 51, l3rank#3)\\\", now \\\"...where one pays alone\\\" (l4code#1).\n- l3docs#5, l3docs#4 and l3still#7: privacy.md:173, :81 and :107 (l4docs#6).\n- l3time#3 ×3: the hatch order (l4code#2).\nThe new checker is work/R5-docs/check_words5.py. On HEAD's docs (copied to work/R5-docs/head-tree/) it passes 3 of 53; on the tree, 53 of 53.\n\n2. The pins in extension/tests/r5-when-it-asks.test.ts hold the code to the new words. They pass on HEAD's code and on the tree with R5-code's changes, in both builds, and need no WebAssembly rebuild. The verifiers' versions of these tests, which expected the old words, failed on HEAD (quoted per item).\n\n3. A slip by R5-code, not mine and not touched: their histories.ts edits left `export const unplacedBox =(txHash` and `export const leftBy =(txHash` without a space after `=` (histories.ts about :90 and :105).\n\n4. Some words depend on R5-code's code being in the tree: architecture.md:565 (sharedBeyond), :144 (box_rank, boxes_largest_first, more_mixed, boxes_to_merge), :759 and privacy.md:432 (fromLovejoin, and their new note words \\\"marked only Back from Lovejoin\\\"). All of it is in the tree now. Check these docs lines if any of it changes.\n\n5. Both builds were run for the new tests. tsc --noEmit is clean after all my edits."
+ }
+]

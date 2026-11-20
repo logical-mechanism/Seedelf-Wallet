@@ -1,0 +1,223 @@
+--- seedelf-platform/seedelf-core/tests/mint_test.rs	2026-11-19 12:50:19.924387906 -0800
++++ seedelf-platform/seedelf-core/tests/mint_test.rs	2026-11-19 14:00:08.730506850 -0800
+@@ -6127,6 +6127,220 @@
+             ),
+         }
+     }
++
++    /// l8words#1 (round eight's last look): the pin above with TM1 and TM2 plain (T1, T2) and U added, a way back of
++    /// unknown making of 10 ₳. The 20, T1 and T2 still pay in 22 inputs, with no box of unknown making; every doc says a
++    /// merge in one transaction takes one of unknown making beyond what pays only where one must go.
++    #[test]
++    fn l8words_1_no_box_of_unknown_making_where_the_20_t1_and_t2_pay() {
++        let w = world();
++        let money: Vec<UtxoResponse> = (0..20u8)
++            .map(|i| owned(&w, 0x10 + i, 0, 10_000_000, &[]))
++            .collect();
++        let t1 = owned(&w, 0x40, 0, 5_100_000, &[("Y", 1)]);
++        let t2 = owned(&w, 0x41, 0, 5_100_000, &[("Y", 1)]);
++        let p = owned(&w, 0x42, 0, 5_020_000, &[]);
++        let many_names: Vec<String> = (0..19)
++            .map(|i| format!("{i:02}{}", "n".repeat(30)))
++            .collect();
++        let many: Vec<(&str, u64)> = many_names.iter().map(|n| (n.as_str(), 1)).collect();
++        let tp = owned(&w, 0x43, 0, 7_000_000, &many);
++        let u = owned(&w, 0x44, 0, 10_000_000, &[]);
++        let with = |extra: &[&UtxoResponse]| -> Vec<UtxoResponse> {
++            money
++                .iter()
++                .cloned()
++                .chain(extra.iter().map(|u| (*u).clone()))
++                .collect()
++        };
++        let target = with(&[&t1, &t2]);
++        let mut known: Vec<(&UtxoResponse, Class)> =
++            money.iter().map(|u| (u, received_class(u))).collect();
++        known.push((&t1, box_class(&t1, Origin::Lovejoin)));
++        known.push((&t2, box_class(&t2, Origin::Lovejoin)));
++        known.push((&p, box_class(&p, Origin::Lovejoin)));
++        known.push((&tp, box_class(&tp, Origin::Lovejoin)));
++        known.push((&u, unknown_class(&u)));
++        let names = [(&t1, "T1"), (&t2, "T2"), (&p, "P"), (&tp, "TP"), (&u, "U")];
++        let mut wrong = Vec::new();
++        for out in [Out::Send, Out::Public, Out::Fund] {
++            let most = most_paid(150_000_000, 230_000_000, |l| {
++                pays_out(&w, &target, out, l).is_ok()
++            });
++            let lovelace = most - 10_000;
++            pays_out(&w, &target, out, lovelace).expect("the 20, T1 and T2 pay");
++            for (what, inputs) in [
++                ("the 20, P and T1", with(&[&p, &t1])),
++                ("the 20, P and TP", with(&[&p, &tp])),
++                ("the 20, TP and T1", with(&[&tp, &t1])),
++            ] {
++                let e = pays_out(&w, &inputs, out, lovelace).unwrap_err();
++                assert!(build::is_short(&e), "{out:?}: {what}: {e}");
++            }
++            let e = pays_out(&w, &with(&[&t1, &t2, &p]), out, lovelace).unwrap_err();
++            assert!(build::is_too_many(&e), "{out:?}: 23 inputs: {e}");
++            pays_out(&w, &with(&[&u]), out, lovelace).expect("the 20 and U pay too");
++            match picked_out(&w, &known, out, lovelace) {
++                Ok(spent) if !spent.iter().any(|s| s.tx_hash == u.tx_hash) => {}
++                Ok(spent) => wrong.push(format!(
++                    "{out:?} of {lovelace} (the 20, T1 and T2 pay up to {most}, none of unknown making): spent {}",
++                    named(&spent, &names)
++                )),
++                Err(e) => wrong.push(format!("{out:?} of {lovelace}: refused: {e}")),
++            }
++        }
++        assert!(
++            wrong.is_empty(),
++            "a box of unknown making merged in one transaction where a set without one pays:\n{}",
++            wrong.join("\n")
++        );
++    }
++
++    /// l8words#1's other shapes: `known` holds the 20 payments received, the boxes and U; `target`, without U, pays in
++    /// 22 inputs; each of `short` is short and `many` too many at just under what `target` pays. Lines where selection
++    /// spends U (or refuses).
++    fn l8w_spends_u(
++        w: &World,
++        known: &[(&UtxoResponse, Class)],
++        target: &[UtxoResponse],
++        short: &[(&str, Vec<UtxoResponse>)],
++        many: &[UtxoResponse],
++        u: &UtxoResponse,
++        names: &[(&UtxoResponse, &str)],
++    ) -> Vec<String> {
++        let mut wrong = Vec::new();
++        for out in [Out::Send, Out::Public, Out::Fund] {
++            let most = most_paid(150_000_000, 230_000_000, |l| pays_out(w, target, out, l).is_ok());
++            let lovelace = most - 10_000;
++            for (what, inputs) in short {
++                let e = pays_out(w, inputs, out, lovelace).unwrap_err();
++                assert!(build::is_short(&e), "{out:?}: {what}: {e}");
++            }
++            if !many.is_empty() {
++                let e = pays_out(w, many, out, lovelace).unwrap_err();
++                assert!(build::is_too_many(&e), "{out:?}: 23 inputs: {e}");
++            }
++            match picked_out(w, known, out, lovelace) {
++                Ok(spent) if !spent.iter().any(|s| s.tx_hash == u.tx_hash) => {}
++                Ok(spent) => wrong.push(format!(
++                    "{out:?} of {lovelace} (a set without U pays up to {most}): spent {} ({} inputs)",
++                    named(&spent, names),
++                    spent.len()
++                )),
++                Err(e) => wrong.push(format!("{out:?} of {lovelace}: refused: {e}")),
++            }
++        }
++        wrong
++    }
++
++    fn l8w_money(w: &World) -> Vec<UtxoResponse> {
++        (0..20u8)
++            .map(|i| owned(w, 0x10 + i, 0, 10_000_000, &[]))
++            .collect()
++    }
++
++    fn l8w_with(money: &[UtxoResponse], extra: &[&UtxoResponse]) -> Vec<UtxoResponse> {
++        money
++            .iter()
++            .cloned()
++            .chain(extra.iter().map(|u| (*u).clone()))
++            .collect()
++    }
++
++    /// B: no TP; a 21st payment received, R, of 3 ₳ of ADA alone, beside T1, T2 (plain, one pool) and P.
++    #[test]
++    fn l8words_1_b_a_small_21st_payment_in_place_of_tp() {
++        let w = world();
++        let money = l8w_money(&w);
++        let r = owned(&w, 0x30, 0, 3_000_000, &[]);
++        let t1 = owned(&w, 0x40, 0, 5_100_000, &[("Y", 1)]);
++        let t2 = owned(&w, 0x41, 0, 5_100_000, &[("Y", 1)]);
++        let p = owned(&w, 0x42, 0, 5_020_000, &[]);
++        let u = owned(&w, 0x44, 0, 10_000_000, &[]);
++        let mut known: Vec<(&UtxoResponse, Class)> =
++            money.iter().map(|u| (u, received_class(u))).collect();
++        known.push((&r, received_class(&r)));
++        known.push((&t1, box_class(&t1, Origin::Lovejoin)));
++        known.push((&t2, box_class(&t2, Origin::Lovejoin)));
++        known.push((&p, box_class(&p, Origin::Lovejoin)));
++        known.push((&u, unknown_class(&u)));
++        let names = [(&r, "R"), (&t1, "T1"), (&t2, "T2"), (&p, "P"), (&u, "U")];
++        let wrong = l8w_spends_u(
++            &w,
++            &known,
++            &l8w_with(&money, &[&t1, &t2]),
++            &[
++                ("the 20, R and P", l8w_with(&money, &[&r, &p])),
++                ("the 20, R and T1", l8w_with(&money, &[&r, &t1])),
++                ("the 20, P and T1", l8w_with(&money, &[&p, &t1])),
++            ],
++            &l8w_with(&money, &[&p, &t1, &t2]),
++            &u,
++            &names,
++        );
++        assert!(wrong.is_empty(), "B: U merged where the 20, T1 and T2 pay:\n{}", wrong.join("\n"));
++    }
++
++    /// C, the control: no TP, no R. 1e1b0647's c over the rest without U (j = 0) grows the 20, T1 and T2.
++    #[test]
++    fn l8words_1_c_control_without_tp_round_eights_pass_finds_it() {
++        let w = world();
++        let money = l8w_money(&w);
++        let t1 = owned(&w, 0x40, 0, 5_100_000, &[("Y", 1)]);
++        let t2 = owned(&w, 0x41, 0, 5_100_000, &[("Y", 1)]);
++        let p = owned(&w, 0x42, 0, 5_020_000, &[]);
++        let u = owned(&w, 0x44, 0, 10_000_000, &[]);
++        let mut known: Vec<(&UtxoResponse, Class)> =
++            money.iter().map(|u| (u, received_class(u))).collect();
++        known.push((&t1, box_class(&t1, Origin::Lovejoin)));
++        known.push((&t2, box_class(&t2, Origin::Lovejoin)));
++        known.push((&p, box_class(&p, Origin::Lovejoin)));
++        known.push((&u, unknown_class(&u)));
++        let names = [(&t1, "T1"), (&t2, "T2"), (&p, "P"), (&u, "U")];
++        let wrong = l8w_spends_u(
++            &w,
++            &known,
++            &l8w_with(&money, &[&t1, &t2]),
++            &[("the 20, P and T1", l8w_with(&money, &[&p, &t1]))],
++            &l8w_with(&money, &[&p, &t1, &t2]),
++            &u,
++            &names,
++        );
++        assert!(wrong.is_empty(), "C: U merged where the 20, T1 and T2 pay:\n{}", wrong.join("\n"));
++    }
++
++    /// D: no P, no TP. Q, a plain way back of another token pool, 5.15 ₳ and a Z of another policy, weighs more than T1
++    /// and T2 and is larger, but beside either is short.
++    #[test]
++    fn l8words_1_d_a_way_back_of_another_pool_beside_the_pair() {
++        const OTHER_POLICY: &str = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0";
++        let w = world();
++        let money = l8w_money(&w);
++        let t1 = owned(&w, 0x40, 0, 5_100_000, &[("Y", 1)]);
++        let t2 = owned(&w, 0x41, 0, 5_100_000, &[("Y", 1)]);
++        let mut q = owned(&w, 0x45, 0, 5_150_000, &[("Z", 1)]);
++        for asset in q.asset_list.iter_mut().flatten() {
++            asset.policy_id = OTHER_POLICY.to_string();
++        }
++        let u = owned(&w, 0x44, 0, 10_000_000, &[]);
++        let mut known: Vec<(&UtxoResponse, Class)> =
++            money.iter().map(|u| (u, received_class(u))).collect();
++        known.push((&t1, box_class(&t1, Origin::Lovejoin)));
++        known.push((&t2, box_class(&t2, Origin::Lovejoin)));
++        known.push((&q, box_class(&q, Origin::Lovejoin)));
++        known.push((&u, unknown_class(&u)));
++        let names = [(&t1, "T1"), (&t2, "T2"), (&q, "Q"), (&u, "U")];
++        let wrong = l8w_spends_u(
++            &w,
++            &known,
++            &l8w_with(&money, &[&t1, &t2]),
++            &[("the 20, Q and T1", l8w_with(&money, &[&q, &t1]))],
++            &l8w_with(&money, &[&q, &t1, &t2]),
++            &u,
++            &names,
++        );
++        assert!(wrong.is_empty(), "D: U merged where the 20, T1 and T2 pay:\n{}", wrong.join("\n"));
++    }
+ }
+ 
+ /// Where a Seedelf spend puts its change (privacy review §3.7).

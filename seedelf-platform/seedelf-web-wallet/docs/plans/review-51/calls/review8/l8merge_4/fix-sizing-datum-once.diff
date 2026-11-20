@@ -1,0 +1,19 @@
+--- transaction-head.rs	2026-11-19 13:48:06.713917456 -0800
++++ transaction-fix.rs	2026-11-19 14:09:49.008523249 -0800
+@@ -198,9 +198,14 @@
+ /// points), so a fixed one prices exactly as a real one, and no randomness or
+ /// curve arithmetic is spent on a datum nobody sees.
+ fn sizing_datum() -> Result<Vec<u8>> {
+-    Register::create(Scalar::ONE)
++    static DATUM: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
++    if let Some(datum) = DATUM.get() {
++        return Ok(datum.clone());
++    }
++    let datum = Register::create(Scalar::ONE)
+         .context("Failed To Construct Points")?
+-        .to_vec()
++        .to_vec()?;
++    Ok(DATUM.get_or_init(|| datum).clone())
+ }
+ 
+ /// Minimum lovelace for a seedelf-style output (datum + seedelf token).

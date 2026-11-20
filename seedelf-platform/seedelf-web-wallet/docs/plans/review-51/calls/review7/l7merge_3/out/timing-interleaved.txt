@@ -1,0 +1,45 @@
+== HEAD run 1
+a funding of 2000 ₳: 206 attempts, 206 of them over 22 inputs (90610 inputs in all), 1.046253705s
+a funding of 3000 ₳: 270 attempts, 270 of them over 22 inputs (170516 inputs in all), 1.430867218s
+one transaction: 121 attempts, 121 of them over 22 inputs (53361 inputs in all), 582.745094ms
+the parts' 9 reruns: 793 attempts over 22 inputs (257039 inputs in all), 2.605156736s
+== S run 1
+a funding of 2000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 186.921679ms
+a funding of 3000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 161.195741ms
+one transaction: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 32.574836ms
+the parts' 9 reruns: 0 attempts over 22 inputs (0 inputs in all), 289.118559ms
+== F run 1
+a funding of 2000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 191.816461ms
+a funding of 3000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 164.602773ms
+one transaction: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 18.302375ms
+the parts' 9 reruns: 0 attempts over 22 inputs (0 inputs in all), 232.342859ms
+== HEAD run 2
+a funding of 2000 ₳: 206 attempts, 206 of them over 22 inputs (90610 inputs in all), 869.036458ms
+a funding of 3000 ₳: 270 attempts, 270 of them over 22 inputs (170516 inputs in all), 1.550023717s
+one transaction: 121 attempts, 121 of them over 22 inputs (53361 inputs in all), 554.78444ms
+the parts' 9 reruns: 793 attempts over 22 inputs (257039 inputs in all), 2.906090599s
+== S run 2
+a funding of 2000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 185.930123ms
+a funding of 3000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 166.166788ms
+one transaction: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 18.640529ms
+the parts' 9 reruns: 0 attempts over 22 inputs (0 inputs in all), 143.931699ms
+== F run 2
+a funding of 2000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 248.505438ms
+a funding of 3000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 198.479814ms
+one transaction: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 16.856645ms
+the parts' 9 reruns: 0 attempts over 22 inputs (0 inputs in all), 158.15531ms
+== HEAD run 3
+a funding of 2000 ₳: 206 attempts, 206 of them over 22 inputs (90610 inputs in all), 1.084401276s
+a funding of 3000 ₳: 270 attempts, 270 of them over 22 inputs (170516 inputs in all), 2.093341754s
+one transaction: 121 attempts, 121 of them over 22 inputs (53361 inputs in all), 590.887495ms
+the parts' 9 reruns: 793 attempts over 22 inputs (257039 inputs in all), 1.934104117s
+== S run 3
+a funding of 2000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 152.162565ms
+a funding of 3000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 147.882537ms
+one transaction: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 12.072585ms
+the parts' 9 reruns: 0 attempts over 22 inputs (0 inputs in all), 92.242051ms
+== F run 3
+a funding of 2000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 117.995077ms
+a funding of 3000 ₳: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 111.48281ms
+one transaction: 0 attempts, 0 of them over 22 inputs (0 inputs in all), 15.947969ms
+the parts' 9 reruns: 0 attempts over 22 inputs (0 inputs in all), 127.138695ms

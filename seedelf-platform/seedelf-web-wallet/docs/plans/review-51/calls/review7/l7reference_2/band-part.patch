@@ -1,0 +1,111 @@
+--- a/seedelf-core/tests/box_rule_reference_test.rs
++++ b/seedelf-core/tests/box_rule_reference_test.rs
+@@ -812,6 +812,15 @@
+     token: &[6_000_000, 7_500_000, 14_500_000],
+ };
+ 
++/// Review scratch (l7reference#2): boxes of ADA alone between what a token pool's way back pays beside a change and
++/// the ADA it holds (5.9 ₳ beside 6 ₳, 7.4 ₳ beside 7.5 ₳, 14.4 ₳ beside 14.5 ₳), where the one-transaction weight and
++/// a box's ADA order them differently; 5.9 ₳ beside 7.5 ₳ is also in WINDOW's window, where that weight and what a box
++/// adds disagree. Each is 0.0724 ₳ over what the token box pays, clear of its token's few bytes of fee.
++const BAND: Sizes = Sizes {
++    ada: &[5_900_000, 7_400_000, 14_400_000],
++    token: &[6_000_000, 7_500_000, 14_500_000],
++};
++
+ /// What a part's balances are like.
+ #[derive(Clone, Copy)]
+ struct Shape {
+@@ -825,6 +834,9 @@
+     other_session: bool,
+     /// The amounts are drawn near what one box and the other money pay, where weights and the input limit decide.
+     near: bool,
++    /// Every balance holds exactly one token pool's way back, at a random place among its boxes, so no two boxes
++    /// share a change's least (the rule's per-box weight's own margin, l7reference#1).
++    one_token_box: bool,
+ }
+ 
+ const DEFAULT: Shape = Shape {
+@@ -834,6 +846,7 @@
+     small: 2 * ADA,
+     other_session: false,
+     near: false,
++    one_token_box: false,
+ };
+ 
+ /// A balance and four spends over it, from `seed`.
+@@ -846,14 +859,18 @@
+     };
+     let boxes = 1 + rng.below(shape.most_boxes) as usize;
+     let mut items: Vec<(UtxoResponse, Kind)> = Vec::new();
+-    for _ in 0..boxes {
++    let token_at = shape
++        .one_token_box
++        .then(|| rng.below(boxes as u64) as usize);
++    for i in 0..boxes {
+         let kind = match rng.below(100) {
+             0..40 => Kind::Mixed,
+             40..75 => Kind::Plain,
+             _ => Kind::Unknown,
+         };
+         let sizes = shape.sizes;
+-        let u = if rng.below(5) == 0 {
++        let token = rng.below(5) == 0;
++        let u = if token_at.map_or(token, |at| i == at) {
+             let lovelace = sizes.token[rng.below(sizes.token.len() as u64) as usize];
+             let pool = ["poolA", "poolB"][rng.below(2) as usize];
+             utxo(w, next(), lovelace, Some(pool))
+@@ -1041,6 +1058,53 @@
+     assert!(tally.merged > 0 && tally.past_the_limit > 0, "{tally:?}");
+ }
+ 
++/// Review scratch (l7reference#2): boxes of ADA alone between what a token pool's way back pays beside a change and
++/// the ADA it holds, one such way back to a balance, amounts near what one box and the other money pay. Weighed by its
++/// ADA, or by what it adds, a token pool's way back goes on the wrong side of such a box.
++const BAND_SHAPE: Shape = Shape {
++    sizes: BAND,
++    near: true,
++    one_token_box: true,
++    ..DEFAULT
++};
++
++#[test]
++fn selection_picks_the_best_set_by_the_box_rule_where_a_weight_could_disagree_with_the_ada_a_box_holds() {
++    let tally = sweep(650..670, BAND_SHAPE);
++    assert!(tally.merged > 0, "{tally:?}");
++}
++
++#[test]
++fn selection_picks_the_best_set_by_the_box_rule_where_a_weight_could_disagree_with_the_ada_a_box_holds_too() {
++    let tally = sweep(670..690, BAND_SHAPE);
++    assert!(tally.merged > 0, "{tally:?}");
++}
++
++/// Review scratch: the same over more seeds (L7R2_FROM, L7R2_COUNT), past the input limit with L7R2_LIMIT, to count
++/// how often each weight is caught.
++#[test]
++#[ignore]
++fn band_explore() {
++    let var = |name: &str, or: u64| {
++        std::env::var(name)
++            .ok()
++            .and_then(|s| s.parse().ok())
++            .unwrap_or(or)
++    };
++    let (from, count) = (var("L7R2_FROM", 600), var("L7R2_COUNT", 200));
++    let limit = std::env::var_os("L7R2_LIMIT").is_some();
++    let shape = Shape {
++        sizes: BAND,
++        most_boxes: var("L7R2_MOST", 6),
++        past_the_limit: limit,
++        small: if limit { 5 * ADA } else { 2 * ADA },
++        near: true,
++        one_token_box: std::env::var_os("L7R2_ANY").is_none(),
++        ..DEFAULT
++    };
++    sweep(from..from + count, shape);
++}
++
+ /// The sweep: many more balances, of up to eight boxes, of every shape above.
+ #[test]
+ #[ignore]
