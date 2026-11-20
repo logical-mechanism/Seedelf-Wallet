@@ -52,7 +52,7 @@ This is l6words#1's code option, the backlog's *The UTxOs holding a token being 
 ### 4. ⬜ The words
 
 - Where the search is exact, the margins leave privacy.md, architecture.md, flows.md and the WebAssembly's README.
-- The privacy policy gets a new dated *Changes* entry, since 1.9.2's 18 November entry has shipped.
+- The privacy policy gets a new dated *Changes* entry, since 1.9.2's 19 November entry has shipped. That entry moved from 18 to 19 November at 1.9.2's merge, so fix the code comments that still cite "the 18 November entry": `token_holders_test.rs`, and the extension's `phrase-typed-translate`, `r5-when-it-asks` (one test title too) and `r6-when-it-asks` tests.
 - The two backlog lines go: *An exact search for the box rule's rules 2 and 3* and the holders' line.
 
 ## Done means
