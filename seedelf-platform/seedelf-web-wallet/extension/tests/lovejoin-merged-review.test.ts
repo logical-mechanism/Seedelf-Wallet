@@ -17,7 +17,7 @@ import { handle, type Context } from "../src/background/handlers";
 import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, type CopyRef, type PoolRef } from "../src/background/lovejoin";
 import { LovejoinLaunchService } from "../src/background/lovejoin-launch";
-import { HOLDER, PoolDiscovery, serviceDeps, type FoundPool, type Kept } from "../src/background/lovejoin-pools";
+import { BOX_READER, HOLDER, PoolDiscovery, serviceDeps, type FoundPool, type Kept } from "../src/background/lovejoin-pools";
 import { builtOutputs, Minswap } from "../src/background/minswap";
 import { PendingService } from "../src/background/pending";
 import { privateIndexClient } from "../src/background/private-index";
@@ -330,6 +330,28 @@ describe("a copy, as discovery hands it over (the merged fixes' review, MERGED-1
     await local.remove(KEY);
     await local.set(KEY, { height: 0, pools: [earlier("aa"), ...copies] });
     expect((await found.copiesUnread("preprod")).map((p) => p.id)).toEqual([TOKEN, "bb".repeat(28)]);
+  });
+
+  // Chunk 51, gap-g6#1: the copies read once were never read again, so this release's box reader (a box datum in
+  // constructor 0's general form, r3a#1; a key address carrying mix_box's hash no box, x2#1) never reached a copy a
+  // release before it read: a box of the wallet's there it now finds stayed unread for good. Read with another reader,
+  // every copy is read once again under today's, the same for every device updated.
+  it("reads every copy once again after the box reader changed, and once only under today's (chunk 51, gap-g6#1)", async () => {
+    const t = await wallet();
+    const local = memoryArea();
+    const found = discoveryOf(t, local);
+    const copies = [REAL, earlier("bb", BLOCK + 10)];
+    const refs = copies.map((p) => `${p.ref.reference.tx_hash}#${p.ref.reference.tx_index}`);
+    // As a release before this one left them: both read once, under its box reader, which the record doesn't name.
+    await local.set(KEY, { height: 0, pools: [earlier("aa"), ...copies], checked: refs });
+    expect((await found.copiesUnread("preprod")).map((p) => p.id)).toEqual([TOKEN, "bb".repeat(28)]);
+    // Read again, under today's: never again, and the record says which reader read them.
+    await found.copiesRead("preprod", refs);
+    expect(await found.copiesUnread("preprod")).toEqual([]);
+    expect((await local.get<{ reader?: number }>(KEY))!.reader).toBe(BOX_READER);
+    await found.scan("preprod");
+    expect(await found.copiesUnread("preprod")).toEqual([]);
+    expect((await local.get<{ reader?: number; checked?: string[] }>(KEY))!).toMatchObject({ reader: BOX_READER, checked: refs });
   });
 });
 

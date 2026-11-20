@@ -4,8 +4,8 @@ import Lovejoin.Every.ReadableOwner
 
 one_shot_mint's `mint` handler in the Aiken source's terms, over a typed `TxInfo`: the seed
 spent, exactly one token under the policy, the first output that passes reference.ak's
-`output_at_reference_holder` with an inline `ReferenceDatum`, and `datum_sane` with
-`token_sane`. Proved equal to the raw `launchResult` on `IsData.toData` of the typed value, for a
+`output_at_reference_holder`, whose datum must then be an inline `ReferenceDatum` (the search
+doesn't go on past it), and `datum_sane` with `token_sane`. Proved equal to the raw `launchResult` on `IsData.toData` of the typed value, for a
 mint and outputs the ledger accepts. -/
 
 namespace Lovejoin.Every.Readable

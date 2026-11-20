@@ -89,6 +89,42 @@ fn create_proof_rejects_non_vkh_bound() {
     assert!(create_proof(datum, sk, "nothex".to_string()).is_err());
 }
 
+/// A compressed point on the curve but outside the prime-order subgroup:
+/// `from_compressed` refuses it, as the wallet contract does.
+fn torsion_point() -> String {
+    (1u8..=u8::MAX)
+        .find_map(|x| {
+            let mut bytes = [0u8; 48];
+            bytes[0] = 0x80;
+            bytes[47] = x;
+            let point = blstrs::G1Affine::from_compressed_unchecked(&bytes).into_option()?;
+            (!bool::from(point.is_torsion_free())).then(|| hex::encode(bytes))
+        })
+        .expect("a small x off the subgroup")
+}
+
+/// No proof for a register outside the prime-order subgroup (chunk 51,
+/// t1a#1). A proof decodes only the generator and hashes the public value,
+/// so the refusal is all that stops a public value off the subgroup, or not
+/// a point at all, from getting one.
+#[test]
+fn create_proof_refuses_a_register_outside_the_prime_order_subgroup() {
+    let sk: Scalar = random_scalar();
+    let good: Register = Register::create(sk).unwrap().rerandomize().unwrap();
+    let vkh = "00112233445566778899aabbccddeeff00112233445566778899aabb";
+    for datum in [
+        Register::new(good.generator.clone(), torsion_point()),
+        Register::new(good.generator.clone(), "00".repeat(48)),
+        Register::new(torsion_point(), good.public_value.clone()),
+    ] {
+        assert!(
+            create_proof(datum.clone(), sk, vkh.to_string()).is_err(),
+            "{datum:?}"
+        );
+    }
+    assert!(create_proof(good, sk, vkh.to_string()).is_ok());
+}
+
 /// The deployed verifier reads z as `scalar.from_bytearray_big_endian(z_b)`
 /// (5b82530 lib/schnorr.ak, stdlib v2.2.0): any length, a proof's when its
 /// value is below the group order. `prove` (WebAssembly's `verifyProof`)

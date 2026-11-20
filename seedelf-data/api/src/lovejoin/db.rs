@@ -148,15 +148,14 @@ const REGISTERS: &str = "select sr.tx_id::bigint as launch, encode(sa.hash_raw, 
      from stake_registration sr join stake_address sa on sa.id = sr.addr_id \
      where sr.tx_id = any($1::bigint[])";
 
-/// What each of `found`'s transactions did: what it spent, the reference
-/// scripts it put at `holder`, the script credentials it registered.
-pub async fn launches(
-    chain: &Chain,
-    holder: &[u8],
-    found: &[&Found],
-) -> Result<HashMap<i64, Launch>> {
-    let ids: Vec<i64> = found.iter().map(|f| f.tx_id).collect();
-    let scripts = format!(
+/// `launches`' query of the reference scripts: `$1` the launches'
+/// transaction ids, `$2` the holder's hash. Only at an address whose payment
+/// part is the holder's script, whatever its stake part, as the wallet reads a
+/// pool's scripts (seedelf-core's `at_holder`): `payment_cred` is the same 28
+/// bytes at the KEY address under that hash (chunk 51, x2#1's twin at the
+/// holder).
+fn scripts_sql() -> String {
+    format!(
         "select o.tx_id::bigint as launch, {}, encode(s.hash, 'hex') as script_hash \
          from tx_out o \
          join tx t on t.id = o.tx_id \
@@ -164,10 +163,21 @@ pub async fn launches(
          join address a on a.id = o.address_id \
          join script s on s.id = o.reference_script_id \
          left join datum d on d.id = o.inline_datum_id \
-         where o.tx_id = any($1::bigint[]) and a.payment_cred = $2::bytea \
+         where o.tx_id = any($1::bigint[]) and a.payment_cred = $2::bytea and a.has_script \
          order by o.id",
         row_columns("false")
-    );
+    )
+}
+
+/// What each of `found`'s transactions did: what it spent, the reference
+/// scripts it put at `holder`'s script, the script credentials it registered.
+pub async fn launches(
+    chain: &Chain,
+    holder: &[u8],
+    found: &[&Found],
+) -> Result<HashMap<i64, Launch>> {
+    let ids: Vec<i64> = found.iter().map(|f| f.tx_id).collect();
+    let scripts = scripts_sql();
     let client = chain.private().await?;
     // On one connection, pipelined: one round trip to home.
     let by_id: &[&(dyn ToSql + Sync)] = &[&ids];
@@ -267,33 +277,35 @@ impl Ever {
     }
 }
 
-/// Every output ever at any of `creds` by the block at slot `at`.
+/// `ever`'s query: `$1` the scripts' hashes, `$2` the slot.
+const EVER: &str = "with outs as materialized ( \
+       select o.id, o.tx_id, o.address_id, o.value, o.inline_datum_id, o.consumed_by_tx_id \
+       from address a join tx_out o on o.address_id = a.id \
+       where a.payment_cred = any($1::bytea[]) and a.has_script) \
+     select encode(a.payment_cred, 'hex') as cred, o.tx_id::bigint as made_by, \
+            o.value::text as lovelace, d.bytes as datum, \
+            (select coalesce(json_agg(json_build_array(encode(m.policy, 'hex'), \
+                    encode(m.name, 'hex'), mto.quantity::text)), '[]'::json)::text \
+               from ma_tx_out mto join multi_asset m on m.id = mto.ident \
+               where mto.tx_out_id = o.id) as assets, \
+            case when cb.slot_no <= $2 then o.consumed_by_tx_id::bigint end as spent_by \
+     from outs o \
+     join tx t on t.id = o.tx_id \
+     join block b on b.id = t.block_id \
+     join address a on a.id = o.address_id \
+     left join datum d on d.id = o.inline_datum_id \
+     left join tx ct on ct.id = o.consumed_by_tx_id \
+     left join block cb on cb.id = ct.block_id \
+     where b.slot_no <= $2";
+
+/// Every output ever at any of `creds`, scripts' hashes, by the block at slot
+/// `at`: at an address whose payment part is one of the scripts, whatever its
+/// stake part, as the wallet reads a pool's rows. db-sync's `payment_cred` is
+/// a key's hash too, and nothing can spend what's at the KEY address under a
+/// script's hash (chunk 51, x2#1).
 pub async fn ever(chain: &Chain, creds: &[Vec<u8>], at: i64) -> Result<Vec<Ever>> {
     let client = chain.private().await?;
-    let rows = client
-        .query(
-            "with outs as materialized ( \
-               select o.id, o.tx_id, o.address_id, o.value, o.inline_datum_id, o.consumed_by_tx_id \
-               from address a join tx_out o on o.address_id = a.id \
-               where a.payment_cred = any($1::bytea[])) \
-             select encode(a.payment_cred, 'hex') as cred, o.tx_id::bigint as made_by, \
-                    o.value::text as lovelace, d.bytes as datum, \
-                    (select coalesce(json_agg(json_build_array(encode(m.policy, 'hex'), \
-                            encode(m.name, 'hex'), mto.quantity::text)), '[]'::json)::text \
-                       from ma_tx_out mto join multi_asset m on m.id = mto.ident \
-                       where mto.tx_out_id = o.id) as assets, \
-                    case when cb.slot_no <= $2 then o.consumed_by_tx_id::bigint end as spent_by \
-             from outs o \
-             join tx t on t.id = o.tx_id \
-             join block b on b.id = t.block_id \
-             join address a on a.id = o.address_id \
-             left join datum d on d.id = o.inline_datum_id \
-             left join tx ct on ct.id = o.consumed_by_tx_id \
-             left join block cb on cb.id = ct.block_id \
-             where b.slot_no <= $2",
-            &[&creds, &at],
-        )
-        .await?;
+    let rows = client.query(EVER, &[&creds, &at]).await?;
     rows.iter()
         .map(|row| {
             Ok(Ever {
@@ -359,5 +371,50 @@ mod tests {
             "{gather}"
         );
         assert!(rest.contains("where b.slot_no <= $2 and exists"), "{rest}");
+    }
+
+    /// Chunk 51, x2#1 (the data layer's copy): db-sync's `address.payment_cred`
+    /// is a key address's key hash as well as a script address's script hash,
+    /// so the KEY address whose hash is a pool's `mix_box` hash came back with
+    /// the pool's outputs. A stranger's box value there, under a box's datum,
+    /// counted as a box nothing can spend, and its payment as a deposit. The
+    /// crowd gathers only what `mix_box` spends, as the wallet reads a pool's
+    /// rows: an address whose payment part is the script, whatever its stake part.
+    #[test]
+    fn the_crowd_gathers_only_what_mix_box_spends() {
+        let (gather, rest) = EVER.split_at(EVER.find(") select").expect("a gather"));
+        assert!(
+            gather
+                .trim_end()
+                .ends_with("where a.payment_cred = any($1::bytea[]) and a.has_script"),
+            "{gather}"
+        );
+        // Every output the crowd reads is one gathered there.
+        assert!(rest.contains("from outs o"), "{rest}");
+        assert!(!rest.contains(" tx_out "), "{rest}");
+    }
+
+    /// Chunk 51, x2#1's twin at the holder: `payment_cred` is the holder's
+    /// hash at its KEY address too, so a reference script a launch put there
+    /// counted as put at the holder. The wallet reads a pool's scripts only
+    /// at the holder's script, whatever the stake part (seedelf-core's
+    /// `at_holder`), and shows no pool whose scripts it would carry. So it
+    /// dropped such a pool, which this listed as standard and, the earliest
+    /// of its values, kept for good: a stranger's launch hid every pool of
+    /// its values from the wallet's mainnet list.
+    #[test]
+    fn a_launchs_scripts_are_read_only_at_the_holders_script() {
+        let sql = scripts_sql();
+        let (_, filter) = sql.split_at(sql.rfind(" where ").expect("a filter"));
+        assert_eq!(
+            filter.trim(),
+            "where o.tx_id = any($1::bigint[]) and a.payment_cred = $2::bytea and a.has_script \
+             order by o.id"
+        );
+        // The address it filters on is the output's own.
+        assert!(
+            sql.contains("join address a on a.id = o.address_id"),
+            "{sql}"
+        );
     }
 }

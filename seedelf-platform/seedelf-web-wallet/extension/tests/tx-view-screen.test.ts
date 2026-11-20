@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DappTxSummary, SessionTxReview, SessionView, TxDetail, TxPlutus } from "../src/shared/rpc";
-import { plutusJson } from "../src/ui/components/PlutusTree";
+import { PlutusTree, plutusJson } from "../src/ui/components/PlutusTree";
 import { TxDetailBody, TxDetailModal, addressWords, certificateWords, redeemerWords } from "../src/ui/components/TxDetail";
 import { proposalWords } from "../src/ui/format";
 import { AccountsContext } from "../src/ui/accounts";
@@ -646,31 +646,54 @@ describe("a datum's tree opens, and holds all of it", () => {
     expect(html).toContain(">CBOR<");
     expect(html).toContain(">JSON<");
     // The JSON a reader copies holds every one of the two thousand.
-    const json = plutusJson(wide(2_000)) as { fields: unknown[] };
+    const json = JSON.parse(plutusJson(wide(2_000))!) as { fields: unknown[] };
     expect(json.fields).toHaveLength(2_000);
   });
 
   it("writes the JSON in Plutus data's detailed schema, as cardano-cli does", () => {
-    expect(
-      plutusJson({
-        type: "constr",
-        constructorIndex: "7",
-        fields: [
-          { type: "int", value: "-18446744073709551617" },
-          { type: "bytes", hex: "53656564656c66", text: "Seedelf" },
-          { type: "list", items: [{ type: "int", value: "1" }] },
-          { type: "map", entries: [{ key: { type: "bytes", hex: "6b", text: "k" }, value: { type: "int", value: "2" } }] },
-        ],
-      }),
-    ).toEqual({
+    const json = plutusJson({
+      type: "constr",
+      constructorIndex: "7",
+      fields: [
+        { type: "int", value: "-18446744073709551617" },
+        { type: "bytes", hex: "53656564656c66", text: "Seedelf" },
+        { type: "list", items: [{ type: "int", value: "1" }] },
+        { type: "map", entries: [{ key: { type: "bytes", hex: "6b", text: "k" }, value: { type: "int", value: "2" } }] },
+      ],
+    })!;
+    // Each number a JSON number, digit for digit however big: as strings, cardano-cli refused the file (chunk 51,
+    // e9b#3). A big one past what a JavaScript number holds is read here by its digits.
+    expect(json).toContain('"int": -18446744073709551617');
+    expect(JSON.parse(json.replace("-18446744073709551617", '"the big one"'))).toEqual({
       constructor: 7,
       fields: [
-        { int: "-18446744073709551617" },
+        { int: "the big one" },
         { bytes: "53656564656c66" },
-        { list: [{ int: "1" }] },
-        { map: [{ k: { bytes: "6b" }, v: { int: "2" } }] },
+        { list: [{ int: 1 }] },
+        { map: [{ k: { bytes: "6b" }, v: { int: 2 } }] },
       ],
     });
+  });
+
+  it("offers no JSON for data the detailed schema can't say, never a null (chunk 51, e9b#3)", () => {
+    // A constructor under a CBOR tag Plutus doesn't read, which the decoder names "tag N"; and a number past the 128
+    // bytes the decoder works out in decimal, which it writes in hex.
+    const odd: TxPlutus = { type: "constr", constructorIndex: "tag 1500", fields: [] };
+    const huge: TxPlutus = { type: "int", value: `-0x${"ab".repeat(200)}` };
+    expect(plutusJson(odd)).toBeUndefined();
+    expect(plutusJson({ type: "list", items: [{ type: "int", value: "1" }, huge] })).toBeUndefined();
+    for (const value of [odd, huge]) {
+      const html = renderToStaticMarkup(createElement(PlutusTree, { label: "Its datum", copyLabels: { cbor: "c", json: "j" }, hex: "00", value }));
+      expect(html).toContain(">CBOR<");
+      expect(html).not.toContain(">JSON<");
+    }
+    // The hex number is shortened as bytes are, with its size, and all of it on the element.
+    const leaf = renderToStaticMarkup(
+      createElement(PlutusTree, { label: "Its datum", copyLabels: { cbor: "c", json: "j" }, hex: "00", value: huge }),
+    );
+    expect(leaf).toContain(`data-value="-0x${"ab".repeat(200)}"`);
+    expect(leaf).toContain("200 bytes");
+    expect(leaf).not.toContain(`>-0x${"ab".repeat(200)}<`);
   });
 
   it("counts a map's pairs and a list's items, and names which is which", () => {

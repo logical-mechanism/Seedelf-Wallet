@@ -9,9 +9,11 @@
 //          move-in; Send only submits.
 // seedelf  A stealth mint from the Seedelf balance (the CLI's `util mint`,
 //          `build::mint`). It only hides the payer when that balance came
-//          from other people's Seedelf payments, so it takes received money
-//          first when the sealed history says which that is (privacy review
-//          §2.3).
+//          from other people's Seedelf payments or a mix, so it takes a box
+//          the wallet knows is mixed first, then received money, then any
+//          other box, and what an earlier spend of its own left after those,
+//          before money made private, when the sealed history says which that
+//          is (privacy review §2.3; chunk 51, B15, l2rank#6).
 //
 // Both are built by script-spend.ts's draft → Ogmios → finish, and kept in
 // session storage until Send: signed for the account, unsigned with its
@@ -19,7 +21,7 @@
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
-import { madePrivate, type HistoryClass } from "../shared/histories";
+import { leftBy, madePrivate, merged, type HistoryClass } from "../shared/histories";
 import type { MintSource, MintSummary, PendingTx, BuildStage } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import { rememberMint } from "./minted-by";
@@ -129,7 +131,10 @@ export class MintService {
       },
     );
     const histories = spentHistories(classes, finished.inputs, finished.classesMixed);
-    return this.keep(network, label, "seedelf", finished, changeHistory(classes, finished.inputs), histories);
+    // Its change, and its Seedelf, are tied to this mint in the open: the next stealth mint or a funding takes money
+    // others paid before them (chunk 51, money#2, own#1; the owner's answer 2 to B15).
+    const origin = merged([changeHistory(classes, finished.inputs), leftBy(finished.txHash)]);
+    return this.keep(network, label, "seedelf", finished, origin, histories);
   }
 
   /** `origin`: the history of what it leaves in the private balance; `histories`: a stealth mint's inputs'. */

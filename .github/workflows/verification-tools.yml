@@ -1,0 +1,42 @@
+name: Proofs' tools
+
+# seedelf-verification/test-tools.sh, the proofs' tools' own test: check.sh
+# and its expected failures, tally.py, Audit/'s count and run-all, and the
+# diag scan with its accepted list, on fake packages, with no Lean or Lake, in
+# about ten seconds. web-wallet.yml's check leaves seedelf-verification/ out,
+# so a Lean or a docs pull request stays fast, and nothing else ran the
+# script: a pull request that changed only one of its files merged with no
+# check (chunk 51, docs#7). So this runs on every pull request that changes
+# the script or a file it reads, which workflows.test.ts checks: on every pull
+# request that changes this file or the script, since web-wallet.yml's check
+# runs for those two (chunk 51, l2docs#1).
+#
+# Never make it a required check: a workflow a path filter skips never
+# reports, and a required check that never reports holds the pull request for
+# good (web-wallet.yml).
+on:
+  pull_request:
+    paths:
+      - "seedelf-verification/**/*.sh"
+      - "seedelf-verification/**/*.py"
+      - "seedelf-verification/**/*.txt"
+      # Read by line and column, against a console the script records.
+      - "seedelf-verification/Seedelf/PolicyBurn.lean"
+      - "seedelf-verification/Seedelf/PolicyMint.lean"
+      - ".github/workflows/verification-tools.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test-tools:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Its own stand-ins for lake, systemd-run and z3; bash and python3 are
+      # the runner's.
+      - name: The proofs' tools' own test
+        run: bash seedelf-verification/test-tools.sh

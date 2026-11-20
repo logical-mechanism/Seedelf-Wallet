@@ -1,0 +1,32 @@
+# Theorems that fail by design, for check.sh. A module whose build fails just as its entry here
+# records reads EXPECTED, which fails no run, where it would read FAILED. Just as recorded: each
+# theorem `fails:` names fails with an error that begins as `with:` does; nothing else in the module
+# fails, is Undetermined, a sorry or a ❌; its other theorems print every ✅ their source has; and
+# no other module fails in its build. Anything else reads FAILED, saying what differs. A failed
+# build leaves no trace, so check.sh reads this from the build's console, and tally.py still lists
+# the module as not ok (no trace).
+#
+# One entry a module, by its name, with the theorems that fail (as its source names them), the
+# error they fail with, why that's by design, and when it was seen. Each entry is a claim about the
+# proofs, so each is the owner's to approve, in the PR that adds it. An entry with no why or no
+# when counts for nothing.
+
+Seedelf.PolicyBurn
+  fails: burn_at_0 burn_at_255
+  with:  Inductive datatype with instance parameters not supported: `BitVec
+  why:   Their burns over a symbolic name reach Char's BitVec, which Blaster can't decide (README,
+         Proved in the kernel, not yet by Blaster). The kernel's policy_accepts_iff proves the
+         policy's rule, and Slice/ proves it by Blaster over an opaque slice. Its two other
+         theorems, burn_at_256_fails and burn_at_neg1_fails, are counted (README: PolicyBurn, 2).
+  when:  Seen 2026-11-02 (chunk 40's baseline) and 2026-11-03 at the current pin (the audit's
+         policyburn-policymint-no-trace: BitVec errors at :28 and :31 alone, ✅ at :34 and :37);
+         the same in chunk 51's runs, 2026-11-18 (review-51.md).
+
+Seedelf.PolicyMint
+  fails: mint_at_0_iff mint_at_255_iff
+  with:  Inductive datatype with instance parameters not supported: `BitVec
+  why:   Both are the policy's rule for a mint over a symbolic name, which reaches Char's BitVec,
+         as PolicyBurn's do (README, Proved in the kernel, not yet by Blaster). The kernel's
+         policy_accepts_iff proves the rule.
+  when:  Seen 2026-11-02 (chunk 40's baseline: both fail on BitVec); the same in chunk 51's runs,
+         2026-11-18 (review-51.md).

@@ -7,8 +7,12 @@
 // of each chain, those the last balance reading found (privacy review §2.17),
 // and up to 500 on each chain when it carries the account's own stake key.
 // One that only carries the stake key is `staked`, not the account's: anyone
-// can pair their own payment key with it (the 2026-11-02 bounty report).
-// Nothing is asked of anyone for it.
+// can pair their own payment key with it (the 2026-11-02 bounty report). One
+// of its payment keys under a stake part none of its accounts' is the
+// account's, `stakeElsewhere`: its stake works for someone else meanwhile
+// (chunk 51, x1a#1). Nothing is asked of anyone for it. Any address on the
+// network is paid, a script's too, which is flagged `script`: its payment
+// carries no datum (chunk 51, r2a#1). A Byron address isn't.
 
 import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
@@ -62,24 +66,37 @@ export async function resolveDestination(
     address = found;
   }
   checkPayable(wasm, network, address);
-  const { own, account, staked } = await ownAccount(deps, network, address);
+  const { own, account, staked, stakeElsewhere } = await ownAccount(deps, network, address);
   const mine = {
     own,
     ...(account !== undefined ? { ownAccount: account } : {}),
     ...(staked !== undefined ? { staked } : {}),
+    ...(stakeElsewhere ? { stakeElsewhere } : {}),
+    ...(isScriptAddress(address) ? { script: true as const } : {}),
   };
   return handle ? { address, handle, ...mine } : { address, ...mine };
 }
 
-/** The text of WebAssembly's refusal of something that doesn't read as an address at all (api::payable_address). */
-const NOT_BECH32 = /isn't a Cardano address/;
+/**
+ * Whether `address`, one WebAssembly took, is a script's: its payment part a script (a multisig's, a contract's).
+ * CIP-19's header types 1, 3, 5 and 7 say so, and the header's top bits are the first character after the "1":
+ * `addr1z…`, `addr1x…`, `addr12…`, `addr1w…` (core's `address::is_script_address`). The ledger takes a payment
+ * there, so the wallet pays it, but with no datum, which some scripts can never spend and some let anyone take, the
+ * Seedelf contract's own address among them: the forms and reviews say so where the refusal was (chunk 51, r2a#1;
+ * the owner's call of 2026-11-18). The stake part says nothing of it: a key address staked by a script is a key's.
+ */
+export const isScriptAddress = (address: string): boolean => /^addr(_test)?1[zx2w]/.test(address.trim().toLowerCase());
+
+/** The text of WebAssembly's refusal of a Byron address, which the wallet doesn't pay (api::payable_address). */
+const BYRON = /can't pay a Byron address/;
 
 /**
  * Throws why `address` can't be paid on `network`, in the user's language and naming the thing that's wrong:
- * the other network's address, a stake address, a script's, or no address at all. WebAssembly's one English
- * sentence for all of them ("Payments go to a normal preprod address: not a script, stake or other network's
- * address") left the user to work out which (chunk 23's second review, PY-10). The prefix says the first two;
- * WebAssembly still checks the rest, and anything else it refuses on this network's prefix is a script.
+ * the other network's address, a stake address, a Byron one, or no address at all. WebAssembly's one English
+ * sentence for all of them left the user to work out which (chunk 23's second review, PY-10). The prefix says the
+ * first two; WebAssembly still checks the rest. A script's address is paid, with a warning (`isScriptAddress`), and a
+ * Byron address is refused in words of its own: "That isn't a Cardano address" was false of one (chunk 51, r2a#1).
+ * Anything else it refuses on this network's prefix doesn't read as an address.
  */
 export function checkPayable(wasm: typeof Wasm, network: NetworkName, address: string): void {
   const text = address.trim().toLowerCase();
@@ -94,7 +111,7 @@ export function checkPayable(wasm: typeof Wasm, network: NetworkName, address: s
     // A trap is the instance broken, not the address: thrown as it is, so the wallet locks (wasm.ts).
     if (isTrap(e)) throw e;
     const message = e instanceof Error ? e.message : String(e);
-    throw new Error(NOT_BECH32.test(message) ? t("worker.address.notAddress") : t("worker.address.script"));
+    throw new Error(BYRON.test(message) ? t("worker.address.byron") : t("worker.address.notAddress"));
   }
 }
 
@@ -108,12 +125,20 @@ export function checkPayable(wasm: typeof Wasm, network: NetworkName, address: s
  * came back (the 2026-11-02 bounty report). Such an address is `staked`, by
  * the account whose stake key it carries, for the screens to say it isn't
  * the user's.
+ *
+ * And the other way round: one of the account's payment keys under a stake
+ * part that's none of the accounts' stake keys (someone else's, a pointer, or
+ * none) is the account's, as the balance counts it, but `stakeElsewhere`:
+ * while the money's there, its stake earns and votes for whoever holds that
+ * part, or nobody. Anyone can pair the account's receive key with their own
+ * stake key, and Send called it "your own public account: it comes back"
+ * alone (chunk 51, x1a#1).
  */
 export async function ownAccount(
   deps: DestinationDeps,
   network: NetworkName,
   address: string,
-): Promise<{ own: boolean; account?: number; staked?: number }> {
+): Promise<{ own: boolean; account?: number; staked?: number; stakeElsewhere?: true }> {
   const { wallet } = deps;
   const active = await wallet.withKeys(async (keys) => {
     const found = await deps.session?.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
@@ -123,18 +148,24 @@ export async function ownAccount(
       staked: keys.cardano.carriesStakeKey(address),
     };
   });
-  if (active.own) return { own: true, account: active.index };
+  // Whose payment key it is, and whose stake key it carries, among the accounts the wallet knows: the active one's
+  // first, and the others only while one of the two isn't known yet.
+  let own = active.own ? active.index : undefined;
   let staked = active.staked ? active.index : undefined;
-  const known = (await deps.knownAccounts?.().catch(() => [])) ?? [];
-  for (const index of known) {
-    if (index === active.index) continue;
-    const other = await wallet.withAccount(index, (keys) => ({
-      own: keys.cardano.isOwnAddress(address, []),
-      staked: keys.cardano.carriesStakeKey(address),
-    }));
-    if (other.own) return { own: true, account: index };
-    if (other.staked) staked ??= index;
+  if (own === undefined || staked === undefined) {
+    const known = (await deps.knownAccounts?.().catch(() => [])) ?? [];
+    for (const index of known) {
+      if (index === active.index) continue;
+      const other = await wallet.withAccount(index, (keys) => ({
+        own: keys.cardano.isOwnAddress(address, []),
+        staked: keys.cardano.carriesStakeKey(address),
+      }));
+      if (other.own) own ??= index;
+      if (other.staked) staked ??= index;
+      if (own !== undefined && staked !== undefined) break;
+    }
   }
+  if (own !== undefined) return { own: true, account: own, ...(staked === undefined ? { stakeElsewhere: true as const } : {}) };
   return staked === undefined ? { own: false } : { own: false, staked };
 }
 

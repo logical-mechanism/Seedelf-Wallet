@@ -7,9 +7,14 @@
 
 import { isMessage, UI_PORT, type BuildStage, type Message, type Reply, type ReplyCode, type RequestName } from "../shared/rpc";
 import { CollateralRefusedError, refusedBy, StaleReviewError } from "./collateral";
+import { AskAgainError } from "./lovejoin";
 
-/** What the UI acts on in a refusal: a review to build again (chunk 23's review, P-3). */
+/**
+ * What the UI acts on in a refusal: a review to build again (chunk 23's review, P-3); the escape hatch's question to
+ * ask again, from a fresh read (chunk 51, gap-g2#2).
+ */
 function codeOf(error: unknown): ReplyCode | undefined {
+  if (error instanceof AskAgainError) return "askAgain";
   return error instanceof StaleReviewError || error instanceof CollateralRefusedError ? "stale" : undefined;
 }
 

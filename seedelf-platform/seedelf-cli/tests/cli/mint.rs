@@ -132,3 +132,121 @@ async fn util_mint_refuses_an_identity_register() {
         assert_eq!((evaluated, sent), (0, 0), "nothing is evaluated or sent");
     }
 }
+
+/// A fresh minter (each `Scenario` has its own wallet scalar) mints a Seedelf
+/// for the holder of `recipient`, given as `-g` and `-p`, from one owned UTxO
+/// `n`: the minted Seedelf's datum, after checking the transaction conserves
+/// value, keeps every output above its minimum, and gives the change back to
+/// the minter.
+async fn mint_for(
+    recipient: &seedelf_crypto::register::Register,
+    label: &str,
+    n: u64,
+) -> seedelf_crypto::register::Register {
+    let mut scenario = Scenario::start().await;
+    scenario
+        .mount_credential_utxos(vec![wallet_utxo(scenario.scalar, n, 10_000_000, &[])])
+        .await;
+    scenario.mount_evaluate_mint(1).await;
+    scenario.mount_collateral().await;
+    scenario.mount_submit().await;
+
+    run(
+        MintArgs {
+            label: Some(label.to_string()),
+            generator: Some(recipient.generator.clone()),
+            public_value: Some(recipient.public_value.clone()),
+            utxos: None,
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect("util mint -g -p should succeed");
+
+    let params = protocol_params().await;
+    let tx = decode_tx(&scenario.submitted_cbor().await);
+    assert_value_conserved(&tx, &scenario.ledger);
+    assert_no_sub_min_outputs(&tx, &params);
+
+    let policy = seedelf_policy();
+    let minted: i128 = tx
+        .mint
+        .iter()
+        .filter(|((p, _), _)| p == &policy)
+        .map(|(_, qty)| *qty)
+        .sum();
+    assert_eq!(minted, 1, "exactly one Seedelf token is minted");
+
+    let (seedelfs, change): (Vec<&DecodedOutput>, Vec<&DecodedOutput>) = tx
+        .outputs_to(&wallet_address())
+        .into_iter()
+        .partition(|o| o.assets.keys().any(|(p, _)| p == &policy));
+    assert_eq!(seedelfs.len(), 1, "one output holds the new Seedelf");
+    assert_eq!(change.len(), 1, "one change output");
+    let back = change[0]
+        .register
+        .as_ref()
+        .expect("the change carries a Register");
+    assert!(
+        back.is_owned(scenario.scalar).expect("change ownership"),
+        "the change goes back to the minter"
+    );
+    seedelfs[0]
+        .register
+        .clone()
+        .expect("the Seedelf output carries a Register datum")
+}
+
+/// `util mint -g -p` mints a Seedelf for someone else under a fresh
+/// re-randomization of the register they give, as `create` and `util mint`
+/// without the flags do: still theirs (one scalar on both points), but no two
+/// such mints share a datum, and none is their `util base` register, whose
+/// generator is G1 itself. Written as given, every Seedelf minted for one
+/// person from that register showed anyone they were one person's (chunk 51,
+/// r4#8).
+#[tokio::test]
+#[serial]
+async fn util_mint_for_someone_else_rerandomizes_the_register_given() {
+    use seedelf_crypto::register::Register;
+    // Alice's key, and what `util base` prints for her: `Register::create`.
+    let alice = seedelf_crypto::schnorr::random_scalar();
+    let base = Register::create(alice).expect("Alice's base register");
+    let g1 = Register::create(blstrs::Scalar::from(1u64))
+        .expect("G1")
+        .generator;
+    assert_eq!(base.generator, g1, "util base's generator is G1 itself");
+
+    // Bob mints her a Seedelf from the register she gave him, then Carol does.
+    let from_bob = mint_for(&base, "for alice", 1).await;
+    let from_carol = mint_for(&base, "for alice too", 2).await;
+
+    // Both before the fix and after: each is Alice's, and safe to pay.
+    for (minter, datum) in [("Bob", &from_bob), ("Carol", &from_carol)] {
+        assert!(
+            datum.is_owned(alice).expect("ownership"),
+            "{minter}'s mint must sit under a register Alice's key owns"
+        );
+        assert!(
+            seedelf_core::build::is_payable(datum),
+            "{minter}'s mint must sit under a payable register"
+        );
+    }
+
+    assert_ne!(
+        from_bob, base,
+        "Bob's mint put Alice's base register on chain as given, not re-randomized"
+    );
+    assert_ne!(
+        from_carol, base,
+        "Carol's mint put Alice's base register on chain as given, not re-randomized"
+    );
+    assert_ne!(
+        from_bob.generator, g1,
+        "a Seedelf minted for someone else is marked by G1 as its generator"
+    );
+    assert_ne!(
+        from_bob, from_carol,
+        "two Seedelfs minted for Alice share one datum: anyone can see they're one person's"
+    );
+}

@@ -74,3 +74,28 @@ describe("a review's balance after", () => {
     expect(homeBalance(unlocked(read))).toBe("13000000");
   });
 });
+
+// Chunk 51's T1 lens over the screens (lane T1l): two of these rules a revert passed with every test green.
+describe("what a form may send, and what a review says is left (chunk 51, T1l)", () => {
+  const MIN = { policyId: "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72", assetName: "4d494e", decimals: 0, fingerprint: "" };
+  const X = { policyId: "ab".repeat(28), assetName: "58", decimals: 0, fingerprint: "" };
+
+  it("keeps a locked UTxO's tokens out of what a form may send (t1l#5)", () => {
+    const side = (locked: string) =>
+      unlocked({
+        lovelace: "10000000",
+        tokens: [{ ...MIN, quantity: "100" }, { ...X, quantity: "5" }],
+        utxos: 2,
+        locked: { lovelace: "2000000", tokens: [{ ...MIN, quantity: locked }], utxos: 1 },
+      }).tokens;
+    // The only 100 MIN in the locked UTxO: none is offered, and X's 5 are.
+    expect(side("100")).toEqual([{ ...X, quantity: "5" }]);
+    // 40 of the 100 locked: 60 are offered.
+    expect(side("40")).toEqual([{ ...MIN, quantity: "60" }, { ...X, quantity: "5" }]);
+  });
+
+  it("says 0 ₳ after, never less, where what leaves is more than the figure it was handed (t1l#6)", () => {
+    expect(after("private", 3_000_000n, "1000000")).toContain("Private balance after 0 ₳");
+    expect(after("private", 3_000_000n, "1000000")).not.toContain("-");
+  });
+});

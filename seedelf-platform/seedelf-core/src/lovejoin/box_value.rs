@@ -2,8 +2,10 @@
 //! "a provable test showing what exactly it has to be for this flow"), proven
 //! by building every step of a box's way back, never estimated. It lived in
 //! its test (`lovejoin_box_value_test.rs`) until chunk 34's 34d, which moved
-//! it here: the launch form suggests a box value from it, and a launch is
-//! held to it under the parameters live then (session 1, 14).
+//! it here: the launch form suggests a box value from it, and a launch under
+//! it under the parameters live then says so on its review (session 1, 14).
+//! It was refused there until chunk 51's gap-g8#6 (the owner, 2026-11-18): a
+//! launch is refused only under a box's network minimum ([`box_minimum`]).
 //!
 //! A box comes back on its own: a withdraw into a Seedelf that the box pays
 //! for itself. What comes back is then spent like any other Seedelf UTxO, and
@@ -393,6 +395,43 @@ pub fn least_box_lovelace(
         }
     }
     Ok(high * SEARCH_STEP)
+}
+
+/// The network's minimum for a box holding `token` (none: an ADA pool) under
+/// `params`, in `probe`'s pool: what the ledger asks of the output a mix makes,
+/// at `mix_box` with an owner's datum, as [`super::usable`] measures a found
+/// pool's. A launch under it is refused, as no mix could make such a box; one
+/// at it or over is built, whatever S0d's least says (the owner's call, chunk
+/// 51's gap-g8#6). The lovelace field's own bytes count, so it's worked out
+/// until it stops moving.
+pub fn box_minimum(
+    probe: &Probe,
+    params: &ProtocolParameters,
+    token: Option<&BoxToken>,
+) -> Result<u64> {
+    check_token(token).map_err(|why| anyhow!(why))?;
+    let a = G1Projective::generator() * Scalar::from(987_654_321u64);
+    let (a, b) = (
+        crypto::point_to_bytes(&a),
+        crypto::point_to_bytes(&(a * Scalar::from(4_242_424u64))),
+    );
+    let mut lovelace = SEARCH_LOW;
+    for _ in 0..4 {
+        let pool = probe.pool(&BoxValue {
+            lovelace,
+            token: token.cloned(),
+        })?;
+        let output = pool
+            .box_value()
+            .output(pool.mix_box_address())?
+            .set_inline_datum(mix_datum(&a, &b));
+        let needed = crate::transaction::calculate_min_required_utxo(output, params)?;
+        if needed == lovelace {
+            return Ok(needed);
+        }
+        lovelace = needed;
+    }
+    bail!("A box's least ADA didn't settle")
 }
 
 /// The box value the launch form suggests for a token whose least is

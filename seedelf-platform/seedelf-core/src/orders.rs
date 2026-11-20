@@ -190,7 +190,13 @@ fn outpoint(text: &str) -> Result<(Hash<32>, u64)> {
 /// The table for a network (`true` is preprod, as everywhere in the
 /// workspace). Each bundled script is checked against its hash.
 pub fn table(network_flag: bool) -> Result<Vec<Entry>> {
-    let json: TableJson = serde_json::from_str(TABLE).context("orders.json can't be read")?;
+    table_from(TABLE, network_flag)
+}
+
+/// [`table`], read from `json` in orders.json's shape: the bundled table, or
+/// a test's, which is how a test reaches each check (chunk 51, t1d#8).
+fn table_from(json: &str, network_flag: bool) -> Result<Vec<Entry>> {
+    let json: TableJson = serde_json::from_str(json).context("orders.json can't be read")?;
     let rows = if network_flag {
         json.orders.preprod
     } else {
@@ -434,6 +440,12 @@ fn fills_once(d: &PlutusData) -> bool {
 /// decoder goes a call deeper for each level of nesting: a datum nested past
 /// [`crate::cbor::MAX_DEPTH`] (real orders' are 10 to 14 deep) is refused
 /// unread, before it can overflow WebAssembly's stack.
+///
+/// Whoever writes an order's datum chooses how it's spelled (Splash's executor
+/// writes a part-filled order's remnant), and its script reads it as data. So
+/// it's read as the node reads it, a constructor nested in the general form
+/// with an indefinite pair among the rest ([`crate::cbor::definite_pairs`]).
+/// Only the reading: a cancel carries and hashes the datum's own bytes.
 pub fn read(protocol: Protocol, datum: &[u8]) -> Result<OrderRead> {
     let unreadable = || {
         anyhow!(
@@ -444,7 +456,8 @@ pub fn read(protocol: Protocol, datum: &[u8]) -> Result<OrderRead> {
     if !crate::cbor::within_depth(datum, crate::cbor::MAX_DEPTH) {
         return Err(unreadable());
     }
-    let data = PlutusData::decode_fragment(datum).map_err(|_| unreadable())?;
+    let readable = crate::cbor::definite_pairs(datum).ok_or_else(unreadable)?;
+    let data = PlutusData::decode_fragment(&readable).map_err(|_| unreadable())?;
     let read = || -> Option<(Hash<28>, Vec<PlutusAddress>)> {
         let (0, fields) = constr(&data)? else {
             return None;
@@ -732,6 +745,17 @@ const COLLATERAL_SHORT: &str =
 /// and from its collateral too only when they can't pay it and a change
 /// output. Measured in the wallet.
 pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
+    cancel_orders_from(c, &|measured| measured)
+}
+
+/// What a cancel's settling starts from, given what its draft measured.
+type FirstBudgets<'f> = &'f dyn Fn(Vec<Budget>) -> Vec<Budget>;
+
+/// [`cancel_orders`], its settling started from `first` of what its draft
+/// measured: the draft's own budgets, but in a test, which starts them short
+/// of what the cancel uses, as a script's cost moving with its fee would
+/// (chunk 51, t1d#9).
+fn cancel_orders_from(c: &Cancel, first: FirstBudgets) -> Result<FinalCancel> {
     let collateral_ref = format!("{}#{}", c.collateral.tx_hash, c.collateral.tx_index);
     if c.collateral
         .asset_list
@@ -860,8 +884,8 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
         .iter()
         .filter(|u| format!("{}#{}", u.tx_hash, u.tx_index) != collateral_ref)
         .collect();
-    match build_cancel(c, &placed, &scripts, &funds, false) {
-        Err(e) if is_short(&e) => build_cancel(c, &placed, &scripts, &funds, true),
+    match build_cancel(c, &placed, &scripts, &funds, false, first) {
+        Err(e) if is_short(&e) => build_cancel(c, &placed, &scripts, &funds, true, first),
         built => built,
     }
 }
@@ -876,13 +900,15 @@ struct Scripts {
 
 /// [`cancel_orders`]' transaction, built and measured: the orders `placed`,
 /// paid for by the session's `funds` (its collateral not among them) and,
-/// when `spend_collateral`, its collateral too.
+/// when `spend_collateral`, its collateral too. Its settling starts from
+/// `first` of what its draft measures ([`cancel_orders_from`]).
 fn build_cancel(
     c: &Cancel,
     placed: &[Placed],
     scripts: &Scripts,
     funds: &[&UtxoResponse],
     spend_collateral: bool,
+    first: FirstBudgets,
 ) -> Result<FinalCancel> {
     let version = placed[0].entry.plutus;
     let splash = placed[0].entry.protocol.alone();
@@ -1065,7 +1091,7 @@ fn build_cancel(
     let draft = stage(DRAFT_FEE, None)?
         .build_conway_raw()
         .context("Failed To Build The Draft Cancel")?;
-    let mut budgets = measure(&draft)?;
+    let mut budgets = first(measure(&draft)?);
     let reference_bytes: u64 = scripts.references.values().map(|(_, _, size)| *size).sum();
     let script_reference = reference_script_fee(c.params, reference_bytes)?;
     let vkeys = signers.len();
@@ -1227,8 +1253,12 @@ const CHECK_FUNDS: u64 = 20_000_000;
 /// datum inline at a Plutus V1 script, a script on it) would keep the swap's
 /// money where Stop can't bring it back. The session's funds and collateral
 /// are stand-ins of ADA alone at its address. A swap that can't be read is an
-/// error; anything about one order is that order's `why`.
+/// error, one nested too deep to decode among them, refused before it's
+/// decoded ([`crate::cbor::check_nesting`]: a DEX builds it, outside the
+/// wallet); anything about one order is that order's `why`.
 pub fn check_cancels(s: &SwapCheck) -> Result<Vec<CancelCheck>> {
+    // Here, not only in whatever read the swap first (chunk 51, r3b#1).
+    crate::cbor::check_nesting(s.tx_cbor)?;
     let tx = MultiEraTx::decode(s.tx_cbor).map_err(|e| anyhow!("The swap can't be read: {e}"))?;
     let swap = tx.hash();
     let fund = stand_in(s.address, &swap, 0, CHECK_FUNDS)?;
@@ -1514,5 +1544,192 @@ mod tests {
             [0, 2]
         );
         assert!(group_of(&[]).is_empty());
+    }
+
+    /// A table in orders.json's shape: `row` alone on preprod, beside the
+    /// bundled scripts.
+    fn table_of(row: &Value) -> String {
+        let bundled: Value = serde_json::from_str(TABLE).unwrap();
+        serde_json::json!({
+            "orders": { "mainnet": [], "preprod": [row] },
+            "inline": bundled["inline"],
+        })
+        .to_string()
+    }
+
+    /// Chunk 51, t1d#8: the bundled table is checked as it loads, so a wrong
+    /// edit to orders.json refuses every cancel in words rather than sending
+    /// one the ledger refuses. A test reaches the checks only through a table
+    /// of its own: each here on a row that breaks it, made from the bundled
+    /// rows, which load as they are.
+    #[test]
+    fn a_table_row_no_cancel_could_use_is_refused_as_the_table_loads() {
+        let bundled: Value = serde_json::from_str(TABLE).unwrap();
+        let rows = bundled["orders"]["mainnet"].as_array().unwrap();
+        let carried = rows.iter().find(|r| r["inline"].is_string()).unwrap();
+        let referenced = rows.iter().find(|r| r["reference"].is_string()).unwrap();
+        for row in [carried, referenced] {
+            assert!(table_from(&table_of(row), true).is_ok(), "{row}");
+        }
+        let edited = |row: &Value, edits: &[(&str, Value)]| {
+            let mut row = row.clone();
+            for (key, value) in edits {
+                row[*key] = value.clone();
+            }
+            match table_from(&table_of(&row), true) {
+                Ok(_) => panic!("loaded {row}"),
+                Err(e) => e.to_string(),
+            }
+        };
+        let name = carried["inline"].as_str().unwrap();
+        let bytes = hex::decode(bundled["inline"][name].as_str().unwrap()).unwrap();
+        let v2_hash = hex::encode(script_hash(2, &bytes));
+        let refusals = [
+            // A carried script that isn't its row's.
+            (
+                edited(carried, &[("script", "00".repeat(28).into())]),
+                "script isn't",
+            ),
+            // Two places to read a script from, and none.
+            (
+                edited(
+                    carried,
+                    &[
+                        ("reference", referenced["reference"].clone()),
+                        ("referenceSize", referenced["referenceSize"].clone()),
+                    ],
+                ),
+                "needs one place",
+            ),
+            (
+                edited(referenced, &[("reference", Value::Null)]),
+                "needs one place",
+            ),
+            // A carried script that isn't Plutus V1, under its own V2 hash.
+            (
+                edited(carried, &[("plutus", 2.into()), ("script", v2_hash.into())]),
+                "Only a Plutus V1 script is carried",
+            ),
+            // A Plutus version the ledger hasn't got.
+            (
+                edited(referenced, &[("plutus", 4.into())]),
+                "names Plutus V4",
+            ),
+        ];
+        for (refusal, words) in refusals {
+            assert!(refusal.contains(words), "{refusal}");
+        }
+    }
+
+    /// A Koios row of a fixture's UTxO.
+    fn koios_row(u: &Value) -> UtxoResponse {
+        let address = Address::from_bech32(u["address"].as_str().unwrap()).unwrap();
+        let payment_cred = match &address {
+            Address::Shelley(s) => hex::encode(s.payment().as_hash()),
+            _ => String::new(),
+        };
+        let or_null = |key: &str| u.get(key).cloned().unwrap_or(Value::Null);
+        serde_json::from_value(serde_json::json!({
+            "tx_hash": u["tx_hash"], "tx_index": u["tx_index"], "address": u["address"],
+            "value": u["value"], "stake_address": null, "payment_cred": payment_cred,
+            "epoch_no": 0, "block_height": 0, "block_time": 0, "datum_hash": or_null("datum_hash"),
+            "inline_datum": or_null("inline_datum"), "reference_script": or_null("reference_script"),
+            "asset_list": u.get("asset_list").cloned().unwrap_or(serde_json::json!([])),
+            "is_spent": false,
+        }))
+        .unwrap()
+    }
+
+    /// One of the session's own UTxOs: ADA alone, at its address.
+    fn session_row(address: &Address, fill: u8, lovelace: u64) -> UtxoResponse {
+        serde_json::from_value(serde_json::json!({
+            "tx_hash": hex::encode([fill; 32]), "tx_index": 0,
+            "address": address.to_bech32().unwrap(), "value": lovelace.to_string(),
+            "stake_address": null, "payment_cred": "", "epoch_no": 0, "block_height": 0,
+            "block_time": 0, "datum_hash": null, "inline_datum": null, "asset_list": [],
+            "is_spent": false,
+        }))
+        .unwrap()
+    }
+
+    /// Chunk 51, t1d#9: a cancel never goes out declaring less than its
+    /// finished bytes use. Its settling starts here 1% short of what the draft
+    /// measured, as a script whose cost moved with the fee would leave it: the
+    /// first finished cancel uses more than it declares, so it's settled
+    /// again, and what comes back covers its scripts measured anew. Minswap
+    /// V2's real mainnet order (tests/fixtures/order_cancels.json).
+    #[test]
+    fn a_cancel_never_goes_out_declaring_less_than_its_scripts_use() {
+        use pallas_addresses::{
+            Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+        };
+        let fixtures: Vec<Value> =
+            serde_json::from_str(include_str!("../tests/fixtures/order_cancels.json")).unwrap();
+        let f = fixtures
+            .iter()
+            .find(|f| f["protocol"] == "MinswapV2" && f["network"] == "mainnet")
+            .unwrap();
+        let rows: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/epoch_params_mainnet.json"))
+                .unwrap();
+        let params =
+            ProtocolParameters::from_koios(if rows.is_array() { &rows[0] } else { &rows }).unwrap();
+        let datum = hex::decode(f["datum"].as_str().unwrap()).unwrap();
+        let to = read(Protocol::MinswapV2, &datum).unwrap().pays[0];
+        let (Credential::Key(payment), Some(Credential::Key(stake))) = (to.payment, to.stake)
+        else {
+            panic!("Minswap V2's order doesn't pay a base address of keys");
+        };
+        let address = Address::Shelley(ShelleyAddress::new(
+            Network::Mainnet,
+            ShelleyPaymentPart::key_hash(payment),
+            ShelleyDelegationPart::key_hash(stake),
+        ));
+        let order = OrderToCancel {
+            utxo: koios_row(&f["order"]),
+            datum,
+        };
+        let reference = koios_row(&f["reference"]);
+        let funds = [session_row(&address, 0xaa, 10_000_000)];
+        let collateral = session_row(&address, 0xbb, SESSION_COLLATERAL);
+        let cancel = Cancel {
+            params: &params,
+            network_flag: false,
+            session: Session { payment, stake },
+            address: &address,
+            orders: std::slice::from_ref(&order),
+            funds: &funds,
+            collateral: &collateral,
+            references: std::slice::from_ref(&reference),
+        };
+        let short = |measured: Vec<Budget>| {
+            measured
+                .into_iter()
+                .map(|b| Budget {
+                    mem: b.mem - b.mem.div_ceil(100),
+                    steps: b.steps - b.steps.div_ceil(100),
+                })
+                .collect()
+        };
+        let built = cancel_orders_from(&cancel, &short).unwrap();
+
+        let mut known: Vec<Resolved> = [&order.utxo, &funds[0], &collateral]
+            .iter()
+            .map(|row| eval::resolve_row(row).unwrap())
+            .collect();
+        let script = reference.reference_script.as_ref().unwrap();
+        let bytes = hex::decode(script.bytes.as_ref().unwrap()).unwrap();
+        known.push(eval::resolve_reference(&reference, 2, &bytes).unwrap());
+        let tx = &built.tx.tx_bytes.0;
+        let answer = eval::evaluate_with(
+            tx,
+            &known,
+            &params.cost_model_v1,
+            &params.cost_model_v2,
+            &params.cost_model_v3,
+            false,
+        )
+        .unwrap();
+        assert_eq!(eval::declared_covers(tx, &answer).unwrap(), Ok(()));
     }
 }

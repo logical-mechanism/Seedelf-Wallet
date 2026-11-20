@@ -48,8 +48,8 @@ import { refusalOf, SessionRefusedFoot, type Refusal } from "../components/Sessi
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
-import { certificateLine, certifiedLine, paidTo, proposalLine, releasesContractFunds, signingTies, stakedLine, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
-import { adaText, formatAda, formatQuantity, shortHex, slotText, unlocked } from "../format";
+import { certificateLine, certifiedLine, paidTo, proposalLine, releasesContractFunds, shownSiteText, signingTies, stakedLine, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
+import { adaText, formatAda, formatQuantity, lockedAside, shortHex, slotText, tokenKey, unlocked } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts, usePreferences } from "../preferences";
 import { aboutAda, SESSION_FEE_ESTIMATE, toCents } from "../swap";
@@ -80,7 +80,11 @@ export function DappApprovals() {
   const tr = useT();
   const siteAccount = useSiteAccount();
   const [approvals, setApprovals] = useState<DappApproval[]>();
-  const [error, setError] = useState<string>();
+  // The window's error, and the request it's about (`for`). An approved request that then fails is out of the
+  // worker's list by the time its error comes back, so the next one may be on screen already: shown there, over its
+  // Sign, it read as that one's (chunk 51, e3b#4). So it shows while its own request does, or once nothing's left; one
+  // about no request (the list's reading), always.
+  const [error, setError] = useState<{ text: string; for?: string }>();
   const [busy, setBusy] = useState(false);
   const closing = useRef<ReturnType<typeof setTimeout>>(undefined);
   // What the user just declined: a site, and how long it's turned away, or everything at once with Decline all, and
@@ -88,7 +92,7 @@ export function DappApprovals() {
   const [declined, setDeclined] = useState<{ host: string; waitMs: number } | { all: true; sites: boolean }>();
 
   const load = useCallback(() => {
-    call("dapp-approvals", {}).then(setApprovals, (e: Error) => setError(e.message));
+    call("dapp-approvals", {}).then(setApprovals, (e: Error) => setError({ text: e.message }));
   }, []);
 
   useEffect(() => {
@@ -119,6 +123,13 @@ export function DappApprovals() {
   // Each request starts with an empty box.
   const currentId = current?.id;
   useEffect(() => setPassword(""), [currentId]);
+  // What's shown of the error: its own request's, on that request's screen or the empty window's (`error`).
+  const shownError = error && (error.for === undefined || !current || error.for === currentId) ? error.text : undefined;
+  // What a connect request hits itself (its reading, its build, a send): about that request.
+  const connectError = useCallback(
+    (text?: string) => setError(text === undefined ? undefined : { text, ...(currentId ? { for: currentId } : {}) }),
+    [currentId],
+  );
   // Contract money the account's key helps release and that doesn't reach it: Sign waits for the user's own yes. Held by
   // the request it was given for, so a yes can never carry over to the next one.
   const mustAck = current?.kind === "sign-tx" && releasesContractFunds(current.summary);
@@ -152,12 +163,13 @@ export function DappApprovals() {
     extra: { password?: string; fund?: { txHash: string }; governance?: boolean } = {},
   ): Promise<Answered> {
     if (!current || busy || held || (approve && needsPassword && !password) || (approve && mustAck && !ack)) return false;
-    answered.current = current.id;
+    const asked = current.id;
+    answered.current = asked;
     setBusy(true);
     setError(undefined);
     try {
       const result = await call("dapp-answer", {
-        id: current.id,
+        id: asked,
         approve,
         ...(approve && needsPassword ? { password } : {}),
         ...extra,
@@ -166,13 +178,13 @@ export function DappApprovals() {
         setPassword("");
         // A private session's funding: its review works out what the refusal leaves it (DX-1).
         if (extra.fund) return { refused: new RpcError(result.error, result.code, result.by) };
-        setError(result.error);
+        setError({ text: result.error, for: asked });
         return false;
       }
       if (!approve && result.waitMs !== undefined) setDeclined({ host: new URL(current.origin).host, waitMs: result.waitMs });
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      setError({ text: (e as Error).message, for: asked });
       return false;
     } finally {
       setBusy(false);
@@ -219,7 +231,7 @@ export function DappApprovals() {
       <Screen
         title="Seedelf Wallet"
         titleId="dapp-title"
-        error={error}
+        error={shownError}
         foot={
           declined && approvals ? (
             <button type="button" className="secondary" onClick={closeNow} data-testid="dapp-declined-close">
@@ -253,8 +265,8 @@ export function DappApprovals() {
         busy={busy}
         held={held}
         change={change}
-        error={error}
-        onError={setError}
+        error={shownError}
+        onError={connectError}
         onAnswer={answer}
       />
     );
@@ -272,7 +284,7 @@ export function DappApprovals() {
       // Where Sign is, from the first view: it follows the request, below the fold of a 400×605 window for most, and
       // T18's tester stopped to work out whether the first view was the whole window (blind test §6).
       aside={tr("dappUi.nothingUntilEnd", { action })}
-      error={error}
+      error={shownError}
       // With the password, Enter in its box signs, as it unlocks elsewhere.
       onSubmit={
         needsPassword
@@ -561,6 +573,7 @@ export function ConnectRequest({
   const [connection, setConnection] = useState<Connection>();
   // Asked for, governance goes with the public account only when switched on: off, as the most private choice is.
   const [governance, setGovernance] = useState(false);
+  // The private balance's side the funding can spend: unlocked (see its reading below).
   const [seedelf, setSeedelf] = useState<Balances["seedelf"]>();
   // How a private session would come back, as Settings has it: through Lovejoin, and what a box of v2's 5 ₳ pool
   // costs at Settings' depth, said in plain words with a figure where it's chosen (blind test §9.8, T16). Said
@@ -601,11 +614,13 @@ export function ConnectRequest({
     if (chosePublic) actions.current?.scrollIntoView({ block: "nearest" });
   }, [chosePublic]);
 
-  // What the private balance holds, for the amount and its tokens: the last reading, no request.
+  // What the private balance holds, for the amount and its tokens: the last reading, no request. Less what the user
+  // locked, as Home hands every other form its side (`unlocked`): the funding's build leaves a locked UTxO out, and
+  // counted, 50 ₳ of 100 ₳ with 60 ₳ locked passed the form to be refused by the build (chunk 51, e3b#2).
   useEffect(() => {
     if (connection !== "private" || seedelf) return;
     call("balances", {}).then(
-      (b) => setSeedelf(b.seedelf),
+      (b) => setSeedelf(unlocked(b.seedelf)),
       (e: Error) => onError(e.message),
     );
   }, [connection, seedelf, onError]);
@@ -632,6 +647,10 @@ export function ConnectRequest({
         error={error}
       >
         <div className="stack" data-testid="dapp-funding">
+          {/* What waits behind it, with Decline all, as on every other screen: it may wait minutes, and closing the
+              window, as the line below invites, declines them (chunk 51, e3b#3). Decline all leaves this funding be. */}
+          {queue}
+          <Changed change={change} />
           {site}
           <p className="dapp-waiting">
             <span className="spin">
@@ -639,7 +658,8 @@ export function ConnectRequest({
             </span>
             {tr("dappUi.waitingForFunding", { number: approval.funding.index + 1 })}
           </p>
-          <ExplorerLink network={network} tx={approval.funding.txHash} private>
+          {/* On the network it was sent on, which a switch in the side panel leaves it waiting on. */}
+          <ExplorerLink network={approval.funding.network ?? network} tx={approval.funding.txHash} private>
             {tr("dappUi.fundingOnCardanoscan")}
           </ExplorerLink>
           <p className="note">{tr("dappUi.canClose")}</p>
@@ -728,8 +748,15 @@ export function ConnectRequest({
   // The funding, built: what goes where, and Send.
   if (review) {
     const [paidSite, collateral] = review.payments;
-    // Less what it pays for its collateral's mix, which a row of its own shows.
-    const forSite = paidSite && { ...paidSite, lovelace: (BigInt(paidSite.lovelace) - BigInt(review.collateralReserve ?? "0")).toString() };
+    // Less what it pays for its collateral's mix, which a row of its own shows. Each token as the private side holds
+    // it, with Koios's decimals from the rows the funding spends: WebAssembly's token lists carry none, and a token off
+    // the wallet's list showed in raw units, as Make public's review never does (chunk 51, r2sign#3's sibling). The
+    // wallet's list still comes first (tokens.ts `tokenDecimals`).
+    const forSite = paidSite && {
+      ...paidSite,
+      lovelace: (BigInt(paidSite.lovelace) - BigInt(review.collateralReserve ?? "0")).toString(),
+      tokens: paidSite.tokens.map((tk) => ({ ...seedelf?.tokens.find((h) => tokenKey(h) === tokenKey(tk)), ...tk })),
+    };
     return (
       <Screen
         onSubmit={send}
@@ -784,6 +811,8 @@ export function ConnectRequest({
         }
       >
         <div className="stack" data-testid="dapp-funding-review">
+          {/* What waits behind it, as on the connect screen; Decline all declines this connect too (chunk 51, e3b#3). */}
+          {queue}
           <ReviewRows testId="dapp-funding-rows">
             <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: review.index + 1 })} strong />
             <Row label={tr("lovejoin.review.account")} value={shortHex(review.address, 16, 8)} title={review.address} />
@@ -801,7 +830,7 @@ export function ConnectRequest({
             <TotalRows
               side="private"
               leaving={review.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(review.fee.total))}
-              before={seedelf && homeBalance(unlocked(seedelf))}
+              before={seedelf && homeBalance(seedelf)}
               tokens={forSite?.tokens.length ?? 0}
             />
           </ReviewRows>
@@ -973,13 +1002,26 @@ export function ConnectRequest({
                 placeholder={withTokens ? tr("sites.topUp.minimum") : "0"}
                 autoFocus={false}
               />
+              {/* The side the funding can spend, said as Make public says it: "available", and what's locked beside it
+                  (chunk 12's #23). Called the private balance, 40 ₳ of 100 ₳ with 60 ₳ locked read as all of it, and
+                  everything locked as "0 ₳" with Review off for no reason given (chunk 51, r2screens#1). */}
               {seedelf && (
                 <p className="note" data-testid="dapp-private-held">
-                  {tr("dappUi.heldAndCollateral", { ada: amounts.ada(seedelf.lovelace) })}
+                  {seedelf.locked.utxos
+                    ? tr("dappUi.availableAndCollateral", {
+                        ada: amounts.ada(seedelf.lovelace),
+                        locked: lockedAside(seedelf, amounts.ada),
+                      })
+                    : tr("dappUi.heldAndCollateral", { ada: amounts.ada(seedelf.lovelace) })}
                 </p>
               )}
               {tooMuch && seedelf && (
-                <p className="field-note">{tr("sites.topUp.tooMuch", { held: amounts.ada(seedelf.lovelace) })}</p>
+                <p className="field-note">
+                  {tr("withdraw.tooMuch", {
+                    amount: amounts.ada(seedelf.lovelace),
+                    available: tr(seedelf.locked.utxos ? "withdraw.available" : "withdraw.inPrivate"),
+                  })}
+                </p>
               )}
             </div>
             {withTokens && <MinimumHint />}
@@ -1081,6 +1123,11 @@ export function SignTx({
   if (s.votes && s.votes > (s.ownVotes ?? 0)) notes.push(tr("dappUi.note.votes", { count: s.votes - (s.ownVotes ?? 0) }));
   if (s.donation) notes.push(tr("dappUi.note.donates", { ada: formatAda(s.donation) }));
   if (s.metadata && !s.note) notes.push(tr("dappUi.note.metadata"));
+  // Beside its note, what else its metadata holds, which signing publishes as well: another label, or more under 674,
+  // as Minswap's extraData, which names the sender's address. The note's box showed it alone (chunk 51, x1a#3).
+  if (s.note && s.otherMetadata) notes.push(tr("dappUi.note.privacy.otherMetadata"));
+  // The site's note (CIP-20), as a message is shown: what doesn't show written as its code (`shownSiteText`).
+  const note = s.note && shownSiteText(s.note.join("\n"));
 
   // What leaves the account, or comes into it, all told: "sends, net" read as jargon (chunk 23's second review,
   // CW-7). It's the wallet's own reviews' "Total leaving", and names the account where there's more than one (CW-5).
@@ -1187,6 +1234,34 @@ export function SignTx({
           {tr("dappUi.warn.noRegister")}
         </Callout>
       )}
+      {/* Under a register no proof can meet: no one can ever take it, not "anyone can" (chunk 51, d1#3). */}
+      {s.paid.some((p) => p.seedelf === "dead") && (
+        <Callout tone="warn" testId="dapp-seedelf-dead">
+          {tr("dappUi.warn.deadRegister")}
+        </Callout>
+      )}
+      {/* Under a datum kept by hash, carried or not: no Seedelf Wallet reads a register from anywhere but the inline
+          datum, so none finds or spends it, and the site may keep the datum. Never "anyone can take it", nor a Seedelf
+          payment (chunk 51, r2sign#1). */}
+      {s.paid.some((p) => p.seedelf === "hash") && (
+        <Callout tone="warn" testId="dapp-seedelf-hash">
+          {tr("dappUi.warn.datumByHash")}
+        </Callout>
+      )}
+      {/* Beside a reference script, its register's owner's, but no Seedelf Wallet spends it yet and the private balance
+          leaves it out: the UTxOs page's words, in place of the Seedelf note (chunk 51, l3sign#1). */}
+      {s.paid.some((p) => p.seedelf === "script-ref") && (
+        <Callout tone="warn" testId="dapp-seedelf-script-ref">
+          {tr("dappUi.warn.seedelfScriptRef")}
+        </Callout>
+      )}
+      {/* The site writes the register, so the window never says it hides whose Seedelf this pays; one the kept view holds
+          already, beside a Seedelf's token or one of the wallet's own UTxOs, shows anyone (chunk 51, x1a#2). */}
+      {s.registerOnChain && (
+        <Callout tone="warn" testId="dapp-seedelf-on-chain">
+          {tr("dappUi.warn.registerOnChain")}
+        </Callout>
+      )}
       {s.paid.some((p) => p.seedelf === "register") && (
         <Callout tone="privacy" testId="dapp-seedelf-payment">
           {tr(session ? "dappUi.privacy.paysSeedelfSession" : "dappUi.privacy.paysSeedelfAccount")}
@@ -1276,12 +1351,24 @@ export function SignTx({
         </p>
       )}
 
-      {s.note && (
+      {/* What it shows of its metadata, or that it shows none, isn't what the signature commits to: the site can send
+          other metadata, or none (chunk 51, G5's notes). Before the note, so it's read first. */}
+      {s.metadataMismatch && (
+        <Callout tone="warn" testId="dapp-metadata-hash">
+          {tr("dappUi.warn.metadataHash")}
+        </Callout>
+      )}
+      {note && (
         <div className="stack-tight">
           <span className="note">{tr("dappUi.itsNote")}</span>
           <pre className="dapp-message" data-testid="dapp-note">
-            {s.note.join("\n")}
+            {note.text}
           </pre>
+          {note.escaped && (
+            <span className="note" data-testid="dapp-note-escaped">
+              {tr("dappUi.warn.hiddenChars")}
+            </span>
+          )}
         </div>
       )}
 
@@ -1316,7 +1403,7 @@ export function SignTx({
         {signingTies(
           ties && [...ties, ...(staked ?? []), ...(certified ?? [])],
           session,
-          s.paid.some((p) => p.seedelf === "register"),
+          s.paid.some((p) => p.seedelf === "register" || p.seedelf === "script-ref"),
         )}
       </Callout>
       {/* The site built these bytes, not the wallet: this is where reading them matters most. It asks the worker
@@ -1352,6 +1439,8 @@ export function SignData({
         { account },
       )
     : tr(signer === "stake" ? "dappUi.stakeKey" : signer === "drep" ? "dappUi.drepKey" : "dappUi.paymentKey");
+  // As what's signed reads: a direction override or a zero-width character written as its code, said so under it.
+  const message = text === undefined ? undefined : shownSiteText(text);
   return (
     <>
       <ReviewRows testId="dapp-data">
@@ -1365,10 +1454,15 @@ export function SignData({
         </span>
       </div>
       <div className="stack-tight">
-        <span className="note">{tr(text === undefined ? "dappUi.dataHex" : "dappUi.theMessage")}</span>
+        <span className="note">{tr(message === undefined ? "dappUi.dataHex" : "dappUi.theMessage")}</span>
         <pre className="dapp-message" data-testid="dapp-data-message">
-          {text ?? payload}
+          {message?.text ?? payload}
         </pre>
+        {message?.escaped && (
+          <span className="note" data-testid="dapp-data-escaped">
+            {tr("dappUi.warn.hiddenChars")}
+          </span>
+        )}
       </div>
       <Callout tone="info" testId="dapp-data-note">
         {tr("dappUi.signDataNote")}

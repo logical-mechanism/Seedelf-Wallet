@@ -80,8 +80,9 @@
 //             transaction as out of the wallet's own: one that uses them is
 //             refused (`keptApart`), and so is one that uses what the site's
 //             own account's Lovejoin chain still being sent needs
-//             (`heldForLovejoin`): the public account's, or the session's.
-//             Another's is left to the stranger's path, never named.
+//             (`heldForLovejoin`): the dApp account's mix, or the session's.
+//             Another's, another public account's mix too, is left to the
+//             stranger's path, never named.
 //             `signData` is CIP-8, with the address's key.
 // Governance  CIP-95 (chunk 21): a site asks for it in `enable()`, and the
 //             window says what it gives before the user agrees: the dApp
@@ -129,8 +130,12 @@
 // still connected to the account it asked of, and what Lovejoin and the
 // user's locks keep apart (independent review L33).
 
+import { blake2b } from "@noble/hashes/blake2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
+
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
+import { madePrivate, sessionClass } from "../shared/histories";
 import {
   APIError,
   DataSignError,
@@ -146,26 +151,40 @@ import type {
   DappDeclined,
   DappSite,
   DappTie,
+  DappToken,
   DappTxSummary,
   RefusedBy,
   ReplyCode,
   SessionOutSummary,
   TokenQuantity,
+  TxDetail,
+  TxMetadata,
+  TxMetadatum,
 } from "../shared/rpc";
 import { readAccountUtxos, type AccountDeps, type KeyPath, type PathedUtxo } from "./account";
-import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
-import { bodyOutpoints, certificateKinds, nestsWithin, txId } from "./cbor";
-import { fartherKeys, GAP_LIMIT } from "./chain";
+import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses, type ActivityService } from "./activity";
+import { bodyOutpoints, certificateKinds, nestsWithin, skip, txId } from "./cbor";
+import { byRegister, fartherKeys, GAP_LIMIT, registerKey } from "./chain";
 import type { CoinControlService } from "./coin-control";
 import { CollateralRefusedError, refusedBy, StaleReviewError } from "./collateral";
-import { KoiosBusyError, KoiosError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
-import { chainOwner, type LovejoinService } from "./lovejoin";
+import { keptContractView } from "./contract-scan";
+import { KoiosBusyError, KoiosError, measurable, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
+import { chainOwner, type ChainReservation, type LovejoinService } from "./lovejoin";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
-import { outpoint, rememberSiteSpent, reservedSet, SPENT_KEEP_MS, spentSet, wait } from "./spent";
-import { SESSION_BALANCES_PREFIX, SESSION_DAPP_REFUSED, SESSION_PRIVATE_STALE_PREFIX, WASM_BROKEN, type Keys } from "./wallet";
+import { outpoint, rememberSiteSpent, reservations, SPENT_KEEP_MS, spentSet, wait } from "./spent";
+import { heldDecimals } from "./tx-view";
+import {
+  phraseOf,
+  phrasePin,
+  SESSION_BALANCES_PREFIX,
+  SESSION_DAPP_REFUSED,
+  SESSION_PRIVATE_STALE_PREFIX,
+  WASM_BROKEN,
+  type Keys,
+} from "./wallet";
 import { isTrap } from "./wasm";
 
 /** chrome.storage.session, per network: the account as the connector last read it. */
@@ -288,6 +307,8 @@ export interface DappDeps extends AccountDeps {
   coins: CoinControlService;
   preferences: PreferencesService;
   store: PrivateStore;
+  /** The Seedelf history: what a site's transaction pays into the user's own Seedelf is noted there as it's signed. */
+  activity?: Pick<ActivityService, "signedInto">;
   /** Private sessions: a site connected to one reads and signs its account. */
   sessions: SessionService;
   /**
@@ -410,6 +431,8 @@ interface Waiting {
    * it with the request.
    */
   txCbor?: string;
+  /** The decimals its window scaled its tokens by (`readTx`), for the transaction view to scale them the same. */
+  decimals?: ReadonlyMap<string, number>;
   /**
    * How it ended, for another page of the same site asking to connect
    * meanwhile (`enable`): answered (undefined), what the site heard, or
@@ -422,6 +445,8 @@ interface Unlocking {
   session: DappSession;
   /** An `enable()`: a site's take one place in the window's queue together (`unlockPlaces`). */
   enable: boolean;
+  /** The network the wallet was on as it began to wait: where a refusal for it is listed (`gone`). */
+  network?: NetworkName;
   resolve: () => void;
   reject: (error: DappError) => void;
 }
@@ -511,7 +536,7 @@ export class DappService {
   private readonly running = new Map<string, number>();
   /** When each site made the worker ask Koios, by what for (`PER_MINUTE`): the last minute's. */
   private readonly asked = new Map<string, number[]>();
-  /** Readings of an account under way, by its storage key: calls at the same time share one. */
+  /** Readings of an account under way, by its storage key and phrase: calls at the same time share one (`view`). */
   private readonly reading = new Map<string, Promise<View>>();
   /** Each site's last transaction being read (`readInTurn`), which its next waits for. */
   private readonly txReads = new Map<string, Promise<unknown>>();
@@ -530,6 +555,22 @@ export class DappService {
    */
   private readonly pageCalls = new Map<string, number>();
   private readonly gonePages = new Set<string>();
+  /**
+   * How many `enable()` calls each page of each site has running, by origin, then session id: counted from the call's
+   * first line, before anything it awaits, so a page on its way to its site's connect question shares it as one already
+   * waiting on it does. Its site's page leaving that question isn't then the site's decline: this one asks itself
+   * (`gone`; chunk 51, G6's note, sign#3).
+   */
+  private readonly enabling = new Map<string, Map<string, number>>();
+  /**
+   * The sites another page spared, by origin, when one of theirs left its connect question or its wait for the unlock
+   * unanswered (`gone`): that page's title and the network it asked on, for the decline the pages that spared it owe.
+   * One of them asking itself, or a refusal, clears it; the last of them leaving before any asks lands the decline then
+   * (chunk 51, l2sign#1: the owner's B7, a question left unanswered is a decline but while another page waits on it).
+   * So does the unlock, where only a wait for it was left: that window is answered (l3still#4). `question`: a page left
+   * a connect question, which no unlock answers.
+   */
+  private readonly spared = new Map<string, { title?: string; network?: NetworkName; question?: true }>();
   /** Where each private session's funding is, by `network:index`: the calls waiting on it share one read a poll (`funded`). */
   private readonly fundingReads = new Map<string, Promise<"landed" | "funding" | "short" | "never">>();
   /**
@@ -549,6 +590,7 @@ export class DappService {
     if (running >= MAX_SITE_CALLS) throw refused(BUSY);
     this.running.set(origin, running + 1);
     this.pageCalls.set(session.id, (this.pageCalls.get(session.id) ?? 0) + 1);
+    if (method === "enable") this.countEnabling(session, 1);
     try {
       await this.readRefusals();
       return await this.run(session, method, args);
@@ -563,6 +605,22 @@ export class DappService {
         this.pageCalls.delete(session.id);
         this.gonePages.delete(session.id);
       }
+      if (method === "enable") this.countEnabling(session, -1);
+    }
+  }
+
+  /** One more, or one fewer, of a page's `enable()` calls running (`enabling`). */
+  private countEnabling(session: DappSession, by: 1 | -1): void {
+    const pages = this.enabling.get(session.origin) ?? new Map<string, number>();
+    const left = (pages.get(session.id) ?? 0) + by;
+    if (left > 0) pages.set(session.id, left);
+    else pages.delete(session.id);
+    if (pages.size) {
+      this.enabling.set(session.origin, pages);
+    } else {
+      this.enabling.delete(session.origin);
+      // None of its pages is on its way to ask any more: nothing is owed by one leaving (`spared`).
+      this.spared.delete(session.origin);
     }
   }
 
@@ -731,7 +789,12 @@ export class DappService {
       this.connectorOff();
     }
     if (!this.unlocking.length || state !== "unlocked") return;
-    for (const u of this.unlocking.splice(0)) u.resolve();
+    for (const u of this.unlocking.splice(0)) {
+      // The unlock window is answered: a page that left its wait for it owes its site no decline any more (`spared`).
+      // One that left a connect question still does, as no unlock answers that (chunk 51, l3still#4).
+      if (!this.spared.get(u.session.origin)?.question) this.spared.delete(u.session.origin);
+      u.resolve();
+    }
     this.deps.changed();
   }
 
@@ -843,6 +906,8 @@ export class DappService {
    * on the dApps page (independent review L33).
    */
   connectorOff(): void {
+    // Nothing more is asked: no page on its way owes a decline (`spared`).
+    this.spared.clear();
     const unlocking = this.unlocking.splice(0);
     for (const u of unlocking) u.reject(refused(OFF));
     if (!this.decline(() => true, OFF) && unlocking.length) this.deps.changed();
@@ -869,19 +934,76 @@ export class DappService {
    * still on their way ask nothing more (`gonePages`). A private session's
    * funding already sent isn't undone: the site finds itself connected next
    * time.
+   *
+   * Its connect question, or its wait for the unlock, left unanswered counts
+   * as closing the window on it does (`windowClosed`): the site is turned
+   * away for a while (`refuseFor`), so a page can't bring the window back by
+   * reloading (chunk 51, G6's note). Unless another page of the same site
+   * has an `enable()` running (`enabling`), waiting on that question or on its
+   * way to it, the unlock among the way: that one asks itself (`enable`), and
+   * a refusal would turn it away (sign#3). A page waiting for the unlock to
+   * sign or send spares nothing: it asks nothing of the site's connection
+   * (the owner's B7, l4code#3). If the page that spared it leaves too before
+   * it asks, the decline lands then (`spared`; l2sign#1), unless the page
+   * that left it only waited for the unlock, and the wallet was unlocked
+   * since: that wait is answered (l3still#4).
    */
   gone(session: DappSession): void {
     if (this.pageCalls.has(session.id)) this.gonePages.add(session.id);
     const waiting = this.waiting.filter((w) => w.session.id === session.id);
     const unlocking = this.unlocking.filter((u) => u.session.id === session.id);
-    if (!waiting.length && !unlocking.length) return;
+    if (!waiting.length && !unlocking.length) {
+      this.sparedNoMore(session);
+      return;
+    }
     remove(this.waiting, (w) => waiting.includes(w));
     remove(this.unlocking, (u) => unlocking.includes(u));
+    const question = waiting.find((w) => w.approval.kind === "connect" && !w.approval.connected && !w.approval.funding);
+    if (question || unlocking.length) {
+      const network = question?.network ?? unlocking[0]?.network;
+      // A question left once stays left: the unlock that answers a wait answers no question (l3still#4).
+      const questionLeft = !!question || !!this.spared.get(session.origin)?.question;
+      if (!this.sharedBeyond(session)) this.refuseFor(session.origin, session.title, network);
+      else {
+        this.spared.set(session.origin, {
+          title: session.title,
+          ...(network ? { network } : {}),
+          ...(questionLeft ? { question: true as const } : {}),
+        });
+      }
+    }
     for (const w of waiting) {
       w.gone = true;
       w.reject(refused(PAGE_GONE));
     }
     for (const u of unlocking) u.reject(refused(PAGE_GONE));
+    this.deps.changed();
+  }
+
+  /**
+   * Whether another page of `session`'s site asks itself, so its leaving a question unanswered isn't the site's
+   * decline: one with an `enable()` running that hasn't gone (`enabling`), its wait for the unlock included. Not one
+   * waiting for the unlock to sign or send: that asks nothing of the site's connection (chunk 51, the owner's B7,
+   * l4code#3).
+   */
+  private sharedBeyond(session: DappSession): boolean {
+    const live = (id: string) => id !== session.id && !this.gonePages.has(id);
+    return [...(this.enabling.get(session.origin)?.keys() ?? [])].some(live);
+  }
+
+  /**
+   * A page with nothing waiting left: if its `enable()` was on its way to its site's question, and spared the site when
+   * another page left that question unanswered (`spared`), the decline lands now, unless another page still asks itself
+   * or a connect question of the site's waits. It never asked: closing a window holding both pages, or a site's two
+   * tabs reloading in turn, kept the window coming back at once (chunk 51, l2sign#1).
+   */
+  private sparedNoMore(session: DappSession): void {
+    const { origin } = session;
+    const spared = this.spared.get(origin);
+    if (!spared || !this.enabling.get(origin)?.has(session.id) || this.sharedBeyond(session)) return;
+    if (this.waiting.some((w) => w.session.origin === origin && w.approval.kind === "connect")) return;
+    this.refuseFor(origin, spared.title, spared.network);
+    // The dApps page and Connected sites list it now.
     this.deps.changed();
   }
 
@@ -1074,6 +1196,8 @@ export class DappService {
     // Nothing is awaited from here until it's asked, so two pages can't both ask.
     const asking = this.waiting.find((w) => w.approval.kind === "connect" && w.session.origin === origin && w.network === network);
     if (asking) {
+      // While this page waits on it, as from its call's first line (`enabling`), that page going away isn't the site's
+      // decline: this one asks itself (`gone`).
       const settled = await asking.settled;
       // This page went away too: nothing is asked for it.
       if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
@@ -1086,6 +1210,9 @@ export class DappService {
       }
       return true;
     }
+    // Its page went away on its way here: nothing is asked for it, nor said of it, as asking again would be (chunk 51,
+    // l2sign#1: its leaving may be what turned the site away).
+    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
     if (this.refusing(origin)) {
       this.askedAgain(origin);
       throw refused(this.declinedWait(origin));
@@ -1121,6 +1248,8 @@ export class DappService {
    * the one it asked on, where the list shows it.
    */
   private refuseFor(origin: string, title?: string, network?: NetworkName): number {
+    // Whatever another page's leaving spared it, this refusal is that decline (`spared`).
+    this.spared.delete(origin);
     const { count, ms } = this.nextRefusal(origin);
     const named = siteTitle(title) ?? this.refusedUntil.get(origin)?.title;
     this.refusedUntil.set(origin, {
@@ -1451,7 +1580,8 @@ export class DappService {
         error: t("dapp.fundedButConnected", { number: index + 1 }),
       };
     }
-    w.approval = { ...w.approval, funding: { index, txHash } } as DappApproval;
+    // With its network: a switch since keeps it waiting (`networkChanged`), and its link stays on the chain it's on.
+    w.approval = { ...w.approval, funding: { index, txHash, network } } as DappApproval;
     this.deps.changed();
     void this.watchFunding(w, index);
     return {};
@@ -1521,13 +1651,15 @@ export class DappService {
     // the wallet is locked (independent review L36): a signature or a send
     // hears what a site that isn't connected does; `enable()` from one, that
     // it was declined. A connected site's `enable()` still opens the window.
-    const known = !!this.lastSites.get(await this.deps.network())?.has(origin);
+    const network = await this.deps.network();
+    const known = !!this.lastSites.get(network)?.has(origin);
+    // Its page went away while this call was on its way: nobody would answer it (independent review L31). Looked at
+    // before the refusal, so a page that left never reads as one that asked again (chunk 51, l2sign#1).
+    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
     if (this.refusing(origin) && (method !== "enable" || !known)) {
       if (method === "enable") this.askedAgain(origin);
       throw refused(method === "enable" ? this.declinedWait(origin) : NOT_CONNECTED);
     }
-    // Its page went away while this call was on its way: nobody would answer it (independent review L31).
-    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
     // Another of its pages' `enable()` waits already: this one shares its
     // place, as it will its connect question, so a site open in several tabs
     // is never refused for it (independent review L35).
@@ -1537,7 +1669,11 @@ export class DappService {
       throw refused(enable || known ? BUSY : NOT_CONNECTED);
     }
     let waiter: Unlocking | undefined;
-    const unlocked = new Promise<void>((resolve, reject) => this.unlocking.push((waiter = { session, enable, resolve, reject })));
+    const unlocked = new Promise<void>((resolve, reject) =>
+      this.unlocking.push((waiter = { session, enable, network, resolve, reject })),
+    );
+    // Its page asks itself, in the unlock window: another's leaving is spared no more (`spared`; chunk 51, l2sign#1).
+    if (enable) this.spared.delete(origin);
     try {
       await this.deps.window.show();
     } catch (e) {
@@ -1560,6 +1696,8 @@ export class DappService {
     txCbor?: string,
     /** A public-side signature's dApp account, as its request was read (`Waiting.account`). */
     account?: number,
+    /** The decimals a signature's window scales its tokens by (`Waiting.decimals`). */
+    decimals?: ReadonlyMap<string, number>,
   ): Promise<T> {
     // Its page went away while it was read: nobody would answer it (independent review L31).
     if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
@@ -1581,9 +1719,13 @@ export class DappService {
         declined: failure,
         ...(txCbor === undefined ? {} : { txCbor }),
         ...(account === undefined ? {} : { account }),
+        ...(decimals === undefined ? {} : { decimals }),
       };
       this.waiting.push(entry);
     });
+    // A connect question of its own: its page asks itself, so another's leaving is spared no more (`spared`; chunk 51,
+    // l2sign#1).
+    if (request.kind === "connect" && !request.connected) this.spared.delete(session.origin);
     entry.settled = answered.then(
       () => undefined,
       (e: unknown) => (entry.gone ? "gone" : e instanceof DappError ? e : new DappError({ code: APIError.InternalError, info: String(e) })),
@@ -1612,26 +1754,36 @@ export class DappService {
     // for 30 s, beside the new one's addresses (the release review).
     const account = holder ? undefined : (pinned ?? (await this.dappAccount()));
     const key = SESSION_DAPP_VIEW + network + suffix(holder, account);
-    const [kept, spent] = await wallet.withKeys(async () => [await session.get<View>(key), await spentSet(session)] as const);
+    const [kept, spent, phrase] = await wallet.withKeys(
+      async (keys) => [await session.get<View>(key), await spentSet(session), phraseOf(keys)] as const,
+    );
     if (kept && !fresh && now() - kept.readAt < VIEW_MS && kept.account === account) {
       return { ...kept, utxos: kept.utxos.filter((p) => !spent.has(outpoint(p.utxo))) };
     }
-    let reading = this.reading.get(key);
+    // Shared only under the phrase it began under, as the balance readings are (wallet.ts `phrasePin`): one still out
+    // as the wallet was removed and another phrase restored was handed to that phrase's site, account 0 for both, A's
+    // used addresses beside B's first and kept for B's next calls, or it ended as a lock ends it and B's site heard
+    // that (chunk 51, as e4a#1).
+    const shared = `${key}#${phrase}`;
+    let reading = this.reading.get(shared);
     if (!reading) {
-      reading = this.read(network, holder, key, spent, account).finally(() => this.reading.delete(key));
-      this.reading.set(key, reading);
+      reading = this.read(network, holder, key, spent, phrase, account).finally(() => this.reading.delete(shared));
+      this.reading.set(shared, reading);
     }
     return reading;
   }
 
+  /** The reading `view` shares: every key it reads is `phrase`'s, and it's kept only while that phrase's keys are in. */
   private async read(
     network: NetworkName,
     holder: Holder,
     key: string,
     spent: ReadonlySet<string>,
+    phrase: string,
     account?: number,
   ): Promise<View> {
     const { wallet, session, now } = this.deps;
+    const pin = phrasePin(phrase);
     let view: View;
     if (holder) {
       // The session's one account: its one address, its key `0/i`, its own stake key.
@@ -1644,7 +1796,7 @@ export class DappService {
         readAt: now(),
       };
     } else {
-      const found = await readAccountUtxos(this.deps, network, spent, { account });
+      const found = await readAccountUtxos(this.deps, network, spent, { account, phrase });
       view = {
         keys: [...found.account.paths.values()],
         utxos: found.utxos,
@@ -1654,7 +1806,10 @@ export class DappService {
         account,
       };
     }
-    await wallet.withKeys(() => session.set(key, view));
+    await wallet.withKeys((keys) => {
+      pin(keys);
+      return session.set(key, view);
+    });
     return view;
   }
 
@@ -1667,8 +1822,14 @@ export class DappService {
    * What a site may spend: the account less what's locked and the
    * collateral, plus what sent transactions return that isn't on chain yet:
    * the dApp account's own locks and collateral, and its own transactions'.
+   * Each as the ledger holds it, or not at all (`handedWhole`), so getBalance
+   * counts what getUtxos hands over. `account`: which public account that
+   * was, the reading's.
    */
-  private async available(network: NetworkName, holder: Holder): Promise<{ utxos: PathedUtxo[]; collateral?: PathedUtxo }> {
+  private async available(
+    network: NetworkName,
+    holder: Holder,
+  ): Promise<{ utxos: PathedUtxo[]; collateral?: PathedUtxo; account: number }> {
     const view = await this.view(network, holder);
     const { spendable, collateral } = holder
       ? sessionCollateral(view.utxos)
@@ -1683,7 +1844,10 @@ export class DappService {
       .filter((s) => s.submittedAt !== undefined && s.submittedAt > since && ofAccount(s, view))
       .flatMap((s) => s.outputs)
       .filter((p) => !seen.has(outpoint(p.utxo)) && !spent.has(outpoint(p.utxo)));
-    return { utxos: [...spendable, ...inflight], collateral };
+    const utxos = [...spendable, ...inflight].filter((p) => handedWhole(p.utxo));
+    // A collateral the user chose may carry a script too: handed over whole, or getCollateral has none.
+    const whole = collateral && handedWhole(collateral.utxo) ? collateral : undefined;
+    return { utxos, ...(whole ? { collateral: whole } : {}), account: view.account ?? 0 };
   }
 
   private async balance(network: NetworkName, holder: Holder): Promise<string> {
@@ -1717,12 +1881,12 @@ export class DappService {
   }
 
   private async collateral(network: NetworkName, holder: Holder, params: unknown): Promise<string[] | null> {
-    const { collateral } = await this.available(network, holder);
+    const { collateral, account } = await this.available(network, holder);
     if (!collateral) return null;
     // While the account's own Lovejoin chain is being sent, its collateral
     // backs the chain's mixes, and a site's transaction whose contract fails
     // would take it: none is offered then (`heldForLovejoin`).
-    if (await this.chainHolds(network, holder, outpoint(collateral.utxo))) return null;
+    if (await this.chainHolds(network, holder, account, outpoint(collateral.utxo))) return null;
     const amount = (params as { amount?: unknown } | null | undefined)?.amount;
     if (amount !== undefined && amount !== null) {
       const { lovelace } = this.readAmount(amount);
@@ -1891,10 +2055,18 @@ export class DappService {
    * and refusing them here, by name and count, would tell a site which UTxOs
    * the wallet's other accounts, or its private balance, are moving, and so
    * tie its account to them (privacy review §2.1). One of those goes the way
-   * a stranger's does.
+   * a stranger's does. On the public side that's the mix of public account
+   * `account` alone, the one the site's request is for: a mix from another
+   * account is kept as the public side's too (`chainHeld`).
    */
-  private async heldForLovejoin(network: NetworkName, holder: Holder, inputs: string[], collateral: string[]): Promise<void> {
-    const held = await this.chainHeld(network, holder);
+  private async heldForLovejoin(
+    network: NetworkName,
+    holder: Holder,
+    account: number,
+    inputs: string[],
+    collateral: string[],
+  ): Promise<void> {
+    const held = await this.chainHeld(network, holder, account);
     const used = [...new Set([...inputs, ...collateral].filter((o) => held.inputs.has(o) || held.collateral.has(o)))];
     if (!used.length) return;
     const [first] = used;
@@ -1906,15 +2078,31 @@ export class DappService {
     );
   }
 
-  /** What the holder's own Lovejoin chain being sent will spend and put up (spent.ts's reservations). */
-  private chainHeld(network: NetworkName, holder: Holder): Promise<{ inputs: Set<string>; collateral: Set<string> }> {
-    const { wallet, session } = this.deps;
-    return wallet.withKeys(() => reservedSet(session, network, { sending: true, only: chainOwner(holder?.index) }));
+  /**
+   * What the holder's own Lovejoin chain being sent will spend and put up
+   * (spent.ts's reservations): the session's, or on the public side, the mix
+   * that public account `account` pays. Every account's mix from the public
+   * side is kept under one owner, one at a time (lovejoin.ts chainOwner), so
+   * that one is held here only when its account is `account`: another's,
+   * answered by name, told a site on the dApp account that the account mixing
+   * was the same wallet's, and when (chunk 51, e3a#1).
+   */
+  private async chainHeld(
+    network: NetworkName,
+    holder: Holder,
+    account: number,
+  ): Promise<{ inputs: Set<string>; collateral: Set<string> }> {
+    const { wallet, session, now } = this.deps;
+    const kept: Record<string, ChainReservation> = await wallet.withKeys(() => reservations(session, network, now()));
+    const r = kept[chainOwner(holder?.index)];
+    // Being sent, and the holder's: a public one that names no account is account 0's (ChainReservation).
+    const own = !!r && r.until === undefined && (!!holder || (r.account ?? 0) === account);
+    return own ? { inputs: new Set(r.inputs), collateral: new Set(r.collateral) } : { inputs: new Set(), collateral: new Set() };
   }
 
-  /** Whether the holder's own Lovejoin chain being sent needs `o`. */
-  private async chainHolds(network: NetworkName, holder: Holder, o: string): Promise<boolean> {
-    const held = await this.chainHeld(network, holder);
+  /** Whether the holder's own Lovejoin chain being sent needs `o`: on the public side, public account `account`'s. */
+  private async chainHolds(network: NetworkName, holder: Holder, account: number, o: string): Promise<boolean> {
+    const held = await this.chainHeld(network, holder, account);
     return held.inputs.has(o) || held.collateral.has(o);
   }
 
@@ -2037,7 +2225,14 @@ export class DappService {
     collateral: string[],
     partialSign: boolean,
     governance = false,
-  ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean; view: View; rows: KoiosUtxo[] }> {
+  ): Promise<{
+    request: string;
+    summary: DappTxSummary;
+    collateralSpent: boolean;
+    view: View;
+    rows: KoiosUtxo[];
+    decimals: ReadonlyMap<string, number>;
+  }> {
     if (this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) throw refused(BUSY);
     if (this.lastMinute(origin, "unprompted").length >= PER_MINUTE.unprompted) {
       throw refused((lng) => t("dapp.tooManyRefusedSignatures", { lng }));
@@ -2102,7 +2297,103 @@ export class DappService {
         throw refuse(TxSignError.ProofGeneration, (lng) => t("dapp.lovejoinRewards", { lng }));
       }
     }
-    return { request, summary, collateralSpent, view, rows };
+    // Whether the metadata is what the body's hash commits to, which is what's signed (a hash with none, too, so a site
+    // can't show one note and send another; G5's notes), WebAssembly says itself, from the bytes it signs
+    // (`metadataMismatch`), and so it names the registers a payment into the contract is under (`paid[].register`): a
+    // second decode, which a site can make fail with bytes only it reads, never silences either (chunk 51, sign#1).
+    // Whether a register is one already on chain, which the site wrote (x1a#2), is read from those. Beside a note, the
+    // window shows only its lines of the metadata, which signing publishes whole: whether there's more, another label
+    // or anything else under 674 (Minswap's extraData names the sender's address; x1a#3), is read from the bytes as
+    // Transaction details reads them, and unread, said to be there.
+    if (summary.metadata && summary.note) {
+      const detail = this.decoded(network, (tx as string).trim());
+      if (!detail || moreThanNote(detail.metadata)) summary = { ...summary, otherMetadata: true };
+    }
+    if (await this.registerOnChain(network, summary.paid)) summary = { ...summary, registerOnChain: true };
+    // Each token in the units Koios gives it, from the rows this reading resolved and those the device keeps, as
+    // Transaction details scales it (tx-view.ts `heldDecimals`, the same map for both): WebAssembly's token lists carry
+    // no decimals, and the window showed a token off the wallet's list in raw units, 10^6 apart from its own view for
+    // one of 6 (chunk 51, l3sign#2). The wallet's list still comes first (ui/tokens.ts `tokenDecimals`). Never in the
+    // way of the window: unread, it shows them as before.
+    const decimals = await this.deps.wallet
+      .withKeys(() => heldDecimals(this.deps, network, rows))
+      .catch((e: unknown): ReadonlyMap<string, number> => {
+        if (isTrap(e)) throw e;
+        return new Map();
+      });
+    return { request, summary: withTokenDecimals(summary, decimals), collateralSpent, view, rows, decimals };
+  }
+
+  /** A site's transaction as WebAssembly's transaction view reads it (`decodeTx`): undefined where it can't. */
+  private decoded(network: NetworkName, txCbor: string): TxDetail | undefined {
+    const { wasm } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    try {
+      return JSON.parse(wasm.decodeTx(net, txCbor)) as TxDetail;
+    } catch (e) {
+      if (isTrap(e)) throw e;
+      return undefined;
+    }
+  }
+
+  /**
+   * Whether a register a site's transaction pays Seedelf Wallet's contract under, one only its key's holder can spend,
+   * as WebAssembly read it from the bytes it signs (`paid[].register`; chunk 51, sign#1), is one the kept contract view
+   * holds already: beside a Seedelf's token, or under one of the wallet's own UTxOs. Matched by its points
+   * (`registerKey`), whatever the spelling, asking nobody: the view as the last reading left it. With none kept,
+   * nothing is said either way. It can't catch a register re-randomized by a small d, nor a copy of a stranger's UTxO
+   * holding no token, which the view doesn't keep, so the window never says the others hide whose Seedelf it is
+   * (chunk 51, x1a#2).
+   */
+  private async registerOnChain(network: NetworkName, paid: DappTxSummary["paid"]): Promise<boolean> {
+    const registers = paid.flatMap((p) => (p.register ? [registerKey(p.register)] : []));
+    if (!registers.length) return false;
+    const view = await this.deps.wallet
+      .withKeys(() => keptContractView(this.deps.session, network))
+      .catch((e: unknown) => {
+        if (isTrap(e)) throw e;
+        return undefined;
+      });
+    if (!view) return false;
+    const kept = byRegister([...view.owned, ...Object.values(view.seedelfs)]);
+    return registers.some((k) => kept.has(k));
+  }
+
+  /**
+   * Notes, in the sealed Seedelf history, what a site's transaction the user just signed pays into their own Seedelf
+   * (activity.ts `SignedNote`): its outputs under the user's own register, but one carrying a reference script, which
+   * the wallet can't spend (l3sign#1), as money made private from the public account that signed (`account`), or as
+   * the private session's (chunk 51, gap-g1#2). Unnoted, the reading that finds them took them for payments received,
+   * which a stealth mint or a funding takes first, tying the new Seedelf or session to the account in the open. Under
+   * the phrase whose keys find them, and nothing at all for a transaction that pays no register of the user's. Read
+   * from `signed`, the summary of the bytes the signature was made over, never a second decode a site can make fail
+   * (chunk 51, sign#1).
+   */
+  private async notePrivate(network: NetworkName, holder: Holder, signed: DappTxSummary, account: number): Promise<void> {
+    const { activity, wasm, wallet } = this.deps;
+    const paid = signed.paid.flatMap((p) =>
+      p.seedelf === "register" && p.register && p.txIndex !== undefined ? [{ register: p.register, index: p.txIndex }] : [],
+    );
+    if (!activity || !paid.length) return;
+    const pin = phrasePin();
+    const outputs = await wallet.withKeys((keys) => {
+      pin(keys);
+      return paid.flatMap((o) => {
+        const register = new wasm.Register(o.register.generator, o.register.publicValue);
+        try {
+          return keys.seedelf.isOwned(register) ? [o.index] : [];
+        } catch (e) {
+          // Points that don't decode, or aren't in the prime-order subgroup, can't be the user's.
+          if (isTrap(e)) throw e;
+          return [];
+        } finally {
+          register.free();
+        }
+      });
+    });
+    if (!outputs.length) return;
+    const origin = holder ? sessionClass(holder.index) : madePrivate(account);
+    await activity.signedInto(network, { txHash: signed.txHash, outputs, origin, ...(holder ? { session: holder.index } : {}) }, pin);
   }
 
   /** CIP-95's `getPubDRepKey`: the dApp account's DRep key, its public key in hex, for a site given governance. */
@@ -2147,8 +2438,9 @@ export class DappService {
     } catch {
       throw invalid((lng) => t("dapp.cannotReadTx", { lng }));
     }
-    await this.heldForLovejoin(network, holder, inputs, collateral);
-    const { request, summary, collateralSpent, view, rows } = await this.readInTurn(session.origin, () =>
+    // Before anything is read: the dApp account's own chain, as Settings has it now (`sameAccount` refuses a change).
+    await this.heldForLovejoin(network, holder, await this.dappAccount(), inputs, collateral);
+    const { request, summary, collateralSpent, view, rows, decimals } = await this.readInTurn(session.origin, () =>
       this.readTx(session.origin, network, holder, tx, bytes, inputs, collateral, partialSign, governance),
     );
     const { wasm } = this.deps;
@@ -2181,7 +2473,8 @@ export class DappService {
         // account, a Lovejoin chain started that needs what it uses, or the
         // user locked a UTxO it spends.
         await this.stillConnected(network, session.origin, holder, view);
-        await this.heldForLovejoin(network, holder, inputs, collateral);
+        // The chain of the account it was read for, whose keys sign it (`withViewKeys`).
+        await this.heldForLovejoin(network, holder, view.account ?? 0, inputs, collateral);
         await this.keptApart(network, holder, view, inputs, collateral);
         // The account again, the last look before signing: a change that landed while those read is refused too,
         // and one after can't move the keys, which are the account's it was read for (1.3.0's release review, C26).
@@ -2194,10 +2487,15 @@ export class DappService {
         // What it pays the session's account, recorded before the site has the signature (independent review M4).
         if (holder) await this.deps.sessions.siteSigned(network, holder.index, (tx as string).trim(), signed.summary);
         await this.remember(network, holder, signed.summary, (tx as string).trim(), holder ? undefined : account);
+        // And what it pays into the user's own Seedelf, noted as that account's or session's money, never a payment
+        // received: before the site has the signature, since it may send it itself (chunk 51, gap-g1#2). From the
+        // summary of the bytes just signed (sign#1).
+        await this.notePrivate(network, holder, signed.summary, account);
         return signed.witnessSet;
       },
       (tx as string).trim(),
       view.account,
+      decimals,
     );
   }
 
@@ -2209,10 +2507,23 @@ export class DappService {
    * answer.
    */
   waitingCbor(txHash: string): string | undefined {
+    return this.waitingSignature(txHash)?.txCbor;
+  }
+
+  /**
+   * The decimals the window scales a waiting signature's tokens by (`readTx`), by the transaction's hash, for the
+   * transaction view to scale them the same (tx-view.ts `withDecimals`; chunk 51, l3sign#2). Read while unlocked.
+   */
+  waitingDecimals(txHash: string): ReadonlyMap<string, number> | undefined {
+    return this.waitingSignature(txHash)?.decimals;
+  }
+
+  /** The signature a site is waiting for on `txHash`, with its bytes. */
+  private waitingSignature(txHash: string): Waiting | undefined {
     const wanted = txHash.trim().toLowerCase();
     return this.waiting.find(
       (w) => w.txCbor !== undefined && w.approval.kind === "sign-tx" && w.approval.summary.txHash.toLowerCase() === wanted,
-    )?.txCbor;
+    );
   }
 
   /**
@@ -2427,9 +2738,10 @@ export class DappService {
 
   /**
    * Keeps a signed transaction's outputs for the site's next transaction:
-   * those to the account for it to spend, and every one (the first 64) for a
-   * while, so one built on it can be read before it's on chain. `account`:
-   * the public account that signed it.
+   * those to the account for it to spend, each with the reference script it
+   * carries, as a site is handed it (chunk 51, w2#4), and every one (the first
+   * 64) for a while, so one built on it can be read before it's on chain.
+   * `account`: the public account that signed it.
    */
   private async remember(
     network: NetworkName,
@@ -2451,6 +2763,7 @@ export class DappService {
         block_height: null,
         inline_datum: o.inlineDatum ? { bytes: o.inlineDatum, value: null } : null,
         datum_hash: o.datumHash,
+        ...(o.referenceScript ? { reference_script: o.referenceScript } : {}),
         asset_list: o.tokens.map((t) => ({
           policy_id: t.policyId,
           asset_name: t.assetName,
@@ -2771,11 +3084,60 @@ const sessionOf = (holder: Holder) => (holder ? { session: holder.index } : {});
 
 /**
  * A private session's collateral: the funding's 5 ₳ of pure ADA, kept out of
- * what a site may spend, as the public account's is.
+ * what a site may spend, as the public account's is. By the rule its return
+ * puts one up by (coin-control.ts `collateralFits`): 5 ₳ of ADA alone, with no
+ * reference script and no datum, inline or by hash, which the funding's never
+ * has. A stranger's 5 ₳ with a datum, listed before the funding's, stood in
+ * for it here: getCollateral offered the stranger's, getUtxos the real one,
+ * and a site's spend of it went unflagged, while the return couldn't put the
+ * stranger's up (chunk 51, e3a#2).
  */
 function sessionCollateral(utxos: PathedUtxo[]): { spendable: PathedUtxo[]; collateral?: PathedUtxo } {
-  const collateral = utxos.find((p) => BigInt(p.utxo.value) === SESSION_COLLATERAL && !p.utxo.asset_list?.length);
+  const collateral = utxos.find(
+    ({ utxo: u }) =>
+      BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script && !u.inline_datum && !u.datum_hash,
+  );
   return { spendable: utxos.filter((p) => p !== collateral), ...(collateral ? { collateral } : {}) };
+}
+
+/**
+ * The script types the ledger has, as Koios names them, each with the tag its hash is taken with: 0 for a native
+ * script's, then 1 to 3 for Plutus V1 to V3.
+ */
+const SCRIPT_TAGS = new Map([
+  ["timelock", 0],
+  ["multisig", 0],
+  ["plutusV1", 1],
+  ["plutusV2", 2],
+  ["plutusV3", 3],
+]);
+
+/**
+ * Whether a UTxO can be handed to a site as the ledger holds it, as WebAssembly writes it (cip30.rs `script_ref`): with
+ * no reference script, or with one whose bytes the data source gives, in a type the ledger has, agreeing with its size
+ * (`measurable`) and with its hash where one's given (the ledger's: the bytes', its tag first; chunk 51, still#11), a
+ * native script's within `MAX_DEPTH` levels. Conway's fee counts the script on a spent input, so handed over without
+ * it, a site would price spending it short and the node would refuse the transaction. Koios and the data layer give no
+ * native script's bytes: a UTxO holding one is left out of getUtxos and getBalance (chunk 51, w2#4).
+ */
+function handedWhole(u: KoiosUtxo): boolean {
+  const script = u.reference_script;
+  if (!script) return true;
+  const tag = SCRIPT_TAGS.get(script.type ?? "");
+  if (!measurable(u) || tag === undefined) return false;
+  const bytes = hexBytes(script.bytes ?? "");
+  if (script.hash != null) {
+    const tagged = new Uint8Array(bytes.length + 1);
+    tagged[0] = tag;
+    tagged.set(bytes, 1);
+    if (bytesToHex(blake2b(tagged, { dkLen: 28 })) !== script.hash.toLowerCase()) return false;
+  }
+  if (tag !== 0) return true;
+  try {
+    return skip(bytes, 0) === bytes.length;
+  } catch {
+    return false;
+  }
 }
 
 function remove<T>(list: T[], drop: (item: T) => boolean): void {
@@ -2888,15 +3250,62 @@ function cborUint(n: bigint): string {
   return `1b${hex(16)}`;
 }
 
-/** The payload as text, when it's UTF-8 with nothing unprintable but line breaks and tabs. */
+/**
+ * The payload as text, when it's UTF-8 with nothing unprintable but line breaks and tabs: every character the bytes
+ * hold, a leading byte order mark too, which TextDecoder otherwise drops (`ignoreBOM`). The window writes those that
+ * don't show as their codes (ui/dapp.ts `shownSiteText`; chunk 51, e3a#3).
+ */
 function readableText(hex: string): string | undefined {
   const bytes = Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text) ? undefined : text;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * `summary` with every token the window shows or counts in the units `decimals` gives it (tx-view.ts `heldDecimals`),
+ * where it gives one: what it sends or gets, what it pays, its own outputs, what it mints, and a contract's (chunk 51,
+ * l3sign#2).
+ */
+export function withTokenDecimals(summary: DappTxSummary, decimals: ReadonlyMap<string, number>): DappTxSummary {
+  if (!decimals.size) return summary;
+  const scaled = (tokens: DappToken[]) =>
+    tokens.map((x) => {
+      const d = decimals.get(`${x.policyId}.${x.assetName}`);
+      return d ? { ...x, decimals: d } : x;
+    });
+  return {
+    ...summary,
+    netTokens: scaled(summary.netTokens),
+    paid: summary.paid.map((p) => ({ ...p, tokens: scaled(p.tokens) })),
+    ownOutputs: summary.ownOutputs.map((o) => ({ ...o, tokens: scaled(o.tokens) })),
+    mint: scaled(summary.mint),
+    ...(summary.contractTokens ? { contractTokens: scaled(summary.contractTokens) } : {}),
+    ...(summary.releasedTokens ? { releasedTokens: scaled(summary.releasedTokens) } : {}),
+  };
+}
+
+/**
+ * Whether metadata holds more than a CIP-20 note's lines: anything but one label, 674, holding one entry, "msg" and
+ * its text. What the window shows of a site's metadata is those lines alone (x1a#3). A metadatum map is a list of
+ * pairs on chain, so a second "msg" is signed and published too, while the window's note is the first (cip30.rs
+ * note_of; r2sign#2). A second 674 label reads the same way, though the ledger refuses one.
+ */
+export function moreThanNote(metadata: readonly TxMetadata[]): boolean {
+  const lines = (m: TxMetadatum) => m.type === "text" || (m.type === "list" && m.items.every((i) => i.type === "text"));
+  return (
+    metadata.length > 1 ||
+    metadata.some(
+      ({ label, value }) =>
+        label !== "674" ||
+        value.type !== "map" ||
+        value.entries.length !== 1 ||
+        value.entries.some(({ key, value: v }) => !(key.type === "text" && key.text === "msg" && lines(v))),
+    )
+  );
 }
 
 /** What a site asked `getUtxos` to cover. */

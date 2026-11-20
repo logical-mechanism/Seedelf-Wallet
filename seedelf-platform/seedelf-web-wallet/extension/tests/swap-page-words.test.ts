@@ -569,3 +569,31 @@ describe("a cancel's review (release review C15)", () => {
     expect(line).toContain("Collateral at risk 5 ₳");
   });
 });
+
+describe("a swap held by its wait after an unlock (chunk 51, e7a#4)", () => {
+  // Found as the wallet unlocked, its next step waits a fresh draw of up to 20 minutes, so nothing goes out the moment
+  // it unlocks (privacy review §3.1): the page said it was asking Minswap now, and the list that it was placing the
+  // order, all through the wait. Lovejoin's page says it of a mix (lovejoin.sub.waiting). Never "the swap goes on": a
+  // swap stopping, or coming back, waits too.
+  const HELD = "It waits after the unlock: its next step goes out within 20 minutes.";
+
+  it("says so on its page and in the list, whichever step waits, until its wait is over", () => {
+    const now = Date.now();
+    const until = now + 10 * 60_000;
+    const ordering = orderSwap({ txs: [OUT] }, { step: "ordering", waitsUntil: until });
+    expect(nowLine(ordering, now)).toBe(HELD);
+    expect(page(ordering)).toContain(HELD);
+    expect(page(ordering)).not.toContain("Asking Minswap for a fresh quote");
+    expect(row(ordering)).toContain("Waiting after the unlock, up to 20 minutes");
+    expect(row(ordering)).not.toContain("Placing the order");
+    // Filled, its return is what waits; stopped, its way back.
+    const filled = orderSwap({ txs: [OUT, LANDED] }, { step: "filling", filled: true, waitsUntil: until });
+    expect(nowLine(filled, now)).toBe(HELD);
+    expect(nowLine(orderSwap({ txs: [OUT] }, { step: "ordering", stopping: true, waitsUntil: until }), now)).toBe(HELD);
+    // Its wait over, the step's own words, as before.
+    const over = orderSwap({ txs: [OUT] }, { step: "ordering", waitsUntil: now - 1 });
+    expect(nowLine(over, now)).toBe("Asking Minswap for a fresh quote, then placing the order.");
+    expect(row(over)).toContain("Placing the order");
+    expect(nowLine({ ...filled, auto: { ...filled.auto!, waitsUntil: now - 1 } }, now)).toBe(COMING_BACK);
+  });
+});

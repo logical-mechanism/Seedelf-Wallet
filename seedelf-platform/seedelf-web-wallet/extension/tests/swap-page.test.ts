@@ -6,14 +6,18 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { receivedOf } from "../src/background/sessions";
+import { t as tr } from "../src/i18n";
 import type { SessionBackSummary, SessionOutSummary, SessionView, SwapLovejoin } from "../src/shared/rpc";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { isClaimable } from "../src/ui/screens/ClaimAll";
-import { CancelCollateralReview, neverAgain, nextStep, Session, SessionFoot, StopDialog, SwapRow, swapsOnly } from "../src/ui/screens/Swaps";
+import { CancelCollateralReview, neverAgain, nextStep, nowLine, Session, SessionFoot, StopDialog, stopReading, SwapRow, swapsOnly } from "../src/ui/screens/Swaps";
+import { lovejoinOf } from "./chain-fixtures";
 import { loadTestWasm, sessionSwap } from "./fakes";
-import { ASK, atSession, signing, unlocked } from "./swap-session";
+import { ASK, atSession, funded, fundingOutsSpent, MIN as MIN_UNIT, ordered, orderRow, pastSpent, signing, started, SWAP_TX, unlocked, type T } from "./swap-session";
+import { ADA_ROWS } from "./v2-pools";
 
 /** A page's text, as a person reads it. */
 function text(element: ReactElement): string {
@@ -143,6 +147,12 @@ describe("a swap's page once its order is filled, and once it's over (chunk 23's
       .trim();
   const stop = />Stop<\/button>/;
   const MIN = { policyId: TUSDM.slice(0, 56), assetName: TUSDM.slice(56), quantity: "4200000" };
+  /** The timeline's third step, the order's fill: its title and the line under it. */
+  const third = (markup: string) => {
+    const step = [...markup.matchAll(/<li class="timeline__step[^"]*"[^>]*>([\s\S]*?)<\/li>/g)][2]?.[1] ?? "";
+    const plain = (x?: string) => x?.replaceAll("&#x27;", "'");
+    return { title: plain(/<span class="timeline__title">(.*?)<\/span>/.exec(step)?.[1]), sub: plain(/<p class="timeline__sub">(.*?)<\/p>/.exec(step)?.[1]) };
+  };
 
   it("offers Stop until the order is filled, and not while everything comes back", () => {
     expect(html(swapSession())).toMatch(stop);
@@ -155,6 +165,43 @@ describe("a swap's page once its order is filled, and once it's over (chunk 23's
     expect(html(coming)).not.toMatch(stop);
     // What the account holds is one labelled row, its tokens too.
     expect(shown(coming)).toContain("It holds 7 ₳, 4.2 tUSDM");
+  });
+
+  it("reads every order spent as its fill or refund told, before the next run tells which: no Stop, and it comes back next (chunk 51, l3screens#1)", () => {
+    // The run that first reads every order of the swap spent only notes it (spentSeen); the next run tells the fill or
+    // the refund. Meanwhile the page said it waited for the fill, and Stop stayed, its dialog pricing a cancel that
+    // never comes.
+    const COMING_BACK = "It all comes back to your private balance next, by itself.";
+    const row = (s: SessionView) => text(createElement(SwapRow, { session: s, onOpen: () => undefined }));
+    const noted = swapSession({
+      txs: [...swapSession().txs, swapTx],
+      auto: { step: "filling", stopping: false, filled: false, approvedMinOut: "4158000", spent: true },
+    });
+    expect(nowLine(noted)).toBe(COMING_BACK);
+    expect(shown(noted)).not.toContain("Waiting for the order to fill");
+    expect(html(noted)).not.toMatch(stop);
+    expect(stopReading(noted).over).toBe(true);
+    expect(row(noted)).toContain("Coming back");
+    expect(row(noted)).not.toContain("Waiting for the fill");
+    // Stopped meanwhile: no cancel is built either, an Order open kept from before or not.
+    const stopping = { ...noted, auto: { ...noted.auto!, step: "cancelling" as const, stopping: true } };
+    expect(nowLine(stopping)).toBe(COMING_BACK);
+    expect(nowLine({ ...stopping, auto: { ...stopping.auto, orderOpen: 0 } })).toBe(COMING_BACK);
+    expect(row(stopping)).toContain("Coming back");
+    // Its timeline's third step never says Cancelled meanwhile: no cancel goes, and the order may have filled. It
+    // names the step as the plan does, its outcome told by the next run (chunk 51, l4worker#2).
+    const filledStep = { title: "Filled", sub: "By a DEX, usually within a few blocks" };
+    expect(third(html(stopping))).toEqual(filledStep);
+    expect(third(html({ ...stopping, auto: { ...stopping.auto, orderOpen: 0 } }))).toEqual(filledStep);
+    expect(third(html(noted))).toEqual(filledStep);
+    // Its cancel sent: cancelled, as before.
+    const cancel = { kind: "cancel" as const, txHash: "ca".repeat(32), at: 0, confirmed: true };
+    expect(third(html({ ...stopping, txs: [...stopping.txs, cancel] })).title).toBe("Cancelled");
+    // Before every order reads spent: as before.
+    const filling = { ...noted, auto: { ...noted.auto!, spent: undefined } };
+    expect(nowLine(filling)).toBe("Waiting for the order to fill. Then it all comes back by itself; Stop cancels it.");
+    expect(html(filling)).toMatch(stop);
+    expect(stopReading(filling).over).toBe(false);
   });
 
   it("says what came back once it's over, when the wallet kept it", () => {
@@ -181,6 +228,447 @@ describe("a swap's page once its order is filled, and once it's over (chunk 23's
     expect(line).toContain("Its funding was turned away before it went out, so the account is empty. Something it spends had changed since the review.");
     expect(line).toContain("Remove from list");
     expect(line).not.toContain("Forget it");
+  });
+});
+
+// Chunk 51, e2b#2: a later return of the same swap, of what a stranger paid its account before it closed, wrote over
+// what its page says once it's over. `received` was each return's own, so the closed swap said it received the
+// stranger's ADA alone, never its 906.5941 MIN; and that return's skip reason took the place of the swap's own return's,
+// which had gone through Lovejoin. Now every return that went counts, and a return of strangers' alone leaves the
+// swap's word on how its own came back as it was. The real runner and WebAssembly, Lovejoin v2's 5 ₳ pool, and the fakes
+// of Koios, giveme.my and Minswap, as sessions.test.ts and swap-lovejoin-way.test.ts run them.
+describe("a finished swap whose account a stranger paid before it closed (chunk 51, e2b#2)", () => {
+  /** Ogmios's answer when the network measures no more than a transaction declares. */
+  const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
+  /** A stranger's payment to session 0's account, made after the swap's own return went. */
+  const STRANGER = "c9".repeat(32);
+  /** That payment as Koios lists it: in a block a minute after the swap's own return went (chunk 51, r2still#2). */
+  const strangerPaid = (t: T) => ({ ...atSession(STRANGER, 0, "2000000"), block_time: Math.floor(t.clock.now / 1000) + 60 });
+  /** The swap's proceeds, as a return's figures name them. */
+  const PROCEEDS = expect.objectContaining({ assetName: MIN_UNIT.slice(56), quantity: "906594100" });
+
+  type Figures = { lovelace: string; tokens: Array<{ assetName: string; quantity: string }> };
+  type Recorded = { txs: Array<{ kind: string; brought?: Figures }>; received?: Figures; lovejoinSkipped?: string };
+  const record = async (t: T) => (await t.store.get<{ sessions: Recorded[] }>("sessions.preprod"))!.sessions[0]!;
+  /** What the session's `n`th return brought back at once, as its record keeps it (before chunk 51: the latest's). */
+  const broughtBy = async (t: T, n: number) => {
+    const r = await record(t);
+    return r.txs.filter((x) => x.kind === "back")[n]?.brought ?? r.received!;
+  };
+  /** The session's page, as a person reads it, balances shown. */
+  const shown = (s: SessionView) =>
+    renderToStaticMarkup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+        createElement(
+          NetworkContext.Provider,
+          { value: "preprod" },
+          createElement(Session, { session: s, reading: false, onRefresh: () => undefined, onBack: () => undefined, onChanged: () => undefined }),
+        ),
+      ),
+    )
+      .replace(/<[^>]+>/g, " ")
+      .replaceAll("&#x27;", "'")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  it("says it received what every return brought back: its own proceeds, and the stranger's 2 ₳ after them", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    fundingOutsSpent(t);
+    // The funding landed: the runner places the order.
+    let view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+    // The order lands and a batcher fills it: everything at the account comes back in one return.
+    ordered(t);
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN_UNIT, "906594100"]]));
+    // A run notes the order spent, and the next tells the fill and brings it back (chunk 51, r2still#2).
+    view = await pastSpent(t, sessions);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+    const own = await broughtBy(t, 0);
+    expect(own.tokens).toContainEqual(PROCEEDS);
+    // That return lands. Before the runner's next look would close the session, someone pays its account 2 ₳: its
+    // address is on chain since the funding. The runner brings that back too, in a return of its own.
+    t.koios.spent.add(`${SWAP_TX}#1`).add(`${"aa".repeat(32)}#0`);
+    t.koios.addedToAccounts.push(strangerPaid(t));
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back", "back"]);
+    const theirs = await broughtBy(t, 1);
+    expect(theirs.tokens).toEqual([]);
+    // It lands, and the session is over: what it got is both returns' together, its proceeds among it.
+    t.koios.spent.add(`${STRANGER}#0`);
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.stage).toBe("closed");
+    expect(view.received).toEqual({ lovelace: (BigInt(own.lovelace) + BigInt(theirs.lovelace)).toString(), tokens: [PROCEEDS] });
+    expect(shown(view)).toMatch(/Received 906\.5941 MIN/);
+    // Its last step, Back in your private balance, links the swap's own return, never the stranger's that came after it
+    // (chunk 51, r2docs#1).
+    const [ownBack, strangers] = view.txs.filter((x) => x.kind === "back");
+    expect(stepLinks(view).at(-1)).toBe(ownBack!.txHash);
+    expect(stepLinks(view)).not.toContain(strangers!.txHash);
+  });
+
+  it(
+    "never says Lovejoin was left out of its return, which went through Lovejoin, for the stranger's 2 ₳ that came back directly",
+    { timeout: 180_000 },
+    async () => {
+      const t = await unlocked();
+      t.koios.evaluation = AGREES;
+      t.koios.confirmations = 1;
+      const now = t.clock.now;
+      const out = "ab".repeat(32);
+      const fill = "aa".repeat(32);
+      const done = (kind: string, txHash: string, extra = {}) => ({ kind, txHash, at: now, confirmed: true, ...extra });
+      // A swap approved to come back through Lovejoin, one wave deep, its order placed and on chain.
+      await t.store.set("sessions.preprod", {
+        next: 1,
+        sessions: [
+          {
+            index: 0,
+            ownStake: true,
+            createdAt: now,
+            txs: [done("out", out), done("swap", SWAP_TX, { orders: [`${SWAP_TX}#0`] })],
+            swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+            auto: {
+              approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } },
+              direct: false,
+              lovejoin: { depth: 1, delay: "1-6", box: "5000000" },
+            },
+          },
+        ],
+      });
+      // Filled: the order is spent, and the account holds the proceeds, the swap's change and its 5 ₳ collateral.
+      t.koios.addedToAccounts.push(
+        orderRow(SWAP_TX, 0),
+        atSession(fill, 0, "2000000", [[MIN_UNIT, "906594100"]]),
+        atSession(SWAP_TX, 1, "12000000"),
+        atSession(out, 1, "5000000"),
+        ...ADA_ROWS,
+      );
+      t.koios.spent.add(`${SWAP_TX}#0`);
+      // Its collateral's own mix into the 5 ₳ pool is off: the return asked about here is its chain alone.
+      await t.deps.preferences.set({ lovejoinCollateral: false });
+      const sessions = signing(t, { lovejoin: lovejoinOf(t), sleep: async () => undefined });
+
+      // The runner sees the fill and brings it all back through Lovejoin, as approved: one chain, the return last, a run
+      // after the one that notes the order spent (chunk 51, r2still#2).
+      await pastSpent(t, sessions);
+      let kept = await record(t);
+      const kinds = kept.txs.map((x) => x.kind);
+      expect(kinds.slice(0, 3)).toEqual(["out", "swap", "deposit"]);
+      expect(kinds.at(-1)).toBe("back");
+      expect(kept.lovejoinSkipped).toBeUndefined();
+      const own = await broughtBy(t, 0);
+      expect(own.tokens).toContainEqual(PROCEEDS);
+      // All of it is on chain. Before the runner's next look would close the session, a stranger pays its account
+      // 2 ₳, too little for a box: it comes back directly, in a return of its own.
+      t.koios.spent.add(`${fill}#0`).add(`${SWAP_TX}#1`).add(`${out}#1`);
+      t.koios.addedToAccounts.push(strangerPaid(t));
+      await sessions.advance("preprod", 0, true);
+      kept = await record(t);
+      expect(kept.txs.filter((x) => x.kind === "back")).toHaveLength(2);
+      // It lands, and the session is over, its chain gone in and finished: the last step reads "Through Lovejoin".
+      t.koios.spent.add(`${STRANGER}#0`);
+      const view = await sessions.advance("preprod", 0, true);
+      expect(view.stage).toBe("closed");
+      expect(view.chain).toMatchObject({ cut: false });
+      expect(view.chain?.stopped).toBeUndefined();
+      // The swap's own return went through Lovejoin: its page never says Lovejoin was left out of it, nor that it got
+      // the stranger's ADA alone.
+      expect(view.lovejoinSkipped).toBeUndefined();
+      const words = shown(view);
+      expect(words).not.toContain("Lovejoin was left out");
+      expect(view.received?.tokens).toEqual([PROCEEDS]);
+      expect(words).toMatch(/Received, besides its boxes in Lovejoin 906\.5941 MIN/);
+    },
+  );
+
+  // Chunk 51, r2tests#9: the other way round. The swap's own return came back directly, Lovejoin left out for want of its
+  // 5 ₳ collateral; what a stranger paid after it, a 5 ₳ of ADA alone among it, goes through Lovejoin in a chain of its
+  // own. That chain never clears the word on how the swap's own came back.
+  it(
+    "keeps saying Lovejoin was left out of its own return, which came back directly, when the stranger's 12 ₳ after it go through Lovejoin",
+    { timeout: 180_000 },
+    async () => {
+      const t = await unlocked();
+      t.koios.evaluation = AGREES;
+      t.koios.confirmations = 1;
+      const now = t.clock.now;
+      const out = "ab".repeat(32);
+      const fill = "aa".repeat(32);
+      const done = (kind: string, txHash: string, extra = {}) => ({ kind, txHash, at: now, confirmed: true, ...extra });
+      // A swap approved to come back through Lovejoin, one wave deep, its order placed and on chain.
+      await t.store.set("sessions.preprod", {
+        next: 1,
+        sessions: [
+          {
+            index: 0,
+            ownStake: true,
+            createdAt: now,
+            txs: [done("out", out), done("swap", SWAP_TX, { orders: [`${SWAP_TX}#0`] })],
+            swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+            auto: {
+              approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } },
+              direct: false,
+              lovejoin: { depth: 1, delay: "1-6", box: "5000000" },
+            },
+          },
+        ],
+      });
+      // Filled: the order is spent, and the account holds the proceeds and the swap's change, but not its 5 ₳ collateral.
+      t.koios.addedToAccounts.push(
+        orderRow(SWAP_TX, 0),
+        atSession(fill, 0, "2000000", [[MIN_UNIT, "906594100"]]),
+        atSession(SWAP_TX, 1, "12000000"),
+        ...ADA_ROWS,
+      );
+      t.koios.spent.add(`${SWAP_TX}#0`);
+      await t.deps.preferences.set({ lovejoinCollateral: false });
+      const sessions = signing(t, { lovejoin: lovejoinOf(t), sleep: async () => undefined });
+
+      // Its own return comes back directly, and says why.
+      await pastSpent(t, sessions);
+      let kept = await record(t);
+      expect(kept.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+      const why = tr("sess.skip.warn.noCollateral");
+      expect(kept.lovejoinSkipped).toBe(why);
+      // It lands. Before the runner's next look would close the session, a stranger pays its account 12 ₳ and 5 ₳ of ADA
+      // alone, which a chain puts up as its collateral: that comes back through Lovejoin, in a chain of its own.
+      t.koios.spent.add(`${fill}#0`).add(`${SWAP_TX}#1`);
+      t.koios.addedToAccounts.push({ ...strangerPaid(t), value: "12000000" }, { ...strangerPaid(t), tx_index: 1, value: "5000000" });
+      await sessions.advance("preprod", 0, true);
+      kept = await record(t);
+      expect(kept.txs.map((x) => x.kind).slice(0, 4)).toEqual(["out", "swap", "back", "deposit"]);
+      expect(kept.txs.at(-1)!.kind).toBe("back");
+      // The swap still says how its own came back.
+      expect(kept.lovejoinSkipped).toBe(why);
+      // It lands, and the session is over: its page says so too.
+      t.koios.spent.add(`${STRANGER}#0`).add(`${STRANGER}#1`);
+      const view = await sessions.advance("preprod", 0, true);
+      expect(view.stage).toBe("closed");
+      expect(view.lovejoinSkipped).toBe(why);
+      expect(shown(view)).toContain("Directly: Lovejoin was left out");
+    },
+  );
+
+  // Chunk 51, l3still#2 (l3screens#3): r2still#2's cut dated a stranger's payment against the swap's chain's last
+  // transaction, sent minutes after its build while each waits for the one before. A payment landing meanwhile read as
+  // the swap's own, and its return's reason took over the page of a swap that came back through Lovejoin (e2b#2 again).
+  // The cut is when the swap's own first return was built: its first transaction.
+  it(
+    "never says Lovejoin was left out of its return, which went through Lovejoin, for a stranger's 2 ₳ that landed while its chain was sent",
+    { timeout: 180_000 },
+    async () => {
+      const t = await unlocked();
+      t.koios.evaluation = AGREES;
+      t.koios.confirmations = 1;
+      const now = t.clock.now;
+      const out = "ab".repeat(32);
+      const fill = "aa".repeat(32);
+      const done = (kind: string, txHash: string, extra = {}) => ({ kind, txHash, at: now, confirmed: true, ...extra });
+      await t.store.set("sessions.preprod", {
+        next: 1,
+        sessions: [
+          {
+            index: 0,
+            ownStake: true,
+            createdAt: now,
+            txs: [done("out", out), done("swap", SWAP_TX, { orders: [`${SWAP_TX}#0`] })],
+            swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+            auto: {
+              approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } },
+              direct: false,
+              lovejoin: { depth: 1, delay: "1-6", box: "5000000" },
+            },
+          },
+        ],
+      });
+      t.koios.addedToAccounts.push(
+        orderRow(SWAP_TX, 0),
+        atSession(fill, 0, "2000000", [[MIN_UNIT, "906594100"]]),
+        atSession(SWAP_TX, 1, "12000000"),
+        atSession(out, 1, "5000000"),
+        ...ADA_ROWS,
+      );
+      t.koios.spent.add(`${SWAP_TX}#0`);
+      await t.deps.preferences.set({ lovejoinCollateral: false });
+      // Each transaction of the chain goes 20 s after the one before it, as one that waits for its parent does.
+      const real = t.koios.fetch;
+      t.koios.fetch = async (url, init) => {
+        const answer = await real(url, init);
+        if (new URL(url).pathname.endsWith("/submittx")) t.clock.now += 20_000;
+        return answer;
+      };
+      const sessions = signing(t, { lovejoin: lovejoinOf(t), sleep: async () => undefined });
+      await pastSpent(t, sessions);
+      const txs = (await record(t)).txs as Array<{ kind: string; at: number }>;
+      expect(txs.map((x) => x.kind).slice(0, 3)).toEqual(["out", "swap", "deposit"]);
+      const deposit = txs.find((x) => x.kind === "deposit")!;
+      const back = txs.find((x) => x.kind === "back")!;
+      // A stranger watching the account pays it 2 ₳ as the deposit appears: in a block 5 s after it went, before the
+      // swap's own return, the chain's last transaction, went.
+      const landed = Math.floor(deposit.at / 1000) + 5;
+      expect(landed * 1000).toBeLessThan(back.at);
+      t.koios.spent.add(`${fill}#0`).add(`${SWAP_TX}#1`).add(`${out}#1`);
+      t.koios.addedToAccounts.push({ ...atSession(STRANGER, 0, "2000000"), block_time: landed });
+      await sessions.advance("preprod", 0, true);
+      expect((await record(t)).txs.filter((x) => x.kind === "back")).toHaveLength(2);
+      t.koios.spent.add(`${STRANGER}#0`);
+      const view = await sessions.advance("preprod", 0, true);
+      expect(view.stage).toBe("closed");
+      // The swap's own return went through Lovejoin: its page never says Lovejoin was left out of it.
+      expect(view.lovejoinSkipped).toBeUndefined();
+      expect(shown(view)).not.toContain("Lovejoin was left out");
+    },
+  );
+
+  it("adds up every return that went, a token's quantities by its unit, and counts the latest of those from before by the record", () => {
+    const min = (quantity: string) => ({ policyId: MIN_UNIT.slice(0, 56), assetName: MIN_UNIT.slice(56), quantity });
+    const back = (lovelace: string, tokens: ReturnType<typeof min>[] = []) => ({ kind: "back" as const, brought: { lovelace, tokens } });
+    const swap = { kind: "swap" as const };
+    expect(receivedOf({}, [swap, back("133411421", [min("906594100")]), back("1829439")])).toEqual({
+      received: { lovelace: "135240860", tokens: [min("906594100")] },
+    });
+    expect(receivedOf({}, [back("1000000", [min("5")]), back("2000000", [min("7")])]).received?.tokens).toEqual([min("12")]);
+    // A session from before: its record says what its latest return brought; one sent since counts beside it.
+    const before = { received: { lovelace: "3000000", tokens: [] } };
+    expect(receivedOf(before, [swap, { kind: "back" }])).toEqual(before);
+    expect(receivedOf(before, [{ kind: "back" }, back("2000000")]).received?.lovelace).toBe("5000000");
+    // Every return its own: the record's is none of theirs. No return: nothing to say.
+    expect(receivedOf(before, [back("2000000")]).received?.lovelace).toBe("2000000");
+    expect(receivedOf(before, [swap])).toEqual({});
+  });
+});
+
+/** A session's page, as markup. */
+const markupOf = (s: SessionView) =>
+  renderToStaticMarkup(
+    createElement(
+      NetworkContext.Provider,
+      { value: "preprod" },
+      createElement(Session, { session: s, reading: false, onRefresh: () => undefined, onBack: () => undefined, onChanged: () => undefined }),
+    ),
+  );
+
+/** The Cardanoscan transactions a session's timeline links, step by step, in order: a step that's done and has one. */
+function stepLinks(s: SessionView): string[] {
+  const steps = /<ol class="timeline__steps">([\s\S]*?)<\/ol>/.exec(markupOf(s))?.[1] ?? "";
+  return [...steps.matchAll(/cardanoscan\.io\/transaction\/([0-9a-f]{64})/g)].map((m) => m[1]!);
+}
+
+// Chunk 51, r2docs#1: the swap's last step, Back in your private balance, followed its latest return, which can be what
+// a stranger paid its account before it closed, brought back after the swap's own: its link opened the stranger's, and a
+// chain of the stranger's alone, which takes the session's chain record, spoke for how the swap's own came back. The
+// swap's own is its first return (the worker marks a return of strangers' alone only once one of its own went), and no
+// chain sent after it speaks for it.
+describe("a finished swap's last step names its own return, whatever came back after it (chunk 51, r2docs#1)", () => {
+  const tx = (kind: SessionView["txs"][number]["kind"], hex: string) => ({ kind, txHash: hex.repeat(32), at: 0, confirmed: true });
+  const OUT = tx("out", "ab");
+  const SWAP = tx("swap", "cd");
+  const done = (over: Partial<SessionView>) =>
+    swapSession({
+      stage: "closed",
+      auto: { step: "done", stopping: false, filled: true, approvedMinOut: "4158000", direct: false },
+      ...over,
+    });
+  /** What the last step, Back in your private balance, says under its title. */
+  const backStep = (s: SessionView) => {
+    const html = markupOf(s);
+    return /<p class="timeline__sub">(.*?)<\/p>/.exec(html.slice(html.indexOf(">Back in your private balance<")))?.[1]?.replaceAll("&#x27;", "'");
+  };
+
+  it("came back directly, nothing for a box: a stranger's chain after it, stopped, never reads as its own", () => {
+    const s = done({
+      txs: [OUT, SWAP, tx("back", "b1"), tx("deposit", "d2"), tx("mix", "e2")],
+      chain: { total: 3, sent: 2, confirmed: 2, cut: false, stopped: "The network rejected the transaction" },
+    });
+    expect(backStep(s)).toBe("Everything at the account, under fresh registers");
+    expect(page(s)).not.toContain("Stopped after");
+    expect(stepLinks(s).at(-1)).toBe("b1".repeat(32));
+  });
+
+  it("came back through Lovejoin: a stranger's chain after it, stopped, never takes its place", () => {
+    const s = done({
+      txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("back", "b1"), tx("deposit", "d2"), tx("back", "b2")],
+      chain: { total: 3, sent: 1, confirmed: 1, cut: false, stopped: "The network rejected the transaction" },
+    });
+    expect(backStep(s)).toBe("What goes into Lovejoin boxes comes back later, each box by itself; the rest at once, under fresh registers");
+    expect(page(s)).not.toContain("Stopped after");
+    expect(stepLinks(s).at(-1)).toBe("b1".repeat(32));
+  });
+
+  it("says its own came back through Lovejoin where a later part of its own came back directly with a reason, which it says is that part's (chunk 51, l3screens#2)", () => {
+    const why = "its 5 ₳ collateral isn't at its account anymore, and the mixes need it";
+    // A late leg's fill, in no listing until the swap's first return, a chain, had gone: it came back directly.
+    const late = done({
+      txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("mix", "e2"), tx("mix", "e3"), tx("deposit", "d2"), tx("mix", "e4"), tx("back", "b1"), tx("back", "b2")],
+      chain: { total: 7, sent: 7, confirmed: 7, cut: false },
+      lovejoinSkipped: why,
+      // The return that wrote it, as the worker says (chunk 51, l4worker#1): the late leg's.
+      lovejoinSkippedBy: "b2".repeat(32),
+    });
+    expect(backStep(late)).toBe("What goes into Lovejoin boxes comes back later, each box by itself; the rest at once, under fresh registers");
+    expect(stepLinks(late).at(-1)).toBe("b1".repeat(32));
+    expect(page(late)).toContain(`Lovejoin was left out of a later return: ${why}. That part comes back directly, tied to the session on chain.`);
+    expect(page(late)).not.toContain("Lovejoin was left out of its return");
+    // Its own return the one with the reason: directly, as before.
+    const own = done({ txs: [OUT, SWAP, tx("back", "b1")], lovejoinSkipped: why });
+    expect(backStep(own)).toBe("Directly: Lovejoin was left out");
+    expect(page(own)).toContain(`Lovejoin was left out of its return: ${why}.`);
+    // Its own return its collateral's mix alone, its boxes left out, with nothing after it: the reason is its own too.
+    const tail = done({
+      txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("back", "b1")],
+      chain: { total: 3, sent: 3, confirmed: 3, cut: false },
+      lovejoinSkipped: why,
+    });
+    expect(backStep(tail)).toBe("Directly: Lovejoin was left out");
+    expect(page(tail)).toContain(`Lovejoin was left out of its return: ${why}.`);
+  });
+
+  it("says the swap's own reason as its own, its collateral's mix alone gone in, once a stranger's return comes after it (chunk 51, l4worker#1)", () => {
+    // The default with Lovejoin on and too little spare ADA for a box: the collateral's deposit and mix, then the return
+    // directly, with its own reason. A stranger's 2 ₳ comes back after it, and writes none. The view can't tell that
+    // first return from a one-box chain (deposit, mix, back): the worker says which return wrote the reason.
+    const why = "its spare ADA is too little for a box";
+    const tail = done({
+      txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("back", "b1"), tx("back", "b2")],
+      chain: { total: 3, sent: 3, confirmed: 3, cut: false },
+      lovejoinSkipped: why,
+      lovejoinSkippedBy: "b1".repeat(32),
+    });
+    expect(backStep(tail)).toBe("Directly: Lovejoin was left out");
+    expect(page(tail)).toContain(`Lovejoin was left out of its return: ${why}. So it comes back directly, tied to the session on chain.`);
+    expect(page(tail)).not.toContain("a later return");
+    expect(stepLinks(tail).at(-1)).toBe("b1".repeat(32));
+    // A record from before the worker said which return wrote it: the reason is the swap's own return's, as it always
+    // was, a late leg's too.
+    const before = done({
+      txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("mix", "e2"), tx("back", "b1"), tx("back", "b2")],
+      chain: { total: 4, sent: 4, confirmed: 4, cut: false },
+      lovejoinSkipped: why,
+    });
+    expect(backStep(before)).toBe("Directly: Lovejoin was left out");
+    expect(page(before)).toContain(`Lovejoin was left out of its return: ${why}.`);
+  });
+
+  it("says what it always did where nothing came back after it, or only directly: its own chain cut short, or all sent", () => {
+    // Cut short: what was left came back directly, in a return of its own.
+    const cut = done({ txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("back", "b1")], chain: { total: 4, sent: 2, confirmed: 2, cut: true } });
+    expect(backStep(cut)).toBe("Stopped after 2 of 4 transactions; what was left came back directly");
+    // All sent, then a stranger's 2 ₳ back directly: its link is the swap's own return.
+    const sent = done({
+      txs: [OUT, SWAP, tx("deposit", "d1"), tx("mix", "e1"), tx("back", "b1"), tx("back", "b2")],
+      chain: { total: 3, sent: 3, confirmed: 3, cut: false },
+    });
+    expect(backStep(sent)).toBe("What goes into Lovejoin boxes comes back later, each box by itself; the rest at once, under fresh registers");
+    expect(stepLinks(sent).at(-1)).toBe("b1".repeat(32));
+    // Directly as chosen, or Lovejoin left out: as before.
+    expect(backStep(done({ txs: [OUT, SWAP, tx("back", "b1")], auto: { step: "done", stopping: false, filled: true, approvedMinOut: "4158000", direct: true } }))).toBe("Directly, as you chose");
+    expect(backStep(done({ txs: [OUT, SWAP, tx("back", "b1")], lovejoinSkipped: "too little" }))).toBe("Directly: Lovejoin was left out");
   });
 });
 

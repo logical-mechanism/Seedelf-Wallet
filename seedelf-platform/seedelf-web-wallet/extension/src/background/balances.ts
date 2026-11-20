@@ -1,7 +1,9 @@
 // Balances: read the chain through Koios and work out what this wallet owns.
 //
 // Seedelf side: every UTxO in the wallet contract, kept when the register in
-// its datum is ours (g^x == u, checked in WebAssembly). The contract is read
+// its datum is ours (g^x == u, checked in WebAssembly), and only at the
+// contract's script: asked by its hash, Koios lists the KEY address with the
+// same 28 bytes too, which no one can spend (`atContract`). The contract is read
 // in full only when due, otherwise from the last block seen (contract-scan.ts). This is what the CLI's
 // `balance` does, and UTxOs holding a seedelf are listed as seedelfs rather
 // than counted in the balance, also as in the CLI.
@@ -58,7 +60,7 @@ import {
   type ReadingUtxos,
 } from "./coin-control";
 import { keptContractView, readContractView } from "./contract-scan";
-import { incomingOf, lessSpent, rewardAccountHex } from "./incoming";
+import { incomingOf, lessSpent, paymentOf, rewardAccountHex } from "./incoming";
 import type { Koios, KoiosUtxo } from "./koios";
 import { mintedBy, paidByOf, type MintedBy } from "./minted-by";
 import type { PrivateIndex } from "./private-index";
@@ -67,7 +69,15 @@ import { heldSent } from "./sent-txs";
 import { outpoint, reservedSet, spentSet } from "./spent";
 import { knownPool, readStake } from "./staking";
 import type { Area } from "./storage";
-import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WalletLocked, type Keys, type Wallet } from "./wallet";
+import {
+  phraseOf,
+  phrasePin,
+  SESSION_BALANCES_PREFIX,
+  SESSION_PRIVATE_STALE_PREFIX,
+  WalletLocked,
+  type Keys,
+  type Wallet,
+} from "./wallet";
 import { isTrap } from "./wasm";
 
 export interface ContractConfig {
@@ -120,7 +130,10 @@ interface Reading {
 export const SESSION_READ_FAILED_PREFIX = "seedelf.readFailed.";
 
 export class BalanceService {
-  /** Readings under way, by network and public account: a page on another account never joins one (release review C11). */
+  /**
+   * Readings under way, by network, public account and phrase: a page on another account never joins one (release
+   * review C11), nor a page of another phrase's wallet, after Remove wallet and a restore (chunk 51, e4a#1).
+   */
   private readonly inFlight = new Map<string, Promise<Reading>>();
   private readonly inFlightPrivate = new Map<string, Promise<Reading>>();
   /** The last failed reading's words per network: in memory only (`readingNoted`). */
@@ -148,9 +161,10 @@ export class BalanceService {
    */
   private async readingNoted(network: NetworkName, refresh: boolean): Promise<Reading> {
     let account: number | undefined;
+    let phrase: string | undefined;
     try {
       const read = await this.reading(network, refresh);
-      account = read.account;
+      ({ account, phrase } = read);
       return await read.reading;
     } catch (e) {
       if (!(e instanceof WalletLocked) && !isTrap(e)) {
@@ -158,8 +172,10 @@ export class BalanceService {
         const message = e instanceof Error ? e.message : String(e);
         await this.deps.wallet
           .withKeys(async (keys) => {
-            // Not a reading of the account the user switched from while it ran: it says nothing of the one shown now.
+            // Not a reading of the account the user switched from while it ran, nor of the phrase removed while it
+            // did: it says nothing of the one shown now.
             if (account !== undefined && keys.account !== account) return;
+            if (phrase !== undefined && phraseOf(keys) !== phrase) return;
             this.failedWords.set(network, { at, message });
             await this.deps.session.set(SESSION_READ_FAILED_PREFIX + network, at);
           })
@@ -195,26 +211,31 @@ export class BalanceService {
   }
 
   /**
-   * The reading to answer with, and the public account it's of: taken with the cached one in one turn of the
-   * wallet's queue, as a switch is one (accounts.ts `use`), so the two always agree.
+   * The reading to answer with, and the public account and phrase it's of: taken with the cached one in one turn of
+   * the wallet's queue, as a switch is one (accounts.ts `use`), so the three always agree.
    */
-  private async reading(network: NetworkName, refresh: boolean): Promise<{ account: number; reading: Promise<Reading> }> {
+  private async reading(
+    network: NetworkName,
+    refresh: boolean,
+  ): Promise<{ account: number; phrase: string; reading: Promise<Reading> }> {
     const { session } = this.deps;
-    const [account, cached, privateStale] = await this.deps.wallet.withKeys(
+    const [account, phrase, cached, privateStale] = await this.deps.wallet.withKeys(
       async (keys) =>
         [
           keys.account,
+          phraseOf(keys),
           refresh ? undefined : await session.get<Balances>(SESSION_BALANCES_PREFIX + network),
           !refresh && (await session.get(SESSION_PRIVATE_STALE_PREFIX + network)) !== undefined,
         ] as const,
     );
-    const key = `${network}:${account}`;
-    if (cached && !privateStale) return { account, reading: Promise.resolve({ balances: cached }) };
-    if (cached) return { account, reading: this.shared(this.inFlightPrivate, key, () => this.readPrivate(network, cached, account)) };
-    return { account, reading: this.shared(this.inFlight, key, () => this.read(network, account)) };
+    const key = `${network}:${account}:${phrase}`;
+    const of = { account, phrase };
+    if (cached && !privateStale) return { ...of, reading: Promise.resolve({ balances: cached }) };
+    if (cached) return { ...of, reading: this.shared(this.inFlightPrivate, key, () => this.readPrivate(network, cached, account, phrase)) };
+    return { ...of, reading: this.shared(this.inFlight, key, () => this.read(network, account, phrase)) };
   }
 
-  /** Pages asking at the same time, on the same network and account, share one reading. */
+  /** Pages asking at the same time, on the same network, account and phrase, share one reading. */
   private shared(inFlight: Map<string, Promise<Reading>>, key: string, read: () => Promise<Reading>): Promise<Reading> {
     let reading = inFlight.get(key);
     if (!reading) {
@@ -234,32 +255,35 @@ export class BalanceService {
    * which is why `activeAccount` is passed in rather than read here: taking
    * the wallet's lock again from under it would deadlock.
    *
-   * `account` and the Activity are the account the wallet is working on, so a
-   * mint worked out from them is that account's (minted-by.ts).
+   * The Activity is the account the wallet is working on, so a mint worked
+   * out from it is that account's (minted-by.ts). Its entries go whole: only
+   * one with the account's fee says the account paid. The account's UTxOs say
+   * nothing, since anyone's transaction can pay it (chunk 51, e6#1).
    */
-  private async held(network: NetworkName, recorded: MintedBy, account: KoiosUtxo[], activeAccount: number): Promise<Held> {
-    const activity = await this.deps.session.get<{ entries: Array<{ txHash: string }> }>(SESSION_ACCOUNT_ACTIVITY_PREFIX + network);
-    return { recorded, account, accountTxs: new Set(activity?.entries.map((e) => e.txHash)), activeAccount };
+  private async held(network: NetworkName, recorded: MintedBy, activeAccount: number): Promise<Held> {
+    const activity = await this.deps.session.get<{ entries: Array<{ txHash: string; fee?: string }> }>(
+      SESSION_ACCOUNT_ACTIVITY_PREFIX + network,
+    );
+    return { recorded, accountActivity: activity?.entries ?? [], activeAccount };
   }
 
   /**
    * The private side read again, the account's side as `cached` has it:
    * after a private spend landed (pending.ts). The contract is read from the
    * last block seen, as any reading does; the account isn't asked about.
-   * `account`: the public account `cached` is.
+   * `account`: the public account `cached` is. `phrase`: the phrase it is
+   * (`read`'s).
    */
-  private async readPrivate(network: NetworkName, cached: Balances, account: number): Promise<Reading> {
+  private async readPrivate(network: NetworkName, cached: Balances, account: number, phrase: string): Promise<Reading> {
     const { wallet, session, contract = CONTRACT_V1 } = this.deps;
+    const pin = phrasePin(phrase);
     const view = await readContractView(this.deps, network);
     const recorded = await this.mintRecord(network);
     const reading = await wallet.withKeys(async (keys): Promise<Reading> => {
+      // The wallet removed and another phrase restored while it read: nothing of it is that phrase's (`read`).
+      pin(keys);
       const utxos = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
-      const held = await this.held(
-        network,
-        recorded,
-        utxos.map((p) => p.utxo),
-        account,
-      );
+      const held = await this.held(network, recorded, account);
       const balances: Balances = { ...cached, seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId, held) };
       // The user switched account while it read: `cached` is the account left, never to be kept as the new one's.
       if (keys.account !== account) return { balances };
@@ -274,8 +298,10 @@ export class BalanceService {
         return { balances, unkept: { owned: view.owned, account: utxos, updatedAt: balances.updatedAt } };
       }
     });
-    // The history never holds up, or breaks, a balance reading.
-    await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);
+    // The history never holds up, or breaks, a balance reading. Pinned to the reading's phrase, as its own turns are: its
+    // write waits its turn in the history's queue, which a Remove wallet and a restore can come before (chunk 51,
+    // e4a#1's residue). With who spent the wallet's own rows, where the private index says (chunk 51, gap-g9#1).
+    await this.deps.activity?.arrived(network, view.owned, pin, view.spentBy).catch(() => undefined);
     return reading;
   }
 
@@ -331,7 +357,7 @@ export class BalanceService {
           stake: rewardAccountHex(wasm, addresses?.stake),
           rewards: BigInt(b.cardano.staking.rewards),
           contract,
-          ours: (utxos) => ownedUtxos(wasm, keys, utxos),
+          ours: (utxos) => ownedUtxos(wasm, keys, utxos, contract),
           // The reading's own tokens too: a coin spent since took its token out of the lists, and its change has it.
           decimals: decimalsOf([...(account ?? []).map((p) => p.utxo), ...(owned ?? [])], [...b.cardano.tokens, ...b.seedelf.tokens]),
         });
@@ -354,32 +380,40 @@ export class BalanceService {
     }
   }
 
-  /** A whole reading of public account `index`, the one active as it began: every key it uses is that account's. */
-  private async read(network: NetworkName, index: number): Promise<Reading> {
+  /**
+   * A whole reading of public account `index`, the one active as it began: every key it uses is that account's.
+   * `phrase`: the phrase it began under (`phraseOf`). A reading still out when the wallet is removed and another
+   * phrase restored ends as a lock ends one: kept, it was that phrase's reading, its addresses that wallet's own, and
+   * its private UTxOs went into that wallet's sealed history, the first reading's mark with them (chunk 51, e4a#1).
+   */
+  private async read(network: NetworkName, index: number, phrase: string): Promise<Reading> {
     const { wasm, wallet, session, now, contract = CONTRACT_V1 } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const pin = phrasePin(phrase);
 
     // Network calls happen outside withKeys, so they never hold up a lock.
     const [spent, stake] = await Promise.all([
-      wallet.withKeys(() => spentSet(session)),
-      wallet.withAccount(index, ({ cardano }) => cardano.stakeAddress(net)),
+      wallet.withKeys((keys) => {
+        pin(keys);
+        return spentSet(session);
+      }),
+      wallet.withAccount(index, (keys) => {
+        pin(keys);
+        return keys.cardano.stakeAddress(net);
+      }),
     ]);
     const [{ account, utxos }, view, staking] = await Promise.all([
-      readAccountUtxos(this.deps, network, spent, { account: index }),
+      readAccountUtxos(this.deps, network, spent, { account: index, phrase }),
       // The contract: in full when due, otherwise only what's new (contract-scan.ts).
       readContractView(this.deps, network),
       readStake(this.deps, network, stake),
     ]);
     const recorded = await this.mintRecord(network);
 
-    // The result is cached only while still unlocked, and still on the account it read.
+    // The result is cached only while still unlocked, on the phrase it began under and the account it read.
     const reading = await wallet.withKeys(async (keys): Promise<Reading> => {
-      const held = await this.held(
-        network,
-        recorded,
-        utxos.map((p) => p.utxo),
-        index,
-      );
+      pin(keys);
+      const held = await this.held(network, recorded, index);
       const balances: Balances = {
         network,
         updatedAt: now(),
@@ -395,8 +429,10 @@ export class BalanceService {
       if (await keep(session, network, balances, utxos, addresses)) return { balances };
       return { balances, unkept };
     });
-    // The history never holds up, or breaks, a balance reading.
-    await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);
+    // The history never holds up, or breaks, a balance reading. Pinned to the reading's phrase, as its own turns are: its
+    // write waits its turn in the history's queue, which a Remove wallet and a restore can come before (chunk 51,
+    // e4a#1's residue). With who spent the wallet's own rows, where the private index says (chunk 51, gap-g9#1).
+    await this.deps.activity?.arrived(network, view.owned, pin, view.spentBy).catch(() => undefined);
     return reading;
   }
 
@@ -407,10 +443,14 @@ export class BalanceService {
       const name = seedelfTokenOf(utxo, policyId);
       if (name) {
         const paid = paidByOf(utxo, name, { ...held, owned });
+        // Every other token its UTxO holds, which goes with it when it's removed: anyone can mint a Seedelf beside
+        // tokens of theirs, and its card said only the ADA (chunk 51, w1b#2's card).
+        const tokens = sumValue([utxo]).tokens.filter((t) => !(t.policyId === policyId && t.assetName === name));
         seedelfs.push({
           assetName: name,
           label: seedelfLabel(name),
           lovelace: utxo.value,
+          ...(tokens.length ? { tokens } : {}),
           ...(paid ? { paidBy: paid.side } : {}),
           ...(paid?.account !== undefined ? { paidByAccount: paid.account } : {}),
         });
@@ -475,8 +515,12 @@ function spendableOwned(owned: KoiosUtxo[], policyId: string): KoiosUtxo[] {
   return owned.filter((utxo) => !seedelfTokenOf(utxo, policyId) && !utxo.reference_script);
 }
 
-/** Each token's decimals as Koios gave them in `utxos`, by `policy.asset`: what a transaction's outputs don't carry. */
-function decimalsOf(utxos: KoiosUtxo[], tokens: TokenAmount[] = []): Map<string, number> {
+/**
+ * Each token's decimals as Koios gave them in `utxos`, by `policy.asset`, where they aren't 0: what a transaction's
+ * outputs don't carry, nor WebAssembly's token lists. A review built from those gives its tokens these (withdraw.ts
+ * `buildRemove`), for a token off the wallet's list, which the screens otherwise show in raw units.
+ */
+export function decimalsOf(utxos: KoiosUtxo[], tokens: TokenAmount[] = []): Map<string, number> {
   const found = new Map<string, number>();
   for (const x of tokens) if (x.decimals) found.set(`${x.policyId}.${x.assetName}`, x.decimals);
   for (const u of utxos) {
@@ -485,9 +529,22 @@ function decimalsOf(utxos: KoiosUtxo[], tokens: TokenAmount[] = []): Map<string,
   return found;
 }
 
-/** The wallet-contract UTxOs whose register is ours (g^x == u, checked in WebAssembly). */
-export function ownedUtxos(wasm: typeof Wasm, keys: Keys, utxos: KoiosUtxo[]): KoiosUtxo[] {
+/**
+ * Whether `utxo` is at the wallet contract: its address's payment part the contract's SCRIPT. Koios lists a
+ * credential's UTxOs by its 28 bytes, a key's and a script's alike, so asked for the contract's it lists one paid to the
+ * KEY address with the same 28 bytes too. No key can spend that, and the wallet's evaluator refuses a spend that takes
+ * it: under one of the user's registers it was counted in the private balance, and Max failed (chunk 51, x2#2; core's
+ * `PoolBox::from_row` keeps a Lovejoin box to the same rule, `Protocol::spends_as_mix_box`).
+ */
+export function atContract(wasm: typeof Wasm, utxo: Pick<KoiosUtxo, "address">, contract: ContractConfig = CONTRACT_V1): boolean {
+  const payment = paymentOf(wasm, utxo.address);
+  return !!payment?.script && payment.hash.toLowerCase() === contract.walletContractHash;
+}
+
+/** The wallet-contract UTxOs whose register is ours (g^x == u, checked in WebAssembly), at the contract (`atContract`). */
+export function ownedUtxos(wasm: typeof Wasm, keys: Keys, utxos: KoiosUtxo[], contract: ContractConfig = CONTRACT_V1): KoiosUtxo[] {
   return utxos.filter((utxo) => {
+    if (!atContract(wasm, utxo, contract)) return false;
     const hex = registerOf(utxo);
     if (!hex) return false;
     const register = new wasm.Register(hex.generator, hex.publicValue);

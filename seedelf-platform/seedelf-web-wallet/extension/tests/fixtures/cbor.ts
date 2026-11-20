@@ -7,7 +7,8 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { skip } from "../../src/background/cbor";
 
 export function txIdOf(tx: Uint8Array): string {
-  if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
+  // A list of four in either length, as the ledger reads one (chunk 51, gap-g8#5).
+  if (tx[0] !== 0x84 && tx[0] !== 0x9f) throw new Error("not a 4-item transaction array");
   const body = tx.subarray(1, skip(tx, 1));
   return bytesToHex(blake2b(body, { dkLen: 32 }));
 }

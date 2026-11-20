@@ -5,17 +5,28 @@ on:
     tags:
       - "*.*.*"
 
+# The CLI's release (RELEASE.md): three builds, then one job that signs what
+# they made and publishes it. A build runs every crate's build script and proc
+# macro, and the toolchain action, and a process they start outlives its step.
+# So the builds get a read-only token, leave none in .git, and never see the
+# release key; the key and the write token are the signing job's alone, which
+# builds nothing (chunk 51, b1#3).
+permissions:
+  contents: read
+
 jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # The toolchain seedelf-platform/rust-toolchain.toml pins, which every
       # cargo call in that folder runs on: keep the two in step.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
 
@@ -27,17 +38,6 @@ jobs:
         working-directory: seedelf-platform
         run: mv target/release/seedelf-cli seedelf-cli.bin
 
-      - name: Import GPG Key
-        run: |
-          echo "${{ secrets.RELEASE_GPG_KEY }}" | gpg --batch --yes --import
-      
-      - name: Sign CLI Binary (Linux)
-        working-directory: seedelf-platform
-        run: |
-          gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-              --armor --detach-sign -o seedelf-cli.bin.asc seedelf-cli.bin
-
       - name: Generate Binary Checksum (Linux)
         working-directory: seedelf-platform
         run: sha256sum seedelf-cli.bin > seedelf-cli.bin.sha256
@@ -45,13 +45,6 @@ jobs:
       - name: Compress Binary and Checksum (Linux)
         working-directory: seedelf-platform
         run: tar -czvf seedelf-cli-linux.tar.gz seedelf-cli.bin
-      
-      - name: Sign Tar File (Linux)
-        working-directory: seedelf-platform
-        run: |
-          gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-              --armor --detach-sign -o seedelf-cli-linux.tar.gz.asc seedelf-cli-linux.tar.gz
 
       - name: Generate Compressed File Checksum (Linux)
         working-directory: seedelf-platform
@@ -63,13 +56,13 @@ jobs:
           echo "Linux Binary: $(cat seedelf-cli.bin.sha256)" >> ../hashes-linux.txt
           echo "Linux Compressed File: $(cat seedelf-cli-linux.tar.gz.sha256)" >> ../hashes-linux.txt
 
+      # Unsigned: sign-and-publish signs it.
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: seedelf-cli-linux
           path: |
             seedelf-platform/seedelf-cli-linux.tar.gz
-            seedelf-platform/seedelf-cli-linux.tar.gz.asc
             hashes-linux.txt
 
   build-windows:
@@ -77,11 +70,13 @@ jobs:
     steps:
       - name: Check out the code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # The toolchain seedelf-platform/rust-toolchain.toml pins, which every
       # cargo call in that folder runs on: keep the two in step.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
           targets: x86_64-pc-windows-gnu
@@ -95,36 +90,6 @@ jobs:
         working-directory: seedelf-platform
         run: mv target\x86_64-pc-windows-gnu\release\seedelf-cli.exe seedelf-cli.exe
 
-      - name: Import GPG Key
-        shell: pwsh
-        run: |
-          $keyFile = "gpg-key.asc"
-          
-          # Write the multiline environment variable to a file
-          $env:RELEASE_GPG_KEY | Out-File -FilePath $keyFile -Encoding ascii
-      
-          # Check if the file actually has content
-          Write-Host "Contents of $($keyFile):"
-          Get-Content $keyFile
-      
-          # Import the key
-          gpg --batch --yes --import $keyFile
-      
-          # Cleanup
-          Remove-Item $keyFile
-        env:
-          RELEASE_GPG_KEY: ${{ secrets.RELEASE_GPG_KEY }}
-      
-      
-
-      - name: Sign CLI Binary (Windows)
-        shell: pwsh
-        working-directory: seedelf-platform
-        run: |
-          gpg --batch --yes --pinentry-mode loopback `
-              --passphrase "${{ secrets.GPG_PASSPHRASE }}" `
-              --armor --detach-sign -o seedelf-cli.exe.asc seedelf-cli.exe
-
       - name: Generate Binary Checksum (Windows)
         shell: pwsh
         working-directory: seedelf-platform
@@ -136,14 +101,6 @@ jobs:
         shell: pwsh
         working-directory: seedelf-platform
         run: Compress-Archive -Path seedelf-cli.exe -DestinationPath seedelf-cli-windows.zip
-
-      - name: Sign Zip File (Windows)
-        shell: pwsh
-        working-directory: seedelf-platform
-        run: |
-          gpg --batch --yes --pinentry-mode loopback `
-              --passphrase "${{ secrets.GPG_PASSPHRASE }}" `
-              --armor --detach-sign -o seedelf-cli-windows.zip.asc seedelf-cli-windows.zip
 
       - name: Generate Compressed File Checksum (Windows)
         shell: pwsh
@@ -159,13 +116,13 @@ jobs:
           echo "Windows Binary: $(Get-Content seedelf-cli.sha256)" >> ..\hashes-windows.txt
           echo "Windows Compressed File: $(Get-Content seedelf-cli-windows.zip.sha256)" >> ..\hashes-windows.txt
 
+      # Unsigned: sign-and-publish signs it.
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: seedelf-cli-windows
           path: |
             seedelf-platform/seedelf-cli-windows.zip
-            seedelf-platform/seedelf-cli-windows.zip.asc
             hashes-windows.txt
 
   build-mac:
@@ -173,11 +130,13 @@ jobs:
     steps:
       - name: Check out the code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # The toolchain seedelf-platform/rust-toolchain.toml pins, which every
       # cargo call in that folder runs on: keep the two in step.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
           targets: x86_64-apple-darwin
@@ -189,17 +148,6 @@ jobs:
       - name: Move Binary (macOS)
         working-directory: seedelf-platform
         run: mv target/x86_64-apple-darwin/release/seedelf-cli seedelf-cli.bin
-      
-      - name: Import GPG Key
-        run: |
-          echo "${{ secrets.RELEASE_GPG_KEY }}" | gpg --batch --yes --import
-      
-      - name: Sign Binary (MacOs)
-        working-directory: seedelf-platform
-        run: |
-          gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-              --armor --detach-sign -o seedelf-cli.bin.asc seedelf-cli.bin
 
       - name: Generate Binary Checksum (macOS)
         working-directory: seedelf-platform
@@ -208,13 +156,6 @@ jobs:
       - name: Compress Binary and Checksum (macOS)
         working-directory: seedelf-platform
         run: tar -czvf seedelf-cli-macos.tar.gz seedelf-cli.bin
-      
-      - name: Sign Tar File (MacOS)
-        working-directory: seedelf-platform
-        run: |
-          gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-              --armor --detach-sign -o seedelf-cli-macos.tar.gz.asc seedelf-cli-macos.tar.gz
 
       - name: Generate Compressed File Checksum (macOS)
         working-directory: seedelf-platform
@@ -226,21 +167,34 @@ jobs:
           echo "macOS Binary: $(cat seedelf-cli.bin.sha256)" >> ../hashes-macos.txt
           echo "macOS Compressed File: $(cat seedelf-cli-macos.tar.gz.sha256)" >> ../hashes-macos.txt
 
+      # Unsigned: sign-and-publish signs it.
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: seedelf-cli-macos
           path: |
             seedelf-platform/seedelf-cli-macos.tar.gz
-            seedelf-platform/seedelf-cli-macos.tar.gz.asc
             hashes-macos.txt
 
-  finalize-release:
+  # Signs the three builds' archives and hashes.txt, then publishes them as a
+  # draft release. It runs in the `release` environment, which holds
+  # RELEASE_GPG_KEY and GPG_PASSPHRASE, takes only tags, and waits for the
+  # owner's approval (RELEASE.md). Until that environment is made, GitHub makes
+  # an empty one at the first run, and the job takes the repository's secrets,
+  # unguarded, as the builds did. Each secret reaches its step through env:,
+  # never written into a script; gpg takes the key on stdin and the passphrase
+  # on a file descriptor, never on its command line. No third-party action
+  # runs here: GitHub's own CLI, on the runner already, publishes the release
+  # (chunk 51, docs#5).
+  sign-and-publish:
     runs-on: ubuntu-latest
     needs:
       - build-linux
       - build-windows
       - build-mac
+    environment: release
+    permissions:
+      contents: write
     steps:
       - name: Download Linux Artifacts
         uses: actions/download-artifact@v4
@@ -264,39 +218,43 @@ jobs:
         run: cat hashes-linux.txt hashes-windows.txt hashes-macos.txt > hashes.txt
 
       - name: Import GPG Key
-        run: |
-          echo "${{ secrets.RELEASE_GPG_KEY }}" | gpg --batch --yes --import
-      
-      - name: Sign Hashes File (Linux)
-        run: |
-          gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-              --armor --detach-sign -o hashes.txt.asc hashes.txt
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          draft: true
-          body: |
-            ### New Release: ${{ github.ref_name }}
-
-            This release includes binaries and checksums for Linux, Windows, and macOS.
-
-            Get the [release key here](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/util/pubkeys/seedelfwallet.asc).
-
-            Thank you for using `seedelf-cli`.
-
-            If you encounter any issues, please report them [here](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
-          generate_release_notes: true
-          files: |
-            seedelf-platform/seedelf-cli-linux.tar.gz
-            seedelf-platform/seedelf-cli-linux.tar.gz.asc
-            seedelf-platform/seedelf-cli-windows.zip
-            seedelf-platform/seedelf-cli-windows.zip.asc
-            seedelf-platform/seedelf-cli-macos.tar.gz
-            seedelf-platform/seedelf-cli-macos.tar.gz.asc
-            hashes.txt
-            hashes.txt.asc
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_GPG_KEY: ${{ secrets.RELEASE_GPG_KEY }}
+        run: |
+          if [ -z "$RELEASE_GPG_KEY" ]; then
+            echo "::error::RELEASE_GPG_KEY is empty: the release environment, or the repository, has no such secret"
+            exit 1
+          fi
+          printf '%s\n' "$RELEASE_GPG_KEY" | gpg --batch --yes --import
+
+      # gpg's agent keeps the unlocked key for ten minutes: stopped once the
+      # files are signed, nothing after this step signs without the passphrase.
+      - name: Sign the Archives and the Hashes
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          for file in seedelf-platform/seedelf-cli-linux.tar.gz seedelf-platform/seedelf-cli-windows.zip \
+              seedelf-platform/seedelf-cli-macos.tar.gz hashes.txt; do
+            printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+                --armor --detach-sign -o "$file.asc" "$file"
+          done
+          gpgconf --kill gpg-agent
+
+      # A draft, its notes these lines and then GitHub's own. The job checks
+      # nothing out, so gh is told the repository. Each run makes a draft of
+      # its own (RELEASE.md).
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s\n' "### New Release: $GITHUB_REF_NAME" "" \
+              "This release includes binaries and checksums for Linux, Windows, and macOS." "" \
+              "Get the [release key here](https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/util/pubkeys/seedelfwallet.asc)." "" \
+              'Thank you for using `seedelf-cli`.' "" \
+              "If you encounter any issues, please report them [here](https://github.com/logical-mechanism/Seedelf-Wallet/issues)." \
+            | gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+                --title "$GITHUB_REF_NAME" --generate-notes --notes-file - \
+                seedelf-platform/seedelf-cli-linux.tar.gz seedelf-platform/seedelf-cli-linux.tar.gz.asc \
+                seedelf-platform/seedelf-cli-windows.zip seedelf-platform/seedelf-cli-windows.zip.asc \
+                seedelf-platform/seedelf-cli-macos.tar.gz seedelf-platform/seedelf-cli-macos.tar.gz.asc \
+                hashes.txt hashes.txt.asc

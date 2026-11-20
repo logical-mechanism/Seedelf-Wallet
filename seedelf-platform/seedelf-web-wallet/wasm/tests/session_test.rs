@@ -366,6 +366,182 @@ fn a_return_merges_into_the_funding_change_under_the_sessions_collateral() {
     assert!(err.to_string().contains("isn't this wallet's"), "{err}");
 }
 
+/// Chunk 51, t1e#14: a merged return is priced for four of the funding's changes at most (`MERGED_OVERHEAD_BYTES`),
+/// so it merges into four at most: five are refused, never built past what the plan reckoned. The worker sends
+/// four at most.
+#[test]
+fn a_return_merges_into_four_of_the_fundings_changes_at_most() {
+    let accounts = accounts();
+    let at = session(3);
+    let sk = random_scalar();
+    let back = |merged: u64| {
+        api::session_return(
+            &accounts,
+            sk,
+            SessionReturnRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 3,
+                utxos: vec![
+                    utxo(1, 0, &at, 20_000_000, &[]),
+                    utxo(3, 0, &at, 5_000_000, &[]),
+                ],
+                merge: (0..merged)
+                    .map(|i| funding_change(9, i, sk, 10_000_000))
+                    .collect(),
+                own: vec![],
+                collateral_pool: None,
+                collateral_boxes: vec![],
+                rewards: Default::default(),
+            },
+        )
+    };
+    assert_eq!(back(4).unwrap().merged, 4);
+    let e = back(5).unwrap_err().to_string();
+    assert!(
+        e.contains(&format!(
+            "at most {} of the funding's UTxOs",
+            api::MAX_MERGE
+        )),
+        "{e}"
+    );
+}
+
+/// The least an output of ADA alone holds at `at`.
+fn ada_alone_least(at: &Address) -> u64 {
+    let p = ProtocolParameters::from_koios(&params()).unwrap();
+    seedelf_core::transaction::address_minimum_lovelace_with_assets(
+        &p,
+        &at.to_bech32().unwrap(),
+        seedelf_core::assets::Assets::new(),
+    )
+    .unwrap()
+}
+
+/// That `built`'s transaction is one the ledger takes as to its collateral: none (no script runs), or one that covers
+/// 3/2 of the fee and whose return holds an output's least. Its fee.
+fn collateral_holds(built: &api::SessionReturnResult, rows: &[UtxoResponse], least: u64) -> u64 {
+    let bytes = hex::decode(&built.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    let fee = tx.fee().unwrap();
+    assert_eq!(fee.to_string(), built.fee);
+    let put_up: u64 = tx
+        .collateral()
+        .iter()
+        .map(|i| {
+            rows.iter()
+                .find(|u| u.tx_hash == hex::encode(**i.hash()) && u.tx_index == i.index())
+                .expect("the collateral is one of the account's UTxOs")
+                .value
+                .parse::<u64>()
+                .unwrap()
+        })
+        .sum();
+    if put_up == 0 {
+        assert!(tx.collateral_return().is_none());
+        return fee;
+    }
+    let back = tx.collateral_return().map_or(0, |o| o.value().coin());
+    assert!(
+        back >= least,
+        "the collateral comes back as {back} lovelace, under an output's least ({least}): the ledger refuses it"
+    );
+    assert!(
+        2 * (put_up - back) >= 3 * fee,
+        "the collateral covers 3/2 of the fee"
+    );
+    fee
+}
+
+/// Chunk 51, r2money#1: a session's return merged into its funding's change, whose only collateral is
+/// `session_collateral`'s fallback (the largest ADA-only UTxO of 2 ₳ or more, the session's 5 ₳ being gone). A heavy
+/// return's fee takes 3/2 of it past an output's least, so the merged form can't be built, and nothing tried the plain
+/// sweep of the same UTxOs, which runs no script, puts up no collateral and builds: every Bring it back was refused
+/// while the shape held. Now the return is planned again without the merge, and comes back whole.
+#[test]
+fn a_merged_return_its_fallback_collateral_cant_carry_comes_back_as_the_plain_sweep() {
+    let accounts = accounts();
+    let at = session(3);
+    let least = ada_alone_least(&at);
+    let sk = random_scalar();
+    let change = funding_change(0xf0, 0, sk, 10_000_000);
+    // What a site's session can hold after a site's transaction the user approved spent its 5 ₳: 13 of the
+    // session's own UTxOs, each 20 NFTs (32-byte names, as CIP-68's) and 6 ₳, and one ADA-only UTxO of `ada`, the
+    // only one, which is session_collateral's fallback when it's 2 ₳ or more. All of them the session's own.
+    let names: Vec<Vec<String>> = (0..13u8)
+        .map(|i| {
+            (0..20u8)
+                .map(|j| {
+                    let mut name = [0x41u8; 32];
+                    name[0] = i;
+                    name[1] = j;
+                    hex::encode(name)
+                })
+                .collect()
+        })
+        .collect();
+    let account = |ada: u64| -> (Vec<UtxoResponse>, Vec<String>) {
+        let mut rows: Vec<UtxoResponse> = names
+            .iter()
+            .enumerate()
+            .map(|(i, nfts)| {
+                let tokens: Vec<(&str, &str, u64)> =
+                    nfts.iter().map(|n| (POLICY, n.as_str(), 1)).collect();
+                utxo(0x10 + i as u8, 0, &at, 6_000_000, &tokens)
+            })
+            .collect();
+        rows.push(utxo(0xc0, 0, &at, ada, &[]));
+        let own = rows.iter().map(|u| u.tx_hash.clone()).collect();
+        (rows, own)
+    };
+    let back = |rows: &[UtxoResponse], merge: &[UtxoResponse], own: &[String]| {
+        api::session_return(
+            &accounts,
+            sk,
+            SessionReturnRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 3,
+                utxos: rows.to_vec(),
+                merge: merge.to_vec(),
+                own: own.to_vec(),
+                collateral_pool: None,
+                collateral_boxes: vec![],
+                rewards: Default::default(),
+            },
+        )
+    };
+
+    // The account as the site left it: its only ADA-only UTxO is 2 ₳. Its plain sweep builds: no script, no
+    // collateral, every UTxO in one transaction.
+    let (rows, own) = account(2_000_000);
+    let sweep = back(&rows, &[], &own).expect("the plain sweep of the account's UTxOs builds");
+    assert_eq!((sweep.merged, sweep.inputs), (0, rows.len()));
+    assert!(sweep.left_out.is_empty());
+    let sweep_fee = collateral_holds(&sweep, &rows, least);
+
+    // With a 3 ₳ ADA-only UTxO instead, the return merges into the funding's change under that collateral; its fee
+    // takes 3/2 of a 2 ₳ one past an output's least, so 2 ₳ can't be this merged return's collateral.
+    let (roomy, roomy_own) = account(3_000_000);
+    let merged = back(&roomy, std::slice::from_ref(&change), &roomy_own)
+        .expect("with 3 ₳ up, the merged return builds");
+    assert_eq!(merged.merged, 1);
+    let merged_fee = collateral_holds(&merged, &roomy, least);
+    assert!(
+        2_000_000 < least + merged_fee * 3 / 2,
+        "the shape needs a merged return whose collateral a 2 ₳ one can't be"
+    );
+
+    // With the funding's change to merge into and only the 2 ₳ to put up: the plain sweep, whole, in a transaction
+    // the ledger takes.
+    let swept = back(&rows, std::slice::from_ref(&change), &own).unwrap_or_else(|e| {
+        panic!("the return is refused, though the plain sweep of the same UTxOs builds (fee {sweep_fee}): {e}")
+    });
+    assert_eq!((swept.merged, swept.inputs), (0, rows.len()));
+    assert!(swept.left_out.is_empty(), "{:?}", swept.left_out.len());
+    assert_eq!(collateral_holds(&swept, &rows, least), sweep_fee);
+}
+
 /// 2^63 − 1 of one token: three of these add up past what an output can hold.
 const JUNK: u64 = (1 << 63) - 1;
 const JUNK_POLICY: &str = "abababababababababababababababababababababababababababab";
@@ -841,6 +1017,91 @@ fn the_connector_reads_and_signs_a_swap_for_a_session_with_its_key_alone() {
     );
 }
 
+/// Chunk 51, t1e#1: a site given governance (CIP-95) and connected to a session gets no DRep from it, whatever the
+/// request says. The one-time accounts' DRep key `3/0` is the same for every session, so a vote or certificate it
+/// signed would tie every session that signed one together: the session's calls read each request with governance
+/// off. Called as the extension calls them, by their WebAssembly names.
+#[test]
+fn a_sessions_calls_never_sign_as_the_one_time_accounts_drep() {
+    let accounts = accounts();
+    let Ok(wasm) = seedelf_wasm::WasmOneTimeAccounts::from_phrase(PHRASE.into()) else {
+        panic!("the one-time accounts")
+    };
+    let index = 5;
+    let drep = accounts.key_hash(Role::Drep, 0).unwrap();
+    // The session's swap, with a vote of that DRep key's beside it.
+    let (tx, inputs) = swap_tx(index);
+    let mut whole = conway::Tx::decode_fragment(&hex::decode(&tx).unwrap()).unwrap();
+    whole.transaction_body.voting_procedures = NonEmptyKeyValuePairs::try_from(vec![(
+        conway::Voter::DRepKey(drep),
+        NonEmptyKeyValuePairs::try_from(vec![(
+            conway::GovActionId {
+                transaction_id: Hash::new([9; 32]),
+                action_index: 0,
+            },
+            conway::VotingProcedure {
+                vote: conway::Vote::Yes,
+                anchor: Nullable::Null,
+            },
+        )])
+        .unwrap(),
+    )])
+    .ok();
+    let tx = hex::encode(whole.encode_fragment().unwrap());
+    let request = json!({
+        "network": "preprod",
+        "txCbor": tx,
+        "keys": [{ "role": 0, "index": index }],
+        "inputs": [{
+            "tx_hash": inputs[0].tx_hash,
+            "tx_index": inputs[0].tx_index,
+            "address": inputs[0].address,
+            "value": inputs[0].value,
+        }],
+        "partialSign": true,
+        "stakeIndex": index,
+        "governance": true,
+    })
+    .to_string();
+    let Ok(summary) = seedelf_wasm::inspect_session_tx(&wasm, &request) else {
+        panic!("inspected")
+    };
+    let summary: Value = serde_json::from_str(&summary).unwrap();
+    assert_eq!(summary["signs"], json!(["0/5"]), "never the DRep key");
+    assert_eq!(summary["ownVotes"], 0);
+    let Ok(signed) = seedelf_wasm::sign_session_tx(&wasm, &request) else {
+        panic!("signed")
+    };
+    let signed: Value = serde_json::from_str(&signed).unwrap();
+    let witness_set = conway::WitnessSet::decode_fragment(
+        &hex::decode(signed["witnessSet"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let signers: Vec<Hash<28>> = witness_set
+        .vkeywitness
+        .unwrap()
+        .iter()
+        .map(|w| Hasher::<224>::hash(&w.vkey.to_vec()))
+        .collect();
+    assert_eq!(signers, [accounts.key_hash(Role::Receive, index).unwrap()]);
+
+    // Data: the DRep's ID is no key of the session's (signSessionData reads the request as sessionDataSigner does).
+    let id = seedelf_core::staking::drep_id(&conway::DRep::Key(drep));
+    let data = json!({
+        "network": "preprod",
+        "keys": [{ "role": 0, "index": index }],
+        "address": id,
+        "payload": hex::encode("Sign in to example.com"),
+        "stakeIndex": index,
+        "governance": true,
+    })
+    .to_string();
+    let Ok(signer) = seedelf_wasm::session_data_signer(&wasm, &data) else {
+        panic!("asked")
+    };
+    assert_eq!(signer, "null");
+}
+
 /// The public key in a COSE_Key (CIP-8's `key`): its `-2` entry.
 fn cose_key_x(key_hex: &str) -> [u8; 32] {
     let key = hex::decode(key_hex).unwrap();
@@ -1169,6 +1430,97 @@ fn a_sessions_own_cancel_releases_nothing_away_from_it() {
         seen += 1;
     }
     assert!(seen >= 11, "{seen} cancels");
+}
+
+/// Chunk 51, t1e#15: a cancel spends only what's at the session's account. The worker reads its funds and collateral
+/// there, so nothing reaches this today; another account's UTxO would be one this session's key can't sign for, tied
+/// to the session by the cancel.
+#[test]
+fn a_cancel_spends_nothing_at_another_account() {
+    let accounts = accounts();
+    let index = 3;
+    let session = Session {
+        payment: accounts.key_hash(Role::Receive, index).unwrap(),
+        stake: accounts.key_hash(Role::Staking, index).unwrap(),
+    };
+    let address = api::one_time_address(&accounts, false, index).unwrap();
+    let elsewhere = api::one_time_address(&accounts, false, index + 1).unwrap();
+    let rows: Value = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/epoch_params_mainnet.json"
+    ))
+    .unwrap();
+    let params = if rows.is_array() {
+        rows[0].clone()
+    } else {
+        rows
+    };
+    let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../seedelf-core/tests/fixtures/order_cancels.json"
+    ))
+    .unwrap();
+    let f = fixtures
+        .iter()
+        .find(|f| f["network"] == "mainnet" && f["stuck"] != true)
+        .unwrap();
+    // A real order made out to the session, as a_sessions_own_cancel_releases_nothing_away_from_it makes them.
+    let protocol: orders::Protocol = serde_json::from_value(f["protocol"].clone()).unwrap();
+    let text = f["datum"].as_str().unwrap();
+    let read = orders::read(protocol, &hex::decode(text).unwrap()).unwrap();
+    let (Credential::Key(payment), Some(Credential::Key(stake))) =
+        (read.pays[0].payment, read.pays[0].stake)
+    else {
+        panic!("{protocol:?}'s order doesn't pay a base address of keys")
+    };
+    let text = text
+        .replace(&hex::encode(payment), &hex::encode(session.payment))
+        .replace(&hex::encode(stake), &hex::encode(session.stake));
+    let mut order = fixture_utxo(&f["order"]);
+    match &mut order.inline_datum {
+        Some(inline) => inline.bytes = text.clone(),
+        None => {
+            order.datum_hash = Some(hex::encode(Hasher::<256>::hash(
+                &hex::decode(&text).unwrap(),
+            )))
+        }
+    }
+    let references: Vec<UtxoResponse> = f["reference"]
+        .as_object()
+        .map(|_| vec![fixture_utxo(&f["reference"])])
+        .unwrap_or_default();
+    let cancel = |funds: &UtxoResponse, collateral: &UtxoResponse| {
+        api::build_order_cancel(api::OrderCancelRequest {
+            network: "mainnet".into(),
+            params: params.clone(),
+            session: address.to_bech32().unwrap(),
+            orders: vec![api::OrderRow {
+                utxo: order.clone(),
+                datum: text.clone(),
+            }],
+            funds: vec![funds.clone()],
+            collateral: collateral.clone(),
+            references: references.clone(),
+        })
+        .map(|c| c.covers.len())
+        .map_err(|e| e.to_string())
+    };
+    let funds = utxo(0xaa, 0, &address, 10_000_000, &[]);
+    let collateral = utxo(0xbb, 0, &address, 5_000_000, &[]);
+    assert_eq!(cancel(&funds, &collateral), Ok(1), "{protocol:?}");
+    let theirs = utxo(0xcc, 0, &elsewhere, 10_000_000, &[]);
+    let refused = Err(format!(
+        "UTxO {}#0 isn't at the session's account",
+        theirs.tx_hash
+    ));
+    assert_eq!(cancel(&theirs, &collateral), refused, "their funds");
+    let their_collateral = UtxoResponse {
+        value: "5000000".into(),
+        ..theirs.clone()
+    };
+    assert_eq!(
+        cancel(&funds, &their_collateral),
+        refused,
+        "their collateral"
+    );
 }
 
 /// Writes the extension's fixture for a session's swap (`extension/tests/

@@ -70,22 +70,39 @@ pub fn refusal(row: &UtxoResponse) -> Option<String> {
 }
 
 /// Why the wallet can't read `row`'s inline datum, in words, or `None` when it
-/// can or there's none: nested past [`cbor::MAX_DEPTH`], or not one CBOR item.
-/// The evaluator's decoder, and Pallas's, would overflow the stack on a datum
-/// a few thousand levels deep, which traps WebAssembly. Anyone can put one on
-/// a UTxO they make, beside a reference script too.
+/// can or there's none: nested past [`cbor::MAX_DEPTH`], not one CBOR item, or
+/// with a constructor in the general form whose pair isn't two items, which
+/// the node refuses too ([`readable`]). The evaluator's decoder, and Pallas's,
+/// would overflow the stack on a datum a few thousand levels deep, which traps
+/// WebAssembly. Anyone can put one on a UTxO they make, beside a reference
+/// script too.
 pub fn unreadable_datum(row: &UtxoResponse) -> Option<String> {
-    let too_deep = row
+    let unreadable = row
         .inline_datum
         .as_ref()
         .and_then(|d| hex::decode(&d.bytes).ok())
-        .is_some_and(|datum| !cbor::within_depth(&datum, cbor::MAX_DEPTH));
-    too_deep.then(|| {
+        .is_some_and(|datum| readable(&datum).is_none());
+    unreadable.then(|| {
         format!(
             "UTxO {}#{} holds a datum the wallet can't read",
             row.tx_hash, row.tx_index
         )
     })
+}
+
+/// An inline datum as the evaluator is handed it: held to [`cbor::MAX_DEPTH`],
+/// and with each constructor in the general form written with a definite pair
+/// ([`cbor::definite_pairs`]). The evaluator decodes it with Pallas, which
+/// misreads one nested with an indefinite pair, and whoever wrote the datum
+/// chose that (a part-filled Splash order's remnant is its executor's): this
+/// way the script sees the data the node gives it (chunk 51, r3a#1's class).
+/// The datum's bytes are only read here: nothing hashes or sends a resolved
+/// output.
+fn readable(datum: &[u8]) -> Option<Vec<u8>> {
+    if !cbor::within_depth(datum, cbor::MAX_DEPTH) {
+        return None;
+    }
+    cbor::definite_pairs(datum)
 }
 
 /// A Koios UTxO row as the evaluator needs it, unless it's one the evaluator
@@ -113,8 +130,8 @@ pub fn resolve_reference(row: &UtxoResponse, version: u8, script: &[u8]) -> Resu
     resolve(row, Some((version, script)))
 }
 
-/// `row`'s output as the ledger encodes it, with `script` as its reference
-/// script when given.
+/// `row`'s output as the ledger encodes it, its inline datum as the evaluator
+/// reads it ([`readable`]), with `script` as its reference script when given.
 fn resolve(row: &UtxoResponse, script: Option<(u8, &[u8])>) -> Result<Resolved> {
     let tx_hash: [u8; 32] = hex::decode(&row.tx_hash)?
         .try_into()
@@ -165,7 +182,14 @@ fn resolve(row: &UtxoResponse, script: Option<(u8, &[u8])>) -> Result<Resolved> 
     let inline = row
         .inline_datum
         .as_ref()
-        .map(|d| hex::decode(&d.bytes))
+        .map(|d| -> Result<Vec<u8>> {
+            readable(&hex::decode(&d.bytes)?).with_context(|| {
+                format!(
+                    "UTxO {}#{} holds a datum the wallet can't read",
+                    row.tx_hash, row.tx_index
+                )
+            })
+        })
         .transpose()?;
     let datum_hash = row.datum_hash.as_ref().map(hex::decode).transpose()?;
 
@@ -370,34 +394,44 @@ pub fn evaluate_with(
     }
 }
 
-/// `uplc` names purposes as the redeemer tags are spelled in Rust.
-fn ogmios_purpose(tag: &str) -> &'static str {
-    match tag.to_ascii_lowercase().as_str() {
-        "spend" => "spend",
-        "mint" => "mint",
-        "cert" => "publish",
-        "reward" | "withdraw" => "withdraw",
-        "vote" => "vote",
-        _ => "propose",
-    }
+/// Ogmios's name for the purpose `uplc` gives a failing script's redeemer, as
+/// [`purpose`] names a measured one's. `uplc` spells it with
+/// `redeemer_tag_to_string` ("Publish" for a certificate's, "Withdraw" for a
+/// reward's), or as the Rust variant is. A spelling it might use otherwise is
+/// passed on as it is, never taken for another purpose (chunk 51, r2b#3).
+fn ogmios_purpose(tag: &str) -> String {
+    use RedeemerTag::*;
+    [Spend, Mint, Cert, Reward, Vote, Propose]
+        .into_iter()
+        .find(|t| {
+            uplc::tx::redeemer_tag_to_string(t).eq_ignore_ascii_case(tag)
+                || format!("{t:?}").eq_ignore_ascii_case(tag)
+        })
+        .map_or_else(|| tag.to_ascii_lowercase(), |t| purpose(&t).to_string())
 }
 
 /// A built transaction's outputs as Ogmios v6 UTxOs, for
 /// `evaluateTransaction`'s `additionalUtxo`: with them the network's own
 /// evaluator can measure a transaction whose parents aren't on chain yet (a
 /// chain's first mix, on its unsent deposit). That's the check that the
-/// wallet's evaluator still costs scripts as the network does.
+/// wallet's evaluator still costs scripts as the network does. A Byron
+/// address is written in base58, as Ogmios and Koios write one: it has no
+/// bech32 (chunk 51, w2#6's sibling).
 pub fn ogmios_utxos(tx_cbor: &[u8]) -> Result<Value> {
     let tx =
         MultiEraTx::decode(tx_cbor).map_err(|e| anyhow!("The transaction can't be read: {e}"))?;
     let id = hex::encode(tx.hash());
     let mut rows = Vec::new();
     for (index, output) in tx.outputs().iter().enumerate() {
-        let address = output
+        let address = match output
             .address()
             .map_err(|e| anyhow!("An output's address can't be read: {e}"))?
-            .to_bech32()
-            .map_err(|e| anyhow!("An output's address can't be written: {e}"))?;
+        {
+            Address::Byron(byron) => byron.to_base58(),
+            address => address
+                .to_bech32()
+                .map_err(|e| anyhow!("An output's address can't be written: {e}"))?,
+        };
         let value = output.value();
         let mut amounts = serde_json::Map::new();
         amounts.insert("ada".into(), json!({ "lovelace": value.coin() }));
@@ -458,4 +492,33 @@ pub fn declared_covers(tx_cbor: &[u8], answer: &Value) -> Result<std::result::Re
     } else {
         Err("the network measures its scripts above what the wallet declared".to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Chunk 51, r2b#3: a failing script is labelled by the purpose `uplc`
+    /// names it by, as a measured one is: `uplc` 1.1.23 spells a certificate's
+    /// tag "Publish" and a reward's "Withdraw", not as the Rust variants are.
+    #[test]
+    fn a_failing_script_is_labelled_as_a_measured_one_of_its_purpose() {
+        use RedeemerTag::*;
+        for tag in [Spend, Mint, Cert, Reward, Vote, Propose] {
+            let named = uplc::tx::redeemer_tag_to_string(&tag);
+            assert_eq!(
+                ogmios_purpose(&named),
+                purpose(&tag),
+                "{tag:?}, named {named}"
+            );
+            // As the variant is spelled too, in any case.
+            let variant = format!("{tag:?}");
+            assert_eq!(ogmios_purpose(&variant), purpose(&tag), "{variant}");
+            assert_eq!(
+                ogmios_purpose(&variant.to_uppercase()),
+                purpose(&tag),
+                "{variant}"
+            );
+        }
+    }
 }

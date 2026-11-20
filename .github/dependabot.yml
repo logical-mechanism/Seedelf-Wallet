@@ -1,0 +1,17 @@
+# The workflows pin every third-party action by a full commit SHA
+# (workflows.test.ts), and a pin nothing updates goes stale. So Dependabot
+# offers new versions of the actions alone, once a month, as one pull request,
+# which keeps each pin a SHA and runs the Web Wallet check like any workflow
+# change (chunk 51, G8's notes; the owner's call, B13).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: chore

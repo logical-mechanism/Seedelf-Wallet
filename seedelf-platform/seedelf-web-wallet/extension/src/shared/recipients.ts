@@ -1,10 +1,13 @@
 // How many people one payment pays, on either side: one to MAX_RECIPIENTS,
 // each with its own amount and tokens. WebAssembly checks it again, and core
-// refuses a transaction over the network's 16 KiB whatever the count.
+// refuses a transaction over the network's 16 KiB whatever the count, which
+// the worker says in the user's words (short.ts `tooMany`). The ledger has no
+// count: 100 keeps the form's cards sane, well past use (it was 20; chunk 51,
+// gap-g8#4).
 
 import { t } from "../i18n";
 /** The most recipients one payment pays (WebAssembly's `MAX_RECIPIENTS`). */
-export const MAX_RECIPIENTS = 20;
+export const MAX_RECIPIENTS = 100;
 
 /** Throws the reason a payment can't have `count` recipients. */
 export function checkRecipients(count: number): void {

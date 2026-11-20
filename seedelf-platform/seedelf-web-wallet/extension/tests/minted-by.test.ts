@@ -6,8 +6,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "../src/background/activity";
+import { CONTRACT_V1 } from "../src/background/balances";
+import { registerOf } from "../src/background/chain";
 import { Collateral } from "../src/background/collateral";
-import { Koios, type KoiosUtxo } from "../src/background/koios";
+import { Koios, type KoiosTxInfo, type KoiosUtxo } from "../src/background/koios";
 import { MintService } from "../src/background/mint";
 import { mintedBy, paidByOf, rememberMint } from "../src/background/minted-by";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
@@ -16,7 +19,7 @@ import type { KnownAccount, SeedelfInfo } from "../src/shared/rpc";
 import { AccountsContext } from "../src/ui/accounts";
 import { PreferencesContext } from "../src/ui/preferences";
 import { removeNote, removeOption, RemoveSeedelf } from "../src/ui/screens/RemoveSeedelf";
-import { accountMintPreprod, koiosPreprod, loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
+import { accountMintPreprod, activityPreprod, koiosPreprod, loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const phrase12 = () => vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
@@ -32,7 +35,7 @@ const seedelfUtxo = ownedUtxos[2]!;
 const SEEDELF = seedelfUtxo.asset_list![0]!.asset_name;
 
 describe("who paid for a Seedelf", () => {
-  const nothing = { recorded: {}, owned: [seedelfUtxo], account: [], accountTxs: new Set<string>() };
+  const nothing = { recorded: {}, owned: [seedelfUtxo], accountActivity: [] };
 
   it("is the record's, when the mint was sent from here, and names the account that paid", () => {
     expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, recorded: { [SEEDELF]: "seedelf" } })).toEqual({ side: "seedelf" });
@@ -52,16 +55,18 @@ describe("who paid for a Seedelf", () => {
     expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, owned: [seedelfUtxo, change] })).toEqual({ side: "seedelf" });
   });
 
-  it("is the public account when the mint's change is at the account, or its Activity lists the mint", () => {
-    // What the wallet holds is the account it is working on, so the answer is that account's.
-    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, account: [{ tx_hash: seedelfUtxo.tx_hash }], activeAccount: 1 })).toEqual({
+  it("is the public account only when its Activity lists the mint as one the account spent in (chunk 51, e6#1)", () => {
+    // What the wallet holds is the account it is working on, so the answer is that account's. An entry has a fee only
+    // where an input of the transaction is under the account's payment keys, which takes the account's signature.
+    const spentIn = [{ txHash: seedelfUtxo.tx_hash, fee: "200000" }];
+    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, accountActivity: spentIn, activeAccount: 1 })).toEqual({
       side: "account",
       account: 1,
     });
-    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, accountTxs: new Set([seedelfUtxo.tx_hash]) })).toEqual({
-      side: "account",
-      account: 0,
-    });
+    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, accountActivity: spentIn })).toEqual({ side: "account", account: 0 });
+    // A transaction that only paid the account, its entry with no fee of the account's: anyone can make one, minting a
+    // Seedelf of their own under the user's register beside it. It says nothing of who paid for that Seedelf.
+    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, accountActivity: [{ txHash: seedelfUtxo.tx_hash }] })).toBeUndefined();
   });
 
   it("isn't known otherwise: the Seedelf's own UTxO says nothing", () => {
@@ -126,16 +131,152 @@ describe("the balance reading", () => {
     expect(t.koios.calls.slice(before).map((c) => c.path)).not.toContain("utxo_info");
   });
 
-  it("finds a stealth mint by its change in the private balance, and an account-paid one by its change at the account", async () => {
+  it("finds a stealth mint by its change in the private balance, and an account-paid one by the account spending in it", async () => {
     const t = await unlocked();
     t.koios.added.push({ ...ownedUtxos[0]!, tx_hash: seedelfUtxo.tx_hash, tx_index: 1 });
     expect(await seedelfOf(t)).toMatchObject({ paidBy: "seedelf" });
 
+    // Its change at the account says nothing: anyone's transaction can pay the account (chunk 51, e6#1).
     const u = await unlocked();
     const template = koiosPreprod.accounts[phrase12().preprod.stake]!.account_utxos[0]!;
     const change: KoiosUtxo = { ...template, tx_hash: seedelfUtxo.tx_hash, tx_index: 1, block_height: 5_300_000 };
     u.koios.addedToAccounts.push(change);
-    expect(await seedelfOf(u)).toMatchObject({ paidBy: "account" });
+    expect(await seedelfOf(u)).not.toHaveProperty("paidBy");
+    // Public activity listing the mint as one the account spent in does: only the account's signature makes that.
+    const { keys } = (await u.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!;
+    const top = activityPreprod.account_txs[0]!;
+    const row = { tx_hash: seedelfUtxo.tx_hash, block_height: top.block_height + 1, block_time: top.block_time + 60 };
+    u.koios.credentialTxs.set(keys[0]!, [row]);
+    // Where each sits, as tx_info writes it: `cred` is its payment key or script hash.
+    const mine = { bech32: template.address, cred: keys[0]! };
+    const contract = { bech32: seedelfUtxo.address, cred: CONTRACT_V1.walletContractHash };
+    u.koios.txRows.set(seedelfUtxo.tx_hash, {
+      tx_hash: seedelfUtxo.tx_hash,
+      block_height: row.block_height,
+      tx_timestamp: row.block_time,
+      fee: "250000",
+      inputs: [{ payment_addr: mine, value: "20000000", asset_list: [] }],
+      outputs: [
+        { payment_addr: contract, value: seedelfUtxo.value, asset_list: [] },
+        { payment_addr: mine, value: "17000000", asset_list: [] },
+      ],
+    } as KoiosTxInfo);
+    const listed = (await u.activity.cardano("preprod")).entries.find((e) => e.txHash === seedelfUtxo.tx_hash);
+    expect(listed).toHaveProperty("fee", "250000");
+    expect(await seedelfOf(u)).toMatchObject({ paidBy: "account", paidByAccount: 0 });
+  });
+});
+
+// Chunk 51, e6#1 (its trace verifier's test, moved here): a stranger can plant a Seedelf so Remove starts on the public
+// account and says it "links nothing new". The mint policy at 5b82530 is open and checks no output, and every Seedelf's
+// register is public through its name. So anyone can mint a Seedelf of their own under a fresh re-randomization of the
+// user's register, and pay the user's public account 1 ₳ in the same transaction. The wallet lists that Seedelf as the
+// user's. With no record of who paid, it took the stranger's payment to the account (a UTxO from the mint, or Public
+// activity's "received" entry for it) for an account-paid mint's change (minted-by.ts paidByOf). Remove then started on
+// the public account: "your public account paid for it, so this links nothing new". Sent there, the freed ADA shows
+// that whoever holds the planted register (the stranger knows it's the owner of the user's Seedelf) holds the account.
+//
+// The right behaviour, which this asserts: a transaction that only paid the account says nothing about who paid for
+// the Seedelf. So the wallet doesn't claim the account did, and Remove doesn't choose the public account for the user.
+describe("a Seedelf a stranger minted under the user's register (chunk 51, e6#1)", () => {
+  /** The stranger's minting transaction. */
+  const T = "e6".repeat(32);
+  const hexOf = (s: string) => Buffer.from(s, "ascii").toString("hex");
+  /** The stranger's own Seedelf, named as the policy names one: prefix, tag, the first input's index and id, 32 bytes. */
+  const GIFT = `5eed0e1f${hexOf("gift")}00${"5a".repeat(32)}`.slice(0, 64);
+
+  /** Output 0 of T: the stranger's Seedelf and 1.5 ₳, under a fresh re-randomization of the user's register. */
+  function planted(): KoiosUtxo {
+    const wasm = loadTestWasm();
+    const found = registerOf(seedelfUtxo)!;
+    const base = new wasm.Register(found.generator, found.publicValue);
+    const fresh = wasm.rerandomize(base);
+    const datum = `d8799f5830${fresh.generator}5830${fresh.publicValue}ff`;
+    base.free();
+    fresh.free();
+    return {
+      ...seedelfUtxo,
+      tx_hash: T,
+      tx_index: 0,
+      value: "1500000",
+      block_height: 5_300_000,
+      inline_datum: { bytes: datum, value: null },
+      asset_list: [{ ...seedelfUtxo.asset_list![0]!, asset_name: GIFT, fingerprint: "asset1strangersgift" }],
+    };
+  }
+
+  /** Output 1 of T: 1 ₳ to the user's public account, at an address of it the stranger saw on chain. */
+  function paidToAccount(): KoiosUtxo {
+    const template = koiosPreprod.accounts[phrase12().preprod.stake]!.account_utxos[0]!;
+    return { ...template, tx_hash: T, tx_index: 1, value: "1000000", asset_list: [], block_height: 5_300_000 };
+  }
+
+  const out = (bech32: string, cred: string, value: string, asset_list: KoiosTxInfo["outputs"][number]["asset_list"] = []) => ({
+    payment_addr: { bech32, cred },
+    value,
+    asset_list,
+  });
+
+  /** T as Koios lists it: the stranger's coin in; their Seedelf at the contract and 1 ₳ to the account out. */
+  const mintTx = (key: string, row: { block_height: number; block_time: number }): KoiosTxInfo => ({
+    tx_hash: T,
+    block_height: row.block_height,
+    tx_timestamp: row.block_time,
+    fee: "250000",
+    inputs: [out("addr_test1_stranger", "57".repeat(28), "10000000")],
+    outputs: [
+      out(seedelfUtxo.address, CONTRACT_V1.walletContractHash, "1500000", [
+        { policy_id: CONTRACT_V1.seedelfPolicyId, asset_name: GIFT, quantity: "1" },
+      ]),
+      out("addr_test1_mine", key, "1000000"),
+    ],
+  });
+
+  /** The Remove form for `seedelf`, as Home opens it: the card it starts on, and what it says. */
+  function removeForm(seedelf: SeedelfInfo) {
+    const html = renderToStaticMarkup(createElement(RemoveSeedelf, { seedelf, onCancel: () => undefined, onSent: () => undefined })).replaceAll(
+      "&#x27;",
+      "'",
+    );
+    const checked = [...html.matchAll(/role="radio" aria-checked="true".*?class="token-row__label">([^<]+)</g)].map((m) => m[1]);
+    return { html, checked };
+  }
+
+  it("isn't taken for one the public account paid for, so Remove doesn't start on the account saying it links nothing new", async () => {
+    // The stranger's 1 ₳ still at the account.
+    const t = testBalances();
+    await t.wallet.create(phrase12().phrase, PASSWORD);
+    t.koios.added.push(planted());
+    t.koios.addedToAccounts.push(paidToAccount());
+    const gift = (await t.balances.get("preprod", true)).seedelf.seedelfs.find((s) => s.assetName === GIFT);
+    // The wallet lists it as the user's: its register is theirs.
+    expect(gift).toMatchObject({ assetName: GIFT, label: "gift", lovelace: "1500000" });
+    // Nothing on the device says who paid for it: no record, and none of the account's money went into T.
+    expect.soft(gift, "who paid, from a UTxO the stranger's payment left at the account").not.toHaveProperty("paidBy");
+    const form = removeForm(gift!);
+    expect.soft(form.checked, "the card Remove starts on").not.toContain("Public account");
+    expect.soft(form.html).not.toContain("your public account paid for it, so this links nothing new");
+    expect.soft(form.html).not.toContain("Links nothing new: it paid for this Seedelf");
+    // It says it doesn't know who paid, and waits for the user's choice (privacy review §3.2).
+    expect.soft(form.html).toContain("doesn't know who paid for this Seedelf");
+
+    // The 1 ₳ spent since, and Public activity listing T as what it is: a payment received.
+    const u = testBalances();
+    await u.wallet.create(phrase12().phrase, PASSWORD);
+    u.koios.added.push(planted());
+    await u.balances.get("preprod");
+    const { keys } = (await u.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!;
+    const top = activityPreprod.account_txs[0]!;
+    const row = { tx_hash: T, block_height: top.block_height + 1, block_time: top.block_time + 60 };
+    u.koios.credentialTxs.set(keys[0]!, [row]);
+    u.koios.txRows.set(T, mintTx(keys[0]!, row));
+    const listed = (await u.activity.cardano("preprod")).entries.find((e) => e.txHash === T);
+    // The account spent nothing in it: received, and no fee of its own.
+    expect(listed).toMatchObject({ kind: "received", direction: "in", lovelace: "1000000" });
+    expect(listed).not.toHaveProperty("fee");
+    const again = (await u.balances.get("preprod", true)).seedelf.seedelfs.find((s) => s.assetName === GIFT);
+    expect(again).toMatchObject({ assetName: GIFT });
+    expect.soft(again, "who paid, from Public activity's received entry for the stranger's mint").not.toHaveProperty("paidBy");
   });
 });
 

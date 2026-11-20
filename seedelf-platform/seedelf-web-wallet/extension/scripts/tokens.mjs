@@ -25,6 +25,12 @@ const KOIOS = { preprod: "https://preprod.koios.rest/api/v1", mainnet: "https://
 /** Logos are stored at this size (square, transparent), enough for 2× screens. */
 const LOGO_PX = 96;
 
+/**
+ * The registry's order, by unit (`policy.name`), in "en-US" whatever the shell's language: with none, a refresh made
+ * in Danish or Norwegian, where "aa" sorts after "z", rewrote the committed file's order (chunk 51, G8's notes).
+ */
+export const byUnit = ([a], [b]) => a.localeCompare(b, "en-US");
+
 async function koios(network, path, body) {
   const url = `${KOIOS[network]}/${path}`;
   const response = await fetch(url, {
@@ -98,7 +104,7 @@ async function build(only) {
           ...(meta.logo ? { logo: await shrink(page, meta.logo) } : {}),
         };
       }
-      const sorted = Object.fromEntries(Object.entries(registry).sort(([a], [b]) => a.localeCompare(b)));
+      const sorted = Object.fromEntries(Object.entries(registry).sort(byUnit));
       const out = `${dir}registry.${network}.json`;
       writeFileSync(out, `${JSON.stringify(sorted, null, 2)}\n`);
       const kb = Math.round(JSON.stringify(sorted).length / 1024);
@@ -121,7 +127,9 @@ async function find(network, tickers) {
   }
 }
 
-const [command, network, ...rest] = process.argv.slice(2);
-if (command === "find") await find(network, rest);
-else if (!command || command === "build") await build(network);
-else throw new Error("usage: node scripts/tokens.mjs [build [network] | find <network> TICKER...]");
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const [command, network, ...rest] = process.argv.slice(2);
+  if (command === "find") await find(network, rest);
+  else if (!command || command === "build") await build(network);
+  else throw new Error("usage: node scripts/tokens.mjs [build [network] | find <network> TICKER...]");
+}

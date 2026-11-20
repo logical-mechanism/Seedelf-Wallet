@@ -12,7 +12,7 @@ import { Minswap } from "../src/background/minswap";
 import { SESSION_SEND } from "../src/background/send";
 import { SessionService } from "../src/background/sessions";
 import { APIError } from "../src/shared/dapp";
-import { loadTestWasm, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
+import { busyFor, loadTestWasm, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 import { txIdOf } from "./fixtures/cbor";
 
 const PASSWORD = "correct horse battery";
@@ -47,6 +47,8 @@ describe("a site's page that goes away while its request waits", () => {
       t.dapp.gone(s);
       await expect(enabling).rejects.toMatchObject({ failure: { code: APIError.Refused, info: "The page went away." } });
       expect(t.dapp.approvals()).toEqual([]);
+      // Left unanswered, it counts as a decline (chunk 51, G6's note): the next page waits that out, at most 5 minutes.
+      await busyFor(t, 5 * 60_000);
     }
     expect(await t.dapp.call(page(), "isEnabled", [])).toBe(false);
     // A page still there is asked, as ever.
@@ -67,6 +69,8 @@ describe("a site's page that goes away while its request waits", () => {
       t.dapp.gone(s);
       await expect(enabling).rejects.toMatchObject({ failure: { info: "The page went away." } });
       expect(t.dapp.unlockingSites()).toEqual([]);
+      // Left waiting for the unlock, it counts as a decline (chunk 51, G6's note): the next page waits that out.
+      t.clock.now += 5 * 60_000;
     }
     await t.wallet.unlock(PASSWORD);
     await t.dapp.stateChanged();
@@ -170,5 +174,617 @@ describe("a site's page that goes away while its request waits", () => {
     release();
     t.koios.hold = undefined;
     await Promise.all(running);
+  });
+});
+
+// Chunk 51, G6's note: a page that went away with its connect question unanswered wasn't counted as a decline, so a
+// page reloading before the user answered never met the back-off (10 s, then a minute, then five; L35), and every
+// reload brought the connector's window to the front again. It counts now, as closing the window on it does
+// (`windowClosed`), its wait for the unlock too, unless another page of the same site waits on that question: that one
+// asks itself, as it always has (`enable`), and a refusal would have turned it away.
+describe("a site's page that leaves its connect question unanswered (chunk 51, G6's note)", () => {
+  const DECLINED_WAIT = { code: APIError.Refused, info: "The user declined this site just now. It can ask again in 10 s." };
+
+  /**
+   * What a new page's `enable()` meets at once: refused (what it heard), or "asked", its question in the window or its
+   * wait for the unlock there, which is then let go as the page going away lets it go.
+   */
+  async function enableMeets(t: Awaited<ReturnType<typeof on>>): Promise<unknown> {
+    const s = page();
+    const asked = () => t.dapp.approvals().some((a) => a.kind === "connect") || t.dapp.unlockingSites().length > 0;
+    const before = asked();
+    let heard: unknown;
+    const enabling = t.dapp.call(s, "enable", []).then(
+      () => (heard = "connected"),
+      (e: { failure: unknown }) => (heard = e.failure),
+    );
+    for (let i = 0; i < 200 && heard === undefined && (before || !asked()); i++) await new Promise((r) => setTimeout(r, 0));
+    if (heard !== undefined) return heard;
+    t.dapp.gone(s);
+    await enabling;
+    return "asked";
+  }
+
+  it("turns the site away as a decline does: its next page is refused unasked, and the window isn't shown", async () => {
+    const t = await on();
+    const s = page();
+    const enabling = t.dapp.call(s, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    t.dapp.gone(s);
+    await expect(enabling).rejects.toMatchObject({ failure: { info: "The page went away." } });
+    const shown = t.dappWindow.shown;
+    expect.soft(await enableMeets(t), "a reload's page, right after").toEqual(DECLINED_WAIT);
+    expect.soft(t.dappWindow.shown, "the window brought back by a reload").toBe(shown);
+    expect.soft((await t.dapp.declined()).map((d) => d.origin)).toEqual([ORIGIN]);
+    // Its wait over, a page is asked again.
+    await busyFor(t, 10_000);
+    expect(await enableMeets(t)).toBe("asked");
+  });
+
+  it("turns it away when its page leaves its wait for the unlock too", async () => {
+    const t = await on();
+    await t.wallet.lock();
+    const s = page();
+    const enabling = t.dapp.call(s, "enable", []);
+    await until(() => t.dapp.unlockingSites().length === 1);
+    t.dapp.gone(s);
+    await expect(enabling).rejects.toMatchObject({ failure: { info: "The page went away." } });
+    const shown = t.dappWindow.shown;
+    expect.soft(await enableMeets(t), "a reload's page, right after").toEqual(DECLINED_WAIT);
+    expect.soft(t.dappWindow.shown, "the unlock window brought back by a reload").toBe(shown);
+  });
+
+  it("never when another page of the same site waits on that question: that one asks itself", async () => {
+    const t = await on();
+    const first = page();
+    const second = page();
+    const enablingFirst = t.dapp.call(first, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    const enablingSecond = t.dapp.call(second, "enable", []);
+    // The second shares the first's question: one question per site.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.dapp.approvals()).toHaveLength(1);
+    t.dapp.gone(first);
+    await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await enablingSecond).toBe(true);
+    expect(await t.dapp.declined()).toEqual([]);
+  });
+
+  it("nor when another page's enable() of the same site still waits for the unlock: it's asked once the wallet is unlocked", async () => {
+    const t = await on();
+    await t.wallet.lock();
+    const first = page();
+    const second = page();
+    const enablingFirst = t.dapp.call(first, "enable", []);
+    const enablingSecond = t.dapp.call(second, "enable", []);
+    await until(() => t.dapp.unlockingSites().length === 1);
+    t.dapp.gone(first);
+    await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+    expect(t.dapp.unlockingSites()).toEqual([ORIGIN]);
+    await t.wallet.unlock(PASSWORD);
+    await t.dapp.stateChanged();
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await enablingSecond).toBe(true);
+  });
+
+  // Chunk 51, l4code#3, the owner's B7: another page of the site waiting for the unlock spared it on any call, so a
+  // page leaving its question, or its unlock wait, beside a signature waiting for the unlock never had its site wait,
+  // and a page reloaded in its unlock wait brought the window back each time. Only another page waiting on the site's
+  // connect question, or on its way to it, spares it: a signature's or a send's wait asks nothing of the connection.
+  describe("but when another page only waits for the unlock to sign (chunk 51, l4code#3, the owner's B7)", () => {
+    type T = Awaited<ReturnType<typeof on>>;
+    const GONE = { info: "The page went away." };
+    const NOT_CONNECTED = { info: "This site isn't connected to Seedelf Wallet. Call enable() first." };
+    const signData = (t: T, s: DappSession) =>
+      t.dapp
+        .call(s, "signData", [t.deps.wasm.cip30Address(account.preprod.receive_0 as string), "00"])
+        .catch((e: { failure: unknown }) => e.failure);
+
+    it("a connect question left beside it turns the site away, as one left alone does", async () => {
+      const t = await on();
+      const asks = page();
+      const enabling = t.dapp.call(asks, "enable", []);
+      await until(() => t.dapp.approvals().length === 1);
+      await t.wallet.lock();
+      await t.dapp.stateChanged();
+      const signing = signData(t, page());
+      await until(() => t.dapp.unlockingSites().length === 1);
+      t.dapp.gone(asks);
+      await expect(enabling).rejects.toMatchObject({ failure: GONE });
+      await t.wallet.unlock(PASSWORD);
+      await t.dapp.stateChanged();
+      expect(await signing).toMatchObject(NOT_CONNECTED);
+      expect.soft((await t.dapp.declined()).map((d) => d.origin), "the site listed as declined").toEqual([ORIGIN]);
+      expect(await enableMeets(t), "a reload's page, after the unlock").toEqual(DECLINED_WAIT);
+    });
+
+    it("a wait for the unlock left beside it turns the site away too", async () => {
+      const t = await on();
+      await t.wallet.lock();
+      const a = page();
+      const shown = t.dappWindow.shown;
+      const signingA = signData(t, a);
+      const signingB = signData(t, page());
+      await until(() => t.dappWindow.shown === shown + 2);
+      t.dapp.gone(a);
+      expect(await signingA).toMatchObject(GONE);
+      await t.wallet.unlock(PASSWORD);
+      await t.dapp.stateChanged();
+      expect(await signingB).toMatchObject(NOT_CONNECTED);
+      expect.soft((await t.dapp.declined()).map((d) => d.origin), "the site listed as declined").toEqual([ORIGIN]);
+      expect(await enableMeets(t), "a reload's page, after the unlock").toEqual(DECLINED_WAIT);
+    });
+
+    it("a page reloaded in its enable()'s unlock wait brings the window back once, then waits", async () => {
+      const t = await on();
+      await t.wallet.lock();
+      const signing = signData(t, page());
+      await until(() => t.dapp.unlockingSites().length === 1);
+      // Each reload's page: what its enable() heard, or the window shown for it, which it then leaves.
+      const heard: unknown[] = [];
+      for (let i = 0; i < 4; i++) {
+        const s = page();
+        const shown = t.dappWindow.shown;
+        let said: unknown;
+        const enabling = t.dapp.call(s, "enable", []).then(
+          () => (said = "connected"),
+          (e: { failure: unknown }) => (said = e.failure),
+        );
+        for (let n = 0; n < 200 && said === undefined && t.dappWindow.shown === shown; n++) await new Promise((r) => setTimeout(r, 0));
+        if (said === undefined) {
+          t.dapp.gone(s);
+          await enabling;
+          said = "window shown";
+        }
+        heard.push(said);
+      }
+      expect(heard).toEqual(["window shown", DECLINED_WAIT, DECLINED_WAIT, DECLINED_WAIT]);
+      await t.wallet.unlock(PASSWORD);
+      await t.dapp.stateChanged();
+      expect(await signing).toMatchObject(NOT_CONNECTED);
+    });
+  });
+
+  // Chunk 51, sign#3: another page counted as sharing the question only once its enable() reached it, after three
+  // awaits (preferences, the wallet's queue, its sealed read of the sites), each of which can sit behind a reading. The
+  // first page leaving in between turned the site away, and the second, on its way to that very question, heard
+  // "declined just now". A page counts from its enable()'s first line now.
+  describe("nor when another page's enable() is still on its way to that question (chunk 51, sign#3)", () => {
+    /** Lets the second page's enable() go on until it's asked, its question or its unlock wait, or hears something. */
+    async function onward(t: Awaited<ReturnType<typeof on>>, heard: () => unknown) {
+      const asked = () => t.dapp.approvals().length > 0 || t.dapp.unlockingSites().length > 0;
+      for (let i = 0; i < 200 && heard() === undefined && !asked(); i++) await new Promise((r) => setTimeout(r, 0));
+    }
+
+    it("held in its sealed read of the connected sites: it asks itself, and the site isn't turned away", async () => {
+      const t = await on();
+      const first = page();
+      const second = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.approvals().length === 1);
+      // Its read of the connected sites (`site`), a sealed record read on the wallet's queue, held.
+      const realGet = t.store.get.bind(t.store) as (name: string) => Promise<unknown>;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let held = 0;
+      t.store.get = (async (name: string) => {
+        if (name === "dapps") {
+          held++;
+          await gate;
+        }
+        return realGet(name);
+      }) as typeof t.store.get;
+      let heard: unknown;
+      const enablingSecond = t.dapp.call(second, "enable", []).then(
+        () => (heard = "connected"),
+        (e: { failure: unknown }) => (heard = e.failure),
+      );
+      await until(() => held === 1);
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      release();
+      await onward(t, () => heard);
+      t.store.get = realGet as typeof t.store.get;
+      expect.soft(heard, "what the second page heard").toBeUndefined();
+      expect.soft(t.dapp.approvals().map((a) => a.kind), "the second page's own question").toEqual(["connect"]);
+      expect.soft((await t.dapp.declined()).map((d) => d.origin), "the site listed as declined").toEqual([]);
+      if (t.dapp.approvals().length === 1) await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+      await enablingSecond;
+      expect(heard).toBe("connected");
+    });
+
+    it("held at the wallet's queue before its enable() is reached: asked, not turned away", async () => {
+      const t = await on();
+      const first = page();
+      const second = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.approvals().length === 1);
+      // The wallet's queue held, as a reading holds it: the second's call waits in `wallet.state()`.
+      let release!: () => void;
+      const reading = t.wallet.withKeys(() => new Promise<void>((r) => (release = r)));
+      let heard: unknown;
+      const enablingSecond = t.dapp.call(second, "enable", []).then(
+        () => (heard = "connected"),
+        (e: { failure: unknown }) => (heard = e.failure),
+      );
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+      expect(heard).toBeUndefined();
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      release();
+      await reading;
+      await onward(t, () => heard);
+      expect.soft(heard, "what the second page heard").toBeUndefined();
+      expect.soft(t.dapp.approvals().map((a) => a.kind), "the second page's own question").toEqual(["connect"]);
+      expect.soft((await t.dapp.declined()).map((d) => d.origin), "the site listed as declined").toEqual([]);
+      if (t.dapp.approvals().length === 1) await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+      await enablingSecond;
+      expect(heard).toBe("connected");
+    });
+
+    it("on its way to the unlock wait the first page leaves: it waits for the unlock itself", async () => {
+      const t = await on();
+      await t.wallet.lock();
+      const first = page();
+      const second = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.unlockingSites().length === 1);
+      // The second's first read, the connector's switch, held.
+      const realGet = t.preferences.get.bind(t.preferences);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let held = 0;
+      t.preferences.get = (async () => {
+        if (held++ === 0) await gate;
+        return realGet();
+      }) as typeof t.preferences.get;
+      let heard: unknown;
+      const enablingSecond = t.dapp.call(second, "enable", []).then(
+        () => (heard = "connected"),
+        (e: { failure: unknown }) => (heard = e.failure),
+      );
+      await until(() => held === 1);
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      release();
+      await onward(t, () => heard);
+      t.preferences.get = realGet;
+      expect.soft(heard, "what the second page heard").toBeUndefined();
+      expect.soft(t.dapp.unlockingSites(), "the second page waiting for the unlock").toEqual([ORIGIN]);
+      if (t.dapp.unlockingSites().length === 1) {
+        await t.wallet.unlock(PASSWORD);
+        await t.dapp.stateChanged();
+        await until(() => t.dapp.approvals().length === 1);
+        await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+      }
+      await enablingSecond;
+      expect(heard).toBe("connected");
+    });
+  });
+
+  it("turns it away once every page that shared the question has gone", async () => {
+    const t = await on();
+    const first = page();
+    const second = page();
+    const enablingFirst = t.dapp.call(first, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    const enablingSecond = t.dapp.call(second, "enable", []);
+    await new Promise((r) => setTimeout(r, 0));
+    t.dapp.gone(second);
+    t.dapp.gone(first);
+    await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+    await expect(enablingSecond).rejects.toMatchObject({ failure: { info: "The page went away." } });
+    expect(t.dapp.approvals()).toEqual([]);
+    expect.soft(await enableMeets(t), "a reload's page, right after").toEqual(DECLINED_WAIT);
+  });
+
+  it("isn't counted for a signature, nor for a private session's funding already sent", async () => {
+    const t = await on();
+    const s = page();
+    const enabling = t.dapp.call(s, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await enabling).toBe(true);
+    // A connected site's signature, its page gone: nothing counted, and the site is asked as ever.
+    const signing = t.dapp.call(s, "signData", [t.deps.wasm.cip30Address(account.preprod.receive_0 as string), "00"]);
+    await until(() => t.dapp.approvals().length === 1);
+    t.dapp.gone(s);
+    await expect(signing).rejects.toMatchObject({ failure: { info: "The page went away." } });
+    expect(await t.dapp.declined()).toEqual([]);
+  });
+
+  // Chunk 51, l2sign#1: a page counts as waiting on its site's question from its enable()'s first line (sign#3), so the
+  // first page leaving spared the site. But if that page then left too before it asked, nothing was recorded: neither
+  // departure turned the site away, and a reload's page brought the window back at once. The owner's B7: a page
+  // leaving its question unanswered is a decline, except while another page of the site waits on it. Once none does,
+  // the decline lands, when the page that spared it leaves.
+  describe("and the page that spared the site leaves before it asks (chunk 51, l2sign#1)", () => {
+    /** Holds every read of the sealed `dapps` record from the `from`-th on (1-based) until `done`. */
+    function holdSites(t: Awaited<ReturnType<typeof on>>, from = 1) {
+      const realGet = t.store.get.bind(t.store) as (name: string) => Promise<unknown>;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const state = { reads: 0 };
+      t.store.get = (async (name: string) => {
+        if (name === "dapps" && ++state.reads >= from) await gate;
+        return realGet(name);
+      }) as typeof t.store.get;
+      return {
+        state,
+        done: () => {
+          release();
+          t.store.get = realGet as typeof t.store.get;
+        },
+      };
+    }
+
+    it("unlocked, held in its sealed read of the sites: the first leaves, then the second: the site is turned away", async () => {
+      const t = await on();
+      const first = page();
+      const second = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.approvals().length === 1);
+      const hold = holdSites(t);
+      const enablingSecond = t.dapp.call(second, "enable", []).catch((e: { failure: unknown }) => e.failure);
+      await until(() => hold.state.reads === 1);
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      t.dapp.gone(second);
+      hold.done();
+      expect(await enablingSecond).toMatchObject({ code: APIError.Refused, info: "The page went away." });
+      expect(t.dapp.approvals()).toEqual([]);
+      const shown = t.dappWindow.shown;
+      // Listed as a decline, with its title, and never as one that asked again: the page that left asked nothing.
+      expect.soft(await t.dapp.declined(), "the site listed as declined").toEqual([
+        { origin: ORIGIN, until: expect.any(Number), title: "Example" },
+      ]);
+      expect.soft(await enableMeets(t), "a reload's page, right after").toEqual(DECLINED_WAIT);
+      expect.soft(t.dappWindow.shown, "the window brought back by a reload").toBe(shown);
+    });
+
+    it("locked, held at its first read: the first leaves its unlock wait, then the second: the site is turned away", async () => {
+      const t = await on();
+      await t.wallet.lock();
+      const first = page();
+      const second = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.unlockingSites().length === 1);
+      const realGet = t.preferences.get.bind(t.preferences);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let held = 0;
+      t.preferences.get = (async () => {
+        if (held++ === 0) await gate;
+        return realGet();
+      }) as typeof t.preferences.get;
+      const enablingSecond = t.dapp.call(second, "enable", []).catch((e: { failure: unknown }) => e.failure);
+      await until(() => held === 1);
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      t.dapp.gone(second);
+      release();
+      t.preferences.get = realGet;
+      expect(await enablingSecond).toMatchObject({ code: APIError.Refused, info: "The page went away." });
+      expect(t.dapp.unlockingSites()).toEqual([]);
+      const shown = t.dappWindow.shown;
+      expect.soft(await enableMeets(t), "a reload's page, right after").toEqual(DECLINED_WAIT);
+      expect.soft(t.dappWindow.shown, "the unlock window brought back by a reload").toBe(shown);
+    });
+
+    it("sharing the question already, it leaves on its way back to ask itself: the site is turned away", async () => {
+      const t = await on();
+      const first = page();
+      const second = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.approvals().length === 1);
+      // Its first read of the sites goes; its second, once the first page's question is gone, is held.
+      const hold = holdSites(t, 2);
+      const enablingSecond = t.dapp.call(second, "enable", []).catch((e: { failure: unknown }) => e.failure);
+      await until(() => hold.state.reads === 1);
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+      expect(t.dapp.approvals()).toHaveLength(1);
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      await until(() => hold.state.reads === 2);
+      t.dapp.gone(second);
+      hold.done();
+      expect(await enablingSecond).toMatchObject({ code: APIError.Refused, info: "The page went away." });
+      expect(t.dapp.approvals()).toEqual([]);
+      expect.soft(await t.dapp.declined(), "the site listed as declined").toEqual([
+        { origin: ORIGIN, until: expect.any(Number), title: "Example" },
+      ]);
+      expect.soft(await enableMeets(t), "a reload's page, right after").toEqual(DECLINED_WAIT);
+    });
+
+    it("the other way round, the second leaving first, turns it away too, and says no more than that", async () => {
+      const t = await on();
+      const first = page();
+      const second = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.approvals().length === 1);
+      const hold = holdSites(t);
+      const enablingSecond = t.dapp.call(second, "enable", []).catch((e: { failure: unknown }) => e.failure);
+      await until(() => hold.state.reads === 1);
+      t.dapp.gone(second);
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      hold.done();
+      expect(await enablingSecond).toMatchObject({ code: APIError.Refused, info: "The page went away." });
+      // The second page's call, gone, reached no refusal of its own: the lists never say the site asked again.
+      expect.soft(await t.dapp.declined(), "the site listed as declined").toEqual([
+        { origin: ORIGIN, until: expect.any(Number), title: "Example" },
+      ]);
+      expect.soft(await enableMeets(t), "a reload's page, right after").toEqual(DECLINED_WAIT);
+    });
+
+    it("while a third page is still on its way, the site isn't turned away: that one asks itself", async () => {
+      const t = await on();
+      const first = page();
+      const second = page();
+      const third = page();
+      const enablingFirst = t.dapp.call(first, "enable", []);
+      await until(() => t.dapp.approvals().length === 1);
+      const hold = holdSites(t);
+      const enablingSecond = t.dapp.call(second, "enable", []).catch((e: { failure: unknown }) => e.failure);
+      let heard: unknown;
+      const enablingThird = t.dapp.call(third, "enable", []).then(
+        () => (heard = "connected"),
+        (e: { failure: unknown }) => (heard = e.failure),
+      );
+      await until(() => hold.state.reads === 2);
+      t.dapp.gone(first);
+      await expect(enablingFirst).rejects.toMatchObject({ failure: { info: "The page went away." } });
+      t.dapp.gone(second);
+      hold.done();
+      expect(await enablingSecond).toMatchObject({ code: APIError.Refused, info: "The page went away." });
+      await until(() => t.dapp.approvals().length === 1);
+      expect.soft(heard, "what the third page heard").toBeUndefined();
+      expect.soft(await t.dapp.declined(), "the site listed as declined").toEqual([]);
+      await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+      await enablingThird;
+      expect(heard).toBe("connected");
+    });
+
+    // Chunk 51, l3still#4: a page that left its wait for the unlock spared its site while another page of it waited
+    // for the unlock too, on any call. The unlock answered that wait but kept the mark, and with no enable() of the site
+    // ending to clear it, a later page of the site leaving mid-enable, even an hour on, landed a decline nobody owed.
+    // The unlock clears a mark that a page leaving its unlock wait set. One a page leaving its connect question set
+    // stays, since the unlock answered no question.
+    describe("and the unlock answers the wait the page that left spared it for (chunk 51, l3still#4)", () => {
+      type T = Awaited<ReturnType<typeof on>>;
+      const GONE = { info: "The page went away." };
+      const signData = (t: T, s: DappSession) =>
+        t.dapp
+          .call(s, "signData", [t.deps.wasm.cip30Address(account.preprod.receive_0 as string), "00"])
+          .catch((e: { failure: unknown }) => e.failure);
+
+      async function connect(t: T) {
+        const s = page();
+        const enabling = t.dapp.call(s, "enable", []);
+        await until(() => t.dapp.approvals().length === 1);
+        await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+        expect(await enabling).toBe(true);
+      }
+
+      /** A later page's enable(), held at its sealed read of the sites, its page leaving there: what that call heard. */
+      async function laterPageLeavesMidEnable(t: T): Promise<unknown> {
+        const hold = holdSites(t);
+        const later = page();
+        const enabling = t.dapp.call(later, "enable", []).catch((e: { failure: unknown }) => e.failure);
+        await until(() => hold.state.reads === 1);
+        t.dapp.gone(later);
+        hold.done();
+        return enabling;
+      }
+
+      /** What a signature meets with the wallet locked again: refused (what it heard), or "waits" for the unlock. */
+      async function lockedSignatureMeets(t: T): Promise<unknown> {
+        await t.wallet.lock();
+        await t.dapp.stateChanged();
+        const s = page();
+        const shown = t.dappWindow.shown;
+        let heard: unknown;
+        const signing = signData(t, s).then((v) => (heard = v));
+        for (let i = 0; i < 200 && heard === undefined && t.dappWindow.shown === shown; i++) await new Promise((r) => setTimeout(r, 0));
+        if (heard !== undefined) return heard;
+        t.dapp.gone(s);
+        await signing;
+        return "waits";
+      }
+
+      // Since the owner's B7 (chunk 51, l4code#3), another page's signature waiting for the unlock spares nothing: the
+      // site is turned away when the page leaves, as when it leaves alone, and no decline is left owed after the unlock.
+      it("a connected site's page leaves its signature's unlock wait beside another's: turned away then, nothing owed after the unlock", async () => {
+        const t = await on();
+        await connect(t);
+        await t.wallet.lock();
+        const [a, b] = [page(), page()];
+        const shown = t.dappWindow.shown;
+        const signingA = signData(t, a);
+        const signingB = signData(t, b);
+        await until(() => t.dappWindow.shown === shown + 2);
+        t.dapp.gone(a);
+        expect(await signingA).toMatchObject(GONE);
+        await t.wallet.unlock(PASSWORD);
+        await t.dapp.stateChanged();
+        await until(() => t.dapp.approvals().length === 1);
+        await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+        expect(await signingB).toMatchObject({ info: "The user declined." });
+        expect(await laterPageLeavesMidEnable(t), "a later page, connected, leaving mid-enable").toBe(true);
+        const NOT_CONNECTED = { info: "This site isn't connected to Seedelf Wallet. Call enable() first." };
+        expect(await lockedSignatureMeets(t), "a signature, the wallet locked again within 10 s").toMatchObject(NOT_CONNECTED);
+        await busyFor(t, 10_000);
+        expect(await lockedSignatureMeets(t), "a signature, the wallet locked again after 10 s").toBe("waits");
+      });
+
+      it("a site not connected (an API kept from before): an hour after the unlock, a page leaving mid-enable turns it away no more", async () => {
+        const t = await on();
+        await t.wallet.lock();
+        const [a, b] = [page(), page()];
+        const shown = t.dappWindow.shown;
+        const signingA = signData(t, a);
+        const signingB = signData(t, b);
+        await until(() => t.dappWindow.shown === shown + 2);
+        t.dapp.gone(a);
+        expect(await signingA).toMatchObject(GONE);
+        await t.wallet.unlock(PASSWORD);
+        await t.dapp.stateChanged();
+        expect(await signingB).toMatchObject({ info: "This site isn't connected to Seedelf Wallet. Call enable() first." });
+        await busyFor(t, 60 * 60_000);
+        expect(await laterPageLeavesMidEnable(t)).toMatchObject(GONE);
+        expect.soft(await t.dapp.declined(), "the site listed as declined").toEqual([]);
+        expect(await enableMeets(t), "a reload's page, right after").toBe("asked");
+      });
+
+      it("a page's enable() leaves beside another's already waiting for the unlock, which leaves after it: no decline lands", async () => {
+        const t = await on();
+        await t.wallet.lock();
+        const [stays, leaves] = [page(), page()];
+        const shown = t.dappWindow.shown;
+        const enablingStays = t.dapp.call(stays, "enable", []).catch((e: { failure: unknown }) => e.failure);
+        await until(() => t.dappWindow.shown === shown + 1);
+        const enablingLeaves = t.dapp.call(leaves, "enable", []);
+        await until(() => t.dappWindow.shown === shown + 2);
+        t.dapp.gone(leaves);
+        await expect(enablingLeaves).rejects.toMatchObject({ failure: GONE });
+        await t.wallet.unlock(PASSWORD);
+        const hold = holdSites(t);
+        await t.dapp.stateChanged();
+        await until(() => hold.state.reads === 1);
+        t.dapp.gone(stays);
+        hold.done();
+        expect(await enablingStays).toMatchObject(GONE);
+        expect.soft(await t.dapp.declined(), "the site listed as declined").toEqual([]);
+        expect(await enableMeets(t), "a reload's page, right after").toBe("asked");
+      });
+
+      it("a connect question left unanswered while another page waits for the unlock is still owed after it (a pin)", async () => {
+        const t = await on();
+        const asks = page();
+        const enablingAsks = t.dapp.call(asks, "enable", []);
+        await until(() => t.dapp.approvals().length === 1);
+        await t.wallet.lock();
+        await t.dapp.stateChanged();
+        const waits = page();
+        const enablingWaits = t.dapp.call(waits, "enable", []).catch((e: { failure: unknown }) => e.failure);
+        await until(() => t.dapp.unlockingSites().length === 1);
+        t.dapp.gone(asks);
+        await expect(enablingAsks).rejects.toMatchObject({ failure: GONE });
+        await t.wallet.unlock(PASSWORD);
+        const hold = holdSites(t);
+        await t.dapp.stateChanged();
+        await until(() => hold.state.reads === 1);
+        t.dapp.gone(waits);
+        hold.done();
+        expect(await enablingWaits).toMatchObject(GONE);
+        expect.soft(await t.dapp.declined(), "the site listed as declined").toEqual([
+          { origin: ORIGIN, until: expect.any(Number), title: "Example" },
+        ]);
+        expect(await enableMeets(t), "a reload's page, right after").toEqual(DECLINED_WAIT);
+      });
+    });
   });
 });

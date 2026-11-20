@@ -11,10 +11,10 @@ import { describe, expect, it } from "vitest";
 
 import { bodyOutpoints } from "../src/background/cbor";
 import type { KoiosUtxo } from "../src/background/koios";
-import { bech32 } from "./fixtures/bech32";
+import { bech32, bech32Bytes } from "./fixtures/bech32";
 import { bytes, SESSION_ADDRESS } from "./fixtures/swap-tx";
 import { loadTestWasm, sessionSwap } from "./fakes";
-import { ASK, atSession, busy, MIN, signing, unlocked, type T } from "./swap-session";
+import { ASK, atSession, busy, MIN, pastSpent, signing, unlocked, type T } from "./swap-session";
 
 const PAYMENT = sessionSwap.keyHash;
 const STAKE = SESSION_ADDRESS.slice(58);
@@ -74,7 +74,8 @@ function spends(t: T, txHash: string, inputs: string[], at = ORDER_AT) {
 function splashReference(t: T) {
   t.koios.addedToAccounts.push({
     stake_address: null,
-    payment_cred: "00".repeat(28),
+    // Its address's payment part, as Koios gives it.
+    payment_cred: Buffer.from(bech32Bytes(SPLASH_ORDER.reference.address!)).toString("hex").slice(2, 58),
     epoch_no: 300,
     block_height: 4_000_000,
     block_time: 1_700_000_000,
@@ -212,7 +213,7 @@ describe("what a stranger puts at a Splash order's address (release review C02)"
     // The order filled whole: its proceeds came. A stranger paid the order's address an order no cancel can spend.
     t.koios.addedToAccounts.push(atAccount("aa".repeat(32), 0, "2000000", [[MIN, "902083681"]]), atOrders(PLANT_H, BROKEN));
     spends(t, PLANT_H, [`${"ee".repeat(32)}#3`], "addr1vstranger");
-    const view = await sessions.advance("mainnet", 0, true);
+    const view = await pastSpent(t, sessions, "mainnet");
     expect(view.auto!.paused).toBeUndefined();
     expect(view.auto!.retry).toBeUndefined();
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);

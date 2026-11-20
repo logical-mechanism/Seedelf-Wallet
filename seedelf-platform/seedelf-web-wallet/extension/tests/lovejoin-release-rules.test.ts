@@ -14,11 +14,13 @@ import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
+import { handle, type Context } from "../src/background/handlers";
 import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, type PoolRef } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
+import { pendingKey } from "../src/background/pending";
 import { SessionService } from "../src/background/sessions";
-import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
+import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { t as tr } from "../src/i18n";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { LovejoinHeld } from "../src/shared/rpc";
@@ -119,6 +121,20 @@ async function wallet(): Promise<T> {
 function atAccount(tx: string, value: string, assets: Array<{ policy_id: string; asset_name: string; quantity: string }> = []): KoiosUtxo {
   const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
   return { ...first!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: assets.map((a) => ({ ...a, decimals: 0, fingerprint: "asset1test" })) as never };
+}
+
+/** Public account `index`'s: a UTxO of ADA alone at its receive address 0/0, as `tx`'s with `value`. */
+async function atAccountOf(t: T, index: number, tx: string, value: string): Promise<KoiosUtxo> {
+  const [address, key] = await t.wallet.withAccount(index, ({ cardano }) => [cardano.receiveAddress(t.deps.wasm.Network.Preprod, 0), cardano.paymentKeyHash(0, 0)]);
+  return {
+    ...atAccount(tx, value),
+    address,
+    stake_address: null,
+    payment_cred: key,
+    inline_datum: null,
+    datum_hash: null,
+    reference_script: null,
+  } as unknown as KoiosUtxo;
 }
 
 const ljtest = (quantity: bigint) => ({ policy_id: VIEW.token.policyId, asset_name: VIEW.token.assetName, quantity: quantity.toString() });
@@ -321,6 +337,108 @@ describe("a box back that ties a public account to the private balance (1.6.0's 
     expect((await historyOf(t, pending.txHash))?.origin).toEqual({ id: `box:${pending.txHash}+public:0`, origin: "own" });
   });
 
+  // Chunk 51, e5#2's sibling: its watch said only that it pays "the public account" (`toAccount`), so it landing once
+  // the wallet was on another account dropped that one's reading, and Home asked Koios about it in the second the box
+  // landed, which ties the two by timing. It names the account that paid now (`paysAccounts`), as a Seedelf spend's.
+  it("reads again, as it lands, the account that paid to bring it back, and no other the wallet is on by then", async () => {
+    for (const on of [0, 1]) {
+      const t = await wallet();
+      const lj = pooled(t);
+      const mine = await tokenBox(t, "f1", true, 7);
+      t.koios.addedToAccounts.push(atAccount("e1", "20000000"), atAccount("e5", "5000000"), ...POOL, mine, ...(await strangers(t)));
+      t.koios.params = DEAR;
+      await t.accounts.add(1);
+      await t.balances.get("preprod");
+      // Brought back by account 0, as it's pressed there.
+      await lj.withdrawNow("preprod", { txHash: mine.tx_hash, txIndex: 0, pool: TOKEN }, false, true);
+      // On account `on` by the time it lands, Home's reading of it kept.
+      if (on) await t.accounts.use(on, ["preprod"]);
+      await t.balances.get("preprod");
+      expect(await t.session.get(SESSION_BALANCES_PREFIX + "preprod")).toBeDefined();
+      t.koios.confirmations = 1;
+      expect(await t.pending.pending("preprod")).toMatchObject({ kind: "lovejoin-withdraw", confirmations: 1 });
+      // On the account that paid, both sides are read again; on another, the private side alone.
+      const kept = (await t.session.get(SESSION_BALANCES_PREFIX + "preprod")) !== undefined;
+      expect(kept, `on account ${on}`).toBe(on !== 0);
+      expect(await t.session.get(SESSION_PRIVATE_STALE_PREFIX + "preprod"), `on account ${on}`).toBe(on !== 0 ? true : undefined);
+    }
+  });
+
+  // Chunk 51, r2time#1: Bring one back paid read which account pays twice. withdrawNow read it as it was pressed, for
+  // the watch, and withdrawOne read, built and signed with whichever account was active after its pool's reward-account
+  // read: a switch in between, which account-use lets through, had one account pay while the watch named the other. It
+  // pays from the account it was pressed on now, read, built and signed with that account's keys.
+  it("pays from the account it was pressed on, though the wallet moves to another while it builds, and watches that one", { timeout: 240_000 }, async () => {
+    /** The token pool's mix_logic reward account: what withdrawOne's first request asks account_info about. */
+    const logic = (JSON.parse(loadTestWasm().lovejoinMixLogic(JSON.stringify({ network: "preprod", poolRef: TOKEN_POOL }))) as { stake: string }).stake;
+    // `landOn`: the account the wallet is on as it lands: the one switched to, or back on the one it was pressed on.
+    for (const landOn of [1, 0]) {
+      const t = await wallet();
+      const lj = pooled(t);
+      const ctx = {
+        ...(t as unknown as Context),
+        lovejoin: lj,
+        wasm: loadTestWasm(),
+        connector: async (on: boolean) => on,
+        version: "1.0.0",
+        network: "preprod",
+        networks: ["preprod"],
+      } as Context;
+      const mine = await tokenBox(t, "f1", true, 7);
+      await t.accounts.add(1);
+      // Each account can pay: 20 ₳, and 5 ₳ for its collateral.
+      const zero = [atAccount("e1", "20000000"), atAccount("e5", "5000000")];
+      const one = await Promise.all([atAccountOf(t, 1, "d1", "20000000"), atAccountOf(t, 1, "d5", "5000000")]);
+      t.koios.addedToAccounts.push(...zero, ...one, ...POOL, mine, ...(await strangers(t)));
+      t.koios.params = DEAR;
+      await t.balances.get("preprod");
+      const sent = t.koios.submitted.length;
+
+      // Pressed on account 0. While Koios answers withdrawOne's first request, the user picks account 1: account-use's
+      // gate lets it through, as nothing of account 0's is maybe sent and no public mix is being sent.
+      const real = t.koios.fetch;
+      let release!: () => void;
+      let reached!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const hit = new Promise<void>((r) => (reached = r));
+      let once = true;
+      t.koios.fetch = async (url, init) => {
+        if (once && new URL(url).pathname.endsWith("/account_info") && String(init?.body ?? "").includes(logic)) {
+          once = false;
+          reached();
+          await gate;
+        }
+        return real(url, init);
+      };
+      const going = lj.withdrawNow("preprod", { txHash: mine.tx_hash, txIndex: 0, pool: TOKEN }, false, true);
+      await hit;
+      await handle({ type: "account-use", index: 1 }, ctx);
+      expect(await t.accounts.active()).toBe(1);
+      release();
+      const pending = await going;
+
+      // Account 0 paid: its UTxOs alone are spent, the history ties it (PRIV-3), and the watch names it.
+      expect(t.koios.submitted).toHaveLength(sent + 1);
+      const inputs = txInputs(t.koios.submitted.at(-1)!);
+      const spends = (us: KoiosUtxo[]) => us.some((u) => inputs.includes(`${u.tx_hash}#${u.tx_index}`));
+      expect({ zero: spends(zero), one: spends(one) }, `inputs ${inputs.join(", ")}`).toEqual({ zero: true, one: false });
+      expect((await historyOf(t, pending.txHash))?.origin?.id).toBe(`box:${pending.txHash}+public:0`);
+      const watch = await t.wallet.withKeys(() => t.session.get<{ txHash: string; paysAccounts?: number[] }>(pendingKey("preprod")));
+      expect(watch).toMatchObject({ txHash: pending.txHash, paysAccounts: [0] });
+
+      // On account `landOn` as it lands, Home's reading of it kept: on the account that paid, both sides are read
+      // again; on another, the private side alone (e5#2).
+      if (landOn !== (await t.accounts.active())) await handle({ type: "account-use", index: landOn }, ctx);
+      expect(await t.accounts.active()).toBe(landOn);
+      await t.balances.get("preprod");
+      t.koios.confirmations = 1;
+      expect(await t.pending.pending("preprod")).toMatchObject({ kind: "lovejoin-withdraw", txHash: pending.txHash, confirmations: 1 });
+      const kept = (await t.wallet.withKeys(() => t.session.get(SESSION_BALANCES_PREFIX + "preprod"))) !== undefined;
+      const privateOnly = await t.wallet.withKeys(() => t.session.get(SESSION_PRIVATE_STALE_PREFIX + "preprod"));
+      expect({ kept, privateOnly }, `landing on ${landOn}`).toEqual(landOn === 0 ? { kept: false, privateOnly: undefined } : { kept: true, privateOnly: true });
+    }
+  });
+
   it("records a public Bootstrap's box brought back from where its deposit put it as the account's too", async () => {
     // Into the 5 ₳ pool: the classic pool, retired, takes no Bootstrap (chunk 44).
     const t = await wallet();
@@ -512,6 +630,26 @@ describe("the Bootstrap form's bounds are the worker's (1.6.0's release review, 
     // which at this price is about 0.4 ₳ short of the change's dearer least and the fee, so the build may still refuse
     // what passes here, in words (1.7.0's release review, pr333#0).
     expect(bootstrapLimits(box, "private", ada(needs + 300_000n), 96, 30, dear).short).toBe(false);
+  });
+
+  it("holds the count typed to one deposit's most, and to one at least (chunk 51, t1l#21)", () => {
+    // The count's box takes any number typed: 200 was shown and sent where one deposit takes 64, and the worker refused it.
+    expect(bootstrapLimits({ id: A, box: { lovelace: "25000000" } }, "public", ada(10_000_000_000n), undefined, 200).putting).toBe(64);
+    expect(bootstrapLimits({ id: undefined, box: { lovelace: "10000000" } }, "public", ada(10_000_000_000n), undefined, 200).putting).toBe(96);
+    expect(bootstrapLimits({ id: A, box: { lovelace: "25000000" } }, "public", ada(10_000_000_000n), undefined, 0).putting).toBe(1);
+    expect(bootstrapLimits({ id: A, box: { lovelace: "25000000" } }, "public", ada(10_000_000_000n), undefined, 12).putting).toBe(12);
+  });
+
+  it("is short from the private balance where it holds too little of the pool's token, however much ADA (chunk 51, t1l#22)", () => {
+    const pool = { id: A, box: MIN_100, floor: 30, others: 0 };
+    const min = (quantity: string) => ({ ...MIN_100.token, quantity, fingerprint: "asset1min", decimals: 6 });
+    // 30 boxes of 100 MIN, the pool's floor: 500 MIN pays five.
+    const few = bootstrapLimits(pool, "private", { lovelace: "10000000000", tokens: [min("500000000")] }, 96);
+    expect(few).toMatchObject({ putting: 30, tokenShort: true, short: true });
+    const enough = bootstrapLimits(pool, "private", { lovelace: "10000000000", tokens: [min("3000000000")] }, 96);
+    expect(enough).toMatchObject({ putting: 30, tokenShort: false, short: false });
+    // From the public account the worker reads the token itself: nothing held here says otherwise.
+    expect(bootstrapLimits(pool, "public", { lovelace: "0", tokens: [] })).toMatchObject({ tokenShort: false, short: false });
   });
 });
 

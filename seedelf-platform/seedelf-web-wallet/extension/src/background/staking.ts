@@ -302,7 +302,11 @@ export function saturation(stake: bigint, supply: bigint, optimal: number): numb
   return Number((stake * BigInt(optimal) * 10_000n) / supply) / 100;
 }
 
-/** A DRep's name from its CIP-119 `givenName`: text, or JSON-LD's `@value`, cut to 64 characters. */
+/**
+ * A DRep's name from its CIP-119 `givenName`: text, or JSON-LD's `@value`, cut to 64 characters, with no control
+ * character, nor a format or other default-ignorable one, as the screens' plainName leaves none: a bidi override or a
+ * zero-width character turns a name round or hides in it, and the DRep chooses it (chunk 51, gap-g7#3).
+ */
 export function drepName(givenName: unknown): string | undefined {
   const text =
     typeof givenName === "string"
@@ -310,7 +314,7 @@ export function drepName(givenName: unknown): string | undefined {
       : typeof (givenName as { "@value"?: unknown } | null)?.["@value"] === "string"
         ? (givenName as { "@value": string })["@value"]
         : undefined;
-  const clean = text?.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim();
+  const clean = text?.replace(/[\u0000-\u001f\u007f-\u009f\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").trim();
   return clean ? clean.slice(0, 64) : undefined;
 }
 
@@ -500,7 +504,10 @@ export class StakingService {
   /**
    * Builds and signs `action` from the Cardano account, reading it and its
    * stake key fresh, and the account's DRep for a DRep action. The same pool
-   * or vote delegation again is refused: it would only cost a fee.
+   * or vote delegation again is built too: the ledger takes it, for a fee,
+   * and Koios's word can be older than the ledger's, which drops a delegation
+   * to a pool or DRep that retires with no certificate saying so (chunk 51,
+   * e7b#1). The screens say it's where it goes already.
    */
   async build(network: NetworkName, action: StakingAction): Promise<StakingSummary> {
     const { wasm, wallet } = this.deps;
@@ -535,12 +542,6 @@ export class StakingService {
       // can't pay it alone (chunk 23's second review, ST-9).
       const empty = takesDeposit(action, state.registered) ? "worker.staking.accountEmpty" : "worker.staking.accountEmptyFee";
       throw nothingInAccount(held, t(empty));
-    }
-    if (action.kind === "delegate" && state.registered && stake?.delegated_pool === wasm.poolId(action.pool)) {
-      throw new Error(t("worker.staking.samePool"));
-    }
-    if (action.kind === "vote" && state.drep === wasm.drepId(action.drep)) {
-      throw new Error(t("worker.staking.sameDrep"));
     }
 
     const request = {

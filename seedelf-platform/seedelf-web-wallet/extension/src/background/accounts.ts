@@ -35,7 +35,7 @@ import { SESSION_ACCOUNT_UTXOS_PREFIX, SESSION_TOO_LARGE_PREFIX } from "./coin-c
 import type { Koios } from "./koios";
 import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
-import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Wallet } from "./wallet";
+import { phrasePin, SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Keys, type Wallet } from "./wallet";
 
 /**
  * How many accounts past the last sequential one may be probed in one
@@ -256,8 +256,14 @@ export class AccountsService {
    *
    * `limit` bounds one run (`MAX_PROBE`): the picker's "check for another
    * account" passes 1, so it costs exactly one request.
+   *
+   * One phrase's look (`phrasePin`): the wallet removed and another phrase
+   * restored while Koios answered, a restore's own look among them, ends it
+   * as a lock does. It probed that phrase's accounts from where it was, and
+   * put this one's into its record (chunk 51, e4a#1's family).
    */
   async discover(network: NetworkName, limit = MAX_PROBE): Promise<KnownAccount[]> {
+    const pin = phrasePin();
     const known = await this.known();
     const found: KnownAccount[] = [];
     // From the first gap in the run up from 0, not from the highest known: a
@@ -265,20 +271,21 @@ export class AccountsService {
     // look from ever reaching account 2.
     let index = nextSequential(known);
     for (let probed = 0; probed < limit && index <= MAX_INDEX && known.length + found.length < MAX_KEPT; probed += 1) {
-      if (!(await this.used(network, index))) break; // Never used: BIP44 stops here, and so does the Koios cost.
+      if (!(await this.used(network, index, pin))) break; // Never used: BIP44 stops here, and so does the Koios cost.
       found.push({ index, foundAt: this.deps.now() });
       index += 1;
     }
-    if (found.length) await this.merge(found);
+    if (found.length) await this.merge(found, pin);
     return found;
   }
 
   /**
    * Adds `found` to the record as it is now, not as it was when the look began: what was added or named while Koios
-   * answered stays, and an account already there keeps its entry.
+   * answered stays, and an account already there keeps its entry. Never to another phrase's record (`pin`).
    */
-  private merge(found: KnownAccount[]): Promise<void> {
+  private merge(found: KnownAccount[], pin: (keys: Keys) => string): Promise<void> {
     return this.serial(async () => {
+      await this.deps.wallet.withKeys(pin);
       const now = await this.known();
       const have = new Set(now.map((a) => a.index));
       const fresh = found.filter((a) => !have.has(a.index)).slice(0, Math.max(0, MAX_KEPT - now.length));
@@ -288,12 +295,16 @@ export class AccountsService {
 
   /**
    * Whether account `index` has ever been used, as **one** Koios
-   * `account_addresses` request about that one account's stake address.
+   * `account_addresses` request about that one account's stake address: of the
+   * phrase `pin` holds the look to.
    */
-  private async used(network: NetworkName, index: number): Promise<boolean> {
+  private async used(network: NetworkName, index: number, pin: (keys: Keys) => string): Promise<boolean> {
     const { wallet, wasm, koios } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-    const stake = await wallet.withAccount(index, ({ cardano }) => cardano.stakeAddress(net));
+    const stake = await wallet.withAccount(index, (keys) => {
+      pin(keys);
+      return keys.cardano.stakeAddress(net);
+    });
     return (await koios(network).accountAddresses(stake)).length > 0;
   }
 
@@ -309,9 +320,12 @@ export class AccountsService {
    */
   async check(network: NetworkName, index: number): Promise<{ index: number; used: boolean }> {
     if (!isIndex(index)) throw new Error(notPublic(index));
-    const used = await this.used(network, index);
+    const pin = phrasePin();
+    const used = await this.used(network, index, pin);
     if (used) {
       await this.serial(async () => {
+        // Never into another phrase's record, as `merge`.
+        await this.deps.wallet.withKeys(pin);
         const known = await this.known();
         if (known.some((a) => a.index === index)) return;
         if (known.length >= MAX_KEPT) throw new Error(tooMany());

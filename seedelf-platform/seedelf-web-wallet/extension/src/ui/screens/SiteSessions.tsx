@@ -58,11 +58,11 @@ import { Screen } from "../components/Screen";
 import { SendButton } from "../components/SendButton";
 import { unsentWhyText } from "../components/SessionRefused";
 import { againOrForm, StaleFoot } from "../components/StaleReview";
-import { TxDetailButton } from "../components/TxDetail";
+import { entryLabel, TxDetailButton } from "../components/TxDetail";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
-import { formatAda, shortHex, tokenKey, whenOf } from "../format";
+import { formatAda, lockedAside, shortHex, tokenKey, whenOf } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { tokenAmountText, tokenQuantity } from "../tokens";
@@ -296,7 +296,13 @@ export function SiteSession({
           busy={busy}
           onChange={(unit, pool) => buildBack(true, { ...backPools, [unit]: pool })}
         />
-        <TxDetailButton txHash={back.txHash} testId="site-back-tx" />
+        {/* Through Lovejoin, its chain's first transaction, the deposit, named, as a swap's return review opens it:
+            `txHash` is the return, the last of the chain, which spends what isn't sent yet (chunk 51, x1b#1). */}
+        <TxDetailButton
+          txHash={back.lovejoin?.entry ?? back.txHash}
+          label={back.lovejoin && entryLabel(back.lovejoin)}
+          testId="site-back-tx"
+        />
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote back={back} />
@@ -612,8 +618,15 @@ function TopUp({
 
   if (review) {
     const [topUp, collateral] = review.payments;
-    // Less what it pays for its collateral's mix, which a row of its own shows.
-    const paid = topUp && { ...topUp, lovelace: (BigInt(topUp.lovelace) - BigInt(review.collateralReserve ?? "0")).toString() };
+    // Less what it pays for its collateral's mix, which a row of its own shows. Each token as the private side holds
+    // it, with Koios's decimals from the rows the top-up spends: WebAssembly's token lists carry none, and a token off
+    // the wallet's list showed in raw units, as Make public's review never does (chunk 51, r2sign#3's sibling). The
+    // wallet's list still comes first (tokens.ts `tokenDecimals`).
+    const paid = topUp && {
+      ...topUp,
+      lovelace: (BigInt(topUp.lovelace) - BigInt(review.collateralReserve ?? "0")).toString(),
+      tokens: topUp.tokens.map((tk) => ({ ...seedelf.tokens.find((h) => tokenKey(h) === tokenKey(tk)), ...tk })),
+    };
     return (
       <Screen
         title={tr("sites.topUp.reviewTitle")}
@@ -663,7 +676,13 @@ function TopUp({
       title={tr("sites.topUp")}
       titleId="top-up-title"
       onBack={onCancel}
-      aside={tr("sites.topUp.aside", { ada: amounts.ada(seedelf.lovelace) })}
+      // The side Home hands it, said as Make public says it: "available", and what's locked beside it (chunk 12's #23).
+      // Called the private balance, 40 ₳ of 100 ₳ with 60 ₳ locked read as all of it (chunk 51, r2screens#1's class).
+      aside={
+        seedelf.locked.utxos
+          ? tr("withdraw.asideAvailable", { amount: amounts.ada(seedelf.lovelace) }) + lockedAside(seedelf, amounts.ada)
+          : tr("sites.topUp.aside", { ada: amounts.ada(seedelf.lovelace) })
+      }
       error={error}
       foot={
         <button type="submit" className="primary" disabled={!ready || busy}>
@@ -680,7 +699,12 @@ function TopUp({
           placeholder={withTokens ? tr("sites.topUp.minimum") : "0"}
         />
         {tooMuch && (
-          <p className="field-note">{tr("sites.topUp.tooMuch", { held: amounts.ada(seedelf.lovelace) })}</p>
+          <p className="field-note">
+            {tr("withdraw.tooMuch", {
+              amount: amounts.ada(seedelf.lovelace),
+              available: tr(seedelf.locked.utxos ? "withdraw.available" : "withdraw.inPrivate"),
+            })}
+          </p>
         )}
       </div>
       {withTokens && <MinimumHint />}

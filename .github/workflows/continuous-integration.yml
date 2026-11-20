@@ -5,12 +5,20 @@ on:
     branches: ["main"]
   pull_request:
 
+# A read-only token: the repository's default is write, and the check runs
+# Aiken and the contracts' dependencies, code from outside (chunk 51, b1#3).
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # No token left in .git, for the same reason.
       - uses: actions/checkout@v3
-      - uses: aiken-lang/setup-aiken@v1
+        with:
+          persist-credentials: false
+      - uses: aiken-lang/setup-aiken@1728a4be43be099752e22d8b841706caaa6fdd88 # v1 (v1.0.4)
         with:
           version: v1.1.24
       - run: aiken fmt --check

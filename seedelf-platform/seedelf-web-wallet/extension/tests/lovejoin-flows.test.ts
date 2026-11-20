@@ -16,16 +16,17 @@ import { bodyOutpoints, txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { handle, type Context } from "../src/background/handlers";
 import type { KoiosTxInfo, KoiosTxOut, KoiosUtxo } from "../src/background/koios";
-import { CLASSIC, LovejoinService, STUCK_WAIT_MS, type PoolRef } from "../src/background/lovejoin";
+import { CLASSIC, LovejoinService, SESSION_LOVEJOIN_SENDING, STUCK_WAIT_MS, type PoolRef } from "../src/background/lovejoin";
 import { LovejoinLaunchService, SESSION_LOVEJOIN_LAUNCH } from "../src/background/lovejoin-launch";
 import { HOLDER, LOVEJOIN_NFT, type FoundPool } from "../src/background/lovejoin-pools";
 import { PendingService } from "../src/background/pending";
+import { NetworkChoice } from "../src/background/preferences";
 import { SessionService } from "../src/background/sessions";
 import { builtOutputs, Minswap } from "../src/background/minswap";
 import { SESSION_BALANCES_PREFIX, SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { t as tr } from "../src/i18n";
 import tokenList from "../src/tokens/list.json";
-import { NETWORKS } from "../src/networks";
+import { NETWORKS, type NetworkName } from "../src/networks";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { epochParams, koiosPreprod, loadTestWasm, madeByMix, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
@@ -196,6 +197,81 @@ describe("a mix from the public account into a token pool (chunk 34's 34d)", SLO
   });
 });
 
+// Chunk 51, r2time#2 (e4a#1's class): a mix from the public account whose Send asked Koios whether its pool's reward
+// balance moved since its review (chunk 43), while the user removed the wallet and restored another phrase: once Koios
+// answered, its chain was recorded into that phrase's Lovejoin record and its progress kept in its session, and the
+// first phrase's mix was sent from there. The Send is the phrase's it began under now: under another, nothing of it is
+// recorded, kept or sent.
+describe("a public mix's Send Koios answers once the wallet is removed and another phrase restored (chunk 51, r2time#2)", SLOW, () => {
+  it("records, keeps and sends none of it under the other phrase", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(atAccount("e1", "3000000", [ljtest(2n * Q)]), atAccount("e5", "5000000"), ...POOL, ...(await strangers(t)));
+    const summary = await lj.publicBuild("preprod", 1, { pool: TOKEN });
+    const networks: NetworkName[] = ["preprod", "mainnet"];
+    const ctx = {
+      ...(t as unknown as Context),
+      lovejoin: lj,
+      wasm: loadTestWasm(),
+      connector: async (on: boolean) => on,
+      version: "1.0.0",
+      network: "preprod",
+      networks,
+      networkChoice: new NetworkChoice(t.local, networks),
+    } as Context;
+    // Send reads the token pool's reward balance again (rewardsMoved): Koios's answer waits while the wallet is removed.
+    const logic = (JSON.parse(loadTestWasm().lovejoinMixLogic(JSON.stringify({ network: "preprod", poolRef: TOKEN_POOL }))) as { stake: string }).stake;
+    const real = t.koios.fetch;
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const hit = new Promise<void>((r) => (reached = r));
+    let once = true;
+    t.koios.fetch = async (url, init) => {
+      if (once && url.endsWith("/account_info") && String(init?.body ?? "").includes(logic)) {
+        once = false;
+        reached();
+        await gate;
+      }
+      return real(url, init);
+    };
+    const sent = t.koios.submitted.length;
+    const sending = lj.publicSubmit("preprod", summary.txHash);
+    sending.catch(() => undefined);
+    await hit;
+
+    // Remove wallet, its second yes given, and the other phrase restored while Koios answers: its keys are in.
+    await handle({ type: "reset-wallet", force: true }, ctx);
+    const other = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 24)!;
+    const restored = handle({ type: "restore-wallet", phrase: other.phrase, password: PASSWORD }, ctx);
+    const receive = () => t.wallet.account("preprod").then((a) => a.receiveAddress, () => undefined);
+    for (let tries = 0; tries < 2_000 && (await receive()) !== other.preprod.receive_0; tries++) await new Promise((r) => setTimeout(r, 5));
+    expect(await receive()).toBe(other.preprod.receive_0);
+    // What's written into the other phrase's Lovejoin record from here on.
+    const set = t.store.set.bind(t.store);
+    const chains: unknown[] = [];
+    t.store.set = (async (key: Parameters<typeof set>[0], value: unknown) => {
+      if (key === "lovejoin.preprod") chains.push(...((value as Sealed).chains ?? []));
+      return set(key, value);
+    }) as typeof t.store.set;
+    release();
+    const outcome = await sending.then(
+      () => "sent",
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+    await restored;
+    t.koios.fetch = real;
+    t.store.set = set;
+
+    // None of its chain went into the other phrase's record, not even for a moment, nor its progress; nothing was sent.
+    expect(chains).toEqual([]);
+    expect(await t.wallet.withKeys(() => t.session.get(SESSION_LOVEJOIN_SENDING + "preprod"))).toBeUndefined();
+    expect(t.koios.submitted).toHaveLength(sent);
+    // And its Send ends as a lock ends one.
+    expect(outcome).toBe("The wallet is locked.");
+  });
+});
+
 describe("no pool read names the pool a mix goes into (chunk 34's §3, 34d's review 1)", SLOW, () => {
   it("lists every pool the wallet reads in each read, whichever pool a flow takes", async () => {
     const t = await wallet();
@@ -217,6 +293,27 @@ describe("no pool read names the pool a mix goes into (chunk 34's §3, 34d's rev
 });
 
 describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
+  // Chunk 51, e8b#1's sibling: a Bootstrap passed the account's collateral to WebAssembly, which converted it at depth 0
+  // too, though a deposit alone spends no script. A collateral WebAssembly can't take (the user chose 5 ₳ of ADA alone
+  // whose datum is nested past what it reads, which the ledger takes for a site's transaction) then refused it.
+  it("puts up no collateral, so one WebAssembly can't take never stops it, where a mix still needs it", async () => {
+    const t = await wallet();
+    const lj = pooled(t, BOTH);
+    const deep = { ...atAccount("e5", "5000000"), inline_datum: { bytes: `${"81".repeat(200)}00`, value: null } } as KoiosUtxo;
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), deep, ...POOL, ...ADA_ROWS);
+    await t.balances.get("preprod");
+    // The user's choice, what a site gets; for the wallet's own builds it's none, and a UTxO like any other (chunk 51,
+    // money#4).
+    await t.coins.use("preprod", `${"e5".repeat(32)}#0`);
+    expect((await t.coins.choices("preprod")).collateral).toBe(`${"e5".repeat(32)}#0`);
+    const summary = await lj.publicBuild("preprod", 1, { pool: ADA, bootstrap: true });
+    expect(summary).toMatchObject({ bootstrap: true, boxes: 1, depth: 0, mixes: 0, txs: 1 });
+    // Nor does a mix: for the wallet's own builds a choice WebAssembly can't take counts as none, and with no other 5 ₳
+    // that fits, the mix says it needs the account's collateral, never a UTxO WebAssembly can't read. The choice stays
+    // the user's, what a site gets (chunk 51, e8b#1's residue).
+    await expect(lj.publicBuild("preprod", 1, { pool: ADA })).rejects.toThrow(tr("lj.needCollateral"));
+  });
+
   it("puts a token pool's boxes in with no mixes, holds them, and caps a deposit at a token box's size", async () => {
     const t = await wallet();
     const lj = pooled(t);
@@ -743,7 +840,13 @@ describe("a mix from the private balance into a token pool (chunk 34's 34d)", SL
 });
 
 /** A launch as WebAssembly builds it: what the tests read of it. */
-type LaunchBuilt = { txHash: string; pool: { id: string }; locked: { deposit: string }; mixLogicStake: string };
+type LaunchBuilt = {
+  txHash: string;
+  pool: { id: string };
+  locked: { deposit: string };
+  mixLogicStake: string;
+  inputs?: Array<{ txHash: string; txIndex: number }>;
+};
 
 describe("a pool's start (chunk 34's 34d)", SLOW, () => {
   /**
@@ -756,11 +859,12 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     { look, alter }: { look?: () => Promise<void>; alter?: (built: LaunchBuilt, register: boolean) => LaunchBuilt } = {},
   ) => {
     const wasm = loadTestWasm();
-    const builds: Array<{ register: boolean; built: LaunchBuilt }> = [];
+    // Each build's UTxOs too, as it was given them (`txhash#index`).
+    const builds: Array<{ register: boolean; built: LaunchBuilt; utxos?: string[] }> = [];
     const kept = (request: string, made: string) => {
-      const { register } = JSON.parse(request) as { register: boolean };
+      const { register, utxos } = JSON.parse(request) as { register: boolean; utxos?: Array<{ tx_hash: string; tx_index: number }> };
       const built = alter ? alter(JSON.parse(made) as LaunchBuilt, register) : (JSON.parse(made) as LaunchBuilt);
-      builds.push({ register, built });
+      builds.push({ register, built, ...(utxos ? { utxos: utxos.map((u) => `${u.tx_hash}#${u.tx_index}`) } : {}) });
       return JSON.stringify(built);
     };
     const service = new LovejoinLaunchService({
@@ -839,14 +943,21 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
       "token list",
     );
     await expect(build({ token: min, quantity: "0", boxLovelace: "4500000" })).rejects.toThrow("whole number above zero");
+    // More of it a box than one output holds: over 2⁶⁴ − 1 (chunk 51, t1g#13).
+    await expect(build({ token: min, quantity: (2n ** 64n).toString(), boxLovelace: "4500000" })).rejects.toThrow("whole number above zero");
     // A copy of a shown pool's values.
     await expect(build({ token: min, quantity: "1000", boxLovelace: "4500000" })).rejects.toThrow("exists already");
-    // The classic pool's value, as an ADA pool.
+    // The classic pool's value, as an ADA pool: refused before the account is read (chunk 51, t1g#12).
+    const reads = t.koios.calls.length;
     await expect(build({ boxLovelace: "10000000" })).rejects.toThrow("classic pool's value");
-    // Too little to come back, too much for a token pool.
-    await expect(build({ token: min, quantity: "1000", boxLovelace: "2000000" })).rejects.toThrow("at least");
+    expect(t.koios.calls.length).toBe(reads);
+    // Under the network's minimum for a box, which no mix could make; too much for a token pool. A box under S0d's least
+    // isn't refused: its review says so (chunk 51, gap-g8#6), so a 2 ₳ box of 1000 MIN, refused here before, is built.
+    await expect(build({ token: min, quantity: "1000", boxLovelace: "1000000" })).rejects.toThrow("at least");
     await expect(build({ token: min, quantity: "1000", boxLovelace: "9500000" })).rejects.toThrow("at most 9");
     expect(launch.builds).toEqual([]);
+    expect((await build({ token: min, quantity: "1000", boxLovelace: "2000000" })).least).toBeDefined();
+    launch.builds.length = 0;
     // A retired pool's values aren't a copy's: that start is built.
     await build({ token: min, quantity: "2000", boxLovelace: "4500000" });
     expect(launch.builds.length).toBeGreaterThan(0);
@@ -971,6 +1082,15 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     expect(summary).toMatchObject({ from: "private", locked: { deposit: "2000000" } });
     const [withCert, bare] = launch.builds.map((b) => b.built) as [LaunchBuilt, LaunchBuilt];
     expect(bare.pool.id).toBe(withCert.pool.id);
+    // Each build's change is tied to its start in the open, and the history it keeps names that start, so the next
+    // stealth mint or a funding takes money others paid first (chunk 51, money#2; the owner's answer 2 to B15).
+    const kept = (await t.session.get<{ origin?: { id: string }; bare?: { origin?: { id: string } } }>(SESSION_LOVEJOIN_LAUNCH))!;
+    expect(kept.origin?.id.split("+")).toContain(`change:${withCert.txHash}`);
+    expect(kept.bare?.origin?.id.split("+")).toContain(`change:${bare.txHash}`);
+    // Without the certificate, it may spend only what the reviewed build does: needing 2 ₳ less, coin selection could
+    // pick, and tie, UTxOs the review never showed (launch_apart; chunk 51, t1g#6).
+    expect(launch.builds[1]!.utxos!.sort()).toEqual(withCert.inputs!.map((i) => `${i.txHash}#${i.txIndex}`).sort());
+    expect(launch.builds[0]!.utxos!.length).toBeGreaterThan(withCert.inputs!.length);
     // Nothing was asked of giveme.my at review, and nothing names the pool to Koios.
     expect(t.collateral.asked).toHaveLength(0);
     expect(askedOf(t, withCert.mixLogicStake)).toEqual([]);

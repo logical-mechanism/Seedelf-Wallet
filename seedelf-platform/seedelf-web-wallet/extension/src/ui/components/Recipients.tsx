@@ -16,7 +16,7 @@ import { useAmounts } from "../preferences";
 import { lovelaceToSend } from "./AdaInput";
 import { CloseIcon, PlusIcon } from "./Icons";
 import { ReviewRows, Row } from "./ReviewRows";
-import { tokenChoices } from "./TokenAmounts";
+import { pickedAway, tokenChoices } from "./TokenAmounts";
 
 /** One recipient as typed. `id` stays with it as others come and go. */
 export interface Draft {
@@ -64,12 +64,18 @@ export function heldFor(network: NetworkName, held: TokenAmount[], drafts: Draft
     .filter((t) => BigInt(t.quantity) > 0n || key(t) in draft.tokens);
 }
 
-/** Each recipient's lovelace and tokens as the worker takes them; `ok` once every one can be sent. */
+/**
+ * Each recipient's lovelace and tokens as the worker takes them; `ok` once every one can be sent. `away`: the tokens
+ * it has picked that `held` doesn't hold (`pickedAway`), which hold it back; `picked`: whether it has picked any it
+ * does hold, sent or with a problem, which `waitingFor` counts (chunk 51, e9a#1).
+ */
 export function recipientAmounts(network: NetworkName, held: TokenAmount[], drafts: Draft[], max: boolean) {
   const each = drafts.map((d) => {
     const tokens = tokenChoices(network, heldFor(network, held, drafts, d), d.tokens);
+    const away = pickedAway(held, d.tokens);
+    const picked = tokens.sent.length > 0 || Object.keys(tokens.problems).length > 0;
     const lovelace = max ? null : lovelaceToSend(d.amount, tokens.sent.length > 0);
-    return { draft: d, tokens, lovelace, ok: tokens.ok && (max || typeof lovelace === "string") };
+    return { draft: d, tokens, away, picked, lovelace, ok: tokens.ok && !away.length && (max || typeof lovelace === "string") };
   });
   const total = each.reduce((sum, e) => sum + (typeof e.lovelace === "string" ? BigInt(e.lovelace) : 0n), 0n);
   return { each, total, ok: each.every((e) => e.ok) };
@@ -143,24 +149,32 @@ export type ToState = "empty" | "reading" | "ok" | "bad";
  * What one payment still needs before Review, the first thing in the form's own order: where it goes, its
  * amount, then its tokens. Undefined while nothing's missing, or while a To is being read, which its own note
  * says (chunk 23's second review, PY-9: Review greyed out at a blank or 0 amount with nothing to say why).
- * `emptyTo` is how the form asks for a recipient.
+ * `emptyTo` is how the form asks for a recipient. A token picked that the form doesn't hold comes first: nothing in
+ * the form brings it, and asking for the rest before it led on to a payment that couldn't go (chunk 51, e9a#1).
  */
 export function waitingFor({
   to,
   amount,
   tokensPicked,
   tokensOk,
+  tokensAway = false,
   max = false,
   emptyTo = "review.why.to",
 }: {
   to?: ToState;
   amount: string;
-  /** Any token box added, filled or not: with one, the ADA may stay empty, and the box is what's missing. */
+  /**
+   * Any token box added, filled or not: with one, the ADA may stay empty, and the box is what's missing. Only the
+   * tokens the form holds count: one it doesn't has no box (`tokensAway`).
+   */
   tokensPicked: boolean;
   tokensOk: boolean;
+  /** A token picked that the form doesn't hold: all of it locked, or on its way (`pickedAway`). */
+  tokensAway?: boolean;
   max?: boolean;
   emptyTo?: I18nKey;
 }): I18nKey | undefined {
+  if (tokensAway) return "review.why.tokenAway";
   if (to === "empty") return emptyTo;
   if (to === "bad") return "review.why.toCheck";
   if (!max && amount.trim() !== "" && parseAda(amount) === undefined) return "review.why.amountNumber";

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { CardanoAccount, Network, SeedelfKey, buildAccountSend, cip30Address, lovejoinOwned, readDexOrder } from "./wasm.mjs";
+import { CardanoAccount, Network, SeedelfKey, buildAccountSend, checkOrderCancels, cip30Address, lovejoinOwned, readDexOrder } from "./wasm.mjs";
 
 const json = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
 const vectors = json("../../../seedelf-crypto/tests/vectors/cardano_account.json").vectors;
@@ -99,4 +99,20 @@ test("a stranger's deep datum at a Splash order's address is no order of the ses
   assert.deepEqual([real.known, real.ours, real.why], [true, false, null]);
   assert.equal(cip30Address(splash.order.address), address);
   account.free();
+});
+
+test("a swap nested too deep is refused before its cancels are checked, and leaves the module whole", () => {
+  // checkOrderCancels reads a swap an aggregator built, from outside the wallet. Core walks it first (cbor's
+  // check_nesting, the one walk a site's transaction goes through too; chunk 51, r3b#1): read unwalked, a swap this
+  // deep would overflow the module's stack and trap it.
+  const swap = json("./fixtures/minswap-swap-preprod.json");
+  const check = (txCbor) =>
+    checkOrderCancels(JSON.stringify({ network: "preprod", params, session: swap.sender, txCbor, orders: [0], references: [] }));
+  // A transaction Pallas reads: a body of no inputs, no outputs and no fee, and in its witness set one datum, a list
+  // nested LEVELS deep, which Pallas decodes by recursion.
+  const deep = `84a3008001800200a10481${"81".repeat(LEVELS)}00f5f6`;
+  assert.throws(() => check(deep), /nested more than 128 levels deep/);
+  // The module is still whole: the real swap's order still cancels in a dry run.
+  const real = JSON.parse(check(swap.cbor));
+  assert.equal(real.orders[0].cancels, true, JSON.stringify(real.orders[0]));
 });

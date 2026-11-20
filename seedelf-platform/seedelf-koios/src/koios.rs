@@ -699,12 +699,18 @@ pub async fn submit_tx(tx_cbor: String, network_flag: bool) -> Result<Value> {
     }
 }
 
+/// The address holding the ADA Handle `asset_name` (no `$`), as Koios
+/// reports it. A handle held at a script's address resolves like any other,
+/// the Seedelf contract's own included: the ledger takes a payment there, so
+/// the caller warns that it carries no datum rather than refusing it (chunk
+/// 51, cli#2; the owner's B16 (2)). `_wallet_addr` is no longer read: it
+/// stays so the signature doesn't change.
 pub async fn ada_handle_address(
     asset_name: String,
     network_flag: bool,
     cip68_flag: bool,
     _variant: u64,
-    wallet_addr: String,
+    _wallet_addr: String,
     ada_handle_policy_id: &str,
 ) -> Result<String, String> {
     // Candidate token-name encodings to try, in order. A non-CIP68 lookup
@@ -748,11 +754,7 @@ pub async fn ada_handle_address(
             .and_then(|obj| obj.get("payment_address"))
             .and_then(|val| val.as_str())
         {
-            return if payment_address == wallet_addr {
-                Err("ADA Handle Is In Wallet Address".to_string())
-            } else {
-                Ok(payment_address.to_string())
-            };
+            return Ok(payment_address.to_string());
         }
     }
 

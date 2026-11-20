@@ -1,0 +1,36 @@
+# The Nat recursions the audit checked by hand, for scan-diag.py (Audit/README.md, diag/).
+#
+# Blaster asserts a recursive function's equation for every value of its SMT sort, unguarded
+# (Application.lean:653 at our pin), and Nat is Int there. A recursion whose argument cycles off
+# Nat's domain could then make a query's background contradict itself, and its ✅ vacuous (the
+# audit's blaster-unguarded-axioms-unmeasured, Lean-blaster #194's class). So the scan flags a row
+# whose query recurses over Nat as a LOOK, unless every such function in it is listed here: one
+# checked by hand to have no such cycle. A lambda's definition, full=sat, bg or prem unsat,
+# alt=sat, an INCONCLUSIVE replay and a failed Lean run still fail a row, and so does a Nat
+# recursion not listed.
+#
+# One entry a function, by its Lean name (a dump's bridge is @<name>_LRec), with why it has no
+# such cycle and when that was checked. Each entry is a claim about a proof, so each is the
+# owner's to approve, in the PR that adds it. An entry with no why or no when counts for nothing.
+#
+# These two come from the audit's own record (Audit/review/findings.json), before any diag run:
+# the next run shows which functions its rows name, and a function not here stays a LOOK.
+
+PlutusCore.Bitwise.BitwiseInternal.itobs_be_loop
+  why:  It recurses on its fuel argument p, structurally: `.succ p` calls it again with p, and
+        `.zero` stops (PlutusCore/Bitwise/Basic.lean:32-35). The n / 256 it passes on is only an
+        argument, never what it recurses on, so it has no recursion through n / k, whose
+        instance at -1 (where -1 / k is -1 again) is the cycle the finding describes. It's how
+        integerToByteString builds its bytes, a builtin mix_logic's code uses.
+  when: Checked 2026-11-03 by the audit (blaster-unguarded-axioms-unmeasured, both its
+        verdicts). Listed 2026-11-18 from that record alone (chunk 51's call on the diag scan's
+        LOOK rows).
+
+Nat.log2
+  why:  Every value under 2 goes to its base, 0, with no recursion: log2 n = if 2 ≤ n then
+        log2 (n / 2) + 1 else 0 (Lean's Nat.log2_def). A value off Nat's domain, below 0, ends
+        there, so there is no cycle. The builtins reach it through integerLog2 and integerWidth
+        (PlutusCore/Bitwise/Basic.lean:21-28).
+  when: Checked 2026-11-03 by the audit (blaster-unguarded-axioms-unmeasured, both its
+        verdicts). Listed 2026-11-18 from that record alone (chunk 51's call on the diag scan's
+        LOOK rows).

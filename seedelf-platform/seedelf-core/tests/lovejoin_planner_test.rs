@@ -270,6 +270,67 @@ fn the_classic_pool_plans_three_wide_exactly_as_before() {
     assert_eq!(lovejoin::again_affordable_in(50_000_000, &classic, 0, 3), 0);
 }
 
+/// Chunk 51, r3a#2: the planner's helpers give a figure for every depth and width, never a trap, which in
+/// WebAssembly locks the wallet. Mixing again at depth 0 is no mix, so no box of it is paid for, as the per-pool
+/// helper says, where the classic one divided by zero. A fan-out too deep to count is more than any ADA pays for,
+/// and a width under 2, which no mix has, is the fan-out's sum all the same: 1 + width + … + width^(depth − 1).
+#[test]
+fn the_planners_helpers_never_trap_whatever_the_depth_or_width() {
+    let classic = Protocol::of(true).unwrap();
+    for spare in [0, 50_000_000, u64::MAX] {
+        assert_eq!(lovejoin::again_affordable(spare, 0), 0);
+        assert_eq!(lovejoin::again_affordable_in(spare, &classic, 0, 3), 0);
+    }
+    assert_eq!(
+        lovejoin::again_funding(2, 0),
+        lovejoin::again_funding_in(2, &classic, 0, 3)
+    );
+    // Too deep to count: the most a usize holds, which no ADA pays for.
+    let words = lovejoin::MORE_THAN_THERE_IS;
+    for depth in [41, 1_000, u32::MAX] {
+        for width in [3, 4] {
+            assert_eq!(lovejoin::mixes_per_box_at(depth, width), usize::MAX);
+            let per = lovejoin::per_box_in(&classic, depth, width);
+            assert_eq!(per.unwrap_err().to_string(), words);
+            let funding = lovejoin::funding_for_in(1, &classic, depth, width);
+            assert_eq!(funding.unwrap_err().to_string(), words);
+            assert_eq!(
+                lovejoin::boxes_affordable_in(u64::MAX, &classic, depth, width),
+                0
+            );
+            assert_eq!(
+                lovejoin::again_affordable_in(u64::MAX, &classic, depth, width),
+                0
+            );
+            assert_eq!(lovejoin::per_box_again_in(&classic, depth, width), u64::MAX);
+            assert_eq!(
+                lovejoin::again_funding_in(1, &classic, depth, width),
+                u64::MAX
+            );
+        }
+        assert_eq!(lovejoin::mixes_per_box(depth), usize::MAX);
+        let funding = lovejoin::funding_for(1, depth, classic.denom);
+        assert_eq!(funding.unwrap_err().to_string(), words);
+        assert_eq!(
+            lovejoin::boxes_affordable(u64::MAX, depth, classic.denom),
+            0
+        );
+        assert_eq!(lovejoin::again_affordable(u64::MAX, depth), 0);
+        assert_eq!(lovejoin::again_funding(1, depth), u64::MAX);
+    }
+    // Widths no mix has (check_width refuses them before anything is built).
+    for depth in [0, 1, 3, 1_000, u32::MAX] {
+        let ones = usize::try_from(depth).unwrap_or(usize::MAX);
+        assert_eq!(lovejoin::mixes_per_box_at(depth, 1), ones, "{depth}");
+        assert_eq!(
+            lovejoin::mixes_per_box_at(depth, 0),
+            usize::from(depth > 0),
+            "{depth}"
+        );
+    }
+    assert_eq!(lovejoin::mixes_per_box_at(3, 2), 7);
+}
+
 #[test]
 fn each_pool_plans_on_its_own_mix() {
     let classic = Protocol::of(true).unwrap();
@@ -1032,4 +1093,75 @@ fn a_four_wide_chain_mixes_four_boxes_at_a_time() {
         )
         .is_err()
     );
+}
+
+/// Chunk 51, t1c#2: a pool's box ADA comes from its datum, so a deposit's boxes
+/// times it can pass what a u64 holds: two boxes of 2^63 lovelace are refused
+/// in words, never wrapped to nothing paid for them.
+#[test]
+fn a_deposits_boxes_past_what_a_sum_holds_are_refused_in_words() {
+    let half = ada_pool_of(1 << 63);
+    let refused = lovejoin::deposit(
+        &params(),
+        &half,
+        &[coin(0x11, 50_000_000)],
+        &owners(Scalar::from(9u64), 2),
+        &session(),
+        1,
+    )
+    .map(|d| d.fee);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("Too many boxes")),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51, t1c#10: a deposit's inputs' ADA is summed checked: two of 2^63
+/// lovelace (more than there is: a lying index's) are refused in words.
+#[test]
+fn a_deposits_inputs_past_what_a_sum_holds_are_refused_in_words() {
+    let classic = Protocol::of(true).unwrap();
+    let refused = lovejoin::deposit(
+        &params(),
+        &classic,
+        &[coin(0x11, 1 << 63), coin(0x12, 1 << 63)],
+        &owners(Scalar::from(9u64), 1),
+        &session(),
+        1,
+    )
+    .map(|d| d.fee);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("The inputs' ADA overflows")),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51, t1c#7: a deposit never makes a box under a register a payment
+/// isn't safe under (`build::is_payable`): one whose public value is the
+/// identity is anyone's to take, and one that isn't made of points, or whose
+/// generator is the identity, can never come back.
+#[test]
+fn a_deposit_never_makes_a_box_no_one_or_anyone_can_spend() {
+    let classic = Protocol::of(true).unwrap();
+    let g = Register::create(Scalar::from(9u64)).unwrap().generator;
+    let identity = format!("c0{}", "00".repeat(47));
+    for register in [
+        Register::new(g.clone(), identity.clone()),
+        Register::new(identity.clone(), g.clone()),
+        Register::new("00".repeat(48), "00".repeat(48)),
+    ] {
+        let refused = lovejoin::deposit(
+            &params(),
+            &classic,
+            &[coin(0x11, 50_000_000)],
+            &[register],
+            &session(),
+            1,
+        )
+        .map(|d| d.fee);
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("valid, non-identity register")),
+            "{refused:?}"
+        );
+    }
 }

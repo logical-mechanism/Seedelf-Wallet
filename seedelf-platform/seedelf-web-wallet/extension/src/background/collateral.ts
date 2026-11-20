@@ -27,13 +27,15 @@ export class StaleReviewError extends Error {}
  * since never gets here, so the screen names giveme.my as who refused rather
  * than guessing at the user's own money (blind test §9.5, T09). `busy`: an
  * outage or a limit (5xx, 429), which waiting fixes and a new review alone
- * doesn't.
+ * doesn't. `status`: its answer's, which tells the two apart (a limit refuses
+ * every transaction; a 5xx may be giveme.my failing on this one's body).
  */
 export class CollateralRefusedError extends CollateralError {
   readonly stale = true;
   constructor(
     message: string,
     readonly busy = false,
+    readonly status?: number,
   ) {
     super(message);
   }
@@ -88,6 +90,7 @@ export class Collateral {
             ? t("worker.collateral.refused.detail", { detail })
             : t("worker.collateral.refused.status", { status: response.status }),
         busy,
+        response.status,
       );
     }
     if (answer === undefined) throw new CollateralError(t("worker.collateral.notJson"));

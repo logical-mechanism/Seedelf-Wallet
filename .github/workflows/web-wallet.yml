@@ -31,17 +31,28 @@ permissions:
 # rust, and wasm, whose build the extension's unit, e2e and store jobs
 # download.
 jobs:
-  # Whether the pull request touches what the check covers: this file, and
-  # seedelf-platform/ but its Markdown and the web wallet's media/ (images for
-  # posts), which nothing builds or tests from, except wasm/README.md
-  # (readme_test.rs reads its export table). A test that comes to read another
-  # .md file names it here too. Its files from the API,
-  # so nothing is checked out. A renamed file's old path is read too, so a
-  # move out of the folder counts, and a list that can't be trusted counts as
-  # touching it (1.7.0's release review): one the API cut short (it lists
-  # 3,000 files at most), or one against a base other than main, since a
-  # change of base runs nothing and the skip would stand once the base is
-  # main. main's own run checks everything.
+  # Whether the pull request touches what the check covers: every workflow,
+  # this one included (workflows.test.ts reads them all), the Lovejoin
+  # scripts' .hex files seedelf-verification proves (included by
+  # lovejoin_proven_bytes_test.rs; chunk 51, v3#2), and seedelf-platform/ but
+  # its Markdown and the web wallet's media/ (images for posts), which nothing
+  # builds or tests from, except wasm/README.md (readme_test.rs reads its
+  # export table). A test that comes to read another .md file, or a file
+  # outside seedelf-platform/, names it here too: workflows.test.ts checks what
+  # the Rust includes, and what its own checks read from outside, the proofs'
+  # tools' test-tools.sh (chunk 51, l2docs#1). The data layer's Rust, which
+  # its docs#11 check reads too, stays out: data-layer.yml, which every pull
+  # request changing it starts, holds it to that rule itself ("No Markdown
+  # included"), so the data layer's pull requests don't wait on this check
+  # (l3misc#1, l3still#3). The proofs' Lean and every doc stay out, so their
+  # pull requests stay fast; the proofs' tools have a check of their own
+  # (verification-tools.yml; chunk 51, docs#7). It reads the pull request's
+  # files from the API, so nothing is checked out. A renamed file's old path
+  # is read too, so a move out of the folder counts, and a list that can't be
+  # trusted counts as touching it (1.7.0's release review): one the API cut
+  # short (it lists 3,000 files at most), or one against a base other than
+  # main, since a change of base runs nothing and the skip would stand once
+  # the base is main. main's own run checks everything.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -64,7 +75,7 @@ jobs:
           # A line a file: its path, and a renamed file's old one after a tab.
           rows=$(gh api --paginate "$FILES" --jq '.[] | [.filename, (.previous_filename // empty)] | @tsv')
           paths=$(tr '\t' '\n' <<<"$rows")
-          covered='/^\.github\/workflows\/web-wallet\.yml$/ || /^seedelf-platform\/seedelf-web-wallet\/wasm\/README\.md$/ || (/^seedelf-platform\// && !/\.md$/ && !/^seedelf-platform\/seedelf-web-wallet\/media\//) { hit = 1 } END { exit !hit }'
+          covered='/^\.github\/workflows\// || /^seedelf-verification\/Lovejoin\/(Template\/)?Scripts\// || /^seedelf-verification\/test-tools\.sh$/ || /^seedelf-platform\/seedelf-web-wallet\/wasm\/README\.md$/ || (/^seedelf-platform\// && !/\.md$/ && !/^seedelf-platform\/seedelf-web-wallet\/media\//) { hit = 1 } END { exit !hit }'
           if [ "$BASE" != main ] || [ "$(wc -l <<<"$rows")" -lt "$CHANGED" ] || awk "$covered" <<<"$paths"; then
             echo "platform=true" >> "$GITHUB_OUTPUT"
           else
@@ -87,13 +98,13 @@ jobs:
 
       # The toolchain seedelf-platform/rust-toolchain.toml pins: keep the two
       # in step, so CI builds and tests what ships (launch review #61).
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 (v2.9.3)
         with:
           workspaces: seedelf-platform
 
@@ -121,12 +132,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 (v2.9.3)
         with:
           workspaces: seedelf-platform
 
@@ -266,7 +277,7 @@ jobs:
 
       # The notices ask cargo which crates the WebAssembly links, and read
       # their licences from the sources cargo fetches.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
           targets: wasm32-unknown-unknown

@@ -90,6 +90,31 @@ pub fn external_address_bech32() -> String {
     external_address().to_bech32().expect("external bech32")
 }
 
+/// The external address's payment key staked by a script (CIP-19's type 2,
+/// `addr_test1y…`): a key address, which only that key spends (chunk 51,
+/// r2a#1).
+pub fn external_address_staked_by_a_script() -> Address {
+    let Address::Shelley(external) = external_address() else {
+        panic!("the external address is a Shelley address");
+    };
+    Address::from(ShelleyAddress::new(
+        Network::Testnet,
+        external.payment().clone(),
+        ShelleyDelegationPart::Script(pallas_addresses::ScriptHash::new([9; 28])),
+    ))
+}
+
+/// A native script's address on preprod, a multisig's say, with no stake
+/// part (`addr_test1w…`): a script's address, which the ledger pays with no
+/// datum (chunk 51, r2a#1).
+pub fn a_multisig_address() -> Address {
+    Address::from(ShelleyAddress::new(
+        Network::Testnet,
+        ShelleyPaymentPart::Script(pallas_addresses::ScriptHash::new([7; 28])),
+        ShelleyDelegationPart::Null,
+    ))
+}
+
 /// The preprod dApp address derived from a wallet scalar — the address the
 /// `external sweep` command pulls UTxOs from.
 pub fn dapp_address_for(scalar: Scalar) -> Address {
@@ -1022,15 +1047,14 @@ pub fn one_time_key_of(cbor_hex: &str, ledger: &Ledger) -> String {
     key
 }
 
-/// Addresses no payment goes to: a script's (the wallet contract's own), a
-/// stake address, and a key address on the other network (mainnet). A
-/// payment there with no datum can lock for good, or never arrives.
+/// Addresses no payment goes to: a stake address, and a key address on the
+/// other network (mainnet). A script's address takes one, as the ledger
+/// does, with a warning that it carries no datum (chunk 51, r2a#1).
 pub fn not_payable_addresses() -> Vec<String> {
     let Address::Shelley(external) = external_address() else {
         panic!("the external address is a Shelley address");
     };
     vec![
-        wallet_address_bech32(),
         StakeAddress::try_from(external)
             .expect("its stake address")
             .to_bech32()

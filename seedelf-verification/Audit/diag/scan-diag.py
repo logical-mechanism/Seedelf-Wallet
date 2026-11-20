@@ -28,11 +28,20 @@ For every theorem it reports:
               .alt.smt2   the full query without recfun-finder and the 5.x-only options, for
                           --alt Z3 (default $Z3_ALT, else ~/tools/z3-4.15.2-x64-glibc-2.39/bin/z3):
                           a second solver build; sat there on a query 5.3.1 calls unsat = LOOK
-  flags     LOOK for any of the above. INCONCLUSIVE when a replay neither confirms nor refutes:
+  flags     LOOK for a lambda definition, a recursion over Nat, full=sat, bg or prem unsat, or
+            alt=sat. A recursion over Nat is no flag when accepted.txt, beside this file, lists its
+            function with a why and a when: the Nat recursions the audit checked by hand for an
+            off-domain cycle, each the owner's to approve. So a row whose Nat recursions are all
+            listed, with no other flag, passes, its rec lines saying so; a Nat recursion not listed
+            is still a LOOK, and an entry with no why or no when counts for nothing.
+            INCONCLUSIVE when a replay neither confirms nor refutes:
             full or alt not unsat, bg not sat, or neither prem nor premc sat (a timeout, an
             unknown); also a Z3 verdict whose query can't be read, a goal premises() can't
             read (prem=shape?), and a --list theorem with no dump. Neither counts as clean.
             Without z3 on PATH (or the --alt one) the scan stops, unless --no-z3 is given.
+  status    exit 0 only when no row is LOOK, INCONCLUSIVE (MISSING included) or FAILED; a Lean
+            run that ended nonzero (`rc=` in its .txt: failed, timed out, killed) is FAILED.
+            run-diag.sh exits with it, and Audit/run-all.sh lists the diag family by it.
 Usage: python3 -I scan-diag.py <out dir> [--list FILE] [--no-z3] [--timeout SECONDS] [--alt [Z3 PATH]]
   --list    only the theorems a run-diag.sh list names (one diag/lean path per line)
 """
@@ -115,6 +124,8 @@ def extract_dump(text):
     return '\n'.join(body)
 
 def verdict(text):
+    rc = re.findall(r'^rc=(\d+)$', text, re.M)
+    if rc and rc[-1] != '0': return 'FAILED'  # the Lean run failed, timed out or was killed
     if re.search(r'✅ Valid', text): return 'OPT-ONLY'
     if re.search(r'Undetermined', text) and 'Smt Query:' in text: return 'Z3'
     return 'FAILED'
@@ -153,7 +164,45 @@ def inventory(cmds):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-COLLAPSE = [(r'^([ab])(\d)$', r'\g<1>1'), (r'^(t0|t1|c|z)(\d)(\d)$', r'\g<1>1\3')]
+
+def accepted(path):
+    # accepted.txt: an unindented line names a function by its Lean name, and its indented `why:`
+    # and `when:` lines follow, each running on over the indented lines after it. Returns the
+    # listed names, each with its when, and the entries with no why or no when, which count for
+    # nothing.
+    entries, cur, field = [], None, None
+    try:
+        lines = open(path, encoding='utf-8').read().split('\n')
+    except OSError:
+        return {}, []
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        if not line[0].isspace():
+            cur, field = {'name': line.split()[0]}, None
+            entries.append(cur)
+            continue
+        m = re.match(r'\s+(why|when):\s*(.*)$', line)
+        if cur is not None and m:
+            field = m.group(1); cur[field] = m.group(2).strip()
+        elif cur is not None and field:
+            cur[field] += ' ' + line.strip()
+    listed, broken = {}, []
+    for e in entries:
+        missing = [f for f in ('why', 'when') if not e.get(f)]
+        if missing:
+            broken.append((e['name'], missing))
+        else:
+            listed[e['name']] = e['when']
+    return listed, broken
+
+def lean_name(bridge):
+    # a recursive function's bridge is @<its Lean name>_LRec (Blaster's Application.lean:645),
+    # quoted |…| when the name needs it
+    n = bridge.strip('|')
+    return n[1:-len('_LRec')] if n.startswith('@') and n.endswith('_LRec') else n
+
+COLLAPSE =[(r'^([ab])(\d)$', r'\g<1>1'), (r'^(t0|t1|c|z)(\d)(\d)$', r'\g<1>1\3')]
 
 def binders(thm):
     # the ∀ binders of the theorem diag/lean/<thm>.lean names, in order. They're the dump's $0,
@@ -266,12 +315,14 @@ def main():
                             pr[:-len('(check-sat)\n')] + '\n'.join(eqs) + '\n(check-sat)\n')
                         row['premc'] = z3run(base + '.premc.smt2', timeout)
         rows.append(row)
-    flags = incon = 0
+    listed, broken = accepted(os.path.join(HERE, 'accepted.txt'))
+    flags = incon = kept = 0
     for r in rows:
         line = f"{r['verdict']:8} {r['thm']}"
         if 'inv' in r:
             i = r['inv']
             nat = [n for n, s in i['rec'] if any(re.search(r'\bNat\b', x) for x in s)]
+            new = [n for n in nat if lean_name(n) not in listed]
             line += f"  lam={i['lam']} rec={len(i['rec'])} recNat={len(nat)} ext={i['ext']} coe={i['coe']} sorts={i['sorts']}"
             if 'full' in r:
                 line += f"  full={r['full']} bg={r['bg']} prem={r['prem']}"
@@ -279,24 +330,33 @@ def main():
                 line += f" premc={r['premc']}"
             if 'alt' in r:
                 line += f" alt={r['alt']}"
-            bad = (i['lam'] > 0 or nat or r.get('full') == 'sat' or r.get('bg') == 'unsat'
+            bad = (i['lam'] > 0 or new or r.get('full') == 'sat' or r.get('bg') == 'unsat'
                    or r.get('prem') == 'unsat' or r.get('alt') == 'sat')
             unsettled = (r.get('full', 'unsat') != 'unsat' or r.get('bg', 'sat') != 'sat'
                          or (r.get('prem', 'sat') not in ('sat', '-') and r.get('premc') != 'sat')
                          or r.get('alt', 'unsat') != 'unsat')
             if bad:
                 flags += 1; line += '  <-- LOOK'
-                for n, s in i['rec']:
-                    if n in nat: line += f"\n           rec over Nat: {n} {s}"
             elif unsettled:
                 incon += 1; line += '  <-- INCONCLUSIVE'
+            elif nat:
+                kept += 1
+            for n, s in i['rec']:
+                if n in nat:
+                    line += f"\n           rec over Nat: {n} {s}" + ('' if n in new else '  accepted (accepted.txt)')
         elif r['verdict'] == 'Z3':
             incon += 1; line += '  no query in the dump  <-- INCONCLUSIVE'
         print(line)
     for m in sorted(only - seen) if only is not None else []:
         incon += 1; print(f"MISSING  {m}  listed, but no dump  <-- INCONCLUSIVE")
+    for name, missing in broken:
+        print(f"accepted.txt: {name} has no {' and no '.join(missing)}, so it counts for nothing")
+    failed = sum(r['verdict'] == 'FAILED' for r in rows)
     print(f"\n{len(rows)} theorems; {sum(r['verdict']=='OPT-ONLY' for r in rows)} closed by the optimizer alone; "
-          f"{sum(r['verdict']=='Z3' for r in rows)} needed Z3; {sum(r['verdict']=='FAILED' for r in rows)} failed; "
-          f"{flags} flagged; {incon} inconclusive" + ('' if use_z3 else '; no replays run (--no-z3)'))
+          f"{sum(r['verdict']=='Z3' for r in rows)} needed Z3; {failed} failed; "
+          f"{flags} flagged; {incon} inconclusive"
+          + (f"; {kept} clean with their Nat recursions on accepted.txt" if kept else '')
+          + ('' if use_z3 else '; no replays run (--no-z3)'))
+    return 1 if flags or incon or failed else 0
 
-main()
+sys.exit(main())

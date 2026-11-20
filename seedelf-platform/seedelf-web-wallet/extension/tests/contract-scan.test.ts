@@ -13,8 +13,12 @@ import {
   readContractView,
   SESSION_CONTRACT_PREFIX,
 } from "../src/background/contract-scan";
+import { CONTRACT_V1, ownedUtxos as ownedOf } from "../src/background/balances";
+import { registerOf } from "../src/background/chain";
 import { type KoiosUtxo, trimmed } from "../src/background/koios";
 import { outpoint, SESSION_SPENT } from "../src/background/spent";
+import { WalletLocked } from "../src/background/wallet";
+import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -238,5 +242,113 @@ describe("the contract scan at scale", () => {
       expect(await t.wallet.state()).toBe("locked");
       expect(t.session.data.size).toBe(0);
     });
+
+    // Chunk 51, t1k#3: a lock alone ends the read by itself (a locked wallet's turn throws), so the case above passes
+    // without `same`'s check. A lock and an unlock between two batches give the next batch other keys, as Remove wallet
+    // and a restore of another phrase do: the read ends, nothing of it kept, rather than judge some rows with one set of
+    // keys and the rest with another.
+    it("ends cleanly when the keys change between its batches: nothing of it kept", async () => {
+      const { t, checks } = await manyRows((t) => {
+        void t.wallet.lock();
+        void t.wallet.unlock(PASSWORD);
+      });
+      await expect(readContractView(t.deps, "preprod")).rejects.toBeInstanceOf(WalletLocked);
+      expect(checks.mock.calls.length).toBeLessThanOrEqual(OWNED_BATCH);
+      expect(await t.wallet.state()).toBe("unlocked");
+      expect(await t.session.get(SESSION_CONTRACT_PREFIX + "preprod")).toBeUndefined();
+    });
+  });
+});
+
+// Chunk 51, x2#2 (the trace verifier's test, and its class). Every Seedelf's register is public: its datum is on
+// chain. A stranger re-randomizes one of the user's, (g^d, u^d), and pays about 1.34 ₳ (the least that output holds) to
+// the enterprise KEY address whose key hash is the wallet contract's script hash, with that register as its inline
+// datum. No key has that hash, so nobody can ever spend it: the stranger's 1.34 ₳ is burnt. Koios's credential_utxos
+// takes bare 28-byte hashes, key or script alike, so asked for the contract's it lists this UTxO too, and the scan,
+// judging a row by its register alone, kept it: the private balance counted 1.34 ₳ that can never move, and a Seedelf
+// spend that takes it can't be built (the builder gives every input a Spend redeemer, and the wallet's evaluator, uplc's
+// phase one, refuses one on a key-locked input), so Max, which takes every UTxO of a balance of 20 or fewer, was refused
+// outright. A contract row is the wallet's only at the contract's SCRIPT (balances.ts `atContract`).
+describe("a row at a KEY address with the contract's hash (chunk 51, x2#2)", () => {
+  /** "This is a test.", a live preprod Seedelf the phrase doesn't own. */
+  const THEIRS = transferPreprod.to;
+  const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+
+  /**
+   * The stranger's output, as Koios's credential_utxos lists it for the contract's hash: 1.34 ₳ at the enterprise KEY
+   * address with that hash, under a fresh re-randomization of the user's register (read off the user's own UTxO).
+   */
+  function planted(): KoiosUtxo {
+    const wasm = loadTestWasm();
+    const found = registerOf(ownedUtxos[0]!)!;
+    const base = new wasm.Register(found.generator, found.publicValue);
+    const fresh = wasm.rerandomize(base);
+    const datum = `d8799f5830${fresh.generator}5830${fresh.publicValue}ff`;
+    base.free();
+    fresh.free();
+    return {
+      ...ownedUtxos[0]!,
+      tx_hash: "b2".repeat(32),
+      tx_index: 0,
+      address: preprodAddress(CONTRACT_V1.walletContractHash),
+      value: "1340000",
+      // The 28 bytes the endpoint matched, as Koios fills it whatever the credential's kind.
+      payment_cred: CONTRACT_V1.walletContractHash,
+      block_height: 9_000_000,
+      inline_datum: { bytes: datum, value: null },
+      asset_list: [],
+    };
+  }
+
+  it("isn't the wallet's: the private balance doesn't count it, and Max still pays what the wallet can spend", async () => {
+    const t = await unlocked();
+    t.koios.evaluation = transferPreprod.evaluation;
+    const row = planted();
+    // The contract's preprod address is header 0x70 (enterprise, SCRIPT payment part); the stranger's is the same 28
+    // bytes under header 0x60 (enterprise, KEY payment part), which no key spends.
+    expect(hex(bech32Bytes(ownedUtxos[0]!.address))).toBe(`70${CONTRACT_V1.walletContractHash}`);
+    expect(hex(bech32Bytes(row.address))).toBe(`60${CONTRACT_V1.walletContractHash}`);
+    // Its register is the user's, re-randomized: what the wallet's ownership check accepts.
+    const wasm = loadTestWasm();
+    const reg = registerOf(row)!;
+    const asRegister = new wasm.Register(reg.generator, reg.publicValue);
+    let owned = false;
+    await t.wallet.withKeys((keys) => void (owned = keys.seedelf.isOwned(asRegister)));
+    asRegister.free();
+    expect(owned).toBe(true);
+
+    // Before it lands: 25 ₳, and 3 ₳ holding tUSDM, and Max spends both (as transfer.test.ts has it).
+    const before = await t.balances.get("preprod");
+    expect(before.seedelf).toMatchObject({ lovelace: "28000000", utxos: 2 });
+    expect(await t.transfer.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).toMatchObject({ max: true, inputs: 2, left: 0 });
+
+    // The stranger's output lands, and Koios lists it beside the contract's own.
+    t.koios.added.push(row);
+    const after = await t.balances.get("preprod", true);
+    expect.soft(after.seedelf, "the private balance, with the stranger's unspendable 1.34 ₳ beside it").toMatchObject({
+      lovelace: "28000000",
+      utxos: 2,
+    });
+    const max = await t.transfer
+      .build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(max, "Max, with the stranger's output beside the wallet's two").toMatchObject({ max: true, inputs: 2, left: 0 });
+  });
+
+  it("is never the user's, wherever a row is judged by its register: the same register at the contract is", async () => {
+    const t = await unlocked();
+    const row = planted();
+    const atScript = { ...row, address: ownedUtxos[0]!.address, tx_hash: "b3".repeat(32) };
+    const mine = await t.wallet.withKeys((keys) => ownedOf(loadTestWasm(), keys, [row, atScript]));
+    expect(mine.map(outpoint)).toEqual([outpoint(atScript)]);
+  });
+
+  it("is no Seedelf's place either, so a name isn't looked for there", async () => {
+    const t = await unlocked();
+    const name = `5eed0e1f${"77".repeat(8)}`;
+    t.koios.added.push({ ...planted(), asset_list: [{ policy_id: CONTRACT_V1.seedelfPolicyId, asset_name: name, quantity: "1", decimals: 0, fingerprint: "" }] });
+    const view = await readContractView(t.deps, "preprod");
+    expect(view.seedelfs[name]).toBeUndefined();
+    expect(view.owned.map(outpoint)).not.toContain(`${"b2".repeat(32)}#0`);
   });
 });

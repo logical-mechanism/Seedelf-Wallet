@@ -1,15 +1,16 @@
-// Send from the Cardano account: pay any normal address, or an ADA Handle,
-// as any Cardano wallet does; or someone's seedelf by its whole name, paid
-// into Seedelf under a fresh copy of its register, like a move-in. Up to 20
+// Send from the Cardano account: pay any address on the network (a script's
+// with a warning: its payment carries no datum), or an ADA Handle,
+// as any Cardano wallet does; or a seedelf, anyone's or your own, by its whole name, paid
+// into Seedelf under a fresh copy of its register, like a move-in. Up to 100
 // recipients at once, each with an amount and optional tokens (with tokens,
 // the amount may stay empty: only the ADA they need goes); or the most
 // possible (Max) to a single recipient, and an optional note (CIP-20's
-// message, one line of 64 characters, which anyone can read). It's paid in
+// message, one line of up to 500 characters, which anyone can read). It's paid in
 // the open; the privacy note says what that shows, and how to pay without
 // that link. The worker builds and signs; nothing is sent until the user has
 // reviewed it and pressed Send.
 
-import { useState, type FormEvent } from "react";
+import { Fragment, useEffect, useState, type FormEvent } from "react";
 import { joinSentences, useT } from "../../i18n";
 
 import type { Balances, PendingTx, SendPaid, SendSummary } from "../../shared/rpc";
@@ -39,7 +40,7 @@ import {
 import { Row } from "../components/ReviewRows";
 import { RewardsRow, RewardsSetting, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
-import { StakedWarning } from "../components/StakedWarning";
+import { ScriptNote, StakedWarning, StakeElsewhereNote } from "../components/StakedWarning";
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
@@ -48,8 +49,12 @@ import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { tokenQuantity } from "../tokens";
 
-/** The longest note: one of CIP-20's lines, as Lace allows (core's `MAX_NOTE_CHARS`). */
-const NOTE_MAX = 64;
+/**
+ * The longest note, core's `MAX_NOTE_CHARS`: what Activity keeps of a note, so one sent from here reads back there.
+ * Core writes it as CIP-20's lines of at most 64 bytes, as many as it takes; one line was Lace's limit, not the
+ * ledger's (chunk 51, gap-g8#3).
+ */
+const NOTE_MAX = 500;
 
 export function CardanoSend({
   cardano,
@@ -86,6 +91,9 @@ export function CardanoSend({
   const [summary, setSummary] = useState<SendSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // A refusal is about what was asked: once the form changes, it's gone, as Make public's is (T05; chunk 51, e8b#5's
+  // sibling).
+  useEffect(() => setError(undefined), [list.drafts, max, note]);
 
   // Max pays a single recipient.
   const maxed = max && !list.several;
@@ -122,8 +130,9 @@ export function CardanoSend({
     waitingFor({
       to: toState(e.draft),
       amount: e.draft.amount,
-      tokensPicked: Object.keys(e.draft.tokens).length > 0,
+      tokensPicked: e.picked,
       tokensOk: e.tokens.ok,
+      tokensAway: e.away.length > 0,
       max: maxed,
     }),
   );
@@ -199,7 +208,11 @@ export function CardanoSend({
         title={t("withdraw.review.title")}
         titleId="send-review"
         review
-        onBack={() => setSummary(undefined)}
+        // Back from the review: its error is the review's, so the form it goes back to starts clean (e8b#5's sibling).
+        onBack={() => {
+          setSummary(undefined);
+          setError(undefined);
+        }}
         backDisabled={busy}
         aside={t("review.nothingSent")}
         error={error}
@@ -229,18 +242,30 @@ export function CardanoSend({
         ))}
         {/* With several, each own one by its number: "your own public account" didn't say which it meant (PY-5).
             Another of the user's accounts says what paying it shows, as the form did: it doesn't come back here.
-            Someone else's key under an account's stake key is neither, and leaves (the 2026-11-02 bounty report). */}
+            Someone else's key under an account's stake key is neither, and leaves (the 2026-11-02 bounty report).
+            The user's key under a stake part that isn't theirs comes back, but its stake works for someone else
+            meanwhile (chunk 51, x1a#1). */}
         {summary.payments.map((p, i) =>
           !p.own ? (
             p.staked !== undefined && (
               <StakedWarning key={i} side="send" account={p.staked} nth={several ? i + 1 : undefined} />
             )
-          ) : p.ownAccount !== undefined && p.ownAccount !== active ? (
-            <OtherAccountNote key={i} index={p.ownAccount} />
           ) : (
-            <OwnNote key={i} nth={several ? i + 1 : undefined} />
+            <Fragment key={i}>
+              {p.ownAccount !== undefined && p.ownAccount !== active ? (
+                <OtherAccountNote index={p.ownAccount} />
+              ) : (
+                <OwnNote nth={several ? i + 1 : undefined} />
+              )}
+              {p.stakeElsewhere && <StakeElsewhereNote side="send" nth={several ? i + 1 : undefined} />}
+            </Fragment>
           ),
         )}
+        {/* One of the user's own Seedelfs, by its number with several: it leaves this account for their private
+            balance (chunk 51, gap-g8#2). */}
+        {summary.payments.map((p, i) => p.seedelf?.own && <OwnSeedelfNote key={i} nth={several ? i + 1 : undefined} />)}
+        {/* A script's address, by its number with several: its payment carries no datum (chunk 51, r2a#1). */}
+        {summary.payments.map((p, i) => p.script && <ScriptNote key={i} side="send" nth={several ? i + 1 : undefined} />)}
         <LeftOutNote leftOut={summary.leftOut} testId="send-left-out" />
         <p className="note">
           {joinSentences([
@@ -295,9 +320,16 @@ export function CardanoSend({
             {read.state === "read" &&
               read.destination.own &&
               (otherAccount(read) !== undefined ? <OtherAccountNote index={otherAccount(read)!} /> : <OwnNote />)}
+            {read.state === "read" && read.destination.own && read.destination.stakeElsewhere && (
+              <StakeElsewhereNote side="send" />
+            )}
             {read.state === "read" && !read.destination.own && read.destination.staked !== undefined && (
               <StakedWarning side="send" account={read.destination.staked} />
             )}
+            {/* A script's address: paid, with no datum, and said where the refusal was (chunk 51, r2a#1). */}
+            {read.state === "read" && read.destination.script && <ScriptNote side="send" />}
+            {/* One of your own Seedelfs: paid, and said, never refused (chunk 51, gap-g8#2). */}
+            {read.state === "seedelf" && read.seedelf.own && <OwnSeedelfNote />}
 
             <div className="field">
               <label htmlFor={fieldId("send-amount", d, i)}>{t("common.amount")}</label>
@@ -433,6 +465,19 @@ function OwnNote({ nth }: { nth?: number }) {
   return (
     <Callout tone="warn" testId="send-own">
       {nth === undefined ? t("send.warn.ownAccount") : t("send.warn.ownAccountNth", { number: nth })}
+    </Callout>
+  );
+}
+
+/**
+ * One of the user's own Seedelfs: the payment goes into their private balance, as Make private's does, and its submit
+ * notes it so (chunk 51, gap-g8#2). `nth` names which recipient, on a review with several.
+ */
+function OwnSeedelfNote({ nth }: { nth?: number }) {
+  const t = useT();
+  return (
+    <Callout tone="warn" testId="send-own-seedelf">
+      {nth === undefined ? t("send.warn.ownSeedelf") : t("send.warn.ownSeedelfNth", { number: nth })}
     </Callout>
   );
 }

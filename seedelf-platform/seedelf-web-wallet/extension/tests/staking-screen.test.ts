@@ -36,7 +36,7 @@ import {
   sentVote,
   votesOut,
 } from "../src/ui/screens/Governance";
-import { paysNothing, PoolListRow, sortPools } from "../src/ui/screens/Pools";
+import { paysNothing, PoolListRow, PoolPage, sortPools } from "../src/ui/screens/Pools";
 import { noFundsReason, oversaturation, poolWarnings, Staking, StakingReview } from "../src/ui/screens/Staking";
 
 const markup = (element: ReactElement) =>
@@ -145,6 +145,33 @@ describe("a staking review's button says the act (ST-2)", () => {
   });
 });
 
+describe("a staking review's Public account after (chunk 51, t1k#10)", () => {
+  // What the account holds once it lands, from Home's figure (10,465.475311 ₳, its rewards in): less the fee and any
+  // deposit, more any deposit back. Withdrawn rewards were in the figure already: neither more nor less. Read with the
+  // balances shown.
+  const shownReview = (s: StakingSummary) =>
+    markup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: { ...DEFAULT_PREFERENCES, hideBalances: false }, loaded: true, set: async () => undefined } },
+        createElement(StakingReview, { summary: s, busy: false, onBack: noop, onSend: noop, total: "10465475311" }),
+      ),
+    );
+  const after = (s: StakingSummary) => /Public account after ([\d,.]+)\s₳/.exec(text(shownReview(s)))?.[1];
+
+  it("is the account less the fee, for a withdrawal of rewards already counted", () => {
+    expect(after(summary({ kind: "withdraw" }, { withdrawal: "57475311" }))).toBe("10,465.302638");
+  });
+
+  it("is less the fee and the deposit, for a first delegation", () => {
+    expect(after(summary({ kind: "delegate", pool: LOGIC }, { pool: LOGIC, deposit: "2000000" }))).toBe("10,463.302638");
+  });
+
+  it("is less the fee and more the deposit back, for Stop staking, whose rewards were counted", () => {
+    expect(after(summary({ kind: "stop" }, { withdrawal: "57475311", refund: "2000000" }))).toBe("10,467.302638");
+  });
+});
+
 describe("an oversaturated pool, in numbers (ST-8)", () => {
   it("says how many times its limit, and what share of a reward is left", () => {
     expect(oversaturation(458.39)).toEqual({ times: "4.6", share: "22%" });
@@ -193,6 +220,31 @@ describe("the pool list (ST-4, ST-5)", () => {
   });
 });
 
+describe("a pool's page (chunk 51, t1k#12)", () => {
+  const page = (status: PoolDetails["status"]) =>
+    markup(
+      createElement(PoolPage, {
+        row: row({}),
+        known: details({ status }),
+        onHistory: noop,
+        shared: 0,
+        registered: true,
+        busy: false,
+        onBack: noop,
+        onStake: noop,
+      }),
+    );
+
+  it("holds Stake with for a pool that has retired, saying so under it: nothing else refuses the delegation before the node", () => {
+    const retired = page("retired");
+    expect(retired).toMatch(/<button type="button" class="primary" disabled="" title="This pool has retired">Stake with TPREP<\/button>/);
+    expect(retired).toContain('data-testid="pool-why">This pool has retired</p>');
+    const live = page("registered");
+    expect(live).toMatch(/<button type="button" class="primary">Stake with TPREP<\/button>/);
+    expect(live).not.toContain('data-testid="pool-why"');
+  });
+});
+
 describe("an account with nothing to pay a fee with (ST-9)", () => {
   const side = (utxos: number, locked: number) => ({ utxos, locked: { lovelace: "0", tokens: [], utxos: locked } });
   it("is caught before a build, saying what's needed", () => {
@@ -202,6 +254,15 @@ describe("an account with nothing to pay a fee with (ST-9)", () => {
       "You need about 1\u00a0₳ of spendable ADA in your public account for the fee. Rewards can't pay it.",
     );
     expect(noFundsReason(side(3, 3))).toContain("Everything in your public account is locked");
+  });
+
+  // Chunk 51, l3misc#2, l3still#5: the account's locked total counts its collateral and every UTxO no build can price
+  // (a reference script no server gives, which anyone can send), as core spends neither. Neither has an Unlock on the
+  // UTxOs screen, so an account holding only those heard to unlock some there.
+  it("tells no one to unlock what nothing can unlock", () => {
+    const reason = noFundsReason(side(3, 3))!;
+    expect(reason).toContain("locked or can't be spent");
+    expect(reason).not.toMatch(/\bunlock/i);
   });
 });
 
@@ -300,7 +361,10 @@ describe("a vote sent, once Home stops watching it (GV-6)", () => {
     const landed = page({ view: view({ [action.id]: "yes" }), waiting: false });
     expect(text(landed)).toContain("Your vote Yes");
     expect(text(landed)).not.toContain("on its way");
-    expect(buttons(landed)).toMatch(/class="secondary" disabled=""[^>]*>Yes<\/button>/);
+    // Marked as the vote, and live: casting it again is the ledger's to take, and keeps the DRep active (chunk 51,
+    // e7b#1).
+    expect(buttons(landed)).toMatch(/class="secondary" title="[^"]*"[^>]*>Yes<\/button>/);
+    expect(buttons(landed)).not.toContain('disabled=""');
     // Not on chain (dropped): the sent line went with it, where it sat over "Not voted".
     const dropped = page({ view: view(), waiting: false });
     expect(text(dropped)).toContain("Your vote Not voted");
@@ -364,5 +428,15 @@ describe("the rewards' switch, beside the note it decides (blind test §9.9, E04
     const locked = page(true, { ...staking, drep: null });
     expect(theSwitch(locked)).toBeUndefined();
     expect(locked).not.toContain("staking-rewards-note");
+  });
+
+  it("holds Stop staking while the rewards are locked, saying why: stopping withdraws them, which the ledger refuses (chunk 51, t1k#11)", () => {
+    const stop = (html: string) => /<button[^>]*class="menu-row menu-row--danger"[^>]*>(?:(?!<\/button>).)*Stop staking/s.exec(html)?.[0];
+    const locked = stop(page(true, { ...staking, drep: null }));
+    expect(locked).toContain('disabled=""');
+    expect(locked).toContain('title="Delegate your voting power first: stopping withdraws the rewards"');
+    // The vote delegated, or no rewards to withdraw: it can be pressed.
+    expect(stop(page(true))).not.toContain('disabled=""');
+    expect(stop(page(true, { ...staking, drep: null, rewards: "0" }))).not.toContain('disabled=""');
   });
 });

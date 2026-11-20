@@ -717,7 +717,9 @@ describe("the prompt's words", () => {
     expect(paidTo({ ...out, yours: 2, datum: "inline" })).toBe("Your private session 3, with data");
     expect(signingTies([1], false)).toBe("Signing ties this transaction to your public account.");
     const page = text({ summary: summary([{ ...out, address: THEIRS }], true), partial: false, session: true, collateralSpent: false, ties: [] });
-    expect(page).toContain("It pays a Seedelf. Nothing on chain says whose, but it comes from this private session's one-time account in the open.");
+    // The site wrote the register, so nothing says whose it hides (chunk 51, x1a#2).
+    expect(page).toContain("It pays a Seedelf, from this private session's one-time account in the open.");
+    expect(page).not.toContain("says whose");
     // Whose Seedelf it is isn't known: the private balance isn't said to be out of it.
     expect(page).toContain("Signing ties this transaction to the session's one-time account. Your public account isn't in it.");
     expect(page).not.toContain("private balance aren't");

@@ -12,9 +12,10 @@ import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
 import { SESSION_BUILT } from "../src/background/move-in";
-import { EXPIRED_AFTER_SLOTS, MAYBE_SENT_WAIT, pendingKey, UNSEEN_AFTER_MS, watchSent } from "../src/background/pending";
+import { EXPIRED_AFTER_SLOTS, MAYBE_SENT_WAIT, pendingKey, submitWatched, UNSEEN_AFTER_MS, watchSent } from "../src/background/pending";
 import { SESSION_SEND } from "../src/background/send";
 import { spentSet } from "../src/background/spent";
+import { WalletLocked } from "../src/background/wallet";
 import { SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
 import type { PendingTx } from "../src/shared/rpc";
 import { PendingBanner } from "../src/ui/components/PendingBanner";
@@ -553,5 +554,93 @@ describe("Home's banner", () => {
       "Private payment not seen on the network After 20 minutes the network still hasn't seen it, so it most likely never went out.",
     );
     expect(text({ ...sent, dropped: "expired" }, false)).toContain("Dismiss");
+  });
+});
+
+// Chunk 51's T1j lens: guards around a payment that may still go through, which no test failed without.
+describe("a payment beside one that may still go through: the guards no test pinned (chunk 51, T1j)", () => {
+  // t1j#8: two pages press Send at once, and both get past the settle before either is written ahead: writeAhead's own
+  // turn takes the first, and refuses the second before it writes anything. Otherwise the second's bytes went to Koios
+  // beside the first (Send again of the first, as the watch read it), or its UTxOs were held back for two hours and its
+  // kept copy marked sent, so a later Send skipped the checks.
+  it("refuses a payment written ahead beside another one, when both got past the settle at once", async () => {
+    const t = await unlocked();
+    const moveIn = await t.moveIn.build("preprod", "5000000", []);
+    const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    const kept = async (key: string) => (await t.session.get<{ txCbor: string; invalidHereafter?: number }>(key))!;
+    const sending = (key: string, k: { txCbor: string; invalidHereafter?: number }, kind: PendingTx["kind"], txHash: string) => ({
+      network: "preprod" as const,
+      txHash,
+      kind,
+      txCbor: k.txCbor,
+      key,
+      kept: k,
+      summary: {},
+      contract: false,
+      ...(k.invalidHereafter !== undefined ? { invalidHereafter: k.invalidHereafter } : {}),
+      again: false,
+    });
+    const [a, b] = [await kept(SESSION_BUILT), await kept(SESSION_SEND)];
+    // Straight to the watch, as each Send goes once its settle found nothing: the first's submit on its way to Koios.
+    const { held, release } = hold(t, "submittx");
+    const first = submitWatched(t.deps, sending(SESSION_BUILT, a, "move-in", moveIn.txHash));
+    const second = submitWatched(t.deps, sending(SESSION_SEND, b, "send", payment.txHash));
+    await expect(second).rejects.toThrow(MAYBE_SENT_WAIT());
+    await held;
+    release();
+    await first;
+    expect(ids(t)).toEqual([moveIn.txHash]);
+    expect(await spentSet(t.session)).toEqual(new Set(txInputs(t.koios.submitted[0]!)));
+    expect(await t.session.get(SESSION_SEND)).not.toHaveProperty("sentCbor");
+  });
+
+  // t1j#9: Send settles a payment that may still go through first. writeAhead refuses the same payment later in the
+  // same words, but by then a private spend had asked giveme.my for its witness and signed, for a transaction never sent;
+  // and one beside a payment that has landed, not yet settled, was refused, where the settle lets it go.
+  it("is settled before a private spend's Send asks giveme.my, and lets it go once it has landed", async () => {
+    const t = await unlocked();
+    const service = privately(t);
+    // Reviewed first: a review settles it too.
+    const review = await service.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
+    const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    unanswered(t);
+    expect(await t.send.submit("preprod", payment.txHash)).toMatchObject({ maybeSent: true });
+    await expect(service.submit("preprod", review.txHash)).rejects.toThrow(MAYBE_SENT_WAIT());
+    expect(t.collateral.asked).toEqual([]);
+    expect(ids(t)).toEqual([payment.txHash]);
+    // It lands; nothing has looked since: Send's own settle finds it, and the spend goes.
+    t.koios.confirmations = 1;
+    expect(await service.submit("preprod", review.txHash)).toMatchObject({ kind: "withdraw", txHash: review.txHash });
+    expect(ids(t)).toEqual([payment.txHash, review.txHash]);
+  });
+
+  it("is settled before Make private's Send, which goes once it has landed", async () => {
+    const t = await unlocked();
+    const moveIn = await t.moveIn.build("preprod", "5000000", []);
+    const service = privately(t);
+    const pay = await service.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
+    unanswered(t);
+    expect(await service.submit("preprod", pay.txHash)).toMatchObject({ maybeSent: true });
+    t.koios.confirmations = 1;
+    expect(await t.moveIn.submit("preprod", moveIn.txHash)).toMatchObject({ kind: "move-in", txHash: moveIn.txHash });
+  });
+
+  // t1j#10: a payment goes only once its maybe-sent copy is sealed: a lock before it settles wipes the session's watch,
+  // and with no sealed copy nothing after the unlock says it may still go through, so it could be paid again.
+  it("isn't sent when its maybe-sent copy can't be sealed: storage full, or a lock as it's sealed", async () => {
+    for (const refusal of [new Error("Resource::kQuotaBytes quota exceeded"), new WalletLocked("The wallet is locked.")]) {
+      const t = await unlocked();
+      const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+      const set = t.store.set.bind(t.store);
+      t.store.set = async (name, value) => {
+        if (name === "maybeSent.preprod") throw refusal;
+        return set(name, value);
+      };
+      await expect(t.send.submit("preprod", payment.txHash), refusal.message).rejects.toThrow(refusal.message);
+      expect(t.koios.submitted, refusal.message).toEqual([]);
+      expect(await t.session.get(pendingKey("preprod")), refusal.message).toBeUndefined();
+      expect((await spentSet(t.session)).size, refusal.message).toBe(0);
+      expect(await t.session.get(SESSION_SEND), refusal.message).not.toHaveProperty("sentCbor");
+    }
   });
 });

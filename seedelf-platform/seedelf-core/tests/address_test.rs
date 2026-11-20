@@ -43,6 +43,7 @@ fn is_on_correct_network_matches_only_its_own_network() {
 }
 
 #[test]
+#[allow(deprecated)] // the old reader, kept for the crate's users, still does what it did
 fn is_not_a_script_distinguishes_key_from_script_address() {
     let config: Config = get_config(1, true).unwrap();
     let script_addr = address::wallet_contract(true, config.contract.wallet_contract_hash);
@@ -60,6 +61,7 @@ fn is_not_a_script_distinguishes_key_from_script_address() {
 }
 
 #[test]
+#[allow(deprecated)] // is_not_a_script, the old reader, still does what it did
 fn dapp_address_builds_key_address_on_each_network() {
     let pkh = "0102030405060708091011121314151617181920212223242526";
     // 26 hex chars = 13 bytes; PaymentKeyHash wants 28 bytes (56 hex chars).

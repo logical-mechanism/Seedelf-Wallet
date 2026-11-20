@@ -62,10 +62,14 @@ export function firstDelegations(years: DelegationYear[], shown: number): Delega
   return cut;
 }
 
-/** Where the vote went, in words: a pinned choice, the account's own DRep, a DRep's name from the list, or its ID cut short. */
+/**
+ * Where the vote went, in words: a pinned choice, the account's own DRep, a DRep's name from the list, as the list
+ * cleans it (chunk 51, gap-g7#3), as "DRep · name" so it can't pass for a choice (gap-g7#1), or its ID cut short, for
+ * one with no name there or none left once cleaned.
+ */
 function voteText(network: NetworkName, row: DelegationRow, yourOwn: string): string | undefined {
   if (!row.drep) return undefined;
-  return row.ownDrep ? yourOwn : voteLabel(row.drep, drepName(network, row.drep));
+  return row.ownDrep ? yourOwn : voteLabel(row.drep, { name: drepName(network, row.drep) });
 }
 
 export function Delegations({ onBack }: { onBack: () => void }) {

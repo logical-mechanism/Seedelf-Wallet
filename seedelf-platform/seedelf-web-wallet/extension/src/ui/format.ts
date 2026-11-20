@@ -61,6 +61,63 @@ const LOOKS_LIKE: Record<string, string> = {
 };
 
 /**
+ * Letters that draw a Latin letter as they're written, read before case is folded: a capital can draw another letter
+ * than its small one does (Greek capital nu draws N, its small letter a v), and some scripts have no case at all.
+ * Lower-cased first, Greek capital nu, mu, eta and upsilon folded to "v", "u", "n" and "u", and Cherokee's and Lisu's
+ * letters not at all, so a token named "SNEK" or "ADA" in them read as its own name (chunk 51, e9b#1). After Unicode's
+ * confusables (UTS #39), for the scripts that draw Latin letters: Greek and Coptic capitals, Cherokee, Lisu, Armenian,
+ * and Latin's own small capitals. A capital that draws no Latin letter keeps its own small letter, unmapped: Greek gamma
+ * and omega, and Cyrillic ghe and pe, aren't y, w, r or n as their small letters pass for. Written as code points,
+ * since a Greek capital alpha and a Latin A can't be told apart on the page.
+ */
+const DRAWS: Record<string, string> = {
+  // Greek capitals, and the lunate sigma and yot.
+  "\u0391": "a", "\u0392": "b", "\u0395": "e", "\u0396": "z", "\u0397": "h", "\u0399": "l", "\u039A": "k",
+  "\u039C": "m", "\u039D": "n", "\u039F": "o", "\u03A1": "p", "\u03A4": "t", "\u03A5": "y", "\u03A7": "x",
+  "\u03F9": "c", "\u03F2": "c", "\u037F": "j", "\u03F3": "j", "\u0393": "\u03B3", "\u03A9": "\u03C9",
+  // Cyrillic capitals that draw no Latin letter, though their small letters do.
+  "\u0413": "\u0433", "\u041F": "\u043F",
+  // Cherokee (its small letters are added below).
+  "\u13A0": "d", "\u13A1": "r", "\u13A2": "t", "\u13A5": "l", "\u13A9": "y", "\u13AA": "a", "\u13AB": "j",
+  "\u13AC": "e", "\u13B3": "w", "\u13B7": "m", "\u13BB": "h", "\u13BD": "y", "\u13C0": "g", "\u13C2": "h",
+  "\u13C3": "z", "\u13CF": "b", "\u13D2": "r", "\u13D4": "w", "\u13D5": "s", "\u13D9": "v", "\u13DA": "s",
+  "\u13DE": "l", "\u13DF": "c", "\u13E2": "p", "\u13E6": "k", "\u13F4": "b",
+  // Lisu, which has no case.
+  "\uA4D0": "b", "\uA4D1": "p", "\uA4D3": "d", "\uA4D4": "t", "\uA4D6": "g", "\uA4D7": "k", "\uA4D9": "j",
+  "\uA4DA": "c", "\uA4DC": "z", "\uA4DD": "f", "\uA4DF": "m", "\uA4E0": "n", "\uA4E1": "l", "\uA4E2": "s",
+  "\uA4E3": "r", "\uA4E6": "v", "\uA4E7": "h", "\uA4EA": "w", "\uA4EB": "x", "\uA4EC": "y", "\uA4EE": "a",
+  "\uA4F0": "e", "\uA4F2": "l", "\uA4F3": "o", "\uA4F4": "u",
+  // Coptic capitals (their small letters are added below).
+  "\u2C80": "a", "\u2C82": "b", "\u2C8C": "z", "\u2C8E": "h", "\u2C92": "l", "\u2C94": "k", "\u2C98": "m",
+  "\u2C9A": "n", "\u2C9E": "o", "\u2CA2": "p", "\u2CA4": "c", "\u2CA6": "t", "\u2CA8": "y", "\u2CAC": "x",
+  // Armenian.
+  "\u0555": "o", "\u0585": "o", "\u054D": "u", "\u057D": "u", "\u053C": "l", "\u0578": "n", "\u0570": "h",
+  "\u0581": "g", "\u0566": "q",
+  // Latin's small capitals.
+  "\u1D00": "a", "\u0299": "b", "\u1D04": "c", "\u1D05": "d", "\u1D07": "e", "\uA730": "f", "\u0262": "g",
+  "\u029C": "h", "\u026A": "l", "\u1D0A": "j", "\u1D0B": "k", "\u029F": "l", "\u1D0D": "m", "\u0274": "n",
+  "\u1D0F": "o", "\u1D18": "p", "\u0280": "r", "\uA731": "s", "\u1D1B": "t", "\u1D1C": "u", "\u1D20": "v",
+  "\u1D21": "w", "\u1D22": "z",
+};
+// A Cherokee or Coptic small letter draws what its capital does.
+for (const [c, latin] of Object.entries(DRAWS)) {
+  const code = c.codePointAt(0)!;
+  if ((code >= 0x13a0 && code <= 0x13f5) || (code >= 0x2c80 && code <= 0x2cb1)) DRAWS[c.toLowerCase()] ??= latin;
+}
+
+/** A character that draws nothing but takes room: any white space, wide or not, and the braille blank. */
+export const BLANK = /[\s\p{Zs}\u2800]/u;
+const BLANK_RUN = new RegExp(`${BLANK.source}{2,}`, "gu");
+
+/**
+ * `text` with each run of blanks as one space. Nine em spaces between "SNEK" and an "x" are a name the lists cut to
+ * "SNEK …", and so a list's row read as the listed SNEK (chunk 51, gap-g10#1). One blank is left as it is.
+ */
+export function oneSpaced(text: string): string {
+  return text.replace(BLANK_RUN, " ");
+}
+
+/**
  * A name reduced to how it looks, to tell apart names that only look the
  * same: compatibility forms folded (NFKD: full-width, bold, ligatures),
  * accents and invisible characters dropped, case folded, lookalike letters
@@ -77,19 +134,40 @@ export function nameSkeleton(name: string): string {
  * "ada bonus", and "OOO SNEK" is "ooo snek", as "000 SNEK" is.
  */
 export function foldName(name: string): string {
-  return [...name.normalize("NFKD").replace(/[\p{M}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").toLowerCase()]
-    .map((c) => LOOKS_LIKE[c] ?? c)
+  // Each character as it's written first (`DRAWS`), then case folded and mapped as a small letter (`LOOKS_LIKE`).
+  return [...name.normalize("NFKD").replace(/[\p{M}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "")]
+    .map((c) => DRAWS[c] ?? [...c.toLowerCase()].map((l) => LOOKS_LIKE[l] ?? l).join(""))
     .join("");
 }
 
-/** A name as a list shows it: without the invisible characters that could hide or reorder its letters. */
+/**
+ * A name as a list shows it: without the invisible characters that could hide or reorder its letters, and with its
+ * blanks one space each (`oneSpaced`), so wide ones can't push its last letters out of the list's row.
+ */
 export function plainName(name: string): string {
-  return name.replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").trim();
+  return oneSpaced(name.replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "")).trim();
 }
 
 /** `5eed0e1f…9ff2` */
 export function shortHex(hex: string, head = 8, tail = 4): string {
   return hex.length <= head + tail + 1 ? hex : `${hex.slice(0, head)}…${hex.slice(-tail)}`;
+}
+
+/** A bech32 address, as a pasted or a listed one is written: its prefix, the "1", and its data. */
+const BECH32_ADDRESS = /^[a-z_]+1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{20,}$/;
+
+/**
+ * An address or a Seedelf's name shortened to parts no one else can choose. An address keeps ten characters of its data
+ * after its prefix, which are its header and its payment part, each one past those taking some 32 keys to match, and
+ * its last six; a Seedelf's name keeps its prefix and its last sixteen, eight bytes of the transaction that minted it.
+ * The last six of an address are its checksum, which anyone can solve for, and the start of a name is a prefix and a
+ * tag anyone can copy: Activity cut an address to as few as three first characters and those six, and the lists cut a
+ * name to its prefix, its tag and three bytes anyone can grind (chunk 51, gap-g10#2). Anything else as `shortHex`.
+ */
+export function shortCounterparty(text: string): string {
+  if (BECH32_ADDRESS.test(text)) return shortHex(text, text.lastIndexOf("1") + 11, 6);
+  if (/^5eed0e1f[0-9a-f]{40,}$/i.test(text)) return shortHex(text, 8, 16);
+  return shortHex(text, 12, 6);
 }
 
 /** "just now", "12 s ago", "3 min ago", "2 h ago". */
@@ -430,12 +508,18 @@ export function poolLabel(pool: PoolRef): string {
   return pool.ticker ?? pool.name ?? shortId(pool.id);
 }
 
-/** Where the vote goes, in words: a pinned choice, the DRep's name or shortened ID, or nowhere. */
-export function voteLabel(drep: string | null, name?: string): string {
+/**
+ * Where the vote goes, in words: a pinned choice, the account's own DRep (`own`), a DRep by its `name` or its
+ * shortened ID, or nowhere. A DRep's name never stands alone ("DRep · 8Ball"): a DRep picks its own, and one called
+ * "Always abstain" read as that choice on the vote's review, in Activity, its CSV and Delegations. For the same
+ * reason the account's own DRep is a flag, never a name passed in (chunk 51, gap-g7#1).
+ */
+export function voteLabel(drep: string | null, { name, own = false }: { name?: string; own?: boolean } = {}): string {
   if (!drep) return t("format.vote.notDelegated");
   if (drep === ALWAYS_ABSTAIN) return t("format.vote.abstain");
   if (drep === ALWAYS_NO_CONFIDENCE) return t("format.vote.noConfidence");
-  return name ?? shortId(drep);
+  if (own) return t("drep.yourOwn");
+  return name ? t("format.vote.drep", { name }) : shortId(drep);
 }
 
 /** A governance action's kind in words, as Transaction details and a site's sign window say what a proposal proposes. */

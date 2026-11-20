@@ -43,9 +43,11 @@ function head(b: Uint8Array, pos: number): Head {
 
 /**
  * How deep a dApp's CBOR may nest: each list, map and tag is a level, as the
- * WebAssembly counts them (cip30.rs refuses past 128 too). A real
- * transaction is a few levels deep; a site's could be thousands, and reading
- * it would run the worker's stack out.
+ * WebAssembly counts them (core's `cbor::check_nesting` refuses past 128 too,
+ * before the connector's read and Transaction details decode; `ogmiosUtxos`
+ * doesn't walk, so `nestsWithin` runs before a site's transaction reaches it).
+ * A real transaction is a few levels deep; a site's could be thousands, and
+ * reading it would run the worker's stack out.
  */
 export const MAX_DEPTH = 128;
 
@@ -118,13 +120,20 @@ export function txInputs(tx: Uint8Array): string[] {
   return inputs;
 }
 
-/** Where the value under one key of a transaction's body starts, or undefined. */
+/**
+ * Whether a transaction starts as a list of four, in either length: `0x84`, or `0x9f` and a break after its items. The
+ * ledger reads either, and hashes the body as it's written; so does WebAssembly, and so a site's transaction written
+ * either way is read here too (chunk 51, gap-g8#5).
+ */
+const fourItems = (tx: Uint8Array) => tx[0] === 0x84 || tx[0] === 0x9f;
+
+/** Where the value under one key of a transaction's body starts, or undefined. The body is a map of either length. */
 function bodyField(tx: Uint8Array, field: number): number | undefined {
-  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
+  if (!fourItems(tx)) throw new Error(t("worker.cbor.notFourItems"));
   const body = head(tx, 1);
-  if (body.major !== 5 || body.indefinite) throw new Error(t("worker.cbor.bodyNotMap"));
+  if (body.major !== 5) throw new Error(t("worker.cbor.bodyNotMap"));
   let p = body.p;
-  for (let i = 0; i < body.n; i++) {
+  for (let i = 0; body.indefinite ? tx[p] !== 0xff : i < body.n; i++) {
     // The body's fields are two levels in: the transaction, then the body.
     const key = head(tx, p);
     const value = skip(tx, p, 2);
@@ -196,16 +205,20 @@ function outpoints(b: Uint8Array, pos: number): string[] {
   const found: string[] = [];
   let p = set.p;
   for (let i = 0; set.indefinite ? b[p] !== 0xff : i < set.n; i++) {
-    const id = head(b, head(b, p).p);
+    // Each outpoint is a pair, `[id, index]`, in either length, as the ledger reads it (TxIn's decodeRecordNamed): the
+    // next starts where the whole pair ends, its break included (chunk 51, sign#2).
+    const pair = head(b, p);
+    if (pair.major !== 4) throw new Error(t("worker.cbor.notWellFormed"));
+    const id = head(b, pair.p);
     const index = head(b, id.p + id.n);
     found.push(`${hex(b.subarray(id.p, id.p + id.n))}#${index.n}`);
-    p = index.p;
+    p = skip(b, p, 3);
   }
   return found;
 }
 
 /** A transaction's id: the BLAKE2b-256 of its body, exactly as encoded. */
 export function txId(tx: Uint8Array): string {
-  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
+  if (!fourItems(tx)) throw new Error(t("worker.cbor.notFourItems"));
   return hex(blake2b(tx.subarray(1, skip(tx, 1, 1)), { dkLen: 32 }));
 }

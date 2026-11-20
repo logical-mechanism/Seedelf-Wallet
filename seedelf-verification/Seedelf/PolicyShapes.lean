@@ -29,8 +29,9 @@ Kernel-checked, no blaster.
 - `policy_every_context_cover`, `policy_every_valid_context`: so every context the ledger
   accepts is in `policyFamilies`: another purpose's; a mint whose redeemer isn't a `B`, with any
   TxInfo; or a mint tagged `B tag` in `withMint _ _ (inputsFrom txid idx out rest) (mintOf lines)`,
-  of other than one line (the `PolicyLines…AnyTx` modules) or of one, `oneLine pid tkn amt`
-  (Slice/).
+  of other than one line (by Blaster, the `PolicyLines…AnyTx` modules, to five lines; in the
+  kernel, `PolicyLinesAll` and `LinesAllAnyMint`, at every length) or of one,
+  `oneLine pid tkn amt` (Slice/).
 
 Unlike the wallet's (AnyTxShapes), this cover needs the ledger's rules for two fields the
 policy reads, in CardanoLedgerApiBlaster's model of them: `validInputs` for the first input,
@@ -222,7 +223,8 @@ theorem policy_ledger_hypotheses (ctx : ScriptContext) (h : validTxInfo ctx = tr
 /-- The policy's families, each as its modules build the context `c`: another purpose's
 (PolicyPurposeAnyTx); a mint whose redeemer isn't a `B`, any TxInfo (PolicyRedeemerAnyTx); or a
 mint tagged `B tag`, in a TxInfo with a first input `txid#idx`, of no empty policy and other than
-one line (the `PolicyLines…AnyTx` modules), or of one line (Slice/). -/
+one line (the `PolicyLines…AnyTx` modules to five lines, and the kernel's `PolicyLinesAll` and
+`LinesAllAnyMint` at every length), or of one line (Slice/). -/
 def policyFamilies (c : Data) : Prop :=
   (∃ (k : Integer) (info redeemer : Data) (fs : List Data), (k = 1 ∨ k = 2 ∨ k = 3 ∨ k = 4 ∨ k = 5) ∧
     c = .Constr 0 [info, redeemer, .Constr k fs]) ∨

@@ -56,7 +56,7 @@ export function buildManifest({ version, mainnetEnabled, storeBuild, dataOrigin 
   const origins = networkOrigins(networks);
   return {
     manifest_version: 3,
-    name: mainnetEnabled ? "Seedelf Wallet" : "Seedelf Wallet",
+    name: "Seedelf Wallet",
     short_name: "Seedelf",
     // SUMMARY, in Chrome's language where the wallet speaks it.
     default_locale: "en",

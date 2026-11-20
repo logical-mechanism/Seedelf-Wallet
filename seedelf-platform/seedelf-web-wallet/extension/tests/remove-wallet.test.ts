@@ -12,12 +12,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { handle, RESET_AT_STAKE, type Context } from "../src/background/handlers";
-import { MAYBE_SENT_WAIT, pendingKey } from "../src/background/pending";
+import { MAYBE_SENT_WAIT, pendingKey, submitWatched } from "../src/background/pending";
 import { NetworkChoice } from "../src/background/preferences";
 import { spentSet } from "../src/background/spent";
+import { SESSION_TRANSFER } from "../src/background/transfer";
 import type { NetworkName } from "../src/networks";
 import type { AtStake, Message, Status } from "../src/shared/rpc";
-import { loadTestWasm, testBalances, vectors } from "./fakes";
+import { loadTestWasm, testBalances, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const account = (words: number) =>
@@ -173,6 +174,79 @@ describe("a payment that may still go through, across Remove wallet", () => {
     expect(await w.t.pending.pending("preprod")).toBeNull();
   });
 
+  // Chunk 51, e4a#1's family (pending.ts): a look for it already asking Koios when the wallet was removed, and another
+  // phrase restored, went on under that phrase's keys: its landing went into that phrase's sealed history, as a
+  // payment it sent. The look is the phrase's whose watch it read, as a reading is.
+  it("still looked for when another phrase is restored, goes into nothing of that phrase's", async () => {
+    const w = await wallet();
+    const { t, ctx } = w;
+    // A private payment Koios didn't answer: watched as maybe sent, with its review for the history once it's seen.
+    t.koios.evaluation = transferPreprod.evaluation;
+    const built = await t.transfer.build("preprod", [{ to: transferPreprod.to, lovelace: "2000000", tokens: [] }]);
+    const kept = (await t.wallet.withKeys(() => t.session.get<{ txCbor: string }>(SESSION_TRANSFER)))!;
+    const real = t.koios.fetch;
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const hit = new Promise<void>((r) => (reached = r));
+    let timeouts = 1;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/submittx") && timeouts-- > 0) throw new DOMException("signal timed out", "TimeoutError");
+      // Home's look, as the wallet is removed: tx_status waits.
+      if (url.endsWith("/tx_status")) {
+        reached();
+        await gate;
+      }
+      return real(url, init);
+    };
+    const sending = { network: "preprod", txHash: built.txHash, kind: "transfer", txCbor: kept.txCbor, key: SESSION_TRANSFER, kept } as const;
+    expect(await submitWatched(t.deps, { ...sending, summary: built, contract: true, again: false })).toMatchObject({ maybeSent: true });
+    t.koios.confirmations = 1;
+    const look = t.pending.pending("preprod");
+    look.catch(() => undefined);
+    await hit;
+
+    await ask({ type: "reset-wallet", force: true }, ctx);
+    await ask({ type: "restore-wallet", phrase: OTHER, password: PASSWORD }, ctx);
+    release();
+    // It lands, and the look ends as a lock ends one: the other phrase's history, watch and reading know nothing of it.
+    await expect(look).rejects.toThrow("The wallet is locked.");
+    expect((await t.activity.seedelf("preprod")).map((e) => e.txHash)).toEqual([]);
+    expect(await t.wallet.withKeys(() => t.session.get(pendingKey("preprod")))).toBeUndefined();
+    expect(await t.pending.pending("preprod")).toBeNull();
+  });
+
+  // Chunk 51, r2time#2 (pending.ts submitWatched): one Koios took while the wallet was removed, at Remove wallet's second
+  // yes, and another phrase restored: once Koios answered, its watch went into that phrase's session, and its entry into
+  // that phrase's private history. What the send writes after Koios answers is the phrase's it began under now.
+  it("taken by Koios as the wallet is removed and another phrase restored, goes into nothing of that phrase's", async () => {
+    const { t, ctx } = await wallet();
+    // A private payment, reviewed and kept for Send.
+    t.koios.evaluation = transferPreprod.evaluation;
+    const built = await t.transfer.build("preprod", [{ to: transferPreprod.to, lovelace: "2000000", tokens: [] }]);
+    const kept = (await t.wallet.withKeys(() => t.session.get<{ txCbor: string }>(SESSION_TRANSFER)))!;
+    let listed: AtStake[] | undefined;
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      if (!url.endsWith("/submittx")) return real(url, init);
+      const taken = await real(url, init);
+      // Remove wallet lists it, maybe sent (written ahead), and the user says yes twice; then the other phrase is restored.
+      listed = (await ask({ type: "reset-check" }, ctx)) as AtStake[];
+      await ask({ type: "reset-wallet", force: true }, ctx);
+      await ask({ type: "restore-wallet", phrase: OTHER, password: PASSWORD }, ctx);
+      return taken;
+    };
+    const sending = { network: "preprod", txHash: built.txHash, kind: "transfer", txCbor: kept.txCbor, key: SESSION_TRANSFER, kept } as const;
+    await expect(submitWatched(t.deps, { ...sending, summary: built, contract: true, again: false })).rejects.toThrow("The wallet is locked.");
+    t.koios.fetch = real;
+
+    expect(listed?.find((a) => a.network === "preprod")?.maybeSent?.txHash).toBe(built.txHash);
+    expect((await t.wallet.account("preprod")).receiveAddress).toBe(account(24).preprod.receive_0);
+    // The other phrase's Home watches nothing of it, and its private Activity lists none of it.
+    expect(await t.wallet.withKeys(() => t.session.get(pendingKey("preprod")))).toBeUndefined();
+    expect((await t.activity.seedelf("preprod")).map((e) => e.txHash)).not.toContain(built.txHash);
+  });
+
   it("leaves nothing sealed once settled, so Remove wallet deletes everything else as before", async () => {
     const w = await wallet();
     const txHash = await maybeSent(w);
@@ -180,6 +254,53 @@ describe("a payment that may still go through, across Remove wallet", () => {
     expect(await w.t.pending.pending("preprod")).toMatchObject({ txHash, confirmations: 1 });
     await ask({ type: "reset-wallet" }, w.ctx);
     expect([...w.t.local.data.keys()].filter((k) => k.startsWith("seedelf.private."))).toEqual([]);
+  });
+});
+
+// Chunk 51, r2time#2 (sessions.ts, e4a#1's class): a refresh of the sessions read one phrase's book, asked Koios, and
+// wrote that book back once Koios answered: the wallet removed and another phrase restored meanwhile, the first
+// phrase's sessions were sealed into the other's book. Each turn of the sessions' queue writes into the phrase it began
+// under alone now (`turnPin`), and throws as a lock does under another.
+describe("a sessions refresh Koios answers once the wallet is removed and another phrase restored (chunk 51, r2time#2)", () => {
+  it("writes none of the first phrase's sessions into the other's book", async () => {
+    const { t, ctx } = await wallet();
+    const now = t.clock.now;
+    // A site's session, its funding sent and not seen on chain yet: a refresh asks tx_status about it.
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [{ index: 0, ownStake: true, createdAt: now, txs: [{ kind: "out", txHash: "ab".repeat(32), at: now }], site: { origin: "https://example.org" } }],
+    });
+    t.koios.confirmations = 1;
+    const real = t.koios.fetch;
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const hit = new Promise<void>((r) => (reached = r));
+    let once = true;
+    t.koios.fetch = async (url, init) => {
+      if (once && url.endsWith("/tx_status")) {
+        once = false;
+        reached();
+        await gate;
+      }
+      return real(url, init);
+    };
+    const refresh = t.sessions.list("preprod", true);
+    refresh.catch(() => undefined);
+    await hit;
+
+    // Remove wallet lists the session, and the user says yes twice; the other phrase is restored while Koios answers.
+    await ask({ type: "reset-wallet", force: true }, ctx);
+    const restored = ask({ type: "restore-wallet", phrase: OTHER, password: PASSWORD }, ctx);
+    const other = account(24).preprod.receive_0 as string;
+    const receive = () => t.wallet.account("preprod").then((a) => a.receiveAddress, () => undefined);
+    for (let tries = 0; tries < 2_000 && (await receive()) !== other; tries++) await new Promise((r) => setTimeout(r, 5));
+    expect(await receive()).toBe(other);
+    release();
+    // The funding has landed, and the refresh would write so: it ends as a lock ends one.
+    await expect(refresh).rejects.toThrow("The wallet is locked.");
+    await restored;
+    expect((await t.store.get<{ sessions: unknown[] }>("sessions.preprod"))?.sessions ?? []).toEqual([]);
   });
 });
 

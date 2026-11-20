@@ -4,9 +4,9 @@
 // cursor are never folded in; a rollback starts again from a snapshot; and
 // Koios's scan, the fallback, never moves the cursor.
 import type * as Wasm from "@seedelf/wasm";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { readContractView, SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
+import { OWNED_BATCH, readContractView, SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
 import { DataParts, DOWN_MS } from "../src/background/data-layer";
 import { privateIndexClient, utxoOf, type IndexRow } from "../src/background/private-index";
 import { outpoint, SESSION_SPENT } from "../src/background/spent";
@@ -14,6 +14,7 @@ import { WalletLocked } from "../src/background/wallet";
 import { assetFingerprint } from "../src/shared/fingerprint";
 import { NETWORKS } from "../src/networks";
 import { fakeIndex, indexRowOf, SLOT_TIME, stableSlot } from "./fake-index";
+import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -333,5 +334,128 @@ describe("a private index row as Koios's", () => {
       inline_datum: null,
       asset_list: [],
     });
+  });
+});
+
+// Chunk 51, x2#2, on the private index: its rows are matched by the contract's 28 bytes too, and a row at the KEY
+// address with them, under one of the user's registers, is nobody's to spend. It's neither owned nor any Seedelf's
+// place (balances.ts `atContract`), on this path as on Koios's.
+describe("the private index's row at a KEY address with the contract's hash", () => {
+  // A restore's snapshot judged through the real WebAssembly: 0.2 to 0.6 s alone, but 3 to 6 s after this file's first
+  // describe, here, and CI's runner is slower than this machine. Vitest's 5 s timed it out with nothing wrong, and hid
+  // what it guards behind that timeout (r2tests#7): sized so only what it checks fails it.
+  it("is neither the wallet's nor a Seedelf's place", { timeout: 30_000 }, async () => {
+    const { index, deps } = await onIndex();
+    const ours = ownedUtxos.find((u) => u.inline_datum?.bytes)!;
+    const scriptAddress = Buffer.from(bech32Bytes(ours.address)).toString("hex");
+    expect(scriptAddress).toBe(`70${CONTRACT}`);
+    // The same 28 bytes as a key's, enterprise, on preprod as the fixture's rows are: header 0x60.
+    const keyAddress = preprodAddress(CONTRACT);
+    const name = `5eed0e1f${"66".repeat(8)}`;
+    const planted = {
+      ...ours,
+      tx_hash: "c4".repeat(32),
+      tx_index: 0,
+      address: keyAddress,
+      asset_list: [{ policy_id: "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255", asset_name: name, quantity: "1", decimals: 0, fingerprint: "" }],
+    };
+    index.contract.push({ row: indexRowOf(planted, index.tip - 100_000) });
+    const view = await readContractView(deps, "mainnet");
+    expect(view.owned.map(outpoint).sort()).toEqual(OURS);
+    expect(view.seedelfs[name]).toBeUndefined();
+  });
+
+  // Chunk 51, gap-g6#1: the sealed record keeps the index's verdicts, and settled rows are never checked again. One
+  // sealed by 1.9.1 holding such a row as ours kept it for good after the update (nobody can spend it, so it never goes
+  // through a spend): the balance counted it and Max failed. A record sealed under an older rule is read again from a
+  // snapshot, and every verdict in it made again by today's: a row kept as ours, and one checked as not.
+  it("sealed as ours by an older release, is judged again by today's rule after the update", async () => {
+    const { t, index, deps, record } = await onIndex();
+    await readContractView(deps, "mainnet");
+    const sealed = (await t.deps.store.get<Record<string, unknown> & { rows: IndexRow[] }>("contract.mainnet"))!;
+    const ours = ownedUtxos.find((u) => u.inline_datum?.bytes)!;
+    // The stranger's row of x2#2, long settled: at the KEY address with the contract's 28 bytes, under the user's
+    // register, and listed by the index as unspent for good.
+    const planted = indexRowOf({ ...ours, tx_hash: "c5".repeat(32), tx_index: 0, address: preprodAddress(CONTRACT) }, index.tip - 100_000);
+    index.contract.push({ row: planted });
+    // A payment of the user's in the last few blocks, above the cursor: kept as checked, not ours.
+    const paid = { ...indexRowOf(ownedUtxos[0]!, index.tip - 50), ref: `${"b1".repeat(32)}#0` };
+    index.contract.push({ row: paid });
+    // As 1.9.1 sealed them, under the rule it had then (v 1): the first among its rows as ours, the second as not.
+    await t.deps.store.set("contract.mainnet", { ...sealed, v: 1, rows: [...sealed.rows, planted], checked: { [paid.ref]: false } });
+
+    index.calls.length = 0;
+    const view = await readContractView(deps, "mainnet");
+    expect(view.owned.map(outpoint), "the planted row, after the update").not.toContain(planted.ref);
+    expect(view.owned.map(outpoint), "the user's payment, after the update").toContain(paid.ref);
+    // One snapshot, as at a restore, and a record sealed again under today's rule, without the planted row.
+    expect(index.calls).toContain("contract/snapshot");
+    const again = await t.deps.store.get<{ v: number; rows: IndexRow[] }>("contract.mainnet");
+    expect(again?.v).not.toBe(1);
+    expect((await record())?.rows.map((r) => r.ref)).not.toContain(planted.ref);
+  });
+});
+
+// Chunk 51's T1k lens: the names loop's checks and the batches' keys, which no test failed without.
+describe("the private index's names and batches: the guards no test pinned (chunk 51, T1k)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** The index's names answer, as the route gives it, changed by `change` before the wallet reads it. */
+  async function namesChanged(ix: Awaited<ReturnType<typeof onIndex>>, change: (names: Array<{ name: string; row: IndexRow }>) => void) {
+    const answer = (await (await ix.index.fetch("https://data.test/seedelf/v1/mainnet/names")).json()) as { names: Array<{ name: string; row: IndexRow }> };
+    change(answer.names);
+    const fetch = async (url: string) => (url.endsWith("/names") ? Response.json(answer) : ix.index.fetch(url));
+    return {
+      ...ix.deps,
+      index: privateIndexClient(
+        { koiosOnly: async () => false, parts: new DataParts(ix.t.session, () => ix.t.clock.now), fetch, limits: {} },
+        (n) => (n === "mainnet" ? "https://data.test" : undefined),
+      ),
+    };
+  }
+
+  // t1k#2: a name is located only at a row holding its token. One the answer pairs with another row was paid there:
+  // Send rebuilds the row with the name in it (seedelfRow), so WebAssembly's check that it holds the token passed.
+  it("locates a name only at a row holding it", async () => {
+    const ix = await onIndex();
+    let moved = "";
+    const deps = await namesChanged(ix, (names) => {
+      const entry = names[0]!;
+      moved = `5eed0e1f${"99".repeat(8)}`;
+      names.push({ name: moved, row: entry.row });
+    });
+    const view = await readContractView(deps, "mainnet");
+    expect(view.seedelfs[moved]).toBeUndefined();
+  });
+
+  // t1k#2: and never at one this wallet has spent, which the index's names answer still lists until it catches up: a
+  // Seedelf removed here kept its place, and paying its name paid the removed row's register.
+  it("never locates a name at a row this wallet has spent, which the index still lists", async () => {
+    const ix = await onIndex();
+    const first = await readContractView(ix.deps, "mainnet");
+    const [name, at] = Object.entries(first.seedelfs).find(([, u]) => OURS.includes(outpoint(u)))!;
+    await ix.t.session.set(SESSION_SPENT, [outpoint(at)]);
+    const view = await readContractView(ix.deps, "mainnet");
+    expect(view.seedelfs[name]).toBeUndefined();
+  });
+
+  // t1k#3, on the index path: a lock and an unlock between two batches of its ownership checks give the next batch
+  // other keys, as Remove wallet and a restore of another phrase do. The read ends, nothing of it sealed.
+  it("ends cleanly when the keys change between its batches: nothing of it sealed", async () => {
+    const ix = await onIndex();
+    const theirs = koiosPreprod.contract_utxos.find((u) => u.inline_datum?.bytes && !OURS.includes(outpoint(u)))!;
+    for (let i = 0; i < 3 * OWNED_BATCH; i++) {
+      ix.index.contract.push({ row: indexRowOf({ ...theirs, tx_hash: (i + 1).toString(16).padStart(64, "c"), tx_index: 0 }, ix.index.tip - 100_000) });
+    }
+    const wasm = loadTestWasm();
+    const isOwned = wasm.SeedelfKey.prototype.isOwned;
+    vi.spyOn(wasm.SeedelfKey.prototype, "isOwned").mockImplementationOnce(function (this: Wasm.SeedelfKey, register) {
+      void ix.t.wallet.lock();
+      void ix.t.wallet.unlock(PASSWORD);
+      return isOwned.call(this, register);
+    });
+    await expect(readContractView(ix.deps, "mainnet")).rejects.toBeInstanceOf(WalletLocked);
+    expect(await ix.t.wallet.state()).toBe("unlocked");
+    expect(await ix.record()).toBeUndefined();
   });
 });

@@ -129,9 +129,10 @@ describe("transfer", () => {
     expect(summary.inputs).toBe(2);
     expect(summary.histories).toEqual(expect.arrayContaining([{ id: "public:0", origin: "own" }, received]));
     expect(summary.histories).toHaveLength(2);
-    // Its change has both histories from now on.
+    // Its change has both histories from now on, and this Send's, which its recipient knows: ranked as a session's
+    // money (chunk 51, the owner's answer 2 to B15).
     const built = (await t.session.get<Stored & { origin: unknown }>(SESSION_TRANSFER))!;
-    expect(built.origin).toEqual({ id: `public:0+received:${ada.tx_hash}`, origin: "own" });
+    expect(built.origin).toEqual({ id: `change:${summary.txHash}+public:0+received:${ada.tx_hash}`, origin: "session" });
 
     // With one history, there's nothing to say.
     const own = await t.transfer.build("preprod", [{ to: MINE, lovelace: "2000000", tokens: [] }]);
@@ -430,5 +431,18 @@ describe("transfer", () => {
     // Lock forgets the built transfer.
     await t.wallet.lock();
     expect(await t.session.get(SESSION_TRANSFER)).toBeUndefined();
+  });
+
+  // Chunk 51 (G4's note, writing its t1h tests): what goes out is what was reviewed. A signature that came back with
+  // another transaction, which only WebAssembly could change, is never sent, nor watched as on its way.
+  it("never sends a transaction its signing changed", async () => {
+    const t = await unlocked();
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    const { service, calls } = withSigner(t, (request) => JSON.stringify({ txCbor: request.txCbor, txHash: "ee".repeat(32) }));
+    await expect(service.submit("preprod", summary.txHash)).rejects.toThrow("Signing changed the transaction, so it wasn't sent.");
+    expect(calls).toHaveLength(1);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
   });
 });

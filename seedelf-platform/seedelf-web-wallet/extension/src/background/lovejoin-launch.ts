@@ -18,9 +18,14 @@
 //   these values the wallet started on v2's scripts that no look has found
 //   yet is said on the review, never refused, as the chain takes both (1.6.0's
 //   release review, 318-worker#1; 1.8.0's, pr363#0);
-// - every box's ADA is at least what one needs to come back and pay part of
-//   itself on its own under the live parameters (S0d's rule, worked out in
-//   WebAssembly: lovejoinBoxValue), and at most 9 ₳ in a token pool (27).
+// - every box's ADA is at least the network's minimum for such a box, what
+//   a mix's output must hold (WebAssembly's lovejoinBoxValue), and at most
+//   9 ₳ in a token pool (27). Under what one needs to come back and pay part
+//   of itself on its own under the live parameters (S0d's least), or to come
+//   back at all, a start is built and its review says so, never refused:
+//   one_shot_mint takes it, and the wallet mixes into such a pool when
+//   someone else starts it (the owner's calls 34 and, for this, chunk 51's
+//   gap-g8#6: S0d's bound was refused until then).
 // Then WebAssembly builds it twice, measures each in the wallet, and checks
 // the pool each makes from its own bytes, as a stranger's would be checked:
 // once registering mix_logic's credential, once without the certificate.
@@ -46,7 +51,7 @@
 
 import { t } from "../i18n";
 import { lovejoinOn, type NetworkName } from "../networks";
-import type { HistoryClass } from "../shared/histories";
+import { leftBy, merged, type HistoryClass } from "../shared/histories";
 import type { LovejoinLaunchSummary, LovejoinLaunchTerms, PendingTx, TokenQuantity } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import type { KoiosUtxo } from "./koios";
@@ -89,6 +94,8 @@ interface Token {
 /** What WebAssembly says a box may hold (`lovejoin::BoxValueResult`). */
 interface BoxValue {
   least: string;
+  /** The network's minimum for such a box: none from a module built before chunk 51's gap-g8#6. */
+  minimum?: string;
   suggested: string;
   most?: string;
 }
@@ -106,6 +113,8 @@ interface Built {
   inputs: OutRef[];
   classesMixed?: string[];
   mixLogicStake: string;
+  /** A box of the pool can't pay its own way back now: said on the review, never refused (chunk 51, gap-g8#6). */
+  cantComeBack?: { has: string; needs: string };
 }
 
 /** One of a start's two builds, as Send needs it. */
@@ -255,7 +264,11 @@ export class LovejoinLaunchService {
     const koios = this.deps.koios(network);
     const params = await koios.epochParams();
     const value = await this.boxValue(network, params, token, tokenQuantity ? BigInt(tokenQuantity.quantity) : undefined);
-    if (box < BigInt(value.least)) throw new Error(t("lj.launch.tooLittle", { least: adaWords(value.least) }));
+    // Under the network's minimum for a box, no mix could make one: refused. Under S0d's least, it's built, and its
+    // review says so (chunk 51, gap-g8#6).
+    if (value.minimum !== undefined && box < BigInt(value.minimum)) {
+      throw new Error(t("lj.launch.belowMinimum", { minimum: adaWords(value.minimum) }));
+    }
     if (value.most !== undefined && box > BigInt(value.most)) throw new Error(t("lj.launch.tooMuch", { most: adaWords(value.most) }));
     const maxFee = (box - 1n < MAX_FEE ? box - 1n : MAX_FEE).toString();
     const terms = { ...(tokenQuantity ? { token: tokenQuantity } : {}), boxLovelace: box.toString(), maxFee };
@@ -275,6 +288,10 @@ export class LovejoinLaunchService {
       inputs: built.inputs.length,
       ...(histories ? { histories } : {}),
       ...(before ? { startedBefore: { txHash: before.txHash, at: before.at } } : {}),
+      // What its boxes can't do on their own under these parameters, said on the review (chunk 51, gap-g8#6): pay out
+      // part of what comes back (S0d's least), or come back at all (core's measure of the build).
+      ...(box < BigInt(value.least) ? { least: value.least } : {}),
+      ...(built.cantComeBack ? { cantComeBack: built.cantComeBack } : {}),
     };
     const kept: Omit<KeptLaunch, "builtAt"> = {
       ...summary,
@@ -342,10 +359,13 @@ export class LovejoinLaunchService {
         },
       );
     });
+    // Its change is tied to the start in the open: the next stealth mint or a funding takes money others paid before it
+    // (chunk 51, money#2, own#1; the owner's answer 2 to B15).
+    const left = (b: Built) => merged([changeHistory(classes, b.inputs), leftBy(b.txHash)]);
     return {
       built,
       bare,
-      origins: { built: changeHistory(classes, built.inputs), bare: changeHistory(classes, bare.inputs) },
+      origins: { built: left(built), bare: left(bare) },
       // The registering build's, the one reviewed: the most the start can tie together.
       histories: spentHistories(classes, built.inputs, built.classesMixed),
     };

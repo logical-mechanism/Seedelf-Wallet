@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { BRING_RUN_MS, LovejoinService, type PoolRef } from "../src/background/lovejoin";
+import { AskAgainError, BRING_RUN_MS, LovejoinService, type PoolRef } from "../src/background/lovejoin";
 import { LOCAL_LOVEJOIN_POOLS_PREFIX, PoolDiscovery, serviceDeps, type FoundPool } from "../src/background/lovejoin-pools";
 import { IndexDown, type PrivateIndex } from "../src/background/private-index";
 import { SESSION_SPENT, SPENT_KEEP_MS } from "../src/background/spent";
@@ -409,7 +409,10 @@ describe("a public deposit's box, its chain's record and its mix gone (1.6.0's r
       const { hash, origin } = await originOf(t, `${summary.entry}#${i}`);
       expect(origin, `box ${i}`).toEqual({ id: `box:${hash}+public:0`, origin: "own" });
     }
-    expect((await originOf(t, `${other}#0`)).origin).toBeUndefined();
+    // The other box a mix made, as Koios said: its way back is marked so, the box a stealth mint takes first (chunk 51,
+    // the owner's answer 4 to B15).
+    const back = await originOf(t, `${other}#0`);
+    expect(back.origin).toEqual({ id: `box:${back.hash}`, origin: "mixed" });
   });
 
   it("records both boxes of a 1.5.0 public seed as the account's, though an older box closed its mix's count first", async () => {
@@ -643,7 +646,10 @@ describe("a stuck pool's box paid back from the private balance (1.6.0's release
     const { t, lj, written } = await stuckPool(["50000000", "3000000"], [1, 0]);
     t.koios.addedToAccounts.push(...POOL, await tokenBox(t, "a1", true, 9), ...(await strangers(t)));
     await publicMix(lj, 1, a0, [a1]);
-    const pending = await lj.withdrawNow("preprod", undefined, false, "private", TOKEN);
+    // As the page asks it: its question named account 1, whose box is the only one it can take (hatchAccountOf). Not
+    // named, it's asked again, never sent (chunk 51, gap-g2#2).
+    await expect(lj.withdrawNow("preprod", undefined, false, "private", TOKEN)).rejects.toBeInstanceOf(AskAgainError);
+    const pending = await lj.withdrawNow("preprod", undefined, false, "private", TOKEN, 1);
     expect(txInputs(t.koios.submitted.at(-1)!).sort()).toEqual([`${a1}#0`, `${"d1".repeat(32)}#0`].sort());
     expect(written[0]!.origin).toEqual(merged([boxFrom(pending.txHash), madePrivate(1)]));
   });

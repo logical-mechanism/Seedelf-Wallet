@@ -28,6 +28,17 @@ describe("reading a dApp's transaction", () => {
     }
   });
 
+  // Chunk 51, t1j#4: a length whose own bytes are cut off, inside an indefinite list. Without head()'s check that a
+  // length's bytes are there, the missing byte read as nothing, the item's end as NaN, and the list's loop for its break
+  // never ended: five bytes from a site's signTx or submitTx hung the worker.
+  it("refuses a length whose own bytes are cut off inside an indefinite list, rather than loop", () => {
+    for (const hex of ["84a1009f58", "84a1009f59ff", "84a1009f5aff00"]) {
+      expect(() => txId(bytes(hex)), hex).toThrow();
+      expect(() => txInputs(bytes(hex)), hex).toThrow();
+      expect(nestsWithin(bytes(hex)), hex).toBe(false);
+    }
+  });
+
   it("still reads a whole one", () => {
     const hash = "ab".repeat(32);
     const tx = bytes(`84a10081825820${hash}01a0f5f6`);

@@ -164,6 +164,23 @@ describe("why the Private tab's actions can't be pressed (blind test T03)", () =
     expect(privateWhy(reading({ privateAda: "5000000", privateUtxos: 1, seedelfs: 1 }), true).lines).toEqual(["busy"]);
   });
 
+  // Chunk 51, l3misc#2, l3still#5: the account's locked total counts its collateral and every UTxO no build can price
+  // (a reference script no server gives, which anyone can send), as core spends neither, and neither has an Unlock on
+  // the UTxOs screen. An account holding only those, beside no private money, had Create's line (and the public tab's,
+  // and Staking's warning) say to unlock one there.
+  it("with nothing free, tells no one to unlock what nothing can unlock, in each language", async () => {
+    const base = reading({ publicAda: "10000000", publicUtxos: 1, seedelfs: 1 });
+    const stuck = { ...base, cardano: { ...base.cardano, locked: { lovelace: "10000000", tokens: [], utxos: 1 } } };
+    expect(privateWhy(stuck, false).create).toBe("home.busy.allLocked");
+    const unlock = { en: /\bunlock/i, es: /desbloque/i, ja: /解除/ } as const;
+    for (const language of ["en", "es", "ja"] as const) {
+      await i18n.changeLanguage(language);
+      for (const key of ["home.busy.allLocked", "staking.warn.allLocked"] as const) {
+        expect(t(key), `${language} ${key}`).not.toMatch(unlock[language]);
+      }
+    }
+  });
+
   it("says nothing when every action can be pressed, or before the first reading", () => {
     expect(privateWhy(reading({ privateAda: "5000000", privateUtxos: 1, publicAda: "1", publicUtxos: 1, seedelfs: 1 }), false).lines).toEqual(
       [],
@@ -295,7 +312,7 @@ describe("an Activity entry's “and 2 more” (the pass-two visual check)", () 
   const html = (more?: number) => renderToStaticMarkup(createElement(Who, { name: address, more }));
 
   it("is a part of its own after the name, its space kept, so the name's tail can't run over it", () => {
-    expect(html(1)).toMatch(/<\/span><\/span><span class="activity__more"> and 1 more<\/span>$/);
+    expect(html(1)).toMatch(/<span class="activity__who"[^>]*>[^<]*<\/span><span class="activity__more"> and 1 more<\/span>$/);
     expect(html(2)).toContain('<span class="activity__more"> and 2 more</span>');
     expect(html()).not.toContain("activity__more");
   });

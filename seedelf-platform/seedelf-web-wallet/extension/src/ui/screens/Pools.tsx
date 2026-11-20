@@ -249,10 +249,11 @@ export function PoolListRow({
   const ticker = pool.ticker ? plainName(pool.ticker) : undefined;
   const label = ticker ?? shortId(pool.id);
   // A pool its delegators earn nothing or less from says so on its row, not only on its page (chunk 23's review,
-  // ST-1): a 100% margin keeps every reward, and past 100% saturation everyone's shrink.
+  // ST-1): a 100% margin keeps every reward, and past 100% saturation everyone's shrink. Warnings in the warning's
+  // colour, so named `.warn.` (chunk 51, e9b#2).
   const flags = [
-    pool.margin >= 1 ? t("pools.tag.keepsAll") : "",
-    pool.saturation > 100 ? t("pools.tag.oversaturated") : "",
+    pool.margin >= 1 ? t("pools.tag.warn.keepsAll") : "",
+    pool.saturation > 100 ? t("pools.tag.warn.oversaturated") : "",
   ].filter(Boolean);
   const terms = [
     t("pools.row.marginCost", { margin: formatPercent(pool.margin * 100), cost: formatAda(pool.cost) }),
@@ -296,8 +297,11 @@ export function PoolListRow({
   );
 }
 
-/** One pool's details and recent epochs, fresh (two requests), and Stake. */
-function PoolPage({
+/**
+ * One pool's details and recent epochs, fresh (two requests), and Stake: held, saying why, for a pool that has retired,
+ * as nothing else refuses one before the node does. Exported for its test.
+ */
+export function PoolPage({
   row,
   known,
   knownHistory,
@@ -363,31 +367,32 @@ function PoolPage({
       backDisabled={busy}
       error={error}
       foot={
-        // Your own pool says so as a label, not as a button that can't be pressed (ST-12).
-        yours ? (
-          <p className="note center" data-testid="pool-yours">
-            {t("pools.alreadyYours")}
-          </p>
-        ) : (
-          <>
-            <button
-              type="button"
-              className="primary"
-              onClick={() => details && onStake(details, shared)}
-              disabled={!details || !!why || busy}
-              title={why}
-            >
-              {busy ? t("common.building") : t("pools.stakeWith", { label })}
-            </button>
-            {/* Why it can't be pressed, under it, not in a tooltip alone, which no touch screen or keyboard shows
-                (blind test T03's verifier). */}
-            {why && (
-              <p className="note foot-note" data-testid="pool-why">
-                {why}
-              </p>
-            )}
-          </>
-        )
+        <>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => details && onStake(details, shared)}
+            disabled={!details || !!why || busy}
+            title={why}
+          >
+            {busy ? t("common.building") : t("pools.stakeWith", { label })}
+          </button>
+          {/* Why it can't be pressed, under it, not in a tooltip alone, which no touch screen or keyboard shows
+              (blind test T03's verifier). */}
+          {why && (
+            <p className="note foot-note" data-testid="pool-why">
+              {why}
+            </p>
+          )}
+          {/* Your own pool says so, under a Stake that stakes with it again: the ledger takes that, for a fee, and
+              Koios can still name a delegation the ledger dropped when the pool retired, then came back (chunk 51,
+              e7b#1). It was a label in the button's place (ST-12). */}
+          {yours && (
+            <p className="note foot-note" data-testid="pool-yours">
+              {t("pools.alreadyYours")}
+            </p>
+          )}
+        </>
       }
     >
       <PoolFacts

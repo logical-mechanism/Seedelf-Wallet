@@ -343,9 +343,11 @@ fn max_to_an_address_keeps_the_tokens_it_isnt_sending() {
     let built = measured(&w, spend).unwrap();
     assert!(built.change_lovelace >= kept);
 
-    // A script address can't be paid what's left.
+    // A script's address is paid what's left too, as the ledger has it: with
+    // no datum, which the wallet warns of (chunk 51, r2a#1). Another
+    // network's address isn't.
     let script: Address = wallet_contract(true, w.chain.config.contract.wallet_contract_hash);
-    let e = build::sweep_most(
+    build::sweep_most(
         &w.chain,
         &inputs,
         &script,
@@ -353,9 +355,28 @@ fn max_to_an_address_keeps_the_tokens_it_isnt_sending() {
         &w.owner,
         w.signer,
     )
+    .expect("a script's address is paid what's left");
+    let mainnet: Address = ShelleyAddress::new(
+        Network::Mainnet,
+        ShelleyPaymentPart::Key(Hasher::<224>::hash(b"someone")),
+        ShelleyDelegationPart::Null,
+    )
+    .into();
+    let e = build::sweep_most(
+        &w.chain,
+        &inputs,
+        &mainnet,
+        &Assets::new(),
+        &w.owner,
+        w.signer,
+    )
     .err()
     .unwrap();
-    assert!(e.to_string().contains("normal preprod address"), "{e}");
+    assert!(
+        e.to_string()
+            .contains("Payments go to an address on preprod"),
+        "{e}"
+    );
 }
 
 /// Max of more kinds of token than an output holds pays what's left

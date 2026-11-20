@@ -520,4 +520,79 @@ describe("a swap's step at the unlock (independent review L10, L12)", SLOW, () =
     expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(SWAP_TX);
     expect(await waitsUntil(sessions)).toBeUndefined();
   });
+
+  // Chunk 51, x4#2: the runner read the unlock's wait once (waits), before a step's Minswap and Koios calls. The user
+  // locking and unlocking while they were out had the step signed and sent seconds after that unlock, which a step found
+  // at an unlock never is. The send reads it again, after the last call, as a Lovejoin withdraw does (L11).
+  it("sends no order seconds after a lock and an unlock while Minswap built it: it waits the new unlock's fresh draw, then goes (chunk 51, x4#2)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await funded(t, sessions);
+    // Long into the unlock: the order is due, and no unlock's wait holds it back (waits says go).
+    await busyFor(t, UNLOCK_WAIT_MS[1] + 60_000);
+    const sent = t.koios.submitted.length;
+    const sentSince = () => t.koios.submitted.slice(sent).map((b) => txIdOf(b));
+    // The alarm's run reaches the order. While Minswap builds it, the user locks and unlocks again.
+    const minswap = t.minswap.fetch;
+    let unlockedAt: number | undefined;
+    t.minswap.fetch = async (url, init) => {
+      if (url.includes("build-tx") && unlockedAt === undefined) {
+        await t.wallet.lock();
+        t.clock.now += 20_000;
+        await t.wallet.unlock(PASSWORD);
+        unlockedAt = t.clock.now;
+      }
+      return minswap(url, init);
+    };
+    await sessions.runAll("preprod");
+    t.minswap.fetch = minswap;
+    expect(await t.wallet.withKeys(() => t.session.get(SESSION_UNLOCKED_AT))).toBe(unlockedAt);
+    // Nothing goes out at the moment of the unlock.
+    expect(sentSince()).toEqual([]);
+    // The alarm's next run, a minute on: still nothing, and the step waits a fresh draw from that unlock.
+    await busyFor(t, 60_000);
+    await sessions.runAll("preprod");
+    expect(sentSince()).toEqual([]);
+    const until = (await waitsUntil(sessions))!;
+    expect(until).toBeGreaterThanOrEqual(unlockedAt! + UNLOCK_WAIT_MS[0]);
+    // Once it's past, the order goes: the step is held, never dropped.
+    await busyFor(t, until - t.clock.now);
+    await sessions.runAll("preprod");
+    expect(sentSince()).toEqual([SWAP_TX]);
+  });
+
+  it("sends no return seconds after a lock and an unlock while its build read Koios, and brings it back after its draw (chunk 51, x4#2)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await funded(t, sessions);
+    // Stopped before any order. Its own step can't read the network's parameters: the runner's next step brings it back.
+    const undo = failing(t, "epoch_params");
+    await sessions.stop("preprod", 0, true);
+    undo();
+    const sent = t.koios.submitted.length;
+    expect((await sessions.list("preprod"))[0]!.auto!.retry).toBeDefined();
+    await busyFor(t, UNLOCK_WAIT_MS[1] + 60_000);
+    // The alarm's run builds the return. While Koios answers its read of the parameters, the user locks and unlocks.
+    const real = t.koios.fetch;
+    let unlockedAt: number | undefined;
+    t.koios.fetch = async (url, init) => {
+      if (url.includes("/epoch_params") && unlockedAt === undefined) {
+        await t.wallet.lock();
+        t.clock.now += 20_000;
+        await t.wallet.unlock(PASSWORD);
+        unlockedAt = t.clock.now;
+      }
+      return real(url, init);
+    };
+    await sessions.runAll("preprod");
+    t.koios.fetch = real;
+    expect(unlockedAt).toBeDefined();
+    expect(t.koios.submitted).toHaveLength(sent);
+    const until = (await waitsUntil(sessions))!;
+    expect(until).toBeGreaterThanOrEqual(unlockedAt! + UNLOCK_WAIT_MS[0]);
+    // Once it's past, it comes back.
+    await busyFor(t, until - t.clock.now);
+    await sessions.runAll("preprod");
+    expect((await sessions.list("preprod"))[0]!.txs.map((x) => x.kind)).toEqual(["out", "back"]);
+  });
 });

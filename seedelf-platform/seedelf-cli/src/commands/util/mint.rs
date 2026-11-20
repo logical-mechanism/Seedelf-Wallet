@@ -82,7 +82,12 @@ pub async fn run(args: MintArgs, network_flag: bool, variant: u64) -> Result<()>
         if !new_register.is_valid()? {
             bail!("Provided Register Is Invalid");
         }
-        new_register
+        // Under a fresh re-randomization of it, as every other Seedelf goes:
+        // still theirs (one scalar on both points), but the register they
+        // gave, their `util base` one with G1 for its generator, never goes on
+        // chain as is, where every Seedelf minted for them from it would show
+        // they're one person's (chunk 51, r4#8).
+        new_register.rerandomize()?
     };
 
     // the proofs are bound to this key, and it signs

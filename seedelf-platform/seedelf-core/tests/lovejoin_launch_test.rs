@@ -13,7 +13,7 @@ use pallas_primitives::conway::Certificate;
 use pallas_traverse::MultiEraTx;
 use rand_core::OsRng;
 use seedelf_core::address::wallet_contract;
-use seedelf_core::build::{Chain, FinalSpend, MAX_TX_SIZE};
+use seedelf_core::build::{Chain, FinalSpend, Histories, MAX_TX_SIZE, Purpose, ScriptSpend};
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::lovejoin::{self, BoxToken, Terms, Version, templates};
 use seedelf_crypto::register::Register;
@@ -223,15 +223,23 @@ fn a_launch_refuses_what_isnt_a_pool_to_start() {
     let mut t = terms();
     t.token.as_mut().unwrap().name = vec![0; 33];
     assert!(refused(t).contains("one_shot_mint"));
-    // A box too small to come back.
+    // A box too small to come back on its own: built, and said, never refused (chunk 51, gap-g8#6).
     let mut t = terms();
     t.box_lovelace = 1_700_000;
     t.max_fee = 1_000_000;
     let token = t.token.as_mut().unwrap();
     token.name = vec![0xee; 32];
     token.quantity = u64::MAX;
+    let back = lovejoin::launch(&w.chain, &inputs, &t, true, &w.owner, w.signer)
+        .unwrap()
+        .cant_come_back
+        .unwrap();
+    assert!(back.has < back.needs, "{back:?}");
+    // One under the network's minimum for such a box, which no mix could make.
+    t.box_lovelace = 1_200_000;
     let why = refused(t);
     assert!(why.contains("couldn't be used"), "{why}");
+    assert!(why.contains("the ledger asks of it now"), "{why}");
     // Inputs holding tokens.
     let with_token = vec![owned(
         &w,
@@ -540,4 +548,153 @@ fn an_account_launch_never_spends_a_utxo_carrying_a_reference_script() {
     .unwrap()
     .to_string();
     assert!(why.contains("public account"), "{why}");
+}
+
+/// Chunk 51, t1d#1: the public account's collateral for a launch must come
+/// back as an output after 3/2 of the fee. One too small is refused in words,
+/// where the node would refuse the signed launch.
+#[test]
+fn an_account_launch_refuses_a_collateral_too_small_to_come_back() {
+    let w = world(true);
+    let change = Address::from_bech32(&account_row(true, [0x0a; 28], 0, 1, None).address).unwrap();
+    let available = vec![account_row(true, [0x0a; 28], 0x51, 40_000_000, None)];
+    let launch = |lovelace: u64| {
+        let collateral = account_row(true, [0x0a; 28], 0x5c, lovelace, None);
+        lovejoin::launch_from_account(
+            &w.chain,
+            &available,
+            Some(&collateral),
+            &terms(),
+            true,
+            &change,
+            None,
+        )
+        .map(|launch| launch.seed)
+    };
+    assert!(launch(5_000_000).is_ok());
+    for lovelace in [1_000_000, 1_200_000] {
+        let refused = launch(lovelace);
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("collateral is too small")),
+            "{lovelace}: {refused:?}"
+        );
+    }
+}
+
+/// Chunk 51, gap-g8#6 (the owner's B2, 2026-11-18): a pool's start refuses
+/// only a box under the network's minimum for it. One whose box can't pay its
+/// own way back (core's floor until then, about 1.63 ₳ for ADA under these
+/// parameters) is a pool one_shot_mint takes, and one the wallet mixes into
+/// when someone else starts it (the owner's call 34): it's built, from either
+/// side and through the private balance's selection, and says so.
+#[test]
+fn a_launch_refuses_only_a_box_under_its_minimum() {
+    let w = world(true);
+    let inputs = vec![owned(&w, 0x31, 30_000_000, None)];
+    let change = Address::from_bech32(&account_row(true, [0x0a; 28], 0, 1, None).address).unwrap();
+    let available = vec![account_row(true, [0x0a; 28], 0x51, 40_000_000, None)];
+    let collateral = account_row(true, [0x0a; 28], 0x5c, 5_000_000, None);
+    // As the worker names them: the fee cap under the box, as one_shot_mint asks.
+    let ada = |lovelace: u64| Terms {
+        token: None,
+        box_lovelace: lovelace,
+        max_fee: (lovelace - 1).min(1_500_000),
+    };
+    // Built, and what it says of a box's way back; or refused, and why.
+    let said = |r: anyhow::Result<Option<lovejoin::CantPayBack>>| match r {
+        Ok(None) => "built".to_string(),
+        Ok(Some(c)) => format!(
+            "built, {} left after the fee where {} is needed",
+            c.has, c.needs
+        ),
+        Err(e) => format!("refused: {e}"),
+    };
+    // Each way a launch is built: from the private balance as given, through its selection, and from the account.
+    let sides = |lovelace: u64| -> Vec<String> {
+        vec![
+            said(
+                lovejoin::launch(&w.chain, &inputs, &ada(lovelace), true, &w.owner, w.signer)
+                    .map(|l| l.cant_come_back),
+            ),
+            said(
+                lovejoin::launch_apart(
+                    &w.chain,
+                    &inputs,
+                    &Histories::new(Purpose::Mint),
+                    &ada(lovelace),
+                    true,
+                    &w.owner,
+                    w.signer,
+                )
+                .map(|l| l.cant_come_back),
+            ),
+            said(
+                lovejoin::launch_from_account(
+                    &w.chain,
+                    &available,
+                    Some(&collateral),
+                    &ada(lovelace),
+                    true,
+                    &change,
+                    None,
+                )
+                .map(|l| l.cant_come_back),
+            ),
+        ]
+    };
+    // 2 ₳ comes back on its own: nothing to say.
+    assert_eq!(sides(2_000_000), ["built"; 3]);
+    // 1.5 ₳ meets an ADA box's minimum (1.3361 ₳ here), and can't pay its own way back: built, and said.
+    let short = "built, 1204978 left after the fee where 1336100 is needed";
+    assert_eq!(sides(1_500_000), [short; 3]);
+    // 1.2 ₳ is under it: no mix could make such a box, so refused, in words.
+    for why in sides(1_200_000) {
+        assert!(why.contains("the ledger asks of it now"), "{why}");
+    }
+}
+
+/// Chunk 51, t1d#7: the pool a finished launch makes is verified before the
+/// wallet signs it: read back under a seed it didn't spend, it isn't trusted.
+#[test]
+fn a_launch_read_back_under_another_seed_isnt_trusted() {
+    let w = world(true);
+    let inputs = vec![owned(&w, 0x31, 30_000_000, None)];
+    let launch = lovejoin::launch(&w.chain, &inputs, &terms(), true, &w.owner, w.signer).unwrap();
+    let done = finished(&w, &launch);
+    let tx = &done.tx.tx_bytes.0;
+    assert!(lovejoin::launched_pool(true, tx, launch.seed).is_ok());
+    let why = lovejoin::launched_pool(true, tx, ([0x32; 32], 1)).map(|pool| pool.id);
+    assert!(
+        matches!(&why, Err(e) if e.to_string().contains("isn't one the wallet trusts")),
+        "{why:?}"
+    );
+}
+
+/// Chunk 51, t1a#7: a launch's NFT is minted by a script the transaction
+/// carries, which must hash to the policy it mints under: one that doesn't
+/// is refused before anything is built, where the node would refuse it for a
+/// missing script.
+#[test]
+fn an_inline_minting_script_must_hash_to_its_policy() {
+    let w = world(true);
+    let inputs = vec![owned(&w, 0x31, 30_000_000, None)];
+    let script = hex::decode("4e4d01000033222220051200120011").unwrap();
+    let mint = |policy: Hash<28>| {
+        ScriptSpend::new(&w.chain, &inputs, &w.owner, w.signer)
+            .unwrap()
+            .mint_inline(
+                policy,
+                script.clone(),
+                b"lovejoin".to_vec(),
+                1,
+                vec![0xd8, 0x79, 0x80],
+            )
+            .map(|_| ())
+    };
+    assert!(mint(Hasher::<224>::hash_tagged(&script, 3)).is_ok());
+    let refused = mint(Hash::new([0x13; 28]));
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("The minting script isn't the policy's")),
+        "{refused:?}"
+    );
 }

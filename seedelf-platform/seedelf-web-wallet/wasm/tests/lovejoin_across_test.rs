@@ -515,3 +515,218 @@ fn a_requests_width_is_read_on_its_own_and_checked() {
         .unwrap()
     );
 }
+
+/// Chunk 51, r3a#2: a fan-out is 0 to 3 waves deep, or 1 to 3 to mix boxes again (a deposit may stop at its seed;
+/// mixing what's in the pool needs a wave). Funding and the account's chains always refused other depths in those
+/// words; a session's plan and chain, in one pool or across pools, took any depth and worked it out anyway.
+#[test]
+fn a_plan_or_a_sessions_chain_is_refused_past_its_waves() {
+    let sk = Scalar::from(51_002u64);
+    let (utxos, funding, fill) = filled();
+    let plan_again = |depth| PlanRequest {
+        again: true,
+        ..plan_request(utxos.clone(), depth)
+    };
+    let chain_request = |depth, again| ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: utxos.clone(),
+        collateral: Some(collateral()),
+        pool: others(&classic(), 0xc0, 8),
+        depth,
+        boxes: Some(1),
+        merge: Vec::new(),
+        again,
+        own: vec![funding.clone()],
+        collateral_pool: None,
+        collateral_boxes: vec![],
+        collateral_reserve: false,
+        rewards: Default::default(),
+    };
+    let deposit = "The fan-out is 0 to 3 waves deep";
+    let mix = "The fan-out is 1 to 3 waves deep";
+    let refused: Vec<(&str, String, &str)> = vec![
+        (
+            "a plan four waves deep",
+            wasm::plan_at(&accounts(), plan_request(utxos.clone(), 4), None, &[], 3)
+                .map(|_| "accepted".to_string())
+                .unwrap_or_else(|e| e.to_string()),
+            deposit,
+        ),
+        (
+            "a plan to mix again with no wave",
+            wasm::plan_at(&accounts(), plan_again(0), None, &[], 3)
+                .map(|_| "accepted".to_string())
+                .unwrap_or_else(|e| e.to_string()),
+            mix,
+        ),
+        (
+            "a plan across pools four waves deep",
+            wasm::plan_across_pools(
+                &accounts(),
+                plan_request(utxos.clone(), 4),
+                std::slice::from_ref(&funding),
+                &across(legs([None, None]), vec![fill.clone()]),
+                3,
+            )
+            .map(|_| "accepted".to_string())
+            .unwrap_or_else(|e| e.to_string()),
+            deposit,
+        ),
+        (
+            "a chain four waves deep",
+            wasm::chain_at(&accounts(), sk, chain_request(4, false), None, 3)
+                .map(|_| "accepted".to_string())
+                .unwrap_or_else(|e| e.to_string()),
+            deposit,
+        ),
+        (
+            "a chain to mix again with no wave",
+            wasm::chain_at(&accounts(), sk, chain_request(0, true), None, 3)
+                .map(|_| "accepted".to_string())
+                .unwrap_or_else(|e| e.to_string()),
+            mix,
+        ),
+        (
+            "a chain across pools four waves deep",
+            wasm::chain_across_pools(
+                &accounts(),
+                sk,
+                chain_request(4, false),
+                &across(legs([None, None]), vec![fill.clone()]),
+                3,
+            )
+            .map(|_| "accepted".to_string())
+            .unwrap_or_else(|e| e.to_string()),
+            deposit,
+        ),
+        (
+            "funding four waves deep, as before",
+            wasm::funding_at(
+                FundingRequest {
+                    network: "preprod".into(),
+                    boxes: 1,
+                    depth: 4,
+                    again: false,
+                },
+                None,
+                3,
+            )
+            .map(|_| "accepted".to_string())
+            .unwrap_or_else(|e| e.to_string()),
+            deposit,
+        ),
+    ];
+    let wrong: Vec<_> = refused
+        .iter()
+        .filter(|(_, said, wanted)| !said.contains(wanted))
+        .collect();
+    assert!(wrong.is_empty(), "not refused for its depth: {wrong:#?}");
+
+    // What the worker asks still plans: a Bootstrap's deposit alone (0), and the deepest, 3.
+    for depth in [0, 3] {
+        assert!(
+            wasm::plan_at(
+                &accounts(),
+                plan_request(utxos.clone(), depth),
+                None,
+                &[],
+                3
+            )
+            .is_ok(),
+            "depth {depth}"
+        );
+    }
+    assert!(wasm::plan_at(&accounts(), plan_again(1), None, &[], 3).is_ok());
+}
+
+/// A token pool of LJTEST launched from `seed`#0, as [`pool_ref`]'s is from
+/// Lovejoin's own seed: another pool (its own NFT and scripts) of the same token.
+fn token_pool_from(seed: [u8; 32]) -> PoolRef {
+    let d = templates::derive(&seed, 0).unwrap();
+    let mut pool = pool_ref();
+    let datum = ReferenceDatum {
+        box_value: BoxValue {
+            lovelace: 2_000_000,
+            token: Some(BoxToken {
+                policy: hex::decode(LJTEST).unwrap().try_into().unwrap(),
+                name: b"LJTEST".to_vec(),
+                quantity: Q,
+            }),
+        },
+        max_fee: 1_500_000,
+        mix_box_hash: d.mix_box.hash,
+        mix_logic_hash: d.mix_logic.hash,
+        fee_hash: d.fee_contract.hash,
+    };
+    pool.reference.tx_hash = "6f".repeat(32);
+    pool.reference.inline_datum =
+        serde_json::from_value(json!({ "bytes": hex::encode(datum.encode()), "value": {} }))
+            .unwrap();
+    pool.reference.asset_list = serde_json::from_value(json!([{
+        "policy_id": hex::encode(d.policy()), "asset_name": hex::encode("lovejoin"),
+        "quantity": "1", "decimals": 0, "fingerprint": "",
+    }]))
+    .unwrap();
+    for ((row, script), first) in pool
+        .scripts
+        .iter_mut()
+        .zip([&d.mix_box, &d.mix_logic])
+        .zip(["6d", "06"])
+    {
+        row.tx_hash = first.repeat(32);
+        row.reference_script = serde_json::from_value(json!({
+            "hash": hex::encode(script.hash), "size": script.cbor.len(), "type": "plutusV3",
+            "bytes": hex::encode(&script.cbor),
+        }))
+        .unwrap();
+    }
+    pool.seed = OutRef {
+        tx_hash: hex::encode(seed),
+        tx_index: 0,
+    };
+    pool
+}
+
+/// Chunk 51, t1f#12: a chain across pools never names one pool twice, nor two
+/// pools of one token, each refused on its own: the same ADA pool twice (only
+/// the pools' ids tell), and two different pools of LJTEST (only the token
+/// tells). The only case before named one token pool twice, which both checks
+/// refuse, so each masked the other.
+#[test]
+fn a_chain_across_pools_names_no_pool_twice_nor_one_token_twice() {
+    let (utxos, funding, _) = filled();
+    let another = token_pool_from([0x5e; 32]);
+    let ids = (
+        token_pool().id,
+        wasm::protocol_of(true, Some(&another)).unwrap().id,
+    );
+    assert_ne!(ids.0, ids.1, "two pools");
+    let leg = |pool_ref: Option<PoolRef>| LegRequest {
+        pool_ref,
+        pool: Vec::new(),
+        most: None,
+    };
+    let said = |legs: Vec<LegRequest>| {
+        wasm::plan_across_pools(
+            &accounts(),
+            plan_request(utxos.clone(), 1),
+            std::slice::from_ref(&funding),
+            &across(legs, Vec::new()),
+            3,
+        )
+        .map(|p| format!("planned {:?}", p.legs))
+        .unwrap_or_else(|e| e.to_string())
+    };
+    assert_eq!(
+        [
+            said(vec![leg(None), leg(None)]),
+            said(vec![leg(Some(pool_ref())), leg(Some(another))]),
+        ],
+        [
+            "A chain names one Lovejoin pool twice",
+            "A chain takes a token into one Lovejoin pool"
+        ]
+    );
+}

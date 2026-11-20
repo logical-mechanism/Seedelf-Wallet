@@ -694,6 +694,11 @@ describe("DReps", () => {
     expect(drepName("\u0007")).toBeUndefined();
     expect(drepName(42)).toBeUndefined();
     expect(drepName(null)).toBeUndefined();
+    // Nor a bidi override or a zero-width character, which turn a name round or hide in it: every screen shows this
+    // one, Voting's card, Governance's own DRep and a staking review among them (chunk 51, gap-g7#3).
+    expect(drepName("Ev\u202eil\u200b Drep")).toBe("Evil Drep");
+    expect(drepName({ "@value": "\u2066Bob\u2069\ufeff" })).toBe("Bob");
+    expect(drepName("\u200b\u2060\u202e")).toBeUndefined();
   });
 });
 
@@ -761,10 +766,11 @@ describe("staking transactions", () => {
     expect(takesDeposit({ kind: "drep-register", delegate: false }, true)).toBe(true);
   });
 
-  it("refuses the same choice again, locked rewards, and what's gone stale", async () => {
+  it("refuses locked rewards and what's gone stale, and builds the same choice again", async () => {
     const t = await unlocked();
-    await expect(t.staking.build("preprod", { kind: "delegate", pool: LOGIC })).rejects.toThrow("already staking with this pool");
-    await expect(t.staking.build("preprod", { kind: "vote", drep: "drep_always_abstain" })).rejects.toThrow("already delegated");
+    // The same pool or vote again is the ledger's to take, for a fee: built, not refused (chunk 51, e7b#1).
+    expect(await t.staking.build("preprod", { kind: "delegate", pool: LOGIC })).toMatchObject({ pool: LOGIC, deposit: "0" });
+    expect(await t.staking.build("preprod", { kind: "vote", drep: "drep_always_abstain" })).toMatchObject({ deposit: "0" });
 
     const info = stakingPreprod.account_info[0]!;
     t.koios.stakes.set(info.stake_address, { ...info, delegated_drep: null });

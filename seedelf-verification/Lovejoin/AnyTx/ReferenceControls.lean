@@ -16,6 +16,21 @@ open Lovejoin.V2.Own1
 #guard match honest with
   | some [b,t,z] => endsWithUnit (ownerOne.exec nftPolicy mixBoxHash g1 b t z kP (fields 1000000))
   | _ => false
+-- Each one-carrier builder at its passing point (README rule 3), the pool's own policy, name,
+-- quantity and datum: the carrier is then OwnerOne's, and the same Owner returns unit; so the
+-- failures below fail on what each changes.
+#guard match honest with
+  | some [b,t,z] => endsWithUnit (refForeign.exec nftPolicy mixBoxHash g1 b t z kP nftPolicy (fields 1000000))
+  | _ => false
+#guard match honest with
+  | some [b,t,z] => endsWithUnit (refName.exec nftPolicy mixBoxHash g1 b t z kP Lovejoin.Template.nftName (fields 1000000))
+  | _ => false
+#guard match honest with
+  | some [b,t,z] => endsWithUnit (refQty.exec nftPolicy mixBoxHash g1 b t z kP 1 (fields 1000000))
+  | _ => false
+#guard match honest with
+  | some [b,t,z] => endsWithUnit (refDatum.exec nftPolicy mixBoxHash g1 b t z kP (Reference.datum mixBoxHash) (fields 1000000))
+  | _ => false
 #guard match honest with
   | some [b,t,z] => endsInError (refAbsent.exec nftPolicy mixBoxHash g1 b t z kP (fields 1000000))
   | _ => false

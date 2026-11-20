@@ -13,7 +13,7 @@ use pallas_primitives::conway::PlutusData;
 use pallas_traverse::MultiEraTx;
 use rand_core::OsRng;
 use seedelf_core::address::wallet_contract;
-use seedelf_core::build::{Chain, ScriptSpend};
+use seedelf_core::build::{Chain, FinalSpend, ScriptSpend};
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr;
@@ -257,4 +257,185 @@ fn an_account_under_another_key_or_a_token_collateral_is_refused() {
         .err()
         .unwrap();
     assert!(error.to_string().contains("one-time key"), "{error}");
+}
+
+/// Chunk 51, t1a#16: the account's rows are this network's. One under the
+/// account's key on the other network is neither an input nor the
+/// collateral: the node would refuse an input that isn't on its chain.
+#[test]
+fn an_account_row_on_the_other_network_is_refused() {
+    let owner = Register::create(schnorr::random_scalar()).unwrap();
+    let s = session();
+    let one_time = session().key;
+    let change = contract_row(0x30, 0, 20_000_000, &owner.clone().rerandomize().unwrap());
+    let spend =
+        || ScriptSpend::new(&chain(), std::slice::from_ref(&change), &owner, one_time).unwrap();
+    let ours = row(0x11, 0, &s.address, 5_000_000, &[]);
+    let mainnet: Address = ShelleyAddress::new(
+        Network::Mainnet,
+        ShelleyPaymentPart::Key(s.key),
+        ShelleyDelegationPart::Null,
+    )
+    .into();
+    let elsewhere = row(0x13, 0, &mainnet, 30_000_000, &[]);
+    assert!(
+        spend()
+            .with_account(s.key, std::slice::from_ref(&ours), &ours)
+            .is_ok()
+    );
+    for (inputs, collateral) in [(&elsewhere, &ours), (&ours, &elsewhere)] {
+        let refused = spend()
+            .with_account(s.key, std::slice::from_ref(inputs), collateral)
+            .map(|_| ());
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("isn't under the account's key")),
+            "{refused:?}"
+        );
+    }
+}
+
+/// A session's return merged into its funding's 20 ₳ change, the account's
+/// 30 ₳ with it, and a collateral of the account's own: the collateral tests'
+/// shape (chunk 51).
+struct Merged {
+    sk: blstrs::Scalar,
+    owner: Register,
+    session: Session,
+    one_time: Hash<28>,
+    change: UtxoResponse,
+}
+
+impl Merged {
+    fn new() -> Self {
+        let sk = schnorr::random_scalar();
+        let owner = Register::create(sk).unwrap();
+        let change = contract_row(0x30, 0, 20_000_000, &owner.clone().rerandomize().unwrap());
+        Merged {
+            sk,
+            owner,
+            session: session(),
+            one_time: session().key,
+            change,
+        }
+    }
+
+    /// The return with a collateral of `lovelace`, unproven.
+    fn spend(&self, lovelace: u64) -> anyhow::Result<ScriptSpend> {
+        let s = &self.session;
+        ScriptSpend::new(
+            &chain(),
+            std::slice::from_ref(&self.change),
+            &self.owner,
+            self.one_time,
+        )?
+        .with_account(
+            s.key,
+            &[row(0x10, 0, &s.address, 30_000_000, &[])],
+            &row(0x20, 0, &s.address, lovelace, &[]),
+        )
+    }
+
+    /// The same proven, and measured in the wallet as it's sent.
+    fn sent(&self, lovelace: u64) -> anyhow::Result<FinalSpend> {
+        let sk = self.sk;
+        self.spend(lovelace)?
+            .proven(|register, vkh| schnorr::create_proof(register.clone(), sk, vkh.to_string()))?
+            .measure_locally(&[])
+    }
+
+    /// The least an output of ADA alone at the account holds, which the
+    /// collateral's return must.
+    fn least(&self) -> u64 {
+        seedelf_core::transaction::address_minimum_lovelace_with_assets(
+            &params(),
+            &self.session.address.to_bech32().unwrap(),
+            seedelf_core::assets::Assets::new(),
+        )
+        .unwrap()
+    }
+}
+
+/// Chunk 51, t1a#18: the collateral the account puts up covers 3/2 of the
+/// fee the return pays. One short of that is refused in words, where the node
+/// would refuse the transaction for its collateral. (Each proof moves the fee
+/// by a hair, so the amounts here stay well clear of it; and the return is
+/// held to the least an output holds, the tests below.)
+#[test]
+fn an_account_collateral_short_of_three_halves_of_the_fee_is_refused() {
+    let m = Merged::new();
+    let fee = m.sent(5_000_000).unwrap().fee.total;
+    assert!(m.sent(fee * 3 / 2 + 1_000_000).is_ok());
+    let refused = m.sent(fee * 3 / 2 - 5_000).map(|built| built.fee.total);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("can't cover this transaction's fee")
+            && seedelf_core::build::is_collateral_short(e)),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51: what the account's collateral gives back is an output, held to
+/// the least one holds at the fee the return pays, as an account-paid mint's
+/// and launch's are. A session return puts up an ADA-only UTxO of 2 ₳ or more
+/// when it has no 5 ₳ one, and a return's fee can take 3/2 of it past that:
+/// the ledger refuses such a collateral return, so it's refused here, in words.
+#[test]
+fn an_account_collateral_whose_return_falls_under_its_least_is_refused() {
+    let m = Merged::new();
+    let fee = m.sent(5_000_000).unwrap().fee.total;
+    let refused = m
+        .sent(fee * 3 / 2 + m.least() - 5_000)
+        .map(|built| built.fee.total);
+    // Typed, so a session's return can come back another way (a plain sweep
+    // puts up no collateral).
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("come back as an output")
+            && seedelf_core::build::is_collateral_short(e)),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51, r2money#2: that least is held at the fee the return pays, never
+/// at a guess. The draft measured is staged at the estimate's fee, priced on
+/// SPEND_BUDGET_GUESS (about 1.3× what the wallet contract uses), and held to
+/// it the least refused a collateral within 3/2 of the guess's extra compute
+/// over what it needs: a transaction the ledger takes. A session's 2 ₳-or-more
+/// fallback collateral under a heavy return lands there, and the money stayed
+/// at the session's account.
+#[test]
+fn a_merged_return_whose_collateral_comes_back_with_its_least_at_the_fee_it_pays_is_built() {
+    let m = Merged::new();
+    let fee = m.sent(5_000_000).unwrap().fee.total;
+    let least = m.least();
+    let guessed = m.spend(5_000_000).unwrap().estimate().unwrap().fee.total;
+    // 5,000 lovelace over its least at the fee it pays, and under it at the guess's.
+    let collateral = least + fee * 3 / 2 + 5_000;
+    assert!(
+        collateral < least + guessed * 3 / 2,
+        "fee {fee}, guessed {guessed}"
+    );
+    let built = m.sent(collateral).unwrap_or_else(|e| {
+        panic!("refused: {e} (least {least}, fee {fee}, collateral {collateral})")
+    });
+
+    // The transaction the ledger takes: that UTxO is the collateral, 3/2 of
+    // the fee stays, and what comes back holds an output's least, by the
+    // ledger's own rule on its bytes.
+    let tx = MultiEraTx::decode(&built.tx.tx_bytes.0).unwrap();
+    let fee = tx.fee().unwrap();
+    assert_eq!(fee, built.fee.total);
+    let collaterals: Vec<_> = tx
+        .collateral()
+        .iter()
+        .map(|i| (**i.hash(), i.index()))
+        .collect();
+    assert_eq!(collaterals, vec![([0x20; 32], 0)]);
+    let back = tx.collateral_return().expect("a collateral return");
+    assert_eq!(back.address().unwrap().to_vec(), m.session.address.to_vec());
+    let coin = back.value().coin();
+    assert_eq!(collateral - coin, fee * 3 / 2);
+    let ledger_least = (160 + back.encode().len() as u64) * 4_310;
+    assert!(
+        coin >= ledger_least && coin >= least,
+        "{coin} < {ledger_least} / {least}"
+    );
 }

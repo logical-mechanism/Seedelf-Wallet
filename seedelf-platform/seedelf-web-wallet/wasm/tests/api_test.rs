@@ -448,6 +448,25 @@ mod move_in {
         }
     }
 
+    /// A testnet Byron address (Pallas's own vector), as base58.
+    const BYRON: &str = "37btjrVyb4KDXBNC4haBVPCrro8AQPHwvCMp3RFhhSVWwfFmZ6wwzSK6JK1hY6wHNmtrpTf1kdbva8TCneM2YsiXT7mrzT21EacHnPpz5YyUdj64na";
+
+    /// Each output's address, lovelace, and whether it carries a datum.
+    fn outputs_with_datums(tx_cbor: &str) -> Vec<(String, u64, bool)> {
+        let bytes = hex::decode(tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        tx.outputs()
+            .iter()
+            .map(|o| {
+                (
+                    o.address().unwrap().to_bech32().unwrap(),
+                    o.value().coin(),
+                    o.datum().is_some(),
+                )
+            })
+            .collect()
+    }
+
     /// An output's address, lovelace and tokens, `policy.name` → quantity.
     type Paid = (String, u64, Vec<(String, u64)>);
 
@@ -614,14 +633,15 @@ mod move_in {
                 .is_none()
         );
 
-        // A note that can't go on a transaction is refused, in words.
+        // A note that can't go on a transaction is refused, in words: past 500
+        // characters, what Activity keeps of one (chunk 51, gap-g8#3).
         let mut request = send(account_utxos(&account), &to, Some("3000000"), vec![]);
-        request.note = Some("x".repeat(65));
+        request.note = Some("x".repeat(501));
         let e = api::account_send(&account, request)
             .err()
             .unwrap()
             .to_string();
-        assert_eq!(e, "A note is at most 64 characters, not 65");
+        assert_eq!(e, "A note is at most 500 characters, not 501");
     }
 
     #[test]
@@ -675,7 +695,7 @@ mod move_in {
         let mut crowd = send(account_utxos(&account), &to, Some("2000000"), vec![]);
         crowd.payments = vec![crowd.payments[0].clone(); api::MAX_RECIPIENTS + 1];
         let e = api::account_send(&account, crowd).unwrap_err().to_string();
-        assert!(e.contains("at most 20 recipients"), "{e}");
+        assert!(e.contains("at most 100 recipients"), "{e}");
         let mut nobody = send(account_utxos(&account), &to, Some("2000000"), vec![]);
         nobody.payments.clear();
         let e = api::account_send(&account, nobody).unwrap_err().to_string();
@@ -705,13 +725,35 @@ mod move_in {
             .to_bech32()
             .unwrap();
         let stake = account.stake_address(true).unwrap().to_bech32().unwrap();
-        for bad in [contract.as_str(), mainnet.as_str(), stake.as_str()] {
+        for bad in [mainnet.as_str(), stake.as_str()] {
             assert!(
-                err(bad, "2000000").contains("normal preprod address"),
+                err(bad, "2000000").contains("Payments go to an address on preprod"),
                 "{bad}"
             );
         }
         assert!(err("nope", "2000000").contains("isn't a Cardano address"));
+        // A Byron address isn't paid, said as it is (chunk 51, r2a#1; the
+        // owner's call of 2026-11-18): "isn't a Cardano address" was false.
+        assert_eq!(
+            err(BYRON, "2000000"),
+            "Seedelf Wallet can't pay a Byron address"
+        );
+        // The contract's own address is a script's: the ledger takes a
+        // payment there, with no datum, so the wallet pays it and the screens
+        // warn that anyone can take it (chunk 51, r2a#1, w1b#1).
+        let paid = api::account_send(
+            &account,
+            send(account_utxos(&account), &contract, Some("2000000"), vec![]),
+        )
+        .unwrap();
+        let out = outputs_with_datums(&paid.tx_cbor);
+        assert_eq!(
+            out.iter()
+                .filter(|(a, ..)| *a == contract)
+                .map(|(_, l, d)| (*l, *d))
+                .collect::<Vec<_>>(),
+            vec![(2_000_000, false)]
+        );
         assert!(err(&theirs(), "999999999999999").contains("for this payment"));
 
         let mut moved = account_utxos(&account);
@@ -1385,6 +1427,7 @@ mod transfer {
             }],
             classes: Default::default(),
             carry: false,
+            most: false,
             seed: None,
             evaluation: None,
         }
@@ -1750,7 +1793,7 @@ mod transfer {
         let mut crowd = request();
         crowd.payments = vec![crowd.payments[0].clone(); api::MAX_RECIPIENTS + 1];
         let e = api::draft_transfer(sk, crowd).unwrap_err().to_string();
-        assert!(e.contains("at most 20 recipients"), "{e}");
+        assert!(e.contains("at most 100 recipients"), "{e}");
         let mut none = request();
         none.payments.clear();
         let e = api::draft_transfer(sk, none).unwrap_err().to_string();
@@ -1926,6 +1969,41 @@ mod transfer {
         let e = api::finish_transfer(sk, r).unwrap_err().to_string();
         assert!(e.contains("evaluation"), "{e}");
     }
+
+    /// Chunk 51, x2#2: a Seedelf's UTxO at the KEY address carrying the
+    /// contract's hash, which Koios lists with the contract's own rows (its
+    /// `payment_cred` the contract's 28 bytes), isn't in the contract, so it
+    /// can't be paid: the register beside it is whatever a stranger wrote.
+    #[test]
+    fn a_seedelf_at_the_key_address_carrying_the_contracts_hash_cant_be_paid() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let config = seedelf_core::constants::get_config(1, true).unwrap();
+        let mut r = request();
+        r.payments[0].recipient.address =
+            pallas_addresses::Address::Shelley(pallas_addresses::ShelleyAddress::new(
+                pallas_addresses::Network::Testnet,
+                pallas_addresses::ShelleyPaymentPart::Key(pallas_crypto::hash::Hash::new(
+                    config.contract.wallet_contract_hash,
+                )),
+                pallas_addresses::ShelleyDelegationPart::Null,
+            ))
+            .to_bech32()
+            .unwrap();
+        assert_eq!(
+            r.payments[0].recipient.payment_cred,
+            hex::encode(config.contract.wallet_contract_hash),
+            "as Koios lists it"
+        );
+        let said = api::draft_transfer(sk, r)
+            .map(|_| "drafted".to_string())
+            .unwrap_or_else(|e| e.to_string());
+        assert!(
+            said.contains("isn't in the Seedelf Wallet contract"),
+            "{said}"
+        );
+        assert!(api::draft_transfer(sk, request()).is_ok());
+    }
+
     /// The contract outputs of a send from the Cardano account: each one's
     /// register and lovelace. Everything else is change.
     fn contract_outputs(tx_cbor: &str) -> Vec<(Register, u64)> {
@@ -2808,6 +2886,149 @@ mod withdraw {
         assert!(outs[0].0.starts_with("addr_test1w"), "{}", outs[0].0);
     }
 
+    /// Chunk 51, w1b#2: a Seedelf's UTxO can hold other tokens beside it. The
+    /// deployed policy (seedelf.ak at 5b82530) checks only the minted name,
+    /// so anyone can mint a Seedelf with tokens of their own under a register
+    /// of ours, and the wallet lists it as ours. A removal moves those tokens
+    /// with the ADA, so its result names each one for Remove's review, as
+    /// every other result whose change goes where the user picks does.
+    #[test]
+    fn a_removal_names_the_other_tokens_it_moves() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (policy, name) = ("cd".repeat(28), hex::encode("junk"));
+        let mut utxo = owned().pop().unwrap();
+        assert_eq!(
+            utxo.asset_list.as_ref().map(Vec::len),
+            Some(1),
+            "the fixture's Seedelf UTxO holds its Seedelf alone"
+        );
+        // 3 ₳: enough for an output carrying the token after the fee.
+        utxo.value = "3000000".into();
+        utxo.asset_list
+            .as_mut()
+            .unwrap()
+            .push(seedelf_koios::koios::Asset {
+                decimals: 0,
+                quantity: "100".into(),
+                policy_id: policy.clone(),
+                asset_name: name.clone(),
+                fingerprint: String::new(),
+            });
+        // Where it goes "to the account": its receive address 0/0.
+        let account = CardanoAccount::from_phrase(PHRASE, 0)
+            .unwrap()
+            .base_address(true, Role::Receive, 0)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        // How much of the token each output pays, by address.
+        let paid = |tx_cbor: &str| -> Vec<(String, u64)> {
+            let bytes = hex::decode(tx_cbor).unwrap();
+            let tx = MultiEraTx::decode(&bytes).unwrap();
+            let mut paid = Vec::new();
+            for output in tx.outputs() {
+                let value = output.value();
+                for group in value.assets() {
+                    for asset in group.assets() {
+                        if hex::encode(group.policy()) == policy
+                            && hex::encode(asset.name()) == name
+                        {
+                            paid.push((
+                                output.address().unwrap().to_bech32().unwrap(),
+                                asset.output_coin().unwrap(),
+                            ));
+                        }
+                    }
+                }
+            }
+            paid
+        };
+        for to in [Some(account.clone()), None] {
+            let mut r = removal(to.clone());
+            r.utxo = utxo.clone();
+            let result = api::build_remove(sk, r).unwrap();
+            let paid = paid(&result.tx_cbor);
+            assert_eq!(paid.iter().map(|(_, q)| q).sum::<u64>(), 100, "{to:?}");
+            match &to {
+                Some(account) => assert!(paid.iter().all(|(at, _)| at == account), "{paid:?}"),
+                // Back into the private balance: the contract.
+                None => assert!(
+                    paid.iter().all(|(at, _)| at.starts_with("addr_test1w")),
+                    "{paid:?}"
+                ),
+            }
+            // In the JSON the worker turns into the review.
+            assert_eq!(
+                serde_json::to_value(&result).unwrap()["tokens"],
+                json!([{ "policyId": policy, "assetName": name, "quantity": "100" }]),
+                "the result names the token that goes with the ADA ({to:?})"
+            );
+        }
+        // A Seedelf alone brings back no token.
+        let alone = api::build_remove(sk, removal(Some(theirs()))).unwrap();
+        assert_eq!(serde_json::to_value(&alone).unwrap()["tokens"], json!([]));
+    }
+
+    /// The KEY address carrying the contract's hash, on preprod: no key has
+    /// that hash, so nothing there can ever be spent.
+    fn at_the_contracts_hash_as_a_key() -> String {
+        let config = seedelf_core::constants::get_config(1, true).unwrap();
+        pallas_addresses::Address::Shelley(ShelleyAddress::new(
+            AddressNetwork::Testnet,
+            ShelleyPaymentPart::Key(Hash::new(config.contract.wallet_contract_hash)),
+            ShelleyDelegationPart::Null,
+        ))
+        .to_bech32()
+        .unwrap()
+    }
+
+    /// Chunk 51, x2#2: Koios lists a credential's UTxOs by its 28 bytes, a
+    /// key's and a script's alike, so asked for the contract's it lists the
+    /// KEY address with the same 28 bytes too, its `payment_cred` the
+    /// contract's. A stranger's output there under one of the user's
+    /// registers isn't in the contract: nothing can spend it, and a private
+    /// spend that took it failed at the node. Every private spend's check
+    /// (`check_spendable`, here a withdrawal's) and a removal refuse it.
+    #[test]
+    fn a_key_address_carrying_the_contracts_hash_holds_nothing_to_spend() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let burnt = at_the_contracts_hash_as_a_key();
+        let mut withdrawal = request("amount");
+        for utxo in &mut withdrawal.utxos {
+            utxo.address = burnt.clone();
+        }
+        let mut removal_there = removal(Some(theirs()));
+        removal_there.utxo.address = burnt.clone();
+        let config = seedelf_core::constants::get_config(1, true).unwrap();
+        assert_eq!(
+            removal_there.utxo.payment_cred,
+            hex::encode(config.contract.wallet_contract_hash),
+            "as Koios lists it"
+        );
+        let said: Vec<(&str, String)> = vec![
+            (
+                "a withdrawal",
+                api::draft_withdraw(sk, withdrawal)
+                    .map(|_| "drafted".to_string())
+                    .unwrap_or_else(|e| e.to_string()),
+            ),
+            (
+                "a removal",
+                api::draft_remove(sk, removal_there)
+                    .map(|_| "drafted".to_string())
+                    .unwrap_or_else(|e| e.to_string()),
+            ),
+        ];
+        let wrong: Vec<_> = said
+            .iter()
+            .filter(|(_, said)| !said.contains("isn't in the Seedelf Wallet contract"))
+            .collect();
+        assert!(wrong.is_empty(), "spent from a key address: {wrong:?}");
+        // At the contract's own script address, the same rows spend.
+        assert!(api::draft_withdraw(sk, request("amount")).is_ok());
+        assert!(api::draft_remove(sk, removal(Some(theirs()))).is_ok());
+    }
+
     #[test]
     fn refuses_what_would_lose_or_misdirect_money() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
@@ -2818,13 +3039,22 @@ mod withdraw {
             r
         };
 
-        // Only a normal preprod key address.
+        // Only an address on preprod that a payment can go to: not a stake
+        // address, another network's or a Byron one, which the wallet can't
+        // pay (chunk 51, r2a#1). A script's address the ledger takes, with no
+        // datum, the contract's own included: the screens warn of it.
         assert!(err(to("nope")).contains("isn't a Cardano address"));
         let stake = "stake_test1urj40zgr2gy4788kl54h6x3gu0pukq5lfr8nflufpg5dzas324ywz";
-        for bad in [contract(), mainnet(), stake.to_string()] {
+        for bad in [mainnet(), stake.to_string()] {
             let e = err(to(&bad));
-            assert!(e.contains("normal preprod address"), "{bad}: {e}");
+            assert!(
+                e.contains("Payments go to an address on preprod"),
+                "{bad}: {e}"
+            );
         }
+        let byron = "37btjrVyb4KDXBNC4haBVPCrro8AQPHwvCMp3RFhhSVWwfFmZ6wwzSK6JK1hY6wHNmtrpTf1kdbva8TCneM2YsiXT7mrzT21EacHnPpz5YyUdj64na";
+        assert_eq!(err(to(byron)), "Seedelf Wallet can't pay a Byron address");
+        assert!(api::draft_withdraw(sk, to(&contract())).is_ok());
 
         // Max takes no token amounts; spends only this wallet's UTxOs, never a seedelf's.
         assert!(err(request("amount").tap_max()).contains("takes no token amounts"));
@@ -2859,12 +3089,12 @@ mod withdraw {
                 .to_string()
                 .contains("exactly one Seedelf")
         );
-        let r = removal(Some(contract()));
+        let r = removal(Some(mainnet()));
         assert!(
             api::draft_remove(sk, r)
                 .unwrap_err()
                 .to_string()
-                .contains("normal preprod address")
+                .contains("Payments go to an address on preprod")
         );
         let e = api::finish_remove(sk, removal(None))
             .unwrap_err()
@@ -3910,6 +4140,7 @@ mod parts_of_any_shape {
             }],
             classes: Default::default(),
             carry: false,
+            most: false,
             seed: None,
             evaluation: None,
         }
@@ -4960,6 +5191,27 @@ mod parts_of_any_shape {
         let asked = Some(150_000_000);
         assert!(api::build_transfer_parts(sk, transfer(utxos.clone(), asked, vec![])).is_err());
         assert!(api::build_withdraw_parts(sk, withdraw(utxos, asked, vec![])).is_err());
+    }
+
+    #[test]
+    fn several_recipients_go_in_one_transaction_or_not_at_all() {
+        // Chunk 51, t1e#3: parts pay one recipient (and a session's funding its collateral beside it, in the first).
+        // Several at once that one transaction can't take are refused in its words: planned in parts, each part paid
+        // the first recipient alone, and the second, named in the request, was never paid. 150 ₳ each to two, of 40
+        // UTxOs of 10 ₳.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let utxos = ada(1, 40, 10_000_000);
+        let too_much = |e: &anyhow::Error| {
+            seedelf_core::build::is_too_many(e) || seedelf_core::build::is_too_large(e)
+        };
+        let mut to_two = withdraw(utxos.clone(), Some(150_000_000), vec![]);
+        to_two.payments.push(to_two.payments[0].clone());
+        let e = api::build_withdraw_parts(sk, to_two).err().unwrap();
+        assert!(too_much(&e), "{e}");
+        let mut to_two = transfer(utxos, Some(150_000_000), vec![]);
+        to_two.payments.push(to_two.payments[0].clone());
+        let e = api::build_transfer_parts(sk, to_two).err().unwrap();
+        assert!(too_much(&e), "{e}");
     }
 
     #[test]

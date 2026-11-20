@@ -1,7 +1,8 @@
 // The send service: pay an address, an ADA Handle or someone's seedelf from
 // the Cardano account, built and signed through WebAssembly on the recorded
 // preprod account, kept until Send, then submitted exactly and watched.
-// Nothing goes to giveme.my, and nothing into the Seedelf history.
+// Nothing goes to giveme.my, and nothing into the Seedelf history but what it
+// pays into the user's own Seedelfs (send-own-seedelf.test.ts).
 import { describe, expect, it } from "vitest";
 
 import { Collateral, StaleReviewError } from "../src/background/collateral";
@@ -10,8 +11,10 @@ import { pendingKey } from "../src/background/pending";
 import { SESSION_SEND, SendService } from "../src/background/send";
 import { publicShort } from "../src/background/short";
 import { WalletLocked, WASM_BROKEN } from "../src/background/wallet";
+import { t as tr } from "../src/i18n";
+import { i18n } from "../src/i18n/core";
 import { MAX_RECIPIENTS } from "../src/shared/recipients";
-import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NOT_AN_ADDRESS } from "../src/shared/seedelf-name";
+import { SEEDELF_NOT_AN_ADDRESS } from "../src/shared/seedelf-name";
 import { bech32Bytes, preprodAddress } from "./fixtures/bech32";
 import { ttlOf, txIdOf } from "./fixtures/cbor";
 import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
@@ -76,7 +79,8 @@ describe("send", () => {
     const built = await t.session.get<{ txCbor: string; txHash: string; note: string }>(SESSION_SEND);
     expect(built!.note).toBe("Invoice 42");
     expect(txIdOf(Uint8Array.from(Buffer.from(built!.txCbor, "hex")))).toBe(noted.txHash);
-    await expect(t.send.build("preprod", to, "x".repeat(65))).rejects.toThrow("A note is at most 64 characters, not 65");
+    // At most 500 characters, what Activity keeps of a note (chunk 51, gap-g8#3).
+    await expect(t.send.build("preprod", to, "x".repeat(501))).rejects.toThrow("A note is at most 500 characters, not 501");
     await expect(t.send.build("preprod", to, "two\tparts")).rejects.toThrow("one line of text");
   });
 
@@ -185,9 +189,12 @@ describe("send", () => {
     await expect(t.send.build("preprod", [])).rejects.toThrow("someone to pay");
   });
 
-  it("points your own Seedelf to Move in, and Withdraw's Seedelf to Send", async () => {
+  it("pays your own Seedelf, marked as yours, and points Withdraw's Seedelf to Send", async () => {
     const t = await unlocked();
-    await expect(t.send.build("preprod", [{ to: MINE, lovelace: "5000000", tokens: [] }])).rejects.toThrow(OWN_SEEDELF_FROM_ACCOUNT());
+    // Paid into the private balance, as Make private would, and said so on the review (chunk 51, gap-g8#2; the rest of
+    // it is in send-own-seedelf.test.ts).
+    const own = await t.send.build("preprod", [{ to: MINE, lovelace: "5000000", tokens: [] }]);
+    expect(own.payments).toMatchObject([{ seedelf: { name: MINE, label: "web-wallet", own: true }, own: false, lovelace: "5000000" }]);
     await expect(t.send.build("preprod", [{ to: `5eed0e1f${"00".repeat(28)}`, lovelace: "5000000", tokens: [] }])).rejects.toThrow(
       "No Seedelf with that name on preprod.",
     );
@@ -225,6 +232,32 @@ describe("send", () => {
     expect(t.koios.submitted).toHaveLength(1);
     // One never sent, and no longer kept, is still a stale review.
     await expect(t.send.submit("preprod", "00".repeat(32))).rejects.toBeInstanceOf(StaleReviewError);
+  });
+
+  // Chunk 51, t1j#14: a payment to no one, or to more than MAX_RECIPIENTS (100 since gap-g8#4), is refused first, in the
+  // user's words. WebAssembly refuses the same counts again, but in English, and only after each $handle was looked up
+  // on Koios and the side read.
+  it("refuses a payment to no one or to more than MAX_RECIPIENTS first, in the user's language, asking Koios nothing", async () => {
+    const t = await unlocked();
+    await i18n.changeLanguage("es");
+    try {
+      const none = tr("shared.recipients.none");
+      const tooMany = tr("shared.recipients.tooMany", { max: MAX_RECIPIENTS });
+      expect(none).not.toBe(i18n.t("shared.recipients.none", { lng: "en" }));
+      const before = t.koios.calls.length;
+      const many = Array.from({ length: MAX_RECIPIENTS + 1 }, () => ({ to: "$someone", lovelace: "2000000", tokens: [] }));
+      for (const [what, service] of [
+        ["Send", t.send],
+        ["Make public", t.withdraw],
+        ["the private balance's Send", t.transfer],
+      ] as const) {
+        await expect(service.build("preprod", []), what).rejects.toThrow(none);
+        await expect(service.build("preprod", many), what).rejects.toThrow(tooMany);
+      }
+      expect(t.koios.calls.length).toBe(before);
+    } finally {
+      await i18n.changeLanguage("en");
+    }
   });
 
   it("explains what stops a payment and needs the wallet unlocked", async () => {

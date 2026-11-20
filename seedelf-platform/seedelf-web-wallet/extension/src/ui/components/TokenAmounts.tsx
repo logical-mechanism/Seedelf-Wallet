@@ -7,7 +7,7 @@
 // with hundreds of tokens never lists them all in the form.
 
 import { useMemo, useState } from "react";
-import { currentLanguage, t, useT } from "../../i18n";
+import { currentLanguage, joinList, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type { TokenAmount, TokenQuantity } from "../../shared/rpc";
@@ -77,6 +77,16 @@ export function tokenChoices(
     }
   }
   return { sent, problems, ok: Object.keys(problems).length === 0 };
+}
+
+/**
+ * The tokens picked that `held` doesn't hold: all of each locked, or still on its way, when a token's details started
+ * the payment, since Home lists both. The form draws no box for one, and `tokenChoices` passes it by, so a form holds
+ * Review while there's one and says why (chunk 51, e9a#1): it went on without the token, unsaid, once an amount was in.
+ */
+export function pickedAway(held: TokenAmount[], typed: Record<string, string>): string[] {
+  const holds = new Set(held.map(key));
+  return Object.keys(typed).filter((k) => !holds.has(k));
 }
 
 /**
@@ -260,13 +270,15 @@ export function TokenPicker({
                   type="button"
                   className={on ? "token-row token-row--on" : "token-row"}
                   aria-pressed={on}
-                  aria-label={v.label}
+                  aria-label={v.warn ? joinList([v.label, v.sub]) : v.label}
                   onClick={() => toggle(key(v.token))}
                 >
                   <TokenAvatar view={v} />
                   <span className="token-row__label">{v.label}</span>
                   <span className="token-row__amount">{on ? <CheckIcon size={16} /> : amounts.text(v.amount)}</span>
-                  <span className="token-row__sub">{v.sub}</span>
+                  {/* A token passing for another says so whole, in the warning's colour, as Home's row does (H-9): here
+                      it was cut to "Calls itself SNEK, not on the…" in grey (chunk 51, gap-g10#3). */}
+                  <span className={v.warn ? "token-row__sub wrap token-row__sub--warn" : "token-row__sub"}>{v.sub}</span>
                 </button>
               </li>
             );

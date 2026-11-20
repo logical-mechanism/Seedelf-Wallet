@@ -19,8 +19,9 @@ is a policy with two names, then a policy with one. The layouts are the composit
 `{+ policy_id => {+ asset_name => nonZeroInt64}}`), so every mint of n lines is the `mintOf` of
 one composition of n, and every minting context is `mintIn` of `withMint` of such a mint
 (`minting_context_layout`, below, kernel-checked). Four lines are PolicyLinesFourAnyTx and five
-PolicyLinesFiveAnyTx; six and more aren't proved, since the ledger bounds a mint's lines only by
-the transaction's size and budget. One line is the policy's rule itself (Slice/).
+PolicyLinesFiveAnyTx; six and more aren't proved by Blaster, since the ledger bounds a mint's
+lines only by the transaction's size and budget. PolicyLinesAll and LinesAllAnyMint prove every
+length in the kernel. One line is the policy's rule itself (Slice/).
 
 1500 steps, the policy's other modules' limit: the longest run here, three policies of one name
 each, errors after 854 (PolicyAnyTxSteps). Each builder's own run at the limit, the honest mint
@@ -202,7 +203,8 @@ theorem minting_context_layout (tx : TxInfo) (rd : Data) (own : ByteString)
   exact ⟨lines, hne, by rw [mintIn_of_minting, TxRest.ofTxInfo_withMint, hm]⟩
 
 -- Kernel-checked: no `blasterProven`, no `sorryAx`.
-#print axioms minting_context_layout
+/-- info: 'Seedelf.V1.minting_context_layout' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms minting_context_layout
 
 end Cover
 

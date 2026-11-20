@@ -11,7 +11,7 @@
 // waits and says to fund the account, with its address a tap away
 // (chunk 23's second review, GS-2).
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { type I18nKey, Rich, useT } from "../../i18n";
 
 import { LABEL_MAX, labelProblem, tokenNamePrefix } from "../../shared/label";
@@ -25,7 +25,7 @@ import { RadioCards } from "../components/RadioCards";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
-import { RewardsRow, TotalRows } from "../components/ReviewTotals";
+import { RewardsRow, RewardsSetting, TotalRows } from "../components/ReviewTotals";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { formatAda } from "../format";
@@ -68,6 +68,8 @@ export function CreateSeedelf({
   const [error, setError] = useState<string>();
   // The worker's words for a review that can't go as it is: Create gives way to building it again.
   const stale = useStale();
+  // A refusal is about what was asked: once the form changes, it's gone, as Make public's is (T05; chunk 51, e8b#5).
+  useEffect(() => setError(undefined), [label, from]);
   // The form's line about the balance that pays, hidden with the balances; the review shows what's sent in full (HM-9).
   const shown = useAmounts();
 
@@ -153,6 +155,8 @@ export function CreateSeedelf({
           />
         </ReviewRows>
         <TxDetailButton txHash={summary.txHash} testId="mint-tx" />
+        {/* Which setting moved the rewards, as Send's and Make private's reviews say (chunk 51, e8b#2's sibling). */}
+        <RewardsSetting withdrawal={summary.withdrawal} />
         <HistoriesNote histories={summary.histories} testId="mint-histories" />
         <p className="note">{t("mint.review.note")}</p>
         {/* Paid from the private balance, giveme.my lends the collateral; from the account, the account's own. */}

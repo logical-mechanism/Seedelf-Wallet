@@ -18,6 +18,7 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { MAX_PROBE } from "../src/background/accounts";
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { Koios, TXS_PER_REQUEST, type FetchLike, type KoiosUtxo } from "../src/background/koios";
@@ -39,6 +40,10 @@ import { busyFor, loadTestWasm, sessionSwap, testBalances, withdrawPreprod } fro
 import { ADA, ADA_ADDRESS, ADA_POOL, ADA_ROWS, ADA_VIEW, adaBox, ownDatum, retiredAlready } from "./v2-pools";
 
 const MIX_BOX = NETWORKS.preprod.lovejoin!.mixBox;
+/** The accounts a restore's wallet judges what made a box against: the first MAX_PROBE, account 0 among them. */
+const PROBED = Array.from({ length: MAX_PROBE }, (_, i) => i);
+/** Session 0's own stake key, which its address carries (hex). */
+const SESSION_STAKE = Buffer.from(bech32Bytes(sessionSwap.address)).toString("hex").slice(58, 114);
 const hash = (h: string) => (h.length === 64 ? h : h.repeat(32));
 
 /** A box in Lovejoin's classic pool that the wallet's Seedelf key owns, at `tx#txIndex`. */
@@ -205,9 +210,11 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     // One due time: the mixed box's.
     expect(status.due).toHaveLength(1);
     // A mix in the 5 ₳ pool, named by its id: `mixed` is the classic pool's.
+    // Neither names an account: each kept with what it spent, at no mix_box, and the accounts it was judged against, to
+    // be judged again against one the wallet comes to know later (chunk 51, gap-g6#2).
     expect(await origins(t)).toEqual({
-      [M]: { mixed: false, mixedIn: [ADA], seen: t.clock.now },
-      [S]: { mixed: false, seen: t.clock.now },
+      [M]: { mixed: false, mixedIn: [ADA], seen: t.clock.now, inputs: [{ cred: "ee".repeat(28) }], judged: PROBED },
+      [S]: { mixed: false, seen: t.clock.now, inputs: [{ cred: sessionSwap.keyHash, stake: SESSION_STAKE }], judged: PROBED },
     });
     // Mix my boxes again takes both, from the private balance: the deposit was a session's, not the account's.
     expect(await t.lovejoin.againBoxes("preprod", false, ADA)).toEqual({ boxes: 2, owned: 2 });
@@ -757,15 +764,18 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     const status = adaOf(await t.lovejoin.status("preprod"));
     expect(status.fromPublic).toEqual([]);
     expect(status.notMixed).toEqual([inAda(P)]);
-    expect(await origins(t)).toEqual({ [P]: { mixed: false, seen: t.clock.now } });
-    // A deposit's box, mixed again from the private balance as any is.
-    expect(await t.lovejoin.againBoxes("preprod", false, ADA)).toEqual({ boxes: 1, owned: 1 });
+    expect(await origins(t)).toEqual({ [P]: { mixed: false, seen: t.clock.now, inputs: [{ cred: stranger, stake }], judged: PROBED } });
+    // A deposit no key of the phrase paid: someone else's, so Mix my boxes again from the private balance leaves it out,
+    // and only Pay from my private balance anyway takes it (chunk 51, e1a#1).
+    expect(status.someoneElse).toEqual([inAda(P)]);
+    await expect(t.lovejoin.againBoxes("preprod", false, ADA)).rejects.toThrow("Someone else, or another device, put these boxes in");
+    expect(await t.lovejoin.againBoxes("preprod", true, ADA)).toEqual({ boxes: 1, owned: 1 });
     // Read from its address alone, as a Koios without `cred` gives it: the same.
     const Q = hash("ba");
     t.koios.addedToAccounts.push(await adaOwned(t, Q));
     t.koios.txSpends.set(Q, [{ payment_addr: { bech32: preprodAddress(stranger, stake) } }]);
     expect(adaOf(await t.lovejoin.status("preprod")).fromPublic).toEqual([]);
-    expect((await origins(t))?.[Q]).toEqual({ mixed: false, seen: t.clock.now });
+    expect((await origins(t))?.[Q]).toEqual({ mixed: false, seen: t.clock.now, inputs: [{ cred: stranger, stake }], judged: PROBED });
   });
 
   it("keeps what Koios said of the transactions it answered for when a later request of the same read fails", async () => {

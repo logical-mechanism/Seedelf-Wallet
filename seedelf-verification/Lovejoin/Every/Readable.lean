@@ -14,9 +14,10 @@ accepts, one_shot_mint returns `()` exactly when its `mint` handler passes (`lau
 
 Those two are the headline: their hypotheses are value rules the ledger enforces. The `_valid`
 forms take the ledger model's whole `validScriptContext` instead, which is stricter than the
-ledger: its `isBalanced` has no term for deposits, refunds or withdrawals, so it rejects every
-real `RegisterCredential` (a deposit) and every withdrawal of a non-zero reward balance. They say
-nothing about those transactions; the forms above do.
+ledger: its `isBalanced` has no term for deposits, refunds, withdrawals or treasury donations, so
+it rejects every real `RegisterCredential` (a deposit), every withdrawal of a non-zero reward
+balance, and every transaction that pays a deposit, takes a refund or donates. They say nothing
+about those transactions; the forms above do.
 
 These compose `every_context_iff` and `mint_every_context_iff` (the CEK theorems, `Typed.lean`
 and `MintTyped.lean`) with the restatements (`Readable*.lean`). The crypto builtins,

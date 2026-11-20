@@ -151,4 +151,7 @@ theorem flatten_apply (a1 a2 a3 a4 a5 a6 a7 a8 a9 : CekValue) (rest : Environmen
 
 end Seedelf.V1.LinesAll
 
-#print axioms Seedelf.V1.LinesAll.flatten_apply
+/-! ### Axioms: Lean's own, no `sorry`, `blasterProven` or `ofReduceBool` -/
+
+/-- info: 'Seedelf.V1.LinesAll.flatten_apply' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Seedelf.V1.LinesAll.flatten_apply

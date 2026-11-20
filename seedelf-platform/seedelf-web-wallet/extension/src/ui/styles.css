@@ -3371,6 +3371,12 @@ button.dapp-tile:hover {
   text-overflow: ellipsis;
 }
 
+/* A step smaller once it's long: at 360 px "Max, up to 10,408.014036" was 3 px past its own box (chunk 51,
+   gap-g10#4). Longer still, it's cut with "…", and the whole of it is the box's title. */
+.amount-box input.amount-box__shown--long {
+  font-size: var(--text-sm);
+}
+
 .amount-box__unit {
   font-size: 18px;
   font-weight: 500;
@@ -3446,11 +3452,19 @@ button.dapp-tile:hover {
   gap: 6px;
 }
 
+/* It takes the row's room, never less than 9em: at a fixed 9em, Max on 1,234,567,890,123 showed "1,234,567,8", with
+   nothing to say the rest was cut (chunk 51, gap-g10#4). */
 .token-amount__row input {
-  width: 9em;
+  flex: 1 1 9em;
+  min-width: 9em;
+  width: auto;
   padding: 7px 10px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.token-amount__row .list__name {
+  min-width: 0;
 }
 
 /* Several recipients: a card each (Send, Send to a Seedelf, Withdraw), and on the review */
@@ -3613,20 +3627,19 @@ button.dapp-tile:hover {
   white-space: pre;
 }
 
-/* Before an address, the time stays whole and the address gives way. */
+/* Before an address, the time stays whole. */
 .activity__sub-lead--fixed {
   flex: none;
 }
 
-.activity__sub .middle-ellipsis {
-  font: inherit;
-  color: inherit;
-  /* Squeezed below its tail, it clips rather than paint the tail over "and 2 more" (the pass-two visual check). */
-  overflow: hidden;
-  /* Never less than a few first letters, the "…" and its tail; it fills the line, up to its whole length. */
-  flex: 1 1 9ch;
-  min-width: 9ch;
-  max-width: max-content;
+/* An address or a Seedelf's name, cut to parts nobody else can choose (format.ts `shortCounterparty`): whole, on a line
+   of its own when the line has no room, never squeezed to its checksum as the line's middle cut did (chunk 51,
+   gap-g10#2). */
+.activity__who {
+  flex: none;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* "and 2 more" beside a name: whole, its spaces kept, never under the name (screens/Activity.tsx `Who`). */
@@ -3874,8 +3887,9 @@ button.dapp-tile:hover {
   border-color: var(--warn-line);
 }
 
-/* A token's whole fingerprint, where a swap names one the wallet won't swap
-   into (Swaps.tsx Unverified): its own line, and it wraps. */
+/* A token's whole fingerprint and ID, where a swap names one neither listed
+   nor verified by Minswap (Swaps.tsx Unverified): each its own line, and it
+   wraps. */
 
 .swap-token-id {
   font-family: var(--mono);

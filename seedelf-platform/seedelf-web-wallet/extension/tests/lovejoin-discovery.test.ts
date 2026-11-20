@@ -319,6 +319,14 @@ describe("the data layer's list", () => {
     expect(await found.known("preprod")).toEqual([]);
   });
 
+  it("leaves out a pool of a token off the wallet's list, as a look at Koios's holder does (chunk 51, t1g#5)", async () => {
+    const on = onIndex();
+    on.index.poolList = listed();
+    const { found } = discovery(koiosOf([], []), { index: on, listed: new Set() });
+    await found.refresh("preprod");
+    expect(await found.known("preprod")).toEqual([]);
+  });
+
   it("leaves out a pool whose launch, or a script of it, isn't its reference UTxO's own transaction (1.6.0's release review, 317-wallet#0)", async () => {
     // A launch puts its reference UTxO and both scripts at the holder in one transaction, the one listed as its
     // launch: a list that says otherwise contradicts itself. That the pool is on chain at all, the ledger checks (each

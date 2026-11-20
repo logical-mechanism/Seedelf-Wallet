@@ -22,8 +22,8 @@ use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
 use seedelf_wasm::api;
 use seedelf_wasm::lovejoin::{
     self as wasm, AccountChainRequest, BootstrapMostRequest, BoxValueRequest, ChainRequest,
-    FundingRequest, OutRef, PlanRequest, PoolRef, WithdrawPaidRequest, WithdrawPrivateRequest,
-    WithdrawRequest,
+    FundingRequest, OutRef, PlanRequest, PoolRef, UsableRequest, WithdrawPaidRequest,
+    WithdrawPrivateRequest, WithdrawRequest,
 };
 use serde_json::{Value, json};
 
@@ -85,6 +85,13 @@ fn pool_ref() -> PoolRef {
 
 /// [`pool_ref`] with boxes of `lovelace` beside the token.
 fn pool_ref_worth(lovelace: u64) -> PoolRef {
+    // 1.5 ₳ for the 2 ₳ pool, as Lovejoin's; below the box value, as a pool's datum must be.
+    pool_ref_with(lovelace, Q, lovelace * 3 / 4)
+}
+
+/// [`pool_ref`] with boxes of `lovelace` beside `quantity` of the token, and
+/// `max_fee`: what a launcher may write in a reference datum.
+fn pool_ref_with(lovelace: u64, quantity: u64, max_fee: u64) -> PoolRef {
     let d = derived();
     let datum = ReferenceDatum {
         box_value: BoxValue {
@@ -92,11 +99,10 @@ fn pool_ref_worth(lovelace: u64) -> PoolRef {
             token: Some(BoxToken {
                 policy: hex::decode(LJTEST).unwrap().try_into().unwrap(),
                 name: b"LJTEST".to_vec(),
-                quantity: Q,
+                quantity,
             }),
         },
-        // 1.5 ₳ for the 2 ₳ pool, as Lovejoin's; below the box value, as a pool's datum must be.
-        max_fee: lovelace * 3 / 4,
+        max_fee,
         mix_box_hash: d.mix_box.hash,
         mix_logic_hash: d.mix_logic.hash,
         fee_hash: d.fee_contract.hash,
@@ -650,6 +656,97 @@ fn the_public_account_mixes_into_a_token_pool_with_its_token() {
     );
 }
 
+/// Chunk 51, t1f#9: how many boxes a session's token pays for is summed past
+/// what a u64 holds. One mint makes at most 2^63 - 1, so three of the session's
+/// own UTxOs hold 3 x (2^63 - 1): summed in a u64, the module (which has no
+/// overflow checks) wrapped it to 2^63 - 3, and the plan put in 9 boxes where
+/// the token pays for 27.
+#[test]
+fn a_sessions_token_past_a_u64_pays_for_every_box_it_makes() {
+    const MOST_A_MINT_MAKES: u64 = 9_223_372_036_854_775_807;
+    const PER_BOX: u64 = 1_000_000_000_000_000_000;
+    let mut utxos = vec![
+        at_session(0x10, 0, 400_000_000, vec![]),
+        at_session(0x11, 0, 5_000_000, vec![]),
+    ];
+    let mut own = Vec::new();
+    for tx in 0x20..0x23u8 {
+        utxos.push(at_session(
+            tx,
+            0,
+            2_000_000,
+            vec![ljtest(MOST_A_MINT_MAKES)],
+        ));
+        own.push(hex::encode([tx; 32]));
+    }
+    let plan = wasm::plan_in(
+        &accounts(),
+        PlanRequest {
+            network: "preprod".into(),
+            index: 0,
+            utxos,
+            collateral: Some(OutRef {
+                tx_hash: hex::encode([0x11; 32]),
+                tx_index: 0,
+            }),
+            depth: 1,
+            again: false,
+            collateral_reserve: false,
+        },
+        Some(&pool_ref_with(2_000_000, PER_BOX, 1_500_000)),
+        &own,
+    )
+    .unwrap();
+    let pays_for = (3 * u128::from(MOST_A_MINT_MAKES) / u128::from(PER_BOX)) as usize;
+    assert_eq!(pays_for, 27);
+    assert_eq!(plan.boxes, pays_for, "{plan:?}");
+}
+
+/// Chunk 51, t1f#10: a public mix's ADA, and the least ADA the token change
+/// needs, are summed checked. A launcher can write a box's ADA near what a u64
+/// holds into its pool's datum (verify_pool checks the scripts, not the value);
+/// summed unchecked, the module wrapped the need to under a token change's
+/// least, and the public account's pick stopped early.
+#[test]
+fn a_public_mixs_need_past_a_u64_is_refused_in_words() {
+    let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let sk = Scalar::from(5_110u64);
+    // What a box costs beside its ADA (its mix, the deposit's reserve), read off a 2 ₳ pool.
+    let small = wasm::protocol_of(true, Some(&pool_ref_with(2_000_000, Q, 1_500_000))).unwrap();
+    let beside = lovejoin::funding_for_in(1, &small, 1, 3).unwrap() - 2_000_000;
+    // A box whose cost comes to half an ADA under the most a u64 holds: the token change's least tips it over.
+    let huge = u64::MAX - beside - 500_000;
+    let pool = pool_ref_with(huge, Q, 1_500_000);
+    let fits = lovejoin::funding_for_in(1, &wasm::protocol_of(true, Some(&pool)).unwrap(), 1, 3);
+    assert_eq!(
+        fits.unwrap(),
+        u64::MAX - 500_000,
+        "the box alone fits a u64"
+    );
+    let said = wasm::chain_from_account_in(
+        &account,
+        sk,
+        AccountChainRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos: vec![
+                // Three boxes' worth of the token: two of them come back, beside their least ADA.
+                public(0x60, Role::Receive, 1, 3_000_000, vec![ljtest(3 * Q)]),
+                public(0x61, Role::Change, 0, 20_000_000, vec![]),
+            ],
+            collateral: Some(public(0x6c, Role::Receive, 0, 5_000_000, vec![])),
+            pool: others(4),
+            depth: 1,
+            boxes: 1,
+            rewards: Default::default(),
+        },
+        Some(&pool),
+    )
+    .map(|c| format!("built {} transactions", c.txs.len()))
+    .unwrap_or_else(|e| e.to_string());
+    assert_eq!(said, lovejoin::MORE_THAN_THERE_IS);
+}
+
 #[test]
 fn a_box_comes_back_with_the_public_account_paying() {
     let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
@@ -731,6 +828,91 @@ fn a_pool_starts_from_the_public_account_signed_by_its_keys() {
     assert_eq!(witnesses(&launched.tx_cbor), 3);
     // v2's mix_logic is 29 bytes longer than 8131b1d's: 124,990 more at the holder.
     assert_eq!(launched.locked.total, "23248300");
+    // Its boxes come back on their own: nothing to say.
+    assert!(launched.cant_come_back.is_none());
+}
+
+/// Chunk 51, gap-g8#6 (the owner's B2, 2026-11-18): a pool's start refuses
+/// only a box under the network's minimum for it, which no mix could make.
+/// One whose box can't pay its own way back is a pool one_shot_mint takes,
+/// and one the wallet mixes into when someone else starts it (call 34): it's
+/// built, and the result says what's left of a box after the fee and what it
+/// needs, for the review to say, from either side.
+#[test]
+fn a_pool_starts_at_any_box_value_a_mix_can_make() {
+    let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let fee_cap = |box_lovelace: &str| {
+        (box_lovelace.parse::<u64>().unwrap() - 1)
+            .min(1_500_000)
+            .to_string()
+    };
+    let from_account = |box_lovelace: &str| {
+        api::build_launch_from_account(
+            &account,
+            api::AccountLaunchRequest {
+                network: "preprod".into(),
+                params: params(),
+                utxos: vec![public(0x80, Role::Receive, 1, 40_000_000, vec![])],
+                collateral: Some(public(0x8c, Role::Receive, 0, 5_000_000, vec![])),
+                token: None,
+                box_lovelace: box_lovelace.into(),
+                max_fee: fee_cap(box_lovelace),
+                register: true,
+                invalid_hereafter: Some(99_999_999),
+            },
+        )
+    };
+    let sk = Scalar::from(5_151_516u64);
+    let config = get_config(VARIANT, true).unwrap();
+    let register = Register::create(sk).unwrap().rerandomize().unwrap();
+    let utxo = row(json!({
+        "tx_hash": "e2".repeat(32), "tx_index": 1,
+        "address": wallet_contract(true, config.contract.wallet_contract_hash).to_bech32().unwrap(),
+        "value": "60000000",
+        "payment_cred": hex::encode(config.contract.wallet_contract_hash),
+        "inline_datum": {
+            "bytes": hex::encode(register.to_vec().unwrap()),
+            "value": { "constructor": 0, "fields": [
+                { "bytes": register.generator }, { "bytes": register.public_value },
+            ]},
+        },
+    }));
+    let from_private = |box_lovelace: &str| {
+        api::build_launch(
+            sk,
+            api::LaunchRequest {
+                network: "preprod".into(),
+                params: params(),
+                utxos: vec![utxo.clone()],
+                classes: Default::default(),
+                token: None,
+                box_lovelace: box_lovelace.into(),
+                max_fee: fee_cap(box_lovelace),
+                register: true,
+            },
+        )
+    };
+    // 2 ₳ comes back on its own.
+    assert!(from_account("2000000").unwrap().cant_come_back.is_none());
+    assert!(from_private("2000000").unwrap().cant_come_back.is_none());
+    // 1.5 ₳ meets an ADA box's minimum and can't pay its own way back: built, and said.
+    for said in [
+        from_account("1500000").unwrap().cant_come_back,
+        from_private("1500000").unwrap().cant_come_back,
+    ] {
+        let said = said.unwrap();
+        assert_eq!(
+            (said.has.as_str(), said.needs.as_str()),
+            ("1204978", "1336100")
+        );
+    }
+    // 1.2 ₳ is under it: refused, in words.
+    for why in [
+        from_account("1200000").err().unwrap().to_string(),
+        from_private("1200000").err().unwrap().to_string(),
+    ] {
+        assert!(why.contains("the ledger asks of it now"), "{why}");
+    }
 }
 
 #[test]
@@ -795,6 +977,38 @@ fn a_launchs_box_value_is_its_way_backs() {
     .unwrap();
     assert_eq!(ada.least, "3450000");
     assert!(ada.most.is_none());
+    // Chunk 51, gap-g8#6: the network's minimum for such a box, the only value a start refuses under (no mix could
+    // make the box), as a found pool's is measured: an ADA box's, and one holding the token.
+    assert_eq!(ada.minimum, "1336100");
+    let minimum: u64 = typical.minimum.parse().unwrap();
+    assert!((1_336_101..3_830_000).contains(&minimum), "{minimum}");
+}
+
+/// Chunk 51, gap-g5#1: asked, whether a box of a found pool pays part of
+/// itself on its own once it's back (S0d's steps, `lovejoin::way_back`, at the
+/// pool's own box value), beside whether it comes back at all. Lovejoin's own
+/// 2 ₳ pool, the one the extension's suite stands in for any token pool with,
+/// comes back and can't: such a pool is used as any other (the owner's call
+/// 34), and said where it's offered. The same pool at 9 ₳ can.
+#[test]
+fn a_found_pools_box_is_measured_by_s0ds_steps() {
+    let measure = |lovelace: u64, alone: bool| {
+        wasm::usable(UsableRequest {
+            network: "preprod".into(),
+            params: params(),
+            pool_ref: Some(pool_ref_worth(lovelace)),
+            registered: true,
+            back_only: true,
+            alone,
+        })
+        .unwrap()
+    };
+    let two = measure(2_000_000, true);
+    assert!(two.usable, "{two:?}");
+    assert_eq!(two.alone, Some(false));
+    assert_eq!(measure(9_000_000, true).alone, Some(true));
+    // Not asked: not measured, nor said.
+    assert_eq!(measure(2_000_000, false).alone, None);
 }
 
 /// A pool of one of its token a box (1.6.0's release review, MONEY-2): the
@@ -1054,6 +1268,43 @@ fn a_box_too_poor_to_come_back_is_paid_from_the_private_balance() {
         witnessed
             .iter()
             .any(|w| w.vkey.as_slice() == one_time.as_ref())
+    );
+}
+
+/// Chunk 51, x2#2: Koios lists a credential's UTxOs by its 28 bytes, a key's and a script's alike, so the KEY address
+/// whose hash is the Seedelf contract's comes back with the private balance's rows. A stranger's output there, under
+/// one of the user's registers, is no Seedelf UTxO: nothing can spend it, so it never pays a box's way back, and the
+/// next UTxO, at the contract, does.
+#[test]
+fn a_box_comes_back_paid_only_from_the_contracts_own_address() {
+    let sk = Scalar::from(6_262u64);
+    let pool = vec![
+        box_row_worth("c1", Some(sk), 1_500_000),
+        box_row_worth("c2", None, 1_500_000),
+    ];
+    let config = get_config(VARIANT, true).unwrap();
+    let burnt = pallas_addresses::Address::Shelley(pallas_addresses::ShelleyAddress::new(
+        pallas_addresses::Network::Testnet,
+        pallas_addresses::ShelleyPaymentPart::Key(Hash::new(config.contract.wallet_contract_hash)),
+        pallas_addresses::ShelleyDelegationPart::Null,
+    ))
+    .to_bech32()
+    .unwrap();
+    // Its payment_cred stays the contract's, as Koios lists it.
+    let there = private_row_with(sk, 0xe2, 50_000_000, json!({ "address": burnt }));
+    let paying = private_row(sk, 0xe1, 5_000_000);
+    let alone = bring_back_privately(sk, pool.clone(), None, vec![there.clone()])
+        .map(|back| format!("paid by {}", back.spent))
+        .unwrap_or_else(|e| e.to_string());
+    let first = bring_back_privately(sk, pool, None, vec![there, paying])
+        .map(|back| format!("paid by {}", back.spent))
+        .unwrap_or_else(|e| e.to_string());
+    assert_eq!(
+        [alone.as_str(), first.as_str()],
+        [
+            wasm::NO_PRIVATE_PAYS,
+            &format!("paid by {}#1", "e1".repeat(32))
+        ]
     );
 }
 

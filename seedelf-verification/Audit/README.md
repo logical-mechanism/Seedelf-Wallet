@@ -42,8 +42,8 @@ The record is [review/findings.md](review/findings.md), with the full evidence i
   - v2's mix_logic outside its withdrawal.
   - The medium findings.
 - `Checks/`: evaluation-only checks, such as the flat decoder against Aiken's text, the Steps runs as `#guard`s, and every theorem's axioms.
-- `diag/`: Blaster's SMT queries for proved theorems, dumped and replayed through Z3 (`bash Audit/diag/run-diag.sh quick`). It checks for Lean-blaster [#194](https://github.com/input-output-hk/Lean-blaster/issues/194): a contradictory background would make a ✅ vacuous. Where a Mix theorem's premises time out, they're replayed again with every input box sharing box 1's points and branches, as some controls do (below). A replay that settles nothing is flagged INCONCLUSIVE, never counted clean.
-- `count.py`: reads each module's last build log and compares it with what its source expects. Blaster logs a check that comes back Undetermined as a warning only. `check.sh`, the folder's build runner, reports such a module as `UNDETERM` (undetermined), not `ok`.
+- `diag/`: Blaster's SMT queries for proved theorems, dumped and replayed through Z3 (`bash Audit/diag/run-diag.sh quick`). It checks for Lean-blaster [#194](https://github.com/input-output-hk/Lean-blaster/issues/194): a contradictory background would make a ✅ vacuous. Where a Mix theorem's premises time out, they're replayed again with every input box sharing box 1's points and branches, as some controls do (below). A replay that settles nothing is flagged INCONCLUSIVE, never counted clean. A query that recurses over Nat is a LOOK, unless each function it recurses through is on [`diag/accepted.txt`](diag/accepted.txt): those the audit checked by hand for a cycle off Nat's domain, each with why and when, each the owner's to approve. A Nat recursion not on it still fails, as every other flag does. The scan exits 1 for a LOOK, an INCONCLUSIVE or a Lean run that failed, timed out or was killed.
+- `count.py`: reads each module's last build log and compares it with what its source expects. Blaster logs a check that comes back Undetermined as a warning only. `check.sh`, the folder's build runner, reports such a module as `UNDETERM` (undetermined), not `ok`. `check.sh` removes a module's build when it fails, here or in the dependency that holds it, so `count.py` reads it as `NO TRACE`, and a module resting on it as `STALE`. A module whose trace is older than its source is `STALE` too, until `./check.sh` reads it again. It exits 1 when any module isn't `ok`.
 
 ## Running it
 
@@ -53,7 +53,7 @@ It needs what the [README](../README.md)'s *Running it* lists, Z3 included, and 
 2. `audit-quick`: definitions, `#guard`s and `#eval`s.
 3. `audit-seedelf`, `audit-v2`, `audit-template`, `audit-classic`, then `audit-gaps`, each at 16G and 60 minutes a module.
 4. `audit-last` and the diagnostic, after everything else.
-5. Last, `count.py`, whose output goes to `Audit/logs/count.txt`.
+5. Last, `count.py`, whose output goes to `Audit/logs/count.txt`, with the families whose run failed, a diag scan that flagged a row among them; `run-all.sh` then exits nonzero, as a full run also does when `count.py` finds a module not `ok`.
 
 ## Reading a result
 

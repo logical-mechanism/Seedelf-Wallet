@@ -173,7 +173,8 @@ test("a box of one token has a value, and none of it is refused in words, the mo
   // The launch form asks as the creator types: "1" trapped, which locked the wallet.
   const token = { policyId: "1a".repeat(28), assetName: Buffer.from("SNEK").toString("hex") };
   const of = (quantity) => JSON.parse(lovejoinBoxValue(JSON.stringify({ network: "mainnet", params, token: { ...token, quantity } })));
-  assert.deepEqual(of("1"), { least: "3620000", suggested: "4000000", most: "9000000" });
+  // `minimum` is the box's own network minimum, the one floor a pool's start keeps (chunk 51, gap-g8#6).
+  assert.deepEqual(of("1"), { least: "3620000", minimum: "1504190", suggested: "4000000", most: "9000000" });
   assert.throws(() => of("0"), /at least one of its token/);
   assert.equal(of("2").most, "9000000");
 });

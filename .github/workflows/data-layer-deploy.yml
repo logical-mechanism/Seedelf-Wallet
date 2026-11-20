@@ -38,7 +38,7 @@ jobs:
       # The toolchain seedelf-data/rust-toolchain.toml pins: keep the two in
       # step. ubuntu-24.04's glibc (2.39) is older than the droplet's, the
       # safe direction. No cache: every deploy builds from scratch.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
         with:
           toolchain: 1.98.1
 

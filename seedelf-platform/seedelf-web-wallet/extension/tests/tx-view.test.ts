@@ -110,6 +110,40 @@ describe("the transaction view", () => {
     expect(t.koios.calls.length).toBe(before);
   });
 
+  // Chunk 51, as x1a#1 (destination.ts ownAccount, `stakeElsewhere`): an output under one of the accounts' payment keys
+  // whose stake part is none of the accounts' stake keys is the account's, as the balance counts it, but its stake earns
+  // and votes for whoever holds that part, or nobody. Send says so of such an address, and the sign window counts it
+  // apart ("Your payment key, with a stake part that isn't yours"); the view marked it the account's and nothing more.
+  it("says of an output under an account's payment key whose stake part is none of the accounts' that its stake works elsewhere", async () => {
+    const t = await unlocked();
+    const net = t.deps.wasm.Network.Preprod;
+    const stakeHash = (address: string) => t.deps.wasm.cip30Address(address).slice(2);
+    const [pay0, stake0] = await t.wallet.withKeys((k) => [k.cardano.paymentKeyHash(0, 0), stakeHash(k.cardano.stakeAddress(net))]);
+    const [pay1, stake1] = await t.wallet.withAccount(1, (k) => [k.cardano.paymentKeyHash(0, 0), stakeHash(k.cardano.stakeAddress(net))]);
+    const stranger = "44".repeat(28);
+    // Base addresses on preprod (a key's payment part and a key's stake part), and an enterprise one (no stake part).
+    const base = (pay: string, stake: string) => `825839${"00"}${pay}${stake}1a001e8480`;
+    const enterprise = (pay: string) => `82581d${"60"}${pay}1a001e8480`;
+    const outputs = [
+      base(pay0, stake0), // the account's own address
+      base(pay0, stranger), // its payment key, someone else's stake key
+      enterprise(pay0), // its payment key, no stake part
+      base(pay0, stake1), // its payment key, Account 2's stake key: the wallet's still
+      base(pay1, stranger), // Account 2's payment key, someone else's stake key
+      base(stranger, stake0), // someone else's payment key under the account's stake key: not the user's at all
+    ];
+    const cbor = `84a3${`0081825820${"11".repeat(32)}00`}0186${outputs.join("")}021a00029810a0f5f6`;
+    const { detail } = await txView({ ...deps(t), knownAccounts: async () => [0, 1] }, "preprod", "ab".repeat(32), () => cbor);
+    expect(detail.outputs.map((o) => o.yours)).toEqual([
+      { kind: "account", account: 0 },
+      { kind: "account", account: 0, stakeElsewhere: true },
+      { kind: "account", account: 0, stakeElsewhere: true },
+      { kind: "account", account: 0 },
+      { kind: "account", account: 1, stakeElsewhere: true },
+      undefined,
+    ]);
+  });
+
   it("marks a withdrawal's and a proposal's deposit back by stake key: the account's, a session's, another account's (chunk 39)", async () => {
     const t = await unlocked();
     const net = t.deps.wasm.Network.Preprod;

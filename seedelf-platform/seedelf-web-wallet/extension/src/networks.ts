@@ -16,8 +16,6 @@ export interface LovejoinConfig {
    * takes any pool, for testing.
    */
   poolFloor: number;
-  /** What a 3-box mix costs on this network's scripts, in lovelace, as measured: for the settings' words, never for a build. */
-  mixCost: number;
 }
 
 export interface NetworkConfig {
@@ -54,8 +52,6 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
     lovejoin: {
       mixBox: "67ffe4ed7f0ccd0a3e3069fddc26d9bccde3fe63d3d58c5e84f7ecc5",
       poolFloor: 0,
-      // 0.877 ₳, measured on preprod (chunk 16).
-      mixCost: 877_000,
     },
   },
   mainnet: {
@@ -69,8 +65,6 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
     lovejoin: {
       mixBox: "c145c10ff4bcaef7f5a4dbb3fcbfddca4b6c7b08191b0690b12f1fad",
       poolFloor: 30,
-      // 0.822–0.828 ₳, measured against mainnet's scripts (the launch review).
-      mixCost: 825_000,
     },
     // The API on its DigitalOcean droplet (chunk 26c, seedelf-data/deploy/README.md).
     // It answers CORS for the store's and the dev build's IDs (DATA_ORIGINS).

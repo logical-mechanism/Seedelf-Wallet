@@ -1,9 +1,10 @@
 """Writes the wallet's core property with 4 to 128 signatories, one module a length, into
 Seedelf/Signers/: Keys.lean (the other signatories the guards use), Signers4.lean to
-Signers128.lean, and modules.txt, which `./check.sh seedelf-signers` builds in order; and
+Signers128.lean, a negative control for a few of them (Control4.lean, Control64.lean,
+Control127.lean), and modules.txt, which `./check.sh seedelf-signers` builds in order; and
 Seedelf/Signers.lean, which imports them all for Seedelf.lean. The wallet walks the signatories
-(`list.has`), so each length is a run of its own (README rule 4). Control128.lean, the negative
-controls, is written by hand and listed last.
+(`list.has`), so each length is a run of its own (README rule 4). Control128.lean, 128's two
+controls, is written by hand. The controls are listed last.
 
     python3 -I gen-seedelf-signers.py
 
@@ -14,6 +15,7 @@ import os
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Seedelf", "Signers")
 KS = range(4, 129)
+CONTROL_KS = (4, 64, 127)  # a generated control each; 128's are Control128.lean's
 WIDTH = 100
 
 
@@ -127,17 +129,57 @@ def module(k):
     ])
 
 
+CONTROL_DOC = """/-! A negative control for `Signers{k}` (gen-seedelf-signers.py writes this file), expected
+Falsified (README rule 8): a control that comes back Valid prints "❌ Unexpected Valid" and fails
+the build. It is the module's iff with the last signatory left out of the disjunction, over
+`Signers{k}`'s own builder: a proof that checks, signed by s{k} alone, passes, so the solver must
+see the key found last of {k}. Were that builder's background contradictory (Lean-blaster #194),
+both of `Signers{k}`'s theorems would come back Valid whatever the bytes do, and so would this. -/"""
+
+
+def control(k):
+    ss = [f"s{i}" for i in range(1, k + 1)]
+    binders = fill("  [∀ (r : TxRest) (ref : Data) (g u z gr vkh", ss[:-1] + [f"{ss[-1]} : ByteString),"], 6)
+    prop = f"appliedSig{k}.prop r ref g u z gr vkh"
+    disj = [f"vkh = {s} ∨" for s in ss[:-2]] + [f"vkh = {ss[-2]}))]"]
+    return "\n".join([
+        f"import Seedelf.Signers.Signers{k}",
+        "import Blaster",
+        "",
+        CONTROL_DOC.format(k=k),
+        "",
+        "namespace Seedelf.V1",
+        "open PlutusCore.ByteString (ByteString)",
+        "open PlutusCore.Data (Data)",
+        "open PlutusCore.UPLC.Utils",
+        "",
+        f"-- The last signatory, s{k}, left out.",
+        "#blaster (gen-cex: 0) (solve-result: 1)",
+        binders,
+        fill(f"    isSuccessful ({prop}", ss[:-1] + [f"{ss[-1]}) ↔"], 6),
+        fill("      (schnorrAccepts g u z gr vkh = true ∧ (vkh = s1 ∨", disj[1:], 8),
+        "",
+        "end Seedelf.V1",
+        "",
+    ])
+
+
+CONTROLS = ["Control128"] + [f"Control{k}" for k in CONTROL_KS]
 os.makedirs(OUT, exist_ok=True)
 with open(os.path.join(OUT, "Keys.lean"), "w", encoding="utf-8") as f:
     f.write(KEYS)
 for k in KS:
     with open(os.path.join(OUT, f"Signers{k}.lean"), "w", encoding="utf-8") as f:
         f.write(module(k))
+for k in CONTROL_KS:
+    with open(os.path.join(OUT, f"Control{k}.lean"), "w", encoding="utf-8") as f:
+        f.write(control(k))
 with open(os.path.join(OUT, "modules.txt"), "w", encoding="utf-8") as f:
     f.write("# gen-seedelf-signers.py writes this list; ./check.sh seedelf-signers builds it in order.\n")
-    f.write("".join(f"Seedelf.Signers.Signers{k}\n" for k in KS) + "Seedelf.Signers.Control128\n")
+    f.write("".join(f"Seedelf.Signers.Signers{k}\n" for k in KS) + "".join(f"Seedelf.Signers.{c}\n" for c in CONTROLS))
 with open(os.path.join(os.path.dirname(OUT), "Signers.lean"), "w", encoding="utf-8") as f:
-    f.write("".join(f"import Seedelf.Signers.Signers{k}\n" for k in KS) + "import Seedelf.Signers.Control128\n\n"
-            "/-! The wallet's core property with 4 to 128 signatories, one module a length, and its\n"
+    f.write("".join(f"import Seedelf.Signers.Signers{k}\n" for k in KS) + "".join(f"import Seedelf.Signers.{c}\n" for c in CONTROLS)
+            + "\n/-! The wallet's core property with 4 to 128 signatories, one module a length, and its\n"
             "controls (gen-seedelf-signers.py writes this file). -/\n")
-print(f"wrote Keys.lean, Signers{KS[0]}.lean to Signers{KS[-1]}.lean, modules.txt and ../Signers.lean in {OUT}")
+print(f"wrote Keys.lean, Signers{KS[0]}.lean to Signers{KS[-1]}.lean, "
+      f"{', '.join(f'Control{k}.lean' for k in CONTROL_KS)}, modules.txt and ../Signers.lean in {OUT}")

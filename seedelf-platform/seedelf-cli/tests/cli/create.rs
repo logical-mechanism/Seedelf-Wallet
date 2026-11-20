@@ -327,3 +327,42 @@ async fn create_goes_when_a_strangers_tokens_at_the_address_total_past_a_u64() {
         vec![(tx_hash(2), 0), (tx_hash(3), 0), (tx_hash(5), 0)]
     );
 }
+
+/// The paying address is checked by its payment part alone: a key address
+/// whose stake part is a script (`addr_test1y…`) signs with its payment key
+/// like any other, so `create` pays from it. It refused one as "Supplied
+/// Address Is Incorrect" (chunk 51, r2a#1).
+#[tokio::test]
+#[serial]
+async fn create_pays_from_a_key_address_staked_by_a_script() {
+    let payer = external_address_staked_by_a_script();
+    let from = payer.to_bech32().expect("bech32");
+    let mut scenario = Scenario::start().await;
+    scenario
+        .mount_address_utxos(vec![
+            address_utxo(&from, 1, 5_000_000, &[]),
+            address_utxo(&from, 2, 10_000_000, &[]),
+        ])
+        .await;
+    scenario.mount_evaluate(1).await;
+    scenario.arm_web_capture();
+
+    run(
+        CreateArgs {
+            address: from,
+            label: Some("hello".to_string()),
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect("create pays from a key address staked by a script");
+
+    let params = protocol_params().await;
+    let tx = decode_tx(&scenario.captured_cbor());
+    assert_sound_transaction(&tx, &scenario, &params);
+    assert!(
+        !tx.outputs_to(&payer).is_empty(),
+        "change returns to the paying address"
+    );
+}

@@ -979,9 +979,11 @@ pub mod api {
     pub const MAX_MERGE: usize = 4;
 
     /// The session's own collateral among its UTxOs: its 5 ₳ ADA-only one,
-    /// or else the largest ADA-only one that covers a script's collateral
-    /// and leaves its return a valid output. Never one the wallet's evaluator
-    /// can't take (`seedelf_core::eval::refusal`).
+    /// or else the largest ADA-only one of 2 ₳ or more. A heavy return's fee
+    /// can take 3/2 of that one under an output's least: core then refuses it
+    /// (`build::CollateralShort`), and the return goes as the plain sweep,
+    /// which puts up none ([`session_return`]; chunk 51, r2money#1). Never one
+    /// the wallet's evaluator can't take (`seedelf_core::eval::refusal`).
     pub(crate) fn session_collateral(utxos: &[UtxoResponse]) -> Option<&UtxoResponse> {
         let ada_only = utxos
             .iter()
@@ -1346,7 +1348,8 @@ pub mod api {
     /// The return of `rows`, UTxOs under session `index`'s key, merged into
     /// `merge` (the funding's Seedelf change, checked here to be this
     /// wallet's): one Seedelf spend proven with `sk`, with `collateral` (one
-    /// of `rows`) as its collateral. The proofs are bound to a new one-time
+    /// of `rows`) as its collateral, refused as [`build::CollateralShort`]
+    /// where that can't carry it. The proofs are bound to a new one-time
     /// key, as every Seedelf spend's (privacy rule 1), never the session's:
     /// a site connected to the session can ask its key to sign, so a proof
     /// bound to it could be replayed in what the site builds. Measured in the
@@ -1429,6 +1432,7 @@ pub mod api {
                 pool,
                 &request.collateral_boxes,
                 &request.utxos,
+                &request.own,
                 &mut rewards,
             )
             .ok()
@@ -1442,13 +1446,22 @@ pub mod api {
                     request.own.clone(),
                 ),
             };
-            let plan = plan_return(&params, &rows, merge, &own)?;
-            if plan.taken.is_empty() {
-                bail!(NOTHING_PAYS);
+            let built = |merge: &[UtxoResponse]| {
+                let plan = plan_return(&params, &rows, merge, &own)?;
+                if plan.taken.is_empty() {
+                    bail!(NOTHING_PAYS);
+                }
+                built_or_without_strangers(plan, |plan| {
+                    planned_return(accounts, sk, &request, &params, plan)
+                })
+            };
+            match built(merge) {
+                // The merged form its collateral can't carry (`session_collateral`'s fallback, under 5 ₳, beside a
+                // heavy return): planned again with no merge, the plain sweep, which puts up no collateral, as
+                // plan_return makes it for a UTxO the merge can't measure (chunk 51, r2money#1).
+                Err(e) if build::is_collateral_short(&e) => built(&[]),
+                other => other,
             }
-            built_or_without_strangers(plan, |plan| {
-                planned_return(accounts, sk, &request, &params, plan)
-            })
         };
         let ((mut result, _), tail) = match tail {
             Some(t) => match attempt(Some(&t)) {
@@ -1532,9 +1545,13 @@ pub mod api {
         })
     }
 
-    /// The most recipients one payment pays. The transaction must also fit
-    /// 16 KiB, which core checks (`build::MAX_TX_SIZE`).
-    pub const MAX_RECIPIENTS: usize = 20;
+    /// The most recipients one payment pays, the extension's
+    /// `MAX_RECIPIENTS` too: a sane card list, well past use. The transaction
+    /// must also fit 16 KiB, the ledger's own limit, which core checks
+    /// (`build::MAX_TX_SIZE`, `TooLarge`): about 200 addresses or 90
+    /// Seedelfs with no tokens. It was 20, refusing what the ledger takes
+    /// (chunk 51, gap-g8#4).
+    pub const MAX_RECIPIENTS: usize = 100;
 
     fn check_recipients(n: usize) -> Result<()> {
         if n == 0 {
@@ -1561,7 +1578,7 @@ pub mod api {
         #[serde(default)]
         pub withdrawal: Option<String>,
         /// A note on the transaction, CIP-20's message, which anyone can
-        /// read: one line, at most 64 characters (see [`Note::new`]).
+        /// read: one line, at most 500 characters (see [`Note::new`]).
         #[serde(default)]
         pub note: Option<String>,
         /// As for a move-in: see [`MoveInRequest::invalid_hereafter`].
@@ -1573,8 +1590,8 @@ pub mod api {
     #[derive(Deserialize, Clone)]
     #[serde(rename_all = "camelCase")]
     pub struct SendPayment {
-        /// A bech32 key address on this network, or a Seedelf's full token
-        /// name, lowercase hex.
+        /// A bech32 address on this network ([`payable_address`]), or a
+        /// Seedelf's full token name, lowercase hex.
         pub to: String,
         /// For a Seedelf: the contract UTxO holding it, as Koios returns it.
         /// Its register is the one paid; see [`recipient_register`].
@@ -1636,8 +1653,8 @@ pub mod api {
     }
 
     impl SendTo {
-        /// A key address on this network, or (a Seedelf's name, with the
-        /// UTxO holding it) that Seedelf's register.
+        /// An address on this network ([`payable_address`]), or (a
+        /// Seedelf's name, with the UTxO holding it) that Seedelf's register.
         fn read(chain: &Chain, payment: &SendPayment) -> Result<SendTo> {
             let to = payment.to.trim();
             if !is_seedelf_name(to) {
@@ -1668,9 +1685,10 @@ pub mod api {
     }
 
     /// Builds and signs a payment from the Cardano account to each of
-    /// `request.payments`: key addresses, or Seedelfs, each under a fresh
-    /// re-randomization of its register (`build::account_send_many`). The
-    /// UTxOs are checked and signed for as for a move-in, inside this module.
+    /// `request.payments`: addresses on this network (`payable_address`), or
+    /// Seedelfs, each under a fresh re-randomization of its register
+    /// (`build::account_send_many`). The UTxOs are checked and signed for as
+    /// for a move-in, inside this module.
     pub fn account_send(account: &CardanoAccount, request: SendRequest) -> Result<SendResult> {
         let chain = chain_of(&request.network, &request.params)?;
         let network_flag = chain.network_flag;
@@ -2106,8 +2124,13 @@ pub mod api {
 
     /// A Seedelf UTxO's history, as the extension reads it from its sealed
     /// history (activity.ts): its class, and where its money came from:
-    /// `own`, `received`, `session`, `lovejoin` or `unknown`. Selection keeps
-    /// different classes apart where it can (`build::Histories`).
+    /// `own`, `received`, `session`, `change` (an earlier private spend's
+    /// change naming no public account, no session and no spend made
+    /// elsewhere: chunk 51, l2rank#6), `lovejoin`, `mixed` (the way back of a
+    /// box the worker knows is mixed, its own chain's last mix having made it
+    /// or Koios having said a mix did: chunk 51, the owner's answer 4 to B15)
+    /// or `unknown`. Selection keeps different classes apart where it can
+    /// (`build::Histories`).
     #[derive(Deserialize, Clone, Debug)]
     pub struct ClassIn {
         pub id: String,
@@ -2131,7 +2154,9 @@ pub mod api {
                     "own" => Origin::Own,
                     "received" => Origin::Received,
                     "session" => Origin::Session,
+                    "change" => Origin::Change,
                     "lovejoin" => Origin::Lovejoin,
+                    "mixed" => Origin::Mixed,
                     "unknown" => Origin::Unknown,
                     other => bail!("{other} isn't where a UTxO's money came from"),
                 };
@@ -2146,13 +2171,22 @@ pub mod api {
             })
     }
 
-    /// Where a part of a merged class's id came from, as the worker reads it (shared/histories.ts `originOf`).
+    /// Where a part of a merged class's id came from, as the worker reads it (shared/histories.ts `originOf`). None is
+    /// `mixed`: that names a box's way back alone, so anything merged with it, a spend's change included, is no box a
+    /// mix brought back.
     fn origin_of(part: &str) -> &'static str {
         if part == "public" || part.starts_with("public:") {
             "own"
         } else if part.starts_with("received:") {
             "received"
-        } else if part.starts_with("session:") {
+        } else if part.starts_with("session:")
+            || part.starts_with("elsewhere:")
+            || part.starts_with("change:")
+        {
+            // `elsewhere:<tx>`: what a spend of the phrase's made in another profile left, ranked as a session's money
+            // (chunk 51, gap-g9#1). `change:<tx>`: what a spend of the wallet's own left, tied to that spend in public
+            // (chunk 51, the owner's answer 2 to B15), which `merged_class` names `change` where nothing else it
+            // carries ranks it as a session's (l2rank#6).
             "session"
         } else if part.starts_with("box:") {
             "lovejoin"
@@ -2162,7 +2196,8 @@ pub mod api {
     }
 
     /// The history of money of `classes` spent together, spelled as the worker spells it (shared/histories.ts
-    /// `merged`): each history once, sorted, joined by `+`, its origin the tie that reaches furthest.
+    /// `merged`): each history once, sorted, joined by `+`, its origin the tie that reaches furthest, but `change` for
+    /// a spend's change that names no public account, no session and no spend made elsewhere (chunk 51, l2rank#6).
     fn merged_class<'a>(classes: impl Iterator<Item = &'a ClassIn>) -> ClassIn {
         let mut parts: Vec<&str> = classes.flat_map(|c| c.id.split('+')).collect();
         parts.sort_unstable();
@@ -2171,6 +2206,17 @@ pub mod api {
             .into_iter()
             .find(|o| parts.iter().any(|p| origin_of(p) == *o))
             .unwrap_or("unknown");
+        let later = |p: &&str| {
+            p.starts_with("session:") || p.starts_with("elsewhere:") || origin_of(p) == "own"
+        };
+        let origin = if origin == "session"
+            && parts.iter().any(|p| p.starts_with("change:"))
+            && !parts.iter().any(later)
+        {
+            "change"
+        } else {
+            origin
+        };
         ClassIn {
             id: if parts.is_empty() {
                 build::UNKNOWN_CLASS.to_string()
@@ -2178,6 +2224,167 @@ pub mod api {
                 parts.join("+")
             },
             origin: origin.into(),
+        }
+    }
+
+    /// The worker spells what a spend of the phrase's made in another profile left as an `elsewhere:<tx>` part, which
+    /// ranks as a session's money (shared/histories.ts `spentElsewhere`): a carry of a part that spent it is too, as
+    /// the worker reads that carry (script-spend.ts `carried`; chunk 51, gap-g9#1).
+    #[cfg(test)]
+    mod class_spelling_tests {
+        use super::*;
+
+        fn class(id: &str, origin: &str) -> ClassIn {
+            ClassIn {
+                id: id.into(),
+                origin: origin.into(),
+            }
+        }
+
+        #[test]
+        fn money_a_spend_made_elsewhere_left_merges_as_a_sessions() {
+            let elsewhere = format!("elsewhere:{}", "fb".repeat(32));
+            assert_eq!(origin_of(&elsewhere), "session");
+            let merged = merged_class(
+                [
+                    class("public:0", "own"),
+                    class(&format!("{elsewhere}+public:0"), "session"),
+                ]
+                .iter(),
+            );
+            assert_eq!(merged.id, format!("{elsewhere}+public:0"));
+            assert_eq!(merged.origin, "session");
+        }
+
+        fn at(tx: u8) -> UtxoResponse {
+            UtxoResponse {
+                tx_hash: hex::encode([tx; 32]),
+                tx_index: 0,
+                ..Default::default()
+            }
+        }
+
+        /// Chunk 51, the owner's answer 4 to B15 (time#1): the worker marks a box's way back `mixed` where it knows the
+        /// box is mixed, and a stealth mint takes only such a box first. Any other box, `lovejoin` as every box brought
+        /// back before, goes after received money. Both merge last, as every box does.
+        #[test]
+        fn a_box_a_mix_brought_back_is_read_apart_from_one_with_no_such_record() {
+            let (mixed, old, received) = (at(0xb1), at(0xb0), at(0x02));
+            let classes: Classes = [
+                (&mixed, class(&format!("box:{}", mixed.tx_hash), "mixed")),
+                (&old, class(&format!("box:{}", old.tx_hash), "lovejoin")),
+                (
+                    &received,
+                    class(&format!("received:{}", received.tx_hash), "received"),
+                ),
+            ]
+            .into_iter()
+            .map(|(u, c)| (format!("{}#0", u.tx_hash), c))
+            .collect();
+            let h = histories(Purpose::Mint, &classes).unwrap();
+            assert_eq!(h.class_of(&mixed).origin, Origin::Mixed);
+            assert!(h.rank_of(&mixed) < h.rank_of(&received));
+            assert!(h.rank_of(&received) < h.rank_of(&old));
+            assert_eq!(h.tier_of(&mixed), h.tier_of(&old));
+        }
+
+        /// Chunk 51, l3rank#3: where one box pays alone, a funding, a top-up and a Send take a box the worker knows is
+        /// mixed before any other box, one of unknown making (`box:<w>+unknown:<w>`, what a box someone else put in
+        /// comes back as) among them, so no planted box's way back is picked over a mixed box on size (l5still#5).
+        /// Both still merge last.
+        #[test]
+        fn a_funding_and_a_send_take_a_mixed_box_before_any_other_box() {
+            let (mixed, unplaced) = (at(0xb1), at(0xb2));
+            let w = &unplaced.tx_hash;
+            let classes: Classes = [
+                (&mixed, class(&format!("box:{}", mixed.tx_hash), "mixed")),
+                (
+                    &unplaced,
+                    class(&format!("box:{w}+unknown:{w}"), "lovejoin"),
+                ),
+            ]
+            .into_iter()
+            .map(|(u, c)| (format!("{}#0", u.tx_hash), c))
+            .collect();
+            for purpose in [
+                Purpose::Fund { session: None },
+                Purpose::Fund {
+                    session: Some("session:3".into()),
+                },
+                Purpose::Pay,
+            ] {
+                let h = histories(purpose.clone(), &classes).unwrap();
+                assert!(h.rank_of(&mixed) < h.rank_of(&unplaced), "{purpose:?}");
+                assert_eq!(h.tier_of(&mixed), h.tier_of(&unplaced), "{purpose:?}");
+            }
+        }
+
+        /// Chunk 51, the owner's answer 2 to B15 (money#2, own#1) and of 2026-11-18 (l2rank#6): what a spend of the
+        /// wallet's own left carries a `change:<tx>` part, and reads `change` where it names no public account, no
+        /// session and no spend made elsewhere, as the worker merges it: a stealth mint or a funding takes it after
+        /// money others paid and a box back from a mix, and, nothing fresher paying, before money made private. A
+        /// spend of a box back from a mix leaves no box a mix brought back.
+        #[test]
+        fn money_a_spend_of_the_wallets_left_merges_as_change() {
+            let change = format!("change:{}", "c1".repeat(32));
+            let boxed = format!("box:{}", "b1".repeat(32));
+            let merged = merged_class([class(&boxed, "mixed")].iter());
+            assert_eq!(merged.origin, "lovejoin");
+            let merged = merged_class([class(&boxed, "mixed"), class(&change, "change")].iter());
+            assert_eq!(merged.id, format!("{boxed}+{change}"));
+            assert_eq!(merged.origin, "change");
+            let received = format!("received:{}", "d1".repeat(32));
+            let merged =
+                merged_class([class(&change, "change"), class(&received, "received")].iter());
+            assert_eq!(merged.origin, "change");
+            assert_eq!(
+                merged_class([class("unknown", "unknown"), class(&change, "change")].iter()).origin,
+                "change"
+            );
+            // Naming money made private, a session, or a spend made elsewhere, it ranks as a session's: after money made
+            // private.
+            for other in [
+                "public:0",
+                "public",
+                "session:1",
+                &format!("elsewhere:{}", "fb".repeat(32)),
+            ] {
+                let merged =
+                    merged_class([class(&change, "change"), class(other, "session")].iter());
+                assert_eq!(merged.origin, "session", "change with {other}");
+            }
+        }
+
+        /// Chunk 51, l2rank#6: `change` reads as Origin::Change, which a stealth mint and a funding take after money
+        /// others paid and before money made private, and a Send with a session's money.
+        #[test]
+        fn a_spends_change_ranks_before_money_made_private_for_a_mint_and_a_funding() {
+            let (change, own, received, session) = (at(0xc1), at(0x01), at(0x02), at(0x03));
+            let classes: Classes = [
+                (
+                    &change,
+                    class(&format!("change:{}", change.tx_hash), "change"),
+                ),
+                (&own, class("public:0", "own")),
+                (
+                    &received,
+                    class(&format!("received:{}", received.tx_hash), "received"),
+                ),
+                (&session, class("session:4", "session")),
+            ]
+            .into_iter()
+            .map(|(u, c)| (format!("{}#0", u.tx_hash), c))
+            .collect();
+            for purpose in [Purpose::Mint, Purpose::Fund { session: None }] {
+                let h = histories(purpose.clone(), &classes).unwrap();
+                assert_eq!(h.class_of(&change).origin, Origin::Change);
+                assert!(h.rank_of(&received) < h.rank_of(&change), "{purpose:?}");
+                assert!(h.rank_of(&change) < h.rank_of(&own), "{purpose:?}");
+                assert!(h.rank_of(&own) < h.rank_of(&session), "{purpose:?}");
+                assert_eq!(h.tier_of(&change), h.tier_of(&own), "{purpose:?}");
+            }
+            let h = histories(Purpose::Pay, &classes).unwrap();
+            assert_eq!(h.rank_of(&change), h.rank_of(&session));
         }
     }
 
@@ -2308,14 +2515,45 @@ pub mod api {
         })
     }
 
-    /// Checks the UTxOs a Seedelf spend may pay with: every one is this
-    /// wallet's, none holds a seedelf (it would go with the change), and the
-    /// wallet's evaluator can take each (`seedelf_core::eval::refusal`): not
-    /// one holding a reference script. The worker leaves those out of what a
-    /// spend may pay with, so the balance, Max and coin control agree.
+    /// Whether `utxo` sits at Seedelf Wallet's contract on this network: its
+    /// address's payment part the contract's script, with any staking part.
+    /// Its address decides, never its `payment_cred` alone: Koios lists a
+    /// credential's UTxOs by its 28 bytes, a key's and a script's alike, so
+    /// asked for the contract's it lists the KEY address with the same 28
+    /// bytes too, which nothing can spend (chunk 51, x2#2; the worker's
+    /// `atContract`, core's `Protocol::spends_as_mix_box`).
+    pub fn at_wallet_contract(network_flag: bool, utxo: &UtxoResponse) -> Result<bool> {
+        let contract = get_config(VARIANT, network_flag)?
+            .contract
+            .wallet_contract_hash;
+        let network = if network_flag {
+            AddressNetwork::Testnet
+        } else {
+            AddressNetwork::Mainnet
+        };
+        Ok(matches!(
+            Address::from_bech32(&utxo.address),
+            Ok(Address::Shelley(s)) if s.network() == network
+                && matches!(s.payment(), ShelleyPaymentPart::Script(h) if **h == contract)
+        ))
+    }
+
+    /// Checks the UTxOs a Seedelf spend may pay with: every one sits at the
+    /// contract ([`at_wallet_contract`]) and is this wallet's, none holds a
+    /// seedelf (it would go with the change), and the wallet's evaluator can
+    /// take each (`seedelf_core::eval::refusal`): not one holding a reference
+    /// script. The worker leaves those out of what a spend may pay with, so
+    /// the balance, Max and coin control agree.
     fn check_spendable(sk: Scalar, chain: &Chain, utxos: &[UtxoResponse]) -> Result<()> {
         let policy = &chain.config.contract.seedelf_policy_id;
         for utxo in utxos {
+            if !at_wallet_contract(chain.network_flag, utxo)? {
+                bail!(
+                    "UTxO {}#{} isn't in the Seedelf Wallet contract",
+                    utxo.tx_hash,
+                    utxo.tx_index
+                );
+            }
             let owned = extract_bytes_with_logging(&utxo.inline_datum)
                 .map(|register| register.is_owned(sk).unwrap_or(false))
                 .unwrap_or(false);
@@ -2547,6 +2785,29 @@ pub mod api {
         /// `mix_logic`'s reward account (bech32): the worker asks
         /// `account_info` whether something registered it meanwhile.
         pub mix_logic_stake: String,
+        /// A box of the pool it makes can't pay its own way back now: said on
+        /// the review, never refused (chunk 51, gap-g8#6).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cant_come_back: Option<CantComeBackOut>,
+    }
+
+    /// What's left of a box after its withdraw's fee, and what its Seedelf
+    /// output needs, where that's less (core's `CantPayBack`), in lovelace.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct CantComeBackOut {
+        pub has: String,
+        pub needs: String,
+    }
+
+    /// [`CantComeBackOut`] of what a launch said, if anything.
+    fn cant_come_back_of(
+        said: Option<&seedelf_core::lovejoin::CantPayBack>,
+    ) -> Option<CantComeBackOut> {
+        said.map(|c| CantComeBackOut {
+            has: c.has.to_string(),
+            needs: c.needs.to_string(),
+        })
     }
 
     /// A launch's terms as a request names them.
@@ -2637,6 +2898,7 @@ pub mod api {
             change_tokens: built.change_tokens.items.len(),
             inputs: launch.inputs().iter().map(out_ref).collect(),
             collateral: out_ref(launch.collateral()),
+            cant_come_back: cant_come_back_of(launch.cant_come_back.as_ref()),
         })
     }
 
@@ -2671,6 +2933,9 @@ pub mod api {
         /// `mix_logic`'s reward account (bech32): the worker asks
         /// `account_info` whether something registered it meanwhile.
         pub mix_logic_stake: String,
+        /// As [`AccountLaunchResult::cant_come_back`].
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cant_come_back: Option<CantComeBackOut>,
     }
 
     /// Starting a pool in one step: picks the Seedelf UTxOs that pay,
@@ -2722,6 +2987,7 @@ pub mod api {
             change_lovelace: built.change_lovelace.to_string(),
             inputs: out_refs(&spend),
             classes_mixed: classes_mixed(&request.classes, &spend)?,
+            cant_come_back: cant_come_back_of(launch.cant_come_back.as_ref()),
         })
     }
 
@@ -2896,6 +3162,11 @@ pub mod api {
         /// (`ScriptSpend::carry`) for the next part, which has no ADA of its own to pay with.
         #[serde(default)]
         pub carry: bool,
+        /// With a single payment's `lovelace` null: the most an amount can be, which the worker says when one is too
+        /// much (`privateShortOf`), rather than Max. Max over the UTxOs an amount takes, so never one that adds less
+        /// than nothing but for a token it sends ([`adding`]; chunk 51, r2a#3). Max itself spends every UTxO.
+        #[serde(default)]
+        pub most: bool,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
         /// Ogmios's answer to evaluating the draft.
@@ -2996,7 +3267,12 @@ pub mod api {
         if !is_seedelf_name(to) {
             bail!("A Seedelf's name is 64 hex characters starting 5eed0e1f");
         }
-        if utxo.payment_cred != hex::encode(chain.config.contract.wallet_contract_hash) {
+        // Its address decides ([`at_wallet_contract`]), and the row's own
+        // payment_cred must agree: at the KEY address carrying the contract's
+        // hash, the register is whatever a stranger wrote (chunk 51, x2#2).
+        if !at_wallet_contract(chain.network_flag, utxo)?
+            || utxo.payment_cred != hex::encode(chain.config.contract.wallet_contract_hash)
+        {
             bail!("That Seedelf isn't in the Seedelf Wallet contract, so it can't be paid");
         }
         let policy = &chain.config.contract.seedelf_policy_id;
@@ -3174,16 +3450,17 @@ pub mod api {
                     .payments
                     .iter()
                     .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
-                let (spend, built) = measured_or_more(short, &request.utxos, &needed, |inputs| {
-                    let spend = build::transfer_from(
-                        &plan.chain,
-                        inputs,
-                        &plan.payments,
-                        &plan.owner,
-                        plan.signer,
-                    )?;
-                    prove_with(sk, spend)
-                })?;
+                let (spend, built) =
+                    measured_or_more(short, &plan.chain, &request.utxos, &needed, |inputs| {
+                        let spend = build::transfer_from(
+                            &plan.chain,
+                            inputs,
+                            &plan.payments,
+                            &plan.owner,
+                            plan.signer,
+                        )?;
+                        prove_with(sk, spend)
+                    })?;
                 (spend, 0, built)
             }
             Err(e) => return Err(e),
@@ -3193,17 +3470,46 @@ pub mod api {
 
     /// When picking found nothing that pays by the guessed budgets (`short`):
     /// the largest UTxOs together, the ones holding `needed` first
-    /// ([`build::max_inputs`]), spent by `spend` and measured. The guess runs
-    /// above what the scripts use, so they may pay; if they don't, `short`.
+    /// ([`build::max_inputs_by`]), spent by `spend` and measured. The guess
+    /// runs above what the scripts use, so they may pay; if they don't,
+    /// `short`. One that adds less than nothing comes last, as picking takes
+    /// it ([`build::adds`]): they're measured without it first, unless it
+    /// holds a token sent, then with it, so an amount up to what a shortfall
+    /// says ([`adding`]) goes (chunk 51, r2a#3).
     fn measured_or_more(
         short: anyhow::Error,
+        chain: &Chain,
         utxos: &[UtxoResponse],
         needed: &Assets,
-        spend: impl FnOnce(&[UtxoResponse]) -> Result<ScriptSpend>,
+        spend: impl Fn(&[UtxoResponse]) -> Result<ScriptSpend>,
     ) -> Result<(ScriptSpend, build::FinalSpend)> {
-        let Ok((inputs, _)) = build::max_inputs(utxos, needed, MAX_WITHDRAW_UTXOS) else {
+        // Each priced once: a sort asks for each many times.
+        let adding_something: HashMap<(&str, u64), bool> = utxos
+            .iter()
+            .map(|u| {
+                let adds = build::adds(&chain.params, u).unwrap_or(0);
+                ((u.tx_hash.as_str(), u.tx_index), adds >= 0)
+            })
+            .collect();
+        let worth = |u: &UtxoResponse| {
+            let something = adding_something
+                .get(&(u.tx_hash.as_str(), u.tx_index))
+                .copied()
+                .unwrap_or(true);
+            (something, u.value.parse::<u64>().unwrap_or(0))
+        };
+        let Ok((inputs, _)) = build::max_inputs_by(utxos, needed, MAX_WITHDRAW_UTXOS, worth) else {
             return Err(short);
         };
+        let sent: Vec<TokenAmount> = needed.items.iter().map(token_amount).collect();
+        let first = adding(chain, &inputs, &sent);
+        if !first.is_empty() && first.len() < inputs.len() {
+            match spend(&first).and_then(|spend| measured(&spend).map(|built| (spend, built))) {
+                Ok(built) => return Ok(built),
+                Err(e) if build::is_short(&e) => {}
+                Err(e) => return Err(e),
+            }
+        }
         let spend = spend(&inputs)?;
         match measured(&spend) {
             Ok(built) => Ok((spend, built)),
@@ -3259,17 +3565,33 @@ pub mod api {
     pub const MAX_WITHDRAW_UTXOS: usize = 20;
 
     /// A destination address from the extension: bech32, and one a
-    /// withdrawal or a send can pay (`build::is_payable_address`).
+    /// withdrawal or a send can pay (`build::is_payable_address`): any
+    /// Shelley address on this network, a script's too, with no datum (the
+    /// extension warns of that). A Byron address (base58) is refused in
+    /// words of its own: the wallet doesn't pay one, and a script spend can't
+    /// (the ledger refuses a Byron output where a Plutus script runs, and
+    /// `uplc` can't put one in a script's context). It read as "That isn't a
+    /// Cardano address" (chunk 51, r2a#1).
     pub fn payable_address(network_flag: bool, to: &str) -> Result<Address> {
-        let addr =
-            Address::from_bech32(to.trim()).map_err(|_| anyhow!("That isn't a Cardano address"))?;
+        let to = to.trim();
+        let addr = match Address::from_bech32(to) {
+            Ok(addr) => addr,
+            Err(_) if is_byron(to) => bail!("Seedelf Wallet can't pay a Byron address"),
+            Err(_) => bail!("That isn't a Cardano address"),
+        };
         if !build::is_payable_address(&addr, network_flag) {
             let network = if network_flag { "preprod" } else { "mainnet" };
             bail!(
-                "Payments go to a normal {network} address: not a script, stake or other network's address"
+                "Payments go to an address on {network}: not a stake, Byron or other network's address"
             );
         }
         Ok(addr)
+    }
+
+    /// Whether `text` is a Byron address: base58 whose bytes are one, with a
+    /// payload that reads.
+    fn is_byron(text: &str) -> bool {
+        pallas_addresses::ByronAddress::from_base58(text).is_ok_and(|byron| byron.decode().is_ok())
     }
 
     /// Paying addresses from the Seedelf balance, as JSON from the extension.
@@ -3288,15 +3610,17 @@ pub mod api {
         #[serde(default)]
         pub classes: Classes,
         /// A private session's funding or top-up, rather than a payment:
-        /// received money, or a box that pays alone, goes first, and another
-        /// session's money last.
+        /// received money first, then a box that pays alone, one a mix moved
+        /// before any other, and another session's money last.
         #[serde(default)]
         pub funding: Option<Funding>,
         /// With a single payment's `lovelace` null: the most a payment of its
         /// tokens can be, the other tokens staying with the least ADA they
         /// need (`build::sweep_most`), rather than everything with every
         /// token (Max). The worker asks it to say how much an amount that's
-        /// too much could be (blind test T05).
+        /// too much could be (blind test T05). Over the UTxOs an amount
+        /// takes, so never one that adds less than nothing but for a token
+        /// it sends ([`adding`]; chunk 51, r2a#3).
         #[serde(default)]
         pub most: bool,
         /// A part of a payment in a chain ([`build_withdraw_parts`]), as [`TransferRequest::carry`]: exactly `utxos`,
@@ -3322,7 +3646,7 @@ pub mod api {
     #[derive(Deserialize, Clone)]
     #[serde(rename_all = "camelCase")]
     pub struct WithdrawPayment {
-        /// A bech32 key address on this network.
+        /// A bech32 address on this network ([`payable_address`]).
         pub to: String,
         /// Lovelace as a decimal string, raised to the least the payment
         /// needs (so "0" sends only that); `null` sends everything (Max), to
@@ -3577,10 +3901,11 @@ pub mod api {
                     .iter()
                     .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
                 let owner = Register::create(sk)?;
-                let (spend, built) = measured_or_more(short, &request.utxos, &needed, |inputs| {
-                    let spend = build::sweep_many_from(&chain, inputs, to_pay, &owner, signer)?;
-                    prove_with(sk, spend)
-                })?;
+                let (spend, built) =
+                    measured_or_more(short, &chain, &request.utxos, &needed, |inputs| {
+                        let spend = build::sweep_many_from(&chain, inputs, to_pay, &owner, signer)?;
+                        prove_with(sk, spend)
+                    })?;
                 (spend, 0, built)
             }
             Err(e) => return Err(e),
@@ -3632,6 +3957,18 @@ pub mod api {
         })
     }
 
+    /// Of `utxos`, those an amount takes for its ADA: all but one that adds less than nothing ([`build::adds`]: its
+    /// tokens need more than it holds, a stranger's pile, say), unless it holds one of `tokens`, which are sent.
+    /// Selection takes such a UTxO only where nothing else pays, and it never pays more, so the most an amount can be
+    /// is Max over these (`most`, the shortfall's figure; chunk 51, r2a#3).
+    fn adding(chain: &Chain, utxos: &[UtxoResponse], tokens: &[TokenAmount]) -> Vec<UtxoResponse> {
+        utxos
+            .iter()
+            .filter(|u| holds_any(u, tokens) || !build::adds(&chain.params, u).is_ok_and(|a| a < 0))
+            .cloned()
+            .collect()
+    }
+
     /// Whether `utxos` together hold `lovelace`: an amount more than they do can't go in any number of parts, and
     /// is refused at once, as core's shortfall (the worker says it in the user's words, `privateShortOf`).
     fn holding_enough(utxos: &[UtxoResponse], lovelace: u64) -> Result<()> {
@@ -3657,9 +3994,11 @@ pub mod api {
 
     /// The UTxOs of `rest` holding any of `tokens`, those holding the most of them first, `at_most` of them: a part's,
     /// where the tokens sent are in more UTxOs than one transaction spends (the owner's test of 1.6.0: a pool's boxes
-    /// brought back, a few of its token in each), or hold more than one output can. `rich`: those adding the most ADA
-    /// first ([`Worth`]), a chain's, which takes the ADA forward (test wallet A, 1.6.0: its 2,621 ADA sat with 19 of
-    /// the 400 tokens it sent, behind bundles of 20 holding only their least, and no part could pay its fee).
+    /// brought back, a few of its token in each), or hold more than one output can. `rich`: by [`Worth`]'s place
+    /// first, those adding ADA before those holding only their tokens' least, a chain's, which takes the ADA forward
+    /// (test wallet A, 1.6.0: its 2,621 ADA sat with 19 of the 400 tokens it sent, behind bundles of 20 holding only
+    /// their least, and no part could pay its fee); but [`Worth::of`]'s with a funding's histories puts its purpose's
+    /// order before that (chunk 51, l8words#2).
     fn token_group(
         rest: &[UtxoResponse],
         tokens: &[TokenAmount],
@@ -3698,8 +4037,12 @@ pub mod api {
     /// ([`by_history_first`]), a session's funding by its purpose's order first (`histories`,
     /// [`build::Histories::rank_of`]). Max takes them by what each adds alone: it spends every UTxO either way.
     ///
-    /// Each one's place, the highest first: whether it adds anything, where its history comes, and what it adds.
-    struct Worth(HashMap<(String, u64), (bool, u32, u64)>);
+    /// Each one's place, the highest first: whether it adds something (1), nothing (0) or less than nothing (-1: its
+    /// tokens need more than it holds, a stranger's pile, say, which comes after everything else: chunk 51, r2a#3),
+    /// where its history comes, and what it adds, with its sign. [`Worth::of`] gives one that adds nothing 1, so its
+    /// history comes before whether it adds, and a funding's order there can take a bundle at its least before ADA
+    /// (chunk 51, l8words#2).
+    struct Worth(HashMap<(String, u64), (i8, u32, i128)>);
 
     impl Worth {
         fn of(chain: &Chain, utxos: &[UtxoResponse], histories: Option<&Histories>) -> Self {
@@ -3708,27 +4051,21 @@ pub mod api {
                     .iter()
                     .map(|u| {
                         let first = u8::MAX - histories.map_or(0, |h| h.rank_of(u));
+                        let adds = Self::adds(chain, u);
+                        let standing = if adds < 0 { -1 } else { 1 };
                         (
                             (u.tx_hash.clone(), u.tx_index),
-                            (true, u32::from(first), Self::adds(chain, u)),
+                            (standing, u32::from(first), adds),
                         )
                     })
                     .collect(),
             )
         }
 
-        /// What `u` adds to a payment: its ADA less the least its own tokens need.
-        fn adds(chain: &Chain, u: &UtxoResponse) -> u64 {
-            seedelf_core::utxos::assets_of(vec![u.clone()])
-                .ok()
-                .and_then(|(lovelace, tokens)| {
-                    if tokens.is_empty() {
-                        return Some(lovelace);
-                    }
-                    let kept = build::minimum_deposit(&chain.params, &tokens).ok()?;
-                    Some(lovelace.saturating_sub(kept))
-                })
-                .unwrap_or(0)
+        /// What `u` adds to a payment: its ADA less the least its own tokens need, with its sign
+        /// ([`build::adds`]); nothing where its value can't be read.
+        fn adds(chain: &Chain, u: &UtxoResponse) -> i128 {
+            build::adds(&chain.params, u).unwrap_or(0)
         }
 
         /// An amount's parts by history (`histories`, the spend's purpose's), so that, where money of one history
@@ -3741,10 +4078,11 @@ pub mod api {
         /// fundings left ties nothing new to it.
         ///
         /// The order takes each history's UTxOs together, as one transaction merges them: boxes and the purpose's
-        /// last resorts last (its tiers), then a top-up's own, and the histories whose money alone pays; then by the
-        /// purpose's order, those with the most first; within each, those adding the most first. Ahead of all that,
-        /// those adding anything: a part of those adding nothing pays no fee. `None` with one history or none known:
-        /// the parts are [`Worth::of`]'s.
+        /// last resorts last (its tiers), the boxes as one transaction takes them ([`build::boxes_to_merge`]); then a
+        /// top-up's own, and the histories whose money alone pays; then by the purpose's order, those with the most
+        /// first; within each, those adding the most first. Ahead of all that,
+        /// those adding anything: a part of those adding nothing pays no fee; and those adding less than nothing after
+        /// everything. `None` with one history or none known: the parts are [`Worth::of`]'s.
         fn apart(
             chain: &Chain,
             utxos: &[UtxoResponse],
@@ -3765,12 +4103,13 @@ pub mod api {
                 return None;
             }
             let is_own = |c: &Class| own.is_some_and(|s| c.has(s));
-            // Each history, whether its money alone pays, and how much it adds.
-            let mut classes: Vec<(Class, Vec<&UtxoResponse>, bool, u64)> = classes
+            // Each history, whether its money alone pays, and how much it adds: what adds less than nothing is never
+            // needed for ADA, so it takes nothing away.
+            let mut classes: Vec<(Class, Vec<&UtxoResponse>, bool, i128)> = classes
                 .into_iter()
                 .map(|(c, rows)| {
-                    let total: u64 = rows.iter().map(|u| Self::adds(chain, u)).sum();
-                    let alone = total >= owed
+                    let total: i128 = rows.iter().map(|u| Self::adds(chain, u).max(0)).sum();
+                    let alone = total >= i128::from(owed)
                         && tokens.iter().all(|t| {
                             let held: u128 = rows.iter().map(|u| quantity_of(u, t)).sum();
                             held >= t.quantity.parse::<u128>().unwrap_or(0)
@@ -3799,9 +4138,37 @@ pub mod api {
                         .collect()
                 })
                 .filter(|alone| alone.len() < utxos.len());
+            // Boxes back from Lovejoin, last, as one transaction merges them, by the box rule (`build::box_rank`):
+            // every one, a token pool's way back holding its token included, weighed by what it adds, its ADA less its
+            // tokens' whole least, as a part leaves the tokens it keeps with just their least (`build::box_weight`,
+            // `Weighed::InParts`; chunk 51, l5merge#1, l6still#1); first those that pay what the rest leaves owed, as
+            // few of unknown making as do, then as few boxes, of as many the most mixed (`build::boxes_to_merge`).
+            let tier = |rows: &[&UtxoResponse]| histories.tier_of(rows[0]);
+            let boxes: Vec<usize> = (0..classes.len())
+                .filter(|&i| tier(&classes[i].1) == 2)
+                .collect();
+            let rest: i128 = classes
+                .iter()
+                .filter(|(_, rows, ..)| tier(rows) < 2)
+                .map(|(.., total)| *total)
+                .sum();
+            let gap = u128::from(owed).saturating_sub(u128::try_from(rest).unwrap_or(0));
+            let weights: Vec<(u128, u8)> = boxes
+                .iter()
+                .map(|&i| {
+                    let (c, rows, ..) = &classes[i];
+                    build::box_weight(&chain.params, c, rows, build::Weighed::InParts)
+                })
+                .collect();
+            let places: HashMap<String, usize> = build::boxes_to_merge(&weights, gap)
+                .into_iter()
+                .enumerate()
+                .map(|(at, i)| (classes[boxes[i]].0.id.clone(), at))
+                .collect();
             classes.sort_by_key(|(c, rows, alone, total)| {
                 (
-                    histories.tier_of(rows[0]),
+                    tier(rows),
+                    places.get(&c.id).copied().unwrap_or(usize::MAX),
                     !(*alone || is_own(c)),
                     histories.rank_of(rows[0]),
                     std::cmp::Reverse(*total),
@@ -3816,7 +4183,8 @@ pub mod api {
                     .flat_map(|((_, rows, ..), n)| {
                         rows.iter().map(move |u| {
                             let adds = Self::adds(chain, u);
-                            ((u.tx_hash.clone(), u.tx_index), (adds > 0, last - n, adds))
+                            let standing = adds.signum() as i8;
+                            ((u.tx_hash.clone(), u.tx_index), (standing, last - n, adds))
                         })
                     })
                     .collect(),
@@ -3824,11 +4192,290 @@ pub mod api {
             Some((order, alone))
         }
 
-        fn of_utxo(&self, u: &UtxoResponse) -> (bool, u32, u64) {
+        fn of_utxo(&self, u: &UtxoResponse) -> (i8, u32, i128) {
             self.0
                 .get(&(u.tx_hash.clone(), u.tx_index))
                 .copied()
-                .unwrap_or((false, 0, 0))
+                .unwrap_or((i8::MIN, 0, 0))
+        }
+    }
+
+    /// Chunk 51, l4code#1: a payment's parts took boxes back from Lovejoin by the purpose's order before their size, so
+    /// every box a mix moved went before a larger box of another kind, and a box of unknown making before a smaller one
+    /// whose making the wallet knows. They take them as one transaction merges them (`build::boxes_to_merge`).
+    #[cfg(test)]
+    mod box_order_tests {
+        use super::*;
+
+        fn row(tx: u8, lovelace: u64) -> UtxoResponse {
+            UtxoResponse {
+                tx_hash: hex::encode([tx; 32]),
+                tx_index: 0,
+                value: lovelace.to_string(),
+                ..Default::default()
+            }
+        }
+
+        /// The order `Worth::apart` takes `rows` in, for `purpose`, `owed` lovelace owed: each row's `tx` byte.
+        fn order(purpose: Purpose, rows: &[(UtxoResponse, &str)], owed: u64) -> Vec<u8> {
+            let params: serde_json::Value = serde_json::from_str::<serde_json::Value>(
+                include_str!("../../../seedelf-core/tests/fixtures/epoch_params.json"),
+            )
+            .unwrap()[0]
+                .clone();
+            let chain = chain_of("preprod", &params).unwrap();
+            let classes: Classes = rows
+                .iter()
+                .map(|(u, origin)| {
+                    let id = if *origin == "unplaced" {
+                        format!("box:{0}+unknown:{0}", u.tx_hash)
+                    } else {
+                        format!("box:{}", u.tx_hash)
+                    };
+                    let origin = if *origin == "mixed" {
+                        "mixed"
+                    } else {
+                        "lovejoin"
+                    };
+                    (
+                        format!("{}#0", u.tx_hash),
+                        ClassIn {
+                            id,
+                            origin: origin.into(),
+                        },
+                    )
+                })
+                .collect();
+            let utxos: Vec<UtxoResponse> = rows.iter().map(|(u, _)| u.clone()).collect();
+            let h = histories(purpose, &classes).unwrap();
+            let (worth, _) = Worth::apart(&chain, &utxos, &h, owed, &[], None).unwrap();
+            let mut taken = utxos.clone();
+            taken.sort_by_key(|u| std::cmp::Reverse(worth.of_utxo(u)));
+            taken
+                .iter()
+                .map(|u| hex::decode(&u.tx_hash).unwrap()[0])
+                .collect()
+        }
+
+        #[test]
+        fn a_payments_parts_merge_as_few_boxes_as_pay_none_of_unknown_making_where_the_others_pay()
+        {
+            // Four ways back a mix moved of 4.71 ₳ (0x51 to 0x54), two plain ones of 9.71 ₳ (0x61, 0x62), and one of
+            // unknown making of 9.8 ₳ (0x70).
+            let rows: Vec<(UtxoResponse, &str)> = [0x51, 0x52, 0x53, 0x54]
+                .map(|tx| (row(tx, 4_710_000), "mixed"))
+                .into_iter()
+                .chain([0x61, 0x62].map(|tx| (row(tx, 9_710_000), "plain")))
+                .chain([(row(0x70, 9_800_000), "unplaced")])
+                .collect();
+            for purpose in [Purpose::Pay, Purpose::Fund { session: None }] {
+                // 12 ₳: two boxes pay, one of them mixed.
+                assert_eq!(
+                    order(purpose.clone(), &rows, 12_000_000),
+                    [0x51, 0x61, 0x62, 0x52, 0x53, 0x54, 0x70],
+                    "{purpose:?}, 12 ₳"
+                );
+                // 15 ₳: only the two plain ones pay as two.
+                assert_eq!(
+                    order(purpose.clone(), &rows, 15_000_000),
+                    [0x61, 0x62, 0x51, 0x52, 0x53, 0x54, 0x70],
+                    "{purpose:?}, 15 ₳"
+                );
+            }
+        }
+
+        fn with_token(mut u: UtxoResponse, name: &str) -> UtxoResponse {
+            u.asset_list = Some(vec![seedelf_koios::koios::Asset {
+                decimals: 0,
+                quantity: "1".into(),
+                policy_id: "c0".repeat(28),
+                asset_name: hex::encode(name),
+                fingerprint: String::new(),
+            }]);
+            u
+        }
+
+        /// The order `Worth::apart` takes `rows` in, each with its own class (`id`, `origin`), for `purpose`, `owed`
+        /// lovelace owed: each row's `tx` byte.
+        fn order_of(
+            chain: &Chain,
+            purpose: Purpose,
+            rows: &[(UtxoResponse, String, &str)],
+            owed: u64,
+        ) -> Option<Vec<u8>> {
+            let classes: Classes = rows
+                .iter()
+                .map(|(u, id, origin)| {
+                    (
+                        format!("{}#0", u.tx_hash),
+                        ClassIn {
+                            id: id.clone(),
+                            origin: (*origin).into(),
+                        },
+                    )
+                })
+                .collect();
+            let utxos: Vec<UtxoResponse> = rows.iter().map(|(u, ..)| u.clone()).collect();
+            let h = histories(purpose, &classes).unwrap();
+            let (worth, _) = Worth::apart(chain, &utxos, &h, owed, &[], None)?;
+            let mut taken = utxos.clone();
+            taken.sort_by_key(|u| std::cmp::Reverse(worth.of_utxo(u)));
+            Some(
+                taken
+                    .iter()
+                    .map(|u| hex::decode(&u.tx_hash).unwrap()[0])
+                    .collect(),
+            )
+        }
+
+        fn preprod() -> Chain {
+            let params: serde_json::Value = serde_json::from_str::<serde_json::Value>(
+                include_str!("../../../seedelf-core/tests/fixtures/epoch_params.json"),
+            )
+            .unwrap()[0]
+                .clone();
+            chain_of("preprod", &params).unwrap()
+        }
+
+        /// Chunk 51, l5merge#1: a payment's parts listed only histories of ADA alone among the boxes, so a token
+        /// pool's way back (here one a mix moved, 4.15 ₳ and its token) went after every box of ADA alone, one of
+        /// unknown making (0x30) included. It's a box, weighed by what it adds: with 5 ₳ made private and K, a plain
+        /// way back of 9.71 ₳, 16 ₳ owed takes K and T, then W.
+        #[test]
+        fn a_token_pools_way_back_is_a_box_to_a_payments_parts() {
+            let chain = preprod();
+            let rows = [
+                (row(0x01, 5_000_000), "public:0".to_string(), "own"),
+                (
+                    row(0x61, 9_710_000),
+                    format!("box:{}", hex::encode([0x61u8; 32])),
+                    "lovejoin",
+                ),
+                (
+                    row(0x30, 9_710_000),
+                    format!("box:{0}+unknown:{0}", hex::encode([0x30u8; 32])),
+                    "lovejoin",
+                ),
+                (
+                    with_token(row(0x70, 4_150_000), "pooltoken"),
+                    format!("box:{}", hex::encode([0x70u8; 32])),
+                    "mixed",
+                ),
+            ];
+            for purpose in [Purpose::Pay, Purpose::Fund { session: None }] {
+                let taken = order_of(&chain, purpose.clone(), &rows, 16_000_000).unwrap();
+                assert_eq!(taken, [0x01, 0x61, 0x70, 0x30], "{purpose:?}");
+            }
+        }
+
+        /// Chunk 51, round six: the boxes a payment's parts take first, to close the gap the rest leaves owed, are
+        /// those the box rule picks, held to a brute force over seeded sets of box histories (a mix's, plain, of
+        /// unknown making, a token pool's way back holding its token among them) beside a little other money: of the
+        /// sets that add more than the gap, as few of unknown making as pay, then as few boxes, then of as many the
+        /// most mixed.
+        #[test]
+        fn a_payments_parts_close_the_gap_with_the_boxes_the_box_rule_picks() {
+            let chain = preprod();
+            let mut state: u64 = 0x5eed_0e1f;
+            let mut below = |n: u64| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state % n
+            };
+            let mut wrong = Vec::new();
+            let mut checked = 0;
+            for _ in 0..400 {
+                let boxes = 1 + below(8) as usize;
+                // Each box: its row, its rank (0 mixed, 1 plain, 2 of unknown making) and its weight, what it adds.
+                let mut rows: Vec<(UtxoResponse, String, &str)> = Vec::new();
+                let mut weighed: Vec<(u8, u128)> = Vec::new();
+                for i in 0..boxes {
+                    let tx = 0x40 + i as u8;
+                    let hash = hex::encode([tx; 32]);
+                    let lovelace = [4_710_000, 7_500_000, 9_710_000, 14_500_000, 19_710_000]
+                        [below(5) as usize];
+                    let u = if below(4) == 0 {
+                        with_token(row(tx, lovelace), ["poolA", "poolB"][below(2) as usize])
+                    } else {
+                        row(tx, lovelace)
+                    };
+                    let rank = below(3) as u8;
+                    let (id, origin) = match rank {
+                        0 => (format!("box:{hash}"), "mixed"),
+                        1 => (format!("box:{hash}"), "lovejoin"),
+                        _ => (format!("box:{hash}+unknown:{hash}"), "lovejoin"),
+                    };
+                    let weight =
+                        u128::try_from(build::adds(&chain.params, &u).unwrap().max(0)).unwrap();
+                    weighed.push((rank, weight));
+                    rows.push((u, id, origin));
+                }
+                let mut rest: u128 = 0;
+                for i in 0..below(3) {
+                    let tx = 0x10 + i as u8;
+                    let lovelace = [1_500_000, 3_000_000, 5_000_000][below(3) as usize];
+                    rest += u128::from(lovelace);
+                    let (id, origin) = if i == 0 {
+                        ("public:0".to_string(), "own")
+                    } else {
+                        (format!("received:{}", hex::encode([tx; 32])), "received")
+                    };
+                    rows.push((row(tx, lovelace), id, origin));
+                }
+                let all: u128 = weighed.iter().map(|(_, w)| w).sum::<u128>() + rest;
+                let owed = 1_000_000 + below(u64::try_from(all).unwrap());
+                let purpose = if below(2) == 0 {
+                    Purpose::Pay
+                } else {
+                    Purpose::Fund { session: None }
+                };
+                let Some(taken) = order_of(&chain, purpose.clone(), &rows, owed) else {
+                    continue;
+                };
+                let gap = u128::from(owed).saturating_sub(rest);
+                let key = |chosen: &[usize]| {
+                    let of = |rank: u8| chosen.iter().filter(|&&i| weighed[i].0 == rank).count();
+                    (of(2), chosen.len(), std::cmp::Reverse(of(0)))
+                };
+                let closes =
+                    |chosen: &[usize]| chosen.iter().map(|&i| weighed[i].1).sum::<u128>() > gap;
+                let Some(best) = (1u32..(1 << boxes))
+                    .map(|mask| {
+                        (0..boxes)
+                            .filter(|i| mask & (1 << i) != 0)
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|chosen| closes(chosen))
+                    .map(|chosen| key(&chosen))
+                    .min()
+                else {
+                    continue;
+                };
+                // The boxes in the order the parts take them, as far as the first that close the gap.
+                let mut first: Vec<usize> = Vec::new();
+                for tx in taken.iter().filter(|&&tx| tx >= 0x40) {
+                    if closes(&first) {
+                        break;
+                    }
+                    first.push(usize::from(tx - 0x40));
+                }
+                checked += 1;
+                if key(&first) != best {
+                    wrong.push(format!(
+                        "{purpose:?}, {owed} owed, gap {gap}, boxes (rank, weight) {weighed:?}: took {first:?}, \
+                         {:?}, where {best:?} closes it",
+                        key(&first)
+                    ));
+                }
+            }
+            assert!(checked > 100, "{checked}");
+            assert!(
+                wrong.is_empty(),
+                "a payment's parts close the gap with other boxes than the box rule picks ({} of {checked}):\n{}",
+                wrong.len(),
+                wrong.join("\n")
+            );
         }
     }
 
@@ -4011,6 +4658,20 @@ pub mod api {
             .collect()
     }
 
+    /// A part of a payment that found nothing to spend: none of what's left holds the tokens still owed ([`fit_part`]).
+    /// It's neither too little ADA nor tokens too many for one output, so Max in parts never puts what it leaves down
+    /// to either: it's refused, and Max asks first that its UTxOs hold what it sends (chunk 51, w1a#1).
+    #[derive(Debug)]
+    struct NothingToPick;
+
+    impl std::fmt::Display for NothingToPick {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("None of the Seedelf balance's UTxOs left holds the tokens this payment still sends")
+        }
+    }
+
+    impl std::error::Error for NothingToPick {}
+
     /// How a part of a chain fills its room ([`fit_part`]).
     #[derive(Clone, Copy, PartialEq)]
     enum Fill {
@@ -4060,7 +4721,7 @@ pub mod api {
                 picks.insert(0, carried.clone());
             }
             if picks.is_empty() {
-                bail!("Not enough ADA in the Seedelf balance for this payment and its fees");
+                bail!(NothingToPick);
             }
             let built = build(picks, share.clone(), more);
             let next = match &built {
@@ -4495,6 +5156,11 @@ pub mod api {
                 break;
             }
         }
+        // A part that found nothing to spend: what's left doesn't hold the tokens still sent. Refused, never left put
+        // down to tokens that won't fit or to the fee (chunk 51, w1a#1).
+        if let Some(e) = failed.take_if(|e| e.is::<NothingToPick>()) {
+            return Err(e);
+        }
         // Why what's left stays, where something does: the parts went as the most a payment goes as; or no part could
         // take it with the rest (a part that failed for anything but its fee, a chain's last part).
         let mut why = if parts.len() == MAX_PARTS {
@@ -4633,8 +5299,20 @@ pub mod api {
         if let [only] = request.payments.as_slice()
             && only.lovelace.is_none()
         {
+            // Asked for more of a token than the UTxOs hold, refused in core's words, as one transaction's Max is: its
+            // parts sent what they held, and left the rest put down to tokens, or refused it as short of ADA (chunk 51,
+            // w1a#1).
+            if !only.tokens.is_empty() {
+                build::max_inputs(&request.utxos, &assets_of(&only.tokens)?, usize::MAX)?;
+            }
+            // The most an amount can be: over what an amount takes (chunk 51, r2a#3).
+            let utxos = if request.most {
+                adding(&chain, &request.utxos, &only.tokens)
+            } else {
+                request.utxos.clone()
+            };
             return max_in_parts(
-                &request.utxos,
+                &utxos,
                 only.tokens.clone(),
                 &worth,
                 |r: &mut TransferResult| (&mut r.left, &mut r.left_why),
@@ -4765,20 +5443,20 @@ pub mod api {
             && only.lovelace.is_none()
             && !funding
         {
-            let worth = Worth::of(
-                &chain_of(&request.network, &request.params)?,
-                &request.utxos,
-                None,
-            );
-            // Everything sends every token; `most`, those named, the others staying.
+            let chain = chain_of(&request.network, &request.params)?;
+            let worth = Worth::of(&chain, &request.utxos, None);
+            // Everything sends every token; `most`, those named, the others staying, over what an amount takes
+            // (chunk 51, r2a#3).
             let most = request.most;
-            let tokens = if most {
-                only.tokens.clone()
+            let (tokens, utxos) = if most {
+                let tokens = only.tokens.clone();
+                let utxos = adding(&chain, &request.utxos, &tokens);
+                (tokens, utxos)
             } else {
-                Vec::new()
+                (Vec::new(), request.utxos.clone())
             };
             return max_in_parts(
-                &request.utxos,
+                &utxos,
                 tokens,
                 &worth,
                 |r: &mut WithdrawResult| (&mut r.left, &mut r.left_why),
@@ -4983,7 +5661,7 @@ pub mod api {
         pub params: serde_json::Value,
         /// The contract UTxO holding the seedelf, as Koios returns it.
         pub utxo: UtxoResponse,
-        /// Where its ADA goes: a bech32 key address, or `null` for the Seedelf balance.
+        /// Where its ADA goes: a bech32 address on this network (`payable_address`), or `null` for the Seedelf balance.
         pub to: Option<String>,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
@@ -5005,6 +5683,10 @@ pub mod api {
         pub to: Option<String>,
         /// What comes back: the ADA locked with it, less the fee.
         pub lovelace: String,
+        /// And every other token its UTxO held, which comes back with it:
+        /// anyone can mint a Seedelf beside tokens of theirs under a register
+        /// of ours (chunk 51, w1b#2). The burned Seedelf isn't among them.
+        pub tokens: Vec<TokenAmount>,
         pub fee: FeeOut,
         pub inputs: Vec<OutRef>,
     }
@@ -5016,6 +5698,10 @@ pub mod api {
     ) -> Result<(ScriptSpend, Vec<u8>)> {
         let chain = chain_of(&request.network, &request.params)?;
         let utxo = &request.utxo;
+        // Only a UTxO at the contract's script can be spent (chunk 51, x2#2).
+        if !at_wallet_contract(chain.network_flag, utxo)? {
+            bail!("That Seedelf isn't in the Seedelf Wallet contract");
+        }
         let owned = extract_bytes_with_logging(&utxo.inline_datum)
             .is_some_and(|register| register.is_owned(sk).unwrap_or(false));
         if !owned {
@@ -5072,6 +5758,7 @@ pub mod api {
             name: hex::encode(name),
             to: request.to.as_ref().map(|t| t.trim().to_string()),
             lovelace: built.change_lovelace.to_string(),
+            tokens: built.change_tokens.items.iter().map(token_amount).collect(),
             fee: fee_out(&built.fee),
             inputs: out_refs(spend),
         }
@@ -5669,6 +6356,370 @@ pub mod api {
             // And the reader is whole after it.
             let real = read(&f, f["datum"].as_str().unwrap(), json!({ "inline": true }));
             assert!(real.ours, "{real:?}");
+        }
+    }
+
+    /// Guards of the payment planner, of a session's return and of signing that no test reached (chunk 51, T1e),
+    /// each with stand-ins where a build would prove and measure.
+    #[cfg(test)]
+    mod guard_tests {
+        use super::*;
+        use pallas_txbuilder::BuildConway;
+        use std::cell::Cell;
+
+        fn params() -> serde_json::Value {
+            serde_json::from_str::<serde_json::Value>(include_str!(
+                "../../../seedelf-core/tests/fixtures/epoch_params.json"
+            ))
+            .unwrap()[0]
+                .clone()
+        }
+
+        /// `quantity` of one token.
+        fn token(quantity: u64) -> TokenAmount {
+            TokenAmount {
+                policy_id: "ab".repeat(28),
+                asset_name: hex::encode("T"),
+                quantity: quantity.to_string(),
+            }
+        }
+
+        /// UTxO `n`: `lovelace`, and `token` too.
+        fn row(n: u64, lovelace: u64, token: Option<&TokenAmount>) -> UtxoResponse {
+            UtxoResponse {
+                tx_hash: format!("{n:064x}"),
+                value: lovelace.to_string(),
+                asset_list: token.map(|t| {
+                    vec![seedelf_koios::koios::Asset {
+                        decimals: 0,
+                        quantity: t.quantity.clone(),
+                        policy_id: t.policy_id.clone(),
+                        asset_name: t.asset_name.clone(),
+                        fingerprint: String::new(),
+                    }]
+                }),
+                ..Default::default()
+            }
+        }
+
+        fn outrefs(spent: &[&UtxoResponse]) -> Vec<OutRef> {
+            spent
+                .iter()
+                .map(|u| OutRef {
+                    tx_hash: u.tx_hash.clone(),
+                    tx_index: u.tx_index,
+                })
+                .collect()
+        }
+
+        /// A part as the planner reads one: what it spends, what it pays, what it carries forward.
+        #[derive(Debug, Clone)]
+        struct Part {
+            inputs: Vec<OutRef>,
+            paid: u64,
+            carry: Option<UtxoResponse>,
+        }
+
+        fn inputs_of(part: &Part) -> &[OutRef] {
+            &part.inputs
+        }
+
+        fn paid_of(part: &Part) -> Result<u64> {
+            Ok(part.paid)
+        }
+
+        fn carried(part: &Part) -> Option<UtxoResponse> {
+            part.carry.clone()
+        }
+
+        /// The least a payment carries: 1 ₳ of ADA alone, 1.5 ₳ with the token.
+        fn least(tokens: &[TokenAmount]) -> Result<u64> {
+            Ok(if tokens.is_empty() {
+                1_000_000
+            } else {
+                1_500_000
+            })
+        }
+
+        /// Each stand-in part's fee.
+        const FEE: u64 = 200_000;
+
+        fn held(picks: &[UtxoResponse]) -> u64 {
+            picks.iter().map(|u| u.value.parse::<u64>().unwrap()).sum()
+        }
+
+        /// A part of `picks` paying `lovelace`, where a build would prove and measure one: too many for one
+        /// transaction past [`MAX_WITHDRAW_UTXOS`], refused where they don't hold it and the fee.
+        fn part(picks: Vec<UtxoResponse>, lovelace: u64) -> Result<Part> {
+            if picks.len() > MAX_WITHDRAW_UTXOS {
+                return Err(build::TooMany(picks.len()).into());
+            }
+            if held(&picks) < lovelace + FEE {
+                bail!("the stand-in's UTxOs don't pay it");
+            }
+            Ok(Part {
+                inputs: outrefs(&picks.iter().collect::<Vec<_>>()),
+                paid: lovelace,
+                carry: None,
+            })
+        }
+
+        /// The parts [`in_parts`] plans of `owed` and `tokens` over `utxos`, `beside` paid in the first, with no
+        /// chain; and how many it built of the most their UTxOs pay, and of an amount.
+        fn planned(
+            utxos: &[UtxoResponse],
+            owed: u64,
+            tokens: Vec<TokenAmount>,
+            beside: u64,
+        ) -> (Result<Vec<Part>>, usize, usize) {
+            let chain = chain_of("preprod", &params()).unwrap();
+            let worth = Worth::of(&chain, utxos, None);
+            let (most, amounts) = (Cell::new(0), Cell::new(0));
+            let parts = in_parts(
+                build::TooMany(utxos.len()).into(),
+                utxos,
+                owed,
+                tokens,
+                beside,
+                &[],
+                least,
+                &worth,
+                false,
+                inputs_of,
+                paid_of,
+                carried,
+                |picks, _, _| {
+                    most.set(most.get() + 1);
+                    let all = held(&picks).saturating_sub(FEE);
+                    part(picks, all)
+                },
+                |picks, lovelace, _, _| {
+                    amounts.set(amounts.get() + 1);
+                    part(picks, lovelace)
+                },
+                |_, _, _| bail!("no chain here"),
+            );
+            (parts, most.get(), amounts.get())
+        }
+
+        #[test]
+        fn a_payment_goes_as_max_parts_transactions_at_most() {
+            // t1e#4: a token in 601 UTxOs, one in each, all of it asked for: 31 parts of 20, past the 25 one payment
+            // goes as. Refused at the 25th in the first try's own words, none built past it.
+            let all = token(601);
+            let utxos: Vec<UtxoResponse> = (1..=601)
+                .map(|n| row(n, 2_000_000, Some(&token(1))))
+                .collect();
+            let owed = least(std::slice::from_ref(&all)).unwrap();
+            let (parts, most, _) = planned(&utxos, owed, vec![all], 0);
+            assert_eq!(
+                parts.err().map(|e| e.to_string()),
+                Some(build::TooMany(601).to_string())
+            );
+            assert_eq!(most, MAX_PARTS - 1, "no part past the most is built");
+        }
+
+        #[test]
+        fn the_part_sending_the_last_tokens_pays_what_is_owed_and_ends_the_payment() {
+            // t1e#5 and t1e#6: a part sends the last of the token and its UTxOs hold what's still owed: it pays
+            // exactly that, and nothing follows it. Short of the first, it paid what's owed less an output's least,
+            // which a part of its own then paid; short of the second, a payment paid in full went on to a part
+            // nobody asked for, the recipient paid that least and its fee.
+            let t = token(1);
+            let mut utxos = vec![row(1, 2_000_000, Some(&t))];
+            utxos.extend((2..=26).map(|n| row(n, 2_000_000, None)));
+            let (parts, _, _) = planned(&utxos, 10_000_000, vec![t], 0);
+            let paid: Vec<u64> = parts.unwrap().iter().map(|p| p.paid).collect();
+            assert_eq!(paid, [10_000_000]);
+        }
+
+        #[test]
+        fn an_amount_past_what_the_utxos_hold_is_refused_before_any_part() {
+            // t1e#7: of 100 ₳, 101 ₳ asked, or 97 ₳ with a session's 5 ₳ collateral beside it in the first part, is
+            // refused at once in holding_enough's words, no part built or proven: parts were planned for an amount
+            // no number of them could pay, and a funding's collateral went uncounted.
+            let utxos: Vec<UtxoResponse> = (1..=10).map(|n| row(n, 10_000_000, None)).collect();
+            for (owed, beside) in [(101_000_000, 0), (97_000_000, 5_000_000)] {
+                let (parts, most, amounts) = planned(&utxos, owed, vec![], beside);
+                assert_eq!(
+                    parts.err().map(|e| e.to_string()).as_deref(),
+                    Some("Not enough ADA in the Seedelf balance for this payment and its fees"),
+                    "{owed} asked, {beside} beside"
+                );
+                assert_eq!((most, amounts), (0, 0), "{owed} asked, {beside} beside");
+            }
+        }
+
+        #[test]
+        fn a_chained_part_spends_something_beside_its_carry() {
+            // t1e#9: a part of a chain spending only the carry it was handed goes round for a fee, carrying less
+            // forward each time; refused, the chain is planned otherwise. A part spending more beside it carries on.
+            let carry = row(1, 3_000_000, None);
+            let made = row(2, 2_500_000, None);
+            let over = |spent: &[&UtxoResponse]| Part {
+                inputs: outrefs(spent),
+                paid: 1_000_000,
+                carry: Some(made.clone()),
+            };
+            let forward = Some(carry.clone());
+            let alone = next_of(&over(&[&carry]), &forward, &inputs_of, &carried);
+            assert_eq!(
+                alone.err().map(|e| e.to_string()).as_deref(),
+                Some("A part of the chain spends nothing new")
+            );
+            let own = row(3, 4_000_000, None);
+            let next = next_of(&over(&[&carry, &own]), &forward, &inputs_of, &carried).unwrap();
+            assert_eq!(next.tx_hash, made.tx_hash);
+        }
+
+        /// A part as [`reserving`] reads one: which plan made it, what it pays, and all it takes.
+        #[derive(Debug, Clone)]
+        struct Planned {
+            plan: &'static str,
+            lovelace: u64,
+            tokens: Vec<TokenAmount>,
+            takes: u64,
+        }
+
+        fn sent(p: &Planned) -> Result<(u64, &[TokenAmount], u64)> {
+            Ok((p.lovelace, &p.tokens, p.takes))
+        }
+
+        fn planned_as(
+            plan: &'static str,
+            lovelace: u64,
+            tokens: &[TokenAmount],
+            takes: u64,
+        ) -> Planned {
+            Planned {
+                plan,
+                lovelace,
+                tokens: tokens.to_vec(),
+                takes,
+            }
+        }
+
+        #[test]
+        fn a_second_plan_taking_as_much_as_the_first_never_replaces_it() {
+            // t1e#10: 16 ₳ paid of 12 ₳ asked, more than the token's least, so it's planned again; the second plan
+            // goes only where it takes less from the Seedelf balance. Taking as much, the first stays.
+            let t = token(1);
+            let first = vec![
+                planned_as("first", 10_000_000, std::slice::from_ref(&t), 10_200_000),
+                planned_as("first", 6_000_000, &[], 6_200_000),
+            ];
+            let kept = |takes: u64| -> Vec<&'static str> {
+                reserving(
+                    |reserve: &[u64], _| {
+                        Ok(if reserve.is_empty() {
+                            first.clone()
+                        } else {
+                            vec![
+                                planned_as(
+                                    "again",
+                                    9_000_000,
+                                    std::slice::from_ref(&t),
+                                    takes - 6_200_000,
+                                ),
+                                planned_as("again", 6_000_000, &[], 6_200_000),
+                            ]
+                        })
+                    },
+                    anyhow!("too many"),
+                    12_000_000,
+                    least,
+                    sent,
+                    |_| false,
+                )
+                .unwrap()
+                .iter()
+                .map(|p| p.plan)
+                .collect()
+            };
+            assert_eq!(
+                kept(16_400_000),
+                ["first", "first"],
+                "as much: the first stays"
+            );
+            assert_eq!(
+                kept(16_300_000),
+                ["again", "again"],
+                "less: the second goes"
+            );
+        }
+
+        #[test]
+        fn a_first_plan_paying_what_was_asked_is_planned_once() {
+            // t1e#11: a first plan paying no more than was asked is kept as it is. Planned again, every part was
+            // built and proven a second time for the same parts.
+            let plans = Cell::new(0);
+            let parts = reserving(
+                |_: &[u64], _| {
+                    plans.set(plans.get() + 1);
+                    Ok(vec![planned_as("first", 12_000_000, &[], 12_200_000)])
+                },
+                anyhow!("too many"),
+                12_000_000,
+                least,
+                sent,
+                |_| false,
+            )
+            .unwrap();
+            assert_eq!((plans.get(), parts.len()), (1, 1));
+        }
+
+        #[test]
+        fn a_sessions_collateral_is_never_a_utxo_the_evaluator_refuses() {
+            // t1e#2 (the launch review's L20): a 5 ₳ of ADA alone carrying a reference script, which anyone can send
+            // the session, is no collateral a merged return can be measured with. plan_return already sweeps, with no
+            // merge, wherever one is priced, so this is the second line.
+            let scripted = UtxoResponse {
+                reference_script: Some(Default::default()),
+                ..row(1, 5_000_000, None)
+            };
+            let plain = row(2, 3_000_000, None);
+            assert_eq!(
+                session_collateral(&[scripted.clone(), plain.clone()]).map(|u| u.tx_hash.clone()),
+                Some(plain.tx_hash)
+            );
+            assert!(session_collateral(&[scripted]).is_none());
+        }
+
+        #[test]
+        fn a_spent_utxo_with_no_key_path_is_refused_never_left_unsigned() {
+            // t1e#13: every caller builds `paths` over what it spends (check_paths), so none reaches this today. A
+            // UTxO without one would leave the transaction a witness short, which the ledger refuses.
+            let account = CardanoAccount::from_phrase(
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+                0,
+            )
+            .unwrap();
+            let ours = row(0x11, 2_000_000, None);
+            let unknown = UtxoResponse {
+                tx_index: 1,
+                ..row(0x22, 2_000_000, None)
+            };
+            let mut paths = Paths::new();
+            paths.insert((ours.tx_hash.clone(), 0), (Role::Receive, 0));
+            let input = |u: &UtxoResponse| {
+                let hash: [u8; 32] = hex::decode(&u.tx_hash).unwrap().try_into().unwrap();
+                pallas_txbuilder::Input::new(Hash::new(hash), u.tx_index)
+            };
+            let tx = pallas_txbuilder::StagingTransaction::new()
+                .input(input(&ours))
+                .input(input(&unknown))
+                .output(pallas_txbuilder::Output::new(
+                    account.base_address(true, Role::Receive, 0).unwrap(),
+                    3_800_000,
+                ))
+                .fee(200_000)
+                .build_conway_raw()
+                .unwrap();
+            let refused = sign_with_paths(&tx, &account, &paths, &[&ours, &unknown]);
+            assert_eq!(
+                refused.err().map(|e| e.to_string()),
+                Some(format!("no key path for UTxO {}#1", unknown.tx_hash))
+            );
         }
     }
 }
@@ -6440,6 +7491,28 @@ pub fn finish_lovejoin_withdraw(request: &str) -> Result<String, JsError> {
     to_json(&lovejoin::finish_withdraw(from_json(request)?).map_err(js_error)?)
 }
 
+/// A transaction's request from a site connected to a session, read as the
+/// public account's is but for governance: a session has no DRep, whatever the
+/// request says. The one-time accounts' DRep key `3/0` is the same for every
+/// session, so a certificate or vote it signed would tie every session that
+/// signed one together; governance is the public account's alone (chunk 21;
+/// chunk 51, t1e#1).
+fn session_tx_request(request: &str) -> Result<cip30::TxRequest, JsError> {
+    Ok(cip30::TxRequest {
+        governance: false,
+        ..from_json(request)?
+    })
+}
+
+/// A request to sign data from a site connected to a session, read with
+/// [`session_tx_request`]'s rule: never as the one-time accounts' DRep.
+fn session_data_request(request: &str) -> Result<cip30::DataRequest, JsError> {
+    Ok(cip30::DataRequest {
+        governance: false,
+        ..from_json(request)?
+    })
+}
+
 /// What a transaction built for a session (a swap, a cancel) does to its
 /// one-time account, as JSON, read the way the connector reads a dApp's
 /// (`cip30::inspect_tx`); `keys` is the session's one path, `0/i`.
@@ -6448,11 +7521,7 @@ pub fn inspect_session_tx(
     accounts: &WasmOneTimeAccounts,
     request: &str,
 ) -> Result<String, JsError> {
-    let request = cip30::TxRequest {
-        // A session has no DRep: governance is the public account's alone.
-        governance: false,
-        ..from_json(request)?
-    };
+    let request = session_tx_request(request)?;
     to_json(&cip30::inspect_tx(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -6460,11 +7529,7 @@ pub fn inspect_session_tx(
 /// `{ witnessSet, summary }`, as `signDappTx`.
 #[wasm_bindgen(js_name = signSessionTx)]
 pub fn sign_session_tx(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
-    let request = cip30::TxRequest {
-        // A session has no DRep: governance is the public account's alone.
-        governance: false,
-        ..from_json(request)?
-    };
+    let request = session_tx_request(request)?;
     to_json(&cip30::sign_tx(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -6476,11 +7541,7 @@ pub fn session_data_signer(
     accounts: &WasmOneTimeAccounts,
     request: &str,
 ) -> Result<String, JsError> {
-    let request = cip30::DataRequest {
-        // A session has no DRep: governance is the public account's alone.
-        governance: false,
-        ..from_json(request)?
-    };
+    let request = session_data_request(request)?;
     to_json(&cip30::data_signer(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -6488,11 +7549,7 @@ pub fn session_data_signer(
 /// `{ signature, key }`, as `signDappData`.
 #[wasm_bindgen(js_name = signSessionData)]
 pub fn sign_session_data(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
-    let request = cip30::DataRequest {
-        // A session has no DRep: governance is the public account's alone.
-        governance: false,
-        ..from_json(request)?
-    };
+    let request = session_data_request(request)?;
     to_json(&cip30::sign_data(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -6571,7 +7628,7 @@ pub fn build_move_in(
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Builds and signs a payment from the Cardano account to a key address or a
+/// Builds and signs a payment from the Cardano account to an address or a
 /// seedelf. `request` is JSON (see `api::SendRequest`); the result is JSON
 /// (`api::SendResult`) holding the signed transaction and what it does. The
 /// payment keys never leave WebAssembly.
@@ -6724,8 +7781,9 @@ pub fn build_withdraw_parts(key: &SeedelfKey, request: &str) -> Result<String, J
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Checks a withdrawal's or a send's destination: a normal key address on
-/// `network`. Throws the reason to show the user.
+/// Checks a withdrawal's or a send's destination: an address on `network`
+/// that a payment can go to, a script's included (`api::payable_address`).
+/// Throws the reason to show the user.
 #[wasm_bindgen(js_name = checkPayableAddress)]
 pub fn check_payable_address(address: &str, network: Network) -> Result<(), JsError> {
     api::payable_address(network.flag(), address)
@@ -6805,13 +7863,17 @@ fn to_json<T: serde::Serialize>(value: &T) -> Result<String, JsError> {
     serde_json::to_string(value).map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// UTxOs (Koios rows, JSON) as CIP-30's `TransactionUnspentOutput`s, hex.
+/// UTxOs (Koios rows, JSON) as CIP-30's `TransactionUnspentOutput`s, hex,
+/// each with its reference script; one whose script can't be written is left
+/// out (`cip30::utxos_cbor`; chunk 51, w2#4).
 #[wasm_bindgen(js_name = cip30Utxos)]
 pub fn cip30_utxos(rows: &str) -> Result<Vec<String>, JsError> {
     let rows: Vec<cip30::KoiosRow> = from_json(rows)?;
-    rows.iter()
-        .map(|r| cip30::utxo_cbor(r).map(hex::encode).map_err(js_error))
-        .collect()
+    Ok(cip30::utxos_cbor(&rows)
+        .map_err(js_error)?
+        .iter()
+        .map(hex::encode)
+        .collect())
 }
 
 /// A balance (lovelace, and tokens as JSON `[{ policyId, assetName, quantity }]`) as CIP-30's `Value`, hex.

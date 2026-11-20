@@ -30,6 +30,7 @@ import { BuildStage } from "../components/BuildStage";
 import { Callout } from "../components/Callout";
 import { GivemeNote } from "../components/GivemeNote";
 import { ShieldIcon, WalletIcon } from "../components/Icons";
+import { PaidRows } from "../components/PaidRows";
 import { RadioCards } from "../components/RadioCards";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
@@ -161,6 +162,24 @@ export function removeOption(to: RemoveTo, paidBy: MintSource | undefined, accou
   return t(to === "account" ? "remove.privacy.option.tiesAccount" : "remove.privacy.option.tiesName");
 }
 
+/**
+ * The review's rows: the Seedelf, what comes back and the fee. What comes back is its ADA, then each token that sat
+ * with it, as the Send reviews list a payment's: anyone can mint a Seedelf beside tokens of theirs under a register of
+ * the user's, and the removal moves them too (chunk 51, w1b#2).
+ */
+export function RemoveRows({ summary }: { summary: RemoveSummary }) {
+  const t = useT();
+  return (
+    <ReviewRows testId="remove-review">
+      {summary.label && <Row label={t("activity.row.seedelf")} value={summary.label} strong />}
+      <Row label={t("utxos.seedelfName")} value={summary.name} whole />
+      {/* What comes back, not change: its own words, as "Back to your …" now names a change output nowhere. */}
+      <PaidRows label={t(summary.to === "account" ? "remove.review.toPublic" : "remove.review.toPrivate")} paid={summary} />
+      <Row label={t("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
+    </ReviewRows>
+  );
+}
+
 export function RemoveSeedelf({
   seedelf,
   onCancel,
@@ -252,13 +271,7 @@ export function RemoveSeedelf({
           )
         }
       >
-        <ReviewRows testId="remove-review">
-          {summary.label && <Row label={t("activity.row.seedelf")} value={summary.label} strong />}
-          <Row label={t("utxos.seedelfName")} value={summary.name} whole />
-          {/* What comes back, not change: its own words, as "Back to your …" now names a change output nowhere. */}
-          <Row label={t(summary.to === "account" ? "remove.review.toPublic" : "remove.review.toPrivate")} value={`${formatAda(summary.lovelace)}\u00a0₳`} strong />
-          <Row label={t("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
-        </ReviewRows>
+        <RemoveRows summary={summary} />
         <TxDetailButton txHash={summary.txHash} testId="remove-tx" />
         <p className="note">
           {t("remove.review.note")}

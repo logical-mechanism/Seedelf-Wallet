@@ -72,6 +72,10 @@ if grep -aq -e "$HOME/" -e "/home/" "$wasm"; then
   exit 1
 fi
 echo "Built $(du -h "$wasm" | cut -f1) ($(gzip -9 -c "$wasm" | wc -c | awk '{printf "%d KB", $1 / 1024}') gzipped) -> $here/pkg"
+# The Rust cargo ran: rust-toolchain.toml pins it, but a RUSTUP_TOOLCHAIN or
+# RUSTC left in the shell overrides the pin (chunk 51, b1#2). Its release and
+# commit, from rustc -vV, for the release record too.
+echo "Rust: $("${RUSTC:-rustc}" -vV 2>/dev/null | awk '/^release: /{r=$2} /^commit-hash: /{c=$2} END{if (!r) exit 1; printf "%s (%s)", r, c}' || echo unknown)"
 # blst's C goes through this compiler, and another version gives another
 # module: for the release record, never a check.
 echo "C compiler: $("$CC_wasm32_unknown_unknown" --version 2>/dev/null | sed -n 1p || echo unknown)"

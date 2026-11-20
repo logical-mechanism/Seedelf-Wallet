@@ -20,7 +20,7 @@ import { useEffect, useState } from "react";
 import { joinSentences, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
-import type { SessionBackSummary, SessionView } from "../../shared/rpc";
+import type { LovejoinTokenWay, SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
@@ -30,7 +30,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
-import { formatAda } from "../format";
+import { formatAda, tokenKey } from "../format";
 import { useNetwork } from "../network";
 import { withoutStop } from "../sentence";
 import { tokenText } from "../tokens";
@@ -79,6 +79,9 @@ export function ClaimAll({
   const [direct, setDirect] = useState(false);
   const [result, setResult] = useState<Result>();
   const [busy, setBusy] = useState(false);
+  // Busy building them all again for the switch, which sends nothing: the button says so, as a swap's approval does
+  // (SendButton's `rebuilding`; chunk 51, r2screens#3).
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string>();
   const network = useNetwork();
   const byIndex = new Map(sessions.map((s) => [s.index, s]));
@@ -104,16 +107,20 @@ export function ClaimAll({
   async function rebuild(straight: boolean) {
     if (!built || busy) return;
     setBusy(true);
+    setRebuilding(true);
     setError(undefined);
     try {
       const again = await call("session-claim-build", { indexes: sessions.map((s) => s.index), ...(straight ? { direct: true } : {}) });
       setBuilt(again);
-      setChosen(new Set(again.returns.map((r) => r.index).filter((i) => chosen.has(i))));
+      // The choice as it stands when the build lands, not as it stood at the press: a session left out meanwhile
+      // stayed in (chunk 51, e8b#3). The rows are off while it builds too.
+      setChosen((now) => new Set(again.returns.map((r) => r.index).filter((i) => now.has(i))));
       setDirect(straight);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      setRebuilding(false);
     }
   }
 
@@ -194,7 +201,11 @@ export function ClaimAll({
       error={error}
       foot={
         <button type="button" className="primary" onClick={() => void send()} disabled={!built || busy || !picked.length}>
-          {busy ? t("common.sending") : picked.length ? t("claim.sendReturns", { count: picked.length }) : t("claim.chooseSession")}
+          {busy
+            ? t(rebuilding ? "common.building" : "common.sending")
+            : picked.length
+              ? t("claim.sendReturns", { count: picked.length })
+              : t("claim.chooseSession")}
         </button>
       }
     >
@@ -256,7 +267,8 @@ export function ClaimReview({
   const picked = built.returns.filter((r) => chosen.has(r.index));
   const total = picked.reduce((sum, r) => sum + BigInt(r.lovelace), 0n);
   const fees = picked.reduce((sum, r) => sum + BigInt(r.fee), 0n);
-  const tokens = picked.reduce((sum, r) => sum + r.tokens.length, 0);
+  // Kinds of token, as Send's and Make public's totals count them: a token two returns bring was counted twice (e8b#4).
+  const tokens = new Set(picked.flatMap((r) => r.tokens.map(tokenKey))).size;
   const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
   const collaterals = picked.filter((r) => r.collateralTail).length;
   // A chain through Lovejoin counts its collateral's mix already; a return with no chain of boxes sends that first.
@@ -270,14 +282,18 @@ export function ClaimReview({
   // pool as any other, and the review says so (the owner's call 34), by the token's name, once however many returns
   // take it there. A return's own review says it under its token's row (TokenWays); this one said nothing (session
   // 5's cross-area review, M2).
-  const stuckTokens = [
+  const tokensWhere = (said: (w: LovejoinTokenWay) => boolean | undefined) => [
     ...new Map(
       picked
         .flatMap((r) => r.lovejoin?.ways ?? [])
-        .filter((w) => w.stuck && w.pool && w.boxes > 0)
+        .filter((w) => said(w) && w.pool && w.boxes > 0)
         .map((w) => [`${w.policyId}${w.assetName}`, tokenText(network, w).label] as const),
     ).values(),
   ];
+  const stuckTokens = tokensWhere((w) => w.stuck);
+  // And one whose boxes come back, but can't then pay out part of themselves on their own: said the same way (chunk 51,
+  // gap-g5#1).
+  const partTokens = tokensWhere((w) => !w.stuck && w.cantPayPart);
 
   return (
     <>
@@ -312,11 +328,13 @@ export function ClaimReview({
               const on = chosen.has(r.index);
               return (
                 <li key={r.index}>
+                  {/* Off while the switch builds them all again, as the switch, Back and Send are (e8b#3). */}
                   <button
                     type="button"
                     className={on ? "token-row claim-row claim-row--on" : "token-row claim-row"}
                     aria-pressed={on}
                     onClick={() => onToggle(r.index)}
+                    disabled={busy}
                   >
                     <span className="claim-check" aria-hidden="true">
                       {on && <CheckIcon size={14} />}
@@ -371,6 +389,15 @@ export function ClaimReview({
           <div className="stack-tight">
             {stuckTokens.map((name) => (
               <span key={name}>{t("claim.warn.skippedItem", { name, why: withoutStop(t("lovejoin.ways.warn.stuck")) })}</span>
+            ))}
+          </div>
+        </Callout>
+      )}
+      {partTokens.length > 0 && (
+        <Callout tone="warn" testId="claim-lovejoin-part">
+          <div className="stack-tight">
+            {partTokens.map((name) => (
+              <span key={name}>{t("claim.warn.skippedItem", { name, why: withoutStop(t("lovejoin.pools.warn.cantPayPart")) })}</span>
             ))}
           </div>
         </Callout>

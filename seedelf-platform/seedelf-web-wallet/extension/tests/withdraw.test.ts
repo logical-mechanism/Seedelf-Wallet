@@ -82,9 +82,16 @@ describe("reading a destination", () => {
     await expect(t.withdraw.resolve("preprod", account(12).preprod.stake)).rejects.toThrow(
       "That's a stake address, which can't receive a payment. Use an address that starts addr_test1.",
     );
-    // A handle held by a script (here, the wallet contract itself).
+    // A handle held by a script (here, the wallet contract itself) the ledger pays, so the wallet does, flagged for the
+    // screens' warning that the payment carries no datum (chunk 51, r2a#1; the owner's call of 2026-11-18). Needs
+    // WebAssembly rebuilt with that change.
     t.koios.nfts.set(`${ADA_HANDLE_POLICY}.${hex("vault")}`, ownedUtxos[0]!.address);
-    await expect(t.withdraw.resolve("preprod", "$vault")).rejects.toThrow("That's a script's address.");
+    expect(await t.withdraw.resolve("preprod", "$vault")).toEqual({
+      address: ownedUtxos[0]!.address,
+      handle: "vault",
+      own: false,
+      script: true,
+    });
   });
 });
 

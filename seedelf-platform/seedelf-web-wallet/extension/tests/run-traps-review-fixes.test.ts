@@ -30,7 +30,7 @@ import { fakeIndex, indexRowOf } from "./fake-index";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, memoryArea, ownedUtxos, testBalances, vectors } from "./fakes";
-import { ADA, ADA_POOL, ADA_VIEW, adaStrangers, retiredAlready } from "./v2-pools";
+import { ADA, ADA_POOL, ADA_VIEW, adaStrangers, onMainnet, retiredAlready } from "./v2-pools";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -527,12 +527,13 @@ describe("a trap under a catch that takes any failure (1.6.0's release review, L
     // (1.8.0's review of its fixes, r2-worker#1: a spy on collateralPool stood in for the trap here).
     const holder = bech32("addr", Uint8Array.from([0x71, ...Buffer.from(HOLDER, "hex")]));
     const five: PoolRef = { ...FIVE, reference: { ...FIVE.reference, address: holder }, scripts: (FIVE.scripts ?? []).map((s) => ({ ...s, address: holder })) };
-    const strangers = adaStrangers(32);
+    // Mainnet's rows, at addresses there: the pool's boxes, the private balance and the session's account.
+    const strangers = onMainnet(adaStrangers(32));
     const mainnet = async (wasm: Partial<ReturnType<typeof loadTestWasm>>, { collateral = true, down = false } = {}) => {
       const t = testBalances({ owned: false });
       await t.wallet.create(PHRASE, PASSWORD);
       t.koios.evaluation = AGREES;
-      t.koios.added.push({ ...ownedUtxos[0]!, tx_hash: "d1".repeat(32), tx_index: 0, value: "40000000" } as KoiosUtxo);
+      t.koios.added.push(...onMainnet([{ ...ownedUtxos[0]!, tx_hash: "d1".repeat(32), tx_index: 0, value: "40000000" } as KoiosUtxo]));
       t.koios.addedToAccounts.push(...strangers);
       await t.deps.preferences.set({ lovejoinCollateral: collateral });
       const idx = fakeIndex();
@@ -580,7 +581,7 @@ describe("a trap under a catch that takes any failure (1.6.0's release review, L
           },
         ],
       });
-      t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "3000000"));
+      t.koios.addedToAccounts.push(...onMainnet([atSession("c1".repeat(32), 0, "3000000")]));
       return sessions;
     };
     for (const [what, trap] of traps()) {

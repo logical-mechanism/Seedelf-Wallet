@@ -38,7 +38,7 @@ import type { Koios, KoiosAccountInfo, KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
 import { outpoint, readFresh, reservedSet, spentSet, unspent } from "./spent";
 import type { Area } from "./storage";
-import type { Keys, Wallet } from "./wallet";
+import { phrasePin, type Keys, type Wallet } from "./wallet";
 
 export interface AccountDeps {
   wasm: typeof Wasm;
@@ -91,18 +91,29 @@ export function discoverAccount(keys: Keys, net: Wasm.Network, used: ReadonlySet
  * `account`: which public account to read, when it isn't the one the wallet
  * is working on — the dApp connector reads the account **sites** use, which
  * is chosen once and doesn't follow the picker (dapp.ts, chunk 18).
+ *
+ * Every key it reads is one phrase's, `phrase` when the caller began under
+ * one (`phrasePin`): the wallet removed and another phrase restored while
+ * Koios answered ends the read, as a lock does, so Koios is never asked about
+ * that phrase's keys beside this one's stake address (chunk 51, e4a#1).
  */
 export async function readAccountUtxos(
   deps: AccountDeps,
   network: NetworkName,
   spent: ReadonlySet<string>,
-  { account }: { account?: number } = {},
+  { account, phrase }: { account?: number; phrase?: string } = {},
 ): Promise<{ account: Account; utxos: PathedUtxo[] }> {
   const { wasm, wallet } = deps;
   const koios = deps.koios(network);
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-  const withAccount = <T,>(task: (keys: Keys) => T | Promise<T>): Promise<T> =>
-    account === undefined ? wallet.withKeys(task) : wallet.withAccount(account, task);
+  const pin = phrasePin(phrase);
+  const withAccount = <T,>(task: (keys: Keys) => T | Promise<T>): Promise<T> => {
+    const pinned = (keys: Keys) => {
+      pin(keys);
+      return task(keys);
+    };
+    return account === undefined ? wallet.withKeys(pinned) : wallet.withAccount(account, pinned);
+  };
   // Network calls happen outside withKeys, so they never hold up a lock.
   const [stake, reserved] = await withAccount(
     async ({ cardano }) => [cardano.stakeAddress(net), await reservedSet(deps.session, network, { sending: true })] as const,
@@ -157,18 +168,22 @@ export interface SpendingAccount {
  * and the protocol parameters. The stake key is read too for `stake`, or
  * when the user spends rewards. `params`: the protocol parameters, when the
  * caller read them already for the same review (a pool's start, 1.6.0's
- * release review, 318-worker#3).
+ * release review, 318-worker#3). `account`: that public account's, whichever
+ * is active (Bring one back paid from the account it was pressed on; chunk
+ * 51, r2time#1).
  */
 export async function readAccount(
   deps: AccountDeps & { coins: CoinControlService; preferences?: PreferencesService },
   network: NetworkName,
-  { stake: readStake = false, params: known }: { stake?: boolean; params?: Record<string, unknown> } = {},
+  { stake: readStake = false, params: known, account }: { stake?: boolean; params?: Record<string, unknown>; account?: number } = {},
 ): Promise<SpendingAccount> {
   const { wasm, wallet } = deps;
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const [spent, stakeAddress, preferences, reserved, sent] = await Promise.all([
     wallet.withKeys(() => spentSet(deps.session)),
-    wallet.withKeys(({ cardano }) => cardano.stakeAddress(net)),
+    account === undefined
+      ? wallet.withKeys(({ cardano }) => cardano.stakeAddress(net))
+      : wallet.withAccount(account, ({ cardano }) => cardano.stakeAddress(net)),
     deps.preferences?.get(),
     wallet.withKeys(() => reservedSet(deps.session, network, { sending: true })),
     wallet.withKeys(() => heldSent(deps.session, network)),
@@ -176,11 +191,12 @@ export async function readAccount(
   const spendRewards = preferences?.spendRewards ?? false;
   const koios = deps.koios(network);
   const [{ utxos }, params, stake] = await Promise.all([
-    readAccountUtxos(deps, network, spent),
+    readAccountUtxos(deps, network, spent, account === undefined ? {} : { account }),
     known ?? koios.epochParams(),
     readStake || spendRewards ? koios.accountInfo(stakeAddress) : undefined,
   ]);
-  const { spendable, collateral } = await deps.coins.account(network, utxos);
+  // The wallet's own builds' reading: a chosen collateral WebAssembly can't put up counts as none here (chunk 51, e8b#1).
+  const { spendable, collateral } = await deps.coins.account(network, utxos, account, true);
   // Not the rewards one of the wallet's own transactions on its way withdraws: Koios reports them until its block,
   // its change holds them, and only one withdrawal of them can land. Home's forms leave them out too (balances.ts,
   // blind test §9.1).

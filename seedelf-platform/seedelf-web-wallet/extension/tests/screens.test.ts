@@ -23,6 +23,7 @@ import { LovejoinNote, LovejoinSwitch } from "../src/ui/components/LovejoinRetur
 import { PendingBanner, validUntil } from "../src/ui/components/PendingBanner";
 import { ReturnLeftOut } from "../src/ui/components/SessionLeft";
 import { SessionRefusedFoot } from "../src/ui/components/SessionRefused";
+import { AccountsContext } from "../src/ui/accounts";
 import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
@@ -308,12 +309,15 @@ describe("a swap's tokens (launch review #18, #20)", () => {
     expect(localMatches("preprod", own, "", "pay").listed).toEqual([]);
   });
 
-  it("says a quote's token isn't verified by Minswap, with its fingerprint", () => {
+  it("says a quote's token isn't verified by Minswap, with its fingerprint and its ID to check", () => {
     const id = STRANGER + hex("SNEK");
     const line = text(createElement(Unverified, { pick: { id, side: { label: "SNEK", decimals: 0 } } }));
     expect(line).toContain("Not verified by Minswap");
-    expect(line).toContain("Minswap doesn't verify its ID, so the wallet won't swap into it. Anyone can copy a known token's name.");
+    // It goes behind "Swap into it anyway" now, never "won't swap into it" (chunk 51, gap-g8#8).
+    expect(line).toContain("Minswap doesn't verify its ID. Anyone can copy a known token's name, so check the ID before you swap into it.");
+    expect(line).not.toContain("won't swap into it");
     expect(line).toMatch(/asset1\w{38}/);
+    expect(line).toContain(id);
   });
 });
 
@@ -504,7 +508,8 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
         busy: false,
       }),
     );
-    expect(high).toContain("High slippage: the order can fill for up to 12% less than the quote.");
+    // What Minswap's minimum allows, amount_out / 1.12: 10.71% less, never 12% (chunk 51, gap-g8#7).
+    expect(high).toContain("High slippage: the order can fill for up to 10.71% less than the quote.");
   });
 
   it("says the pool takes nothing now, and doesn't promise Lovejoin", () => {
@@ -778,6 +783,15 @@ describe("a site's private session (launch review H7, #43, H6, #23, #56)", () =>
       ),
     );
   const disconnect = (html: string) => html.match(/<button[^>]*data-testid="site-disconnect"[^>]*>/)![0];
+
+  // Chunk 51, t1i#16: an account not read yet keeps Disconnect off, saying to Refresh. No test failed without it: Bring
+  // it back's own reason says the same words on the page. Settings' Connected sites, which has no Refresh, leaves it to
+  // the worker's own read.
+  it("keeps Disconnect off for an account it hasn't read yet, and says to Refresh", () => {
+    expect(disconnectWait(siteSession({ holding: null }))).toBe("Refresh to read what it holds");
+    expect(disconnectWait(siteSession({ holding: null }), { canRefresh: false })).toBeUndefined();
+    expect(disconnect(markup(siteSession({ holding: null }), true))).toContain("disabled");
+  });
 
   it("keeps Disconnect off while its funding, its return or its chain is on its way, and says why", () => {
     expect(disconnectWait(siteSession({ stage: "funding", holding: null }))).toBe("Its funding is on its way: wait for it to land");
@@ -1094,9 +1108,28 @@ describe("Lovejoin's page (launch review H2)", () => {
   it("lists a chain being sent, which holds withdraws, and one stopped partway, with why", () => {
     const line = text(shown(chains));
     expect(line).toContain("Private session 2, 3 boxes Sending 5 of 13 transactions sent No box comes back until it's all sent.");
+    // A mix from the public account: Mix again from my public account takes the boxes it didn't mix, and Mix my boxes
+    // again, which the row named, leaves them out (privacy review §2.10; chunk 51, e8a#2).
     expect(line).toContain(
-      "From your public account, 2 boxes Stopped Stopped after 4 of 9 transactions Why it stopped: The wallet locked, or the browser closed, while its chain was being sent. Mix my boxes again mixes the boxes it didn't.",
+      "From your public account, 2 boxes Stopped Stopped after 4 of 9 transactions Why it stopped: The wallet locked, or the browser closed, while its chain was being sent. Mix again from my public account mixes the boxes it didn't.",
     );
+    expect(line).not.toContain("Mix my boxes again mixes the boxes it didn't.");
+    // A session's chain still says Mix my boxes again.
+    const session = text(
+      shown(createElement(Chains, { chains: [{ session: 1, boxes: 2, total: 9, sent: 4, at: 2, stopped: "The pool is full." }] })),
+    );
+    expect(session).toContain("Why it stopped: The pool is full. Mix my boxes again mixes the boxes it didn't.");
+  });
+
+  it("says why alone of a public mix's stopped chain where the wallet has several public accounts: the row can't say whose (chunk 51, e8a#2)", () => {
+    const several = createElement(
+      AccountsContext.Provider,
+      { value: { accounts: [{ index: 0 }, { index: 1 }], active: 1, loaded: true, name: "", several: true, reload: async () => undefined } },
+      shown(chains),
+    );
+    const line = text(several);
+    expect(line).toContain("Why it stopped: The wallet locked, or the browser closed, while its chain was being sent.");
+    expect(line).not.toContain("mixes the boxes it didn't");
   });
 
   it("lists a chain's transactions while it's being sent, each by what it is and where it is, each opening its details (O3)", () => {
@@ -1194,6 +1227,24 @@ describe("mixing a public mix's boxes again (privacy review §2.10)", () => {
     expect(line).toContain("Total leaving your public account 6.6 ₳");
     expect(line).toContain("paying their mixes from it ties nothing new. Your private balance stays out of it");
     expect(line).not.toContain("Into Lovejoin");
+  });
+
+  it("says how many of the account's boxes in the pool go, and to mix the rest after, as the private side's does (chunk 51, gap-g2#4)", () => {
+    const again = (boxes: number, owned?: number) =>
+      text(
+        createElement(PublicReview, {
+          summary: { network: "preprod", txHash: "ab".repeat(32), entry: "11".repeat(32), boxes, ...(owned !== undefined ? { owned } : {}), depth: 2, delay: "1-6", mixes: 4 * boxes, txs: 4 * boxes, fees: "6600000", change: "40000000", again: true },
+        }),
+      );
+    // 15 of the account's boxes in a pool with room for 10 at this depth: the 5 left stay as they were, which it said nothing of.
+    const some = again(10, 15);
+    expect(some).toContain("Mixed again 10 of the 15 boxes your public account put in");
+    expect(some).toContain("The pool has room for 10 boxes at this depth now. Mix the rest once this is done.");
+    // All of them go: as it always said.
+    for (const all of [again(2, 2), again(2)]) {
+      expect(all).toContain("Mixed again 2 boxes your public account put in");
+      expect(all).not.toContain("Mix the rest once this is done.");
+    }
   });
 });
 

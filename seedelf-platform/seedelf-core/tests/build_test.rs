@@ -999,11 +999,13 @@ fn send_refuses_what_would_lose_money() {
         .map(|e| e.to_string())
         .unwrap_or_default()
     };
-    // A script (the wallet contract itself: the output would carry no datum).
-    assert!(err(&w.wallet, 2_000_000).contains("normal preprod address"));
+    // A script's address, the wallet contract's own here, the ledger takes:
+    // the output carries no datum, which the wallet warns of rather than
+    // refuses (chunk 51, r2a#1; the owner's call of 2026-11-18).
+    assert_eq!(err(&w.wallet, 2_000_000), "");
     // Mainnet, from preprod.
     let mainnet = w.account.base_address(false, Role::Receive, 0).unwrap();
-    assert!(err(&mainnet, 2_000_000).contains("normal preprod address"));
+    assert!(err(&mainnet, 2_000_000).contains("Payments go to an address on preprod"));
     // Below the output's minimum.
     assert!(err(&elsewhere(), 500_000).contains("needs at least"));
     // More than there is.
@@ -1370,14 +1372,25 @@ fn several_recipients_refuse_max_too_much_and_no_one() {
         )])
         .contains("register isn't valid")
     );
+    // A script's address, the wallet contract's own, takes a payment as the
+    // ledger has it, with no datum (chunk 51, r2a#1); a stake address none.
     let script = Payee::Address(&w.wallet);
-    assert!(
+    assert_eq!(
         err(&[AccountPay::new(
             script,
             AccountAmount::Lovelace(2_000_000),
             &[]
+        )]),
+        ""
+    );
+    let stake = w.account.stake_address(true).unwrap();
+    assert!(
+        err(&[AccountPay::new(
+            Payee::Address(&stake),
+            AccountAmount::Lovelace(2_000_000),
+            &[]
         )])
-        .contains("normal preprod address")
+        .contains("Payments go to an address on preprod")
     );
 }
 
@@ -1571,4 +1584,95 @@ fn a_payment_of_more_tokens_than_one_output_holds_goes_twenty_to_an_output() {
     assert_eq!(paid.iter().map(|o| o.lovelace).sum::<u64>(), least);
     // Less than every output's least isn't enough.
     assert!(pay(least - 1).is_err());
+}
+
+/// Chunk 51, t1a#8 (T1e's t1e#12 too): what a part carries forward is read
+/// back only when one output alone could be it. A payment to a Seedelf of
+/// exactly as much, with no token, would be a second: the next part, built on
+/// the wrong one, couldn't prove it.
+#[test]
+fn a_carry_is_read_back_only_when_one_output_could_be_it() {
+    use pallas_txbuilder::{BuildConway, Input, StagingTransaction};
+    let chain = build::Chain {
+        params: params(),
+        network_flag: true,
+        config: get_config(1, true).unwrap(),
+    };
+    let wallet = wallet_contract(true, chain.config.contract.wallet_contract_hash);
+    let owner = Register::create(random_scalar()).unwrap();
+    let at_wallet = |lovelace: u64| {
+        Output::new(wallet.clone(), lovelace)
+            .set_inline_datum(owner.clone().rerandomize().unwrap().to_vec().unwrap())
+    };
+    let carrying = |outputs: Vec<Output>| {
+        let staged = outputs.into_iter().fold(
+            StagingTransaction::new().input(Input::new([0x77; 32].into(), 0)),
+            |tx, output| tx.output(output),
+        );
+        build::FinalSpend {
+            tx: staged.fee(200_000).build_conway_raw().unwrap(),
+            fee: build::ScriptFee {
+                size: 200_000,
+                compute: 0,
+                script_reference: 0,
+                total: 200_000,
+            },
+            rest_lovelace: Some(3_000_000),
+            change_lovelace: 5_000_000,
+            change_tokens: Assets::new(),
+            change_outputs: 1,
+        }
+    };
+    let one = carrying(vec![at_wallet(5_000_000), at_wallet(3_000_000)]);
+    assert_eq!(build::carried(&chain, &one).unwrap().tx_index, 1);
+    let two = carrying(vec![at_wallet(3_000_000), at_wallet(3_000_000)]);
+    let refused = build::carried(&chain, &two).map(|row| row.tx_index);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("two outputs that could carry")),
+        "{refused:?}"
+    );
+}
+
+/// Chunk 51, t1a#9: signing adds witnesses and leaves the body byte for byte,
+/// since the signatures are over its hash. A body Pallas would write
+/// otherwise (here its fee in a longer head than it needs) is refused rather
+/// than sent under signatures of another body.
+#[test]
+fn signing_never_changes_the_transactions_body() {
+    use pallas_crypto::key::ed25519::SecretKey;
+    use pallas_txbuilder::{BuildConway, Input, StagingTransaction};
+    let to = Address::from_bytes(&[&[0x60][..], &[7; 28]].concat()).unwrap();
+    let bytes = StagingTransaction::new()
+        .input(Input::new([0x77; 32].into(), 0))
+        .output(Output::new(to, 2_000_000))
+        .fee(200_000)
+        .build_conway_raw()
+        .unwrap()
+        .tx_bytes
+        .0;
+    let key = SecretKey::new(rand_core::OsRng);
+    let sign = |tx: &[u8]| {
+        let hash = build::tx_id(tx).unwrap();
+        build::add_witnesses(tx, &[(key.public_key(), key.sign(hash))])
+            .map(|signed| (hash, build::tx_id(&signed).unwrap()))
+    };
+    let (before, after) = sign(&bytes).unwrap();
+    assert_eq!(after, before);
+    // The fee, key 2 then 200000 as 1a 00 03 0d 40, written as 1b and eight bytes.
+    let fee = [0x02, 0x1a, 0x00, 0x03, 0x0d, 0x40];
+    let at: Vec<usize> = (0..bytes.len() - 5)
+        .filter(|&i| bytes[i..i + 6] == fee)
+        .collect();
+    assert_eq!(at.len(), 1);
+    let long = [
+        &bytes[..at[0]],
+        &[0x02, 0x1b, 0, 0, 0, 0, 0x00, 0x03, 0x0d, 0x40][..],
+        &bytes[at[0] + 6..],
+    ]
+    .concat();
+    let refused = sign(&long);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("Signing changed the transaction")),
+        "{refused:?}"
+    );
 }

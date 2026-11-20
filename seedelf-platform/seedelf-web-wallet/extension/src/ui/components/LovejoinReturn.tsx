@@ -205,12 +205,24 @@ export function LovejoinRows({ back }: { back: SessionBackSummary }) {
 }
 
 /**
+ * What Change's list says beside a pool it offers, as the review's `values` have it, as the review would say it once
+ * chosen (the owner's call 34): its boxes can't pay their own way back today, or come back and can't then pay out part
+ * of themselves on their own (chunk 51, gap-g5#1). Exported for its test.
+ */
+export function wayOptionNote(box?: LovejoinBoxValue): { testId: string; text: string } | undefined {
+  if (box?.stuck) return { testId: "lovejoin-way-option-stuck", text: t("lovejoin.pools.warn.stuck") };
+  if (box?.cantPayPart) return { testId: "lovejoin-way-option-part", text: withoutStop(t("lovejoin.pools.warn.cantPayPart")) };
+  return undefined;
+}
+
+/**
  * A return's or a swap's tokens on their way back (chunk 34's 34e and 34f): each through its own pool, its boxes
  * and what a box holds there, or back directly and why; a pool whose boxes can't pay their own way back today, under
- * its row (`stuck`, the owner's call 34). Change, where there's a choice, picks another of its pools
+ * its row (`stuck`, the owner's call 34), or come back and can't then pay out part of themselves on their own
+ * (`cantPayPart`, chunk 51's gap-g5#1). Change, where there's a choice, picks another of its pools
  * that can take a box now, or back directly (`onChange`, by the token's unit, null for directly), and the review is
- * built again. `values`: what a box holds in each pool, by id. `funded`: a swap's, whose boxes are as many as the
- * least it asks for makes, funded at Send.
+ * built again; each pool it lists says the same of its boxes, as `values` has it. `values`: what a box holds in each
+ * pool, by id. `funded`: a swap's, whose boxes are as many as the least it asks for makes, funded at Send.
  */
 export function TokenWays({
   ways,
@@ -238,15 +250,14 @@ export function TokenWays({
           const name = tokenText(network, w).label;
           const box = valueOf(w.pool);
           const into = w.pool && w.boxes > 0;
+          // Coming back directly though the way back is Lovejoin is a warning, in its colour, its words its own below
+          // (chunk 51, e9b#2); through a pool, or directly as chosen, is a note.
+          const unmixed = !into && !w.direct;
           const text = into
             ? tr(funded ? "lovejoin.ways.fundedInto" : "lovejoin.ways.into", {
                 boxes: box ? t("lovejoin.boxesOf", { count: w.boxes, box: boxText(network, box) }) : t("amount.boxes", { count: w.boxes, n: w.boxes }),
               })
-            : w.direct
-              ? tr("lovejoin.ways.directChosen")
-              : w.skipped
-                ? tr("lovejoin.ways.warn.direct", { why: withoutStop(w.skipped) })
-                : tr("lovejoin.ways.direct");
+            : tr("lovejoin.ways.directChosen");
           // A choice to make: another pool that takes a box, or back directly, or back into one after choosing directly.
           const choice = !!onChange && (w.pools.length > (w.pool ? 1 : 0) || (!!w.pool && !w.direct) || (!!w.direct && w.pools.length > 0));
           return (
@@ -264,12 +275,25 @@ export function TokenWays({
                   {tr("lovejoin.ways.change")}
                 </button>
               )}
-              <span className={`token-row__sub wrap${!into && !w.direct ? " token-row__sub--warn" : ""}`}>{text}</span>
+              {unmixed ? (
+                <span className="token-row__sub wrap token-row__sub--warn">
+                  {w.skipped ? tr("lovejoin.ways.warn.direct", { why: withoutStop(w.skipped) }) : tr("lovejoin.ways.direct")}
+                </span>
+              ) : (
+                <span className="token-row__sub wrap">{text}</span>
+              )}
               {/* Its pool's boxes can't pay their own way back today: chosen as any pool, and said (the owner's
                   call 34). */}
               {into && w.stuck && (
                 <span className="token-row__sub wrap token-row__sub--warn" data-testid="lovejoin-token-way-stuck">
                   {tr("lovejoin.ways.warn.stuck")}
+                </span>
+              )}
+              {/* Its pool's boxes come back, but can't then pay out part of themselves on their own (under S0d's least):
+                  chosen as any pool, and said (chunk 51, gap-g5#1). */}
+              {into && !w.stuck && w.cantPayPart && (
+                <span className="token-row__sub wrap token-row__sub--warn" data-testid="lovejoin-token-way-part">
+                  {tr("lovejoin.pools.warn.cantPayPart")}
                 </span>
               )}
             </li>
@@ -291,6 +315,7 @@ export function TokenWays({
             {changing.pools.map((id) => {
               const box = valueOf(id);
               const chosen = id === changing.pool && !changing.direct;
+              const note = wayOptionNote(box);
               return (
                 <li key={id}>
                   <button
@@ -307,6 +332,11 @@ export function TokenWays({
                     <PoolAvatar token={box?.token} />
                     <span className="token-row__label">{box ? boxText(network, box) : id.slice(0, 8)}</span>
                     <span className="token-row__sub">{chosen ? tr("lovejoin.ways.chosen") : tr("lovejoin.ways.intoThis")}</span>
+                    {note && (
+                      <span className="token-row__sub wrap token-row__sub--warn" data-testid={note.testId}>
+                        {note.text}
+                      </span>
+                    )}
                   </button>
                 </li>
               );

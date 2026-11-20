@@ -216,6 +216,37 @@ export interface Keys {
   oneTime: Wasm.OneTimeAccounts;
 }
 
+/**
+ * Which phrase `keys` are of, by its first one-time key: the same on every public account and after a lock and an
+ * unlock, another for another phrase.
+ */
+export function phraseOf(keys: Keys): string {
+  return keys.oneTime.keyHash(0);
+}
+
+/**
+ * A phrase pin (phrasePin): run under `withKeys`, it throws as a lock does once another phrase's keys are there. A
+ * writer handed one checks it in its own turn before it writes (activity.ts, sessions.ts, lovejoin.ts; chunk 51,
+ * r2time#2).
+ */
+export type PhrasePin = (keys: Keys) => string;
+
+/**
+ * Pins a read that asks the network between turns of the wallet's queue to one phrase: `phrase`, or the one its first
+ * turn finds. Called with each turn's keys, it throws as a lock does once another phrase's are there, the wallet
+ * removed and another phrase restored meanwhile, so nothing the read found is kept as that phrase's, nor asked about
+ * under its keys (the restore scan is pinned so, sessions.ts, 1.5.0's release review C16; chunk 51, e4a#1). Returns
+ * the phrase.
+ */
+export function phrasePin(phrase?: string): PhrasePin {
+  let pinned = phrase;
+  return (keys) => {
+    const id = phraseOf(keys);
+    if ((pinned ??= id) !== id) throw new WalletLocked(t("worker.wallet.locked"));
+    return id;
+  };
+}
+
 export class Wallet {
   private keys: Keys | undefined;
   /**

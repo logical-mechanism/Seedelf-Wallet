@@ -28,8 +28,9 @@ export function activityTitle(e: ActivityEntry): string {
   switch (e.kind) {
     case "received":
       // Found by the private history's first reading (a restore, another profile): who paid isn't known
-      // (independent review L38).
-      return t(e.origin?.origin === "unknown" ? "activity.title.alreadyPrivate" : "activity.title.received");
+      // (independent review L38). Or made by a spend of this phrase's in another profile, which spent the wallet's
+      // own UTxOs and so carries their history: no one else paid it (chunk 51, gap-g9#1).
+      return t(e.origin && e.origin.origin !== "received" ? "activity.title.alreadyPrivate" : "activity.title.received");
     case "sent":
       return t("activity.title.sent");
     case "move-in":
@@ -124,9 +125,9 @@ export function poolOf(s: ActivityStaking): string | undefined {
   return s.pool ? (s.ticker ?? shortHex(s.pool, 10, 6)) : undefined;
 }
 
-/** The vote delegated, in words. */
+/** The vote delegated, in words: a DRep's name from the list, as "DRep · name" (voteLabel). */
 export function voteOf(network: NetworkName, s: ActivityStaking): string | undefined {
-  return s.drep ? voteLabel(s.drep, drepName(network, s.drep)) : undefined;
+  return s.drep ? voteLabel(s.drep, { name: drepName(network, s.drep) }) : undefined;
 }
 
 /** A staking entry's line under its title: "LOGIC", "Always abstain", "LOGIC · Always abstain", "2 governance actions". */
@@ -206,12 +207,12 @@ const DIRECTION: Record<ActivityEntry["direction"], I18nKey> = {
  * in its own column, as the rewards withdrawn are in theirs, so ADA less the
  * fee is what the balance did (blind test §9.1), each token with its own sign,
  * and the transaction's ID. Not what's pending: it isn't on chain yet, and may
- * never be (`exported`). Starts with a byte-order mark so a spreadsheet reads
- * it as UTF-8.
+ * never be (`exported`; `pendingHash` as there). Starts with a byte-order mark
+ * so a spreadsheet reads it as UTF-8.
  */
-export function activityCsv(network: NetworkName, entries: ActivityEntry[]): string {
+export function activityCsv(network: NetworkName, entries: ActivityEntry[], pendingHash?: string): string {
   const ada = (lovelace?: string) => (lovelace ? formatAda(lovelace).replaceAll(",", "") : "");
-  const rows = exported(entries).map((e) => {
+  const rows = exported(entries, pendingHash).map((e) => {
     const sign = e.direction === "in" ? "" : e.direction === "out" ? "-" : "";
     // Name first: a token's name is its own, and never a formula (csvCell).
     const tokens = (e.assets ?? [])
@@ -239,5 +240,10 @@ export function activityCsv(network: NetworkName, entries: ActivityEntry[]): str
   return `\uFEFF${[COLUMNS().join(","), ...rows].join("\r\n")}\r\n`;
 }
 
-/** What Save as CSV writes: the entries on chain, not those still pending. */
-export const exported = (entries: ActivityEntry[]) => entries.filter((e) => !e.pending);
+/**
+ * What Save as CSV writes: the entries on chain, not those still pending. The worker marks the public side's, and
+ * `pendingHash` is the one Home watches, which the private side's history holds from its submit on, before it's in a
+ * block: the page called it Pending, and the file a payment made (chunk 51, e9a#5).
+ */
+export const exported = (entries: ActivityEntry[], pendingHash?: string) =>
+  entries.filter((e) => !e.pending && (pendingHash === undefined || e.txHash !== pendingHash));

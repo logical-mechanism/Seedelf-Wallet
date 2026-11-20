@@ -240,3 +240,27 @@ fn a_pool_of_one_token_a_box_has_a_box_value() {
         assert!(why.contains("at least one of its token"), "{why}");
     }
 }
+
+/// Chunk 51, t1c#4: a token box's output holds at least one of its token,
+/// refused in words here whatever checked it before: pallas takes an output of
+/// none, then panics building it, a trap in WebAssembly (1.6.0's MONEY-2).
+#[test]
+fn a_box_output_of_none_of_its_token_is_refused_in_words() {
+    let address = seedelf_core::lovejoin::Protocol::of(true)
+        .unwrap()
+        .mix_box_address();
+    let value = |quantity: u64| BoxValue {
+        lovelace: 2_000_000,
+        token: Some(BoxToken {
+            policy: [0x1a; 28],
+            name: b"NIGHT".to_vec(),
+            quantity,
+        }),
+    };
+    assert!(value(1).output(address.clone()).is_ok());
+    let refused = value(0).output(address).map(|o| o.lovelace);
+    assert!(
+        matches!(&refused, Err(e) if e.to_string().contains("at least one of its token")),
+        "{refused:?}"
+    );
+}

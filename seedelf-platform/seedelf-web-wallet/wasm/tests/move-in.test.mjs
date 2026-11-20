@@ -85,7 +85,19 @@ test("sends from the Cardano account to an address inside WebAssembly", () => {
       buildAccountSend(account, JSON.stringify({ network: "preprod", params, utxos, payments: [{ to: "nope", lovelace: "0", tokens: [] }] })),
     /isn't a Cardano address/,
   );
-  assert.throws(() => checkPayableAddress(account.stakeAddress(Network.Preprod), Network.Preprod), /normal preprod address/);
+  assert.throws(
+    () => checkPayableAddress(account.stakeAddress(Network.Preprod), Network.Preprod),
+    /Payments go to an address on preprod/,
+  );
+  // A Byron address, said as it is (chunk 51, r2a#1).
+  assert.throws(
+    () =>
+      checkPayableAddress(
+        "37btjrVyb4KDXBNC4haBVPCrro8AQPHwvCMp3RFhhSVWwfFmZ6wwzSK6JK1hY6wHNmtrpTf1kdbva8TCneM2YsiXT7mrzT21EacHnPpz5YyUdj64na",
+        Network.Preprod,
+      ),
+    /Seedelf Wallet can't pay a Byron address/,
+  );
   account.free();
 });
 

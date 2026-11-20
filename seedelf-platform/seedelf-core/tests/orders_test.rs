@@ -19,12 +19,14 @@ use pallas_primitives::{BoundedBytes, Fragment};
 use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::{BuildConway, Input, Output, ScriptKind, StagingTransaction};
 use seedelf_core::build::Budgets;
-use seedelf_core::cbor::MAX_DEPTH;
+use seedelf_core::cbor::{MAX_DEPTH, nests_within, within_depth};
 use seedelf_core::eval;
 use seedelf_core::orders::{
     self, Cancel, Credential, OrderToCancel, Protocol, Session, cancel_orders, read_order,
 };
-use seedelf_koios::koios::{InlineDatum, ProtocolParameters, ReferenceScript, UtxoResponse};
+use seedelf_koios::koios::{
+    Asset as KoiosAsset, InlineDatum, ProtocolParameters, ReferenceScript, UtxoResponse,
+};
 use serde_json::{Value, json};
 
 fn params(preprod: bool) -> ProtocolParameters {
@@ -1886,4 +1888,318 @@ fn what_isnt_an_order_a_swap_places_never_checks_out() {
         })
         .is_err()
     );
+}
+
+/// Chunk 51, r3b#1: the swap a DEX builds comes from outside the wallet, and
+/// Pallas decodes its plutus data by recursion, so a datum a few thousand
+/// levels deep overflows WebAssembly's stack, which kills the module. The dry
+/// run refuses such a swap itself, before decoding it, wherever the datum
+/// sits: in the witnesses for its hash, or inline in an output, in tag 24's
+/// byte string, which Pallas decodes too and `within_depth` doesn't open. It
+/// was safe only because the worker's inspect read the same bytes first. The
+/// deep swaps run on a thread with a large stack, so that a decode of them
+/// fails here as an assertion rather than overflowing the test's own stack.
+#[test]
+fn a_swap_nested_too_deep_is_refused_by_the_cancel_check_itself() {
+    let run = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let s = Setup::of(&fixture("MinswapV2", "mainnet"));
+            // Minswap V2's order as a swap places it, and beside it an output
+            // at the session's address under a datum `deep` levels down: by
+            // its hash, the datum in the witnesses, or inline.
+            let swap = |deep: Option<(usize, bool)>| {
+                let Some((levels, inline)) = deep else {
+                    return swap_placing(&s.address, &s.order, &s.datum, true, None);
+                };
+                let mut order = Output::new(
+                    Address::from_bech32(&s.order.address).unwrap(),
+                    s.order.value.parse().unwrap(),
+                );
+                for a in s.order.asset_list.iter().flatten() {
+                    let policy: [u8; 28] = hex::decode(&a.policy_id).unwrap().try_into().unwrap();
+                    order = order
+                        .add_asset(
+                            Hash::new(policy),
+                            hex::decode(&a.asset_name).unwrap(),
+                            a.quantity.parse().unwrap(),
+                        )
+                        .unwrap();
+                }
+                let datum = nested_arrays(levels);
+                let beside = Output::new(s.address.clone(), 2_000_000);
+                let mut tx = StagingTransaction::new()
+                    .input(Input::new(Hash::new([0x77; 32]), 0))
+                    .output(Output::new(s.address.clone(), 3_000_000))
+                    .output(order.set_inline_datum(s.datum.clone()));
+                tx = if inline {
+                    tx.output(beside.set_inline_datum(datum))
+                } else {
+                    tx.output(beside.set_datum_hash(Hasher::<256>::hash(&datum)))
+                        .datum(datum)
+                };
+                tx.fee(200_000).build_conway_raw().unwrap().tx_bytes.0
+            };
+            let check = |tx: &[u8]| {
+                orders::check_cancels(&orders::SwapCheck {
+                    params: &s.params,
+                    network_flag: s.preprod,
+                    session: s.session,
+                    address: &s.address,
+                    tx_cbor: tx,
+                    orders: &[1],
+                    references: &s.references,
+                })
+            };
+
+            // The honest swap checks out, and so does one beside a datum real
+            // ones nest no deeper than.
+            for tx in [swap(None), swap(Some((20, true))), swap(Some((20, false)))] {
+                assert!(nests_within(&tx, MAX_DEPTH));
+                let checks = check(&tx).expect("an honest swap is read");
+                assert_eq!(checks.len(), 1);
+                assert_eq!(checks[0].why, None, "{:?}", checks[0]);
+                assert!(checks[0].fee.is_some(), "{:?}", checks[0]);
+            }
+            // 4,000 levels: past the few thousand that overflowed
+            // WebAssembly's stack, in about 4 KB.
+            for inline in [false, true] {
+                let tx = swap(Some((4_000, inline)));
+                // An inline datum is a byte string to a walk that doesn't open it.
+                assert_eq!(within_depth(&tx, MAX_DEPTH), inline);
+                let refused = check(&tx).map(|c| format!("{c:?}")).unwrap_err().to_string();
+                assert_eq!(
+                    refused,
+                    "The wallet can't read this transaction: its data is nested more than 128 levels deep.",
+                    "inline {inline}"
+                );
+            }
+        })
+        .unwrap();
+    if let Err(panic) = run.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// `row` holding `what` besides its ADA: anyone can send the session's
+/// address a UTxO like it.
+fn with_extra(row: &UtxoResponse, what: &str) -> UtxoResponse {
+    let mut row = row.clone();
+    match what {
+        "a token" => {
+            row.asset_list = Some(vec![KoiosAsset {
+                decimals: 0,
+                quantity: "7".to_string(),
+                policy_id: "c0".repeat(28),
+                asset_name: String::new(),
+                fingerprint: String::new(),
+            }])
+        }
+        "an inline datum" => {
+            row.inline_datum = Some(InlineDatum {
+                bytes: "d87980".to_string(),
+                value: Value::Null,
+            })
+        }
+        "a datum hash" => row.datum_hash = Some(hex::encode([0x5d; 32])),
+        "a reference script" => row.reference_script = Some(Default::default()),
+        _ => panic!("{what}"),
+    }
+    row
+}
+
+/// Chunk 51, t1d#2: a cancel's collateral holds ADA alone. Its return is
+/// written as ADA alone, so a token on it would go missing, which the ledger
+/// refuses after the session signed; the worker puts up only ADA alone, and
+/// this backs it.
+#[test]
+fn a_cancels_collateral_holding_a_token_or_a_datum_is_refused() {
+    let s = Setup::of(&fixture("MinswapV2", "mainnet"));
+    let funds = vec![own(&s.address, 0xaa, 10_000_000)];
+    let plain = own(&s.address, 0xbb, SESSION_COLLATERAL);
+    assert!(s.cancel(&[s.order()], &funds, &plain).is_ok());
+    for what in ["a token", "an inline datum", "a datum hash"] {
+        let refused = s
+            .cancel(&[s.order()], &funds, &with_extra(&plain, what))
+            .map(|c| c.fee);
+        assert!(
+            matches!(&refused, Err(e) if format!("{e:#}").contains("must hold ADA alone")),
+            "{what}: {refused:?}"
+        );
+    }
+}
+
+/// `datum` in other bytes: the same data, its fields' list definite where it
+/// was indefinite, or the other way round.
+fn rewritten(datum: &[u8]) -> Vec<u8> {
+    let mut data = PlutusData::decode_fragment(datum).unwrap();
+    let PlutusData::Constr(c) = &mut data else {
+        panic!("not a constructor");
+    };
+    c.fields = match &c.fields {
+        MaybeIndefArray::Def(v) => MaybeIndefArray::Indef(v.clone()),
+        MaybeIndefArray::Indef(v) => MaybeIndefArray::Def(v.clone()),
+    };
+    let bytes = data.encode_fragment().unwrap();
+    assert_ne!(bytes, datum);
+    bytes
+}
+
+/// Chunk 51, t1d#3: a cancel is built only on the datum its order holds, in
+/// its bytes: inline, or the bytes its hash names. Who owns the order is read
+/// from those bytes, so other bytes of the same data would decide it on what
+/// the order's script never sees.
+#[test]
+fn a_cancel_is_built_only_on_the_datum_its_order_holds() {
+    let refused_as = |s: &Setup, order: OrderToCancel, words: &str| {
+        let funds = vec![own(&s.address, 0xaa, 10_000_000)];
+        let collateral = own(&s.address, 0xbb, SESSION_COLLATERAL);
+        let refused = s.cancel(&[order], &funds, &collateral).map(|c| c.fee);
+        assert!(
+            matches!(&refused, Err(e) if format!("{e:#}").contains(words)),
+            "{words}: {refused:?}"
+        );
+    };
+    let v2 = Setup::of(&fixture("MinswapV2", "mainnet"));
+    let inline = OrderToCancel {
+        utxo: v2.order.clone(),
+        datum: rewritten(&v2.datum),
+    };
+    refused_as(&v2, inline, "isn't the one it holds");
+    let v1 = Setup::of(&fixture("Minswap", "mainnet"));
+    assert!(v1.order.datum_hash.is_some());
+    let by_hash = OrderToCancel {
+        utxo: v1.order.clone(),
+        datum: rewritten(&v1.datum),
+    };
+    refused_as(&v1, by_hash, "isn't the one its hash names");
+    let mut bare = v2.order.clone();
+    bare.inline_datum = None;
+    bare.datum_hash = None;
+    let none = OrderToCancel {
+        utxo: bare,
+        datum: v2.datum.clone(),
+    };
+    refused_as(&v2, none, "holds no datum");
+}
+
+/// Chunk 51, t1d#4: a cancel never spends a session row holding a datum or a
+/// script, which a stranger can send the session's address; the worker passes
+/// only rows of ADA alone, and this backs it.
+#[test]
+fn a_cancel_never_spends_a_session_row_holding_a_datum_or_a_script() {
+    let s = Setup::of(&fixture("MinswapV2", "mainnet"));
+    let collateral = own(&s.address, 0xbb, SESSION_COLLATERAL);
+    let fund = own(&s.address, 0xaa, 10_000_000);
+    for what in ["an inline datum", "a datum hash", "a reference script"] {
+        let refused = s
+            .cancel(&[s.order()], &[with_extra(&fund, what)], &collateral)
+            .map(|c| c.fee);
+        assert!(
+            matches!(&refused, Err(e) if format!("{e:#}").contains("holds a datum or a script")),
+            "{what}: {refused:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chunk 51, r3a#1's class (class#1): a constructor nested in an order's datum,
+// written in the general form with an indefinite pair.
+// ---------------------------------------------------------------------------
+
+/// `data` as Pallas writes it, but each constructor in the general form with
+/// an indefinite pair, `102([_ index, fields])`, which the node reads as the
+/// same data (cardano-cli 11.0.0.0, offline).
+fn general_form(data: &PlutusData, e: &mut minicbor::Encoder<Vec<u8>>) {
+    match data {
+        PlutusData::Constr(c) => {
+            e.tag(minicbor::data::Tag::new(102)).unwrap();
+            e.begin_array().unwrap().u64(c.constr_index()).unwrap();
+            e.array(c.fields.len() as u64).unwrap();
+            for field in c.fields.iter() {
+                general_form(field, e);
+            }
+            e.end().unwrap();
+        }
+        PlutusData::Array(items) => {
+            e.array(items.len() as u64).unwrap();
+            for item in items.iter() {
+                general_form(item, e);
+            }
+        }
+        PlutusData::Map(pairs) => {
+            e.map(pairs.len() as u64).unwrap();
+            for (key, value) in pairs.iter() {
+                general_form(key, e);
+                general_form(value, e);
+            }
+        }
+        other => {
+            e.encode(other).unwrap();
+        }
+    }
+}
+
+/// Chunk 51, r3a#1's class (class#1): whoever writes an order's datum chooses
+/// how it's spelled, and the order's script reads it as data, never as bytes.
+/// Each real order here, every constructor in its datum written
+/// `102([_ i, fields])`, reads as the order does. Pallas reads that pair's
+/// head but never its closing break, so nested, the break ended the list
+/// around it early, or failed the next read.
+#[test]
+fn every_order_reads_alike_with_its_constructors_in_the_general_form() {
+    let mut differ = Vec::new();
+    for f in fixtures() {
+        let p = protocol(f["protocol"].as_str().unwrap());
+        let datum = hex::decode(f["datum"].as_str().unwrap()).unwrap();
+        let mut e = minicbor::Encoder::new(Vec::new());
+        general_form(&PlutusData::decode_fragment(&datum).unwrap(), &mut e);
+        let general = e.into_writer();
+        let read = orders::read(p, &general).map_err(|e| e.to_string());
+        if read != orders::read(p, &datum).map_err(|e| e.to_string()) {
+            differ.push(format!("{} on {}: {read:?}", f["protocol"], f["network"]));
+        }
+    }
+    assert!(differ.is_empty(), "{differ:#?}");
+}
+
+/// Chunk 51, r3a#1's class (class#1): Splash fills an order in parts. Its
+/// executor spends the order and writes what's left as a new one where it sat,
+/// datum and all, and Splash's script reads that datum as data. Here the real
+/// Splash order with its input asset class respelled `102([_ 0, [policy,
+/// name]])`, as the executor may leave it: cardano-cli 11.0.0.0 reads it as
+/// exactly the order's data. Read as no order of the session's, the remnant
+/// was never cancelled by Stop, and the session could close with it open. It's
+/// the session's, and its cancel, run through Splash's real script, is the
+/// order's own, byte for byte.
+#[test]
+fn a_splash_remnant_its_executor_respelled_is_still_the_sessions_to_cancel() {
+    let s = Setup::of(&fixture("Splash", "mainnet"));
+    // Field 2: Constr 0 [policy, name], tag 121 and a definite list.
+    let asset = "d87982581c5d16cc1a177b5d9ba9cfa9793b07e60f1fb70fea1f8aef064415d11443494147";
+    let placed = hex::encode(&s.datum);
+    assert_eq!(placed.matches(asset).count(), 1);
+    let datum =
+        hex::decode(placed.replacen(asset, &format!("d8669f00{}ff", &asset[4..]), 1)).unwrap();
+
+    let read = orders::read(Protocol::Splash, &datum).map_err(|e| e.to_string());
+    assert_eq!(read, Ok(orders::read(Protocol::Splash, &s.datum).unwrap()));
+    // Where the worker looks for it: at the spent order's address.
+    let address = Address::from_bech32(&s.order.address).unwrap().to_vec();
+    let (_, found) = read_order(false, &address, &datum).unwrap().unwrap();
+    assert!(s.session.owns(&found));
+
+    // Stop's cancel of it, at the remnant's own outpoint.
+    let at = moved(&s.order, 0x5e);
+    let funds = vec![own(&s.address, 0xaa, 10_000_000)];
+    let collateral = own(&s.address, 0xbb, SESSION_COLLATERAL);
+    let cancel = |utxo: UtxoResponse, datum: Vec<u8>| {
+        s.cancel(&[OrderToCancel { utxo, datum }], &funds, &collateral)
+            .map_err(|e| format!("{e:#}"))
+    };
+    let remnant = cancel(with_datum(&at, &datum), datum).unwrap();
+    let as_placed = cancel(at.clone(), s.datum.clone()).unwrap();
+    assert_eq!(remnant.covers, vec![outpoint(&at)]);
+    assert_eq!(remnant.tx.tx_bytes.0, as_placed.tx.tx_bytes.0);
+    assert_eq!(remnant.budgets, as_placed.budgets);
 }

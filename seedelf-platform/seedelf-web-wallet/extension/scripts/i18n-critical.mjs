@@ -2,16 +2,20 @@
 // source rather than from a list someone maintains.
 //
 // A string the wallet shows inside `<Callout tone="privacy">`, `<Callout
-// tone="warn">` or anything with `role="alert"` is a privacy note, a warning
-// or an error. Those are the strings where a wrong translation costs a user
-// money or privacy rather than a moment's confusion, so they are the set that
-// has to be checked by a person before it ships.
+// tone="warn">`, anything with `role="alert"` or anything in the warning's
+// colour (a class with a `--warn` modifier) is a privacy note, a warning or an
+// error. Those are the strings where a wrong translation costs a user money or
+// privacy rather than a moment's confusion, so they are the set that has to be
+// checked by a person before it ships.
 //
 // Two sources, unioned, because each catches what the other misses:
 //
 //   1. **The component.** What is inside a privacy callout, a warning callout
 //      or anything with `role="alert"`, a callout whose tone is worked out as
-//      it renders included when it can come out as one.
+//      it renders included when it can come out as one; and what is inside an
+//      element whose class can carry a `--warn` modifier, a warning with no
+//      callout around it: a lookalike token's mark, a pool's or a DRep's
+//      shared-name tag (chunk 51, e9b#2).
 //   2. **The name.** Any key with `.privacy.` or `.warn.` in it. A privacy note
 //      is sometimes a plain `<p className="note">` rather than a callout —
 //      `accountRecipients.privacy.ownAccounts` is one, and source 1 alone would
@@ -90,6 +94,11 @@ function isCriticalElement(node, source, ctx) {
   // is not.
   const role = attr("role");
   if (role && canBe(expressionOf(role), ALERT, source.find, ctx, false)) return true;
+  // A warning in the warning's colour with no callout around it: a class that can carry a `--warn` modifier (a lookalike
+  // token's `token-mark--warn`, a pool's or a DRep's `utxo-tag--warn`, a hand-made `callout--warn`). Callouts and alerts
+  // alone were read, and those shipped as unchecked machine drafts (chunk 51, e9b#2).
+  const className = attr("className");
+  if (className && canWarn(expressionOf(className), source.find, ctx)) return true;
   const name = open.name?.type === "JSXIdentifier" ? open.name.name : undefined;
   if (name !== "Callout" && (!name || source.importedAs(ctx.file, name) !== "Callout")) return false;
   const tone = attr("tone");
@@ -103,6 +112,45 @@ function isCriticalElement(node, source, ctx) {
 
 /** An attribute's value as an expression: `"warn"` and `{"warn"}` alike. */
 const expressionOf = (value) => (value.type === "JSXExpressionContainer" ? value.expression : value);
+
+/** A class list's `--warn` modifier: `token-row__sub--warn`, `callout--warn`. */
+const WARN_CLASS = /[\w-]--warn\b/;
+
+/**
+ * Whether a class name can come out holding a `--warn` modifier: read as `canBe` reads a tone, through a literal, a
+ * template's own text and what it puts in, a const's value, both branches of a condition and either side of `||`,
+ * `??` and `&&`. Unlike a tone, anything it can't read (a call, a member, a parameter) is no warning: a class is often
+ * put together, and only a modifier the source spells out says it's one. Callout's own `callout--${tone}` is judged
+ * where its tone is handed in.
+ */
+function canWarn(node, find, ctx, depth = 0) {
+  if (depth > 8) return false;
+  node = bare(node);
+  if (!node) return false;
+  const again = (next) => canWarn(next, find, ctx, depth + 1);
+  switch (node.type) {
+    case "Literal":
+      return typeof node.value === "string" && WARN_CLASS.test(node.value);
+    case "TemplateLiteral":
+      return node.quasis.some((q) => WARN_CLASS.test(q.value.cooked ?? "")) || node.expressions.some(again);
+    case "Identifier": {
+      const found = find(node.name, ctx);
+      const b = found?.binding;
+      if (b?.kind === "var" && !b.mutable && b.init && !b.state && !b.path.length) {
+        return canWarn(b.init, find, found.ctx, depth + 1);
+      }
+      return false;
+    }
+    case "ConditionalExpression":
+      return again(node.consequent) || again(node.alternate);
+    case "LogicalExpression":
+      return again(node.left) || again(node.right);
+    case "BinaryExpression":
+      return node.operator === "+" && (again(node.left) || again(node.right));
+    default:
+      return false;
+  }
+}
 
 /**
  * Whether `node` can come out as one of `wanted`. Only the places its value

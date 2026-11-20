@@ -123,9 +123,10 @@ describe("a chained part's carry (1.6.0 review: carry-has-no-history)", SLOW, ()
     expect(all.slice(1).some((p) => p.waits)).toBe(true);
     expect(summary.histories?.map((c) => c.id).sort()).toEqual(["public:0", "session:5"]);
     expect(historiesNote(summary.histories)).not.toContain("no history");
-    // Each part's change has what paid for it, the carry's included: the last ends with session 6's ADA.
+    // Each part's change has what paid for it, the carry's included: the last ends with session 6's ADA. And its own
+    // part's, which its recipients know (chunk 51, the owner's answer 2 to B15).
     const kept = await keptParts(t, SESSION_TRANSFER, all.length);
-    expect(kept.map((k) => k?.origin)).toEqual(all.map(() => ({ id: "public:0+session:5", origin: "session" })));
+    expect(kept.map((k) => k?.origin)).toEqual(kept.map((k) => ({ id: `change:${k!.txHash}+public:0+session:5`, origin: "session" })));
   });
 
   it("is read so in Make public's parts too", async () => {

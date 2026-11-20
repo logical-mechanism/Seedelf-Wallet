@@ -52,6 +52,11 @@ import {
 // fingerprint, and says what it calls itself.
 const TUSDM = "asset13vxx…6fmzjw";
 const PRIVATE_TUSDM = "asset1synt…ctusdm";
+// The Add tokens picker reads a token passing for another out whole, its fingerprint and then what it calls itself
+// (chunk 51, gap-g10#3), so each is picked by that name.
+const LOOKALIKE = "Calls itself tUSDM, not on the wallet's list";
+const TUSDM_PICKED = `${TUSDM}, ${LOOKALIKE}`;
+const PRIVATE_TUSDM_PICKED = `${PRIVATE_TUSDM}, ${LOOKALIKE}`;
 
 /** The 5 ₳ of ADA alone a collateral payment from the 12-word phrase's account makes, at its own address. */
 function collateralMadeBy(txHash: string) {
@@ -1681,7 +1686,7 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await page.getByRole("button", { name: "Take SIRIUS-A off" }).click();
   await expect(page.getByLabel(/^Amount of /)).toHaveCount(1);
   await page.getByRole("button", { name: "Take SIRIUS-B off" }).click();
-  await addTokens(page, [TUSDM]);
+  await addTokens(page, [TUSDM_PICKED]);
 
   // Any amount of a token: Max fills in all of it.
   const tusdm = page.getByLabel(`Amount of ${TUSDM}`);
@@ -2090,7 +2095,7 @@ test("send from the public account: a token with only the ADA it needs, review, 
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
   await expect(page.getByTestId("review-wait")).toHaveText("Enter an amount.");
   await expect(page.getByTestId("minimum-hint")).toHaveCount(0);
-  await addTokens(page, [TUSDM]);
+  await addTokens(page, [TUSDM_PICKED]);
   await page.getByLabel(`Amount of ${TUSDM}`).fill("1000");
   await expect(page.getByTestId("minimum-hint")).toContainText("only the ADA the tokens need");
   await expect(page.getByLabel("Amount", { exact: true })).toHaveAttribute("placeholder", "Minimum");
@@ -2321,16 +2326,18 @@ test("send from the public account to a Seedelf: paste its name, see it found, r
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Send publicly" }).click();
 
-  // A whole name only; your own seedelf is Move in's.
+  // A whole name only; your own Seedelf is found and said, never refused (chunk 51, gap-g8#2).
   const to = page.getByLabel("To", { exact: true });
   const note = page.getByTestId("send-to-note");
   await expect(to).toHaveAttribute("placeholder", "addr_test1…, $handle or a Seedelf name");
   await to.fill(theirs.slice(0, 40));
   await expect(note).toContainText("64 characters long, only 0–9 and a–f, and starts 5eed0e1f");
   await to.fill(mine);
-  await expect(note).toContainText("That Seedelf is yours. To put money into your private balance, use Make private.");
+  await expect(note).toContainText("Found: web-wallet");
+  await expect(page.getByTestId("send-own-seedelf")).toHaveText("This Seedelf is yours: the payment goes into your private balance.");
   await to.fill(` ${theirs.slice(0, 32).toUpperCase()} ${theirs.slice(32)} `);
   await expect(note).toContainText("Found: This is a test.");
+  await expect(page.getByTestId("send-own-seedelf")).toHaveCount(0);
   await expect(page.getByText("went from your public account to a private balance, though not whose")).toBeVisible();
   await page.getByLabel("Amount", { exact: true }).fill("5");
   await snap(page, "send-seedelf-form");
@@ -2379,10 +2386,10 @@ test("several recipients: Send from the public account pays a handle and a Seede
   await expect(second.getByLabel("To", { exact: true })).toBeFocused();
 
   await first.getByLabel("Amount", { exact: true }).fill("3");
-  await addTokens(page, [TUSDM], first);
+  await addTokens(page, [TUSDM_PICKED], first);
   await first.getByLabel(`Amount of ${TUSDM}`).fill("1000");
   // The second recipient's tUSDM box offers only what the first left.
-  await addTokens(page, [TUSDM], second);
+  await addTokens(page, [TUSDM_PICKED], second);
   await expect(second.getByText("of 2,999,999,000", { exact: true })).toBeVisible();
   await second.getByRole("button", { name: `Take ${TUSDM} off` }).click();
   await second.getByLabel("To", { exact: true }).fill(transferPreprod.to);
@@ -2498,7 +2505,9 @@ test("create a Seedelf from the private balance: tag rules, review, and nothing 
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await page.getByRole("button", { name: "Create a Seedelf" }).click();
   await page.getByRole("radio", { name: "Private balance" }).click();
-  await expect(page.getByTestId("mint-from-note")).toContainText("Only money others paid you keeps the Seedelf apart from your public account");
+  await expect(page.getByTestId("mint-from-note")).toContainText(
+    "Only boxes back from Lovejoin and money others paid you keep the Seedelf apart from your public account",
+  );
 
   // The tag: printable ASCII, 15 characters at most, previewed as it will read.
   const tag = page.getByLabel("Tag (optional, anyone can read it)");
@@ -2506,7 +2515,8 @@ test("create a Seedelf from the private balance: tag rules, review, and nothing 
   await expect(page.getByTestId("mint-preview")).toContainText("With no tag, it's listed by its name alone");
   await expect(page.getByTestId("mint-preview")).not.toContainText("Unnamed");
   await tag.fill("héllo");
-  await expect(page.getByRole("alert")).toContainText("A tag can't use “é”");
+  // The wallet's rule, said as its own: the chain takes any bytes (chunk 51, gap-g8#1).
+  await expect(page.getByRole("alert")).toContainText("Seedelf Wallet can't show “é” in a tag");
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
   await tag.fill("a tag far too long for it");
   await expect(tag).toHaveValue("a tag far too l");
@@ -2589,7 +2599,7 @@ test("send to a Seedelf: paste its name, see it found, review, and nothing sent 
 
   // 5 ₳ and 1 of the private tUSDM, of the 1,234.56 held.
   await page.getByLabel("Amount", { exact: true }).fill("5");
-  await addTokens(page, [PRIVATE_TUSDM]);
+  await addTokens(page, [PRIVATE_TUSDM_PICKED]);
   const tusdm = page.getByLabel(`Amount of ${PRIVATE_TUSDM}`);
   await tusdm.fill("2000");
   await expect(tusdm).toHaveValue("");
@@ -2706,7 +2716,7 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   await expect(page.getByTestId("withdraw-own")).toHaveCount(0);
 
   // Max hides the token amounts; an amount brings them back.
-  await addTokens(page, [PRIVATE_TUSDM]);
+  await addTokens(page, [PRIVATE_TUSDM_PICKED]);
   await page.getByRole("button", { name: "Max" }).click();
   await expect(page.getByTestId("withdraw-max-note")).toContainText("in as many transactions as that takes");
   await expect(page.getByLabel(`Amount of ${PRIVATE_TUSDM}`)).toHaveCount(0);
@@ -2745,6 +2755,9 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   koios,
   swaps,
 }) => {
+  // The outcome is told from a run READ_EVERY_MS (15 s) after every order first reads spent (below), so this one runs
+  // longer than the default.
+  test.setTimeout(90_000);
   // One spend: the funding takes the 25 ₳ UTxO alone.
   koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
   const page = await openApp(context);
@@ -2799,8 +2812,9 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   // Slippage: its own setting, and a quote to match.
   await page.getByRole("button", { name: "Slippage: 1%" }).click();
   const settings = page.getByRole("dialog", { name: "Slippage" });
-  await settings.getByLabel("Your own").fill("30");
-  await expect(settings).toContainText("Between 0.1% and 20%");
+  // Anything over none and under all of it (chunk 51, gap-g8#7).
+  await settings.getByLabel("Your own").fill("100");
+  await expect(settings).toContainText("Between 0.01% and 99.99%");
   await settings.getByLabel("Your own").fill("2");
   await settings.getByRole("button", { name: "Done" }).click();
   await expect(quote).toContainText("Slippage2%");
@@ -2940,7 +2954,16 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
     ],
   });
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByTestId("session-now")).toContainText("Coming back into your private balance");
+  // The run that first reads every order spent only notes it: the outcome is told, and the return built, from a run
+  // 15 s on, so a split route's legs paid in different blocks come back together (chunk 51, r2still#2, l3time#2).
+  // Meanwhile the page says it all comes back next, and Stop, which can't cancel a spent order, is gone (l3screens#1).
+  await expect(page.getByTestId("session-now")).toHaveText("It all comes back to your private balance next, by itself.");
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+  expect(koios.submitted).toHaveLength(1);
+  await expect(async () => {
+    await page.getByRole("button", { name: "Refresh" }).click();
+    await expect(page.getByTestId("session-now")).toContainText("Coming back into your private balance", { timeout: 2_000 });
+  }).toPass({ timeout: 45_000, intervals: [3_000] });
   await expect(timeline.locator('[data-state="done"]')).toHaveCount(3);
   await expect(page.getByTestId("session-rows")).toContainText("906.5941 MIN");
   expect(koios.submitted).toHaveLength(2);
@@ -3989,7 +4012,7 @@ test("a private swap paused by a price move, then stopped: everything comes back
   expect(swaps.calls.map((c) => c.path)).not.toContain("build-tx");
 });
 
-test("a private swap into a token neither listed nor verified by Minswap: the picker keeps it apart, and it can't be reviewed", async ({
+test("a private swap into a token neither listed nor verified by Minswap: the picker keeps it apart, and it's reviewed only behind the switch", async ({
   context,
   koios,
   swaps,
@@ -4013,17 +4036,29 @@ test("a private swap into a token neither listed nor verified by Minswap: the pi
   await snap(page, "swap-picker-unverified");
   await held.click();
 
-  // Minswap's verified list doesn't have it by its ID: the quote says so, and Review stays off.
+  // Minswap's verified list doesn't have it by its ID: the quote says so, with the ID to check, and Review waits for
+  // "Swap into it anyway", off to begin with (chunk 51, gap-g8#8).
+  const id = `${ownedUtxos[1].asset_list[0].policy_id}${ownedUtxos[1].asset_list[0].asset_name}`;
   const unverified = page.getByTestId("swap-unverified");
   await expect(unverified).toContainText("Not verified by Minswap");
-  await expect(unverified).toContainText("so the wallet won't swap into it");
+  await expect(unverified).toContainText("so check the ID before you swap into it");
+  await expect(unverified).toContainText(id);
   await expect(page.getByTestId("swap-out")).not.toBeEmpty();
   await expect(page.getByRole("button", { name: "Not verified by Minswap" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Review swap" })).toHaveCount(0);
+  const anyway = page.getByRole("switch", { name: "Swap into it anyway" });
+  await expect(anyway).toHaveAttribute("aria-checked", "false");
   await snap(page, "swap-unverified");
   // Asked about by its ID alone; nothing was built or sent.
-  const id = `${ownedUtxos[1].asset_list[0].policy_id}${ownedUtxos[1].asset_list[0].asset_name}`;
   expect(swaps.calls.filter((c) => c.path === "tokens").map((c) => c.body.query)).toContain(id);
+  expect(swaps.calls.map((c) => c.path)).not.toContain("build-tx");
+  expect(koios.submitted).toHaveLength(0);
+
+  // Turned on, Review builds the funding: reviewed, nothing sent.
+  await anyway.click();
+  await expect(anyway).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("button", { name: "Review swap" }).click();
+  await expect(page.getByTestId("swap-summary")).toBeVisible();
   expect(swaps.calls.map((c) => c.path)).not.toContain("build-tx");
   expect(koios.submitted).toHaveLength(0);
 });
@@ -4654,7 +4689,10 @@ test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async (
   await page.getByRole("button", { name: "Change who votes for you", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Voting power" })).toBeVisible();
   await expect(page.getByRole("radio", { name: /^Always abstain/ })).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  // The vote already goes to Always abstain. Delegating it there again is a fee-only no-op the ledger takes, so Review
+  // stays live and a note says so (chunk 51, e7b#1).
+  await expect(page.getByTestId("vote-already")).toHaveText("Your voting power already goes there");
+  await expect(page.getByRole("button", { name: "Review" })).toBeEnabled();
   const reads = koios.calls.length;
   await page.getByRole("radio", { name: /^A DRep/ }).click();
   const results = page.getByTestId("drep-results");
@@ -4679,13 +4717,15 @@ test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async (
   await results.getByRole("button").filter({ hasText: `${LOGIC_DREP.slice(0, 16)}…${LOGIC_DREP.slice(-6)}` }).click();
   const facts = page.getByTestId("drep-facts");
   await expect(facts).toContainText("NameLogical Mechanism dRep");
-  await expect(facts).toContainText("StatusInactive since epoch 189");
+  // Koios's expires_epoch_no is 189, the last epoch it was active in (chunk 51, e7b#4).
+  await expect(facts).toContainText("StatusInactive since epoch 190");
   await expect(facts).toContainText("Voting power5,914,902.920642 ₳");
   await expect(page.getByTestId("drep-details")).toContainText("hasn't voted lately");
   expect(koios.calls.slice(lookups).sort()).toEqual(["drep_info", "drep_metadata"]);
   await snap(page, "voting");
   await page.getByRole("button", { name: "Review" }).click();
-  await expect(page.getByTestId("staking-review")).toContainText("Voting power toLogical Mechanism dRep");
+  // Said as a DRep's, so a name can't pass for a choice (chunk 51, gap-g7#1).
+  await expect(page.getByTestId("staking-review")).toContainText("Voting power toDRep · Logical Mechanism dRep");
   // The DRep's inactive warning stays on its review (GV-5), and Back finds the choice as it was (ST-11).
   await expect(page.getByTestId("drep-inactive-review")).toContainText("hasn't voted lately");
   await page.getByRole("button", { name: "Back", exact: true }).click();
@@ -4913,11 +4953,12 @@ test("send from the public account with a note: its count, the review, and what 
   await page.getByLabel("Amount", { exact: true }).fill("3");
   const note = page.getByLabel("Note (optional)");
   await note.fill("Invoice 42");
-  await expect(page.getByTestId("send-note-hint")).toHaveText("10/64. Anyone can read it, for good.");
-  // At most 64 characters, and a longer one pasted says it was cut (chunk 23's second review, PY-12).
-  await note.fill("x".repeat(80));
-  await expect(note).toHaveValue("x".repeat(64));
-  await expect(page.getByTestId("send-note-cut")).toHaveText("Cut to 64 characters, the most a note can hold.");
+  await expect(page.getByTestId("send-note-hint")).toHaveText("10/500. Anyone can read it, for good.");
+  // At most 500 characters, what Activity keeps of a note (chunk 51, gap-g8#3), and a longer one pasted says it was cut
+  // (chunk 23's second review, PY-12).
+  await note.fill("x".repeat(520));
+  await expect(note).toHaveValue("x".repeat(500));
+  await expect(page.getByTestId("send-note-cut")).toHaveText("Cut to 500 characters, the most a note can hold.");
   await note.fill("Invoice 42");
   await expect(page.getByTestId("send-note-cut")).toHaveCount(0);
   await page.getByRole("button", { name: "Review" }).click();
@@ -4955,7 +4996,7 @@ test("every wallet screen in the side panel, for the look", async ({ context, ko
   await back();
   await panel.getByRole("button", { name: "Make private" }).click();
   await panel.getByLabel("Amount", { exact: true }).fill("25.5");
-  await addTokens(panel, [TUSDM]);
+  await addTokens(panel, [TUSDM_PICKED]);
   await panel.getByLabel(`Amount of ${TUSDM}`).fill("1000");
   await shot("move-in");
   await panel.getByRole("button", { name: "Review" }).click();
@@ -4964,7 +5005,7 @@ test("every wallet screen in the side panel, for the look", async ({ context, ko
   await back();
   await back();
   await panel.getByRole("button", { name: "Send publicly" }).click();
-  await addTokens(panel, [TUSDM]);
+  await addTokens(panel, [TUSDM_PICKED]);
   await panel.getByLabel(`Amount of ${TUSDM}`).fill("1000");
   await shot("send");
   await back();

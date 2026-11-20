@@ -84,7 +84,7 @@ pub mod templates;
 mod value;
 
 pub use box_value::{
-    BOX_MARGIN, BOX_STEP, MAX_TOKEN_BOX_LOVELACE, Probe, WayBack, least_box_lovelace,
+    BOX_MARGIN, BOX_STEP, MAX_TOKEN_BOX_LOVELACE, Probe, WayBack, box_minimum, least_box_lovelace,
     suggested_box_lovelace, way_back,
 };
 pub use launch::{
@@ -400,11 +400,18 @@ pub fn mix_datum(a: &[u8; 48], b: &[u8; 48]) -> Vec<u8> {
 /// the wallet's own, and the general form `102([0, fields])`. mix_logic reads a
 /// box's datum as data, never as bytes, so whoever builds a mix of this wallet's
 /// box chooses which one its output carries. Both are read (chunk 51, r3a#1).
+///
+/// The general form's pair is exactly two items, as the node reads it: Pallas
+/// reads a pair's head but not its length, so the pairs are written definite
+/// first ([`cbor::definite_pairs`]), which refuses any other. The spellings the
+/// node reads as a box are `tests/fixtures/lovejoin-box-spellings.json`'s,
+/// which seedelf-data's `is_mix_datum` is held to as well (r3a#1's class).
 fn parse_mix_datum(datum: &[u8]) -> Option<([u8; 48], [u8; 48])> {
     if !cbor::within_depth(datum, cbor::MAX_DEPTH) {
         return None;
     }
-    let PlutusData::Constr(constr) = PlutusData::decode_fragment(datum).ok()? else {
+    let datum = cbor::definite_pairs(datum)?;
+    let PlutusData::Constr(constr) = PlutusData::decode_fragment(&datum).ok()? else {
         return None;
     };
     if !matches!(
@@ -1450,6 +1457,33 @@ fn withdraw_with(
     paying: Paying<'_>,
     rewards: &mut Rewards,
 ) -> Result<Withdraw> {
+    let one_over = |measured: &Budgets| measured.with_margin(1);
+    withdraw_declaring(
+        params,
+        protocol,
+        boxes,
+        owner,
+        destination,
+        paying,
+        rewards,
+        &one_over,
+    )
+}
+
+/// [`withdraw_with`], each round declaring `declare` of what the round before
+/// measured: 1% over it, but in a test, which declares less than the scripts
+/// use, to show such a withdraw is never returned (chunk 51, t1c#15).
+#[allow(clippy::too_many_arguments)]
+fn withdraw_declaring(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    boxes: &[PoolBox],
+    owner: &Scalar,
+    destination: Register,
+    paying: Paying<'_>,
+    rewards: &mut Rewards,
+    declare: &dyn Fn(&Budgets) -> Budgets,
+) -> Result<Withdraw> {
     let payer = match paying {
         Paying::Account(p) => Some(p),
         _ => None,
@@ -1583,15 +1617,11 @@ fn withdraw_with(
                 );
             }
             tx = tx.output(back(lovelace)?);
+            // The account's change at this round's fee, which a draft's first
+            // guess (0.5 ₳) may put under its least, or under nothing: it's held
+            // to its least at the fee that settles (chunk 51).
             if let Some(p) = payer {
-                let change = p
-                .fee
-                .lovelace
-                .checked_sub(fee + topped)
-                .filter(|c| *c >= least)
-                .context(
-                    "There isn't enough ADA left to pay this withdraw's fee and keep the change",
-                )?;
+                let change = p.fee.lovelace.saturating_sub(fee + topped);
                 tx = tx.output(Output::new(p.address.clone(), change));
             }
             for reference in protocol.reference_inputs() {
@@ -1742,11 +1772,18 @@ fn withdraw_with(
                     let change = match payer {
                         None => None,
                         Some(p) => Some(Coin {
+                            lovelace: p
+                                .fee
+                                .lovelace
+                                .checked_sub(fee + topped)
+                                .filter(|c| *c >= least)
+                                .context(
+                                    "There isn't enough ADA left to pay this withdraw's fee and keep the change",
+                                )?,
                             utxo: eval::resolve_outputs(&tx.tx_bytes.0)?
                                 .get(1)
                                 .context("The withdraw has no change")?
                                 .clone(),
-                            lovelace: p.fee.lovelace - fee - topped,
                         }),
                     };
                     rewards.taken(protocol);
@@ -1765,7 +1802,7 @@ fn withdraw_with(
                 // ledger asks, which it rounds up (InsufficientCollateral).
                 fee = even(needed);
             }
-            _ => declared = Some(measured.with_margin(1)),
+            _ => declared = Some(declare(&measured)),
         }
     }
     bail!("The withdraw's fee did not settle")
@@ -1794,9 +1831,20 @@ pub fn check_width(width: usize) -> Result<()> {
 }
 
 /// [`mixes_per_box`] at `width` boxes a mix: `(width^depth − 1)/(width − 1)`,
-/// which leaves ours one of `width^depth`.
+/// which leaves ours one of `width^depth`. It's `1 + width + … +
+/// width^(depth − 1)`, a mix for each box of the fan-out but its leaves, and
+/// that's what it is for a width under 2 too, which no mix has
+/// ([`check_width`]). Past what a usize counts, the most it counts, which no
+/// ADA pays for: a figure for every depth and width, never a trap (chunk 51,
+/// r3a#2).
 pub fn mixes_per_box_at(depth: u32, width: usize) -> usize {
-    (width.pow(depth) - 1) / (width - 1)
+    match width {
+        0 => usize::from(depth > 0),
+        1 => usize::try_from(depth).unwrap_or(usize::MAX),
+        _ => width
+            .checked_pow(depth)
+            .map_or(usize::MAX, |leaves| (leaves - 1) / (width - 1)),
+    }
 }
 
 /// What the wallet plans on for a 3-box mix before measuring one: preprod's
@@ -1949,13 +1997,27 @@ fn funding(boxes: usize, per: Option<u64>) -> Result<u64> {
 /// What a box costs at `depth`: the box, and every mix of its fan-out. None
 /// past what a u64 holds.
 fn per_box(depth: u32, denom: u64) -> Option<u64> {
-    denom.checked_add(mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE)
+    per_box_again(depth).and_then(|mixes| denom.checked_add(mixes))
 }
 
 /// What mixing one of the wallet's boxes again costs at `depth`: every mix of
-/// its fan-out. It's in the pool already, so there's no box to pay for.
-fn per_box_again(depth: u32) -> u64 {
-    mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE
+/// its fan-out. It's in the pool already, so there's no box to pay for. None
+/// past what a u64 holds.
+fn per_box_again(depth: u32) -> Option<u64> {
+    mixes_cost(mixes_per_box(depth), MIX_FEE_ESTIMATE)
+}
+
+/// `mixes` mixes at `each`: none past what a u64 holds.
+fn mixes_cost(mixes: usize, each: u64) -> Option<u64> {
+    u64::try_from(mixes).ok()?.checked_mul(each)
+}
+
+/// What paying for `boxes` boxes' mixes at `per` each and the deposit's
+/// reserve takes: past what a u64 holds, the most it holds, which nothing pays.
+fn again_cost(boxes: usize, per: u64) -> u64 {
+    u64::try_from(boxes)
+        .map_or(u64::MAX, |boxes| boxes.saturating_mul(per))
+        .saturating_add(DEPOSIT_RESERVE)
 }
 
 /// [`per_box`] in `protocol`'s pool, `width` boxes a mix: its box's ADA, and
@@ -1963,15 +2025,24 @@ fn per_box_again(depth: u32) -> u64 {
 /// three is [`per_box`]'s. A token pool's token isn't counted: it's the
 /// token's, not ADA. Refused past what a u64 holds ([`MORE_THAN_THERE_IS`]).
 pub fn per_box_in(protocol: &Protocol, depth: u32, width: usize) -> Result<u64> {
-    protocol
-        .denom
-        .checked_add(per_box_again_in(protocol, depth, width))
+    again_in(protocol, depth, width)
+        .and_then(|mixes| protocol.denom.checked_add(mixes))
         .context(MORE_THAN_THERE_IS)
 }
 
-/// [`per_box_again`] in `protocol`'s pool, `width` boxes a mix.
+/// [`per_box_again`] in `protocol`'s pool, `width` boxes a mix: past what a
+/// u64 holds, the most it holds, which nothing pays.
 pub fn per_box_again_in(protocol: &Protocol, depth: u32, width: usize) -> u64 {
-    mixes_per_box_at(depth, width) as u64 * mix_fee_estimate(protocol, width)
+    again_in(protocol, depth, width).unwrap_or(u64::MAX)
+}
+
+/// [`per_box_again`] in `protocol`'s pool, `width` boxes a mix: none past
+/// what a u64 holds.
+fn again_in(protocol: &Protocol, depth: u32, width: usize) -> Option<u64> {
+    mixes_cost(
+        mixes_per_box_at(depth, width),
+        mix_fee_estimate(protocol, width),
+    )
 }
 
 /// [`boxes_affordable`] in `protocol`'s pool, `width` boxes a mix.
@@ -1986,16 +2057,12 @@ pub fn funding_for_in(boxes: usize, protocol: &Protocol, depth: u32, width: usiz
 
 /// [`again_affordable`] in `protocol`'s pool, `width` boxes a mix.
 pub fn again_affordable_in(spare: u64, protocol: &Protocol, depth: u32, width: usize) -> usize {
-    let per = per_box_again_in(protocol, depth, width);
-    if per == 0 {
-        return 0;
-    }
-    (spare.saturating_sub(DEPOSIT_RESERVE) / per) as usize
+    affordable(spare, again_in(protocol, depth, width))
 }
 
 /// [`again_funding`] in `protocol`'s pool, `width` boxes a mix.
 pub fn again_funding_in(boxes: usize, protocol: &Protocol, depth: u32, width: usize) -> u64 {
-    DEPOSIT_RESERVE + boxes as u64 * per_box_again_in(protocol, depth, width)
+    again_cost(boxes, per_box_again_in(protocol, depth, width))
 }
 
 /// One pool's part of a chain that spans pools, as it's planned: the pool,
@@ -2203,16 +2270,18 @@ pub fn bootstrap_most(
 }
 
 /// How many of the wallet's boxes `spare` lovelace mixes again at `depth`
-/// ([`again`]): none if it can't pay for one's mixes.
+/// ([`again`]): none if it can't pay for one's mixes, or there are none, at
+/// depth 0 (chunk 51, r3a#2).
 pub fn again_affordable(spare: u64, depth: u32) -> usize {
-    (spare.saturating_sub(DEPOSIT_RESERVE) / per_box_again(depth)) as usize
+    affordable(spare, per_box_again(depth))
 }
 
 /// What pays for mixing `boxes` of the wallet's boxes again at `depth`
 /// ([`again_affordable`]'s plan run backwards): every mix, and the change the
-/// last one leaves, which comes back.
+/// last one leaves, which comes back. Past what a u64 holds, the most it
+/// holds, which nothing pays.
 pub fn again_funding(boxes: usize, depth: u32) -> u64 {
-    DEPOSIT_RESERVE + boxes as u64 * per_box_again(depth)
+    again_cost(boxes, per_box_again(depth).unwrap_or(u64::MAX))
 }
 
 /// What pays for a chain: the key account's ADA-only `coins`, its
@@ -2551,6 +2620,9 @@ fn fresh_for(
     if !(0..=3).contains(&depth) {
         bail!("The fan-out is 0 to 3 waves deep");
     }
+    // Its callers check the width first; `width − 1` is held to it here too
+    // (chunk 51, r3a#2).
+    check_width(width)?;
     let mut fresh: Vec<PoolBox> = pool
         .iter()
         .filter(|b| !ours.iter().any(|o| o.utxo == b.utxo))
@@ -2632,5 +2704,145 @@ pub(crate) fn shuffle<T>(items: &mut [T]) {
     for i in (1..items.len()).rev() {
         let j = (OsRng.next_u64() % (i as u64 + 1)) as usize;
         items.swap(i, j);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    /// Preprod's parameters at epoch 315, with its V3 cost model.
+    fn params() -> ProtocolParameters {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/eval-preprod.json")).unwrap();
+        let seedelf = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"].as_str().unwrap().starts_with("seedelf spend"))
+            .unwrap();
+        ProtocolParameters::from_koios(&json!({
+            "min_fee_a": 44, "min_fee_b": 155381, "coins_per_utxo_size": "4310",
+            "key_deposit": "2000000", "price_mem": 0.0577, "price_step": 0.0000721,
+            "min_fee_ref_script_cost_per_byte": 15,
+            "cost_models": { "PlutusV3": seedelf["cost_model_v3"] },
+        }))
+        .unwrap()
+    }
+
+    /// Chunk 51, t1c#15: a withdraw is returned only from a round whose
+    /// declared budgets cover what that round's scripts used. Each round's
+    /// proof is new, so its measure moves by a hair, which declaring 1% over
+    /// the round before covers. Declared short of it here instead, no round
+    /// covers, and no withdraw comes back, where one declaring less than it
+    /// uses would fail its scripts on chain and lose the collateral.
+    #[test]
+    fn a_withdraw_declaring_less_than_its_scripts_use_is_never_returned() {
+        let params = params();
+        let protocol = Protocol::of(true).unwrap();
+        let sk = Scalar::from(31_415u64);
+        let mut address = vec![0x60];
+        address.extend([0x55; 28]);
+        let address = Address::from_bytes(&address).unwrap();
+        let coin = Coin {
+            utxo: Resolved {
+                tx_hash: [0x55; 32],
+                index: 0,
+                output: Output::new(address.clone(), 50_000_000)
+                    .build_babbage_raw()
+                    .unwrap()
+                    .encode_fragment()
+                    .unwrap(),
+            },
+            lovelace: 50_000_000,
+        };
+        let owner = Register::create(sk).unwrap();
+        let owners = vec![owner.clone().rerandomize().unwrap()];
+        let boxes = deposit(&params, &protocol, &[coin], &owners, &address, 1)
+            .unwrap()
+            .boxes;
+        let destination = || owner.clone().rerandomize().unwrap();
+        let back = |declare: &dyn Fn(&Budgets) -> Budgets| {
+            withdraw_declaring(
+                &params,
+                &protocol,
+                &boxes,
+                &sk,
+                destination(),
+                Paying::Boxes,
+                &mut Rewards::none(),
+                declare,
+            )
+            .map(|w| w.fee)
+        };
+        assert!(back(&|measured| measured.with_margin(1)).is_ok());
+        let short = |measured: &Budgets| {
+            let lowered = |purpose: &str, budget: Option<Budget>, index: u64| {
+                budget.map(|b| {
+                    json!({
+                        "validator": { "purpose": purpose, "index": index },
+                        "budget": {
+                            "memory": b.mem - b.mem.div_ceil(100),
+                            "cpu": b.steps - b.steps.div_ceil(100),
+                        },
+                    })
+                })
+            };
+            let rows: Vec<Value> = (0..8)
+                .flat_map(|i| {
+                    [
+                        lowered("spend", measured.spend(i), i),
+                        lowered("withdraw", measured.withdraw(i), i),
+                    ]
+                })
+                .flatten()
+                .collect();
+            Budgets::from_ogmios(&json!({ "result": rows })).unwrap()
+        };
+        let refused = back(&short);
+        assert!(
+            matches!(&refused, Err(e) if e.to_string().contains("did not settle")),
+            "{refused:?}"
+        );
+    }
+
+    /// Chunk 51, r3a#1's class: the box reader on its own takes exactly the
+    /// spellings the node reads as `Constr 0 [a, b]`
+    /// (`tests/fixtures/lovejoin-box-spellings.json`, cardano-cli's
+    /// verdicts), as seedelf-data's `is_mix_datum` does. `PoolBox::from_row`
+    /// refuses a general form's pair of three anyway, as it resolves the row
+    /// (`eval::refusal`), but Pallas reads one as a pair of two:
+    /// `Constr::decode` reads the pair's head but not its length, and
+    /// `decode_fragment` leaves whatever comes after.
+    #[test]
+    fn the_box_reader_takes_exactly_the_spellings_the_node_reads_as_a_box() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/lovejoin-box-spellings.json"
+        ))
+        .unwrap();
+        let point = |key: &str| -> [u8; 48] {
+            hex::decode(fixture[key].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap()
+        };
+        let the_box = (point("a"), point("b"));
+        let wrong: Vec<String> = fixture["spellings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| {
+                let datum = hex::decode(s["hex"].as_str().unwrap()).unwrap();
+                parse_mix_datum(&datum) != (s["node"] == "constr0_ab").then_some(the_box)
+            })
+            .map(|s| format!("{} (the node's {})", s["name"], s["node"]))
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} read otherwise: {}",
+            wrong.len(),
+            wrong.join(", ")
+        );
     }
 }

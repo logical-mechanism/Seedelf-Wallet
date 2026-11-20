@@ -1,10 +1,13 @@
 //! The depth check on CBOR from outside the wallet (`seedelf_core::cbor`),
-//! and the readers of a Koios row's datum that use it.
+//! and the readers of a Koios row's datum that use it; and the general form's
+//! pairs, written for Pallas to read as the node does.
 
 use hex_literal::hex;
 use pallas_addresses::Address;
 use pallas_codec::minicbor::{self, data::Tag};
-use seedelf_core::cbor::{MAX_DEPTH, output_within_depth, within_depth};
+use seedelf_core::cbor::{
+    MAX_DEPTH, check_nesting, definite_pairs, nests_within, output_within_depth, within_depth,
+};
 use seedelf_core::eval;
 use seedelf_core::lovejoin::{PoolBox, Protocol, mix_datum};
 use seedelf_crypto::register::Register;
@@ -61,6 +64,49 @@ fn far_too_deep_is_refused_without_recursing() {
         assert!(!within_depth(&deep, MAX_DEPTH));
         // The walk itself doesn't recurse: with no limit, it reads to the end.
         assert!(within_depth(&deep, usize::MAX));
+    }
+}
+
+/// `cbor` in a byte string under tag 24, as an output's inline datum and its
+/// reference script sit.
+fn wrapped(cbor: &[u8]) -> Vec<u8> {
+    let mut e = minicbor::Encoder::new(Vec::new());
+    e.tag(Tag::new(24)).unwrap().bytes(cbor).unwrap();
+    e.into_writer()
+}
+
+/// Chunk 51, r3b#1: a whole transaction from outside the wallet (a site's, a
+/// swap a DEX built) is held to the limit with the CBOR its tagged byte
+/// strings hold, which Pallas decodes too and `within_depth` doesn't open.
+#[test]
+fn a_transactions_nesting_counts_what_its_tagged_bytes_hold() {
+    for nested in [lists, indefinite, maps, tags] {
+        assert!(nests_within(&nested(MAX_DEPTH), MAX_DEPTH));
+        assert!(!nests_within(&nested(MAX_DEPTH + 1), MAX_DEPTH));
+        // Far too deep is refused without recursing: with no limit, it walks to the end.
+        assert!(!nests_within(&nested(100_000), MAX_DEPTH));
+        assert!(nests_within(&nested(100_000), usize::MAX));
+    }
+    // The tag, its byte string and the item in it are a level each.
+    let deep = wrapped(&lists(100_000));
+    assert!(within_depth(&deep, MAX_DEPTH));
+    assert!(!nests_within(&deep, MAX_DEPTH));
+    assert!(nests_within(&wrapped(&lists(MAX_DEPTH - 3)), MAX_DEPTH));
+    assert!(!nests_within(&wrapped(&lists(MAX_DEPTH - 2)), MAX_DEPTH));
+    // Bytes under a tag that aren't CBOR (a big number's) are bytes, and the
+    // walk goes on after them.
+    let big = hex!("c2 49 ffffffffffffffffff");
+    let beside = |n: usize| [&hex!("82")[..], &big, &lists(n)].concat();
+    assert!(nests_within(&beside(MAX_DEPTH - 1), MAX_DEPTH));
+    assert!(!nests_within(&beside(MAX_DEPTH), MAX_DEPTH));
+
+    assert!(check_nesting(&lists(MAX_DEPTH)).is_ok());
+    assert!(check_nesting(&wrapped(&lists(MAX_DEPTH - 3))).is_ok());
+    for refused in [lists(MAX_DEPTH + 1), deep] {
+        assert_eq!(
+            check_nesting(&refused).unwrap_err().to_string(),
+            "The wallet can't read this transaction: its data is nested more than 128 levels deep."
+        );
     }
 }
 
@@ -263,4 +309,120 @@ fn a_box_too_deep_to_read_is_skipped() {
     assert!(PoolBox::from_row(&boxed(&datum), &protocol).is_some());
     // A recursive decoder would overflow the stack on this one.
     assert!(PoolBox::from_row(&boxed(&lists(100_000)), &protocol).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Chunk 51, r3a#1's class (class#1): constructors in the general form,
+// written for Pallas to read as the node does.
+// ---------------------------------------------------------------------------
+
+/// Each `102([_ i, fields])` is written `102([i, fields])`, its break dropped,
+/// and every other byte stays as it was: a definite pair, a longer head, and a
+/// byte string holding `d8 66 9f`, which is bytes, not a constructor.
+#[test]
+fn the_general_forms_indefinite_pairs_are_written_definite_and_nothing_else() {
+    let rewritten: [(&[u8], &[u8]); 6] = [
+        (&hex!("d866 9f 00 80 ff"), &hex!("d866 82 00 80")),
+        // Constr 0 [_ Constr 1 [_ 0], 5], the inner one in the general form.
+        (
+            &hex!("d879 9f d866 9f 01 9f 00 ff ff 05 ff"),
+            &hex!("d879 9f d866 82 01 9f 00 ff 05 ff"),
+        ),
+        // One in another.
+        (
+            &hex!("d866 9f 00 81 d866 9f 01 80 ff ff"),
+            &hex!("d866 82 00 81 d866 82 01 80"),
+        ),
+        // Under a longer head, the tag's and the index's.
+        (&hex!("d90066 9f 1800 80 ff"), &hex!("d90066 82 1800 80")),
+        // Bytes holding a pair's first bytes, beside one.
+        (
+            &hex!("d866 9f 00 82 43 d8669f 5f 42 d866 41 9f ff ff"),
+            &hex!("d866 82 00 82 43 d8669f 5f 42 d866 41 9f ff"),
+        ),
+        // In a map of indefinite length, as a key and a value.
+        (
+            &hex!("bf d866 9f 00 80 ff d866 9f 01 80 ff ff"),
+            &hex!("bf d866 82 00 80 d866 82 01 80 ff"),
+        ),
+    ];
+    for (datum, definite) in rewritten {
+        assert_eq!(
+            definite_pairs(datum).as_deref(),
+            Some(definite),
+            "{}",
+            hex::encode(datum)
+        );
+        assert!(within_depth(definite, MAX_DEPTH));
+    }
+    let untouched: [&[u8]; 6] = [
+        &hex!("d866 82 00 80"),
+        &hex!("d866 98 02 00 80"),
+        &hex!("43 d8669f"),
+        &hex!("d879 9f 5f 42 d866 41 9f ff c2 49 ffffffffffffffffff ff"),
+        &hex!("a1 00 9f 01 02 ff"),
+        &hex!("00"),
+    ];
+    for datum in untouched {
+        assert_eq!(
+            definite_pairs(datum).as_deref(),
+            Some(datum),
+            "{}",
+            hex::encode(datum)
+        );
+    }
+}
+
+/// The node refuses the general form's pair of anything but two items, and so
+/// does this, as it refuses CBOR that isn't one well-formed item.
+#[test]
+fn a_general_form_pair_not_of_two_items_is_refused() {
+    let refused: [&[u8]; 12] = [
+        &hex!("d866 9f 00 ff"),         // a pair of one
+        &hex!("d866 9f 00 80 00 ff"),   // of three
+        &hex!("d866 9f ff"),            // of none
+        &hex!("d866 81 00"),            // definite, of one
+        &hex!("d866 83 00 80 00"),      // definite, of three
+        &hex!("d866 00"),               // no pair at all
+        &hex!("d879 81 d866 9f 00 80"), // no break
+        &hex!("d866 9f 00 80 ff 00"),   // something after it
+        &hex!("ff"),                    // a break with nothing to end
+        &hex!("5f 01 ff"),              // a chunk that isn't bytes
+        &hex!("5b ffffffffffffffff"),   // longer than it is
+        &[],
+    ];
+    for datum in refused {
+        assert_eq!(definite_pairs(datum), None, "{}", hex::encode(datum));
+    }
+}
+
+#[test]
+fn the_general_forms_pairs_are_written_definite_without_recursing() {
+    // A recursive walk overflows the stack well before 100,000 levels.
+    let levels = 100_000;
+    let deep = [
+        hex!("d866 9f 00 81").repeat(levels),
+        vec![0x00],
+        vec![0xff; levels],
+    ]
+    .concat();
+    let definite = [hex!("d866 82 00 81").repeat(levels), vec![0x00]].concat();
+    assert_eq!(definite_pairs(&deep), Some(definite));
+}
+
+/// The evaluator reads a row's datum with Pallas, so it's handed the datum
+/// with the general form's pairs definite: the same data, as the node reads
+/// it. A pair the node refuses is a datum the wallet can't read.
+#[test]
+fn the_evaluator_reads_a_datum_in_the_general_form_as_the_node_does() {
+    let nested = hex!("d879 9f d866 9f 01 9f 00 ff ff 05 ff");
+    let definite = hex!("d879 9f d866 82 01 9f 00 ff 05 ff");
+    assert_eq!(
+        eval::resolve_row(&row_with_datum(&nested)).unwrap(),
+        eval::resolve_row(&row_with_datum(&definite)).unwrap()
+    );
+    let three = row_with_datum(&hex!("d879 81 d866 9f 00 80 00 ff"));
+    let err = eval::resolve_row(&three).unwrap_err().to_string();
+    assert!(err.contains("holds a datum the wallet can't read"), "{err}");
+    assert_eq!(eval::refusal(&three), Some(err));
 }

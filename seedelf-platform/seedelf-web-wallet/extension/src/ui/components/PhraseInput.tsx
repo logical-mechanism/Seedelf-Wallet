@@ -1,6 +1,12 @@
 // One box per recovery-phrase word, each with BIP39 autocomplete. Pasting a
 // whole phrase into any box fills them all. Lace's and Eternl's restore
 // screens are the reference for the behaviour, not the code.
+//
+// Each box, and the words suggested under it, are marked not to translate, as
+// the phrase's grid is (PhraseGrid.tsx): three or four letters in, the list is
+// the phrase's own word, and Chrome's Translate sent it to Google with the
+// page. The "Word 7" labels and the line under a word off the list still
+// translate (chunk 51, docs#1 and still#2; the owner's B9).
 
 import { useEffect, useId, useRef, useState } from "react";
 import { t, useT } from "../../i18n";
@@ -182,6 +188,7 @@ function WordBox({ position, value, wrong, labelled, list, inputRef, onChange, o
         autoCapitalize="off"
         autoCorrect="off"
         spellCheck={false}
+        translate="no"
         value={value}
         onFocus={() => setFocused(true)}
         onBlur={() => {
@@ -216,7 +223,13 @@ function WordBox({ position, value, wrong, labelled, list, inputRef, onChange, o
         }}
       />
       {open && (
-        <ul className="suggestions" role="listbox" id={listId} aria-label={t("phrase.suggestions", { number: position })}>
+        <ul
+          className="suggestions"
+          translate="no"
+          role="listbox"
+          id={listId}
+          aria-label={t("phrase.suggestions", { number: position })}
+        >
           {suggestions.map((word, i) => (
             <li
               key={word}

@@ -107,12 +107,12 @@ async fn remove_refuses_a_seedelf_this_wallet_doesnt_own() {
     assert_eq!((evaluated, sent), (0, 0), "nothing is evaluated or sent");
 }
 
-/// The burned Seedelf's ADA goes only to a normal address on this network:
-/// core pays `remove`'s change unchecked, and a payment with no datum to a
-/// script can lock for good there (chunk 51, t1b#9).
+/// The burned Seedelf's ADA goes only to an address on this network that a
+/// payment can go to: core pays `remove`'s change unchecked, and a stake or
+/// other-network address takes nothing (chunk 51, t1b#9).
 #[tokio::test]
 #[serial]
-async fn remove_refuses_to_pay_a_script_stake_or_other_network_address() {
+async fn remove_refuses_to_pay_a_stake_or_other_network_address() {
     for address in not_payable_addresses() {
         let (refused, evaluated, sent) = remove_refused(None, address.clone()).await;
         assert!(
@@ -126,6 +126,42 @@ async fn remove_refuses_to_pay_a_script_stake_or_other_network_address() {
             (0, 0),
             "{address}: nothing is evaluated or sent"
         );
+    }
+}
+
+/// The burned Seedelf's ADA goes to a key address staked by a script, and to
+/// a script's address, as the ledger takes both, with no datum: `remove`
+/// refused them as "Supplied Address Is Incorrect" (chunk 51, r2a#1; a
+/// script's gets a warning, the owner's call of 2026-11-18).
+#[tokio::test]
+#[serial]
+async fn remove_pays_a_key_address_staked_by_a_script_and_a_scripts_address() {
+    for to in [external_address_staked_by_a_script(), a_multisig_address()] {
+        let mut scenario = Scenario::start().await;
+        scenario
+            .mount_credential_utxos(vec![seedelf_utxo(
+                scenario.scalar,
+                1,
+                5_000_000,
+                SAMPLE_SEEDELF,
+            )])
+            .await;
+        scenario.mount_evaluate_mint(1).await;
+        scenario.mount_collateral().await;
+        scenario.mount_submit().await;
+        run(
+            RemoveArgs {
+                seedelf: SAMPLE_SEEDELF.to_string(),
+                address: to.to_bech32().expect("bech32"),
+            },
+            PREPROD,
+            VARIANT,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{to:?}: {e:#}"));
+        let tx = decode_tx(&scenario.submitted_cbor().await);
+        let paid: Vec<bool> = tx.outputs_to(&to).iter().map(|o| o.has_datum).collect();
+        assert_eq!(paid, vec![false], "{to:?}: one output, with no datum");
     }
 }
 
