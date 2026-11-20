@@ -1524,6 +1524,70 @@ mod transfer {
         assert_eq!(sent.to_string(), all);
     }
 
+    /// Chunk 52, l6words#1's code option: a payment in parts takes the UTxOs holding a token it sends by the box rule
+    /// too, as one transaction does: a box a mix moved first, then a plain one, then one of unknown making, before how
+    /// much each holds. 30 boxes back from Lovejoin holding the token alike, in the balance's order 10 of unknown making,
+    /// 10 plain, 10 a mix moved. A Send of 25 boxes' worth goes in parts, which spend the 20 whose making the wallet
+    /// knows and 5 of unknown making, the fewest that hold the rest; by how much each holds, 10 of unknown making went.
+    #[test]
+    fn a_token_sent_in_parts_comes_from_boxes_a_mix_moved_before_those_of_unknown_making() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let token = owned().into_iter().nth(1).unwrap();
+        let held = token.asset_list.clone().unwrap()[0].clone();
+        let mut r = request();
+        r.utxos = (0..30u64)
+            .map(|i| UtxoResponse {
+                tx_hash: format!("{:064x}", i + 1),
+                ..token.clone()
+            })
+            .collect();
+        let kind = |i: usize| ["unknown", "plain", "mixed"][i / 10];
+        r.classes = r
+            .utxos
+            .iter()
+            .enumerate()
+            .map(|(i, u)| {
+                let (id, origin) = match kind(i) {
+                    "unknown" => (format!("box:{0}+unknown:{0}", u.tx_hash), "lovejoin"),
+                    "plain" => (format!("box:{}", u.tx_hash), "lovejoin"),
+                    _ => (format!("box:{}", u.tx_hash), "mixed"),
+                };
+                (
+                    format!("{}#{}", u.tx_hash, u.tx_index),
+                    api::ClassIn {
+                        id,
+                        origin: origin.into(),
+                    },
+                )
+            })
+            .collect();
+        let each: u128 = held.quantity.parse().unwrap();
+        r.payments[0].lovelace = Some("0".into());
+        r.payments[0].tokens = vec![TokenAmount {
+            policy_id: held.policy_id.clone(),
+            asset_name: held.asset_name.clone(),
+            quantity: (each * 25).to_string(),
+        }];
+        let parts = api::build_transfer_parts(sk, r.clone()).unwrap();
+        assert!(parts.len() > 1, "{} parts", parts.len());
+        let spent = |what: &str| {
+            parts
+                .iter()
+                .flat_map(|p| p.inputs.iter())
+                .filter(|o| {
+                    r.utxos
+                        .iter()
+                        .position(|u| u.tx_hash == o.tx_hash && u.tx_index == o.tx_index)
+                        .is_some_and(|i| kind(i) == what)
+                })
+                .count()
+        };
+        assert_eq!(
+            (spent("mixed"), spent("plain"), spent("unknown")),
+            (10, 10, 5)
+        );
+    }
+
     #[test]
     fn max_to_a_seedelf_takes_every_utxo_in_parts_the_tokens_in_the_first() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();

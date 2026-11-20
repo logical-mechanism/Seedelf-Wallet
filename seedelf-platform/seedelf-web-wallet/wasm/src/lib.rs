@@ -3998,12 +3998,14 @@ pub mod api {
     /// first, those adding ADA before those holding only their tokens' least, a chain's, which takes the ADA forward
     /// (test wallet A, 1.6.0: its 2,621 ADA sat with 19 of the 400 tokens it sent, behind bundles of 20 holding only
     /// their least, and no part could pay its fee); but [`Worth::of`]'s with a funding's histories puts its purpose's
-    /// order before that (chunk 51, l8words#2).
+    /// order before that (chunk 51, l8words#2). By history, before both, by the box rule ([`Worth::holder`]: chunk 52,
+    /// l6words#1's code option).
     fn token_group(
         rest: &[UtxoResponse],
         tokens: &[TokenAmount],
         at_most: usize,
-        rich: Option<&Worth>,
+        worth: &Worth,
+        rich: bool,
     ) -> Vec<UtxoResponse> {
         let mut holders: Vec<UtxoResponse> = rest
             .iter()
@@ -4011,10 +4013,13 @@ pub mod api {
             .cloned()
             .collect();
         holders.sort_by_key(|u| {
-            std::cmp::Reverse((
-                rich.map(|w| w.of_utxo(u)),
-                tokens.iter().map(|t| quantity_of(u, t)).sum::<u128>(),
-            ))
+            (
+                worth.holder(u),
+                std::cmp::Reverse((
+                    rich.then(|| worth.of_utxo(u)),
+                    tokens.iter().map(|t| quantity_of(u, t)).sum::<u128>(),
+                )),
+            )
         });
         holders.truncate(at_most);
         holders
@@ -4042,7 +4047,11 @@ pub mod api {
     /// where its history comes, and what it adds, with its sign. [`Worth::of`] gives one that adds nothing 1, so its
     /// history comes before whether it adds, and a funding's order there can take a bundle at its least before ADA
     /// (chunk 51, l8words#2).
-    struct Worth(HashMap<(String, u64), (i8, u32, i128)>);
+    ///
+    /// By history (`Worth::apart`), it keeps the histories too, so a part takes the UTxOs holding the tokens it sends
+    /// by the box rule ([`token_group`], `build::max_inputs_apart`; chunk 52, l6words#1's code option); by what each
+    /// adds, by how much of them each holds, as before, so what those parts took is still tried.
+    struct Worth(HashMap<(String, u64), (i8, u32, i128)>, Option<Histories>);
 
     impl Worth {
         fn of(chain: &Chain, utxos: &[UtxoResponse], histories: Option<&Histories>) -> Self {
@@ -4059,6 +4068,7 @@ pub mod api {
                         )
                     })
                     .collect(),
+                None,
             )
         }
 
@@ -4188,6 +4198,7 @@ pub mod api {
                         })
                     })
                     .collect(),
+                Some(histories.clone()),
             );
             Some((order, alone))
         }
@@ -4197,6 +4208,16 @@ pub mod api {
                 .get(&(u.tx_hash.clone(), u.tx_index))
                 .copied()
                 .unwrap_or((i8::MIN, 0, 0))
+        }
+
+        /// Where `u` goes among the UTxOs holding a token sent, by the box rule, where this order is by history: one
+        /// that's no box back from Lovejoin first, then a box a mix moved, a plain one, one of unknown making
+        /// ([`build::box_rank`]). All alike by what each adds.
+        fn holder(&self, u: &UtxoResponse) -> (u8, u8) {
+            match &self.1 {
+                Some(h) if h.tier_of(u) == 2 => (1, build::box_rank(&h.class_of(u))),
+                _ => (0, 0),
+            }
         }
     }
 
@@ -4573,7 +4594,15 @@ pub mod api {
             } else {
                 self.k
             };
-            Ok(build::max_inputs_by(&from, &assets_of(share)?, at_most, |u| worth.of_utxo(u))?.0)
+            let holders = worth.1.as_ref();
+            Ok(build::max_inputs_apart(
+                &from,
+                &assets_of(share)?,
+                at_most,
+                |u| worth.of_utxo(u),
+                holders,
+            )?
+            .0)
         }
 
         /// Fewer UTxOs, two-thirds as many: after too much computation, or a part of ADA alone that couldn't pay its
@@ -4712,7 +4741,7 @@ pub mod api {
             Room::new()
         };
         loop {
-            let group = token_group(rest, tokens, room.h, chained.then_some(worth));
+            let group = token_group(rest, tokens, room.h, worth, chained);
             let share = share_of(&group, tokens);
             let more = !less(tokens, &share).is_empty();
             let keep_ada = (more && !chained) || (chain == Some(Fill::Lean) && !share.is_empty());
