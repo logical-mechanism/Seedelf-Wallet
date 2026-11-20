@@ -1,3 +1,0 @@
-== wasm false: exit 0, passed 383, failed 0, ignored 2 (42 s)
-== wasm true: exit 0, passed 383, failed 0, ignored 2 (28 s)
-== done

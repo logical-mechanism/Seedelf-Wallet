@@ -1,7 +1,0 @@
-core-raw-weight: exit 0; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 20.17s; failing: []
-known-fail-zero: exit 0; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 24.99s; failing: []
-c-no-swap: exit 0; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 17.82s; failing: []
-c-largest-ignores-tier: exit 0; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 24.00s; failing: []
-fund-session-tier-0: exit 0; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 37.92s; failing: []
-restored
-exit=0

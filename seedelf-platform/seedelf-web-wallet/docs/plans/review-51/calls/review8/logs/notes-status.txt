@@ -1,2 +1,0 @@
-default exit 0
-sweep exit 0
