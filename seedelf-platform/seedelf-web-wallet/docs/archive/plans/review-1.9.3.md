@@ -121,7 +121,17 @@ At `9bc0fde1`, all green:
   - vote abstain, `be1ddec5`;
   - stake LOGIC, `440eff94`.
 
-**#397's live run** (the owner's, left for this review): a fresh wallet, since wallet A's held boxes in v2's 5 ₳ pool would read as not mixed yet after a restore. Its phrase was made by the wallet's own WebAssembly and kept out of every log. A funded it with 60 ₳ (`21c63fe0`); it minted a Seedelf from its account (`1db3ddb4`), made 54 ₳ private (`a63af2d6`), and mixed two boxes from its private balance into v2's 5 ₳ pool (funding `04d970d4`, its chain of 12 sent within a minute). Then a Mix my boxes again, cut by a lock partway, then unlocked: its result follows in this branch's next commit.
+**#397's live run** (the owner's, left for this review): a fresh wallet, since wallet A's held boxes in v2's 5 ₳ pool would read as not mixed yet after a restore. Its phrase was made by the wallet's own WebAssembly and kept out of every log. A funded it with 60 ₳ (`21c63fe0`); it minted a Seedelf from its account (`1db3ddb4`), made 54 ₳ private (`a63af2d6`), and mixed two boxes from its private balance into v2's 5 ₳ pool (funding `04d970d4`, its chain of 12 sent within a minute). A first Mix my boxes again, uncut, went on at once after that mix and ran its 15 transactions.
+
+The test itself, a Mix my boxes again over 4 boxes (16 mixes, 19 transactions), was cut by a lock at 3 of 19 sent (21:08:22 UTC), then unlocked 20 s later:
+- **Just after the unlock:** three of its transactions were still in flight. Mix my boxes again was off, and the page said the boxes were being mixed again: the note and the button agreed.
+- **42 s later:** those had landed, and it came on with no reload. On 1.9.2 it stayed off until the session's return went, after the unlock's draw.
+- **The pool page** said 3 of the 4 boxes weren't mixed yet, and the chain's row why it stopped. Mix my boxes again's review took all 4.
+- **A new Mix my boxes again** (funding `c4596316`) ran its 19 transactions to the end beside the cut session.
+- **The cut session's rest** came back about 12.5 minutes after the unlock, as a chain of its own through its collateral's mix (3 transactions), never as another mix of the boxes (r4#1).
+- **While that rest ran,** Mix my boxes again stayed on, with no note (r4#2).
+
+The fresh wallet contacted preprod.koios.rest and www.giveme.my. Seen, not fixed: the hub's card said the cut chain "Stopped after 4 of 19 transactions", and its row "Stopped after 3 of 19". The two count the transaction whose send began at the lock differently, as 1.9.2's views did.
 
 ## For the owner
 
