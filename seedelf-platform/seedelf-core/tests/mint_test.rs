@@ -6443,6 +6443,271 @@ mod apart {
             ),
         }
     }
+
+    // Chunk 52: the shapes chunk 51's last looks found the weighed orders missing (review8.json), where the box rule's
+    // merge now searches every set of a balance's few boxes. Each picks the rule's best, and each fails on 1.9.2's
+    // build.rs.
+
+    /// `u` with each of its tokens of `policy` instead of the file's.
+    fn of_policy(mut u: UtxoResponse, policy: &str) -> UtxoResponse {
+        for asset in u.asset_list.iter_mut().flatten() {
+            asset.policy_id = policy.to_string();
+        }
+        u
+    }
+
+    /// Chunk 52, l8merge#1: l7merge#1's A beside small money. T1 and T2, two plain ways back of one token pool, 6 ₳ and
+    /// its token each; A, a plain way back of 5.9 ₳; U, one of unknown making of 6.5 ₳; 20 payments received of 10 ₳;
+    /// and 1 to 5 more received of 2 or 3 ₳. Just under the most T1, T2 and the 20 pay in 22 inputs, A and either one
+    /// beside the 20 are short, and U, A and the 20 pay: T1, T2 and the 20, never U. 1.9.2 spent U, A and the 20: with
+    /// the small money at its start, neither its orders nor 1e1b0647's held T1 and T2 without A.
+    #[test]
+    fn beside_small_payments_a_box_of_unknown_making_stays_out_where_one_pools_ways_back_pay() {
+        let w = world();
+        let a = owned(&w, 0x31, 0, 5_900_000, &[]);
+        let t1 = owned(&w, 0x70, 0, 6_000_000, &[("pooltoken", 1)]);
+        let t2 = owned(&w, 0x71, 0, 6_000_000, &[("pooltoken", 1)]);
+        let u = owned(&w, 0x90, 0, 6_500_000, &[]);
+        let payments: Vec<UtxoResponse> = (0..20u8)
+            .map(|i| owned(&w, 0x50 + i, 0, 10_000_000, &[]))
+            .collect();
+        let names = [(&a, "A"), (&t1, "T1"), (&t2, "T2"), (&u, "U")];
+        let both = with_first(&[&t1, &t2], &payments, 20);
+        let mut wrong = Vec::new();
+        for out in [Out::Send, Out::Public, Out::Fund] {
+            let most = most_paid(150_000_000, 230_000_000, |l| {
+                pays_out(&w, &both, out, l).is_ok()
+            });
+            let lovelace = most - 20_000;
+            for (what, inputs) in [
+                ("A, T1 and the 20", with_first(&[&a, &t1], &payments, 20)),
+                ("A, T2 and the 20", with_first(&[&a, &t2], &payments, 20)),
+                ("U and the 20", with_first(&[&u], &payments, 20)),
+            ] {
+                let e = pays_out(&w, &inputs, out, lovelace).unwrap_err();
+                assert!(build::is_short(&e), "{out:?}: {what}: {e}");
+            }
+            pays_out(&w, &with_first(&[&u, &a], &payments, 20), out, lovelace)
+                .expect("U, A and the 20 pay");
+            for (count, small) in [
+                (1u8, 3_000_000),
+                (2, 2_000_000),
+                (3, 3_000_000),
+                (5, 2_000_000),
+            ] {
+                let smalls: Vec<UtxoResponse> = (0..count)
+                    .map(|i| owned(&w, 0xa0 + i, 0, small, &[]))
+                    .collect();
+                let e = pays_out(
+                    &w,
+                    &[with_first(&[&t1], &payments, 20), smalls[..1].to_vec()].concat(),
+                    out,
+                    lovelace,
+                )
+                .unwrap_err();
+                assert!(
+                    build::is_short(&e),
+                    "{out:?}: T1, the 20 and a small one: {e}"
+                );
+                let mut known: Vec<(&UtxoResponse, Class)> = vec![
+                    (&a, box_class(&a, Origin::Lovejoin)),
+                    (&t1, box_class(&t1, Origin::Lovejoin)),
+                    (&t2, box_class(&t2, Origin::Lovejoin)),
+                    (&u, unknown_class(&u)),
+                ];
+                known.extend(
+                    payments
+                        .iter()
+                        .chain(&smalls)
+                        .map(|p| (p, received_class(p))),
+                );
+                let line = format!(
+                    "{out:?} of {lovelace} beside {count} more of {small} (T1, T2 and the 20 pay up to {most})"
+                );
+                match picked_out(&w, &known, out, lovelace) {
+                    Ok(spent) if outpoints(&spent) == outpoints(&both) => {}
+                    Ok(spent) => wrong.push(format!("{line}: spent {}", named(&spent, &names))),
+                    Err(e) => wrong.push(format!("{line}: refused: {e}")),
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "a box of unknown making merged where T1, T2 and the 20 pay without one:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Chunk 52, l8still#2: l7still#1's balance beside a third token box. T1 and T2, plain ways back of one token pool, 6
+    /// ₳ and its token each; T3, a plain way back a little larger, holding another policy's token or another of the
+    /// pool policy's; A, a plain way back of 5.9 ₳, or none; U, one of unknown making of 10 ₳; 20 payments received of
+    /// 10 ₳. Just under the most T1, T2 and the 20 pay, every other two of the boxes beside the 20 are short, all of them
+    /// too many, and U beside one of them pays: T1, T2 and the 20, never U. 1.9.2 spent U: T3 weighed more than T1 or
+    /// T2 alone, so neither its orders nor 1e1b0647's held T1 and T2 without T3 or A.
+    #[test]
+    fn beside_a_third_token_box_a_box_of_unknown_making_stays_out_where_one_pools_ways_back_pay() {
+        const OTHER_POLICY: &str = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0";
+        let w = world();
+        let t1 = owned(&w, 0x70, 0, 6_000_000, &[("pooltoken", 1)]);
+        let t2 = owned(&w, 0x71, 0, 6_000_000, &[("pooltoken", 1)]);
+        let a = owned(&w, 0x31, 0, 5_900_000, &[]);
+        let u = owned(&w, 0x32, 0, 10_000_000, &[]);
+        let payments: Vec<UtxoResponse> = (0..20u8)
+            .map(|i| owned(&w, 0x50 + i, 0, 10_000_000, &[]))
+            .collect();
+        let both = with_first(&[&t1, &t2], &payments, 20);
+        let mut wrong = Vec::new();
+        for (what, t3) in [
+            (
+                "another policy, 6.01 ₳",
+                of_policy(owned(&w, 0x72, 0, 6_010_000, &[("X", 1)]), OTHER_POLICY),
+            ),
+            (
+                "another policy, 6.05 ₳",
+                of_policy(owned(&w, 0x73, 0, 6_050_000, &[("X", 1)]), OTHER_POLICY),
+            ),
+            (
+                "the pool's policy, 6.02 ₳",
+                owned(&w, 0x74, 0, 6_020_000, &[("pooltokeB", 1)]),
+            ),
+        ] {
+            for with_a in [true, false] {
+                let mut boxes: Vec<(&UtxoResponse, &str)> =
+                    vec![(&t1, "T1"), (&t2, "T2"), (&t3, "T3")];
+                if with_a {
+                    boxes.push((&a, "A"));
+                }
+                let mut names = boxes.clone();
+                names.push((&u, "U"));
+                for out in [Out::Send, Out::Public, Out::Fund] {
+                    let most = most_paid(150_000_000, 230_000_000, |l| {
+                        pays_out(&w, &both, out, l).is_ok()
+                    });
+                    // T1 and T3 of the pool's policy pay 0.01 ₳ less.
+                    let lovelace = most - 2_000;
+                    for (i, (x, xn)) in boxes.iter().enumerate() {
+                        for (y, yn) in &boxes[i + 1..] {
+                            if [*xn, *yn] == ["T1", "T2"] {
+                                continue;
+                            }
+                            let e =
+                                pays_out(&w, &with_first(&[x, y], &payments, 20), out, lovelace)
+                                    .unwrap_err();
+                            assert!(
+                                build::is_short(&e),
+                                "{what}, {out:?}: {xn}, {yn} and the 20: {e}"
+                            );
+                        }
+                    }
+                    pays_out(&w, &with_first(&[&u, &t3], &payments, 20), out, lovelace)
+                        .expect("U, T3 and the 20 pay");
+                    let mut known: Vec<(&UtxoResponse, Class)> = boxes
+                        .iter()
+                        .map(|(b, _)| (*b, box_class(b, Origin::Lovejoin)))
+                        .collect();
+                    known.push((&u, unknown_class(&u)));
+                    known.extend(payments.iter().map(|p| (p, received_class(p))));
+                    let line = format!(
+                        "T3 of {what}, A {with_a}: {out:?} of {lovelace} (T1, T2 and the 20 pay up to {most})"
+                    );
+                    match picked_out(&w, &known, out, lovelace) {
+                        Ok(spent) if outpoints(&spent) == outpoints(&both) => {}
+                        Ok(spent) => wrong.push(format!("{line}: spent {}", named(&spent, &names))),
+                        Err(e) => wrong.push(format!("{line}: refused: {e}")),
+                    }
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "a box of unknown making merged where T1, T2 and the 20 pay without one:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// Chunk 52, l8still#1's F (rule 4): M, money made private holding 20 kinds of token at their least and 3 ₳; R, 3
+    /// ₳ received; T, a plain way back of 7.5 ₳ and a pool's token; X, a mixed way back of 5.9 ₳ and that token; A, a
+    /// plain way back of 6 ₳; maybe U1 and U2, of unknown making. Just under the most T, X, M and R pay, T, A, M and R
+    /// pay too, and one box beside M and R is short: T and X, one a mix moved. 1.9.2 spent T and A: beside a change of
+    /// 20 kinds it weighed X as opening an output of its own, which it shares with T.
+    #[test]
+    fn of_as_many_boxes_a_mixed_one_goes_where_its_token_shares_the_output_another_opens() {
+        const BUNDLE_POLICY: &str = "e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0";
+        const X_POLICY: &str = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0";
+        let w = world();
+        let bundle_names: Vec<String> = (0..20).map(|i| format!("m{i:02}")).collect();
+        let bundle: Vec<(&str, u64)> = bundle_names.iter().map(|n| (n.as_str(), 1)).collect();
+        let least20 = {
+            let probe = of_policy(owned(&w, 0x28, 0, 0, &bundle), BUNDLE_POLICY);
+            let (_, kinds) = seedelf_core::utxos::assets_of(vec![probe]).unwrap();
+            build::minimum_deposit(&w.chain.params, &kinds).unwrap()
+        };
+        let m = of_policy(
+            owned(&w, 0x28, 0, least20 + 3_000_000, &bundle),
+            BUNDLE_POLICY,
+        );
+        let r = owned(&w, 0x29, 0, 3_000_000, &[]);
+        let t = owned(&w, 0x78, 0, 7_500_000, &[("poolB", 1)]);
+        let x = owned(&w, 0x79, 0, 5_900_000, &[("poolB", 1)]);
+        let a = owned(&w, 0x38, 0, 6_000_000, &[]);
+        let u1 = of_policy(owned(&w, 0x91, 0, 6_000_000, &[("X", 1)]), X_POLICY);
+        let u2 = owned(&w, 0x92, 0, BOX, &[("poolB", 1)]);
+        let names = [
+            (&m, "M"),
+            (&r, "R"),
+            (&t, "T"),
+            (&x, "X"),
+            (&a, "A"),
+            (&u1, "U1"),
+            (&u2, "U2"),
+        ];
+        let set = |us: &[&UtxoResponse]| -> Vec<UtxoResponse> {
+            us.iter().map(|u| (*u).clone()).collect()
+        };
+        let target = set(&[&m, &r, &t, &x]);
+        let mut wrong = Vec::new();
+        for out in [Out::Send, Out::Public, Out::Fund] {
+            let most = most_paid(6_100_000, 40_000_000, |l| {
+                pays_out(&w, &target, out, l).is_ok()
+            });
+            let lovelace = most - 20_000;
+            pays_out(&w, &set(&[&m, &r, &t, &a]), out, lovelace).expect("T, A, M and R pay");
+            for (what, inputs) in [
+                ("X, A, M and R", set(&[&m, &r, &x, &a])),
+                ("T, M and R", set(&[&m, &r, &t])),
+                ("A, M and R", set(&[&m, &r, &a])),
+            ] {
+                let e = pays_out(&w, &inputs, out, lovelace).unwrap_err();
+                assert!(build::is_short(&e), "{out:?}: {what}: {e}");
+            }
+            for with_unknown in [false, true] {
+                let mut known: Vec<(&UtxoResponse, Class)> = vec![
+                    (&m, class("public:0", Origin::Own)),
+                    (&r, received_class(&r)),
+                    (&t, box_class(&t, Origin::Lovejoin)),
+                    (&x, box_class(&x, Origin::Mixed)),
+                    (&a, box_class(&a, Origin::Lovejoin)),
+                ];
+                if with_unknown {
+                    known.push((&u1, unknown_class(&u1)));
+                    known.push((&u2, unknown_class(&u2)));
+                }
+                let line = format!(
+                    "{out:?} of {lovelace}, U1 and U2 {with_unknown} (T, X, M and R pay up to {most})"
+                );
+                match picked_out(&w, &known, out, lovelace) {
+                    Ok(spent) if outpoints(&spent) == outpoints(&target) => {}
+                    Ok(spent) => wrong.push(format!("{line}: spent {}", named(&spent, &names))),
+                    Err(e) => wrong.push(format!("{line}: refused: {e}")),
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "of two boxes, a plain one merged where a mixed one pays beside the same other money:\n{}",
+            wrong.join("\n")
+        );
+    }
 }
 
 /// Where a Seedelf spend puts its change (privacy review §3.7).
