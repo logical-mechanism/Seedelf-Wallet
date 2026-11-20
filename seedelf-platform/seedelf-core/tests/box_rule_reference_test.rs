@@ -1864,6 +1864,101 @@ fn twelve_boxes_beside_hundreds_of_payments_plan_in_a_fraction_of_a_second() {
         assert_eq!(picked.is_ok(), builds, "{spend:?}");
     }
     println!("the slowest selection: {worst:?}; the reruns: {reruns:?}");
+    // This test's own figures, on one machine (1.9.3's release review, r1#3): 5 to 7 ms a selection beside the payments
+    // and 28 to 35 ms beside the 400 kinds in release, 0.1 s in a debug build, the reruns 30 ms and 0.1 s; with 0.1 s
+    // spent on each build, 2.1 s, which passed this test before it held a bound. The bounds sit some twenty times over
+    // these, with room for a loaded runner.
+    let (one, all) = if cfg!(debug_assertions) {
+        (2_000, 3_000)
+    } else {
+        (1_000, 1_500)
+    };
+    assert!(
+        worst < std::time::Duration::from_millis(one),
+        "the slowest selection took {worst:?}"
+    );
+    assert!(
+        reruns < std::time::Duration::from_millis(all),
+        "the reruns took {reruns:?}"
+    );
+}
+
+/// 1.9.3's release review, r1#2: of as many change outputs, a set worth less than one that came up short is short too,
+/// and so is one worth less, its change's outputs at the size their addresses take, than the fee every transaction
+/// pays and its inputs' computation: the exact search builds a few sets, not every set within a few bytes of fee of a
+/// short one. Twelve boxes of ADA alone, a mix's and plain in turn, of 4.71 ₳ and 7 × 2^i lovelace, so every set of
+/// them is worth its own, beside 20 UTxOs of money made private, each holding 20 kinds of one policy at their least and
+/// 0.06 ₳: each adds more than the bound carries a short build by to one more input, and less than that input costs.
+/// Sends of 15, 20 and 30 ₳, each in a fraction of a second. The reviewed search built every set of each level beside
+/// every start, 5,590 builds for 15 ₳ and 13,900 for 20 ₳, and took 22 s and 38 s in release (80 s and 135 s in the
+/// WebAssembly, on two cores); 1.9.2's orders 0.64 s in a debug build.
+#[test]
+fn twelve_boxes_beside_money_that_adds_less_than_its_input_costs_plan_in_a_fraction_of_a_second() {
+    let w = world();
+    let mut items: Vec<(UtxoResponse, Kind)> = Vec::new();
+    for i in 0..12u32 {
+        let kind = if i % 2 == 0 { Kind::Mixed } else { Kind::Plain };
+        items.push((
+            utxo(&w, 0x4000_0000 + i, 4_710_000 + 7 * (1 << i), None),
+            kind,
+        ));
+    }
+    for k in 0..20u32 {
+        let mut u = utxo(&w, 0x4000_0100 + k, 0, None);
+        u.asset_list = Some(
+            (0..20)
+                .map(|i| Asset {
+                    decimals: 0,
+                    quantity: "1".into(),
+                    policy_id: format!("{:02x}", 0x60 + k).repeat(28),
+                    asset_name: hex::encode(format!("k{k}m{i:02}")),
+                    fingerprint: String::new(),
+                })
+                .collect(),
+        );
+        let (_, held) = seedelf_core::utxos::assets_of(vec![u.clone()]).unwrap();
+        u.value = (build::minimum_deposit(&w.chain.params, &held).unwrap() + 60_000).to_string();
+        items.push((u, Kind::Own));
+    }
+    let balance = Balance {
+        boxes: 12,
+        distinct: 20,
+        smalls: 0,
+        small: 2 * ADA,
+        items,
+    };
+    let available: Vec<UtxoResponse> = balance.items.iter().map(|(u, _)| u.clone()).collect();
+    let mut worst = std::time::Duration::ZERO;
+    for lovelace in [15 * ADA, 20 * ADA, 30 * ADA] {
+        let spend = Spend::Send(lovelace);
+        let paying = Paying::new(&w, &spend);
+        let h = balance.histories(spend.purpose(), true);
+        // The best of three, so a load spike on a shared runner doesn't decide it.
+        let (took, picked) = (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                let picked = paying.apart(&available, &h);
+                (started.elapsed(), picked)
+            })
+            .min_by_key(|(took, _)| *took)
+            .unwrap();
+        worst = worst.max(took);
+        println!(
+            "12 boxes beside 400 kinds that add little, {spend:?}: {} in {took:?}",
+            match &picked {
+                Ok(inputs) => format!("{} inputs", inputs.len()),
+                Err(e) => format!("refused ({e})"),
+            }
+        );
+        assert!(picked.is_ok(), "{spend:?}: {:?}", picked.as_ref().err());
+    }
+    // This test's own figures, on one machine: 0.1 to 0.12 s a selection in release, 0.25 to 0.29 s in a debug build,
+    // 0.5 s in the WebAssembly on two cores. The bounds sit ten times over these, with room for a loaded runner.
+    let bound = if cfg!(debug_assertions) { 3_000 } else { 1_000 };
+    assert!(
+        worst < std::time::Duration::from_millis(bound),
+        "the slowest selection took {worst:?}"
+    );
 }
 
 /// `unknown` boxes of unknown making and `plain` plain ones of 10 ₳, beside `received` payments of 2 ₳: one
