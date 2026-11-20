@@ -1,6 +1,7 @@
 //! The UTxOs holding a token sent, by the box rule and the spend's purpose (`holding_by_rule`, and `select_script_inputs`
-//! choosing between its spend and the one from the biggest holdings): 1.9.3's review of chunk 52, r3#2, r3#3 and r3#4.
-//! Each pin failed on chunk 52's code; r3#2's and r3#3's sent what 1.9.2 sent.
+//! choosing between its spend and the one from the biggest holdings): 1.9.3's review of chunk 52, r3#2, r3#3 and r3#4,
+//! and its last look at the fixes, F1, F3 and F4. Each pin failed on the code before its fix; r3#2's and r3#3's sent
+//! what 1.9.2 sent.
 
 use pallas_addresses::{
     Address, Network, PaymentKeyHash, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
@@ -293,4 +294,153 @@ fn two_tokens_sent_at_once_take_the_one_box_of_unknown_making_that_holds_both() 
     let h = histories(Purpose::Pay, &rows);
     let spend = build::transfer_apart(&w.chain, &available, &h, &pay, &w.owner, w.signer).unwrap();
     assert_eq!(names(&rows, &spend.inputs()), vec![rows[1].0], "U2 alone");
+}
+
+fn class(id: &str, origin: Origin) -> Class {
+    Class {
+        id: id.into(),
+        origin,
+    }
+}
+
+/// F4, where r3#2 meets r3#3: a top-up of session A sells 10 TOK. O, session A's own money, holds 10 TOK and 1.5 ₳;
+/// S, session B's money (a funding's last resort), 12 TOK and 20 ₳, and pays alone; R, a payment received, 10 ₳. The
+/// rule's holders are O, beside R for the ADA; the spend from the biggest holding is S alone. Both are alike by the box
+/// rule (no box), and each ties two histories: O and R session A and a payment received, S session A and session B,
+/// since the top-up ties its session to whatever it spends. The tie keeps the rule's: O and R.
+#[test]
+fn a_top_ups_token_comes_from_its_own_sessions_money_before_another_sessions() {
+    let w = world();
+    let s = utxo(&w, 0x31, 20 * ADA, &[(TOK, 12)]);
+    let o = utxo(&w, 0x32, 1_500_000, &[(TOK, 10)]);
+    let r = utxo(&w, 0x33, 10 * ADA, &[]);
+    let rows: Vec<Row> = vec![
+        (
+            "S, session B's money, 12 TOK, 20 ADA",
+            s.clone(),
+            class("session:B", Origin::Session),
+        ),
+        (
+            "O, session A's own money, 10 TOK, 1.5 ADA",
+            o.clone(),
+            class("session:A", Origin::Session),
+        ),
+        (
+            "R, received, 10 ADA",
+            r.clone(),
+            class("received:33", Origin::Received),
+        ),
+    ];
+    let fund = vec![AddressPayment {
+        to: w.to.clone(),
+        lovelace: 2 * ADA,
+        tokens: tokens(&[(TOK, 10)]),
+    }];
+    let pays = |inputs: &[UtxoResponse]| {
+        build::sweep_many_from(&w.chain, inputs, &fund, &w.owner, w.signer)
+            .and_then(|s| s.estimate().map(|_| ()))
+            .is_ok()
+    };
+    assert!(pays(&[s.clone()]), "S pays alone");
+    assert!(pays(&[o.clone(), r.clone()]), "O and R pay");
+    let available: Vec<UtxoResponse> = rows.iter().map(|(_, u, _)| u.clone()).collect();
+    let h = histories(
+        Purpose::Fund {
+            session: Some("session:A".into()),
+        },
+        &rows,
+    );
+    let spend =
+        build::sweep_many_apart(&w.chain, &available, &h, &fund, &w.owner, w.signer).unwrap();
+    assert_eq!(
+        names(&rows, &spend.inputs()),
+        vec![rows[1].0, rows[2].0],
+        "O and R"
+    );
+}
+
+/// F3: a Send of 10 TOK. H, made private, holds 15 TOK and 2.5 ₳ and is short alone; PILE, a payment received, holds
+/// one TWO of TOK's policy at less than the least a change is sized at, so it adds less than nothing; M, a mixed box,
+/// 10 ₳. H and M pay, and so do H and PILE, the change keeping TOK's policy anyway. Merging's first step, the holders
+/// beside one UTxO of another class, leaves PILE out, so the box goes: a stranger's pile waits until no box pays.
+#[test]
+fn a_strangers_pile_stays_out_of_merging_where_a_box_pays_beside_the_holders() {
+    let w = world();
+    let p = &w.chain.params;
+    let h = utxo(&w, 0x41, 2_500_000, &[(TOK, 15)]);
+    let mut pile = utxo(&w, 0x42, 0, &[(TWO, 1)]);
+    pile.value = (build::minimum_deposit(p, &tokens(&[(TWO, 1)])).unwrap() - 100_000).to_string();
+    assert!(
+        build::adds(p, &pile).unwrap() < 0,
+        "PILE adds less than nothing"
+    );
+    let m = utxo(&w, 0x43, 10 * ADA, &[]);
+    let rows: Vec<Row> = vec![
+        (
+            "H, made private, 15 TOK, 2.5 ADA",
+            h.clone(),
+            class("public:0", Origin::Own),
+        ),
+        (
+            "PILE, received, 1 TWO",
+            pile.clone(),
+            class("received:42", Origin::Received),
+        ),
+        ("M, mixed, 10 ADA", m.clone(), mixed(&m.tx_hash)),
+    ];
+    let pay = send(&w, &[(TOK, 10)], 0);
+    let pays = |inputs: &[UtxoResponse]| {
+        build::transfer_from(&w.chain, inputs, &pay, &w.owner, w.signer)
+            .and_then(|s| s.estimate().map(|_| ()))
+            .is_ok()
+    };
+    assert!(!pays(&[h.clone()]), "H is short alone");
+    assert!(
+        pays(&[h.clone(), pile.clone()]) && pays(&[h.clone(), m.clone()]),
+        "H pays beside PILE or M"
+    );
+    let available: Vec<UtxoResponse> = rows.iter().map(|(_, u, _)| u.clone()).collect();
+    let hs = histories(Purpose::Pay, &rows);
+    let spend = build::transfer_apart(&w.chain, &available, &hs, &pay, &w.owner, w.signer).unwrap();
+    assert_eq!(
+        names(&rows, &spend.inputs()),
+        vec![rows[0].0, rows[2].0],
+        "H and the box"
+    );
+}
+
+/// F1: 400 UTxOs made private, each holding one NFT of its own, and a payment of all 400. The holders are chosen in
+/// milliseconds: dropping the needless ones read every token over all the others again for each holder, which took
+/// 5 s in release for this set alone, and a minute for the payment in parts, which chooses them at every part.
+#[test]
+fn the_holders_of_four_hundred_tokens_one_a_utxo_are_chosen_in_a_fraction_of_a_second() {
+    let w = world();
+    let mut available = Vec::new();
+    let mut needed = Assets::new();
+    let mut h = Histories::new(Purpose::Pay);
+    for i in 0..400 {
+        let name = hex::encode(format!("nft{i:05}"));
+        let mut u = utxo(&w, 0, 2 * ADA, &[]);
+        u.tx_hash = format!("{:064x}", 0x9000 + i);
+        u.asset_list = Some(vec![Asset {
+            decimals: 0,
+            quantity: "1".into(),
+            policy_id: POLICY.to_string(),
+            asset_name: name.clone(),
+            fingerprint: String::new(),
+        }]);
+        needed = needed
+            .add(Token::new(POLICY.into(), name, 1).unwrap())
+            .unwrap();
+        h = h.with(&u.tx_hash, 0, class("public:0", Origin::Own));
+        available.push(u);
+    }
+    let started = std::time::Instant::now();
+    let ruled = build::holding_by_rule(&available, &needed, &h).unwrap();
+    let took = started.elapsed();
+    assert_eq!(ruled.len(), 400, "every one holds a token sent");
+    assert!(
+        took < std::time::Duration::from_secs(1),
+        "the holders of 400 tokens took {took:?}"
+    );
 }

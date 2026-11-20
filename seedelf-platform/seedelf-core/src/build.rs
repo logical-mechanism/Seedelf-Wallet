@@ -2891,6 +2891,24 @@ impl Histories {
         }
     }
 
+    /// How many histories a spend of `inputs` ties together, counted as [`Histories::merged`] counts them, but with a
+    /// top-up's own session among them: its funding ties that session to whatever it spends, so another session's
+    /// money alone ties two (1.9.3's review, F4).
+    pub fn ties(&self, inputs: &[UtxoResponse]) -> usize {
+        let mut ids: Vec<String> = Vec::new();
+        for class in inputs.iter().map(|u| self.class_of(u)) {
+            if !ids.contains(&class.id) {
+                ids.push(class.id);
+            }
+        }
+        if let Purpose::Fund { session: Some(own) } = &self.purpose
+            && !ids.iter().any(|id| id.split('+').any(|part| part == own))
+        {
+            ids.push(own.clone());
+        }
+        if ids.len() > 1 { ids.len() } else { 0 }
+    }
+
     /// Whether nothing is known of any of `utxos`.
     fn blind(&self, utxos: &[UtxoResponse]) -> bool {
         utxos
@@ -3063,8 +3081,7 @@ pub(crate) fn select_script_inputs<T>(
             &mut recorded,
         );
         let quantity_spent = spent.take();
-        let key =
-            |spent: &[UtxoResponse]| (box_key(spent, histories), histories.merged(spent).len());
+        let key = |spent: &[UtxoResponse]| (box_key(spent, histories), histories.ties(spent));
         return match (by_rule, by_quantity) {
             (Ok(_), Ok(other)) if key(&quantity_spent) < key(&ruled_spent) => Ok(other),
             (Ok(ruled), _) => Ok(ruled),
@@ -4310,10 +4327,11 @@ impl<'a> Exact<'a> {
             && can(self, Beside::All)
         {
             let cands = self.candidates(0, u, n);
-            let large = self.large.len();
             match self.first_built(&cands, Beside::All, (n, held), run, grown, too_many_at) {
                 Ok((mask, built)) => plain = Some((mask, Beside::All, built)),
-                Err(false) if !self.history_tokens && self.large.len() == large => {
+                // Short, and no build too large at any level: a too-large one before can have passed over every set
+                // of this one beside all of it, unbuilt (1.9.3's review, F2).
+                Err(false) if !self.history_tokens && self.large.is_empty() => {
                     from.clone_from(&self.beyond)
                 }
                 Err(_) => {}
@@ -4359,7 +4377,6 @@ impl<'a> Exact<'a> {
         };
         for mixed in (had + 1..=most_mixed).rev() {
             let more = of(self, &cands, mixed);
-            let large = self.large.len();
             if let Ok((_, built)) =
                 self.first_built(&more, beside, (n, held), run, grown, too_many_at)
             {
@@ -4369,7 +4386,8 @@ impl<'a> Exact<'a> {
             // whose change can cost more than they add, or a build was too large): the first k of each of c's orders,
             // fewer than all of it, so no more of the other inputs than the plain choice takes (1.9.3's release review,
             // r2#3).
-            if beside != Beside::All || !(self.history_tokens || self.large.len() > large) {
+            // A build too large at any level counts: one before can have passed over these unbuilt (F2).
+            if beside != Beside::All || !(self.history_tokens || !self.large.is_empty()) {
                 continue;
             }
             for order in 0..self.orders.len() {
@@ -4559,7 +4577,8 @@ fn apart<T>(
     if !base.is_empty() {
         let others: Vec<&UtxoResponse> = rest
             .iter()
-            .filter(|u| !joins_base(u) && purpose.tier(&class(u)) == 0)
+            // Never one that adds less than nothing: a stranger's pile waits until a box can't pay (1.9.3's review, F3).
+            .filter(|u| !joins_base(u) && purpose.tier(&class(u)) == 0 && !last(u))
             .collect();
         if let Some(built) = one_more(others, ranked, is_box, &mut try_with, &mut Vec::new()) {
             return Ok(built);
@@ -5291,6 +5310,8 @@ pub fn holding_by_rule(
     histories: &Histories,
 ) -> Result<Vec<UtxoResponse>> {
     let mut picked: Vec<UtxoResponse> = Vec::new();
+    // Those picked so far, looked up as a set: a payment of many tokens has as many holders (1.9.3's review, F1).
+    let mut taken: std::collections::HashSet<(&str, u64)> = std::collections::HashSet::new();
     for want in &needed.items {
         let policy = hex::encode(want.policy_id);
         let name = hex::encode(&want.token_name);
@@ -5303,7 +5324,7 @@ pub fn holding_by_rule(
         }
         let holders: Vec<&UtxoResponse> = available
             .iter()
-            .filter(|u| held(u) > 0 && !picked.iter().any(|p| same_utxo(p, u)))
+            .filter(|u| held(u) > 0 && !taken.contains(&(u.tx_hash.as_str(), u.tx_index)))
             .collect();
         if sum(&holders) < need {
             return holding(available, needed);
@@ -5352,6 +5373,7 @@ pub fn holding_by_rule(
             got += held(o);
             chosen.push(o);
         }
+        taken.extend(chosen.iter().map(|u| (u.tx_hash.as_str(), u.tx_index)));
         picked.extend(chosen.into_iter().cloned());
     }
     Ok(needless_dropped(picked, needed, histories))
@@ -5360,47 +5382,61 @@ pub fn holding_by_rule(
 /// `picked` less each holder the others make needless, every token of `needed` still held enough without it: a box of
 /// unknown making first, then a plain box, then a mixed one, then the rest, the one holding least of them first. Each
 /// token's holders are chosen in turn, so a later token's can hold an earlier one's too (chunk 52's review, r3#4: two
-/// boxes of unknown making went where one held both).
+/// boxes of unknown making went where one held both). What each holds of each token is read once, and what the rest
+/// hold kept as a running total: summing every token over all the others again for each holder took a minute for a
+/// payment of 400 tokens in parts (1.9.3's review, F1).
 fn needless_dropped(
-    mut picked: Vec<UtxoResponse>,
+    picked: Vec<UtxoResponse>,
     needed: &Assets,
     histories: &Histories,
 ) -> Vec<UtxoResponse> {
-    let held = |u: &UtxoResponse, want: &Asset| {
-        u128::from(quantity_in(
-            u,
-            &hex::encode(want.policy_id),
-            &hex::encode(&want.token_name),
-        ))
-    };
-    let enough = |us: &[UtxoResponse]| {
-        needed
-            .items
-            .iter()
-            .all(|want| us.iter().map(|u| held(u, want)).sum::<u128>() >= u128::from(want.amount))
-    };
+    let wants: Vec<(String, String, u128)> = needed
+        .items
+        .iter()
+        .map(|want| {
+            (
+                hex::encode(want.policy_id),
+                hex::encode(&want.token_name),
+                u128::from(want.amount),
+            )
+        })
+        .collect();
+    let holds: Vec<Vec<u128>> = picked
+        .iter()
+        .map(|u| {
+            wants
+                .iter()
+                .map(|(policy, name, _)| u128::from(quantity_in(u, policy, name)))
+                .collect()
+        })
+        .collect();
+    let mut total: Vec<u128> = (0..wants.len())
+        .map(|t| holds.iter().map(|h| h[t]).sum())
+        .collect();
     let place = |u: &UtxoResponse| match histories.tier_of(u) {
         2 => 2 - box_rank(&histories.class_of(u)),
         _ => 3,
     };
-    let mut order = picked.clone();
-    order.sort_by_key(|u| {
-        (
-            place(u),
-            needed.items.iter().map(|want| held(u, want)).sum::<u128>(),
-        )
-    });
-    for u in order {
-        let without: Vec<UtxoResponse> = picked
+    let mut order: Vec<usize> = (0..picked.len()).collect();
+    order.sort_by_key(|&i| (place(&picked[i]), holds[i].iter().sum::<u128>()));
+    let mut keep = vec![true; picked.len()];
+    for i in order {
+        let needless = wants
             .iter()
-            .filter(|p| !same_utxo(p, &u))
-            .cloned()
-            .collect();
-        if enough(&without) {
-            picked = without;
+            .enumerate()
+            .all(|(t, (_, _, amount))| total[t] - holds[i][t] >= *amount);
+        if needless {
+            keep[i] = false;
+            for (t, sum) in total.iter_mut().enumerate() {
+                *sum -= holds[i][t];
+            }
         }
     }
     picked
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(u, kept)| kept.then_some(u))
+        .collect()
 }
 
 /// A whole spend's boxes back from Lovejoin as the box rule counts them ([`box_rank`]): how many of unknown making, how
