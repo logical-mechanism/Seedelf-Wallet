@@ -1353,7 +1353,11 @@ function running(s: SessionRecord): boolean {
  * A mix of the wallet's boxes again whose chain may still spend them: from
  * its funding on (unless that never went) until its return is sent, and not
  * while nothing at its account can come back (`nothingBack`): no chain goes
- * then, so its boxes aren't held for one (independent review H1).
+ * then, so its boxes aren't held for one (independent review H1). Nor once
+ * its chain stopped for good (stoppedForGood): its return, which waits the
+ * unlock's draw as every send does, held every way of mixing again, Bring one
+ * back now and Lovejoin's withdraws for a day (the owner, 2026-11-20). The
+ * page reads this, never a copy of it (SessionView `mixingAgain`).
  */
 function mixingAgain(s: SessionRecord): boolean {
   return (
@@ -1362,8 +1366,22 @@ function mixingAgain(s: SessionRecord): boolean {
     !s.auto?.failed &&
     s.nothingBack === undefined &&
     !s.txs[0]?.unsent &&
-    !s.txs.some((t) => t.kind === "back" && !t.unsent)
+    !s.txs.some((t) => t.kind === "back" && !t.unsent) &&
+    !stoppedForGood(s)
   );
+}
+
+/**
+ * Whether session `s`'s chain stopped after some of it went in, with nothing of it still on its way: it never sends
+ * again (markCut, sendChain's stop), and what it left comes back directly or with its collateral's mix alone, which
+ * draws no box another chain holds (buildBack's `started`), never in a chain over the wallet's boxes. So it spends
+ * none of them again. One stopped before any of it went is built again over them (buildBack), and a transaction of it
+ * that may still land, sent and neither on chain nor given up (act's lost rule), may spend them yet.
+ */
+function stoppedForGood(s: SessionRecord): boolean {
+  const chain = s.chain;
+  if (!chain?.stopped || !chainSoFar(s).started) return false;
+  return !s.txs.some((t) => t.at >= chain.at && !t.confirmed && !t.replaced && !t.unsent);
 }
 
 /**
@@ -6187,6 +6205,8 @@ export class SessionService {
       ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix, s.swap) } : {}),
       ...(s.site ? { site: s.site } : {}),
       ...(s.mix ? { mix: s.mix } : {}),
+      // As the worker holds the boxes, so the page never offers what the worker refuses, nor holds what it takes.
+      ...(mixingAgain(s) ? { mixingAgain: true as const } : {}),
       ...(s.chain ? { chain: chainView(s.chain, txs) } : {}),
       ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped, ...(s.lovejoinSkippedBy ? { lovejoinSkippedBy: s.lovejoinSkippedBy } : {}) } : {}),
       ...leftBehindView(s, utxos),

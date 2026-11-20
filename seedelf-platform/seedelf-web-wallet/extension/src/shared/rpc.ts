@@ -2010,6 +2010,11 @@ export interface SessionView {
    */
   mix?: { boxes: number; again?: boolean; skipped?: string; bootstrap?: boolean; pool?: string; cleared?: true };
   /**
+   * A mix of the wallet's boxes again whose chain may still spend them, as the worker holds them (sessions.ts
+   * mixingAgain): nothing else mixes them, and none comes back, meanwhile. Never once its chain stopped for good.
+   */
+  mixingAgain?: true;
+  /**
    * A return through Lovejoin: its chain's transactions (the return last),
    * how many are sent and how many are on chain, as the runner last read
    * them, and `cut`: it stopped partway, and what was left came back
