@@ -1,8 +1,8 @@
 # Chunk 52 · The box rule, exact
 
-**Status: 🚧 in progress (2026-11-20, branch `web-wallet/box-rule-exact`, worktree `../Seedelf-Wallet-chunk52`).** Steps 1 to 4 are built and every offline check passes (*Done means*). Left: step 5, the review, then the record, then 1.9.3. For 1.9.3. Written 2026-11-19 on chunk 51's branch, so a new session can pick it up once 1.9.2 ships. The owner: "We could write these as chunks then commit push and open that pr for merge then after release we handle those chunks for the 1.9.3 since it would be much smaller of a patch then what ended up happening here."
+**Status: ✅ done (2026-11-20).** Steps 1 to 4 merged as #396 (`9c9e51d5`); step 5 was 1.9.3's release review, whose record is [review-1.9.3.md](review-1.9.3.md), and its fixes ship in 1.9.3. For 1.9.3. Written 2026-11-19 on chunk 51's branch, so a new session can pick it up once 1.9.2 ships. The owner: "We could write these as chunks then commit push and open that pr for merge then after release we handle those chunks for the 1.9.3 since it would be much smaller of a patch then what ended up happening here."
 
-Chunk 51's calls round ([its record](../archive/plans/review-51.md#the-calls-round)) built the box rule: how a private spend merges the boxes back from Lovejoin. It is round six's rule, the lead's, set on the owner's calls. In 1.9.2, rule 1 holds by construction: nothing 1e1b0647's selection sent as one transaction is refused or split. Rules 2 to 4 hold among the orders the search tries.
+Chunk 51's calls round ([its record](review-51.md#the-calls-round)) built the box rule: how a private spend merges the boxes back from Lovejoin. It is round six's rule, the lead's, set on the owner's calls. In 1.9.2, rule 1 holds by construction: nothing 1e1b0647's selection sent as one transaction is refused or split. Rules 2 to 4 hold among the orders the search tries.
 
 Near the input limit, beside token boxes, the search can miss a set, and architecture.md's *The box rule* names those margins. The cause is that one transaction weighs each box alone, but the least a set's tokens need back as change is shared, 20 kinds of token to an output. So a set pays more or less than its boxes' weights add up to.
 
@@ -77,7 +77,7 @@ This is l6words#1's code option, the backlog's *The UTxOs holding a token being 
 
 **Done (2026-11-20):** privacy.md, architecture.md (*Picking inputs*, *Merging*, *The box rule*, and the box of unknown making's line), flows.md's Send and the WebAssembly's README; the policy's entry is dated **20 November 2026** with its Effective line: move both to the merge day in the PR's last commit, one entry. The three extension tests now cite the 19 November entry.
 
-### 5. ⬜ The review, then the patch
+### 5. ✅ The review, then the patch
 
 The owner, 2026-11-20: "We will do a review on this before publishing. Maybe we can update the chunk to talk about a review so its very pinpointed about what it needs to verify. Then after the review for the patch we retire that chunk and publish it."
 
@@ -120,6 +120,15 @@ Review the PR's diff against `main` (1.9.2). A finding is real only if a reviewe
    - The margins now hold past 12 boxes and in parts only. The policy says nothing the extension sends to a service changed.
 
 Fixes go in this PR, each test-first (fails before, passes after). Then rerun *Done means*' checks, the live flows, and a short look at the fixes alone.
+
+**Done (2026-11-20), as 1.9.3's release review:** #396 had merged by then (`9c9e51d5`), so the review ran on `main` with #397 beside it, and its fixes went on `web-wallet/release-1.9.3`. Its record is [review-1.9.3.md](review-1.9.3.md).
+- **Round one:** 16 findings (1 high, 9 medium, 5 low, 1 nit), every one reproduced.
+  - On point 6, the high: the bound built every set within `epsilon` of a short one, so one Send took 135 s in the WebAssembly (r1#2).
+  - On points 1 and 3: the large prune (r1#1), 3's skipped orders (r2#1), the box order (r2#2) and the more-mixed sets beside less (r2#3).
+  - On points 4 and 5: the holders' purpose (r3#2), their tie (r3#3) and the parts (r3#1).
+  - In #397: a cut chain's rest (r4#1, r4#2).
+- **The last look** at the fixes found 4 more where two fixes met (F1 to F4). All 20 are fixed and pinned.
+- **The point-1 list is whole** for selection's spends (R1). The named "set that pays exactly" margin can't occur for a script spend: `settle`'s first draft leaves a change below its least, so it's refused as short.
 
 ## Done means
 

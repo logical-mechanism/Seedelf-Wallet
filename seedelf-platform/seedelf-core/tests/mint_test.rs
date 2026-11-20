@@ -6708,6 +6708,391 @@ mod apart {
             wrong.join("\n")
         );
     }
+
+    // 1.9.3's release review: the exact search's shapes its reviewers found and one beside them, each picking the rule's
+    // best, which 1.9.2 picked too but for r1#1's and r2#3's, and each failing on the reviewed build.rs.
+
+    /// `u` holding one of each (policy, name) token in `tokens` instead of its own.
+    fn holding_kinds(mut u: UtxoResponse, tokens: &[(String, Vec<u8>)]) -> UtxoResponse {
+        u.asset_list = Some(
+            tokens
+                .iter()
+                .map(|(policy, name)| Asset {
+                    decimals: 0,
+                    quantity: "1".into(),
+                    policy_id: policy.clone(),
+                    asset_name: hex::encode(name),
+                    fingerprint: String::new(),
+                })
+                .collect(),
+        );
+        u
+    }
+
+    /// `u` holding `lovelace`.
+    fn with_lovelace(mut u: UtxoResponse, lovelace: u64) -> UtxoResponse {
+        u.value = lovelace.to_string();
+        u
+    }
+
+    /// The least the wallet's change needs for `u`'s tokens ([`build::minimum_deposit`]).
+    fn wallet_least(w: &World, u: &UtxoResponse) -> u64 {
+        let (_, tokens) = seedelf_core::utxos::assets_of(vec![u.clone()]).unwrap();
+        build::minimum_deposit(&w.chain.params, &tokens).unwrap()
+    }
+
+    /// The least the ledger takes for an output of the wallet contract holding `u`'s tokens under a register, as a
+    /// stranger can pay one: under what the wallet's change needs for them, which it sizes at a base address, so it adds
+    /// less than nothing by its tokens' whole least.
+    fn least_on_chain(w: &World, u: &UtxoResponse) -> u64 {
+        let register = w.owner.clone().rerandomize().unwrap();
+        let mut output = pallas_txbuilder::Output::new(w.wallet.clone(), 5_000_000)
+            .set_inline_datum(register.to_vec().unwrap());
+        for a in u.asset_list.iter().flatten() {
+            let policy: [u8; 28] = hex::decode(&a.policy_id).unwrap().try_into().unwrap();
+            output = output
+                .add_asset(
+                    Hash::new(policy),
+                    hex::decode(&a.asset_name).unwrap(),
+                    a.quantity.parse().unwrap(),
+                )
+                .unwrap();
+        }
+        seedelf_core::transaction::calculate_min_required_utxo(output, &w.chain.params).unwrap()
+    }
+
+    /// The most a Send pays from exactly `inputs`.
+    fn most_sent(w: &World, inputs: &[UtxoResponse]) -> u64 {
+        let all: u64 = inputs.iter().map(|u| u.value.parse::<u64>().unwrap()).sum();
+        most_paid(2_000_000, all, |l| {
+            pays_out(w, inputs, Out::Send, l).is_ok()
+        })
+    }
+
+    /// 1.9.3's release review, r2#1: c's orders take a UTxO that adds less than nothing after the rest of the other
+    /// money, and a's leave it out, so beside such a UTxO c runs at a level where all the rest is short beside every set.
+    /// K1, a plain way back of 10 ₳ and pool A's token; K2, a plain way back of pool B's at its least; O, 3 ₳ made
+    /// private; a stranger's payment of pool A's token at the least the ledger takes for it, which adds less than nothing
+    /// by its whole least and most of its ADA beside K1's token. The most K1, O and the stranger's pay, which O and both
+    /// boxes can't: K1, O and the stranger's, one box, as 1.9.2's c took them. The reviewed search skipped c there and
+    /// spent both boxes and the stranger's.
+    #[test]
+    fn beside_a_strangers_token_at_its_least_one_box_goes_where_c_takes_it_after_the_rest() {
+        let w = world();
+        let (pool_a, pool_b) = (hex::encode([0x51u8; 28]), hex::encode([0x52u8; 28]));
+        let k1 = of_policy(owned(&w, 0xc1, 0, 10_000_000, &[("poolA", 1)]), &pool_a);
+        let k2 = of_policy(owned(&w, 0xc2, 0, 0, &[("poolB", 1)]), &pool_b);
+        let k2 = with_lovelace(k2.clone(), wallet_least(&w, &k2));
+        let o = owned(&w, 0xc3, 0, 3_000_000, &[]);
+        let pile = of_policy(owned(&w, 0xc4, 0, 0, &[("poolA", 1)]), &pool_a);
+        let pile = with_lovelace(pile.clone(), least_on_chain(&w, &pile));
+        assert!(build::adds(&w.chain.params, &pile).unwrap() < 0);
+        let target = [k1.clone(), o.clone(), pile.clone()];
+        let lovelace = most_sent(&w, &target);
+        for (what, inputs) in [
+            (
+                "O and both boxes",
+                [o.clone(), k1.clone(), k2.clone()].to_vec(),
+            ),
+            ("O and K1", [o.clone(), k1.clone()].to_vec()),
+            ("O and the stranger's", [o.clone(), pile.clone()].to_vec()),
+        ] {
+            let e = pays_out(&w, &inputs, Out::Send, lovelace).unwrap_err();
+            assert!(build::is_short(&e), "{what}: {e}");
+        }
+        let known = [
+            (&k1, box_class(&k1, Origin::Lovejoin)),
+            (&k2, box_class(&k2, Origin::Lovejoin)),
+            (&o, class("public:0", Origin::Own)),
+            (&pile, received_class(&pile)),
+        ];
+        let names = [
+            (&k1, "K1"),
+            (&k2, "K2"),
+            (&o, "O"),
+            (&pile, "the stranger's"),
+        ];
+        let spent = picked_out(&w, &known, Out::Send, lovelace).expect("it pays");
+        assert_eq!(
+            outpoints(&spent),
+            outpoints(&target),
+            "a Send of {lovelace}: spent {}",
+            named(&spent, &names)
+        );
+    }
+
+    /// r2#1 at a level of one box of unknown making: U2, of unknown making, 10 ₳; U1, of unknown making, pool B's way back
+    /// at its least; K1, O and the stranger's as above. U2, K1, O and the stranger's pay, and so do O, U2, K1 and U1;
+    /// without the stranger's or U1, those don't. U2, K1, O and the stranger's, one of unknown making, as 1.9.2's c took
+    /// them; the reviewed search spent two.
+    #[test]
+    fn beside_a_strangers_token_at_its_least_one_box_of_unknown_making_goes_where_c_takes_it_after_the_rest()
+     {
+        let w = world();
+        let (pool_a, pool_b) = (hex::encode([0x51u8; 28]), hex::encode([0x52u8; 28]));
+        let k1 = of_policy(owned(&w, 0xd1, 0, 10_000_000, &[("poolA", 1)]), &pool_a);
+        let u2 = owned(&w, 0xd2, 0, 10_000_000, &[]);
+        let u1 = of_policy(owned(&w, 0xd3, 0, 0, &[("poolB", 1)]), &pool_b);
+        let u1 = with_lovelace(u1.clone(), wallet_least(&w, &u1));
+        let o = owned(&w, 0xd4, 0, 3_000_000, &[]);
+        let pile = of_policy(owned(&w, 0xd5, 0, 0, &[("poolA", 1)]), &pool_a);
+        let pile = with_lovelace(pile.clone(), least_on_chain(&w, &pile));
+        let one = [u2.clone(), k1.clone(), o.clone(), pile.clone()];
+        let two = [o.clone(), u2.clone(), k1.clone(), u1.clone()];
+        let lovelace = most_sent(&w, &one).min(most_sent(&w, &two));
+        pays_out(&w, &two, Out::Send, lovelace).expect("two of unknown making pay");
+        let e = pays_out(&w, &two[..3], Out::Send, lovelace).unwrap_err();
+        assert!(build::is_short(&e), "O, U2 and K1: {e}");
+        let known = [
+            (&k1, box_class(&k1, Origin::Lovejoin)),
+            (&u2, unknown_class(&u2)),
+            (&u1, unknown_class(&u1)),
+            (&o, class("public:0", Origin::Own)),
+            (&pile, received_class(&pile)),
+        ];
+        let names = [
+            (&k1, "K1"),
+            (&u2, "U2"),
+            (&u1, "U1"),
+            (&o, "O"),
+            (&pile, "the stranger's"),
+        ];
+        let spent = picked_out(&w, &known, Out::Send, lovelace).expect("it pays");
+        assert_eq!(
+            outpoints(&spent),
+            outpoints(&one),
+            "a Send of {lovelace}: spent {}",
+            named(&spent, &names)
+        );
+    }
+
+    /// r2#1 where all the other money beside every set of a level is too large for one transaction rather than short:
+    /// fewer of it can fit, though it holds no token. P, a plain way back, and M, one a mix moved, 30 ₳ each, listed in
+    /// that order; R, 120 ₳ received; 15 payments received of 1.5 ₳; a Send of 1.5 ₳ to each of 91 Seedelfs, which
+    /// leaves room for 13 inputs. The other money alone pays only in more inputs than fit, and a box beside all of it is
+    /// too large: M and R, one box, the one a mix moved, as 1.9.2's c took them. The reviewed search skipped c there,
+    /// and its pass of 1e1b0647's own orders spent P and R.
+    #[test]
+    fn where_all_the_other_money_is_too_large_beside_every_box_one_a_mix_moved_goes_beside_less() {
+        let w = world();
+        let p = owned(&w, 0x61, 0, 30_000_000, &[]);
+        let m = owned(&w, 0x62, 0, 30_000_000, &[]);
+        let r = owned(&w, 0x63, 0, 120_000_000, &[]);
+        let smalls: Vec<UtxoResponse> = (0..15u8)
+            .map(|i| owned(&w, 0x70 + i, 0, 1_500_000, &[]))
+            .collect();
+        let seedelfs: Vec<Payment> = (0..91).map(|_| paying(1_500_000)).collect();
+        let pays = |inputs: &[UtxoResponse]| pays_many(&w, inputs, &seedelfs, &[]);
+        pays(&[m.clone(), r.clone()]).expect("M and R pay");
+        let all = [vec![r.clone()], smalls.clone()].concat();
+        let money_alone = (1..=all.len())
+            .find(|&k| !pays(&all[..k]).as_ref().is_err_and(build::is_short))
+            .expect("all the other money is short or too large");
+        let e = pays(&all[..money_alone]).unwrap_err();
+        assert!(
+            build::is_too_large(&e),
+            "the other money alone, the fewest not short: {e}"
+        );
+        let e = pays(&[all.clone(), vec![m.clone()]].concat()).unwrap_err();
+        assert!(build::is_too_large(&e), "M beside all of it: {e}");
+        let mut known: Vec<(&UtxoResponse, Class)> = vec![
+            (&p, box_class(&p, Origin::Lovejoin)),
+            (&m, box_class(&m, Origin::Mixed)),
+            (&r, received_class(&r)),
+        ];
+        known.extend(smalls.iter().map(|s| (s, received_class(s))));
+        let names = [(&p, "P"), (&m, "M"), (&r, "R")];
+        let spent = picked_by(&w, Purpose::Pay, &known, &seedelfs, &[]).expect("it pays");
+        assert_eq!(
+            outpoints(&spent),
+            outpoints(&[m.clone(), r.clone()]),
+            "spent {}",
+            named(&spent, &names)
+        );
+    }
+
+    /// 1.9.3's release review, r2#2: the exact search builds a set's boxes in a's weighed order, as 1.9.2's a took them.
+    /// H, money made private holding 19 kinds of one policy at their least and 5 ₳; A and B, plain ways back of 6 ₳, A
+    /// holding a token of another policy and B one of H's, listed in that order. A change takes its tokens 20 kinds to an
+    /// output in the order the inputs bring them: B first fills H's output with no new policy, where A first takes one
+    /// there and B opens another output. The most H, B and A pay, which H, A and B can't: built, from all three, as 1.9.2
+    /// built it (its a weighed B over A beside H's change). The reviewed search built the boxes in the balance's order,
+    /// and refused.
+    #[test]
+    fn two_token_boxes_that_pay_in_the_weighed_order_are_never_refused() {
+        let w = world();
+        let policy = hex::encode([0x71u8; 28]);
+        let names: Vec<String> = (0..19).map(|i| format!("h{i:02}")).collect();
+        let bundle: Vec<(&str, u64)> = names.iter().map(|n| (n.as_str(), 1)).collect();
+        let h = of_policy(owned(&w, 0xe1, 0, 0, &bundle), &policy);
+        let h = with_lovelace(h.clone(), wallet_least(&w, &h) + 5_000_000);
+        let a = of_policy(
+            owned(&w, 0xe2, 0, 6_000_000, &[("a", 1)]),
+            &hex::encode([0x72u8; 28]),
+        );
+        let b = of_policy(owned(&w, 0xe3, 0, 6_000_000, &[("b", 1)]), &policy);
+        let weighed = most_sent(&w, &[h.clone(), b.clone(), a.clone()]);
+        let listed = most_sent(&w, &[h.clone(), a.clone(), b.clone()]);
+        assert!(weighed > listed, "{weighed} against {listed}");
+        let known = [
+            (&a, box_class(&a, Origin::Lovejoin)),
+            (&b, box_class(&b, Origin::Lovejoin)),
+            (&h, class("public:0", Origin::Own)),
+        ];
+        let spent = picked_out(&w, &known, Out::Send, weighed)
+            .expect("H, B and A pay as one transaction, as 1.9.2 built them");
+        assert_eq!(outpoints(&spent), outpoints(&[h, a, b]));
+    }
+
+    /// 1.9.3's release review, r2#3 (rules 4 and 5): where the plain choice goes beside all the other money, a set a mix
+    /// moved more of goes beside less of it where that pays. T, money made private holding 19 kinds of one policy at
+    /// their least; O, 5 ₳ received; P, a plain way back of 10 ₳; M1 and M2, ways back a mix moved, 6 ₳ and a token of
+    /// another policy each. Beside T, M1 and M2's tokens take a second output of change; beside O alone they pay, and P
+    /// and M1 pay beside T and O. M1 and M2 beside O: two a mix moved, beside one other input fewer. The reviewed
+    /// search, as 1.9.2, spent T, O, P and M1.
+    #[test]
+    fn of_as_many_boxes_the_most_mixed_go_where_they_pay_beside_less_of_the_other_money() {
+        let w = world();
+        let names: Vec<String> = (0..19).map(|i| format!("h{i:02}")).collect();
+        let bundle: Vec<(&str, u64)> = names.iter().map(|n| (n.as_str(), 1)).collect();
+        let t = of_policy(owned(&w, 0xf1, 0, 0, &bundle), &hex::encode([0x71u8; 28]));
+        let t = with_lovelace(t.clone(), wallet_least(&w, &t));
+        let o = owned(&w, 0xf2, 0, 5_000_000, &[]);
+        let p = owned(&w, 0xf3, 0, 10_000_000, &[]);
+        let m1 = of_policy(
+            owned(&w, 0xf4, 0, 6_000_000, &[("b", 1)]),
+            &hex::encode([0x73u8; 28]),
+        );
+        let m2 = of_policy(
+            owned(&w, 0xf5, 0, 6_000_000, &[("c", 1)]),
+            &hex::encode([0x74u8; 28]),
+        );
+        let target = [m1.clone(), m2.clone(), o.clone()];
+        let plain = [o.clone(), t.clone(), p.clone(), m1.clone()];
+        let lovelace = most_sent(&w, &target).min(most_sent(&w, &plain));
+        for (what, inputs) in [
+            (
+                "M1 and M2 beside O and T",
+                vec![o.clone(), t.clone(), m1.clone(), m2.clone()],
+            ),
+            ("P beside O and T", vec![o.clone(), t.clone(), p.clone()]),
+            ("M1 beside O and T", vec![o.clone(), t.clone(), m1.clone()]),
+        ] {
+            let e = pays_out(&w, &inputs, Out::Send, lovelace).unwrap_err();
+            assert!(build::is_short(&e), "{what}: {e}");
+        }
+        let known = [
+            (&p, box_class(&p, Origin::Lovejoin)),
+            (&m1, box_class(&m1, Origin::Mixed)),
+            (&m2, box_class(&m2, Origin::Mixed)),
+            (&t, class("public:0", Origin::Own)),
+            (&o, received_class(&o)),
+        ];
+        let names = [(&t, "T"), (&o, "O"), (&p, "P"), (&m1, "M1"), (&m2, "M2")];
+        let spent = picked_out(&w, &known, Out::Send, lovelace).expect("it pays");
+        assert_eq!(
+            outpoints(&spent),
+            outpoints(&target),
+            "a Send of {lovelace}: spent {}",
+            named(&spent, &names)
+        );
+    }
+
+    /// 1.9.3's release review, r2#4: a UTxO that adds less than nothing goes after the boxes (r2a#3), so the other money
+    /// alone goes without it, and it never goes in with no box where a box pays beside the other money. K, a way back
+    /// a mix moved of 4 ₳; O, 4 ₳ made private; a stranger's NFT at the least the ledger takes for it. The most O and
+    /// the stranger's pay, which K alone can't and O and K can: O and K, as 1.9.2 spent them. The reviewed search spent
+    /// O and the stranger's, and its change kept the stranger's token.
+    #[test]
+    fn a_strangers_token_at_its_least_stays_out_where_a_box_beside_the_other_money_pays() {
+        let w = world();
+        let k = owned(&w, 0xa1, 0, 4_000_000, &[]);
+        let o = owned(&w, 0xa2, 0, 4_000_000, &[]);
+        let nft = of_policy(
+            owned(&w, 0xa3, 0, 0, &[("nft", 1)]),
+            &hex::encode([0x60u8; 28]),
+        );
+        let nft = with_lovelace(nft.clone(), least_on_chain(&w, &nft));
+        let lovelace = most_sent(&w, &[o.clone(), nft.clone()]);
+        assert!(lovelace > most_sent(&w, std::slice::from_ref(&o)));
+        pays_out(&w, &[o.clone(), k.clone()], Out::Send, lovelace).expect("O and K pay");
+        let e = pays_out(&w, std::slice::from_ref(&k), Out::Send, lovelace).unwrap_err();
+        assert!(build::is_short(&e), "K alone: {e}");
+        let known = [
+            (&k, box_class(&k, Origin::Mixed)),
+            (&o, class("public:0", Origin::Own)),
+            (&nft, received_class(&nft)),
+        ];
+        let names = [(&k, "K"), (&o, "O"), (&nft, "the stranger's")];
+        let spent = picked_out(&w, &known, Out::Send, lovelace).expect("it pays");
+        assert_eq!(
+            outpoints(&spent),
+            outpoints(&[o.clone(), k.clone()]),
+            "a Send of {lovelace}: spent {}",
+            named(&spent, &names)
+        );
+    }
+
+    /// 1.9.3's release review, r1#1: a build too large for one transaction rules out only sets as large. A, a plain way
+    /// back of 10.5 ₳ and a token of its own, a 32-byte name; B1, a plain way back of 10 ₳; B2, one a mix moved of 9.9 ₳;
+    /// the other money, 14 UTxOs made private of 20 kinds of 32-byte names, each of its own policy, and one of 14, each
+    /// at their least and 1 ₳. Beside all of it A makes the transaction too large, where B1 and B2, of as many inputs
+    /// and change outputs, fit. 0.3 ₳ under the most B2 and all of it pay: B2 beside all of it, as few boxes as pay and
+    /// of as many the one a mix moved. The reviewed search ruled out every set of A's inputs and change outputs, and
+    /// spent B1 and B2 beside four of the other money.
+    #[test]
+    fn a_box_too_large_beside_all_the_other_money_rules_out_no_smaller_set_of_as_many_inputs() {
+        let w = world();
+        let a = of_policy(
+            owned(&w, 0xb0, 0, 10_500_000, &[(&"c".repeat(32), 1)]),
+            &hex::encode([0xeeu8; 28]),
+        );
+        let b1 = owned(&w, 0xb1, 0, 10_000_000, &[]);
+        let b2 = owned(&w, 0xb2, 0, 9_900_000, &[]);
+        let kinds = |policy: u8, count: u8, fill: u8| -> Vec<(String, Vec<u8>)> {
+            (0..count)
+                .map(|i| {
+                    (
+                        hex::encode([policy; 28]),
+                        [vec![i], vec![fill; 31]].concat(),
+                    )
+                })
+                .collect()
+        };
+        let money: Vec<UtxoResponse> = (0..14u8)
+            .map(|k| holding_kinds(owned(&w, 0x80 + k, 0, 0, &[]), &kinds(0x10 + k, 20, 0x61)))
+            .chain(std::iter::once(holding_kinds(
+                owned(&w, 0x9f, 0, 0, &[]),
+                &kinds(0x0f, 14, 0x62),
+            )))
+            .map(|u| {
+                let least = wallet_least(&w, &u);
+                with_lovelace(u, least + 1_000_000)
+            })
+            .collect();
+        let with = |b: &UtxoResponse| [money.clone(), vec![b.clone()]].concat();
+        let lovelace = most_sent(&w, &with(&b2)) - 300_000;
+        pays_out(&w, &with(&b1), Out::Send, lovelace).expect("B1 beside all of it pays too");
+        let e = pays_out(&w, &with(&a), Out::Send, lovelace).unwrap_err();
+        assert!(build::is_too_large(&e), "A beside all of it: {e}");
+        let fewer = [money[..14].to_vec(), vec![b1.clone()]].concat();
+        let e = pays_out(&w, &fewer, Out::Send, lovelace).unwrap_err();
+        assert!(build::is_short(&e), "B1 beside less of it: {e}");
+        let mut known: Vec<(&UtxoResponse, Class)> = vec![
+            (&a, box_class(&a, Origin::Lovejoin)),
+            (&b1, box_class(&b1, Origin::Lovejoin)),
+            (&b2, box_class(&b2, Origin::Mixed)),
+        ];
+        known.extend(money.iter().map(|u| (u, class("public:0", Origin::Own))));
+        let names = [(&a, "A"), (&b1, "B1"), (&b2, "B2")];
+        let spent = picked_out(&w, &known, Out::Send, lovelace).expect("it pays");
+        assert_eq!(
+            outpoints(&spent),
+            outpoints(&with(&b2)),
+            "a Send of {lovelace}: spent {}",
+            named(&spent, &names)
+        );
+    }
 }
 
 /// Where a Seedelf spend puts its change (privacy review §3.7).

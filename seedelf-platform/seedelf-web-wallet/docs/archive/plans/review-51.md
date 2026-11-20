@@ -265,7 +265,7 @@ The owner's answers are in [The owner's calls](#the-owners-calls). Each round be
   - The claims say what the search guarantees: rules 2 to 4 hold among the orders it tries.
   - Every margin is named in one clause.
   - The pins the lows asked for are added.
-  - An exact search is [chunk 52](../../plans/chunk-52-box-rule-exact.md)'s, for 1.9.3.
+  - An exact search is [chunk 52](chunk-52-box-rule-exact.md)'s, for 1.9.3.
 - **The privacy policy's 18 November entry** was extended in place, never under a new date, for each change the rounds made to what the wallet sends, keeps or reveals.
 
 ## The checks
@@ -331,7 +331,7 @@ Then, once it merges, in order:
 ## Left open
 
 In [backlog.md](../../backlog.md), from this review and its calls round, each still open in the code:
-- ⬜ **The box rule, exact** ([chunk 52](../../plans/chunk-52-box-rule-exact.md), for 1.9.3): an exact search where a balance holds few boxes, the reviews' shapes pinned, and a sent token's holders picked by the rule. Its two backlog lines are *An exact search for the box rule's rules 2 and 3* and *The UTxOs holding a token being sent go by quantity*.
+- ⬜ **The box rule, exact** ([chunk 52](chunk-52-box-rule-exact.md), for 1.9.3): an exact search where a balance holds few boxes, the reviews' shapes pinned, and a sent token's holders picked by the rule. Its two backlog lines are *An exact search for the box rule's rules 2 and 3* and *The UTxOs holding a token being sent go by quantity*.
 - ⬜ **Core's token sums are quadratic in their kinds** (l3cli#3's root): `fitting` and `Assets::add` clone the whole list for every token. The CLI's windows now bound what they hand core, but the web wallet's private sends still run it over every owned UTxO, so a stranger's many-token piles under the user's register slow each one. Not measured in the WebAssembly.
 - ⬜ **Two Lovejoin AnyTx modules no family builds** (l3tests#3's note): `Lovejoin.AnyTx.LogicOwnerParserReach` and `LogicOwnerPrefix` are in no `check.sh` list and no listed module imports them, so no run builds or judges them, and `tally.py` reads them not ok.
 - ⬜ **A swap keeps one skip reason** (l4worker#1's limits): a late leg's direct return after a swap's own return that had its own reason replaces it, so the page reads it as a later part's and the swap's own words are lost; and a direct return rebuilt under a new hash with no reason leaves the old hash named. A reason kept per return would close both.
