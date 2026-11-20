@@ -577,8 +577,11 @@ interface SessionRecord {
    * the return last (`last`), and when it began to be sent (`at`), recorded
    * before the first is sent, so its progress shows as they're sent and
    * confirmed. `stopped`: why a transaction of it couldn't be sent, when one
-   * couldn't. `from`: a collateral's mix built again (tailChain), when the
-   * chain it goes on with began, whose transactions went in (chainSoFar).
+   * couldn't. `from`: a chain sent for what one that went in partly left
+   * (buildBack's `started`: its collateral's mix built again, tailChain, or
+   * the rest with its collateral's mix), when the chain it goes on with began,
+   * whose transactions went in (chainSoFar). It holds none of the wallet's
+   * boxes (stoppedForGood).
    */
   chain?: { total: number; last: string; at: number; stopped?: string; from?: number };
   /**
@@ -1354,10 +1357,12 @@ function running(s: SessionRecord): boolean {
  * its funding on (unless that never went) until its return is sent, and not
  * while nothing at its account can come back (`nothingBack`): no chain goes
  * then, so its boxes aren't held for one (independent review H1). Nor once
- * its chain stopped for good (stoppedForGood): its return, which waits the
- * unlock's draw as every send does, held every way of mixing again, Bring one
- * back now and Lovejoin's withdraws for a day (the owner, 2026-11-20). The
- * page reads this, never a copy of it (SessionView `mixingAgain`).
+ * its chain stopped for good (stoppedForGood), its rest's chain on its way or
+ * not: its return, which waits the unlock's draw as every send does, held
+ * every way of mixing again, Bring one back now and Lovejoin's withdraws for
+ * a day (the owner, 2026-11-20), and so did its collateral's mix before that
+ * return, which giveme.my may keep waiting as long (1.9.3's gate review,
+ * r4#2). The page reads this, never a copy of it (SessionView `mixingAgain`).
  */
 function mixingAgain(s: SessionRecord): boolean {
   return (
@@ -1373,15 +1378,23 @@ function mixingAgain(s: SessionRecord): boolean {
 
 /**
  * Whether session `s`'s chain stopped after some of it went in, with nothing of it still on its way: it never sends
- * again (markCut, sendChain's stop), and what it left comes back directly or with its collateral's mix alone, which
- * draws no box another chain holds (buildBack's `started`), never in a chain over the wallet's boxes. So it spends
- * none of them again. One stopped before any of it went is built again over them (buildBack), and a transaction of it
- * that may still land, sent and neither on chain nor given up (act's lost rule), may spend them yet.
+ * again (markCut, sendChain's stop), and what it left comes back directly or with its collateral's mix alone
+ * (buildBack's `started`), never in a chain over the wallet's boxes. That mix goes in a chain of its own (`from`),
+ * being sent, stopped or never gone, which draws only others' boxes, none another chain holds, and spends the box its
+ * collateral's deposit made: the wallet's, not mixed yet, which that chain reserves while it's sent, and whose mix
+ * ends (tailOf) where a send of the wallet's took it first. So it spends none of the wallet's boxes again but that
+ * one, and holds none, though giveme.my may keep that mix waiting a day (1.9.3's gate review, r4#2). One stopped
+ * before any of it went, its rest's aside, is built again over them (buildBack), and a transaction of it that may
+ * still land, sent and neither on chain nor given up (act's lost rule), may spend them yet.
  */
 function stoppedForGood(s: SessionRecord): boolean {
   const chain = s.chain;
-  if (!chain?.stopped || !chainSoFar(s).started) return false;
-  return !s.txs.some((t) => t.at >= chain.at && !t.confirmed && !t.replaced && !t.unsent);
+  if (!chain) return false;
+  // With its rest's chain after it, only what went before that one's is its own.
+  const rest = chain.from !== undefined;
+  if (!rest && (!chain.stopped || !chainSoFar(s).started)) return false;
+  const [from, until] = [chain.from ?? chain.at, rest ? chain.at : Infinity];
+  return !s.txs.some((t) => t.at >= from && t.at < until && !t.confirmed && !t.replaced && !t.unsent);
 }
 
 /**
@@ -1392,10 +1405,13 @@ function stoppedForGood(s: SessionRecord): boolean {
  * rest came back directly, that return on chain; not a mix's, though:
  * another chain would mix the wallet's boxes again, which nothing holds for
  * it anymore (mixingAgain), so what reaches its account after comes back
- * directly too. A collateral's mix built again went in with the chain it goes
- * on with (`from`), though it stopped before any of its own was sent: its
- * next return is a plain one, never a chain built afresh, whose reason a mix
- * would keep as why it never went in (1.6.0's release review, 323-worker#8).
+ * directly too. A chain sent for what one that went in partly left (its
+ * collateral's mix built again, or the rest with its collateral's mix) went
+ * in with the chain it goes on with (`from`), though it stopped before any of
+ * its own was sent: its next return is the rest again, never a chain built
+ * afresh, whose reason a mix would keep as why it never went in (1.6.0's
+ * release review, 323-worker#8), and which would mix a Mix my boxes again's
+ * boxes again beside one the user pressed since (1.9.3's gate review, r4#1).
  *
  * `done`: a mix whose own return went, its chain in and finished, or straight
  * back with Lovejoin left out (a return of it, sent and not given up). What
@@ -5493,8 +5509,10 @@ export class SessionService {
         ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}),
         ...(s.lovejoinSkippedBy ? { lovejoinSkippedBy: s.lovejoinSkippedBy } : {}),
       };
-      // A collateral's mix built again goes on with the chain that stopped short of it, which went in (chainSoFar).
-      const from = tailOf?.resumes && s.chain ? (s.chain.from ?? s.chain.at) : undefined;
+      // A chain sent for what one that went in partly left (buildBack's `started`: its collateral's mix built again, or
+      // the rest with its collateral's mix) goes on with that one, which went in (chainSoFar): one of it that never went
+      // is followed by the rest again, never by a chain built afresh (1.9.3's gate review, r4#1).
+      const from = s.chain && chainSoFar(s).started ? (s.chain.from ?? s.chain.at) : undefined;
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now(), ...(from !== undefined ? { from } : {}) };
       // A return of strangers' alone, after the session's own, leaves the word on how that came back as it is (e2b#2).
       if (strangers) return;
