@@ -31,7 +31,6 @@ Promises the repo has already made, by the IDs the code and the docs cite (O1 to
 - ⬜ **O2, the by-hand mainnet swap checks:** done for every route but Splash and Spectrum, which are dead in the water (the owner, 2026-10-08), so theirs are very low priority. No re-run is asked: the first real swaps of each release are the live check of the dry-run cancel (C05) and of Danogo's collateral (C21). The owner's.
 - ⛔ **O4, A2, the contract round trip:** a DEX order paying straight to a Seedelf ([flows.md](flows.md#contract-round-trip)). SundaeSwap V3 first, then WingRiders V2, each with the wallet's own order builder; preprod's V3 has no scooper, so the test is mainnet's. Blocked on a batcher test.
 - ⬜ **O6, chunk 21 by hand:** retiring a DRep live (which confirms the ledger drops delegations to a retired DRep), a profile update live, and GovTool over CIP-95. The owner's.
-- ⬜ **At the next upload, chunk 50's listing** ([its record](archive/plans/chunk-50-docs-for-outsiders.md#when-it-landed)): paste store/README.md's changed texts in all three languages, and run `npm run store:images` though no screen changed, since captions 2 and 3 did.
 - ⬜ **O9, tell Lovejoin what we found:** its configs swap Seedelf's preprod and mainnet reference UTxOs, its mainnet `mix_script_hash` is null, and its withdraw to the Seedelf contract writes no datum, so anyone can take that box. Outward-facing, so the owner's.
 
 ## Network privacy
@@ -174,6 +173,7 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 - ⬜ **Show image and the connect window's CIP-95 switch** have never been through a findings round.
 - ⬜ **An arrow that turns itself off drops the focus** (pr335#4): in Transaction details' parts and in the box stepper. Move it to the other arrow, in both.
 - ⬜ **The launch review's smaller items** (its *Still open* #5): #14 and #15's refusals reach only the site; a chain's last window isn't watched until it lands; chain records live on one device; the Lovejoin page's buttons while a payment may still go through; one maybe-sent watch per network; `swaps.review.noBox` without the amount.
+- ⬜ **An e2e test's Decline can close its window under the click** (1.9.2's release): *a locked wallet asks for the password in the connector's window first* failed once on `main`'s store build (run 44605565348), its click on Decline ending in "Target page, context or browser has been closed". Let the click race the window's close. #393's own runs, on its PR and on `main`, passed it.
 
 ## Smaller features
 
