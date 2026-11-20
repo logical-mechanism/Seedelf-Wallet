@@ -92,7 +92,7 @@ jobs:
         working-directory: seedelf-platform
     steps:
       # No token left in .git: the check runs every dependency's build script.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -128,7 +128,7 @@ jobs:
       run:
         working-directory: seedelf-platform
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -141,7 +141,7 @@ jobs:
         with:
           workspaces: seedelf-platform
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -154,7 +154,7 @@ jobs:
       - name: Build WebAssembly
         run: ./seedelf-web-wallet/wasm/build.sh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wasm-pkg
           path: seedelf-platform/seedelf-web-wallet/wasm/pkg
@@ -181,16 +181,16 @@ jobs:
       run:
         working-directory: seedelf-platform/seedelf-web-wallet/extension
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: wasm-pkg
           path: seedelf-platform/seedelf-web-wallet/wasm/pkg
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -224,16 +224,16 @@ jobs:
       run:
         working-directory: seedelf-platform/seedelf-web-wallet/extension
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: wasm-pkg
           path: seedelf-platform/seedelf-web-wallet/wasm/pkg
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -266,11 +266,11 @@ jobs:
       run:
         working-directory: seedelf-platform/seedelf-web-wallet/extension
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: wasm-pkg
           path: seedelf-platform/seedelf-web-wallet/wasm/pkg
@@ -282,7 +282,7 @@ jobs:
           toolchain: 1.98.1
           targets: wasm32-unknown-unknown
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm

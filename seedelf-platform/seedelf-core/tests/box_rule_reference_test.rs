@@ -438,19 +438,23 @@ fn last_resort(spend: &Spend, kind: Kind) -> bool {
     matches!((spend, kind), (Spend::Fund(_), Kind::OtherSession))
 }
 
-/// What a box pays beside the change a spend makes anyway, from the ledger's own least of a Seedelf output: its ADA
-/// where it holds no token, else its ADA less what its tokens add to that change's least.
-fn weight_of(params: &ProtocolParameters, u: &UtxoResponse) -> u128 {
-    let lovelace = u128::from(lovelace_of(u));
-    let tokens = u.asset_list.iter().flatten().fold(Assets::new(), |all, a| {
-        let quantity = a.quantity.parse().unwrap();
-        all.add(Token::new(a.policy_id.clone(), a.asset_name.clone(), quantity).unwrap())
-            .unwrap()
-    });
+/// What a set of boxes adds to a spend, by this file's own reckoning from the ledger's least of a Seedelf output: its
+/// ADA less what its tokens, together, add to a change's least. No balance's other money holds a token and no spend
+/// sends one, so the change keeps the set's tokens alone, and a token two ways back of one pool hold is counted once.
+fn set_value(params: &ProtocolParameters, boxes: &[&UtxoResponse]) -> i128 {
+    let lovelace: i128 = boxes.iter().map(|u| i128::from(lovelace_of(u))).sum();
+    let tokens = boxes
+        .iter()
+        .flat_map(|u| u.asset_list.iter().flatten())
+        .fold(Assets::new(), |all, a| {
+            let quantity = a.quantity.parse().unwrap();
+            all.add(Token::new(a.policy_id.clone(), a.asset_name.clone(), quantity).unwrap())
+                .unwrap()
+        });
     if tokens.items.is_empty() {
         return lovelace;
     }
-    let least = |t: Assets| u128::from(wallet_minimum_lovelace_with_assets(params, t).unwrap());
+    let least = |t: Assets| i128::from(wallet_minimum_lovelace_with_assets(params, t).unwrap());
     lovelace - (least(tokens) - least(Assets::new()))
 }
 
@@ -531,47 +535,41 @@ fn best_paying(balance: &Balance, spend: &Spend, paying: &mut Paying) -> Option<
 }
 
 /// The plain choice at the best level `(u, n)`, and the other inputs its build takes: rule 5's baseline, by the rule's
-/// own words. The u boxes of unknown making and the n − u others the rule weighs largest (`weight_of`; of as heavy, a
-/// mixed one first, then the balance's order), beside all the other money where one transaction takes that (order a),
-/// else beside as few of it as pay, the largest first with a funding's last resort after the rest, or where that runs
-/// into the input limit the largest first whatever the tier (order c). The boxes, the other inputs, and whether they
-/// were all the other money; None where those boxes pay beside none of it.
+/// own words. Of the level's sets, the one that adds the most (`set_value`; of as much, the most a mix moved, then the
+/// balance's order) that pays beside all the other money, where one transaction takes that (order a); else, in each of
+/// c's orders in turn (the largest first with a funding's last resort after the rest, then the largest first whatever
+/// the tier, l6reference#1), beside as few of it as pay, the one that adds the most that pays there. The boxes, the
+/// other inputs, and whether they were all the other money; None where no set of the level pays beside any of it.
 fn plain_choice(
     balance: &Balance,
     spend: &Spend,
     paying: &mut Paying,
     (u, n): (usize, usize),
-    h: &Histories,
 ) -> Option<(BTreeSet<usize>, Vec<usize>, bool)> {
     let params = &paying.w.chain.params;
     let floor = u128::from(spend.floor(params));
-    let weighed: Vec<(usize, u128, u8)> = (0..balance.boxes)
-        .map(|i| {
-            let b = &balance.items[i].0;
-            (i, weight_of(params, b), made_of(&h.class_of(b)))
+    let mut level: Vec<(i128, usize, u32, BTreeSet<usize>)> = (0..(1u32 << balance.boxes))
+        .filter_map(|mask| {
+            let b = boxes_in(mask, balance);
+            let (bu, bn, bm) = boxes_key(&b, balance);
+            let held: Vec<&UtxoResponse> = b.iter().map(|&i| &balance.items[i].0).collect();
+            ((bu, bn) == (u, n)).then(|| (set_value(params, &held), bm, mask, b))
         })
         .collect();
-    let mut unknown: Vec<&(usize, u128, u8)> = weighed.iter().filter(|b| b.2 == 2).collect();
-    unknown.sort_by_key(|b| std::cmp::Reverse(b.1));
-    let mut known: Vec<&(usize, u128, u8)> = weighed.iter().filter(|b| b.2 < 2).collect();
-    known.sort_by_key(|b| (std::cmp::Reverse(b.1), b.2));
-    let chosen: BTreeSet<usize> = unknown
-        .iter()
-        .take(u)
-        .chain(known.iter().take(n - u))
-        .map(|b| b.0)
-        .collect();
-    let boxes: Vec<&UtxoResponse> = chosen.iter().map(|&i| &balance.items[i].0).collect();
+    level.sort_by_key(|(v, m, mask, _)| (std::cmp::Reverse(*v), std::cmp::Reverse(*m), *mask));
     let others: Vec<usize> = (balance.boxes..balance.items.len()).collect();
-    let with = |money: &[usize]| -> Vec<&UtxoResponse> {
-        boxes
-            .iter()
-            .copied()
-            .chain(money.iter().map(|&i| &balance.items[i].0))
+    let with = |b: &BTreeSet<usize>, money: &[usize]| -> Vec<&UtxoResponse> {
+        b.iter()
+            .chain(money)
+            .map(|&i| &balance.items[i].0)
             .collect()
     };
-    if paying.verdict(&with(&others)) == Verdict::Pays {
-        return Some((chosen, others, true));
+    if n + others.len() <= 22 {
+        for (_, _, _, b) in &level {
+            if paying.verdict(&with(b, &others)) == Verdict::Pays {
+                return Some((b.clone(), others, true));
+            }
+        }
     }
     let size = |i: &usize| std::cmp::Reverse(lovelace_of(&balance.items[*i].0));
     let mut largest = others.clone();
@@ -584,15 +582,21 @@ fn plain_choice(
     }
     for order in orders {
         for m in 0..=order.len() {
-            let inputs = with(&order[..m]);
-            let held: u128 = inputs.iter().map(|u| u128::from(lovelace_of(u))).sum();
-            if held <= floor {
-                continue;
+            let mut failed = false;
+            for (_, _, _, b) in &level {
+                let inputs = with(b, &order[..m]);
+                let held: u128 = inputs.iter().map(|u| u128::from(lovelace_of(u))).sum();
+                if held <= floor {
+                    continue;
+                }
+                match paying.verdict(&inputs) {
+                    Verdict::Pays => return Some((b.clone(), order[..m].to_vec(), false)),
+                    Verdict::Failed => failed = true,
+                    Verdict::Short => {}
+                }
             }
-            match paying.verdict(&inputs) {
-                Verdict::Pays => return Some((chosen, order[..m].to_vec(), false)),
-                Verdict::Failed => break,
-                Verdict::Short => {}
+            if failed {
+                break;
             }
         }
     }
@@ -640,18 +644,21 @@ fn one_unknown_pays(balance: &Balance, spend: &Spend, paying: &mut Paying, most:
         .any(|mask| pays_beside(balance, spend, paying, mask))
 }
 
-/// [`check`], and with `margin`, where a set holding two ways back of one token pool pays at the best level, the
-/// rule's stated margin there (build.rs's `Weighed::InOne`): past the first box of unknown making, as few as pay or one
-/// more; of boxes, the fewest that pay or one more; rules 4 and 5 unasked. The first is held strictly, none where a set
-/// without one pays, since [`pair_band`] draws none of the margin's shapes for it. With `margin`, it counts where the
-/// first is at stake (`Tally::at_stake`).
+/// [`check`], and with `pair`, where [`pair_band`] draws the balance: it counts where a set holding two ways back of
+/// one token pool pays at the best level (`Tally::pair`), and where the first box of unknown making is at stake
+/// (`Tally::at_stake`). Every check is strict for a balance of at most `EXACT_BOXES` boxes, where the merge searches
+/// every set of them (chunk 52): the reference's balances hold at most eight.
 fn check_with(
     w: &World,
     balance: &Balance,
     spend: &Spend,
     tally: &mut Tally,
-    margin: bool,
+    pair: bool,
 ) -> Result<(), String> {
+    assert!(
+        balance.boxes <= build::EXACT_BOXES,
+        "the brute force checks balances the merge searches whole"
+    );
     let available: Vec<UtxoResponse> = balance.items.iter().map(|(u, _)| u.clone()).collect();
     let purpose = spend.purpose();
     let h = balance.histories(purpose.clone(), true);
@@ -718,8 +725,11 @@ fn check_with(
         };
     }
     tally.merged += 1;
-    if margin && best.0 == 0 && one_unknown_pays(balance, spend, &mut paying, best.1) {
+    if pair && best.0 == 0 && one_unknown_pays(balance, spend, &mut paying, best.1) {
         tally.at_stake += 1;
+    }
+    if pair && pair_pays_at(balance, spend, &mut paying, best) {
+        tally.pair += 1;
     }
 
     // Merging: the fewest of unknown making, then the fewest boxes, over every set that pays.
@@ -728,20 +738,6 @@ fn check_with(
     let picked_others: BTreeSet<usize> =
         at.iter().copied().filter(|&i| i >= balance.boxes).collect();
     let (u, n, m) = boxes_key(&picked_boxes, balance);
-    if margin && pair_pays_at(balance, spend, &mut paying, best) {
-        tally.builds += paying.builds;
-        tally.pair += 1;
-        let unknown_ok = u == best.0 || (best.0 > 0 && u == best.0 + 1);
-        tally.one_more_unknown += usize::from(u > best.0);
-        return if unknown_ok && (n == best.1 || n == best.1 + 1) {
-            Ok(())
-        } else {
-            Err(said(format!(
-                "{u} of unknown making and {n} boxes, where (of unknown making, boxes) {best:?} pay, two ways back of \
-                 one pool among them"
-            )))
-        };
-    }
     if (u, n) != best {
         tally.builds += paying.builds;
         return Err(said(format!(
@@ -755,12 +751,17 @@ fn check_with(
     }
     // Rule 5's baseline, this file's own: the plain choice and the other inputs its build takes.
     let Some((plain_boxes, plain_others, all_of_it)) =
-        plain_choice(balance, spend, &mut paying, best, &h)
+        plain_choice(balance, spend, &mut paying, best)
     else {
         tally.builds += paying.builds;
         return Err(said(format!(
-            "at {best:?}, the boxes the rule weighs largest pay beside none of the other money"
+            "at {best:?}, no set of the level pays beside the other money as a and c take it"
         )));
+    };
+    let params = &w.chain.params;
+    let value = |b: &BTreeSet<usize>| {
+        let held: Vec<&UtxoResponse> = b.iter().map(|&i| &balance.items[i].0).collect();
+        set_value(params, &held)
     };
     let plain_set: BTreeSet<usize> = plain_others.iter().copied().collect();
     let describe_at = |at: &[usize]| {
@@ -774,6 +775,7 @@ fn check_with(
             .copied()
             .collect::<Vec<_>>(),
     );
+    let (_, _, plain_mixed) = boxes_key(&plain_boxes, balance);
     if picked_boxes == plain_boxes {
         if picked_others != plain_set {
             tally.builds += paying.builds;
@@ -782,8 +784,8 @@ fn check_with(
             )));
         }
     } else {
-        let (_, _, plain_mixed) = boxes_key(&plain_boxes, balance);
-        if m <= plain_mixed {
+        // Another set that adds as much and a mix moved as many of is as good.
+        if m < plain_mixed || (m == plain_mixed && value(&picked_boxes) != value(&plain_boxes)) {
             tally.builds += paying.builds;
             return Err(said(format!(
                 "other boxes than the plain choice's ({plain_text}), with no more a mix moved"
@@ -796,9 +798,10 @@ fn check_with(
             )));
         }
     }
-    // Of as many, the most a mix moved, beside no more than the plain choice's other inputs.
+    // Of as many, the most a mix moved, beside no more than the plain choice's other inputs; of those, the one that
+    // adds the most.
     let beside: Vec<&UtxoResponse> = plain_others.iter().map(|&i| &balance.items[i].0).collect();
-    let most = (0..(1u32 << balance.boxes))
+    let paying_sets: Vec<(usize, i128)> = (0..(1u32 << balance.boxes))
         .map(|mask| boxes_in(mask, balance))
         .filter(|b| {
             let (bu, bn, _) = boxes_key(b, balance);
@@ -812,13 +815,26 @@ fn check_with(
                 .collect();
             paying.verdict(&inputs) == Verdict::Pays
         })
-        .map(|b| boxes_key(&b, balance).2)
-        .max()
-        .unwrap_or(0);
+        .map(|b| (boxes_key(&b, balance).2, value(&b)))
+        .collect();
     tally.builds += paying.builds;
+    let most = paying_sets.iter().map(|(m, _)| *m).max().unwrap_or(0);
     if m != most {
         return Err(said(format!(
             "{m} boxes a mix moved, where {most} of as many pay beside the plain choice's other inputs"
+        )));
+    }
+    let largest = paying_sets
+        .iter()
+        .filter(|(mm, _)| *mm == m)
+        .map(|(_, v)| *v)
+        .max()
+        .unwrap_or(i128::MIN);
+    if value(&picked_boxes) != largest {
+        return Err(said(format!(
+            "boxes adding {}, where of as many and as many a mix moved, a set adding {largest} pays beside the plain \
+             choice's other inputs",
+            value(&picked_boxes)
         )));
     }
     Ok(())
@@ -850,10 +866,8 @@ struct Tally {
     merged: usize,
     past_the_limit: usize,
     old_built: usize,
-    /// Checked within the margin, where two ways back of one pool pay at the best level.
+    /// Of the merges a pair part checks, those where a set holding two ways back of one pool pays at the best level.
     pair: usize,
-    /// Of those, the picks with one box of unknown making more than pay, past the first (the rule's stated margin).
-    one_more_unknown: usize,
     /// Of the merges a pair part checks, those whose best set holds none of unknown making where a set holding one,
     /// of no more boxes, pays too: where the first of them is at stake (l8reference#3).
     at_stake: usize,
@@ -1418,7 +1432,6 @@ fn selection_picks_the_best_set_by_the_box_rule_over_many_balances() {
         all.past_the_limit += t.past_the_limit;
         all.old_built += t.old_built;
         all.pair += t.pair;
-        all.one_more_unknown += t.one_more_unknown;
         all.at_stake += t.at_stake;
         all.builds += t.builds;
     };
@@ -1694,6 +1707,163 @@ fn token_boxes_beside_money_holding_many_kinds_plan_in_a_fraction_of_a_second() 
         worst < std::time::Duration::from_millis(bound),
         "the slowest selection took {worst:?}"
     );
+}
+
+/// Chunk 52: the exact search over as many boxes as it searches whole (`EXACT_BOXES`, 4,096 sets), beside hundreds of
+/// payments. Twelve boxes, a mix's, plain and of unknown making in turn, three of them token pools' ways back, beside
+/// 400 payments received of 2 ₳: Sends and a funding that take boxes up to the input limit, a Make public of a few,
+/// one too large for one transaction, and the reruns a payment's parts make after each part. Then the balance whose
+/// costs are the most to work out: every box holding another policy's token, beside 20 UTxOs of money made private
+/// holding 20 kinds of token each, and 100 payments. Each selection in a fraction of a second.
+#[test]
+fn twelve_boxes_beside_hundreds_of_payments_plan_in_a_fraction_of_a_second() {
+    let w = world();
+    let mut n = 0x3000_0000u32;
+    let mut next = || {
+        n += 1;
+        n
+    };
+    let kinds = [Kind::Mixed, Kind::Plain, Kind::Unknown];
+    let sizes = [4_710_000, 9_710_000, 19_710_000, 24_710_000];
+    let mut items: Vec<(UtxoResponse, Kind)> = Vec::new();
+    for i in 0..12u64 {
+        let token = (i % 4 == 3).then_some(["poolA", "poolB", "poolA"][(i / 4) as usize]);
+        let lovelace = sizes[(i % 4) as usize] + i * 10_000;
+        items.push((utxo(&w, next(), lovelace, token), kinds[(i % 3) as usize]));
+    }
+    for _ in 0..400 {
+        items.push((utxo(&w, next(), 2 * ADA, None), Kind::Received));
+    }
+    let balance = Balance {
+        boxes: 12,
+        distinct: 0,
+        smalls: 400,
+        small: 2 * ADA,
+        items,
+    };
+    let available: Vec<UtxoResponse> = balance.items.iter().map(|(u, _)| u.clone()).collect();
+    let mut worst = std::time::Duration::ZERO;
+    let mut time = |spend: &Spend, available: &[UtxoResponse], builds: Option<bool>| {
+        let paying = Paying::new(&w, spend);
+        let h = balance.histories(spend.purpose(), true);
+        // The best of three, so a load spike on a shared runner doesn't decide it.
+        let (took, picked) = (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                let picked = paying.apart(available, &h);
+                (started.elapsed(), picked)
+            })
+            .min_by_key(|(took, _)| *took)
+            .unwrap();
+        worst = worst.max(took);
+        if let Some(builds) = builds {
+            println!(
+                "12 boxes and {} others, {spend:?}: {} in {took:?}",
+                available.len() - 12,
+                match &picked {
+                    Ok(inputs) => format!("{} inputs", inputs.len()),
+                    Err(e) => format!("refused ({e})"),
+                }
+            );
+            assert_eq!(picked.is_ok(), builds, "{spend:?}");
+        }
+        (took, picked.is_ok())
+    };
+    for (spend, builds) in [
+        (Spend::Send(150 * ADA), true),
+        (Spend::Send(185 * ADA), true),
+        (Spend::Fund(120 * ADA), true),
+        (Spend::Public(30 * ADA), true),
+        (Spend::Send(400 * ADA), false),
+    ] {
+        time(&spend, &available, Some(builds));
+    }
+    // The reruns of a payment's parts, the payments first, 20 UTxOs a part.
+    let mut rest = available.clone();
+    rest.reverse();
+    let (mut owed, mut reruns, mut count) = (400 * ADA, std::time::Duration::ZERO, 0);
+    while !rest.is_empty() {
+        let taken: Vec<UtxoResponse> = rest.drain(..20.min(rest.len())).collect();
+        owed = owed.saturating_sub(taken.iter().map(lovelace_of).sum::<u64>() - 400_000);
+        if owed == 0 || rest.is_empty() {
+            break;
+        }
+        let (took, built) = time(&Spend::Send(owed), &rest, None);
+        reruns += took;
+        count += 1;
+        if built {
+            break;
+        }
+    }
+    println!("12 boxes and 400 payments, a Send of 400 ₳ in parts: {count} reruns in {reruns:?}");
+    // Every box holding a token of its own policy, beside money holding 20 kinds a UTxO.
+    let mut items: Vec<(UtxoResponse, Kind)> = Vec::new();
+    for i in 0..12u64 {
+        let mut u = utxo(
+            &w,
+            next(),
+            sizes[(i % 4) as usize] + i * 10_000,
+            Some("pool"),
+        );
+        for a in u.asset_list.iter_mut().flatten() {
+            a.policy_id = format!("{:02x}", 0x40 + i).repeat(28);
+        }
+        items.push((u, kinds[(i % 3) as usize]));
+    }
+    for k in 0..20u32 {
+        let mut u = utxo(&w, next(), 0, None);
+        u.asset_list = Some(
+            (0..20)
+                .map(|i| Asset {
+                    decimals: 0,
+                    quantity: "1".into(),
+                    policy_id: format!("{:02x}", 0x60 + k).repeat(28),
+                    asset_name: hex::encode(format!("k{k}m{i:02}")),
+                    fingerprint: String::new(),
+                })
+                .collect(),
+        );
+        let (_, held) = seedelf_core::utxos::assets_of(vec![u.clone()]).unwrap();
+        u.value = (build::minimum_deposit(&w.chain.params, &held).unwrap() + ADA / 2).to_string();
+        items.push((u, Kind::Own));
+    }
+    for _ in 0..100 {
+        items.push((utxo(&w, next(), 2 * ADA, None), Kind::Received));
+    }
+    let tokens = Balance {
+        boxes: 12,
+        distinct: 20,
+        smalls: 100,
+        small: 2 * ADA,
+        items,
+    };
+    let available: Vec<UtxoResponse> = tokens.items.iter().map(|(u, _)| u.clone()).collect();
+    for (spend, builds) in [
+        (Spend::Send(60 * ADA), true),
+        (Spend::Public(150 * ADA), true),
+        (Spend::Send(400 * ADA), false),
+    ] {
+        let paying = Paying::new(&w, &spend);
+        let h = tokens.histories(spend.purpose(), true);
+        let (took, picked) = (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                let picked = paying.apart(&available, &h);
+                (started.elapsed(), picked)
+            })
+            .min_by_key(|(took, _)| *took)
+            .unwrap();
+        worst = worst.max(took);
+        println!(
+            "12 token boxes of 12 policies beside 400 kinds, {spend:?}: {} in {took:?}",
+            match &picked {
+                Ok(inputs) => format!("{} inputs", inputs.len()),
+                Err(e) => format!("refused ({e})"),
+            }
+        );
+        assert_eq!(picked.is_ok(), builds, "{spend:?}");
+    }
+    println!("the slowest selection: {worst:?}; the reruns: {reruns:?}");
 }
 
 /// `unknown` boxes of unknown making and `plain` plain ones of 10 ₳, beside `received` payments of 2 ₳: one

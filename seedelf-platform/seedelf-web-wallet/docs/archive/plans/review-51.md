@@ -408,3 +408,7 @@ Mind the clashes:
 - `l3time#` and `l3still#` each name two lenses, the review's own last look and the calls round's third review, and share numbers (l3time#1 and #2, l3still#1 to #5): a citation from a commit up to `984ff48f` is the review's, one from after it the calls round's, whose tests call that review "round three's last look". This record calls the review's own lens L3time;
 - the owner's letters aren't lane B1 (`b1#`), T1i's guards (its B15, B16, C1 and C2) or 1.9.1's clusters C1 to C3;
 - four group names are in both fixer lists, G7a, G7b, G8 and G10: *G8's notes* and the swap page's *G7a's note* are the review's groups', and *Left open*'s notes on B9 and on the diag run are the calls round's.
+
+## Errata (19 November 2026)
+
+- **The privacy policy's entry is dated 19 November 2026, not 18 November.** It went live when #393 merged, on 19 November, so its Effective line and its *Changes* entry moved to that day in 1.9.2's record PR, as one entry. Where this record says "18 November" (*Status*, *The lead's calls*, *The calls round*), read 19 November. No finding's outcome changes.

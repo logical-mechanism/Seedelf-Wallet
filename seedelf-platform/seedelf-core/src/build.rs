@@ -26,7 +26,9 @@ use serde_json::Value;
 
 use crate::address::{collateral_address, is_on_correct_network, wallet_contract};
 use crate::assets::{Asset, Assets};
-use crate::constants::{COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO};
+use crate::constants::{
+    COLLATERAL_HASH, COLLATERAL_PUBLIC_KEY, Config, MAXIMUM_TOKENS_PER_UTXO, OVERHEAD_COST,
+};
 use crate::data_structures::{create_mint_redeemer, create_spend_redeemer};
 use crate::note::Note;
 use crate::staking::Staking;
@@ -2573,28 +2575,29 @@ impl Purpose {
 ///
 /// The box rule, the one every spend merges boxes by (chunk 51, round six's rule, after l4code#1, l5merge#1,
 /// l5merge#2, l5merge#3, l5still#2 and l5still#4, with round seven's l6reference#1, l6reference#2, l6still#1 and
-/// l6words#3, round eight's l7merge#1, l7merge#2 and l7still#1, and round nine's l8merge#2). It orders what pays beside
-/// the UTxOs holding the tokens a spend sends, which [`holding`] takes first, by how much of each token they hold,
-/// whatever made them (l6words#1). The boxes are every box back from Lovejoin that adds something, a token pool's way
-/// back holding its token included, each weighed by [`box_weight`]: in one transaction by what it pays beside the
-/// change its order makes anyway ([`Weighed::InOne`]), a box of ADA alone by its ADA. Of the choices its orders try, in
-/// one strict order:
+/// l6words#3, round eight's l7merge#1, l7merge#2 and l7still#1, and round nine's l8merge#2; chunk 52's exact search).
+/// It orders what pays beside the UTxOs holding the tokens a spend sends, which [`holding`] takes first, by how much of
+/// each token they hold, whatever made them (l6words#1). The boxes are every box back from Lovejoin that adds
+/// something, a token pool's way back holding its token included. In one strict order:
 ///
-/// 1. nothing 1e1b0647's selection sent as one transaction is refused or sent in parts: where none of the rule's own
-///    orders builds, 1e1b0647's own orders run before the CLI's, and that pass is what makes this hold (l5merge#2,
-///    l6still#1, l6words#3);
-/// 2. as few boxes of unknown making as pay: one goes in only where none of the orders the search tries builds without
-///    one, and another only where none builds with fewer; before the first, 1e1b0647's orders run over everything else
-///    too (l7merge#1, l7still#1);
-/// 3. as few boxes as pay, among the orders tried;
-/// 4. of as many, the most a mix moved, among the orders tried;
+/// 1. nothing 1e1b0647's selection sent as one transaction is refused or sent in parts: where nothing else builds,
+///    1e1b0647's own orders run before the CLI's, and that pass is what makes this hold (l5merge#2, l6still#1,
+///    l6words#3);
+/// 2. as few boxes of unknown making as pay; before the first, 1e1b0647's orders run over everything else too
+///    (l7merge#1, l7still#1);
+/// 3. then as few boxes as pay;
+/// 4. of as many, the most a mix moved;
 /// 5. never at the cost of more of the other inputs than the plain choice's build takes (l5merge#3, l5still#2).
 ///
-/// The margins, since each box is weighed by itself where a set's boxes share their change's outputs (how much,
-/// [`Weighed::InOne`] says; chunk 51, round eight's last look): near the input limit, beside token boxes, a merge can
-/// take a box of unknown making, or one more of them, where a set the search doesn't try pays without it, as beside two
-/// ways back of one pool, or a token that shares or opens a change output (l8merge#1, l8still#2); and it can take a box
-/// more than pays, or a plain box where a mixed one pays.
+/// Where a spend's boxes number at most [`EXACT_BOXES`], nearly every wallet's, the merge searches every set of them
+/// ([`Exact`], chunk 52): each set costed from what it merges, its tokens' least shared as its change shares them, and
+/// beside the other money as the weighed orders take it, all of it where one transaction takes that, else as few of it
+/// as pay. So 2 to 4 hold over every set of the boxes, and the plain choice is the set of its level that adds the most.
+/// Past that many, the merge goes by orders of boxes each weighed by itself ([`box_weight`], [`Weighed::InOne`]), and 2
+/// to 4 hold among the orders tried, within the margins `Weighed` names: near the input limit, beside token boxes, a
+/// merge can take a box of unknown making, or one more of them, where a set those orders don't try pays without it, as
+/// beside two ways back of one pool, or a token that shares or opens a change output (l8merge#1, l8still#2); and it can
+/// take a box more than pays, or a plain box where a mixed one pays.
 ///
 /// After those, the purpose's order and size: where one transaction takes it, all the other money before any box, a
 /// funding's last resort (another session's money) after the rest; past that, as few of it as pay, the last resorts
@@ -2633,7 +2636,8 @@ pub enum Weighed<'a> {
     /// l8merge#3, l8still#1). So the orders can miss the best: near the input limit, beside token boxes, a merge can
     /// take a box of unknown making, or one more of them, where a set the search doesn't try pays without it (rule 2:
     /// two ways back of one pool, or a token that shares or opens a change output; l8merge#1, l8still#2); and it can
-    /// take a box more than pays (rule 3), or a plain box where a mixed one pays (rule 4).
+    /// take a box more than pays (rule 3), or a plain box where a mixed one pays (rule 4). Only past [`EXACT_BOXES`]
+    /// boxes: with as many or fewer, the merge costs every set of them as a whole instead ([`Exact`], chunk 52).
     InOne(&'a Kept),
     /// In a payment's parts (the web wallet's `Worth::apart`): what it adds ([`adds`]: its ADA less its tokens' whole
     /// least), since a part pays all but its fee and leaves the tokens it keeps with just their least. Each box is
@@ -2924,12 +2928,13 @@ fn less_than_nothing(
 /// 2. UTxOs of one class, by the purpose's order, the largest first;
 /// 3. merging classes: with tokens sent, their UTxOs and one of another
 ///    class first; then the boxes back from Lovejoin by the box rule
-///    ([`box_rank`]), for every purpose, among the orders it tries and within
-///    the margins it names: as few of unknown making as pay, none where an
-///    order without one builds, then as few boxes as pay, of as many the most
-///    a mix moved, with no more of the other inputs than the plain choice
-///    takes, each box weighed by what it pays beside the change its order
-///    makes anyway. Beside them the other money by the purpose's
+///    ([`box_rank`]), for every purpose: as few of unknown making as pay,
+///    then as few boxes as pay, of as many the most a mix moved, with no more
+///    of the other inputs than the plain choice takes. With at most
+///    [`EXACT_BOXES`] boxes over every set of them, each costed from what it
+///    merges ([`Exact`], chunk 52); past that, among the orders it tries and
+///    within the margins it names, each box weighed by what it pays beside
+///    the change its order makes anyway. Beside them the other money by the purpose's
 ///    order, its last resorts after the rest, all of it before any box where
 ///    one transaction takes that; where that runs into what a transaction
 ///    can spend (too many inputs), or everything together is short (a UTxO
@@ -2988,12 +2993,68 @@ pub(crate) fn select_script_inputs<T>(
         .filter(|u| !mandatory.iter().any(|m| same_utxo(m, u)))
         .cloned()
         .collect();
-    let piles = less_than_nothing(params, &rest);
+    let piles = less_than_nothing(params, available);
     let last = |u: &UtxoResponse| piles.contains(&(u.tx_hash.clone(), u.tx_index));
     if !histories.blind(available) {
-        return apart(
-            params, mandatory, rest, needed, floor, histories, last, attempt,
+        let ruled = holding_by_rule(available, needed, histories)?;
+        if ruled.len() == mandatory.len()
+            && ruled
+                .iter()
+                .all(|r| mandatory.iter().any(|m| same_utxo(m, r)))
+        {
+            return apart(
+                params, mandatory, rest, needed, floor, histories, last, attempt,
+            );
+        }
+        // The holders by the box rule, and by how much of each token they hold: the spend that does better by the rule
+        // over all its boxes goes, the rule's holders' where they tie, and the others' only where the rule's are
+        // refused or do worse, so nothing that built before is refused (chunk 52, l6words#1's code option).
+        let spent: RefCell<Vec<UtxoResponse>> = RefCell::new(Vec::new());
+        let mut recorded = |inputs: &[UtxoResponse]| {
+            let built = attempt(inputs);
+            if built.is_ok() {
+                *spent.borrow_mut() = inputs.to_vec();
+            }
+            built
+        };
+        let beside = |base: &[UtxoResponse]| -> Vec<UtxoResponse> {
+            available
+                .iter()
+                .filter(|u| !base.iter().any(|b| same_utxo(b, u)))
+                .cloned()
+                .collect()
+        };
+        let by_rule = apart(
+            params,
+            ruled.clone(),
+            beside(&ruled),
+            needed,
+            floor,
+            histories,
+            last,
+            &mut recorded,
         );
+        let ruled_spent = spent.take();
+        let by_quantity = apart(
+            params,
+            mandatory,
+            rest,
+            needed,
+            floor,
+            histories,
+            last,
+            &mut recorded,
+        );
+        let quantity_spent = spent.take();
+        return match (by_rule, by_quantity) {
+            (Ok(_), Ok(other))
+                if box_key(&quantity_spent, histories) < box_key(&ruled_spent, histories) =>
+            {
+                Ok(other)
+            }
+            (Ok(ruled), _) => Ok(ruled),
+            (Err(_), other) => other,
+        };
     }
     rest.sort_by_key(|u| (last(u), holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
     let mut last_error = None;
@@ -3394,6 +3455,815 @@ fn old_orders_built<'a, T>(
     None
 }
 
+/// How many boxes back from Lovejoin a merge searches every set of (chunk 52): with at most this many, the box rule's
+/// merge is exact ([`Exact`]); past it, it goes by the weighed orders, within the margins [`box_rank`] names. At most
+/// 4,096 sets, each costed without a build.
+pub const EXACT_BOXES: usize = 12;
+
+/// A token as a change's cost reads it ([`Around`]): its policy, the bytes its name takes, and how much.
+#[derive(Clone, Copy)]
+struct Held {
+    policy: Hash<28>,
+    name: u64,
+    amount: u64,
+}
+
+/// A token's policy and name.
+type TokenKey = (Hash<28>, Vec<u8>);
+
+/// What a change costs a spend beside its lovelace ([`change_cost`]): its outputs' least, the bytes they take, and how
+/// many.
+type Cost = (u64, u64, usize);
+
+impl Held {
+    fn of(a: &Asset) -> Self {
+        let length = a.token_name.len() as u64;
+        Held {
+            policy: a.policy_id,
+            name: head_size(length) + length,
+            amount: a.amount,
+        }
+    }
+}
+
+fn key_of(a: &Asset) -> TokenKey {
+    (a.policy_id, a.token_name.clone())
+}
+
+/// The bytes `items`, one output's tokens, add to its value as the ledger encodes it, over a value of ADA alone:
+/// [`value_size`]'s `[lovelace, {policy: {name: amount}}]` less the lovelace's own head.
+fn held_bytes(items: &[Held]) -> u64 {
+    // Each policy, and how many names it holds.
+    let mut policies: Vec<(Hash<28>, u64)> = Vec::new();
+    let mut names = 0u64;
+    for h in items {
+        names += h.name + head_size(h.amount);
+        match policies.iter_mut().find(|(p, _)| *p == h.policy) {
+            Some((_, n)) => *n += 1,
+            None => policies.push((h.policy, 1)),
+        }
+    }
+    1 + head_size(policies.len() as u64)
+        + policies
+            .iter()
+            .map(|(_, n)| head_size(28) + 28 + head_size(*n))
+            .sum::<u64>()
+        + names
+}
+
+/// The least of one change output of `items` and the bytes it takes, worked out from `empty`, the least of one of ADA
+/// alone, without making it.
+fn output_cost(coins_per_byte: u64, empty: u64, items: &[Held]) -> (u64, u64) {
+    let least = if items.is_empty() {
+        empty
+    } else {
+        empty.saturating_add(coins_per_byte.saturating_mul(held_bytes(items)))
+    };
+    (
+        least,
+        (least / coins_per_byte).saturating_sub(OVERHEAD_COST),
+    )
+}
+
+/// The least, bytes and outputs of the outputs `items` go out in, 20 kinds to an output ([`token_chunks`]); none where
+/// there are none.
+fn outputs_cost(coins_per_byte: u64, empty: u64, items: &[Held]) -> (u64, u64, usize) {
+    items
+        .chunks(MAXIMUM_TOKENS_PER_UTXO as usize)
+        .fold((0, 0, 0), |(least, bytes, n), chunk| {
+            let (l, b) = output_cost(coins_per_byte, empty, chunk);
+            (least.saturating_add(l), bytes.saturating_add(b), n + 1)
+        })
+}
+
+/// What a change of `tokens` costs a spend beside its lovelace (chunk 52): each output's least, 20 kinds of token to an
+/// output as [`minimum_deposit`] has it, the bytes the outputs take, read off those leasts, and how many outputs; one
+/// of ADA alone where there are no tokens.
+fn change_cost(coins_per_byte: u64, empty: u64, tokens: &Assets) -> (u64, u64, usize) {
+    let items: Vec<Held> = tokens.items.iter().map(Held::of).collect();
+    if items.is_empty() {
+        let (least, bytes) = output_cost(coins_per_byte, empty, &[]);
+        return (least, bytes, 1);
+    }
+    outputs_cost(coins_per_byte, empty, &items)
+}
+
+/// A change's tokens around a set's, as the inputs bring them (chunk 52): those `before` the set's and those `after`.
+/// The change is `before`, then the set's own kinds new to it, then `after`'s new to both, each kind's amounts merged
+/// where it first comes, less those sent ([`Assets::separate`]).
+struct Around {
+    raw: (Assets, Assets),
+    /// Laid out once, so a set costs only the output where its tokens meet the others'; None where it can't be (the
+    /// tokens sent aren't all before), and every set is costed in full.
+    laid: Option<Laid>,
+}
+
+/// [`Around`]'s change laid out: `before` with `after`'s kinds it holds merged in, less those sent; `at`, where each
+/// kind of it is; `moved`, the kinds a set holding one would move (one after, which then merges into the set's, or one
+/// sent whole, which comes back), so such a set is costed in full; the rest `after`; what `before`'s whole outputs
+/// cost; and what `after`'s cost from each place it can start in an output (`tails`, as worked out).
+struct Laid {
+    before: Vec<Held>,
+    at: BTreeMap<TokenKey, usize>,
+    moved: BTreeSet<TokenKey>,
+    after: Vec<Held>,
+    whole: (u64, u64, usize),
+    tails: Vec<Option<(u64, u64, usize)>>,
+}
+
+impl Around {
+    fn new(
+        before: Assets,
+        after: Assets,
+        needed: &Assets,
+        coins_per_byte: u64,
+        empty: u64,
+    ) -> Self {
+        let laid = (|| -> Option<Laid> {
+            let mut items: Vec<(TokenKey, Held)> = before
+                .items
+                .iter()
+                .map(|a| (key_of(a), Held::of(a)))
+                .collect();
+            let at: BTreeMap<TokenKey, usize> = items
+                .iter()
+                .enumerate()
+                .map(|(i, (k, _))| (k.clone(), i))
+                .collect();
+            let (mut moved, mut rest) = (BTreeSet::new(), Vec::new());
+            for a in &after.items {
+                match at.get(&key_of(a)) {
+                    Some(&i) => items[i].1.amount = items[i].1.amount.checked_add(a.amount)?,
+                    None => {
+                        moved.insert(key_of(a));
+                        rest.push(Held::of(a));
+                    }
+                }
+            }
+            for n in &needed.items {
+                let i = *at.get(&key_of(n))?;
+                items[i].1.amount = items[i].1.amount.checked_sub(n.amount)?;
+            }
+            for (k, h) in &items {
+                if h.amount == 0 {
+                    moved.insert(k.clone());
+                }
+            }
+            items.retain(|(_, h)| h.amount > 0);
+            let at = items
+                .iter()
+                .enumerate()
+                .map(|(i, (k, _))| (k.clone(), i))
+                .collect();
+            let before: Vec<Held> = items.into_iter().map(|(_, h)| h).collect();
+            let whole = before.len() - before.len() % MAXIMUM_TOKENS_PER_UTXO as usize;
+            Some(Laid {
+                whole: outputs_cost(coins_per_byte, empty, &before[..whole]),
+                before,
+                at,
+                moved,
+                after: rest,
+                tails: vec![None; MAXIMUM_TOKENS_PER_UTXO as usize],
+            })
+        })();
+        Around {
+            raw: (before, after),
+            laid,
+        }
+    }
+}
+
+impl Laid {
+    /// The cost of a change of a set holding `kinds` (each box's, in turn), from the layout: `before`'s whole outputs,
+    /// the outputs where its tokens meet the set's and `after`'s, and `after`'s from where it then starts. None where
+    /// the set moves a kind (`moved`) or an amount can't be added up: it's costed in full.
+    fn cost(
+        &mut self,
+        kinds: &[&[(TokenKey, Held)]],
+        coins_per_byte: u64,
+        empty: u64,
+    ) -> Option<(u64, u64, usize)> {
+        let mut bumps: Vec<(usize, u64)> = Vec::new();
+        let mut new: Vec<(&TokenKey, Held)> = Vec::new();
+        for (key, held) in kinds.iter().flat_map(|k| k.iter()) {
+            if self.moved.contains(key) {
+                return None;
+            }
+            if let Some(&i) = self.at.get(key) {
+                match bumps.iter_mut().find(|(j, _)| *j == i) {
+                    Some((_, amount)) => *amount = amount.checked_add(held.amount)?,
+                    None => bumps.push((i, held.amount)),
+                }
+            } else if let Some((_, h)) = new.iter_mut().find(|(k, _)| *k == key) {
+                h.amount = h.amount.checked_add(held.amount)?;
+            } else {
+                new.push((key, *held));
+            }
+        }
+        let per = MAXIMUM_TOKENS_PER_UTXO as usize;
+        let whole = self.before.len() - self.before.len() % per;
+        let (mut least, mut bytes, mut outputs) = self.whole;
+        let mut meet: Vec<Held> = self.before[whole..].to_vec();
+        for (i, add) in bumps {
+            let had = self.before[i].amount;
+            let now = had.checked_add(add)?;
+            if i < whole {
+                // Within a whole output only the amount's own bytes change.
+                let more = head_size(now) - head_size(had);
+                least = least.saturating_add(coins_per_byte.saturating_mul(more));
+                bytes = bytes.saturating_add(more);
+            } else {
+                meet[i - whole].amount = now;
+            }
+        }
+        meet.extend(new.into_iter().map(|(_, h)| h));
+        let phase = ((per - meet.len() % per) % per).min(self.after.len());
+        meet.extend_from_slice(&self.after[..phase]);
+        let tail = match self.tails[phase] {
+            Some(tail) => tail,
+            None => {
+                let tail = outputs_cost(coins_per_byte, empty, &self.after[phase..]);
+                self.tails[phase] = Some(tail);
+                tail
+            }
+        };
+        for (l, b, n) in [outputs_cost(coins_per_byte, empty, &meet), tail] {
+            least = least.saturating_add(l);
+            bytes = bytes.saturating_add(b);
+            outputs += n;
+        }
+        if outputs == 0 {
+            let (least, bytes) = output_cost(coins_per_byte, empty, &[]);
+            return Some((least, bytes, 1));
+        }
+        Some((least, bytes, outputs))
+    }
+}
+
+/// `all` with `more` merged in, as [`Assets::merge`] merges them, kept with where each kind is.
+fn merge_into(all: &mut (Vec<Asset>, BTreeMap<TokenKey, usize>), more: &Assets) -> Option<()> {
+    for a in &more.items {
+        match all.1.get(&key_of(a)) {
+            Some(&i) => all.0[i].amount = all.0[i].amount.checked_add(a.amount)?,
+            None => {
+                all.1.insert(key_of(a), all.0.len());
+                all.0.push(a.clone());
+            }
+        }
+    }
+    Some(())
+}
+
+/// One set of the boxes [`Exact`] searches, by its mask: what its boxes hold, and how the box rule counts them.
+#[derive(Clone, Copy, Default)]
+struct BoxSet {
+    lovelace: u128,
+    /// The bytes its outpoints' indexes take past one each.
+    index: u64,
+    /// Which of its boxes hold tokens.
+    tokens: u32,
+    unknown: u8,
+    boxes: u8,
+    mixed: u8,
+}
+
+/// The other money a set of boxes goes beside in [`Exact`], as the weighed orders take it: all that adds something, by
+/// the purpose's order, where one transaction takes that (merge order a); or the first `k` of c's `order`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Beside {
+    All,
+    Fewest { order: usize, k: usize },
+}
+
+/// A level's sets, each with what it adds to a spend beside the other money ([`Exact::candidates`]), the most first:
+/// its ADA less its change's least and the bytes of fee its outputs and outpoints take, its mask, and how many outputs
+/// that change takes.
+type Candidates = std::rc::Rc<Vec<(i128, u32, usize)>>;
+
+/// The box rule's exact search (chunk 52), where a spend's boxes back from Lovejoin number at most [`EXACT_BOXES`]: every
+/// set of them, in the rule's order, each beside the other money as the weighed orders take it, rather than orders of
+/// boxes by what each pays alone. Sets come in levels, as few of unknown making, then as few boxes; at a level, the one
+/// that pays the most first (the plain choice), then those a mix moved more of, beside no more of the other money.
+///
+/// Each set is costed from what it merges, without a build: its ADA, beside what the other money and the tokens' own
+/// UTxOs bring, less the least its change needs with its tokens among those the change keeps anyway, and less the fee
+/// of the bytes that change and its outpoints take. A spend's fee is otherwise the same for every choice of as many
+/// inputs. So a build that comes up short says that no set worth less, by more than a few bytes of fee (`epsilon`),
+/// pays at that count of inputs, nor at a larger count by more than the computation the inputs it adds cost: only a
+/// set that bound can't rule out is built.
+struct Exact<'a> {
+    fee_per_byte: i128,
+    coins_per_byte: u64,
+    /// The least of a change of ADA alone.
+    empty: u64,
+    /// What one more input's guessed computation costs.
+    per_input: i128,
+    /// How far apart two sets' fees can be beyond what their costs say: the bytes an output's address and lovelace
+    /// take as the least sizes it rather than as the change is, and rounding.
+    epsilon: i128,
+    floor: u128,
+    needed: Assets,
+    base: usize,
+    base_lovelace: u128,
+    base_index: u64,
+    boxes: Vec<&'a UtxoResponse>,
+    box_tokens: Vec<Assets>,
+    /// Each box's tokens, as a change's cost reads them.
+    box_kinds: Vec<Vec<(TokenKey, Held)>>,
+    sets: Vec<BoxSet>,
+    /// The sets, by (of unknown making, boxes).
+    levels: BTreeMap<(u8, u8), Vec<u32>>,
+    history: Vec<&'a UtxoResponse>,
+    history_lovelace: u128,
+    history_index: u64,
+    history_tokens: bool,
+    orders: Vec<Vec<&'a UtxoResponse>>,
+    /// What each start of each order holds, and its outpoints' extra bytes.
+    order_lovelace: Vec<Vec<u128>>,
+    order_index: Vec<Vec<u64>>,
+    /// Which of `arounds` the change of each start of each order keeps.
+    order_around: Vec<Vec<usize>>,
+    /// Where each of `arounds` is first an order's: the order, and how many of it.
+    around_at: Vec<(usize, usize)>,
+    /// The tokens a change keeps around a set's: with all the other money (0), or the tokens' own UTxOs' and an
+    /// order's first k, each made where it's first needed.
+    arounds: BTreeMap<usize, Around>,
+    base_tokens: Assets,
+    history_tokens_held: Assets,
+    costs: BTreeMap<(usize, u32), Option<Cost>>,
+    candidates: BTreeMap<(usize, u8, u8), Candidates>,
+    /// By count of inputs, the most a set worth that much came up short.
+    shorts: Vec<Option<i128>>,
+    /// Builds already made, by count, worth and change outputs: another alike ends the same way.
+    tried: BTreeSet<(usize, i128, usize)>,
+    /// Counts of inputs and change outputs a build failed at otherwise (too large): as many or more fail too.
+    large: Vec<(usize, usize)>,
+}
+
+impl<'a> Exact<'a> {
+    /// The search over `boxes` (each with its [`box_rank`] as the merge weighs it), beside `base`, the tokens' own
+    /// UTxOs, and the other money `history` (all of it, by the purpose's order) or c's `orders`. None where a value
+    /// can't be read, or there are too many boxes: the weighed orders go instead.
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        params: &ProtocolParameters,
+        base: &[UtxoResponse],
+        needed: &Assets,
+        floor: u64,
+        boxes: &[&'a UtxoResponse],
+        ranks: &[u8],
+        history: &[&'a UtxoResponse],
+        orders: &[&Vec<&'a UtxoResponse>],
+        value: &dyn Fn(&UtxoResponse) -> u128,
+    ) -> Option<Self> {
+        if boxes.len() > EXACT_BOXES || params.coins_per_utxo_size == 0 {
+            return None;
+        }
+        let tokens_of = |u: &UtxoResponse| -> Option<Assets> {
+            if holds_tokens(u) {
+                assets_of(vec![u.clone()]).ok().map(|(_, t)| t)
+            } else {
+                Some(Assets::new())
+            }
+        };
+        let index = |u: &UtxoResponse| head_size(u.tx_index) - 1;
+        let merged = |all: Assets, more: &[&UtxoResponse]| -> Option<Assets> {
+            more.iter()
+                .filter(|u| holds_tokens(u))
+                .try_fold(all, |all, u| all.merge(tokens_of(u)?).ok())
+        };
+        let base_tokens = assets_of(base.to_vec()).ok()?.1;
+        let box_tokens: Vec<Assets> = boxes.iter().map(|u| tokens_of(u)).collect::<Option<_>>()?;
+        let mut sets = vec![BoxSet::default(); 1 << boxes.len()];
+        let mut levels: BTreeMap<(u8, u8), Vec<u32>> = BTreeMap::new();
+        levels.entry((0, 0)).or_default().push(0);
+        for mask in 1..sets.len() {
+            let i = mask.trailing_zeros() as usize;
+            let had = sets[mask & (mask - 1)];
+            let set = BoxSet {
+                lovelace: had.lovelace + value(boxes[i]),
+                index: had.index + index(boxes[i]),
+                tokens: had.tokens | (u32::from(!box_tokens[i].is_empty()) << i),
+                unknown: had.unknown + u8::from(ranks[i] == 2),
+                boxes: had.boxes + 1,
+                mixed: had.mixed + u8::from(ranks[i] == 0),
+            };
+            sets[mask] = set;
+            levels
+                .entry((set.unknown, set.boxes))
+                .or_default()
+                .push(mask as u32);
+        }
+        let (mut order_lovelace, mut order_index, mut order_around) = (vec![], vec![], vec![]);
+        // 0: beside all the other money; 1: beside none of it; then each start of an order that takes one more token.
+        let mut around_at = vec![(0, 0), (0, 0)];
+        for (o, order) in orders.iter().enumerate() {
+            let (mut held, mut extra, mut around) = (vec![0u128], vec![0u64], vec![1usize]);
+            for (k, u) in order.iter().enumerate() {
+                held.push(held.last().copied().unwrap_or(0) + value(u));
+                extra.push(extra.last().copied().unwrap_or(0) + index(u));
+                if holds_tokens(u) {
+                    around_at.push((o, k + 1));
+                }
+                around.push(if holds_tokens(u) {
+                    around_at.len() - 1
+                } else {
+                    around.last().copied().unwrap_or(1)
+                });
+            }
+            order_lovelace.push(held);
+            order_index.push(extra);
+            order_around.push(around);
+        }
+        // How many outputs a change can take, of every kind of token it could keep.
+        let mut kinds: BTreeSet<TokenKey> = base_tokens.items.iter().map(key_of).collect();
+        for t in box_tokens.iter().chain(
+            orders
+                .iter()
+                .flat_map(|o| o.iter())
+                .filter(|u| holds_tokens(u))
+                .filter_map(|u| tokens_of(u))
+                .collect::<Vec<_>>()
+                .iter(),
+        ) {
+            kinds.extend(t.items.iter().map(key_of));
+        }
+        let outputs = kinds.len().div_ceil(MAXIMUM_TOKENS_PER_UTXO as usize) as i128 + 1;
+        let history_tokens_held = merged(Assets::new(), history)?;
+        let box_kinds = box_tokens
+            .iter()
+            .map(|t| t.items.iter().map(|a| (key_of(a), Held::of(a))).collect())
+            .collect();
+        let fee_per_byte = i128::from(params.min_fee_a);
+        let empty = wallet_minimum_lovelace_with_assets(params, Assets::new()).ok()?;
+        let compute = computation_fee(params, SPEND_BUDGET_GUESS.mem, SPEND_BUDGET_GUESS.steps);
+        Some(Exact {
+            fee_per_byte,
+            coins_per_byte: params.coins_per_utxo_size,
+            empty,
+            per_input: i128::from(compute),
+            epsilon: fee_per_byte * (32 * outputs + 16) + 8,
+            floor: u128::from(floor),
+            needed: needed.clone(),
+            base: base.len(),
+            base_lovelace: base.iter().map(|u| u128::from(lovelace_of(u))).sum(),
+            base_index: base.iter().map(index).sum(),
+            boxes: boxes.to_vec(),
+            box_tokens,
+            box_kinds,
+            sets,
+            levels,
+            history: history.to_vec(),
+            history_lovelace: history.iter().map(|u| value(u)).sum(),
+            history_index: history.iter().map(|u| index(u)).sum(),
+            history_tokens: history.iter().any(|u| holds_tokens(u)),
+            orders: orders.iter().map(|o| o.to_vec()).collect(),
+            order_lovelace,
+            order_index,
+            order_around,
+            around_at,
+            arounds: BTreeMap::new(),
+            base_tokens,
+            history_tokens_held,
+            costs: BTreeMap::new(),
+            candidates: BTreeMap::new(),
+            shorts: vec![None; GUESSED_MOST_INPUTS + 1],
+            tried: BTreeSet::new(),
+            large: Vec::new(),
+        })
+    }
+
+    /// Whether any box is of unknown making.
+    fn has_unknown(&self) -> bool {
+        self.levels.keys().any(|(u, _)| *u > 0)
+    }
+
+    /// `around`'s tokens, made where first needed: beside all the other money, the tokens' own UTxOs' and all of its
+    /// (0); beside an order's first k, theirs, and the first k's after the set's.
+    fn around(&mut self, around: usize) -> Option<&mut Around> {
+        if !self.arounds.contains_key(&around) {
+            let mut after = (Vec::new(), BTreeMap::new());
+            let before = if around == 0 {
+                let mut before = (Vec::new(), BTreeMap::new());
+                merge_into(&mut before, &self.base_tokens)?;
+                merge_into(&mut before, &self.history_tokens_held)?;
+                Assets { items: before.0 }
+            } else {
+                let (order, k) = self.around_at[around];
+                for u in self.orders[order][..k].iter().filter(|u| holds_tokens(u)) {
+                    merge_into(&mut after, &assets_of(vec![(*u).clone()]).ok()?.1)?;
+                }
+                self.base_tokens.clone()
+            };
+            let made = Around::new(
+                before,
+                Assets { items: after.0 },
+                &self.needed,
+                self.coins_per_byte,
+                self.empty,
+            );
+            self.arounds.insert(around, made);
+        }
+        self.arounds.get_mut(&around)
+    }
+
+    /// The least, bytes and outputs of the change of the boxes in `tokens` between `around`'s tokens. None where the
+    /// tokens can't be added up or don't hold those sent.
+    fn cost(&mut self, around: usize, tokens: u32) -> Option<(u64, u64, usize)> {
+        if let Some(cost) = self.costs.get(&(around, tokens)) {
+            return *cost;
+        }
+        let made = self.around(around).is_some();
+        let Exact {
+            arounds,
+            box_kinds,
+            box_tokens,
+            needed,
+            coins_per_byte,
+            empty,
+            costs,
+            ..
+        } = self;
+        let picked = (0..box_kinds.len()).filter(|i| tokens & (1 << i) != 0);
+        let cost = arounds.get_mut(&around).filter(|_| made).and_then(|a| {
+            let kinds: Vec<&[(TokenKey, Held)]> =
+                picked.clone().map(|i| box_kinds[i].as_slice()).collect();
+            if let Some(fast) = a
+                .laid
+                .as_mut()
+                .and_then(|l| l.cost(&kinds, *coins_per_byte, *empty))
+            {
+                return Some(fast);
+            }
+            // In full, as the build adds them up.
+            let (before, after) = &a.raw;
+            picked
+                .clone()
+                .try_fold(before.clone(), |all, i| {
+                    all.merge(box_tokens[i].clone()).ok()
+                })
+                .and_then(|all| all.merge(after.clone()).ok())
+                .and_then(|all| all.separate(needed.clone()).ok())
+                .map(|change| change_cost(*coins_per_byte, *empty, &change))
+        });
+        costs.insert((around, tokens), cost);
+        cost
+    }
+
+    /// The level's sets beside `around`'s change, what each adds ([`Candidates`]) the most first, of as much the most
+    /// a mix moved first, then the boxes first in the balance. A set whose change can't be worked out isn't one.
+    fn candidates(&mut self, around: usize, unknown: u8, boxes: u8) -> Candidates {
+        if let Some(c) = self.candidates.get(&(around, unknown, boxes)) {
+            return c.clone();
+        }
+        let masks = self
+            .levels
+            .get(&(unknown, boxes))
+            .cloned()
+            .unwrap_or_default();
+        let mut c: Vec<(i128, u32, usize, u8)> = Vec::with_capacity(masks.len());
+        for mask in masks {
+            let set = self.sets[mask as usize];
+            if let Some((least, bytes, outputs)) = self.cost(around, set.tokens) {
+                let fee = self.fee_per_byte * i128::from(bytes + set.index);
+                let adds =
+                    i128::try_from(set.lovelace).unwrap_or(i128::MAX) - i128::from(least) - fee;
+                c.push((adds, mask, outputs, set.mixed));
+            }
+        }
+        c.sort_by_key(|&(adds, mask, _, mixed)| {
+            (std::cmp::Reverse(adds), std::cmp::Reverse(mixed), mask)
+        });
+        let c: Candidates = std::rc::Rc::new(c.into_iter().map(|(a, m, o, _)| (a, m, o)).collect());
+        self.candidates.insert((around, unknown, boxes), c.clone());
+        c
+    }
+
+    /// What the other money `beside` holds, its outpoints' extra bytes, how many UTxOs, and which change tokens it
+    /// keeps.
+    fn money(&self, beside: Beside) -> (u128, u64, usize, usize) {
+        match beside {
+            Beside::All => (
+                self.history_lovelace,
+                self.history_index,
+                self.history.len(),
+                0,
+            ),
+            Beside::Fewest { order, k } => (
+                self.order_lovelace[order][k],
+                self.order_index[order][k],
+                k,
+                self.order_around[order][k],
+            ),
+        }
+    }
+
+    /// The most a set worth that much fell short by at `count` inputs, carried to `count` from fewer by the computation
+    /// the inputs between cost: a set worth no more than this, less `epsilon`, can't pay there.
+    fn bound(&self, count: usize) -> Option<i128> {
+        self.shorts
+            .iter()
+            .enumerate()
+            .take(count + 1)
+            .filter_map(|(c, s)| s.map(|s| s + self.per_input * (count - c) as i128))
+            .max()
+    }
+
+    /// Of `cands` (a level's, filtered or not, of `boxes` boxes holding at most `most`) beside `beside`, the first that
+    /// builds, the most it adds first, passing by each the bound rules out. Err with whether one failed otherwise (too
+    /// large, too many): more inputs won't mend it.
+    #[allow(clippy::too_many_arguments)]
+    fn first_built<T>(
+        &mut self,
+        cands: &[(i128, u32, usize)],
+        beside: Beside,
+        (boxes, most): (u8, u128),
+        run: &mut impl FnMut(
+            Vec<&'a UtxoResponse>,
+            usize,
+            Option<Known>,
+            &GrownWhole<'a>,
+        ) -> Option<Grown<T>>,
+        grown: &GrownWhole<'a>,
+        too_many_at: &Cell<Option<usize>>,
+    ) -> Result<(u32, T), bool> {
+        let (held, index, k, _) = self.money(beside);
+        let extra = k + usize::from(boxes);
+        let count = self.base + extra;
+        if count > GUESSED_MOST_INPUTS || too_many_at.get().is_some_and(|at| extra >= at) {
+            return Err(true);
+        }
+        let offset = i128::try_from(self.base_lovelace + held).unwrap_or(i128::MAX)
+            - i128::try_from(self.floor).unwrap_or(i128::MAX)
+            - self.fee_per_byte * i128::from(self.base_index + index);
+        if self.base_lovelace + held + most <= self.floor {
+            return Err(false);
+        }
+        let mut bound = self.bound(count);
+        for &(adds, mask, outputs) in cands {
+            let worth = offset + adds;
+            if bound.is_some_and(|b| worth <= b - self.epsilon) {
+                break;
+            }
+            let set = self.sets[mask as usize];
+            // It can't pay what the spend pays out.
+            if self.base_lovelace + held + set.lovelace <= self.floor
+                || self.tried.contains(&(count, worth, outputs))
+                || self.large.iter().any(|&(c, o)| count >= c && outputs >= o)
+            {
+                continue;
+            }
+            let picked = (0..self.boxes.len())
+                .filter(|i| mask & (1 << i) != 0)
+                .map(|i| self.boxes[i]);
+            let order: Vec<&'a UtxoResponse> = match beside {
+                Beside::All => self.history.iter().copied().chain(picked).collect(),
+                Beside::Fewest { order, k } => picked
+                    .chain(self.orders[order][..k].iter().copied())
+                    .collect(),
+            };
+            let len = order.len();
+            match run(order, len, None, grown) {
+                Some(Grown::Built(built, _)) => return Ok((mask, built)),
+                Some(Grown::Short) => {
+                    self.tried.insert((count, worth, outputs));
+                    let s = &mut self.shorts[count];
+                    *s = Some(s.map_or(worth, |s| s.max(worth)));
+                    bound = self.bound(count);
+                }
+                Some(Grown::Failed(_)) => {
+                    if too_many_at.get().is_some_and(|at| extra >= at) {
+                        return Err(true);
+                    }
+                    // Too large: as many inputs or more, with as many change outputs or more, are too.
+                    self.tried.insert((count, worth, outputs));
+                    self.large.push((count, outputs));
+                }
+                None => {}
+            }
+        }
+        Err(false)
+    }
+
+    /// The first level of `unknown` boxes of unknown making that builds, in the rule's order ([`Exact`]).
+    fn search<T>(
+        &mut self,
+        unknown: std::ops::RangeInclusive<u8>,
+        run: &mut impl FnMut(
+            Vec<&'a UtxoResponse>,
+            usize,
+            Option<Known>,
+            &GrownWhole<'a>,
+        ) -> Option<Grown<T>>,
+        grown: &GrownWhole<'a>,
+        too_many_at: &Cell<Option<usize>>,
+    ) -> Option<T> {
+        let levels: Vec<(u8, u8)> = self
+            .levels
+            .keys()
+            .copied()
+            .filter(|(u, n)| unknown.contains(u) && *n > 0)
+            .collect();
+        for (u, n) in levels {
+            if self.base + usize::from(n) > GUESSED_MOST_INPUTS {
+                continue;
+            }
+            if let Some(built) = self.level(u, n, run, grown, too_many_at) {
+                return Some(built);
+            }
+        }
+        None
+    }
+
+    /// The level of `u` boxes of unknown making and `n` in all: its plain choice, the set that adds the most and
+    /// builds beside all the other money where one transaction takes that, else beside the fewest of one of c's orders;
+    /// then, of as many, the one a mix moved the most of that builds beside the same other money or less (rules 4 and
+    /// 5). None where no set of the level builds.
+    fn level<T>(
+        &mut self,
+        u: u8,
+        n: u8,
+        run: &mut impl FnMut(
+            Vec<&'a UtxoResponse>,
+            usize,
+            Option<Known>,
+            &GrownWhole<'a>,
+        ) -> Option<Grown<T>>,
+        grown: &GrownWhole<'a>,
+        too_many_at: &Cell<Option<usize>>,
+    ) -> Option<T> {
+        let held = self.levels.get(&(u, n)).map_or(0, |masks| {
+            masks
+                .iter()
+                .map(|&m| self.sets[m as usize].lovelace)
+                .max()
+                .unwrap_or(0)
+        });
+        let mut plain: Option<(u32, Beside, T)> = None;
+        // With all of the other money short, fewer of it is too, unless some of it holds tokens (whose change can
+        // cost more than they add) or a build failed otherwise.
+        let mut fewest = true;
+        // What can't pay what the spend pays out, beside the most a set of the level holds, isn't costed.
+        let can = |exact: &Self, beside: Beside| {
+            exact.base_lovelace + exact.money(beside).0 + held > exact.floor
+        };
+        if !self.history.is_empty()
+            && self.base + self.history.len() + usize::from(n) <= GUESSED_MOST_INPUTS
+            && can(self, Beside::All)
+        {
+            let cands = self.candidates(0, u, n);
+            match self.first_built(&cands, Beside::All, (n, held), run, grown, too_many_at) {
+                Ok((mask, built)) => plain = Some((mask, Beside::All, built)),
+                Err(failed) => fewest = failed || self.history_tokens,
+            }
+        }
+        if plain.is_none() && fewest {
+            'orders: for order in 0..self.orders.len() {
+                let most = self.orders[order]
+                    .len()
+                    .min(GUESSED_MOST_INPUTS.saturating_sub(self.base + usize::from(n)));
+                for k in 0..=most {
+                    let beside = Beside::Fewest { order, k };
+                    if !can(self, beside) {
+                        continue;
+                    }
+                    let cands = self.candidates(self.order_around[order][k], u, n);
+                    match self.first_built(&cands, beside, (n, held), run, grown, too_many_at) {
+                        Ok((mask, built)) => {
+                            plain = Some((mask, beside, built));
+                            break 'orders;
+                        }
+                        Err(true) => break,
+                        Err(false) => {}
+                    }
+                }
+            }
+        }
+        let (mask, beside, built) = plain?;
+        let had = self.sets[mask as usize].mixed;
+        let (_, _, _, around) = self.money(beside);
+        let cands = self.candidates(around, u, n);
+        let most_mixed = cands
+            .iter()
+            .map(|&(_, m, _)| self.sets[m as usize].mixed)
+            .max()
+            .unwrap_or(0);
+        for mixed in (had + 1..=most_mixed).rev() {
+            let more: Vec<(i128, u32, usize)> = cands
+                .iter()
+                .copied()
+                .filter(|&(_, m, _)| self.sets[m as usize].mixed == mixed)
+                .collect();
+            if let Ok((_, built)) =
+                self.first_built(&more, beside, (n, held), run, grown, too_many_at)
+            {
+                return Some(built);
+            }
+        }
+        Some(built)
+    }
+}
+
 /// [`select_script_inputs`] with histories known: `base` are the UTxOs
 /// holding the tokens sent, `needed`, which every choice spends, and `rest`
 /// the others, of which those `last` says add less than nothing come after
@@ -3568,11 +4438,12 @@ fn apart<T>(
         }
     }
 
-    // Then the merge, by the box rule ([`box_rank`]): of the choices its orders try, within the margins it names, as
-    // few boxes of unknown making as pay, one only where no order tried builds without it; then as few boxes as pay; of
-    // as many, the most a mix moved, with no more of the other inputs than the plain choice's build; then the purpose's
-    // order and size. Each box is weighed by what it pays beside the change its order makes anyway
-    // ([`Weighed::InOne`]). So for u = 0, 1, 2, … boxes of unknown making, the largest u, in turn:
+    // Then the merge, by the box rule ([`box_rank`]): as few boxes of unknown making as pay; then as few boxes as pay;
+    // of as many, the most a mix moved, with no more of the other inputs than the plain choice's build; then the
+    // purpose's order and size. With at most EXACT_BOXES boxes, over every set of them ([`Exact`], below the orders'
+    // setup, chunk 52), each beside the other money as a and c take it. Past that, of the choices the weighed orders
+    // try, within the margins the rule names, each box weighed by what it pays beside the change its order makes
+    // anyway ([`Weighed::InOne`]). So for u = 0, 1, 2, … boxes of unknown making, the largest u, in turn:
     //
     // a. As the CLI would, but the purpose's last resorts after the rest and the boxes after everything: the other
     //    money that adds something by the purpose's order (independent review L39), then the u, then those whose
@@ -3609,10 +4480,10 @@ fn apart<T>(
     //    `where_the_box_rules_orders_build_nothing_1e1b0647s_own_still_send_it_in_one`); its b, which no balance found
     //    needs, replays 1e1b0647 whole (l7still#2). The same orders run once before the first box of unknown making
     //    too, over everything else (l7merge#1, l7still#1): a set they build holds none, so it goes before anything the
-    //    orders with one or more build, and that is the one choice they change. A set neither they nor the rule's
-    //    orders try can still pay without one: near the input limit, beside token boxes, a merge can then take one
-    //    (l8merge#1, l8still#2), and past one, with no such pass between one and two, one more of them than pays.
-    //    Neither pass promises rules 3 to 5 for what it builds.
+    //    orders with one or more build, and that is the one choice they change. Past EXACT_BOXES boxes, a set neither
+    //    they nor the weighed orders try can still pay without one: near the input limit, beside token boxes, a merge
+    //    can then take one (l8merge#1, l8still#2), and past one, with no such pass between one and two, one more of
+    //    them than pays. Neither pass promises rules 3 to 5 for what it builds.
     // e. The CLI's own order: never refused what the CLI would pay.
     //
     // Each order is grown one UTxO at a time, from its first start that holds more than the spend pays out. One that
@@ -3908,12 +4779,67 @@ fn apart<T>(
         failed: &failed,
     };
 
+    // With at most EXACT_BOXES boxes, the exact search (chunk 52): the other money alone, as a, b and c take it; then
+    // every set of the boxes in the rule's order, beside the other money as a and c take it ([`Exact`]); before the
+    // first box of unknown making, 1e1b0647's own orders over everything else, as below. Where none builds, d and e.
+    let ranks: Vec<u8> = weights.iter().map(|w| w.1).collect();
+    let mut exact = Exact::new(
+        params,
+        &base,
+        needed,
+        floor,
+        &box_list,
+        &ranks,
+        &by_history,
+        &rests,
+        &lovelace_in,
+    );
+    if let Some(exact) = exact.as_mut() {
+        let mut alone: Vec<&Vec<&UtxoResponse>> = Vec::new();
+        for money in [&by_history, &by_tier]
+            .into_iter()
+            .chain(rests.iter().copied())
+        {
+            if money.is_empty() || alone.iter().any(|m| same(m, money)) {
+                continue;
+            }
+            alone.push(money);
+            if let Some(Grown::Built(built, _)) = run(money.clone(), 0, None, &grown) {
+                return Ok(built);
+            }
+        }
+        if let Some(built) = exact.search(0..=0, &mut run, &grown, &too_many_at) {
+            return Ok(built);
+        }
+        if exact.has_unknown() {
+            let unknown_box = |x: &UtxoResponse| unknown_boxes.iter().any(|b| std::ptr::eq(*b, x));
+            let without = old.get_or_insert_with(&old_orders).without(unknown_box);
+            let held: u128 = without.a.iter().map(|x| lovelace_in(x)).sum();
+            if !without.a.is_empty()
+                && !unpaid(held)
+                && let Some(built) = old_orders_built(&without, &search, &mut run)
+            {
+                return Ok(built);
+            }
+            if let Some(built) = exact.search(1..=u8::MAX, &mut run, &grown, &too_many_at) {
+                return Ok(built);
+            }
+        }
+    }
+
+    // Past EXACT_BOXES boxes, the weighed orders.
+    //
     // The fewest boxes whose making the wallet knows that, beside the u of unknown making, failed alone in c: as
     // many or more fail too, beside as many or more of unknown making.
     let mut known_fail: Option<usize> = None;
     // Whether a's start, its other money and the u, failed alone: with more of unknown making it fails too.
     let mut ahead_fail = false;
-    for u in 0..=unknown.len() {
+    let weighed_to = if exact.is_some() {
+        0
+    } else {
+        unknown.len() + 1
+    };
+    for u in 0..weighed_to {
         // Before the first box of unknown making, once, where none of u = 0's orders built: 1e1b0647's own orders over
         // everything else (d's, chunk 51, l7merge#1, l7still#1). What they build holds none; a set that neither they
         // nor u = 0's orders try can still pay without one (l8merge#1, l8still#2).
@@ -4110,6 +5036,20 @@ pub fn max_inputs_by<K: Ord>(
     at_most: usize,
     worth: impl Fn(&UtxoResponse) -> K,
 ) -> Result<(Vec<UtxoResponse>, usize)> {
+    max_inputs_apart(available, needed, at_most, worth, None)
+}
+
+/// [`max_inputs_by`], where `histories` are given those holding `needed` by the box rule ([`holding_by_rule`], chunk
+/// 52, l6words#1's code option), and by how much of each token they hold only where the rule's are more than `at_most`.
+/// The web wallet's payments in parts by history pass them; by what each adds, they don't, so what those parts took
+/// before is still tried.
+pub fn max_inputs_apart<K: Ord>(
+    available: &[UtxoResponse],
+    needed: &Assets,
+    at_most: usize,
+    worth: impl Fn(&UtxoResponse) -> K,
+    histories: Option<&Histories>,
+) -> Result<(Vec<UtxoResponse>, usize)> {
     let holds_needed = |u: &UtxoResponse| {
         needed.items.iter().any(|want| {
             quantity_in(
@@ -4125,7 +5065,14 @@ pub fn max_inputs_by<K: Ord>(
         .cloned()
         .collect();
     let (fits, _) = fitting(&evaluable, &Assets::new(), holds_needed)?;
-    let mut taken = holding(&fits, needed)?;
+    let ruled = match histories {
+        Some(h) if !h.blind(&fits) => Some(holding_by_rule(&fits, needed, h)?),
+        _ => None,
+    };
+    let mut taken = match ruled {
+        Some(ruled) if ruled.len() <= at_most => ruled,
+        _ => holding(&fits, needed)?,
+    };
     if taken.len() > at_most {
         bail!(
             "The tokens being sent are spread over more than {at_most} UTxOs, more than one transaction spends: send less of them at once"
@@ -4191,6 +5138,97 @@ fn holding(available: &[UtxoResponse], needed: &Assets) -> Result<Vec<UtxoRespon
         }
     }
     Ok(picked)
+}
+
+/// [`holding`] by the box rule (chunk 52, l6words#1's code option): for each token in turn, the UTxOs holding it that
+/// are no box back from Lovejoin first, the most of it first, as `holding` takes them; where those don't hold enough,
+/// as few boxes of unknown making as hold the rest, then as few boxes, of as many the most a mix moved, the largest
+/// first, beside as few of the others as then hold enough. Errors as `holding` does.
+fn holding_by_rule(
+    available: &[UtxoResponse],
+    needed: &Assets,
+    histories: &Histories,
+) -> Result<Vec<UtxoResponse>> {
+    let mut picked: Vec<UtxoResponse> = Vec::new();
+    for want in &needed.items {
+        let policy = hex::encode(want.policy_id);
+        let name = hex::encode(&want.token_name);
+        let held = |u: &UtxoResponse| u128::from(quantity_in(u, &policy, &name));
+        let sum = |us: &[&UtxoResponse]| us.iter().map(|u| held(u)).sum::<u128>();
+        let have: u128 = picked.iter().map(held).sum();
+        let need = u128::from(want.amount).saturating_sub(have);
+        if need == 0 {
+            continue;
+        }
+        let holders: Vec<&UtxoResponse> = available
+            .iter()
+            .filter(|u| held(u) > 0 && !picked.iter().any(|p| same_utxo(p, u)))
+            .collect();
+        if sum(&holders) < need {
+            return holding(available, needed);
+        }
+        let (mut others, boxes): (Vec<&UtxoResponse>, Vec<&UtxoResponse>) =
+            holders.into_iter().partition(|u| histories.tier_of(u) < 2);
+        others.sort_by_key(|u| std::cmp::Reverse(held(u)));
+        let rank = |u: &UtxoResponse| box_rank(&histories.class_of(u));
+        let largest = |of: &dyn Fn(u8) -> bool| -> Vec<&UtxoResponse> {
+            let mut b: Vec<&UtxoResponse> = boxes.iter().copied().filter(|u| of(rank(u))).collect();
+            b.sort_by_key(|u| (std::cmp::Reverse(held(u)), rank(u)));
+            b
+        };
+        let mut chosen: Vec<&UtxoResponse> = Vec::new();
+        let beside = sum(&others);
+        if beside < need {
+            let (unknown, known) = (largest(&|r| r == 2), largest(&|r| r < 2));
+            // As few of unknown making as hold the rest beside every other holder.
+            let all_known = sum(&known);
+            let u = (0..=unknown.len())
+                .find(|&u| beside + all_known + sum(&unknown[..u]) >= need)
+                .unwrap_or(unknown.len());
+            // Then as few whose making the wallet knows as hold the rest, the largest; of as many, the most a mix moved.
+            let left = need.saturating_sub(beside + sum(&unknown[..u]));
+            let j = (0..=known.len())
+                .find(|&j| sum(&known[..j]) >= left)
+                .unwrap_or(known.len());
+            let (mixed, plain) = (largest(&|r| r == 0), largest(&|r| r == 1));
+            let most = (0..=j.min(mixed.len()))
+                .rev()
+                .filter(|&m| j - m <= plain.len())
+                .map(|m| [&mixed[..m], &plain[..j - m]].concat())
+                .find(|set| sum(set) >= left)
+                .unwrap_or_else(|| known[..j].to_vec());
+            chosen = [&unknown[..u], &most[..]].concat();
+        }
+        // Beside the boxes, as few of the others as then hold enough.
+        let mut got = sum(&chosen);
+        for o in others {
+            if got >= need {
+                break;
+            }
+            got += held(o);
+            chosen.push(o);
+        }
+        picked.extend(chosen.into_iter().cloned());
+    }
+    Ok(picked)
+}
+
+/// A whole spend's boxes back from Lovejoin as the box rule counts them ([`box_rank`]): how many of unknown making, how
+/// many in all, and how many a mix moved, so the smaller is the better.
+fn box_key(
+    spent: &[UtxoResponse],
+    histories: &Histories,
+) -> (usize, usize, std::cmp::Reverse<usize>) {
+    let ranks: Vec<u8> = spent
+        .iter()
+        .filter(|u| histories.tier_of(u) == 2)
+        .map(|u| box_rank(&histories.class_of(u)))
+        .collect();
+    (
+        ranks.iter().filter(|r| **r == 2).count(),
+        ranks.len(),
+        std::cmp::Reverse(ranks.iter().filter(|r| **r == 0).count()),
+    )
 }
 
 /// A seedelf mint, ready to prove, draft and finalize.
@@ -5424,6 +6462,163 @@ mod too_many_by_count {
         assert!(
             is_too_many(&e),
             "refused as too many for one transaction, so the wallet's parts take it: {e}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod exact_costs {
+    use super::*;
+
+    /// Chunk 52: the exact search's change least, worked out from its tokens without making an output, is the ledger's
+    /// own least of the outputs that change goes out in ([`minimum_deposit`]), and its bytes are those outputs' as that
+    /// least sizes them: one to four policies, names of 1 to 32 bytes, quantities of every CBOR width, 1 to 45 kinds.
+    #[test]
+    fn a_changes_least_worked_out_from_its_tokens_is_the_ledgers() {
+        let rows: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/epoch_params.json")).unwrap();
+        let p = ProtocolParameters::from_koios(&rows[0]).unwrap();
+        let empty = wallet_minimum_lovelace_with_assets(&p, Assets::new()).unwrap();
+        let mut seed = 0x5eed_0052u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for case in 0..400 {
+            let kinds = 1 + next() % 45;
+            let policies = 1 + next() % 4;
+            let mut tokens = Assets::new();
+            for k in 0..kinds {
+                let policy = hex::encode([(next() % policies) as u8 + 1; 28]);
+                let length = [1usize, 5, 23, 24, 32][(next() % 5) as usize];
+                let name: String = (0..length)
+                    .map(|i| format!("{:02x}", if i == 0 { k as usize } else { i }))
+                    .collect();
+                let amount = [
+                    1,
+                    23,
+                    24,
+                    255,
+                    256,
+                    65_535,
+                    65_536,
+                    u64::from(u32::MAX),
+                    u64::from(u32::MAX) + 1,
+                    u64::MAX / 3,
+                ][(next() % 10) as usize];
+                tokens = tokens
+                    .add(Asset::new(policy, name, amount).unwrap())
+                    .unwrap();
+            }
+            let (least, bytes, outputs) = change_cost(p.coins_per_utxo_size, empty, &tokens);
+            assert_eq!(least, minimum_deposit(&p, &tokens).unwrap(), "case {case}");
+            assert_eq!(outputs, token_chunks(&tokens).len(), "case {case}");
+            let sized: u64 = token_chunks(&tokens)
+                .into_iter()
+                .map(|c| {
+                    wallet_minimum_lovelace_with_assets(&p, c).unwrap() / p.coins_per_utxo_size
+                        - OVERHEAD_COST
+                })
+                .sum();
+            assert_eq!(bytes, sized, "case {case}");
+        }
+        assert_eq!(
+            change_cost(p.coins_per_utxo_size, empty, &Assets::new()),
+            (empty, empty / p.coins_per_utxo_size - OVERHEAD_COST, 1)
+        );
+    }
+
+    /// Chunk 52: a set's change costed from its layout ([`Laid::cost`]) is its change costed in full, as the build adds
+    /// its tokens up (each kind merged where it first comes, less those sent), wherever the layout answers: tokens
+    /// before the set's from none to 45 kinds, after them from none to 45, some shared with the set's or sent, the set's
+    /// own bumping kinds before them, new ones, and ones whose amounts change their bytes.
+    #[test]
+    fn a_sets_change_costed_from_its_layout_is_its_change_costed_in_full() {
+        let rows: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/epoch_params.json")).unwrap();
+        let p = ProtocolParameters::from_koios(&rows[0]).unwrap();
+        let (cpb, empty) = (
+            p.coins_per_utxo_size,
+            wallet_minimum_lovelace_with_assets(&p, Assets::new()).unwrap(),
+        );
+        let seed = Cell::new(0x5eed_5e75u64);
+        let next = || {
+            let mut x = seed.get();
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            seed.set(x);
+            x
+        };
+        let token = |kind: u64, amount: u64| {
+            let policy = hex::encode([(kind % 5) as u8 + 1; 28]);
+            let name: String = (0..1 + kind % 9)
+                .map(|i| format!("{:02x}", (kind + i) % 256))
+                .collect();
+            Asset::new(policy, name, amount).unwrap()
+        };
+        let amounts = [1u64, 23, 24, 255, 256, 65_535, 65_536, u64::from(u32::MAX)];
+        let (mut laid, mut fallbacks) = (0, 0);
+        for case in 0..3_000 {
+            let draw = |n: u64, from: u64| {
+                (0..n).fold(Assets::new(), |all, _| {
+                    all.add(token(from + next() % 60, amounts[(next() % 8) as usize]))
+                        .unwrap()
+                })
+            };
+            let before = draw(next() % 46, 0);
+            let after = draw(next() % 46, 20);
+            let boxes: Vec<Assets> = (0..1 + next() % 4)
+                .map(|_| draw(1 + next() % 3, 10))
+                .collect();
+            // Some of a kind before is sent.
+            let needed =
+                before
+                    .items
+                    .iter()
+                    .filter(|_| next() % 4 == 0)
+                    .fold(Assets::new(), |all, a| {
+                        let sent = if next() % 2 == 0 {
+                            a.amount
+                        } else {
+                            a.amount.div_ceil(2)
+                        };
+                        all.add(Asset {
+                            amount: sent,
+                            ..a.clone()
+                        })
+                        .unwrap()
+                    });
+            let kinds: Vec<Vec<(TokenKey, Held)>> = boxes
+                .iter()
+                .map(|t| t.items.iter().map(|a| (key_of(a), Held::of(a))).collect())
+                .collect();
+            let full = boxes
+                .iter()
+                .try_fold(before.clone(), |all, t| all.merge(t.clone()))
+                .and_then(|all| all.merge(after.clone()))
+                .and_then(|all| all.separate(needed.clone()))
+                .map(|change| change_cost(cpb, empty, &change))
+                .ok();
+            let mut around = Around::new(before, after, &needed, cpb, empty);
+            let kinds: Vec<&[(TokenKey, Held)]> = kinds.iter().map(|k| k.as_slice()).collect();
+            match around
+                .laid
+                .as_mut()
+                .and_then(|l| l.cost(&kinds, cpb, empty))
+            {
+                Some(fast) => {
+                    laid += 1;
+                    assert_eq!(Some(fast), full, "case {case}");
+                }
+                None => fallbacks += 1,
+            }
+        }
+        assert!(
+            laid > 1_000 && fallbacks > 100,
+            "{laid} laid, {fallbacks} in full"
         );
     }
 }
