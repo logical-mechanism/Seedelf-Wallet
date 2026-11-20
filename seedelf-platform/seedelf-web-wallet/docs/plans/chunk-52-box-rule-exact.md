@@ -129,4 +129,8 @@ Fixes go in this PR, each test-first (fails before, passes after). Then rerun *D
 - The review's findings are fixed or named, and its fixes pass the checks above.
 - This plan moves to the archive with a record of its PR and its review, and 1.9.3 ships.
 
-**Checks (2026-11-20, on the uncommitted tree):** `cargo test --workspace --locked` 1,104 passed (chunk 51's 1,095 and nine new); the box rule's ignored pair (the strict sweep, and 200 + 200 boxes in parts) and the parts suite (`payment_parts_shapes_test --ignored`, 163 s) pass; `cargo fmt --check` and CI's clippy pass. Typecheck; Vitest 3,949 and, preprod-only, 3,935; e2e 109 on the dev build, 3 on the data layer's, 109 on the store build. **Left:** the live preprod flows (`run.mjs all` and `staking`), which need the test wallet's phrase file in this worktree's extension folder; then the commit, the PR and its record.
+**Checks (2026-11-20, on the uncommitted tree):** `cargo test --workspace --locked` 1,104 passed (chunk 51's 1,095 and nine new); the box rule's ignored pair (the strict sweep, and 200 + 200 boxes in parts) and the parts suite (`payment_parts_shapes_test --ignored`, 163 s) pass; `cargo fmt --check` and CI's clippy pass. Typecheck; Vitest 3,949 and, preprod-only, 3,935; e2e 109 on the dev build, 3 on the data layer's, 109 on the store build.
+
+**Live preprod flows (2026-11-20, on 2af17ab2's dev build, the test wallet):** all ten confirmed.
+- `run.mjs all`, hosts preprod.koios.rest and www.giveme.my: mint (account) `d06681a1`, move in 25.5 ₳ `32232adc`, stealth mint `cbf458e2`, transfer 3.3 ₳ `567e3c87`, Make public 5.5 ₳ `6cecdaee`, remove into the private balance `bf0b6370`. The last four spend from the private balance through the changed selection.
+- `run.mjs staking`, host preprod.koios.rest: stake TPREP `366a8e65`, vote no confidence `ee2c4d94`, vote abstain `c7241f90`, stake LOGIC `60e5eb1a`.
