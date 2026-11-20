@@ -3998,8 +3998,10 @@ pub mod api {
     /// first, those adding ADA before those holding only their tokens' least, a chain's, which takes the ADA forward
     /// (test wallet A, 1.6.0: its 2,621 ADA sat with 19 of the 400 tokens it sent, behind bundles of 20 holding only
     /// their least, and no part could pay its fee); but [`Worth::of`]'s with a funding's histories puts its purpose's
-    /// order before that (chunk 51, l8words#2). By history, before both, by the box rule ([`Worth::holder`]: chunk 52,
-    /// l6words#1's code option).
+    /// order before that (chunk 51, l8words#2). By history, before both, by the box rule: first those the rule takes
+    /// for everything still owed ([`build::holding_by_rule`]), so no part takes a holder the payment's own choice
+    /// leaves out (chunk 52's review, r3#1: 20 mixed boxes went where one box held the whole token), then the others
+    /// by [`Worth::holder`] (chunk 52, l6words#1's code option).
     fn token_group(
         rest: &[UtxoResponse],
         tokens: &[TokenAmount],
@@ -4012,8 +4014,22 @@ pub mod api {
             .filter(|u| holds_any(u, tokens))
             .cloned()
             .collect();
+        let ruled: Vec<UtxoResponse> = worth
+            .1
+            .as_ref()
+            .and_then(|h| {
+                let needed = assets_of(tokens).ok()?;
+                build::holding_by_rule(&holders, &needed, h).ok()
+            })
+            .unwrap_or_default();
+        let outside = |u: &UtxoResponse| {
+            !ruled
+                .iter()
+                .any(|r| r.tx_hash == u.tx_hash && r.tx_index == u.tx_index)
+        };
         holders.sort_by_key(|u| {
             (
+                outside(u),
                 worth.holder(u),
                 std::cmp::Reverse((
                     rich.then(|| worth.of_utxo(u)),
@@ -4211,11 +4227,14 @@ pub mod api {
         }
 
         /// Where `u` goes among the UTxOs holding a token sent, by the box rule, where this order is by history: one
-        /// that's no box back from Lovejoin first, then a box a mix moved, a plain one, one of unknown making
-        /// ([`build::box_rank`]). All alike by what each adds.
+        /// that's no box back from Lovejoin and that the purpose takes before a box a mix moved first
+        /// ([`build::Histories::before_boxes`]), then a box a mix moved, a plain one, one of unknown making
+        /// ([`build::box_rank`]), then the purpose's later money, a funding's another session's money among it
+        /// (chunk 52's review, r3#2). All alike by what each adds.
         fn holder(&self, u: &UtxoResponse) -> (u8, u8) {
             match &self.1 {
                 Some(h) if h.tier_of(u) == 2 => (1, build::box_rank(&h.class_of(u))),
+                Some(h) if !h.before_boxes(u) => (2, 0),
                 _ => (0, 0),
             }
         }

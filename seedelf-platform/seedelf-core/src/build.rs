@@ -2863,6 +2863,18 @@ impl Histories {
         self.purpose.tier(&self.class_of(utxo))
     }
 
+    /// Whether `utxo`, no box back from Lovejoin, is money the spend's purpose takes before a box a mix moved: for a
+    /// payment, all of it; for a funding, its own session's money and money received, never another session's, money
+    /// made private, change or Unknown money (chunk 52's review, r3#2). The UTxOs holding a token sent go so
+    /// ([`holding_by_rule`]).
+    pub fn before_boxes(&self, utxo: &UtxoResponse) -> bool {
+        let mixed = Class {
+            id: String::new(),
+            origin: Origin::Mixed,
+        };
+        self.tier_of(utxo) < 2 && self.rank_of(utxo) < self.purpose.rank(&mixed)
+    }
+
     /// The classes `inputs` merge: each one once, in the order first spent,
     /// when there's more than one; none when they share a history.
     pub fn merged(&self, inputs: &[UtxoResponse]) -> Vec<Class> {
@@ -3007,8 +3019,10 @@ pub(crate) fn select_script_inputs<T>(
             );
         }
         // The holders by the box rule, and by how much of each token they hold: the spend that does better by the rule
-        // over all its boxes goes, the rule's holders' where they tie, and the others' only where the rule's are
-        // refused or do worse, so nothing that built before is refused (chunk 52, l6words#1's code option).
+        // over all its boxes goes, and of two alike there, the one merging fewer histories (chunk 52's review, r3#3:
+        // money made private beside the mixed box that paid alone); the rule's holders' where they tie on both, and
+        // the others' only where the rule's are refused or do worse, so nothing that built before is refused (chunk 52,
+        // l6words#1's code option).
         let spent: RefCell<Vec<UtxoResponse>> = RefCell::new(Vec::new());
         let mut recorded = |inputs: &[UtxoResponse]| {
             let built = attempt(inputs);
@@ -3046,12 +3060,10 @@ pub(crate) fn select_script_inputs<T>(
             &mut recorded,
         );
         let quantity_spent = spent.take();
+        let key =
+            |spent: &[UtxoResponse]| (box_key(spent, histories), histories.merged(spent).len());
         return match (by_rule, by_quantity) {
-            (Ok(_), Ok(other))
-                if box_key(&quantity_spent, histories) < box_key(&ruled_spent, histories) =>
-            {
-                Ok(other)
-            }
+            (Ok(_), Ok(other)) if key(&quantity_spent) < key(&ruled_spent) => Ok(other),
             (Ok(ruled), _) => Ok(ruled),
             (Err(_), other) => other,
         };
@@ -5141,10 +5153,14 @@ fn holding(available: &[UtxoResponse], needed: &Assets) -> Result<Vec<UtxoRespon
 }
 
 /// [`holding`] by the box rule (chunk 52, l6words#1's code option): for each token in turn, the UTxOs holding it that
-/// are no box back from Lovejoin first, the most of it first, as `holding` takes them; where those don't hold enough,
-/// as few boxes of unknown making as hold the rest, then as few boxes, of as many the most a mix moved, the largest
-/// first, beside as few of the others as then hold enough. Errors as `holding` does.
-fn holding_by_rule(
+/// are no box back from Lovejoin and that the spend's purpose takes before a box a mix moved first
+/// ([`Histories::before_boxes`]), the most of it first, as `holding` takes them; where those don't hold enough, as few
+/// boxes of unknown making as hold the rest, then as few boxes, of as many the most a mix moved, the largest first,
+/// beside as few of those first as then hold enough; and only then the purpose's later money holding it, the most first
+/// (chunk 52's review, r3#2: a funding's token came from another session's money before a mixed box that paid alone).
+/// Then a holder that another token's choice made needless is dropped ([`needless_dropped`], r3#4). Errors as
+/// `holding` does.
+pub fn holding_by_rule(
     available: &[UtxoResponse],
     needed: &Assets,
     histories: &Histories,
@@ -5167,9 +5183,12 @@ fn holding_by_rule(
         if sum(&holders) < need {
             return holding(available, needed);
         }
-        let (mut others, boxes): (Vec<&UtxoResponse>, Vec<&UtxoResponse>) =
+        let (money, boxes): (Vec<&UtxoResponse>, Vec<&UtxoResponse>) =
             holders.into_iter().partition(|u| histories.tier_of(u) < 2);
+        let (mut others, mut later): (Vec<&UtxoResponse>, Vec<&UtxoResponse>) =
+            money.into_iter().partition(|u| histories.before_boxes(u));
         others.sort_by_key(|u| std::cmp::Reverse(held(u)));
+        later.sort_by_key(|u| std::cmp::Reverse(held(u)));
         let rank = |u: &UtxoResponse| box_rank(&histories.class_of(u));
         let largest = |of: &dyn Fn(u8) -> bool| -> Vec<&UtxoResponse> {
             let mut b: Vec<&UtxoResponse> = boxes.iter().copied().filter(|u| of(rank(u))).collect();
@@ -5199,9 +5218,9 @@ fn holding_by_rule(
                 .unwrap_or_else(|| known[..j].to_vec());
             chosen = [&unknown[..u], &most[..]].concat();
         }
-        // Beside the boxes, as few of the others as then hold enough.
+        // Beside the boxes, as few of the others as then hold enough, the purpose's later money last.
         let mut got = sum(&chosen);
-        for o in others {
+        for o in others.into_iter().chain(later) {
             if got >= need {
                 break;
             }
@@ -5210,7 +5229,53 @@ fn holding_by_rule(
         }
         picked.extend(chosen.into_iter().cloned());
     }
-    Ok(picked)
+    Ok(needless_dropped(picked, needed, histories))
+}
+
+/// `picked` less each holder the others make needless, every token of `needed` still held enough without it: a box of
+/// unknown making first, then a plain box, then a mixed one, then the rest, the one holding least of them first. Each
+/// token's holders are chosen in turn, so a later token's can hold an earlier one's too (chunk 52's review, r3#4: two
+/// boxes of unknown making went where one held both).
+fn needless_dropped(
+    mut picked: Vec<UtxoResponse>,
+    needed: &Assets,
+    histories: &Histories,
+) -> Vec<UtxoResponse> {
+    let held = |u: &UtxoResponse, want: &Asset| {
+        u128::from(quantity_in(
+            u,
+            &hex::encode(want.policy_id),
+            &hex::encode(&want.token_name),
+        ))
+    };
+    let enough = |us: &[UtxoResponse]| {
+        needed
+            .items
+            .iter()
+            .all(|want| us.iter().map(|u| held(u, want)).sum::<u128>() >= u128::from(want.amount))
+    };
+    let place = |u: &UtxoResponse| match histories.tier_of(u) {
+        2 => 2 - box_rank(&histories.class_of(u)),
+        _ => 3,
+    };
+    let mut order = picked.clone();
+    order.sort_by_key(|u| {
+        (
+            place(u),
+            needed.items.iter().map(|want| held(u, want)).sum::<u128>(),
+        )
+    });
+    for u in order {
+        let without: Vec<UtxoResponse> = picked
+            .iter()
+            .filter(|p| !same_utxo(p, &u))
+            .cloned()
+            .collect();
+        if enough(&without) {
+            picked = without;
+        }
+    }
+    picked
 }
 
 /// A whole spend's boxes back from Lovejoin as the box rule counts them ([`box_rank`]): how many of unknown making, how
