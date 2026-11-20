@@ -1,5 +1,5 @@
 // Chunk 51, docs#1 and still#2. The privacy policy says Chrome's Translate never gets the recovery phrase (its
-// Translate line, and the 18 November entry), and privacy.md that the phrase's words are kept out, but only the grid
+// Translate line, and the 19 November entry), and privacy.md that the phrase's words are kept out, but only the grid
 // that shows them was marked (PhraseGrid.tsx, B9). Typing the phrase, in Restore, Settings' Check recovery phrase and
 // Create's confirm step, lists the BIP39 words that start with what's typed, and after three or four letters the list
 // is the phrase's own word: page text nothing marked, so a translated page sent it to Google with the rest. So B9

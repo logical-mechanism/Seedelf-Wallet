@@ -1,5 +1,5 @@
 // Chunk 51, round six's words (l5words#1, l5words#2): pins of which pool reads ask Koios again about a box it hasn't
-// answered for, as the privacy policy's Lovejoin row, its Koios bullet and its 18 November entry now say it, with
+// answered for, as the privacy policy's Lovejoin row, its Koios bullet and its 19 November entry now say it, with
 // privacy.md's *Lovejoin* and architecture.md's *When it asks*. Only a pool read's own count, and the 1.9.1 once-more
 // ask, keep a transaction as still asked of (`asking`), for every later pool read that counts the boxes (`sortOut`).
 // A take's ask Koios doesn't answer (a box's own return, a Bring one back press, Mix my boxes again) isn't kept: the

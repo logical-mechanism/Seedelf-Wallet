@@ -1,5 +1,5 @@
 // Chunk 51, round five's words (l4docs#1, l4still#1, l4docs#2): pins of when the wallet asks Koios what made a box,
-// as the privacy policy's Lovejoin row, its Koios bullet and its 18 November entry now say it, with privacy.md's
+// as the privacy policy's Lovejoin row, its Koios bullet and its 19 November entry now say it, with privacy.md's
 // *Lovejoin* and architecture.md's *When it asks*. Every pool read that counts the boxes (sortOut) asks again about a
 // transaction Koios hasn't answered for (`asking`), whatever its count says: the one Bring one back anyway's press
 // makes too, though that press puts no box in the ask, and the one a due run makes before a retired pool's box comes
@@ -133,7 +133,7 @@ async function upgraded(origin: Record<string, unknown>) {
 }
 
 describe("chunk 51, l4docs#2: a 1.9.1 deposit's answer, asked about once more", CHAINS, () => {
-  it("takes in the pool's other boxes no record or answer names, in the same request, as the policy's 18 November entry says", async () => {
+  it("takes in the pool's other boxes no record or answer names, in the same request, as the policy's 19 November entry says", async () => {
     const { t, lj, A, M1, M2 } = await upgraded({});
     await lj.status("preprod");
     expect(txInfoAsked(t)).toEqual([[A, M1, M2].sort()]);
