@@ -113,8 +113,10 @@ jobs:
 
       # --locked everywhere: the crates are the ones Cargo.lock records, the
       # same graph the shipped WebAssembly is built from, or the step fails.
-      - name: Clippy (web wallet crates)
-        run: cargo clippy --locked -p seedelf-crypto -p seedelf-wasm --all-targets -- -D warnings
+      # seedelf-messaging is linted with them: the wallet will build it into
+      # the module.
+      - name: Clippy (web wallet crates and messaging)
+        run: cargo clippy --locked -p seedelf-crypto -p seedelf-wasm -p seedelf-messaging --all-targets -- -D warnings
 
       - name: Rust tests
         run: cargo test --workspace --locked
