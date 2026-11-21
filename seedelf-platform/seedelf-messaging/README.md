@@ -96,13 +96,6 @@ Measured on an Intel Core i5-12400F (one thread, `powersave` governor), Linux 7.
 
 One recipient's whole scan took 72 ms for 1,000 envelopes and 738 ms for 10,000 (100 and 1,000 matched). Parsing every envelope first costs about twice the scan.
 
-## Next: Phase 2
+## Next
 
-A minimal relay, and nothing more:
-- **Storage:** an append-only store of envelope bytes. POST an envelope, GET everything after a cursor.
-- **No recipient fields:** the relay stores no recipient fields, accounts or keys.
-- **Checks at the relay:** each envelope is parsed with `Envelope::from_bytes` (which reads no key) to refuse garbage, then capped at 161 bytes + 64 KiB, given a time to live, and rate-limited or charged a small proof of work against spam.
-- **Clients:** they download everything (discovery privacy), drop duplicates by hash (replay), and pad plaintexts to fixed sizes.
-- **Then:** WebAssembly bindings in seedelf-wasm, using the Seedelf's own scalar as chosen.
-
-Sender authentication, forward secrecy and group messages stay out until the relay is settled.
+[docs/protocol.md](docs/protocol.md) is the draft for what comes after: one-to-one conversations with the Double Ratchet inside this envelope, conversation identities the first sender makes for both sides, and a relay that keeps envelopes 36 hours behind proof of work. It's for review; none of it is built.
