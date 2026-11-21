@@ -1,8 +1,8 @@
 # seedelf-messaging
 
-Phase 1 of Seedelf Messaging: end-to-end encryption of a byte payload to a re-randomized Seedelf register, and its discovery by the recipient.
+Seedelf Messaging's library: end-to-end encryption of a byte payload to a re-randomized Seedelf register, and its discovery by the recipient (Phase 1), and one-to-one conversations on top of it, with the Double Ratchet inside the envelope (the session layer, chunk 54's 54a).
 
-It's a library only. There's no relay and no UI, and nothing in the wallet uses it yet. It's unaudited: [docs/security.md](docs/security.md) says what holds and what doesn't.
+It's a library only, with no network, no storage and no clock. There's no relay and no UI, and nothing in the wallet uses it yet. It's unaudited, and outside the bug bounty except a flaw in it that exposes the Seedelf key: [docs/security.md](docs/security.md) says what holds and what doesn't.
 
 ## What it does
 
@@ -51,12 +51,39 @@ Every refusal is an `Error` variant, never a panic.
 
 An earlier idea used PEACE's pairing capsule. For one recipient it reduces to ElGamal with a pairing that adds nothing, so v1 is plain ECIES ([docs/construction.md §3](docs/construction.md#3-why-there-is-no-pairing)).
 
+## Sessions
+
+The `session` module builds [docs/protocol.md](docs/protocol.md) §3 to §6: the sender of a first message makes both conversation identities on one base, a first-contact block F carries what the reader needs, a static DH in the session secret proves the writer holds their identity's key, and the Double Ratchet runs inside v1 envelopes padded to 512 bytes, 2, 8 or 32 KiB. §16 fixes every byte and rule.
+
+```rust
+use seedelf_messaging::session::{Inbox, Received};
+
+let mut alice_inbox = Inbox::new();
+let cid = alice_inbox.start(&alice, &bob_handle, b"", now)?; // a Seedelf's register
+let envelope = alice_inbox.send(cid, b"hello Bob")?; // store the state with it, then post
+
+let mut bob_inbox = Inbox::new();
+let Received::Request { plaintext, .. } = bob_inbox.receive(&bob, &envelope, now)? else { unreachable!() };
+bob_inbox.accept(&bob, cid)?; // a request until Bob replies
+let reply = bob_inbox.send(cid, b"hello")?;
+```
+
+| API | |
+|---|---|
+| `Conversation::{start, start_continuing, send, receive, expire, missing, to_bytes, from_bytes}` | One side of a conversation. Every operation that fails leaves it as it was; its bytes are versioned and hold its secrets. |
+| `Inbox::{start, start_continuing, send, receive, accept, delete, expire, from_parts}` | One network's conversations, requests and tombstones, with §5 and §6's rules over them. |
+| `Requests`, `Tombstones`, `Continues` | Strangers' first messages, bounded and holding no state; deleted conversations' IDs until t + 48 hours; what a `replaces` amounts to. |
+| `open`, `Opened`, `FirstContact`, `Header` | An envelope opened and parsed, every point checked, before any conversation sees it. |
+
+The caller passes `now`, in Unix seconds by the reader's clock, and stores what each state gives: protocol.md §4.2 says in what order.
+
 ## Dependencies
 
 | Crate | Why |
 |---|---|
 | `blstrs` 0.7.1 | G1 arithmetic. It's already the workspace's BLS12-381 library (seedelf-crypto, the WebAssembly module): blst's audited C and assembly behind a safe API. |
-| `hkdf` 0.12.4 | The only crate new to the lockfile. |
+| `hkdf` 0.12.4 | The only crate Phase 1 added to the lockfile. |
+| `hmac` 0.12.1 | The ratchet's chain keys. Already in the lockfile, under `hkdf`. |
 | `sha2`, `aes-gcm` | Already in the lockfile. |
 | `rand_core` (`OsRng`), `zeroize`, `ff`, `group` | Randomness, wiping, and the curve traits. |
 
@@ -64,7 +91,7 @@ An earlier idea used PEACE's pairing capsule. For one recipient it reduces to El
 
 ## Tests
 
-`cargo test -p seedelf-messaging` takes about 4 seconds; CI runs it with the workspace.
+`cargo test -p seedelf-messaging` takes about 10 seconds, the session layer's simulation and Phase 1H's pool most of it; CI runs it with the workspace.
 
 | File | What it covers |
 |---|---|
@@ -75,8 +102,15 @@ An earlier idea used PEACE's pairing capsule. For one recipient it reduces to El
 | tests/seedelf_registers.rs | A Seedelf datum's register as the recipient, read with the wallet's own scalar. |
 | tests/vectors.rs, `src/tests.rs` | Test 13: the vectors, the key schedule's binding and labels, decryption forced past discovery, and secrets absent from envelopes. |
 | tests/pool.rs | Phase 1H: 10 recipients and 1,000 envelopes in one pool. Each scans the raw bytes and reads exactly theirs. |
+| src/session/tests/first_contact.rs | Sessions, part 1: F's layout and refusals, SK on both sides and its binding, both inits, the identities. |
+| src/session/tests/ratchet.rs | Part 2: KDF_RK, KDF_CK, ENCRYPT's salt, skipping within and across chains, MAX_SKIP in all, the stored keys' cap, the 48 hours. |
+| src/session/tests/state.rs, `rules.rs` | Part 3: storage at every step, corrupted states, failures changing nothing, padding, parsing, and §5 and §6's rules. |
+| src/session/tests/adversarial.rs | Part 4: protocol-review.md §E's cases 1–3 and 6–14, one test each. |
+| src/session/tests/vectors.rs, tests/session_vectors.rs | The session vectors, written from fixed draws and read back through the public API. |
+| tests/session_properties.rs | Any schedule of sends, out-of-order deliveries, duplicates, losses and restarts; both sides first; resets; skipped keys' 48 hours. |
+| tests/simulation.rs | Two wallets over a 36-hour relay, killed at every point of §4.2 and locked past 36 hours; cases 4 and 5. `SIMULATION_SEEDS=n` runs more than 24 seeds. |
 
-`RECORD_MESSAGING_VECTORS=1 cargo test -p seedelf-messaging --lib` rewrites the vectors. That's for a deliberate change of format only: other implementations are held to them.
+`RECORD_MESSAGING_VECTORS=1 cargo test -p seedelf-messaging --lib` rewrites the envelope's vectors, and `RECORD_MESSAGING_SESSION_VECTORS=1` the session's. That's for a deliberate change of format only: other implementations are held to them. Both sets were reproduced by an independent implementation (noble-curves and WebCrypto), the session's written from protocol.md §16 alone.
 
 ## Measured performance
 
@@ -111,4 +145,4 @@ Without blst's x86 assembly, the scan is the scaling limit. A 36-hour pool at 10
 
 ## Next
 
-[docs/protocol.md](docs/protocol.md) is the draft for what comes after: one-to-one conversations with the Double Ratchet inside this envelope, conversation identities the first sender makes for both sides, and a relay that keeps envelopes 36 hours behind proof of work. It's for review; none of it is built.
+Chunk 54's plan ([chunk-54-messaging.md](../seedelf-web-wallet/docs/plans/chunk-54-messaging.md)) has the rest: the protocol's model (54b), the relay that keeps envelopes 36 hours (54c), the WebAssembly bindings (54d), the worker (54e) and the screens (54f). Proof of work waits on the plan's call 6.

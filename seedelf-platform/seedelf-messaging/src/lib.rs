@@ -34,6 +34,7 @@ mod envelope;
 mod error;
 mod keys;
 mod register;
+pub mod session;
 #[cfg(test)]
 mod tests;
 

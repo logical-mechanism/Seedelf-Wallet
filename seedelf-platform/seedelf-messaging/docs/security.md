@@ -1,6 +1,10 @@
 # Seedelf Messaging v1: security notes
 
-What Phase 1 guarantees, under which assumptions, and what it doesn't. This is a cryptographic foundation, not a messaging protocol: there's no sender authentication, no forward secrecy, no replay protection, no relay and no key distribution yet. Unaudited.
+What the crate guarantees, under which assumptions, and what it doesn't. Unaudited. Seedelf Messaging is outside the bug bounty ([SECURITY.md](../../../SECURITY.md)), except a flaw in it that exposes the Seedelf key.
+
+- **The v1 envelope** (Phase 1, most of this file) is a cryptographic foundation. On its own it has no sender authentication, no forward secrecy and no replay protection.
+- **The session layer** (chunk 54's 54a: [protocol.md](protocol.md) §3 to §6, exact in §16) builds those on it: conversations, the Double Ratchet, and the rules for replays, requests and continuations. What each compromise reveals is protocol.md §1.1. What its tests establish is [below](#the-session-layer).
+- There's still no relay, no model of the protocol (54b), and no key distribution beyond a Seedelf's public register.
 
 ## What the tests establish, and what they don't
 
@@ -104,13 +108,36 @@ ElfTalk (2025) was earlier Register-based messaging. Its review shaped v1:
 
 ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-work idea is worth a look for Phase 2's spam limits.
 
+## The session layer
+
+### What its tests establish
+
+- **Vectors** for every layer: F, SK, both inits, every chain and message key, ENCRYPT, the padding, the inner messages and the envelopes. An implementation written from protocol.md §16 alone, without reading the Rust (noble-curves and WebCrypto), reproduced them byte for byte.
+- **protocol-review.md §E's 14 adversarial cases,** one test each: src/session/tests/adversarial.rs, with cases 4 and 5 in tests/simulation.rs.
+- **Every rule of §3 to §6 is load-bearing in the tests:** a mutation pass removed or weakened each rule in turn, 39 of them, and a test failed every time.
+- **Properties:** any schedule of sends, out-of-order deliveries, duplicates, losses and restarts reads each message once, changes nothing on a duplicate, and counts exactly the lost messages it skipped as missing.
+- **A two-wallet simulation** over a relay that keeps envelopes 36 hours, with the worker killed at every point of §4.2 and locks past 36 hours. No message shows twice, no message key seals two envelopes, every refusal is explained, the missing counts are exact, and the conversation is still live at the end.
+- **Stored states,** requests and tombstones round-trip, and every truncation, extension and unknown version is refused.
+
+### What they don't
+
+- **Secrecy, forward secrecy, recovery and authentication** rest on the Double Ratchet's and X3DH's analyses, adapted here, and on the static DH's argument in protocol-review.md finding 1. 54b's model checks them symbolically; it isn't written yet.
+- **Constant time,** as for the envelope.
+
+### Implementation notes
+
+- **A conversation's secrets** (its root, chain, message and ratchet keys) are wiped on drop, and its `Debug` shows none of them. Copies that a `Vec`'s growth leaves behind, and blst's internals, aren't wiped: best effort, as for `SecretKey`.
+- **x never enters a stored state.** The responder's RatchetInitBob state holds it only until the first message's ratchet step replaces it, and a test looks for it in the stored bytes.
+- **Every operation that can fail works on a copy** and keeps it only on success. Tests compare a state's bytes before and after every refusal.
+- **Every point** from an envelope, F or a header is checked before a key touches it. A stored state's points and ratchet key are checked again on reading.
+- **No unsafe code, and no panic on untrusted input.** The `expect`s guard fixed output lengths, a ratchet key the crate itself stored, and a receiving chain the step before just made.
+
 ## Before production
 
 - An external review of the construction and the code.
 - Written arguments for IND-CCA2 and for unlinkability, with the per-envelope base.
 - The spending-and-reading argument, checked against the literature.
 - A constant-time review of the WebAssembly build. WebAssembly engines promise nothing about timing.
-- Plaintext padding to fixed sizes.
-- Replay handling, sender authentication and forward secrecy, each as a design, not a patch.
+- The session layer's model (54b), then an outside review of the protocol.
 - Spam and resource limits at the relay.
 - A dependency audit (cargo-audit or cargo-deny) for this crate in CI.

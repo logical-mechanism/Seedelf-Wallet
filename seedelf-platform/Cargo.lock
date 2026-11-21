@@ -2544,6 +2544,7 @@ dependencies = [
  "group",
  "hex",
  "hkdf",
+ "hmac",
  "proptest",
  "rand_core 0.6.4",
  "seedelf-crypto",
