@@ -1,6 +1,6 @@
 # Chunk 54 · Seedelf Messaging
 
-**Status: ⬜ planning.** Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
+**Status: 🚧 54a built,** on `web-wallet/messaging-session`. Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
 
 **The specification is [protocol.md](../../../seedelf-messaging/docs/protocol.md),** with the envelope in [construction.md](../../../seedelf-messaging/docs/construction.md) and the guarantees in [security.md](../../../seedelf-messaging/docs/security.md). It has had two reviews; the second's reasoning, and its adversarial tests, are in [protocol-review.md](../../../seedelf-messaging/docs/protocol-review.md). This plan doesn't repeat them: it says what to build, where, in what order, and what's still the owner's to decide. A step that changes the protocol changes protocol.md in the same PR.
 
@@ -65,7 +65,7 @@
 
 ## Steps
 
-### 54a ⬜ The session layer, in seedelf-messaging
+### 54a 🚧 The session layer, in seedelf-messaging
 
 Everything in protocol.md §3 to §6, as plain Rust with no network and no storage:
 
@@ -93,6 +93,12 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 - A two-wallet simulation over an in-memory relay with the 36-hour expiry.
 
 **Done means:** every rule in protocol.md §3 to §6 has a test that fails without it, and the vectors are reproduced.
+
+**Where it stands** (2026-11-20, `web-wallet/messaging-session`, not yet a PR):
+- **Built:** everything above but proof of work, which this step's brief left out: it waits on call 6. protocol.md §16 fixes every byte and rule the build decided, each choice marked [choice] for the owner to overturn.
+- **The vectors** (tests/vectors/messaging_session_v1.json, three conversations) were reproduced by a script written from protocol.md §16 alone, without reading the Rust: noble-curves 2.0.1 and WebCrypto, every value. Its notes on where the spec was silent are folded into §16.
+- **The rules hold the tests:** a mutation pass removed or weakened each of 39 rules in turn, and a test failed every time. Its first run found four survivors, which became a fix (a request's joining message now reads as eager processing would) and two continuation tests.
+- **For 54e and 54f:** a first message is refused once its t is 48 hours old, so a conversation nobody read in its first 48 hours can never begin, however many first messages follow (protocol.md §16.4). The wallet needs "start again", or must start again by itself.
 
 ### 54b ⬜ The model
 

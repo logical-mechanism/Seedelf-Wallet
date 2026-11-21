@@ -1,6 +1,6 @@
 # Seedelf Messaging: the one-to-one protocol (draft)
 
-The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). Only that envelope is built. Everything else here is a design we refine as we build.
+The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay, the wallet's side and the protocol model are still to come, and the design is refined as they're built.
 
 Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multiplication, registers (g, v) with v = [x]g.
 
@@ -28,6 +28,8 @@ Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multipl
 - what the relay learns (§11).
 
 36 hours stands, despite the unlock trade it raised (§13).
+
+**Building the session layer (54a)** decided what the reviews left open, each marked [choice] in §16, and found one thing the wallet must handle: a first message is refused once its t is 48 hours old, so a conversation nobody has read within 48 hours of its start can never begin, however many first messages follow (§16.4, "A first message's life"). The vectors were reproduced by an implementation written from §16 alone (§16.6).
 
 **The second review (2026-11-20),** recorded in [protocol-review.md](protocol-review.md), changed:
 - **Who controls R_A.** R_A is now made on R_B's base, and a static DH between them goes into the session secret, so only R_A's key holder can start a session (§2, §3). This also settles which conversations count as continuations (§6), and what the labels may claim (§7).
@@ -338,7 +340,7 @@ Phase 2 settles the details; the protocol needs only this:
 **Open:**
 - **Proof of work:** the function (a plain hash, or a memory-hard one against GPUs) and the starting difficulty, measured in WebAssembly. Also its economics: the relay's storage is its rate cap times 36 hours.
 - **The bounds on requests** (§3.1: 50 and 256 KiB) and the sizes (§9: 512 bytes to 32 KiB), checked against real use.
-- **MAX_SKIP and the 48-hour lifetime of skipped keys.**
+- **MAX_SKIP, the 2,000 stored skipped keys and their 48-hour lifetime** (§16.4).
 - **How long a browser keeps message history,** and whether the user picks.
 - **To measure in the extension itself,** before §8's figures are relied on:
   - a 15,000-envelope scan in the service worker, in 200-envelope turns, stopped and resumed by its cursor;
@@ -347,7 +349,7 @@ Phase 2 settles the details; the protocol needs only this:
   - proof-of-work solving times;
   - a parallel scan from offscreen documents, if the single thread falls short;
   - the storage used by a hundred conversations with their skipped keys.
-- **Test vectors for the session layer,** checked by an independent implementation as v1's were.
+- **Restarting a conversation that was never read.** A first message older than 48 hours is refused by a reader who hasn't seen the conversation (§16.4). How the wallet offers "start again", or starts again by itself, is the wallet's to settle (54e, 54f).
 - **A model of §3 to §6** in a protocol verifier (ProVerif or Tamarin) before mainnet, then an outside review.
 
 ## 14. Against Signal
@@ -372,6 +374,93 @@ Phase 2 settles the details; the protocol needs only this:
 |---|---|
 | 1 | Done: the v1 envelope, and its scan. |
 | 2 | The relay: storage, the 36-hour expiry, proof of work, duplicates, the cursor. |
-| 3 | Sessions: §3 to §6 in this crate, with vectors, property tests and the protocol model. |
+| 3 | Sessions: §3 to §6 in this crate, with vectors, property tests and the protocol model. Built (§16), with independently reproduced vectors; the model is 54b. |
 | 4 | The wallet: WebAssembly bindings, the worker's queue, chunked scanning, encrypted local state, requests, a Messages screen, sender labels, and "message me at ⟨Seedelf⟩". |
 | Later | Proving who you are, groups, post-quantum, delivery receipts, prekeys if users want them. |
+
+## 16. The session layer as built (54a)
+
+§3 to §6 are built in this crate's `session` module, as plain Rust with no network, no storage and no clock: the caller passes `now`, by the reader's clock, and stores the bytes each state gives. This section fixes every byte and every rule the build had to decide, so another implementation needs nothing else. Choices made while building, not in the reviews, are marked [choice].
+
+### 16.1 Encodings
+
+- **Points:** 48-byte compressed G1, canonical, in G1 and not O (construction.md §4.4). A point that is a KDF's input (a DH output, or z) is its 48 compressed bytes too.
+- **Scalars:** 32 bytes, big-endian. Every scalar drawn (b, e_A, s_A, every ratchet key, the envelope's b and r) is uniform in [1, q − 1].
+- **Counters** PN and N: u32, big-endian. **t:** u64, big-endian, Unix seconds.
+- **F:** `cid (16) | t (8) | len (1) | to (len, at most 32) | len (1, 0 or 16) | replaces | p₀ (48) | A (48) | E_A (48)`, 170 to 218 bytes (§3). `to` is the asset name's raw bytes, not hex.
+- **The ratchet header:** `DHs (48) | PN (4) | N (4)`, 56 bytes.
+- **The associated data:** `cid (16) | p₀ | A | p₀ | w₀ | header (56)`, 264 bytes: cid ‖ R_A ‖ R_B ‖ header.
+- **The ratchet ciphertext:** `salt (16) | AES-256-GCM ciphertext | tag (16)`.
+- **Inner messages:** `0x01 | F | header | ratchet ciphertext` and `0x02 | cid | header | ratchet ciphertext`. Any other type byte is refused.
+- **Padding:** `inner | 0x80 | 0x00…` to `size − 161` bytes, where size is the smallest of 512, 2,048, 8,192 and 32,768 that holds the inner message and the marker. A reader takes any of the four sizes [choice: a sender may pad up], and refuses any other length, or padding whose last nonzero byte isn't `0x80`.
+- **The outer envelope:** v1 (construction.md §4), with the padded inner message as its plaintext, to a fresh re-randomization of the recipient's conversation identity: R_B = (p₀, w₀) for the initiator's messages, R_A = (p₀, A) for the responder's. So every session envelope is exactly 512, 2,048, 8,192 or 32,768 bytes.
+
+### 16.2 The key schedule
+
+| Step | Definition |
+|---|---|
+| SK | HKDF-SHA256(salt = `Seedelf-Messaging\|v1\|session\|salt`, ikm = [e_A]w₀ ‖ [x_A]w₀, info = `Seedelf-Messaging\|v1\|session\|SK` ‖ F), 32 bytes. The responder's ikm is [x_B]E_A ‖ [x_B]A. |
+| RatchetInitAlice | DHs = (s_A, S_A), DHr = w₀, (RK, CKs) = KDF_RK(SK, [s_A]w₀), Ns = Nr = PN = 0. |
+| RatchetInitBob | DHs = (x_B, w₀), RK = SK. A scratch state only: the first message's ratchet step replaces DHs, so no stored state ever holds x_B. |
+| DH(s, P) | [s]P, compressed. Key pairs are (s, [s]p₀). |
+| KDF_RK(rk, dh) | HKDF-SHA256(salt = rk, ikm = dh, info = `Seedelf-Messaging\|v1\|ratchet\|root`), 64 bytes: RK′ then CK. |
+| KDF_CK(ck) | mk = HMAC-SHA256(key = ck, message = the one byte `0x01`); ck′ = HMAC-SHA256(key = ck, message = `0x02`). |
+| ENCRYPT(mk, m, ad) | key ‖ nonce = HKDF-SHA256(salt = a fresh 16-byte salt, ikm = mk, info = `Seedelf-Messaging\|v1\|ratchet\|message`), 44 bytes; the output is salt ‖ AES-256-GCM(key, nonce, ad, m). |
+| The ratchet | The Double Ratchet specification's RatchetEncrypt, RatchetDecrypt, SkipMessageKeys and DHRatchet, with §16.4's bounds. |
+
+### 16.3 Random draws
+
+Every random value comes from the operating system. To make vectors, each operation draws in a fixed order:
+
+- **Starting from a handle:** b (the re-randomization of the handle into R_B), cid, e_A, s_A.
+- **Starting a continuation:** cid, e_A, s_A. There's no b: the base is the old one.
+- **Sending:** the ratchet's salt, then the outer envelope's b, then its r.
+- **A ratchet step on receiving:** the new DHs scalar.
+- **Requests:** authenticating a request's message runs RatchetInitBob and the request's messages on a scratch state, whose ratchet step draws a key that's thrown away with it. The kept state's DHs is drawn when the reply builds it, at its first stored message's step. The vectors give only the draws of states that are kept.
+
+**Starting a continuation, from the writer's side** (§6). The writer becomes the new conversation's initiator, whichever side it was:
+- p₀ is the old p₀;
+- the new w₀ is the other side's old public value: the old w₀ if the writer started the old conversation, the old A if it was written to;
+- the new A is the writer's own [x]p₀, its old public value;
+- `replaces` is the old cid, and `to` is the writer's to choose (empty in the vectors);
+- everything else is §3 with these values, so R_A and R_B, and the associated data, follow the new roles.
+
+### 16.4 The rules, exactly
+
+- **The window:** a first message for an unknown cid is read only if now ≤ t + 48 h and t ≤ now + 1 h, both ends included.
+- **Tombstones:** held while now ≤ t + 48 h; `expire` deletes the rest. Deleting a request or a conversation leaves one; a request pushed out by the bounds doesn't [choice].
+- **A known cid:** a `0x01` counts only with F byte for byte the stored F; it's refused at the initiator, whose own F it is [choice]. A `0x02` for a request not yet replied to is refused [choice].
+- **Skipping:** one message may make the reader skip at most MAX_SKIP = 1,000 keys in all: the old receiving chain's remainder (PN − Nr, when there is a receiving chain) plus the new chain's N [choice: in all, not per chain]. The bound is checked before any key is derived. N = 2³² − 1 is refused, so Nr never wraps.
+- **Skipped keys:** usable while now ≤ stored + 48 h. At most 2,000 are stored per conversation [choice]; past that the oldest are deleted, as `expire` deletes the expired ones, and each counts as missing.
+- **Missing:** the skipped keys still stored, plus those deleted unused. A message that arrives for a stored key stops being missing.
+- **Replays:** a message whose key was used, in the current receiving chain or among the stored keys, is refused as used. A replay from an earlier chain whose keys are gone can't be told from a forgery without keeping old chains' keys: it runs as a new chain on a copy and fails to authenticate. Either way nothing changes.
+- **Requests:** "oldest" means first to arrive, not lowest t, since t is the writer's to choose [choice]. A later `0x01` joins its request only with the stored F, a header not already held, and if it reads after the stored messages, in their order and with their times, as processing each on arrival would read it. So a request shows exactly what its conversation will hold: a message that arrives more than 48 hours after a later one skipped its key is refused there, as it would be in the conversation. The bytes counted are the stored inner messages, unpadded. After every addition the oldest requests go until both bounds hold.
+- **Replying to a request:** RatchetInitBob, then each stored message in the order it arrived, with its arrival time as now. That builds exactly the state processing each on arrival would have.
+- **Continuations:** judged when the request arrives, against the reader's conversations only, not its requests [choice].
+- **One's own handle:** starting a conversation with a register of one's own key is refused, since R_A would be R_B [choice].
+- **A first message's life.** Every first message carries the conversation's t, so the window refuses all of them once t is 48 hours old, unless the reader already holds the cid as a request or a conversation. A writer with no reply after 48 hours can't know whether the reader has the conversation. Only a new conversation, with a new t, reaches a reader who hasn't. The two-wallet simulation meets this whenever a reader stays locked through a conversation's first 48 hours.
+
+### 16.5 The stored state
+
+The wallet's private format, versioned by its first byte; another implementation needn't read it. Every record is parsed in full and checked: points, the ratchet key's two halves, counts, flags and trailing bytes.
+
+- **A conversation** (version 1): `1 | role (1) | len (2) | F | w₀ (48) | RK (32) | flags (1) | CKs (32)? | CKr (32)? | DHs secret (32) | DHs public (48) | DHr (48)? | Ns (4) | Nr (4) | PN (4) | lost (8) | count (2) | count × (DH (48) | N (4) | mk (32) | stored at (8))`. Flags bit 0 is CKs, bit 1 CKr, bit 2 DHr. It holds the conversation's secrets: the wallet seals it under the vault key.
+- **Requests** (version 1): `1 | next sequence (8) | count (2) | count × (sequence (8) | continues (1, then a cid for 1 or 2) | messages (2) | messages × (arrived at (8) | len (4) | inner message))`. No secrets.
+- **Tombstones** (version 1): `1 | count (4) | count × (cid (16) | t (8))`.
+
+### 16.6 Vectors
+
+[tests/vectors/messaging_session_v1.json](../tests/vectors/messaging_session_v1.json) has three conversations with every intermediate value: F, both DHs and SK, each init, every chain and message key, ENCRYPT's key and nonce, each ratchet step, each inner message, and each envelope with its draws.
+
+1. A first contact to a Seedelf's handle with a full `to`, replies both ways, and a pair delivered out of order.
+2. The responder continuing that conversation with its identities, which the reader's rules call verified.
+3. The smallest first contact (a root register, no `to`, no `replaces`), with 91 and 92 bytes of text, read last first.
+
+**The fields.** Each session gives the keys, the handle (null for a continuation), t, `to`, `replaces`, the start's `draws`, and every value of §3. Then `events`, in order:
+- **A send:** `from` (initiator or responder), `kind`, the plaintext, the chain key before it, the message key, the next chain key, the header, the associated data, ENCRYPT's `salt`, `aes_key` and `nonce`, the ratchet ciphertext, the inner message, `envelope_size`, the envelope's draws `outer_b` and `outer_r`, and the envelope.
+- **A receive:** `by`, `at` (the reader's now), `delivers` (the index in `events` of the send it reads), its header, the plaintext, and `ratchet_step`, null when it made none. A step gives `receiving_dh` (the DH output of the old DHs and the header's key), `root_key` (RK after the receiving half), `receiving_chain_key`, `new_ratchet_secret` and `new_ratchet_public`, `sending_dh` (the DH output of the new key and the header's key), `next_root_key` and `sending_chain_key`. A responder's first step starts from RK = SK and DHs = (x_B, w₀).
+
+**Checked independently** (2026-11-20): a script written from this section, protocol.md and construction.md alone, without reading the Rust, reproduced every value in all three sessions with noble-curves 2.0.1 for G1 and Node 24's WebCrypto for HKDF-SHA256, HMAC-SHA256 and AES-256-GCM: 281 session values, the labels and sizes, and v1's 40. Where it had to guess, this section now says what it found.
+
+- `session_vectors_match_the_file` holds the code to the file. `RECORD_MESSAGING_SESSION_VECTORS=1` rewrites it, for a deliberate change of format only (it never touches messaging_v1.json).
+- tests/session_vectors.rs reads it through the public API.
