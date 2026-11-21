@@ -63,6 +63,8 @@ pub enum Error {
     InvalidState,
     /// A stored state's format version this library doesn't read.
     UnsupportedStateVersion(u8),
+    /// Proof of work past [`MAX_STAMP_BITS`](crate::relay::MAX_STAMP_BITS).
+    StampTooHard,
 }
 
 impl fmt::Display for Error {
@@ -93,6 +95,7 @@ impl fmt::Display for Error {
             Error::ChainExhausted => write!(f, "chain counter is exhausted"),
             Error::InvalidState => write!(f, "stored session state is invalid"),
             Error::UnsupportedStateVersion(v) => write!(f, "unsupported session state version {v}"),
+            Error::StampTooHard => write!(f, "proof of work asked is past the most this solves"),
         }
     }
 }

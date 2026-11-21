@@ -1,7 +1,8 @@
 //! Seedelf Wallet's data layer (web wallet chunk 26): the API in front of the
 //! home db-sync, Kupo and node: the private index of the Seedelf contract and
 //! Lovejoin's mix box, the Koios-equivalent public routes, and the submit
-//! part. See `seedelf-data/README.md`.
+//! part. Beside them, Seedelf Messaging's relay (chunk 54's 54c), which
+//! reads no chain. See `seedelf-data/README.md`.
 
 pub mod chain;
 pub mod config;
@@ -12,6 +13,7 @@ pub mod edge;
 pub mod ids;
 pub mod kupo;
 pub mod lovejoin;
+pub mod messaging;
 pub mod private;
 pub mod public;
 pub mod row;
@@ -27,9 +29,11 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::edge::Edge;
+use crate::messaging::Relay;
 use crate::state::{AppState, age, block_age, slot_age};
 use crate::submit::Submit;
 
@@ -42,19 +46,25 @@ use crate::submit::Submit;
 /// max-age) instead of making one before every POST; this keeps the answers
 /// themselves out of the browser's cache, which would otherwise hold some
 /// that name what's private (an ADA Handle, a DRep ID).
+///
+/// The relay's pages aren't compressed: they're ciphertext, which doesn't.
 pub fn app(
     state: Arc<AppState>,
     submit: Arc<Submit>,
     edge: Arc<Edge>,
+    relay: Arc<Relay>,
     origins: &[String],
 ) -> Router {
+    let compress =
+        DefaultPredicate::new().and(NotForContentType::const_new("application/octet-stream"));
     Router::new()
         .route("/health", get(health))
-        .with_state((state.clone(), edge.clone(), submit.clone()))
+        .with_state((state.clone(), edge.clone(), submit.clone(), relay.clone()))
         .merge(private::routes().with_state(state.clone()))
         .merge(public::routes().with_state(state))
         .merge(submit::routes().with_state(submit))
-        .layer(CompressionLayer::new())
+        .merge(messaging::routes().with_state(relay))
+        .layer(CompressionLayer::new().compress_when(compress))
         .layer(axum::middleware::from_fn_with_state(edge, edge::limit))
         .layer(SetResponseHeaderLayer::overriding(
             header::CACHE_CONTROL,
@@ -63,14 +73,16 @@ pub fn app(
         .layer(edge::cors(origins))
 }
 
+/// What `/health` reads: every part.
+type Parts = (Arc<AppState>, Arc<Edge>, Arc<Submit>, Arc<Relay>);
+
 /// Each part's state, and each source's tip and age. 200 while the private
 /// index and the public routes both answer; 503 when either can't (though
 /// the private index may still answer from Kupo while db-sync is down), or
 /// when the month's traffic is over its ceiling. The submit part's state is
 /// said, not counted: the deploy compares this status with the one before.
-async fn health(
-    State((state, edge, submit)): State<(Arc<AppState>, Arc<Edge>, Arc<Submit>)>,
-) -> Response {
+/// So is the relay's: messaging over its own allowance, and each pool's size.
+async fn health(State((state, edge, submit, relay)): State<Parts>) -> Response {
     let db_sync = state.tip();
     let public = state.fresh_tip().is_ok();
     let private = state.private_sources().into_iter().next();
@@ -85,6 +97,10 @@ async fn health(
         "public": if public { "ok" } else { "down" },
         "submit": if submit.synced() { "ok" } else { "down" },
         "egress": if egress_over { "over" } else { "ok" },
+        "messaging": {
+            "egress": if edge.messaging_egress.over() { "over" } else { "ok" },
+            "pools": relay.health(),
+        },
         "db_sync": db_sync.map(|tip| serde_json::json!({
             "block": tip.height, "slot": tip.slot, "hash": tip.hash, "age": age(&tip),
         })),

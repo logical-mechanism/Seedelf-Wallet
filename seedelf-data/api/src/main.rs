@@ -7,6 +7,7 @@ use seedelf_data_api::config::Config;
 use seedelf_data_api::decimals::Decimals;
 use seedelf_data_api::edge::{self, Edge, Egress};
 use seedelf_data_api::kupo::Kupo;
+use seedelf_data_api::messaging::{self, Relay};
 use seedelf_data_api::public::history;
 use seedelf_data_api::state::{AppState, watch_kupo, watch_tip};
 use seedelf_data_api::submit::{Submit, watch_node};
@@ -59,32 +60,46 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(watch_node(submit.clone()));
     let egress = Egress::new(
         config.egress_ceiling,
-        config.state_dir.map(|dir| dir.join("egress.json")),
+        config.state_dir.as_ref().map(|dir| dir.join("egress.json")),
     );
-    let edge = Arc::new(Edge::new(
-        config.trust_proxy,
-        config.origins.clone(),
-        egress,
-    ));
+    let messaging_egress = Egress::new(
+        config.messaging_egress_ceiling,
+        config
+            .state_dir
+            .as_ref()
+            .map(|dir| dir.join("messaging-egress.json")),
+    );
+    let edge = Arc::new(
+        Edge::new(config.trust_proxy, config.origins.clone(), egress)
+            .with_messaging_egress(messaging_egress),
+    );
     tokio::spawn(edge::keep(edge.clone()));
     info!(
         origins = config.origins.len(),
         trust_proxy = config.trust_proxy,
         egress_ceiling = config.egress_ceiling.is_some(),
+        messaging_egress_ceiling = config.messaging_egress_ceiling.is_some(),
         "the edge's limits"
     );
+    let relay = Arc::new(Relay::new(config.state_dir.as_deref()));
+    tokio::spawn(messaging::keep(relay.clone()));
+    info!(saved = config.state_dir.is_some(), "the messaging relay");
 
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     info!(listen = %config.listen, "seedelf-data-api is listening");
-    let app = seedelf_data_api::app(state, submit, edge.clone(), &config.origins);
+    let app = seedelf_data_api::app(state, submit, edge.clone(), relay.clone(), &config.origins);
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown())
     .await?;
-    // The month's traffic, written down before the server stops.
+    // The month's traffic, and the pools as they are, written down before
+    // the server stops: nothing more comes in now, so the pools' files are
+    // marked clean.
     edge.egress.flush();
+    edge.messaging_egress.flush();
+    relay.save(true);
     Ok(())
 }
 

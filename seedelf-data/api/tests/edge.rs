@@ -11,6 +11,7 @@ use axum::extract::ConnectInfo;
 use axum::http::{Method, Request, StatusCode, header};
 use seedelf_data_api::chain::Chain;
 use seedelf_data_api::edge::{Edge, Egress};
+use seedelf_data_api::messaging::Relay;
 use seedelf_data_api::state::AppState;
 use seedelf_data_api::submit::Submit;
 use serde_json::Value;
@@ -28,7 +29,13 @@ fn app(ceiling: Option<u64>) -> Router {
         vec![WALLET.to_string()],
         Egress::new(ceiling, None),
     ));
-    seedelf_data_api::app(state, submit, edge, &[WALLET.to_string()])
+    seedelf_data_api::app(
+        state,
+        submit,
+        edge,
+        Arc::new(Relay::new(None)),
+        &[WALLET.to_string()],
+    )
 }
 
 /// A request as Caddy passes it on: from loopback, naming the client.
