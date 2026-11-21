@@ -98,6 +98,17 @@ Measured on an Intel Core i5-12400F (one thread, `powersave` governor), Linux 7.
 
 One recipient's scan took 179 ms for 1,000 envelopes and 1.80 s for 10,000 (100 and 1,000 matched). A full parse followed by discovery costs about 0.23 ms an envelope, so scanning raw bytes saves about a fifth.
 
+**In WebAssembly,** built as the wallet builds its module (wasm-bindgen 0.2.128, clang 21, the `wasm-release` profile) and run in Node 24 (V8, Chrome's engine) on the same machine:
+
+| Operation | WebAssembly | Against native |
+|---|---|---|
+| Scan raw bytes | 1.02 ms | about 5.7× |
+| Full parse | 0.88 ms | about 5.5× |
+| Open a match | 1.77 ms | about 5.7× |
+| Encrypt | 2.2 ms | about 7× |
+
+Without blst's x86 assembly, the scan is the scaling limit. A 36-hour pool at 10,000 envelopes a day takes about 15 s to scan on a fresh sync ([docs/protocol.md §8](docs/protocol.md#8-what-each-message-costs)). The size-optimized profile measured the same as `-O3`. The harness was a scratch crate outside the repo; Phase 4's bindings will carry the real one.
+
 ## Next
 
 [docs/protocol.md](docs/protocol.md) is the draft for what comes after: one-to-one conversations with the Double Ratchet inside this envelope, conversation identities the first sender makes for both sides, and a relay that keeps envelopes 36 hours behind proof of work. It's for review; none of it is built.
