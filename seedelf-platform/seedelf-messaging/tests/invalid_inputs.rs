@@ -7,7 +7,7 @@ use blstrs::{G1Affine, Scalar};
 use group::Curve;
 
 use common::{random_nonzero, with_point};
-use seedelf_messaging::{Envelope, Error, Register, SecretKey, encrypt_message};
+use seedelf_messaging::{Envelope, Error, Register, SecretKey, encrypt_message, matches_envelope};
 
 /// BLS12-381's base field modulus.
 const FIELD_MODULUS: &str = "1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab";
@@ -146,6 +146,41 @@ fn an_envelope_refuses_every_bad_point_in_every_place() {
             );
         }
     }
+}
+
+/// The scan refuses what parsing refuses in `p` and `w`, and leaves `c` to
+/// the full parse: a bad `c` still matches its owner, and only its owner,
+/// and is refused before the owner's key touches it.
+#[test]
+fn the_scan_checks_the_register_and_leaves_c_to_the_parse() {
+    let (key, other) = (SecretKey::generate(), SecretKey::generate());
+    let bytes = encrypt_message(&key.register(), b"payload")
+        .unwrap()
+        .to_bytes();
+    for (name, bad, error) in bad_points() {
+        for place in 0..2 {
+            assert_eq!(
+                matches_envelope(&key, &with_point(&bytes, place, &bad)),
+                Err(error),
+                "{name} at point {place}"
+            );
+        }
+        let bad_c = with_point(&bytes, 2, &bad);
+        assert_eq!(matches_envelope(&key, &bad_c), Ok(true), "{name} as c");
+        assert_eq!(matches_envelope(&other, &bad_c), Ok(false), "{name} as c");
+        assert_eq!(Envelope::from_bytes(&bad_c), Err(error), "{name} as c");
+    }
+    assert_eq!(matches_envelope(&key, &[]), Err(Error::InvalidLength));
+    assert_eq!(
+        matches_envelope(&key, &bytes[..bytes.len() - 24]),
+        Err(Error::InvalidLength)
+    );
+    let mut other_version = bytes.clone();
+    other_version[0] = 2;
+    assert_eq!(
+        matches_envelope(&key, &other_version),
+        Err(Error::UnsupportedVersion(2))
+    );
 }
 
 /// A negated point is a different valid point, not an error.

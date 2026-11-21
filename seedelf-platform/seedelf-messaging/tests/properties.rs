@@ -11,7 +11,7 @@ use proptest::prelude::*;
 use common::g1;
 use seedelf_messaging::{
     ENVELOPE_OVERHEAD, Envelope, Error, POINT_LEN, Register, SecretKey, decrypt_message,
-    encrypt_message, matches_register, rerandomize_register,
+    encrypt_message, matches_envelope, matches_register, rerandomize_register,
 };
 
 /// Any nonzero scalar below 2^254, from 32 random bytes.
@@ -68,6 +68,19 @@ proptest! {
         prop_assert_eq!(decrypt_message(&wrong, &envelope), Err(Error::NotForThisKey));
     }
 
+    /// The scan of raw bytes agrees with the full parse, for the recipient
+    /// and for anyone else.
+    #[test]
+    fn the_scan_agrees_with_the_parse(y in scalar(), other in scalar(), plaintext in prop::collection::vec(any::<u8>(), 0..256)) {
+        prop_assume!(y != other);
+        let (key, wrong) = (SecretKey::from_scalar(y).unwrap(), SecretKey::from_scalar(other).unwrap());
+        let bytes = encrypt_message(&key.register(), &plaintext).unwrap().to_bytes();
+        let envelope = Envelope::from_bytes(&bytes).unwrap();
+        prop_assert_eq!(matches_envelope(&key, &bytes), Ok(true));
+        prop_assert_eq!(matches_envelope(&wrong, &bytes), Ok(false));
+        prop_assert!(envelope.is_for(&key) && !envelope.is_for(&wrong));
+    }
+
     /// No single flipped bit, anywhere in an envelope, gives back a plaintext.
     #[test]
     fn no_flipped_bit_is_accepted(
@@ -93,7 +106,10 @@ proptest! {
         if versioned && !bytes.is_empty() {
             bytes[0] = 1;
         }
+        let key = SecretKey::generate();
+        let scanned = matches_envelope(&key, &bytes);
         if let Ok(envelope) = Envelope::from_bytes(&bytes) {
+            prop_assert_eq!(scanned, Ok(envelope.is_for(&key)));
             prop_assert_eq!(envelope.to_bytes(), bytes);
         }
     }

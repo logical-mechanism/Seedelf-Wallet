@@ -49,8 +49,8 @@ Input: the recipient's register R = (g, v), checked as in §4.4, and a plaintext
 
 With the secret y:
 
-1. **Parse:** the version is 1, the length is 161 to 161 + 65,536 bytes, and p, w and c are each canonical, in G1 and not O. Anything else is refused before any arithmetic with y.
-2. **Discover:** if [y]p ≠ w, the envelope isn't theirs.
+1. **Scan** (`matches_envelope`): the version is 1, the length is 161 to 161 + 65,536 bytes, and p and w are each canonical, in G1 and not O. Then, if [y]p ≠ w, the envelope isn't theirs, and c is never looked at.
+2. **Parse** (`Envelope::from_bytes`): c is checked the same way. y never touches a point that hasn't been checked.
 3. **Shared point:** z = [y]c.
 4. **Open:** derive the key and nonce from z and H, then open with aad = H. A failure releases nothing.
 
@@ -95,6 +95,5 @@ The envelope is 161 bytes plus the plaintext.
 | Operation | Work |
 |---|---|
 | Encrypt | Four G1 scalar multiplications |
-| Parse | Three subgroup checks |
-| Discover | One scalar multiplication |
-| Decrypt | Two scalar multiplications: discovery again, then [y]c |
+| Scan | Two subgroup checks and one scalar multiplication |
+| Open a match | The full parse's three subgroup checks, then two scalar multiplications: discovery again, then [y]c |

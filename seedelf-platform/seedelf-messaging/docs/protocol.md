@@ -100,8 +100,8 @@ An unknown cid on a `0x02` message is a conversation this browser no longer has,
 
 | Step | Work |
 |---|---|
-| Parsing and discovery | Three subgroup checks and one scalar multiplication. About 0.23 ms per envelope natively (README). |
-| A matched envelope | One more multiplication for the outer layer, three when it starts a ratchet step (a new key pair and two DH), and symmetric work. |
+| Scanning | Two subgroup checks and one scalar multiplication (`matches_envelope`). About 0.18 ms per envelope natively (README). |
+| A matched envelope | The full parse's three subgroup checks, one more multiplication for the outer layer, three when it starts a ratchet step (a new key pair and two DH), and symmetric work. |
 | A first message | Eight multiplications to send: the outer envelope's four, R_A's two, S_A and its DH. Three to receive, plus checks on R_A and S_A. |
 
 ## 6. Size and padding
@@ -120,7 +120,7 @@ Phase 2 settles the details; the protocol needs only this:
 - **The relay stores bytes.** It keeps no recipient, sender, account or key.
 - **Envelopes are deleted after 36 hours.** Deleting doesn't unsend: anyone who downloaded the pool keeps copies. What protects old envelopes is forward secrecy, not deletion.
 - **Every envelope carries proof of work** over its own bytes, so the work can't be reused. The difficulty is the relay's to raise.
-- **Clients download everything after their cursor.** At 10,000 envelopes a day, 36 hours is about 15,000 envelopes: roughly 7.5 MB at 0.5 KiB each, and about 3.5 s to scan natively for a fresh sync.
+- **Clients download everything after their cursor.** At 10,000 envelopes a day, 36 hours is about 15,000 envelopes: roughly 7.5 MB at 0.5 KiB each, and about 2.7 s to scan natively for a fresh sync.
 
 **What 36 hours means:**
 - A recipient offline for longer misses whatever was sent meanwhile, first messages included, and the sender can't tell.

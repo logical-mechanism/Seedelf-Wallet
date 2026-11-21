@@ -78,25 +78,12 @@ impl Envelope {
     ///
     /// Checks the version, the length and every point (canonical, in the
     /// prime-order subgroup, not the identity) before anything else is done
-    /// with them. Doesn't decrypt.
+    /// with them. Doesn't decrypt. To scan a pool, [`matches_envelope`] first
+    /// is cheaper: it skips `c` for the envelopes that aren't the reader's.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        let (&version, _) = bytes.split_first().ok_or(Error::InvalidLength)?;
-        if version != VERSION {
-            return Err(Error::UnsupportedVersion(version));
-        }
-        if bytes.len() < ENVELOPE_OVERHEAD || bytes.len() > ENVELOPE_OVERHEAD + MAX_PLAINTEXT_LEN {
-            return Err(Error::InvalidLength);
-        }
-        let point = |i: usize| -> Result<G1Affine, Error> {
-            let start = 1 + i * POINT_LEN;
-            let chunk: &[u8; POINT_LEN] = bytes[start..start + POINT_LEN]
-                .try_into()
-                .map_err(|_| Error::InvalidLength)?;
-            decode_point(chunk)
-        };
         Ok(Self {
-            register: Register::from_checked(point(0)?, point(1)?),
-            ephemeral: point(2)?,
+            register: register_of(bytes)?,
+            ephemeral: point_at(bytes, 2)?,
             ciphertext: bytes[HEADER_LEN..].to_vec(),
         })
     }
@@ -133,6 +120,44 @@ pub fn decrypt_message(key: &SecretKey, envelope: &Envelope) -> Result<Vec<u8>, 
     let shared =
         Zeroizing::new((G1Projective::from(envelope.ephemeral) * key.scalar()).to_compressed());
     open(&shared, &envelope.header(), &envelope.ciphertext)
+}
+
+/// Whether an envelope's raw bytes are addressed to `key`: the scan of a pool.
+///
+/// Checks the version, the length, and `p` and `w` as [`Envelope::from_bytes`]
+/// does, then tests `[y]p == w`. It leaves `c` and the ciphertext alone, so
+/// an envelope that isn't the reader's costs two subgroup checks and one
+/// scalar multiplication, not three and one. `Ok(true)` only says the
+/// envelope is the reader's to open: [`Envelope::from_bytes`] then checks
+/// `c` before `key` ever touches it, and [`decrypt_message`] authenticates.
+pub fn matches_envelope(key: &SecretKey, bytes: &[u8]) -> Result<bool, Error> {
+    Ok(matches_register(key, &register_of(bytes)?))
+}
+
+/// The version and length checks, then the register `(p, w)`, checked.
+fn register_of(bytes: &[u8]) -> Result<Register, Error> {
+    let (&version, _) = bytes.split_first().ok_or(Error::InvalidLength)?;
+    if version != VERSION {
+        return Err(Error::UnsupportedVersion(version));
+    }
+    if bytes.len() < ENVELOPE_OVERHEAD || bytes.len() > ENVELOPE_OVERHEAD + MAX_PLAINTEXT_LEN {
+        return Err(Error::InvalidLength);
+    }
+    Ok(Register::from_checked(
+        point_at(bytes, 0)?,
+        point_at(bytes, 1)?,
+    ))
+}
+
+/// Header point `i` (0 = `p`, 1 = `w`, 2 = `c`), checked. The caller has
+/// checked the length.
+fn point_at(bytes: &[u8], i: usize) -> Result<G1Affine, Error> {
+    let start = 1 + i * POINT_LEN;
+    let chunk: &[u8; POINT_LEN] = bytes
+        .get(start..start + POINT_LEN)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(Error::InvalidLength)?;
+    decode_point(chunk)
 }
 
 /// [`encrypt_message`] with given `b` and `r`, both nonzero. Only the test

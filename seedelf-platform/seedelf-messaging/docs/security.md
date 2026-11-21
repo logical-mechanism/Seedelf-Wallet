@@ -89,7 +89,7 @@ Not proven here.
 - **No unsafe code:** `#![forbid(unsafe_code)]`.
 - **No panics on untrusted input.** Two `expect`s guard invariants that no input reaches: a stored key is canonical, and HKDF's output length is a constant.
 - **Randomness** is the operating system's (`OsRng`), with zero scalars redrawn.
-- **Parsing order:** all three points are checked before y is used on any of them. Checking c only after a match would save a third of parsing for envelopes that aren't the reader's; that's a measured optimization for later, not a change to the order of checks against y.
+- **Order of checks:** the scan (`matches_envelope`) checks p and w before y touches p, and the full parse checks c before [y]c. y never touches an unchecked point. An envelope that isn't the reader's never has c checked, which saves a subgroup check on each (README, "Measured performance").
 
 ## What ElfTalk taught
 

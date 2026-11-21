@@ -14,13 +14,13 @@ A recipient's register is (g, v) with v = [y]g: a root register (G, [y]G), or an
 4. **The recipient reads them** with [y]c = [r]w.
 
 ```rust
-use seedelf_messaging::{Envelope, SecretKey, decrypt_message, encrypt_message};
+use seedelf_messaging::{Envelope, SecretKey, decrypt_message, encrypt_message, matches_envelope};
 
 let alice = SecretKey::generate();
 let bytes = encrypt_message(&alice.register(), b"hello")?.to_bytes();
 
-let envelope = Envelope::from_bytes(&bytes)?; // checks every point first
-assert!(envelope.is_for(&alice));
+assert!(matches_envelope(&alice, &bytes)?); // the scan: checks p and w, tests [y]p = w
+let envelope = Envelope::from_bytes(&bytes)?; // checks every point
 assert_eq!(decrypt_message(&alice, &envelope)?, b"hello");
 ```
 
@@ -29,6 +29,7 @@ assert_eq!(decrypt_message(&alice, &envelope)?, b"hello");
 | `SecretKey::{generate, from_bytes, from_scalar, register}` | The recipient's y. `from_scalar` takes a Seedelf wallet's scalar. |
 | `Register::{from_bytes, to_bytes, generator_bytes, public_value_bytes}` | A checked (g, v), in the bytes a Seedelf datum holds. |
 | `rerandomize_register`, `matches_register` | Re-randomization and discovery. |
+| `matches_envelope` | The scan: whether an envelope's raw bytes are yours. It checks p and w, not c, so an envelope that isn't yours costs one subgroup check less. |
 | `encrypt_message`, `decrypt_message` | One envelope, up to 64 KiB of plaintext. |
 | `Envelope::{from_bytes, to_bytes, is_for, register}` | The wire format. |
 
@@ -69,11 +70,11 @@ An earlier idea used PEACE's pairing capsule. For one recipient it reduces to El
 |---|---|
 | tests/register_algebra.rs | Tests 1–3: the register algebra. |
 | tests/envelope.rs | Tests 4, 6–10, 12, 14 and 15: round trips, the wrong key, tampering with every part, a mixed collection, serialization, versions. |
-| tests/invalid_inputs.rs | Test 11: every bad point in every position, and bad scalars. |
+| tests/invalid_inputs.rs | Test 11: every bad point in every position, bad scalars, and what the scan leaves to the full parse. |
 | tests/properties.rs | Phase 1G's properties, with proptest. |
 | tests/seedelf_registers.rs | A Seedelf datum's register as the recipient, read with the wallet's own scalar. |
 | tests/vectors.rs, `src/tests.rs` | Test 13: the vectors, the key schedule's binding and labels, decryption forced past discovery, and secrets absent from envelopes. |
-| tests/pool.rs | Phase 1H: 10 recipients and 1,000 envelopes in one pool. Each finds and reads exactly theirs. |
+| tests/pool.rs | Phase 1H: 10 recipients and 1,000 envelopes in one pool. Each scans the raw bytes and reads exactly theirs. |
 
 `RECORD_MESSAGING_VECTORS=1 cargo test -p seedelf-messaging --lib` rewrites the vectors. That's for a deliberate change of format only: other implementations are held to them.
 
@@ -87,14 +88,15 @@ Measured on an Intel Core i5-12400F (one thread, `powersave` governor), Linux 7.
 
 | Operation | 1,000 messages | 10,000 messages |
 |---|---|---|
-| Key and root register | 79 µs | 75 µs |
-| Re-randomize a register | 153 µs | 153 µs |
-| Encrypt, to bytes | 307 µs | 309 µs |
-| Parse an envelope (three subgroup checks) | 152 µs | 154 µs |
-| Discovery, per header | 72 µs | 74 µs |
-| Decrypt a matched message | 151 µs | 152 µs |
+| Key and root register (10 of them) | 122 µs | 79 µs |
+| Re-randomize a register | 161 µs | 157 µs |
+| Encrypt, to bytes | 309 µs | 310 µs |
+| **Scan raw bytes** (`matches_envelope`: two subgroup checks, one test) | **179 µs** | **180 µs** |
+| Full parse, for comparison (three subgroup checks) | 155 µs | 165 µs |
+| Discovery on a parsed envelope, for comparison | 74 µs | 78 µs |
+| Open a match (full parse, then decrypt) | 330 µs | 307 µs |
 
-One recipient's whole scan took 72 ms for 1,000 envelopes and 738 ms for 10,000 (100 and 1,000 matched). Parsing every envelope first costs about twice the scan.
+One recipient's scan took 179 ms for 1,000 envelopes and 1.80 s for 10,000 (100 and 1,000 matched). A full parse followed by discovery costs about 0.23 ms an envelope, so scanning raw bytes saves about a fifth.
 
 ## Next
 

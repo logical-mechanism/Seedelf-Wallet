@@ -1,10 +1,11 @@
 //! The local message pool (Phase 1H): 10 recipients, 1,000 envelopes mixed in
-//! one collection of plain bytes. Each recipient scans every header with only
-//! their own key, and reads exactly their messages. Timings live in
-//! examples/pool_bench.rs, not here.
+//! one collection of plain bytes. Each recipient scans every envelope's raw
+//! bytes with only their own key, parses and opens what matches, and reads
+//! exactly their messages. Timings live in examples/pool_bench.rs, not here.
 
 use seedelf_messaging::{
-    Envelope, Error, Register, SecretKey, decrypt_message, encrypt_message, rerandomize_register,
+    Envelope, Register, SecretKey, decrypt_message, encrypt_message, matches_envelope,
+    rerandomize_register,
 };
 
 const RECIPIENTS: usize = 10;
@@ -39,7 +40,7 @@ fn each_recipient_finds_and_reads_exactly_their_messages() {
     }
     assert!(sent.iter().all(|messages| !messages.is_empty()));
 
-    // A client downloads the pool and parses it once.
+    // Each envelope parsed in full, only to check the scan against.
     let envelopes: Vec<Envelope> = pool
         .iter()
         .map(|bytes| Envelope::from_bytes(bytes).unwrap())
@@ -48,16 +49,18 @@ fn each_recipient_finds_and_reads_exactly_their_messages() {
     let mut claimed = vec![0usize; MESSAGES];
     for (who, key) in keys.iter().enumerate() {
         let mut read = Vec::new();
-        for (i, envelope) in envelopes.iter().enumerate() {
-            let matched = envelope.is_for(key);
-            match decrypt_message(key, envelope) {
-                Ok(plaintext) => {
-                    assert!(matched);
-                    claimed[i] += 1;
-                    read.push(plaintext);
-                }
-                Err(Error::NotForThisKey) => assert!(!matched),
-                Err(other) => panic!("envelope {i} for recipient {who}: {other}"),
+        for (i, bytes) in pool.iter().enumerate() {
+            // The client's scan: raw bytes, p and w checked, one test.
+            let matched = matches_envelope(key, bytes).unwrap();
+            assert_eq!(
+                matched,
+                envelopes[i].is_for(key),
+                "envelope {i}, recipient {who}"
+            );
+            if matched {
+                let envelope = Envelope::from_bytes(bytes).unwrap();
+                read.push(decrypt_message(key, &envelope).unwrap());
+                claimed[i] += 1;
             }
         }
         // Everything sent to them, in order, and nothing else.

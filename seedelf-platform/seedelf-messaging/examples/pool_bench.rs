@@ -12,7 +12,8 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use seedelf_messaging::{
-    ENVELOPE_OVERHEAD, Envelope, SecretKey, decrypt_message, encrypt_message, rerandomize_register,
+    ENVELOPE_OVERHEAD, Envelope, SecretKey, decrypt_message, encrypt_message, matches_envelope,
+    rerandomize_register,
 };
 
 const PLAINTEXT_LEN: usize = 256;
@@ -56,26 +57,36 @@ fn main() {
         .collect();
     let encrypt_time = start.elapsed();
 
-    // Parsing: lengths, versions and three subgroup checks per envelope.
+    // For comparison: the full parse (three subgroup checks per envelope),
+    // then discovery on parsed envelopes.
     let start = Instant::now();
     let envelopes: Vec<Envelope> = pool
         .iter()
         .map(|bytes| Envelope::from_bytes(bytes).expect("parses"))
         .collect();
     let parse_time = start.elapsed();
-
-    // Discovery: one recipient tests every header.
     let me = &keys[0];
     let start = Instant::now();
-    let mine: Vec<&Envelope> = envelopes.iter().filter(|e| e.is_for(me)).collect();
-    let scan_time = start.elapsed();
+    let parsed_matches = envelopes.iter().filter(|e| e.is_for(me)).count();
+    let discovery_time = start.elapsed();
 
-    // Decryption of what matched (it checks the register again first).
+    // The client's scan: raw bytes, p and w checked, one test each.
     let start = Instant::now();
-    for envelope in &mine {
-        black_box(decrypt_message(me, envelope).expect("decrypts"));
+    let mine: Vec<&Vec<u8>> = pool
+        .iter()
+        .filter(|bytes| matches_envelope(me, bytes).expect("scans"))
+        .collect();
+    let scan_time = start.elapsed();
+    assert_eq!(mine.len(), parsed_matches);
+
+    // Opening what matched: the full parse, then decryption (which tests the
+    // register again first).
+    let start = Instant::now();
+    for bytes in &mine {
+        let envelope = Envelope::from_bytes(bytes).expect("parses");
+        black_box(decrypt_message(me, &envelope).expect("decrypts"));
     }
-    let decrypt_time = start.elapsed();
+    let open_time = start.elapsed();
 
     println!("{messages} messages to {recipients} recipients, {PLAINTEXT_LEN}-byte plaintexts");
     println!(
@@ -91,19 +102,23 @@ fn main() {
         per_op(encrypt_time, messages)
     );
     println!(
-        "parse an envelope          {}",
+        "full parse, per envelope   {}",
         per_op(parse_time, messages)
     );
     println!(
-        "discovery, per header      {}   ({} headers in {:.1} ms, {} matched)",
+        "discovery on a parsed one  {}",
+        per_op(discovery_time, messages)
+    );
+    println!(
+        "scan raw bytes, per one    {}   ({} envelopes in {:.1} ms, {} matched)",
         per_op(scan_time, messages),
         messages,
         scan_time.as_secs_f64() * 1e3,
         mine.len()
     );
     println!(
-        "decrypt a matched message  {}",
-        per_op(decrypt_time, mine.len())
+        "open a match               {}",
+        per_op(open_time, mine.len())
     );
     println!(
         "envelope size              {} bytes ({} + plaintext)",

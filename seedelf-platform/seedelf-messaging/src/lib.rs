@@ -5,21 +5,24 @@
 //! it to `(p, w) = ([b]g, [b]v)`, picks an ephemeral `c = [r]p`, and seals the
 //! message under a key derived from the shared point `[r]w = [y]c` (ECIES-KEM
 //! with HKDF-SHA256 and AES-256-GCM). The recipient finds their envelopes by
-//! testing `[y]p == w`, then decrypts. Nothing here needs a pairing.
+//! testing `[y]p == w` on raw bytes ([`matches_envelope`]), then parses and
+//! decrypts those. Nothing here needs a pairing.
 //!
 //! docs/construction.md has the mathematics; docs/security.md what holds,
 //! under which assumptions, and what doesn't. Unaudited: not for production
 //! use.
 //!
 //! ```
-//! use seedelf_messaging::{SecretKey, decrypt_message, encrypt_message, Envelope};
+//! use seedelf_messaging::{
+//!     Envelope, SecretKey, decrypt_message, encrypt_message, matches_envelope,
+//! };
 //!
 //! let alice = SecretKey::generate();
-//! let envelope = encrypt_message(&alice.register(), b"hello")?;
-//! let bytes = envelope.to_bytes();
+//! let bytes = encrypt_message(&alice.register(), b"hello")?.to_bytes();
 //!
+//! // Scan raw bytes; parse in full and decrypt only what matches.
+//! assert!(matches_envelope(&alice, &bytes)?);
 //! let received = Envelope::from_bytes(&bytes)?;
-//! assert!(received.is_for(&alice));
 //! assert_eq!(decrypt_message(&alice, &received)?, b"hello");
 //! # Ok::<(), seedelf_messaging::Error>(())
 //! ```
@@ -36,7 +39,7 @@ mod tests;
 
 pub use envelope::{
     ENVELOPE_OVERHEAD, Envelope, HEADER_LEN, MAX_PLAINTEXT_LEN, VERSION, decrypt_message,
-    encrypt_message,
+    encrypt_message, matches_envelope,
 };
 pub use error::Error;
 pub use keys::SecretKey;
