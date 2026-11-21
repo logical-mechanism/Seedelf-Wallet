@@ -145,4 +145,6 @@ Without blst's x86 assembly, the scan is the scaling limit. A 36-hour pool at 10
 
 ## Next
 
-Chunk 54's plan ([chunk-54-messaging.md](../seedelf-web-wallet/docs/plans/chunk-54-messaging.md)) has the rest: the protocol's model (54b), the relay that keeps envelopes 36 hours (54c), the WebAssembly bindings (54d), the worker (54e) and the screens (54f). Proof of work waits on the plan's call 6.
+The protocol's Tamarin model is [model/](model/) (54b): `model/check.sh` proves it in Docker.
+
+Chunk 54's plan ([chunk-54-messaging.md](../seedelf-web-wallet/docs/plans/chunk-54-messaging.md)) has the rest: the relay that keeps envelopes 36 hours (54c), the WebAssembly bindings (54d), the worker (54e) and the screens (54f). Proof of work waits on the plan's call 6.

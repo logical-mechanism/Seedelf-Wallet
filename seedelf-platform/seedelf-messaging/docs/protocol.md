@@ -1,6 +1,6 @@
 # Seedelf Messaging: the one-to-one protocol (draft)
 
-The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay, the wallet's side and the protocol model are still to come, and the design is refined as they're built.
+The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The protocol is modelled in Tamarin ([model/](../model/), 54b). The relay and the wallet's side are still to come, and the design is refined as they're built.
 
 Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multiplication, registers (g, v) with v = [x]g.
 
@@ -31,6 +31,8 @@ Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multipl
 
 **Building the session layer (54a)** decided what the reviews left open, each marked [choice] in §16, and found one thing the wallet must handle: a first message is refused once its t is 48 hours old, so a conversation nobody has read within 48 hours of its start can never begin, however many first messages follow (§16.4, "A first message's life"). The vectors were reproduced by an implementation written from §16 alone (§16.6).
 
+**Modelling the protocol (54b),** in Tamarin ([model/](../model/)), states as lemmas what §1.1 says of each long-term key and each side's state, §3's hold on R_A, agreement both ways, §5's rule on a cid and §6's continuations. Chunk 54's plan says which are proved. Its review added to this spec: what a stolen x_B allows before Bob's first reply, key-compromise impersonation (§1.1, §7), and why w₀ must stay in the associated data (§3).
+
 **The second review (2026-11-20),** recorded in [protocol-review.md](protocol-review.md), changed:
 - **Who controls R_A.** R_A is now made on R_B's base, and a static DH between them goes into the session secret, so only R_A's key holder can start a session (§2, §3). This also settles which conversations count as continuations (§6), and what the labels may claim (§7).
 - **A smaller first-contact block,** so a first message fits the smallest envelope (§3, §9).
@@ -54,9 +56,9 @@ Alice wrote first; Bob was written to.
 
 | Compromised | Reveals | Doesn't reveal |
 |---|---|---|
-| Bob's x_B | Which envelopes are Bob's, and their outer layers: cids, ratchet headers, first-contact blocks. The content of every message Alice sent before she received Bob's first reply. | Anything Bob sent. Anything Alice sent after receiving Bob's first reply. |
+| Bob's x_B | Which envelopes are Bob's, and their outer layers: cids, ratchet headers, first-contact blocks. The content of every message Alice sent before she received Bob's first reply. Stolen before that reply reaches her, the power to forge it and take the conversation over from her side. | Anything Bob sent: his replies are sealed to R_A, which x_B doesn't open. Anything Alice sent after receiving Bob's first reply. |
 | Alice's x_A | Which envelopes are Alice's, and their outer layers. | Any content: the session secret also needs e_A or x_B (§3). |
-| Either x | The power to pose as that side in new conversations and in continuations (§6). The Seedelf's funds, since x spends. | The content of existing conversations' later messages. |
+| Either x | The power to pose as that side in new conversations and in continuations (§6). The power to pose to that side as anyone: any R_A, and a continuation of any of its conversations, which it would label "Continues" (key-compromise impersonation, as in X3DH). The Seedelf's funds, since x spends. | The content of existing conversations' later messages. |
 | One message key | That message. | Any other. |
 | A conversation's current state (the device) | Its stored history and skipped keys, and its messages until a ratchet round trip the attacker only watches. | Messages after that round trip. Nothing protects against an attacker who uses the stolen state to step into the conversation. |
 | An old copy of the state | Messages sent after the copy was taken, until the next ratchet step. | Messages before the copy. |
@@ -112,6 +114,7 @@ Alice holds Bob's handle register (g_S, v_S).
 
    - **The ratchet header** is S_A ‖ PN ‖ N: a 48-byte point and two big-endian u32 counters.
    - **The associated data** is cid ‖ R_A ‖ R_B ‖ ratchet header, with R_A = p₀ ‖ A and R_B = p₀ ‖ w₀. It binds both identities to every message, as X3DH's associated data does.
+   - **w₀ in it is load-bearing.** A writer can choose A, E_A and S_A as multiples of the handle's generator and so compute SK on any p₀; only the tag, which needs w₀ = [x_B]p₀, ties a first message to a base its writer can use. Without w₀ there, a reader would accept any p₀, and its continuation (§6) would publish [x_B]p₀ for a p₀ of the attacker's choosing: a static-DH oracle on the spending key. Found while modelling (54b).
    - **Sending:** the message is padded (§9) and sealed in an outer envelope to a fresh re-randomization of R_B.
    - F, E_A and S_A stay the same in each. Alice switches to `0x02` once a reply from Bob decrypts.
 
@@ -233,6 +236,8 @@ What the wallet says about the other side:
 | Verified ⟨handle⟩ | Only with a future handle proof | The writer holds that handle's key. |
 
 `to` shows which of the reader's handles a first message named.
+
+Every label assumes the reader's own x is safe. With it, anyone can pose to the reader as any R_A, and as a continuation of any of its conversations (§1.1).
 
 - **A future handle proof must be bound to F.** For instance, a Chaum–Pedersen proof that A and the handle's register share a key, with F in its challenge. With A on p₀ and the static DH, a proof lifted from another conversation can't start a session anyway; binding it to F makes that explicit. Two designs stay open until users ask for one:
   - **A plain proof** Bob can show to anyone: evidence of who wrote to him.
@@ -370,7 +375,7 @@ Phase 2 settles the details; the protocol needs only this:
   - a parallel scan from offscreen documents, if the single thread falls short;
   - the storage used by a hundred conversations with their skipped keys.
 - **Restarting a conversation that was never read.** A first message older than 48 hours is refused by a reader who hasn't seen the conversation (§16.4). How the wallet offers "start again", or starts again by itself, is the wallet's to settle (54e, 54f).
-- **A model of §3 to §6** in a protocol verifier (ProVerif or Tamarin) before mainnet, then an outside review.
+- **An outside review** of the protocol before mainnet. The model of §3 to §6 is built: [model/](../model/) (54b, Tamarin).
 
 ## 14. Against Signal
 
@@ -394,7 +399,7 @@ Phase 2 settles the details; the protocol needs only this:
 |---|---|
 | 1 | Done: the v1 envelope, and its scan. |
 | 2 | The relay: storage, the 36-hour expiry, proof of work, duplicates, the cursor. |
-| 3 | Sessions: §3 to §6 in this crate, with vectors, property tests and the protocol model. Built (§16), with independently reproduced vectors; the model is 54b. |
+| 3 | Sessions: §3 to §6 in this crate, with vectors, property tests and the protocol model. Built (§16), with independently reproduced vectors, and modelled in Tamarin ([model/](../model/), 54b). |
 | 4 | The wallet: WebAssembly bindings, the worker's queue, chunked scanning, encrypted local state, requests, a Messages screen, sender labels, and "message me at ⟨Seedelf⟩". |
 | Later | Proving who you are, groups, post-quantum, delivery receipts, prekeys if users want them. |
 
@@ -409,7 +414,7 @@ Phase 2 settles the details; the protocol needs only this:
 - **Counters** PN and N: u32, big-endian. **t:** u64, big-endian, Unix seconds.
 - **F:** `cid (16) | t (8) | len (1) | to (len, at most 32) | len (1, 0 or 16) | replaces | p₀ (48) | A (48) | E_A (48)`, 170 to 218 bytes (§3). `to` is the asset name's raw bytes, not hex.
 - **The ratchet header:** `DHs (48) | PN (4) | N (4)`, 56 bytes.
-- **The associated data:** `cid (16) | p₀ | A | p₀ | w₀ | header (56)`, 264 bytes: cid ‖ R_A ‖ R_B ‖ header.
+- **The associated data:** `cid (16) | p₀ | A | p₀ | w₀ | header (56)`, 264 bytes: cid ‖ R_A ‖ R_B ‖ header. w₀ must stay in it (§3).
 - **The ratchet ciphertext:** `salt (16) | AES-256-GCM ciphertext | tag (16)`.
 - **Inner messages:** `0x01 | F | header | ratchet ciphertext` and `0x02 | cid | header | ratchet ciphertext`. Any other type byte is refused.
 - **Padding:** `inner | 0x80 | 0x00…` to `size − 161` bytes, where size is the smallest of 512, 2,048, 8,192 and 32,768 that holds the inner message and the marker. A reader takes any of the four sizes [choice: a sender may pad up], and refuses any other length, or padding whose last nonzero byte isn't `0x80`.
