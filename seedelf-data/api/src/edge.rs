@@ -7,6 +7,12 @@
 //!
 //! **IPs exist only in memory:** a bucket per address while it's refilling,
 //! dropped once full. Nothing here logs one.
+//!
+//! **Messaging is apart** (web wallet chunk 54's 54c): the relay's routes,
+//! `/messaging/…`, have buckets of their own, so catching up on messages
+//! never makes the wallet's other reads wait, and a traffic ceiling of their
+//! own inside the API's, so a flood of messages can spend messaging's
+//! allowance but never the rest's.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -62,9 +68,9 @@ pub fn weight(path: &str) -> f64 {
     }
 }
 
-/// Who a request is from, for its bucket: an IPv6 address by its /64, which
-/// one machine holds whole.
-fn bucket_key(ip: IpAddr) -> IpAddr {
+/// Who a request is from, for its bucket and the relay's counts: an IPv6
+/// address by its /64, which one machine holds whole.
+pub fn client_key(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
             Some(v4) => IpAddr::V4(v4),
@@ -95,29 +101,82 @@ struct Buckets {
     swept: Option<Instant>,
 }
 
+/// Which routes a request is for: each part has its own buckets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    /// Everything but the relay.
+    Data,
+    /// The relay's routes, `/messaging/…`.
+    Messaging,
+}
+
+impl Part {
+    pub fn of(path: &str) -> Part {
+        if path.starts_with("/messaging/") {
+            Part::Messaging
+        } else {
+            Part::Data
+        }
+    }
+}
+
+/// The client's address, as the edge read it, for the relay's prices.
+#[derive(Debug, Clone, Copy)]
+pub struct Client(pub IpAddr);
+
 pub struct Edge {
     buckets: Mutex<Buckets>,
+    messaging_buckets: Mutex<Buckets>,
     /// Caddy on loopback names the client in `X-Forwarded-For`.
     trust_proxy: bool,
     /// The wallet's origins: a request from any other is refused.
     origins: Vec<String>,
+    /// Every route's traffic, messaging's included.
     pub egress: Egress,
+    /// The relay's traffic alone.
+    pub messaging_egress: Egress,
 }
 
 impl Edge {
     pub fn new(trust_proxy: bool, origins: Vec<String>, egress: Egress) -> Self {
         Edge {
             buckets: Mutex::new(Buckets::default()),
+            messaging_buckets: Mutex::new(Buckets::default()),
             trust_proxy,
             origins,
             egress,
+            messaging_egress: Egress::new(None, None),
+        }
+    }
+
+    /// The relay's own ceiling, inside the API's.
+    pub fn with_messaging_egress(mut self, egress: Egress) -> Self {
+        self.messaging_egress = egress;
+        self
+    }
+
+    fn buckets_of(&self, part: Part) -> &Mutex<Buckets> {
+        match part {
+            Part::Data => &self.buckets,
+            Part::Messaging => &self.messaging_buckets,
         }
     }
 
     /// Takes `weight` from `ip`'s bucket, or says how many seconds until it can.
     pub fn take(&self, ip: IpAddr, weight: f64, now: Instant) -> Result<(), Refusal> {
-        let mut buckets = self.buckets.lock().expect("buckets lock");
-        let key = bucket_key(ip);
+        self.take_in(Part::Data, ip, weight, now)
+    }
+
+    /// [`Edge::take`] from `part`'s buckets.
+    pub fn take_in(
+        &self,
+        part: Part,
+        ip: IpAddr,
+        weight: f64,
+        now: Instant,
+    ) -> Result<(), Refusal> {
+        let mut buckets = self.buckets_of(part).lock().expect("buckets lock");
+        let key = client_key(ip);
         if !buckets.map.contains_key(&key) && buckets.map.len() >= MAX_BUCKETS {
             let recently = buckets
                 .swept
@@ -150,20 +209,35 @@ impl Edge {
     /// Charges `ip`'s bucket for `bytes` sent back to it; it may go below empty,
     /// to at most a full bucket's worth.
     pub fn charge(&self, ip: IpAddr, bytes: usize) {
-        let mut buckets = self.buckets.lock().expect("buckets lock");
-        if let Some(bucket) = buckets.map.get_mut(&bucket_key(ip)) {
+        self.charge_in(Part::Data, ip, bytes);
+    }
+
+    /// [`Edge::charge`] to `part`'s buckets.
+    pub fn charge_in(&self, part: Part, ip: IpAddr, bytes: usize) {
+        let mut buckets = self.buckets_of(part).lock().expect("buckets lock");
+        if let Some(bucket) = buckets.map.get_mut(&client_key(ip)) {
             bucket.tokens = (bucket.tokens - bytes as f64 / BYTES_PER_UNIT).max(-CAPACITY);
         }
     }
 
     /// Forgets every bucket that has refilled: its address is gone from memory.
     pub fn sweep(&self, now: Instant) {
-        let mut buckets = self.buckets.lock().expect("buckets lock");
-        buckets.map.retain(|_, b| !b.refilled(now));
+        for part in [Part::Data, Part::Messaging] {
+            let mut buckets = self.buckets_of(part).lock().expect("buckets lock");
+            buckets.map.retain(|_, b| !b.refilled(now));
+        }
     }
 
     pub fn buckets(&self) -> usize {
         self.buckets.lock().expect("buckets lock").map.len()
+    }
+
+    pub fn messaging_buckets(&self) -> usize {
+        self.messaging_buckets
+            .lock()
+            .expect("buckets lock")
+            .map
+            .len()
     }
 
     /// The client's address: the peer's, or Caddy's last `X-Forwarded-For`
@@ -218,9 +292,14 @@ pub enum Refusal {
 
 /// The limits, in front of every route. `/health` is exempt from the page
 /// check and the egress ceiling, so a monitor (or a browser tab) can always read it.
-pub async fn limit(State(edge): State<Arc<Edge>>, request: Request, next: Next) -> Response {
+pub async fn limit(State(edge): State<Arc<Edge>>, mut request: Request, next: Next) -> Response {
     let path = request.uri().path();
     let health = path == "/health";
+    let part = Part::of(path);
+    let weight = match part {
+        Part::Data => weight(path),
+        Part::Messaging => crate::messaging::weight(request.method() == Method::POST),
+    };
     if !health && edge.made_by_a_page(&request) {
         let body = axum::Json(serde_json::json!({ "error": "only Seedelf Wallet reads this" }));
         return (StatusCode::FORBIDDEN, body).into_response();
@@ -232,16 +311,24 @@ pub async fn limit(State(edge): State<Arc<Edge>>, request: Request, next: Next) 
             3600,
         );
     }
+    if part == Part::Messaging && edge.messaging_egress.over() {
+        return refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "messaging is over its traffic allowance",
+            3600,
+        );
+    }
     // A request with no address (none reaches the server so) takes no bucket.
     let ip = edge.client(&request);
     if let Some(ip) = ip {
-        match edge.take(ip, weight(path), Instant::now()) {
+        match edge.take_in(part, ip, weight, Instant::now()) {
             Ok(()) => {}
             Err(Refusal::Wait(secs)) => {
                 return refuse(StatusCode::TOO_MANY_REQUESTS, "slow down", secs);
             }
             Err(Refusal::Full) => return refuse(StatusCode::SERVICE_UNAVAILABLE, "busy", 30),
         }
+        request.extensions_mut().insert(Client(ip));
     }
     let response = next.run(request).await;
     let (parts, body) = response.into_parts();
@@ -249,8 +336,11 @@ pub async fn limit(State(edge): State<Arc<Edge>>, request: Request, next: Next) 
     let body = body.map_frame(move |frame| {
         if let Some(data) = frame.data_ref() {
             edge.egress.add(data.len() as u64);
+            if part == Part::Messaging {
+                edge.messaging_egress.add(data.len() as u64);
+            }
             if let Some(ip) = ip {
-                edge.charge(ip, data.len());
+                edge.charge_in(part, ip, data.len());
             }
         }
         frame
@@ -414,6 +504,7 @@ pub async fn keep(edge: Arc<Edge>) {
         every.tick().await;
         edge.sweep(Instant::now());
         edge.egress.flush();
+        edge.messaging_egress.flush();
     }
 }
 
@@ -505,13 +596,32 @@ mod tests {
     fn an_ipv6_machine_is_its_64() {
         let a: IpAddr = "2001:db8:1:2::1".parse().unwrap();
         let b: IpAddr = "2001:db8:1:2:ffff::9".parse().unwrap();
-        assert_eq!(bucket_key(a), bucket_key(b));
+        assert_eq!(client_key(a), client_key(b));
         assert_ne!(
-            bucket_key(a),
-            bucket_key("2001:db8:1:3::1".parse().unwrap())
+            client_key(a),
+            client_key("2001:db8:1:3::1".parse().unwrap())
         );
         let mapped: IpAddr = "::ffff:203.0.113.7".parse().unwrap();
-        assert_eq!(bucket_key(mapped), "203.0.113.7".parse::<IpAddr>().unwrap());
+        assert_eq!(client_key(mapped), "203.0.113.7".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn messaging_has_buckets_of_its_own() {
+        let edge = edge();
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
+        let start = Instant::now();
+        // A sync's worth of pages empties the relay's bucket...
+        edge.take_in(Part::Messaging, ip, 1.0, start).unwrap();
+        edge.charge_in(Part::Messaging, ip, 8 << 20);
+        assert!(edge.take_in(Part::Messaging, ip, 1.0, start).is_err());
+        // ...and the wallet's other reads don't wait.
+        assert_eq!(edge.take(ip, 4.0, start), Ok(()));
+        assert_eq!((edge.buckets(), edge.messaging_buckets()), (1, 1));
+        edge.sweep(start + Duration::from_secs(3600));
+        assert_eq!((edge.buckets(), edge.messaging_buckets()), (0, 0));
+        assert_eq!(Part::of("/messaging/v1/mainnet/envelopes"), Part::Messaging);
+        assert_eq!(Part::of("/api/v1/tip"), Part::Data);
+        assert_eq!(Part::of("/messagingx"), Part::Data);
     }
 
     #[test]

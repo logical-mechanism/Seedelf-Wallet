@@ -113,6 +113,11 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
   curl -si -X OPTIONS https://mainnet.<domain>/api/v1/tip \
     -H 'Origin: chrome-extension://<ID>' -H 'Access-Control-Request-Method: GET' | grep -i access-control
   ```
+- **The relay:** `/health`'s `messaging` says `"egress":"ok"` and each pool's size, and a page answers 200 with the page's 16-byte header (`01`, then flags, a cursor and four prices) and no `Content-Encoding`:
+
+  ```bash
+  curl -s https://mainnet.<domain>/messaging/v1/mainnet/envelopes | head -c 16 | od -An -tx1
+  ```
 - **Limits,** from a third machine, never the maintainer's:
   - about 75 `POST /api/v1/account_info` sent at once from one address end in a 429 with `Retry-After`. Send them in parallel (`xargs -P 20`): one at a time, the refill keeps up. Sending from the VPS to its own public name counts as a third machine;
   - a request with `Sec-Fetch-Mode: no-cors`, or from another `Origin`, gets 403: a web page can't spend the API's traffic.
@@ -150,6 +155,7 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
   - **What `.prev` holds,** and so what a rollback takes away. `status` prints the sha256 of the running binary and of `.prev`. The deploy run that installed a binary printed the same sha256, in its *build* job's *Checksum* step and in `DEPLOYED <sha256> (<the one before> kept as .prev)`, so that run's commit is the binary's: `gh run list --workflow data-layer-deploy.yml` lists the runs with their commits. A deploy that fails its check leaves `.prev` as it was, and a `rollback` swaps the two. Then `git diff <.prev's commit> <the running one's> -- seedelf-data/api/src` is what a rollback takes away: the routes are in `public/mod.rs`, `private.rs` and `lovejoin/routes.rs`, and every fix since goes with them. A slow answer costs more than a refusal: a read that takes longer than the wallet's 10 s holds its whole part on Koios for 5 minutes, and a token route's part is the private index's.
   - Every cache refills within a block, and the month's traffic is kept.
 - **Watch the VPS's own meter** (`vnstat`) against the provider's allowance: `DATA_EGRESS_GB_MONTH` counts the API's response bodies alone, and TLS, headers and the tunnel come on top.
+- **The relay's share,** `DATA_MESSAGING_GB_MONTH` in `/etc/seedelf-data/env`: what messaging may spend of the month's traffic. Every reader downloads every envelope, so messaging's traffic grows with the square of its users. Raise it as they come, and the droplet with it. The pools are saved beside `egress.json` (`messaging-<pool>.pool`), so a deploy keeps what's waiting; deleting them drops every waiting message.
 - **Caddy:** apt doesn't update it (§2, step 1). Watch its releases, and install a new one's `.deb` the same way, checked.
 - **Before a node upgrade,** check Kupo's and Ogmios's compatibility with the new version: there's no preprod to try it on first.
 - **After a db-sync upgrade,** compare its insert options with `home/db-sync-insert-options.json`.

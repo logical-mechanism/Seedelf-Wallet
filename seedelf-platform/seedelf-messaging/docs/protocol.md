@@ -1,6 +1,6 @@
 # Seedelf Messaging: the one-to-one protocol (draft)
 
-The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay, the wallet's side and the protocol model are still to come, and the design is refined as they're built.
+The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay is built too, in the data layer (54c), and §17 fixes what it takes and gives. The wallet's side and the protocol model are still to come, and the design is refined as they're built.
 
 Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multiplication, registers (g, v) with v = [x]g.
 
@@ -279,10 +279,10 @@ Measured on the same machine as the README: an Intel Core i5-12400F, one thread.
 
 ## 10. The relay
 
-Phase 2 settles the details; the protocol needs only this:
+§17 fixes the details as built (54c); the protocol needs only this:
 
 - **The relay stores bytes.** It keeps no recipient, sender, account or key.
-- **Size:** at most 32 KiB an envelope.
+- **Size:** exactly one of §9's four sizes, so at most 32 KiB an envelope.
 - **Envelopes are deleted after 36 hours.** Deleting doesn't unsend: anyone who downloaded the pool keeps copies. What protects old envelopes is forward secrecy, not deletion.
 - **One relay.** The wallet uses one relay; choosing another isn't offered right now. That's what lets the relay price posts by where they come from.
 - **Proof of work, priced by traffic** (2026-11-20). Every envelope carries proof of work over its own bytes, so the work can't be reused. The price is per sending address:
@@ -349,7 +349,7 @@ Phase 2 settles the details; the protocol needs only this:
 - **A discovery key that stays available while locked.** It can't be the Seedelf's key, so handles would need a messaging register of their own, which reopens §0's choice of key.
 
 **Open:**
-- **Proof of work's numbers.** The shape is settled: priced by traffic (§10). Open are the base, the curve, the window and the ceiling, measured in WebAssembly. Hashcash over SHA-256 comes first. If GPUs prove the problem, a memory-hard puzzle that stays cheap to check, such as Equihash, is in reserve. Not one whose check costs the relay as much as an attempt, such as Argon2. Also its economics: the relay's storage is its rate cap times 36 hours.
+- **Proof of work's numbers.** Set in §17.4 (54c) from a measured attempt: about 425 ns of WebAssembly. Open is tuning them with real use, and timing them in the extension itself (54d). Hashcash over SHA-256 comes first. If GPUs prove the problem, a memory-hard puzzle that stays cheap to check, such as Equihash, is in reserve. Not one whose check costs the relay as much as an attempt, such as Argon2. Also its economics: the relay's storage is its rate cap times 36 hours.
 - **A first-contact stamp,** proposed. An 8-byte nonce in F such that a hash over F, nonce included, meets a difficulty the reader sets, checked before any key is computed.
   - It prices a stranger's first message to one reader. The relay's price can't target that, since the relay can't tell first messages from replies.
   - F is unique to its conversation and bound into SK, so a stamp can't be moved to another reader or another conversation.
@@ -393,7 +393,7 @@ Phase 2 settles the details; the protocol needs only this:
 | Phase | What |
 |---|---|
 | 1 | Done: the v1 envelope, and its scan. |
-| 2 | The relay: storage, the 36-hour expiry, proof of work, duplicates, the cursor. |
+| 2 | The relay: storage, the 36-hour expiry, proof of work, duplicates, the cursor. Built (§17), in the data layer (54c). |
 | 3 | Sessions: §3 to §6 in this crate, with vectors, property tests and the protocol model. Built (§16), with independently reproduced vectors; the model is 54b. |
 | 4 | The wallet: WebAssembly bindings, the worker's queue, chunked scanning, encrypted local state, requests, a Messages screen, sender labels, and "message me at ⟨Seedelf⟩". |
 | Later | Proving who you are, groups, post-quantum, delivery receipts, prekeys if users want them. |
@@ -484,3 +484,102 @@ The wallet's private format, versioned by its first byte; another implementation
 
 - `session_vectors_match_the_file` holds the code to the file. `RECORD_MESSAGING_SESSION_VECTORS=1` rewrites it, for a deliberate change of format only (it never touches messaging_v1.json).
 - tests/session_vectors.rs reads it through the public API.
+
+## 17. The relay as built (54c)
+
+The relay is a part of the data layer, seedelf-data's `api/src/messaging/`, on the same server, behind the same edge and deploys, with buckets and a monthly traffic ceiling of its own (chunk 54's call 1, the owner, 2026-11-21). The data layer's [README](../../../seedelf-data/README.md#seedelf-messagings-relay) is its reference for operators. This section fixes every byte a wallet sends it and reads from it, so a wallet needs nothing else. Choices made while building are marked [choice].
+
+### 17.1 Pools
+
+- **One per network, named in the path:** `mainnet` and `preprod` (call 4). A Seedelf's x is the same on every network (derivation.rs), so one pool would show a preprod message to the mainnet wallet.
+- **The pool's name is in the stamp** (§17.3), so work done for one pool isn't accepted by the other.
+- **What each holds:** at most 64 MiB of envelopes on mainnet and 8 MiB on preprod [choice]. Past it, a post is refused until the oldest expire.
+
+### 17.2 Posting
+
+`POST /messaging/v1/{pool}/envelopes`, `Content-Type: application/octet-stream`, the body:
+
+```text
+nonce (8, big-endian) | envelope
+```
+
+At most 8 + 32,768 bytes. The checks run cheapest first, and the first that fails answers:
+
+| Order | Check | Answer when it fails |
+|---|---|---|
+| 1 | The body holds a nonce: at least 8 bytes | 400 |
+| 2 | **The shape:** version 1, and exactly 512, 2,048, 8,192 or 32,768 bytes (§9, §16.1) | 400 |
+| 3 | **Already held,** by the stamp's digest (§17.3): the same bytes in the same pool | 200 `already`, whatever the stamp |
+| 4 | **The price** (§17.4) is within its ceiling | 429, with `Retry-After` |
+| 5 | **The stamp** shows at least the price | 402, `{"error": …, "price": <bits>}` |
+| 6 | **The points:** p, w and c each canonical, in G1 and not O (construction.md §4.4), so no reader ever parses garbage (call 3) | 400 |
+| 7 | **Room** in the pool | 503, with `Retry-After` |
+
+Kept, the answer is 200 `{"kept": "new", "expires": <Unix seconds>}`; `already` carries the held copy's `expires`. The relay's own refusals carry `{"error": "<words>"}`. One more: a 503 `busy`, with `Retry-After`, from an address new to the relay while it already counts 200,000 (§17.4).
+
+- **Already held comes before the price** [choice], so a wallet that re-posts its stored bytes after a restart (§4.2) gets 200 even when its address's price has risen since. Anyone can download the pool, so this tells no one anything.
+- **The points come after the price** [choice]: they're the costly check (three subgroup checks, about 0.16 ms natively), so a sender pays its work before the relay spends on them.
+- **A 402 is solved again for the same bytes** at the price it names (§10). The wallet marks a message posted on either 200 (§4.2, step 3), and shows "sent, expires at" from `expires`.
+- **The edge** answers before any of this: a 429 when the address's messaging bucket is empty (a post costs 4 units, a page 1 plus 1 for every 16 KiB it sends), a 503 once messaging's traffic allowance for the day is spent, and a 413 for a body over 8 + 32,768 bytes (axum's, in plain text). These buckets and this allowance are messaging's alone: catching up on messages never makes the wallet's other reads wait, and a flood of messages never spends their traffic.
+
+### 17.3 The stamp
+
+```text
+digest = SHA-256("Seedelf-Messaging|v1|stamp|" ‖ len(pool) (1) ‖ pool ‖ envelope)
+work   = the leading zero bits of SHA-256(digest ‖ nonce (8, big-endian))
+```
+
+- **Bits count from the most significant bit of the hash's first byte.** A stamp meets a price of b bits when its work is at least b.
+- **Bound to the envelope's bytes and the pool,** so it can't be reused for another envelope or moved to the other pool. The digest also identifies the envelope for the duplicate check.
+- **Each attempt is one SHA-256 block** (40 bytes), whatever the envelope's size.
+- **Solving:** any nonce that meets the price is taken. The crate's `solve_stamp` takes the first from 0, which makes the vectors [choice], and `find_stamp` searches a slice, so the worker can yield between slices (54d). It refuses more than 32 bits (`MAX_STAMP_BITS`).
+- **Measured** (2026-11-21, Intel Core i5-12400F, the sha2 crate built as the wallet's module is, run in Node 24): about **425 ns an attempt** in WebAssembly, 160 ns natively. b bits take 2^b attempts on average: 18 bits about 0.11 s, 20 about 0.45 s, 24 about 7 s. The number of attempts is geometric, so one time in twenty takes three times the average or more. A slow laptop's figures are to measure in the extension (54d).
+
+### 17.4 The price
+
+What's counted is units of 512 bytes, so an envelope is 1, 4, 16 or 64 units. Each sending address has a count of its recent units, an IPv4 address whole and an IPv6 address by its /64, and everyone together has one. Both halve every 10 minutes. A post's price, its own units u counted:
+
+```text
+bits = base + ⌊(mine + u) / 32⌋ + floor
+floor = 0 when all + u < quiet, else ⌊log₂((all + u) / quiet)⌋ + 1
+```
+
+| Pool | base | quiet | ceiling | per bit | half-life |
+|---|---|---|---|---|---|
+| mainnet | 18 bits | 1,000 units | 24 bits | 32 units | 10 minutes |
+| preprod | 16 bits | 200 units | 24 bits | 32 units | 10 minutes |
+
+All [choice], to tune with real use.
+
+- **Past the ceiling a post is refused,** not priced: a 429 whose `Retry-After` is when the counts will have decayed enough, if nothing else is posted meanwhile, in 15 s steps and at most an hour.
+- **Only kept posts are counted.** The counts live in the relay's memory, an address's until it has decayed below a hundredth of a unit (about an hour after one short post), and are never logged or saved.
+- **What it means for a sender:** a short message alone costs 18 bits, about 0.1 s; a 32 KiB one, 20. One address can send 31 short messages in a burst before the first extra bit, and stays under the ceiling while its recent units stay under 224: about 15 short messages a minute, kept up indefinitely. A busy pool raises everyone's price by a bit for each doubling of its traffic past `quiet`, which at mainnet's numbers is about 100,000 short envelopes a day.
+- **What it doesn't stop.** A GPU computes SHA-256 thousands of times faster than a browser, and a sender with many addresses (an IPv6 /48 holds 65,536 /64s) meets only the floor. Such a sender can fill a pool, and posts are then refused until the oldest expire. The cap bounds what that costs the server and every reader. In reserve: a memory-hard puzzle that stays cheap to check (§13), and a larger droplet.
+
+### 17.5 Reading
+
+`GET /messaging/v1/{pool}/envelopes`, for the first page, then `?after=<cursor>` with the last page's cursor: a decimal u64 with no sign. Any other query is a 400. The answer is `application/octet-stream`, not compressed:
+
+```text
+version (1) = 1 | flags (1) | cursor (8) | prices (4) | count (2) | count × (length (4) | envelope)
+```
+
+- **Whole envelopes,** in the order they came, at most 256 KiB of them and always at least one when any follows the cursor.
+- **cursor:** what to ask from next. Every envelope a pool keeps gets the next number, starting from the Unix time in microseconds when the pool was loaded [choice], so a number says nothing of when its envelope came, and a pool that lost what it held still numbers above every cursor it gave out. An empty page's cursor is the last number given out.
+- **flags:** bit 0 (1), another page follows now; bit 1 (2), a gap: something after the cursor is gone (expired, or lost to a crash), or the cursor isn't one this pool gave out, in which case the page starts from the oldest envelope held. A wallet with no cursor is told of no gap.
+- **prices:** the bits a post from the reader's address would be asked now, for 512, 2,048, 8,192 and 32,768 bytes in that order; 0 when it would be refused. A wallet solves at these and is spared a 402 unless the price rises before it posts.
+- **The wallet's loop** (54e): read pages until bit 0 is clear, saving the cursor after each; on a gap, say that messages sent meanwhile may never arrive. Envelopes read twice are harmless: §5's rules refuse them.
+
+### 17.6 Kept and lost
+
+- **36 hours from when it came:** kept while now < came + 36 h, by the server's clock. A re-post after that is new, with new work (§5, rule 5).
+- **Saved** to the server's state directory every minute and at shutdown, and read at start, so a deploy keeps what's waiting (call 2). A shutdown leaves a mark beside each pool's file saying it holds everything. A pool read without the mark tells every earlier cursor of a gap, since what came after its last save is gone.
+- **Nothing else is kept:** no recipient, sender, account or key; the counts of §17.4 in memory only; no log of a request (the data layer's README, *What it sees and keeps*).
+
+### 17.7 Vectors
+
+[tests/vectors/messaging_relay_v1.json](../tests/vectors/messaging_relay_v1.json), written by this crate's `relay` module:
+
+- **posts:** 20 envelopes and what the relay makes of each: the four sizes kept, then each refusal of §17.2's shape and points (two other versions, five wrong lengths, and each kind of bad point in p, w and c), named as `check_envelope` names them.
+- **stamps:** six, with the envelope, the pool, the price, the digest, the first nonce from 0 that meets it, the hash and its work.
+- `relay_vectors_match_the_file` holds the crate to the file, and `RECORD_MESSAGING_RELAY_VECTORS=1` rewrites it, for a deliberate change of format only. The relay's copy of the checks, which the data layer can't take from this crate, is held to the same file (seedelf-data's `api/src/messaging/check.rs`), and its tests post every envelope in it through the whole app.

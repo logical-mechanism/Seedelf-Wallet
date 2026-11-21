@@ -2,7 +2,7 @@
 
 Seedelf Wallet reads Cardano mainnet through this API, at `https://mainnet.seedelf.logicalmechanism.io`. Seedelf Wallet is a Cardano wallet for Chrome with Seedelf built in; Seedelf is a stealth wallet that hides who receives and who spends ([what Seedelf is](../README.md)). The API sits in front of its own Cardano node, db-sync (the chain in a Postgres database) and Kupo (an index of only the outputs it's set to match).
 
-**Mainnet only.** On preprod the wallet reads Koios ([koios.rest](https://koios.rest), a public Cardano API). On mainnet it reads Koios alone when Settings → *Read Cardano through Koios only* is on.
+**Mainnet only,** for the chain. On preprod the wallet reads Koios ([koios.rest](https://koios.rest), a public Cardano API). On mainnet it reads Koios alone when Settings → *Read Cardano through Koios only* is on. [Seedelf Messaging's relay](#seedelf-messagings-relay) keeps a preprod pool beside mainnet's, since it reads no chain.
 
 **The wallet falls back to Koios part by part.** When a part of this API can't answer, the wallet reads that part from Koios instead. The parts are the three the wallet's Settings name: the private balance, the public account, and sending. The public routes and the submit part take Koios's own paths and JSON, so for them the fallback is only a change of base URL.
 
@@ -12,9 +12,10 @@ Seedelf Wallet reads Cardano mainnet through this API, at `https://mainnet.seede
 - **[Lovejoin's token pools](#lovejoins-token-pools):** which pools are shown, each pool's crowd (how many deposits its boxes could have come from), and every shown pool's boxes in one feed.
 - **[The public routes](#the-public-routes):** the 24 other Koios endpoints the wallet uses, for the public account, staking and governance, under Koios's own `/api/v1/` paths and JSON. They take only the requests the wallet makes.
 - **[The submit part](#the-submit-part):** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to a cardano-submit-api and an Ogmios, for sending.
+- **[Seedelf Messaging's relay](#seedelf-messagings-relay):** encrypted messages, kept 36 hours for every reader to download. It reads no chain and can't read a message or tell whom it's for.
 - **[`/health`](#health):** each part's state.
 
-Every request passes [the edge](#the-edge) first: a bucket per IP, a monthly traffic ceiling, and CORS for the wallet's origins only.
+Every request passes [the edge](#the-edge) first: a bucket per IP, a monthly traffic ceiling, and CORS for the wallet's origins only. The relay has buckets and a ceiling of its own.
 
 ## Run it
 
@@ -34,7 +35,7 @@ curl http://127.0.0.1:8099/health
 | `MAINNET_KUPO_URL` | a Kupo that matches the contract and the mix box: the private index's second source. Without it, the private index reads db-sync alone. |
 | `MAINNET_SUBMIT_API_URL`, `MAINNET_OGMIOS_URL` | cardano-submit-api and Ogmios, for the submit part. `submittx` needs both and `ogmios` needs Ogmios; a route missing one answers 503. |
 | `DATA_LISTEN` | where it listens: `127.0.0.1:8099` by default |
-| `DATA_ORIGINS`, `DATA_TRUST_PROXY`, `DATA_EGRESS_GB_MONTH`, `DATA_STATE_DIR` | the edge's settings ([below](#the-edge)) |
+| `DATA_ORIGINS`, `DATA_TRUST_PROXY`, `DATA_EGRESS_GB_MONTH`, `DATA_MESSAGING_GB_MONTH`, `DATA_STATE_DIR` | the edge's settings ([below](#the-edge)) |
 | `RUST_LOG` | the log level: `info` by default |
 
 **What the services need,** as templates in [deploy/home/](deploy/home/):
@@ -69,13 +70,13 @@ The API runs on a VPS, behind Caddy. The services it reads run on a separate mac
 
 What the code does is in this repository; what runs on the servers isn't something a user can check. The deployed binary is built from `main` by `.github/workflows/data-layer-deploy.yml`, whose run prints its SHA-256.
 
-- **Your IP address,** as any server does. It's kept only in memory, for its bucket ([the edge](#the-edge), `api/src/edge.rs`), and forgotten once the bucket is full again.
+- **Your IP address,** as any server does. It's kept only in memory, for its bucket ([the edge](#the-edge), `api/src/edge.rs`), and forgotten once the bucket is full again. The relay also counts how much each address has posted lately, in memory, to price its next post, and forgets it as the count decays ([the relay](#seedelf-messagings-relay)).
 - **What a request names.** A public route's request names what it asks about, as a request to Koios would: stake keys, addresses, payment credentials, outputs, transactions, a pool, a DRep, a token. A submit carries the transaction. The private index's requests name nothing but a [cursor](#the-private-index), which shows roughly when the wallet last read.
 - **No logs of a request.** It logs its start and failed queries only, never a request's address, path or body. A failed query logs only its SQLSTATE, since a Postgres message can quote a value the request sent. The database driver and axum, which can log a request's contents, sit behind a log filter of their own, so no `RUST_LOG` directive can turn them up (`api/src/main.rs`).
 - **The servers' own logs, as configured here:** Caddy keeps no access log, and its error log leaves out the loggers that name a client (`deploy/edge/Caddyfile`). Postgres's log holds no statement (`deploy/home/postgresql-seedelf.conf`), and Kupo's HTTP log, set to Warning, no request path (`deploy/home/kupo_seedelf.service`).
 - **Nothing kept or logged about a submit:** not the transaction, not its ID (`api/src/submit.rs`).
 - **Answers the same for everyone are kept** for a time, in memory, and serve every wallet. **An answer about one user is never kept:** the *Kept* column of [the public routes](#the-public-routes) says which is which.
-- **Its one file** is the month's count of bytes sent (`egress.json`), so a restart doesn't forget it.
+- **Its files** are the month's counts of bytes sent (`egress.json`, and the relay's `messaging-egress.json`), so a restart doesn't forget them, and the relay's pools (`messaging-<pool>.pool`): the envelopes it holds and when each came, which anyone can download anyway, saved every minute so a deploy keeps what's waiting.
 - **Nothing in a browser's cache:** every answer but a CORS preflight carries `Cache-Control: no-store`.
 
 ## The edge
@@ -87,6 +88,7 @@ What stands between the internet and the routes, in `api/src/edge.rs`. Caddy in 
 | `DATA_ORIGINS` | the origins CORS lets read answers, comma-separated: the wallet's `chrome-extension://<id>`. The wallet then needs no host permission. `Retry-After` is exposed, and a 429 carries CORS too, so the wallet can read why it waits. None by default. |
 | `DATA_TRUST_PROXY=true` | behind Caddy on loopback: the client is the last `X-Forwarded-For` address. From anywhere else the header is ignored. Any value but `true` or `false` is refused at start. |
 | `DATA_EGRESS_GB_MONTH` | the API's own traffic a calendar month (UTC), in GB, before every route but `/health` answers 503. Each day gets an equal share of what's left, so a flood costs a day, not the rest of the month. The count is kept in `egress.json` in `DATA_STATE_DIR`, or systemd's `StateDirectory`, so a restart doesn't forget it; with neither, the count starts from zero at each restart. Unset, there's no ceiling. It counts response bodies alone: TLS and headers come on top. |
+| `DATA_MESSAGING_GB_MONTH` | the relay's share of that, at most, counted the same way (in `messaging-egress.json`). Past it, the relay's routes answer 503 and every other route goes on: a flood of messages can spend messaging's allowance, never the wallet's reads. Its traffic counts toward `DATA_EGRESS_GB_MONTH` too. Unset, the relay has no ceiling of its own. |
 
 **A bucket per client:** 300 units, refilled at 10 a second. IPv6 addresses are taken by their /64.
 
@@ -95,6 +97,8 @@ What stands between the internet and the routes, in `api/src/edge.rs`. Caddy in 
 | the private index, `/health`, and the public answers that are the same for everyone: `tip`, `epoch_params`, `totals`, `pool_list`, `proposal_list` | 1 |
 | any other public route: one user's live SQL | 4 |
 | `submittx`, `ogmios` | 10 |
+
+**The relay's routes have buckets of their own,** the same size, so catching up on messages never makes the wallet's other reads wait: a page costs 1 and a post 4, and a page's bytes are charged as every answer's are.
 
 - **Answers cost what they send:** a unit more for every 16 KB, charged after. A bucket can go below empty, to a full bucket's worth.
 - **Past it, a 429** with `Retry-After`. The wallet paces itself under this: it keeps to 80 units every 10 s, by these weights (`DATA_LIMIT` in the wallet's [data-layer.ts](../seedelf-platform/seedelf-web-wallet/extension/src/background/data-layer.ts)).
@@ -109,11 +113,12 @@ What stands between the internet and the routes, in `api/src/edge.rs`. Caddy in 
 - `private`, `public` and `submit`: `ok` or `down`;
 - `source`: which source the private index answers from, `db-sync` or `kupo`;
 - `egress`: `over` once the month's traffic ceiling is passed;
+- `messaging`: the relay's `egress`, `over` past its own ceiling, and each pool's `envelopes` and `bytes`;
 - `db_sync` and `kupo`: each source's tip and its age;
 - `node`: the node's tip as Ogmios says it, its age, and whether Ogmios is `connected` to it;
 - `network`: always `mainnet`.
 
-It answers 200 while the private index and the public routes answer and the month's traffic is under its ceiling, and 503 otherwise. The submit part's state is said but doesn't change the status.
+It answers 200 while the private index and the public routes answer and the month's traffic is under its ceiling, and 503 otherwise. The submit part's and the relay's states are said but don't change the status.
 
 ## The private index
 
@@ -302,6 +307,46 @@ curl -s "$api/api/v1/pool_history?_pool_bech32=pool1gaztx97t53k47fr7282d70tje832
 - **Only while the node is synced.** A node catching up after a restart rejects a valid spend of an output newer than its tip, as already spent, and Ogmios evaluates such a spend as having an unknown input. The wallet can't tell either answer from a real rejection. So Ogmios's `/health` is read every 2 s, and both paths answer 503 `behind` with `Retry-After` while the node's tip is more than 3 minutes old, while Ogmios can't reach the node, or once `/health` has failed two reads in a row. The wallet then goes to Koios at once. Without an Ogmios configured, the node's sync is unknown, and the submit part answers 503.
 - **Nothing is cached or logged:** not a transaction, not its ID, not an upstream's URL.
 
+## Seedelf Messaging's relay
+
+Seedelf Messaging's relay, in `api/src/messaging/` (web wallet chunk 54's 54c). The protocol is [protocol.md](../seedelf-platform/seedelf-messaging/docs/protocol.md): §10 says what the relay is for, and §17 every byte of what it takes and gives.
+
+- **It stores bytes,** encrypted envelopes, for 36 hours, and every reader downloads all of them: that's what hides whom a message is for. It can't read one or tell whom it's for, and it keeps no recipient, sender, account or key.
+- **A pool per network,** `mainnet` and `preprod`. A Seedelf's key is the same on both, so one pool would show a preprod message to the mainnet wallet. Preprod's is for testing: a lower price and a smaller cap.
+- **It reads no chain,** so a pool is open while db-sync, Kupo or the node is down.
+
+| Route | Takes | Answers |
+|---|---|---|
+| `POST /messaging/v1/{pool}/envelopes` | `nonce (8, big-endian) ‖ envelope`, as `application/octet-stream`, at most 32,776 bytes | 200 `{"kept": "new" \| "already", "expires": <Unix time>}` |
+| `GET /messaging/v1/{pool}/envelopes?after=<cursor>` | the cursor from the last page; none for the first | a page, as `application/octet-stream`: below |
+
+**A post is checked, cheapest first:**
+
+1. **The shape:** version 1, and exactly 512, 2,048, 8,192 or 32,768 bytes long, the session layer's four sizes. Else 400.
+2. **Already held?** Then 200 `already`, whatever its stamp: a wallet re-posts the same bytes after a restart.
+3. **The price:** proof of work over the envelope's bytes and the pool's name (§17). Too little is a 402 with the `price` in bits; past the ceiling, a 429 with `Retry-After`.
+4. **The points:** `p`, `w` and `c` each a valid point of G1, so a reader never meets garbage. Else 400. Checked after the price, since it's the costly check.
+5. **Room:** a pool holds at most 64 MiB (preprod 8 MiB). Past it, 503 with `Retry-After`, until the oldest expire.
+
+**The price** is a number of bits: 2^bits SHA-256 attempts on average, about 425 ns each in a browser's WebAssembly. Mainnet's base is 18 bits (about 0.1 s), and its ceiling 24 (about 7 s). What's counted is 512-byte units, an address's and everyone's, halving every 10 minutes (`api/src/messaging/price.rs`): a bit more for every 32 of the address's recent units, this post's included, and a bit more for every doubling of everyone's past 1,000. An IPv6 address is counted by its /64. The counts live in memory, an address's while it's above a hundredth of a unit, and nothing logs them.
+
+**A page** holds whole envelopes, at most 256 KiB of them (always at least one), in the order they came:
+
+```text
+version (1) = 1 | flags (1) | cursor (8) | prices (4) | count (2) | count × (length (4) | envelope)
+```
+
+- **The cursor** to ask from next, big-endian. A pool numbers what it keeps from the time it was loaded, in microseconds, so its numbers say nothing of when an envelope came.
+- **Flags:** 1, another page follows now; 2, a gap: something after the reader's cursor expired, or was lost to a crash, or the cursor isn't one this pool gave out. A gap means some messages were never seen.
+- **Prices:** the bits a post from the reader's address would be asked now, for each size in order; 0, refused for now. A wallet solves at these and saves a 402.
+- **Not compressed:** ciphertext doesn't compress.
+
+**The pools are saved** to the state directory (`messaging-<pool>.pool`) every minute and at shutdown, and read at start, so a deploy keeps what's waiting. A shutdown leaves a mark beside each file (`messaging-<pool>.clean`) saying it holds everything; without the mark, a pool read at start tells every earlier cursor of a gap, since what came after the last save is gone.
+
+**The checks are a copy** of seedelf-messaging's `relay` module, which the data layer can't depend on. Both are held to `seedelf-platform/seedelf-messaging/tests/vectors/messaging_relay_v1.json`, which the crate writes: every envelope it holds, kept or refused and why, and stamps with their work.
+
+**A load test,** on two cores, the droplet's size: `RELAY_LOAD=1 taskset -c 0,1 cargo test --release --locked --test messaging_load -- --nocapture`. It runs the server in the test, on a local port, with no source. On an Intel Core i5-12400F, with the test's clients on the same two cores: 6,400 posts a second (p50 7.7 ms, p99 28 ms, 64 at once), and fresh syncs of a 3,000-envelope pool at 2.1 GB/s. Traffic, not the relay, is the droplet's limit: every reader downloads every envelope.
+
 ## A row
 
 ```json
@@ -329,7 +374,7 @@ curl -s "$api/api/v1/pool_history?_pool_bech32=pool1gaztx97t53k47fr7282d70tje832
 
 ## Limits
 
-- **Mainnet only.** Preprod reads Koios.
+- **Mainnet only,** but for the relay's preprod pool. Preprod reads Koios.
 - **Only the wallet's requests.** It isn't a general Koios: any other request is a 400.
 - **A request too large for it is a 503:** more than 20,000 unspent outputs, more than 200,000 outputs behind a transaction listing, or a page more than 10,000 transactions in. The wallet reads Koios for that request.
 - **A part that's down answers 503,** and the wallet reads that part from Koios for 5 minutes. While db-sync is down, or its tip is over 3 minutes old, the public routes and the token pools' routes answer 503; the private index answers from Kupo.

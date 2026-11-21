@@ -25,6 +25,8 @@ pub struct Config {
     pub trust_proxy: bool,
     /// The month's ceiling on the API's own traffic, in bytes.
     pub egress_ceiling: Option<u64>,
+    /// The relay's share of it, at most, in bytes: messaging stops there, the rest goes on.
+    pub messaging_egress_ceiling: Option<u64>,
     /// Where the month's traffic is kept: systemd's `StateDirectory`, or `DATA_STATE_DIR`.
     pub state_dir: Option<PathBuf>,
 }
@@ -58,15 +60,23 @@ impl Config {
                 Some("true") => true,
                 Some(_) => bail!("DATA_TRUST_PROXY is true or false"),
             },
-            egress_ceiling: optional("DATA_EGRESS_GB_MONTH")
-                .map(|gb| match gb.parse::<f64>() {
-                    Ok(gb) if gb.is_finite() && gb > 0.0 => Ok((gb * 1e9) as u64),
-                    _ => Err(anyhow!("DATA_EGRESS_GB_MONTH is a number of GB above 0")),
-                })
-                .transpose()?,
+            egress_ceiling: gigabytes("DATA_EGRESS_GB_MONTH")?,
+            messaging_egress_ceiling: gigabytes("DATA_MESSAGING_GB_MONTH")?,
             state_dir: optional("DATA_STATE_DIR")
                 .or_else(|| optional("STATE_DIRECTORY"))
                 .map(PathBuf::from),
         })
     }
+}
+
+/// A number of GB above 0 in `name`, as bytes, if it's set.
+fn gigabytes(name: &str) -> Result<Option<u64>> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(|gb| match gb.parse::<f64>() {
+            Ok(gb) if gb.is_finite() && gb > 0.0 => Ok((gb * 1e9) as u64),
+            _ => Err(anyhow!("{name} is a number of GB above 0")),
+        })
+        .transpose()
 }

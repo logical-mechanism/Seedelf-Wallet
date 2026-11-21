@@ -4,7 +4,7 @@ What the crate guarantees, under which assumptions, and what it doesn't. Unaudit
 
 - **The v1 envelope** (Phase 1, most of this file) is a cryptographic foundation. On its own it has no sender authentication, no forward secrecy and no replay protection.
 - **The session layer** (chunk 54's 54a: [protocol.md](protocol.md) §3 to §6, exact in §16) builds those on it: conversations, the Double Ratchet, and the rules for replays, requests and continuations. What each compromise reveals is protocol.md §1.1. What its tests establish is [below](#the-session-layer).
-- There's still no relay, no model of the protocol (54b), and no key distribution beyond a Seedelf's public register.
+- The relay is built, in the data layer (54c, protocol.md §17): it checks a post's shape, points and proof of work, and can't read it. There's still no model of the protocol (54b), and no key distribution beyond a Seedelf's public register.
 
 ## What the tests establish, and what they don't
 
@@ -84,7 +84,7 @@ Not proven here.
 - **Whatever reads can spend.** A client or service that scans for a Seedelf holds its spending key, and there's no read-only delegation under this choice. A scanning-only key would have to be a separate key, which means revisiting the choice.
 - **Decryption sits next to the spending key.** Any oracle on [x]·(an attacker's point), beyond what ECIES allows, would be an oracle on the spending key. The subgroup, identity and canonical-encoding checks are what make that safe. They're mandatory, and the tests hold them.
 - **Compromise of one is compromise of both.**
-- **Anyone can message any Seedelf,** since its register is public. Spam is a relay concern (Phase 2).
+- **Anyone can message any Seedelf,** since its register is public. Spam is the relay's concern: proof of work priced by traffic (protocol.md §17.4), which a GPU or a sender with many addresses can outpay.
 - **No new derivation:** the wallet's frozen v1 derivation stays as it is.
 
 ## Implementation notes
@@ -140,6 +140,6 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 - The spending-and-reading argument, checked against the literature.
 - A constant-time review of the WebAssembly build. WebAssembly engines promise nothing about timing.
 - The session layer's model (54b), then an outside review of the protocol.
-- Spam and resource limits at the relay: priced by traffic (protocol.md §10).
+- The relay's price tuned with real use, and a memory-hard puzzle if GPUs flood it (protocol.md §17.4).
 - A fix for linking through a sum of registers (protocol.md §13).
 - A dependency audit (cargo-audit or cargo-deny) for this crate in CI.

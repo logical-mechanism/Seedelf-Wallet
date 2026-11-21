@@ -1,6 +1,6 @@
 # Chunk 54 · Seedelf Messaging
 
-**Status: 🚧 54a built,** on `web-wallet/messaging-session`. Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
+**Status: ✅ 54a merged** (#403). **🚧 54c built,** on `web-wallet/messaging-relay`. Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
 
 **The specification is [protocol.md](../../../seedelf-messaging/docs/protocol.md),** with the envelope in [construction.md](../../../seedelf-messaging/docs/construction.md) and the guarantees in [security.md](../../../seedelf-messaging/docs/security.md). It has had two reviews; the second's reasoning, and its adversarial tests, are in [protocol-review.md](../../../seedelf-messaging/docs/protocol-review.md). This plan doesn't repeat them: it says what to build, where, in what order, and what's still the owner's to decide. A step that changes the protocol changes protocol.md in the same PR.
 
@@ -20,6 +20,7 @@
 - "if you delete the wallet and the data associated to it on the browser then yeah you lost those conversations".
 - A Seedelf is a handle, "message me at SEEDELF". A proof of one is a maybe until users ask.
 - One relay, the wallet's only one, pricing each address's posts by its recent traffic, said plainly: "we dont know what is being sent nor to who but we do rate limit via ip because of dos attacks basically. I mean its real." That settles call 6.
+- The relay on the data layer's droplet, with buckets and a traffic ceiling of its own (2026-11-21): "Lets build on that same droplet and as the wallet expands we expand that server as well, or add more or something. Initially there should not be that many users anyway using this feature." That settles calls 1 and 2.
 - Groups and post-quantum later.
 
 **The marks:**
@@ -115,7 +116,7 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 
 **Done means:** the model's queries hold, and a fresh-context reviewer has read the model against protocol.md.
 
-### 54c ⬜ The relay
+### 54c 🚧 The relay
 
 Where it runs is call 1, and its storage call 2. The routes, as the recommendation puts them:
 
@@ -135,6 +136,21 @@ Where it runs is call 1, and its storage call 2. The routes, as the recommendati
 - **Deploying:** through `data-layer-deploy.yml`, approved by the owner, and never by hand.
 
 **Done means:** offline tests for every refusal, the expiry, paging and duplicates, the price (a burst from one address, from one IPv6 /64, and from many addresses at once), a load test on the droplet's size [measure], and the vectors.
+
+**Where it stands** (2026-11-21, `web-wallet/messaging-relay`):
+- **Built:** seedelf-messaging's `relay` module (what a post must be, the stamp, and vectors), and the relay in seedelf-data's `api/src/messaging/`: the two routes, a pool per network, the price, the 36-hour expiry, pages behind a cursor, duplicates, saving across a restart, and the edge's share. protocol.md §17 fixes every byte, each choice marked [choice]; the data layer's README is the operators' reference.
+- **The talk before it** (the owner, 2026-11-21): one droplet holds both. Every reader downloads every envelope, so the relay's traffic grows with the square of its users: at 20 messages a user a day, about 600 GB a month at 1,000 daily users and the droplet's 4 TB at about 2,500, where a fresh sync's scan also reaches a minute or more. A second server wouldn't move that wall; only a change to the protocol would. So the server grows with the wallet.
+- **Two additions from that talk,** in the edge: messaging has buckets of its own, so catching up on messages never makes the wallet's other reads wait, and a traffic ceiling of its own inside the API's (`DATA_MESSAGING_GB_MONTH`), so a flood of messages spends messaging's allowance and never the rest's. The data layer falls back to Koios; messaging has nothing to fall back to, and needs nothing.
+- **Measured:** a SHA-256 attempt costs about 425 ns in WebAssembly (Node 24), so mainnet's base of 18 bits is about 0.1 s in a browser and its ceiling of 24 about 7 s. On two cores, with the load test's clients on the same two, the relay keeps 6,400 posts a second (p50 7.7 ms) and serves fresh syncs at 2.1 GB/s: traffic, not the relay, is the droplet's limit.
+- **What changed from the plan,** all in protocol.md §17:
+  - **Pages are binary,** not JSON: base64 would add a third to the traffic that's the droplet's limit. Each page also carries the reader's current price for each size, so a wallet usually solves at the right price first, and a gap flag for a cursor whose envelopes expired or were lost.
+  - **Exactly the four sizes,** not "at most 32 KiB": every session envelope is one of them (§16.1), and anything else is refused.
+  - **The stamp binds the pool's name,** so work for preprod's lower price can't be posted to mainnet.
+  - **The size counts in the price:** a 32 KiB envelope counts as 64 short ones.
+  - **Already held comes before the price,** so a re-post after a restart is accepted at any price; **the points come after it,** so a sender pays before the relay's costly check.
+  - **Cursors number from the time a pool was loaded,** in microseconds, so a pool that lost what it held still numbers above every cursor it gave out. A clean shutdown leaves a mark beside the pool's file; without it, every earlier cursor is told of a gap.
+  - **The data layer takes blstrs and sha2** for its copy of the checks, at the wallet's own versions (blst 0.3.15), and `/health` says the relay's state without changing its status.
+- **Not done here:** the deploy (54g, the owner); setting `DATA_MESSAGING_GB_MONTH` on the droplet before the next data-layer deploy, since every deploy from `main` now carries the relay; the privacy policy's entry, which goes with the step that first contacts the relay (54e, 54f).
 
 ### 54d ⬜ WebAssembly
 
@@ -222,20 +238,16 @@ Where it runs is call 1, and its storage call 2. The routes, as the recommendati
 
 Each has a recommendation, which the owner can overturn.
 
-1. ❓ **Where the relay runs.**
-   - **Recommended: new routes in seedelf-data-api,** a module of its own on the same droplet, behind the same Caddy and limiter, deployed by the same workflow, with no new origin for the wallet to trust.
-   - The alternative is its own binary and origin: isolated from the data layer's health and deploys, with a pipeline of its own to run.
-2. ❓ **The relay's storage.**
-   - **Recommended: in memory, snapshotted to `StateDirectory` every minute and on shutdown,** so a deploy or restart keeps the pool. 36 hours at 10,000 envelopes a day is about 7.5 MB.
-   - The alternatives are memory alone (a deploy drops what's waiting) or SQLite.
-3. ❓ **Whether the relay checks points.**
+1. ✅ **Where the relay runs: new routes in seedelf-data-api** (the owner, 2026-11-21), a module of its own on the same droplet, behind the same Caddy, deployed by the same workflow, with no new origin for the wallet to trust. With buckets and a traffic ceiling of its own, inside the API's (54c). The server grows as the wallet does.
+2. ✅ **The relay's storage: in memory, saved to `StateDirectory` every minute and on shutdown** (the owner, 2026-11-21), so a deploy or restart keeps the pool. 36 hours at 10,000 envelopes a day is about 7.5 MB.
+3. ❓ **Whether the relay checks points.** Built as recommended (54c), the owner's to overturn.
    - **Recommended: yes,** with a copy of `decode_point` held to the crate's vectors, so garbage never reaches readers.
    - The alternative is the version, the length and the proof of work alone: cheaper, and readers refuse garbage anyway.
-4. ❓ **Preprod.**
+4. ❓ **Preprod.** Built as recommended (54c), the owner's to overturn.
    - **Recommended: a preprod pool on the same relay,** told apart by the path, with lower caps, so 54g can run live between two preprod wallets.
    - It's the data layer's first preprod route, but it reads no chain, so it touches nothing of preprod's.
    - The alternative is mainnet only, with preprod tested against the e2e fake and a local relay.
-5. ❓ **The largest message.**
+5. ❓ **The largest message.** Built as recommended (54c), the owner's to overturn.
    - **Recommended: 32 KiB envelopes,** under Caddy's 64 KiB.
    - The alternative is raising Caddy's limit for this route alone.
 6. ✅ **Proof of work, priced by traffic** (the owner, 2026-11-20: "or even scale with traffic via ip").
@@ -266,7 +278,7 @@ Each has a recommendation, which the owner can overturn.
 ## Unknowns
 
 - The scan in the extension's own worker, as against Node's, at 15,000 envelopes (54d) [measure].
-- Proof of work's base, curve, window and ceiling, and solving times in WebAssembly (54c, 54d) [measure].
+- Proof of work's solving times in the extension's own worker, and on a slow laptop (54d) [measure]. The numbers are set (protocol.md §17.4) from an attempt measured in Node's WebAssembly, and are to tune with real use.
 - The relay's egress at real use against the droplet's monthly ceiling: each wallet downloads every envelope [measure].
 - The storage quota with history and skipped keys (54e) [measure].
 - Whether a 15-minute auto-lock leaves enough unlocked time to sync a 36-hour pool [assumed: yes, about 15 s of scanning].

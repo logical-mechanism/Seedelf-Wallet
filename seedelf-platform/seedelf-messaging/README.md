@@ -1,8 +1,8 @@
 # seedelf-messaging
 
-Seedelf Messaging's library: end-to-end encryption of a byte payload to a re-randomized Seedelf register, and its discovery by the recipient (Phase 1), and one-to-one conversations on top of it, with the Double Ratchet inside the envelope (the session layer, chunk 54's 54a).
+Seedelf Messaging's library: end-to-end encryption of a byte payload to a re-randomized Seedelf register, and its discovery by the recipient (Phase 1), one-to-one conversations on top of it, with the Double Ratchet inside the envelope (the session layer, chunk 54's 54a), and what a post to the relay must be (54c).
 
-It's a library only, with no network, no storage and no clock. There's no relay and no UI, and nothing in the wallet uses it yet. It's unaudited, and outside the bug bounty except a flaw in it that exposes the Seedelf key: [docs/security.md](docs/security.md) says what holds and what doesn't.
+It's a library only, with no network, no storage and no clock. The relay is the data layer's ([seedelf-data](../../seedelf-data/README.md#seedelf-messagings-relay)), which keeps its own copy of the `relay` module's checks. There's no UI, and nothing in the wallet uses it yet. It's unaudited, and outside the bug bounty except a flaw in it that exposes the Seedelf key: [docs/security.md](docs/security.md) says what holds and what doesn't.
 
 ## What it does
 
@@ -77,6 +77,25 @@ let reply = bob_inbox.send(cid, b"hello")?;
 
 The caller passes `now`, in Unix seconds by the reader's clock, and stores what each state gives: protocol.md §4.2 says in what order.
 
+## Posting to the relay
+
+The `relay` module says what the relay keeps and what a post costs: [docs/protocol.md](docs/protocol.md) §17 fixes every byte. A post is `nonce (8) ‖ envelope`, and its proof of work is the leading zero bits of SHA-256 over the envelope's digest and the nonce.
+
+```rust
+use seedelf_messaging::relay::{check_envelope, post_body, solve_stamp};
+
+check_envelope(&envelope)?; // what the relay checks: the version, one of the four sizes, the points
+let nonce = solve_stamp("mainnet", &envelope, 18)?; // the price, in bits, the relay named
+let body = post_body(nonce, &envelope); // POST /messaging/v1/mainnet/envelopes
+```
+
+| API | |
+|---|---|
+| `check_envelope` | Whether the relay keeps an envelope, and if not, why. |
+| `stamp_digest`, `stamp_bits` | The digest that binds the work to the envelope and the pool, and the work a nonce shows. |
+| `find_stamp`, `solve_stamp` | A nonce meeting a price: in a slice of nonces, so a caller can yield between slices, or all at once. |
+| `post_body` | The bytes to post. |
+
 ## Dependencies
 
 | Crate | Why |
@@ -109,8 +128,9 @@ The caller passes `now`, in Unix seconds by the reader's clock, and stores what 
 | src/session/tests/vectors.rs, tests/session_vectors.rs | The session vectors, written from fixed draws and read back through the public API. |
 | tests/session_properties.rs | Any schedule of sends, out-of-order deliveries, duplicates, losses and restarts; both sides first; resets; skipped keys' 48 hours. |
 | tests/simulation.rs | Two wallets over a 36-hour relay, killed at every point of §4.2 and locked past 36 hours; cases 4 and 5. `SIMULATION_SEEDS=n` runs more than 24 seeds. |
+| src/relay.rs | What the relay keeps and the stamp: the relay's vectors, every refusal, session envelopes of each size kept, the stamp's binding and its first nonce. |
 
-`RECORD_MESSAGING_VECTORS=1 cargo test -p seedelf-messaging --lib` rewrites the envelope's vectors, and `RECORD_MESSAGING_SESSION_VECTORS=1` the session's. That's for a deliberate change of format only: other implementations are held to them. Both sets were reproduced by an independent implementation (noble-curves and WebCrypto), the session's written from protocol.md §16 alone.
+`RECORD_MESSAGING_VECTORS=1 cargo test -p seedelf-messaging --lib` rewrites the envelope's vectors, `RECORD_MESSAGING_SESSION_VECTORS=1` the session's, and `RECORD_MESSAGING_RELAY_VECTORS=1` the relay's, which the data layer's copy of the checks is held to. That's for a deliberate change of format only: other implementations are held to them. Both sets were reproduced by an independent implementation (noble-curves and WebCrypto), the session's written from protocol.md §16 alone.
 
 ## Measured performance
 
@@ -145,4 +165,4 @@ Without blst's x86 assembly, the scan is the scaling limit. A 36-hour pool at 10
 
 ## Next
 
-Chunk 54's plan ([chunk-54-messaging.md](../seedelf-web-wallet/docs/plans/chunk-54-messaging.md)) has the rest: the protocol's model (54b), the relay that keeps envelopes 36 hours (54c), the WebAssembly bindings (54d), the worker (54e) and the screens (54f). Proof of work waits on the plan's call 6.
+Chunk 54's plan ([chunk-54-messaging.md](../seedelf-web-wallet/docs/plans/chunk-54-messaging.md)) has the rest: the protocol's model (54b), the WebAssembly bindings (54d), the worker (54e) and the screens (54f). The relay (54c) is built, in the data layer.

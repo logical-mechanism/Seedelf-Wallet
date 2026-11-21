@@ -18,7 +18,7 @@ use crate::{Envelope, Error, HEADER_LEN, SecretKey, decrypt_message, matches_reg
 /// A fixed scalar for tests: SHA-256 of a label with its top two bits
 /// cleared, so it's below the group order. Production scalars come from the
 /// operating system's generator alone.
-fn test_scalar(label: &str) -> Scalar {
+pub(crate) fn test_scalar(label: &str) -> Scalar {
     let mut bytes: [u8; 32] = Sha256::digest(label.as_bytes()).into();
     bytes[0] &= 0x3f;
     Option::from(Scalar::from_bytes_be(&bytes)).expect("below the group order")
@@ -28,7 +28,7 @@ fn g() -> G1Projective {
     G1Projective::from(G1Affine::generator())
 }
 
-fn root_register(y: &Scalar, d: Option<&Scalar>) -> Register {
+pub(crate) fn root_register(y: &Scalar, d: Option<&Scalar>) -> Register {
     let generator = match d {
         Some(d) => g() * d,
         None => g(),
