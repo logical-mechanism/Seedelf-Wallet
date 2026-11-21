@@ -1,6 +1,6 @@
 # Seedelf Messaging: the one-to-one protocol (draft)
 
-The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay is built too, in the data layer (54c), and §17 fixes what it takes and gives. A first message now carries a stamp and a proof that its base comes from the handle it names, and every envelope is bound to its conversation (calls 12 and 13, 2026-11-21), so no writer can learn whether two Seedelfs are one wallet's (§2). The wallet's side and the protocol model are still to come, and the design is refined as they're built.
+The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay is built too, in the data layer (54c), and §17 fixes what it takes and gives. A first message now carries a stamp and a proof that its base comes from the handle it names, and every envelope is bound to its conversation (calls 12 and 13, 2026-11-21), so no writer can learn whether two Seedelfs are one wallet's (§2). The wallet's worker is built too (54e), and §18 fixes what a message's plaintext holds; its screens and the protocol model are still to come, and the design is refined as they're built.
 
 Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multiplication, registers (g, v) with v = [x]g.
 
@@ -383,7 +383,7 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 - **Proving the base comes from the named handle: decided (call 13, the owner, 2026-11-21),** with the envelope's binding it turned out to need (§2). As proposed, the proof alone left the envelope free: a writer could aim an honest first message's envelope, or any later one's, at the sum of two handles or at a second handle, and a reply would still link them. Binding each envelope to its conversation by the message's outer scalar closes that, at no bytes and one multiplication a message. `to` is now required except in a continuation, and a continuation without a handle must be verified.
 - **The bounds on requests** (§3.1: 50 and 256 KiB) and the sizes (§9: 512 bytes to 32 KiB), checked against real use.
 - **MAX_SKIP, the 2,000 stored skipped keys and their 48-hour lifetime** (§16.4).
-- **How long a browser keeps message history,** and whether the user picks.
+- **How long a browser keeps message history: decided (call 10, the owner, 2026-11-21).** Until the user deletes it, within about 5 MB of the extension's storage across every conversation; past it, the oldest messages go first, and the thread says so (the wallet's architecture.md, *Seedelf Messaging*).
 - **To measure in the extension itself,** before §8's figures are relied on:
   - a 15,000-envelope scan in the service worker, in 200-envelope turns, stopped and resumed by its cursor;
   - the same on a slow laptop;
@@ -393,7 +393,7 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
   - the storage used by a hundred conversations with their skipped keys.
 
   54d measured the scan and both stamps in the wallet's module, in Node and in a Chrome worker (§8, §17.3). The extension's own service worker, its memory, a slow laptop and the storage are 54e's.
-- **Restarting a conversation that was never read.** A first message older than 48 hours is refused by a reader who hasn't seen the conversation (§16.4). How the wallet offers "start again", or starts again by itself, is the wallet's to settle (54e, 54f).
+- **Restarting a conversation that was never read.** A first message older than 48 hours is refused by a reader who hasn't seen the conversation (§16.4). The worker (54e) marks a conversation it started that has had no reply in those 48 hours, and starts it again, on the user's word, as a new conversation to the same handle; a conversation the ratchet can no longer reach is continued with its identities (§6). Whether the screens offer it or the wallet does it by itself is 54f's.
 - **A model of §3 to §6** in a protocol verifier (ProVerif or Tamarin) before mainnet, then an outside review.
 
 ## 14. Against Signal
@@ -643,3 +643,16 @@ version (1) = 1 | flags (1) | cursor (8) | prices (4) | count (2) | count × (le
 - **posts:** 20 envelopes and what the relay makes of each: the four sizes kept, then each refusal of §17.2's shape and points (two other versions, five wrong lengths, and each kind of bad point in p, w and c), named as `check_envelope` names them.
 - **stamps:** six, with the envelope, the pool, the price, the digest, the first nonce from 0 that meets it, the hash and its work.
 - `relay_vectors_match_the_file` holds the crate to the file, and `RECORD_MESSAGING_RELAY_VECTORS=1` rewrites it, for a deliberate change of format only. The relay's copy of the checks, which the data layer can't take from this crate, is held to the same file (seedelf-data's `api/src/messaging/check.rs`), and its tests post every envelope in it through the whole app.
+
+## 18. The wallet's messages (54e)
+
+What a message's plaintext holds, above the session layer, which takes it as bytes (§16). [choice]
+
+```text
+kind (1) | body
+```
+
+- **`0x01`: text,** the body UTF-8. The only kind so far.
+- **Any other kind** is shown as a message this version can't show, never guessed at. A kind added later (a payment request that opens Send filled in, §7) is read by the versions that know it, and said to be unreadable by the rest.
+- **The kind byte counts in the text's room:** the longest text a message carries is the session layer's `max_text_len` less one byte.
+- **Nothing in a message changes a label or authorizes anything** (§7): a kind is content, as text is.

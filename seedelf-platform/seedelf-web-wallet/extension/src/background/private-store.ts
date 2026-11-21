@@ -3,7 +3,8 @@
 // connected to the public account, the private sessions, a payment that may
 // still go through, who paid for each Seedelf, which public accounts the
 // phrase has used and what they are called, and which of the contract's
-// UTxOs are its own as the private index last settled them): sealed in
+// UTxOs are its own as the private index last settled them, and Seedelf
+// Messaging's conversations, requests and scan): sealed in
 // chrome.storage.local with XChaCha20-Poly1305 under a key derived from the
 // recovery phrase's entropy (Wallet.withStoreKey). They can't be read while
 // the wallet is locked, or by anyone without the phrase, and removing the
@@ -17,6 +18,7 @@ import { type I18nKey, t } from "../i18n";
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 
+import type { NetworkName } from "../networks";
 import { fromBase64, toBase64, type Area } from "./storage";
 import type { Wallet } from "./wallet";
 
@@ -44,8 +46,25 @@ export const PRIVATE_RECORDS = [
   "mintedBy.mainnet",
   // The private index's settled view of this wallet (contract-scan.ts): mainnet only, as the data layer is.
   "contract.mainnet",
+  // Seedelf Messaging's inbox on each network (messaging.ts): the requests, the tombstones, the scan's cursor and
+  // what each conversation shows. Each conversation's own record is one of `CONVERSATION_RECORDS`.
+  "messaging.preprod",
+  "messaging.mainnet",
 ] as const;
-export type RecordName = (typeof PRIVATE_RECORDS)[number];
+
+/**
+ * A Seedelf Messaging conversation's record (messaging.ts): its ratchet, its outbox and its history together, so one
+ * write moves them all (protocol.md §4.2). A family, one record a conversation, named by the network and the
+ * conversation's ID: removing the wallet finds them by this prefix, with no key.
+ */
+export const CONVERSATION_RECORDS = "conversation.";
+export type ConversationRecord = `conversation.${NetworkName}.${string}`;
+
+/** A conversation's record name. */
+export const conversationRecord = (network: NetworkName, cid: string): ConversationRecord =>
+  `${CONVERSATION_RECORDS}${network}.${cid}`;
+
+export type RecordName = (typeof PRIVATE_RECORDS)[number] | ConversationRecord;
 
 /**
  * What removing the wallet keeps: a payment that may still go through, which
@@ -91,7 +110,7 @@ function padded(value: unknown): Uint8Array {
 const aad = (name: RecordName) => new TextEncoder().encode(PRIVATE_PREFIX + name);
 
 /** What each record keeps, in the wallet's words. */
-const WHAT: Record<RecordName, I18nKey> = {
+const WHAT: Record<(typeof PRIVATE_RECORDS)[number], I18nKey> = {
   accounts: "worker.record.accounts",
   contacts: "worker.record.contacts",
   "history.preprod": "worker.record.history",
@@ -110,7 +129,12 @@ const WHAT: Record<RecordName, I18nKey> = {
   "mintedBy.preprod": "worker.record.mintedBy",
   "mintedBy.mainnet": "worker.record.mintedBy",
   "contract.mainnet": "worker.record.contract",
+  "messaging.preprod": "worker.record.messaging",
+  "messaging.mainnet": "worker.record.messaging",
 };
+
+const what = (name: RecordName): I18nKey =>
+  name.startsWith(CONVERSATION_RECORDS) ? "worker.record.conversation" : WHAT[name as (typeof PRIVATE_RECORDS)[number]];
 
 /**
  * A record that's there but won't open: another wallet's, damaged, or sealed
@@ -122,7 +146,7 @@ const WHAT: Record<RecordName, I18nKey> = {
  */
 export class UnreadableRecordError extends Error {
   constructor(readonly record: RecordName) {
-    super(t("worker.record.warn.unreadable", { what: t(WHAT[record]) }));
+    super(t("worker.record.warn.unreadable", { what: t(what(record)) }));
   }
 }
 

@@ -2,7 +2,7 @@
 
 Seedelf Messaging's library: end-to-end encryption of a byte payload to a re-randomized Seedelf register, and its discovery by the recipient (Phase 1), one-to-one conversations on top of it, with the Double Ratchet inside the envelope (the session layer, chunk 54's 54a), and what a post to the relay must be (54c).
 
-It's a library only, with no network, no storage and no clock. The relay is the data layer's ([seedelf-data](../../seedelf-data/README.md#seedelf-messagings-relay)), which keeps its own copy of the `relay` module's checks. There's no UI: the wallet's WebAssembly module binds it ([seedelf-wasm](../seedelf-web-wallet/wasm/README.md), chunk 54's 54d), and nothing in the worker calls it yet. It's unaudited, and outside the bug bounty except a flaw in it that exposes the Seedelf key: [docs/security.md](docs/security.md) says what holds and what doesn't.
+It's a library only, with no network, no storage and no clock. The relay is the data layer's ([seedelf-data](../../seedelf-data/README.md#seedelf-messagings-relay)), which keeps its own copy of the `relay` module's checks. There's no UI: the wallet's WebAssembly module binds it ([seedelf-wasm](../seedelf-web-wallet/wasm/README.md), chunk 54's 54d), and the wallet's worker calls it (54e, [architecture.md](../seedelf-web-wallet/docs/architecture.md#seedelf-messaging)), with no screens yet. It's unaudited, and outside the bug bounty except a flaw in it that exposes the Seedelf key: [docs/security.md](docs/security.md) says what holds and what doesn't.
 
 ## What it does
 
@@ -171,4 +171,4 @@ Without blst's x86 assembly, the scan is the scaling limit. A 36-hour pool at 10
 
 ## Next
 
-Chunk 54's plan ([chunk-54-messaging.md](../seedelf-web-wallet/docs/plans/chunk-54-messaging.md)) has the rest: the protocol's model (54b), the worker (54e) and the screens (54f). The relay (54c) is built, in the data layer, and so are the WebAssembly bindings (54d).
+Chunk 54's plan ([chunk-54-messaging.md](../seedelf-web-wallet/docs/plans/chunk-54-messaging.md)) has the rest: the protocol's model (54b) and the screens (54f). The relay (54c) is built, in the data layer, and so are the WebAssembly bindings (54d) and the worker (54e).

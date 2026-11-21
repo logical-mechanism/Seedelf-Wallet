@@ -40,6 +40,15 @@ export interface NetworkConfig {
    * VITE_DATA_ORIGIN (`dataOrigin`); a store build never does.
    */
   data?: string;
+  /**
+   * Seedelf Messaging's relay (chunk 54): its origin, and the pool this
+   * network's envelopes go to, named in the path. Both pools are on the data
+   * layer's server (calls 1 and 4): preprod's too, though preprod reads
+   * nothing else there. The wallet reaches it only while the network's
+   * Messages switch is on (messaging.ts). A dev or e2e build names another
+   * origin with VITE_DATA_ORIGIN (`relayOrigin`), as for the data layer.
+   */
+  relay: { origin: string; pool: NetworkName };
 }
 
 export const NETWORKS: Record<NetworkName, NetworkConfig> = {
@@ -53,6 +62,8 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
       mixBox: "67ffe4ed7f0ccd0a3e3069fddc26d9bccde3fe63d3d58c5e84f7ecc5",
       poolFloor: 0,
     },
+    // The preprod pool on the data layer's server (chunk 54's call 4).
+    relay: { origin: "https://mainnet.seedelf.logicalmechanism.io", pool: "preprod" },
   },
   mainnet: {
     name: "mainnet",
@@ -69,6 +80,7 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
     // The API on its DigitalOcean droplet (chunk 26c, seedelf-data/deploy/README.md).
     // It answers CORS for the store's and the dev build's IDs (DATA_ORIGINS).
     data: "https://mainnet.seedelf.logicalmechanism.io",
+    relay: { origin: "https://mainnet.seedelf.logicalmechanism.io", pool: "mainnet" },
   },
 };
 
@@ -166,14 +178,25 @@ export function dataOrigin(network: NetworkName, override = ""): string | undefi
 }
 
 /**
+ * Seedelf Messaging's relay on `network` (chunk 54): the network's own, or
+ * `override` (VITE_DATA_ORIGIN, a dev or e2e build's, where the relay lives
+ * as it does on the data layer's server). A store build never passes one.
+ */
+export function relayOrigin(network: NetworkName, override = ""): string {
+  return new URL(override || NETWORKS[network].relay.origin).origin;
+}
+
+/**
  * Origins the pages may reach without a host permission: services that
  * answer with CORS headers. The data layer is one: it answers the wallet's
  * own origin (seedelf-data's DATA_ORIGINS), so it adds nothing asked for at
- * install.
+ * install. So is Seedelf Messaging's relay, on the same server: a
+ * preprod-only build lists it for preprod's pool.
  */
 export function corsOrigins(networks: NetworkName[], dataOverride = ""): string[] {
   const data = networks.flatMap((n) => dataOrigin(n, dataOverride) ?? []);
-  return [...new Set([...networks.map((n) => new URL(NETWORKS[n].swaps).origin), ...data])];
+  const relays = networks.map((n) => relayOrigin(n, dataOverride));
+  return [...new Set([...networks.map((n) => new URL(NETWORKS[n].swaps).origin), ...data, ...relays])];
 }
 
 /**
