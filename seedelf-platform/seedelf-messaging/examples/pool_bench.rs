@@ -11,8 +11,6 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use blstrs::{G1Affine, G2Affine, pairing};
-use group::prime::PrimeCurveAffine;
 use seedelf_messaging::{
     ENVELOPE_OVERHEAD, Envelope, SecretKey, decrypt_message, encrypt_message, rerandomize_register,
 };
@@ -79,16 +77,6 @@ fn main() {
     }
     let decrypt_time = start.elapsed();
 
-    // For comparison only: one pairing, what each decryption of the pairing
-    // design would have added (docs/construction.md §3).
-    let (g1, g2) = (G1Affine::generator(), G2Affine::generator());
-    let rounds = 100;
-    let start = Instant::now();
-    for _ in 0..rounds {
-        black_box(pairing(black_box(&g1), black_box(&g2)));
-    }
-    let pairing_time = start.elapsed();
-
     println!("{messages} messages to {recipients} recipients, {PLAINTEXT_LEN}-byte plaintexts");
     println!(
         "key + root register        {}",
@@ -116,10 +104,6 @@ fn main() {
     println!(
         "decrypt a matched message  {}",
         per_op(decrypt_time, mine.len())
-    );
-    println!(
-        "one pairing (not used)     {}",
-        per_op(pairing_time, rounds)
     );
     println!(
         "envelope size              {} bytes ({} + plaintext)",

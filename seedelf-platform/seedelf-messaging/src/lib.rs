@@ -7,9 +7,9 @@
 //! with HKDF-SHA256 and AES-256-GCM). The recipient finds their envelopes by
 //! testing `[y]p == w`, then decrypts. Nothing here needs a pairing.
 //!
-//! docs/construction.md has the mathematics, and why the pairing design was
-//! set aside; docs/security.md what holds, under which assumptions, and what
-//! doesn't. Unaudited: not for production use.
+//! docs/construction.md has the mathematics; docs/security.md what holds,
+//! under which assumptions, and what doesn't. Unaudited: not for production
+//! use.
 //!
 //! ```
 //! use seedelf_messaging::{SecretKey, decrypt_message, encrypt_message, Envelope};

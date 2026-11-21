@@ -6,7 +6,7 @@ What Phase 1 guarantees, under which assumptions, and what it doesn't. This is a
 
 The tests are finite, and they show the code does what [construction.md](construction.md) says on the inputs they try:
 
-- The register algebra and the pairing identity, over many random values.
+- The register algebra, over many random values.
 - Round trips for every plaintext kind, up to the 64 KiB limit.
 - Refusal of every malformed, non-canonical, off-curve, small-order and identity point in every position, and of zero and out-of-range scalars, as structured errors.
 - Rejection of every single-bit change to the header and the ciphertext, of truncation, extension and register swaps, including a swap the recipient still recognizes as theirs.
@@ -43,7 +43,7 @@ Those rest on the arguments and assumptions below.
    - Scanning costs one scalar multiplication per header after parsing (README, "Measured performance").
 3. **Register unlinkability.** Under XDH, no one without y can tell whether two envelopes go to the same recipient, or link an envelope to a known register. That holds except for:
    - **The sender,** who knows b.
-   - **A public G2 multiple of y,** such as [y]h (construction.md §3.4).
+   - **A public G2 multiple of y,** such as [y]h (construction.md §2).
    - **Metadata:** timing, the network, and the plaintext's length, since the envelope is 161 + |m| bytes with no padding.
    - **Datum registers:** when the recipient's register is a Seedelf datum, the sender knows which Seedelf they wrote to.
 4. **Secret-key compromise.** y reads every envelope ever sent to any of its registers, past and future. With the key reuse chosen for later, it's also the key that spends the Seedelf.

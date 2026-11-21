@@ -1,13 +1,11 @@
-//! The register algebra (Tests 1–3), and the proposed pairing construction's
-//! identity and its consequences (Test 5; docs/construction.md §3).
+//! The register algebra (Tests 1–3): ownership, re-randomization, and many
+//! re-randomizations of one register.
 
 mod common;
 
 use std::collections::HashSet;
 
-use blstrs::{G1Projective, G2Affine, G2Projective, pairing};
-use group::Curve;
-use group::prime::PrimeCurveAffine;
+use blstrs::G1Projective;
 
 use common::{g1, random_nonzero};
 use seedelf_messaging::{Register, SecretKey, matches_register, rerandomize_register};
@@ -90,118 +88,4 @@ fn a_hundred_rerandomizations_are_all_owned_and_all_distinct() {
         assert!(seen.insert(register.to_bytes()), "a repeated register");
     }
     assert_eq!(seen.len(), 101);
-}
-
-// --- Test 5: the pairing identity (the construction that was set aside) ------
-
-/// PEACE's H0 (app/src/constants.py), a G2 point.
-const PEACE_H0: &str = "a5acbe8bdb762cf7b4bfa9171b9ffa23b6ed710b290280b271a0258e285354aac338bb9e5a9ee41b4454e4c410f40eea16c82b493986bfc754aa789e1408b2b526f8b92e9ddcd4eee1a6c4daa84d561a6ceb452afc4559fe81a1c7f3f26715db";
-
-fn h0s() -> Vec<G2Affine> {
-    let peace: [u8; 96] = hex::decode(PEACE_H0).unwrap().try_into().unwrap();
-    let peace = Option::from(G2Affine::from_compressed(&peace)).expect("PEACE's H0 is in G2");
-    let random = (G2Projective::from(G2Affine::generator()) * random_nonzero()).to_affine();
-    vec![peace, random]
-}
-
-struct Capsule {
-    y: blstrs::Scalar,
-    a: blstrs::Scalar,
-    p: G1Projective,
-    w: G1Projective,
-    c1: G1Projective,
-    c2: G1Projective,
-}
-
-/// `p = [b]g`, `w = [b]v`, `C1 = [r]p`, `C2 = [a]p + [r]w`.
-fn capsule() -> Capsule {
-    let (y, a, r, b) = (
-        random_nonzero(),
-        random_nonzero(),
-        random_nonzero(),
-        random_nonzero(),
-    );
-    let (p, w) = (g1() * b, g1() * y * b);
-    Capsule {
-        y,
-        a,
-        p,
-        w,
-        c1: p * r,
-        c2: p * a + w * r,
-    }
-}
-
-/// `e([a]p, h0) == e(C2, h0) − e(C1, [y]h0)`. blstrs writes GT additively,
-/// so the quotient is a subtraction.
-#[test]
-fn the_pairing_identity_holds() {
-    for h0 in h0s() {
-        for _ in 0..32 {
-            let k = capsule();
-            let y_h0 = (G2Projective::from(h0) * k.y).to_affine();
-            let key = pairing(&(k.p * k.a).to_affine(), &h0);
-            let recovered = pairing(&k.c2.to_affine(), &h0) - pairing(&k.c1.to_affine(), &y_h0);
-            assert_eq!(key, recovered);
-        }
-    }
-}
-
-/// The recipient can recover `[a]p = C2 − [y]C1` in G1, with no pairing: the
-/// capsule is ElGamal encryption of `[a]p`, and `K = e([a]p, h0)` is a fixed
-/// map of it.
-#[test]
-fn the_capsule_is_elgamal_on_a_p() {
-    for h0 in h0s() {
-        for _ in 0..16 {
-            let k = capsule();
-            let m = k.c2 - k.c1 * k.y;
-            assert_eq!(m, k.p * k.a);
-            assert_eq!(
-                pairing(&m.to_affine(), &h0),
-                pairing(&(k.p * k.a).to_affine(), &h0)
-            );
-        }
-    }
-}
-
-/// Anyone can change the capsule, or rescale the register, without changing
-/// `K`: the header must be bound into the key derivation or the AEAD.
-#[test]
-fn the_capsule_and_register_are_malleable() {
-    for _ in 0..16 {
-        let k = capsule();
-        let (s, t) = (random_nonzero(), random_nonzero());
-        // (C1 + [s]p, C2 + [s]w) hides the same [a]p.
-        let (c1, c2) = (k.c1 + k.p * s, k.c2 + k.w * s);
-        assert_eq!(c2 - c1 * k.y, k.p * k.a);
-        // ([t]p, [t]w) is still the recipient's, and C2 − [y]C1 is unchanged.
-        let (p, w) = (k.p * t, k.w * t);
-        assert_eq!(p * k.y, w);
-        assert_eq!(k.c2 - k.c1 * k.y, k.p * k.a);
-    }
-}
-
-/// If `[y]h0` were ever public, anyone could compute `K`, and anyone could
-/// link a re-randomized register to its owner: `e(p, [y]h0) == e(w, h0)`.
-#[test]
-fn a_public_y_h0_would_break_confidentiality_and_unlinkability() {
-    for h0 in h0s() {
-        let k = capsule();
-        let y_h0 = (G2Projective::from(h0) * k.y).to_affine();
-        // An observer with p, w, C1, C2, h0 and [y]h0, but not y:
-        let observed = pairing(&k.c2.to_affine(), &h0) - pairing(&k.c1.to_affine(), &y_h0);
-        assert_eq!(observed, pairing(&(k.p * k.a).to_affine(), &h0));
-        assert_eq!(
-            pairing(&k.p.to_affine(), &y_h0),
-            pairing(&k.w.to_affine(), &h0)
-        );
-        // ...and a stranger's register fails the same test.
-        let stranger = random_nonzero();
-        let w_other = k.p * stranger;
-        assert_ne!(
-            pairing(&k.p.to_affine(), &y_h0),
-            pairing(&w_other.to_affine(), &h0)
-        );
-    }
 }

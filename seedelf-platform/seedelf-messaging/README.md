@@ -46,14 +46,9 @@ Every refusal is an `Error` variant, never a panic.
 
 [docs/construction.md](docs/construction.md) has the mathematics and the exact key schedule. [tests/vectors/messaging_v1.json](tests/vectors/messaging_v1.json) has every intermediate value for four cases, which an independent implementation (noble-curves and WebCrypto) reproduces byte for byte.
 
-## Why ECIES and not the pairing design
+## Why no pairing
 
-The proposed pairing construction is correct. For a single recipient, though, it's ElGamal encryption of the point [a]p, followed by a pairing that adds no secrecy:
-- It needs a fourth header point, a pairing per decryption and a byte encoding of GT. There's no standard GT encoding, and PEACE already has two.
-- It rests on an assumption no weaker than ECIES's.
-- It also needs [y]h₀ to stay secret, or anyone can both decrypt and link registers.
-
-The pairing earns its place only with PEACE's transfer of decryption rights. [docs/construction.md §3](docs/construction.md#3-the-pairing-design-reviewed) has the review, and tests/register_algebra.rs checks every step of it.
+An earlier idea used PEACE's pairing capsule. For one recipient it reduces to ElGamal with a pairing that adds nothing, so v1 is plain ECIES ([docs/construction.md §3](docs/construction.md#3-why-there-is-no-pairing)).
 
 ## Dependencies
 
@@ -64,7 +59,7 @@ The pairing earns its place only with PEACE's transfer of decryption rights. [do
 | `sha2`, `aes-gcm` | Already in the lockfile. |
 | `rand_core` (`OsRng`), `zeroize`, `ff`, `group` | Randomness, wiping, and the curve traits. |
 
-`blst` directly would mean unsafe FFI here, and arkworks would be a second, slower curve stack next to blstrs. The library itself does no pairing; only a test does.
+`blst` directly would mean unsafe FFI here, and arkworks would be a second, slower curve stack next to blstrs. Nothing here uses a pairing.
 
 ## Tests
 
@@ -72,7 +67,7 @@ The pairing earns its place only with PEACE's transfer of decryption rights. [do
 
 | File | What it covers |
 |---|---|
-| tests/register_algebra.rs | Tests 1–3 and 5: the register algebra, and the pairing design's identity and consequences. |
+| tests/register_algebra.rs | Tests 1–3: the register algebra. |
 | tests/envelope.rs | Tests 4, 6–10, 12, 14 and 15: round trips, the wrong key, tampering with every part, a mixed collection, serialization, versions. |
 | tests/invalid_inputs.rs | Test 11: every bad point in every position, and bad scalars. |
 | tests/properties.rs | Phase 1G's properties, with proptest. |
@@ -98,7 +93,6 @@ Measured on an Intel Core i5-12400F (one thread, `powersave` governor), Linux 7.
 | Parse an envelope (three subgroup checks) | 152 µs | 154 µs |
 | Discovery, per header | 72 µs | 74 µs |
 | Decrypt a matched message | 151 µs | 152 µs |
-| One pairing, for comparison (not used) | 479 µs | 479 µs |
 
 One recipient's whole scan took 72 ms for 1,000 envelopes and 738 ms for 10,000 (100 and 1,000 matched). Parsing every envelope first costs about twice the scan.
 
