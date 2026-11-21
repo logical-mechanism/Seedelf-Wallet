@@ -12,7 +12,7 @@ Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multipl
 | Long-term key | The Seedelf's own key x. A Seedelf is the handle: "message me at ⟨Seedelf⟩". |
 | Identities | The sender of a first message makes both conversation identities. |
 | First message | Protected by the recipient's long-term key alone until they reply. No prekeys, so the relay holds no key material. A review asked for prekeys; declined for now, to revisit with users. |
-| Relay | Keeps envelopes 36 hours, then deletes them. Proof of work against spam. Senders' IP addresses are seen, as the data layer already sees them. |
+| Relay | Keeps envelopes 36 hours, then deletes them, even though a reader must unlock within that time to receive (§13). Proof of work against spam. Senders' IP addresses are seen, as the data layer already sees them. |
 | Local state | Conversations live in the browser. Deleting the wallet's data loses them. |
 | Proving who you are | Undecided until users ask for it (§7). |
 | Groups | Later, on top of one-to-one sessions. |
@@ -27,7 +27,7 @@ Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multipl
 - the WebAssembly costs (§8);
 - what the relay learns (§11).
 
-It also raised the trade between unlocking and the expiry (§13, the owner's call).
+It also raised the trade between unlocking and the expiry: 36 hours stands (§13).
 
 ## 1. Layers
 
@@ -247,12 +247,11 @@ Phase 2 settles the details; the protocol needs only this:
 
 ## 13. Open, to settle as we build
 
-**Unlocking versus the expiry (the owner's call).** Discovery needs x, and x is the spending key, available only while the wallet is unlocked. A message reaches its reader only if they unlock within 36 hours, and people open a wallet less often than a chat app. The options:
-- **Keep 36 hours,** and say so in the wallet.
+**Unlocking versus the expiry: decided, 36 hours (the owner, 2026-11-20).** Discovery needs x, and x is the spending key, available only while the wallet is unlocked. So a message reaches its reader only if they unlock within 36 hours, and the wallet says so. The alternatives stay on record, to revisit with users:
 - **A longer expiry.** Seven days is about 70,000 envelopes at 10,000 a day, about 70 s of WebAssembly scanning on a fresh sync.
 - **A discovery key that stays available while locked.** It can't be the Seedelf's key, so handles would need a messaging register of their own, which reopens §0's choice of key.
 
-**Also open:**
+**Open:**
 - **Proof of work:** the function (a plain hash, or a memory-hard one against GPUs) and the starting difficulty, measured in WebAssembly. Also its economics: the relay's storage is its rate cap times 36 hours.
 - **Padding sizes.**
 - **MAX_SKIP and the 48-hour lifetime of skipped keys.**
