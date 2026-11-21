@@ -72,8 +72,9 @@ cargo test -- --ignored --test-threads=1         # the live tests, against home'
 - **seedelf-display** — TUI/text formatting, color, version-check helpers.
 - **seedelf-cli** — binary entrypoint. One module per subcommand in [src/commands/](seedelf-platform/seedelf-cli/src/commands/) (`create`, `fund`, `transfer`, `sweep`, `remove`, `balance`, `welcome`, `util/`, `external/`). [web_server.rs](seedelf-platform/seedelf-cli/src/web_server.rs) spins up a local static site at `127.0.0.1:44203` to bridge CIP30 browser wallets for signing.
 - **seedelf-wasm** ([seedelf-web-wallet/wasm/](seedelf-platform/seedelf-web-wallet/wasm/), `publish = false`) — the web wallet's WebAssembly bindings: thin wrappers over `seedelf-crypto` and `seedelf-core`, built by `wasm/build.sh` with the workspace's `[profile.wasm-release]`.
+- **seedelf-messaging** ([seedelf-messaging/](seedelf-platform/seedelf-messaging/), `publish = false`) — Seedelf Messaging, Phase 1: ECIES encryption to re-randomized registers, and their discovery. A library alone, unaudited, used by nothing yet; start at its [README](seedelf-platform/seedelf-messaging/README.md).
 
-Dependency direction: `cli` → `core`, `display`, `koios`, `crypto`; `seedelf-wasm` → `core`, `koios`, `crypto`; `core` → `crypto` + `koios`; `display` → `koios`; `koios` → `crypto`. Crypto is the only leaf crate.
+Dependency direction: `cli` → `core`, `display`, `koios`, `crypto`; `seedelf-wasm` → `core`, `koios`, `crypto`; `core` → `crypto` + `koios`; `display` → `koios`; `koios` → `crypto`. Crypto is the only leaf crate among them; `seedelf-messaging` depends on no workspace crate (`crypto` only in its tests).
 
 ### On-chain contracts ([seedelf-contracts/](seedelf-contracts/))
 

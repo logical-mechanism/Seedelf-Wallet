@@ -1,0 +1,29 @@
+[package]
+name = "seedelf-messaging"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+description = "Seedelf Messaging: end-to-end encryption to re-randomized Seedelf registers (Phase 1, unaudited)"
+authors = ["Logical Mechanism LLC <support@logicalmechanism.io>"]
+repository = "https://github.com/logical-mechanism/Seedelf-Wallet"
+publish = false
+
+# The smallest stack that does the job (README.md, "Dependencies"): blstrs for
+# G1, already the wallet's BLS12-381 library; RustCrypto's HKDF, SHA-256 and
+# AES-256-GCM; rand_core's OsRng; zeroize for the secret's bytes.
+[dependencies]
+aes-gcm = "0.10.3"
+blstrs = "0.7.1"
+ff = "0.13.0"
+group = "0.13"
+hkdf = "0.12.4"
+rand_core = { version = "0.6.0", features = ["std"] }
+sha2 = "0.10.9"
+zeroize = "1.8.1"
+
+[dev-dependencies]
+hex = "0.4.3"
+proptest = "1"
+# Real Seedelf registers as recipients (tests/seedelf_registers.rs).
+seedelf-crypto = { workspace = true }
+serde_json = "1.0.133"
