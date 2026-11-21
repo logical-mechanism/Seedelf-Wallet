@@ -12,7 +12,7 @@ Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multipl
 | Long-term key | The Seedelf's own key x. A Seedelf is the handle: "message me at ⟨Seedelf⟩". |
 | Identities | The sender of a first message makes both conversation identities. |
 | First message | Protected by the recipient's long-term key alone until they reply. No prekeys, so the relay holds no key material. A review asked for prekeys; declined for now, to revisit with users. |
-| Relay | Keeps envelopes 36 hours, then deletes them, even though a reader must unlock within that time to receive (§13). Proof of work against spam. Senders' IP addresses are seen, as the data layer already sees them. |
+| Relay | Keeps envelopes 36 hours, then deletes them, even though a reader must unlock within that time to receive (§13). Proof of work against spam. Senders' IP addresses are seen, as the data layer already sees them. The wallet uses one relay, which prices each address's posts by its recent traffic, and says so (§10). |
 | Local state | Conversations live in the browser. Deleting the wallet's data loses them. |
 | Proving who you are | Undecided until users ask for it (§7). |
 | Groups | Later, on top of one-to-one sessions. |
@@ -284,7 +284,15 @@ Phase 2 settles the details; the protocol needs only this:
 - **The relay stores bytes.** It keeps no recipient, sender, account or key.
 - **Size:** at most 32 KiB an envelope.
 - **Envelopes are deleted after 36 hours.** Deleting doesn't unsend: anyone who downloaded the pool keeps copies. What protects old envelopes is forward secrecy, not deletion.
-- **Proof of work.** Every envelope carries proof of work over its own bytes, so the work can't be reused. The difficulty is the relay's to raise.
+- **One relay.** The wallet uses one relay; choosing another isn't offered right now. That's what lets the relay price posts by where they come from.
+- **Proof of work, priced by traffic** (2026-11-20). Every envelope carries proof of work over its own bytes, so the work can't be reused. The price is per sending address:
+  - a light base, which someone sending a few messages an hour never notices;
+  - rising with the address's posts over a short recent window, so one source posting hundreds pays more for each;
+  - IPv6 counted by prefix, a /64 at least, so one host can't spread over fresh addresses;
+  - a global floor that rises when the whole pool grows unusually fast, against floods spread over many addresses;
+  - a ceiling an honest browser can meet; past it a post is refused, not priced.
+
+  The relay names the price it wants, and a post refused for too little work is solved again for the same envelope bytes. It's a price, not a cap, so an honest user behind the same address as a flooder still gets through, only slower. The counts live in memory for their window only and are never logged.
 - **Duplicates.** The relay drops an envelope whose bytes it already holds.
 - **Clients download everything after their cursor,** in pages. At 10,000 envelopes a day, 36 hours is about 15,000 envelopes, roughly 7.5 MB at 0.5 KiB each.
 
@@ -299,12 +307,15 @@ Phase 2 settles the details; the protocol needs only this:
 
 **From the network,** which no cryptography here hides, the relay and anyone watching learn:
 - the IP address and time each envelope is posted, its size, and its proof of work;
+- for a short window, how many envelopes each address has posted, which the relay keeps in memory to price posts (§10) and never logs;
 - each client's IP address and when it syncs, so when each wallet is online;
 - timing. A reply posted soon after a message hints at a conversation, more so when few wallets are online. Over time such hints can link the two sides of a conversation.
 
 **What the relay can also do:** withhold, delay, reorder or replay envelopes (§5, §6). It can't read, address or forge them.
 
 **What's claimed and what isn't:** no envelope names its recipient or sender. There's no claim of anonymity against an observer who watches the whole network.
+
+**What the wallet and the privacy policy say:** the relay can't read messages or tell whom they're for. It sees the IP address that posts each envelope and when, and counts each address's recent posts, in memory, to stop floods.
 
 **The other side of a conversation learns:**
 - the writer of a first message learns the handle they wrote to;
@@ -338,7 +349,16 @@ Phase 2 settles the details; the protocol needs only this:
 - **A discovery key that stays available while locked.** It can't be the Seedelf's key, so handles would need a messaging register of their own, which reopens §0's choice of key.
 
 **Open:**
-- **Proof of work:** the function (a plain hash, or a memory-hard one against GPUs) and the starting difficulty, measured in WebAssembly. Also its economics: the relay's storage is its rate cap times 36 hours.
+- **Proof of work's numbers.** The shape is settled: priced by traffic (§10). Open are the base, the curve, the window and the ceiling, measured in WebAssembly. Hashcash over SHA-256 comes first. If GPUs prove the problem, a memory-hard puzzle that stays cheap to check, such as Equihash, is in reserve. Not one whose check costs the relay as much as an attempt, such as Argon2. Also its economics: the relay's storage is its rate cap times 36 hours.
+- **A first-contact stamp,** proposed. An 8-byte nonce in F such that a hash over F, nonce included, meets a difficulty the reader sets, checked before any key is computed.
+  - It prices a stranger's first message to one reader. The relay's price can't target that, since the relay can't tell first messages from replies.
+  - F is unique to its conversation and bound into SK, so a stamp can't be moved to another reader or another conversation.
+  - Replies pay nothing more. It changes F, so it's settled before the WebAssembly bindings fix the format.
+- **Proving the base comes from the named handle,** proposed. Two registers of one key add up to a register of that key: (g₁ + g₂, v₁ + v₂) belongs to x whenever (g₁, v₁) and (g₂, v₂) both do, and to no one otherwise.
+  - So a first message to the sum of two Seedelfs' registers opens only for a wallet holding both. A reply tells the writer that both Seedelfs are one wallet's, and the reader can't see it happen: every point is a multiple of every other.
+  - Seedelf payments share the property, at the cost of a payment and a spend to watch for.
+  - The fix for messages: a short proof, with F in its challenge, that p₀ = [b]g for the handle named in `to`, which only a writer who re-randomized that one handle can make. It also makes `to` verified rather than claimed; `to` becomes required.
+  - About 64 to 80 bytes. It changes F too, so it's settled with the stamp.
 - **The bounds on requests** (§3.1: 50 and 256 KiB) and the sizes (§9: 512 bytes to 32 KiB), checked against real use.
 - **MAX_SKIP, the 2,000 stored skipped keys and their 48-hour lifetime** (§16.4).
 - **How long a browser keeps message history,** and whether the user picks.
