@@ -20,6 +20,7 @@ use zeroize::Zeroizing;
 pub mod cip30;
 pub mod decode;
 pub mod lovejoin;
+pub mod messaging;
 
 /// The module's start function, which does nothing. wasm-bindgen's reset
 /// (`__wbg_reset_state`, built with `--experimental-reset-state-function`),
@@ -7990,4 +7991,178 @@ pub fn sign_dapp_data(account: &WasmCardanoAccount, request: &str) -> Result<Str
 pub fn decode_tx(network: Network, tx_cbor: &str) -> Result<String, JsError> {
     let name = if network.flag() { "preprod" } else { "mainnet" };
     to_json(&decode::decode_tx(name, tx_cbor).map_err(js_error)?)
+}
+
+// ---------------------------------------------------------------------------
+// Seedelf Messaging (chunk 54's 54d): see [`messaging`]. JSON in and out,
+// every byte string hex; a refusal is `{ "refused": "<code>" }`, and only a
+// request that doesn't read throws. An answer holding a conversation's record
+// or a message's text is built in a buffer WebAssembly wipes once JavaScript
+// has its string, and so is each such request.
+// ---------------------------------------------------------------------------
+
+/// Counts what `serde_json` writes, so the answer's buffer is made its exact
+/// size: a buffer that grows leaves its old copy behind, unwiped.
+struct Measure(usize);
+
+impl std::io::Write for Measure {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `value` as JSON, from a buffer wiped once JavaScript holds the string.
+fn to_secret_json<T: serde::Serialize>(value: &T) -> Result<js_sys::JsString, JsError> {
+    let fail = |e: serde_json::Error| JsError::new(&e.to_string());
+    let mut size = Measure(0);
+    serde_json::to_writer(&mut size, value).map_err(fail)?;
+    let mut out = Zeroizing::new(Vec::with_capacity(size.0));
+    serde_json::to_writer(&mut *out, value).map_err(fail)?;
+    let text = std::str::from_utf8(&out).map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(js_sys::JsString::from(text))
+}
+
+/// The indexes of the envelopes addressed to the key in one batch:
+/// `envelopes` is a JSON array of hex envelopes, the answer an array of
+/// indexes (`messaging::scan`).
+#[wasm_bindgen(js_name = messagingScan)]
+pub fn messaging_scan(key: &SeedelfKey, envelopes: &str) -> Result<String, JsError> {
+    let envelopes: Vec<String> = from_json(envelopes)?;
+    to_json(&messaging::scan(key.sk, &envelopes).map_err(js_error)?)
+}
+
+/// Opens an envelope, hex, and says which conversation it's for, and
+/// nothing secret (`messaging::open`).
+#[wasm_bindgen(js_name = messagingOpen)]
+pub fn messaging_open(key: &SeedelfKey, envelope: &str) -> Result<String, JsError> {
+    to_json(&messaging::open(key.sk, envelope).map_err(js_error)?)
+}
+
+/// Takes an envelope under protocol.md §5 and §6's rules, with the records
+/// it needs (`messaging::ReceiveRequest` → `messaging::ReceiveResult`).
+#[wasm_bindgen(js_name = messagingReceive)]
+pub fn messaging_receive(key: &SeedelfKey, request: String) -> Result<js_sys::JsString, JsError> {
+    let request = Zeroizing::new(request);
+    let request: messaging::ReceiveRequest = from_json(&request)?;
+    to_secret_json(&messaging::receive(key.sk, request).map_err(js_error)?)
+}
+
+/// Starts a conversation with a Seedelf's owner, before its stamp
+/// (`messaging::StartRequest` → `messaging::Started`).
+#[wasm_bindgen(js_name = messagingStart)]
+pub fn messaging_start(key: &SeedelfKey, request: &str) -> Result<js_sys::JsString, JsError> {
+    let request: messaging::StartRequest = from_json(request)?;
+    to_secret_json(&messaging::start(key.sk, request).map_err(js_error)?)
+}
+
+/// Starts a conversation continuing an old one, with its identities
+/// (`messaging::ContinueRequest` → `messaging::Started`).
+#[wasm_bindgen(js_name = messagingStartContinuing)]
+pub fn messaging_start_continuing(
+    key: &SeedelfKey,
+    request: String,
+) -> Result<js_sys::JsString, JsError> {
+    let request = Zeroizing::new(request);
+    let request: messaging::ContinueRequest = from_json(&request)?;
+    to_secret_json(&messaging::start_continuing(key.sk, request).map_err(js_error)?)
+}
+
+/// Sets a conversation's first-contact stamp
+/// (`messaging::SetStampRequest` → `messaging::Stamped`).
+#[wasm_bindgen(js_name = messagingSetStamp)]
+pub fn messaging_set_stamp(request: String) -> Result<js_sys::JsString, JsError> {
+    let request = Zeroizing::new(request);
+    let request: messaging::SetStampRequest = from_json(&request)?;
+    to_secret_json(&messaging::set_stamp(request).map_err(js_error)?)
+}
+
+/// The next message of a conversation, in its envelope
+/// (`messaging::SendRequest` → `messaging::Sent`).
+#[wasm_bindgen(js_name = messagingSend)]
+pub fn messaging_send(request: String) -> Result<js_sys::JsString, JsError> {
+    let request = Zeroizing::new(request);
+    let request: messaging::SendRequest = from_json(&request)?;
+    to_secret_json(&messaging::send(request).map_err(js_error)?)
+}
+
+/// Replies to a request: its conversation, built from what arrived
+/// (`messaging::RequestOf` → `messaging::Accepted`).
+#[wasm_bindgen(js_name = messagingAccept)]
+pub fn messaging_accept(key: &SeedelfKey, request: &str) -> Result<js_sys::JsString, JsError> {
+    let request: messaging::RequestOf = from_json(request)?;
+    to_secret_json(&messaging::accept(key.sk, request).map_err(js_error)?)
+}
+
+/// A request's texts, decrypted in memory to show them
+/// (`messaging::RequestOf` → `messaging::RequestTexts`).
+#[wasm_bindgen(js_name = messagingReadRequest)]
+pub fn messaging_read_request(
+    key: &SeedelfKey,
+    request: &str,
+) -> Result<js_sys::JsString, JsError> {
+    let request: messaging::RequestOf = from_json(request)?;
+    to_secret_json(&messaging::read_request(key.sk, request).map_err(js_error)?)
+}
+
+/// Deletes a conversation or a request, keeping a tombstone
+/// (`messaging::DeleteRequest` → `messaging::Deleted`).
+#[wasm_bindgen(js_name = messagingDelete)]
+pub fn messaging_delete(request: String) -> Result<String, JsError> {
+    let request = Zeroizing::new(request);
+    let request: messaging::DeleteRequest = from_json(&request)?;
+    to_json(&messaging::delete(request).map_err(js_error)?)
+}
+
+/// Deletes skipped keys and tombstones past their 48 hours
+/// (`messaging::ExpireRequest` → `messaging::Expired`).
+#[wasm_bindgen(js_name = messagingExpire)]
+pub fn messaging_expire(request: String) -> Result<js_sys::JsString, JsError> {
+    let request = Zeroizing::new(request);
+    let request: messaging::ExpireRequest = from_json(&request)?;
+    to_secret_json(&messaging::expire(request).map_err(js_error)?)
+}
+
+/// A conversation's record, hex, read without its secrets
+/// (`messaging::ConversationInfo`).
+#[wasm_bindgen(js_name = messagingConversationInfo)]
+pub fn messaging_conversation_info(record: String) -> Result<String, JsError> {
+    let record = messaging::Secret::from(record);
+    to_json(&messaging::conversation_info(&record).map_err(js_error)?)
+}
+
+/// The requests' record, hex, read without their texts
+/// (`messaging::RequestInfo`, oldest first).
+#[wasm_bindgen(js_name = messagingRequestsInfo)]
+pub fn messaging_requests_info(record: &str) -> Result<String, JsError> {
+    to_json(&messaging::requests_info(record).map_err(js_error)?)
+}
+
+/// One slice of a stamp's search, the first-contact stamp's or a post's
+/// (`messaging::FindStampRequest` → `messaging::Found`).
+#[wasm_bindgen(js_name = messagingFindStamp)]
+pub fn messaging_find_stamp(request: &str) -> Result<String, JsError> {
+    to_json(&messaging::find_stamp(from_json(request)?).map_err(js_error)?)
+}
+
+/// What a post's stamp is over: the envelope, hex, in `pool`.
+#[wasm_bindgen(js_name = messagingRelayDigest)]
+pub fn messaging_relay_digest(pool: &str, envelope: &str) -> Result<String, JsError> {
+    messaging::relay_digest(pool, envelope).map_err(js_error)
+}
+
+/// The bytes to post to the relay (`messaging::PostRequest`).
+#[wasm_bindgen(js_name = messagingPostBody)]
+pub fn messaging_post_body(request: &str) -> Result<Vec<u8>, JsError> {
+    messaging::post_body(from_json(request)?).map_err(js_error)
+}
+
+/// The numbers the worker works by (`messaging::Constants`).
+#[wasm_bindgen(js_name = messagingConstants)]
+pub fn messaging_constants() -> Result<String, JsError> {
+    to_json(&messaging::constants())
 }

@@ -86,6 +86,11 @@ fn later_first_contact_messages_join_their_request() {
         request.read(&bob).unwrap(),
         vec![Ok(b"zero".to_vec()), Ok(b"one".to_vec())]
     );
+    // Each text's arrival, in the same order, and kept across storage.
+    assert_eq!(request.arrivals().collect::<Vec<_>>(), [T, late]);
+    let stored = Requests::from_bytes(&before).unwrap();
+    let stored = stored.get(a.cid()).unwrap();
+    assert_eq!(stored.arrivals().collect::<Vec<_>>(), [T, late]);
     // Reading changed nothing.
     assert_eq!(inbox.requests().to_bytes(), before);
 }

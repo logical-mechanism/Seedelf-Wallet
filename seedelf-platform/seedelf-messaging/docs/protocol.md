@@ -266,8 +266,19 @@ Measured on the same machine as the README: an Intel Core i5-12400F, one thread.
 | Open a match (full parse, then decrypt) | 0.31 ms | 1.77 ms |
 | Encrypt an envelope | 0.31 ms | 2.2 ms |
 
+**In the wallet's own module** (54d), through its bindings and called as the worker will call them: `messagingScan` takes 200 envelopes a call as JSON of hex, with a turn of the event loop between calls. Measured with `node scale.mjs messaging` ([seedelf-wasm's README](../../seedelf-web-wallet/wasm/README.md)) on the same machine, 2026-11-21, and in a module worker in headless Chrome 157, the engine the extension's service worker runs, with a scratch harness running the same steps:
+
+| Step | Node 24 | Chrome 157, a worker |
+|---|---|---|
+| Scan an envelope | 0.97 ms | 1.09 ms |
+| Scan 15,000 envelopes | 14.6 s | 16.3 s |
+| Open a match (`messagingOpen`) | 1.9 ms | 2.1 ms |
+| Receive a message that takes a ratchet step, with its record | 5.7 ms | 6.1 ms |
+
+The bindings' JSON and hex cost nothing measurable beside the scalar multiplication: the scan matches the scratch harness's 1.02 ms.
+
 **Scale:**
-- A 36-hour pool at 10,000 envelopes a day (about 15,000) takes about 2.7 s to scan natively and about 15 s in WebAssembly on a fresh sync.
+- A 36-hour pool at 10,000 envelopes a day (about 15,000) takes about 2.7 s to scan natively and about 15 s in WebAssembly on a fresh sync: 14.6 s in the wallet's module in Node, 16.3 s in Chrome's worker.
 - Keeping up scans only what's new, about 10 s of WebAssembly work a day at that rate.
 - **The WebAssembly scan is the scaling limit.**
 - The wallet's own `isOwned` row test, measured at 0.73 ms a row in the module (wasm/README.md), agrees with these figures: it checks one point where the scan checks two.
@@ -380,6 +391,8 @@ Measured on the same machine as the README: an Intel Core i5-12400F, one thread.
   - proof-of-work solving times;
   - a parallel scan from offscreen documents, if the single thread falls short;
   - the storage used by a hundred conversations with their skipped keys.
+
+  54d measured the scan and both stamps in the wallet's module, in Node and in a Chrome worker (§8, §17.3). The extension's own service worker, its memory, a slow laptop and the storage are 54e's.
 - **Restarting a conversation that was never read.** A first message older than 48 hours is refused by a reader who hasn't seen the conversation (§16.4). How the wallet offers "start again", or starts again by itself, is the wallet's to settle (54e, 54f).
 - **A model of §3 to §6** in a protocol verifier (ProVerif or Tamarin) before mainnet, then an outside review.
 
@@ -578,7 +591,9 @@ work   = the leading zero bits of SHA-256(digest ‖ nonce (8, big-endian))
 - **Bound to the envelope's bytes and the pool,** so it can't be reused for another envelope or moved to the other pool. The digest also identifies the envelope for the duplicate check.
 - **Each attempt is one SHA-256 block** (40 bytes), whatever the envelope's size.
 - **Solving:** any nonce that meets the price is taken. The crate's `solve_stamp` takes the first from 0, which makes the vectors [choice], and `find_stamp` searches a slice, so the worker can yield between slices (54d). It refuses more than 32 bits (`MAX_STAMP_BITS`).
-- **Measured** (2026-11-21, Intel Core i5-12400F, the sha2 crate built as the wallet's module is, run in Node 24): about **425 ns an attempt** in WebAssembly, 160 ns natively. b bits take 2^b attempts on average: 18 bits about 0.11 s, 20 about 0.45 s, 24 about 7 s. The number of attempts is geometric, so one time in twenty takes three times the average or more. A slow laptop's figures are to measure in the extension (54d).
+- **Measured** (2026-11-21, Intel Core i5-12400F, the sha2 crate built as the wallet's module is, run in Node 24): about **425 ns an attempt** in WebAssembly, 160 ns natively. b bits take 2^b attempts on average: 18 bits about 0.11 s, 20 about 0.45 s, 24 about 7 s. The number of attempts is geometric, so one time in twenty takes three times the average or more.
+  - **In the wallet's module** (54d, `scale.mjs messaging` and the same steps in a Chrome 157 worker), solved in slices of 2^16 attempts with a turn of the event loop between: 422 ns an attempt in Node 24 and 438 ns in Chrome, so 24 bits take about 7.1 and 7.4 s on average. 64 relay stamps at 18 bits averaged 0.13 and 0.12 s. 16 first-contact stamps at 24 bits averaged 6.4 and 10.9 s, with medians of 6.1 and 7.7 s; the longest of the 32 took 33 s. Sixteen geometric draws don't settle a mean, so the attempt's cost is the figure to plan by.
+  - A slow laptop's figures are still to measure.
 
 ### 17.4 The price
 

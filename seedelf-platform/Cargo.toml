@@ -57,6 +57,15 @@ strip = true
 # sums can link core's checked copy and trap. So no crate leans on the checks:
 # a value from outside the wallet is summed with checked_* and refused in
 # words. seedelf-core/tests/wasm_profile_test.rs fails without these sections.
+#
+# Not seedelf-messaging, though the module links it (chunk 54's 54d). Its
+# input is a stranger's envelope, which the worker reads again at every sync
+# until the relay drops it, so a trap there would lock the whole wallet at
+# every unlock for 36 hours. No integer it reads from an envelope reaches
+# arithmetic that can wrap: the chain counters' bounds are refused in words
+# (N below Nr, N = u32::MAX, more than MAX_SKIP), and stored counts come only
+# from the wallet's own sealed records. A wrap missed all the same would stay
+# inside messaging's state, which holds no funds.
 [profile.wasm-release.package.seedelf-core]
 overflow-checks = true
 

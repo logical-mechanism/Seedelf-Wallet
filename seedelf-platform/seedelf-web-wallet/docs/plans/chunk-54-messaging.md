@@ -1,6 +1,6 @@
 # Chunk 54 · Seedelf Messaging
 
-**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **🚧 Calls 12 and 13 built** (54a′), on `web-wallet/messaging-first-contact`, before 54d. 54b's proofs run separately (#405). Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
+**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **✅ Calls 12 and 13 merged** (54a′, #407). **🚧 54d built** (the WebAssembly bindings), on `web-wallet/messaging-wasm`. 54b's proofs run separately (#405). Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
 
 **The specification is [protocol.md](../../../seedelf-messaging/docs/protocol.md),** with the envelope in [construction.md](../../../seedelf-messaging/docs/construction.md) and the guarantees in [security.md](../../../seedelf-messaging/docs/security.md). It has had two reviews; the second's reasoning, and its adversarial tests, are in [protocol-review.md](../../../seedelf-messaging/docs/protocol-review.md). This plan doesn't repeat them: it says what to build, where, in what order, and what's still the owner's to decide. A step that changes the protocol changes protocol.md in the same PR.
 
@@ -152,7 +152,7 @@ Where it runs is call 1, and its storage call 2. The routes, as the recommendati
   - **The data layer takes blstrs and sha2** for its copy of the checks, at the wallet's own versions (blst 0.3.15), and `/health` says the relay's state without changing its status.
 - **Not done here:** the deploy (54g, the owner); setting `DATA_MESSAGING_GB_MONTH` on the droplet before the next data-layer deploy, since every deploy from `main` now carries the relay; the privacy policy's entry, which goes with the step that first contacts the relay (54e, 54f).
 
-### 54a′ 🚧 Calls 12 and 13, before 54d
+### 54a′ ✅ Calls 12 and 13, before 54d
 
 The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-messaging's `session` module, protocol.md changed to match (§0, §2, §3, §5 to §9, §13, §16), and the reasoning in protocol-review.md §G.
 
@@ -167,7 +167,7 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
 - **For 54b:** the model's F leaves out `to` already. The proof, the stamp and the envelope's binding are about unlinkability and spam, which none of its lemmas claims, so tonight's proofs stand as they are.
 - **For 54d:** starting a conversation and setting its stamp are separate exports, the stamp solved in slices as the relay's is, and receiving takes the reader's handles.
 
-### 54d ⬜ WebAssembly
+### 54d 🚧 WebAssembly
 
 - `seedelf-wasm` takes `seedelf-messaging` as a dependency.
 - **Exports, JSON in and out as the others:**
@@ -180,6 +180,33 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
 - `scale.mjs` measures a 15,000-envelope scan in the module [measure].
 
 **Done means:** the module's size change is recorded, and the scan's figure is in protocol.md §8.
+
+**Where it stands** (2026-11-21, `web-wallet/messaging-wasm`):
+- **The owner's calls** (2026-11-21), each as recommended:
+  - records in, records out: no state outlives a call;
+  - receiving is two calls, `messagingOpen` to name the records, then `messagingReceive` with only those;
+  - hex inside JSON throughout, a message's text included;
+  - every export 54e needs, not only the plan's list.
+- **Built:** `seedelf-wasm` takes `seedelf-messaging`, and 17 exports wrap it ([wasm/src/messaging.rs](../../wasm/src/messaging.rs), [the README's table](../../wasm/README.md#api)).
+  - Beyond the plan's list: accepting a request, reading one's texts, deleting, expiring, a no-secrets summary of a conversation and of the requests, and the constants the worker works by.
+  - A refusal is an answer, `{ "refused": "<code>" }`, the crate's error in snake case; only a request that doesn't read throws. The worker branches on codes, never words.
+  - Answers and requests that carry a conversation's record or a text go through buffers WebAssembly wipes.
+- **One addition to the crate:** `Request::arrivals`, so a request's texts show when they came after a reload.
+- **Overflow checks stay off in seedelf-messaging** [choice]. Its input is a stranger's envelope, read again at every sync, so a trap there would lock the wallet at every unlock for 36 hours. An audit found no integer from an envelope reaching arithmetic that can wrap. The reasons are in the workspace Cargo.toml.
+- **Tests:**
+  - `messaging_test.rs` (6 tests) and `messaging.test.mjs` (4): the session vectors' first messages opened and received at the full 24 bits, read back and accepted; both vector files' stamps found in slices, and a post's bytes;
+  - two wallets writing to each other through the records alone, with a continuation, a deletion and its tombstone's expiry, and each refusal as its code.
+  - a mutation pass weakened each of 31 lines of the binding in turn, and a test failed every time.
+- **Measured** (the i5-12400F, 2026-11-21):
+  - the module grew 155 KB raw, 52 KB gzipped and 36 KB brotli, to 3,831, 1,114 and 797 KB;
+  - the scan took 0.97 ms an envelope in Node and 1.09 ms in a Chrome 157 worker: 14.6 and 16.3 s for 15,000 (protocol.md §8);
+  - the stamps are under Unknowns.
+- **For 54e:**
+  - a request's `continues` survives only in `messagingAccept`'s answer, since the conversation's record doesn't keep it: the worker stores the label with the conversation;
+  - `messagingReceive` takes the named conversation's record and the one its `replaces` names; a cid held both as a request and as a conversation throws;
+  - `firstContactBits` is for tests and tuning, never the wallet;
+  - `messagingSetStamp` reports the nonce's work and doesn't refuse less: solve at `messagingConstants().firstContactStampBits`;
+  - expiring is one call per conversation's record.
 
 ### 54e ⬜ The worker
 
@@ -292,8 +319,13 @@ Each has a recommendation, which the owner can overturn.
 
 ## Unknowns
 
-- The scan in the extension's own worker, as against Node's, at 15,000 envelopes (54d) [measure].
-- Proof of work's solving times in the extension's own worker, and on a slow laptop (54d) [measure]: the relay's price and the first-contact stamp's 24 bits. The numbers are set (protocol.md §16.4, §17.4) from an attempt measured in Node's WebAssembly, and are to tune with real use.
+- The scan at 15,000 envelopes: 14.6 s in Node and 16.3 s in a Chrome 157 worker, through the bindings (54d, protocol.md §8). The extension's own service worker and a slow laptop are still to measure (54e) [measure].
+- Proof of work's solving times. Measured in 54d (protocol.md §17.3), in slices of 2^16 attempts with a turn of the event loop between:
+  - an attempt costs 422 ns in Node 24 and 438 ns in a Chrome 157 worker;
+  - the relay's 18 bits take about 0.12 s: 64 solves averaged 0.13 s in Node and 0.12 s in Chrome;
+  - first contact's 24 bits take about 7.1 to 7.4 s on average. 16 solves averaged 6.4 s in Node and 10.9 s in Chrome (medians 6.1 and 7.7 s), and the longest of the 32 took 33 s.
+
+  Still to measure: the extension's own worker and a slow laptop [measure]. The numbers (protocol.md §16.4, §17.4) are to tune with real use.
 - The relay's egress at real use against the droplet's monthly ceiling: each wallet downloads every envelope [measure].
 - The storage quota with history and skipped keys (54e) [measure].
 - Whether a 15-minute auto-lock leaves enough unlocked time to sync a 36-hour pool [assumed: yes, about 15 s of scanning].
