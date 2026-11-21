@@ -11,6 +11,7 @@ import type { ActivityService } from "./activity";
 import type { BalanceService } from "./balances";
 import type { CoinControlService } from "./coin-control";
 import type { ContactsService } from "./contacts";
+import type { MessagingService } from "./messaging";
 import type { DappService } from "./dapp";
 import type { DataParts } from "./data-layer";
 import type { MintService } from "./mint";
@@ -26,7 +27,7 @@ import type { LovejoinLaunchService } from "./lovejoin-launch";
 import type { SessionService } from "./sessions";
 import type { StakingService } from "./staking";
 import type { Area } from "./storage";
-import type { TransferService } from "./transfer";
+import { seedelfNameOf, type TransferService } from "./transfer";
 import { txView } from "./tx-view";
 import type { WithdrawService } from "./withdraw";
 import { SESSION_RESTORED, WalletLocked, type Wallet } from "./wallet";
@@ -66,6 +67,8 @@ export interface Context {
   /** A payment's parts that wait for the part before to be in a block (parts.ts): Home's poll and the runs send them. */
   parts?: PartsService;
   contacts: ContactsService;
+  /** Seedelf Messaging (messaging.ts, chunk 54). */
+  messaging: MessagingService;
   activity: ActivityService;
   coins: CoinControlService;
   staking: StakingService;
@@ -295,6 +298,30 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.contacts.save(ctx.network, message);
     case "contact-remove":
       return ctx.contacts.remove(ctx.network, message.id);
+    case "messaging":
+      return ctx.messaging.overview(ctx.network);
+    case "messaging-switch":
+      await ctx.messaging.switch(ctx.network, message.on === true);
+      return ctx.messaging.overview(ctx.network);
+    case "messaging-start":
+      return { cid: await ctx.messaging.start(ctx.network, seedelfNameOf(message.to), message.text) };
+    case "messaging-send":
+      await ctx.messaging.send(ctx.network, message.cid, message.text);
+      return null;
+    case "messaging-thread":
+      return ctx.messaging.thread(ctx.network, message.cid);
+    case "messaging-request":
+      return ctx.messaging.request(ctx.network, message.cid);
+    case "messaging-accept":
+      await ctx.messaging.accept(ctx.network, message.cid);
+      return null;
+    case "messaging-delete":
+      await ctx.messaging.remove(ctx.network, message.cid);
+      return null;
+    case "messaging-restart":
+      return { cid: await ctx.messaging.restart(ctx.network, message.cid, message.text) };
+    case "messaging-continue":
+      return { cid: await ctx.messaging.continueIn(ctx.network, message.cid, message.text) };
     case "history": {
       if (message.of === "seedelf") {
         // Arrivals are noted by a balance reading: Refresh makes one, and otherwise the history asks nothing.
@@ -348,7 +375,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "preferences":
       return ctx.preferences.get();
     case "preferences-set": {
-      const { type: _type, ...change } = message;
+      // Messages' switches change through `messaging-switch` only, which starts and stops the relay's reads with them.
+      const { type: _type, messaging: _messaging, ...change } = message;
       const prefs = await ctx.preferences.set(change);
       // Another dApp account: a site's signature waiting was checked for the one it left (chunk 25). Told once it's
       // written: a request's last look before its window then sees the new one, or it's waiting by now (dapp.ts

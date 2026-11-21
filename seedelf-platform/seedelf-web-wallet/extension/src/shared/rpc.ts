@@ -219,6 +219,90 @@ export interface Contact {
   network: NetworkName;
 }
 
+/**
+ * Seedelf Messaging (chunk 54): a conversation as the list shows it, without its messages. Its labels are protocol.md
+ * §7's, which the screens say in its words.
+ */
+export interface MessagingConversation {
+  cid: string;
+  /** `initiator`: this wallet wrote first. */
+  role: "initiator" | "responder";
+  /** The Seedelf this wallet wrote to (asset name, hex): the other side holds that Seedelf's key. */
+  handle?: string;
+  /** Which of this wallet's Seedelfs the other side wrote to (asset name, hex), verified by its proof. */
+  to?: string;
+  /** What its `replaces` amounted to: `verified`, it continues that conversation; otherwise it only says so. */
+  continues?: { cid: string; verified: boolean };
+  /** When it started, and its last message either way (ms). */
+  startedAt: number;
+  lastAt: number;
+  /** Messages received and not yet shown. */
+  unread: number;
+  /** Messages still to be posted, or waiting for the first-contact stamp (about 7 s). */
+  outbox: number;
+  /**
+   * Written first, and no reply in the 48 hours a first message can be read in: a reader that never took one refuses
+   * them all now (protocol.md §16.4), so it may need starting again (`messaging-restart`).
+   */
+  unanswered: boolean;
+  /** The conversation it was started again, or continued, as. */
+  restartedAs?: string;
+  /** Messages the ratchet couldn't reach (protocol.md §6): it may not continue (`messaging-continue`). */
+  unreachable?: number;
+}
+
+/** A stranger's first message, kept apart until the user replies or deletes it (protocol.md §3.1). */
+export interface MessagingRequest {
+  cid: string;
+  startedAt: number;
+  /** Which of this wallet's Seedelfs it was written to (asset name, hex), verified; empty for a continuation. */
+  to: string;
+  continues?: { cid: string; verified: boolean };
+  messages: number;
+  lastAt: number;
+  unread: number;
+}
+
+/** Messages on one network. */
+export interface MessagingOverview {
+  /** The network's Messages switch: off, nothing reaches the relay. */
+  on: boolean;
+  /** Newest first. */
+  conversations: MessagingConversation[];
+  requests: MessagingRequest[];
+  /** Conversations this browser no longer has, whose messages still arrive (protocol.md §6). */
+  lost: Array<{ cid: string; lastAt: number; messages: number }>;
+  /** When the relay last said envelopes were gone before they were read (ms): messages sent then may never arrive. */
+  gapAt?: number;
+}
+
+/** One message of a thread or a request. */
+export interface MessagingEntry {
+  id: number;
+  dir: "in" | "out";
+  /** Received, or written (ms). */
+  at: number;
+  text?: string;
+  /** A kind of message this version can't show, or a request's message that doesn't read now. */
+  unreadable?: true;
+  /** A sent one: waiting for the first-contact stamp, to be posted, posted ("sent, expires at"), or refused. */
+  sent?: "queued" | "pending" | "posted" | "refused";
+  /** When the relay drops it (ms): never "delivered". */
+  expires?: number;
+}
+
+/** A conversation's messages. */
+export interface MessagingThread {
+  conversation: MessagingConversation;
+  messages: MessagingEntry[];
+  /** The oldest messages the history's budget deleted. */
+  trimmed: number;
+  /** Messages missing (protocol.md §6): never "expired". */
+  missing: number;
+  /** The longest text the next message can carry, in UTF-8 bytes. */
+  maxTextBytes: number;
+}
+
 /** One of the user's seedelfs: a named token in a UTxO the wallet owns. */
 export interface SeedelfInfo {
   /** The full token name, hex. */
@@ -2924,6 +3008,28 @@ export interface Requests {
   "change-password": { payload: { current: string; next: string }; result: None };
   /** This network's contacts, by name. */
   contacts: { payload: None; result: Contact[] };
+  /**
+   * Seedelf Messaging on the wallet's network (chunk 54, background/messaging.ts): the conversations and requests,
+   * newest first. Throws if locked.
+   */
+  messaging: { payload: None; result: MessagingOverview };
+  /** Turns the network's Messages switch on or off (call 9); on, its relay pool is read at once and every minute. */
+  "messaging-switch": { payload: { on: boolean }; result: MessagingOverview };
+  /** Writes first to the owner of a Seedelf, by its name: its stamp is solved (about 7 s), then it's posted. */
+  "messaging-start": { payload: { to: string; text: string }; result: { cid: string } };
+  "messaging-send": { payload: { cid: string; text: string }; result: null };
+  /** A conversation's messages, which are then read. */
+  "messaging-thread": { payload: { cid: string }; result: MessagingThread };
+  /** A request's messages, which are then read; nothing else changes. */
+  "messaging-request": { payload: { cid: string }; result: MessagingEntry[] };
+  /** Accepts a request: its conversation, which the reply is then sent in. */
+  "messaging-accept": { payload: { cid: string }; result: null };
+  /** Deletes a conversation or a request; its ID stays a tombstone for 48 hours. */
+  "messaging-delete": { payload: { cid: string }; result: null };
+  /** Starts an unanswered conversation again, to the same Seedelf. */
+  "messaging-restart": { payload: { cid: string; text: string }; result: { cid: string } };
+  /** Continues a conversation in a new one, with its identities (protocol.md §6). */
+  "messaging-continue": { payload: { cid: string; text: string }; result: { cid: string } };
   /** Adds a contact, or changes the one with `id`; returns the contacts. */
   "contact-save": { payload: { id?: string; name: string; value: string }; result: Contact[] };
   "contact-remove": { payload: { id: string }; result: Contact[] };
@@ -3386,6 +3492,16 @@ const REQUEST_LIST = [
   "contacts",
   "contact-save",
   "contact-remove",
+  "messaging",
+  "messaging-switch",
+  "messaging-start",
+  "messaging-send",
+  "messaging-thread",
+  "messaging-request",
+  "messaging-accept",
+  "messaging-delete",
+  "messaging-restart",
+  "messaging-continue",
   "history",
   "utxos",
   "utxo-lock",
@@ -3521,6 +3637,13 @@ export const STATE_CHANGED = { event: "state-changed" } as const;
 
 export function isStateChanged(value: unknown): boolean {
   return (value as { event?: unknown } | null)?.event === STATE_CHANGED.event;
+}
+
+/** Broadcast by the worker when a network's messages change: something arrived, was posted, or was set. */
+export const MESSAGING_CHANGED = { event: "messaging-changed" } as const;
+
+export function isMessagingChanged(value: unknown): value is typeof MESSAGING_CHANGED & { network: NetworkName } {
+  return (value as { event?: unknown } | null)?.event === MESSAGING_CHANGED.event;
 }
 
 /** Broadcast by the worker when what sites are waiting for changes. */

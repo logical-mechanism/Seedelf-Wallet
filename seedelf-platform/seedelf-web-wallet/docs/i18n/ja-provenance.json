@@ -3059,5 +3059,15 @@
   "swaps.step.fundingShort": "machine",
   "swaps.step.partsIn": "machine",
   "worker.parts.fundingPartly": "machine",
-  "worker.parts.fundingPartlyMaybe": "machine"
+  "worker.parts.fundingPartlyMaybe": "machine",
+  "worker.messaging.cantRestart": "machine",
+  "worker.messaging.empty": "machine",
+  "worker.messaging.noConversation": "machine",
+  "worker.messaging.noRequest": "machine",
+  "worker.messaging.notARegister": "machine",
+  "worker.messaging.ownSeedelf": "machine",
+  "worker.messaging.refused": "machine",
+  "worker.messaging.tooLong": "machine",
+  "worker.record.conversation": "machine",
+  "worker.record.messaging": "machine"
 }

@@ -39,6 +39,10 @@
 //                   data layer (data-layer.ts). Off by default; read at each
 //                   request, so turning it on needs no restart. Kept when
 //                   the wallet is removed (above).
+// messaging         Seedelf Messaging, a switch for each network (chunk 54's
+//                   call 9): while one is on and the wallet is unlocked,
+//                   that network's relay pool is read every minute
+//                   (messaging.ts). Off by default.
 //
 // Where the toolbar button opens the wallet isn't one of these: it's the
 // browser's, not the wallet's (shared/open-in.ts). Nor is the network, which
@@ -56,6 +60,7 @@ import {
   isLovejoinWidth,
   LOCAL_NETWORK,
   LOCAL_PREFERENCES,
+  messagingSwitches,
   type Preferences,
 } from "../shared/preferences";
 import type { Area } from "./storage";
@@ -127,6 +132,7 @@ export class PreferencesService {
       lovejoinDelay: isLovejoinDelay(kept.lovejoinDelay) ? kept.lovejoinDelay : DEFAULT_PREFERENCES.lovejoinDelay,
       lovejoinWidth: isLovejoinWidth(kept.lovejoinWidth) ? kept.lovejoinWidth : DEFAULT_PREFERENCES.lovejoinWidth,
       koiosOnly: typeof kept.koiosOnly === "boolean" ? kept.koiosOnly : DEFAULT_PREFERENCES.koiosOnly,
+      messaging: messagingSwitches(kept.messaging),
     };
   }
 
@@ -146,6 +152,14 @@ export class PreferencesService {
     if (isLovejoinDelay(change.lovejoinDelay)) next.lovejoinDelay = change.lovejoinDelay;
     if (isLovejoinWidth(change.lovejoinWidth)) next.lovejoinWidth = change.lovejoinWidth;
     if (typeof change.koiosOnly === "boolean") next.koiosOnly = change.koiosOnly;
+    // One network's switch at a time, the other kept: each is only ever a boolean.
+    if (typeof change.messaging === "object" && change.messaging !== null) {
+      const asked = change.messaging as unknown as Partial<Record<string, unknown>>;
+      next.messaging = {
+        preprod: typeof asked.preprod === "boolean" ? asked.preprod : next.messaging.preprod,
+        mainnet: typeof asked.mainnet === "boolean" ? asked.mainnet : next.messaging.mainnet,
+      };
+    }
     await this.local.set(LOCAL_PREFERENCES, next);
     return next;
   }

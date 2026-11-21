@@ -183,7 +183,13 @@ async function busy(t: T, ms: number) {
 }
 
 /** The same storage under a new object: a restarted worker's, so every map kept by it starts empty. */
-const restarted = (s: Area): Area => ({ get: (k) => s.get(k), set: (k, v) => s.set(k, v), remove: (...k) => s.remove(...k), clear: () => s.clear() });
+const restarted = (s: Area): Area => ({
+  get: (k) => s.get(k),
+  set: (k, v) => s.set(k, v),
+  remove: (...k) => s.remove(...k),
+  clear: () => s.clear(),
+  keys: (p) => s.keys(p),
+});
 
 /** Koios with its submit of `hash` taken but never answered: a worker stopped while it was asked. */
 function hangingOn(t: T, hang: { hash?: string; any?: boolean }): Fetch {

@@ -42,6 +42,8 @@ import { SessionService } from "../src/background/sessions";
 import { StakingService } from "../src/background/staking";
 import { AccountsService, activeAccount } from "../src/background/accounts";
 import { PrivateStore } from "../src/background/private-store";
+import { MessagingService } from "../src/background/messaging";
+import { fakeRelay } from "./fake-relay";
 import { TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
 import type { Area } from "../src/background/storage";
@@ -72,6 +74,9 @@ export function memoryArea(): MemoryArea {
     },
     async clear() {
       data.clear();
+    },
+    async keys(prefix: string) {
+      return [...data.keys()].filter((k) => k.startsWith(prefix));
     },
   };
 }
@@ -708,6 +713,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   const coingecko = fakeCoinGecko();
   const minswap = fakeMinswap();
   const dappWindow = fakeWindow();
+  const relay = fakeRelay(t.clock);
   let dappChanged = 0;
   const deps = {
     wasm: loadTestWasm(),
@@ -787,6 +793,22 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     prices: new PriceService({ session: t.session, local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
     nftImages: new NftImageService({ koios: koiosFor, allowed: async () => true }),
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
+    relay,
+    // Messages off, as every wallet starts: nothing here reaches the fake relay unless a test turns it on.
+    messaging: new MessagingService({
+      wasm: deps.wasm,
+      wallet: t.wallet,
+      store,
+      local: t.local,
+      preferences,
+      relay: (n) => relay.client(n),
+      ownSeedelfs: async () => [],
+      seedelfRegister: async () => {
+        throw new Error("no Seedelf in these fakes");
+      },
+      now: () => t.clock.now,
+      wait: async () => undefined,
+    }),
     accounts,
     dappWindow,
     dappChanged: () => dappChanged,

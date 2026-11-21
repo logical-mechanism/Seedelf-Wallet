@@ -1,6 +1,6 @@
 # Chunk 54 · Seedelf Messaging
 
-**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **✅ Calls 12 and 13 merged** (54a′, #407). **🚧 54d built** (the WebAssembly bindings), on `web-wallet/messaging-wasm`. 54b's proofs run separately (#405). Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
+**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **✅ Calls 12 and 13 merged** (54a′, #407). **✅ 54d merged** (#408, the WebAssembly bindings). **🚧 54e built** (the worker), on `web-wallet/messaging-worker`. 54b's proofs run separately (#405). Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
 
 **The specification is [protocol.md](../../../seedelf-messaging/docs/protocol.md),** with the envelope in [construction.md](../../../seedelf-messaging/docs/construction.md) and the guarantees in [security.md](../../../seedelf-messaging/docs/security.md). It has had two reviews; the second's reasoning, and its adversarial tests, are in [protocol-review.md](../../../seedelf-messaging/docs/protocol-review.md). This plan doesn't repeat them: it says what to build, where, in what order, and what's still the owner's to decide. A step that changes the protocol changes protocol.md in the same PR.
 
@@ -22,6 +22,7 @@
 - One relay, the wallet's only one, pricing each address's posts by its recent traffic, said plainly: "we dont know what is being sent nor to who but we do rate limit via ip because of dos attacks basically. I mean its real." That settles call 6.
 - The relay on the data layer's droplet, with buckets and a traffic ceiling of its own (2026-11-21): "Lets build on that same droplet and as the wallet expands we expand that server as well, or add more or something. Initially there should not be that many users anyway using this feature." That settles calls 1 and 2.
 - Groups and post-quantum later.
+- Messages on and off with a switch for each network, off by default, the worker reading each network whose switch is on whichever the wallet shows; history kept within about 5 MB, the oldest going first; and calls 3, 4 and 5 as 54c built them (2026-11-21). That settles calls 3, 4, 5, 9 and 10.
 
 **The marks:**
 - **[code]:** read in this repository.
@@ -167,7 +168,7 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
 - **For 54b:** the model's F leaves out `to` already. The proof, the stamp and the envelope's binding are about unlinkability and spam, which none of its lemmas claims, so tonight's proofs stand as they are.
 - **For 54d:** starting a conversation and setting its stamp are separate exports, the stamp solved in slices as the relay's is, and receiving takes the reader's handles.
 
-### 54d 🚧 WebAssembly
+### 54d ✅ WebAssembly
 
 - `seedelf-wasm` takes `seedelf-messaging` as a dependency.
 - **Exports, JSON in and out as the others:**
@@ -181,7 +182,7 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
 
 **Done means:** the module's size change is recorded, and the scan's figure is in protocol.md §8.
 
-**Where it stands** (2026-11-21, `web-wallet/messaging-wasm`):
+**Where it stands** (2026-11-21, merged in #408):
 - **The owner's calls** (2026-11-21), each as recommended:
   - records in, records out: no state outlives a call;
   - receiving is two calls, `messagingOpen` to name the records, then `messagingReceive` with only those;
@@ -208,7 +209,7 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
   - `messagingSetStamp` reports the nonce's work and doesn't refuse less: solve at `messagingConstants().firstContactStampBits`;
   - expiring is one call per conversation's record.
 
-### 54e ⬜ The worker
+### 54e 🚧 The worker
 
 - **A messaging service with one queue for every state change** (protocol.md §4.2). The sequence: write the state and outbox, then post the stored bytes, then mark them posted; after a restart, re-post them. Receiving decrypts on a copy, then writes, then advances the cursor.
 - **Records in `PrivateStore`,** per network:
@@ -231,6 +232,23 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
 - **Deleting the wallet** deletes everything messaging stored; it's in `PRIVATE_RECORDS`.
 
 **Done means:** unit tests with a fake relay, a worker stopped mid-scan and mid-send, the quota checked [measure], and `byWorker` holding for every relay call.
+
+**Where it stands** (2026-11-21, `web-wallet/messaging-worker`):
+- **Built:** `background/messaging.ts`, the service with its one queue, and `background/relay.ts`, the relay's client (protocol.md §17's pages and posts), wired in `sw.ts` with an alarm of their own, `seedelf.messaging`. The architecture's [Seedelf Messaging](../architecture.md#seedelf-messaging) says how it works; protocol.md §18 fixes what a message's plaintext holds.
+- **The owner's calls** (2026-11-21), each as recommended: call 9, a switch per network, off by default, read for each network whose switch is on whichever the wallet shows; call 10, a 5 MB budget, oldest first; calls 3, 4 and 5 as 54c built them, so preprod's pool is on the same relay, and a preprod-only build's `connect-src` lists it.
+- **My calls,** flagged for overturn:
+  - **The plaintext's kind byte** [choice, protocol.md §18]: `0x01` then UTF-8 text, so a later kind (a payment request) needs no format break.
+  - **Records:** the inbox, `messaging.<network>`, and one record a conversation, `conversation.<network>.<cid>`, a family Remove wallet finds by its prefix: `Area` takes `keys(prefix)`, Chrome's `getKeys` where there is one.
+  - **The order of writes** replaces a transaction: a conversation's record before the inbox that lists it, and after the inbox that stops listing it. A network's first sync of each unlock deletes a record nothing lists, and brings the inbox's view of each conversation back to its record.
+  - **Handles:** every register the wallet's Seedelfs are seen holding, from the contract view the wallet keeps, at each sync with no request; the contract read fresh, once a sync, only when a stranger's first message is refused for its handle, and a read that fails holds the cursor.
+  - **A conversation's states the screens get:** `unanswered` (written first, no reply past the 48 hours, so `messaging-restart` starts it again to the same Seedelf), `unreachable` (messages too far ahead, so `messaging-continue` continues it with its identities), conversations this browser no longer has (`lost`), and the relay's gap (`gapAt`).
+  - **The switch changes through `messaging-switch` alone,** which starts and stops the alarm; `preferences-set` ignores it.
+  - **The privacy policy's entry goes with 54f,** whose switch is the first thing that can turn Messages on: nothing in 54e reaches the relay without it.
+- **Tests:** `tests/messaging.test.ts`, two wallets through an in-memory relay (`tests/fake-relay.ts`, written from §17 with noble's SHA-256), the records alone between their calls, and `tests/relay.test.ts`, the client's pages and answers.
+  - **Writing the tests** found a conversation that had had replies marked unanswered after 48 hours, and a pending message a lock between two writes left uncounted (now repaired at each unlock's first sync), both fixed.
+  - **A fresh-context review** (one agent, the code and protocol.md, not this plan) found no message key used twice and no deadlock, and nine things, all fixed with a test each: the budget stopped for good once an older conversation was empty, and counted UTF-16, not UTF-8; a stranger's first message to a Seedelf the kept view was too old to have was refused for good, as was one met after a failed read; the relay was still asked after the switch went off, mid-catch-up or mid-post, and once after a lock; a trap under a sync nothing waited for didn't lock the wallet; one record that wouldn't open blocked a network's messages, and couldn't be deleted; two switches at once could undo each other; the cursor's write wasn't pinned to the phrase. And from its smaller notes: a page whose body didn't arrive escaped as the wrong error, a relay that said more followed without moving would loop, and a conversation deleted mid-post was still posted.
+  - **A mutation pass** (a scratchpad script, not in the PR) weakened each of 51 rules in turn, and a test failed for 49. The two left are second guards behind the check right before every request (the switch on, the wallet unlocked), which holds alone: removing either still sends the relay nothing, and only costs local work, so they stay. Its runs turned eight survivors into tests: the contract read when no view is kept, the alarm stopped at a lock, a post's switch turned off mid-solve, a trap outside the wallet's queue, a conversation deleted mid-post, the cursor's phrase, and two from the fixes above.
+- **Not done here:** `byWorker` for every relay call, which needs the screens (54f's e2e); the quota and the scan in the extension's own worker [measure].
 
 ### 54f ⬜ The screens
 
@@ -282,14 +300,14 @@ Each has a recommendation, which the owner can overturn.
 
 1. ✅ **Where the relay runs: new routes in seedelf-data-api** (the owner, 2026-11-21), a module of its own on the same droplet, behind the same Caddy, deployed by the same workflow, with no new origin for the wallet to trust. With buckets and a traffic ceiling of its own, inside the API's (54c). The server grows as the wallet does.
 2. ✅ **The relay's storage: in memory, saved to `StateDirectory` every minute and on shutdown** (the owner, 2026-11-21), so a deploy or restart keeps the pool. 36 hours at 10,000 envelopes a day is about 7.5 MB.
-3. ❓ **Whether the relay checks points.** Built as recommended (54c), the owner's to overturn.
+3. ✅ **Whether the relay checks points: yes** (the owner, 2026-11-21), as 54c built it.
    - **Recommended: yes,** with a copy of `decode_point` held to the crate's vectors, so garbage never reaches readers.
    - The alternative is the version, the length and the proof of work alone: cheaper, and readers refuse garbage anyway.
-4. ❓ **Preprod.** Built as recommended (54c), the owner's to overturn.
+4. ✅ **Preprod: a pool on the same relay** (the owner, 2026-11-21), as 54c built it.
    - **Recommended: a preprod pool on the same relay,** told apart by the path, with lower caps, so 54g can run live between two preprod wallets.
    - It's the data layer's first preprod route, but it reads no chain, so it touches nothing of preprod's.
    - The alternative is mainnet only, with preprod tested against the e2e fake and a local relay.
-5. ❓ **The largest message.** Built as recommended (54c), the owner's to overturn.
+5. ✅ **The largest message: 32 KiB envelopes** (the owner, 2026-11-21), as 54c built it.
    - **Recommended: 32 KiB envelopes,** under Caddy's 64 KiB.
    - The alternative is raising Caddy's limit for this route alone.
 6. ✅ **Proof of work, priced by traffic** (the owner, 2026-11-20: "or even scale with traffic via ip").
@@ -302,10 +320,10 @@ Each has a recommendation, which the owner can overturn.
    - The alternative is a dApp tile.
 8. ❓ **Strangers' first messages on screen.** protocol.md §3.1 bounds what's kept; this is how it's shown.
    - **Recommended: a Requests list,** apart from conversations, until the user replies or deletes. Nothing tells the sender either way.
-9. ❓ **Messages on or off by default.**
+9. ✅ **Messages off by default, a switch for each network** (the owner, 2026-11-21): the worker reads each network whose switch is on, whichever the wallet shows (54e).
    - **Recommended: off,** with one switch on the Messages screen. Syncing tells the relay when the wallet is online, which is the private-by-default rule's case for off.
    - Messages works whether or not Koios-only is on, since there's no Koios version of it.
-10. ❓ **How long history is kept.**
+10. ✅ **History kept within about 5 MB** (the owner, 2026-11-21), the oldest going first, and the thread says so (54e).
     - **Recommended: until the user deletes it, within a budget of about 5 MB of the extension's storage.** The oldest messages go first past it, and the thread says so.
     - The alternative is a fixed age, such as 30 days.
 11. ❓ **Notifications.**

@@ -33,6 +33,8 @@ describe("preferences", () => {
       lovejoinWidth: 3,
       // Mainnet reads the wallet's own data layer first, where the build has one (chunk 26b).
       koiosOnly: false,
+      // Seedelf Messaging off on both networks until the user turns one on (chunk 54's call 9).
+      messaging: { preprod: false, mainnet: false },
     });
 
     expect(await prefs.set({ hideBalances: true, lockAfterMinutes: 60, currency: "eur" })).toEqual({
@@ -49,8 +51,15 @@ describe("preferences", () => {
       lovejoinDelay: "1-6",
       lovejoinWidth: 3,
       koiosOnly: false,
+      messaging: { preprod: false, mainnet: false },
     });
     expect(await prefs.lockAfterMs()).toBe(60 * 60_000);
+
+    // Messages' switches: one network's at a time, the other kept, and only ever a boolean.
+    await prefs.set({ messaging: { mainnet: true } as never });
+    expect((await prefs.get()).messaging).toEqual({ preprod: false, mainnet: true });
+    await prefs.set({ messaging: { preprod: "yes", mainnet: false } as never });
+    expect((await prefs.get()).messaging).toEqual({ preprod: false, mainnet: false });
 
     // Nothing it can't be: 7 minutes, a currency the wallet doesn't offer, a string for a switch.
     await prefs.set({ lockAfterMinutes: 7 as never, currency: "xyz" as never, hideBalances: "yes" as never });
