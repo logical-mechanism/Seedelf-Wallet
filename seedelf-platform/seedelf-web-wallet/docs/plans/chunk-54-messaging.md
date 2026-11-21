@@ -1,6 +1,6 @@
 # Chunk 54 · Seedelf Messaging
 
-**Status: 🚧 54a built,** on `web-wallet/messaging-session`. Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
+**Status: ✅ 54a merged** (#403). **🚧 54b built,** on `web-wallet/messaging-model`. Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
 
 **The specification is [protocol.md](../../../seedelf-messaging/docs/protocol.md),** with the envelope in [construction.md](../../../seedelf-messaging/docs/construction.md) and the guarantees in [security.md](../../../seedelf-messaging/docs/security.md). It has had two reviews; the second's reasoning, and its adversarial tests, are in [protocol-review.md](../../../seedelf-messaging/docs/protocol-review.md). This plan doesn't repeat them: it says what to build, where, in what order, and what's still the owner's to decide. A step that changes the protocol changes protocol.md in the same PR.
 
@@ -66,7 +66,7 @@
 
 ## Steps
 
-### 54a 🚧 The session layer, in seedelf-messaging
+### 54a ✅ The session layer, in seedelf-messaging
 
 Everything in protocol.md §3 to §6, as plain Rust with no network and no storage:
 
@@ -95,13 +95,13 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 
 **Done means:** every rule in protocol.md §3 to §6 has a test that fails without it, and the vectors are reproduced.
 
-**Where it stands** (2026-11-20, `web-wallet/messaging-session`, not yet a PR):
+**Where it stands** (merged in #403, 2026-11-20):
 - **Built:** everything above but proof of work, which this step's brief left out. Call 6 has since been settled (priced by traffic), so solving and checking it, with vectors, can be built before 54c needs them. protocol.md §16 fixes every byte and rule the build decided, each choice marked [choice] for the owner to overturn.
 - **The vectors** (tests/vectors/messaging_session_v1.json, three conversations) were reproduced by a script written from protocol.md §16 alone, without reading the Rust: noble-curves 2.0.1 and WebCrypto, every value. Its notes on where the spec was silent are folded into §16.
 - **The rules hold the tests:** a mutation pass removed or weakened each of 39 rules in turn, and a test failed every time. Its first run found four survivors, which became a fix (a request's joining message now reads as eager processing would) and two continuation tests.
 - **For 54e and 54f:** a first message is refused once its t is 48 hours old, so a conversation nobody read in its first 48 hours can never begin, however many first messages follow (protocol.md §16.4). The wallet needs "start again", or must start again by itself.
 
-### 54b ⬜ The model
+### 54b 🚧 The model
 
 - §3 to §6 in ProVerif or Tamarin [choice: ProVerif]. The queries:
   - secrecy of message keys;
@@ -114,6 +114,18 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 - Runs alongside 54c to 54e. It gates mainnet, not the code.
 
 **Done means:** the model's queries hold, and a fresh-context reviewer has read the model against protocol.md.
+
+**Where it stands** (2026-11-21, `web-wallet/messaging-model`):
+- **Built in Tamarin, not ProVerif:** [seedelf-messaging/model/](../../../seedelf-messaging/model/), run by its `check.sh` in a pinned container. ProVerif's Diffie–Hellman equation needs a fixed base, and registers need any point as a base: its completion didn't finish on a one-line model.
+- **Four configurations of one file,** since Tamarin's search grows with every rule that publishes something and every compromise: the sessions (two full round trips, long-term keys and the initiator's state stolen), the responder's state, the continuations (one link), and the sessions without §5's cid rule. The model README lists every abstraction, what each configuration's attacker lacks, and why nothing is lost.
+- **It's heavy:** a lemma takes up to an hour and 12 GB, so the proofs run overnight on an idle machine (the owner, 2026-11-21).
+- **A fresh-context reviewer read it against protocol.md.** Its findings, all taken: the first version let the attacker decrypt only with the associated data, so a stolen state opened nothing; the argument for the bases a reader accepts was wrong (w₀ in the associated data is what ties a first message to its base); the agreement lemmas excused a key stolen mid-conversation; the responder's state wasn't modelled.
+- **What it changed in the spec** (protocol.md §0, §1.1, §3, §7, §16.1): x_B stolen before the first reply takes the conversation over from the writer's side; the reader's own key lets anyone pose to it, "Continues" included; w₀ must stay in the associated data.
+- **For the owner (call 14):** a request the bounds push out leaves no tombstone, so a re-posted first message can read again as a new request.
+- **Proved so far** (2026-11-21, a partial run stopped to free the machine): 11 of the 32 lemmas check.sh runs. They are the four continuation lemmas, the cid check, `keys1` to `keys4`, `responder_keys2_secret` and `initiator_agreement_r1`.
+- **Still to run, overnight:** the other 21. They include the main claims: m3, m4, r1 and r2's forward secrecy, recovery after a stolen state, the static DH's hold on R_A, and agreement on the later messages. `responder_keys4_secret` ran past 12 GB, so it runs alone with more room (`PAR=1 CAP=24g LIMIT=7200`).
+- **Four continuation lemmas didn't finish in an hour** (the static DH's hold and agreement with continuations, the "Continues" label, its forging by the reader's key). They're kept under `-D=CONTINUATIONS_UNFINISHED`, out of check.sh. The README says what stands in for them and what's only argued.
+- **Done means is met** once check.sh reads "ok" with the rest proved; then 54b goes ✅.
 
 ### 54c ⬜ The relay
 
@@ -262,6 +274,9 @@ Each has a recommendation, which the owner can overturn.
 13. ❓ **Proving the base comes from the named handle** (protocol.md §13).
     - **Recommended: yes.** A first message to the sum of two Seedelfs' registers opens only for a wallet holding both, so a reply to it links them, unseen. A short proof that p₀ re-randomizes the handle in `to`, bound to F, closes that for messages and makes `to` verified; `to` becomes required.
     - It changes F too. Both would land as one follow-up to 54a before 54d: F's new fields, the vectors re-recorded and checked again independently, and 54b told.
+14. ❓ **Tombstones for evicted requests** (found by 54b's review). §16.4 leaves no tombstone when the bounds push a request out [choice]. So after a flood of 50 requests, a first message re-posted after the relay's 36 hours, and within t + 48 hours, reads again as a new request. No conversation changes; the reader sees a request twice.
+    - **Recommended: tombstone evicted requests too,** until t + 48 hours as the others. A flood then costs the reader a tombstone per evicted request (24 bytes each), as it costs the flooder proof of work for each.
+    - The alternative is to leave it, documented.
 
 ## Unknowns
 

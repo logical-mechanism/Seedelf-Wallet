@@ -1,0 +1,650 @@
+/*
+ * Seedelf Messaging's one-to-one sessions: protocol.md §3 to §6, as built
+ * (§16), in Tamarin. Chunk 54's 54b. Run it with ./check.sh; the README
+ * says what is modelled, what isn't, and why.
+ *
+ * Four configurations, by flag, sharing the handles and first contact:
+ *   (none)              the ratchet over two round trips, long-term keys and
+ *                       the initiator's state stolen, and the sessions' lemmas;
+ *   -D=RESPONDER_STATE  the same with the responder's state stolen instead;
+ *   -D=CONTINUATIONS    §6's continuations instead of the ratchet, and theirs;
+ *   -D=NO_CID_RULE      the sessions without §5's cid rule, to find a replay.
+ * Tamarin's search grows with every rule that publishes a power of G, so
+ * each lemma sees only the rules it needs; the README says what each
+ * configuration's attacker lacks, and why that loses no attack.
+ *
+ * Notation follows the spec: p0 is the conversation's base, Ai = [x_A]p0 is
+ * R_A's public value, w0 = [x_B]p0 is R_B's, Ei the session ephemeral, Si,
+ * S2, S3 the initiator's ratchet keys and T1, T2 the responder's. A point
+ * [k]P is P^k. Principals are $Ini (wrote first) and $Rsp (was written to),
+ * roles not people: every principal plays both.
+ */
+
+theory SeedelfMessagingSessions
+begin
+
+builtins: diffie-hellman
+
+/* AES-256-GCM: anyone with the key reads (adec takes no associated data);
+   a reader accepts only a ciphertext under its own key and associated data,
+   by matching aenc(m, mk, ad). The HKDF and HMAC steps of §16.2 are one-way
+   functions. ENCRYPT's salt is left out (README). */
+functions: aenc/3, adec/2,
+           kdf_sk/3, kdf_root/2, kdf_chain/2, ck_next/1, ck_mk/1
+equations: adec(aenc(m, k, ad), k) = m
+
+restriction neq: "All x y #i. Neq(x, y)@i ==> not (x = y)"
+restriction one_handle: "All P #i #j. OneHandle(P)@i & OneHandle(P)@j ==> #i = #j"
+
+/* What §5's rules aim at: a reader takes a cid's first message once. The
+   cid table, the tombstones and the window keep it in the code, but for one
+   gap (README); -D=NO_CID_RULE drops it, to show it's needed. */
+#ifdef not NO_CID_RULE
+restriction unique_cid: "All R c #i #j. RNewCid(R, c)@i & RNewCid(R, c)@j ==> #i = #j"
+#endif
+
+/* ---- Handles and keys ---- */
+
+/* A Seedelf's datum register, as a root register (G, [x]G): README. */
+rule Handle:
+  [ Fr(~ltk) ] --[ Handle($P, ~ltk), OneHandle($P) ]-> [ !Ltk($P, ~ltk), !Pk($P, 'g'^~ltk), Out('g'^~ltk) ]
+
+rule Reveal_ltk:
+  [ !Ltk(P, x) ] --[ RevLtk(P) ]-> [ Out(x) ]
+
+/* Observers, never published: KeyOn(P, p0, A) marks A = [x_P]p0, so a lemma
+   can say "R_A is P's key" without a power in its formula. */
+rule Key_on_honest_base:
+  [ !Ltk(P, ~x), !Base(~rb) ] --[ KeyOn(P, 'g'^~rb, 'g'^(~rb*~x)) ]-> [ ]
+
+rule Key_on_attacker_base:
+  [ !Ltk(P, ~x), In($k) ] --[ KeyOn(P, 'g'^$k, 'g'^($k*~x)) ]-> [ ]
+
+/* ---- The initiator (§3) ---- */
+
+/* Both identities, F, SK with the static DH, RatchetInitAlice, and the
+   first first-contact message (N = 0). */
+rule I_Start:
+  let p0  = 'g'^~rb
+      w0  = pkr^~rb
+      Ai  = p0^~xi
+      Ei  = p0^~ei
+      Si  = p0^~si
+      F   = <~cid, $t, 'none', p0, Ai, Ei>
+      SK  = kdf_sk(w0^~ei, w0^~xi, F)
+      RK1 = kdf_root(SK, w0^~si)
+      CK  = kdf_chain(SK, w0^~si)
+      h   = <Si, '0', '0'>
+      ad  = <~cid, p0, Ai, p0, w0, h>
+  in
+  [ !Ltk($Ini, ~xi), !Pk($Rsp, pkr), Fr(~rb), Fr(~cid), Fr(~ei), Fr(~si), Fr(~m1) ]
+  --[ Neq($Ini, $Rsp), IStart($Ini, $Rsp, ~cid, p0, Ai, w0, F), HasConv($Ini, ~cid),
+      ISent($Ini, $Rsp, ~cid, 'm1', ~m1), IKeys($Ini, $Rsp, ~cid, 'k1', RK1, CK) ]->
+  [ !Base(~rb), !Conv($Ini, ~cid, ~rb, Ai, w0), !Side($Ini, ~cid, ~rb, Ai, w0),
+    I1($Ini, $Rsp, ~cid, ~rb, Ai, w0, ~si, RK1),
+    Out(<'0x01', F, h, aenc(~m1, ck_mk(CK), ad)>) ]
+
+/* ---- The responder (§3, Bob's side) ---- */
+
+/* p0 is an honest initiator's base, or G^k for a k the attacker chose
+   (README, assumption 4). */
+rule R_Derive_m1a_honest_base:
+  let p0 = 'g'^~rb
+      F  = <cid, t, rep, p0, Ai, Ei>
+  in
+  [ !Ltk($Rsp, ~xr), !Base(~rb), In(<'0x01', F, <Si, '0', '0'>>) ]
+  --[ RStatic($Rsp, p0, Ai, Ai^~xr) ]->
+  [ R0a($Rsp, ~xr, F, ~rb, Si, p0^~xr, Ai^~xr) ]
+
+rule R_Derive_m1a_attacker_base:
+  let p0 = 'g'^$k
+      F  = <cid, t, rep, p0, Ai, Ei>
+  in
+  [ !Ltk($Rsp, ~xr), In($k), In(<'0x01', F, <Si, '0', '0'>>) ]
+  --[ RStatic($Rsp, p0, Ai, Ai^~xr) ]->
+  [ R0a($Rsp, ~xr, F, $k, Si, p0^~xr, Ai^~xr) ]
+
+/* SK from [x_B]E_A and [x_B]A, RatchetInitBob with (x_B, w0), and the
+   step from Si: the receiving chain. */
+rule R_Derive_m1b:
+  let p0  = 'g'^e0
+      F   = <cid, t, rep, p0, Ai, Ei>
+      SK  = kdf_sk(Ei^~xr, sdh, F)
+      RK1 = kdf_root(SK, Si^~xr)
+      CKr = kdf_chain(SK, Si^~xr)
+      h   = <Si, '0', '0'>
+      ad  = <cid, p0, Ai, p0, w0, h>
+  in
+  [ R0a(Rsp, ~xr, F, e0, Si, w0, sdh) ]
+  -->
+  [ R0b(Rsp, F, e0, Si, w0, RK1, ad, ck_mk(CKr)) ]
+
+/* It authenticates: a request, read as replying would (§3.1, §16.4). Then
+   the ratchet's sending half, with a fresh T1. */
+rule R_Read_m1:
+  let p0  = 'g'^e0
+      F   = <cid, t, rep, p0, Ai, Ei>
+      h   = <Si, '0', '0'>
+      RK2 = kdf_root(RK1, Si^~t1)
+      CKs = kdf_chain(RK1, Si^~t1)
+  in
+  [ R0b(Rsp, F, e0, Si, w0, RK1, ad, mk), In(<'0x01', F, h, aenc(m, mk, ad)>), Fr(~t1) ]
+  --[ RNewCid(Rsp, cid), RAccept(Rsp, cid, p0, Ai, w0, F),
+      RRecv(Rsp, cid, p0, Ai, w0, 'm1', m), RKeys(Rsp, cid, 'k2', RK2, CKs) ]->
+  [ !Accepted(Rsp, cid, e0, Ai, w0, rep),
+    R1(Rsp, cid, e0, Ai, w0, ~t1, Si, RK2, CKs) ]
+
+#ifdef CONTINUATIONS | CONTINUATIONS_UNFINISHED
+
+/* ---- Continuing (§6, §16.3) ---- */
+
+/* A request becomes a conversation when the reader replies (§3.1); only a
+   conversation can be continued or matched. The reply itself isn't needed
+   here. One link: a conversation that is itself a continuation isn't
+   continued again (README). */
+rule R_Reply_c:
+  [ R1(Rsp, cid, e0, Ai, w0, ~t1, Si, RK, CKs), !Accepted(Rsp, cid, e0, Ai, w0, 'none') ]
+  --[ HasConv(Rsp, cid) ]->
+  [ !Conv(Rsp, cid, e0, Ai, w0), !Side(Rsp, cid, e0, w0, Ai) ]
+
+/* Either side continues with the old identities: the old base, its own old
+   public value as the new A, the other side's as the new w0, and `replaces`
+   naming the old cid. !Side holds (base, mine, theirs). Keys first, in a
+   rule that publishes nothing, then the message, as the reads are split. */
+rule C_Derive:
+  let p0  = 'g'^e0
+      Ei  = p0^~ei
+      F   = <~cid, $t, ocid, p0, mine, Ei>
+      SK  = kdf_sk(theirs^~ei, theirs^~x, F)
+      CK  = kdf_chain(SK, theirs^~si)
+  in
+  [ !Ltk(W, ~x), !Side(W, ocid, e0, mine, theirs), Fr(~cid), Fr(~ei), Fr(~si) ]
+  -->
+  [ CPrep(W, ocid, ~cid, e0, mine, theirs, F, ~si, CK) ]
+
+rule C_Send_honest_base:
+  let p0  = 'g'^~rb
+      Si  = p0^~si
+      h   = <Si, '0', '0'>
+      ad  = <cid, p0, mine, p0, theirs, h>
+  in
+  [ CPrep(W, ocid, cid, ~rb, mine, theirs, F, ~si, CK), Fr(~mc) ]
+  --[ StartsContinuation(W, ocid, cid),
+      IStartC(W, ocid, cid, p0, mine, theirs, F), ISentC(W, cid, 'm1', ~mc) ]->
+  [ Out(<'0x01', F, h, aenc(~mc, ck_mk(CK), ad)>) ]
+
+rule C_Send_attacker_base:
+  let p0  = 'g'^$k
+      Si  = p0^~si
+      h   = <Si, '0', '0'>
+      ad  = <cid, p0, mine, p0, theirs, h>
+  in
+  [ CPrep(W, ocid, cid, $k, mine, theirs, F, ~si, CK), Fr(~mc) ]
+  --[ StartsContinuation(W, ocid, cid),
+      IStartC(W, ocid, cid, p0, mine, theirs, F), ISentC(W, cid, 'm1', ~mc) ]->
+  [ Out(<'0x01', F, h, aenc(~mc, ck_mk(CK), ad)>) ]
+
+/* The reader shows "Continues" only for §6's match, judged when the request
+   arrives against its conversations: the same p0, and the new A and the
+   reader's own [x]p0 the old A and w0, in either order. */
+rule R_Label_continues_as_responder:
+  [ !Accepted(R, ncid, e0, Anew, wnew, ocid), !Conv(R, ocid, e0, Anew, wnew) ]
+  --[ ShowsContinues(R, ocid, ncid, 'g'^e0, Anew), Judged(R, ocid, ncid) ]->
+  [ ]
+
+rule R_Label_continues_as_initiator:
+  [ !Accepted(R, ncid, e0, Anew, wnew, ocid), !Conv(R, ocid, e0, wnew, Anew) ]
+  --[ ShowsContinues(R, ocid, ncid, 'g'^e0, Anew), Judged(R, ocid, ncid) ]->
+  [ ]
+
+restriction judged_on_arrival:
+  "All R o n #l. Judged(R, o, n)@l
+     ==> Ex p A w F #c #a. HasConv(R, o)@c & RAccept(R, n, p, A, w, F)@a & #c < #a"
+
+#endif
+
+/* ---- Lemmas: continuations (-D=CONTINUATIONS) ---- */
+
+#ifdef CONTINUATIONS
+
+/* §3 and §6: a reader accepts a session whose A is P's key only if P
+   started it, fresh or as a continuation, with the same cid, R_A, R_B, F,
+   and reads only what P sent. First the static DH itself: [x_R]A for A of
+   P's key is secret unless one of the two keys is. */
+
+lemma static_dh_secret_with_continuations [reuse]:
+  "All R p0 A s P #i #k #j.
+     RStatic(R, p0, A, s)@i & KeyOn(P, p0, A)@k & K(s)@j
+     ==> (Ex #r. RevLtk(P)@r) | (Ex #r. RevLtk(R)@r)"
+
+/* A continuation's message is secret unless the old other side's key is. */
+
+lemma continuation_message_secret:
+  "All W o cid p0 mine theirs F m Q #s #t #k #j.
+     IStartC(W, o, cid, p0, mine, theirs, F)@s & ISentC(W, cid, 'm1', m)@t
+   & KeyOn(Q, p0, theirs)@k & K(m)@j
+     ==> (Ex #r. RevLtk(Q)@r)"
+
+/* §6, §7: "Continues" means the old other side's key wrote it. */
+
+/* Reachable both ways, and the reader's own key undoes it (§1.1). */
+
+lemma continues_shown_to_the_old_responder: exists-trace
+  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 Fc mc A w #s #t #a #h #c #u #b #i.
+     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, ocid, 'm1', m1)@t
+   & RRecv(Rsp, ocid, p0, Ai, w0, 'm1', m1)@a & HasConv(Rsp, ocid)@h
+   & IStartC(Ini, ocid, ncid, p0, Ai, w0, Fc)@c & ISentC(Ini, ncid, 'm1', mc)@u
+   & RRecv(Rsp, ncid, p0, A, w, 'm1', mc)@b & ShowsContinues(Rsp, ocid, ncid, p0, A)@i
+   & not (Ex P #k. RevLtk(P)@k)"
+
+lemma continues_shown_to_the_old_initiator: exists-trace
+  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 Fc mc A w #s #t #a #h #c #u #b #i.
+     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, ocid, 'm1', m1)@t
+   & RRecv(Rsp, ocid, p0, Ai, w0, 'm1', m1)@a & HasConv(Rsp, ocid)@h
+   & IStartC(Rsp, ocid, ncid, p0, w0, Ai, Fc)@c & ISentC(Rsp, ncid, 'm1', mc)@u
+   & RRecv(Ini, ncid, p0, A, w, 'm1', mc)@b & ShowsContinues(Ini, ocid, ncid, p0, A)@i
+   & not (Ex P #k. RevLtk(P)@k)"
+
+#endif
+
+/* ---- Lemmas: continuations, unfinished (-D=CONTINUATIONS_UNFINISHED) ---- */
+
+/* These ran past an hour at 12 GB each, and check.sh doesn't run them. The
+   README says what stands in for them: static_dh_secret_with_continuations
+   above, and the sessions' static_dh_holds_r_a and KCI trace, which cover
+   any honest base, an old conversation's included. */
+
+#ifdef CONTINUATIONS_UNFINISHED
+
+lemma static_dh_secret_unfinished [reuse]:
+  "All R p0 A s P #i #k #j.
+     RStatic(R, p0, A, s)@i & KeyOn(P, p0, A)@k & K(s)@j
+     ==> (Ex #r. RevLtk(P)@r) | (Ex #r. RevLtk(R)@r)"
+
+lemma static_dh_holds_r_a_with_continuations:
+  "All Rsp cid p0 Ai w0 F P #i #k.
+     RAccept(Rsp, cid, p0, Ai, w0, F)@i & KeyOn(P, p0, Ai)@k
+     ==> (Ex #s. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & #s < #i)
+       | (Ex o #s. IStartC(P, o, cid, p0, Ai, w0, F)@s & #s < #i)
+       | (Ex #r. RevLtk(P)@r & #r < #i) | (Ex #r. RevLtk(Rsp)@r & #r < #i)"
+
+lemma responder_agreement_m1_with_continuations:
+  "All Rsp cid p0 Ai w0 m P #i #k.
+     RRecv(Rsp, cid, p0, Ai, w0, 'm1', m)@i & KeyOn(P, p0, Ai)@k
+     ==> (Ex F #s #t. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & ISent(P, Rsp, cid, 'm1', m)@t & #t < #i)
+       | (Ex o F #s #t. IStartC(P, o, cid, p0, Ai, w0, F)@s & ISentC(P, cid, 'm1', m)@t & #t < #i)
+       | (Ex #r. RevLtk(P)@r & #r < #i) | (Ex #r. RevLtk(Rsp)@r & #r < #i)"
+
+lemma continues_only_from_the_old_other_side:
+  "All R ocid ncid p0 A P #i #k.
+     ShowsContinues(R, ocid, ncid, p0, A)@i & KeyOn(P, p0, A)@k
+     ==> (Ex #c. StartsContinuation(P, ocid, ncid)@c & #c < #i)
+       | (Ex #r. RevLtk(P)@r & #r < #i) | (Ex #r. RevLtk(R)@r & #r < #i)"
+
+lemma reader_key_forges_continues: exists-trace
+  "Ex Ini Rsp ocid ncid p0 Ai w0 F #s #h #i #r.
+     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & HasConv(Rsp, ocid)@h
+   & ShowsContinues(Rsp, ocid, ncid, p0, Ai)@i & RevLtk(Rsp)@r
+   & not (Ex #c. StartsContinuation(Ini, ocid, ncid)@c) & not (Ex #q. RevLtk(Ini)@q)"
+
+#endif
+
+#ifdef not CONTINUATIONS & not CONTINUATIONS_UNFINISHED
+
+/* ---- The ratchet (§4), the initiator ---- */
+
+/* The first reply: a new receiving chain from T1, then the initiator's own
+   step. Each read is two rules, derive then authenticate (README). */
+rule I_Derive_r1:
+  let p0  = 'g'^~rb
+      h   = <T1, '0', '0'>
+      ad  = <cid, p0, Ai, p0, w0, h>
+      RK2 = kdf_root(RK1, T1^~si)
+      CKr = kdf_chain(RK1, T1^~si)
+  in
+  [ I1(Ini, Rsp, cid, ~rb, Ai, w0, ~si, RK1), In(<'0x02', cid, h>) ]
+  --[ Neq(T1, w0) ]->
+  [ I1r(Ini, Rsp, cid, ~rb, Ai, w0, T1, RK2, CKr, ad) ]
+
+rule I_Read_r1:
+  let p0  = 'g'^~rb
+      RK3 = kdf_root(RK2, T1^~s2)
+      CKs = kdf_chain(RK2, T1^~s2)
+  in
+  [ I1r(Ini, Rsp, cid, ~rb, Ai, w0, T1, RK2, CKr, ad), In(<'0x02', cid, h, aenc(m, ck_mk(CKr), ad)>), Fr(~s2) ]
+  --[ IRecv(Ini, Rsp, cid, p0, Ai, w0, 'r1', m), IGotReply(Ini, Rsp, cid),
+      IKeys(Ini, Rsp, cid, 'k2', RK2, CKr), IKeys(Ini, Rsp, cid, 'k3', RK3, CKs) ]->
+  [ I2(Ini, Rsp, cid, ~rb, Ai, w0, ~s2, T1, RK3, CKs),
+    SnapI(Ini, cid, ~s2, RK3, CKs, ck_next(CKr), w0) ]
+
+#endif
+
+/* §1.1's "current state": the initiator's record as it was after the first
+   reply, taken once, then or later. */
+#ifdef not CONTINUATIONS & not CONTINUATIONS_UNFINISHED & not RESPONDER_STATE
+rule Reveal_state_initiator:
+  [ SnapI(Ini, cid, ~s2, RK, CKs, CKr, w0) ]
+  --[ RevState(Ini, cid) ]->
+  [ Out(<~s2, RK, CKs, CKr, w0>) ]
+#endif
+
+#ifdef not CONTINUATIONS & not CONTINUATIONS_UNFINISHED
+
+rule I_Send_m3:
+  let p0 = 'g'^~rb
+      S2 = p0^~s2
+      h  = <S2, '1', '0'>
+      ad = <cid, p0, Ai, p0, w0, h>
+  in
+  [ I2(Ini, Rsp, cid, ~rb, Ai, w0, ~s2, T1, RK, CKs), Fr(~m3) ]
+  --[ ISent(Ini, Rsp, cid, 'm3', ~m3), ISentKey(Ini, cid, 'm3', S2) ]->
+  [ I3(Ini, Rsp, cid, ~rb, Ai, w0, ~s2, T1, RK),
+    Out(<'0x02', cid, h, aenc(~m3, ck_mk(CKs), ad)>) ]
+
+rule I_Derive_r2:
+  let p0  = 'g'^~rb
+      h   = <T2, '1', '0'>
+      ad  = <cid, p0, Ai, p0, w0, h>
+      RK4 = kdf_root(RK3, T2^~s2)
+      CKr = kdf_chain(RK3, T2^~s2)
+  in
+  [ I3(Ini, Rsp, cid, ~rb, Ai, w0, ~s2, T1, RK3), In(<'0x02', cid, h>) ]
+  --[ Neq(T2, T1) ]->
+  [ I3r(Ini, Rsp, cid, ~rb, Ai, w0, T2, RK4, CKr, ad) ]
+
+rule I_Read_r2:
+  let p0  = 'g'^~rb
+      RK5 = kdf_root(RK4, T2^~s3)
+      CKs = kdf_chain(RK4, T2^~s3)
+  in
+  [ I3r(Ini, Rsp, cid, ~rb, Ai, w0, T2, RK4, CKr, ad), In(<'0x02', cid, h, aenc(m, ck_mk(CKr), ad)>), Fr(~s3) ]
+  --[ IRecv(Ini, Rsp, cid, p0, Ai, w0, 'r2', m), IRecvKey(Ini, cid, 'r2', T2),
+      IKeys(Ini, Rsp, cid, 'k4', RK4, CKr), IHeal(Ini, Rsp, cid, T2, RK5, CKs) ]->
+  [ I4(Ini, Rsp, cid, ~rb, Ai, w0, ~s3, CKs) ]
+
+rule I_Send_m4:
+  let p0 = 'g'^~rb
+      S3 = p0^~s3
+      h  = <S3, '1', '0'>
+      ad = <cid, p0, Ai, p0, w0, h>
+  in
+  [ I4(Ini, Rsp, cid, ~rb, Ai, w0, ~s3, CKs), Fr(~m4) ]
+  --[ ISent(Ini, Rsp, cid, 'm4', ~m4) ]->
+  [ Out(<'0x02', cid, h, aenc(~m4, ck_mk(CKs), ad)>) ]
+
+/* ---- The ratchet (§4), the responder ---- */
+
+rule R_Send_r1:
+  let p0 = 'g'^e0
+      T1 = p0^~t1
+      h  = <T1, '0', '0'>
+      ad = <cid, p0, Ai, p0, w0, h>
+  in
+  [ R1(Rsp, cid, e0, Ai, w0, ~t1, Si, RK, CKs), Fr(~r1) ]
+  --[ RSent(Rsp, cid, p0, Ai, w0, 'r1', ~r1) ]->
+  [ R2(Rsp, cid, e0, Ai, w0, ~t1, Si, RK),
+    SnapR(Rsp, cid, ~t1, RK, ck_next(CKs), w0),
+    Out(<'0x02', cid, h, aenc(~r1, ck_mk(CKs), ad)>) ]
+
+#endif
+
+/* The responder's record after its first reply, taken once, then or later. */
+#ifdef RESPONDER_STATE
+rule Reveal_state_responder:
+  [ SnapR(Rsp, cid, ~t1, RK, CKs, w0) ]
+  --[ RevStateR(Rsp, cid) ]->
+  [ Out(<~t1, RK, CKs, w0>) ]
+#endif
+
+#ifdef not CONTINUATIONS & not CONTINUATIONS_UNFINISHED
+
+rule R_Derive_m3:
+  let p0  = 'g'^e0
+      h   = <S2, '1', '0'>
+      ad  = <cid, p0, Ai, p0, w0, h>
+      RK3 = kdf_root(RK2, S2^~t1)
+      CKr = kdf_chain(RK2, S2^~t1)
+  in
+  [ R2(Rsp, cid, e0, Ai, w0, ~t1, Si, RK2), In(<'0x02', cid, h>) ]
+  --[ Neq(S2, Si) ]->
+  [ R2r(Rsp, cid, e0, Ai, w0, S2, RK3, CKr, ad) ]
+
+rule R_Read_m3:
+  let p0   = 'g'^e0
+      RK4  = kdf_root(RK3, S2^~t2)
+      CKs2 = kdf_chain(RK3, S2^~t2)
+  in
+  [ R2r(Rsp, cid, e0, Ai, w0, S2, RK3, CKr, ad), In(<'0x02', cid, h, aenc(m, ck_mk(CKr), ad)>), Fr(~t2) ]
+  --[ RRecv(Rsp, cid, p0, Ai, w0, 'm3', m), RRecvKey(Rsp, cid, 'm3', S2),
+      RHeal(Rsp, cid, S2, RK4, CKs2) ]->
+  [ R3(Rsp, cid, e0, Ai, w0, ~t2, S2, RK4, CKs2) ]
+
+rule R_Send_r2:
+  let p0 = 'g'^e0
+      T2 = p0^~t2
+      h  = <T2, '1', '0'>
+      ad = <cid, p0, Ai, p0, w0, h>
+  in
+  [ R3(Rsp, cid, e0, Ai, w0, ~t2, S2, RK, CKs), Fr(~r2) ]
+  --[ RSent(Rsp, cid, p0, Ai, w0, 'r2', ~r2), RSentKey(Rsp, cid, 'r2', T2) ]->
+  [ R4(Rsp, cid, e0, Ai, w0, ~t2, S2, RK),
+    Out(<'0x02', cid, h, aenc(~r2, ck_mk(CKs), ad)>) ]
+
+rule R_Derive_m4:
+  let p0  = 'g'^e0
+      h   = <S3, '1', '0'>
+      ad  = <cid, p0, Ai, p0, w0, h>
+      CKr = kdf_chain(RK4, S3^~t2)
+  in
+  [ R4(Rsp, cid, e0, Ai, w0, ~t2, S2, RK4), In(<'0x02', cid, h>) ]
+  --[ Neq(S3, S2) ]->
+  [ R4r(Rsp, cid, e0, Ai, w0, CKr, ad) ]
+
+rule R_Read_m4:
+  let p0 = 'g'^e0
+  in
+  [ R4r(Rsp, cid, e0, Ai, w0, CKr, ad), In(<'0x02', cid, h, aenc(m, ck_mk(CKr), ad)>) ]
+  --[ RRecv(Rsp, cid, p0, Ai, w0, 'm4', m) ]->
+  [ ]
+
+#endif
+
+/* ---- Lemmas: the replay check (-D=NO_CID_RULE) ---- */
+
+#ifdef NO_CID_RULE
+
+lemma first_message_replays_without_the_cid_rule: exists-trace
+  "Ex Rsp cid p0 Ai w0 m #i #j.
+     RRecv(Rsp, cid, p0, Ai, w0, 'm1', m)@i & RRecv(Rsp, cid, p0, Ai, w0, 'm1', m)@j & not (#i = #j)
+   & not (Ex P #n. RevLtk(P)@n)"
+
+#endif
+
+/* ---- Lemmas: sessions (no flag) ---- */
+
+/* Long-term keys and the initiator's state can be stolen. A lemma names
+   the initiator's state where the state opens something, and also where
+   it doesn't but naming it lets Tamarin finish (README); it then still
+   says everything about traces where no state is stolen. */
+
+#ifdef not CONTINUATIONS & not CONTINUATIONS_UNFINISHED & not NO_CID_RULE & not RESPONDER_STATE
+
+/* Each step's root key and chain key, one step at a time, each reused by
+   the next. */
+
+lemma keys1_secret [reuse]:
+  "All Ini Rsp cid rk ck k #i #j.
+     IKeys(Ini, Rsp, cid, 'k1', rk, ck)@i & K(k)@j & ((k = rk) | (k = ck))
+     ==> (Ex #r. RevLtk(Rsp)@r)"
+
+lemma keys2_secret [reuse]:
+  "All Ini Rsp cid rk ck k #i #j.
+     IKeys(Ini, Rsp, cid, 'k2', rk, ck)@i & K(k)@j & ((k = rk) | (k = ck))
+     ==> (Ex #r. RevLtk(Rsp)@r & #r < #i)"
+
+lemma keys3_secret [reuse]:
+  "All Ini Rsp cid rk ck k #i #j.
+     IKeys(Ini, Rsp, cid, 'k3', rk, ck)@i & K(k)@j & ((k = rk) | (k = ck))
+     ==> (Ex #r. RevLtk(Rsp)@r & #r < #i) | (Ex #r. RevState(Ini, cid)@r)"
+
+lemma keys4_secret [reuse]:
+  "All Ini Rsp cid rk ck k #i #j.
+     IKeys(Ini, Rsp, cid, 'k4', rk, ck)@i & K(k)@j & ((k = rk) | (k = ck))
+     ==> (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g) | (Ex #r. RevState(Ini, cid)@r)"
+
+lemma heal_keys_secret [reuse]:
+  "All Ini Rsp cid T2 rk ck k #i #b #j.
+     IHeal(Ini, Rsp, cid, T2, rk, ck)@i & RSentKey(Rsp, cid, 'r2', T2)@b
+   & K(k)@j & ((k = rk) | (k = ck))
+     ==> (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g)"
+
+lemma responder_keys2_secret [reuse]:
+  "All Ini Rsp cid p0 Ai w0 F rk ck k #i #s #j.
+     RKeys(Rsp, cid, 'k2', rk, ck)@i & RAccept(Rsp, cid, p0, Ai, w0, F)@i
+   & IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & K(k)@j & ((k = rk) | (k = ck))
+     ==> (Ex #r. RevLtk(Rsp)@r & #r < #i) | (Ex #r. RevState(Ini, cid)@r)"
+
+lemma responder_keys4_secret [reuse]:
+  "All Ini Rsp cid p0 Ai w0 F S2 rk ck k #i #a #s #j.
+     RHeal(Rsp, cid, S2, rk, ck)@i & RAccept(Rsp, cid, p0, Ai, w0, F)@a
+   & IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & K(k)@j & ((k = rk) | (k = ck))
+     ==> (Ex #r #a. RevLtk(Rsp)@r & RAccept(Rsp, cid, p0, Ai, w0, F)@a & #r < #a) | (Ex #r. RevState(Ini, cid)@r)"
+
+/* Agreement on cid, R_A, R_B and every message, both ways. A key stolen
+   once the session runs can't forge into it: only a theft before the
+   reader's first step excuses a later message, or a stolen state, which
+   §1.1 says lets the attacker step in. */
+
+lemma initiator_agreement_r1 [reuse]:
+  "All Ini Rsp cid p0 Ai w0 m #i.
+     IRecv(Ini, Rsp, cid, p0, Ai, w0, 'r1', m)@i
+     ==> (Ex #s. RSent(Rsp, cid, p0, Ai, w0, 'r1', m)@s & #s < #i)
+       | (Ex #r. RevLtk(Rsp)@r & #r < #i)"
+
+lemma initiator_agreement_r2 [reuse]:
+  "All Ini Rsp cid p0 Ai w0 m #i.
+     IRecv(Ini, Rsp, cid, p0, Ai, w0, 'r2', m)@i
+     ==> (Ex #s. RSent(Rsp, cid, p0, Ai, w0, 'r2', m)@s & #s < #i)
+       | (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g) | (Ex #r. RevState(Ini, cid)@r & #r < #i)"
+
+lemma responder_agreement_m1:
+  "All Rsp cid p0 Ai w0 m P #i #k.
+     RRecv(Rsp, cid, p0, Ai, w0, 'm1', m)@i & KeyOn(P, p0, Ai)@k
+     ==> (Ex F #s #t. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & ISent(P, Rsp, cid, 'm1', m)@t & #t < #i)
+       | (Ex #r. RevLtk(P)@r & #r < #i) | (Ex #r. RevLtk(Rsp)@r & #r < #i)"
+
+lemma responder_agreement_m3:
+  "All Rsp cid p0 Ai w0 m P #i #k.
+     RRecv(Rsp, cid, p0, Ai, w0, 'm3', m)@i & KeyOn(P, p0, Ai)@k
+     ==> (Ex F #s #t. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & ISent(P, Rsp, cid, 'm3', m)@t & #t < #i)
+       | (Ex F #a #r. RAccept(Rsp, cid, p0, Ai, w0, F)@a & RevLtk(P)@r & #r < #a)
+       | (Ex F #a #r. RAccept(Rsp, cid, p0, Ai, w0, F)@a & RevLtk(Rsp)@r & #r < #a)
+       | (Ex #r. RevState(P, cid)@r & #r < #i)"
+
+lemma responder_agreement_m4:
+  "All Rsp cid p0 Ai w0 m P #i #k.
+     RRecv(Rsp, cid, p0, Ai, w0, 'm4', m)@i & KeyOn(P, p0, Ai)@k
+     ==> (Ex F #s #t. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & ISent(P, Rsp, cid, 'm4', m)@t & #t < #i)
+       | (Ex F #a #r. RAccept(Rsp, cid, p0, Ai, w0, F)@a & RevLtk(P)@r & #r < #a)
+       | (Ex F #a #r. RAccept(Rsp, cid, p0, Ai, w0, F)@a & RevLtk(Rsp)@r & #r < #a)
+       | (Ex #r. RevState(P, cid)@r & #r < #i)"
+
+/* §1.1: what each theft reveals of content. */
+
+lemma m1_secret:
+  "All Ini Rsp cid m #i #j. ISent(Ini, Rsp, cid, 'm1', m)@i & K(m)@j
+     ==> (Ex #k. RevLtk(Rsp)@k)"
+
+lemma m3_forward_secret:
+  "All Ini Rsp cid m #i #j. ISent(Ini, Rsp, cid, 'm3', m)@i & K(m)@j
+     ==> (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g) | (Ex #r. RevState(Ini, cid)@r)"
+
+lemma m4_forward_secret:
+  "All Ini Rsp cid m #i #j. ISent(Ini, Rsp, cid, 'm4', m)@i & K(m)@j
+     ==> (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g) | (Ex #r. RevState(Ini, cid)@r)"
+
+lemma m4_heals_after_a_reply_the_attacker_only_watched:
+  "All Ini Rsp cid T2 m #i #a #b #j.
+     ISent(Ini, Rsp, cid, 'm4', m)@i & IRecvKey(Ini, cid, 'r2', T2)@a & RSentKey(Rsp, cid, 'r2', T2)@b
+   & K(m)@j
+     ==> (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g)"
+
+lemma r1_forward_secret:
+  "All Ini Rsp cid p0 Ai w0 F m #i #s #j.
+     RSent(Rsp, cid, p0, Ai, w0, 'r1', m)@i & IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & K(m)@j
+     ==> (Ex #r #a. RevLtk(Rsp)@r & RAccept(Rsp, cid, p0, Ai, w0, F)@a & #r < #a) | (Ex #r. RevState(Ini, cid)@r)"
+
+lemma r2_forward_secret:
+  "All Ini Rsp cid p0 Ai w0 F m #i #s #j.
+     RSent(Rsp, cid, p0, Ai, w0, 'r2', m)@i & IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & K(m)@j
+     ==> (Ex #r #a. RevLtk(Rsp)@r & RAccept(Rsp, cid, p0, Ai, w0, F)@a & #r < #a) | (Ex #r. RevState(Ini, cid)@r)"
+
+/* §3: who controls R_A. A reader accepts a session whose A is P's key only
+   if P started it with exactly that cid, R_A, R_B and F. */
+
+lemma static_dh_holds_r_a:
+  "All Rsp cid p0 Ai w0 F P #i #k.
+     RAccept(Rsp, cid, p0, Ai, w0, F)@i & KeyOn(P, p0, Ai)@k
+     ==> (Ex #s. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & #s < #i)
+       | (Ex #r. RevLtk(P)@r & #r < #i) | (Ex #r. RevLtk(Rsp)@r & #r < #i)"
+
+/* Traces the model must be able to reach: not vacuous, and the limits
+   §1.1 states are real. */
+
+lemma executable: exists-trace
+  "Ex Ini Rsp cid p0 Ai w0 m #i #j.
+     ISent(Ini, Rsp, cid, 'm4', m)@i & RRecv(Rsp, cid, p0, Ai, w0, 'm4', m)@j
+   & not (Ex P #k. RevLtk(P)@k) & not (Ex P c #k. RevState(P, c)@k)"
+
+lemma m1_open_to_a_later_reader_key: exists-trace
+  "Ex Ini Rsp cid m #i #g #k #l.
+     ISent(Ini, Rsp, cid, 'm1', m)@i & IGotReply(Ini, Rsp, cid)@g & RevLtk(Rsp)@k & #g < #k & K(m)@l
+   & not (Ex P #n. RevLtk(P)@n & #n < #g) & not (Ex P c #n. RevState(P, c)@n)"
+
+lemma initiator_state_opens_m3_and_r2: exists-trace
+  "Ex Ini Rsp cid p0 Ai w0 m r #i #s #k #j #l.
+     ISent(Ini, Rsp, cid, 'm3', m)@i & RSent(Rsp, cid, p0, Ai, w0, 'r2', r)@s
+   & RevState(Ini, cid)@k & K(m)@j & K(r)@l & not (Ex P #n. RevLtk(P)@n)"
+
+lemma reader_key_before_the_reply_takes_over: exists-trace
+  "Ex Ini Rsp cid m #i #r #g #j.
+     ISent(Ini, Rsp, cid, 'm3', m)@i & RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g & K(m)@j
+   & not (Ex #n. RevLtk(Ini)@n) & not (Ex P c #n. RevState(P, c)@n)"
+
+lemma reader_key_lets_anyone_pose_to_the_reader: exists-trace
+  "Ex Rsp cid p0 Ai w0 F P #i #k #r.
+     RAccept(Rsp, cid, p0, Ai, w0, F)@i & KeyOn(P, p0, Ai)@k & RevLtk(Rsp)@r & not (P = Rsp)
+   & not (Ex R2 c2 p2 A2 w2 F2 #s. IStart(P, R2, c2, p2, A2, w2, F2)@s)
+   & not (Ex #q. RevLtk(P)@q)"
+
+#endif
+
+/* ---- Lemmas: the responder's state (-D=RESPONDER_STATE) ---- */
+
+#ifdef RESPONDER_STATE
+
+lemma responder_heal_keys_secret_with_its_state [reuse]:
+  "All Ini Rsp cid S2 rk ck k #i #b #j.
+     RHeal(Rsp, cid, S2, rk, ck)@i & ISentKey(Ini, cid, 'm3', S2)@b
+   & K(k)@j & ((k = rk) | (k = ck))
+     ==> F"
+
+/* Bob's state opens the initiator's next message, m3 ... */
+
+lemma responder_state_opens_m3: exists-trace
+  "Ex Ini Rsp cid m #i #k #j.
+     ISent(Ini, Rsp, cid, 'm3', m)@i & RevStateR(Rsp, cid)@k & K(m)@j
+   & not (Ex P #n. RevLtk(P)@n)"
+
+/* ... and his reply to it is secret again, once he has read the initiator's
+   own ratchet key. */
+
+lemma r2_heals_after_the_responder_state:
+  "All Rsp cid p0 Ai w0 S2 m Ini #i #a #b #j.
+     RSent(Rsp, cid, p0, Ai, w0, 'r2', m)@i & RRecvKey(Rsp, cid, 'm3', S2)@a & ISentKey(Ini, cid, 'm3', S2)@b
+   & K(m)@j
+     ==> F"
+
+#endif
+
+end
