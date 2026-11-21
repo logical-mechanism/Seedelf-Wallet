@@ -2,7 +2,7 @@
 
 Seedelf Messaging's library: end-to-end encryption of a byte payload to a re-randomized Seedelf register, and its discovery by the recipient (Phase 1), one-to-one conversations on top of it, with the Double Ratchet inside the envelope (the session layer, chunk 54's 54a), and what a post to the relay must be (54c).
 
-It's a library only, with no network, no storage and no clock. The relay is the data layer's ([seedelf-data](../../seedelf-data/README.md#seedelf-messagings-relay)), which keeps its own copy of the `relay` module's checks. There's no UI, and nothing in the wallet uses it yet. It's unaudited, and outside the bug bounty except a flaw in it that exposes the Seedelf key: [docs/security.md](docs/security.md) says what holds and what doesn't.
+It's a library only, with no network, no storage and no clock. The relay is the data layer's ([seedelf-data](../../seedelf-data/README.md#seedelf-messagings-relay)), which keeps its own copy of the `relay` module's checks. There's no UI: the wallet's WebAssembly module binds it ([seedelf-wasm](../seedelf-web-wallet/wasm/README.md), chunk 54's 54d), and nothing in the worker calls it yet. It's unaudited, and outside the bug bounty except a flaw in it that exposes the Seedelf key: [docs/security.md](docs/security.md) says what holds and what doesn't.
 
 ## What it does
 
@@ -167,8 +167,8 @@ One recipient's scan took 179 ms for 1,000 envelopes and 1.80 s for 10,000 (100 
 | Open a match | 1.77 ms | about 5.7× |
 | Encrypt | 2.2 ms | about 7× |
 
-Without blst's x86 assembly, the scan is the scaling limit. A 36-hour pool at 10,000 envelopes a day takes about 15 s to scan on a fresh sync ([docs/protocol.md §8](docs/protocol.md#8-what-each-message-costs)). The size-optimized profile measured the same as `-O3`. The harness was a scratch crate outside the repo; Phase 4's bindings will carry the real one.
+Without blst's x86 assembly, the scan is the scaling limit. A 36-hour pool at 10,000 envelopes a day takes about 15 s to scan on a fresh sync ([docs/protocol.md §8](docs/protocol.md#8-what-each-message-costs)). The size-optimized profile measured the same as `-O3`. That harness was a scratch crate outside the repo. The wallet's module now measures its own, through its bindings (`node scale.mjs messaging`, [seedelf-wasm's README](../seedelf-web-wallet/wasm/README.md)): 0.97 ms an envelope in Node, 1.09 ms in a Chrome worker.
 
 ## Next
 
-Chunk 54's plan ([chunk-54-messaging.md](../seedelf-web-wallet/docs/plans/chunk-54-messaging.md)) has the rest: the protocol's model (54b), the WebAssembly bindings (54d), the worker (54e) and the screens (54f). The relay (54c) is built, in the data layer.
+Chunk 54's plan ([chunk-54-messaging.md](../seedelf-web-wallet/docs/plans/chunk-54-messaging.md)) has the rest: the protocol's model (54b), the worker (54e) and the screens (54f). The relay (54c) is built, in the data layer, and so are the WebAssembly bindings (54d).

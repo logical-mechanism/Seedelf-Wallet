@@ -74,6 +74,12 @@ impl Request {
         self.messages.len()
     }
 
+    /// When each message arrived, by the reader's clock, in arrival order:
+    /// the order [`Request::read`] gives their texts in.
+    pub fn arrivals(&self) -> impl Iterator<Item = u64> + '_ {
+        self.messages.iter().map(|(at, _)| *at)
+    }
+
     /// Its stored bytes, as counted against [`MAX_REQUEST_BYTES`].
     pub fn stored_len(&self) -> usize {
         self.messages
