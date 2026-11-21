@@ -19,6 +19,7 @@
 - Proof of work against spam. IP addresses seen, as the data layer already sees them.
 - "if you delete the wallet and the data associated to it on the browser then yeah you lost those conversations".
 - A Seedelf is a handle, "message me at SEEDELF". A proof of one is a maybe until users ask.
+- One relay, the wallet's only one, pricing each address's posts by its recent traffic, said plainly: "we dont know what is being sent nor to who but we do rate limit via ip because of dos attacks basically. I mean its real." That settles call 6.
 - Groups and post-quantum later.
 
 **The marks:**
@@ -95,7 +96,7 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 **Done means:** every rule in protocol.md §3 to §6 has a test that fails without it, and the vectors are reproduced.
 
 **Where it stands** (2026-11-20, `web-wallet/messaging-session`, not yet a PR):
-- **Built:** everything above but proof of work, which this step's brief left out: it waits on call 6. protocol.md §16 fixes every byte and rule the build decided, each choice marked [choice] for the owner to overturn.
+- **Built:** everything above but proof of work, which this step's brief left out. Call 6 has since been settled (priced by traffic), so solving and checking it, with vectors, can be built before 54c needs them. protocol.md §16 fixes every byte and rule the build decided, each choice marked [choice] for the owner to overturn.
 - **The vectors** (tests/vectors/messaging_session_v1.json, three conversations) were reproduced by a script written from protocol.md §16 alone, without reading the Rust: noble-curves 2.0.1 and WebCrypto, every value. Its notes on where the spec was silent are folded into §16.
 - **The rules hold the tests:** a mutation pass removed or weakened each of 39 rules in turn, and a test failed every time. Its first run found four survivors, which became a fix (a request's joining message now reads as eager processing would) and two continuation tests.
 - **For 54e and 54f:** a first message is refused once its t is 48 hours old, so a conversation nobody read in its first 48 hours can never begin, however many first messages follow (protocol.md §16.4). The wallet needs "start again", or must start again by itself.
@@ -127,12 +128,13 @@ Where it runs is call 1, and its storage call 2. The routes, as the recommendati
 - **Limits:**
   - each route gets its own weight in `edge.rs`;
   - a cap on stored bytes per network;
-  - a cap on posts per IP;
+  - posts priced per address (protocol.md §10, call 6): a light base rising with the address's recent posts, IPv6 counted by prefix (a /64 at least), a global floor that rises under load, and a ceiling past which a post is refused; a refusal names the price;
   - the monthly egress ceiling counts this traffic too.
-- **Privacy:** no access log (Caddy has none), no recipient, no account. Health and the existing routes are unaffected.
+- **Privacy:** no access log (Caddy has none), no recipient, no account. The per-address counts live in memory for their window only and are never logged. Health and the existing routes are unaffected.
+- **What the wallet and the privacy policy say:** the relay can't read messages or tell whom they're for. It sees the IP address that posts each envelope and when, and counts each address's recent posts, in memory, to stop floods.
 - **Deploying:** through `data-layer-deploy.yml`, approved by the owner, and never by hand.
 
-**Done means:** offline tests for every refusal, the expiry, paging and duplicates, a load test on the droplet's size [measure], and the vectors.
+**Done means:** offline tests for every refusal, the expiry, paging and duplicates, the price (a burst from one address, from one IPv6 /64, and from many addresses at once), a load test on the droplet's size [measure], and the vectors.
 
 ### 54d ⬜ WebAssembly
 
@@ -142,7 +144,7 @@ Where it runs is call 1, and its storage call 2. The routes, as the recommendati
   - opening an envelope;
   - starting a conversation;
   - sending and receiving in one, with state in and state out;
-  - solving proof of work.
+  - solving proof of work at the price the relay names.
 - Each export is in the README's table (`readme_test.rs` checks it), with native tests and `node --test` tests.
 - `scale.mjs` measures a 15,000-envelope scan in the module [measure].
 
@@ -164,7 +166,7 @@ Where it runs is call 1, and its storage call 2. The routes, as the recommendati
   - nothing while locked.
 - **Sending:**
   - the handle looked up as Send's pay-by-name does;
-  - proof of work solved without blocking the worker [measure];
+  - proof of work solved at the relay's price, without blocking the worker [measure]; a post refused for too little work is solved again for the same bytes;
   - the post retried with the same bytes.
 - **The relay's origin.** It goes in the CSP's `connect-src`. Preprod gets one only if call 4 gives it a pool. `manifest.test.ts` is updated.
 - **The request cost,** stated in architecture.md: one GET per page while unlocked, one POST per message, and a fresh sync's pages.
@@ -192,7 +194,7 @@ Where it runs is call 1, and its storage call 2. The routes, as the recommendati
   - a conversation that can't continue, with "start again".
 - **The unlock line:** messages arrive while the wallet is unlocked, and the relay keeps them 36 hours.
 - **Payments:** nothing in a message starts a payment. A payment request, if one is ever added, opens Send filled in.
-- **Strings** in en, es and ja; flows.md; privacy.md's *Known links*; and the dated *Changes* entry in [privacy-policy.md](../store/privacy-policy.md).
+- **Strings** in en, es and ja; flows.md; privacy.md's *Known links*; and the dated *Changes* entry in [privacy-policy.md](../store/privacy-policy.md), with 54c's line on what the relay sees and counts.
 - **e2e:** a `fakeRelay` beside `fakeDataLayer`, two wallets messaging through it, a stranger's request, expiry, a reset with `replaces`, and the switch off sending nothing. Run under load and on the store build, as the e2e stress rule asks.
 
 **Done means:** unit and e2e tests pass, under load and on the store build, and the screens are checked by eye.
@@ -236,9 +238,11 @@ Each has a recommendation, which the owner can overturn.
 5. ❓ **The largest message.**
    - **Recommended: 32 KiB envelopes,** under Caddy's 64 KiB.
    - The alternative is raising Caddy's limit for this route alone.
-6. ❓ **Proof of work.**
-   - **Recommended: hashcash over SHA-256 of the envelope.** It costs the relay a microsecond to check. The difficulty is set so solving takes about a second in WebAssembly [measure], and the relay can raise it.
-   - A memory-hard function resists GPUs better, but checking it would cost the 2-vCPU relay milliseconds a post. That's a lever for later.
+6. ✅ **Proof of work, priced by traffic** (the owner, 2026-11-20: "or even scale with traffic via ip").
+   - Hashcash over SHA-256 of the envelope, a microsecond for the relay to check, at a light base that rises with the address's recent posts, with a global floor and a ceiling (protocol.md §10). The numbers are 54c's [measure].
+   - A price, not a refusal, so an honest user behind the same address as a flooder (a carrier's NAT, an office) still gets through, only slower.
+   - Raising one flat difficulty for everyone was weighed and set aside: the relay can't tell first messages from replies, so every reply would pay, and a GPU solves SHA-256 orders of magnitude faster than a browser.
+   - In reserve against GPUs: a memory-hard puzzle that stays cheap to check, such as Equihash. Not one whose check costs as much as an attempt, such as Argon2, which would make the 2-vCPU relay the target.
 7. ❓ **Where Messages lives.**
    - **Recommended: a row on Home,** like the dApps row, with its unread count, opening the Messages screen. It's the wallet's own, not a dApp.
    - The alternative is a dApp tile.
@@ -252,11 +256,17 @@ Each has a recommendation, which the owner can overturn.
     - The alternative is a fixed age, such as 30 days.
 11. ❓ **Notifications.**
     - **Recommended: the unread count on the Messages row only,** and no badge or system notification in this chunk. The notification centre was declined on 2026-10-11.
+12. ❓ **A first-contact stamp** (protocol.md §13).
+    - **Recommended: yes.** An 8-byte nonce in F such that a hash over F meets a difficulty the reader sets, tens of seconds in the browser, checked before any key is computed. It prices a stranger's first message to one reader, which the relay's price can't target, since the relay can't tell first messages from replies. Replies pay nothing more.
+    - It changes F, so it's settled before 54d, with call 13.
+13. ❓ **Proving the base comes from the named handle** (protocol.md §13).
+    - **Recommended: yes.** A first message to the sum of two Seedelfs' registers opens only for a wallet holding both, so a reply to it links them, unseen. A short proof that p₀ re-randomizes the handle in `to`, bound to F, closes that for messages and makes `to` verified; `to` becomes required.
+    - It changes F too. Both would land as one follow-up to 54a before 54d: F's new fields, the vectors re-recorded and checked again independently, and 54b told.
 
 ## Unknowns
 
 - The scan in the extension's own worker, as against Node's, at 15,000 envelopes (54d) [measure].
-- Proof of work's difficulty for about a second in WebAssembly (54a) [measure].
+- Proof of work's base, curve, window and ceiling, and solving times in WebAssembly (54c, 54d) [measure].
 - The relay's egress at real use against the droplet's monthly ceiling: each wallet downloads every envelope [measure].
 - The storage quota with history and skipped keys (54e) [measure].
 - Whether a 15-minute auto-lock leaves enough unlocked time to sync a 36-hour pool [assumed: yes, about 15 s of scanning].

@@ -50,6 +50,7 @@ Those rest on the arguments and assumptions below.
    - **A public G2 multiple of y,** such as [y]h (construction.md §2).
    - **Metadata:** timing, the network, and the plaintext's length, since the envelope is 161 + |m| bytes with no padding.
    - **Datum registers:** when the recipient's register is a Seedelf datum, the sender knows which Seedelf they wrote to.
+   - **A reaction to a sum of registers.** (g₁ + g₂, v₁ + v₂) is a register of y exactly when both (g₁, v₁) and (g₂, v₂) are. So any visible reaction to an envelope addressed to the sum, such as a reply, links the two. Seedelf's own registers share the property. [protocol.md](protocol.md) §13 has the proposed fix for first messages.
 4. **Secret-key compromise.** y reads every envelope ever sent to any of its registers, past and future. With the key reuse chosen for later, it's also the key that spends the Seedelf.
 5. **Ciphertext integrity.** A change to any byte is rejected (AEAD, with the header bound). That's integrity against third parties, not proof of who sent it: anyone with the recipient's register can make an envelope that opens.
 6. **Recipient key substitution.**
@@ -139,5 +140,6 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 - The spending-and-reading argument, checked against the literature.
 - A constant-time review of the WebAssembly build. WebAssembly engines promise nothing about timing.
 - The session layer's model (54b), then an outside review of the protocol.
-- Spam and resource limits at the relay.
+- Spam and resource limits at the relay: priced by traffic (protocol.md §10).
+- A fix for linking through a sum of registers (protocol.md §13).
 - A dependency audit (cargo-audit or cargo-deny) for this crate in CI.
