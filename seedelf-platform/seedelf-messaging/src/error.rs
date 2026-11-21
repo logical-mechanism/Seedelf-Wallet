@@ -65,6 +65,23 @@ pub enum Error {
     UnsupportedStateVersion(u8),
     /// Proof of work past [`MAX_STAMP_BITS`](crate::relay::MAX_STAMP_BITS).
     StampTooHard,
+    /// A first message whose first-contact stamp shows less work than the
+    /// reader asks.
+    StampTooLow,
+    /// A first-contact message, sent before its stamp was set.
+    Unstamped,
+    /// A first message whose `to` names none of the reader's handles.
+    UnknownHandle,
+    /// A first message whose proof that its base re-randomizes the named
+    /// handle doesn't verify against any of that handle's registers.
+    InvalidBaseProof,
+    /// A first message without a handle that isn't a verified continuation
+    /// of one of the reader's conversations.
+    UnverifiedContinuation,
+    /// A message whose envelope isn't addressed to its conversation identity
+    /// re-randomized by the message's own outer scalar, or that came without
+    /// its envelope.
+    WrongEnvelopeRegister,
 }
 
 impl fmt::Display for Error {
@@ -96,6 +113,24 @@ impl fmt::Display for Error {
             Error::InvalidState => write!(f, "stored session state is invalid"),
             Error::UnsupportedStateVersion(v) => write!(f, "unsupported session state version {v}"),
             Error::StampTooHard => write!(f, "proof of work asked is past the most this solves"),
+            Error::StampTooLow => write!(f, "first-contact stamp shows too little work"),
+            Error::Unstamped => write!(f, "first-contact message has no stamp yet"),
+            Error::UnknownHandle => write!(f, "first message names none of this reader's handles"),
+            Error::InvalidBaseProof => {
+                write!(f, "proof that the base re-randomizes the handle fails")
+            }
+            Error::UnverifiedContinuation => {
+                write!(
+                    f,
+                    "first message without a handle continues no conversation here"
+                )
+            }
+            Error::WrongEnvelopeRegister => {
+                write!(
+                    f,
+                    "envelope is not addressed to the conversation identity it must be"
+                )
+            }
         }
     }
 }

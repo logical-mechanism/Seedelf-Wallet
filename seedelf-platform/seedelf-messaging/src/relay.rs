@@ -348,8 +348,10 @@ mod tests {
         let (alice, bob) = (SecretKey::generate(), SecretKey::generate());
         let mut inbox = Inbox::new();
         let cid = inbox
-            .start(&alice, &bob.register(), b"", 1_800_000_000)
+            .start(&alice, &bob.register(), b"bob", 1_800_000_000)
             .unwrap();
+        // The relay doesn't read the first-contact stamp: any nonce sends.
+        inbox.set_stamp(cid, 0).unwrap();
         for text in [&b"hi"[..], &[7u8; 1000], &[7u8; 5000], &[7u8; 20_000]] {
             assert_eq!(check_envelope(&inbox.send(cid, text).unwrap()), Ok(()));
         }

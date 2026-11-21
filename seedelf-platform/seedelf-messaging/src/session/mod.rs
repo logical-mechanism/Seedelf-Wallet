@@ -7,26 +7,34 @@
 //!
 //! ```
 //! use seedelf_messaging::SecretKey;
-//! use seedelf_messaging::session::{Inbox, Received};
+//! use seedelf_messaging::relay::find_stamp;
+//! use seedelf_messaging::session::{Handle, Inbox, Received};
 //!
 //! let (alice, bob) = (SecretKey::generate(), SecretKey::generate());
 //! let now = 1_800_000_000;
+//! // Bob's handle: a Seedelf's name and register (here his root register).
+//! let bob_handle = Handle::new(b"bob", bob.register())?;
 //!
-//! // Alice writes to Bob's handle: here his root register.
+//! // Alice writes to it, after solving the first-contact stamp. Readers ask
+//! // FIRST_CONTACT_STAMP_BITS; this example asks 8, to run fast.
 //! let mut alice_inbox = Inbox::new();
-//! let cid = alice_inbox.start(&alice, &bob.register(), b"", now)?;
+//! let cid = alice_inbox.start(&alice, bob_handle.register(), bob_handle.name(), now)?;
+//! let digest = alice_inbox.stamp_digest(cid)?;
+//! alice_inbox.set_stamp(cid, find_stamp(&digest, 8, 0, u64::MAX).unwrap())?;
 //! let envelope = alice_inbox.send(cid, b"hello Bob")?;
 //!
 //! // Bob's scan finds it; it's a request until he replies.
 //! let mut bob_inbox = Inbox::new();
-//! let Received::Request { plaintext, .. } = bob_inbox.receive(&bob, &envelope, now)? else {
+//! bob_inbox.set_first_contact_bits(8);
+//! let handles = [bob_handle];
+//! let Received::Request { plaintext, .. } = bob_inbox.receive(&bob, &handles, &envelope, now)? else {
 //!     unreachable!()
 //! };
 //! assert_eq!(plaintext, b"hello Bob");
 //! bob_inbox.accept(&bob, cid)?;
 //! let reply = bob_inbox.send(cid, b"hello")?;
 //!
-//! let received = alice_inbox.receive(&alice, &reply, now + 60)?;
+//! let received = alice_inbox.receive(&alice, &[], &reply, now + 60)?;
 //! assert_eq!(received, Received::Message { cid, plaintext: b"hello".to_vec() });
 //! # Ok::<(), seedelf_messaging::Error>(())
 //! ```
@@ -44,8 +52,9 @@ mod tests;
 
 pub use conversation::{Conversation, Role, STATE_VERSION};
 pub use first_contact::{
-    CID_LEN, ConversationId, FIRST_CONTACT_MAX_AGE, FIRST_CONTACT_MAX_AHEAD, FIRST_CONTACT_MAX_LEN,
-    FIRST_CONTACT_MIN_LEN, FirstContact, MAX_TO_LEN, within_window,
+    BASE_PROOF_LEN, CID_LEN, ConversationId, FIRST_CONTACT_MAX_AGE, FIRST_CONTACT_MAX_AHEAD,
+    FIRST_CONTACT_MAX_LEN, FIRST_CONTACT_MIN_LEN, FIRST_CONTACT_STAMP_BITS, FirstContact, Handle,
+    MAX_TO_LEN, STAMP_LEN, within_window,
 };
 pub use inbox::{
     Continues, Inbox, MAX_REQUEST_BYTES, MAX_REQUESTS, RECORD_VERSION, Received, Request, Requests,

@@ -50,7 +50,7 @@ Those rest on the arguments and assumptions below.
    - **A public G2 multiple of y,** such as [y]h (construction.md §2).
    - **Metadata:** timing, the network, and the plaintext's length, since the envelope is 161 + |m| bytes with no padding.
    - **Datum registers:** when the recipient's register is a Seedelf datum, the sender knows which Seedelf they wrote to.
-   - **A reaction to a sum of registers.** (g₁ + g₂, v₁ + v₂) is a register of y exactly when both (g₁, v₁) and (g₂, v₂) are. So any visible reaction to an envelope addressed to the sum, such as a reply, links the two. Seedelf's own registers share the property. [protocol.md](protocol.md) §13 has the proposed fix for first messages.
+   - **A reaction to a sum of registers.** (g₁ + g₂, v₁ + v₂) is a register of y exactly when both (g₁, v₁) and (g₂, v₂) are. So any visible reaction to a bare v1 envelope addressed to the sum, such as a reply, links the two, and so does one to an envelope addressed to a second register of y. Seedelf's own registers share the property. The session layer closes it for messages: a first message proves its base comes from the one handle it names, and every envelope is bound to its conversation identity ([protocol.md](protocol.md) §2).
 4. **Secret-key compromise.** y reads every envelope ever sent to any of its registers, past and future. With the key reuse chosen for later, it's also the key that spends the Seedelf.
 5. **Ciphertext integrity.** A change to any byte is rejected (AEAD, with the header bound). That's integrity against third parties, not proof of who sent it: anyone with the recipient's register can make an envelope that opens.
 6. **Recipient key substitution.**
@@ -113,9 +113,10 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 
 ### What its tests establish
 
-- **Vectors** for every layer: F, SK, both inits, every chain and message key, ENCRYPT, the padding, the inner messages and the envelopes. An implementation written from protocol.md §16 alone, without reading the Rust (noble-curves and WebCrypto), reproduced them byte for byte.
+- **Vectors** for every layer: F with its proof and stamp, SK, both inits, every chain and message key, ENCRYPT, the outer scalar, the padding, the inner messages and the envelopes. An implementation written from protocol.md §16 alone, without reading the Rust (noble-curves and WebCrypto), reproduced them byte for byte.
+- **Handles stay unlinkable through replies** (calls 12 and 13): src/session/tests/linking.rs aims an honest message's envelope at a reader's second handle and at the sum of two, and builds a base on the sum, and each is refused with nothing kept. The first-contact stamp is checked before the proof and any key.
 - **protocol-review.md §E's 14 adversarial cases,** one test each: src/session/tests/adversarial.rs, with cases 4 and 5 in tests/simulation.rs.
-- **Every rule of §3 to §6 is load-bearing in the tests:** a mutation pass removed or weakened each rule in turn, 39 of them, and a test failed every time.
+- **Every rule of §3 to §6 is load-bearing in the tests:** a mutation pass removed or weakened each rule in turn, 39 of them, and a test failed every time. Calls 12 and 13's 21 rules had their own pass (2026-11-21). One survived at first, a stored request replayed after a restart, and a test now holds it.
 - **Properties:** any schedule of sends, out-of-order deliveries, duplicates, losses and restarts reads each message once, changes nothing on a duplicate, and counts exactly the lost messages it skipped as missing.
 - **A two-wallet simulation** over a relay that keeps envelopes 36 hours, with the worker killed at every point of §4.2 and locks past 36 hours. No message shows twice, no message key seals two envelopes, every refusal is explained, the missing counts are exact, and the conversation is still live at the end.
 - **Stored states,** requests and tombstones round-trip, and every truncation, extension and unknown version is refused.
@@ -141,5 +142,4 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 - A constant-time review of the WebAssembly build. WebAssembly engines promise nothing about timing.
 - The session layer's model (54b), then an outside review of the protocol.
 - The relay's price tuned with real use, and a memory-hard puzzle if GPUs flood it (protocol.md §17.4).
-- A fix for linking through a sum of registers (protocol.md §13).
 - A dependency audit (cargo-audit or cargo-deny) for this crate in CI.

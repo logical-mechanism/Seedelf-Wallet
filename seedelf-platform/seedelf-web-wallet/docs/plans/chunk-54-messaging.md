@@ -1,6 +1,6 @@
 # Chunk 54 · Seedelf Messaging
 
-**Status: ✅ 54a merged** (#403). **🚧 54c built,** on `web-wallet/messaging-relay`. Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
+**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **🚧 Calls 12 and 13 built** (54a′), on `web-wallet/messaging-first-contact`, before 54d. 54b's proofs run separately (#405). Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
 
 **The specification is [protocol.md](../../../seedelf-messaging/docs/protocol.md),** with the envelope in [construction.md](../../../seedelf-messaging/docs/construction.md) and the guarantees in [security.md](../../../seedelf-messaging/docs/security.md). It has had two reviews; the second's reasoning, and its adversarial tests, are in [protocol-review.md](../../../seedelf-messaging/docs/protocol-review.md). This plan doesn't repeat them: it says what to build, where, in what order, and what's still the owner's to decide. A step that changes the protocol changes protocol.md in the same PR.
 
@@ -67,7 +67,7 @@
 
 ## Steps
 
-### 54a 🚧 The session layer, in seedelf-messaging
+### 54a ✅ The session layer, in seedelf-messaging
 
 Everything in protocol.md §3 to §6, as plain Rust with no network and no storage:
 
@@ -116,7 +116,7 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 
 **Done means:** the model's queries hold, and a fresh-context reviewer has read the model against protocol.md.
 
-### 54c 🚧 The relay
+### 54c ✅ The relay
 
 Where it runs is call 1, and its storage call 2. The routes, as the recommendation puts them:
 
@@ -152,14 +152,29 @@ Where it runs is call 1, and its storage call 2. The routes, as the recommendati
   - **The data layer takes blstrs and sha2** for its copy of the checks, at the wallet's own versions (blst 0.3.15), and `/health` says the relay's state without changing its status.
 - **Not done here:** the deploy (54g, the owner); setting `DATA_MESSAGING_GB_MONTH` on the droplet before the next data-layer deploy, since every deploy from `main` now carries the relay; the privacy policy's entry, which goes with the step that first contacts the relay (54e, 54f).
 
+### 54a′ 🚧 Calls 12 and 13, before 54d
+
+The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-messaging's `session` module, protocol.md changed to match (§0, §2, §3, §5 to §9, §13, §16), and the reasoning in protocol-review.md §G.
+
+- **Call 13, the base proof.** F carries a Schnorr proof that p₀ = [b]g for the handle named in `to`, with F's other fields in its challenge: 64 bytes. `to` is required, except in a continuation, which must then be verified.
+- **What building it found:** the proof alone didn't close the link. Each envelope went to a random re-randomization of its conversation identity, so a writer could aim an honest message's envelope at the sum of two Seedelfs' registers, or at a second Seedelf's, and a reply would still link them.
+  - **So every envelope is now bound:** its re-randomization is the outer scalar, derived from the message key and the ratchet's salt, and the reader checks the envelope's base is [o]p₀ once the message decrypts. No bytes, one multiplication a message.
+- **Call 12, the stamp.** An 8-byte nonce after F, whose work over F's digest must show 24 bits [choice], about 7 s of WebAssembly. The reader checks it first, before the proof and before any key.
+  - It sits after F, not in it, so a start's state exists before its work is done. The worker can solve it in slices with nothing secret held outside a record.
+- **The reader passes its handles:** each of its Seedelfs by name, with every register the wallet knows it has held. A Seedelf's datum can change while a message is on its way.
+- **Sizes:** a first message to a Seedelf (a 32-byte name) is never 512 bytes now. It's at least 2 KiB, which the relay sees as it sees a reply of 246 to 1,781 bytes (protocol.md §9).
+- **Tests:** src/session/tests/linking.rs attacks both ways and checks the stamp's order. A mutation pass weakened each of the 21 new rules in turn, and a test failed every time, once a test for a stored request replayed after a restart was added. §E's cases 1, 2, 11 and 13 expect the new refusals and sizes. The vectors were re-recorded: three stamps at 24 bits, the first nonce from 0.
+- **For 54b:** the model's F leaves out `to` already. The proof, the stamp and the envelope's binding are about unlinkability and spam, which none of its lemmas claims, so tonight's proofs stand as they are.
+- **For 54d:** starting a conversation and setting its stamp are separate exports, the stamp solved in slices as the relay's is, and receiving takes the reader's handles.
+
 ### 54d ⬜ WebAssembly
 
 - `seedelf-wasm` takes `seedelf-messaging` as a dependency.
 - **Exports, JSON in and out as the others:**
   - `messagingScan(key, envelopes)` tests a batch and answers the indexes that match, like `lovejoinOwned`;
   - opening an envelope;
-  - starting a conversation;
-  - sending and receiving in one, with state in and state out;
+  - starting a conversation, then its first-contact stamp, solved in slices and set (54a′);
+  - sending and receiving in one, with state in and state out; receiving takes the reader's handles, every register each of its Seedelfs has held (54a′);
   - solving proof of work at the price the relay names.
 - Each export is in the README's table (`readme_test.rs` checks it), with native tests and `node --test` tests.
 - `scale.mjs` measures a 15,000-envelope scan in the module [measure].
@@ -268,17 +283,17 @@ Each has a recommendation, which the owner can overturn.
     - The alternative is a fixed age, such as 30 days.
 11. ❓ **Notifications.**
     - **Recommended: the unread count on the Messages row only,** and no badge or system notification in this chunk. The notification centre was declined on 2026-10-11.
-12. ❓ **A first-contact stamp** (protocol.md §13).
-    - **Recommended: yes.** An 8-byte nonce in F such that a hash over F meets a difficulty the reader sets, tens of seconds in the browser, checked before any key is computed. It prices a stranger's first message to one reader, which the relay's price can't target, since the relay can't tell first messages from replies. Replies pay nothing more.
-    - It changes F, so it's settled before 54d, with call 13.
-13. ❓ **Proving the base comes from the named handle** (protocol.md §13).
-    - **Recommended: yes.** A first message to the sum of two Seedelfs' registers opens only for a wallet holding both, so a reply to it links them, unseen. A short proof that p₀ re-randomizes the handle in `to`, bound to F, closes that for messages and makes `to` verified; `to` becomes required.
-    - It changes F too. Both would land as one follow-up to 54a before 54d: F's new fields, the vectors re-recorded and checked again independently, and 54b told.
+12. ✅ **A first-contact stamp** (the owner, 2026-11-21): built in 54a′.
+    - An 8-byte nonce after F whose work over F the reader checks before any key is computed, 24 bits [choice], about 7 s in the browser. It prices a stranger's first message to one reader, which the relay's price can't target, since the relay can't tell first messages from replies. Replies pay nothing more.
+    - Writers solve at 24 bits and readers ask the same: there's no way to tell writers a reader's own price.
+13. ✅ **Proving the base comes from the named handle** (the owner, 2026-11-21): built in 54a′.
+    - A first message to the sum of two Seedelfs' registers opens only for a wallet holding both, so a reply to it links them, unseen. A proof that p₀ re-randomizes the handle in `to`, bound to F, makes `to` verified; `to` is required.
+    - It needed every envelope bound to its conversation too, or the writer aims the envelope at the sum instead (54a′, protocol-review.md §G).
 
 ## Unknowns
 
 - The scan in the extension's own worker, as against Node's, at 15,000 envelopes (54d) [measure].
-- Proof of work's solving times in the extension's own worker, and on a slow laptop (54d) [measure]. The numbers are set (protocol.md §17.4) from an attempt measured in Node's WebAssembly, and are to tune with real use.
+- Proof of work's solving times in the extension's own worker, and on a slow laptop (54d) [measure]: the relay's price and the first-contact stamp's 24 bits. The numbers are set (protocol.md §16.4, §17.4) from an attempt measured in Node's WebAssembly, and are to tune with real use.
 - The relay's egress at real use against the droplet's monthly ceiling: each wallet downloads every envelope [measure].
 - The storage quota with history and skipped keys (54e) [measure].
 - Whether a 15-minute auto-lock leaves enough unlocked time to sync a 36-hour pool [assumed: yes, about 15 s of scanning].

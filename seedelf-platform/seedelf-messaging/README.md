@@ -53,25 +53,30 @@ An earlier idea used PEACE's pairing capsule. For one recipient it reduces to El
 
 ## Sessions
 
-The `session` module builds [docs/protocol.md](docs/protocol.md) §3 to §6: the sender of a first message makes both conversation identities on one base, a first-contact block F carries what the reader needs, a static DH in the session secret proves the writer holds their identity's key, and the Double Ratchet runs inside v1 envelopes padded to 512 bytes, 2, 8 or 32 KiB. §16 fixes every byte and rule.
+The `session` module builds [docs/protocol.md](docs/protocol.md) §3 to §6: the sender of a first message makes both conversation identities on one base, a first-contact block F carries what the reader needs and proves the base comes from the handle it names, a stamp of proof of work prices a stranger's first message, a static DH in the session secret proves the writer holds their identity's key, and the Double Ratchet runs inside v1 envelopes padded to 512 bytes, 2, 8 or 32 KiB, each bound to its conversation. §16 fixes every byte and rule.
 
 ```rust
-use seedelf_messaging::session::{Inbox, Received};
+use seedelf_messaging::relay::find_stamp;
+use seedelf_messaging::session::{FIRST_CONTACT_STAMP_BITS, Handle, Inbox, Received};
 
 let mut alice_inbox = Inbox::new();
-let cid = alice_inbox.start(&alice, &bob_handle, b"", now)?; // a Seedelf's register
+let cid = alice_inbox.start(&alice, &bob_register, bob_name, now)?; // a Seedelf's register and name
+let digest = alice_inbox.stamp_digest(cid)?; // about 7 s of work in a browser: solve it in slices
+alice_inbox.set_stamp(cid, find_stamp(&digest, FIRST_CONTACT_STAMP_BITS, 0, u64::MAX).unwrap())?;
 let envelope = alice_inbox.send(cid, b"hello Bob")?; // store the state with it, then post
 
 let mut bob_inbox = Inbox::new();
-let Received::Request { plaintext, .. } = bob_inbox.receive(&bob, &envelope, now)? else { unreachable!() };
+let bob_handles = [Handle::new(bob_name, bob_register)?]; // every register each of his Seedelfs has held
+let Received::Request { plaintext, .. } = bob_inbox.receive(&bob, &bob_handles, &envelope, now)? else { unreachable!() };
 bob_inbox.accept(&bob, cid)?; // a request until Bob replies
 let reply = bob_inbox.send(cid, b"hello")?;
 ```
 
 | API | |
 |---|---|
-| `Conversation::{start, start_continuing, send, receive, expire, missing, to_bytes, from_bytes}` | One side of a conversation. Every operation that fails leaves it as it was; its bytes are versioned and hold its secrets. |
-| `Inbox::{start, start_continuing, send, receive, accept, delete, expire, from_parts}` | One network's conversations, requests and tombstones, with §5 and §6's rules over them. |
+| `Conversation::{start, start_continuing, stamp_digest, set_stamp, send, receive, expire, missing, to_bytes, from_bytes}` | One side of a conversation. Every operation that fails leaves it as it was; its bytes are versioned and hold its secrets. |
+| `Inbox::{start, start_continuing, stamp_digest, set_stamp, send, receive, accept, delete, expire, from_parts}` | One network's conversations, requests and tombstones, with §5 and §6's rules over them. `set_first_contact_bits` is for tests and tuning. |
+| `Handle` | One of the reader's Seedelfs, by name and register, which a first message's proof is checked against. |
 | `Requests`, `Tombstones`, `Continues` | Strangers' first messages, bounded and holding no state; deleted conversations' IDs until t + 48 hours; what a `replaces` amounts to. |
 | `open`, `Opened`, `FirstContact`, `Header` | An envelope opened and parsed, every point checked, before any conversation sees it. |
 
@@ -121,10 +126,11 @@ let body = post_body(nonce, &envelope); // POST /messaging/v1/mainnet/envelopes
 | tests/seedelf_registers.rs | A Seedelf datum's register as the recipient, read with the wallet's own scalar. |
 | tests/vectors.rs, `src/tests.rs` | Test 13: the vectors, the key schedule's binding and labels, decryption forced past discovery, and secrets absent from envelopes. |
 | tests/pool.rs | Phase 1H: 10 recipients and 1,000 envelopes in one pool. Each scans the raw bytes and reads exactly theirs. |
-| src/session/tests/first_contact.rs | Sessions, part 1: F's layout and refusals, SK on both sides and its binding, both inits, the identities. |
+| src/session/tests/first_contact.rs | Sessions, part 1: F's layout and refusals, the base proof and the stamp's digest, SK on both sides and its binding, both inits, the identities. |
 | src/session/tests/ratchet.rs | Part 2: KDF_RK, KDF_CK, ENCRYPT's salt, skipping within and across chains, MAX_SKIP in all, the stored keys' cap, the 48 hours. |
 | src/session/tests/state.rs, `rules.rs` | Part 3: storage at every step, corrupted states, failures changing nothing, padding, parsing, and §5 and §6's rules. |
 | src/session/tests/adversarial.rs | Part 4: protocol-review.md §E's cases 1–3 and 6–14, one test each. |
+| src/session/tests/linking.rs | Part 5: calls 12 and 13. Envelopes aimed at a reader's second handle or at the sum of two, a base on the sum, the reader's handles, the stamp checked first, and every envelope at its identity times the outer scalar. |
 | src/session/tests/vectors.rs, tests/session_vectors.rs | The session vectors, written from fixed draws and read back through the public API. |
 | tests/session_properties.rs | Any schedule of sends, out-of-order deliveries, duplicates, losses and restarts; both sides first; resets; skipped keys' 48 hours. |
 | tests/simulation.rs | Two wallets over a 36-hour relay, killed at every point of §4.2 and locked past 36 hours; cases 4 and 5. `SIMULATION_SEEDS=n` runs more than 24 seeds. |

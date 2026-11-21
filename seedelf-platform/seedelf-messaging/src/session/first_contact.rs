@@ -1,14 +1,17 @@
-//! The first-contact block F and the session secret SK (docs/protocol.md §3).
+//! The first-contact block F, its proof that the base re-randomizes the
+//! named handle, its stamp, and the session secret SK (docs/protocol.md §3).
 
 use std::fmt;
 
-use blstrs::G1Affine;
+use blstrs::{G1Affine, G1Projective, Scalar};
+use group::Curve;
 use hkdf::Hkdf;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::Error;
-use crate::register::{POINT_LEN, decode_point};
+use crate::keys::scalar_mod_q;
+use crate::register::{POINT_LEN, Register, decode_point};
 use crate::session::secret::Secret32;
 
 /// Bytes in a conversation ID.
@@ -17,11 +20,34 @@ pub const CID_LEN: usize = 16;
 /// The longest `to`: a Seedelf's asset name.
 pub const MAX_TO_LEN: usize = 32;
 
-/// F's size with an empty `to` and no `replaces`.
-pub const FIRST_CONTACT_MIN_LEN: usize = CID_LEN + 8 + 1 + 1 + 3 * POINT_LEN;
+/// The proof that `p₀` re-randomizes the handle in `to`: its challenge `c`
+/// (32) then its response `z` (32).
+pub const BASE_PROOF_LEN: usize = 64;
 
-/// F's size with a full `to` and a `replaces`.
-pub const FIRST_CONTACT_MAX_LEN: usize = FIRST_CONTACT_MIN_LEN + MAX_TO_LEN + CID_LEN;
+/// F's fixed fields: cid, t, both length bytes, `p₀`, `A` and `E_A`.
+const FIXED_LEN: usize = CID_LEN + 8 + 1 + 1 + 3 * POINT_LEN;
+
+/// F's smallest size: a continuation, which has no `to` and no proof but
+/// must have `replaces`.
+pub const FIRST_CONTACT_MIN_LEN: usize = FIXED_LEN + CID_LEN;
+
+/// F's largest size: a full `to`, a `replaces` and the proof.
+pub const FIRST_CONTACT_MAX_LEN: usize = FIXED_LEN + MAX_TO_LEN + CID_LEN + BASE_PROOF_LEN;
+
+/// The work a first message's stamp must show, in leading zero bits: 2²⁴
+/// SHA-256 attempts on average, about 7 s of WebAssembly (docs/protocol.md
+/// §16.4). A reader that asked for more would drop every first message
+/// written at this price.
+pub const FIRST_CONTACT_STAMP_BITS: u32 = 24;
+
+/// A first-contact stamp: 8 bytes, big-endian, after F.
+pub const STAMP_LEN: usize = 8;
+
+/// SHA-256's label for the proof's challenge.
+pub(crate) const BASE_LABEL: &[u8] = b"Seedelf-Messaging|v1|session|base";
+
+/// SHA-256's label for the stamp's digest.
+pub(crate) const FIRST_STAMP_LABEL: &[u8] = b"Seedelf-Messaging|v1|session|stamp";
 
 /// How old a first message's `t` may be when it's read: 48 hours.
 pub const FIRST_CONTACT_MAX_AGE: u64 = 48 * 3600;
@@ -49,22 +75,68 @@ impl fmt::Debug for ConversationId {
     }
 }
 
+/// One of the reader's handles: a Seedelf's asset name and a register it
+/// has held, which a first message's `to` and proof are checked against.
+/// A name may come with several registers, every one the wallet knows.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Handle {
+    name: Vec<u8>,
+    register: Register,
+}
+
+impl Handle {
+    /// A handle from its asset name, 1 to 32 bytes, and its register.
+    pub fn new(name: &[u8], register: Register) -> Result<Self, Error> {
+        if name.is_empty() || name.len() > MAX_TO_LEN {
+            return Err(Error::InvalidMessage);
+        }
+        Ok(Self {
+            name: name.to_vec(),
+            register,
+        })
+    }
+
+    /// The asset name.
+    pub fn name(&self) -> &[u8] {
+        &self.name
+    }
+
+    /// The register.
+    pub fn register(&self) -> &Register {
+        &self.register
+    }
+}
+
+/// The proof that `p₀ = [b]g` for the handle `(g, v)` named in `to`: a
+/// Schnorr proof of `b` with F in its challenge (docs/protocol.md §3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct BaseProof {
+    /// `c`: the challenge, SHA-256's 32 bytes as they came.
+    pub(crate) challenge: [u8; 32],
+    /// `z = k + c·b`.
+    pub(crate) response: Scalar,
+}
+
 /// The first-contact block F, which every message carries until the first
 /// reply:
 ///
 /// ```text
-/// cid (16) | t (8) | to (1 + 0–32) | replaces (1 + 0 or 16) | p₀ (48) | A (48) | E_A (48)
+/// cid (16) | t (8) | to (1 + 0–32) | replaces (1 + 0 or 16) | p₀ (48) | A (48) | E_A (48) | proof (0 or 64)
 /// ```
 ///
 /// - `t`: when the conversation started, in Unix seconds, big-endian.
-/// - `to`: a length byte, then the handle's asset name (empty allowed).
+/// - `to`: a length byte, then the handle's asset name. Empty only for a
+///   continuation.
 /// - `replaces`: a length byte, then the conversation ID this one continues
-///   (docs/protocol.md §6), or nothing.
+///   (docs/protocol.md §6), or nothing. Required when `to` is empty.
 /// - `p₀`: the conversation's base, shared by both identities.
 /// - `A`: the initiator's public value on it, `[x_A]p₀`.
 /// - `E_A`: the session ephemeral, `[e_A]p₀`.
+/// - `proof`: `c ‖ z`, that `p₀` re-randomizes the handle in `to`; present
+///   exactly when `to` is.
 ///
-/// Every point is canonical, in G1 and not the identity: parsing checks it.
+/// Every point is canonical, in G1 and not the identity, and `z` is below
+/// the group order: parsing checks it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FirstContact {
     pub(crate) cid: ConversationId,
@@ -74,6 +146,7 @@ pub struct FirstContact {
     pub(crate) base: G1Affine,
     pub(crate) initiator: G1Affine,
     pub(crate) ephemeral: G1Affine,
+    pub(crate) proof: Option<BaseProof>,
 }
 
 impl FirstContact {
@@ -88,7 +161,8 @@ impl FirstContact {
         self.started_at
     }
 
-    /// The handle's asset name the initiator wrote to, or empty.
+    /// The handle's asset name the initiator wrote to, which its proof
+    /// verifies, or empty for a continuation.
     pub fn to(&self) -> &[u8] {
         &self.to
     }
@@ -110,6 +184,28 @@ impl FirstContact {
 
     /// F's bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = self.prefix_bytes();
+        if let Some(proof) = &self.proof {
+            out.extend_from_slice(&proof.challenge);
+            out.extend_from_slice(&proof.response.to_bytes_be());
+        }
+        out
+    }
+
+    /// `SHA-256("Seedelf-Messaging|v1|session|stamp" ‖ F)`: what a stamp's
+    /// work is over. Each attempt is then one SHA-256 block, of this digest
+    /// and the 8-byte nonce, as the relay's stamp is
+    /// ([`stamp_bits`](crate::relay::stamp_bits), [`find_stamp`](crate::relay::find_stamp)).
+    pub fn stamp_digest(&self) -> [u8; 32] {
+        Sha256::new()
+            .chain_update(FIRST_STAMP_LABEL)
+            .chain_update(self.to_bytes())
+            .finalize()
+            .into()
+    }
+
+    /// F before its proof: what the proof's challenge covers.
+    pub(crate) fn prefix_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.len());
         out.extend_from_slice(&self.cid.0);
         out.extend_from_slice(&self.started_at.to_be_bytes());
@@ -129,10 +225,28 @@ impl FirstContact {
         out
     }
 
-    /// F's size in bytes: 170 to 218.
+    /// F's size in bytes: 186 for a continuation, 235 to 282 from a handle.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
-        FIRST_CONTACT_MIN_LEN + self.to.len() + if self.replaces.is_some() { CID_LEN } else { 0 }
+        FIXED_LEN
+            + self.to.len()
+            + if self.replaces.is_some() { CID_LEN } else { 0 }
+            + if self.proof.is_some() {
+                BASE_PROOF_LEN
+            } else {
+                0
+            }
+    }
+
+    /// Whether the proof shows that `p₀` re-randomizes `handle`.
+    pub(crate) fn proves_base(&self, handle: &Register) -> bool {
+        let Some(proof) = &self.proof else {
+            return false;
+        };
+        let c = scalar_mod_q(&proof.challenge);
+        let commitment =
+            (handle.generator() * proof.response - G1Projective::from(self.base) * c).to_affine();
+        base_challenge(handle, &self.base, &commitment, &self.prefix_bytes()) == proof.challenge
     }
 
     /// F from exactly its bytes.
@@ -159,9 +273,24 @@ impl FirstContact {
             16 => Some(ConversationId(reader.array()?)),
             _ => return Err(Error::InvalidMessage),
         };
+        // A first message names a handle or continues a conversation.
+        if to.is_empty() && replaces.is_none() {
+            return Err(Error::InvalidMessage);
+        }
         let base = decode_point(&reader.array()?)?;
         let initiator = decode_point(&reader.array()?)?;
         let ephemeral = decode_point(&reader.array()?)?;
+        let proof = if to.is_empty() {
+            None
+        } else {
+            let challenge = reader.array()?;
+            let response = Option::from(Scalar::from_bytes_be(&reader.array()?))
+                .ok_or(Error::InvalidMessage)?;
+            Some(BaseProof {
+                challenge,
+                response,
+            })
+        };
         Ok((
             Self {
                 cid,
@@ -171,9 +300,40 @@ impl FirstContact {
                 base,
                 initiator,
                 ephemeral,
+                proof,
             },
             reader.position(),
         ))
+    }
+}
+
+/// `c = SHA-256("Seedelf-Messaging|v1|session|base" ‖ g ‖ v ‖ p₀ ‖ T ‖ F′)`,
+/// with `(g, v)` the handle, `T` the commitment and `F′` F before its proof.
+pub(crate) fn base_challenge(
+    handle: &Register,
+    base: &G1Affine,
+    commitment: &G1Affine,
+    prefix: &[u8],
+) -> [u8; 32] {
+    Sha256::new()
+        .chain_update(BASE_LABEL)
+        .chain_update(handle.to_bytes())
+        .chain_update(base.to_compressed())
+        .chain_update(commitment.to_compressed())
+        .chain_update(prefix)
+        .finalize()
+        .into()
+}
+
+/// The proof that `base = [b]g` for `handle = (g, v)`, with the nonce `k`:
+/// `T = [k]g`, `c` from [`base_challenge`], `z = k + c·b`.
+pub(crate) fn prove_base(handle: &Register, b: &Scalar, k: &Scalar, prefix: &[u8]) -> BaseProof {
+    let base = (handle.generator() * b).to_affine();
+    let commitment = (handle.generator() * k).to_affine();
+    let challenge = base_challenge(handle, &base, &commitment, prefix);
+    BaseProof {
+        challenge,
+        response: k + scalar_mod_q(&challenge) * b,
     }
 }
 
