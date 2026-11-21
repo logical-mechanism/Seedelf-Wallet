@@ -2,15 +2,19 @@
 //! (docs/protocol.md §3, §4.1 and §9).
 //!
 //! ```text
-//! 0x01 | F | ratchet header (56) | ratchet ciphertext     a first-contact message
-//! 0x02 | cid (16) | ratchet header (56) | ratchet ciphertext   a session message
+//! 0x01 | F | stamp (8) | ratchet header (56) | ratchet ciphertext   a first-contact message
+//! 0x02 | cid (16) | ratchet header (56) | ratchet ciphertext        a session message
 //! ```
 //!
 //! The inner message is padded with `0x80` then zeros to fill one of
-//! [`ENVELOPE_SIZES`], and sealed in a v1 envelope.
+//! [`ENVELOPE_SIZES`], and sealed in a v1 envelope to the other side's
+//! identity re-randomized by the message's outer scalar (docs/protocol.md
+//! §16.2).
+
+use blstrs::G1Affine;
 
 use crate::envelope::{ENVELOPE_OVERHEAD, Envelope, decrypt_message};
-use crate::session::first_contact::{CID_LEN, ConversationId, FirstContact, Reader};
+use crate::session::first_contact::{CID_LEN, ConversationId, FirstContact, Reader, STAMP_LEN};
 use crate::session::ratchet::{Header, RATCHET_HEADER_LEN, RATCHET_OVERHEAD};
 use crate::{Error, SecretKey};
 
@@ -72,6 +76,18 @@ pub(crate) fn unpad(padded: &[u8]) -> Result<&[u8], Error> {
     Ok(&padded[..end])
 }
 
+/// Where an inner message's envelope register stands: what a conversation
+/// checks against the message's outer scalar.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Outer {
+    /// Opened from an envelope addressed to this generator.
+    Envelope(G1Affine),
+    /// Stored after its check passed: a request's message.
+    Checked,
+    /// Parsed from bytes alone, so it can't be checked: refused.
+    Unknown,
+}
+
 /// An opened envelope's inner message, parsed and every point checked, but
 /// not yet decrypted by any conversation.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -79,10 +95,13 @@ pub struct Opened {
     pub(crate) cid: ConversationId,
     /// F and its bytes, for a first-contact message.
     pub(crate) first: Option<(FirstContact, Vec<u8>)>,
+    /// The first-contact stamp, for a first-contact message.
+    pub(crate) stamp: Option<u64>,
     pub(crate) header: Header,
     pub(crate) ciphertext: Vec<u8>,
     /// The inner message's bytes, unpadded, as a request stores them.
     pub(crate) bytes: Vec<u8>,
+    pub(crate) outer: Outer,
 }
 
 impl Opened {
@@ -96,6 +115,11 @@ impl Opened {
         self.first.as_ref().map(|(first, _)| first)
     }
 
+    /// The first-contact stamp's nonce, for a first-contact message.
+    pub fn stamp(&self) -> Option<u64> {
+        self.stamp
+    }
+
     /// The ratchet header.
     pub fn header(&self) -> &Header {
         &self.header
@@ -106,18 +130,35 @@ impl Opened {
         &self.bytes
     }
 
-    /// An inner message from its unpadded bytes.
+    /// An inner message from its unpadded bytes. Without its envelope, no
+    /// conversation takes it ([`Error::WrongEnvelopeRegister`]): the
+    /// envelope's register is what a message's outer scalar is checked
+    /// against.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        Self::parse(bytes, Outer::Unknown)
+    }
+
+    /// The same message, marked as having passed its envelope's check, as a
+    /// request stores it.
+    pub(crate) fn checked(&self) -> Self {
+        Self {
+            outer: Outer::Checked,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn parse(bytes: &[u8], outer: Outer) -> Result<Self, Error> {
         let mut reader = Reader::new(bytes);
-        let (cid, first) = match reader.byte()? {
+        let (cid, first, stamp) = match reader.byte()? {
             FIRST_CONTACT_TYPE => {
                 let rest = reader.rest();
                 let (first, used) = FirstContact::parse_prefix(rest)?;
                 let first_bytes = rest[..used].to_vec();
                 reader = Reader::new(&rest[used..]);
-                (first.cid, Some((first, first_bytes)))
+                let stamp = u64::from_be_bytes(reader.array::<STAMP_LEN>()?);
+                (first.cid, Some((first, first_bytes)), Some(stamp))
             }
-            SESSION_TYPE => (ConversationId(reader.array()?), None),
+            SESSION_TYPE => (ConversationId(reader.array()?), None, None),
             _ => return Err(Error::InvalidMessage),
         };
         let header = Header::read(&mut reader)?;
@@ -129,9 +170,11 @@ impl Opened {
         Ok(Self {
             cid,
             first,
+            stamp,
             header,
             ciphertext,
             bytes: bytes.to_vec(),
+            outer,
         })
     }
 }
@@ -144,5 +187,8 @@ impl Opened {
 pub fn open(key: &SecretKey, envelope: &[u8]) -> Result<Opened, Error> {
     let envelope = Envelope::from_bytes(envelope)?;
     let padded = decrypt_message(key, &envelope)?;
-    Opened::from_bytes(unpad(&padded)?)
+    Opened::parse(
+        unpad(&padded)?,
+        Outer::Envelope(envelope.register().generator_point()),
+    )
 }

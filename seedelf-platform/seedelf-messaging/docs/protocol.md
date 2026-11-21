@@ -1,6 +1,6 @@
 # Seedelf Messaging: the one-to-one protocol (draft)
 
-The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay is built too, in the data layer (54c), and §17 fixes what it takes and gives. The wallet's side and the protocol model are still to come, and the design is refined as they're built.
+The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay is built too, in the data layer (54c), and §17 fixes what it takes and gives. A first message now carries a stamp and a proof that its base comes from the handle it names, and every envelope is bound to its conversation (calls 12 and 13, 2026-11-21), so no writer can learn whether two Seedelfs are one wallet's (§2). The wallet's side and the protocol model are still to come, and the design is refined as they're built.
 
 Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multiplication, registers (g, v) with v = [x]g.
 
@@ -15,6 +15,8 @@ Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multipl
 | Relay | Keeps envelopes 36 hours, then deletes them, even though a reader must unlock within that time to receive (§13). Proof of work against spam. Senders' IP addresses are seen, as the data layer already sees them. The wallet uses one relay, which prices each address's posts by its recent traffic, and says so (§10). |
 | Local state | Conversations live in the browser. Deleting the wallet's data loses them. |
 | Proving who you are | Undecided until users ask for it (§7). |
+| First-contact stamp | A first message to a new conversation carries proof of work over its first-contact block, 2²⁴ attempts, which the reader checks before computing any key (§3; call 12, 2026-11-21). |
+| Unlinkable handles | A first message proves its base re-randomizes the handle it names, and every envelope goes to its conversation identity re-randomized by a scalar from the message key, which the reader checks (§2; call 13, 2026-11-21). |
 | Groups | Later, on top of one-to-one sessions. |
 | Post-quantum | Later. |
 
@@ -75,27 +77,38 @@ Alice wrote first; Bob was written to.
   - Alice knows R_B is Bob's, since she chose him.
   - Bob knows R_A only as a stranger's.
   - Sharing a base links R_A and R_B only to each other, and only inside the encryption.
-- **Addressing.** Every message to Bob, the first included, goes to a fresh re-randomization of R_B, and every message to Alice to one of R_A. Each side finds its messages with its usual scan.
-- **Which handle.** Bob's Seedelfs all share x, and a re-randomization hides which of them it came from. So Bob can't tell which handle Alice wrote to unless she says. The first-contact block carries an optional `to` field.
+- **Addressing.** Every message to Bob, the first included, goes to R_B re-randomized by a scalar the message derives (§4.1), fresh each time, and every message to Alice to R_A likewise. Each side finds its messages with its usual scan.
+- **Which handle.** Bob's Seedelfs all share x, and a re-randomization hides which of them it came from. So the first-contact block names the handle in `to` and proves the base re-randomizes it (§3). `to` is verified, not claimed.
+- **Linking two handles.** Two registers of one key add up to a register of that key: (g₁ + g₂, v₁ + v₂) belongs to x whenever (g₁, v₁) and (g₂, v₂) both do, and to no one otherwise.
+  - So a writer who aims a message at the sum of two Seedelfs' registers, or at a second Seedelf's register while naming the first, learns from any reply that both are one wallet's. Bob's scan matches either, since every register of his key is his, and the reader can't see it happen: every point is a multiple of every other.
+  - **Two rules close it.** The base must be a re-randomization of the one handle named, which the proof in F shows (§3). And every envelope goes to its conversation identity re-randomized by a scalar derived from the message key, which the reader checks once the message decrypts (§4.1), so an envelope aimed anywhere else is dropped.
+  - Each is needed: with the proof alone, a writer could still aim the envelope of an honest first message, or of any later message, at the sum or at another handle.
+  - Either failure is dropped without a word, as a message that doesn't authenticate is. Nothing tells the writer.
+  - Seedelf payments share the property, at the cost of a payment and a spend to watch for. That's outside messaging.
 
 ## 3. The first message (Alice → Bob)
 
 Alice holds Bob's handle register (g_S, v_S).
 
 1. **Identities and keys.** Alice makes:
-   - R_B and R_A (§2);
+   - R_B and R_A (§2), with R_B = ([b]g_S, [b]v_S);
    - a random 16-byte conversation ID, cid;
    - a session ephemeral e_A, with E_A = [e_A]p₀;
    - a ratchet key s_A, with S_A = [s_A]p₀.
 2. **The first-contact block:**
 
-       F = cid (16) | t (8) | to (1 + 0–32) | replaces (1 + 0 or 16) | p₀ (48) | A (48) | E_A (48)
+       F = cid (16) | t (8) | to (1 + 0–32) | replaces (1 + 0 or 16) | p₀ (48) | A (48) | E_A (48) | proof (0 or 64)
 
    - **t:** when Alice started the conversation, in Unix seconds, big-endian.
-   - **to:** a length byte, then the handle's asset name (empty allowed).
-   - **replaces:** a length byte, then the cid of a conversation this one continues (§6), or nothing.
+   - **to:** a length byte, then the handle's asset name. Empty only in a continuation (§6).
+   - **replaces:** a length byte, then the cid of a conversation this one continues (§6), or nothing. Required when `to` is empty.
+   - **proof:** present exactly when `to` is. A Schnorr proof that p₀ = [b]g_S for the handle (g_S, v_S) named in `to`, with the rest of F in its challenge (§16.2): 64 bytes. Only a writer who re-randomized that one handle can make it, so it makes `to` verified, and keeps p₀ off the sum of two handles (§2).
    - **w₀ isn't sent:** Bob computes it as [x_B]p₀.
-3. **The session secret** comes from F, not from any one envelope:
+3. **The stamp.** Alice finds an 8-byte nonce such that SHA-256 of F's digest and the nonce has at least 24 leading zero bits (§16.2, §16.4): about 7 seconds of a browser's time on average.
+   - It prices a stranger's first message to one reader, which the relay's price can't target: the relay can't tell first messages from replies.
+   - F holds the reader's base and its proof, and is bound into SK, so the work can't be moved to another reader or another conversation.
+   - Replies and later messages pay nothing more.
+4. **The session secret** comes from F, not from any one envelope:
 
        SK = HKDF-SHA256(salt = "Seedelf-Messaging|v1|session|salt",
                         ikm  = [e_A]w₀ ‖ [x_A]w₀,
@@ -105,21 +118,22 @@ Alice holds Bob's handle register (g_S, v_S).
    - **The second half is a static DH between R_A and R_B,** as X3DH's DH1 is. Only the holder of A's key can compute it.
    - So a first message Bob can read was written by whoever controls R_A. A writer naming a register they don't control can't start a session, so Bob's replies can't be sent to a third party's mailbox.
    - It's implicit: there's no proof to carry, and nothing Bob could show anyone else.
-4. **Starting the ratchet,** as the Double Ratchet specification's `RatchetInitAlice`. R_B stands in for a signed prekey: Bob's initial ratchet key pair is (x_B, w₀) on the base p₀, which is the "long-term key only" decision. Alice computes (RK, CKs) = KDF_RK(SK, [s_A]w₀).
-5. **Every message until Alice receives Bob's first reply** is a first-contact message:
+5. **Starting the ratchet,** as the Double Ratchet specification's `RatchetInitAlice`. R_B stands in for a signed prekey: Bob's initial ratchet key pair is (x_B, w₀) on the base p₀, which is the "long-term key only" decision. Alice computes (RK, CKs) = KDF_RK(SK, [s_A]w₀).
+6. **Every message until Alice receives Bob's first reply** is a first-contact message:
 
-       0x01 | F | ratchet header (56) | ratchet ciphertext
+       0x01 | F | stamp (8) | ratchet header (56) | ratchet ciphertext
 
    - **The ratchet header** is S_A ‖ PN ‖ N: a 48-byte point and two big-endian u32 counters.
    - **The associated data** is cid ‖ R_A ‖ R_B ‖ ratchet header, with R_A = p₀ ‖ A and R_B = p₀ ‖ w₀. It binds both identities to every message, as X3DH's associated data does.
-   - **Sending:** the message is padded (§9) and sealed in an outer envelope to a fresh re-randomization of R_B.
-   - F, E_A and S_A stay the same in each. Alice switches to `0x02` once a reply from Bob decrypts.
+   - **Sending:** the message is padded (§9) and sealed in an outer envelope to R_B re-randomized by the message's outer scalar (§4.1).
+   - F, the stamp, E_A and S_A stay the same in each. Alice switches to `0x02` once a reply from Bob decrypts.
 
-**Bob's side,** for a `0x01` whose cid he doesn't know:
+**Bob's side,** for a `0x01` whose cid he doesn't know. Every point was checked, canonical, in G1 and not O, when the envelope was opened. Then, in order, each check before anything costlier:
 1. Refuse it if t is more than 48 hours old or more than an hour ahead (§5).
-2. Check that p₀, A, E_A and S_A are canonical, in G1 and not O.
-3. Compute w₀ = [x_B]p₀, then SK from [x_B]E_A ‖ [x_B]A. Run `RatchetInitBob(SK, (x_B, w₀))` and decrypt, on a copy of the state (§4.2).
-4. If it authenticates, it's a request (§3.1). If anything fails, nothing is kept.
+2. Refuse it if the stamp shows less than 24 bits of work. Nothing about F is computed before this.
+3. With a `to`: refuse it unless `to` names one of Bob's handles and the proof verifies against a register that handle has held. Without one: refuse it unless it's a verified continuation of one of Bob's conversations (§6).
+4. Compute w₀ = [x_B]p₀, then SK from [x_B]E_A ‖ [x_B]A. Run `RatchetInitBob(SK, (x_B, w₀))` and decrypt, on a copy of the state (§4.2). Check the envelope went to R_B re-randomized by the message's outer scalar (§4.1).
+5. If it authenticates, it's a request (§3.1). If anything fails, nothing is kept.
 
 - **Whichever message arrives first starts the session.** Its counter N shows how many came before it.
 - **Until Alice receives Bob's first reply,** what she sends is keyed from secrets x_B alone can rebuild. There's no forward secrecy for those messages against a later theft of x_B (§1.1).
@@ -148,19 +162,20 @@ The Double Ratchet runs as specified, with these choices:
 | KDF_CK(ck) | HMAC-SHA256(ck, 0x01) is the message key; HMAC-SHA256(ck, 0x02) is the next chain key. |
 | ENCRYPT(mk, m, ad) | A fresh random 16-byte salt; key ‖ nonce = HKDF-SHA256(salt = salt, ikm = mk, info = "Seedelf-Messaging\|v1\|ratchet\|message"), 44 bytes; the output is salt ‖ AES-256-GCM(key, nonce, ad, m). |
 | Header encryption | None: the outer layer already hides the header from everyone without x. |
+| The envelope's register | The other side's conversation identity re-randomized by the message's outer scalar o, derived from the message key and the ratchet salt (§16.2), not a random b. The reader checks the envelope's generator is [o]p₀ once the message decrypts. It binds every envelope to its conversation, so none can be aimed at another register of the reader's (§2). |
 | MAX_SKIP | 1,000 skipped keys per chain, each deleted 48 hours after it was stored. No message derives more than MAX_SKIP keys. |
 
 Inside the outer layer, a session message is:
 
     0x02 | cid (16) | ratchet header (56) | ratchet ciphertext
 
-The associated data is cid ‖ R_A ‖ R_B ‖ ratchet header, as in §3. It goes to a fresh re-randomization of the recipient's conversation identity.
+The associated data is cid ‖ R_A ‖ R_B ‖ ratchet header, as in §3. It goes to the recipient's conversation identity re-randomized by its outer scalar.
 
 **The recipient:**
 1. Scans.
 2. Opens the outer layer with [x]c.
 3. Looks up the cid.
-4. Runs the ratchet.
+4. Runs the ratchet, then checks the envelope's register against the message's outer scalar.
 
 ### 4.2 The state machine
 
@@ -189,7 +204,7 @@ After a restart, every `pending` envelope is posted again, the same bytes. A mes
 ## 5. Duplicates and replays
 
 1. **A `0x01` for a cid the reader has,** as a conversation or a request, counts only if its F is the stored F. Then it's a ratchet message of that conversation. Otherwise it's dropped. It never starts the conversation again.
-2. **A `0x01` for an unknown cid** is refused if its t is more than 48 hours old or more than an hour ahead of the reader's clock.
+2. **A `0x01` for an unknown cid** is refused if its t is more than 48 hours old or more than an hour ahead of the reader's clock, if its stamp shows too little work, or if it neither proves its base re-randomizes one of the reader's handles nor verifiably continues one of the reader's conversations (§3).
 3. **Deleting a conversation or request keeps its cid as a tombstone until t + 48 hours,** with t from its F.
    - That's exactly as long as rule 2 could accept one of its `0x01`s, and no longer is needed: after t + 48 hours, rule 2 refuses them.
    - A tombstone timed from the deletion could expire up to an hour early, when t ran ahead of the reader's clock.
@@ -216,8 +231,9 @@ The reader's clock judges rules 2 and 3. A clock set far wrong moves the window 
   - its two public values, A and the reader's own [x]p₀, are the old A and w₀ in either order.
 
   The static DH in the session secret (§3) then proves the writer holds the old key for their side.
-  - Either side that still has the conversation can restart it this way, with the old identities.
-  - Anything else with `replaces` shows as a new request that says it continues the old one, unverified. That includes a side that lost its state and writes fresh to a handle.
+  - Either side that still has the conversation can restart it this way, with the old identities, and with no `to`: the old base has no handle to prove.
+  - A first message with `replaces` that names a handle, with its proof, shows as a new request that says it continues the old one, unverified. That's how a side that lost its state writes fresh to a handle.
+  - One without a handle that isn't §6's match is refused: its base would be proven by nothing.
 
 ## 7. Who a sender is
 
@@ -229,10 +245,10 @@ What the wallet says about the other side:
 | Unknown sender | The reader was written to | The other side controls this conversation's R_A (§3), and nothing more. |
 | Says they're ⟨handle⟩ (unverified) | A message names a handle | Nothing: a claim. No message's content changes a label. |
 | Continues ⟨conversation⟩ | §6's match | The same keys as the old conversation. |
-| Says it continues ⟨conversation⟩ (unverified) | A `replaces` without §6's match | Nothing. |
+| Says it continues ⟨conversation⟩ (unverified) | A `replaces` without §6's match, in a first message from a handle | Nothing. |
 | Verified ⟨handle⟩ | Only with a future handle proof | The writer holds that handle's key. |
 
-`to` shows which of the reader's handles a first message named.
+`to` shows which of the reader's handles a first message was written to: verified by its proof (§3), not claimed.
 
 - **A future handle proof must be bound to F.** For instance, a Chaum–Pedersen proof that A and the handle's register share a key, with F in its challenge. With A on p₀ and the static DH, a proof lifted from another conversation can't start a session anyway; binding it to F makes that explicit. Two designs stay open until users ask for one:
   - **A plain proof** Bob can show to anyone: evidence of who wrote to him.
@@ -259,23 +275,25 @@ Measured on the same machine as the README: an Intel Core i5-12400F, one thread.
 
 **Per matched envelope,** a conversation's ratchet adds:
 - one multiplication for the outer layer;
+- one to check the envelope's register, [o]p₀;
 - three when a message starts a ratchet step (a new key pair and two DH);
 - symmetric work.
 
 **A conversation's first message:**
-- **Sending** costs twelve multiplications: the outer envelope's four, p₀ and w₀, A, E_A and [e_A]w₀, [x_A]w₀, and S_A and [s_A]w₀. Each later `0x01` costs only the outer four.
-- **Receiving** costs eight: discovery, the outer layer, w₀, [x_B]E_A, [x_B]A, and the ratchet step's three. That's plus the subgroup checks on p₀, A, E_A and S_A.
+- **Sending** costs thirteen multiplications: the outer envelope's four, p₀ and w₀, A, E_A and [e_A]w₀, [x_A]w₀, S_A and [s_A]w₀, and the proof's [k]g_S. Each later `0x01` costs only the outer four. The stamp adds 2²⁴ SHA-256 attempts on average, about 7 s of WebAssembly (§16.4).
+- **Receiving** costs eleven: discovery, the outer layer, the proof's two, w₀, [x_B]E_A, [x_B]A, the ratchet step's three and the envelope's check. That's plus the subgroup checks on p₀, A, E_A and S_A, and two SHA-256 for the stamp.
 
 ## 9. Size and padding
 
 - **Overhead:**
   - The outer layer adds 161 bytes.
   - Inside it, an `0x02` adds 105 bytes: the type, the cid, the ratchet header, and the ratchet ciphertext's 16-byte salt and 16-byte tag.
-  - An `0x01` adds 259–307: the same, with F's 170–218 in place of the cid.
+  - An `0x01` adds F and the stamp in place of the cid: 332–379 bytes from a handle (F's 235–282), 283 for a continuation (F's 186).
 - **Padding:** the inner message is padded to fill one of four envelope sizes: 512 bytes, 2, 8 and 32 KiB. 32 KiB is the largest, under the relay's 64 KiB request limit.
   - The method: 0x80, then zeros, stripped on reading.
-  - The smallest envelope holds 350 inner bytes: an `0x02` with up to 245 bytes of text, or an `0x01` with up to 91 (43 with a full `to` and `replaces`).
-- **What size still says:** a first message with 92–245 bytes of text lands one size up from a reply with the same text. The relay sees only the size, which an ordinary longer reply shares. Doubling the smallest size would hide that, at the cost of doubling the pool for every short message; it's documented instead.
+  - The smallest envelope holds 350 inner bytes: an `0x02` with up to 245 bytes of text; a continuation's `0x01` with up to 67; a first message from a handle with up to 18 under a 1-byte `to`.
+  - A first message to a Seedelf, whose name is 32 bytes, never fits 512 bytes: it's at least 2 KiB, which holds 1,523 bytes of text (1,507 with `replaces`).
+- **What size still says:** a first message to a Seedelf is a 2 KiB envelope, a size the relay also sees for every reply of 246 to 1,781 bytes of text, but never for a short one. So it can tell a first message from a short reply, not from a longer one. Doubling the smallest size would hide that, at the cost of doubling the pool for every short message; it's documented instead.
 
 ## 10. The relay
 
@@ -313,7 +331,7 @@ Measured on the same machine as the README: an Intel Core i5-12400F, one thread.
 
 **What the relay can also do:** withhold, delay, reorder or replay envelopes (§5, §6). It can't read, address or forge them.
 
-**What's claimed and what isn't:** no envelope names its recipient or sender. There's no claim of anonymity against an observer who watches the whole network.
+**What's claimed and what isn't:** no envelope names its recipient or sender, and no writer can learn from a reader's replies whether two Seedelfs are one wallet's (§2). There's no claim of anonymity against an observer who watches the whole network.
 
 **What the wallet and the privacy policy say:** the relay can't read messages or tell whom they're for. It sees the IP address that posts each envelope and when, and counts each address's recent posts, in memory, to stop floods.
 
@@ -349,16 +367,9 @@ Measured on the same machine as the README: an Intel Core i5-12400F, one thread.
 - **A discovery key that stays available while locked.** It can't be the Seedelf's key, so handles would need a messaging register of their own, which reopens §0's choice of key.
 
 **Open:**
-- **Proof of work's numbers.** Set in §17.4 (54c) from a measured attempt: about 425 ns of WebAssembly. Open is tuning them with real use, and timing them in the extension itself (54d). Hashcash over SHA-256 comes first. If GPUs prove the problem, a memory-hard puzzle that stays cheap to check, such as Equihash, is in reserve. Not one whose check costs the relay as much as an attempt, such as Argon2. Also its economics: the relay's storage is its rate cap times 36 hours.
-- **A first-contact stamp,** proposed. An 8-byte nonce in F such that a hash over F, nonce included, meets a difficulty the reader sets, checked before any key is computed.
-  - It prices a stranger's first message to one reader. The relay's price can't target that, since the relay can't tell first messages from replies.
-  - F is unique to its conversation and bound into SK, so a stamp can't be moved to another reader or another conversation.
-  - Replies pay nothing more. It changes F, so it's settled before the WebAssembly bindings fix the format.
-- **Proving the base comes from the named handle,** proposed. Two registers of one key add up to a register of that key: (g₁ + g₂, v₁ + v₂) belongs to x whenever (g₁, v₁) and (g₂, v₂) both do, and to no one otherwise.
-  - So a first message to the sum of two Seedelfs' registers opens only for a wallet holding both. A reply tells the writer that both Seedelfs are one wallet's, and the reader can't see it happen: every point is a multiple of every other.
-  - Seedelf payments share the property, at the cost of a payment and a spend to watch for.
-  - The fix for messages: a short proof, with F in its challenge, that p₀ = [b]g for the handle named in `to`, which only a writer who re-randomized that one handle can make. It also makes `to` verified rather than claimed; `to` becomes required.
-  - About 64 to 80 bytes. It changes F too, so it's settled with the stamp.
+- **Proof of work's numbers.** Set in §17.4 (54c) from a measured attempt: about 425 ns of WebAssembly, and the first-contact stamp's 24 bits (§16.4) from the same figure. Open is tuning both with real use, and timing them in the extension itself (54d). Hashcash over SHA-256 comes first. If GPUs prove the problem, a memory-hard puzzle that stays cheap to check, such as Equihash, is in reserve. Not one whose check costs the relay as much as an attempt, such as Argon2. Also its economics: the relay's storage is its rate cap times 36 hours.
+- **A first-contact stamp: decided (call 12, the owner, 2026-11-21).** An 8-byte nonce after F, whose work over F the reader checks before any key is computed (§3). Writers solve at 24 bits [choice], and readers ask the same: a reader that asked more would drop honest first messages, since there's no way to tell writers.
+- **Proving the base comes from the named handle: decided (call 13, the owner, 2026-11-21),** with the envelope's binding it turned out to need (§2). As proposed, the proof alone left the envelope free: a writer could aim an honest first message's envelope, or any later one's, at the sum of two handles or at a second handle, and a reply would still link them. Binding each envelope to its conversation by the message's outer scalar closes that, at no bytes and one multiplication a message. `to` is now required except in a continuation, and a continuation without a handle must be verified.
 - **The bounds on requests** (§3.1: 50 and 256 KiB) and the sizes (§9: 512 bytes to 32 KiB), checked against real use.
 - **MAX_SKIP, the 2,000 stored skipped keys and their 48-hour lifetime** (§16.4).
 - **How long a browser keeps message history,** and whether the user picks.
@@ -405,15 +416,19 @@ Measured on the same machine as the README: an Intel Core i5-12400F, one thread.
 ### 16.1 Encodings
 
 - **Points:** 48-byte compressed G1, canonical, in G1 and not O (construction.md §4.4). A point that is a KDF's input (a DH output, or z) is its 48 compressed bytes too.
-- **Scalars:** 32 bytes, big-endian. Every scalar drawn (b, e_A, s_A, every ratchet key, the envelope's b and r) is uniform in [1, q − 1].
+- **Scalars:** 32 bytes, big-endian. Every scalar drawn (b, e_A, s_A, k, every ratchet key, the envelope's r) is uniform in [1, q − 1]. A scalar from a hash (the proof's challenge, the outer scalar) is the hash's bytes as a big-endian integer, reduced mod q.
 - **Counters** PN and N: u32, big-endian. **t:** u64, big-endian, Unix seconds.
-- **F:** `cid (16) | t (8) | len (1) | to (len, at most 32) | len (1, 0 or 16) | replaces | p₀ (48) | A (48) | E_A (48)`, 170 to 218 bytes (§3). `to` is the asset name's raw bytes, not hex.
+- **F:** `cid (16) | t (8) | len (1) | to (len, at most 32) | len (1, 0 or 16) | replaces | p₀ (48) | A (48) | E_A (48) | c (32) | z (32)` (§3). `to` is the asset name's raw bytes, not hex.
+  - The proof's c and z are there exactly when `to`'s length isn't 0. An F with an empty `to` must have a `replaces`: it's a continuation. Anything else is refused.
+  - z must be below q; c is any 32 bytes.
+  - So F is 186 bytes for a continuation, and 235 to 282 from a handle.
+  - **F′** is F without c and z: what the proof's challenge covers.
 - **The ratchet header:** `DHs (48) | PN (4) | N (4)`, 56 bytes.
 - **The associated data:** `cid (16) | p₀ | A | p₀ | w₀ | header (56)`, 264 bytes: cid ‖ R_A ‖ R_B ‖ header.
 - **The ratchet ciphertext:** `salt (16) | AES-256-GCM ciphertext | tag (16)`.
-- **Inner messages:** `0x01 | F | header | ratchet ciphertext` and `0x02 | cid | header | ratchet ciphertext`. Any other type byte is refused.
+- **Inner messages:** `0x01 | F | stamp (8, big-endian) | header | ratchet ciphertext` and `0x02 | cid | header | ratchet ciphertext`. Any other type byte is refused.
 - **Padding:** `inner | 0x80 | 0x00…` to `size − 161` bytes, where size is the smallest of 512, 2,048, 8,192 and 32,768 that holds the inner message and the marker. A reader takes any of the four sizes [choice: a sender may pad up], and refuses any other length, or padding whose last nonzero byte isn't `0x80`.
-- **The outer envelope:** v1 (construction.md §4), with the padded inner message as its plaintext, to a fresh re-randomization of the recipient's conversation identity: R_B = (p₀, w₀) for the initiator's messages, R_A = (p₀, A) for the responder's. So every session envelope is exactly 512, 2,048, 8,192 or 32,768 bytes.
+- **The outer envelope:** v1 (construction.md §4), with the padded inner message as its plaintext, to the recipient's conversation identity re-randomized by the message's outer scalar o (§16.2): v1's b is o, and its r is drawn. The identity is R_B = (p₀, w₀) for the initiator's messages, R_A = (p₀, A) for the responder's. So every session envelope is exactly 512, 2,048, 8,192 or 32,768 bytes, and its p is [o]p₀.
 
 ### 16.2 The key schedule
 
@@ -426,15 +441,19 @@ Measured on the same machine as the README: an Intel Core i5-12400F, one thread.
 | KDF_RK(rk, dh) | HKDF-SHA256(salt = rk, ikm = dh, info = `Seedelf-Messaging\|v1\|ratchet\|root`), 64 bytes: RK′ then CK. |
 | KDF_CK(ck) | mk = HMAC-SHA256(key = ck, message = the one byte `0x01`); ck′ = HMAC-SHA256(key = ck, message = `0x02`). |
 | ENCRYPT(mk, m, ad) | key ‖ nonce = HKDF-SHA256(salt = a fresh 16-byte salt, ikm = mk, info = `Seedelf-Messaging\|v1\|ratchet\|message`), 44 bytes; the output is salt ‖ AES-256-GCM(key, nonce, ad, m). |
+| The outer scalar o | HKDF-SHA256(salt = ENCRYPT's salt, ikm = mk, info = `Seedelf-Messaging\|v1\|ratchet\|outer`), 64 bytes, as a big-endian integer mod q. The envelope goes to ([o]p₀, [o]V), V the recipient's public value on p₀. An o of 0 (probability 2⁻²⁵⁴) sends nothing, and a retry draws a new salt. |
 | The ratchet | The Double Ratchet specification's RatchetEncrypt, RatchetDecrypt, SkipMessageKeys and DHRatchet, with §16.4's bounds. |
+| The base proof | For the handle (g_S, v_S) and p₀ = [b]g_S: T = [k]g_S; c = SHA-256(`Seedelf-Messaging\|v1\|session\|base` ‖ g_S ‖ v_S ‖ p₀ ‖ T ‖ F′), the points compressed; z = k + (c mod q)·b mod q. The reader computes T′ = [z]g_S − [c mod q]p₀ and accepts if the same hash with T′ is c. |
+| The stamp | digest = SHA-256(`Seedelf-Messaging\|v1\|session\|stamp` ‖ F); its work is the leading zero bits of SHA-256(digest ‖ nonce (8, big-endian)), counted from the most significant bit of the first byte, as the relay's stamp's are (§17.3). |
 
 ### 16.3 Random draws
 
 Every random value comes from the operating system. To make vectors, each operation draws in a fixed order:
 
-- **Starting from a handle:** b (the re-randomization of the handle into R_B), cid, e_A, s_A.
-- **Starting a continuation:** cid, e_A, s_A. There's no b: the base is the old one.
-- **Sending:** the ratchet's salt, then the outer envelope's b, then its r.
+- **Starting from a handle:** b (the re-randomization of the handle into R_B), cid, e_A, s_A, then the proof's k.
+- **Starting a continuation:** cid, e_A, s_A. There's no b and no k: the base is the old one, with no handle to prove.
+- **The stamp** isn't drawn: the vectors take the first nonce from 0 with enough work. The wallet searches as it likes.
+- **Sending:** the ratchet's salt, then the outer envelope's r. Its b is the outer scalar, not a draw.
 - **A ratchet step on receiving:** the new DHs scalar.
 - **Requests:** authenticating a request's message runs RatchetInitBob and the request's messages on a scratch state, whose ratchet step draws a key that's thrown away with it. The kept state's DHs is drawn when the reply builds it, at its first stored message's step. The vectors give only the draws of states that are kept.
 
@@ -448,6 +467,16 @@ Every random value comes from the operating system. To make vectors, each operat
 ### 16.4 The rules, exactly
 
 - **The window:** a first message for an unknown cid is read only if now ≤ t + 48 h and t ≤ now + 1 h, both ends included.
+- **A first message for an unknown cid,** past the window, in this order:
+  - **the stamp** shows at least 24 bits [choice];
+  - **with a `to`,** the reader holds a handle of that name, and the proof verifies against one of the registers that name has held [choice: the wallet passes every register it knows for each of its Seedelfs, since a Seedelf's datum can change while a message is on its way];
+  - **without one,** it's a verified continuation (below);
+  - **then** SK and the ratchet, on a copy, and the envelope's check.
+
+  A stamp under 24 bits, an unknown `to`, a proof that doesn't verify and an unverified continuation without a handle are each refused with nothing kept.
+- **The envelope:** every message's, on every path (a request's first message and later joins, a conversation's messages), is checked once it decrypts: its p must be [o]p₀. A message that fails is refused, and the state is as it was. A request's stored messages were checked when they came, and are replayed without their envelopes [choice].
+- **A known cid's stamp** isn't checked again: a later `0x01` of a request or conversation is judged by F alone [choice].
+- **Starting** names a handle, 1 to 32 bytes; only a continuation has no `to` [choice].
 - **Tombstones:** held while now ≤ t + 48 h; `expire` deletes the rest. Deleting a request or a conversation leaves one; a request pushed out by the bounds doesn't [choice].
 - **A known cid:** a `0x01` counts only with F byte for byte the stored F; it's refused at the initiator, whose own F it is [choice]. A `0x02` for a request not yet replied to is refused [choice].
 - **Skipping:** one message may make the reader skip at most MAX_SKIP = 1,000 keys in all: the old receiving chain's remainder (PN − Nr, when there is a receiving chain) plus the new chain's N [choice: in all, not per chain]. The bound is checked before any key is derived. N = 2³² − 1 is refused, so Nr never wraps.
@@ -456,7 +485,7 @@ Every random value comes from the operating system. To make vectors, each operat
 - **Replays:** a message whose key was used, in the current receiving chain or among the stored keys, is refused as used. A replay from an earlier chain whose keys are gone can't be told from a forgery without keeping old chains' keys: it runs as a new chain on a copy and fails to authenticate. Either way nothing changes.
 - **Requests:** "oldest" means first to arrive, not lowest t, since t is the writer's to choose [choice]. A later `0x01` joins its request only with the stored F, a header not already held, and if it reads after the stored messages, in their order and with their times, as processing each on arrival would read it. So a request shows exactly what its conversation will hold: a message that arrives more than 48 hours after a later one skipped its key is refused there, as it would be in the conversation. The bytes counted are the stored inner messages, unpadded. After every addition the oldest requests go until both bounds hold.
 - **Replying to a request:** RatchetInitBob, then each stored message in the order it arrived, with its arrival time as now. That builds exactly the state processing each on arrival would have.
-- **Continuations:** judged when the request arrives, against the reader's conversations only, not its requests [choice].
+- **Continuations:** judged when the request arrives, against the reader's conversations only, not its requests [choice]. Without a handle, only a verified one is read.
 - **One's own handle:** starting a conversation with a register of one's own key is refused, since R_A would be R_B [choice].
 - **A first message's life.** Every first message carries the conversation's t, so the window refuses all of them once t is 48 hours old, unless the reader already holds the cid as a request or a conversation. A writer with no reply after 48 hours can't know whether the reader has the conversation. Only a new conversation, with a new t, reaches a reader who hasn't. The two-wallet simulation meets this whenever a reader stays locked through a conversation's first 48 hours.
 
@@ -464,23 +493,39 @@ Every random value comes from the operating system. To make vectors, each operat
 
 The wallet's private format, versioned by its first byte; another implementation needn't read it. Every record is parsed in full and checked: points, the ratchet key's two halves, counts, flags and trailing bytes.
 
-- **A conversation** (version 1): `1 | role (1) | len (2) | F | w₀ (48) | RK (32) | flags (1) | CKs (32)? | CKr (32)? | DHs secret (32) | DHs public (48) | DHr (48)? | Ns (4) | Nr (4) | PN (4) | lost (8) | count (2) | count × (DH (48) | N (4) | mk (32) | stored at (8))`. Flags bit 0 is CKs, bit 1 CKr, bit 2 DHr. It holds the conversation's secrets: the wallet seals it under the vault key.
+- **A conversation** (version 1): `1 | role (1) | len (2) | F | w₀ (48) | RK (32) | flags (1) | CKs (32)? | CKr (32)? | DHs secret (32) | DHs public (48) | DHr (48)? | stamp (8)? | Ns (4) | Nr (4) | PN (4) | lost (8) | count (2) | count × (DH (48) | N (4) | mk (32) | stored at (8))`. Flags bit 0 is CKs, bit 1 CKr, bit 2 DHr, bit 3 the stamp, which only an initiator has. It holds the conversation's secrets: the wallet seals it under the vault key.
 - **Requests** (version 1): `1 | next sequence (8) | count (2) | count × (sequence (8) | continues (1, then a cid for 1 or 2) | messages (2) | messages × (arrived at (8) | len (4) | inner message))`. No secrets.
 - **Tombstones** (version 1): `1 | count (4) | count × (cid (16) | t (8))`.
 
 ### 16.6 Vectors
 
-[tests/vectors/messaging_session_v1.json](../tests/vectors/messaging_session_v1.json) has three conversations with every intermediate value: F, both DHs and SK, each init, every chain and message key, ENCRYPT's key and nonce, each ratchet step, each inner message, and each envelope with its draws.
+[tests/vectors/messaging_session_v1.json](../tests/vectors/messaging_session_v1.json) has four conversations with every intermediate value: F with its proof and stamp, both DHs and SK, each init, every chain and message key, ENCRYPT's key and nonce, each outer scalar, each ratchet step, each inner message, and each envelope with its draws.
 
-1. A first contact to a Seedelf's handle with a full `to`, replies both ways, and a pair delivered out of order.
+1. A first contact to a Seedelf's handle under its full 32-byte name, replies both ways, and a pair delivered out of order. Both first messages are 2 KiB.
 2. The responder continuing that conversation with its identities, which the reader's rules call verified.
-3. The smallest first contact (a root register, no `to`, no `replaces`), with 91 and 92 bytes of text, read last first.
+3. The smallest first contact (a root register under a 1-byte `to`, no `replaces`), with 18 and 19 bytes of text, read last first.
+4. A fresh start from a handle under its full name with a `replaces` (F at its largest, 282 bytes), whose proof's challenge is at least q, so F carries it unreduced; an 8 KiB message; and a ratchet step that skips the rest of the old receiving chain (PN − Nr = 1), whose skipped message is read last.
 
-**The fields.** Each session gives the keys, the handle (null for a continuation), t, `to`, `replaces`, the start's `draws`, and every value of §3. Then `events`, in order:
-- **A send:** `from` (initiator or responder), `kind`, the plaintext, the chain key before it, the message key, the next chain key, the header, the associated data, ENCRYPT's `salt`, `aes_key` and `nonce`, the ratchet ciphertext, the inner message, `envelope_size`, the envelope's draws `outer_b` and `outer_r`, and the envelope.
-- **A receive:** `by`, `at` (the reader's now), `delivers` (the index in `events` of the send it reads), its header, the plaintext, and `ratchet_step`, null when it made none. A step gives `receiving_dh` (the DH output of the old DHs and the header's key), `root_key` (RK after the receiving half), `receiving_chain_key`, `new_ratchet_secret` and `new_ratchet_public`, `sending_dh` (the DH output of the new key and the header's key), `next_root_key` and `sending_chain_key`. A responder's first step starts from RK = SK and DHs = (x_B, w₀).
+**Encodings.** Every byte string is lowercase hex, `to` included: the hex of its raw bytes. `t`, `at`, `delivers`, `envelope_size` and the stamp's `bits`, `nonce` and `work` are JSON numbers. An absent value (`handle`, `replaces`, `base_proof`, `ratchet_step`) is null.
+
+**The fields.** Each session gives:
+- `name`, and for a continuation `continues`, the name of the session it continues;
+- `initiator_secret_key` (x_A) and `responder_secret_key` (x_B);
+- `handle` (`generator`, `public_value`; null for a continuation), `t`, `to` and `replaces`;
+- the start's `draws` (`cid`, `e_A`, `s_A`, and `b` and `k` from a handle);
+- `base_proof`: null for a continuation, else F′ as `first_contact_prefix`, T as `commitment`, `challenge`, `challenge_scalar` (c mod q) and `response`;
+- `stamp`: `digest`, `bits`, `nonce`, the `hash` of digest and nonce, and its `work`. The file's `first_contact_stamp_bits` is 24, and each stamp's nonce is the first from 0 with that work;
+- §3's values: `base` (p₀), `initiator_public` (A), `responder_public` (w₀), `ephemeral` (E_A), `ratchet_public` (S_A), `first_contact` (F), `ephemeral_dh` ([e_A]w₀), `static_dh` ([x_A]w₀), `session_key` (SK), `init_dh` ([s_A]w₀), and RatchetInitAlice's `root_key` and `sending_chain_key`.
+
+The file also has `version` (1), `description`, `envelope_sizes`, `first_contact_stamp_bits`, and `labels`: `session_salt`, `session_info`, `base_label`, `stamp_label`, `root_info`, `message_info` and `outer_info`, §16.2's strings.
+
+Then `events`, in order:
+- **A send:** `from` (initiator or responder), `kind` (`first-contact` or `session`), `plaintext`, `chain_key` (before it), `message_key`, `next_chain_key`, `header`, `associated_data`, ENCRYPT's `salt`, `aes_key` and `nonce`, `ratchet_ciphertext`, `inner` (the inner message, unpadded), `envelope_size`, the outer scalar's HKDF output `outer_okm` and the scalar `outer_scalar`, the envelope's draw `outer_r`, and `envelope`.
+- **A receive:** `by`, `at` (the reader's now), `delivers` (the index in `events` of the send it reads), `header`, `plaintext`, and `ratchet_step`, null when it made none. A step gives `receiving_dh` (the DH output of the old DHs and the header's key), `root_key` (RK after the receiving half), `receiving_chain_key`, `new_ratchet_secret` and `new_ratchet_public`, `sending_dh` (the DH output of the new key and the header's key), `next_root_key` and `sending_chain_key`. A responder's first step starts from RK = SK and DHs = (x_B, w₀).
 
 **Checked independently** (2026-11-20): a script written from this section, protocol.md and construction.md alone, without reading the Rust, reproduced every value in all three sessions with noble-curves 2.0.1 for G1 and Node 24's WebCrypto for HKDF-SHA256, HMAC-SHA256 and AES-256-GCM: 281 session values, the labels and sizes, and v1's 40. Where it had to guess, this section now says what it found.
+
+**Checked again** (2026-11-21, after calls 12 and 13), the same way, by a new script that read no Rust: every value in all four sessions, 451 session values and v1's 42 with the labels, and each stamp's nonce found as the first from 0 with 24 bits. Its first pass, over three sessions, showed what the bytes didn't pin: a challenge stored reduced, a step that ignored PN, F with both `to` and `replaces`, and an 8 KiB envelope. Session 4 was added for them, and each wrong reading now changes values. Its notes on the file's fields are folded in above.
 
 - `session_vectors_match_the_file` holds the code to the file. `RECORD_MESSAGING_SESSION_VECTORS=1` rewrites it, for a deliberate change of format only (it never touches messaging_v1.json).
 - tests/session_vectors.rs reads it through the public API.

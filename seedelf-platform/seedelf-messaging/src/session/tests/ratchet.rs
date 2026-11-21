@@ -5,7 +5,7 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
-use super::support::{Seeded, handle, key, opened, skip_sends};
+use super::support::{Seeded, handle, key, opened, skip_sends, start};
 use crate::Error;
 use crate::SecretKey;
 use crate::session::conversation::Conversation;
@@ -118,8 +118,7 @@ pub(crate) struct Pair {
 pub(crate) fn pair(label: &str) -> Pair {
     let (alice, bob) = (key("alice"), key("bob"));
     let mut draw = Seeded::new(label);
-    let mut a = Conversation::start_with(&alice, &handle("bob", "bob's handle"), b"", T, &mut draw)
-        .unwrap();
+    let mut a = start(&alice, &handle("bob", "bob's handle"), T, &mut draw);
     let first = opened(&bob, &a.send_with(b"first", &mut draw).unwrap());
     let (mut b, _) = Conversation::accept_with(&bob, &[(&first, T)], &mut draw).unwrap();
     let reply = opened(&alice, &b.send_with(b"reply", &mut draw).unwrap());
@@ -191,8 +190,7 @@ fn out_of_order_within_and_across_chains() {
 fn one_message_skips_at_most_max_skip_across_both_chains() {
     let (alice, bob) = (key("alice"), key("bob"));
     let mut draw = Seeded::new("both chains");
-    let mut a = Conversation::start_with(&alice, &handle("bob", "bob's handle"), b"", T, &mut draw)
-        .unwrap();
+    let mut a = start(&alice, &handle("bob", "bob's handle"), T, &mut draw);
     let first = opened(&bob, &a.send_with(b"first", &mut draw).unwrap());
     let (mut b, _) = Conversation::accept_with(&bob, &[(&first, T)], &mut draw).unwrap();
     // Alice's first chain runs to 601 messages; Bob has seen one.
@@ -286,7 +284,7 @@ fn skipped_keys_live_48_hours() {
 fn alice_before_the_first_reply_derives_nothing_from_a_forged_header() {
     let (alice, bob) = (key("alice"), key("bob"));
     let mut draw = Seeded::new("forged");
-    let mut a = Conversation::start_with(&alice, &handle("bob", "h"), b"", T, &mut draw).unwrap();
+    let mut a = start(&alice, &handle("bob", "h"), T, &mut draw);
     let first = opened(&bob, &a.send_with(b"x", &mut draw).unwrap());
     let (mut b, _) = Conversation::accept_with(&bob, &[(&first, T)], &mut draw).unwrap();
     let mut reply = opened(&alice, &b.send_with(b"y", &mut draw).unwrap());

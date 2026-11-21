@@ -5,13 +5,17 @@
 //!
 //! The public API draws its own randomness, so a reader here can follow a
 //! transcript only up to its own first ratchet step: it reads every
-//! first-contact message the responder received, and checks F and every
-//! header and inner message on the way.
+//! first-contact message the responder received, with the responder's
+//! handle and the protocol's stamp work, and checks F and every header and
+//! inner message on the way. The continuation reads only beside the
+//! conversation it continues, which this reader doesn't have: it's refused.
 
 use serde_json::Value;
 
-use seedelf_messaging::SecretKey;
-use seedelf_messaging::session::{ENVELOPE_SIZES, FirstContact, Inbox, Received, open};
+use seedelf_messaging::session::{
+    ENVELOPE_SIZES, FIRST_CONTACT_STAMP_BITS, FirstContact, Handle, Inbox, Received, open,
+};
+use seedelf_messaging::{Error, Register, SecretKey};
 
 fn bytes(value: &Value) -> Vec<u8> {
     hex::decode(value.as_str().unwrap()).unwrap()
@@ -19,6 +23,10 @@ fn bytes(value: &Value) -> Vec<u8> {
 
 fn secret(value: &Value) -> SecretKey {
     SecretKey::from_bytes(&bytes(value).try_into().unwrap()).unwrap()
+}
+
+fn point(value: &Value) -> [u8; 48] {
+    bytes(value).try_into().unwrap()
 }
 
 #[test]
@@ -30,9 +38,13 @@ fn every_first_contact_message_reads_through_the_public_api() {
         file["envelope_sizes"].as_array().unwrap().len(),
         ENVELOPE_SIZES.len()
     );
+    assert_eq!(
+        file["first_contact_stamp_bits"].as_u64(),
+        Some(u64::from(FIRST_CONTACT_STAMP_BITS))
+    );
     let sessions = file["sessions"].as_array().unwrap();
-    assert_eq!(sessions.len(), 3);
-    let mut read = 0;
+    assert_eq!(sessions.len(), 4);
+    let (mut read, mut refused) = (0, 0);
     for session in sessions {
         let initiator = secret(&session["initiator_secret_key"]);
         let responder = secret(&session["responder_secret_key"]);
@@ -45,6 +57,24 @@ fn every_first_contact_message_reads_through_the_public_api() {
             bytes(&session["initiator_public"])
         );
         assert_eq!(first.cid().0.to_vec(), bytes(&session["draws"]["cid"]));
+        assert_eq!(
+            first.stamp_digest().to_vec(),
+            bytes(&session["stamp"]["digest"])
+        );
+        let handles: Vec<Handle> = match &session["handle"] {
+            Value::Null => Vec::new(),
+            handle => vec![
+                Handle::new(
+                    first.to(),
+                    Register::from_bytes(
+                        &point(&handle["generator"]),
+                        &point(&handle["public_value"]),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            ],
+        };
 
         let mut inbox = Inbox::new();
         for event in session["events"].as_array().unwrap() {
@@ -66,20 +96,25 @@ fn every_first_contact_message_reads_through_the_public_api() {
             }
             assert!(to_responder);
             assert_eq!(opened.first_contact(), Some(&first));
+            assert_eq!(opened.stamp(), session["stamp"]["nonce"].as_u64());
             // Arrival times inside the window: t itself.
-            let received = inbox
-                .receive(&responder, &envelope, first.started_at())
-                .unwrap();
-            let Received::Request { cid, plaintext, .. } = received else {
+            let received = inbox.receive(&responder, &handles, &envelope, first.started_at());
+            if handles.is_empty() {
+                assert_eq!(received, Err(Error::UnverifiedContinuation));
+                refused += 1;
+                continue;
+            }
+            let Received::Request { cid, plaintext, .. } = received.unwrap() else {
                 panic!("a first-contact message is a request")
             };
             assert_eq!(cid, first.cid());
             assert_eq!(plaintext, bytes(&send["plaintext"]));
             read += 1;
         }
-        // The other side's key opens none of the responder's envelopes.
-        let request = inbox.requests().get(first.cid()).unwrap();
-        assert!(request.read(&initiator).is_err());
+        if let Some(request) = inbox.requests().get(first.cid()) {
+            // The other side's key opens none of the responder's envelopes.
+            assert!(request.read(&initiator).is_err());
+        }
     }
-    assert_eq!(read, 6);
+    assert_eq!((read, refused), (7, 1));
 }

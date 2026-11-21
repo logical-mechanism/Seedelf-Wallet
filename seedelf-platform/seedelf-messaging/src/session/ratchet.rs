@@ -6,7 +6,7 @@
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
-use blstrs::{G1Affine, G1Projective};
+use blstrs::{G1Affine, G1Projective, Scalar};
 use group::Curve;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -14,7 +14,7 @@ use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::Error;
-use crate::keys::scalar_from_bytes;
+use crate::keys::{scalar_from_bytes, scalar_mod_q};
 use crate::register::{POINT_LEN, decode_point};
 use crate::session::draw::Draw;
 use crate::session::first_contact::Reader;
@@ -46,6 +46,9 @@ pub(crate) const ROOT_INFO: &[u8] = b"Seedelf-Messaging|v1|ratchet|root";
 
 /// ENCRYPT's HKDF info.
 pub(crate) const MESSAGE_INFO: &[u8] = b"Seedelf-Messaging|v1|ratchet|message";
+
+/// The outer scalar's HKDF info.
+pub(crate) const OUTER_INFO: &[u8] = b"Seedelf-Messaging|v1|ratchet|outer";
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
@@ -98,6 +101,24 @@ pub(crate) fn message_key_and_nonce(
         .expand(MESSAGE_INFO, okm.as_mut())
         .expect("44 bytes is within HKDF-SHA256's limit");
     okm
+}
+
+/// The outer scalar's 64 bytes: HKDF-SHA256(salt = salt, ikm = mk,
+/// info = "Seedelf-Messaging|v1|ratchet|outer").
+pub(crate) fn outer_okm(mk: &Secret32, salt: &[u8; RATCHET_SALT_LEN]) -> Zeroizing<[u8; 64]> {
+    let mut okm = Zeroizing::new([0u8; 64]);
+    Hkdf::<Sha256>::new(Some(salt), mk.bytes())
+        .expand(OUTER_INFO, okm.as_mut())
+        .expect("64 bytes is within HKDF-SHA256's limit");
+    okm
+}
+
+/// The outer scalar `o`: [`outer_okm`] as a big-endian integer mod the group
+/// order. A message's envelope goes to the other side's identity
+/// re-randomized by `o`, so its reader can check the envelope belongs to the
+/// conversation (docs/protocol.md §16.2). Zero only with probability 2⁻²⁵⁴.
+pub(crate) fn outer_scalar(mk: &Secret32, salt: &[u8; RATCHET_SALT_LEN]) -> Scalar {
+    scalar_mod_q(outer_okm(mk, salt).as_ref())
 }
 
 /// ENCRYPT(mk, m, ad) with a given salt: `salt ‖ AES-256-GCM(key, nonce, ad, m)`.
@@ -288,6 +309,7 @@ impl Ratchet {
 
     /// RatchetDecrypt, with the bound that no message skips more than
     /// [`MAX_SKIP`] keys in all, and skipped keys usable for 48 hours.
+    /// Returns the plaintext and the message key that opened it.
     ///
     /// `ad_prefix` is `cid ‖ R_A ‖ R_B`; the header follows it in the
     /// associated data.
@@ -299,7 +321,7 @@ impl Ratchet {
         ad_prefix: &[u8],
         now: u64,
         draw: &mut dyn Draw,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<(Vec<u8>, Secret32), Error> {
         let mut ad = Vec::with_capacity(ad_prefix.len() + RATCHET_HEADER_LEN);
         ad.extend_from_slice(ad_prefix);
         ad.extend_from_slice(&header.to_bytes());
@@ -318,8 +340,8 @@ impl Ratchet {
                 return Err(Error::KeyUsedOrDeleted);
             }
             let plaintext = decrypt(&self.skipped[i].mk, ciphertext, &ad)?;
-            self.skipped.remove(i);
-            return Ok(plaintext);
+            let used = self.skipped.remove(i);
+            return Ok((plaintext, used.mk));
         }
 
         let new_chain = self.dhr != Some(header.dh);
@@ -366,7 +388,7 @@ impl Ratchet {
         self.nr = header.n + 1;
         let plaintext = decrypt(&mk, ciphertext, &ad)?;
         self.evict();
-        Ok(plaintext)
+        Ok((plaintext, mk))
     }
 
     /// SkipMessageKeys: store the receiving chain's keys up to `until`.

@@ -4,22 +4,33 @@
 use blstrs::{G1Affine, G1Projective};
 use group::Curve;
 use hkdf::Hkdf;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
-use super::support::{Seeded, handle, identity, key, off_curve, opened, outside_g1, test_scalar};
+use super::support::{
+    HANDLE_NAME, Seeded, handle, identity, key, off_curve, opened, outside_g1, stamp, test_scalar,
+};
 use crate::Error;
-use crate::register::POINT_LEN;
+use crate::register::{POINT_LEN, Register};
 use crate::session::conversation::{Conversation, Role};
 use crate::session::draw::Draw;
 use crate::session::first_contact::{
-    ConversationId, FIRST_CONTACT_MAX_LEN, FIRST_CONTACT_MIN_LEN, FirstContact, SESSION_INFO,
-    SESSION_SALT, session_key, within_window,
+    BASE_LABEL, BASE_PROOF_LEN, ConversationId, FIRST_CONTACT_MAX_LEN, FIRST_CONTACT_MIN_LEN,
+    FIRST_STAMP_LABEL, FirstContact, SESSION_INFO, SESSION_SALT, prove_base, session_key,
+    within_window,
 };
 use crate::session::ratchet::kdf_rk;
 
+/// The handle the samples' bases re-randomize, and their `b`.
+fn sample_handle() -> (Register, blstrs::Scalar) {
+    (handle("bob", "F handle"), test_scalar("F base"))
+}
+
+/// An F whose base re-randomizes [`sample_handle`], with its proof when
+/// `to` isn't empty.
 fn sample(to: &[u8], replaces: Option<ConversationId>) -> FirstContact {
-    let base = (super::support::g() * test_scalar("F base")).to_affine();
-    FirstContact {
+    let (handle, b) = sample_handle();
+    let base = (handle.generator() * b).to_affine();
+    let mut first = FirstContact {
         cid: ConversationId(*b"0123456789abcdef"),
         started_at: 0x0102_0304_0506_0708,
         to: to.to_vec(),
@@ -27,18 +38,33 @@ fn sample(to: &[u8], replaces: Option<ConversationId>) -> FirstContact {
         base,
         initiator: (G1Projective::from(base) * test_scalar("F a")).to_affine(),
         ephemeral: (G1Projective::from(base) * test_scalar("F e")).to_affine(),
+        proof: None,
+    };
+    if !to.is_empty() {
+        first.proof = Some(prove_base(
+            &handle,
+            &b,
+            &test_scalar("F k"),
+            &first.prefix_bytes(),
+        ));
     }
+    first
 }
 
-/// F is `cid | t | to | replaces | p₀ | A | E_A`, 170 to 218 bytes, with
-/// every field where §3 puts it.
+/// Where F's three points start.
+fn points_at(to: &[u8], replaces: Option<ConversationId>) -> usize {
+    26 + to.len() + if replaces.is_some() { 16 } else { 0 }
+}
+
+/// F is `cid | t | to | replaces | p₀ | A | E_A | proof`, 186 to 282 bytes,
+/// with every field where §3 puts it, and the proof exactly when `to` is.
 #[test]
 fn f_is_laid_out_as_specified() {
     for (to, replaces, len) in [
-        (&b""[..], None, 170),
-        (&[0x5e; 32][..], None, 202),
+        (&b"x"[..], None, 235),
+        (&[0x5e; 32][..], None, 266),
         (&b""[..], Some(ConversationId([7; 16])), 186),
-        (&[0x5e; 32][..], Some(ConversationId([7; 16])), 218),
+        (&[0x5e; 32][..], Some(ConversationId([7; 16])), 282),
     ] {
         let first = sample(to, replaces);
         let bytes = first.to_bytes();
@@ -56,35 +82,60 @@ fn f_is_laid_out_as_specified() {
             }
             None => assert_eq!(bytes[at], 0),
         }
-        let points = &bytes[len - 3 * POINT_LEN..];
+        let at = points_at(to, replaces);
+        let points = &bytes[at..at + 3 * POINT_LEN];
         assert_eq!(&points[..48], &first.base.to_compressed());
         assert_eq!(&points[48..96], &first.initiator.to_compressed());
         assert_eq!(&points[96..], &first.ephemeral.to_compressed());
+        let proof = &bytes[at + 3 * POINT_LEN..];
+        match &first.proof {
+            Some(p) => {
+                assert_eq!(proof.len(), BASE_PROOF_LEN);
+                assert_eq!(&proof[..32], &p.challenge);
+                assert_eq!(&proof[32..], &p.response.to_bytes_be());
+            }
+            None => assert!(proof.is_empty()),
+        }
+        assert_eq!(first.prefix_bytes(), bytes[..at + 3 * POINT_LEN]);
         assert_eq!(FirstContact::from_bytes(&bytes).unwrap(), first);
     }
-    assert_eq!(FIRST_CONTACT_MIN_LEN, 170);
-    assert_eq!(FIRST_CONTACT_MAX_LEN, 218);
+    assert_eq!(FIRST_CONTACT_MIN_LEN, 186);
+    assert_eq!(FIRST_CONTACT_MAX_LEN, 282);
 }
 
-/// Every refusal is a structured error: lengths out of range, a truncated or
-/// extended block, and every bad point in every position.
+/// Every refusal is a structured error: lengths out of range, neither a
+/// handle nor a continuation, a response not below the group order, a
+/// truncated or extended block, and every bad point in every position.
 #[test]
 fn f_refuses_bad_lengths_and_points() {
     let bytes = sample(&[1; 3], None).to_bytes();
     // `to` longer than 32.
-    let mut long = sample(&[], None).to_bytes();
+    let mut long = sample(&[], Some(ConversationId([7; 16]))).to_bytes();
     long[24] = 33;
     assert_eq!(FirstContact::from_bytes(&long), Err(Error::InvalidMessage));
     // `replaces` of any length but 0 and 16.
     for len in [1u8, 15, 17, 255] {
-        let mut changed = sample(&[], None).to_bytes();
-        changed[25] = len;
+        let mut changed = sample(&[1], None).to_bytes();
+        changed[26] = len;
         assert_eq!(
             FirstContact::from_bytes(&changed),
             Err(Error::InvalidMessage),
             "{len}"
         );
     }
+    // No `to` and no `replaces`: neither a handle nor a continuation.
+    let mut neither = sample(&[], Some(ConversationId([7; 16]))).to_bytes();
+    neither[25] = 0;
+    neither.drain(26..42);
+    assert_eq!(
+        FirstContact::from_bytes(&neither),
+        Err(Error::InvalidMessage)
+    );
+    // A response at or past the group order.
+    let mut wide = bytes.clone();
+    let z = wide.len() - 32;
+    wide[z..].copy_from_slice(&[0xff; 32]);
+    assert_eq!(FirstContact::from_bytes(&wide), Err(Error::InvalidMessage));
     for cut in 0..bytes.len() {
         assert!(FirstContact::from_bytes(&bytes[..cut]).is_err(), "{cut}");
     }
@@ -96,7 +147,7 @@ fn f_refuses_bad_lengths_and_points() {
     );
 
     let (identity, off_curve) = (identity(), off_curve());
-    let start = bytes.len() - 3 * POINT_LEN;
+    let start = points_at(&[1; 3], None);
     for i in 0..3 {
         let at = start + i * POINT_LEN;
         let mut with_identity = bytes.clone();
@@ -124,10 +175,11 @@ fn f_refuses_bad_lengths_and_points() {
 /// before any key touches it.
 #[test]
 fn f_refuses_points_outside_the_subgroup() {
-    let bytes = sample(&[], None).to_bytes();
+    let replaces = Some(ConversationId([7; 16]));
+    let bytes = sample(&[], replaces).to_bytes();
     let outside = outside_g1();
     for i in 0..3 {
-        let at = 26 + i * POINT_LEN;
+        let at = points_at(&[], replaces) + i * POINT_LEN;
         let mut changed = bytes.clone();
         changed[at..at + POINT_LEN].copy_from_slice(&outside);
         assert_eq!(
@@ -135,6 +187,106 @@ fn f_refuses_points_outside_the_subgroup() {
             Err(Error::NotInSubgroup),
             "{i}"
         );
+    }
+}
+
+/// The proof is a Schnorr proof of `b` for `p₀ = [b]g`, its challenge
+/// `SHA-256(label ‖ g ‖ v ‖ p₀ ‖ T ‖ F′)`: it verifies against its handle,
+/// and fails against another handle of the same key, and with any bit of
+/// F′, `c` or `z` changed.
+#[test]
+fn the_proof_shows_the_base_re_randomizes_the_named_handle() {
+    let (bob_handle, b) = sample_handle();
+    let first = sample(b"bob", None);
+    assert!(first.proves_base(&bob_handle));
+    // Its challenge, recomputed from its definition.
+    let proof = first.proof.unwrap();
+    let k = test_scalar("F k");
+    let commitment = (bob_handle.generator() * k).to_affine();
+    let mut hash = sha2::Sha256::new();
+    sha2::Digest::update(&mut hash, b"Seedelf-Messaging|v1|session|base");
+    sha2::Digest::update(&mut hash, bob_handle.to_bytes());
+    sha2::Digest::update(&mut hash, first.base.to_compressed());
+    sha2::Digest::update(&mut hash, commitment.to_compressed());
+    sha2::Digest::update(&mut hash, first.prefix_bytes());
+    let c: [u8; 32] = sha2::Digest::finalize(hash).into();
+    assert_eq!(proof.challenge, c);
+    assert_eq!(BASE_LABEL, b"Seedelf-Messaging|v1|session|base");
+    assert_eq!(
+        proof.response,
+        k + crate::keys::scalar_mod_q(&c) * b,
+        "z = k + c·b, c read mod q"
+    );
+
+    // Another of Bob's handles: same key, another generator.
+    assert!(!first.proves_base(&handle("bob", "another handle")));
+    // Any change to F′, the challenge or the response.
+    let bytes = first.to_bytes();
+    for byte in 0..bytes.len() {
+        let mut changed = bytes.clone();
+        changed[byte] ^= 1;
+        if let Ok(parsed) = FirstContact::from_bytes(&changed) {
+            assert!(!parsed.proves_base(&bob_handle), "byte {byte}");
+        }
+    }
+    // No proof at all: a continuation's F proves nothing.
+    assert!(!sample(&[], Some(ConversationId([7; 16]))).proves_base(&bob_handle));
+}
+
+/// The sum of two handles of one key is a register of that key, so a first
+/// message to it opens only for a wallet holding both. With the proof, a
+/// writer who built the base on the sum can't name either handle: the
+/// proof she can make shows only the sum.
+#[test]
+fn a_base_on_the_sum_of_two_handles_proves_neither() {
+    let (one, two) = (handle("bob", "one"), handle("bob", "two"));
+    let sum = Register::from_checked(
+        (one.generator() + two.generator()).to_affine(),
+        (one.public_value() + two.public_value()).to_affine(),
+    );
+    assert!(crate::matches_register(&key("bob"), &sum));
+    let b = test_scalar("sum b");
+    let base = (sum.generator() * b).to_affine();
+    let mut first = sample(b"one", None);
+    first.base = base;
+    for named in [&one, &two, &sum] {
+        first.proof = Some(prove_base(
+            named,
+            &b,
+            &test_scalar("k"),
+            &first.prefix_bytes(),
+        ));
+        assert!(!first.proves_base(&one));
+        assert!(!first.proves_base(&two));
+    }
+    // Only the sum's own proof holds, and the sum is no one's handle.
+    first.proof = Some(prove_base(
+        &sum,
+        &b,
+        &test_scalar("k"),
+        &first.prefix_bytes(),
+    ));
+    assert!(first.proves_base(&sum));
+}
+
+/// The stamp's digest is `SHA-256(label ‖ F)`, so it covers every byte of
+/// F, the proof included.
+#[test]
+fn the_stamp_digest_covers_f() {
+    let first = sample(b"bob", None);
+    let mut hash = sha2::Sha256::new();
+    sha2::Digest::update(&mut hash, FIRST_STAMP_LABEL);
+    sha2::Digest::update(&mut hash, first.to_bytes());
+    let expected: [u8; 32] = sha2::Digest::finalize(hash).into();
+    assert_eq!(first.stamp_digest(), expected);
+    assert_eq!(FIRST_STAMP_LABEL, b"Seedelf-Messaging|v1|session|stamp");
+    let bytes = first.to_bytes();
+    for byte in [0, 30, bytes.len() - 1] {
+        let mut changed = bytes.clone();
+        changed[byte] ^= 1;
+        if let Ok(parsed) = FirstContact::from_bytes(&changed) {
+            assert_ne!(parsed.stamp_digest(), expected);
+        }
     }
 }
 
@@ -147,7 +299,7 @@ fn both_sides_derive_the_same_session_key() {
     let conversation = Conversation::start_with(
         &alice,
         &handle("bob", "bob's handle"),
-        b"",
+        HANDLE_NAME,
         1_800_000_000,
         &mut draw,
     )
@@ -216,7 +368,7 @@ fn ratchet_init_alice_and_bob_agree() {
     let mut conversation = Conversation::start_with(
         &alice,
         &handle("bob", "bob's handle"),
-        b"",
+        HANDLE_NAME,
         1_800_000_000,
         &mut draw,
     )
@@ -254,6 +406,7 @@ fn ratchet_init_alice_and_bob_agree() {
     let (bob_rk, bob_ckr) = kdf_rk(&sk, &(sa * bob.scalar()).to_compressed());
     assert_eq!((bob_rk, bob_ckr), (rk, cks));
 
+    stamp(&mut conversation);
     let envelope = conversation.send_with(b"hi", &mut draw).unwrap();
     let message = opened(&bob, &envelope);
     let (bob_side, texts) =
@@ -277,7 +430,7 @@ fn identities_share_a_base_and_belong_to_their_sides() {
     let conversation = Conversation::start_with(
         &alice,
         &handle("bob", "bob's handle"),
-        b"",
+        HANDLE_NAME,
         0,
         &mut Seeded::new("identities"),
     )
@@ -292,7 +445,8 @@ fn identities_share_a_base_and_belong_to_their_sides() {
 }
 
 /// Starting a conversation with one's own handle is refused: R_A would be
-/// R_B, and the protocol can't carry it.
+/// R_B, and the protocol can't carry it. So is a start without a handle's
+/// name, or with one longer than 32 bytes.
 #[test]
 fn a_conversation_with_ones_own_handle_is_refused() {
     let alice = key("alice");
@@ -300,24 +454,20 @@ fn a_conversation_with_ones_own_handle_is_refused() {
         Conversation::start_with(
             &alice,
             &handle("alice", "her handle"),
-            b"",
+            HANDLE_NAME,
             0,
             &mut Seeded::new("own")
         )
         .err(),
         Some(Error::OwnRegister)
     );
-    assert_eq!(
-        Conversation::start_with(
-            &alice,
-            &handle("bob", "h"),
-            &[0; 33],
-            0,
-            &mut Seeded::new("to")
-        )
-        .err(),
-        Some(Error::InvalidMessage)
-    );
+    for to in [&[][..], &[0; 33][..]] {
+        assert_eq!(
+            Conversation::start_with(&alice, &handle("bob", "h"), to, 0, &mut Seeded::new("to"))
+                .err(),
+            Some(Error::InvalidMessage)
+        );
+    }
 }
 
 /// The window: `now ∈ [t − 1 h, t + 48 h]`, both ends included.
@@ -335,27 +485,38 @@ fn the_window_is_minus_an_hour_to_plus_48_hours() {
     assert!(!within_window(0, u64::MAX));
 }
 
-/// The start draws `b`, `cid`, `e_A`, `s_A`, in that order; a continuation
-/// draws no `b`.
+/// The start draws `b`, `cid`, `e_A`, `s_A` and the proof's `k`, in that
+/// order; a continuation draws no `b` and no `k`.
 #[test]
 fn the_start_draws_in_the_documented_order() {
     let alice = key("alice");
+    let bob_handle = handle("bob", "h");
     let mut draw = Seeded::new("order");
     let conversation =
-        Conversation::start_with(&alice, &handle("bob", "h"), b"", 0, &mut draw).unwrap();
+        Conversation::start_with(&alice, &bob_handle, HANDLE_NAME, 0, &mut draw).unwrap();
     let drawn = draw.drain();
-    assert_eq!(drawn.len(), 4);
+    assert_eq!(drawn.len(), 5);
     assert_eq!(drawn[1], conversation.cid().0);
     let mut replay = Seeded::new("order");
     let b = replay.scalar();
-    let generator = G1Projective::from(
-        G1Affine::from_compressed(&handle("bob", "h").generator_bytes()).unwrap(),
-    );
+    let generator =
+        G1Projective::from(G1Affine::from_compressed(&bob_handle.generator_bytes()).unwrap());
     assert_eq!((generator * b).to_affine(), conversation.first.base);
+    let k = crate::keys::scalar_from_bytes(&drawn[4].clone().try_into().unwrap()).unwrap();
+    assert_eq!(
+        conversation.first.proof,
+        Some(prove_base(
+            &bob_handle,
+            &b,
+            &k,
+            &conversation.first.prefix_bytes()
+        ))
+    );
 
     let mut draw = Seeded::new("order 2");
-    let next = Conversation::continue_with(&alice, &conversation, b"", 0, &mut draw).unwrap();
+    let next = Conversation::continue_with(&alice, &conversation, 0, &mut draw).unwrap();
     assert_eq!(draw.drain().len(), 3);
+    assert!(next.first.to.is_empty() && next.first.proof.is_none());
     assert_eq!(next.first.base, conversation.first.base);
     assert_eq!(next.first.replaces, Some(conversation.cid()));
 }

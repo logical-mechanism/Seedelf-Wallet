@@ -261,3 +261,17 @@ The crate is unchanged: none of this touches the v1 envelope.
 - "the same guarantees" as Signal;
 - "expired before it arrived";
 - the relay "never learns" whom an envelope is for, unqualified.
+
+## G. Calls 12 and 13, as built (2026-11-21)
+
+The owner accepted both proposals of protocol.md §13 (chunk 54's calls 12 and 13) before the WebAssembly bindings. Building them found that call 13 as proposed didn't close what it was for.
+
+- **The finding.** The proposal had a first message prove that its base p₀ re-randomizes the handle named in `to`. But the base isn't where the envelope goes: each envelope went to a fresh, random re-randomization of the conversation identity, which nothing tied to the conversation. A writer could take an honest first message to Seedelf one and seal its inner bytes to the sum of one's and two's registers, or to two's alone. The reader's scan matches either when both are one wallet's, the proof still verifies, and a reply links the two. The same works with any later message, from either side. It needs no forgery, only the writer's own messages.
+- **The fix.** The envelope's re-randomization is no longer drawn. It's derived from the message key and the ratchet salt (the outer scalar o, protocol.md §16.2), and the reader checks that the envelope's base is [o]p₀ once the message decrypts. An envelope aimed anywhere else is dropped like any message that doesn't authenticate. It costs no bytes, and one multiplication a received message.
+- **Each rule is needed.** Without the proof, a writer builds p₀ on the sum and the bound envelope follows it there. Without the binding, a writer aims an honest message's envelope at the sum. src/session/tests/linking.rs attacks each way, and the mutation pass removes each check.
+- **The stamp (call 12)** went in as proposed, after F rather than inside it, so a start's state exists before its work is done and the worker can solve it in slices with no secret held outside a record. It's 24 bits, checked first.
+- **Consequences for §E's cases,** whose tests now expect:
+  - **Case 1's second forgery,** on Alice's base: refused for its proof, before any key, rather than for its session key.
+  - **Case 2's lifted base:** the same.
+  - **Case 11:** a continuation without a handle that the reader can't verify, whether it lost the old conversation or the writer's keys differ, is refused, not shown as "says it continues". Only a first message from a handle, with its proof, may say it continues unverified.
+  - **Case 13:** a first message to a Seedelf's 32-byte name never fits 512 bytes. A 1-byte `to` fits 18 bytes of text, and a continuation 67.

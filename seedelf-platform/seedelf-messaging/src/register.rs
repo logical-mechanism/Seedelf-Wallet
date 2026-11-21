@@ -68,6 +68,10 @@ impl Register {
         }
     }
 
+    pub(crate) fn generator_point(&self) -> G1Affine {
+        self.generator
+    }
+
     pub(crate) fn generator(&self) -> G1Projective {
         G1Projective::from(self.generator)
     }

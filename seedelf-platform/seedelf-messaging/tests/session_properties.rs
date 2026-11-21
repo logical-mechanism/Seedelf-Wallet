@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 
 use proptest::prelude::*;
 
+mod common;
+
 use seedelf_messaging::SecretKey;
 use seedelf_messaging::session::{
     Continues, Conversation, ConversationId, Inbox, Received, Requests, SKIPPED_KEY_LIFETIME,
@@ -49,7 +51,7 @@ impl Side {
     fn new(key: SecretKey) -> Self {
         Self {
             key,
-            inbox: Inbox::new(),
+            inbox: common::test_bits(Inbox::new()),
             in_flight: Vec::new(),
             delivered: Vec::new(),
             their_chains: Vec::new(),
@@ -66,7 +68,8 @@ impl Side {
             .collect();
         let requests = Requests::from_bytes(&self.inbox.requests().to_bytes()).unwrap();
         let tombstones = Tombstones::from_bytes(&self.inbox.tombstones().to_bytes()).unwrap();
-        self.inbox = Inbox::from_parts(conversations, requests, tombstones).unwrap();
+        self.inbox =
+            common::test_bits(Inbox::from_parts(conversations, requests, tombstones).unwrap());
     }
 
     /// What `missing` must be once everything not lost has arrived: every
@@ -118,7 +121,9 @@ fn send(from: &mut Side, to: &mut Side, cid: ConversationId, text: Vec<u8>) {
 /// Delivers in-flight message `i` to `to`: it must read exactly its text.
 fn deliver(to: &mut Side, cid: ConversationId, i: usize, now: u64) -> Result<(), TestCaseError> {
     let message = to.in_flight.remove(i);
-    let received = to.inbox.receive(&to.key, &message.envelope, now);
+    let received = to
+        .inbox
+        .receive(&to.key, &common::handles(&to.key), &message.envelope, now);
     prop_assert_eq!(
         received,
         Ok(Received::Message {
@@ -136,14 +141,12 @@ fn established() -> (Side, Side, ConversationId) {
         Side::new(SecretKey::generate()),
         Side::new(SecretKey::generate()),
     );
-    let cid = alice
-        .inbox
-        .start(&alice.key, &bob.key.register(), b"", T)
-        .unwrap();
+    let cid = common::start(&mut alice.inbox, &alice.key, &bob.key.register(), T);
     send(&mut alice, &mut bob, cid, b"first".to_vec());
     let first = bob.in_flight.remove(0);
     assert!(matches!(
-        bob.inbox.receive(&bob.key, &first.envelope, T),
+        bob.inbox
+            .receive(&bob.key, &common::handles(&bob.key), &first.envelope, T),
         Ok(Received::Request { .. })
     ));
     bob.delivered.push(first);
@@ -211,7 +214,7 @@ proptest! {
                     if !to.delivered.is_empty() {
                         let message = to.delivered[i % to.delivered.len()].clone();
                         let before = to.inbox.conversation(cid).unwrap().to_bytes();
-                        prop_assert!(to.inbox.receive(&to.key, &message.envelope, T).is_err());
+                        prop_assert!(to.inbox.receive(&to.key, &common::handles(&to.key), &message.envelope, T).is_err());
                         prop_assert_eq!(&*to.inbox.conversation(cid).unwrap().to_bytes(), &*before);
                     }
                 }
@@ -247,9 +250,9 @@ proptest! {
         order in any::<u64>(),
     ) {
         let (alice, bob) = (SecretKey::generate(), SecretKey::generate());
-        let (mut a, mut b) = (Inbox::new(), Inbox::new());
-        let ab = a.start(&alice, &bob.register(), b"", T).unwrap();
-        let ba = b.start(&bob, &alice.register(), b"", T).unwrap();
+        let (mut a, mut b) = (common::test_bits(Inbox::new()), common::test_bits(Inbox::new()));
+        let ab = common::start(&mut a, &alice, &bob.register(), T);
+        let ba = common::start(&mut b, &bob, &alice.register(), T);
         let mut to_bob: Vec<_> = (0..from_alice).map(|i| (ab, a.send(ab, &[i as u8]).unwrap(), i)).collect();
         let mut to_alice: Vec<_> = (0..from_bob).map(|i| (ba, b.send(ba, &[i as u8]).unwrap(), i)).collect();
         let mut bits = order;
@@ -259,7 +262,7 @@ proptest! {
             let (inbox, key, queue) = if pick_bob { (&mut b, &bob, &mut to_bob) } else { (&mut a, &alice, &mut to_alice) };
             let i = (bits as usize) % queue.len();
             let (cid, envelope, text) = queue.remove(i);
-            let Ok(Received::Request { cid: got, plaintext, .. }) = inbox.receive(key, &envelope, T) else {
+            let Ok(Received::Request { cid: got, plaintext, .. }) = inbox.receive(key, &common::handles(key), &envelope, T) else {
                 return Err(TestCaseError::fail("a request"));
             };
             prop_assert_eq!(got, cid);
@@ -271,9 +274,9 @@ proptest! {
         b.accept(&bob, ab).unwrap();
         a.accept(&alice, ba).unwrap();
         let reply = b.send(ab, b"r").unwrap();
-        prop_assert_eq!(a.receive(&alice, &reply, T).unwrap(), Received::Message { cid: ab, plaintext: b"r".to_vec() });
+        prop_assert_eq!(a.receive(&alice, &common::handles(&alice), &reply, T).unwrap(), Received::Message { cid: ab, plaintext: b"r".to_vec() });
         let reply = a.send(ba, b"r").unwrap();
-        prop_assert_eq!(b.receive(&bob, &reply, T).unwrap(), Received::Message { cid: ba, plaintext: b"r".to_vec() });
+        prop_assert_eq!(b.receive(&bob, &common::handles(&bob), &reply, T).unwrap(), Received::Message { cid: ba, plaintext: b"r".to_vec() });
     }
 
     /// After any number of exchanges, either side restarts the conversation
@@ -289,9 +292,10 @@ proptest! {
             deliver(&mut alice, old, 0, T)?;
         }
         let (writer, reader) = if by_alice { (&mut alice, &mut bob) } else { (&mut bob, &mut alice) };
-        let new = writer.inbox.start_continuing(&writer.key, old, b"", T + 60).unwrap();
+        let new = writer.inbox.start_continuing(&writer.key, old, T + 60).unwrap();
+        common::stamp(&mut writer.inbox, new);
         let envelope = writer.inbox.send(new, b"again").unwrap();
-        let received = reader.inbox.receive(&reader.key, &envelope, T + 60);
+        let received = reader.inbox.receive(&reader.key, &common::handles(&reader.key), &envelope, T + 60);
         prop_assert!(matches!(received, Ok(Received::Request { .. })), "a request");
         prop_assert_eq!(
             reader.inbox.requests().get(new).unwrap().continues(),
@@ -300,12 +304,12 @@ proptest! {
         reader.inbox.accept(&reader.key, new).unwrap();
         let back = reader.inbox.send(new, b"back").unwrap();
         prop_assert_eq!(
-            writer.inbox.receive(&writer.key, &back, T + 61).unwrap(),
+            writer.inbox.receive(&writer.key, &common::handles(&writer.key), &back, T + 61).unwrap(),
             Received::Message { cid: new, plaintext: b"back".to_vec() }
         );
         let old_again = writer.inbox.send(old, b"old").unwrap();
         prop_assert_eq!(
-            reader.inbox.receive(&reader.key, &old_again, T + 62).unwrap(),
+            reader.inbox.receive(&reader.key, &common::handles(&reader.key), &old_again, T + 62).unwrap(),
             Received::Message { cid: old, plaintext: b"old".to_vec() }
         );
     }
@@ -321,7 +325,7 @@ proptest! {
         deliver(&mut bob, cid, gap as usize, T)?;
         prop_assert_eq!(bob.inbox.conversation(cid).unwrap().missing(), u64::from(gap));
         let early = bob.in_flight.remove(0);
-        let result = bob.inbox.receive(&bob.key, &early.envelope, T + delay);
+        let result = bob.inbox.receive(&bob.key, &common::handles(&bob.key), &early.envelope, T + delay);
         if delay <= SKIPPED_KEY_LIFETIME {
             prop_assert_eq!(result, Ok(Received::Message { cid, plaintext: early.text }));
             prop_assert_eq!(bob.inbox.conversation(cid).unwrap().missing(), u64::from(gap) - 1);

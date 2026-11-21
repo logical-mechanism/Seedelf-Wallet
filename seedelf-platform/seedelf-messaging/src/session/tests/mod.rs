@@ -3,6 +3,7 @@
 
 mod adversarial;
 mod first_contact;
+mod linking;
 mod ratchet;
 mod rules;
 mod state;

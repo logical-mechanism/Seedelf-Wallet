@@ -11,6 +11,8 @@
 
 use std::collections::BTreeMap;
 
+mod common;
+
 use seedelf_messaging::session::{
     Conversation, ConversationId, FIRST_CONTACT_MAX_AGE, FirstContact, Inbox, Received, Requests,
     SKIPPED_KEY_LIFETIME, Tombstones, open,
@@ -148,12 +150,14 @@ impl Wallet {
             .values()
             .map(|record| Conversation::from_bytes(&record.state).unwrap())
             .collect();
-        Inbox::from_parts(
-            conversations,
-            Requests::from_bytes(&self.store.requests).unwrap(),
-            Tombstones::from_bytes(&self.store.tombstones).unwrap(),
+        common::test_bits(
+            Inbox::from_parts(
+                conversations,
+                Requests::from_bytes(&self.store.requests).unwrap(),
+                Tombstones::from_bytes(&self.store.tombstones).unwrap(),
+            )
+            .unwrap(),
         )
-        .unwrap()
     }
 
     /// One write of everything the inbox holds, with a new envelope in its
@@ -250,7 +254,7 @@ impl Wallet {
             let sent = &oracle.sent[bytes];
             let mut inbox = self.load();
             let before = Self::parts(&inbox);
-            match inbox.receive(&self.key, bytes, now) {
+            match inbox.receive(&self.key, &common::handles(&self.key), bytes, now) {
                 Ok(received) => {
                     let (cid, plaintext) = match received {
                         Received::Message { cid, plaintext } => (cid, plaintext),
@@ -444,7 +448,7 @@ fn run(seed: u64) {
     let cid = {
         let alice = &mut wallets[0];
         let mut inbox = alice.load();
-        let cid = inbox.start(&alice.key, &bob_handle, b"", now).unwrap();
+        let cid = common::start(&mut inbox, &alice.key, &bob_handle, now);
         alice.write(&inbox, None);
         cid
     };
@@ -540,7 +544,7 @@ fn run(seed: u64) {
         saw(|s| s.started_again += 1);
         let alice = &mut wallets[0];
         let mut inbox = alice.load();
-        let fresh = inbox.start(&alice.key, &bob_handle, b"", now).unwrap();
+        let fresh = common::start(&mut inbox, &alice.key, &bob_handle, now);
         alice.write(&inbox, None);
         fresh
     };
@@ -592,9 +596,7 @@ fn case_04_killed_between_write_post_and_mark() {
         Wallet::new(SecretKey::generate()),
     );
     let mut inbox = alice.load();
-    let cid = inbox
-        .start(&alice.key, &bob.key.register(), b"", T)
-        .unwrap();
+    let cid = common::start(&mut inbox, &alice.key, &bob.key.register(), T);
     alice.write(&inbox, None);
 
     // Dies after the write: nothing posted.
@@ -637,9 +639,7 @@ fn case_05_killed_between_the_write_and_the_cursor() {
         Wallet::new(SecretKey::generate()),
     );
     let mut inbox = alice.load();
-    let cid = inbox
-        .start(&alice.key, &bob.key.register(), b"", T)
-        .unwrap();
+    let cid = common::start(&mut inbox, &alice.key, &bob.key.register(), T);
     alice.write(&inbox, None);
     for text in [&b"one"[..], b"two"] {
         let envelope = alice.compose(cid, text);
