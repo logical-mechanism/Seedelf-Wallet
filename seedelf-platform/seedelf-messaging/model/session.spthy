@@ -667,6 +667,8 @@ lemma skipped_key_opens_only_its_message [hide_lemma=skipped_keys1_secret,
    gives. With w0 too, which the reader's own key gives even stolen after it
    accepted, it writes the message it stands for while the reader waits. */
 
+/* Its 2.2 GB peak is where GHC would start compacting, which crawls (README). */
+// check.sh: CAP=8g,RTS=-c100
 lemma skipped_agreement [hide_lemma=skipped_keys1_secret, hide_lemma=skipped_keys2_secret,
                          hide_lemma=skipped_keys3_secret]:
   "(All Rsp cid p0 Ai w0 m P #i #k.
