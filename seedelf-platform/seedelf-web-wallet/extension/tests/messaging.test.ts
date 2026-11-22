@@ -630,8 +630,15 @@ describe("Seedelf Messaging in the worker", () => {
   it("posts nothing once the switch goes off while a post's stamp is solved", async () => {
     const { relay, alice, bob } = await pair();
     const cid = await talking(alice, bob);
-    // Dear enough to take several slices, the switch turned off at the first turn between them.
+    // Dear enough to take several slices, the switch turned off at the first turn between them. The first slice comes
+    // back empty: at 19 bits a real one finds a nonce one time in eight, and then there's no turn to turn it off in.
     relay.price = 19;
+    const wasm = loadTestWasm();
+    alice.restart({
+      ...wasm,
+      messagingFindStamp: (request) =>
+        (JSON.parse(request) as { from: number }).from === 0 ? JSON.stringify({ nonce: null }) : wasm.messagingFindStamp(request),
+    });
     await synced(alice);
     relay.calls.length = 0;
     alice.onWait = async () => {
