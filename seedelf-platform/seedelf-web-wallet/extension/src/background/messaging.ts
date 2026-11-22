@@ -46,12 +46,13 @@ import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import { NETWORKS, type NetworkName } from "../networks";
-import type {
-  MessagingConversation,
-  MessagingEntry,
-  MessagingOverview,
-  MessagingRequest,
-  MessagingThread,
+import {
+  CONVERSATION_NAME_CHARS,
+  type MessagingConversation,
+  type MessagingEntry,
+  type MessagingOverview,
+  type MessagingRequest,
+  type MessagingThread,
 } from "../shared/rpc";
 import type { RegisterHex } from "./chain";
 import type { PreferencesService } from "./preferences";
@@ -62,7 +63,7 @@ import {
   type PrivateStore,
   UnreadableRecordError,
 } from "./private-store";
-import { type PostAnswer, type RelayClient, RelayDown, type RelayPage } from "./relay";
+import { type PostAnswer, type RelayClient, RelayDown, RelayNotAsked, type RelayPage } from "./relay";
 import type { Area } from "./storage";
 import { phrasePin, type PhrasePin, type Wallet, WalletLocked, WASM_BROKEN } from "./wallet";
 import { isTrap } from "./wasm";
@@ -154,7 +155,17 @@ export interface Meta {
    * may not continue.
    */
   unreachable?: number;
+  /** Its last message kept, for the list (`lastOf`): which way, and the start of its text. */
+  last?: { dir: "in" | "out"; text?: string };
+  /** The user's own name for it, on this device only: never from a message, never sent (`rename`). */
+  name?: string;
 }
+
+/** The longest name the user can give a conversation, in characters. */
+export const NAME_CHARS = CONVERSATION_NAME_CHARS;
+
+/** How much of a conversation's last message the inbox keeps for the list: its first characters. */
+export const PREVIEW_CHARS = 120;
 
 /** A conversation's own record, `conversation.<network>.<cid>`. */
 export interface ConversationFile {
@@ -289,6 +300,8 @@ export class MessagingService {
   private freshRead = new Set<NetworkName>();
   /** The networks swept, each with the unlock it was swept in (`sweep`). */
   private swept = new Set<string>();
+  /** The networks whose relay didn't answer their last read: the screens say messages wait (`overview`). */
+  private offline = new Set<NetworkName>();
   private constants?: { firstContactStampBits: number; envelopeSizes: number[] };
   /** Switches, one at a time: a preference's write reads the others first (preferences.ts `set`). */
   private switching: Promise<unknown> = Promise.resolve();
@@ -315,6 +328,8 @@ export class MessagingService {
     const write = this.switching.then(() => this.deps.preferences.set({ messaging: { [network]: on } as never }));
     this.switching = write.catch(() => undefined);
     const switches = (await write).messaging;
+    // Whatever the relay did before the switch, the next read says again.
+    this.offline.delete(network);
     if (on) {
       await this.deps.alarm?.start();
       this.behind(this.sync(network));
@@ -352,6 +367,7 @@ export class MessagingService {
         .filter(([, l]) => now - l.at <= LOST_FOR_MS)
         .map(([cid, l]) => ({ cid, lastAt: l.at, messages: l.count })),
       ...(inbox.gapAt !== undefined ? { gapAt: inbox.gapAt } : {}),
+      ...(on && this.offline.has(network) ? { offline: true as const } : {}),
     };
   }
 
@@ -367,6 +383,9 @@ export class MessagingService {
       if (meta.unread) {
         meta.unread = 0;
         await this.writeInbox(network, inbox);
+        // Read now: the top bar's count and Home's row change with it. Only then, so a page that reads the thread
+        // again when told isn't told again.
+        this.deps.changed?.(network);
       }
       return {
         conversation: this.summary(cid, meta, this.deps.now()),
@@ -393,6 +412,7 @@ export class MessagingService {
       if (inbox.requestsUnread[cid]) {
         delete inbox.requestsUnread[cid];
         await this.writeInbox(network, inbox);
+        this.deps.changed?.(network);
       }
       return read.messages.map((m, i) =>
         entryView({ id: i, dir: "in", at: m.at * 1000, ...(m.plaintext !== undefined ? textOf(m.plaintext) : { kind: -1 }) }),
@@ -440,6 +460,9 @@ export class MessagingService {
         outbox: 1,
         bytes,
         oldestAt: now,
+        last: lastOf(file.history),
+        // Started again to the same Seedelf: the user's name for it goes on.
+        ...(replacing && inbox.conversations[replacing]?.name ? { name: inbox.conversations[replacing]!.name } : {}),
       };
       if (replacing && inbox.conversations[replacing]) inbox.conversations[replacing]!.restartedAs = started.cid;
       await this.writeInbox(network, inbox);
@@ -503,6 +526,8 @@ export class MessagingService {
         outbox: 1,
         bytes,
         oldestAt: now,
+        last: lastOf(file.history),
+        ...(meta.name ? { name: meta.name } : {}),
       };
       meta.restartedAs = started.cid;
       await this.writeInbox(network, inbox);
@@ -574,7 +599,31 @@ export class MessagingService {
         outbox: 0,
         bytes,
         oldestAt: history[0]?.at ?? now,
+        ...(history.length ? { last: lastOf(history) } : {}),
+        // Continuing one this wallet holds, with the same keys (§6): the same other side, so the user's name for it
+        // goes on. A continuation only claimed takes none.
+        ...(accepted.continues?.verified && inbox.conversations[accepted.continues.cid]?.name
+          ? { name: inbox.conversations[accepted.continues.cid]!.name }
+          : {}),
       };
+      await this.writeInbox(network, inbox);
+      this.deps.changed?.(network);
+    });
+  }
+
+  /**
+   * Names a conversation as the user chooses, or takes its name away (empty): on this device only, never sent, and
+   * shown as the user's, beside protocol.md §7's label, never in its place. Throws if locked.
+   */
+  rename(network: NetworkName, cid: string, name: string): Promise<void> {
+    const named = typeof name === "string" ? name.trim() : "";
+    if ([...named].length > NAME_CHARS) return Promise.reject(new Error(t("worker.messaging.nameTooLong", { max: NAME_CHARS })));
+    return this.serial(async () => {
+      const inbox = await this.inbox(network);
+      const meta = inbox.conversations[cid];
+      if (!meta) throw new Error(t("worker.messaging.noConversation"));
+      if (named) meta.name = named;
+      else delete meta.name;
       await this.writeInbox(network, inbox);
       this.deps.changed?.(network);
     });
@@ -659,9 +708,16 @@ export class MessagingService {
         // Asked again before each page: a switch turned off, or a lock, mid-catch-up stops it there.
         page = await relay.page(cursor, () => this.mayAsk(network));
       } catch (e) {
+        // A relay that didn't answer, not one the wallet chose not to ask: the screens say messages wait.
+        if (e instanceof RelayDown && !(e instanceof RelayNotAsked) && !this.offline.has(network)) {
+          this.offline.add(network);
+          this.deps.changed?.(network);
+        }
         if (e instanceof RelayDown) break;
         throw e;
       }
+      // Answering again: said at once, not at the sync's end, which a later failure could keep from coming.
+      if (this.offline.delete(network)) this.deps.changed?.(network);
       this.prices.set(network, page.prices);
       for (let at = 0; at < page.envelopes.length; at += SCAN_BATCH) {
         const batch = page.envelopes.slice(at, at + SCAN_BATCH);
@@ -773,7 +829,8 @@ export class MessagingService {
         if (unreachable) unreachable.unreachable = (unreachable.unreachable ?? 0) + 1;
         // The registers read now are kept for the next, as is what was noted.
         if (noted || lost || unreachable) await this.writeInbox(network, inbox);
-        return lost;
+        // Both change what the screens show: a conversation this browser no longer has, one that may not continue.
+        return lost || unreachable !== undefined;
       }
       if ("conversation" in result) {
         const cid = result.received.cid;
@@ -885,7 +942,13 @@ export class MessagingService {
           continue;
         }
         const now = measure(file, meta.lastAt);
-        if (now.bytes !== meta.bytes || now.outbox !== meta.outbox || now.oldestAt !== meta.oldestAt) {
+        if (
+          now.bytes !== meta.bytes ||
+          now.outbox !== meta.outbox ||
+          now.oldestAt !== meta.oldestAt ||
+          now.last?.dir !== meta.last?.dir ||
+          now.last?.text !== meta.last?.text
+        ) {
           Object.assign(meta, now);
           repaired = true;
         }
@@ -1147,6 +1210,10 @@ export class MessagingService {
       file.trimmed += before - file.history.length;
       oldest.meta.bytes = await this.writeFile(oldest.network, oldest.cid, file);
       oldest.meta.oldestAt = file.history[0]?.at ?? oldest.meta.lastAt;
+      // The list's last message, gone with the rest when the budget deleted every one.
+      const last = lastOf(file.history);
+      if (last) oldest.meta.last = last;
+      else delete oldest.meta.last;
       await this.writeInbox(oldest.network, inboxes.get(oldest.network)!);
     }
   }
@@ -1172,6 +1239,8 @@ export class MessagingService {
       unanswered: meta.role === "initiator" && !meta.answered && now > meta.startedAt + maxAge,
       ...(meta.restartedAs ? { restartedAs: meta.restartedAs } : {}),
       ...(meta.unreachable ? { unreachable: meta.unreachable } : {}),
+      ...(meta.last ? { last: meta.last } : {}),
+      ...(meta.name ? { name: meta.name } : {}),
     };
   }
 
@@ -1303,12 +1372,25 @@ function rethrowTrap(e: unknown): void {
 }
 
 /** What the inbox shows of a conversation that its record decides: its storage, its outbox, its oldest message. */
-function measure(file: ConversationFile, lastAt: number): Pick<Meta, "bytes" | "outbox" | "oldestAt"> {
+function measure(file: ConversationFile, lastAt: number): Pick<Meta, "bytes" | "outbox" | "oldestAt" | "last"> {
   return {
     bytes: storedBytes(utf8Length(JSON.stringify(file))),
     outbox: file.history.filter((e) => e.sent === "queued" || e.sent === "pending").length,
     oldestAt: file.history[0]?.at ?? lastAt,
+    last: lastOf(file.history),
   };
+}
+
+/**
+ * What the list shows of a history's last message: which way, and its first PREVIEW_CHARS characters, whole code
+ * points, so a cut never splits one. None once the budget has deleted every message.
+ */
+export function lastOf(history: readonly Entry[]): Meta["last"] {
+  const entry = history.at(-1);
+  if (!entry) return undefined;
+  if (entry.text === undefined) return { dir: entry.dir };
+  const chars = [...entry.text];
+  return { dir: entry.dir, text: chars.length > PREVIEW_CHARS ? `${chars.slice(0, PREVIEW_CHARS).join("")}…` : entry.text };
 }
 
 function entryView(entry: Entry): MessagingEntry {

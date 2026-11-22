@@ -249,7 +249,14 @@ export interface MessagingConversation {
   restartedAs?: string;
   /** Messages the ratchet couldn't reach (protocol.md §6): it may not continue (`messaging-continue`). */
   unreachable?: number;
+  /** Its last message, for the list: which way, and the start of its text (none for a kind this version can't show). */
+  last?: { dir: "in" | "out"; text?: string };
+  /** The user's own name for it, on this device only (`messaging-name`): theirs, never a message's or a proof's. */
+  name?: string;
 }
+
+/** The longest name the user can give a conversation (`messaging-name`), in characters. */
+export const CONVERSATION_NAME_CHARS = 40;
 
 /** A stranger's first message, kept apart until the user replies or deletes it (protocol.md §3.1). */
 export interface MessagingRequest {
@@ -274,6 +281,8 @@ export interface MessagingOverview {
   lost: Array<{ cid: string; lastAt: number; messages: number }>;
   /** When the relay last said envelopes were gone before they were read (ms): messages sent then may never arrive. */
   gapAt?: number;
+  /** The relay didn't answer this network's last read: messages wait until it does. */
+  offline?: true;
 }
 
 /** One message of a thread or a request. */
@@ -3015,6 +3024,11 @@ export interface Requests {
   messaging: { payload: None; result: MessagingOverview };
   /** Turns the network's Messages switch on or off (call 9); on, its relay pool is read at once and every minute. */
   "messaging-switch": { payload: { on: boolean }; result: MessagingOverview };
+  /**
+   * Reads the network's relay pool now, as the alarm does every minute, while Messages is open: nothing while its
+   * switch is off or the wallet locked.
+   */
+  "messaging-sync": { payload: None; result: null };
   /** Writes first to the owner of a Seedelf, by its name: its stamp is solved (about 7 s), then it's posted. */
   "messaging-start": { payload: { to: string; text: string }; result: { cid: string } };
   "messaging-send": { payload: { cid: string; text: string }; result: null };
@@ -3024,6 +3038,8 @@ export interface Requests {
   "messaging-request": { payload: { cid: string }; result: MessagingEntry[] };
   /** Accepts a request: its conversation, which the reply is then sent in. */
   "messaging-accept": { payload: { cid: string }; result: null };
+  /** Names a conversation as the user chooses, on this device only; an empty name takes it away. */
+  "messaging-name": { payload: { cid: string; name: string }; result: null };
   /** Deletes a conversation or a request; its ID stays a tombstone for 48 hours. */
   "messaging-delete": { payload: { cid: string }; result: null };
   /** Starts an unanswered conversation again, to the same Seedelf. */
@@ -3494,11 +3510,13 @@ const REQUEST_LIST = [
   "contact-remove",
   "messaging",
   "messaging-switch",
+  "messaging-sync",
   "messaging-start",
   "messaging-send",
   "messaging-thread",
   "messaging-request",
   "messaging-accept",
+  "messaging-name",
   "messaging-delete",
   "messaging-restart",
   "messaging-continue",

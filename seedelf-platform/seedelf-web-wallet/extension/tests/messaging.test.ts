@@ -3,7 +3,7 @@
 // alone between their calls, as a restarted worker has them.
 import { describe, expect, it } from "vitest";
 
-import { MessagingService, plaintextOf, storedBytes, textOf } from "../src/background/messaging";
+import { lastOf, MessagingService, plaintextOf, PREVIEW_CHARS, storedBytes, textOf } from "../src/background/messaging";
 import { PreferencesService } from "../src/background/preferences";
 import { conversationRecord, PRIVATE_PREFIX, PrivateStore } from "../src/background/private-store";
 import type { RegisterHex } from "../src/background/chain";
@@ -698,6 +698,8 @@ describe("Seedelf Messaging in the worker", () => {
     expect(total).toBeLessThanOrEqual(64 * 1024);
     expect((await alice.messaging.thread("preprod", old)).messages).toEqual([]);
     expect((await alice.messaging.thread("preprod", busy)).trimmed).toBeGreaterThan(0);
+    // The list's last message went with the rest: no deleted text is shown for it.
+    expect((await alice.messaging.overview("preprod")).conversations.find((c) => c.cid === old)!.last).toBeUndefined();
   });
 
   it("tells open pages what changed, and syncs nothing while locked, its alarm stopped", async () => {
@@ -758,5 +760,151 @@ describe("the wallet's messages", () => {
   it("are counted as the store keeps them: sealed, padded to a power of two, base64", () => {
     expect(storedBytes(10)).toBe(Math.ceil(((1024 + 16) * 4) / 3));
     expect(storedBytes(1025)).toBe(Math.ceil(((2048 + 16) * 4) / 3));
+  });
+});
+
+describe("what the screens show (54f)", () => {
+  it("keeps each conversation's last message for the list, either way, from the start, a reply and an accept", async () => {
+    const { alice, bob } = await pair();
+    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "hello Bob");
+    expect((await alice.messaging.overview("preprod")).conversations[0]!.last).toEqual({ dir: "out", text: "hello Bob" });
+    await alice.messaging.whenIdle();
+    await synced(bob);
+    await bob.messaging.accept("preprod", cid);
+    expect((await bob.messaging.overview("preprod")).conversations[0]!.last).toEqual({ dir: "in", text: "hello Bob" });
+    await bob.messaging.send("preprod", cid, "hi Alice");
+    expect((await bob.messaging.overview("preprod")).conversations[0]!.last).toEqual({ dir: "out", text: "hi Alice" });
+    await bob.messaging.whenIdle();
+    await synced(alice);
+    expect((await alice.messaging.overview("preprod")).conversations[0]!.last).toEqual({ dir: "in", text: "hi Alice" });
+  });
+
+  it("cuts a long last message to whole characters, and names a kind it can't show by its way alone", () => {
+    const long = "🙂".repeat(PREVIEW_CHARS + 5);
+    const cut = lastOf([{ id: 0, dir: "in", at: 1, text: long }])!;
+    expect([...cut.text!]).toHaveLength(PREVIEW_CHARS + 1);
+    expect(cut.text!.endsWith("🙂…")).toBe(true);
+    expect(lastOf([{ id: 0, dir: "out", at: 1, text: "short" }])).toEqual({ dir: "out", text: "short" });
+    expect(lastOf([{ id: 0, dir: "in", at: 1, kind: 2 }])).toEqual({ dir: "in" });
+    expect(lastOf([])).toBeUndefined();
+  });
+
+  it("says the relay didn't answer while it doesn't, and stops once it does; never while the switch is off", async () => {
+    const { relay, alice } = await pair();
+    relay.up = false;
+    alice.changed.length = 0;
+    await synced(alice);
+    expect((await alice.messaging.overview("preprod")).offline).toBe(true);
+    expect(alice.changed).toContain("preprod");
+    relay.up = true;
+    alice.changed.length = 0;
+    await synced(alice);
+    expect((await alice.messaging.overview("preprod")).offline).toBeUndefined();
+    expect(alice.changed).toContain("preprod");
+    // Off, there's nothing to wait for, and on again the next read says afresh: no warning left from before.
+    relay.up = false;
+    await synced(alice);
+    await alice.messaging.switch("preprod", false);
+    expect((await alice.messaging.overview("preprod")).offline).toBeUndefined();
+    relay.up = true;
+    await alice.messaging.switch("preprod", true);
+    await alice.messaging.whenIdle();
+    expect((await alice.messaging.overview("preprod")).offline).toBeUndefined();
+  });
+
+  it("tells open pages when reading a thread or a request leaves less unread, and only then", async () => {
+    const { alice, bob } = await pair();
+    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "hello Bob");
+    await alice.messaging.whenIdle();
+    await synced(bob);
+    bob.changed.length = 0;
+    await bob.messaging.request("preprod", cid);
+    expect(bob.changed).toEqual(["preprod"]);
+    await bob.messaging.request("preprod", cid);
+    expect(bob.changed).toEqual(["preprod"]);
+    await bob.messaging.accept("preprod", cid);
+    await bob.messaging.send("preprod", cid, "hi Alice");
+    await bob.messaging.whenIdle();
+    await synced(alice);
+    alice.changed.length = 0;
+    await alice.messaging.thread("preprod", cid);
+    expect(alice.changed).toEqual(["preprod"]);
+    await alice.messaging.thread("preprod", cid);
+    expect(alice.changed).toEqual(["preprod"]);
+  });
+
+  it("says the relay answers again at once, even when the sync then fails", async () => {
+    const relay = fakeRelay(clock);
+    const directory: Directory = new Map();
+    const alice = await party(12, relay, directory, ALICE_SEEDELF);
+    const bob = await party(24, relay, directory, BOB_SEEDELF);
+    bob.kept = [];
+    await alice.messaging.switch("preprod", true);
+    await bob.messaging.switch("preprod", true);
+    await alice.messaging.whenIdle();
+    await bob.messaging.whenIdle();
+    relay.up = false;
+    await synced(bob);
+    expect((await bob.messaging.overview("preprod")).offline).toBe(true);
+    relay.up = true;
+    await alice.messaging.start("preprod", BOB_SEEDELF, "new Seedelf?");
+    await alice.messaging.whenIdle();
+    // The page reads, then the contract read for the stranger's first message fails: the sync throws.
+    bob.readFails = new Error("Koios is down");
+    bob.changed.length = 0;
+    await expect(bob.messaging.sync("preprod")).rejects.toThrow(/Koios is down/);
+    expect((await bob.messaging.overview("preprod")).offline).toBeUndefined();
+    expect(bob.changed).toContain("preprod");
+  });
+
+  it("tells open pages at once that a conversation may not continue", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    // More than MAX_SKIP (1,000) of Bob's messages never reach Alice: his ratchet steps on a copy of his record, and
+    // only the last envelope is posted.
+    const wasm = loadTestWasm();
+    let state = (await bob.store.get<{ state: string }>(conversationRecord("preprod", cid)))!.state;
+    let envelope = "";
+    for (let i = 0; i < 1002; i++) {
+      const sent = JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: state, plaintext: plaintextOf(`m${i}`) })));
+      state = sent.conversation;
+      envelope = sent.envelope;
+    }
+    relay.put("preprod", envelope);
+    alice.changed.length = 0;
+    await synced(alice);
+    expect((await alice.messaging.overview("preprod")).conversations[0]!.unreachable).toBe(1);
+    expect(alice.changed).toContain("preprod");
+    // 1,002 ratchet steps: about 5 s alone, twice that beside the rest of the suite.
+  }, 60_000);
+
+  it("keeps the user's own name for a conversation, on the device, into one started again; takes it away when empty", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "hello Bob");
+    await alice.messaging.whenIdle();
+    await synced(bob);
+    await bob.messaging.accept("preprod", cid);
+    relay.calls.length = 0;
+    await bob.messaging.rename("preprod", cid, "  Alice  ");
+    expect((await bob.messaging.overview("preprod")).conversations[0]).toMatchObject({ cid, name: "Alice", role: "responder" });
+    // Never sent: naming asks the relay nothing.
+    expect(relay.calls).toEqual([]);
+    await expect(bob.messaging.rename("preprod", cid, "x".repeat(41))).rejects.toThrow(/at most 40/);
+    await bob.messaging.rename("preprod", cid, "");
+    expect((await bob.messaging.overview("preprod")).conversations[0]!.name).toBeUndefined();
+    // Started again to the same Seedelf: Alice's name for it goes on.
+    await alice.messaging.rename("preprod", cid, "Bob");
+    const again = await alice.messaging.restart("preprod", cid, "again");
+    const listed = (await alice.messaging.overview("preprod")).conversations;
+    expect(listed.find((c) => c.cid === again)!.name).toBe("Bob");
+  });
+
+  it("isn't offline for a read it chose not to make: a lock mid-sync", async () => {
+    const { relay, alice } = await pair();
+    relay.up = false;
+    await alice.wallet.lock();
+    await alice.messaging.sync("preprod");
+    await alice.wallet.unlock(PASSWORD);
+    expect((await alice.messaging.overview("preprod")).offline).toBeUndefined();
   });
 });

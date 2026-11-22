@@ -4191,3 +4191,484 @@ button.dapp-tile:hover {
   color: var(--muted);
   font-size: 11px;
 }
+
+/* Seedelf Messaging (screens/Messages.tsx, chunk 54f): a messenger's layout. The page stops scrolling and its parts
+   scroll instead: the list, and a conversation's messages over the box to write in, which stays at the foot. In a
+   window wide enough, the list and a conversation sit side by side, and the column widens for them. */
+
+.app--messages {
+  height: 100dvh;
+  min-height: 0;
+  max-width: 1100px;
+}
+
+.app--messages main {
+  min-height: 0;
+}
+
+.messages {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s4);
+}
+
+.messages--wide {
+  grid-template-columns: minmax(270px, 330px) minmax(0, 1fr);
+}
+
+.messages__list,
+.messages__pane {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.messages--wide .messages__list {
+  padding-right: var(--s4);
+  border-right: 1px solid var(--border);
+}
+
+.messages__head {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: var(--s2);
+  padding-bottom: var(--s3);
+}
+
+.messages__title {
+  text-align: center;
+}
+
+.messages__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding-bottom: var(--s2);
+}
+
+.messages__switch {
+  padding: var(--s3) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.messages__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.messages__group > h2 {
+  padding: 0 var(--s2);
+}
+
+.messages__none {
+  margin: 0;
+  padding: var(--s5) var(--s3);
+  text-align: center;
+  color: var(--muted);
+}
+
+.messages__unlock {
+  margin-top: auto;
+  padding-top: var(--s3);
+  text-align: center;
+}
+
+.messages__empty {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--s2);
+  color: var(--muted);
+  text-align: center;
+}
+
+.messages__empty p {
+  margin: 0;
+}
+
+/* A conversation in the list: its round mark, its name and when, and its last message or its state, with what's
+   unread at the end. */
+
+.convos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.convo {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2);
+  border-radius: var(--r-sm);
+  text-align: left;
+  color: var(--text);
+  transition: background-color 120ms;
+}
+
+.convo:hover {
+  background: var(--surface-2);
+}
+
+.convo[aria-current="true"] {
+  background: var(--accent-soft);
+}
+
+.convo__mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.convo__mark--unknown {
+  color: var(--muted);
+}
+
+.convo__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.convo__top,
+.convo__bottom {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.convo__name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.convo__time {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.convo__preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.convo__preview--state {
+  color: var(--warn);
+}
+
+.convo__unread {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A conversation: its header, its messages by day, and the box at the foot. */
+
+.thread {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.thread__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: 52px;
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--border);
+}
+
+.thread__who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.thread__name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread__name--alone {
+  flex: 1;
+}
+
+.thread__detail {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.thread__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s2) var(--s1);
+}
+
+.thread__scroll--form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.bubbles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.thread__day {
+  align-self: center;
+  margin: var(--s2) 0;
+  padding: 2px 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.thread__note {
+  align-self: center;
+  padding: 2px var(--s3);
+  text-align: center;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.bubble {
+  max-width: min(80%, 560px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 12px 5px;
+  border-radius: 16px;
+}
+
+.bubble--in {
+  align-self: flex-start;
+  background: var(--surface-2);
+  border-bottom-left-radius: 4px;
+}
+
+.bubble--out {
+  align-self: flex-end;
+  background: rgb(0 196 188 / 0.17);
+  border-bottom-right-radius: 4px;
+}
+
+.bubble__text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.bubble__text--unreadable {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.bubble__meta {
+  align-self: flex-end;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bubble__state--refused {
+  color: var(--danger-text);
+}
+
+/* A conversation's state over the box: no reply, can't continue, started again, a request. */
+.thread__state {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  font-size: 12.5px;
+}
+
+.thread__state > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.thread__state--again,
+.thread__state--request {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.thread__state > .secondary {
+  flex: none;
+  min-height: 32px;
+  padding: 0 var(--s4);
+  font-size: 13px;
+}
+
+.thread__error {
+  margin: 0;
+}
+
+.composer-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s2);
+  padding: 5px 5px 5px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  transition: border-color 120ms;
+}
+
+.composer:focus-within {
+  border-color: var(--accent);
+}
+
+.composer textarea,
+.composer textarea:focus {
+  flex: 1;
+  min-width: 0;
+  max-height: 160px;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  resize: none;
+  line-height: 1.4;
+}
+
+.composer__send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.composer__send:disabled {
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
+.composer__count {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.composer__count--over {
+  color: var(--danger-text);
+}
+
+.composer__off {
+  margin: 0;
+}
+
+/* The top bar's Messages button: what's unread, on its edge. */
+.icon-button--count {
+  position: relative;
+}
+
+.icon-button__count {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--accent-text);
+  box-shadow: 0 0 0 2px var(--bg);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.menu-row__sub--unread {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* A Seedelf's name's last sixteen beside its tag in the list: what tells two Seedelfs tagged alike apart. */
+.convo__tail {
+  margin-left: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
