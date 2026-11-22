@@ -68,8 +68,9 @@ pub fn weight(path: &str) -> f64 {
     }
 }
 
-/// Who a request is from, for its bucket and the relay's counts: an IPv6
-/// address by its /64, which one machine holds whole.
+/// Who a request is from, for its bucket: an IPv6 address by its /64,
+/// which one machine holds whole. The relay counts posts by a wider key of
+/// its own (`messaging::address_key`).
 pub fn client_key(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
