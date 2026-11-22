@@ -309,6 +309,11 @@ export interface MessagingEntry {
   sent?: "queued" | "pending" | "posted" | "refused";
   /** When the relay drops it (ms): never "delivered". */
   expires?: number;
+  /**
+   * Its proof of work being solved now (a first message's stamp, or its post's): about how long it takes here. Each
+   * attempt is a fresh chance, so this is what's left at any moment, never a countdown.
+   */
+  working?: { seconds: number };
 }
 
 /** A conversation's messages. */
@@ -321,6 +326,8 @@ export interface MessagingThread {
   missing: number;
   /** The longest text the next message can carry, in UTF-8 bytes. */
   maxTextBytes: number;
+  /** The relay asked the wallet to wait: when what's waiting to be sent is tried again (ms). */
+  nextTry?: number;
   /**
    * The wallet's Seedelfs it can show the other side (asset names, hex): only where it wrote first and has a reply
    * (`messaging-reveal`, protocol.md §19).

@@ -41,6 +41,11 @@ export interface FakeRelay {
   alwaysMore: boolean;
   /** Answers the next post with this status (429 or 503) instead. */
   waitOnce?: number;
+  /**
+   * This address can't post now, for this many seconds, as the relay's own limits say: every page prices every size
+   * at 0, and a post is refused with a 429 before its work is looked at (§17.5).
+   */
+  refusing?: number;
   now: () => number;
   /** Puts `envelope` (hex) in `pool` as if posted. */
   put(pool: NetworkName, envelope: string): void;
@@ -135,7 +140,8 @@ export function fakeRelay(clock: { now: number } = { now: Date.now() }): FakeRel
     out[1] = (more || relay.alwaysMore ? 1 : 0) | (relay.gapOnce && after !== null ? 2 : 0);
     relay.gapOnce = false;
     view.setBigUint64(2, cursor);
-    out.set([relay.price, relay.price, relay.price, relay.price], 10);
+    const price = relay.refusing ? 0 : relay.price;
+    out.set([price, price, price, price], 10);
     view.setUint16(14, taken.length);
     let at = 16;
     for (const h of taken) {
@@ -162,6 +168,7 @@ export function fakeRelay(clock: { now: number } = { now: Date.now() }): FakeRel
       relay.waitOnce = undefined;
       return json(status, { error: "wait" }, { "retry-after": "30" });
     }
+    if (relay.refusing) return json(429, { error: "too many posts from this address for now" }, { "retry-after": String(relay.refusing) });
     if (work(digest, nonce) < relay.price) return json(402, { error: "more proof of work", price: relay.price });
     const kept = keep(name, envelope);
     return json(200, { kept: "new", expires: Math.floor((kept.came + HOLD_MS) / 1000) });

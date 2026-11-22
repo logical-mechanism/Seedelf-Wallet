@@ -82,7 +82,8 @@ test("54f: Messages opens from the top bar and from Home, off by default, and of
   const toggle = page.getByTestId("messages-switch");
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(page.getByTestId("messages-none")).toContainText("Turn Messages on");
-  await expect(page.locator("#messages-switch-note")).toContainText("never what's sent or to whom");
+  // Just the switch, with no line under it (the owner, 2026-11-22).
+  await expect(page.getByRole("switch", { name: "Turn on Messages" })).toBeVisible();
 
   // Never to one's own Seedelf.
   await page.getByTestId("messages-new").click();
@@ -174,6 +175,11 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
 
     // Its conversation, named by the Seedelf's tag: preparing (the stamp), then "sent, expires …", never "delivered".
     await expect(b.getByTestId("thread-name")).toHaveText("web-wallet");
+    // B wrote to that Seedelf, so its header copies it and saves it to the contacts (the owner, 2026-11-22).
+    await other.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await b.getByTestId("thread-copy").click();
+    expect(await b.evaluate(() => navigator.clipboard.readText())).toBe(SEEDELF);
+    await expect(b.getByTestId("thread-save")).toBeVisible();
     await expect(b.getByTestId("bubble")).toHaveText(/hello from B/);
     await expect(b.getByTestId("bubble-state")).toContainText("sent, expires", { timeout: 120_000 });
 
@@ -190,6 +196,9 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     await expect(a.getByTestId("thread")).toBeVisible();
     await expect(a.getByTestId("thread-name")).toHaveText("Unknown sender");
     await expect(a.getByTestId("thread-detail")).toContainText("Wrote to your web-wallet");
+    // A doesn't know B's Seedelf: nothing to copy or save.
+    await expect(a.getByTestId("thread-copy")).toHaveCount(0);
+    await expect(a.getByTestId("thread-save")).toHaveCount(0);
     await expect(a.getByTestId("thread").getByTestId("bubble")).toHaveCount(2);
     await expect(a.getByTestId("messages-requests")).toBeHidden();
     await expect(a.getByTestId("messages-conversations")).toContainText("You: hi B");
@@ -217,12 +226,18 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     await expect(a.getByTestId("thread-detail").first()).toHaveText("b-wallet");
     await expect(a.getByTestId("thread-detail").nth(1)).toContainText("Verified Seedelf");
     await expect(a.getByTestId("messages-conversations")).toContainText("Showed you a Seedelf");
-    // Saved to A's contacts, by A's own name for it: the bubble names it so, and asks no more.
-    await a.getByTestId("bubble-reveal-save").click();
+    // Verified, the header copies B's Seedelf and saves it to A's contacts; the chat itself has no links (the owner,
+    // 2026-11-22). Saved by A's own name for it, the bubble names it so, and the header asks no more.
+    await expect(a.getByTestId("bubble-reveal").getByRole("button")).toHaveCount(0);
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await a.getByTestId("thread-copy").click();
+    expect(await a.evaluate(() => navigator.clipboard.readText())).toBe(B_SEEDELF);
+    await a.getByTestId("thread-save").click();
     await a.getByLabel("Name", { exact: true }).fill("Bea");
     await a.getByRole("button", { name: "Save", exact: true }).click();
     await expect(a.getByTestId("bubble-reveal")).toHaveText(/Showed you their Seedelf Bea/);
-    await expect(a.getByTestId("bubble-reveal-save")).toBeHidden();
+    await expect(a.getByTestId("thread-save")).toBeHidden();
+    await expect(a.getByTestId("thread-copy")).toBeVisible();
     // B never sees a button to reveal on A's side of things, nor A on its own.
     await expect(a.getByTestId("thread-reveal")).toBeHidden();
 
