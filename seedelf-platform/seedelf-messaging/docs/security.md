@@ -24,7 +24,7 @@ The tests don't establish, and can't:
 - Unlinkability.
 - Constant-time behaviour.
 - The quality of the operating system's randomness.
-- The joint security of one key for spending and reading.
+- The joint security of one key for spending and reading ([joint-security.md](joint-security.md) argues it).
 
 Those rest on the arguments and assumptions below.
 
@@ -69,21 +69,13 @@ Those rest on the arguments and assumptions below.
 
 Later, a Seedelf's own on-chain register is the recipient and the wallet's scalar x reads (the owner, 2026-11-20). Phase 1 changes nothing in the wallet. tests/seedelf_registers.rs shows the formats and the algebra already line up: a datum's register is a recipient, `SecretKey::from_scalar(x)` reads, and seedelf-crypto's `is_owned` agrees.
 
-**One scalar, two uses:**
-- **Spending:** Schnorr proofs, z = ρ + c·x with c = blake2b-224(g ‖ [ρ]g ‖ u ‖ vkh).
-- **Reading:** ECIES decryption, [x]c.
+**One scalar, many uses:** spending proofs, Lovejoin's owner proofs, the verified reveal, reading, the handshake's Diffie–Hellman, discovery, and the one-time signing keys.
 
-**Joint security.** Degabriele, Lehmann, Paterson, Smart and Strefler, *On the Joint Security of Encryption and Signature in EMV* (CT-RSA 2012), show EC-Schnorr signatures and ECIES-KEM can share a key pair in the random-oracle model. To be checked against the paper before it's relied on. Seedelf differs in ways the result doesn't cover:
-- Bases change per register.
-- Proofs are bound to a one-time key hash.
-- Proof nonces are hedged with HMAC-SHA-512.
-- The two hashes are different functions.
-
-Not proven here.
+**Joint security: [joint-security.md](joint-security.md).** It lists every use of x in the code, the rules each must keep, and a theorem with its proof, game by game, extending Degabriele, Lehmann, Paterson, Smart and Strefler's Theorem 2 (ECIES-KEM and EC-Schnorr on one key, CT-RSA 2012). It's argued in the random-oracle model under gap assumptions, and one step, the handshake's identity on the reader's base, needs a static Diffie–Hellman assumption the attacker doesn't get to use (its §7.3). Unaudited: its outside review is below, under "Before production". It also says why we depart from NIST SP 800-56A's rule against one key pair for signatures and key establishment.
 
 **What it means in practice:**
 - **Whatever reads can spend.** A client or service that scans for a Seedelf holds its spending key, and there's no read-only delegation under this choice. A scanning-only key would have to be a separate key, which means revisiting the choice.
-- **Decryption sits next to the spending key.** Any oracle on [x]·(an attacker's point), beyond what ECIES allows, would be an oracle on the spending key. The subgroup, identity and canonical-encoding checks are what make that safe. They're mandatory, and the tests hold them.
+- **Decryption sits next to the spending key.** Any oracle on [x]·(an attacker's point), beyond what ECIES allows, would be an oracle on the spending key. The subgroup, identity and canonical-encoding checks are what make that safe. They're mandatory, and the tests hold them. joint-security.md's rule 1 lists every place x meets a point someone else chose.
 - **Compromise of one is compromise of both.**
 - **Anyone can message any Seedelf,** since its register is public. Spam is the relay's concern: proof of work priced by traffic, which a GPU can outpay, and a cap on what one address has in the pool (protocol.md §17.4), which a sender with many addresses can get around.
 - **No new derivation:** the wallet's frozen v1 derivation stays as it is.
@@ -156,12 +148,13 @@ A Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers) that the revealed S
 - The reader's own forgery verifies, and one made without its key doesn't.
 - Every malformed reveal is refused with its code, the length read first.
 - Vectors reproduced byte for byte by an implementation written from protocol.md alone (noble-curves and SHA-256), and a mutation pass: all 25 of the proof's and parser's rules are load-bearing in the tests.
+- The nonce's hedge (protocol.md §19.2): with the random source stuck, one statement gives one proof, and every part of the statement, the simulated branch, the key and the branch gives another nonce. Its own mutation pass and a second clean-room check are in [joint-security.md](joint-security.md) §10.
 
 ## Before production
 
 - An external review of the construction and the code.
 - Written arguments for IND-CCA2 and for unlinkability, with the per-envelope base.
-- The spending-and-reading argument, checked against the literature.
+- An outside review of the spending-and-messaging argument, [joint-security.md](joint-security.md), starting from its §7.4.
 - A constant-time review of the WebAssembly build. WebAssembly engines promise nothing about timing.
 - An outside review of the protocol, its model (54b), and the reveal's proof, which the model doesn't cover.
 - The relay's price and window tuned with real use, and a memory-hard puzzle if GPUs flood it (protocol.md §17.4).
