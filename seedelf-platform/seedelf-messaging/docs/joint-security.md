@@ -8,7 +8,7 @@ This document is the argument that sharing x is safe, and the conditions it rest
 - §4 lists every use of x in the code, crate by crate;
 - §5 states the rules every use must keep;
 - §6 and §7 give a theorem and its proof, game by game, in the random-oracle model;
-- §7.4 says which steps are new, §8 what isn't covered, and §9 the gaps found, one of them still open.
+- §7.4 says which steps are new, §8 what isn't covered, and §9 the gaps found, all since fixed.
 
 **Status.** An argument in the random-oracle model under gap assumptions, in the style of Degabriele, Lehmann, Paterson, Smart and Strefler's Theorem 2. It's written for an outside cryptographer to check, and nobody outside has checked it yet. A fresh-context review found real errors in its first draft, folded in (§10). It isn't machine-checked, and it doesn't prove anything about the code beyond what §4's inventory and the tests listed in §10 hold the code to.
 
@@ -65,6 +65,8 @@ Seedelf breaks this rule on purpose: x proves spending (a signature-like use) an
 | H_kdf | HKDF-SHA-256 | a salt that's a `Seedelf-Messaging\|v1\|…` label or a fresh secret | Uses 5 and 6 |
 | N_spend | HMAC-SHA-512, keyed by x | `seedelf/schnorr/nonce/v1` | Use 2's nonce |
 | N_rev | HMAC-SHA-512, keyed by x | `Seedelf-Messaging\|v1\|session\|reveal-nonce` | Use 4's nonce |
+| N_b | HMAC-SHA-512, keyed by x | `Seedelf-Messaging\|v1\|session\|base-scalar` | Use 6's b, the writer's blinding |
+| N_k | HMAC-SHA-512, keyed by b | `Seedelf-Messaging\|v1\|session\|base-nonce` | The base proof's nonce (not a use of x) |
 | N_lj | RFC 6979's HMAC-SHA-256 DRBG over x and SHA-256(`lovejoin/sigmajoin/v1/` ‖ …) | | Use 3's nonce |
 | H_ot | HKDF-SHA-256, salt `seedelf-one-time-key-v1`, ikm x | | Use 8 |
 | H_ed | SHA-512 of x's 32 bytes, inside Ed25519 | | Use 9 (CLI) |
@@ -78,11 +80,11 @@ Found by reading every crate, the CLI, the WebAssembly bindings and the extensio
 | 1 | Registers | (g, [x]g) on a base the wallet re-randomized with a fresh d, from its root (G, [x]G) | The register, on chain | seedelf-crypto/src/register.rs:58 (`create`), :117 (`rerandomize`) |
 | 2 | The spending proof (Schnorr, checked on chain, frozen as variant 1) | T = [r]g; c = blake2b-224(g ‖ T ‖ u ‖ vkh) over the raw bytes; z = r + c·x. r = HMAC-SHA-512(x, `seedelf/schnorr/nonce/v1` ‖ g ‖ u ‖ vkh ‖ 32 random bytes) mod q | (T, z) in the redeemer | seedelf-crypto/src/schnorr.rs:114 (`create_proof`), :72 (the nonce), :172; validator seedelf-contracts lib/schnorr.ak at 5b82530 |
 | 3 | Lovejoin's owner proof (Schnorr, to withdraw a box) | t = [r]a; c = blake2b-256(`lovejoin/sigmajoin/v1/` ‖ 0x01 ‖ a ‖ b ‖ t ‖ ctx) mod q; z = r + c·x. r from RFC 6979 over x and SHA-256(tag ‖ a ‖ b ‖ ctx), deterministic | (t, z) in the redeemer | seedelf-crypto/src/lovejoin.rs:199 (`prove_schnorr`), :130 (the nonce) |
-| 4 | The verified reveal (CDS OR-proof, protocol.md §19.2) | z₁ = k₁ + c₁·x, c₁ + c₂ = SHA-256(label ‖ cid ‖ p₀ ‖ A ‖ w₀ ‖ len ‖ N ‖ g_S ‖ u_S ‖ T₁ ‖ T₁′ ‖ T₂) mod q. k₁ = HMAC-SHA-512(x, nonce label ‖ 0x01 ‖ statement ‖ c₂ ‖ z₂ ‖ aux) mod q | The reveal, inside the ratchet, to the other side | seedelf-messaging/src/session/reveal.rs:207 (`prove_seedelf`), :172 (the nonce), :324 (`Conversation::reveal`) |
+| 4 | The verified reveal (CDS OR-proof, protocol.md §19.2) | z₁ = k₁ + c₁·x, c₁ + c₂ = SHA-256(label ‖ cid ‖ p₀ ‖ A ‖ w₀ ‖ len ‖ N ‖ g_S ‖ u_S ‖ T₁ ‖ T₁′ ‖ T₂) mod q. k₁ = HMAC-SHA-512(x, nonce label ‖ 0x01 ‖ statement ‖ c₂ ‖ z₂ ‖ aux) mod q | The reveal, inside the ratchet, to the other side | seedelf-messaging/src/session/reveal.rs:199 (`prove_seedelf`), :170 (the nonce, through session/draw.rs:81, `hedged_scalar`), :304 (`Conversation::reveal`) |
 | 5 | Reading (ECIES decapsulation) | [x]c for the envelope's c, then HKDF | Nothing directly: whether it opened shows in behaviour | seedelf-messaging/src/envelope.rs:116 |
-| 6 | The handshake's Diffie–Hellman (protocol.md §3, §16.2) | As reader: w₀ = [x]p₀, [x]E_A, [x]A, and in the first ratchet step [x]S_A, all on the writer's points. As writer: A = [x]p₀ on p₀ = [b]g_S (the reader's handle, re-randomized by the writer's fresh b), and [x]w₀ | A, in F. Every DH value goes only into HKDF. A and w₀ go into every message's associated data, which the other side can solve for from the tags (rule 1) | session/conversation.rs:161 (A), :172 ([x]w₀), :228–231 (the reader's), :234 (x as RatchetInitBob's key); session/ratchet.rs:415 (the first step's [x]S_A) |
-| 6′ | Continuations (protocol.md §6) | The new F's A = [x]p₀ on the old conversation's base | A, in F: the writer's old public value | session/conversation.rs:112 (`continue_with`), session/inbox.rs:686 (`judge`) |
-| 7 | Ownership tests | Is [x]g = u? | Nothing directly: what the wallet spends, scans, refuses or answers | seedelf-crypto/src/register.rs:176 (`is_owned`); seedelf-core/src/lovejoin/mod.rs:498; seedelf-core/src/utxos.rs:68, :163, :601; seedelf-messaging/src/register.rs:107 (`matches_register`), envelope.rs:133 (the scan); reveal.rs:338–339; conversation.rs:85 (own handle refused), :122 (a continuation's own side) |
+| 6 | The handshake's Diffie–Hellman (protocol.md §3, §16.2) | As reader: w₀ = [x]p₀, [x]E_A, [x]A, and in the first ratchet step [x]S_A, all on the writer's points. As writer: b = HMAC-SHA-512(x, `…\|session\|base-scalar` ‖ g_S ‖ v_S ‖ F's head ‖ 32 random bytes) mod q (protocol.md §16.2), then A = [x]p₀ on p₀ = [b]g_S, the reader's handle re-randomized by b; and [x]w₀ | A, in F; b never leaves, and the base proof proves it under a nonce keyed by b. Every DH value goes only into HKDF. A and w₀ go into every message's associated data, which the other side can solve for from the tags (rule 1) | session/conversation.rs:146 (b, through session/first_contact.rs:347, `base_scalar`), :165 (A), :175 ([x]w₀), :231–234 (the reader's), :237 (x as RatchetInitBob's key); session/ratchet.rs:415 (the first step's [x]S_A) |
+| 6′ | Continuations (protocol.md §6) | The new F's A = [x]p₀ on the old conversation's base | A, in F: the writer's old public value | session/conversation.rs:110 (`continue_with`), session/inbox.rs:686 (`judge`) |
+| 7 | Ownership tests | Is [x]g = u? | Nothing directly: what the wallet spends, scans, refuses or answers | seedelf-crypto/src/register.rs:176 (`is_owned`); seedelf-core/src/lovejoin/mod.rs:498; seedelf-core/src/utxos.rs:68, :163, :601; seedelf-messaging/src/register.rs:107 (`matches_register`), envelope.rs:133 (the scan); reveal.rs:318–319; conversation.rs:96 (own handle refused), :120 (a continuation's own side) |
 | 8 | One-time signing keys (web wallet) | HKDF-SHA-256(salt `seedelf-one-time-key-v1`, ikm = x, info = a fresh 32-byte seed): an Ed25519 key whose hash is the proof's vkh | Its public key and signatures, in the transaction | seedelf-web-wallet/wasm/src/lib.rs:2071 (`one_time_key`) |
 | 9 | The CLI's external address key (CLI only) | Ed25519's key pair of x's 32 bytes as a seed; its public key, as 32 bytes, is in turn the seed of the address's Ed25519 key | That second key's public key and signatures | seedelf-crypto/src/convert.rs:23; seedelf-cli/src/commands/external/sweep.rs:29, :65, external/balance.rs |
 
@@ -95,7 +97,7 @@ Found by reading every crate, the CLI, the WebAssembly bindings and the extensio
 
 **What isn't a use of x** (checked, so a reviewer needn't look):
 - **Lovejoin's mix proofs** (`prove_sigma_or`) use each mix's fresh witnesses (seedelf-core/src/lovejoin/mod.rs:1035), never x.
-- **The base proof in F** (protocol.md §16.2) proves the writer's fresh b, never x. But b is what blinds the writer's A = [x][b]g_S, so b's secrecy matters to x: rule 2's last item, and §9.
+- **The base proof in F** (protocol.md §16.2) proves the writer's b, never x, and its nonce is keyed by b, not x (N_k). But b is derived from x (use 6) and blinds the writer's A = [x][b]g_S, so b's secrecy matters to x: rule 1's A bullet, rule 2's last item, and §9.
 - **The CLI's one-time keys** are random (commands/spend.rs:26). convert.rs:9–11's comment, that use 9's key is the one-time key a proof binds to, is out of date.
 - **The Cardano account** (CIP-1852) is a sibling derivation from the same phrase, not from x.
 - **`baseRegister`** in the worker: (G, [x]G) as the account's identifier and, hashed, as a local record's owner (extension wallet.ts:519, contract-scan.ts:245). It's a register (use 1), never written to chain as it is.
@@ -119,25 +121,29 @@ A static Diffie–Hellman oracle on x, even a slow one, cuts the cost of finding
 Where x meets a point the wallet didn't choose, and what leaves:
 - **Uses 5 and 6, the DH values** ([x]c, [x]E_A, [x]A, [x]S_A, [x]w₀): only into HKDF.
 - **Use 6, the reader's w₀ = [x]p₀, in the associated data.** It's unhashed there in effect: whoever holds a message's key gets one GF(2¹²⁸)-linear equation in w₀'s three GCM blocks from each tag, so the other side recovers w₀ from three replies. That's safe because that side already knew w₀. A first message from a handle proves the writer made p₀ = [b]g_S, so it knows w₀ = [b]v_S; and a continuation is read only when verified, on a base and values both sides had. Third parties hold no message keys.
-- **Use 6, the writer's A = [x]p₀:** p₀ = [b]g_S with b the writer's secret and g_S the reader's. So (p₀, A) is a uniformly random register of x, which anyone can make by re-randomizing a public one: a *blinded* answer. It stays blinded only while b is secret and uniform. Anyone who learns b gets [x]g_S = [b⁻¹]A on a g_S of their own choosing, rule 2's last item.
+- **Use 6, the writer's A = [x]p₀:** p₀ = [b]g_S with b the writer's secret and g_S the reader's. So (p₀, A) is a uniformly random register of x, which anyone can make by re-randomizing a public one: a *blinded* answer. It stays blinded only while b is secret and uniform: anyone who learns b gets [x]g_S = [b⁻¹]A on a g_S of their own choosing. b is N_b's output, keyed by x, so it's secret and uniform whatever the random source does (rule 2's last item).
 - **Use 6′, a continuation's A = [x]p₀** on a base the other side chose: published only for a verified continuation (§6), where that side already knew it. It made p₀ = [b]g_S and proved b, so it knows [x]p₀ = [b]v_S; or its tag held w₀ = [x]p₀ in the associated data. protocol.md §3, "w₀ in it is load-bearing", is why both stay.
 - **Uses 2, 3 and 4, the proofs,** only for a true statement whose public value is already public. For a register (g, u) with u ≠ [x]g, the challenge is computable from public values, so z = r + c·x gives [x]g = ([z]g − T)/c. So:
   - use 2's `create_proof` refuses a register x doesn't own (schnorr.rs:128, added with this document; every caller already checked, but at about 12 call sites);
   - use 3's `prove_schnorr` computes u itself, and every withdraw checks each box is owned first (lovejoin/mod.rs:1504);
-  - use 4 refuses unless A = [x]p₀ and the Seedelf's register is x's (reveal.rs:338–339).
+  - use 4 refuses unless A = [x]p₀ and the Seedelf's register is x's (reveal.rs:318–319).
 - **Use 1:** registers on bases the wallet itself randomized.
 
-### Rule 2: every nonce is derived from x and everything its challenge covers
+### Rule 2: no nonce, and no b, rests on the random source alone
 
 Uses 2, 3 and 4 all compute z = r + c·x. One r under two different challenges, in the same use or in any two of them, gives x = (z − z′)/(c − c′), whatever the bases. So:
 - **Use 2:** r = HMAC-SHA-512(x, `seedelf/schnorr/nonce/v1` ‖ g ‖ u ‖ vkh ‖ aux), and the challenge covers g, T, u and vkh, with T = [r]g.
 - **Use 3:** r = RFC 6979(x, SHA-256(tag ‖ a ‖ b ‖ ctx)), and the challenge covers a, b, t and ctx, with t = [r]a. Deterministic: proving the same box under the same ctx twice gives the same proof.
 - **Use 4:** k₁ = HMAC-SHA-512(x, `…|reveal-nonce` ‖ 0x01 ‖ cid ‖ p₀ ‖ A ‖ w₀ ‖ len ‖ N ‖ g_S ‖ u_S ‖ c₂ ‖ z₂ ‖ aux). The challenge also covers T₂ = [z₂]p₀ − [c₂]w₀, which is why c₂ and z₂ are in the message. Until this document's change k₁ came from the random source alone (the gap in §7.1).
-- **Across uses:** N_spend and N_rev are one function, HMAC-SHA-512 keyed by x, on messages whose first bytes differ (`seedelf/…` against `Seedelf-…`). N_lj is HMAC-SHA-256. So the three nonces are independent functions of their inputs, and no two uses share one except by a collision.
+- **The writer's b and the base proof's k** (protocol.md §16.2, §16.3). Neither is x, but b blinds A, and a b given away unblinds A into [x]g_S, a static-DH answer on a generator the attacker chose (rule 1). So:
+  - b = HMAC-SHA-512(x, `…|session|base-scalar` ‖ g_S ‖ v_S ‖ F's head ‖ aux_b) mod q, F's head being F's bytes before p₀ (cid, t, `to`, `replaces`). Keyed by x, b is secret even when the source is predictable, and it's new for each handle, name, time and cid.
+  - k = HMAC-SHA-512(b, `…|session|base-nonce` ‖ g_S ‖ v_S ‖ p₀ ‖ F′ ‖ aux_k) mod q, and the base challenge covers g_S, v_S, p₀, T and F′, with T = [k]g_S. So one k never meets two challenges, which would give b = (z − z′)/(c − c′).
+  - k is keyed by b, the witness it hides, as RFC 6979 keys a nonce by the signing key: the proof then depends on b alone, and x meets one HMAC here (N_b), not two.
+  - Until this change both came from the source alone, in the order b, cid, e_A, s_A, k. A stuck source gave k = b, and z = b(1 + c) gave b away from one F (§9).
+- **Across uses:** N_spend, N_rev and N_b are one function, HMAC-SHA-512 keyed by x, on messages whose first bytes differ (`seedelf/…` against `Seedelf-…|reveal-nonce` and `Seedelf-…|base-scalar`). N_k is HMAC-SHA-512 keyed by b, under a label of its own. N_lj is HMAC-SHA-256. So the nonces and b are independent functions of their inputs, and no two uses share one except by a collision.
 
-So for these three a random source that fails or repeats costs nothing: the same statement gives the same proof again, and two different statements get independent nonces.
+So a random source that fails or repeats costs x nothing: the same statement gives the same proof again, two different statements get independent nonces, and b stays secret.
 
-- **Not yet: the writer's b and the base proof's k** (protocol.md §16.2, §16.3). Both are drawn from the source alone, in the order b, cid, e_A, s_A, k. A stuck source gives k = b, and then z = k + c·b = b(1 + c) gives b from one F. One b and one k under two F′ give it too: b = (z − z′)/(c − c′). Neither is x, but b unblinds A into [x]g_S, a static-DH answer on a generator the attacker chose. With a failing source, every conversation the user starts to an attacker's handle hands out one such answer. That's §5's table, not x outright, since the user starts each one. Open: §9.
 - **No other drawn value meets x:** e_A, s_A, the envelope's r, the ratchet keys and Lovejoin's witnesses never combine with it. A failing source costs secrecy and unlinkability there.
 
 ### Rule 3: no two uses hash the same input under one function
@@ -148,7 +154,7 @@ So for these three a random source that fails or repeats costs nothing: the same
   - raw SHA-256 runs over labelled inputs (`Seedelf-Messaging|v1|session|{reveal,base,stamp}`, and Lovejoin's `lovejoin/sigmajoin/v1/` for N_lj's message), and over the two stamps' unlabelled `digest ‖ nonce`, which are 40 bytes, shorter than any labelled input;
   - HMAC-SHA-256 and HKDF-SHA-256 are keyed by labels that differ from each other (`Seedelf-Messaging|v1|…|salt`, `seedelf-one-time-key-v1`, `seedelf-wallet-v1`), or by fresh secrets (rk, the ratchet's salt, chain keys);
   - x itself enters SHA-256 as H_ot's ikm, under the key `seedelf-one-time-key-v1`, and in N_lj's DRBG. That DRBG's first HMAC is keyed by 32 zero bytes, with x in the message after RFC 6979's 32 bytes of 0x01 and a 0x00: separated by that prefix, since nothing else in Seedelf uses a zero HMAC key.
-- **SHA-512:** HMAC-SHA-512 keyed by x (N_spend, N_rev), whose inner hash is at least 128 bytes; Ed25519's expansion of a 32-byte seed (use 9 and the one-time keys); BIP39's PBKDF2 over the phrase. They differ in key or in length.
+- **SHA-512:** HMAC-SHA-512 keyed by x (N_spend, N_rev, N_b) or by b (N_k), whose inner hash is at least 128 bytes, with labels none of which is a prefix of another; Ed25519's expansion of a 32-byte seed (use 9 and the one-time keys); BIP39's PBKDF2 over the phrase. They differ in key or in length.
 
 Treating these as independent random oracles is the standard step of "oracle cloning" by domain separation (Bellare, Davis and Günther, *Separate Your Domains*, EUROCRYPT 2020). A reviewer should check this table against the code more than anything else in this section.
 
@@ -187,7 +193,7 @@ Both are conditions on the worker and the CLI, which hold x and so are trusted w
 
     q_pf · (q_H + q_pf) / q + ε_key
 
-where q_pf is the number of proofs made, q_H the attacker's hash queries, and ε_key the chance the attacker queries a keyed oracle (N_spend, N_rev, N_lj, H_ot) under x itself, which R_P can use as x. No such R_P exists yet (Status).
+where q_pf is the number of proofs made, q_H the attacker's hash queries, and ε_key the chance the attacker queries a keyed oracle (N_spend, N_rev, N_b, N_lj, H_ot) under x itself, which R_P can use as x. No such R_P exists yet (Status).
 
 **(B) Spending proofs stay unforgeable.** Say an attacker gets, with probability ε, a transaction accepted that spends a register of x the wallet didn't sign for. Then either:
 - it forged an Ed25519 signature under one of the wallet's one-time keys, which are independent of x (A3); or
@@ -206,9 +212,9 @@ From the second, an algorithm of about twice the attacker's running time finds x
 This is Theorem 2's first half (DLPSS §4.4, "Security of the KEM component"), done once for each proof system and for the two derived keys.
 
 - **Game A0:** P's game, with every oracle of §6.
-- **Game A1: nonces drawn.** Replace N_spend, N_rev and N_lj with fresh uniform values for each distinct input, the same value for a repeated one.
+- **Game A1: nonces drawn.** Replace N_spend, N_rev, N_lj and N_b with fresh uniform values for each distinct input, the same value for a repeated one.
   - A0 and A1 differ only if the attacker queries one of those functions with x as the key. In the random-oracle model nothing else in its view depends on how they're computed, which is ε_key.
-  - **This step is where the old reveal failed.** With k₁ drawn from the random source alone, a source that repeats gives one k₁ to two challenges, and A1's "fresh value per input" isn't what the wallet did: the real wallet then leaks x. Rule 2 makes the nonce a function of everything the challenge covers, so A1 holds whatever the source does.
+  - **This step is where the old reveal failed.** With k₁ drawn from the random source alone, a source that repeats gives one k₁ to two challenges, and A1's "fresh value per input" isn't what the wallet did: the real wallet then leaks x. Rule 2 makes the nonce a function of everything the challenge covers, so A1 holds whatever the source does. The old drawn b failed the same way: a b that a stuck source gave away wasn't a fresh value either.
 - **Game A2: proofs simulated.** Answer each proof query without x, by the honest-verifier zero-knowledge simulator, and program the proof's random oracle:
   - **Use 2:** draw c uniform in [0, 2²²⁴) and z uniform mod q; set T = [z]g − [c]u; program H_spend(g ‖ T ‖ u ‖ vkh) := c.
   - **Use 3:** likewise, with H_lj's 256-bit output chosen uniformly and c its value mod q.
@@ -233,10 +239,11 @@ The reduction B gets a DLP instance X = [x]G, a DDH oracle, and a static-DH orac
   - **Opening an envelope** (use 5): as in ECIES's gap-DH proof (Abdalla–Bellare–Rogaway; Cramer–Shoup). B keeps H_kdf's table. For an envelope with c and header H, if the attacker already queried H_kdf at (salt, Z, info ‖ H) with (G, X, c, Z) a DH tuple, that answer is the key. Otherwise B draws one, and gives it to any later query whose Z the DDH oracle accepts.
   - **Receiving a first message** (use 6, as reader):
     - SK = H_kdf([x]E_A ‖ [x]A, info ‖ F) and the first step's KDF_RK(SK, [x]S_A) are handled the same way, with two and one DDH checks. If the attacker never queried the right inputs, the keys are random to it and its message can't authenticate: B refuses it.
-    - The associated data needs w₀ = [x]p₀ itself, and the envelope gives it. The wallet reads a message only if its envelope (p, w) is its own ([x]p = w, the scan) and p = [o]p₀ for the message's outer scalar o (conversation.rs:356–366). o comes from the message key, which B now has, and the salt. So B checks p = [o]p₀ itself and sets w₀ = [o⁻¹]w, which is [x]p₀ whenever the wallet would read the message. No static-DH answer is needed.
-    - **One condition:** the wallet checks the tag before the envelope (conversation.rs:348 before :361). When p ≠ [o]p₀, B can't tell which of the two refusals the wallet would give. The two must look the same to the attacker, and they do: protocol.md §2 drops both without a word.
+    - The associated data needs w₀ = [x]p₀ itself, and the envelope gives it. The wallet reads a message only if its envelope (p, w) is its own ([x]p = w, the scan) and p = [o]p₀ for the message's outer scalar o (conversation.rs:359–369). o comes from the message key, which B now has, and the salt. So B checks p = [o]p₀ itself and sets w₀ = [o⁻¹]w, which is [x]p₀ whenever the wallet would read the message. No static-DH answer is needed.
+    - **One condition:** the wallet checks the tag before the envelope (conversation.rs:351 before :364). When p ≠ [o]p₀, B can't tell which of the two refusals the wallet would give. The two must look the same to the attacker, and they do: protocol.md §2 drops both without a word.
   - **Starting a conversation** (use 6, as writer) to a handle (g_S, v_S):
-    - B draws b, sets p₀ = [b]g_S, and gets [x]g_S from the static-DH oracle, so A = [b][x]g_S is the real value. One more answer for q_s.
+    - B draws b as N_b's answer (B2), sets p₀ = [b]g_S, and gets [x]g_S from the static-DH oracle, so A = [b][x]g_S is the real value. One more answer for q_s.
+    - B knows b, so it makes the base proof as the wallet does, k from N_k under b.
     - [x]w₀ only enters H_kdf, which B handles with the DDH oracle on (G, X, w₀, ·).
   - **Continuing** (use 6′): the A it publishes is [x]p₀ for an old p₀, which B already has from that conversation's start or first message.
   - **Revealing** (use 4): simulated as in B3, since A and the Seedelf's register are known to B.
@@ -260,7 +267,7 @@ One step of B4 needs [x]P for a point P the attacker chose: **starting** a conve
 **What the attacker actually gets is less:**
 - Starting gives it (p₀, A) blinded by b: a random register of x, which it could make itself.
 - In the generic group model, that costs nothing while b stays secret: the blinded answers are random multiples with fresh unknown factors, and Cheon's attack needs [x^d]G on one base, which no chain of blinded answers gives.
-- With a failing random source, b doesn't stay secret (rule 2's last item), and each start becomes a real static-DH answer.
+- b stays secret even with a failing random source, since it's keyed by x (rule 2's last item). When b was drawn alone, a failing source made each start a real static-DH answer (§9).
 
 **Two other routes,** not taken here:
 - **The algebraic group model,** where starting reduces to q-DL, whose best known attack is the same Cheon bound.
@@ -277,7 +284,7 @@ One step of B4 needs [x]P for a point P the attacker chose: **starting** a conve
 **New, and where a reviewer should push:**
 1. **Many bases.** x's public side is a set of registers, not one key. B handles it by re-randomizing X (B1), and extraction needs no log_G g* (B5). We believe this is sound. It's the step to check that the attacker can't gain from registers it re-randomized itself.
 2. **Three proof systems on one key.** That's rule 2, and the hedging, as the hypothesis that keeps A1 true when the random source fails. Before this document the reveal didn't meet it.
-3. **The handshake's identity on the reader's base** (§7.3): the only place the proof needs more than gap assumptions, and only for conversations the user starts. It's the weakest step, and it rests on b staying secret.
+3. **The handshake's identity on the reader's base** (§7.3): the only place the proof needs more than gap assumptions, and only for conversations the user starts. It's the weakest step, and it rests on b staying secret, which rule 2 keeps whatever the random source does.
 6. **The funds game** (§6, rule 7): a spend is safe only if its proofs are bound to a fresh key of the wallet's that signs nothing else. That's a rule about the worker, not about x.
 4. **Decision bits beyond decryption:** the scan, acceptance, a reveal's check, what the wallet spends. Rule 4 claims each is a DDH answer. That claim is checked against the code in §4, not proved.
 5. **Domain separation** (rule 3), across functions that Cardano and Lovejoin also use.
@@ -285,7 +292,7 @@ One step of B4 needs [x]P for a point P the attacker chose: **starting** a conve
 ## 8. What this doesn't cover
 
 - **Side channels.** Timing, caches, and the WebAssembly engine, which promises nothing about timing (security.md, "Before production"). The scan's early return, whether an envelope is ours, is a timing signal of the kind rule 4 counts.
-- **The random source, beyond the hedging.** Rule 2 keeps the three proofs' nonces safe from a failing source. The writer's b isn't hedged yet, so a failing source turns each conversation the user starts into a static-DH answer (§9). Secrecy and unlinkability don't survive a failing source either.
+- **The random source, beyond the hedging.** Rule 2 keeps the three proofs' nonces, the writer's b and the base proof's k safe from a failing source. Secrecy and unlinkability don't survive one: e_A, s_A, the ratchet keys and the envelope's r are drawn alone.
 - **Unlinkability** (XDH): another model's job, the outer envelope's and then unlinkability's.
 - **The handshake's own security.** Part A carries over whatever it has. Its symbolic proofs are the Tamarin model ([model/](../model/)), and there's no computational proof of it here.
 - **The contracts' correctness:** seedelf-verification, for Seedelf's three scripts and Lovejoin v2's (mix_logic's Owner withdrawal included, in every transaction). Part B takes the validators as they're stated there: Seedelf's frozen variant 1 hashes raw bytes with blake2b-224, takes z of any length below q, and needs the vkh in the extra signatories; Lovejoin's owner proof is bound to its ctx, a blake2b-256 hash of the outputs, the input references and the mix box's script hash (`owner_context`, seedelf-core/src/lovejoin/mod.rs:1307).
@@ -296,15 +303,19 @@ One step of B4 needs [x]P for a point P the attacker chose: **starting** a conve
 
 ## 9. Gaps found
 
-### Open: the writer's b and the base proof's k
+### Fixed: the writer's b and the base proof's k
 
-Found by the fresh-context review (§10). Rule 2's last item says what it costs: with a stuck or predictable random source, each conversation the user starts to an attacker's handle hands out [x]g_S, a real static-DH answer. Not x, and only as many answers as conversations the user starts, but exactly what rule 1 forbids.
+Found by the fresh-context review (§10), and fixed in the change after the reveal's. Both came from the random source alone, in the order b, cid, e_A, s_A, k:
+- a stuck source gave k = b, and then z = b(1 + c) gave b away from one F;
+- one b and one k under two F′ gave b = (z − z′)/(c − c′);
+- a predictable source gave b outright.
 
-**The fix proposed,** the same hedge as the reveal's:
-- b = HMAC-SHA-512(x, a new label ‖ the handle ‖ to ‖ t ‖ aux) mod q, so b stays secret even when the source is predictable;
-- k derived the same way, from b, F′ and aux, so no two challenges share one.
+b unblinds A into [x]g_S, a static-DH answer on a generator the attacker chose. So with a failing source, each conversation the user started to an attacker's handle handed one out. Not x, and only as many answers as conversations the user started, but exactly what rule 1 forbids.
 
-It changes protocol.md §16.2 and §16.3 and the session vectors, which means a new clean-room check of §16 and a mutation pass. It isn't in this change.
+**The fix,** the reveal's hedge (rule 2's last item):
+- protocol.md §16.2: b = HMAC-SHA-512 keyed by x over the handle, F's head and 32 drawn bytes, and k = HMAC-SHA-512 keyed by b over the handle, p₀, F′ and 32 drawn bytes. §3 and §16.3 follow: cid is drawn first, since b covers it.
+- Two choices made in building it: b's message holds F's head in F's own encoding, so cid and `replaces` too; and k is keyed by b, not x, the witness it hides, so x meets one new HMAC, not two.
+- The session vectors were re-recorded with b's and k's messages and HMACs, and the reveal vectors too, since their conversations start from a handle: a deliberate format change. The relay's and v1's vectors are byte for byte as they were, and the reveal's 31 checks give the results they gave.
 
 ### Fixed: the reveal's nonce
 
@@ -336,13 +347,16 @@ Each hit is a use in §4's table, a caller of one, or a new use, which needs thi
 - **Rule 2:**
   - schnorr.rs's `a_stuck_random_source_still_gives_each_statement_and_key_its_own_nonce`;
   - session/tests/reveal.rs's `a_stuck_random_source_still_gives_each_statement_its_own_nonce` and `the_nonce_is_hmac_sha512_of_the_statement_under_the_key`;
-  - the reveal vectors, which hold every byte of each nonce's message and HMAC.
+  - the reveal vectors, which hold every byte of each nonce's message and HMAC;
+  - session/tests/first_contact.rs's `a_stuck_random_source_still_keeps_b_secret_and_gives_each_proof_its_own_k`, `b_and_k_are_hmac_sha512_of_their_specified_messages` and `the_start_draws_in_the_documented_order`, for b and k;
+  - the session vectors, which hold every byte of b's and k's messages and HMACs, and session/tests/vectors.rs's `the_files_b_and_k_are_the_hmacs_of_their_specified_messages`, which rebuilds both from the file's other values.
 - **Rule 5:** tests/invalid_inputs.rs, and the parsers' refusals throughout.
 - **A mutation pass** over the new rules (2026-11-22): 13 mutants, 12 killed. Each part of the nonce's message removed (the label, the branch, the statement, c, z, aux), the key replaced, half the HMAC reduced, the old drawn nonce, the writer's branch byte made the reader's, aux drawn first, and create_proof's guard removed: each made a test fail. The survivor keeps a zero nonce instead of drawing aux again, an event of probability 2⁻²⁵⁵ that no test can reach.
-- **A clean-room check** of the new §19.2: protocol.md §19.6, "Checked again".
+- **A second, over b and k** (2026-11-22): 28 mutants, 27 killed. Each label changed or removed; each part of b's message removed (the handle, F's head, aux) or reordered, and each field of the head (cid, t, `to`, `replaces`); each part of k's message removed (the handle, p₀, F′, aux); b not keyed by x, k not keyed by b; the old drawn b, the old drawn k, and k = b; the draw order changed three ways (b's aux before cid, k's aux before e_A, the old order); and the shared hedge's key zeroed or little-endian, or half its HMAC reduced. The survivor is the same 2⁻²⁵⁵ zero kept.
+- **A clean-room check** of the new §19.2: protocol.md §19.6, "Checked again". And of §16.2's b and k: protocol.md §16.6, "Checked again" (2026-11-22).
 
 **Review.** A fresh-context Claude review read the first draft and the code (2026-11-22). What it found, now folded in:
-- b's secrecy rests on the random source alone (§9, open);
+- b's secrecy rested on the random source alone (§9, since fixed);
 - receiving needs no static-DH answer (§7.2), so q_s is only the conversations the user starts;
 - the first draft's funds game gave the attacker proofs under any vkh and signatures on any transaction, so its win condition wasn't a funds condition (rule 7, §6);
 - w₀ in the associated data is recoverable by the other side (rule 1);

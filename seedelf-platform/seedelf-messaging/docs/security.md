@@ -71,7 +71,7 @@ Later, a Seedelf's own on-chain register is the recipient and the wallet's scala
 
 **One scalar, many uses:** spending proofs, Lovejoin's owner proofs, the verified reveal, reading, the handshake's Diffie–Hellman, discovery, and the one-time signing keys.
 
-**Joint security: [joint-security.md](joint-security.md).** It lists every use of x in the code, the rules each must keep, and a theorem with its proof, game by game, extending Degabriele, Lehmann, Paterson, Smart and Strefler's Theorem 2 (ECIES-KEM and EC-Schnorr on one key, CT-RSA 2012). It's argued in the random-oracle model under gap assumptions. One step, starting a conversation, needs a static Diffie–Hellman assumption, for answers the attacker only ever sees blinded (its §7.3). One gap is open: the writer's b is drawn from the random source alone, so a failing source unblinds them (its §9). The messaging half is conditional on reductions not written yet. Unaudited: its outside review is below, under "Before production". It also says why we depart from NIST SP 800-56A's rule against one key pair for signatures and key establishment.
+**Joint security: [joint-security.md](joint-security.md).** It lists every use of x in the code, the rules each must keep, and a theorem with its proof, game by game, extending Degabriele, Lehmann, Paterson, Smart and Strefler's Theorem 2 (ECIES-KEM and EC-Schnorr on one key, CT-RSA 2012). It's argued in the random-oracle model under gap assumptions. One step, starting a conversation, needs a static Diffie–Hellman assumption, for answers the attacker only ever sees blinded (its §7.3). The writer's b, which blinds them, is an HMAC keyed by x, so a failing random source doesn't unblind them (its rule 2 and §9). The messaging half is conditional on reductions not written yet. Unaudited: its outside review is below, under "Before production". It also says why we depart from NIST SP 800-56A's rule against one key pair for signatures and key establishment.
 
 **What it means in practice:**
 - **Whatever reads can spend.** A client or service that scans for a Seedelf holds its spending key, and there's no read-only delegation under this choice. A scanning-only key would have to be a separate key, which means revisiting the choice.
@@ -86,7 +86,7 @@ Later, a Seedelf's own on-chain register is the recipient and the wallet's scala
 - **The shared point, key and nonce** live in `Zeroizing` buffers.
 - **No unsafe code:** `#![forbid(unsafe_code)]`.
 - **No panics on untrusted input.** Two `expect`s guard invariants that no input reaches: a stored key is canonical, and HKDF's output length is a constant.
-- **Randomness** is the operating system's (`OsRng`), with zero scalars redrawn.
+- **Randomness** is the operating system's (`OsRng`), with zero scalars redrawn. The scalars the key's safety rests on aren't drawn alone: the reveal's nonce, the writer's b and the base proof's k are each HMAC-SHA-512 over 32 drawn bytes and everything it must cover (protocol.md §16.2, §19.2; joint-security.md, rule 2).
 - **Order of checks:** the scan (`matches_envelope`) checks p and w before y touches p, and the full parse checks c before [y]c. y never touches an unchecked point. An envelope that isn't the reader's never has c checked, which saves a subgroup check on each (README, "Measured performance").
 
 ## What ElfTalk taught

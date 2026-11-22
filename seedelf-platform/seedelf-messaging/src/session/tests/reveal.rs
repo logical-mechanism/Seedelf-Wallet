@@ -9,15 +9,15 @@ use group::Curve;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::support::{Seeded, handle, identity, key, off_curve, opened, outside_g1, start};
+use super::support::{Seeded, Stuck, handle, identity, key, off_curve, opened, outside_g1, start};
 use crate::keys::scalar_mod_q;
 use crate::register::Register;
 use crate::session::conversation::Conversation;
-use crate::session::draw::Draw;
+use crate::session::draw::{Draw, hedge_okm};
 use crate::session::first_contact::Handle;
 use crate::session::reveal::{
     BRANCH_READER, BRANCH_SEEDELF, Commitments, REVEAL_LABEL, REVEAL_MAX_LEN, REVEAL_MIN_LEN,
-    REVEAL_NONCE_LABEL, Reveal, RevealProof, Statement, nonce_okm,
+    REVEAL_NONCE_LABEL, Reveal, RevealProof, Statement,
 };
 use crate::{Error, SecretKey};
 
@@ -448,25 +448,6 @@ fn malformed(bytes: &[u8]) -> Vec<((&'static str, Vec<u8>), Error)> {
     ]
 }
 
-/// A source that gives the same values every time, as one that fails or
-/// repeats would: each scalar is `scalar`, each 32 bytes `aux`.
-struct Stuck {
-    scalar: Scalar,
-    aux: [u8; 32],
-}
-
-impl Draw for Stuck {
-    fn scalar(&mut self) -> Scalar {
-        self.scalar
-    }
-    fn bytes16(&mut self) -> [u8; 16] {
-        self.aux[..16].try_into().unwrap()
-    }
-    fn bytes32(&mut self) -> [u8; 32] {
-        self.aux
-    }
-}
-
 /// The nonce's hedge (joint-security.md, rule 2). With every draw held
 /// still, two reveals of one statement are one proof, and anything the
 /// challenge covers that changes, changes the nonce. Two challenges on one
@@ -520,7 +501,7 @@ fn a_stuck_random_source_still_gives_each_statement_its_own_nonce() {
     let okm = |c: u64, z: u64, aux: [u8; 32]| {
         let message =
             statement.nonce_message(BRANCH_SEEDELF, (&Scalar::from(c), &Scalar::from(z)), &aux);
-        *nonce_okm(&x, &message)
+        *hedge_okm(&x, &message)
     };
     let base = okm(5, 5, [0x5a; 32]);
     assert_eq!(scalar_mod_q(&base), k);
@@ -571,7 +552,7 @@ fn the_nonce_is_hmac_sha512_of_the_statement_under_the_key() {
     expected.extend_from_slice(&aux);
     let message = statement.nonce_message(BRANCH_SEEDELF, (&c2, &z2), &aux);
     assert_eq!(message, expected);
-    let k = scalar_mod_q(&*nonce_okm(&p.alice.scalar(), &message));
+    let k = scalar_mod_q(&*hedge_okm(&p.alice.scalar(), &message));
     assert_eq!(
         commitments.t1,
         (G1Projective::from(p.a.first.base) * k).to_affine()
@@ -660,7 +641,7 @@ fn nonce_json(
     let (c, z) = (scalar(&drawn[0]), scalar(&drawn[1]));
     let aux: [u8; 32] = drawn[2].clone().try_into().unwrap();
     let message = statement.nonce_message(branch, (&c, &z), &aux);
-    let okm = nonce_okm(key, &message);
+    let okm = hedge_okm(key, &message);
     let k = scalar_mod_q(&okm[..]);
     assert_eq!(
         *commitment,

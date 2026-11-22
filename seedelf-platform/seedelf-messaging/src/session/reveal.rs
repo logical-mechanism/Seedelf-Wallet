@@ -15,16 +15,13 @@
 //! ```
 
 use blstrs::{G1Affine, G1Projective, Scalar};
-use ff::Field;
 use group::Curve;
-use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256, Sha512};
-use zeroize::Zeroizing;
+use sha2::{Digest, Sha256};
 
 use crate::keys::scalar_mod_q;
 use crate::register::{POINT_LEN, Register, decode_point, matches_register};
 use crate::session::conversation::{Conversation, Role};
-use crate::session::draw::{Draw, OsDraw};
+use crate::session::draw::{Draw, OsDraw, hedged_scalar};
 use crate::session::first_contact::{Handle, MAX_TO_LEN, Reader};
 use crate::{Error, SecretKey};
 
@@ -164,7 +161,8 @@ impl Statement<'_> {
     /// The real branch's nonce, hedged as the spending proof's is: drawn `c`,
     /// `z` and `aux` first, then HMAC-SHA-512 keyed by `key` over
     /// [`Self::nonce_message`], reduced mod q. A zero (probability about
-    /// 2⁻²⁵⁵) draws `aux` again. Returns the nonce and the draws.
+    /// 2⁻²⁵⁵) draws `aux` again ([`hedged_scalar`]). Returns the nonce and
+    /// the draws.
     ///
     /// A nonce never rests on the random source alone: one source that
     /// repeats gives one proof again, never one nonce under two challenges,
@@ -177,14 +175,8 @@ impl Statement<'_> {
     ) -> (Scalar, Scalar, Scalar) {
         let c = draw.scalar();
         let z = draw.scalar();
-        loop {
-            let aux = draw.bytes32();
-            let okm = nonce_okm(key, &self.nonce_message(branch, (&c, &z), &aux));
-            let nonce = scalar_mod_q(&okm[..]);
-            if !bool::from(nonce.is_zero()) {
-                return (nonce, c, z);
-            }
-        }
+        let nonce = hedged_scalar(key, draw, |aux| self.nonce_message(branch, (&c, &z), aux));
+        (nonce, c, z)
     }
 
     /// The commitments a proof's responses and challenge shares give: what
@@ -233,18 +225,6 @@ impl Statement<'_> {
         let c = scalar_mod_q(&self.challenge(&self.commitments_of(proof)));
         proof.c1 + proof.c2 == c
     }
-}
-
-/// HMAC-SHA-512 keyed by `key`'s 32 big-endian bytes over `message`: the 64
-/// bytes a nonce is reduced from. The key's copy and the output are wiped.
-pub(crate) fn nonce_okm(key: &Scalar, message: &[u8]) -> Zeroizing<[u8; 64]> {
-    let key = Zeroizing::new(key.to_bytes_be());
-    let mut mac =
-        <Hmac<Sha512> as Mac>::new_from_slice(&key[..]).expect("HMAC takes a key of any length");
-    mac.update(message);
-    let mut okm = Zeroizing::new([0u8; 64]);
-    okm.copy_from_slice(&mac.finalize().into_bytes());
-    okm
 }
 
 impl Reveal {

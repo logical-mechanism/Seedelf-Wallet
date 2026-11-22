@@ -1,22 +1,25 @@
 //! Part 1: the first-contact block F, SK with the static DH, and
 //! RatchetInitAlice and RatchetInitBob (docs/protocol.md §3).
 
-use blstrs::{G1Affine, G1Projective};
+use blstrs::{G1Affine, G1Projective, Scalar};
+use ff::Field;
 use group::Curve;
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 
 use super::support::{
-    HANDLE_NAME, Seeded, handle, identity, key, off_curve, opened, outside_g1, stamp, test_scalar,
+    HANDLE_NAME, Seeded, Stuck, handle, identity, key, off_curve, opened, outside_g1, stamp,
+    test_scalar,
 };
 use crate::Error;
+use crate::keys::scalar_mod_q;
 use crate::register::{POINT_LEN, Register};
-use crate::session::conversation::{Conversation, Role};
-use crate::session::draw::Draw;
+use crate::session::conversation::{Conversation, Origin, Role};
+use crate::session::draw::hedge_okm;
 use crate::session::first_contact::{
     BASE_LABEL, BASE_PROOF_LEN, ConversationId, FIRST_CONTACT_MAX_LEN, FIRST_CONTACT_MIN_LEN,
-    FIRST_STAMP_LABEL, FirstContact, SESSION_INFO, SESSION_SALT, prove_base, session_key,
-    within_window,
+    FIRST_STAMP_LABEL, FirstContact, SESSION_INFO, SESSION_SALT, base_nonce_message, base_scalar,
+    base_scalar_message, head_bytes, prove_base_with_nonce, session_key, within_window,
 };
 use crate::session::ratchet::kdf_rk;
 
@@ -41,7 +44,7 @@ fn sample(to: &[u8], replaces: Option<ConversationId>) -> FirstContact {
         proof: None,
     };
     if !to.is_empty() {
-        first.proof = Some(prove_base(
+        first.proof = Some(prove_base_with_nonce(
             &handle,
             &b,
             &test_scalar("F k"),
@@ -250,7 +253,7 @@ fn a_base_on_the_sum_of_two_handles_proves_neither() {
     let mut first = sample(b"one", None);
     first.base = base;
     for named in [&one, &two, &sum] {
-        first.proof = Some(prove_base(
+        first.proof = Some(prove_base_with_nonce(
             named,
             &b,
             &test_scalar("k"),
@@ -260,7 +263,7 @@ fn a_base_on_the_sum_of_two_handles_proves_neither() {
         assert!(!first.proves_base(&two));
     }
     // Only the sum's own proof holds, and the sum is no one's handle.
-    first.proof = Some(prove_base(
+    first.proof = Some(prove_base_with_nonce(
         &sum,
         &b,
         &test_scalar("k"),
@@ -485,8 +488,37 @@ fn the_window_is_minus_an_hour_to_plus_48_hours() {
     assert!(!within_window(0, u64::MAX));
 }
 
-/// The start draws `b`, `cid`, `e_A`, `s_A` and the proof's `k`, in that
-/// order; a continuation draws no `b` and no `k`.
+/// `b` and the proof's `k` from their definitions (§16.2): HMAC-SHA-512
+/// keyed by `x` and by `b`, over the handle and F's head, and over the
+/// handle, `p₀` and F′, each with its aux. Checks the start used them.
+fn b_and_k(
+    x: &Scalar,
+    handle: &Register,
+    conversation: &Conversation,
+    aux_b: &[u8; 32],
+    aux_k: &[u8; 32],
+) -> (Scalar, Scalar) {
+    let first = &conversation.first;
+    let head = head_bytes(&first.cid, first.started_at, &first.to, first.replaces);
+    let b = scalar_mod_q(&hedge_okm(x, &base_scalar_message(handle, &head, aux_b))[..]);
+    let prefix = first.prefix_bytes();
+    let k =
+        scalar_mod_q(&hedge_okm(&b, &base_nonce_message(handle, &first.base, &prefix, aux_k))[..]);
+    assert_eq!((handle.generator() * b).to_affine(), first.base);
+    assert_eq!(
+        (handle.public_value() * b).to_affine(),
+        conversation.responder
+    );
+    assert_eq!(
+        first.proof,
+        Some(prove_base_with_nonce(handle, &b, &k, &prefix))
+    );
+    (b, k)
+}
+
+/// The start draws `cid`, `b`'s aux, `e_A`, `s_A` and the proof's aux, in
+/// that order; a continuation draws `cid`, `e_A` and `s_A`, with no `b` and
+/// no `k`.
 #[test]
 fn the_start_draws_in_the_documented_order() {
     let alice = key("alice");
@@ -496,27 +528,213 @@ fn the_start_draws_in_the_documented_order() {
         Conversation::start_with(&alice, &bob_handle, HANDLE_NAME, 0, &mut draw).unwrap();
     let drawn = draw.drain();
     assert_eq!(drawn.len(), 5);
-    assert_eq!(drawn[1], conversation.cid().0);
-    let mut replay = Seeded::new("order");
-    let b = replay.scalar();
-    let generator =
-        G1Projective::from(G1Affine::from_compressed(&bob_handle.generator_bytes()).unwrap());
-    assert_eq!((generator * b).to_affine(), conversation.first.base);
-    let k = crate::keys::scalar_from_bytes(&drawn[4].clone().try_into().unwrap()).unwrap();
+    assert_eq!(drawn[0], conversation.cid().0);
+    let aux = |i: usize| -> [u8; 32] { drawn[i].clone().try_into().unwrap() };
+    b_and_k(
+        &alice.scalar(),
+        &bob_handle,
+        &conversation,
+        &aux(1),
+        &aux(4),
+    );
+    let scalar = |i: usize| crate::keys::scalar_from_bytes(&aux(i)).unwrap();
+    let p0 = G1Projective::from(conversation.first.base);
+    assert_eq!((p0 * scalar(2)).to_affine(), conversation.first.ephemeral);
     assert_eq!(
-        conversation.first.proof,
-        Some(prove_base(
-            &bob_handle,
-            &b,
-            &k,
-            &conversation.first.prefix_bytes()
-        ))
+        (p0 * scalar(3)).to_affine(),
+        conversation.ratchet.dhs.public
     );
 
     let mut draw = Seeded::new("order 2");
     let next = Conversation::continue_with(&alice, &conversation, 0, &mut draw).unwrap();
-    assert_eq!(draw.drain().len(), 3);
+    let drawn = draw.drain();
+    assert_eq!(drawn.len(), 3);
+    assert_eq!(drawn[0], next.cid().0);
     assert!(next.first.to.is_empty() && next.first.proof.is_none());
     assert_eq!(next.first.base, conversation.first.base);
     assert_eq!(next.first.replaces, Some(conversation.cid()));
+}
+
+/// b and k are hedged (joint-security.md, rule 2). With every draw held
+/// still, as a failed or repeating source gives them, b stays the writer's
+/// secret and each k meets one challenge. When both were drawn, in the order
+/// b, cid, e_A, s_A, k, a stuck source gave k = b, and z = b(1 + c) gave b
+/// away from one F; b unblinds A into [x]g_S.
+#[test]
+fn a_stuck_random_source_still_keeps_b_secret_and_gives_each_proof_its_own_k() {
+    let (alice, carol) = (key("alice"), key("carol"));
+    let bob_handle = handle("bob", "h");
+    let aux = [0x5a; 32];
+    let stuck = |scalar: u64| Stuck {
+        scalar: Scalar::from(scalar),
+        aux,
+    };
+    let start = |key: &crate::SecretKey, draw: &mut Stuck| {
+        Conversation::start_with(key, &bob_handle, HANDLE_NAME, 0, draw).unwrap()
+    };
+    let one = start(&alice, &mut stuck(5));
+    let (b, k) = b_and_k(&alice.scalar(), &bob_handle, &one, &aux, &aux);
+    let proof = one.first.proof.unwrap();
+    let c = scalar_mod_q(&proof.challenge);
+
+    // k isn't b, and the one-F recovery the drawn order allowed fails.
+    assert_ne!(k, b);
+    assert_ne!(proof.response * (Scalar::ONE + c).invert().unwrap(), b);
+
+    // The same key, handle, time and draws: the same F, proof and all.
+    assert_eq!(start(&alice, &mut stuck(5)).first_bytes, one.first_bytes);
+
+    // The same aux under another F′ (here another E_A): the same b, another
+    // k, and the two-F recovery fails too.
+    let two = start(&alice, &mut stuck(6));
+    assert_ne!(two.first.prefix_bytes(), one.first.prefix_bytes());
+    let (b2, k2) = b_and_k(&alice.scalar(), &bob_handle, &two, &aux, &aux);
+    assert_eq!(b2, b);
+    assert_ne!(k2, k);
+    let proof2 = two.first.proof.unwrap();
+    let c2 = scalar_mod_q(&proof2.challenge);
+    assert_ne!(c2, c);
+    assert_ne!(
+        (proof.response - proof2.response) * (c - c2).invert().unwrap(),
+        b
+    );
+
+    // Another key under the same draws: another b, so a source anyone can
+    // predict doesn't make b theirs.
+    let carols = start(&carol, &mut stuck(5));
+    assert_ne!(carols.first.base, one.first.base);
+    let (b3, _) = b_and_k(&carol.scalar(), &bob_handle, &carols, &aux, &aux);
+    assert_ne!(b3, b);
+
+    // Each part of b's message changes b: the handle, cid, t, the name,
+    // replaces, aux.
+    let x = alice.scalar();
+    let cid = ConversationId(aux[..16].try_into().unwrap());
+    let b_of = |handle: &Register, head: Vec<u8>, aux: [u8; 32]| {
+        base_scalar(
+            &x,
+            handle,
+            &head,
+            &mut Stuck {
+                scalar: Scalar::from(5u64),
+                aux,
+            },
+        )
+    };
+    let head = |cid: ConversationId, t: u64, to: &[u8], replaces: Option<ConversationId>| {
+        head_bytes(&cid, t, to, replaces)
+    };
+    assert_eq!(b_of(&bob_handle, head(cid, 0, HANDLE_NAME, None), aux), b);
+    let others = [
+        b_of(
+            &handle("bob", "another"),
+            head(cid, 0, HANDLE_NAME, None),
+            aux,
+        ),
+        b_of(
+            &bob_handle,
+            head(ConversationId([1; 16]), 0, HANDLE_NAME, None),
+            aux,
+        ),
+        b_of(&bob_handle, head(cid, 1, HANDLE_NAME, None), aux),
+        b_of(&bob_handle, head(cid, 0, b"another name", None), aux),
+        b_of(&bob_handle, head(cid, 0, HANDLE_NAME, Some(cid)), aux),
+        b_of(&bob_handle, head(cid, 0, HANDLE_NAME, None), [0xa5; 32]),
+    ];
+    for (i, other) in others.iter().enumerate() {
+        assert_ne!(*other, b, "part {i} of b's message");
+    }
+
+    // Each part of k's message changes k: the handle, p₀, F′, aux, and the
+    // key, b.
+    let prefix = one.first.prefix_bytes();
+    let k_of = |key: &Scalar, handle: &Register, base: &G1Affine, prefix: &[u8], aux: [u8; 32]| {
+        scalar_mod_q(&hedge_okm(key, &base_nonce_message(handle, base, prefix, &aux))[..])
+    };
+    let base = one.first.base;
+    let mut changed = prefix.clone();
+    changed[20] ^= 1;
+    assert_eq!(k_of(&b, &bob_handle, &base, &prefix, aux), k);
+    let others = [
+        k_of(&b, &handle("bob", "another"), &base, &prefix, aux),
+        k_of(&b, &bob_handle, &two.first.ephemeral, &prefix, aux),
+        k_of(&b, &bob_handle, &base, &changed, aux),
+        k_of(&b, &bob_handle, &base, &prefix, [0xa5; 32]),
+        k_of(&x, &bob_handle, &base, &prefix, aux),
+    ];
+    for (i, other) in others.iter().enumerate() {
+        assert_ne!(*other, k, "part {i} of k's message");
+    }
+}
+
+/// b and k are HMAC-SHA-512 of exactly §16.2's messages, written out here
+/// byte by byte, under x's and b's 32 big-endian bytes: with a `replaces`
+/// and without.
+#[test]
+fn b_and_k_are_hmac_sha512_of_their_specified_messages() {
+    use hmac::{Hmac, Mac};
+    let hmac = |key: &Scalar, message: &[u8]| {
+        let mut mac = <Hmac<sha2::Sha512> as Mac>::new_from_slice(&key.to_bytes_be()).unwrap();
+        mac.update(message);
+        scalar_mod_q(&mac.finalize().into_bytes())
+    };
+    let alice = key("alice");
+    let bob_handle = handle("bob", "h");
+    for replaces in [None, Some(ConversationId([9; 16]))] {
+        let mut draw = Seeded::new("hmac messages");
+        let conversation = Conversation::begin(
+            &alice,
+            Origin::Handle(&bob_handle),
+            HANDLE_NAME,
+            replaces,
+            0x0102_0304_0506_0708,
+            &mut draw,
+        )
+        .unwrap();
+        let drawn = draw.drain();
+        let first = &conversation.first;
+
+        let mut expected = b"Seedelf-Messaging|v1|session|base-scalar".to_vec();
+        expected.extend_from_slice(&bob_handle.generator_bytes());
+        expected.extend_from_slice(&bob_handle.public_value_bytes());
+        expected.extend_from_slice(&drawn[0]);
+        expected.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        expected.push(HANDLE_NAME.len() as u8);
+        expected.extend_from_slice(HANDLE_NAME);
+        match replaces {
+            Some(cid) => {
+                expected.push(16);
+                expected.extend_from_slice(&cid.0);
+            }
+            None => expected.push(0),
+        }
+        expected.extend_from_slice(&drawn[1]);
+        let head = head_bytes(&first.cid, first.started_at, &first.to, first.replaces);
+        let aux_b: [u8; 32] = drawn[1].clone().try_into().unwrap();
+        assert_eq!(base_scalar_message(&bob_handle, &head, &aux_b), expected);
+        let b = hmac(&alice.scalar(), &expected);
+        assert_eq!((bob_handle.generator() * b).to_affine(), first.base);
+
+        let mut expected = b"Seedelf-Messaging|v1|session|base-nonce".to_vec();
+        expected.extend_from_slice(&bob_handle.generator_bytes());
+        expected.extend_from_slice(&bob_handle.public_value_bytes());
+        expected.extend_from_slice(&first.base.to_compressed());
+        expected.extend_from_slice(&first.prefix_bytes());
+        expected.extend_from_slice(&drawn[4]);
+        let aux_k: [u8; 32] = drawn[4].clone().try_into().unwrap();
+        assert_eq!(
+            base_nonce_message(&bob_handle, &first.base, &first.prefix_bytes(), &aux_k),
+            expected
+        );
+        let k = hmac(&b, &expected);
+        let proof = first.proof.unwrap();
+        let c = scalar_mod_q(&proof.challenge);
+        assert_eq!(
+            (bob_handle.generator() * proof.response - G1Projective::from(first.base) * c)
+                .to_affine(),
+            (bob_handle.generator() * k).to_affine(),
+            "T is [k]g_S"
+        );
+        assert_eq!(proof.response, k + c * b);
+    }
 }
