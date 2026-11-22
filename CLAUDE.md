@@ -90,6 +90,10 @@ These constraints are load-bearing for correctness *and* safety — a mistake he
 - A re-randomized register must apply the *same* scalar `d` to both `generator` and `public_value`. `(g^d, u^d)` spendable; `(g^d, u^d')` is a dead UTxO.
 - Points pushed into a `Register` must be torsion-free (in the BLS12-381 prime-order subgroup). The validator rejects non-prime-order points, which also yields a dead UTxO. The CLI enforces this; callers constructing registers directly must call `is_torsion_free()` or multiply by the cofactor first. Neither point may be the identity either: an identity public value lets anyone spend the UTxO. `seedelf_core::build::is_payable` checks all of this.
 - Proof `z = r + c·x`; `c` comes from Fiat-Shamir including the one-time signing key hash `vkh` — omitting `vkh` reintroduces the rollback-replay vector.
+- **One key, many uses.** The Seedelf scalar x also proves Lovejoin withdrawals and the verified reveal, reads and writes Seedelf Messaging, and derives the web wallet's one-time signing keys. [joint-security.md](seedelf-platform/seedelf-messaging/docs/joint-security.md) lists every use (§4), the rules they keep (§5) and the argument that sharing x is safe (§6, §7).
+  - A new use of x (a new proof, a new Diffie–Hellman, a new key derived from it, anything that hashes or outputs [x]·P) updates that inventory and argument first.
+  - Nothing may output [x]·P for a point someone else chose unless [x]·P is already public: that's a static Diffie–Hellman oracle on the funds key. So no proof is made for a register x doesn't own (`create_proof` refuses one).
+  - Every `z = r + c·x` takes a nonce derived from x and everything its challenge covers, under its own label: never from the random source alone.
 
 ## Release & versioning
 

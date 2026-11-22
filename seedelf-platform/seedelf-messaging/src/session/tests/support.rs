@@ -139,6 +139,14 @@ impl Draw for Seeded {
         self.log.push(bytes.to_vec());
         bytes
     }
+
+    fn bytes32(&mut self) -> [u8; 32] {
+        let bytes: [u8; 32] =
+            Sha256::digest(format!("{} bytes32 {}", self.label, self.count).as_bytes()).into();
+        self.count += 1;
+        self.log.push(bytes.to_vec());
+        bytes
+    }
 }
 
 pub(crate) fn key(label: &str) -> SecretKey {

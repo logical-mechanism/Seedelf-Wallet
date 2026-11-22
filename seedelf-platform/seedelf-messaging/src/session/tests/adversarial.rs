@@ -410,6 +410,9 @@ impl Draw for Fixed {
     fn bytes16(&mut self) -> [u8; 16] {
         self.0
     }
+    fn bytes32(&mut self) -> [u8; 32] {
+        self.1.bytes32()
+    }
 }
 
 /// Case 8. A message at Nr + MAX_SKIP is read; at Nr + MAX_SKIP + 1 it's

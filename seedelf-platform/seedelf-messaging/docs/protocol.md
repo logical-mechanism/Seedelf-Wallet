@@ -693,26 +693,32 @@ The side that wrote first may show the other which Seedelf it holds (call 15, th
 
 ### 19.2 The proof
 
-The conversation gives cid, p₀, A = [x_A]p₀ (the initiator's identity) and w₀ = [x_B]p₀ (the responder's). The Seedelf gives its name N, 1 to 32 bytes, and its datum's register (g_S, u_S), with u_S = [x_A]g_S for the writer's key.
+The conversation gives cid, p₀, A = [x_A]p₀ (the initiator's identity) and w₀ = [x_B]p₀ (the responder's). The Seedelf gives its name N, 1 to 32 bytes (the asset name's raw bytes, not hex), and its datum's register (g_S, u_S), with u_S = [x_A]g_S for the writer's key.
+
+**The statement's bytes,** which the challenge and both nonces cover, with every point compressed (48 bytes):
+
+    statement = cid (16) ‖ p₀ ‖ A ‖ w₀ ‖ len(N) (1) ‖ N ‖ g_S ‖ u_S
 
 The statement is an OR of two: **log_{g_S} u_S = log_{p₀} A** (a Chaum–Pedersen proof that the Seedelf's register and A share a key), or **the prover knows log_{p₀} w₀** (a Schnorr proof of the reader's own key). It's a Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers, 1994). The writer proves the first and simulates the second.
 
-**The challenge** is SHA-256 over, in order, with every point compressed (48 bytes):
+**The challenge** is SHA-256 over, in order:
 
-    label ‖ cid (16) ‖ p₀ ‖ A ‖ w₀ ‖ len(N) (1) ‖ N ‖ g_S ‖ u_S ‖ T₁ ‖ T₁′ ‖ T₂
+    label ‖ statement ‖ T₁ ‖ T₁′ ‖ T₂
 
 with label the ASCII bytes of `Seedelf-Messaging|v1|session|reveal`, with no length or terminator. c is that hash as a big-endian integer, reduced mod q (§16.1). A commitment the reader computes may be O (z₁ = c₁ = 0 makes T₁ and T₁′ O, and such a proof is valid): it's hashed as O's compressed encoding, `0xc0` then 47 zero bytes, the only place a point here may be O.
 
 **The writer** (branch 1 real, branch 2 simulated):
-1. Draws k₁, then c₂, then z₂, each uniform in [1, q − 1] [choice: the order, for the vectors].
-2. T₁ = [k₁]p₀, T₁′ = [k₁]g_S, T₂ = [z₂]p₀ − [c₂]w₀.
-3. c from the challenge; c₁ = c − c₂ mod q; z₁ = k₁ + c₁·x_A mod q.
+1. Draws c₂, then z₂, each uniform in [1, q − 1], then 32 bytes aux [choice: the order, for the vectors].
+2. **The nonce,** hedged: k₁ = HMAC-SHA-512(key = x_A as 32 big-endian bytes, message = nonce label ‖ 0x01 ‖ statement ‖ c₂ ‖ z₂ ‖ aux), its 64 bytes a big-endian integer reduced mod q. The nonce label is the ASCII bytes of `Seedelf-Messaging|v1|session|reveal-nonce`, with no length or terminator, and 0x01 says branch 1 is the one proved. c₂ and z₂ are 32 bytes big-endian. A k₁ of 0 (probability about 2⁻²⁵⁵) draws aux again.
+   - **Why hedged:** the message holds everything the challenge covers (the statement, and T₂ through c₂ and z₂; T₁ and T₁′ follow from k₁). So a random source that fails or repeats gives the same proof again, never one k₁ under two challenges, which would give x_A away: z₁ − z₁′ = (c₁ − c₁′)·x_A. x_A also spends the Seedelf. [joint-security.md](joint-security.md), rule 2.
+3. T₁ = [k₁]p₀, T₁′ = [k₁]g_S, T₂ = [z₂]p₀ − [c₂]w₀.
+4. c from the challenge; c₁ = c − c₂ mod q; z₁ = k₁ + c₁·x_A mod q.
 
 **The reader:**
 1. T₁ = [z₁]p₀ − [c₁]A, T₁′ = [z₁]g_S − [c₁]u_S, T₂ = [z₂]p₀ − [c₂]w₀.
 2. Accepts if c₁ + c₂ ≡ c (mod q), c computed over these.
 
-**The reader's own reveal.** The responder can make one for any Seedelf, simulating branch 1 and proving branch 2 with x_B: it draws k₂, then c₁, then z₁; T₁ = [z₁]p₀ − [c₁]A, T₁′ = [z₁]g_S − [c₁]u_S, T₂ = [k₂]p₀; c₂ = c − c₁ mod q; z₂ = k₂ + c₂·x_B mod q. It verifies like the writer's. That's what keeps a conversation deniable: shown to anyone else, a reveal proves nothing, since the reader could have made it. The wallet never makes one; the vectors do (§19.6).
+**The reader's own reveal.** The responder can make one for any Seedelf, simulating branch 1 and proving branch 2 with x_B: it draws c₁, then z₁, then 32 bytes aux; k₂ = HMAC-SHA-512(key = x_B as 32 big-endian bytes, message = nonce label ‖ 0x02 ‖ statement ‖ c₁ ‖ z₁ ‖ aux) mod q, as the writer's k₁ is, a k₂ of 0 drawing aux again; T₁ = [z₁]p₀ − [c₁]A, T₁′ = [z₁]g_S − [c₁]u_S, T₂ = [k₂]p₀; c₂ = c − c₁ mod q; z₂ = k₂ + c₂·x_B mod q. It verifies like the writer's. That's what keeps a conversation deniable: shown to anyone else, a reveal proves nothing, since the reader could have made it. The wallet never makes one; the vectors do (§19.6).
 
 ### 19.3 The bytes
 
@@ -722,11 +728,11 @@ with label the ASCII bytes of `Seedelf-Messaging|v1|session|reveal`, with no len
 - **226 to 257 bytes,** 227 to 258 with the kind byte. A Seedelf's name is 32 bytes, so a reveal's plaintext is 258: a 2 KiB envelope, the size of every reply of 246 to 1,781 bytes of text (§9).
 - **The register travels with the name** [choice], so the reader checks the proof before anything reads the chain, and a reveal that doesn't verify reaches nothing. It costs a 2 KiB envelope where a name alone would fit 512 bytes.
 - **Parsing** reads the fields in order, each refused as it's read: len, which must be 1 to 32; N; g_S, then u_S, each canonical, in G1 and not O (§16.1); then c₁, c₂, z₁, z₂, each below q, and any may be 0; then nothing may follow. Nothing about the conversation changes on a refusal.
-- **The codes** (seedelf-wasm's, the crate's error in snake case): len outside 1 to 32, bytes running out at any field or left over after z₂, or a scalar not below q is `invalid_message`; a point that isn't the canonical compressed encoding of a point on the curve (bad flag bits, x not below p, no point for x) is `invalid_encoding`; one on the curve outside G1 is `not_in_subgroup`; O is `identity_point`. A proof that doesn't verify is `invalid_reveal`; a check at the initiator, or a reveal made at the responder or before a reply, is `reveal_not_allowed`. The wallet's own rules (§19.1's session message, §19.4's chain register) have no code: they show a reveal as failed.
+- **The codes** (seedelf-wasm's, the crate's error in snake case): len outside 1 to 32, bytes running out at any field or left over after z₂, or a scalar not below q is `invalid_message`; a point that isn't the canonical compressed encoding of a point on the curve (bad flag bits, O's flags with any other bit set, x not below p, no point for x) is `invalid_encoding`; one on the curve outside G1 is `not_in_subgroup`; O, as `0xc0` then 47 zero bytes, is `identity_point`. A proof that doesn't verify is `invalid_reveal`; a check at the initiator, or a reveal made at the responder or before a reply, is `reveal_not_allowed`. The wallet's own rules (§19.1's session message, §19.4's chain register) have no code: they show a reveal as failed.
 
 ### 19.4 The reader's checks, in order
 
-1. **A session message** of a conversation in which the reader is the responder (§19.1). The wallet checks the inner type; the crate parses before it checks the side, so a reveal that doesn't parse is refused as §19.3 says whichever side checks it.
+1. **A session message** of a conversation in which the reader is the responder (§19.1). The wallet checks the inner type; the crate parses before it checks the side, so a reveal that doesn't parse is refused as §19.3 says whichever side checks it. It checks the side before the proof: at the writer's side the proof is never checked, and any reveal that parses is `reveal_not_allowed`.
 2. **It parses** (§19.3).
 3. **The proof verifies** for the conversation's cid, p₀, A and w₀ (§19.2).
 4. **The register is the Seedelf's now** [choice]: the wallet reads the contract fresh, whole, as Send's pay-by-name reads it, and looks the name up in it, never in a view kept from before the reveal came, which a Seedelf's move would leave behind. Its datum's register must be (g_S, u_S). A register the Seedelf no longer holds fails: a Seedelf can move to another owner. The writer can reveal again.
@@ -750,12 +756,21 @@ Steps 1 to 3 run as the message is received, in the worker's queue (§4.2). Step
 [tests/vectors/messaging_reveal_v1.json](../tests/vectors/messaging_reveal_v1.json), written by this crate's `session` module from fixed draws:
 
 - **`conversations`:** two conversations from Alice to Bob's handle, each answered (Alice's first message, Bob's reply, Alice reading it). Each gives `initiator_secret_key` (x_A), `responder_secret_key` (x_B), `cid`, `base` (p₀), `initiator_public` (A), `responder_public` (w₀), and both sides' stored states, `initiator_state` and `responder_state` (§16.5), which are this crate's own, for its public-API test: another implementation needn't read them.
-- **`reveals`:** three, each with its `conversation` (an index), `made_by` (`initiator` or `responder`), the `seedelf` (`name`, `generator`, `public_value`), its `draws` by name (drawn `k1`, `c2`, `z2` from the initiator and `k2`, `c1`, `z1` from the responder, in that order; the file's keys are sorted), the `commitments` (`t1`, `t1_seedelf`, `t2`), the `challenge` as SHA-256 gave it and as a scalar (`challenge_scalar`), the `proof` (`c1`, `c2`, `z1`, `z2`), the `reveal`'s bytes and its `plaintext` (with the kind byte):
+- **`reveals`:** three, each with its `conversation` (an index), `made_by` (`initiator` or `responder`), the `seedelf` (`name`, `generator`, `public_value`), its `draws` by name (drawn `c2`, `z2`, `aux` from the initiator and `c1`, `z1`, `aux` from the responder, in that order; the file's keys are sorted), the `nonce` (its `branch`, the HMAC's `message` and its 64-byte output `hmac`, and the `scalar` k₁ or k₂), the `commitments` (`t1`, `t1_seedelf`, `t2`), the `challenge` as SHA-256 gave it and as a scalar (`challenge_scalar`), the `proof` (`c1`, `c2`, `z1`, `z2`), the `reveal`'s bytes and its `plaintext` (with the kind byte):
   1. Alice's Seedelf under its full 32-byte name;
   2. Alice's root register (G, [x_A]G) under a 1-byte name;
-  3. Carol's Seedelf, made by the reader with its own key, whose challenge is at least q: it verifies, which is why a reveal convinces no one else.
-- **`checks`:** 23, each a reveal's bytes, the `conversation` and `side` it's checked at, and its `result`: `ok`, or the refusal's code, the crate's error in snake case as seedelf-wasm names it (`reveal_not_allowed`, `invalid_reveal`, `invalid_message`, `invalid_encoding`, `not_in_subgroup`, `identity_point`). They cover each reveal at the reader, two at the writer's side, another conversation of the same two keys, another name, another register of the same key, each share and response moved or swapped, another key's Seedelf proved with Alice's, a reader's own reveal whose T₁ and T₁′ are O, and each way parsing refuses, one of them two faults at once, to show the order fields are read in.
-- The file also has `version` (1), `description`, `label` (§19.2's), `kind` (2) and `group_order` (q, big-endian hex). Every byte string is lowercase hex.
+  3. Carol's Seedelf, made by the reader with its own key, whose challenge is at least q (the first draws that give one, which the test asserts): it verifies, which is why a reveal convinces no one else.
+- **`checks`:** 31, each a reveal's bytes, the `conversation` and `side` it's checked at, and its `result`: `ok`, or the refusal's code, the crate's error in snake case as seedelf-wasm names it (`reveal_not_allowed`, `invalid_reveal`, `invalid_message`, `invalid_encoding`, `not_in_subgroup`, `identity_point`). They cover:
+  - each reveal at the reader, and two at the writer's side;
+  - another conversation of the same two keys, another name, another register of the same key;
+  - each share and response moved or swapped, and another key's Seedelf proved with Alice's;
+  - a reader's own reveal whose T₁ and T₁′ are O;
+  - each way parsing refuses, among them O's flags with a stray bit or the sign flag, a point without the compression flag, and x equal to p;
+  - three with two faults at once, to show the order fields are read in: the name before g_S, the points before the scalars, and leftover bytes last;
+  - at the writer's side, a reveal that doesn't parse, refused as unparsed (parsing comes before the side), and one that parses but doesn't verify, refused as `reveal_not_allowed` (the side comes before the proof).
+- The file also has `version` (1), `description`, `label` and `nonce_label` (§19.2's), `kind` (2) and `group_order` (q, big-endian hex). Every byte string is lowercase hex.
 - `reveal_vectors_match_the_file` holds the code to the file. `RECORD_MESSAGING_REVEAL_VECTORS=1` rewrites it, for a deliberate change of format only, and never touches the other vectors files. tests/reveal_vectors.rs reads it through the public API.
 
 **Checked independently** (2026-11-22): a script written from this section, §16.1 and construction.md alone, without reading the Rust, reproduced every value with noble-curves 2.0.1 and Node 24's SHA-256: both conversations' identities, each reveal's commitments, challenge, proof, bytes and plaintext, every check's result, and q, 76 comparisons in all, and again after the checks were added (78). Where it had to guess (which code each refusal is, the order parsing reads in, how O is hashed, the draws' order), this section now says, and the checks of a commitment at O and of the parsing order were added for it.
+
+**Checked again** (2026-11-22, after the hedged nonce, [joint-security.md](joint-security.md) §9): a new script, written from §19, §18, §16.1 and construction.md without reading the Rust, reproduced every value of the re-recorded file on its first run, each nonce's message, HMAC and scalar included. It then changed one rule at a time to see which the file pins, and found five it didn't: the side checked before parsing, the scalars read before the points, leftover bytes read before the points, O's flags with a stray bit taken as O, and x ≥ p. It also found gaps in the text: the statement's bytes weren't defined once, nor N's encoding, x_B's encoding or a zero k₂. This section now says each, and the eight checks after the first 23 were added for them. On the final file it matches 84 of 84: 53 values and 31 checks.
