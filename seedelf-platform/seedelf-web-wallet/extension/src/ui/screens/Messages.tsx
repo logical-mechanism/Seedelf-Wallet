@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { useT } from "../../i18n";
-import { NETWORKS, type NetworkName } from "../../networks";
+import { type NetworkName } from "../../networks";
 import {
   CONVERSATION_NAME_CHARS as NAME_CHARS,
   type Contact,
@@ -32,7 +32,7 @@ import {
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ContactEditor, useContacts } from "../components/Contacts";
-import { BackIcon, MessageIcon, PencilIcon, PenIcon, SendIcon, ShieldIcon, TrashIcon } from "../components/Icons";
+import { BackIcon, CheckIcon, CopyIcon, MessageIcon, PencilIcon, PenIcon, SendIcon, ShieldIcon, TrashIcon, UserPlusIcon } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RadioCards } from "../components/RadioCards";
 import { pressedBack, useBrowserBack } from "../history";
@@ -215,7 +215,6 @@ function ListPane({
   titleOf: (cid: string) => string | undefined;
 }) {
   const t = useT();
-  const network = useNetwork();
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState<string>();
   const now = Date.now();
@@ -269,20 +268,15 @@ function ListPane({
       </header>
 
       <div className="messages__scroll">
+        {/* Just the switch (the owner, 2026-11-22): what it tells the server is the privacy policy's. */}
         <div className="setting-row messages__switch">
-          <span className="stack-tight">
-            <span id="messages-switch-label">{t("messages.switch", { network: NETWORKS[network].label })}</span>
-            <span className="note" id="messages-switch-note">
-              {t("messages.privacy.relay")}
-            </span>
-          </span>
+          <span id="messages-switch-label">{t("messages.switch")}</span>
           <button
             type="button"
             role="switch"
             className="switch"
             aria-checked={on}
             aria-labelledby="messages-switch-label"
-            aria-describedby="messages-switch-note"
             onClick={() => void flip()}
             disabled={!overview || switching}
             data-testid="messages-switch"
@@ -443,24 +437,34 @@ function ConversationRow({
   );
 }
 
-/** A conversation's header: Back where the list isn't beside it, its mark and name, its §7 label, and Delete. */
+/**
+ * A conversation's header: Back where the list isn't beside it, its mark and name, its §7 label; and, where the other
+ * side's Seedelf is known (written to, or shown and verified), Copy and Save to contacts beside Rename and Delete.
+ */
 function PaneHead({
   title,
   known,
   detail,
+  seedelf,
   onBack,
+  onSave,
   onRename,
   onDelete,
 }: {
   title: string;
   known: boolean;
   detail: string[];
+  /** The other side's Seedelf (asset name, hex), to copy. */
+  seedelf?: string;
   onBack?: () => void;
+  /** Saves `seedelf` to the contacts; absent once it's one. */
+  onSave?: () => void;
   onRename?: () => void;
   onDelete?: () => void;
 }) {
   const t = useT();
   const id = useId();
+  const [copied, setCopied] = useState(false);
   return (
     <header className="thread__head">
       {onBack && (
@@ -477,9 +481,12 @@ function PaneHead({
           <BackIcon />
         </button>
       )}
-      <span className={known ? "convo__mark" : "convo__mark convo__mark--unknown"} aria-hidden="true">
-        {initialOf(title, known)}
-      </span>
+      {/* Narrow, with Back, the list's mark isn't repeated: the name and its Seedelf keep the room beside four buttons. */}
+      {!onBack && (
+        <span className={known ? "convo__mark" : "convo__mark convo__mark--unknown"} aria-hidden="true">
+          {initialOf(title, known)}
+        </span>
+      )}
       <span className="thread__who">
         <h2 className="thread__name" id={id} data-testid="thread-name">
           {title}
@@ -490,6 +497,35 @@ function PaneHead({
           </span>
         ))}
       </span>
+      {seedelf && (
+        <button
+          type="button"
+          className="icon-button icon-button--small"
+          onClick={() => {
+            void navigator.clipboard.writeText(seedelf).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            });
+          }}
+          aria-label={t(copied ? "common.copied" : "messages.copySeedelf")}
+          title={t(copied ? "common.copied" : "messages.copySeedelf")}
+          data-testid="thread-copy"
+        >
+          {copied ? <CheckIcon size={15} /> : <CopyIcon size={15} />}
+        </button>
+      )}
+      {onSave && (
+        <button
+          type="button"
+          className="icon-button icon-button--small"
+          onClick={onSave}
+          aria-label={t("destination.saveToContacts")}
+          title={t("destination.saveToContacts")}
+          data-testid="thread-save"
+        >
+          <UserPlusIcon size={16} />
+        </button>
+      )}
       {onRename && (
         <button
           type="button"
@@ -540,7 +576,7 @@ function ThreadPane({
   const [deleting, setDeleting] = useState(false);
   const [naming, setNaming] = useState(false);
   const [revealing, setRevealing] = useState(false);
-  // A Seedelf the other side showed, verified, being saved to the contacts.
+  // The other side's Seedelf, written to or shown and verified, being saved to the contacts (the header's button).
   const [saving, setSaving] = useState<string>();
   // A reply's text that wasn't sent, offered once: Start again, then Cancel, doesn't bring it back.
   const [kept, setKept] = useState(draft);
@@ -586,13 +622,17 @@ function ThreadPane({
   }
 
   const title = conversationTitle(c, contacts);
+  const seedelf = seedelfOf(c);
+  const saved = !!seedelf && !!contacts?.some((x) => x.kind === "seedelf" && x.value === seedelf);
   return (
     <div className="thread" data-testid="thread">
       <PaneHead
         title={title}
-        known={!!seedelfOf(c) || !!c.name}
+        known={!!seedelf || !!c.name}
         detail={conversationDetail(c, contacts, titleOf)}
+        seedelf={seedelf}
         onBack={onBack}
+        onSave={seedelf && contacts && !saved ? () => setSaving(seedelf) : undefined}
         onRename={() => setNaming(true)}
         onDelete={() => setDeleting(true)}
       />
@@ -600,7 +640,7 @@ function ThreadPane({
         messages={thread.messages}
         on={on}
         contacts={contacts}
-        onSave={setSaving}
+        nextTry={thread.nextTry}
         before={
           <>
             {thread.trimmed > 0 && <li className="thread__note">{t("messages.trimmed", { count: thread.trimmed })}</li>}
@@ -850,19 +890,26 @@ function MessageList({
   on,
   before,
   contacts,
-  onSave,
+  nextTry,
 }: {
   messages: MessagingEntry[];
   on: boolean;
   before?: ReactNode;
   contacts?: Contact[];
-  /** Saves a verified Seedelf the other side showed to the contacts. */
-  onSave?: (name: string) => void;
+  /** When the relay lets what's waiting be tried again (ms): counted down. */
+  nextTry?: number;
 }) {
   const t = useT();
   const scroller = useRef<HTMLDivElement>(null);
   const atFoot = useRef(true);
-  const now = Date.now();
+  const [now, setNow] = useState(Date.now);
+  // Each second while there's a next try to count down to; otherwise when the messages change.
+  useEffect(() => {
+    setNow(Date.now());
+    if (nextTry === undefined) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [messages, nextTry]);
   // At the foot when it opens, and kept there as messages come, unless the reader scrolled up to read.
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -892,7 +939,7 @@ function MessageList({
             ),
             <li key={m.id} className={`bubble bubble--${m.dir}${m.reveal ? " bubble--reveal" : ""}`} data-testid="bubble">
               {m.reveal ? (
-                <RevealText reveal={m.reveal} contacts={contacts} onSave={onSave} />
+                <RevealText reveal={m.reveal} contacts={contacts} />
               ) : (
                 <p className={m.text === undefined ? "bubble__text bubble__text--unreadable" : "bubble__text"}>
                   {m.text ?? t("messages.unreadable")}
@@ -900,7 +947,7 @@ function MessageList({
               )}
               <span className="bubble__meta">
                 {timeOf(m.at)}
-                {m.dir === "out" && m.sent && <SentState entry={m} on={on} now={now} />}
+                {m.dir === "out" && m.sent && <SentState entry={m} on={on} now={now} nextTry={nextTry} />}
               </span>
             </li>,
           ];
@@ -912,18 +959,10 @@ function MessageList({
 
 /**
  * A reveal's message (protocol.md §19): the user's own Seedelf shown; or the other side's, checking, verified with its
- * name (a contact's, else its tag and the part of its name no one else can choose) and Save to contacts, or failed,
- * never named.
+ * name (a contact's, else its tag and the part of its name no one else can choose), or failed, never named. Saving and
+ * copying it are the header's (the owner, 2026-11-22: no links in the chat).
  */
-function RevealText({
-  reveal,
-  contacts,
-  onSave,
-}: {
-  reveal: NonNullable<MessagingEntry["reveal"]>;
-  contacts?: Contact[];
-  onSave?: (name: string) => void;
-}) {
+function RevealText({ reveal, contacts }: { reveal: NonNullable<MessagingEntry["reveal"]>; contacts?: Contact[] }) {
   const t = useT();
   if (reveal.status === "shown" && reveal.name) {
     return (
@@ -934,18 +973,10 @@ function RevealText({
   }
   if (reveal.status === "verified" && reveal.name) {
     const shown = seedelfShown(reveal.name, contacts);
-    const saved = contacts?.some((c) => c.kind === "seedelf" && c.value === reveal.name);
     return (
-      <>
-        <p className="bubble__text" data-testid="bubble-reveal">
-          {t("messages.reveal.verified", { name: `${shown.title} (${shown.short})` })}
-        </p>
-        {!saved && onSave && (
-          <button type="button" className="link bubble__action" onClick={() => onSave(reveal.name!)} data-testid="bubble-reveal-save">
-            {t("destination.saveToContacts")}
-          </button>
-        )}
-      </>
+      <p className="bubble__text" data-testid="bubble-reveal">
+        {t("messages.reveal.verified", { name: `${shown.title} (${shown.short})` })}
+      </p>
     );
   }
   if (reveal.status === "checking") {
@@ -964,10 +995,21 @@ function RevealText({
 
 /**
  * A sent message's state: being prepared (its stamp, solved with the switch off too), sending, or waiting for the
- * switch; "sent, expires at …" (never "delivered"); or refused.
+ * switch; "sent, expires at …" (never "delivered"); or refused. While its proof of work is solved, about how long that
+ * takes; while the relay has asked the wallet to wait, how long until it tries again (the owner, 2026-11-22).
  */
-function SentState({ entry, on, now }: { entry: MessagingEntry; on: boolean; now: number }) {
+/** A wait as a clock: 2:14, or 1:02:14 past an hour. */
+function clockOf(ms: number): string {
+  const all = Math.max(0, Math.ceil(ms / 1000));
+  const [h, m, sec] = [Math.floor(all / 3600), Math.floor(all / 60) % 60, all % 60];
+  const two = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${two(m)}:${two(sec)}` : `${m}:${two(sec)}`;
+}
+
+function SentState({ entry, on, now, nextTry }: { entry: MessagingEntry; on: boolean; now: number; nextTry?: number }) {
   const t = useT();
+  // Under 2 s of work isn't worth a number.
+  const seconds = entry.working && entry.working.seconds >= 2 ? entry.working.seconds : undefined;
   const text =
     entry.sent === "posted"
       ? entry.expires !== undefined
@@ -976,8 +1018,16 @@ function SentState({ entry, on, now }: { entry: MessagingEntry; on: boolean; now
       : entry.sent === "refused"
         ? t("messages.sent.refused")
         : entry.sent === "queued"
-          ? t("messages.sent.queued")
-          : t(on ? "messages.sent.pending" : "messages.sent.waiting");
+          ? seconds !== undefined
+            ? t("messages.sent.preparing", { seconds })
+            : t("messages.sent.queued")
+          : !on
+            ? t("messages.sent.waiting")
+            : seconds !== undefined
+              ? t("messages.sent.working", { seconds })
+              : nextTry !== undefined && nextTry > now
+                ? t("messages.sent.nextTry", { time: clockOf(nextTry - now) })
+                : t("messages.sent.pending");
   return (
     <span className={entry.sent === "refused" ? "bubble__state bubble__state--refused" : "bubble__state"} data-testid="bubble-state">
       {" · "}

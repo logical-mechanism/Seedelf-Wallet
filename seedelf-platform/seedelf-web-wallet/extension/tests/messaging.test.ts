@@ -18,6 +18,7 @@ import { PreferencesService } from "../src/background/preferences";
 import { conversationRecord, PRIVATE_PREFIX, PrivateStore } from "../src/background/private-store";
 import type { RegisterHex } from "../src/background/chain";
 import type { NetworkName } from "../src/networks";
+import type { MessagingEntry } from "../src/shared/rpc";
 import { fakeRelay, type FakeRelay } from "./fake-relay";
 import { loadTestWasm, memoryArea, testWallet, vectors, type MemoryArea } from "./fakes";
 
@@ -343,6 +344,80 @@ describe("Seedelf Messaging in the worker", () => {
     expect((await alice.messaging.thread("preprod", cid)).messages.at(-1)!.sent).toBe("posted");
   });
 
+  it("asks with no work where the page prices a size at 0, and the thread counts down to the relay's own retry-after", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    let solved = 0;
+    const wasm = loadTestWasm();
+    alice.restart({
+      ...wasm,
+      messagingFindStamp: (request) => {
+        solved++;
+        return wasm.messagingFindStamp(request);
+      },
+    });
+    relay.refusing = 90;
+    await synced(alice);
+    relay.calls.length = 0;
+    await alice.messaging.send("preprod", cid, "later");
+    await alice.messaging.whenIdle();
+    // One post, with no work solved: the 429 says how long, not a guess.
+    expect(solved).toBe(0);
+    expect(relay.calls.filter((c) => c.startsWith("POST"))).toHaveLength(1);
+    let thread = await alice.messaging.thread("preprod", cid);
+    expect(thread.messages.at(-1)!.sent).toBe("pending");
+    expect(thread.nextTry).toBe(clock.now + 90_000);
+    // Nothing asked again before then.
+    await synced(alice);
+    expect(relay.calls.filter((c) => c.startsWith("POST"))).toHaveLength(1);
+    // Then the relay takes it at the price it names (402), solved now.
+    relay.refusing = undefined;
+    clock.now += 90_000;
+    await alice.messaging.post("preprod");
+    await alice.messaging.whenIdle();
+    thread = await alice.messaging.thread("preprod", cid);
+    expect(thread.messages.at(-1)!.sent).toBe("posted");
+    expect(thread.nextTry).toBeUndefined();
+    expect(solved).toBeGreaterThan(0);
+  });
+
+  it("says about how long a post's work and a first message's stamp take, on the messages waiting on them", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    // Each first slice comes back empty, so there's a turn of the event loop to read the thread in.
+    const wasm = loadTestWasm();
+    alice.restart({
+      ...wasm,
+      messagingFindStamp: (request) =>
+        (JSON.parse(request) as { from: number }).from === 0 ? JSON.stringify({ nonce: null }) : wasm.messagingFindStamp(request),
+    });
+    relay.price = 9;
+    await synced(alice);
+    const seen: MessagingEntry[][] = [];
+    alice.onWait = async () => {
+      alice.onWait = undefined;
+      seen.push((await alice.messaging.thread("preprod", cid)).messages);
+    };
+    await alice.messaging.send("preprod", cid, "worked for");
+    await alice.messaging.whenIdle();
+    const [during] = seen;
+    expect(during!.at(-1)!.working!.seconds).toBeGreaterThanOrEqual(1);
+    expect(during!.filter((m) => m.working)).toHaveLength(1);
+    expect((await alice.messaging.thread("preprod", cid)).messages.some((m) => m.working)).toBe(false);
+
+    // A first message: every message waiting on its stamp says so.
+    let first: MessagingEntry[] | undefined;
+    let other = "";
+    alice.onWait = async () => {
+      alice.onWait = undefined;
+      first = (await alice.messaging.thread("preprod", other)).messages;
+    };
+    other = await alice.messaging.start("preprod", BOB_SEEDELF, "again");
+    await alice.messaging.whenIdle();
+    expect(first?.[0]?.sent).toBe("queued");
+    expect(first?.[0]?.working?.seconds).toBeGreaterThanOrEqual(1);
+  });
+
   it("keeps a deleted request's ID as a tombstone: its first message read again starts nothing (§5)", async () => {
     const { alice, bob } = await pair();
     const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "hello");
@@ -491,14 +566,16 @@ describe("Seedelf Messaging in the worker", () => {
     expect((await bob.messaging.overview("preprod")).conversations[0]!.unread).toBe(0);
   });
 
-  it("posts nothing while the relay's price for its size is refused (0), and nothing from a direct sync while off", async () => {
+  it("keeps a message while the relay refuses its size (0), asking once with no work, and asks nothing from a direct sync while off", async () => {
     const { relay, alice, bob } = await pair();
     const cid = await talking(alice, bob);
-    relay.price = 0;
+    relay.refusing = 600;
     await synced(alice);
+    relay.calls.length = 0;
     await alice.messaging.send("preprod", cid, "held");
     await alice.messaging.whenIdle();
     expect((await alice.messaging.thread("preprod", cid)).messages.at(-1)!.sent).toBe("pending");
+    expect(relay.calls.filter((c) => c.startsWith("POST"))).toHaveLength(1);
 
     await alice.messaging.switch("preprod", false);
     relay.calls.length = 0;

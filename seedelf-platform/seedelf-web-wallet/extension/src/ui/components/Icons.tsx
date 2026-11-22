@@ -219,6 +219,16 @@ export const SettingsIcon = icon(
   </>,
 );
 
+/** user-plus: saving a Seedelf to the contacts. */
+export const UserPlusIcon = icon(
+  <>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M19 8v6" />
+    <path d="M22 11h-6" />
+  </>,
+);
+
 /** users */
 export const UsersIcon = icon(
   <>

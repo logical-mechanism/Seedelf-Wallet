@@ -342,6 +342,13 @@ export class MessagingService {
   private prices = new Map<NetworkName, number[]>();
   /** No post before this (ms), by network: the relay asked the wallet to wait. */
   private postAfter = new Map<NetworkName, number>();
+  /**
+   * Work being solved, by conversation record: the first-contact stamp (`entry` absent: every queued message waits on
+   * it) or one message's post, at `bits`. The thread says about how long it takes.
+   */
+  private work = new Map<string, { entry?: number; bits: number }>();
+  /** How long a stamp attempt takes here (ns), measured over the slices solved; §17.3's Chrome worker figure first. */
+  private attemptNs = 440;
   /** The networks whose contract a sync has read fresh for a stranger's first message (`receive`): once a sync. */
   private freshRead = new Set<NetworkName>();
   /** The networks swept, each with the unlock it was swept in (`sweep`). */
@@ -439,9 +446,19 @@ export class MessagingService {
       // kept, with no request.
       const seedelfs =
         meta.role === "initiator" && !info.sendsFirstContact ? (await this.deps.ownSeedelfs(network, false)).map((s) => s.name) : undefined;
+      const now = this.deps.now();
+      const work = this.work.get(conversationRecord(network, cid));
+      const seconds = work && Math.max(1, Math.round((2 ** work.bits * this.attemptNs) / 1e9));
+      const after = this.postAfter.get(network) ?? 0;
+      const waiting = after > now && file.history.some((e) => e.sent === "pending");
       return {
-        conversation: this.summary(cid, meta, this.deps.now()),
-        messages: file.history.map(entryView),
+        conversation: this.summary(cid, meta, now),
+        messages: file.history.map((e) => {
+          const view = entryView(e);
+          const solving = work && (work.entry === undefined ? e.sent === "queued" : work.entry === e.id && e.sent === "pending");
+          return solving ? { ...view, working: { seconds: seconds! } } : view;
+        }),
+        ...(waiting ? { nextTry: after } : {}),
         trimmed: file.trimmed,
         missing: info.missing,
         maxTextBytes: Math.max(0, info.maxTextLen - 1),
@@ -1159,7 +1176,10 @@ export class MessagingService {
     try {
       const file = await this.readable(network, cid);
       if (!file?.stampDigest) return;
-      const nonce = await this.solve(file.stampDigest, this.deps.firstContactBits ?? this.constantsOf().firstContactStampBits);
+      const bits = this.deps.firstContactBits ?? this.constantsOf().firstContactStampBits;
+      this.work.set(name, { bits });
+      this.deps.changed?.(network);
+      const nonce = await this.solve(file.stampDigest, bits);
       await this.serial(async () => {
         const inbox = await this.inbox(network);
         const kept = inbox.conversations[cid] && (await this.readable(network, cid));
@@ -1173,10 +1193,12 @@ export class MessagingService {
         for (const entry of kept.history) if (entry.sent === "queued") this.seal(kept, entry);
         await this.commit(network, inbox, cid, kept);
       });
+      this.work.delete(name);
       this.deps.changed?.(network);
       await this.post(network);
     } finally {
       this.solving.delete(name);
+      this.work.delete(name);
     }
   }
 
@@ -1221,10 +1243,21 @@ export class MessagingService {
         if (entry.sent !== "pending" || !entry.envelope) continue;
         // Deleted meanwhile: nothing of it is posted.
         if (!(await this.inbox(network)).conversations[cid]) break;
-        const answer = await this.postOne(relay, network, pool, entry.envelope);
+        const record = conversationRecord(network, cid);
+        let answer: Exclude<PostAnswer, { kind: "price" }> | undefined;
+        try {
+          answer = await this.postOne(relay, network, pool, entry.envelope, (bits) => {
+            this.work.set(record, { entry: entry.id, bits });
+            this.deps.changed?.(network);
+          });
+        } finally {
+          this.work.delete(record);
+        }
         if (!answer) return;
         if (answer.kind === "wait") {
           this.postAfter.set(network, this.deps.now() + answer.retryAfterMs);
+          // The thread counts down to the next try.
+          this.deps.changed?.(network);
           return;
         }
         await this.serial(async () => {
@@ -1255,15 +1288,18 @@ export class MessagingService {
     network: NetworkName,
     pool: string,
     envelope: string,
+    /** Told the price before its work is solved. */
+    onSolve?: (bits: number) => void,
   ): Promise<Exclude<PostAnswer, { kind: "price" }> | undefined> {
     const size = envelope.length / 2;
     const index = this.constantsOf().envelopeSizes.indexOf(size);
     let bits = this.prices.get(network)?.[index] ?? RELAY_BASE_BITS[network];
-    // 0: the relay would refuse this address's post now (§17.5): it waits for the next sync's page.
-    if (bits === 0) return { kind: "wait", retryAfterMs: 60_000 };
     const digest = this.wasmCall(() => this.deps.wasm.messagingRelayDigest(pool, envelope));
     for (let tries = 0; tries < 4; tries++) {
-      const nonce = await this.solve(digest, bits);
+      // 0: the relay would refuse this address's post now (§17.5). Posted with no work, it says for how long (a 429's
+      // retry-after, counted before any work is checked), or names its price if that's passed meanwhile.
+      if (bits > 0) onSolve?.(bits);
+      const nonce = bits === 0 ? 0 : await this.solve(digest, bits);
       const body = this.wasmCall(() => this.deps.wasm.messagingPostBody(JSON.stringify({ nonce, envelope })));
       let answer: PostAnswer;
       try {
@@ -1283,11 +1319,15 @@ export class MessagingService {
   private async solve(digest: string, bits: number): Promise<number> {
     let lastKept = this.deps.now();
     for (let from = 0; ; from += STAMP_SLICE) {
+      const began = performance.now();
       const found = this.parse<{ nonce: number | null }>(
         this.wasmCall(() => this.deps.wasm.messagingFindStamp(JSON.stringify({ digest, bits, from, attempts: STAMP_SLICE }))),
       );
       if (isRefused(found)) throw new MessagingRefused(found.refused);
       if (found.nonce !== null) return found.nonce;
+      // A whole slice's time, smoothed: what "about N s" is worked out from.
+      const ns = ((performance.now() - began) * 1e6) / STAMP_SLICE;
+      if (ns > 0) this.attemptNs = 0.8 * this.attemptNs + 0.2 * ns;
       await this.wait();
       if (this.deps.keepAlive && this.deps.now() - lastKept > 10_000) {
         lastKept = this.deps.now();

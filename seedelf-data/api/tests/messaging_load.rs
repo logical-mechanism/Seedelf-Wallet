@@ -20,6 +20,7 @@ use seedelf_data_api::chain::Chain;
 use seedelf_data_api::edge::{Edge, Egress};
 use seedelf_data_api::messaging::check::{stamp_bits, stamp_digest};
 use seedelf_data_api::messaging::price::Prices;
+use seedelf_data_api::messaging::window::Limits;
 use seedelf_data_api::messaging::{Config, Relay};
 use seedelf_data_api::state::AppState;
 use seedelf_data_api::submit::Submit;
@@ -42,6 +43,11 @@ static POOL: [Config; 1] = [Config {
         quiet: f64::MAX,
         ceiling: 24,
         half_life: Duration::from_secs(600),
+    },
+    // Each post comes from an address of its own.
+    window: Limits {
+        envelopes: 1000,
+        units: 4096,
     },
 }];
 

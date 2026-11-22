@@ -1071,6 +1071,31 @@ describe("the dApp connector", SLOW, () => {
     expect(t.dapp.approvals()).toEqual([]);
   });
 
+  it("keeps its window for a signature the unlock let go while its account is read, and closes once it's answered", async () => {
+    const t = await on();
+    const s = await connected(t);
+    const message = [t.deps.wasm.cip30Address(OWN), hex("Sign in")];
+    await t.wallet.lock();
+    const signing = t.dapp.call(s, "signData", message);
+    await until(() => t.dappWindow.shown === 2);
+    // Koios slow: the signature reads the account before it's listed, and the window, empty meanwhile, stays.
+    let release!: () => void;
+    t.koios.hold = new Promise<void>((r) => (release = r));
+    await t.wallet.unlock(PASSWORD);
+    await t.dapp.stateChanged();
+    await until(() => t.koios.calls.length > 0 && t.dapp.approvals().length === 0);
+    expect(await t.dapp.closeWindow()).toBe(false);
+    expect(t.dappWindow).toMatchObject({ closed: 0, open: true });
+    t.koios.hold = undefined;
+    release();
+    // Listed in the window it unlocked in; answered, nothing holds the window any more.
+    await until(() => t.dapp.approvals().length === 1);
+    expect(t.dappWindow).toMatchObject({ closed: 0, open: true });
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+    await expect(signing).rejects.toMatchObject({ failure: { code: DataSignError.UserDeclined } });
+    expect(await t.dapp.closeWindow()).toBe(true);
+  });
+
   it("keeps every connection when several are answered at once", async () => {
     const t = await on();
     const origins = ["https://a.example", "https://b.example", "https://c.example"];

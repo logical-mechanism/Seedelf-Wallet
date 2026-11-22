@@ -1,11 +1,12 @@
 //! The relay through the whole app, offline (web wallet chunk 54's 54c):
 //! posts with real envelopes and real proof of work, pages read back, every
-//! refusal, its own buckets and allowance at the edge, and a restart that
-//! keeps the pools. No source is up, and none is needed: the relay reads no
-//! chain.
+//! refusal, an address's window, its own buckets and allowance at the edge,
+//! and a restart that keeps the pools. No source is up, and none is needed:
+//! the relay reads no chain.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -14,8 +15,10 @@ use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
 use seedelf_data_api::chain::Chain;
 use seedelf_data_api::edge::{Edge, Egress, Part};
-use seedelf_data_api::messaging::Relay;
 use seedelf_data_api::messaging::check::{stamp_bits, stamp_digest};
+use seedelf_data_api::messaging::price::Prices;
+use seedelf_data_api::messaging::window::Limits;
+use seedelf_data_api::messaging::{Config, Relay};
 use seedelf_data_api::state::AppState;
 use seedelf_data_api::submit::Submit;
 use serde_json::Value;
@@ -100,6 +103,29 @@ fn unpaid(envelope: &[u8]) -> Vec<u8> {
     [&nonce.to_be_bytes()[..], envelope].concat()
 }
 
+/// A post with nonce 0, unsolved: what a wallet sends to learn a wait.
+fn nonce_zero(envelope: &[u8]) -> Vec<u8> {
+    [&0u64.to_be_bytes()[..], envelope].concat()
+}
+
+/// Preprod's pool with a window a test reaches: 3 envelopes or 70 units,
+/// which a lone 32 KiB envelope (64) fits.
+static SMALL_WINDOW: [Config; 1] = [Config {
+    name: "preprod",
+    cap: 8 << 20,
+    prices: Prices {
+        base: 16,
+        per_bit: 32.0,
+        quiet: 200.0,
+        ceiling: 24,
+        half_life: Duration::from_secs(600),
+    },
+    window: Limits {
+        envelopes: 3,
+        units: 70,
+    },
+}];
+
 /// A request as Caddy passes it on, from the wallet, from `client`.
 fn request(client: &str, method: Method, path: &str, body: Vec<u8>) -> Request<Body> {
     let mut request = Request::builder()
@@ -122,10 +148,24 @@ async fn send(app: &Router, request: Request<Body>) -> Response {
 }
 
 async fn post(app: &Router, client: &str, body: Vec<u8>) -> (StatusCode, Value) {
+    let (status, body, _) = post_waiting(app, client, body).await;
+    (status, body)
+}
+
+/// A post's answer and its `Retry-After`, if it has one.
+async fn post_waiting(
+    app: &Router,
+    client: &str,
+    body: Vec<u8>,
+) -> (StatusCode, Value, Option<u64>) {
     let response = send(app, request(client, Method::POST, ENVELOPES, body)).await;
     let status = response.status();
+    let retry = response
+        .headers()
+        .get(header::RETRY_AFTER)
+        .map(|value| value.to_str().unwrap().parse().unwrap());
     let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
+    (status, serde_json::from_slice(&bytes).unwrap(), retry)
 }
 
 struct Page {
@@ -402,5 +442,109 @@ async fn a_restart_keeps_the_pools() {
     // Held across the restart: a re-post is "already".
     let (_, body) = post(&app, "203.0.113.7", unpaid(&short(1))).await;
     assert_eq!(body["kept"], "already");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn an_address_past_its_window_waits_for_its_oldest_to_age_out() {
+    let Relayed { app, .. } = relayed(Relay::with_pools(None, &SMALL_WINDOW));
+    let me = "203.0.113.7";
+    for i in 0..3 {
+        let (status, body) = post(&app, me, post_body(&short(i), 16)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    // The page says so before any work: every size reads 0.
+    assert_eq!(page(&app, me, None).await.prices, [0; 4]);
+    // A paid post is refused, told to wait until this hour's posts have
+    // been 36 hours in the pool: past 36 hours, at most 37.
+    let (status, body, retry) = post_waiting(&app, me, post_body(&short(3), 16)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        body["error"],
+        "this address's share of the pool is full for now"
+    );
+    let retry = retry.unwrap();
+    assert!((36 * 3600 + 1..=37 * 3600).contains(&retry), "{retry}");
+    // Nonce 0, unsolved, learns the same wait.
+    let (status, _, zero) = post_waiting(&app, me, nonce_zero(&short(3))).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(zero.unwrap().abs_diff(retry) <= 1);
+    // What it holds is still "already", whatever the stamp.
+    let (status, body) = post(&app, me, nonce_zero(&short(0))).await;
+    assert_eq!((status, &body["kept"]), (StatusCode::OK, &"already".into()));
+    // Another address posts as before.
+    let other = "198.51.100.1";
+    assert_eq!(page(&app, other, None).await.prices, [16, 16, 16, 18]);
+    let (status, _) = post(&app, other, post_body(&short(3), 16)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page(&app, other, None).await.envelopes.len(), 4);
+}
+
+#[tokio::test]
+async fn the_window_counts_units_and_the_page_says_which_sizes_wait() {
+    let Relayed { app, .. } = relayed(Relay::with_pools(None, &SMALL_WINDOW));
+    let me = "203.0.113.7";
+    assert_eq!(page(&app, me, None).await.prices, [16, 16, 16, 18]);
+    let (status, _) = post(&app, me, post_body(&envelope("32,768 bytes"), 18)).await;
+    assert_eq!(status, StatusCode::OK);
+    // 64 of its 70 units held: 512 bytes and 2 KiB fit, 8 and 32 KiB wait.
+    assert_eq!(page(&app, me, None).await.prices, [18, 18, 0, 0]);
+    let (status, _, retry) = post_waiting(&app, me, nonce_zero(&envelope("8,192 bytes"))).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(retry.unwrap() > 36 * 3600);
+    let (status, _) = post(&app, me, post_body(&envelope("2,048 bytes"), 18)).await;
+    assert_eq!(status, StatusCode::OK);
+    // 68 units: only a short one fits now.
+    assert_eq!(page(&app, me, None).await.prices, [18, 0, 0, 0]);
+}
+
+#[tokio::test]
+async fn an_ipv6_56_is_one_address() {
+    let Relayed { app, .. } = relayed(Relay::with_pools(None, &SMALL_WINDOW));
+    // Three /64s of one /56 fill one window.
+    for (i, client) in [
+        "2001:db8:0:100::1",
+        "2001:db8:0:1a0::2",
+        "2001:db8:0:1ff:ffff::3",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (status, _) = post(&app, client, post_body(&short(i as u32), 16)).await;
+        assert_eq!(status, StatusCode::OK, "{client}");
+    }
+    // A fourth is the same address.
+    let fourth = "2001:db8:0:150::4";
+    assert_eq!(page(&app, fourth, None).await.prices, [0; 4]);
+    let (status, _, _) = post_waiting(&app, fourth, post_body(&short(3), 16)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    // The next /56 is another.
+    let (status, _) = post(&app, "2001:db8:0:200::1", post_body(&short(3), 16)).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_window_is_never_saved_and_a_restart_starts_it_empty() {
+    let dir = std::env::temp_dir().join(format!("seedelf-relay-window-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let me = "203.0.113.7";
+    {
+        let Relayed { app, relay, .. } = relayed(Relay::with_pools(Some(&dir), &SMALL_WINDOW));
+        for i in 0..3 {
+            post(&app, me, post_body(&short(i), 16)).await;
+        }
+        assert_eq!(page(&app, me, None).await.prices, [0; 4]);
+        relay.save(true);
+    }
+    // The file holds the envelopes and nothing more: its header, then each
+    // one's number, time, length and bytes.
+    let file = std::fs::read(dir.join("messaging-preprod.pool")).unwrap();
+    assert_eq!(file.len(), 21 + 3 * (20 + 512));
+    let Relayed { app, relay, .. } = relayed(Relay::with_pools(Some(&dir), &SMALL_WINDOW));
+    assert_eq!(relay.health()["preprod"]["envelopes"], 3);
+    // The window starts empty, as the prices do.
+    assert_eq!(page(&app, me, None).await.prices, [16, 16, 16, 18]);
+    let (status, _) = post(&app, me, post_body(&short(3), 16)).await;
+    assert_eq!(status, StatusCode::OK);
     std::fs::remove_dir_all(&dir).unwrap();
 }

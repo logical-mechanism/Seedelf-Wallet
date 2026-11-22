@@ -531,7 +531,6 @@
     "lovejoin.stuck.privacy.private",
     "lovejoin.stuck.privacy.privateNamed",
     "messages.ownSeedelf",
-    "messages.privacy.relay",
     "messages.privacy.request",
     "messages.warn.cantContinue",
     "messages.warn.gap",

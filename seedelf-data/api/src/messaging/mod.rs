@@ -4,23 +4,25 @@
 //! it keeps no recipient, sender, account or key.
 //!
 //! - `POST /messaging/v1/{pool}/envelopes`: `nonce (8) ‖ envelope`, as
-//!   `application/octet-stream`. Checked (the shape, then the price, then
-//!   the points), then kept.
+//!   `application/octet-stream`. Checked (the shape, then the price and the
+//!   address's window, then the points), then kept.
 //! - `GET /messaging/v1/{pool}/envelopes?after=<cursor>`: a page of what
 //!   came after the cursor, in the binary format `Page::encode` writes.
 //!
 //! A pool per network (`mainnet`, `preprod`): the Seedelf key is the same on
 //! both, so one pool would show a preprod message to the mainnet wallet.
 //! What an address posted is counted in memory, to price its next post
-//! (`price`), and never logged. The pools are saved to the state directory
-//! every minute and at shutdown, so a deploy keeps what's waiting.
+//! (`price`) and to bound what it has in the pool (`window`), and never
+//! logged or saved. The pools are saved to the state directory every minute
+//! and at shutdown, so a deploy keeps what's waiting.
 
 pub mod check;
 pub mod pool;
 pub mod price;
+pub mod window;
 
 use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -34,10 +36,11 @@ use axum::routing::get;
 use serde_json::{Value, json};
 use tracing::warn;
 
-use crate::edge::{self, Client};
+use crate::edge::Client;
 use check::{NONCE_LEN, SIZES};
 use pool::{Full, Held, Kept, PAGE_BYTES, PAGE_VERSION, Page, Snapshot};
 use price::{Asked, Counts, Prices};
+use window::{Limits, Window};
 
 /// A pool's numbers.
 pub struct Config {
@@ -45,12 +48,19 @@ pub struct Config {
     /// The most envelope bytes it holds; past it, posts wait for room.
     pub cap: usize,
     pub prices: Prices,
+    /// The most one address may have in it, whatever work it does
+    /// (`window`).
+    pub window: Limits,
 }
 
 /// The pools, and what they price by (protocol.md §17). The base costs a
 /// browser about 0.1 s of WebAssembly (2¹⁸ SHA-256 attempts at about 425 ns
 /// each, measured in Node 24), the ceiling about 7 s (2²⁴). Preprod is for
 /// testing: a lower base, and a smaller cap.
+///
+/// The window is the owner's to tune: 1,000 envelopes is about a second of
+/// every reader's trial scan, 4,096 units 2 MiB of every reader's download.
+/// The same on both pools, so a wallet meets the same limits on preprod.
 pub const POOLS: [Config; 2] = [
     Config {
         name: "mainnet",
@@ -61,6 +71,10 @@ pub const POOLS: [Config; 2] = [
             quiet: 1000.0,
             ceiling: 24,
             half_life: Duration::from_secs(600),
+        },
+        window: Limits {
+            envelopes: 1000,
+            units: 4096,
         },
     },
     Config {
@@ -73,18 +87,83 @@ pub const POOLS: [Config; 2] = [
             ceiling: 24,
             half_life: Duration::from_secs(600),
         },
+        window: Limits {
+            envelopes: 1000,
+            units: 4096,
+        },
     },
 ];
 
 /// Counted for a request with no address, which none from Caddy is.
 const NO_ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
+/// Who the relay counts a post or a page as, for its prices and its
+/// window: an IPv4 address whole, an IPv6 address by its /56, so the /64s
+/// of one server's or one home's allocation are one address. The edge's
+/// buckets take a /64 (`edge::client_key`).
+pub fn address_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(Ipv6Addr::new(s[0], s[1], s[2], s[3] & 0xff00, 0, 0, 0, 0))
+            }
+        },
+        v4 => v4,
+    }
+}
+
 pub struct Pool {
     pub config: &'static Config,
     held: Mutex<Held>,
     counts: Mutex<Counts>,
+    /// Taken before `held` when both are, never after.
+    window: Mutex<Window>,
     /// Where it's saved, and the mark a clean shutdown leaves beside it.
     file: Option<(PathBuf, PathBuf)>,
+}
+
+/// Why a post whose checks passed wasn't kept: try again in this many
+/// seconds.
+#[derive(Debug, PartialEq, Eq)]
+enum NotKept {
+    /// The address's window, filled meanwhile by its other posts.
+    Window(u64),
+    /// The pool's cap.
+    Full(u64),
+}
+
+impl Pool {
+    /// Keeps a post whose checks have passed. Its address's window is
+    /// checked again and counted with the insert, so posts from one address
+    /// at once can't pass it together; a copy kept meanwhile is still
+    /// "already".
+    fn keep(
+        &self,
+        digest: [u8; 32],
+        envelope: Bytes,
+        address: IpAddr,
+        now: i64,
+        instant: Instant,
+    ) -> Result<Kept, NotKept> {
+        let size = envelope.len();
+        let mut window = self.window.lock().expect("window lock");
+        let mut held = self.held.lock().expect("pool lock");
+        held.expire(now);
+        if held.already(&digest).is_none()
+            && let Some(secs) = window.wait(address, size, instant)
+        {
+            return Err(NotKept::Window(secs));
+        }
+        let kept = held
+            .insert(digest, envelope, now, self.config.cap)
+            .map_err(|Full(secs)| NotKept::Full(secs))?;
+        if let Kept::New { .. } = kept {
+            window.record(address, size, instant);
+        }
+        Ok(kept)
+    }
 }
 
 pub struct Relay {
@@ -116,6 +195,7 @@ impl Relay {
                     config,
                     held: Mutex::new(load(config.name, file.as_ref())),
                     counts: Mutex::new(Counts::new(config.prices, now)),
+                    window: Mutex::new(Window::new(config.window, now)),
                     file,
                 }
             })
@@ -130,12 +210,14 @@ impl Relay {
         self.pools.iter().find(|pool| pool.config.name == name)
     }
 
-    /// Drops what's expired and the counts that have decayed away.
+    /// Drops what's expired, the counts that have decayed away and the
+    /// window's buckets that have aged out.
     pub fn tidy(&self) {
         let (now, instant) = (unix_now(), Instant::now());
         for pool in &self.pools {
             pool.held.lock().expect("pool lock").expire(now);
             pool.counts.lock().expect("counts lock").forget(instant);
+            pool.window.lock().expect("window lock").forget(instant);
         }
     }
 
@@ -277,38 +359,43 @@ async fn post(
     if let Some(expires) = already {
         return kept("already", expires);
     }
-    let address = client.map_or(NO_ADDRESS, |Extension(Client(ip))| edge::client_key(ip));
+    let address = client.map_or(NO_ADDRESS, |Extension(Client(ip))| address_key(ip));
+    let size = envelope.len();
     let asked = {
         let mut counts = pool.counts.lock().expect("counts lock");
         if !counts.room_for(address, instant) {
             return refuse(StatusCode::SERVICE_UNAVAILABLE, "busy", 60);
         }
-        counts.ask(address, envelope.len(), instant)
+        counts.ask(address, size, instant)
     };
-    match asked {
-        Asked::Refused(secs) => {
+    // The window with the price, before the stamp: a post with any nonce,
+    // 0 say, learns how long to wait without solving.
+    let wait = {
+        let mut window = pool.window.lock().expect("window lock");
+        if !window.room_for(address, instant) {
+            return refuse(StatusCode::SERVICE_UNAVAILABLE, "busy", 60);
+        }
+        window.wait(address, size, instant)
+    };
+    match (asked, wait) {
+        (Asked::Refused(secs), wait) => {
             return refuse(
                 StatusCode::TOO_MANY_REQUESTS,
                 "too many posts from this address for now",
-                secs,
+                secs.max(wait.unwrap_or(0)),
             );
         }
-        Asked::Bits(bits) if check::stamp_bits(&digest, nonce) < bits => {
+        (_, Some(secs)) => return refuse(StatusCode::TOO_MANY_REQUESTS, WINDOW_FULL, secs),
+        (Asked::Bits(bits), None) if check::stamp_bits(&digest, nonce) < bits => {
             let body = json!({ "error": "more proof of work", "price": bits });
             return (StatusCode::PAYMENT_REQUIRED, axum::Json(body)).into_response();
         }
-        Asked::Bits(_) => {}
+        (Asked::Bits(_), None) => {}
     }
     if let Err(refused) = check::check_points(&envelope) {
         return bad(refused.reason());
     }
-    let size = envelope.len();
-    let result =
-        pool.held
-            .lock()
-            .expect("pool lock")
-            .insert(digest, envelope, now, pool.config.cap);
-    match result {
+    match pool.keep(digest, envelope, address, now, instant) {
         Ok(Kept::New { expires }) => {
             pool.counts
                 .lock()
@@ -317,7 +404,10 @@ async fn post(
             kept("new", expires)
         }
         Ok(Kept::Already { expires }) => kept("already", expires),
-        Err(Full(secs)) => refuse(StatusCode::SERVICE_UNAVAILABLE, "the pool is full", secs),
+        Err(NotKept::Window(secs)) => refuse(StatusCode::TOO_MANY_REQUESTS, WINDOW_FULL, secs),
+        Err(NotKept::Full(secs)) => {
+            refuse(StatusCode::SERVICE_UNAVAILABLE, "the pool is full", secs)
+        }
     }
 }
 
@@ -342,15 +432,11 @@ async fn page(
         .lock()
         .expect("pool lock")
         .page(after, PAGE_BYTES, unix_now());
-    let address = client.map_or(NO_ADDRESS, |Extension(Client(ip))| edge::client_key(ip));
+    let address = client.map_or(NO_ADDRESS, |Extension(Client(ip))| address_key(ip));
     let prices = {
         let counts = pool.counts.lock().expect("counts lock");
-        let instant = Instant::now();
-        SIZES.map(|size| match counts.ask(address, size, instant) {
-            // At most the ceiling, which is below 256.
-            Asked::Bits(bits) => bits as u8,
-            Asked::Refused(_) => 0,
-        })
+        let window = pool.window.lock().expect("window lock");
+        prices(&counts, &window, address, Instant::now())
     };
     let mut response = encode(&page, prices).into_response();
     response.headers_mut().insert(
@@ -358,6 +444,17 @@ async fn page(
         HeaderValue::from_static("application/octet-stream"),
     );
     response
+}
+
+/// What a page says a post from `address` costs now, for each of the four
+/// sizes: its price in bits, or 0 when the price's ceiling or the address's
+/// window refuses it.
+fn prices(counts: &Counts, window: &Window, address: IpAddr, now: Instant) -> [u8; 4] {
+    SIZES.map(|size| match counts.ask(address, size, now) {
+        // At most the ceiling, which is below 256.
+        Asked::Bits(bits) if window.wait(address, size, now).is_none() => bits as u8,
+        Asked::Bits(_) | Asked::Refused(_) => 0,
+    })
 }
 
 /// `after=` and a number: decimal digits, no sign, within a u64.
@@ -394,6 +491,9 @@ pub fn encode(page: &Page, prices: [u8; 4]) -> Vec<u8> {
     }
     out
 }
+
+/// A 429's words when the window refuses a post.
+const WINDOW_FULL: &str = "this address's share of the pool is full for now";
 
 fn kept(kept: &str, expires: i64) -> Response {
     axum::Json(json!({ "kept": kept, "expires": expires })).into_response()
@@ -472,6 +572,112 @@ mod tests {
                 pool.name
             );
         }
+    }
+
+    #[test]
+    fn each_pools_window_holds_a_lone_post_of_every_size() {
+        let now = Instant::now();
+        for pool in &POOLS {
+            let window = Window::new(pool.window, now);
+            for size in SIZES {
+                assert_eq!(window.wait(NO_ADDRESS, size, now), None, "{}", pool.name);
+            }
+        }
+    }
+
+    #[test]
+    fn an_ipv6_allocation_is_one_address_by_its_56() {
+        let key = |s: &str| address_key(s.parse().unwrap());
+        // Every /64 of one /56 is one address...
+        assert_eq!(key("2001:db8:0:100::1"), key("2001:db8:0:1ff:ffff::9"));
+        assert_eq!(
+            key("2001:db8:0:1ab::1"),
+            "2001:db8:0:100::".parse::<IpAddr>().unwrap()
+        );
+        // ...and the next /56 is another.
+        assert_ne!(key("2001:db8:0:100::1"), key("2001:db8:0:200::1"));
+        assert_ne!(key("2001:db8:0:100::1"), key("2001:db8:1:100::1"));
+        // An IPv4 address is whole, mapped or not.
+        assert_eq!(key("::ffff:203.0.113.7"), key("203.0.113.7"));
+        assert_ne!(key("203.0.113.7"), key("203.0.113.8"));
+        // The edge's buckets still take a /64.
+        assert_ne!(
+            crate::edge::client_key("2001:db8:0:100::1".parse().unwrap()),
+            crate::edge::client_key("2001:db8:0:1ff::1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn a_page_says_0_for_a_size_the_window_refuses() {
+        let now = Instant::now();
+        let prices_ = POOLS[0].prices;
+        let counts = Counts::new(prices_, now);
+        let me: IpAddr = "203.0.113.7".parse().unwrap();
+        let mut window = Window::new(
+            Limits {
+                envelopes: 1000,
+                units: 20,
+            },
+            now,
+        );
+        assert_eq!(prices(&counts, &window, me, now), [18, 18, 18, 0]);
+        window.record(me, 8192, now);
+        // 16 units held: 1 and 4 more fit, 16 and 64 don't.
+        assert_eq!(prices(&counts, &window, me, now), [18, 18, 0, 0]);
+        // The envelope limit refuses every size alike.
+        let mut window = Window::new(
+            Limits {
+                envelopes: 1,
+                units: 4096,
+            },
+            now,
+        );
+        window.record(me, 512, now);
+        assert_eq!(prices(&counts, &window, me, now), [0; 4]);
+        // Another address is told the base.
+        let other: IpAddr = "203.0.113.8".parse().unwrap();
+        assert_eq!(prices(&counts, &window, other, now), [18, 18, 18, 20]);
+    }
+
+    /// A pool whose window holds one envelope.
+    static ONE: [Config; 1] = [Config {
+        name: "preprod",
+        cap: 1 << 20,
+        prices: POOLS[1].prices,
+        window: Limits {
+            envelopes: 1,
+            units: 4096,
+        },
+    }];
+
+    #[test]
+    fn posts_at_once_are_counted_as_kept_so_only_one_passes_the_window() {
+        let relay = Relay::with_pools(None, &ONE);
+        let pool = relay.pool("preprod").unwrap();
+        let (now, instant) = (unix_now(), Instant::now());
+        let me: IpAddr = "203.0.113.7".parse().unwrap();
+        let envelope = |i: u8| {
+            let bytes = Bytes::from(vec![i; 512]);
+            (check::stamp_digest("preprod", &bytes), bytes)
+        };
+        // Both passed the window before either was kept...
+        assert_eq!(pool.window.lock().unwrap().wait(me, 512, instant), None);
+        let ((a, first), (b, second)) = (envelope(1), envelope(2));
+        // ...and only the first is.
+        assert!(matches!(
+            pool.keep(a, first.clone(), me, now, instant),
+            Ok(Kept::New { .. })
+        ));
+        assert!(matches!(
+            pool.keep(b, second, me, now, instant),
+            Err(NotKept::Window(secs)) if secs > 36 * 3600
+        ));
+        // A copy of the first is still "already".
+        assert!(matches!(
+            pool.keep(a, first, me, now, instant),
+            Ok(Kept::Already { .. })
+        ));
+        assert_eq!(relay.health()["preprod"]["envelopes"], 1);
     }
 
     #[test]

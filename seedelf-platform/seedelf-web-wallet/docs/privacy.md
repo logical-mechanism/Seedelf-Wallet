@@ -502,7 +502,7 @@ Lovejoin is a mixer. Each pool holds boxes of one value: ADA alone, or a set amo
 - **What it sees:**
   - this IP address reading the messages while the wallet is unlocked: at unlock, every minute after, and every 10 seconds while a page of the wallet is on screen. So it can tell when a device there is unlocked with Messages on, and when the wallet is open on screen;
   - each message posted, from this IP address, when, and its size, padded to 512 B, 2, 8 or 32 KiB;
-  - a count of each address's recent posts, in memory, to price the next against floods. Nothing of it is logged.
+  - counts of each address's posts (an IPv6 address by its /56), in memory: its recent posts, to price the next against floods, and its posts in each hour, kept 36 hours after the hour ends, to limit what one address can have on the server. They say how many, never which messages. Nothing of them is logged or written to disk.
 - **What it can link is timing.** Posts from one address are one sender's to it, and a reply soon after a message arrives, from another address, hints that the two talk. Who a message is for, and what it says, it can't see.
 - **Writing first to a Seedelf looks it up** as Send does, in the contract the wallet reads whole: the Cardano server sees a read of the contract, never which Seedelf was looked for.
 - **A first message names no Seedelf of the writer's.** The reader sees an unknown sender, and the Seedelf it was written to, which its proof shows: nothing ties the writer to a Seedelf unless the text does, or the writer shows one.
