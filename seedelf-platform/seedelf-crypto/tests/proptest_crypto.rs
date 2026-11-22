@@ -44,9 +44,10 @@ proptest! {
         prop_assert!(register.is_valid().unwrap());
     }
 
-    /// A proof produced for `sk` verifies against `sk`'s register.
+    /// A proof produced for `sk` verifies against `sk`'s register. Zero is
+    /// left out, as above: no key owns its register, so no proof is made.
     #[test]
-    fn schnorr_proof_round_trips(sk in any::<u64>()) {
+    fn schnorr_proof_round_trips(sk in 1..=u64::MAX) {
         let scalar = Scalar::from(sk);
         let register = Register::create(scalar).unwrap();
         let (z, g_r) = create_proof(register.clone(), scalar, VKH.to_string()).unwrap();
@@ -57,7 +58,7 @@ proptest! {
 
     /// A re-randomized register is still spendable via a fresh proof.
     #[test]
-    fn schnorr_proof_round_trips_after_rerandomize(sk in any::<u64>()) {
+    fn schnorr_proof_round_trips_after_rerandomize(sk in 1..=u64::MAX) {
         let scalar = Scalar::from(sk);
         let register = Register::create(scalar).unwrap().rerandomize().unwrap();
         let (z, g_r) = create_proof(register.clone(), scalar, VKH.to_string()).unwrap();
@@ -66,16 +67,22 @@ proptest! {
         );
     }
 
-    /// A proof of knowledge of the wrong scalar does not verify — you cannot
-    /// spend a register you do not own.
+    /// No proof is made with a scalar that doesn't own the register: its
+    /// response would hand out [scalar]·g (docs: seedelf-messaging's
+    /// joint-security.md, rule 1). The owner's proof, checked as the
+    /// validator checks it with that register, still verifies.
     #[test]
-    fn schnorr_proof_rejects_wrong_scalar(owner in any::<u64>(), attacker in any::<u64>()) {
-        prop_assume!(owner != attacker);
+    fn schnorr_proof_refuses_a_register_the_scalar_doesnt_own(
+        owner in 1..=u64::MAX,
+        other in any::<u64>(),
+    ) {
+        prop_assume!(owner != other);
         let register = Register::create(Scalar::from(owner)).unwrap();
-        let (z, g_r) =
-            create_proof(register.clone(), Scalar::from(attacker), VKH.to_string()).unwrap();
         prop_assert!(
-            !prove(&register.generator, &register.public_value, &z, &g_r, VKH).unwrap()
+            create_proof(register.clone(), Scalar::from(other), VKH.to_string()).is_err()
         );
+        let (z, g_r) =
+            create_proof(register.clone(), Scalar::from(owner), VKH.to_string()).unwrap();
+        prop_assert!(prove(&register.generator, &register.public_value, &z, &g_r, VKH).unwrap());
     }
 }
