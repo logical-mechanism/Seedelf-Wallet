@@ -93,8 +93,8 @@ Alice wrote first; Bob was written to.
 Alice holds Bob's handle register (g_S, v_S).
 
 1. **Identities and keys.** Alice makes:
-   - R_B and R_A (§2), with R_B = ([b]g_S, [b]v_S);
    - a random 16-byte conversation ID, cid;
+   - R_B and R_A (§2), with R_B = ([b]g_S, [b]v_S). b isn't drawn: it's an HMAC under Alice's key x_A of the handle, the start of F and 32 random bytes (§16.2). So it stays secret even when her random source fails, and it's new for each handle, name, time and cid. It must stay secret: it blinds A = [x_A][b]g_S, and whoever learns it gets [x_A]g_S on a generator they chose ([joint-security.md](joint-security.md), rule 1);
    - a session ephemeral e_A, with E_A = [e_A]p₀;
    - a ratchet key s_A, with S_A = [s_A]p₀.
 2. **The first-contact block:**
@@ -104,7 +104,7 @@ Alice holds Bob's handle register (g_S, v_S).
    - **t:** when Alice started the conversation, in Unix seconds, big-endian.
    - **to:** a length byte, then the handle's asset name. Empty only in a continuation (§6).
    - **replaces:** a length byte, then the cid of a conversation this one continues (§6), or nothing. Required when `to` is empty.
-   - **proof:** present exactly when `to` is. A Schnorr proof that p₀ = [b]g_S for the handle (g_S, v_S) named in `to`, with the rest of F in its challenge (§16.2): 64 bytes. Only a writer who re-randomized that one handle can make it, so it makes `to` verified, and keeps p₀ off the sum of two handles (§2).
+   - **proof:** present exactly when `to` is. A Schnorr proof that p₀ = [b]g_S for the handle (g_S, v_S) named in `to`, with the rest of F in its challenge and its nonce derived from b and everything the challenge covers (§16.2): 64 bytes. Only a writer who re-randomized that one handle can make it, so it makes `to` verified, and keeps p₀ off the sum of two handles (§2).
    - **w₀ isn't sent:** Bob computes it as [x_B]p₀.
 3. **The stamp.** Alice finds an 8-byte nonce such that SHA-256 of F's digest and the nonce has at least 24 leading zero bits (§16.2, §16.4): about 7 seconds of a browser's time on average.
    - It prices a stranger's first message to one reader, which the relay's price can't target: the relay can't tell first messages from replies.
@@ -435,13 +435,14 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 ### 16.1 Encodings
 
 - **Points:** 48-byte compressed G1, canonical, in G1 and not O (construction.md §4.4). A point that is a KDF's input (a DH output, or z) is its 48 compressed bytes too.
-- **Scalars:** 32 bytes, big-endian. Every scalar drawn (b, e_A, s_A, k, every ratchet key, the envelope's r) is uniform in [1, q − 1]. A scalar from a hash (the proof's challenge, the outer scalar) is the hash's bytes as a big-endian integer, reduced mod q.
+- **Scalars:** 32 bytes, big-endian. Every scalar drawn (e_A, s_A, every ratchet key, the envelope's r) is uniform in [1, q − 1]. A scalar from a hash (the proof's challenge, the outer scalar, b and the proof's k) is the hash's bytes as a big-endian integer, reduced mod q. b and k aren't drawn: each is an HMAC over 32 drawn bytes and what it must cover (§16.2).
 - **Counters** PN and N: u32, big-endian. **t:** u64, big-endian, Unix seconds.
 - **F:** `cid (16) | t (8) | len (1) | to (len, at most 32) | len (1, 0 or 16) | replaces | p₀ (48) | A (48) | E_A (48) | c (32) | z (32)` (§3). `to` is the asset name's raw bytes, not hex.
   - The proof's c and z are there exactly when `to`'s length isn't 0. An F with an empty `to` must have a `replaces`: it's a continuation. Anything else is refused.
   - z must be below q; c is any 32 bytes.
   - So F is 186 bytes for a continuation, and 235 to 282 from a handle.
   - **F′** is F without c and z: what the proof's challenge covers.
+  - **F's head** is F's bytes before p₀, `cid | t | len | to | len | replaces`: what b covers, since p₀ follows from b.
 - **The ratchet header:** `DHs (48) | PN (4) | N (4)`, 56 bytes.
 - **The associated data:** `cid (16) | p₀ | A | p₀ | w₀ | header (56)`, 264 bytes: cid ‖ R_A ‖ R_B ‖ header. w₀ must stay in it (§3).
 - **The ratchet ciphertext:** `salt (16) | AES-256-GCM ciphertext | tag (16)`.
@@ -462,14 +463,23 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 | ENCRYPT(mk, m, ad) | key ‖ nonce = HKDF-SHA256(salt = a fresh 16-byte salt, ikm = mk, info = `Seedelf-Messaging\|v1\|ratchet\|message`), 44 bytes; the output is salt ‖ AES-256-GCM(key, nonce, ad, m). |
 | The outer scalar o | HKDF-SHA256(salt = ENCRYPT's salt, ikm = mk, info = `Seedelf-Messaging\|v1\|ratchet\|outer`), 64 bytes, as a big-endian integer mod q. The envelope goes to ([o]p₀, [o]V), V the recipient's public value on p₀. An o of 0 (probability 2⁻²⁵⁴) sends nothing, and a retry draws a new salt. |
 | The ratchet | The Double Ratchet specification's RatchetEncrypt, RatchetDecrypt, SkipMessageKeys and DHRatchet, with §16.4's bounds. |
-| The base proof | For the handle (g_S, v_S) and p₀ = [b]g_S: T = [k]g_S; c = SHA-256(`Seedelf-Messaging\|v1\|session\|base` ‖ g_S ‖ v_S ‖ p₀ ‖ T ‖ F′), the points compressed; z = k + (c mod q)·b mod q. The reader computes T′ = [z]g_S − [c mod q]p₀ and accepts if the same hash with T′ is c. |
+| b | For the handle (g_S, v_S): HMAC-SHA-512(key = x_A as 32 big-endian bytes, message = `Seedelf-Messaging\|v1\|session\|base-scalar` ‖ g_S ‖ v_S ‖ F's head ‖ aux_b), the points compressed and aux_b 32 drawn bytes; its 64 bytes as a big-endian integer, reduced mod q. A b of 0 (probability about 2⁻²⁵⁵) draws aux_b again. Then p₀ = [b]g_S and w₀ = [b]v_S. |
+| The base proof | For the handle (g_S, v_S) and p₀ = [b]g_S: k = HMAC-SHA-512(key = b as 32 big-endian bytes, message = `Seedelf-Messaging\|v1\|session\|base-nonce` ‖ g_S ‖ v_S ‖ p₀ ‖ F′ ‖ aux_k), aux_k 32 drawn bytes, reduced mod q as b is, a k of 0 drawing aux_k again; T = [k]g_S; c = SHA-256(`Seedelf-Messaging\|v1\|session\|base` ‖ g_S ‖ v_S ‖ p₀ ‖ T ‖ F′), the points compressed; z = k + (c mod q)·b mod q. The reader computes T′ = [z]g_S − [c mod q]p₀ and accepts if the same hash with T′ is c. |
 | The stamp | digest = SHA-256(`Seedelf-Messaging\|v1\|session\|stamp` ‖ F); its work is the leading zero bits of SHA-256(digest ‖ nonce (8, big-endian)), counted from the most significant bit of the first byte, as the relay's stamp's are (§17.3). |
+
+Every label is its ASCII bytes, with no length or terminator.
+
+**Why b and k are derived, not drawn** ([joint-security.md](joint-security.md), rule 2). Both are hedged as the reveal's nonce is (§19.2), so a random source that fails, repeats or is predictable costs nothing here.
+- **b blinds A.** (p₀, A) = ([b]g_S, [b][x_A]g_S) is a random register of x_A while b is secret. Whoever learns b gets [x_A]g_S = [b⁻¹]A on a generator of their choosing: a static Diffie–Hellman answer on the spending key. Keyed by x_A, b is secret whatever the source does. Its message holds the handle and F's head, so another handle, name, time or cid gives another b.
+- **k must never meet two challenges,** or b = (z − z′)/(c − c′). Its message holds everything the challenge covers except T, which follows from k. So the same values give the same proof again, and anything else gives another k.
+- **k is keyed by b,** the witness it hides, as RFC 6979 keys a nonce by the signing key. The proof then depends on b alone, and x_A meets one HMAC here, not two. A k keyed by x_A would add nothing: k only has to stay as secret as b.
+- **Before this, both were drawn,** in the order b, cid, e_A, s_A, k. A stuck source gave k = b, and then z = b(1 + c) gave b away from one F.
 
 ### 16.3 Random draws
 
 Every random value comes from the operating system. To make vectors, each operation draws in a fixed order:
 
-- **Starting from a handle:** b (the re-randomization of the handle into R_B), cid, e_A, s_A, then the proof's k.
+- **Starting from a handle:** cid, then 32 bytes aux_b for b (the re-randomization of the handle into R_B, §16.2), then e_A, s_A, then 32 bytes aux_k for the proof's k. A b or k of 0 draws its aux again, before anything else is drawn.
 - **Starting a continuation:** cid, e_A, s_A. There's no b and no k: the base is the old one, with no handle to prove.
 - **The stamp** isn't drawn: the vectors take the first nonce from 0 with enough work. The wallet searches as it likes.
 - **Sending:** the ratchet's salt, then the outer envelope's r. Its b is the outer scalar, not a draw.
@@ -525,18 +535,19 @@ The wallet's private format, versioned by its first byte; another implementation
 3. The smallest first contact (a root register under a 1-byte `to`, no `replaces`), with 18 and 19 bytes of text, read last first.
 4. A fresh start from a handle under its full name with a `replaces` (F at its largest, 282 bytes), whose proof's challenge is at least q, so F carries it unreduced; an 8 KiB message; and a ratchet step that skips the rest of the old receiving chain (PN − Nr = 1), whose skipped message is read last.
 
-**Encodings.** Every byte string is lowercase hex, `to` included: the hex of its raw bytes. `t`, `at`, `delivers`, `envelope_size` and the stamp's `bits`, `nonce` and `work` are JSON numbers. An absent value (`handle`, `replaces`, `base_proof`, `ratchet_step`) is null.
+**Encodings.** Every byte string is lowercase hex, `to` included: the hex of its raw bytes. `t`, `at`, `delivers`, `envelope_size` and the stamp's `bits`, `nonce` and `work` are JSON numbers. An absent value (`handle`, `replaces`, `base_scalar`, `base_proof`, `ratchet_step`) is null.
 
 **The fields.** Each session gives:
 - `name`, and for a continuation `continues`, the name of the session it continues;
 - `initiator_secret_key` (x_A) and `responder_secret_key` (x_B);
 - `handle` (`generator`, `public_value`; null for a continuation), `t`, `to` and `replaces`;
-- the start's `draws` (`cid`, `e_A`, `s_A`, and `b` and `k` from a handle);
-- `base_proof`: null for a continuation, else F′ as `first_contact_prefix`, T as `commitment`, `challenge`, `challenge_scalar` (c mod q) and `response`;
+- the start's `draws` (`cid`, `e_A`, `s_A`, and `aux_b` and `aux_k` from a handle), in §16.3's order, though the file's keys are sorted;
+- `base_scalar`: null for a continuation, else b's HMAC: its `message`, its 64-byte output `hmac`, and `scalar` (b);
+- `base_proof`: null for a continuation, else F′ as `first_contact_prefix`, the `nonce` (its HMAC's `message` and `hmac`, and `scalar`, k), T as `commitment`, `challenge`, `challenge_scalar` (c mod q) and `response`;
 - `stamp`: `digest`, `bits`, `nonce`, the `hash` of digest and nonce, and its `work`. The file's `first_contact_stamp_bits` is 24, and each stamp's nonce is the first from 0 with that work;
 - §3's values: `base` (p₀), `initiator_public` (A), `responder_public` (w₀), `ephemeral` (E_A), `ratchet_public` (S_A), `first_contact` (F), `ephemeral_dh` ([e_A]w₀), `static_dh` ([x_A]w₀), `session_key` (SK), `init_dh` ([s_A]w₀), and RatchetInitAlice's `root_key` and `sending_chain_key`.
 
-The file also has `version` (1), `description`, `envelope_sizes`, `first_contact_stamp_bits`, and `labels`: `session_salt`, `session_info`, `base_label`, `stamp_label`, `root_info`, `message_info` and `outer_info`, §16.2's strings.
+The file also has `version` (1), `description`, `envelope_sizes`, `first_contact_stamp_bits`, and `labels`: `session_salt`, `session_info`, `base_scalar_label`, `base_nonce_label`, `base_label`, `stamp_label`, `root_info`, `message_info` and `outer_info`, §16.2's strings.
 
 Then `events`, in order:
 - **A send:** `from` (initiator or responder), `kind` (`first-contact` or `session`), `plaintext`, `chain_key` (before it), `message_key`, `next_chain_key`, `header`, `associated_data`, ENCRYPT's `salt`, `aes_key` and `nonce`, `ratchet_ciphertext`, `inner` (the inner message, unpadded), `envelope_size`, the outer scalar's HKDF output `outer_okm` and the scalar `outer_scalar`, the envelope's draw `outer_r`, and `envelope`.

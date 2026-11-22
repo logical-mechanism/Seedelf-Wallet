@@ -22,11 +22,12 @@ use crate::envelope::ENVELOPE_OVERHEAD;
 use crate::keys::scalar_mod_q;
 use crate::register::Register;
 use crate::relay::{find_stamp, stamp_bits};
-use crate::session::conversation::Conversation;
-use crate::session::draw::Draw;
+use crate::session::conversation::{Conversation, Origin};
+use crate::session::draw::hedge_okm;
 use crate::session::first_contact::{
-    BASE_LABEL, FIRST_CONTACT_STAMP_BITS, FIRST_STAMP_LABEL, SESSION_INFO, SESSION_SALT,
-    base_challenge, session_key,
+    BASE_LABEL, BASE_NONCE_LABEL, BASE_SCALAR_LABEL, FIRST_CONTACT_STAMP_BITS, FIRST_STAMP_LABEL,
+    SESSION_INFO, SESSION_SALT, base_challenge, base_nonce_message, base_scalar_message,
+    head_bytes, prove_base_with_nonce, session_key,
 };
 use crate::session::inbox::{Continues, Inbox, Received};
 use crate::session::ratchet::{
@@ -229,8 +230,24 @@ fn accept(by: &mut Side, envelope: &[u8], at: u64, sk: &Secret32, draw: &mut See
     })
 }
 
+/// A hedged scalar's HMAC (§16.2): its message, its 64-byte output, and the
+/// scalar, the output reduced mod q.
+fn hedged_json(key: &blstrs::Scalar, message: &[u8]) -> (blstrs::Scalar, Value) {
+    let okm = hedge_okm(key, message);
+    let scalar = scalar_mod_q(&okm[..]);
+    (
+        scalar,
+        json!({
+            "message": hex(message),
+            "hmac": hex(&okm[..]),
+            "scalar": hex(scalar.to_bytes_be()),
+        }),
+    )
+}
+
 /// The start's values, and its stamp, which it sets. `handle` is `None` for
-/// a continuation.
+/// a continuation. A start from a handle draws `cid`, `b`'s aux, `e_A`,
+/// `s_A` and `k`'s aux; a continuation `cid`, `e_A` and `s_A` (§16.3).
 fn start_json(
     initiator: &mut Side,
     responder: &Side,
@@ -241,11 +258,20 @@ fn start_json(
     let stamp = stamp_of(initiator.conversation.as_mut().unwrap(), index);
     let conversation = initiator.conversation.as_ref().unwrap();
     let first = &conversation.first;
-    let (b, rest) = match handle {
-        Some(_) => (Some(&drawn[0]), &drawn[1..]),
-        None => (None, drawn),
+    // The other draws, cid, e_A and s_A, and from a handle the aux of `b`
+    // and of `k`.
+    let aux = |i: usize| -> [u8; 32] { drawn[i].clone().try_into().unwrap() };
+    let (rest, auxes) = match handle {
+        Some(_) => {
+            assert_eq!(drawn.len(), 5, "cid, b's aux, e_A, s_A, k's aux");
+            ([&drawn[0], &drawn[2], &drawn[3]], Some((aux(1), aux(4))))
+        }
+        None => {
+            assert_eq!(drawn.len(), 3, "cid, e_A, s_A");
+            ([&drawn[0], &drawn[1], &drawn[2]], None)
+        }
     };
-    assert_eq!(rest.len(), if handle.is_some() { 4 } else { 3 });
+    assert_eq!(rest[0][..], first.cid.0);
     let e = crate::keys::scalar_from_bytes(&rest[1].clone().try_into().unwrap()).unwrap();
     let s = crate::keys::scalar_from_bytes(&rest[2].clone().try_into().unwrap()).unwrap();
     let w0 = G1Projective::from(conversation.responder);
@@ -266,26 +292,44 @@ fn start_json(
     let (rk, cks) = kdf_rk(&sk, &init_dh);
     assert_eq!(conversation.ratchet.rk, rk);
     let mut draws = json!({
-        "cid": hex(&rest[0]),
-        "e_A": hex(&rest[1]),
-        "s_A": hex(&rest[2]),
+        "cid": hex(rest[0]),
+        "e_A": hex(rest[1]),
+        "s_A": hex(rest[2]),
     });
+    let mut base_scalar = Value::Null;
     let mut base_proof = Value::Null;
-    if let (Some(b), Some(handle)) = (b, handle) {
-        draws["b"] = json!(hex(b));
-        draws["k"] = json!(hex(&rest[3]));
-        // The proof, recomputed from its definition.
-        let k = crate::keys::scalar_from_bytes(&rest[3].clone().try_into().unwrap()).unwrap();
-        let b = crate::keys::scalar_from_bytes(&b.clone().try_into().unwrap()).unwrap();
-        let commitment = (handle.generator() * k).to_affine();
+    if let (Some((aux_b, aux_k)), Some(handle)) = (auxes, handle) {
+        draws["aux_b"] = json!(hex(aux_b));
+        draws["aux_k"] = json!(hex(aux_k));
+        // b, recomputed from its definition: the base and w₀ follow from it.
+        let head = head_bytes(&first.cid, first.started_at, &first.to, first.replaces);
+        let (b, b_json) = hedged_json(
+            &initiator.key.scalar(),
+            &base_scalar_message(handle, &head, &aux_b),
+        );
+        assert_eq!((handle.generator() * b).to_affine(), first.base);
+        assert_eq!(
+            (handle.public_value() * b).to_affine(),
+            conversation.responder
+        );
+        base_scalar = b_json;
+        // The proof, recomputed from its definition, k from b.
         let prefix = first.prefix_bytes();
+        let (k, nonce) = hedged_json(
+            &b,
+            &base_nonce_message(handle, &first.base, &prefix, &aux_k),
+        );
+        assert_ne!(k, b);
+        let commitment = (handle.generator() * k).to_affine();
         let challenge = base_challenge(handle, &first.base, &commitment, &prefix);
         let proof = first.proof.unwrap();
+        assert_eq!(proof, prove_base_with_nonce(handle, &b, &k, &prefix));
         assert_eq!(proof.challenge, challenge);
         assert_eq!(proof.response, k + scalar_mod_q(&challenge) * b);
         assert!(first.proves_base(handle));
         base_proof = json!({
             "first_contact_prefix": hex(&prefix),
+            "nonce": nonce,
             "commitment": hex(commitment.to_compressed()),
             "challenge": hex(challenge),
             "challenge_scalar": hex(scalar_mod_q(&challenge).to_bytes_be()),
@@ -301,6 +345,7 @@ fn start_json(
             "to": hex(&first.to),
             "replaces": first.replaces.map(|cid| hex(cid.0)),
             "draws": draws,
+            "base_scalar": base_scalar,
             "base_proof": base_proof,
             "stamp": stamp,
             "base": hex(first.base.to_compressed()),
@@ -353,6 +398,12 @@ fn with_events(mut start: Value, name: &str, mut events: Vec<Value>) -> Value {
     start["name"] = json!(name);
     start["events"] = json!(events);
     start
+}
+
+/// Whether the base proof's challenge, as F carries it, is below q.
+fn challenge_is_canonical(conversation: &Conversation) -> bool {
+    let challenge = conversation.first.proof.unwrap().challenge;
+    Option::<blstrs::Scalar>::from(blstrs::Scalar::from_bytes_be(&challenge)).is_some()
 }
 
 fn all_vectors() -> Value {
@@ -503,37 +554,32 @@ fn all_vectors() -> Value {
         })
         .find(|draw| {
             let mut trial = Seeded::new(&draw.label);
-            let b = trial.scalar();
-            let rb = crate::register::rerandomize_with(&frank_handle, &b);
             let c = Conversation::begin(
                 &erin.key,
-                rb.generator().to_affine(),
-                rb.public_value().to_affine(),
+                Origin::Handle(&frank_handle),
                 &name,
                 Some(replaces),
-                Some((&frank_handle, &b)),
                 t + 3600,
                 &mut trial,
             )
             .unwrap();
-            let challenge = c.first.proof.unwrap().challenge;
-            Option::<blstrs::Scalar>::from(blstrs::Scalar::from_bytes_be(&challenge)).is_none()
+            !challenge_is_canonical(&c)
         })
         .unwrap();
-    let b = draw.scalar();
-    let rb = crate::register::rerandomize_with(&frank_handle, &b);
     erin.conversation = Some(
         Conversation::begin(
             &erin.key,
-            rb.generator().to_affine(),
-            rb.public_value().to_affine(),
+            Origin::Handle(&frank_handle),
             &name,
             Some(replaces),
-            Some((&frank_handle, &b)),
             t + 3600,
             &mut draw,
         )
         .unwrap(),
+    );
+    assert!(
+        !challenge_is_canonical(erin.conversation.as_ref().unwrap()),
+        "session 4's challenge is at least q, so F carries it unreduced"
     );
     let drawn = draw.drain();
     let (start, sk) = start_json(&mut erin, &frank, Some(&frank_handle), &drawn, 3);
@@ -574,11 +620,13 @@ fn all_vectors() -> Value {
     );
 
     json!({
-        "description": "Seedelf Messaging session layer v1 test vectors (docs/protocol.md §3, §4, §9 and §16). Scalars are 32-byte big-endian; points are 48-byte compressed G1. Every random value is given under `draws`, `salt`, `outer_r` and `new_ratchet_secret`; the first-contact stamp's nonce is the first from 0 with `bits` of work. The outer envelope is v1 (tests/vectors/messaging_v1.json) with b = outer_scalar and the given r, sealing the inner message padded with 0x80 then zeros to envelope_size - 161 bytes.",
+        "description": "Seedelf Messaging session layer v1 test vectors (docs/protocol.md §3, §4, §9 and §16). Scalars are 32-byte big-endian; points are 48-byte compressed G1. Every random value is given under `draws`, `salt`, `outer_r` and `new_ratchet_secret`; b and the base proof's k aren't drawn but derived from `aux_b` and `aux_k` (§16.2), with their HMACs under `base_scalar` and `base_proof.nonce`; the first-contact stamp's nonce is the first from 0 with `bits` of work. The outer envelope is v1 (tests/vectors/messaging_v1.json) with b = outer_scalar and the given r, sealing the inner message padded with 0x80 then zeros to envelope_size - 161 bytes.",
         "version": 1,
         "labels": {
             "session_salt": String::from_utf8(SESSION_SALT.to_vec()).unwrap(),
             "session_info": String::from_utf8(SESSION_INFO.to_vec()).unwrap(),
+            "base_scalar_label": String::from_utf8(BASE_SCALAR_LABEL.to_vec()).unwrap(),
+            "base_nonce_label": String::from_utf8(BASE_NONCE_LABEL.to_vec()).unwrap(),
             "base_label": String::from_utf8(BASE_LABEL.to_vec()).unwrap(),
             "stamp_label": String::from_utf8(FIRST_STAMP_LABEL.to_vec()).unwrap(),
             "root_info": String::from_utf8(ROOT_INFO.to_vec()).unwrap(),
@@ -606,6 +654,105 @@ fn session_vectors_match_the_file() {
         serde_json::from_str(&std::fs::read_to_string(&path).expect("reads the vectors"))
             .expect("parses the vectors");
     assert_eq!(computed, recorded);
+}
+
+/// The file's b and k are HMAC-SHA-512 of exactly §16.2's messages, built
+/// here from the file's other values and the labels as §16.2 spells them,
+/// under x_A and b: what another implementation is held to, checked without
+/// the crate's own builders.
+#[test]
+fn the_files_b_and_k_are_the_hmacs_of_their_specified_messages() {
+    use hmac::{Hmac, Mac};
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(VECTORS);
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let bytes = |value: &Value| hex::decode(value.as_str().unwrap()).unwrap();
+    let hmac = |key: &[u8], message: &[u8]| {
+        let mut mac = <Hmac<sha2::Sha512> as Mac>::new_from_slice(key).unwrap();
+        mac.update(message);
+        mac.finalize().into_bytes().to_vec()
+    };
+    let point = |compressed: &[u8]| {
+        G1Projective::from(
+            blstrs::G1Affine::from_compressed(&compressed.try_into().unwrap()).unwrap(),
+        )
+    };
+    let scalar_label = b"Seedelf-Messaging|v1|session|base-scalar";
+    let nonce_label = b"Seedelf-Messaging|v1|session|base-nonce";
+    assert_eq!(
+        file["labels"]["base_scalar_label"]
+            .as_str()
+            .unwrap()
+            .as_bytes(),
+        scalar_label
+    );
+    assert_eq!(
+        file["labels"]["base_nonce_label"]
+            .as_str()
+            .unwrap()
+            .as_bytes(),
+        nonce_label
+    );
+    let mut from_handles = 0;
+    for session in file["sessions"].as_array().unwrap() {
+        let draws = &session["draws"];
+        if session["handle"].is_null() {
+            assert!(session["base_scalar"].is_null() && session["base_proof"].is_null());
+            assert!(draws.get("aux_b").is_none() && draws.get("aux_k").is_none());
+            continue;
+        }
+        let g = bytes(&session["handle"]["generator"]);
+        let v = bytes(&session["handle"]["public_value"]);
+        let f = bytes(&session["first_contact"]);
+        let to = bytes(&session["to"]);
+        let replaces = if session["replaces"].is_null() { 0 } else { 16 };
+        // F's head: cid, t, len, to, len, replaces.
+        let head = &f[..16 + 8 + 1 + to.len() + 1 + replaces];
+
+        // b, keyed by x_A's 32 bytes.
+        let mut message = scalar_label.to_vec();
+        for part in [&g, &v, &head.to_vec(), &bytes(&draws["aux_b"])] {
+            message.extend_from_slice(part);
+        }
+        assert_eq!(bytes(&session["base_scalar"]["message"]), message);
+        let okm = hmac(&bytes(&session["initiator_secret_key"]), &message);
+        assert_eq!(bytes(&session["base_scalar"]["hmac"]), okm);
+        let b = scalar_mod_q(&okm);
+        assert_eq!(bytes(&session["base_scalar"]["scalar"]), b.to_bytes_be());
+        let base = bytes(&session["base"]);
+        assert_eq!((point(&g) * b).to_compressed()[..], base[..]);
+        assert_eq!(
+            (point(&v) * b).to_compressed()[..],
+            bytes(&session["responder_public"])[..]
+        );
+
+        // k, keyed by b's 32 bytes, over everything the challenge covers but T.
+        let proof = &session["base_proof"];
+        let prefix = bytes(&proof["first_contact_prefix"]);
+        assert_eq!(prefix[..], f[..f.len() - 64]);
+        let mut message = nonce_label.to_vec();
+        for part in [&g, &v, &base, &prefix, &bytes(&draws["aux_k"])] {
+            message.extend_from_slice(part);
+        }
+        assert_eq!(bytes(&proof["nonce"]["message"]), message);
+        let okm = hmac(&b.to_bytes_be(), &message);
+        assert_eq!(bytes(&proof["nonce"]["hmac"]), okm);
+        let k = scalar_mod_q(&okm);
+        assert_eq!(bytes(&proof["nonce"]["scalar"]), k.to_bytes_be());
+        assert_ne!(k, b);
+        assert_eq!(
+            (point(&g) * k).to_compressed()[..],
+            bytes(&proof["commitment"])[..]
+        );
+        let challenge = bytes(&proof["challenge"]);
+        let z = k + scalar_mod_q(&challenge) * b;
+        assert_eq!(bytes(&proof["response"]), z.to_bytes_be());
+        assert_eq!(
+            f[f.len() - 64..],
+            [challenge, z.to_bytes_be().to_vec()].concat()
+        );
+        from_handles += 1;
+    }
+    assert_eq!(from_handles, 3);
 }
 
 /// The generator's keys are what their labels say: a check on the helper,

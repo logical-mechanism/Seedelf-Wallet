@@ -12,6 +12,7 @@ use zeroize::Zeroizing;
 use crate::Error;
 use crate::keys::scalar_mod_q;
 use crate::register::{POINT_LEN, Register, decode_point};
+use crate::session::draw::{Draw, hedged_scalar};
 use crate::session::secret::Secret32;
 
 /// Bytes in a conversation ID.
@@ -45,6 +46,13 @@ pub const STAMP_LEN: usize = 8;
 
 /// SHA-256's label for the proof's challenge.
 pub(crate) const BASE_LABEL: &[u8] = b"Seedelf-Messaging|v1|session|base";
+
+/// HMAC-SHA-512's label for `b`, keyed by the writer's key (§16.2).
+pub(crate) const BASE_SCALAR_LABEL: &[u8] = b"Seedelf-Messaging|v1|session|base-scalar";
+
+/// HMAC-SHA-512's label for the base proof's nonce `k`, keyed by `b`
+/// (§16.2).
+pub(crate) const BASE_NONCE_LABEL: &[u8] = b"Seedelf-Messaging|v1|session|base-nonce";
 
 /// SHA-256's label for the stamp's digest.
 pub(crate) const FIRST_STAMP_LABEL: &[u8] = b"Seedelf-Messaging|v1|session|stamp";
@@ -204,21 +212,9 @@ impl FirstContact {
             .into()
     }
 
-    /// F before its proof: what the proof's challenge covers.
+    /// F before its proof, F′: what the proof's challenge covers.
     pub(crate) fn prefix_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.len());
-        out.extend_from_slice(&self.cid.0);
-        out.extend_from_slice(&self.started_at.to_be_bytes());
-        // Both lengths are checked on construction and on parse.
-        out.push(self.to.len() as u8);
-        out.extend_from_slice(&self.to);
-        match self.replaces {
-            Some(cid) => {
-                out.push(CID_LEN as u8);
-                out.extend_from_slice(&cid.0);
-            }
-            None => out.push(0),
-        }
+        let mut out = head_bytes(&self.cid, self.started_at, &self.to, self.replaces);
         out.extend_from_slice(&self.base.to_compressed());
         out.extend_from_slice(&self.initiator.to_compressed());
         out.extend_from_slice(&self.ephemeral.to_compressed());
@@ -307,6 +303,73 @@ impl FirstContact {
     }
 }
 
+/// F's head: `cid | t | len | to | len | replaces`, F's bytes before `p₀`.
+/// What `b` covers ([`base_scalar`]), since `p₀` follows from it.
+pub(crate) fn head_bytes(
+    cid: &ConversationId,
+    started_at: u64,
+    to: &[u8],
+    replaces: Option<ConversationId>,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(FIRST_CONTACT_MAX_LEN);
+    out.extend_from_slice(&cid.0);
+    out.extend_from_slice(&started_at.to_be_bytes());
+    // Both lengths are checked on construction and on parse.
+    out.push(to.len() as u8);
+    out.extend_from_slice(to);
+    match replaces {
+        Some(cid) => {
+            out.push(CID_LEN as u8);
+            out.extend_from_slice(&cid.0);
+        }
+        None => out.push(0),
+    }
+    out
+}
+
+/// What `b`'s HMAC is over: `"Seedelf-Messaging|v1|session|base-scalar" ‖ g ‖
+/// v ‖ head ‖ aux`, with `(g, v)` the handle and `head` F's head.
+pub(crate) fn base_scalar_message(handle: &Register, head: &[u8], aux: &[u8; 32]) -> Vec<u8> {
+    let mut out = BASE_SCALAR_LABEL.to_vec();
+    out.extend_from_slice(&handle.to_bytes());
+    out.extend_from_slice(head);
+    out.extend_from_slice(aux);
+    out
+}
+
+/// `b`, the re-randomization of `handle` into the responder's identity:
+/// HMAC-SHA-512 keyed by the writer's key `x` over [`base_scalar_message`],
+/// with 32 drawn bytes of `aux`, reduced mod q ([`hedged_scalar`]).
+///
+/// It blinds the writer's `A = [x][b]g`: whoever learns `b` gets `[x]g` on a
+/// generator they chose. Keyed by `x`, it stays secret whatever the random
+/// source gives (docs/joint-security.md, rule 1 and rule 2).
+pub(crate) fn base_scalar(
+    x: &Scalar,
+    handle: &Register,
+    head: &[u8],
+    draw: &mut dyn Draw,
+) -> Scalar {
+    hedged_scalar(x, draw, |aux| base_scalar_message(handle, head, aux))
+}
+
+/// What the base proof's nonce's HMAC is over:
+/// `"Seedelf-Messaging|v1|session|base-nonce" ‖ g ‖ v ‖ p₀ ‖ F′ ‖ aux`.
+/// Everything the challenge covers but `T`, which follows from the nonce.
+pub(crate) fn base_nonce_message(
+    handle: &Register,
+    base: &G1Affine,
+    prefix: &[u8],
+    aux: &[u8; 32],
+) -> Vec<u8> {
+    let mut out = BASE_NONCE_LABEL.to_vec();
+    out.extend_from_slice(&handle.to_bytes());
+    out.extend_from_slice(&base.to_compressed());
+    out.extend_from_slice(prefix);
+    out.extend_from_slice(aux);
+    out
+}
+
 /// `c = SHA-256("Seedelf-Messaging|v1|session|base" ‖ g ‖ v ‖ p₀ ‖ T ‖ F′)`,
 /// with `(g, v)` the handle, `T` the commitment and `F′` F before its proof.
 pub(crate) fn base_challenge(
@@ -325,9 +388,32 @@ pub(crate) fn base_challenge(
         .into()
 }
 
-/// The proof that `base = [b]g` for `handle = (g, v)`, with the nonce `k`:
-/// `T = [k]g`, `c` from [`base_challenge`], `z = k + c·b`.
-pub(crate) fn prove_base(handle: &Register, b: &Scalar, k: &Scalar, prefix: &[u8]) -> BaseProof {
+/// The proof that `base = [b]g` for `handle = (g, v)`, F′ being `prefix`.
+/// Its nonce `k` is HMAC-SHA-512 keyed by `b` over [`base_nonce_message`],
+/// with 32 drawn bytes of `aux`, reduced mod q ([`hedged_scalar`]): so one
+/// `k` never meets two challenges, which would give `b` away.
+pub(crate) fn prove_base(
+    handle: &Register,
+    b: &Scalar,
+    prefix: &[u8],
+    draw: &mut dyn Draw,
+) -> BaseProof {
+    let base = (handle.generator() * b).to_affine();
+    let k = hedged_scalar(b, draw, |aux| {
+        base_nonce_message(handle, &base, prefix, aux)
+    });
+    prove_base_with_nonce(handle, b, &k, prefix)
+}
+
+/// The proof with the nonce `k` given: `T = [k]g`, `c` from
+/// [`base_challenge`], `z = k + c·b`. Only [`prove_base`] chooses `k`; the
+/// tests and vectors call this to check it.
+pub(crate) fn prove_base_with_nonce(
+    handle: &Register,
+    b: &Scalar,
+    k: &Scalar,
+    prefix: &[u8],
+) -> BaseProof {
     let base = (handle.generator() * b).to_affine();
     let commitment = (handle.generator() * k).to_affine();
     let challenge = base_challenge(handle, &base, &commitment, prefix);

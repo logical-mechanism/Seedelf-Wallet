@@ -11,7 +11,7 @@ use super::support::{
     test_inbox, test_scalar,
 };
 use crate::register::{Register, rerandomize_with};
-use crate::session::conversation::{Conversation, Role};
+use crate::session::conversation::{Conversation, Origin, Role};
 use crate::session::draw::Draw;
 use crate::session::first_contact::{
     BaseProof, ConversationId, FIRST_CONTACT_MAX_AGE, FirstContact, prove_base, session_key,
@@ -61,7 +61,7 @@ fn forge(forgery: &Forgery, text: &[u8], draw: &mut dyn Draw) -> Vec<u8> {
         (Some((handle, b)), _) => {
             assert_eq!(base_and_w0(handle, b).0, forgery.base);
             first.to = HANDLE_NAME.to_vec();
-            first.proof = Some(prove_base(handle, b, &draw.scalar(), &first.prefix_bytes()));
+            first.proof = Some(prove_base(handle, b, &first.prefix_bytes(), draw));
         }
         (None, None) => {
             first.to = HANDLE_NAME.to_vec();
@@ -361,15 +361,11 @@ fn case_07_a_known_cid_with_another_f() {
     let first = a.send_with(b"one", &mut draw).unwrap();
     // A second, genuine conversation of Alice's, forced to the same cid.
     let bob_handle = handle("bob", "h");
-    let b = test_scalar("case 7 b");
-    let (base, w0) = base_and_w0(&bob_handle, &b);
     let mut again = Conversation::begin(
         &alice,
-        base,
-        w0,
+        Origin::Handle(&bob_handle),
         HANDLE_NAME,
         None,
-        Some((&bob_handle, &b)),
         T + 5,
         &mut Fixed(a.cid().0, Seeded::new("case 7 again")),
     )
@@ -669,14 +665,11 @@ fn case_11_continuations() {
 
     // A fresh base, the right cid: Alice wrote fresh to Bob's handle.
     let bob_handle = handle("bob", "bob's handle");
-    let (base, w0) = base_and_w0(&bob_handle, &test_scalar("fresh"));
     let mut fresh = Conversation::begin(
         &p.alice,
-        base,
-        w0,
+        Origin::Handle(&bob_handle),
         HANDLE_NAME,
         Some(old),
-        Some((&bob_handle, &test_scalar("fresh"))),
         T,
         &mut p.draw,
     )
@@ -718,11 +711,12 @@ fn case_11_continuations() {
     let mallory = key("mallory");
     let mut on_the_base = Conversation::begin(
         &mallory,
-        p.a.first.base,
-        p.a.responder,
+        Origin::Base {
+            base: p.a.first.base,
+            responder: p.a.responder,
+        },
         b"",
         Some(old),
-        None,
         T,
         &mut p.draw,
     )
@@ -780,11 +774,12 @@ fn case_11_a_continuation_needs_the_old_base_itself() {
     // Bob's value on −p₀ is [−x](−p₀) = [x]p₀ = A.
     let mut other_base = Conversation::begin(
         &alice,
-        negated,
-        a.first.initiator,
+        Origin::Base {
+            base: negated,
+            responder: a.first.initiator,
+        },
         b"",
         Some(old),
-        None,
         T,
         &mut draw,
     )
@@ -883,15 +878,11 @@ fn case_13_sizes() {
     stamp(&mut a);
     assert_eq!(a.send_with(&[0; 18], &mut draw).unwrap().len(), 512);
     assert_eq!(a.send_with(&[0; 19], &mut draw).unwrap().len(), 2048);
-    let b = test_scalar("case 13 b");
-    let (base, w0) = base_and_w0(&bob_handle, &b);
     let mut full = Conversation::begin(
         &alice,
-        base,
-        w0,
+        Origin::Handle(&bob_handle),
         &[0x5e; 32],
         Some(ConversationId([5; 16])),
-        Some((&bob_handle, &b)),
         T,
         &mut draw,
     )
