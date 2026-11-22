@@ -175,7 +175,6 @@ From chunks 26, 26b and 26c ([archive/plans/](archive/plans/)). None breaks anyt
 - ⬜ **Show image and the connect window's CIP-95 switch** have never been through a findings round.
 - ⬜ **An arrow that turns itself off drops the focus** (pr335#4): in Transaction details' parts and in the box stepper. Move it to the other arrow, in both.
 - ⬜ **The launch review's smaller items** (its *Still open* #5): #14 and #15's refusals reach only the site; a chain's last window isn't watched until it lands; chain records live on one device; the Lovejoin page's buttons while a payment may still go through; one maybe-sent watch per network; `swaps.review.noBox` without the amount.
-- ⬜ **An e2e test's Decline can close its window under the click** (1.9.2's release): *a locked wallet asks for the password in the connector's window first* failed once on `main`'s store build (run 44605565348), its click on Decline ending in "Target page, context or browser has been closed". Let the click race the window's close. #393's own runs, on its PR and on `main`, passed it.
 
 ## Smaller features
 
