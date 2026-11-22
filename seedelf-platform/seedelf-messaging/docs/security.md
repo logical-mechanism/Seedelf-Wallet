@@ -85,7 +85,7 @@ Not proven here.
 - **Whatever reads can spend.** A client or service that scans for a Seedelf holds its spending key, and there's no read-only delegation under this choice. A scanning-only key would have to be a separate key, which means revisiting the choice.
 - **Decryption sits next to the spending key.** Any oracle on [x]·(an attacker's point), beyond what ECIES allows, would be an oracle on the spending key. The subgroup, identity and canonical-encoding checks are what make that safe. They're mandatory, and the tests hold them.
 - **Compromise of one is compromise of both.**
-- **Anyone can message any Seedelf,** since its register is public. Spam is the relay's concern: proof of work priced by traffic (protocol.md §17.4), which a GPU or a sender with many addresses can outpay.
+- **Anyone can message any Seedelf,** since its register is public. Spam is the relay's concern: proof of work priced by traffic, which a GPU can outpay, and a cap on what one address has in the pool (protocol.md §17.4), which a sender with many addresses can get around.
 - **No new derivation:** the wallet's frozen v1 derivation stays as it is.
 
 ## Implementation notes
@@ -164,5 +164,5 @@ A Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers) that the revealed S
 - The spending-and-reading argument, checked against the literature.
 - A constant-time review of the WebAssembly build. WebAssembly engines promise nothing about timing.
 - The session layer's model (54b), then an outside review of the protocol and of the reveal's proof, which the model doesn't cover.
-- The relay's price tuned with real use, and a memory-hard puzzle if GPUs flood it (protocol.md §17.4).
+- The relay's price and window tuned with real use, and a memory-hard puzzle if GPUs flood it (protocol.md §17.4).
 - A dependency audit (cargo-audit or cargo-deny) for this crate in CI.
