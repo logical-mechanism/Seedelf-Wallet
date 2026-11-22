@@ -3516,5 +3516,19 @@
   "messages.renameNote": "Solo tú ves este nombre, en este dispositivo. Nunca va en un mensaje.",
   "messages.nameLabel": "Tu nombre para ella",
   "messages.save": "Guardar",
-  "messages.removeName": "Quitar el nombre"
+  "messages.removeName": "Quitar el nombre",
+  "messages.reveal.button": "Mostrar mi Seedelf",
+  "messages.reveal.title": "Muestra tu Seedelf",
+  "messages.reveal.pick": "Tus Seedelfs",
+  "messages.privacy.reveal": "La otra persona sabrá que habla con el dueño de ese Seedelf. Solo ella puede verificarlo, así que no sirve como prueba ante nadie más.",
+  "messages.reveal.show": "Mostrarlo",
+  "messages.reveal.shown": "Mostraste tu Seedelf {{name}}",
+  "messages.reveal.verified": "Te mostró su Seedelf {{name}}, verificado en la cadena",
+  "messages.reveal.checking": "Te mostró un Seedelf; comprobándolo en la cadena",
+  "messages.warn.revealFailed": "Te mostró un Seedelf que no se pudo verificar, así que se omite el nombre de ese Seedelf.",
+  "messages.verifiedSeedelf": "Seedelf verificado {{name}}",
+  "messages.preview.revealIn": "Te mostró un Seedelf",
+  "messages.preview.revealOut": "Mostraste tu Seedelf",
+  "worker.messaging.notYourSeedelf": "Ese Seedelf ya no es de esta billetera.",
+  "worker.messaging.cantRevealYet": "Solo quien escribió primero puede mostrar un Seedelf, y solo cuando el otro lado ya respondió."
 }

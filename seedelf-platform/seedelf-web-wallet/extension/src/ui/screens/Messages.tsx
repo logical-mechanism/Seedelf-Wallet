@@ -10,6 +10,12 @@
 // names are protocol.md §7's labels; a message's states are §6's and §10's:
 // "sent, expires at …", never "delivered"; "missing", never "expired".
 // Nothing in a message starts a payment: its text is shown as text.
+//
+// Where the user wrote first and has a reply, Show my Seedelf proves one of
+// the wallet's Seedelfs to the other side (§19, call 15). A Seedelf the other
+// side showed names the conversation only once it's verified; one that
+// isn't is never named, since an unverified "says they're …" would be a tool
+// for phishing.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
@@ -25,9 +31,10 @@ import {
 } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
-import { useContacts } from "../components/Contacts";
-import { BackIcon, MessageIcon, PencilIcon, PenIcon, SendIcon, TrashIcon } from "../components/Icons";
+import { ContactEditor, useContacts } from "../components/Contacts";
+import { BackIcon, MessageIcon, PencilIcon, PenIcon, SendIcon, ShieldIcon, TrashIcon } from "../components/Icons";
 import { Modal } from "../components/Modal";
+import { RadioCards } from "../components/RadioCards";
 import { pressedBack, useBrowserBack } from "../history";
 import {
   conversationDetail,
@@ -38,6 +45,9 @@ import {
   initialOf,
   listTimeOf,
   onMessagingChanged,
+  ownShown,
+  seedelfOf,
+  seedelfShown,
   timeOf,
   utf8Length,
 } from "../messaging";
@@ -71,7 +81,7 @@ export function Messages({
   const t = useT();
   const wide = useWide();
   const [open, setOpen] = useState<Open>();
-  const [contacts] = useContacts();
+  const [contacts, setContacts] = useContacts();
   const on = overview?.on === true;
 
   // A pane's action that finishes after the user moved on (a reply's accept, a start, a restart) leaves them where they
@@ -116,6 +126,7 @@ export function Messages({
         draft={open.draft}
         on={on}
         contacts={contacts}
+        onContacts={setContacts}
         titleOf={titleOf}
         onBack={wide ? undefined : () => setOpen(undefined)}
         onOpen={(cid) => from(open)({ kind: "thread", cid })}
@@ -385,13 +396,12 @@ function ConversationRow({
 }) {
   const t = useT();
   const title = conversationTitle(c, contacts);
-  const known = (c.role === "initiator" && !!c.handle) || !!c.name;
+  const seedelf = seedelfOf(c);
+  const known = !!seedelf || !!c.name;
   // A Seedelf no contact names goes by its tag, which anyone can mint: its name's last sixteen beside it, the part no
   // one else can choose, so two Seedelfs tagged alike don't read as one.
   const tail =
-    !c.name && c.handle && c.role === "initiator" && !contacts?.some((x) => x.kind === "seedelf" && x.value === c.handle)
-      ? `…${c.handle.slice(-16)}`
-      : undefined;
+    !c.name && seedelf && !contacts?.some((x) => x.kind === "seedelf" && x.value === seedelf) ? `…${seedelf.slice(-16)}` : undefined;
   const state = c.restartedAs
     ? t("messages.state.restarted")
     : c.unreachable
@@ -400,7 +410,15 @@ function ConversationRow({
         ? t("messages.state.noReply")
         : undefined;
   const preview =
-    c.last === undefined ? "" : c.last.text === undefined ? t("messages.unreadable") : c.last.dir === "out" ? t("messages.you", { text: c.last.text }) : c.last.text;
+    c.last === undefined
+      ? ""
+      : c.last.reveal
+        ? t(c.last.dir === "out" ? "messages.preview.revealOut" : "messages.preview.revealIn")
+        : c.last.text === undefined
+          ? t("messages.unreadable")
+          : c.last.dir === "out"
+            ? t("messages.you", { text: c.last.text })
+            : c.last.text;
   return (
     <button type="button" className="convo" aria-current={current ? "true" : undefined} onClick={onOpen} data-testid="messages-conversation">
       <span className={known ? "convo__mark" : "convo__mark convo__mark--unknown"} aria-hidden="true">
@@ -498,6 +516,7 @@ function ThreadPane({
   draft,
   on,
   contacts,
+  onContacts,
   titleOf,
   onBack,
   onOpen,
@@ -507,6 +526,7 @@ function ThreadPane({
   draft?: Draft;
   on: boolean;
   contacts: Contact[] | undefined;
+  onContacts: (contacts: Contact[]) => void;
   titleOf: (cid: string) => string | undefined;
   onBack?: () => void;
   onOpen: (cid: string) => void;
@@ -519,6 +539,9 @@ function ThreadPane({
   const [again, setAgain] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [naming, setNaming] = useState(false);
+  const [revealing, setRevealing] = useState(false);
+  // A Seedelf the other side showed, verified, being saved to the contacts.
+  const [saving, setSaving] = useState<string>();
   // A reply's text that wasn't sent, offered once: Start again, then Cancel, doesn't bring it back.
   const [kept, setKept] = useState(draft);
 
@@ -567,7 +590,7 @@ function ThreadPane({
     <div className="thread" data-testid="thread">
       <PaneHead
         title={title}
-        known={(c.role === "initiator" && !!c.handle) || !!c.name}
+        known={!!seedelfOf(c) || !!c.name}
         detail={conversationDetail(c, contacts, titleOf)}
         onBack={onBack}
         onRename={() => setNaming(true)}
@@ -576,6 +599,8 @@ function ThreadPane({
       <MessageList
         messages={thread.messages}
         on={on}
+        contacts={contacts}
+        onSave={setSaving}
         before={
           <>
             {thread.trimmed > 0 && <li className="thread__note">{t("messages.trimmed", { count: thread.trimmed })}</li>}
@@ -627,6 +652,14 @@ function ThreadPane({
           </button>
         </div>
       )}
+      {/* Once answered, where this wallet wrote first: its Seedelf, proved to the other side alone (§19). */}
+      {!c.restartedAs && !restarting && thread.seedelfs && (
+        <div className="thread__actions">
+          <button type="button" className="link" onClick={() => setRevealing(true)} data-testid="thread-reveal">
+            {t("messages.reveal.button")}
+          </button>
+        </div>
+      )}
       {!c.restartedAs && (
         <Composer
           key={restarting ? "again" : "send"}
@@ -649,7 +682,95 @@ function ThreadPane({
         />
       )}
       {naming && <NameConversation cid={cid} name={c.name} onClose={() => setNaming(false)} />}
+      {revealing && thread.seedelfs && (
+        <RevealSeedelf
+          cid={cid}
+          seedelfs={thread.seedelfs}
+          onClose={() => setRevealing(false)}
+          onShown={() => {
+            setRevealing(false);
+            load();
+          }}
+        />
+      )}
+      {saving !== undefined && (
+        <ContactEditor
+          value={saving}
+          onClose={() => setSaving(undefined)}
+          onSaved={(next) => {
+            setSaving(undefined);
+            onContacts(next);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Shows the other side one of the wallet's Seedelfs (protocol.md §19): they all share its key, so any proves the same
+ * owner, and the one picked is the one named. Only they can check it.
+ */
+function RevealSeedelf({
+  cid,
+  seedelfs,
+  onClose,
+  onShown,
+}: {
+  cid: string;
+  seedelfs: string[];
+  onClose: () => void;
+  onShown: () => void;
+}) {
+  const t = useT();
+  const [name, setName] = useState(seedelfs.length === 1 ? seedelfs[0] : undefined);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  async function show() {
+    if (!name) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await call("messaging-reveal", { cid, name });
+      onShown();
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  }
+  return (
+    <Modal
+      title={t("messages.reveal.title")}
+      titleId="messages-reveal-title"
+      onClose={onClose}
+      foot={
+        <>
+          <button type="button" className="primary" onClick={() => void show()} disabled={busy || !name} data-testid="messages-reveal-show">
+            {t("messages.reveal.show")}
+          </button>
+          <button type="button" className="secondary" onClick={onClose} disabled={busy}>
+            {t("common.cancel")}
+          </button>
+        </>
+      }
+    >
+      <div className="stack">
+        <RadioCards
+          label={t("messages.reveal.pick")}
+          id="messages-reveal-pick"
+          value={name}
+          onChange={setName}
+          testId="messages-reveal-pick"
+          options={seedelfs.map((s) => ({ value: s, label: ownShown(s), icon: <ShieldIcon size={16} /> }))}
+        />
+        <Callout tone="privacy">{t("messages.privacy.reveal")}</Callout>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -724,7 +845,20 @@ function NameConversation({ cid, name, onClose }: { cid: string; name?: string; 
 }
 
 /** The messages of a thread or a request, by day, the newest at the foot, kept in view as more arrive. */
-function MessageList({ messages, on, before }: { messages: MessagingEntry[]; on: boolean; before?: ReactNode }) {
+function MessageList({
+  messages,
+  on,
+  before,
+  contacts,
+  onSave,
+}: {
+  messages: MessagingEntry[];
+  on: boolean;
+  before?: ReactNode;
+  contacts?: Contact[];
+  /** Saves a verified Seedelf the other side showed to the contacts. */
+  onSave?: (name: string) => void;
+}) {
   const t = useT();
   const scroller = useRef<HTMLDivElement>(null);
   const atFoot = useRef(true);
@@ -756,10 +890,14 @@ function MessageList({ messages, on, before }: { messages: MessagingEntry[]; on:
                 {d}
               </li>
             ),
-            <li key={m.id} className={`bubble bubble--${m.dir}`} data-testid="bubble">
-              <p className={m.text === undefined ? "bubble__text bubble__text--unreadable" : "bubble__text"}>
-                {m.text ?? t("messages.unreadable")}
-              </p>
+            <li key={m.id} className={`bubble bubble--${m.dir}${m.reveal ? " bubble--reveal" : ""}`} data-testid="bubble">
+              {m.reveal ? (
+                <RevealText reveal={m.reveal} contacts={contacts} onSave={onSave} />
+              ) : (
+                <p className={m.text === undefined ? "bubble__text bubble__text--unreadable" : "bubble__text"}>
+                  {m.text ?? t("messages.unreadable")}
+                </p>
+              )}
               <span className="bubble__meta">
                 {timeOf(m.at)}
                 {m.dir === "out" && m.sent && <SentState entry={m} on={on} now={now} />}
@@ -769,6 +907,58 @@ function MessageList({ messages, on, before }: { messages: MessagingEntry[]; on:
         })}
       </ol>
     </div>
+  );
+}
+
+/**
+ * A reveal's message (protocol.md §19): the user's own Seedelf shown; or the other side's, checking, verified with its
+ * name (a contact's, else its tag and the part of its name no one else can choose) and Save to contacts, or failed,
+ * never named.
+ */
+function RevealText({
+  reveal,
+  contacts,
+  onSave,
+}: {
+  reveal: NonNullable<MessagingEntry["reveal"]>;
+  contacts?: Contact[];
+  onSave?: (name: string) => void;
+}) {
+  const t = useT();
+  if (reveal.status === "shown" && reveal.name) {
+    return (
+      <p className="bubble__text" data-testid="bubble-reveal">
+        {t("messages.reveal.shown", { name: ownShown(reveal.name) })}
+      </p>
+    );
+  }
+  if (reveal.status === "verified" && reveal.name) {
+    const shown = seedelfShown(reveal.name, contacts);
+    const saved = contacts?.some((c) => c.kind === "seedelf" && c.value === reveal.name);
+    return (
+      <>
+        <p className="bubble__text" data-testid="bubble-reveal">
+          {t("messages.reveal.verified", { name: `${shown.title} (${shown.short})` })}
+        </p>
+        {!saved && onSave && (
+          <button type="button" className="link bubble__action" onClick={() => onSave(reveal.name!)} data-testid="bubble-reveal-save">
+            {t("destination.saveToContacts")}
+          </button>
+        )}
+      </>
+    );
+  }
+  if (reveal.status === "checking") {
+    return (
+      <p className="bubble__text bubble__text--unreadable" data-testid="bubble-reveal">
+        {t("messages.reveal.checking")}
+      </p>
+    );
+  }
+  return (
+    <p className="bubble__text bubble__text--unreadable" data-testid="bubble-reveal">
+      {t("messages.warn.revealFailed")}
+    </p>
   );
 }
 

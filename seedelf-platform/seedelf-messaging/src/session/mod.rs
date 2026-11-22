@@ -1,5 +1,6 @@
 //! Seedelf Messaging's session layer: one-to-one conversations with the
-//! Double Ratchet inside v1 envelopes (docs/protocol.md §3 to §6).
+//! Double Ratchet inside v1 envelopes (docs/protocol.md §3 to §6), and the
+//! verified reveal of a Seedelf inside one (§19).
 //!
 //! Plain Rust with no network, no storage and no clock: the caller passes
 //! `now`, in Unix seconds by the reader's clock, and stores the bytes each
@@ -44,6 +45,7 @@ mod draw;
 mod first_contact;
 mod inbox;
 mod ratchet;
+mod reveal;
 mod secret;
 mod wire;
 
@@ -64,6 +66,7 @@ pub use ratchet::{
     Header, MAX_SKIP, MAX_STORED_SKIPPED, RATCHET_HEADER_LEN, RATCHET_OVERHEAD, RATCHET_SALT_LEN,
     SKIPPED_KEY_LIFETIME,
 };
+pub use reveal::{REVEAL_MAX_LEN, REVEAL_MIN_LEN, REVEAL_PROOF_LEN, Reveal};
 pub use wire::{
     ENVELOPE_SIZES, FIRST_CONTACT_TYPE, MAX_ENVELOPE_LEN, Opened, SESSION_OVERHEAD, SESSION_TYPE,
     inner_capacity, open,

@@ -504,8 +504,9 @@ Lovejoin is a mixer. Each pool holds boxes of one value: ADA alone, or a set amo
   - each message posted, from this IP address, when, and its size, padded to 512 B, 2, 8 or 32 KiB;
   - a count of each address's recent posts, in memory, to price the next against floods. Nothing of it is logged.
 - **What it can link is timing.** Posts from one address are one sender's to it, and a reply soon after a message arrives, from another address, hints that the two talk. Who a message is for, and what it says, it can't see.
-- **Writing first to a Seedelf looks it up** on the Cardano server, as Send does: that server sees which Seedelf this IP address is about to write to.
-- **A first message names no Seedelf of the writer's.** The reader sees an unknown sender, and the Seedelf it was written to, which its proof shows: nothing ties the writer to a Seedelf unless the text does.
+- **Writing first to a Seedelf looks it up** as Send does, in the contract the wallet reads whole: the Cardano server sees a read of the contract, never which Seedelf was looked for.
+- **A first message names no Seedelf of the writer's.** The reader sees an unknown sender, and the Seedelf it was written to, which its proof shows: nothing ties the writer to a Seedelf unless the text does, or the writer shows one.
+- **Show my Seedelf** tells the other side, once they've replied, which of your Seedelfs you hold, by a proof only they can check: they could have made it themselves, so it proves nothing to anyone they show it to. Your other Seedelfs stay unlinked. Their wallet checks it against the contract as Send looks a Seedelf up, so the server learns nothing of which.
 - **On this device:** the conversations, and the names the user gives them, encrypted like the contacts, within about 5 MB, the oldest messages going first. A name is never sent. Removing the wallet deletes them, and another browser can't read them.
 - **Nothing in a message starts a payment.** A message is shown as text, never as a link or a request to pay.
 

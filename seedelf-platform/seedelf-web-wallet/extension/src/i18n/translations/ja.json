@@ -3144,5 +3144,19 @@
   "messages.renameNote": "この名前が見えるのはこのデバイス上のあなただけです。メッセージに含まれることはありません。",
   "messages.nameLabel": "あなたが付ける名前",
   "messages.save": "保存",
-  "messages.removeName": "名前を外す"
+  "messages.removeName": "名前を外す",
+  "messages.reveal.button": "自分の Seedelf を見せる",
+  "messages.reveal.title": "あなたの Seedelf を見せる",
+  "messages.reveal.pick": "あなたの Seedelf",
+  "messages.privacy.reveal": "相手は、その Seedelf の所有者と話していると分かります。確認できるのは相手だけなので、ほかの誰に対しても何の証明にもなりません。",
+  "messages.reveal.show": "見せる",
+  "messages.reveal.shown": "あなたの Seedelf {{name}} を見せました",
+  "messages.reveal.verified": "相手が Seedelf {{name}} を見せました。チェーン上で確認済みです",
+  "messages.reveal.checking": "相手が Seedelf を見せました。チェーン上で確認中です",
+  "messages.warn.revealFailed": "相手が見せた Seedelf は確認できなかったため、その Seedelf の名前は表示しません。",
+  "messages.verifiedSeedelf": "確認済みの Seedelf {{name}}",
+  "messages.preview.revealIn": "相手が Seedelf を見せました",
+  "messages.preview.revealOut": "あなたの Seedelf を見せました",
+  "worker.messaging.notYourSeedelf": "その Seedelf は現在このウォレットのものではありません。",
+  "worker.messaging.cantRevealYet": "Seedelf を見せられるのは最初に書いた側だけで、相手が返信した後です。"
 }

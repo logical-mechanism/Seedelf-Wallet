@@ -4,6 +4,7 @@ What the crate guarantees, under which assumptions, and what it doesn't. Unaudit
 
 - **The v1 envelope** (Phase 1, most of this file) is a cryptographic foundation. On its own it has no sender authentication, no forward secrecy and no replay protection.
 - **The session layer** (chunk 54's 54a: [protocol.md](protocol.md) §3 to §6, exact in §16) builds those on it: conversations, the Double Ratchet, and the rules for replays, requests and continuations. What each compromise reveals is protocol.md §1.1. What its tests establish is [below](#the-session-layer).
+- **The verified reveal** (54f, [protocol.md](protocol.md) §19) lets the side that wrote first show the other one of its Seedelfs, by a designated-verifier proof. What it proves and what it doesn't is [below](#the-verified-reveal).
 - The relay is built, in the data layer (54c, protocol.md §17): it checks a post's shape, points and proof of work, and can't read it. There's still no model of the protocol (54b), and no key distribution beyond a Seedelf's public register.
 
 ## What the tests establish, and what they don't
@@ -134,12 +135,34 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 - **Every point** from an envelope, F or a header is checked before a key touches it. A stored state's points and ratchet key are checked again on reading.
 - **No unsafe code, and no panic on untrusted input.** The `expect`s guard fixed output lengths, a ratchet key the crate itself stored, and a receiving chain the step before just made.
 
+## The verified reveal
+
+A Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers) that the revealed Seedelf's register and the initiator's identity A share a key (Chaum–Pedersen), or that its maker knows the key of the reader's identity w₀ (protocol.md §19.2). The writer proves the first; the reader holds the second.
+
+**What it proves, to the reader:**
+- Whoever holds A's key, so whoever started the conversation (the static DH in SK, protocol.md §3), holds the key of the register it names. The wallet then checks the chain gives the Seedelf's name that register now.
+- Nothing about a person: "someone with that Seedelf is writing". Its use is tying a conversation to a Seedelf the reader already knows.
+
+**What it doesn't:**
+- **Anything to anyone else.** The reader could have made the same proof with its own key, so a reveal it shows others proves nothing: the conversation stays deniable, as Signal's are. Witness indistinguishability makes the writer's proof and the reader's look alike (up to about 2/q: drawn scalars are never 0).
+- **Anything after it was checked.** It's checked against a fresh read of the contract, never a view kept from before, but a Seedelf can move to another owner afterwards; the reveal's message keeps the time it came.
+- **Anything against a stolen x_B.** A thief of the reader's key makes reveals for any Seedelf, in conversations it starts with the reader: key-compromise impersonation, inherent to designated-verifier proofs and already open through the static DH. That key spends the Seedelf too.
+- **Any link between the writer's Seedelfs.** They share its key, but under DDH no one without it can tell.
+- **A plain proof** someone else could check: not built, until users ask for one (protocol.md §7).
+
+**What the tests establish** (src/session/tests/reveal.rs, tests/reveal_vectors.rs):
+- Who may make one (the initiator, once a reply has decrypted, for a Seedelf of its own key) and who may check one (the responder), each refusal tested.
+- Binding: another conversation of the same keys, another name, another register of the same key, a share or response moved or swapped, and another key's Seedelf proved with the writer's own each fail; so does every single-bit change to a reveal's bytes.
+- The reader's own forgery verifies, and one made without its key doesn't.
+- Every malformed reveal is refused with its code, the length read first.
+- Vectors reproduced byte for byte by an implementation written from protocol.md alone (noble-curves and SHA-256), and a mutation pass: all 25 of the proof's and parser's rules are load-bearing in the tests.
+
 ## Before production
 
 - An external review of the construction and the code.
 - Written arguments for IND-CCA2 and for unlinkability, with the per-envelope base.
 - The spending-and-reading argument, checked against the literature.
 - A constant-time review of the WebAssembly build. WebAssembly engines promise nothing about timing.
-- The session layer's model (54b), then an outside review of the protocol.
+- The session layer's model (54b), then an outside review of the protocol and of the reveal's proof, which the model doesn't cover.
 - The relay's price tuned with real use, and a memory-hard puzzle if GPUs flood it (protocol.md §17.4).
 - A dependency audit (cargo-audit or cargo-deny) for this crate in CI.

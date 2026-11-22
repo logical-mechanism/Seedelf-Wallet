@@ -1,8 +1,8 @@
 //! Seedelf Messaging through the WebAssembly layer (chunk 54's 54d): the
 //! session vectors' first messages read at the full first-contact stamp,
 //! both vector files' stamps found in slices, two wallets writing to each
-//! other through nothing but the bindings' records, and every refusal as
-//! its code. `node --test tests/messaging.test.mjs` runs the same through
+//! other through nothing but the bindings' records, the reveal (54f), and
+//! every refusal as its code. `node --test tests/messaging.test.mjs` runs the same through
 //! the built module.
 
 use std::fs;
@@ -14,9 +14,10 @@ use seedelf_crypto::schnorr::random_scalar;
 use seedelf_messaging::Error;
 use seedelf_wasm::api::scalar_from_hex;
 use seedelf_wasm::messaging::{
-    self, Answer, ContinueRequest, ContinuesView, DeleteRequest, ExpireRequest, FindStampRequest,
-    HandleHex, PostRequest, ReceiveRequest, ReceiveResult, ReceivedView, RegisterHex, RequestOf,
-    RequestText, Secret, SendRequest, SetStampRequest, StartRequest,
+    self, Answer, CheckRevealRequest, ContinueRequest, ContinuesView, DeleteRequest, ExpireRequest,
+    FindStampRequest, HandleHex, PostRequest, ReceiveRequest, ReceiveResult, ReceivedView,
+    RegisterHex, RequestOf, RequestText, RevealChecked, RevealRequest, Secret, SendRequest,
+    SetStampRequest, StartRequest,
 };
 use serde_json::{Value, json};
 
@@ -684,6 +685,148 @@ fn two_wallets_write_through_the_bindings() {
 /// What isn't the wallet's request throws, and changes nothing: records that
 /// don't read or hold one conversation twice, hex that isn't, a handle's
 /// name past 32 bytes.
+/// The reveal (protocol.md §19) through the bindings: the vectors' checks
+/// come out as the file says, and Alice, once Bob has replied, shows him her
+/// Seedelf in a message of kind 0x02, which only Bob checks.
+#[test]
+fn a_reveal_through_the_bindings() {
+    let file = vectors("messaging_reveal_v1.json");
+    let check = |conversation: &Value, reveal: &str| {
+        messaging::check_reveal(CheckRevealRequest {
+            conversation: Secret::from(s(conversation)),
+            reveal: reveal.to_string(),
+        })
+        .unwrap()
+    };
+    for c in file["checks"].as_array().unwrap() {
+        let held = &file["conversations"][c["conversation"].as_u64().unwrap() as usize];
+        let state = &held[format!("{}_state", c["side"].as_str().unwrap())];
+        let answer = check(state, c["reveal"].as_str().unwrap());
+        match c["result"].as_str().unwrap() {
+            "ok" => assert!(answer.done().is_some(), "{}", c["name"]),
+            code => assert_eq!(answer.refused(), Some(code), "{}", c["name"]),
+        }
+    }
+    for r in file["reveals"].as_array().unwrap() {
+        let held = &file["conversations"][r["conversation"].as_u64().unwrap() as usize];
+        assert_eq!(
+            done(check(
+                &held["responder_state"],
+                r["reveal"].as_str().unwrap()
+            )),
+            RevealChecked {
+                name: s(&r["seedelf"]["name"]),
+                register: RegisterHex {
+                    generator: s(&r["seedelf"]["generator"]),
+                    public_value: s(&r["seedelf"]["public_value"]),
+                },
+            }
+        );
+    }
+
+    // Two wallets: Alice writes first, Bob replies, Alice reads it.
+    let (alice, bob) = (Wallet::new(0xa1), Wallet::new(0xb0));
+    let started = done(
+        messaging::start(
+            alice.sk,
+            StartRequest {
+                handle: register_hex(&bob.seedelf),
+                to: bob.name.clone(),
+                now: T,
+            },
+        )
+        .unwrap(),
+    );
+    let early = stamped(&started.conversation, &started.digest, 4);
+    let (a, first) = send(&early, b"hello Bob");
+    let request = done(
+        messaging::receive(
+            bob.sk,
+            receive_request(&first, T + 60, bob.handles(), vec![], None, Some(4)),
+        )
+        .unwrap(),
+    );
+    let accepted = done(
+        messaging::accept(
+            bob.sk,
+            RequestOf {
+                requests: request.requests.unwrap(),
+                cid: started.cid.clone(),
+            },
+        )
+        .unwrap(),
+    );
+    let (b, reply) = send(&accepted.conversation, b"hello Alice");
+    let read = done(
+        messaging::receive(
+            alice.sk,
+            receive_request(&reply, T + 120, vec![], vec![&a], None, None),
+        )
+        .unwrap(),
+    );
+    let a = read.conversation.unwrap();
+
+    let reveal = |sk: Scalar, conversation: &Secret, wallet: &Wallet| {
+        messaging::reveal(
+            sk,
+            RevealRequest {
+                conversation: conversation.clone(),
+                name: wallet.name.clone(),
+                register: register_hex(&wallet.seedelf),
+            },
+        )
+        .unwrap()
+    };
+    // Not before the reply, not by Bob, and only a Seedelf of Alice's key.
+    assert_eq!(
+        refused(reveal(alice.sk, &early, &alice)),
+        "reveal_not_allowed"
+    );
+    assert_eq!(refused(reveal(bob.sk, &b, &bob)), "reveal_not_allowed");
+    assert_eq!(refused(reveal(alice.sk, &a, &bob)), "not_for_this_key");
+    let shown = done(reveal(alice.sk, &a, &alice));
+    assert_eq!(shown.reveal.len(), 2 * 257);
+    let mut plaintext = vec![0x02];
+    plaintext.extend(hex::decode(&shown.reveal).unwrap());
+    let (a, carried) = send(&a, &plaintext);
+    assert_eq!(carried.len(), 2 * 2048);
+    let came = done(
+        messaging::receive(
+            bob.sk,
+            receive_request(&carried, T + 180, vec![], vec![&b], None, None),
+        )
+        .unwrap(),
+    );
+    assert_eq!(plaintext_of(&came), plaintext);
+    let b = came.conversation.unwrap();
+    let checked = |conversation: &Secret, reveal: &str| {
+        messaging::check_reveal(CheckRevealRequest {
+            conversation: conversation.clone(),
+            reveal: reveal.to_string(),
+        })
+        .unwrap()
+    };
+    assert_eq!(
+        done(checked(&b, &shown.reveal)),
+        RevealChecked {
+            name: alice.name.clone(),
+            register: register_hex(&alice.seedelf),
+        }
+    );
+    assert_eq!(refused(checked(&a, &shown.reveal)), "reveal_not_allowed");
+    assert_eq!(
+        refused(checked(&b, &shown.reveal[..shown.reveal.len() - 2])),
+        "invalid_message"
+    );
+    assert!(
+        messaging::check_reveal(CheckRevealRequest {
+            conversation: b,
+            reveal: "zz".to_string(),
+        })
+        .is_err()
+    );
+}
+
 #[test]
 fn what_isnt_a_request_throws() {
     let (alice, bob) = (Wallet::new(1), Wallet::new(2));
@@ -781,6 +924,8 @@ fn every_refusal_has_its_own_code() {
         Error::InvalidBaseProof,
         Error::UnverifiedContinuation,
         Error::WrongEnvelopeRegister,
+        Error::RevealNotAllowed,
+        Error::InvalidReveal,
     ];
     let codes: std::collections::BTreeSet<&str> =
         errors.iter().map(|e| messaging::code(*e)).collect();

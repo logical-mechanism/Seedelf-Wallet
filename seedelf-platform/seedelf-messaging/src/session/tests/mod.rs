@@ -5,6 +5,7 @@ mod adversarial;
 mod first_contact;
 mod linking;
 mod ratchet;
+mod reveal;
 mod rules;
 mod state;
 mod support;

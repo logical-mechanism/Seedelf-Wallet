@@ -30,7 +30,7 @@ use seedelf_messaging::relay::{self, MAX_STAMP_BITS};
 use seedelf_messaging::session::{
     Continues, Conversation, ConversationId, ENVELOPE_SIZES, FIRST_CONTACT_MAX_AGE,
     FIRST_CONTACT_MAX_AHEAD, FIRST_CONTACT_STAMP_BITS, Handle, Inbox, MAX_REQUEST_BYTES,
-    MAX_REQUESTS, Received, Requests, Role, SKIPPED_KEY_LIFETIME, Tombstones,
+    MAX_REQUESTS, Received, Requests, Reveal, Role, SKIPPED_KEY_LIFETIME, Tombstones,
 };
 use seedelf_messaging::{Error, POINT_LEN, Register, SecretKey, matches_envelope};
 use serde::{Deserialize, Serialize};
@@ -155,6 +155,8 @@ pub fn code(error: Error) -> &'static str {
         Error::InvalidBaseProof => "invalid_base_proof",
         Error::UnverifiedContinuation => "unverified_continuation",
         Error::WrongEnvelopeRegister => "wrong_envelope_register",
+        Error::RevealNotAllowed => "reveal_not_allowed",
+        Error::InvalidReveal => "invalid_reveal",
     }
 }
 
@@ -604,6 +606,95 @@ pub fn send(request: SendRequest) -> Result<Answer<Sent>> {
         conversation: Secret::of(&held.to_bytes()),
         envelope: hex::encode(envelope),
     }))
+}
+
+// ---------------------------------------------------------------------------
+// The verified reveal (protocol.md §19)
+// ---------------------------------------------------------------------------
+
+/// [`reveal`]'s request.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealRequest {
+    /// The conversation's record: its initiator's, once a reply has come.
+    pub conversation: Secret,
+    /// The Seedelf's asset name, hex: 1 to 32 bytes.
+    pub name: String,
+    /// The Seedelf's register now, as the chain read gives it.
+    pub register: RegisterHex,
+}
+
+/// A reveal, to send as a message of its own kind (protocol.md §18).
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Revealed {
+    /// The reveal's bytes, hex (§19.3), without the kind byte.
+    pub reveal: String,
+}
+
+/// Shows the other side of a conversation which Seedelf `sk` holds
+/// (protocol.md §19): a proof only that side can check, bound to the
+/// conversation. Only its initiator, once a reply has come
+/// (`reveal_not_allowed`); the Seedelf's register must be `sk`'s, as the
+/// conversation's own identity must (`not_for_this_key`). The record is
+/// unchanged: the wallet then sends the reveal with [`send`].
+pub fn reveal(sk: Scalar, request: RevealRequest) -> Result<Answer<Revealed>> {
+    let key = secret_key(sk)?;
+    let held = conversation(&request.conversation)?;
+    let name = decode(&request.name, "the Seedelf's name")?;
+    let seedelf = match request
+        .register
+        .read("the Seedelf's register")?
+        .and_then(|register| Handle::new(&name, register))
+    {
+        Ok(seedelf) => seedelf,
+        Err(error) => return Ok(answer(Err(error))),
+    };
+    Ok(answer(held.reveal(&key, &seedelf).map(|reveal| Revealed {
+        reveal: hex::encode(reveal.to_bytes()),
+    })))
+}
+
+/// [`check_reveal`]'s request.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckRevealRequest {
+    /// The conversation's record, as it stands after the message that
+    /// carried the reveal.
+    pub conversation: Secret,
+    /// The reveal's bytes, hex: the message's plaintext after its kind byte.
+    pub reveal: String,
+}
+
+/// A reveal whose proof verifies, and what the wallet then checks against
+/// the chain: that the name's register is this one now (protocol.md §19.4).
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealChecked {
+    /// The Seedelf's asset name, hex.
+    pub name: String,
+    /// The register the proof is for.
+    pub register: RegisterHex,
+}
+
+/// Checks a reveal the other side of a conversation sent (protocol.md
+/// §19.4's steps 2 and 3): it parses, and its proof verifies for the
+/// conversation. Only its responder checks one (`reveal_not_allowed`); one
+/// that doesn't parse or verify is refused. Nothing changes. Bytes that
+/// aren't hex throw.
+pub fn check_reveal(request: CheckRevealRequest) -> Result<Answer<RevealChecked>> {
+    let held = conversation(&request.conversation)?;
+    let bytes = decode(&request.reveal, "the reveal")?;
+    Ok(answer(Reveal::from_bytes(&bytes).and_then(|reveal| {
+        held.verify_reveal(&reveal)?;
+        Ok(RevealChecked {
+            name: hex::encode(reveal.name()),
+            register: RegisterHex {
+                generator: hex::encode(reveal.register().generator_bytes()),
+                public_value: hex::encode(reveal.register().public_value_bytes()),
+            },
+        })
+    })))
 }
 
 // ---------------------------------------------------------------------------

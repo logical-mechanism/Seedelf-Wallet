@@ -308,6 +308,15 @@ function getContext(): Promise<Worker> {
         if (!register) throw new Error(t("worker.messaging.notARegister"));
         return register;
       },
+      // Reveals' Seedelfs, as pay-by-name finds one, in the contract read now: the whole of it, so nothing names the
+      // one looked for, and never a view kept from before a Seedelf moved.
+      revealedRegisters: async (n) => {
+        const { seedelfs } = await readContractView(spends, n);
+        return (name) => {
+          const utxo = seedelfs[name];
+          return utxo ? registerOf(utxo) : undefined;
+        };
+      },
       now: Date.now,
       // Any call to Chrome resets the idle timer, which would otherwise stop the worker partway through a stamp.
       keepAlive: () => chrome.runtime.getPlatformInfo().then(() => undefined),

@@ -3,7 +3,17 @@
 // alone between their calls, as a restarted worker has them.
 import { describe, expect, it } from "vitest";
 
-import { lastOf, MessagingService, plaintextOf, PREVIEW_CHARS, storedBytes, textOf } from "../src/background/messaging";
+import {
+  type ConversationFile,
+  type Inbox,
+  lastOf,
+  REVEAL_READ_RETRY_MS,
+  MessagingService,
+  plaintextOf,
+  PREVIEW_CHARS,
+  storedBytes,
+  textOf,
+} from "../src/background/messaging";
 import { PreferencesService } from "../src/background/preferences";
 import { conversationRecord, PRIVATE_PREFIX, PrivateStore } from "../src/background/private-store";
 import type { RegisterHex } from "../src/background/chain";
@@ -39,6 +49,10 @@ interface Party {
   readFails?: unknown;
   /** What any look at the wallet's Seedelfs does instead of answering, kept view or read: throw. */
   ownFails?: unknown;
+  /** What a read of the contract for reveals does instead of answering: throw. */
+  revealFails?: unknown;
+  /** How many times the contract was read for reveals. */
+  revealReads: number;
   /** Runs at each turn of the event loop the service takes (between scan batches, between a stamp's slices). */
   onWait?: () => Promise<void>;
   /** The messaging alarm, as sw.ts gives it. */
@@ -71,6 +85,13 @@ function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, dire
       if (!register) throw new Error("no such Seedelf");
       return register;
     },
+    revealedRegisters: async () => {
+      p.revealReads++;
+      if (p.revealFails) throw p.revealFails;
+      // The chain as it is now: what the read finds.
+      const now = new Map(directory);
+      return (name) => now.get(name);
+    },
     now: () => clock.now,
     wait: async () => {
       await p.onWait?.();
@@ -95,6 +116,7 @@ async function party(words: number, relay: FakeRelay, directory: Directory, seed
     preferences,
     own: [],
     keptView: true,
+    revealReads: 0,
     changed: [],
     alarm: {
       on: false,
@@ -785,7 +807,8 @@ describe("what the screens show (54f)", () => {
     expect([...cut.text!]).toHaveLength(PREVIEW_CHARS + 1);
     expect(cut.text!.endsWith("🙂…")).toBe(true);
     expect(lastOf([{ id: 0, dir: "out", at: 1, text: "short" }])).toEqual({ dir: "out", text: "short" });
-    expect(lastOf([{ id: 0, dir: "in", at: 1, kind: 2 }])).toEqual({ dir: "in" });
+    expect(lastOf([{ id: 0, dir: "in", at: 1, kind: 9 }])).toEqual({ dir: "in" });
+    expect(lastOf([{ id: 0, dir: "in", at: 1, kind: 2 }])).toEqual({ dir: "in", reveal: true });
     expect(lastOf([])).toBeUndefined();
   });
 
@@ -906,5 +929,255 @@ describe("what the screens show (54f)", () => {
     await alice.messaging.sync("preprod");
     await alice.wallet.unlock(PASSWORD);
     expect((await alice.messaging.overview("preprod")).offline).toBeUndefined();
+  });
+});
+
+describe("the verified reveal in the worker (protocol.md §19)", () => {
+  /** Another register of `p`'s key: what its Seedelf's datum holds once it's locked again. */
+  async function another(p: Party): Promise<RegisterHex> {
+    const wasm = loadTestWasm();
+    return p.wallet.withKeys((keys) => {
+      const b = keys.seedelf.baseRegister();
+      const r = wasm.rerandomize(b);
+      b.free();
+      try {
+        return { generator: r.generator, publicValue: r.publicValue };
+      } finally {
+        r.free();
+      }
+    });
+  }
+
+  const last = async (p: Party, cid: string) => (await p.messaging.thread("preprod", cid)).messages.at(-1)!;
+  const record = (p: Party, cid: string) => p.store.get<ConversationFile>(conversationRecord("preprod", cid));
+
+  it("shows Bob Alice's Seedelf once he has replied, which his wallet checks against the chain, then names", async () => {
+    const { alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    // Offered where Alice wrote first and has a reply, never on Bob's side.
+    expect((await alice.messaging.thread("preprod", cid)).seedelfs).toEqual([ALICE_SEEDELF]);
+    expect((await bob.messaging.thread("preprod", cid)).seedelfs).toBeUndefined();
+    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
+    await alice.messaging.whenIdle();
+    const shown = await last(alice, cid);
+    expect(shown).toMatchObject({ dir: "out", reveal: { status: "shown", name: ALICE_SEEDELF }, sent: "posted" });
+    expect(shown.text).toBeUndefined();
+    const mine = (await alice.messaging.overview("preprod")).conversations[0]!;
+    expect(mine.last).toEqual({ dir: "out", reveal: true });
+    expect(mine.revealed).toBeUndefined();
+
+    await synced(bob);
+    const thread = await bob.messaging.thread("preprod", cid);
+    expect(thread.messages.at(-1)).toMatchObject({ dir: "in", reveal: { status: "verified", name: ALICE_SEEDELF } });
+    expect(thread.conversation.revealed).toEqual({ name: ALICE_SEEDELF, at: expect.any(Number) });
+    expect((await bob.messaging.overview("preprod")).conversations[0]!.last).toEqual({ dir: "in", reveal: true });
+    // One fresh read of the contract, and nothing left to check.
+    expect(bob.revealReads).toBe(1);
+    expect((await bob.store.get<Inbox>("messaging.preprod"))!.conversations[cid]!.checking).toBeUndefined();
+    expect((await record(bob, cid))!.history.at(-1)!.reveal).toEqual({ status: "verified", name: ALICE_SEEDELF });
+  });
+
+  it("refuses one before a reply, from the side written to, and of a Seedelf that isn't the wallet's, sending nothing", async () => {
+    const { alice, bob } = await pair();
+    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "hello Bob");
+    await alice.messaging.whenIdle();
+    expect((await alice.messaging.thread("preprod", cid)).seedelfs).toBeUndefined();
+    await expect(alice.messaging.reveal("preprod", cid, ALICE_SEEDELF)).rejects.toThrow(/wrote first/);
+    await synced(bob);
+    await bob.messaging.accept("preprod", cid);
+    await bob.messaging.send("preprod", cid, "hi Alice");
+    await bob.messaging.whenIdle();
+    await synced(alice);
+    await expect(bob.messaging.reveal("preprod", cid, BOB_SEEDELF)).rejects.toThrow(/wrote first/);
+    await expect(alice.messaging.reveal("preprod", cid, BOB_SEEDELF)).rejects.toThrow(/isn't this wallet's/);
+    // One the contract read no longer finds the wallet's: moved away since the view was kept.
+    alice.own = [];
+    await expect(alice.messaging.reveal("preprod", cid, ALICE_SEEDELF)).rejects.toThrow(/isn't this wallet's/);
+    expect(await texts(alice, cid)).toEqual(["out:hello Bob", "in:hi Alice"]);
+  });
+
+  it("fails one whose register the chain no longer gives its name, never naming it; shown again, it verifies", async () => {
+    const { alice, bob, directory } = await pair();
+    const cid = await talking(alice, bob);
+    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
+    await alice.messaging.whenIdle();
+    // Alice's Seedelf was locked again under another register (or passed to someone else) before Bob's wallet read
+    // the contract: whatever a view kept from before says, the read now decides.
+    const was = directory.get(ALICE_SEEDELF)!;
+    const now = await another(alice);
+    directory.set(ALICE_SEEDELF, now);
+    await synced(bob);
+    let thread = await bob.messaging.thread("preprod", cid);
+    expect(thread.messages.at(-1)!.reveal).toEqual({ status: "failed" });
+    expect(thread.conversation.revealed).toBeUndefined();
+    expect(bob.revealReads).toBe(1);
+    expect(JSON.stringify(await record(bob, cid))).not.toContain(ALICE_SEEDELF);
+    expect(JSON.stringify(await bob.store.get("messaging.preprod"))).not.toContain(ALICE_SEEDELF);
+
+    // Shown again: for the register a contract read finds now, even where Alice's kept view still has the old one.
+    alice.own = [{ name: ALICE_SEEDELF, register: now }];
+    alice.kept = [{ name: ALICE_SEEDELF, register: was }];
+    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
+    await alice.messaging.whenIdle();
+    await synced(bob);
+    thread = await bob.messaging.thread("preprod", cid);
+    expect(thread.messages.at(-1)!.reveal).toEqual({ status: "verified", name: ALICE_SEEDELF });
+    expect(thread.conversation.revealed?.name).toBe(ALICE_SEEDELF);
+  });
+
+  it("reads the contract once a pass, however many reveals wait, and not at all when none does", async () => {
+    const { alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    for (let i = 0; i < 3; i++) await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
+    await alice.messaging.whenIdle();
+    await synced(bob);
+    const thread = await bob.messaging.thread("preprod", cid);
+    expect(thread.messages.slice(-3).map((m) => m.reveal?.status)).toEqual(["verified", "verified", "verified"]);
+    expect(bob.revealReads).toBe(1);
+    await synced(bob);
+    expect(bob.revealReads).toBe(1);
+  });
+
+  it("leaves one checking while the chain can't be read, never named, and checks it at the next sync", async () => {
+    const { alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
+    await alice.messaging.whenIdle();
+    bob.revealFails = new Error("the server didn't answer");
+    await synced(bob);
+    expect((await last(bob, cid)).reveal).toEqual({ status: "checking" });
+    expect((await bob.messaging.overview("preprod")).conversations[0]!.revealed).toBeUndefined();
+    expect((await bob.store.get<Inbox>("messaging.preprod"))!.conversations[cid]!.checking).toBe(true);
+    // Not asked again at every sync: a minute on.
+    bob.revealFails = undefined;
+    await synced(bob);
+    expect(bob.revealReads).toBe(1);
+    expect((await last(bob, cid)).reveal).toEqual({ status: "checking" });
+    await busyFor(REVEAL_READ_RETRY_MS, bob);
+    await synced(bob);
+    expect(bob.revealReads).toBe(2);
+    expect((await last(bob, cid)).reveal).toEqual({ status: "verified", name: ALICE_SEEDELF });
+    expect((await bob.store.get<Inbox>("messaging.preprod"))!.conversations[cid]!.checking).toBeUndefined();
+  });
+
+  it("names the other side by the latest that verified, by when it came", async () => {
+    const { alice, bob, directory } = await pair();
+    const cid = await talking(alice, bob);
+    const SECOND = "5eed0e1f00" + "616c69636532";
+    const second = await another(alice);
+    alice.own.push({ name: SECOND, register: second });
+    directory.set(SECOND, second);
+    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
+    await alice.messaging.reveal("preprod", cid, SECOND);
+    await alice.messaging.whenIdle();
+    // Both verified in one pass, at one time: the one that came last names the other side.
+    await synced(bob);
+    let thread = await bob.messaging.thread("preprod", cid);
+    expect(thread.messages.slice(-2).map((m) => m.reveal)).toEqual([
+      { status: "verified", name: ALICE_SEEDELF },
+      { status: "verified", name: SECOND },
+    ]);
+    expect(thread.conversation.revealed?.name).toBe(SECOND);
+    // A later one that fails names nothing, and the last that verified stands.
+    directory.set(ALICE_SEEDELF, await another(alice));
+    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
+    await alice.messaging.whenIdle();
+    await synced(bob);
+    thread = await bob.messaging.thread("preprod", cid);
+    expect(thread.messages.at(-1)!.reveal).toEqual({ status: "failed" });
+    expect(thread.conversation.revealed?.name).toBe(SECOND);
+    // Shown again for the register it holds now, at a later sync: the newer names the other side.
+    alice.own[0] = { name: ALICE_SEEDELF, register: directory.get(ALICE_SEEDELF)! };
+    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
+    await alice.messaging.whenIdle();
+    await synced(bob);
+    thread = await bob.messaging.thread("preprod", cid);
+    expect(thread.messages.at(-1)!.reveal).toEqual({ status: "verified", name: ALICE_SEEDELF });
+    expect(thread.conversation.revealed?.name).toBe(ALICE_SEEDELF);
+  });
+
+  it("sets right a conversation's reveals from its record: a stop between two writes, or the history's budget", async () => {
+    const { alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
+    await alice.messaging.whenIdle();
+    bob.revealFails = new Error("the server didn't answer");
+    await synced(bob);
+    const inbox = async () => (await bob.store.get<Inbox>("messaging.preprod"))!;
+    // A stop between the record's write and the inbox's: the reveal waits, and the inbox doesn't say so.
+    let kept = await inbox();
+    delete kept.conversations[cid]!.checking;
+    await bob.store.set("messaging.preprod", kept);
+    bob.revealFails = undefined;
+    await busyFor(REVEAL_READ_RETRY_MS, bob);
+    bob.restart();
+    await synced(bob);
+    expect((await last(bob, cid)).reveal).toEqual({ status: "verified", name: ALICE_SEEDELF });
+    expect((await inbox()).conversations[cid]!.revealed?.name).toBe(ALICE_SEEDELF);
+    // The record checked and the inbox not told: still waiting by the inbox, named by nothing.
+    kept = await inbox();
+    kept.conversations[cid]!.checking = true;
+    delete kept.conversations[cid]!.revealed;
+    await bob.store.set("messaging.preprod", kept);
+    const reads = bob.revealReads;
+    await synced(bob);
+    expect(bob.revealReads).toBe(reads);
+    expect((await inbox()).conversations[cid]!.checking).toBeUndefined();
+    expect((await bob.messaging.thread("preprod", cid)).conversation.revealed?.name).toBe(ALICE_SEEDELF);
+  });
+
+  it("fails one whose proof doesn't verify at once, never naming it, and reads nothing of the chain for it", async () => {
+    const { relay, alice, bob } = await pair();
+    const wasm = loadTestWasm();
+    const cid = await talking(alice, bob);
+    const state = (await record(alice, cid))!.state;
+    const made = await alice.wallet.withKeys(
+      (keys) =>
+        JSON.parse(wasm.messagingReveal(keys.seedelf, JSON.stringify({ conversation: state, name: ALICE_SEEDELF, register: alice.own[0]!.register })))
+          .reveal as string,
+    );
+    // z₂'s last bit flipped: still a scalar below q, a proof that no longer verifies, in an honest session message.
+    const last = Number.parseInt(made.slice(-2), 16) ^ 1;
+    const broken = made.slice(0, -2) + last.toString(16).padStart(2, "0");
+    relay.put("preprod", JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: state, plaintext: "02" + broken }))).envelope);
+    await synced(bob);
+    const thread = await bob.messaging.thread("preprod", cid);
+    expect(thread.messages.at(-1)).toMatchObject({ dir: "in", reveal: { status: "failed" } });
+    expect(thread.conversation.revealed).toBeUndefined();
+    expect(bob.revealReads).toBe(0);
+    expect(JSON.stringify(await record(bob, cid))).not.toContain(ALICE_SEEDELF);
+  });
+
+  it("takes no reveal from a first-contact message, nor from a request's, and never names one", async () => {
+    const { relay, alice, bob } = await pair();
+    const wasm = loadTestWasm();
+    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "hello Bob");
+    await alice.messaging.whenIdle();
+    const before = (await record(alice, cid))!.state;
+    // A request's message of kind 0x02: shown as a reveal that couldn't be verified, before and after the reply.
+    const odd = JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: before, plaintext: "02" + "00".repeat(226) })));
+    relay.put("preprod", odd.envelope);
+    await synced(bob);
+    expect((await bob.messaging.request("preprod", cid)).map((m) => m.reveal)).toEqual([undefined, { status: "failed" }]);
+    await bob.messaging.accept("preprod", cid);
+    await bob.messaging.send("preprod", cid, "hi Alice");
+    await bob.messaging.whenIdle();
+    await synced(alice);
+    expect((await bob.messaging.thread("preprod", cid)).messages[1]!.reveal).toEqual({ status: "failed" });
+
+    // A valid reveal, sealed with Alice's record from before the reply: a first-contact message, F and all.
+    const after = (await record(alice, cid))!.state;
+    const made = await alice.wallet.withKeys(
+      (keys) =>
+        JSON.parse(wasm.messagingReveal(keys.seedelf, JSON.stringify({ conversation: after, name: ALICE_SEEDELF, register: alice.own[0]!.register })))
+          .reveal as string,
+    );
+    const skipped = JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: odd.conversation, plaintext: "02" + made })));
+    relay.put("preprod", skipped.envelope);
+    await synced(bob);
+    const thread = await bob.messaging.thread("preprod", cid);
+    expect(thread.messages.at(-1)).toMatchObject({ dir: "in", reveal: { status: "failed" } });
+    expect(thread.conversation.revealed).toBeUndefined();
+    expect(bob.revealReads).toBe(0);
   });
 });

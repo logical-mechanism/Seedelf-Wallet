@@ -806,6 +806,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
       seedelfRegister: async () => {
         throw new Error("no Seedelf in these fakes");
       },
+      revealedRegisters: async () => () => undefined,
       now: () => t.clock.now,
       wait: async () => undefined,
     }),

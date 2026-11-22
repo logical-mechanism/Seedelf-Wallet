@@ -1,8 +1,8 @@
 # seedelf-messaging
 
-Seedelf Messaging's library: end-to-end encryption of a byte payload to a re-randomized Seedelf register, and its discovery by the recipient (Phase 1), one-to-one conversations on top of it, with the Double Ratchet inside the envelope (the session layer, chunk 54's 54a), and what a post to the relay must be (54c).
+Seedelf Messaging's library: end-to-end encryption of a byte payload to a re-randomized Seedelf register, and its discovery by the recipient (Phase 1), one-to-one conversations on top of it, with the Double Ratchet inside the envelope (the session layer, chunk 54's 54a), what a post to the relay must be (54c), and the verified reveal of a writer's Seedelf (54f).
 
-It's a library only, with no network, no storage and no clock. The relay is the data layer's ([seedelf-data](../../seedelf-data/README.md#seedelf-messagings-relay)), which keeps its own copy of the `relay` module's checks. There's no UI: the wallet's WebAssembly module binds it ([seedelf-wasm](../seedelf-web-wallet/wasm/README.md), chunk 54's 54d), and the wallet's worker calls it (54e, [architecture.md](../seedelf-web-wallet/docs/architecture.md#seedelf-messaging)), with no screens yet. It's unaudited, and outside the bug bounty except a flaw in it that exposes the Seedelf key: [docs/security.md](docs/security.md) says what holds and what doesn't.
+It's a library only, with no network, no storage and no clock. The relay is the data layer's ([seedelf-data](../../seedelf-data/README.md#seedelf-messagings-relay)), which keeps its own copy of the `relay` module's checks. There's no UI: the wallet's WebAssembly module binds it ([seedelf-wasm](../seedelf-web-wallet/wasm/README.md), chunk 54's 54d), and the wallet's worker calls it (54e, [architecture.md](../seedelf-web-wallet/docs/architecture.md#seedelf-messaging)), under the wallet's Messages screens (54f). It's unaudited, and outside the bug bounty except a flaw in it that exposes the Seedelf key: [docs/security.md](docs/security.md) says what holds and what doesn't.
 
 ## What it does
 
@@ -53,7 +53,7 @@ An earlier idea used PEACE's pairing capsule. For one recipient it reduces to El
 
 ## Sessions
 
-The `session` module builds [docs/protocol.md](docs/protocol.md) §3 to §6: the sender of a first message makes both conversation identities on one base, a first-contact block F carries what the reader needs and proves the base comes from the handle it names, a stamp of proof of work prices a stranger's first message, a static DH in the session secret proves the writer holds their identity's key, and the Double Ratchet runs inside v1 envelopes padded to 512 bytes, 2, 8 or 32 KiB, each bound to its conversation. §16 fixes every byte and rule.
+The `session` module builds [docs/protocol.md](docs/protocol.md) §3 to §6: the sender of a first message makes both conversation identities on one base, a first-contact block F carries what the reader needs and proves the base comes from the handle it names, a stamp of proof of work prices a stranger's first message, a static DH in the session secret proves the writer holds their identity's key, and the Double Ratchet runs inside v1 envelopes padded to 512 bytes, 2, 8 or 32 KiB, each bound to its conversation. §16 fixes every byte and rule. Once answered, the side that wrote first can show the other one of its Seedelfs (`Conversation::reveal`, `Conversation::verify_reveal`): a designated-verifier proof bound to the conversation, which convinces the reader alone (§19).
 
 ```rust
 use seedelf_messaging::relay::find_stamp;
@@ -132,11 +132,12 @@ let body = post_body(nonce, &envelope); // POST /messaging/v1/mainnet/envelopes
 | src/session/tests/adversarial.rs | Part 4: protocol-review.md §E's cases 1–3 and 6–14, one test each. |
 | src/session/tests/linking.rs | Part 5: calls 12 and 13. Envelopes aimed at a reader's second handle or at the sum of two, a base on the sum, the reader's handles, the stamp checked first, and every envelope at its identity times the outer scalar. |
 | src/session/tests/vectors.rs, tests/session_vectors.rs | The session vectors, written from fixed draws and read back through the public API. |
+| src/session/tests/reveal.rs, tests/reveal_vectors.rs | The reveal (§19): who may make and check one, its binding to the conversation, name and register, every bit flipped, the reader's own forgery verifying, every malformed reveal's code, and its vectors, read back through the public API. |
 | tests/session_properties.rs | Any schedule of sends, out-of-order deliveries, duplicates, losses and restarts; both sides first; resets; skipped keys' 48 hours. |
 | tests/simulation.rs | Two wallets over a 36-hour relay, killed at every point of §4.2 and locked past 36 hours; cases 4 and 5. `SIMULATION_SEEDS=n` runs more than 24 seeds. |
 | src/relay.rs | What the relay keeps and the stamp: the relay's vectors, every refusal, session envelopes of each size kept, the stamp's binding and its first nonce. |
 
-`RECORD_MESSAGING_VECTORS=1 cargo test -p seedelf-messaging --lib` rewrites the envelope's vectors, `RECORD_MESSAGING_SESSION_VECTORS=1` the session's, and `RECORD_MESSAGING_RELAY_VECTORS=1` the relay's, which the data layer's copy of the checks is held to. That's for a deliberate change of format only: other implementations are held to them. Both sets were reproduced by an independent implementation (noble-curves and WebCrypto), the session's written from protocol.md §16 alone.
+`RECORD_MESSAGING_VECTORS=1 cargo test -p seedelf-messaging --lib` rewrites the envelope's vectors, `RECORD_MESSAGING_SESSION_VECTORS=1` the session's, `RECORD_MESSAGING_RELAY_VECTORS=1` the relay's, which the data layer's copy of the checks is held to, and `RECORD_MESSAGING_REVEAL_VECTORS=1` the reveal's. That's for a deliberate change of format only: other implementations are held to them. The envelope's, the session's and the reveal's were reproduced by independent implementations (noble-curves and WebCrypto), the session's written from protocol.md §16 alone and the reveal's from §19.
 
 ## Measured performance
 

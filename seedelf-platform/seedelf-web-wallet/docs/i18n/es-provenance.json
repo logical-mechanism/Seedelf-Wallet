@@ -3516,5 +3516,19 @@
   "messages.renameNote": "machine",
   "messages.nameLabel": "machine",
   "messages.save": "machine",
-  "messages.removeName": "machine"
+  "messages.removeName": "machine",
+  "messages.reveal.button": "machine",
+  "messages.reveal.title": "machine",
+  "messages.reveal.pick": "machine",
+  "messages.privacy.reveal": "machine",
+  "messages.reveal.show": "machine",
+  "messages.reveal.shown": "machine",
+  "messages.reveal.verified": "machine",
+  "messages.reveal.checking": "machine",
+  "messages.warn.revealFailed": "machine",
+  "messages.verifiedSeedelf": "machine",
+  "messages.preview.revealIn": "machine",
+  "messages.preview.revealOut": "machine",
+  "worker.messaging.notYourSeedelf": "machine",
+  "worker.messaging.cantRevealYet": "machine"
 }

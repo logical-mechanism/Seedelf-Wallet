@@ -1,8 +1,9 @@
 // Seedelf Messaging on the screens (chunk 54's 54f): the worker's overview of
 // a network's conversations, kept fresh as the worker says it changed, and
 // how each one is named. The names are protocol.md §7's labels: a Seedelf the
-// user wrote to, an unknown sender, and what a conversation continues. No
-// message's text ever changes them.
+// user wrote to, one the other side showed with a proof that verified (§19),
+// an unknown sender, and what a conversation continues. No message's text
+// ever changes them, and a reveal that didn't verify never names anything.
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -89,27 +90,37 @@ export function seedelfShown(name: string, contacts: readonly Contact[] | undefi
 }
 
 /**
+ * The other side's Seedelf, where the wallet knows it: the one it wrote to, or, where it was written to, the one the
+ * other side showed and the wallet verified (protocol.md §19).
+ */
+export function seedelfOf(c: Pick<MessagingConversation, "role" | "handle" | "revealed">): string | undefined {
+  return c.role === "initiator" ? c.handle : c.revealed?.name;
+}
+
+/**
  * A conversation's name in the list and its header: the user's own name for it, where they gave one; else protocol.md
- * §7's label, the Seedelf written to or an unknown sender.
+ * §7's label, the Seedelf written to or verified, or an unknown sender.
  */
 export function conversationTitle(
-  c: Pick<MessagingConversation, "role" | "handle" | "name">,
+  c: Pick<MessagingConversation, "role" | "handle" | "name" | "revealed">,
   contacts: readonly Contact[] | undefined,
 ): string {
   return c.name ?? labelOf(c, contacts);
 }
 
-/** protocol.md §7's label for the other side: the Seedelf this wallet wrote to, or an unknown sender. */
-function labelOf(c: Pick<MessagingConversation, "role" | "handle">, contacts: readonly Contact[] | undefined): string {
-  return c.role === "initiator" && c.handle ? seedelfShown(c.handle, contacts).title : t("messages.unknownSender");
+/** protocol.md §7's label for the other side: its Seedelf, written to or verified, or an unknown sender. */
+function labelOf(c: Pick<MessagingConversation, "role" | "handle" | "revealed">, contacts: readonly Contact[] | undefined): string {
+  const seedelf = seedelfOf(c);
+  return seedelf ? seedelfShown(seedelf, contacts).title : t("messages.unknownSender");
 }
 
 /**
- * The rest of protocol.md §7's label, under the name: which Seedelf an initiator wrote to, which of the user's a
- * stranger wrote to (verified by its proof), and what it continues, verified or only said.
+ * The rest of protocol.md §7's label, under the name: which Seedelf an initiator wrote to, the Seedelf the other side
+ * showed and the wallet verified (§19), which of the user's a stranger wrote to (verified by its proof), and what it
+ * continues, verified or only said.
  */
 export function conversationDetail(
-  c: Pick<MessagingConversation, "role" | "handle" | "to" | "continues" | "name">,
+  c: Pick<MessagingConversation, "role" | "handle" | "to" | "continues" | "name" | "revealed">,
   contacts: readonly Contact[] | undefined,
   titleOf: (cid: string) => string | undefined,
 ): string[] {
@@ -117,7 +128,10 @@ export function conversationDetail(
   // protocol's.
   const lines: string[] = c.name ? [labelOf(c, contacts)] : [];
   if (c.role === "initiator" && c.handle) lines.push(seedelfShown(c.handle, contacts).short);
-  else if (c.to) lines.push(t("messages.wroteTo", { name: ownShown(c.to) }));
+  else {
+    if (c.revealed) lines.push(t("messages.verifiedSeedelf", { name: seedelfShown(c.revealed.name, contacts).short }));
+    if (c.to) lines.push(t("messages.wroteTo", { name: ownShown(c.to) }));
+  }
   if (c.continues) {
     const name = titleOf(c.continues.cid) ?? t("messages.anEarlier");
     lines.push(t(c.continues.verified ? "messages.continues" : "messages.saysContinues", { name }));

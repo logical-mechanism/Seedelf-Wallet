@@ -4535,6 +4535,19 @@ button.dapp-tile:hover {
   color: var(--danger-text);
 }
 
+/* A reveal's message (protocol.md §19): its Save to contacts under its line. */
+.bubble__action {
+  align-self: flex-start;
+  font-size: 12.5px;
+}
+
+/* What the side that wrote first can do once answered, over the box: Show my Seedelf. Quiet, never a state. */
+.thread__actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 var(--s2);
+}
+
 /* A conversation's state over the box: no reply, can't continue, started again, a request. */
 .thread__state {
   display: flex;

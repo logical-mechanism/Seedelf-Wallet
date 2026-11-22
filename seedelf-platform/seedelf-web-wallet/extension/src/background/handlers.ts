@@ -328,6 +328,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return { cid: await ctx.messaging.restart(ctx.network, message.cid, message.text) };
     case "messaging-continue":
       return { cid: await ctx.messaging.continueIn(ctx.network, message.cid, message.text) };
+    case "messaging-reveal":
+      await ctx.messaging.reveal(ctx.network, message.cid, seedelfNameOf(message.name));
+      return null;
     case "history": {
       if (message.of === "seedelf") {
         // Arrivals are noted by a balance reading: Refresh makes one, and otherwise the history asks nothing.

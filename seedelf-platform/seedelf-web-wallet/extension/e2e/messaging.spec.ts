@@ -5,7 +5,9 @@
 // and a conversation side by side, and in a narrow side panel's list-then-
 // conversation. A first message's stamp is the protocol's 24 bits, solved by
 // the worker, about 7 s and sometimes much more: the two-wallet test allows
-// for it.
+// for it. Once answered, the wallet that wrote first shows the other its
+// Seedelf (protocol.md §19), which the other checks on the chain and names.
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +22,40 @@ const SEEDELF = ownedUtxos
   .find((name: string) => name.startsWith("5eed0e1f"))!;
 
 const ENVELOPES = "/messaging/v1/preprod/envelopes";
+
+/** vector(24)'s Seedelf, tagged "b-wallet": put in the contract for the reveal (`koios.addedToContract`). */
+const B_SEEDELF = "5eed0e1f" + Buffer.from("b-wallet").toString("hex") + "00" + "cd".repeat(19);
+
+/**
+ * A Seedelf of `phrase`'s in the contract, as a mint would leave it: A's recorded UTxO, with this name, and a datum of
+ * a fresh re-randomization of the phrase's register, made by the built module.
+ */
+function seedelfOf(phrase: string, name: string) {
+  const pkg = new URL("../../wasm/pkg/", import.meta.url);
+  const script = `
+    import { readFileSync } from "node:fs";
+    const wasm = await import(${JSON.stringify(new URL("seedelf_wasm.js", pkg).href)});
+    wasm.initSync({ module: readFileSync(new URL(${JSON.stringify(new URL("seedelf_wasm_bg.wasm", pkg).href)})) });
+    const key = wasm.SeedelfKey.fromEntropy(wasm.phraseToEntropy(process.argv[1]), 0);
+    process.stdout.write(Buffer.from(wasm.registerToDatum(wasm.rerandomize(key.baseRegister()))).toString("hex"));
+  `;
+  const datum = execFileSync(process.execPath, ["--input-type=module", "-e", script, phrase], {
+    env: { ...process.env, NODE_OPTIONS: "" },
+    encoding: "utf8",
+  });
+  const recorded = ownedUtxos.find((u: { asset_list?: Array<{ asset_name: string }> }) =>
+    u.asset_list?.some((a) => a.asset_name === SEEDELF),
+  );
+  return {
+    ...recorded,
+    tx_hash: "b2".repeat(32),
+    tx_index: 0,
+    inline_datum: { bytes: datum, value: {} },
+    asset_list: recorded.asset_list.map((a: { asset_name: string }) =>
+      a.asset_name === SEEDELF ? { ...a, asset_name: name, fingerprint: "asset1syntheticbseedelf" } : a,
+    ),
+  };
+}
 
 /**
  * Home shows its splash until its first reading of the balances, each time it opens (as from Settings): on a slow
@@ -103,6 +139,8 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
   test.setTimeout(240_000);
   const fake = relayFake();
   await routeRelay(context, fake, "A");
+  // B holds a Seedelf too, to show A once A has replied.
+  koios.addedToContract.push(seedelfOf(vector(24).phrase, B_SEEDELF));
 
   // A holds vector(12)'s Seedelf, in a tab wide enough for the list and a conversation side by side.
   const a = await openApp(context);
@@ -166,6 +204,27 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
 
     // B reads the reply in its conversation while it's open.
     await expect(b.getByTestId("thread").getByTestId("bubble").last()).toHaveText(/hi B/, { timeout: 30_000 });
+
+    // Answered, B shows A its Seedelf (§19): A's wallet checks the proof, then the chain, and only then names it.
+    await b.getByTestId("thread-reveal").click();
+    await expect(b.getByTestId("messages-reveal-pick")).toContainText("b-wallet");
+    await expect(b.getByText("Only they can check it, so it proves nothing to anyone else.")).toBeVisible();
+    await b.getByTestId("messages-reveal-show").click();
+    await expect(b.getByTestId("bubble-reveal")).toHaveText(/You showed your Seedelf b-wallet/);
+    await expect(a.getByTestId("bubble-reveal")).toHaveText(/Showed you their Seedelf b-wallet .*, verified on the chain/, { timeout: 30_000 });
+    // A's own name for it stands; under it, §7's label is now the Seedelf, verified.
+    await expect(a.getByTestId("thread-name")).toHaveText("B from the forum");
+    await expect(a.getByTestId("thread-detail").first()).toHaveText("b-wallet");
+    await expect(a.getByTestId("thread-detail").nth(1)).toContainText("Verified Seedelf");
+    await expect(a.getByTestId("messages-conversations")).toContainText("Showed you a Seedelf");
+    // Saved to A's contacts, by A's own name for it: the bubble names it so, and asks no more.
+    await a.getByTestId("bubble-reveal-save").click();
+    await a.getByLabel("Name", { exact: true }).fill("Bea");
+    await a.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(a.getByTestId("bubble-reveal")).toHaveText(/Showed you their Seedelf Bea/);
+    await expect(a.getByTestId("bubble-reveal-save")).toBeHidden();
+    // B never sees a button to reveal on A's side of things, nor A on its own.
+    await expect(a.getByTestId("thread-reveal")).toBeHidden();
 
     // A on Home: a message that comes is counted there, read within seconds by the page on screen, not the alarm's
     // minute (the owner, 2026-11-21).

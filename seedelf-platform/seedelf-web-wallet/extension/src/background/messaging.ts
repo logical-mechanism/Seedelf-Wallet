@@ -41,6 +41,13 @@
 // (preferences.ts `messaging`), and nothing is read while locked: there's no
 // key then. Pages are read on unlock and every minute after, through
 // `seedelf.messaging`'s alarm (sw.ts).
+//
+// The verified reveal (protocol.md §19, 54f): the side that wrote first may
+// show the other one of its Seedelfs, once answered, as a message of kind
+// 0x02. Its reader checks the proof as the message is received, in the
+// queue, and then, after the page, that the chain gives the name that
+// register now, as Send's pay-by-name finds a Seedelf. Only then does the
+// conversation name it; a reveal that fails never shows its name.
 
 import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
@@ -81,6 +88,9 @@ export const STAMP_SLICE = 2 ** 16;
  */
 export const HISTORY_BUDGET_BYTES = 5 * 1024 * 1024;
 
+/** After a read of the contract for reveals fails, the next waits this long: it isn't asked at every sync. */
+export const REVEAL_READ_RETRY_MS = 60_000;
+
 /** Skipped keys and tombstones are expired at most this often. */
 export const EXPIRE_EVERY_MS = 60 * 60_000;
 
@@ -90,8 +100,11 @@ export const EXPIRE_EVERY_MS = 60 * 60_000;
  */
 export const RELAY_BASE_BITS: Record<NetworkName, number> = { mainnet: 18, preprod: 16 };
 
-/** The plaintext's first byte: what it holds [choice, protocol.md §18]. Only text so far. */
+/** The plaintext's first byte: what it holds [choice, protocol.md §18]. */
 export const KIND_TEXT = 0x01;
+
+/** A reveal: the writer's Seedelf and its proof (protocol.md §19). */
+export const KIND_REVEAL = 0x02;
 
 /** The inbox, `messaging.<network>`. */
 export interface Inbox {
@@ -155,10 +168,18 @@ export interface Meta {
    * may not continue.
    */
   unreachable?: number;
-  /** Its last message kept, for the list (`lastOf`): which way, and the start of its text. */
-  last?: { dir: "in" | "out"; text?: string };
+  /** Its last message kept, for the list (`lastOf`): which way, and the start of its text, or that it's a reveal. */
+  last?: { dir: "in" | "out"; text?: string; reveal?: true };
   /** The user's own name for it, on this device only: never from a message, never sent (`rename`). */
   name?: string;
+  /**
+   * The Seedelf the other side showed, verified (protocol.md §19): its proof, and the register a fresh read of the
+   * contract gave its name when it was checked. The latest that verified, in the order they came, and when it came
+   * (`at`, ms). Only where this wallet was written to. Set from the record (`revealsOf`).
+   */
+  revealed?: { name: string; at: number };
+  /** A reveal whose proof verified waits for the chain's register (`checkReveals`). Set from the record. */
+  checking?: true;
 }
 
 /** The longest name the user can give a conversation, in characters. */
@@ -201,7 +222,21 @@ export interface Entry {
   envelope?: string;
   /** When the relay drops it (ms), once posted. */
   expires?: number;
+  /**
+   * A reveal (`kind` KIND_REVEAL, protocol.md §19). Sent: the Seedelf this wallet showed. Received: `checking`, its
+   * proof verified and the chain's register still to compare, which the name and register are kept for; `verified`;
+   * or `failed`, with nothing of the name kept. A received reveal with none was never checked: one in a request's
+   * message, or a first-contact message's.
+   */
+  reveal?:
+    | { dir: "out"; name: string }
+    | { status: "checking"; name: string; register: RegisterHex }
+    | { status: "verified"; name: string }
+    | { status: "failed" };
 }
+
+/** A reveal the other side sent, as the history keeps it. */
+type ReceivedReveal = Exclude<NonNullable<Entry["reveal"]>, { dir: "out" }>;
 
 export interface MessagingDeps {
   wasm: typeof Wasm;
@@ -222,6 +257,12 @@ export interface MessagingDeps {
   ownSeedelfs: (network: NetworkName, read: boolean) => Promise<Array<{ name: string; register: RegisterHex }>>;
   /** The register of the Seedelf `name` (asset name, hex) on `network`, as Send's pay-by-name finds it. */
   seedelfRegister: (network: NetworkName, name: string) => Promise<RegisterHex>;
+  /**
+   * The contract read now, as Send's pay-by-name reads it, and a lookup of the register it gives each Seedelf (asset
+   * name, hex): undefined for no such Seedelf, or no register on it. A read that fails throws. It reads the whole
+   * contract, never one Seedelf, so the server can't tell which a reveal named.
+   */
+  revealedRegisters: (network: NetworkName) => Promise<(name: string) => RegisterHex | undefined>;
   now: () => number;
   /** A turn of the event loop between slices of work. */
   wait?: (ms: number) => Promise<void>;
@@ -262,6 +303,11 @@ export function plaintextOf(text: string): string {
   out[0] = KIND_TEXT;
   out.set(body, 1);
   return hexOf(out);
+}
+
+/** A reveal (hex, protocol.md §19.3) as the plaintext it's sent as: its kind, then the reveal. */
+export function revealPlaintextOf(reveal: string): string {
+  return KIND_REVEAL.toString(16).padStart(2, "0") + reveal;
 }
 
 /** A plaintext's text, or its kind when this version can't show it. */
@@ -305,6 +351,8 @@ export class MessagingService {
   private constants?: { firstContactStampBits: number; envelopeSizes: number[] };
   /** Switches, one at a time: a preference's write reads the others first (preferences.ts `set`). */
   private switching: Promise<unknown> = Promise.resolve();
+  /** No read of the contract for reveals before this (ms), by network: the last one failed. */
+  private revealReadAfter = new Map<NetworkName, number>();
   /** What runs in the background: stamps being solved, posts. */
   private background = new Set<Promise<unknown>>();
 
@@ -387,12 +435,17 @@ export class MessagingService {
         // again when told isn't told again.
         this.deps.changed?.(network);
       }
+      // Where this wallet wrote first and has a reply, the Seedelfs it can show (§19), from the view the last reading
+      // kept, with no request.
+      const seedelfs =
+        meta.role === "initiator" && !info.sendsFirstContact ? (await this.deps.ownSeedelfs(network, false)).map((s) => s.name) : undefined;
       return {
         conversation: this.summary(cid, meta, this.deps.now()),
         messages: file.history.map(entryView),
         trimmed: file.trimmed,
         missing: info.missing,
         maxTextBytes: Math.max(0, info.maxTextLen - 1),
+        ...(seedelfs?.length ? { seedelfs } : {}),
       };
     });
   }
@@ -552,6 +605,43 @@ export class MessagingService {
       file.history.push(entry);
       // Before its stamp, a first-contact message waits: it's sealed with the others once the stamp is set.
       if (!file.stampDigest) this.seal(file, entry);
+      meta.lastAt = now;
+      await this.commit(network, inbox, cid, file);
+    });
+    this.deps.changed?.(network);
+    this.behind(this.post(network));
+  }
+
+  /**
+   * Shows the other side of conversation `cid` this wallet's Seedelf `name` (asset name, hex), in a message of its own
+   * (protocol.md §19): only where this wallet wrote first, once a reply has come. Its register is the one a contract
+   * read finds now, which is what the reader's check compares, and the read names no Seedelf. Throws if locked.
+   */
+  async reveal(network: NetworkName, cid: string, name: string): Promise<void> {
+    const own = await this.deps.ownSeedelfs(network, true);
+    const register = own.find((s) => s.name === name)?.register;
+    if (!register) throw new Error(t("worker.messaging.notYourSeedelf"));
+    await this.serial(async () => {
+      const pin = phrasePin();
+      const inbox = await this.inbox(network);
+      const meta = inbox.conversations[cid];
+      const file = meta && (await this.file(network, cid));
+      if (!meta || !file) throw new Error(t("worker.messaging.noConversation"));
+      const made = await this.withKey((key, keys) => {
+        pin(keys);
+        return this.parse<{ reveal: string }>(
+          this.deps.wasm.messagingReveal(key, JSON.stringify({ conversation: file.state, name, register })),
+        );
+      });
+      if (isRefused(made)) {
+        if (made.refused === "reveal_not_allowed") throw new Error(t("worker.messaging.cantRevealYet"));
+        if (made.refused === "not_for_this_key") throw new Error(t("worker.messaging.notYourSeedelf"));
+        throw new MessagingRefused(made.refused);
+      }
+      const now = this.deps.now();
+      const entry: Entry = { id: file.next++, dir: "out", at: now, kind: KIND_REVEAL, reveal: { dir: "out", name }, sent: "queued" };
+      file.history.push(entry);
+      this.sealPlaintext(file, entry, revealPlaintextOf(made.reveal));
       meta.lastAt = now;
       await this.commit(network, inbox, cid, file);
     });
@@ -746,6 +836,7 @@ export class MessagingService {
       if (!page.more || stuck) break;
     }
     if (received) this.deps.changed?.(network);
+    await this.checkReveals(network);
     await this.expire(network);
     this.resumeStamps(network, inbox);
     await this.post(network);
@@ -838,7 +929,13 @@ export class MessagingService {
         const file = files.get(cid);
         if (!meta || !file) return false;
         file.state = result.conversation;
-        file.history.push({ id: file.next++, dir: "in", at: now, ...textOf(result.received.plaintext) });
+        const entry: Entry = { id: file.next++, dir: "in", at: now, ...textOf(result.received.plaintext) };
+        if (entry.kind === KIND_REVEAL) {
+          // §19.4's first three checks, now: a session message, at the side written to, whose proof verifies. The
+          // chain's register is compared after the page (`checkReveals`); commit marks the conversation as waiting.
+          entry.reveal = this.checkReveal(opened.kind, result.conversation, result.received.plaintext);
+        }
+        file.history.push(entry);
         // Only the other side's reply decrypts in a conversation this wallet started: it's answered.
         meta.answered = true;
         meta.unread++;
@@ -853,6 +950,84 @@ export class MessagingService {
       }
       return true;
     });
+  }
+
+  /**
+   * A received reveal's proof, checked against its conversation's record as the message left it (protocol.md §19.4,
+   * steps 1 to 3): taken only from a session message, never a first-contact message, and checked only where this wallet
+   * was written to. Verified, its name and register wait for the chain's (`checkReveals`); otherwise it failed, and
+   * nothing of its name is kept.
+   */
+  private checkReveal(kind: string, conversation: string, plaintext: string): ReceivedReveal {
+    if (kind !== "session") return { status: "failed" };
+    const checked = this.parse<{ name: string; register: RegisterHex }>(
+      this.wasmCall(() => this.deps.wasm.messagingCheckReveal(JSON.stringify({ conversation, reveal: plaintext.slice(2) }))),
+    );
+    if (isRefused(checked)) return { status: "failed" };
+    return { status: "checking", name: checked.name, register: checked.register };
+  }
+
+  /**
+   * Compares each reveal whose proof verified with the register the chain gives its Seedelf's name now (§19.4, step
+   * 4): one fresh read of the contract a pass, as Send's pay-by-name reads it, for every reveal waiting, never a view
+   * kept from before (a Seedelf can have moved since). The same, the other side holds that Seedelf; otherwise it failed,
+   * and it isn't named. A read that fails leaves them to a sync a minute on. A conversation whose flag outlived its
+   * reveals (a stop between a record's write and the inbox's, the history's budget) is set right from its record. Out
+   * of the queue for the read, in it for the writes.
+   */
+  private async checkReveals(network: NetworkName): Promise<void> {
+    const flagged = Object.entries((await this.inbox(network)).conversations).filter(([, meta]) => meta.checking);
+    if (!flagged.length) return;
+    const files = new Map<string, ConversationFile>();
+    for (const [cid] of flagged) {
+      const file = await this.readable(network, cid);
+      if (file) files.set(cid, file);
+    }
+    let lookup: ((name: string) => RegisterHex | undefined) | undefined;
+    const waiting = [...files.values()].some((file) => file.history.some(isChecking));
+    if (waiting && (this.revealReadAfter.get(network) ?? 0) <= this.deps.now()) {
+      try {
+        lookup = await this.deps.revealedRegisters(network);
+      } catch (e) {
+        // A trap and a lock are the wallet's; a read that failed is tried again a minute on, not at every sync.
+        if (isTrap(e) || e instanceof WalletLocked) throw e;
+        this.revealReadAfter.set(network, this.deps.now() + REVEAL_READ_RETRY_MS);
+      }
+    }
+    for (const [cid, file] of files) {
+      const outcomes = new Map<number, boolean>();
+      for (const entry of file.history) {
+        if (!lookup || !isChecking(entry)) continue;
+        const found = lookup(entry.reveal.name);
+        outcomes.set(entry.id, found?.generator === entry.reveal.register.generator && found.publicValue === entry.reveal.register.publicValue);
+      }
+      // Still waiting for a read: the next pass. Otherwise the record decides, a stale flag's too.
+      if (!outcomes.size && file.history.some(isChecking)) continue;
+      const decided = await this.serial(async () => {
+        const inbox = await this.inbox(network);
+        const meta = inbox.conversations[cid];
+        const kept = meta && (await this.readable(network, cid));
+        if (!meta || !kept) return false;
+        let changed = false;
+        for (const entry of kept.history) {
+          const outcome = outcomes.get(entry.id);
+          if (outcome === undefined || !isChecking(entry)) continue;
+          const { name } = entry.reveal;
+          const decided: Entry = entry;
+          decided.reveal = outcome ? { status: "verified", name } : { status: "failed" };
+          changed = true;
+        }
+        if (changed) {
+          // commit sets `checking` and `revealed` from the record (`measure`).
+          await this.commit(network, inbox, cid, kept);
+        } else {
+          Object.assign(meta, revealsOf(kept, meta.revealed));
+          await this.writeInbox(network, inbox);
+        }
+        return true;
+      });
+      if (decided) this.deps.changed?.(network);
+    }
   }
 
   /**
@@ -941,13 +1116,17 @@ export class MessagingService {
           repaired = true;
           continue;
         }
-        const now = measure(file, meta.lastAt);
+        const now = measure(file, meta);
         if (
           now.bytes !== meta.bytes ||
           now.outbox !== meta.outbox ||
           now.oldestAt !== meta.oldestAt ||
           now.last?.dir !== meta.last?.dir ||
-          now.last?.text !== meta.last?.text
+          now.last?.text !== meta.last?.text ||
+          now.last?.reveal !== meta.last?.reveal ||
+          now.checking !== meta.checking ||
+          now.revealed?.name !== meta.revealed?.name ||
+          now.revealed?.at !== meta.revealed?.at
         ) {
           Object.assign(meta, now);
           repaired = true;
@@ -1003,10 +1182,13 @@ export class MessagingService {
 
   /** Seals a queued text in its envelope, the ratchet stepping in `file`: pending, to be posted. */
   private seal(file: ConversationFile, entry: Entry): void {
+    this.sealPlaintext(file, entry, plaintextOf(entry.text ?? ""));
+  }
+
+  /** Seals `plaintext` (hex, its kind first) as `entry`'s envelope, the ratchet stepping in `file`. */
+  private sealPlaintext(file: ConversationFile, entry: Entry, plaintext: string): void {
     const sent = this.parse<{ conversation: string; envelope: string }>(
-      this.wasmCall(() =>
-        this.deps.wasm.messagingSend(JSON.stringify({ conversation: file.state, plaintext: plaintextOf(entry.text ?? "") })),
-      ),
+      this.wasmCall(() => this.deps.wasm.messagingSend(JSON.stringify({ conversation: file.state, plaintext }))),
     );
     if (isRefused(sent)) {
       entry.sent = "refused";
@@ -1156,7 +1338,7 @@ export class MessagingService {
   private async commit(network: NetworkName, inbox: Inbox, cid: string, file: ConversationFile): Promise<void> {
     const meta = inbox.conversations[cid]!;
     await this.writeFile(network, cid, file);
-    Object.assign(meta, measure(file, meta.lastAt));
+    Object.assign(meta, measure(file, meta));
     await this.writeInbox(network, inbox);
     await this.budget(network, inbox);
   }
@@ -1241,6 +1423,7 @@ export class MessagingService {
       ...(meta.unreachable ? { unreachable: meta.unreachable } : {}),
       ...(meta.last ? { last: meta.last } : {}),
       ...(meta.name ? { name: meta.name } : {}),
+      ...(meta.revealed ? { revealed: meta.revealed } : {}),
     };
   }
 
@@ -1363,6 +1546,15 @@ export class MessagingService {
   }
 }
 
+/** What a reveal's message shows: the Seedelf shown, checking, verified with its name, or failed, never named. */
+function revealView(entry: Entry): NonNullable<MessagingEntry["reveal"]> {
+  const reveal = entry.reveal;
+  if (reveal && "dir" in reveal) return { status: "shown", name: reveal.name };
+  if (reveal?.status === "verified") return { status: "verified", name: reveal.name };
+  if (reveal?.status === "checking") return { status: "checking" };
+  return { status: "failed" };
+}
+
 /**
  * A trap ends a run, as runs.ts's does; any other failure is that network's alone. One `wasmCall` or the wallet's
  * queue caught has locked the wallet already.
@@ -1371,14 +1563,39 @@ function rethrowTrap(e: unknown): void {
   if (isTrap(e)) throw e;
 }
 
-/** What the inbox shows of a conversation that its record decides: its storage, its outbox, its oldest message. */
-function measure(file: ConversationFile, lastAt: number): Pick<Meta, "bytes" | "outbox" | "oldestAt" | "last"> {
+/**
+ * What the inbox shows of a conversation that its record decides: its storage, its outbox, its oldest message, its last,
+ * and its reveals.
+ */
+function measure(
+  file: ConversationFile,
+  meta: Pick<Meta, "lastAt" | "revealed">,
+): Pick<Meta, "bytes" | "outbox" | "oldestAt" | "last" | "checking" | "revealed"> {
   return {
     bytes: storedBytes(utf8Length(JSON.stringify(file))),
     outbox: file.history.filter((e) => e.sent === "queued" || e.sent === "pending").length,
-    oldestAt: file.history[0]?.at ?? lastAt,
+    oldestAt: file.history[0]?.at ?? meta.lastAt,
     last: lastOf(file.history),
+    ...revealsOf(file, meta.revealed),
   };
+}
+
+/** A received reveal whose proof verified and whose register the chain hasn't been asked about yet. */
+function isChecking(entry: Entry): entry is Entry & { reveal: Extract<ReceivedReveal, { status: "checking" }> } {
+  return !!entry.reveal && "status" in entry.reveal && entry.reveal.status === "checking";
+}
+
+/**
+ * What a conversation's record says of its reveals: whether one waits for the chain, and the latest that verified,
+ * in the order they came, with when it came. One the budget has deleted leaves `revealed` as it was.
+ */
+function revealsOf(file: ConversationFile, revealed: Meta["revealed"]): Pick<Meta, "checking" | "revealed"> {
+  let latest: Meta["revealed"];
+  for (const entry of file.history) {
+    if (entry.reveal && "status" in entry.reveal && entry.reveal.status === "verified") latest = { name: entry.reveal.name, at: entry.at };
+  }
+  const named = latest ?? revealed;
+  return { checking: file.history.some(isChecking) ? true : undefined, revealed: named };
 }
 
 /**
@@ -1388,6 +1605,7 @@ function measure(file: ConversationFile, lastAt: number): Pick<Meta, "bytes" | "
 export function lastOf(history: readonly Entry[]): Meta["last"] {
   const entry = history.at(-1);
   if (!entry) return undefined;
+  if (entry.kind === KIND_REVEAL) return { dir: entry.dir, reveal: true };
   if (entry.text === undefined) return { dir: entry.dir };
   const chars = [...entry.text];
   return { dir: entry.dir, text: chars.length > PREVIEW_CHARS ? `${chars.slice(0, PREVIEW_CHARS).join("")}…` : entry.text };
@@ -1399,7 +1617,11 @@ function entryView(entry: Entry): MessagingEntry {
     dir: entry.dir,
     at: entry.at,
     // A kind this version can't show, or a request's message that doesn't read now: said, never guessed at.
-    ...(entry.text !== undefined ? { text: entry.text } : { unreadable: true }),
+    ...(entry.kind === KIND_REVEAL
+      ? { reveal: revealView(entry) }
+      : entry.text !== undefined
+        ? { text: entry.text }
+        : { unreadable: true }),
     ...(entry.sent ? { sent: entry.sent } : {}),
     ...(entry.expires !== undefined ? { expires: entry.expires } : {}),
   };
