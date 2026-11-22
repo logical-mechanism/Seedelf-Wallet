@@ -1,6 +1,6 @@
 # Chunk 54 · Seedelf Messaging
 
-**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **✅ Calls 12 and 13 merged** (54a′, #407). **✅ 54d merged** (#408, the WebAssembly bindings). **✅ 54e merged** (#409, the worker). **✅ 54f merged** (#410, the screens, with call 15's verified reveal). **🚧 54f′, the owner's reflection,** on `web-wallet/messaging-reflection`. 54b's proofs run separately (#405). Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
+**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **✅ Calls 12 and 13 merged** (54a′, #407). **✅ 54d merged** (#408, the WebAssembly bindings). **✅ 54e merged** (#409, the worker). **✅ 54f merged** (#410, the screens, with call 15's verified reveal). **🚧 54f′, the owner's reflection,** on `web-wallet/messaging-reflection`. **✅ 54b, the model** (#405): every lemma check.sh runs is proved. Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
 
 **The specification is [protocol.md](../../../seedelf-messaging/docs/protocol.md),** with the envelope in [construction.md](../../../seedelf-messaging/docs/construction.md) and the guarantees in [security.md](../../../seedelf-messaging/docs/security.md). It has had two reviews; the second's reasoning, and its adversarial tests, are in [protocol-review.md](../../../seedelf-messaging/docs/protocol-review.md). This plan doesn't repeat them: it says what to build, where, in what order, and what's still the owner's to decide. A step that changes the protocol changes protocol.md in the same PR.
 
@@ -98,13 +98,13 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 
 **Done means:** every rule in protocol.md §3 to §6 has a test that fails without it, and the vectors are reproduced.
 
-**Where it stands** (2026-11-20, `web-wallet/messaging-session`, not yet a PR):
+**Where it stands** (merged in #403, 2026-11-20):
 - **Built:** everything above but proof of work, which this step's brief left out. Call 6 has since been settled (priced by traffic), so solving and checking it, with vectors, can be built before 54c needs them. protocol.md §16 fixes every byte and rule the build decided, each choice marked [choice] for the owner to overturn.
 - **The vectors** (tests/vectors/messaging_session_v1.json, three conversations) were reproduced by a script written from protocol.md §16 alone, without reading the Rust: noble-curves 2.0.1 and WebCrypto, every value. Its notes on where the spec was silent are folded into §16.
 - **The rules hold the tests:** a mutation pass removed or weakened each of 39 rules in turn, and a test failed every time. Its first run found four survivors, which became a fix (a request's joining message now reads as eager processing would) and two continuation tests.
 - **For 54e and 54f:** a first message is refused once its t is 48 hours old, so a conversation nobody read in its first 48 hours can never begin, however many first messages follow (protocol.md §16.4). The wallet needs "start again", or must start again by itself.
 
-### 54b ⬜ The model
+### 54b ✅ The model
 
 - §3 to §6 in ProVerif or Tamarin [choice: ProVerif]. The queries:
   - secrecy of message keys;
@@ -115,13 +115,24 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 
   It checks the first-contact replay rules too.
 - Runs alongside 54c to 54e. It gates mainnet, not the code.
-- **The reveal (54f, protocol.md §19) isn't in the model.** model/README.md exists only on #405's branch, so its note waits for that PR. The text to add to *What the model assumes*:
-
-  > 15. **The verified reveal isn't modelled** (54f, protocol.md §19). A reveal is a message of its own kind inside the ratchet, sent only after the first reply, so its secrecy and who could have sent it are any session message's, which the lemmas above cover. Its proof isn't: an OR-proof that the Seedelf's register and A share a key, or that its maker knows w₀'s. Its soundness and its deniability (the reader can make one, so it convinces no one else) rest on the Cramer–Damgård–Schoenmakers argument, the crate's tests, a mutation pass and vectors reproduced from protocol.md alone (security.md, *The verified reveal*). A lemma with the proof as an abstract function, that a reader labels a Seedelf only when that Seedelf's key holder sent the reveal or the reader's own key is stolen, is the owner's to ask for.
-
-  Whether to add that lemma is the owner's call.
+- **The reveal (54f, protocol.md §19) isn't in the model:** the model README's assumption 15 says what covers it instead. A lemma with its proof as an abstract function is the owner's call.
 
 **Done means:** the model's queries hold, and a fresh-context reviewer has read the model against protocol.md.
+
+**Where it stands** (2026-11-22, `web-wallet/messaging-model`):
+- **Built in Tamarin, not ProVerif:** [seedelf-messaging/model/](../../../seedelf-messaging/model/), run by its `check.sh` in a pinned container. ProVerif's Diffie–Hellman equation needs a fixed base, and registers need any point as a base: its completion didn't finish on a one-line model.
+- **Four configurations of one file,** since Tamarin's search grows with every rule that publishes something and every compromise: the sessions (two full round trips, long-term keys and the initiator's state stolen), the responder's state, the continuations (one link), and the sessions without §5's cid rule. The model README lists every abstraction, what each configuration's attacker lacks, and why nothing is lost.
+- **A fresh-context reviewer read it against protocol.md.** Its findings, all taken: the first version let the attacker decrypt only with the associated data, so a stolen state opened nothing; the argument for the bases a reader accepts was wrong (w₀ in the associated data is what ties a first message to its base); the agreement lemmas excused a key stolen mid-conversation; the responder's state wasn't modelled.
+- **What it changed in the spec** (protocol.md §0, §1.1, §3, §7, §16.1): x_B stolen before the first reply takes the conversation over from the writer's side; the reader's own key lets anyone pose to it, "Continues" included; w₀ must stay in the associated data.
+- **For the owner (call 14):** a request the bounds push out leaves no tombstone, so a re-posted first message can read again as a new request.
+- **Calls 12 and 13 (54a′) after it:** the model's F leaves out `to`, its base proof and the stamp after F, and the README's assumption 4, which the model rested on, is now a rule the reader enforces: a first message's base is proved to be [b]g_S, and a continuation's is one of the reader's own (assumptions 4 and 12).
+- **Proved** (2026-11-22): every lemma check.sh runs, 35 of them, and each configuration's wellformedness checks, in one run of check.sh on the final file: an hour, 5 at a time with 1 core and 8 GB each, the longest lemma 29 minutes. The four lemmas of assumption 14 stay out of it, as before.
+- **What proving it found** (2026-11-22), in the model README:
+  - **The `[reuse]` lemmas helped nothing.** Their guard, `K(k)`, is the attacker sending k into the protocol, which a key never is, so no later proof could close on one, and each split the search on every message sent. That's why most lemmas ran out of an hour or 12.5 GB. Each keys lemma now guards on the key itself, `KU(rk)` and `KU(ck)`, a claim at least as strong; most lemmas then take minutes.
+  - **`r1_forward_secret` and `r2_forward_secret` were first stated false.** Their excuse named a theft of Bob's key only before he accepted Alice's own F; with his key, the attacker has him accept another F with her cid, p₀, A and w₀ and reads his replies (§1.1's key-compromise impersonation). Their excuse now names a theft before Bob accepted any first message, as their claim always said.
+  - **Agreement on m4 excuses the initiator's state stolen at any time,** not only before m4 is read, as `responder_keys4_secret` states it. That lemma with its theft dated, which m4's timed excuse would need, didn't finish in 30 minutes.
+- **How, in the model:** three helper lemmas (`static_dh_secret`, `responder_accepted_the_initiators_f`, and `static_dh_holds_r_a` made `[reuse]`), each lemma hiding the helpers it doesn't rest on, `keys4_secret` with a key-guarded twin, the trace lemmas naming their trace step by step, and a goal ranking (`states_then_keys`) for the lemmas Tamarin's default ranking stalled on. None changes a claim but the three above.
+- **check.sh** caps each run's cores and keeps it out of swap, runs the wellformedness checks in the same pool, kills a run inside its container (killing the docker client left it running), and fails a wellformedness run that didn't finish.
 
 ### 54c ✅ The relay
 
@@ -387,6 +398,9 @@ Each has a recommendation, which the owner can overturn.
 13. ✅ **Proving the base comes from the named handle** (the owner, 2026-11-21): built in 54a′.
     - A first message to the sum of two Seedelfs' registers opens only for a wallet holding both, so a reply to it links them, unseen. A proof that p₀ re-randomizes the handle in `to`, bound to F, makes `to` verified; `to` is required.
     - It needed every envelope bound to its conversation too, or the writer aims the envelope at the sum instead (54a′, protocol-review.md §G).
+14. ❓ **Tombstones for evicted requests** (found by 54b's review). §16.4 leaves no tombstone when the bounds push a request out [choice]. So after a flood of 50 requests, a first message re-posted after the relay's 36 hours, and within t + 48 hours, reads again as a new request. No conversation changes; the reader sees a request twice.
+    - **Recommended: tombstone evicted requests too,** until t + 48 hours as the others. A flood then costs the reader a tombstone per evicted request (24 bytes each), as it costs the flooder a stamp for each (call 12).
+    - The alternative is to leave it, documented.
 15. ✅ **Revealing one's Seedelf inside a conversation: a verified reveal, in 54f** (the owner, 2026-11-21: "allow alice to reveal but only in the rachet part so its not in the first message"; "a button that shows up after the handshake on Alices side that says, Reveal or something and it sends it like a message to bob"; "I think its worth putting it in this pr"). Built as recommended, designated-verifier (protocol.md §19). The owner noted it proves "someone with a seedelf is messaging you", not a person: its value is tying a conversation to a Seedelf the reader already knows. Numbered past 54b's call 14 (#405).
     - **Recommended: a verified reveal only,** as its own step after 54f. A new inner kind (§18), sent in the ratchet and never in a first message, carries the Seedelf's name and a proof that the conversation's key A and that Seedelf's register share the writer's key, bound to the cid; the reader shows §7's "Verified ⟨handle⟩". The writer chooses it, per conversation, and the reader alone learns it.
     - **Which proof:** a designated-verifier one convinces only the reader, who could have made it, so the conversation stays deniable, as Signal's are; a plain one is evidence the reader can show anyone. Recommended: designated-verifier.

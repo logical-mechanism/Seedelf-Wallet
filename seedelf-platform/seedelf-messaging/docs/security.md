@@ -5,7 +5,7 @@ What the crate guarantees, under which assumptions, and what it doesn't. Unaudit
 - **The v1 envelope** (Phase 1, most of this file) is a cryptographic foundation. On its own it has no sender authentication, no forward secrecy and no replay protection.
 - **The session layer** (chunk 54's 54a: [protocol.md](protocol.md) §3 to §6, exact in §16) builds those on it: conversations, the Double Ratchet, and the rules for replays, requests and continuations. What each compromise reveals is protocol.md §1.1. What its tests establish is [below](#the-session-layer).
 - **The verified reveal** (54f, [protocol.md](protocol.md) §19) lets the side that wrote first show the other one of its Seedelfs, by a designated-verifier proof. What it proves and what it doesn't is [below](#the-verified-reveal).
-- The relay is built, in the data layer (54c, protocol.md §17): it checks a post's shape, points and proof of work, and can't read it. There's still no model of the protocol (54b), and no key distribution beyond a Seedelf's public register.
+- The relay is built, in the data layer (54c, protocol.md §17): it checks a post's shape, points and proof of work, and can't read it. There's no key distribution beyond a Seedelf's public register. The protocol is modelled in Tamarin: [model/](../model/) (54b).
 
 ## What the tests establish, and what they don't
 
@@ -124,7 +124,7 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 
 ### What they don't
 
-- **Secrecy, forward secrecy, recovery and authentication** rest on the Double Ratchet's and X3DH's analyses, adapted here, and on the static DH's argument in protocol-review.md finding 1. 54b's model checks them symbolically; it isn't written yet.
+- **Secrecy, forward secrecy, recovery and authentication** rest on the Double Ratchet's and X3DH's analyses, adapted here. [The model](../model/README.md) (54b) states them as lemmas and checks them symbolically, within the assumptions its README lists: every lemma but four on how a continuation is labelled is proved. A symbolic proof says nothing of the primitives' strength, of timing, or of the code: the tests hold the code to §16, and the model holds §16 to its claims.
 - **Constant time,** as for the envelope.
 
 ### Implementation notes
@@ -163,6 +163,6 @@ A Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers) that the revealed S
 - Written arguments for IND-CCA2 and for unlinkability, with the per-envelope base.
 - The spending-and-reading argument, checked against the literature.
 - A constant-time review of the WebAssembly build. WebAssembly engines promise nothing about timing.
-- The session layer's model (54b), then an outside review of the protocol and of the reveal's proof, which the model doesn't cover.
+- An outside review of the protocol, its model (54b), and the reveal's proof, which the model doesn't cover.
 - The relay's price and window tuned with real use, and a memory-hard puzzle if GPUs flood it (protocol.md §17.4).
 - A dependency audit (cargo-audit or cargo-deny) for this crate in CI.
