@@ -353,7 +353,7 @@ Each hit is a use in §4's table, a caller of one, or a new use, which needs thi
 - **Rule 5:** tests/invalid_inputs.rs, and the parsers' refusals throughout.
 - **A mutation pass** over the new rules (2026-11-22): 13 mutants, 12 killed. Each part of the nonce's message removed (the label, the branch, the statement, c, z, aux), the key replaced, half the HMAC reduced, the old drawn nonce, the writer's branch byte made the reader's, aux drawn first, and create_proof's guard removed: each made a test fail. The survivor keeps a zero nonce instead of drawing aux again, an event of probability 2⁻²⁵⁵ that no test can reach.
 - **A second, over b and k** (2026-11-22): 28 mutants, 27 killed. Each label changed or removed; each part of b's message removed (the handle, F's head, aux) or reordered, and each field of the head (cid, t, `to`, `replaces`); each part of k's message removed (the handle, p₀, F′, aux); b not keyed by x, k not keyed by b; the old drawn b, the old drawn k, and k = b; the draw order changed three ways (b's aux before cid, k's aux before e_A, the old order); and the shared hedge's key zeroed or little-endian, or half its HMAC reduced. The survivor is the same 2⁻²⁵⁵ zero kept.
-- **A clean-room check** of the new §19.2: protocol.md §19.6, "Checked again".
+- **A clean-room check** of the new §19.2: protocol.md §19.6, "Checked again". And of §16.2's b and k: protocol.md §16.6, "Checked again" (2026-11-22).
 
 **Review.** A fresh-context Claude review read the first draft and the code (2026-11-22). What it found, now folded in:
 - b's secrecy rested on the random source alone (§9, since fixed);

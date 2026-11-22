@@ -16,7 +16,7 @@ use group::Curve;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::support::{Seeded, handle, key, opened, test_scalar};
+use super::support::{Seeded, handle, identity, key, off_curve, opened, outside_g1, test_scalar};
 use crate::SecretKey;
 use crate::envelope::ENVELOPE_OVERHEAD;
 use crate::keys::scalar_mod_q;
@@ -400,6 +400,227 @@ fn with_events(mut start: Value, name: &str, mut events: Vec<Value>) -> Value {
     start
 }
 
+/// The group order q, big-endian.
+const GROUP_ORDER: &str = "73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001";
+
+/// What a reader makes of F's proof for `handle` (§16.2, §16.4): `ok`, or
+/// the refusal's code, the crate's error in snake case as seedelf-wasm
+/// names it. F is parsed first.
+fn judge_base_proof(handle: &Register, first_contact: &[u8]) -> &'static str {
+    match crate::session::first_contact::FirstContact::from_bytes(first_contact) {
+        Err(crate::Error::InvalidMessage) => "invalid_message",
+        Err(crate::Error::InvalidEncoding) => "invalid_encoding",
+        Err(crate::Error::NotInSubgroup) => "not_in_subgroup",
+        Err(crate::Error::IdentityPoint) => "identity_point",
+        Err(other) => panic!("no base proof check refuses with {other:?}"),
+        Ok(first) if first.proves_base(handle) => "ok",
+        Ok(_) => "invalid_base_proof",
+    }
+}
+
+/// The base proof's checks: what the sessions don't pin of how a reader
+/// takes F and its proof for a handle (§16.1, §16.2), each built from a
+/// session's recorded values. Each gives the handle, F and the result.
+fn base_proof_checks(sessions: &[&Value]) -> Value {
+    let bytes = |value: &Value| hex::decode(value.as_str().unwrap()).unwrap();
+    let handle_of = |session: &Value| {
+        Register::from_bytes(
+            &bytes(&session["handle"]["generator"]).try_into().unwrap(),
+            &bytes(&session["handle"]["public_value"])
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let q: [u8; 32] = hex::decode(GROUP_ORDER).unwrap().try_into().unwrap();
+    // F's last 64 bytes are c then z.
+    let with_proof = |first_contact: &[u8], c: &[u8], z: &[u8]| {
+        let mut out = first_contact[..first_contact.len() - 64].to_vec();
+        out.extend_from_slice(c);
+        out.extend_from_slice(z);
+        out
+    };
+    let (one, four) = (sessions[0], sessions[3]);
+    let f1 = bytes(&one["first_contact"]);
+    let f4 = bytes(&four["first_contact"]);
+    let (c1, z1) = (&f1[f1.len() - 64..f1.len() - 32], &f1[f1.len() - 32..]);
+    let (c4, z4) = (&f4[f4.len() - 64..f4.len() - 32], &f4[f4.len() - 32..]);
+
+    // c + q, as 32 bytes: the first session whose challenge leaves room.
+    let plus_q = |c: &[u8]| -> Option<[u8; 32]> {
+        let mut out = [0u8; 32];
+        let mut carry = 0u16;
+        for i in (0..32).rev() {
+            let sum = u16::from(c[i]) + u16::from(q[i]) + carry;
+            out[i] = sum as u8;
+            carry = sum >> 8;
+        }
+        (carry == 0).then_some(out)
+    };
+    let (room, c_plus_q) = sessions
+        .iter()
+        .filter(|session| !session["handle"].is_null())
+        .find_map(|session| {
+            let f = bytes(&session["first_contact"]);
+            plus_q(&f[f.len() - 64..f.len() - 32]).map(|c| (*session, c))
+        })
+        .expect("a challenge below 2^256 - q");
+    let f_room = bytes(&room["first_contact"]);
+
+    // A proof whose nonce is 0: T = O, z = (c mod q)·b, on session 1's F′.
+    let handle1 = handle_of(one);
+    let b =
+        crate::keys::scalar_from_bytes(&bytes(&one["base_scalar"]["scalar"]).try_into().unwrap())
+            .unwrap();
+    let base = blstrs::G1Affine::from_compressed(&bytes(&one["base"]).try_into().unwrap()).unwrap();
+    let prefix = &f1[..f1.len() - 64];
+    let c0 = base_challenge(
+        &handle1,
+        &base,
+        &<blstrs::G1Affine as group::prime::PrimeCurveAffine>::identity(),
+        prefix,
+    );
+    let z0 = scalar_mod_q(&c0) * b;
+
+    // A proof whose challenge leaves F′ out: valid only to a reader that
+    // leaves it out too.
+    let k = crate::keys::scalar_from_bytes(
+        &bytes(&one["base_proof"]["nonce"]["scalar"])
+            .try_into()
+            .unwrap(),
+    )
+    .unwrap();
+    let commitment = (handle1.generator() * k).to_affine();
+    let without_f: [u8; 32] = Sha256::new()
+        .chain_update(BASE_LABEL)
+        .chain_update(handle1.to_bytes())
+        .chain_update(base.to_compressed())
+        .chain_update(commitment.to_compressed())
+        .finalize()
+        .into();
+    let z_without_f = k + scalar_mod_q(&without_f) * b;
+
+    // Session 1's own proof with z + q: refused at parsing.
+    let z_plus_q = plus_q(z1).expect("session 1's response leaves room for q");
+
+    // Another register of session 1's reader: its root, (G, [x_B]G).
+    let bob =
+        SecretKey::from_bytes(&bytes(&one["responder_secret_key"]).try_into().unwrap()).unwrap();
+
+    // F's points, each replaced: p₀, A and E_A follow F's head.
+    let to_len = bytes(&one["to"]).len();
+    let points = 16 + 8 + 1 + to_len + 1 + if one["replaces"].is_null() { 0 } else { 16 };
+    let with_point = |at: usize, point: [u8; 48]| {
+        let mut out = f1.clone();
+        out[points + 48 * at..points + 48 * (at + 1)].copy_from_slice(&point);
+        out
+    };
+    let mut longer = f1.clone();
+    longer.push(0);
+    // Two faults: p₀ as O, and z + q. Fields are read in order.
+    let mut two_faults = with_proof(&f1, c1, &z_plus_q);
+    two_faults[points..points + 48].copy_from_slice(&identity());
+
+    let cases: Vec<(String, Register, Vec<u8>)> = vec![
+        ("session 1's proof".into(), handle1, f1.clone()),
+        (
+            "session 4's proof, whose challenge is at least q, carried unreduced".into(),
+            handle_of(four),
+            f4.clone(),
+        ),
+        (
+            "session 4's challenge reduced mod q: c is compared as F's 32 bytes".into(),
+            handle_of(four),
+            with_proof(&f4, &scalar_mod_q(c4).to_bytes_be(), z4),
+        ),
+        (
+            format!(
+                "session {}'s challenge plus q: c is compared as F's 32 bytes",
+                sessions.iter().position(|s| *s == room).unwrap() + 1
+            ),
+            handle_of(room),
+            with_proof(&f_room, &c_plus_q, &f_room[f_room.len() - 32..]),
+        ),
+        (
+            "a proof whose nonce is 0: T' is O, hashed as 0xc0 then 47 zero bytes, and it verifies"
+                .into(),
+            handle1,
+            with_proof(&f1, &c0, &z0.to_bytes_be()),
+        ),
+        (
+            "session 1's proof against another register of the same key".into(),
+            bob.register(),
+            f1.clone(),
+        ),
+        (
+            "a proof whose challenge leaves out F': the challenge covers F'".into(),
+            handle1,
+            with_proof(&f1, &without_f, &z_without_f.to_bytes_be()),
+        ),
+        (
+            "session 1's proof with z + q: z must be below q, or F doesn't parse".into(),
+            handle1,
+            with_proof(&f1, c1, &z_plus_q),
+        ),
+        (
+            "session 1's F with p0 as O".into(),
+            handle1,
+            with_point(0, identity()),
+        ),
+        (
+            "session 1's F with A outside G1".into(),
+            handle1,
+            with_point(1, outside_g1()),
+        ),
+        (
+            "session 1's F with E_A off the curve".into(),
+            handle1,
+            with_point(2, off_curve()),
+        ),
+        ("session 1's F with a byte after it".into(), handle1, longer),
+        (
+            "session 1's F with p0 as O and z + q: F is read in order, so p0's fault is the one"
+                .into(),
+            handle1,
+            two_faults,
+        ),
+    ];
+    let checks: Vec<Value> = cases
+        .into_iter()
+        .map(|(name, handle, first_contact)| {
+            json!({
+                "name": name,
+                "handle": register_json(&handle),
+                "first_contact": hex(&first_contact),
+                "result": judge_base_proof(&handle, &first_contact),
+            })
+        })
+        .collect();
+    let results: Vec<&str> = checks
+        .iter()
+        .map(|c| c["result"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        results,
+        [
+            "ok",
+            "ok",
+            "invalid_base_proof",
+            "invalid_base_proof",
+            "ok",
+            "invalid_base_proof",
+            "invalid_base_proof",
+            "invalid_message",
+            "identity_point",
+            "not_in_subgroup",
+            "invalid_encoding",
+            "invalid_message",
+            "identity_point",
+        ]
+    );
+    json!(checks)
+}
+
 /// Whether the base proof's challenge, as F carries it, is below q.
 fn challenge_is_canonical(conversation: &Conversation) -> bool {
     let challenge = conversation.first.proof.unwrap().challenge;
@@ -635,6 +856,7 @@ fn all_vectors() -> Value {
         },
         "first_contact_stamp_bits": FIRST_CONTACT_STAMP_BITS,
         "envelope_sizes": ENVELOPE_SIZES,
+        "base_proof_checks": base_proof_checks(&[&first, &second, &third, &fourth]),
         "sessions": [first, second, third, fourth],
     })
 }
