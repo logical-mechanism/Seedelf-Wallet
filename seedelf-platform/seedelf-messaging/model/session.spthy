@@ -3,12 +3,15 @@
  * (§16), in Tamarin. Chunk 54's 54b. Run it with ./check.sh; the README
  * says what is modelled, what isn't, and why.
  *
- * Four configurations, by flag, sharing the handles and first contact:
+ * Six configurations, by flag, sharing the handles and first contact:
  *   (none)              the ratchet over two round trips, long-term keys and
  *                       the initiator's state stolen, and the sessions' lemmas;
  *   -D=RESPONDER_STATE  the same with the responder's state stolen instead;
  *   -D=CONTINUATIONS    §6's continuations instead of the ratchet, and theirs;
- *   -D=NO_CID_RULE      the sessions without §5's cid rule, to find a replay.
+ *   -D=NO_CID_RULE      the sessions without §5's cid rule, to find a replay;
+ *   -D=REVEAL           §19's verified reveal instead of the ratchet;
+ *   -D=SKIPPED          the ratchet to a chain of two messages, read in either
+ *                       order, and a kept skipped key stolen.
  * Tamarin's search grows with every rule that publishes a power of G, so
  * each lemma sees only the rules it needs; the README says what each
  * configuration's attacker lacks, and why that loses no attack.
@@ -134,7 +137,7 @@ rule R_Read_m1:
   [ !Accepted(Rsp, cid, e0, Ai, w0, rep),
     R1(Rsp, cid, e0, Ai, w0, ~t1, Si, RK2, CKs) ]
 
-#ifdef CONTINUATIONS | CONTINUATIONS_UNFINISHED
+#ifdef CONTINUATIONS
 
 /* ---- Continuing (§6, §16.3) ---- */
 
@@ -210,58 +213,17 @@ restriction judged_on_arrival:
 /* §3 and §6: a reader accepts a session whose A is P's key only if P
    started it, fresh or as a continuation, with the same cid, R_A, R_B, F,
    and reads only what P sent. First the static DH itself: [x_R]A for A of
-   P's key is secret unless one of the two keys is. */
+   P's key is secret unless one of the two keys was stolen before it was
+   known. Dated as the sessions' static_dh_secret is: an undated "unless"
+   can't close the branch where the key is stolen after the forgery, and
+   the hold on R_A ran past an hour on it (README). */
 
 lemma static_dh_secret_with_continuations [reuse]:
   "All R p0 A s P #i #k #j.
      RStatic(R, p0, A, s)@i & KeyOn(P, p0, A)@k & KU(s)@j
-     ==> (Ex #r. RevLtk(P)@r) | (Ex #r. RevLtk(R)@r)"
+     ==> (Ex #r. RevLtk(P)@r & #r < #j) | (Ex #r. RevLtk(R)@r & #r < #j)"
 
-/* A continuation's message is secret unless the old other side's key is. */
-
-lemma continuation_message_secret [hide_lemma=static_dh_secret_with_continuations]:
-  "All W o cid p0 mine theirs F m Q #s #t #k #j.
-     IStartC(W, o, cid, p0, mine, theirs, F)@s & ISentC(W, cid, 'm1', m)@t
-   & KeyOn(Q, p0, theirs)@k & K(m)@j
-     ==> (Ex #r. RevLtk(Q)@r)"
-
-/* §6, §7: "Continues" means the old other side's key wrote it. */
-
-/* Reachable both ways, and the reader's own key undoes it (§1.1). */
-
-lemma continues_shown_to_the_old_responder [hide_lemma=static_dh_secret_with_continuations]: exists-trace
-  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 Fc mc A w #s #t #a #h #c #u #b #i.
-     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, ocid, 'm1', m1)@t
-   & RRecv(Rsp, ocid, p0, Ai, w0, 'm1', m1)@a & HasConv(Rsp, ocid)@h
-   & IStartC(Ini, ocid, ncid, p0, Ai, w0, Fc)@c & ISentC(Ini, ncid, 'm1', mc)@u
-   & RRecv(Rsp, ncid, p0, A, w, 'm1', mc)@b & ShowsContinues(Rsp, ocid, ncid, p0, A)@i
-   & not (Ex P #k. RevLtk(P)@k)"
-
-lemma continues_shown_to_the_old_initiator [hide_lemma=static_dh_secret_with_continuations]: exists-trace
-  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 Fc mc A w #s #t #a #h #c #u #b #i.
-     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, ocid, 'm1', m1)@t
-   & RRecv(Rsp, ocid, p0, Ai, w0, 'm1', m1)@a & HasConv(Rsp, ocid)@h
-   & IStartC(Rsp, ocid, ncid, p0, w0, Ai, Fc)@c & ISentC(Rsp, ncid, 'm1', mc)@u
-   & RRecv(Ini, ncid, p0, A, w, 'm1', mc)@b & ShowsContinues(Ini, ocid, ncid, p0, A)@i
-   & not (Ex P #k. RevLtk(P)@k)"
-
-#endif
-
-/* ---- Lemmas: continuations, unfinished (-D=CONTINUATIONS_UNFINISHED) ---- */
-
-/* These ran past an hour at 12 GB each, and check.sh doesn't run them. The
-   README says what stands in for them: static_dh_secret_with_continuations
-   above, and the sessions' static_dh_holds_r_a and KCI trace, which cover
-   any honest base, an old conversation's included. */
-
-#ifdef CONTINUATIONS_UNFINISHED
-
-lemma static_dh_secret_unfinished [reuse]:
-  "All R p0 A s P #i #k #j.
-     RStatic(R, p0, A, s)@i & KeyOn(P, p0, A)@k & KU(s)@j
-     ==> (Ex #r. RevLtk(P)@r) | (Ex #r. RevLtk(R)@r)"
-
-lemma static_dh_holds_r_a_with_continuations:
+lemma static_dh_holds_r_a_with_continuations [reuse]:
   "All Rsp cid p0 Ai w0 F P #i #k.
      RAccept(Rsp, cid, p0, Ai, w0, F)@i & KeyOn(P, p0, Ai)@k
      ==> (Ex #s. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & #s < #i)
@@ -275,21 +237,59 @@ lemma responder_agreement_m1_with_continuations:
        | (Ex o F #s #t. IStartC(P, o, cid, p0, Ai, w0, F)@s & ISentC(P, cid, 'm1', m)@t & #t < #i)
        | (Ex #r. RevLtk(P)@r & #r < #i) | (Ex #r. RevLtk(Rsp)@r & #r < #i)"
 
-lemma continues_only_from_the_old_other_side:
+/* A continuation's message is secret unless the old other side's key is. */
+
+lemma continuation_message_secret [hide_lemma=static_dh_secret_with_continuations,
+                                   hide_lemma=static_dh_holds_r_a_with_continuations]:
+  "All W o cid p0 mine theirs F m Q #s #t #k #j.
+     IStartC(W, o, cid, p0, mine, theirs, F)@s & ISentC(W, cid, 'm1', m)@t
+   & KeyOn(Q, p0, theirs)@k & K(m)@j
+     ==> (Ex #r. RevLtk(Q)@r)"
+
+/* §6, §7: "Continues" means the old other side's key wrote it, unless that
+   key or the reader's own was stolen first. */
+
+lemma continues_only_from_the_old_other_side [hide_lemma=static_dh_secret_with_continuations]:
   "All R ocid ncid p0 A P #i #k.
      ShowsContinues(R, ocid, ncid, p0, A)@i & KeyOn(P, p0, A)@k
      ==> (Ex #c. StartsContinuation(P, ocid, ncid)@c & #c < #i)
        | (Ex #r. RevLtk(P)@r & #r < #i) | (Ex #r. RevLtk(R)@r & #r < #i)"
 
+/* Reachable both ways, and the reader's own key forges it (§1.1): the
+   attacker, holding x_B after an honest conversation, writes a continuation
+   of it on the old base with E = S = G, which any point would do. */
+
+lemma continues_shown_to_the_old_responder [hide_lemma=static_dh_secret_with_continuations,
+                                            hide_lemma=static_dh_holds_r_a_with_continuations]: exists-trace
+  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 Fc mc A w #s #t #a #h #c #u #b #i.
+     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, ocid, 'm1', m1)@t
+   & RRecv(Rsp, ocid, p0, Ai, w0, 'm1', m1)@a & HasConv(Rsp, ocid)@h
+   & IStartC(Ini, ocid, ncid, p0, Ai, w0, Fc)@c & ISentC(Ini, ncid, 'm1', mc)@u
+   & RRecv(Rsp, ncid, p0, A, w, 'm1', mc)@b & ShowsContinues(Rsp, ocid, ncid, p0, A)@i
+   & not (Ex P #k. RevLtk(P)@k)"
+
+lemma continues_shown_to_the_old_initiator [hide_lemma=static_dh_secret_with_continuations,
+                                            hide_lemma=static_dh_holds_r_a_with_continuations]: exists-trace
+  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 Fc mc A w #s #t #a #h #c #u #b #i.
+     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, ocid, 'm1', m1)@t
+   & RRecv(Rsp, ocid, p0, Ai, w0, 'm1', m1)@a & HasConv(Rsp, ocid)@h
+   & IStartC(Rsp, ocid, ncid, p0, w0, Ai, Fc)@c & ISentC(Rsp, ncid, 'm1', mc)@u
+   & RRecv(Ini, ncid, p0, A, w, 'm1', mc)@b & ShowsContinues(Ini, ocid, ncid, p0, A)@i
+   & not (Ex P #k. RevLtk(P)@k)"
+
 lemma reader_key_forges_continues: exists-trace
-  "Ex Ini Rsp ocid ncid p0 Ai w0 F #s #h #i #r.
-     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & HasConv(Rsp, ocid)@h
-   & ShowsContinues(Rsp, ocid, ncid, p0, Ai)@i & RevLtk(Rsp)@r
-   & not (Ex #c. StartsContinuation(Ini, ocid, ncid)@c) & not (Ex #q. RevLtk(Ini)@q)"
+  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 t #s #t #a #h #r #x #n #i.
+     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, ocid, 'm1', m1)@t
+   & RRecv(Rsp, ocid, p0, Ai, w0, 'm1', m1)@a & HasConv(Rsp, ocid)@h
+   & RevLtk(Rsp)@r & #h < #r
+   & K(<'0x01', <ncid, t, ocid, p0, Ai, 'g'>, <'g', '0', '0'>>)@x & #r < #x
+   & RAccept(Rsp, ncid, p0, Ai, w0, <ncid, t, ocid, p0, Ai, 'g'>)@n
+   & ShowsContinues(Rsp, ocid, ncid, p0, Ai)@i
+   & not (Ex W o c #c. StartsContinuation(W, o, c)@c) & not (Ex #q. RevLtk(Ini)@q)"
 
 #endif
 
-#ifdef not CONTINUATIONS & not CONTINUATIONS_UNFINISHED
+#ifdef not CONTINUATIONS & not REVEAL
 
 /* ---- The ratchet (§4), the initiator ---- */
 
@@ -321,14 +321,14 @@ rule I_Read_r1:
 
 /* §1.1's "current state": the initiator's record as it was after the first
    reply, taken once, then or later. */
-#ifdef not CONTINUATIONS & not CONTINUATIONS_UNFINISHED & not RESPONDER_STATE
+#ifdef not CONTINUATIONS & not RESPONDER_STATE & not REVEAL & not SKIPPED
 rule Reveal_state_initiator:
   [ SnapI(Ini, cid, ~s2, RK, CKs, CKr, w0) ]
   --[ RevState(Ini, cid) ]->
   [ Out(<~s2, RK, CKs, CKr, w0>) ]
 #endif
 
-#ifdef not CONTINUATIONS & not CONTINUATIONS_UNFINISHED
+#ifdef not CONTINUATIONS & not REVEAL & not SKIPPED
 
 rule I_Send_m3:
   let p0 = 'g'^~rb
@@ -372,6 +372,10 @@ rule I_Send_m4:
   --[ ISent(Ini, Rsp, cid, 'm4', ~m4) ]->
   [ Out(<'0x02', cid, h, aenc(~m4, ck_mk(CKs), ad)>) ]
 
+#endif
+
+#ifdef not CONTINUATIONS & not REVEAL
+
 /* ---- The ratchet (§4), the responder ---- */
 
 rule R_Send_r1:
@@ -396,7 +400,7 @@ rule Reveal_state_responder:
   [ Out(<~t1, RK, CKs, w0>) ]
 #endif
 
-#ifdef not CONTINUATIONS & not CONTINUATIONS_UNFINISHED
+#ifdef not CONTINUATIONS & not REVEAL & not SKIPPED
 
 rule R_Derive_m3:
   let p0  = 'g'^e0
@@ -449,6 +453,283 @@ rule R_Read_m4:
 
 #endif
 
+#ifdef REVEAL
+
+/* ---- The verified reveal (§19), -D=REVEAL ---- */
+
+/* The OR-proof, as two constructors with no destructor: prf1 is the real
+   branch, made with the key x of A = [x]p0 and of the register (g_S, [x]g_S);
+   prf2 the other, made with the key of w0 = [y]p0. Each binds what §19.2's
+   challenge does: cid, p0, A, w0, the name and the register. The reader
+   checks one by equality, as the real check's equations hold exactly then,
+   taking its key from a principal's: the real branch's from any principal's,
+   the other from its own. A proof by a key no principal holds isn't here: it
+   verifies only for registers of that key, so for no principal's Seedelf, and
+   every lemma below is about a principal's (README). */
+functions: prf1/8, prf2/8
+restriction eq: "All x y #i. Eq(x, y)@i ==> x = y"
+
+/* A Seedelf on chain: a name, once, with a register of its owner's key. The
+   attacker mints its own, with any register, a copy of another's included. */
+rule Seedelf:
+  [ !Ltk(P, ~x), Fr(~s) ]
+  --[ SeedelfOf(P, $N, 'g'^~s, ('g'^~s)^~x), OneName($N) ]->
+  [ !Seedelf(P, $N, 'g'^~s, ('g'^~s)^~x), !Chain($N, 'g'^~s, ('g'^~s)^~x), Out(<$N, 'g'^~s, ('g'^~s)^~x>) ]
+
+rule Seedelf_attacker:
+  [ In(<gS, uS>) ] --[ OneName($N), AttackerSeedelf($N) ]-> [ !Chain($N, gS, uS) ]
+
+restriction one_name: "All N #i #j. OneName(N)@i & OneName(N)@j ==> #i = #j"
+
+/* The initiator reveals one of its Seedelfs in a conversation it started
+   (§19.1): the name, the register, and the proof (§19.3). Sent in the
+   clear, where the protocol sends it inside the ratchet: this attacker
+   sees more than the real one. */
+rule I_Reveal:
+  [ !Conv(Ini, cid, rb, Ai, w0), !Ltk(Ini, ~xi), !Seedelf(Ini, N, gS, uS) ]
+  --[ IRevealed(Ini, cid, N) ]->
+  [ Out(<'reveal', cid, N, gS, uS, prf1(~xi, cid, 'g'^rb, Ai, w0, N, gS, uS)>) ]
+
+/* The responder checks a reveal in a conversation it accepted, against the
+   register the chain gives the name (§19.4). The real branch in two rules,
+   A's key, then the register's: one rule raising both points to the key
+   stalls Tamarin's precomputation, as a read deriving on several bases does. */
+rule R_Check_reveal_own_key:
+  let p0 = 'g'^e0 in
+  [ !Accepted(Rsp, cid, e0, Ai, w0, rep), !Ltk(P, ~x), !Chain(N, gS, uS),
+    In(<'reveal', cid, N, gS, uS, prf1(~x, cid, p0, Ai, w0, N, gS, uS)>) ]
+  --[ Eq(p0^~x, Ai) ]->
+  [ RevealOnA(Rsp, cid, N, gS, uS, ~x) ]
+
+rule R_Check_reveal_own_key_register:
+  [ RevealOnA(Rsp, cid, N, gS, uS, ~x) ]
+  --[ Eq(gS^~x, uS), RVerified(Rsp, cid, N, gS, uS) ]->
+  [ ]
+
+rule R_Check_reveal_reader_key:
+  let p0 = 'g'^e0 in
+  [ !Accepted(Rsp, cid, e0, Ai, w0, rep), !Ltk(Rsp, ~xr), !Chain(N, gS, uS),
+    In(<'reveal', cid, N, gS, uS, prf2(~xr, cid, p0, Ai, w0, N, gS, uS)>) ]
+  --[ RVerified(Rsp, cid, N, gS, uS) ]->
+  [ ]
+
+/* §19.5: "Verified" names a Seedelf only if its owner revealed it, in this
+   conversation, which it started with this reader; unless the owner's key
+   or the reader's was stolen first. The register is any of a principal's
+   Seedelfs, and the name any name, so a name the attacker minted with a
+   copy of the register is covered too. */
+lemma reveal_only_from_the_seedelfs_owner:
+  "All R cid N N0 gS uS P #i #k.
+     RVerified(R, cid, N, gS, uS)@i & SeedelfOf(P, N0, gS, uS)@k
+     ==> (Ex p0 Ai w0 F #s #v. IStart(P, R, cid, p0, Ai, w0, F)@s & IRevealed(P, cid, N)@v & #v < #i)
+       | (Ex #r. RevLtk(P)@r & #r < #i) | (Ex #r. RevLtk(R)@r & #r < #i)"
+
+/* Reachable, and the reader's own key forges one (§19.5): the attacker
+   writes to the reader as itself and shows another's Seedelf. */
+lemma reveal_verifies: exists-trace
+  "Ex Ini Rsp cid p0 Ai w0 F N gS uS #s #a #v #k.
+     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & RAccept(Rsp, cid, p0, Ai, w0, F)@a
+   & IRevealed(Ini, cid, N)@v & RVerified(Rsp, cid, N, gS, uS)@k
+   & not (Ex P #r. RevLtk(P)@r)"
+
+lemma reader_key_forges_a_reveal: exists-trace
+  "Ex Rsp cid p0 Ai w0 F N gS uS P #a #o #r #k.
+     RAccept(Rsp, cid, p0, Ai, w0, F)@a & SeedelfOf(P, N, gS, uS)@o & RevLtk(Rsp)@r
+   & RVerified(Rsp, cid, N, gS, uS)@k & not (P = Rsp)
+   & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)
+   & not (Ex c M #v. IRevealed(P, c, M)@v) & not (Ex #q. RevLtk(P)@q)"
+
+#endif
+
+#ifdef SKIPPED
+
+/* ---- Skipped keys (§4.1, §6), -D=SKIPPED ---- */
+
+/* The sessions up to the first reply, then the initiator's next chain with
+   two messages, n = 0 and n = 1, which the reader takes in either order:
+   n = 1 first keeps n = 0's key until n = 0 comes, and that kept key can be
+   stolen, once (§1.1's "one message key"). No later step, no state theft. */
+rule I_Send_m3_first:
+  let p0 = 'g'^~rb
+      S2 = p0^~s2
+      h  = <S2, '1', '0'>
+      ad = <cid, p0, Ai, p0, w0, h>
+  in
+  [ I2(Ini, Rsp, cid, ~rb, Ai, w0, ~s2, T1, RK, CKs), Fr(~m3) ]
+  --[ ISent(Ini, Rsp, cid, 'm3', ~m3) ]->
+  [ I2b(Ini, Rsp, cid, ~rb, Ai, w0, ~s2, ck_next(CKs)),
+    Out(<'0x02', cid, h, aenc(~m3, ck_mk(CKs), ad)>) ]
+
+rule I_Send_m3_second:
+  let p0 = 'g'^~rb
+      S2 = p0^~s2
+      h  = <S2, '1', '1'>
+      ad = <cid, p0, Ai, p0, w0, h>
+  in
+  [ I2b(Ini, Rsp, cid, ~rb, Ai, w0, ~s2, CK), Fr(~m3b) ]
+  --[ ISent(Ini, Rsp, cid, 'm3b', ~m3b) ]->
+  [ Out(<'0x02', cid, h, aenc(~m3b, ck_mk(CK), ad)>) ]
+
+/* The reader derives the chain from whichever comes first. */
+rule R_Derive_m3_chain:
+  let CKr = kdf_chain(RK2, S2^~t1)
+  in
+  [ R2(Rsp, cid, e0, Ai, w0, ~t1, Si, RK2), In(<'0x02', cid, <S2, '1', n>>) ]
+  --[ Neq(S2, Si) ]->
+  [ R2c(Rsp, cid, e0, Ai, w0, S2, CKr) ]
+
+rule R_Read_m3_in_order:
+  let p0 = 'g'^e0
+      ad = <cid, p0, Ai, p0, w0, <S2, '1', '0'>>
+  in
+  [ R2c(Rsp, cid, e0, Ai, w0, S2, CKr), In(<'0x02', cid, <S2, '1', '0'>, aenc(m, ck_mk(CKr), ad)>) ]
+  --[ RRecv(Rsp, cid, p0, Ai, w0, 'm3', m) ]->
+  [ R2n(Rsp, cid, e0, Ai, w0, S2, ck_next(CKr)) ]
+
+rule R_Read_m3b_next:
+  let p0 = 'g'^e0
+      ad = <cid, p0, Ai, p0, w0, <S2, '1', '1'>>
+  in
+  [ R2n(Rsp, cid, e0, Ai, w0, S2, CK), In(<'0x02', cid, <S2, '1', '1'>, aenc(m, ck_mk(CK), ad)>) ]
+  --[ RRecv(Rsp, cid, p0, Ai, w0, 'm3b', m) ]->
+  [ ]
+
+rule R_Read_m3b_skipping:
+  let p0 = 'g'^e0
+      ad = <cid, p0, Ai, p0, w0, <S2, '1', '1'>>
+  in
+  [ R2c(Rsp, cid, e0, Ai, w0, S2, CKr), In(<'0x02', cid, <S2, '1', '1'>, aenc(m, ck_mk(ck_next(CKr)), ad)>) ]
+  --[ RRecv(Rsp, cid, p0, Ai, w0, 'm3b', m), RSkipped(Rsp, cid) ]->
+  [ Skipped(Rsp, cid, e0, Ai, w0, S2, ck_mk(CKr)), SkippedCopy(Rsp, cid, ck_mk(CKr)) ]
+
+rule R_Read_m3_with_the_skipped_key:
+  let p0 = 'g'^e0
+      ad = <cid, p0, Ai, p0, w0, <S2, '1', '0'>>
+  in
+  [ Skipped(Rsp, cid, e0, Ai, w0, S2, mk), In(<'0x02', cid, <S2, '1', '0'>, aenc(m, mk, ad)>) ]
+  --[ RRecv(Rsp, cid, p0, Ai, w0, 'm3', m), RUsedSkipped(Rsp, cid) ]->
+  [ ]
+
+rule Reveal_skipped_key:
+  [ SkippedCopy(Rsp, cid, mk) ] --[ RevMk(Rsp, cid) ]-> [ Out(mk) ]
+
+/* Its own copies of the sessions' helpers: each configuration proves its own. */
+
+lemma skipped_keys1_secret [reuse]:
+  "(All Ini Rsp cid rk ck #i #j.
+       IKeys(Ini, Rsp, cid, 'k1', rk, ck)@i & KU(rk)@j
+       ==> (Ex #r. RevLtk(Rsp)@r))
+ & (All Ini Rsp cid rk ck #i #j.
+       IKeys(Ini, Rsp, cid, 'k1', rk, ck)@i & KU(ck)@j
+       ==> (Ex #r. RevLtk(Rsp)@r))"
+
+lemma skipped_keys2_secret [reuse, hide_lemma=skipped_keys1_secret]:
+  "(All Ini Rsp cid rk ck #i #j.
+       IKeys(Ini, Rsp, cid, 'k2', rk, ck)@i & KU(rk)@j
+       ==> (Ex #r. RevLtk(Rsp)@r & #r < #i))
+ & (All Ini Rsp cid rk ck #i #j.
+       IKeys(Ini, Rsp, cid, 'k2', rk, ck)@i & KU(ck)@j
+       ==> (Ex #r. RevLtk(Rsp)@r & #r < #i))"
+
+lemma skipped_keys3_secret [reuse]:
+  "(All Ini Rsp cid rk ck #i #j.
+       IKeys(Ini, Rsp, cid, 'k3', rk, ck)@i & KU(rk)@j
+       ==> (Ex #r. RevLtk(Rsp)@r & #r < #i))
+ & (All Ini Rsp cid rk ck #i #j.
+       IKeys(Ini, Rsp, cid, 'k3', rk, ck)@i & KU(ck)@j
+       ==> (Ex #r. RevLtk(Rsp)@r & #r < #i))"
+
+lemma skipped_static_dh_secret [reuse, hide_lemma=skipped_keys1_secret, hide_lemma=skipped_keys2_secret,
+                                hide_lemma=skipped_keys3_secret]:
+  "All R p0 A s P #i #k #j.
+     RStatic(R, p0, A, s)@i & KeyOn(P, p0, A)@k & KU(s)@j
+     ==> (Ex #r. RevLtk(P)@r & #r < #j) | (Ex #r. RevLtk(R)@r & #r < #j)"
+
+lemma skipped_static_dh_holds_r_a [reuse, hide_lemma=skipped_keys1_secret, hide_lemma=skipped_keys2_secret,
+                                   hide_lemma=skipped_keys3_secret]:
+  "All Rsp cid p0 Ai w0 F P #i #k.
+     RAccept(Rsp, cid, p0, Ai, w0, F)@i & KeyOn(P, p0, Ai)@k
+     ==> (Ex #s. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & #s < #i)
+       | (Ex #r. RevLtk(P)@r & #r < #i) | (Ex #r. RevLtk(Rsp)@r & #r < #i)"
+
+/* §1.1: the kept key opens its own message, and only that: the next one on
+   its chain stays secret. */
+
+lemma skipped_key_opens_only_its_message [hide_lemma=skipped_keys1_secret,
+                                          hide_lemma=skipped_keys2_secret,
+                                          hide_lemma=skipped_static_dh_secret,
+                                          hide_lemma=skipped_static_dh_holds_r_a]:
+  "(All Ini Rsp cid m #i #j. ISent(Ini, Rsp, cid, 'm3b', m)@i & K(m)@j
+       ==> (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g))
+ & (All Ini Rsp cid m #i #j. ISent(Ini, Rsp, cid, 'm3', m)@i & K(m)@j
+       ==> (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g) | (Ex #r. RevMk(Rsp, cid)@r))"
+
+/* Agreement on both, in either order. Here the kept key alone writes
+   nothing, as the tag's associated data holds w0; with w0 too, which the
+   reader's own key gives even stolen after it accepted, it writes the
+   message it stands for while the reader waits. On the wire the first half
+   rests on the outer layer, which this model leaves out (README,
+   assumption 2): the envelope's [o]w0, with o from the key and the inner
+   salt, gives w0, and AES-GCM's tag can be redone without the associated
+   data from one genuine ciphertext and its key. */
+
+/* Its 2.2 GB peak is where GHC would start compacting, which crawls (README). */
+// check.sh: CAP=8g,RTS=-c100
+lemma skipped_agreement [hide_lemma=skipped_keys1_secret, hide_lemma=skipped_keys2_secret,
+                         hide_lemma=skipped_keys3_secret]:
+  "(All Rsp cid p0 Ai w0 m P #i #k.
+       RRecv(Rsp, cid, p0, Ai, w0, 'm3b', m)@i & KeyOn(P, p0, Ai)@k
+       ==> (Ex F #s #t. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & ISent(P, Rsp, cid, 'm3b', m)@t & #t < #i)
+         | (Ex F #a #r. RAccept(Rsp, cid, p0, Ai, w0, F)@a & RevLtk(P)@r & #r < #a)
+         | (Ex F #a #r. RAccept(Rsp, cid, p0, Ai, w0, F)@a & RevLtk(Rsp)@r & #r < #a))
+ & (All Rsp cid p0 Ai w0 m P #i #k.
+       RRecv(Rsp, cid, p0, Ai, w0, 'm3', m)@i & KeyOn(P, p0, Ai)@k
+       ==> (Ex F #s #t. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & ISent(P, Rsp, cid, 'm3', m)@t & #t < #i)
+         | (Ex F #a #r. RAccept(Rsp, cid, p0, Ai, w0, F)@a & RevLtk(P)@r & #r < #a)
+         | (Ex F #a #r. RAccept(Rsp, cid, p0, Ai, w0, F)@a & RevLtk(Rsp)@r & #r < #a)
+         | (Ex #r #q. RevMk(Rsp, cid)@r & RevLtk(Rsp)@q & #r < #i & #q < #i))"
+
+/* Each is read once: a kept key goes when it's used. */
+
+lemma skipped_each_read_once:
+  "All Rsp cid p0 Ai w0 n m m2 #i #j.
+     RRecv(Rsp, cid, p0, Ai, w0, n, m)@i & RRecv(Rsp, cid, p0, Ai, w0, n, m2)@j
+     ==> #i = #j"
+
+/* Reachable: both read out of order; the kept key, stolen, opens its
+   message; and with the reader's key stolen after it accepted, writes it. */
+
+lemma skipped_in_order: exists-trace
+  "Ex Ini Rsp cid p0 Ai w0 F m m2 #s #t #u #c #a.
+     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, cid, 'm3', m)@t
+   & ISent(Ini, Rsp, cid, 'm3b', m2)@u
+   & RRecv(Rsp, cid, p0, Ai, w0, 'm3', m)@c & RRecv(Rsp, cid, p0, Ai, w0, 'm3b', m2)@a & #c < #a
+   & not (Ex R c2 #k. RSkipped(R, c2)@k)
+   & not (Ex P #r. RevLtk(P)@r) & not (Ex R c2 #r. RevMk(R, c2)@r)"
+
+lemma skipped_out_of_order: exists-trace
+  "Ex Ini Rsp cid p0 Ai w0 F m m2 #s #t #u #a #b #c #d.
+     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, cid, 'm3', m)@t
+   & ISent(Ini, Rsp, cid, 'm3b', m2)@u
+   & RRecv(Rsp, cid, p0, Ai, w0, 'm3b', m2)@a & RSkipped(Rsp, cid)@b
+   & RRecv(Rsp, cid, p0, Ai, w0, 'm3', m)@c & RUsedSkipped(Rsp, cid)@d
+   & not (Ex P #r. RevLtk(P)@r) & not (Ex R c #r. RevMk(R, c)@r)"
+
+lemma skipped_key_stolen_opens_its_message: exists-trace
+  "Ex Ini Rsp cid p0 Ai w0 F m m2 #s #t #u #a #k #j.
+     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, cid, 'm3', m)@t
+   & ISent(Ini, Rsp, cid, 'm3b', m2)@u & RRecv(Rsp, cid, p0, Ai, w0, 'm3b', m2)@a
+   & RevMk(Rsp, cid)@k & K(m)@j & not (Ex P #r. RevLtk(P)@r)"
+
+lemma skipped_key_and_reader_key_forge_its_message: exists-trace
+  "Ex Ini Rsp cid p0 Ai w0 F m2 m #s #u #a #b #q #k #c.
+     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & RAccept(Rsp, cid, p0, Ai, w0, F)@a
+   & ISent(Ini, Rsp, cid, 'm3b', m2)@u & RRecv(Rsp, cid, p0, Ai, w0, 'm3b', m2)@b
+   & RevLtk(Rsp)@q & #a < #q & RevMk(Rsp, cid)@k & RRecv(Rsp, cid, p0, Ai, w0, 'm3', m)@c
+   & not (Ex #t. ISent(Ini, Rsp, cid, 'm3', m)@t) & not (Ex #r. RevLtk(Ini)@r)"
+
+#endif
+
 /* ---- A ranking, for any configuration ---- */
 
 /* For the lemmas that stalled under Tamarin's default ranking (README):
@@ -497,7 +778,7 @@ lemma first_message_replays_without_the_cid_rule: exists-trace
    attacker would build a message without its key. Each trace lemma names
    its trace step by step, which only narrows what it says exists. */
 
-#ifdef not CONTINUATIONS & not CONTINUATIONS_UNFINISHED & not NO_CID_RULE & not RESPONDER_STATE
+#ifdef not CONTINUATIONS & not NO_CID_RULE & not RESPONDER_STATE & not REVEAL & not SKIPPED
 
 /* Each step's root key and chain key, one step at a time, each reused by
    the next. */
@@ -556,17 +837,20 @@ lemma heal_keys_secret [reuse, heuristic={states_then_keys}, hide_lemma=keys1_se
        & KU(ck)@j
        ==> (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g))"
 
+/* Its state excuse is dated, as m4's agreement needs: Tamarin takes an hour
+   and a half and 6.5 GB of live heap on it, so check.sh gives it its own room. */
+// check.sh: CAP=20g,LIMIT=9000,RTS=-c100
 lemma responder_keys2_secret [reuse, hide_lemma=keys1_secret, hide_lemma=keys2_secret,
                               hide_lemma=keys3_secret, hide_lemma=keys4_secret,
                               hide_lemma=heal_keys_secret, hide_lemma=keys4_secret_guarded]:
   "(All Ini Rsp cid p0 Ai w0 F rk ck #i #s #j.
        RKeys(Rsp, cid, 'k2', rk, ck)@i & RAccept(Rsp, cid, p0, Ai, w0, F)@i
        & IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & KU(rk)@j
-       ==> (Ex #r. RevLtk(Rsp)@r & #r < #i) | (Ex #r. RevState(Ini, cid)@r))
+       ==> (Ex #r. RevLtk(Rsp)@r & #r < #i) | (Ex #r. RevState(Ini, cid)@r & #r < #j))
  & (All Ini Rsp cid p0 Ai w0 F rk ck #i #s #j.
        RKeys(Rsp, cid, 'k2', rk, ck)@i & RAccept(Rsp, cid, p0, Ai, w0, F)@i
        & IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & KU(ck)@j
-       ==> (Ex #r. RevLtk(Rsp)@r & #r < #i) | (Ex #r. RevState(Ini, cid)@r))"
+       ==> (Ex #r. RevLtk(Rsp)@r & #r < #i) | (Ex #r. RevState(Ini, cid)@r & #r < #j))"
 
 lemma responder_keys4_secret [reuse, heuristic={states_then_keys}, hide_lemma=keys1_secret,
                               hide_lemma=keys2_secret, hide_lemma=keys3_secret,
@@ -575,11 +859,11 @@ lemma responder_keys4_secret [reuse, heuristic={states_then_keys}, hide_lemma=ke
   "(All Ini Rsp cid p0 Ai w0 F S2 rk ck #i #a #s #j.
        RHeal(Rsp, cid, S2, rk, ck)@i & RAccept(Rsp, cid, p0, Ai, w0, F)@a
        & IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & KU(rk)@j
-       ==> (Ex #r #a. RevLtk(Rsp)@r & RAccept(Rsp, cid, p0, Ai, w0, F)@a & #r < #a) | (Ex #r. RevState(Ini, cid)@r))
+       ==> (Ex #r #a. RevLtk(Rsp)@r & RAccept(Rsp, cid, p0, Ai, w0, F)@a & #r < #a) | (Ex #r. RevState(Ini, cid)@r & #r < #j))
  & (All Ini Rsp cid p0 Ai w0 F S2 rk ck #i #a #s #j.
        RHeal(Rsp, cid, S2, rk, ck)@i & RAccept(Rsp, cid, p0, Ai, w0, F)@a
        & IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & KU(ck)@j
-       ==> (Ex #r #a. RevLtk(Rsp)@r & RAccept(Rsp, cid, p0, Ai, w0, F)@a & #r < #a) | (Ex #r. RevState(Ini, cid)@r))"
+       ==> (Ex #r #a. RevLtk(Rsp)@r & RAccept(Rsp, cid, p0, Ai, w0, F)@a & #r < #a) | (Ex #r. RevState(Ini, cid)@r & #r < #j))"
 
 /* Agreement on cid, R_A, R_B and every message, both ways. A key stolen
    once the session runs can't forge into it: only a theft before the
@@ -671,7 +955,7 @@ lemma responder_agreement_m4 [hide_lemma=keys1_secret, hide_lemma=keys2_secret,
      ==> (Ex F #s #t. IStart(P, Rsp, cid, p0, Ai, w0, F)@s & ISent(P, Rsp, cid, 'm4', m)@t & #t < #i)
        | (Ex F #a #r. RAccept(Rsp, cid, p0, Ai, w0, F)@a & RevLtk(P)@r & #r < #a)
        | (Ex F #a #r. RAccept(Rsp, cid, p0, Ai, w0, F)@a & RevLtk(Rsp)@r & #r < #a)
-       | (Ex #r. RevState(P, cid)@r)"
+       | (Ex #r. RevState(P, cid)@r & #r < #i)"
 
 /* §1.1: what each theft reveals of content. */
 

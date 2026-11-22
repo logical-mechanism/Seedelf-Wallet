@@ -124,7 +124,7 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 
 ### What they don't
 
-- **Secrecy, forward secrecy, recovery and authentication** rest on the Double Ratchet's and X3DH's analyses, adapted here. [The model](../model/README.md) (54b) states them as lemmas and checks them symbolically, within the assumptions its README lists: every lemma but four on how a continuation is labelled is proved. A symbolic proof says nothing of the primitives' strength, of timing, or of the code: the tests hold the code to §16, and the model holds §16 to its claims.
+- **Secrecy, forward secrecy, recovery and authentication** rest on the Double Ratchet's and X3DH's analyses, adapted here. [The model](../model/README.md) (54b) states them as lemmas and checks them symbolically, within the assumptions its README lists: every lemma is proved. A symbolic proof says nothing of the primitives' strength, of timing, or of the code: the tests hold the code to §16, and the model holds §16 to its claims.
 - **Constant time,** as for the envelope.
 
 ### Implementation notes
@@ -163,6 +163,6 @@ A Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers) that the revealed S
 - Written arguments for IND-CCA2 and for unlinkability, with the per-envelope base.
 - The spending-and-reading argument, checked against the literature.
 - A constant-time review of the WebAssembly build. WebAssembly engines promise nothing about timing.
-- An outside review of the protocol, its model (54b), and the reveal's proof, which the model doesn't cover.
+- An outside review of the protocol, its model (54b), and the reveal's proof: the model checks who could have made one, not the proof's soundness or deniability.
 - The relay's price and window tuned with real use, and a memory-hard puzzle if GPUs flood it (protocol.md §17.4).
 - A dependency audit (cargo-audit or cargo-deny) for this crate in CI.
