@@ -286,7 +286,7 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
 - **Built:** `ui/screens/Messages.tsx` and `ui/messaging.ts`, reached from the top bar's round button (left of Settings) and Home's row (under dApps, on both tabs), each with what's unread (call 11). [flows.md](../flows.md#messages-seedelf-messaging) has the flow, [privacy.md](../privacy.md#seedelf-messaging) what each service learns, and the privacy policy its dated entry (21 November 2026).
   - **The layout:** the list and a conversation side by side in a window at least 760 px wide, the wallet's column widened to 1,100 px for it; narrower, as the side panel is, the list first and a conversation in its place, with Back. The page stops scrolling, and the list and the messages scroll in it, so the box to write in stays at the foot.
   - **The labels and states** are §7's, §6's and §10's: the Seedelf written to, or "Unknown sender" and "Wrote to your ⟨Seedelf⟩"; "Continues", or "Says it continues … (unverified)"; "sent, expires …", never "delivered"; "N messages missing", never "expired"; a gap's and an unreachable server's warnings; conversations this browser no longer has, as a count; **Start again** for one unanswered past 48 hours (`messaging-restart`) or one that can't continue (`messaging-continue`).
-  - **Requests** (call 8, as recommended): a list of their own over the conversations, read-only with **Accept**, and a reply accepts one as it's sent.
+  - **Requests** (call 8): a list of their own over the conversations, read-only with **Accept**, and a reply accepts one as it's sent.
 - **Added to the worker:** each conversation's last message, its first 120 characters, kept in the inbox for the list (`last`); the user's own name for it (`name`, `messaging-name`); `offline` in the overview while the relay doesn't answer a read; `messaging-changed` when reading a thread or a request leaves less unread; and `messaging-sync`, which the screen sends every 10 seconds while it's seen and the switch is on, so a reply shows up while a conversation is open. The architecture's request cost says so.
 - **My calls,** flagged for overturn:
   - **10 seconds while a page of the wallet is on screen** [choice]: the alarm's minute is slow to talk in, and was slow to count a message on Home (the owner, 2026-11-21: "you can get a message and just not know it until you physically click that button"; it took 51 s on Home, measured). It costs the relay a page every 10 seconds per page on screen, and tells it when the wallet is open (the policy says so).
@@ -357,7 +357,7 @@ Each has a recommendation, which the owner can overturn.
 7. ✅ **Where Messages lives** (the owner, 2026-11-21): both a round button left of Settings in the top bar and a row on Home near dApps, Activity and UTxOs, opening the same page.
    - **Recommended: a row on Home,** like the dApps row, with its unread count, opening the Messages screen. It's the wallet's own, not a dApp.
    - The alternative is a dApp tile.
-8. ❓ **Strangers' first messages on screen.** protocol.md §3.1 bounds what's kept; this is how it's shown. Built as recommended in 54f; still the owner's to confirm.
+8. ✅ **Strangers' first messages on screen: a Requests list** (the owner, 2026-11-21), as recommended and built in 54f. protocol.md §3.1 bounds what's kept; this is how it's shown.
    - **Recommended: a Requests list,** apart from conversations, until the user replies or deletes. Nothing tells the sender either way.
 9. ✅ **Messages off by default, a switch for each network** (the owner, 2026-11-21): the worker reads each network whose switch is on, whichever the wallet shows (54e).
    - **Recommended: off,** with one switch on the Messages screen. Syncing tells the relay when the wallet is online, which is the private-by-default rule's case for off.
@@ -365,7 +365,7 @@ Each has a recommendation, which the owner can overturn.
 10. ✅ **History kept within about 5 MB** (the owner, 2026-11-21), the oldest going first, and the thread says so (54e).
     - **Recommended: until the user deletes it, within a budget of about 5 MB of the extension's storage.** The oldest messages go first past it, and the thread says so.
     - The alternative is a fixed age, such as 30 days.
-11. ❓ **Notifications.** Built as recommended in 54f, the count on the top bar's button too, since the owner put one there; still the owner's to confirm.
+11. ✅ **Notifications: the unread count, on Home's row and the top bar's button** (the owner, 2026-11-21), as built in 54f, the button's since the owner put one there. No badge or system notification.
     - **Recommended: the unread count on the Messages row only,** and no badge or system notification in this chunk. The notification centre was declined on 2026-10-11.
 12. ✅ **A first-contact stamp** (the owner, 2026-11-21): built in 54a′.
     - An 8-byte nonce after F whose work over F the reader checks before any key is computed, 24 bits [choice], about 7 s in the browser. It prices a stranger's first message to one reader, which the relay's price can't target, since the relay can't tell first messages from replies. Replies pay nothing more.
