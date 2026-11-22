@@ -20,7 +20,8 @@ pub enum Error {
     InvalidLength,
     /// A plaintext longer than [`MAX_PLAINTEXT_LEN`](crate::MAX_PLAINTEXT_LEN).
     PlaintextTooLarge,
-    /// The envelope's register isn't one of this key's.
+    /// A register isn't one of this key's: an envelope's, a conversation's
+    /// own identity, or a Seedelf's to reveal.
     NotForThisKey,
     /// Authenticated decryption failed: the envelope or message was altered,
     /// or wasn't made with this conversation's keys.
@@ -82,6 +83,12 @@ pub enum Error {
     /// re-randomized by the message's own outer scalar, or that came without
     /// its envelope.
     WrongEnvelopeRegister,
+    /// A reveal this side can't make or take: only the side that wrote first
+    /// reveals, once a reply has decrypted, and only the side written to
+    /// checks one (docs/protocol.md §19).
+    RevealNotAllowed,
+    /// A reveal whose proof doesn't verify for this conversation.
+    InvalidReveal,
 }
 
 impl fmt::Display for Error {
@@ -94,7 +101,7 @@ impl fmt::Display for Error {
             Error::UnsupportedVersion(v) => write!(f, "unsupported envelope version {v}"),
             Error::InvalidLength => write!(f, "envelope has an invalid length"),
             Error::PlaintextTooLarge => write!(f, "plaintext is too large"),
-            Error::NotForThisKey => write!(f, "envelope is not addressed to this key"),
+            Error::NotForThisKey => write!(f, "register is not one of this key's"),
             Error::DecryptionFailed => write!(f, "authenticated decryption failed"),
             Error::InvalidPadding => write!(f, "message padding or size is invalid"),
             Error::InvalidMessage => write!(f, "inner message is malformed"),
@@ -130,6 +137,10 @@ impl fmt::Display for Error {
                     f,
                     "envelope is not addressed to the conversation identity it must be"
                 )
+            }
+            Error::RevealNotAllowed => write!(f, "this side can't make or take a reveal"),
+            Error::InvalidReveal => {
+                write!(f, "reveal's proof doesn't verify for this conversation")
             }
         }
     }

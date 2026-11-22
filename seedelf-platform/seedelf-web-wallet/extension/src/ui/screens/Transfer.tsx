@@ -51,7 +51,7 @@ import { withoutStop } from "../sentence";
 import { tokenQuantity } from "../tokens";
 import { MaxLeftNote } from "./Withdraw";
 
-type Found = { state: "idle" } | { state: "looking" } | { state: "found"; seedelf: SeedelfLookup } | { state: "error"; message: string };
+export type Found = { state: "idle" } | { state: "looking" } | { state: "found"; seedelf: SeedelfLookup } | { state: "error"; message: string };
 
 /** Where an ordinary address pasted into Send is paid from instead: Make public, or the public account's Send. */
 export type AddressRoute = "private" | "public";
@@ -411,6 +411,8 @@ export function SeedelfNameInput({
   onFound,
   onPayAddress,
   publicBlocked,
+  idleNote,
+  addressNote,
 }: {
   id: string;
   value: string;
@@ -419,6 +421,10 @@ export function SeedelfNameInput({
   onPayAddress?: (route: AddressRoute, to: string) => void;
   /** Why the public account's Send can't pay now, said before its note, its button off. */
   publicBlocked?: string;
+  /** What the empty field says, where it isn't a payment's: Messages' (chunk 54f). */
+  idleNote?: string;
+  /** What follows "That's an ordinary address", where an address can't be the way on at all: Messages'. */
+  addressNote?: string;
 }) {
   const t = useT();
   const hint = useHint();
@@ -492,7 +498,10 @@ export function SeedelfNameInput({
       <div id={`${id}-note`} data-testid={`${id}-note`}>
         {nameProblem && ADDRESS_LIKE.test(value.trim()) ? (
           <p className="field-note">
-            {joinSentences([t("transfer.anAddress"), t(onPayAddress ? "transfer.anAddressRoutes" : "transfer.anAddressSeveral")])}
+            {joinSentences([
+              t("transfer.anAddress"),
+              addressNote ?? t(onPayAddress ? "transfer.anAddressRoutes" : "transfer.anAddressSeveral"),
+            ])}
           </p>
         ) : nameProblem ? (
           <p className="field-note">{nameProblem}</p>
@@ -527,7 +536,7 @@ export function SeedelfNameInput({
             )}
           </p>
         ) : (
-          <p className="note">{t("transfer.pasteName")}</p>
+          <p className="note">{idleNote ?? t("transfer.pasteName")}</p>
         )}
       </div>
       {nameProblem && ADDRESS_LIKE.test(value.trim()) && onPayAddress && (

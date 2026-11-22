@@ -249,7 +249,20 @@ export interface MessagingConversation {
   restartedAs?: string;
   /** Messages the ratchet couldn't reach (protocol.md §6): it may not continue (`messaging-continue`). */
   unreachable?: number;
+  /** Its last message, for the list: which way, and the start of its text (none for a kind this version can't show). */
+  last?: { dir: "in" | "out"; text?: string; reveal?: true };
+  /** The user's own name for it, on this device only (`messaging-name`): theirs, never a message's or a proof's. */
+  name?: string;
+  /**
+   * The Seedelf the other side showed this wallet (asset name, hex), its proof checked and its register the chain's
+   * (protocol.md §19): §7's "Verified ⟨Seedelf⟩". The latest that verified, and when it came (ms). Only where the other
+   * side wrote first.
+   */
+  revealed?: { name: string; at: number };
 }
+
+/** The longest name the user can give a conversation (`messaging-name`), in characters. */
+export const CONVERSATION_NAME_CHARS = 40;
 
 /** A stranger's first message, kept apart until the user replies or deletes it (protocol.md §3.1). */
 export interface MessagingRequest {
@@ -274,6 +287,8 @@ export interface MessagingOverview {
   lost: Array<{ cid: string; lastAt: number; messages: number }>;
   /** When the relay last said envelopes were gone before they were read (ms): messages sent then may never arrive. */
   gapAt?: number;
+  /** The relay didn't answer this network's last read: messages wait until it does. */
+  offline?: true;
 }
 
 /** One message of a thread or a request. */
@@ -285,6 +300,11 @@ export interface MessagingEntry {
   text?: string;
   /** A kind of message this version can't show, or a request's message that doesn't read now. */
   unreadable?: true;
+  /**
+   * A reveal (protocol.md §19): `shown`, this wallet's Seedelf `name`; or one the other side showed, `checking` its
+   * register on the chain, `verified` with its `name`, or `failed`, never named.
+   */
+  reveal?: { status: "shown" | "checking" | "verified" | "failed"; name?: string };
   /** A sent one: waiting for the first-contact stamp, to be posted, posted ("sent, expires at"), or refused. */
   sent?: "queued" | "pending" | "posted" | "refused";
   /** When the relay drops it (ms): never "delivered". */
@@ -301,6 +321,11 @@ export interface MessagingThread {
   missing: number;
   /** The longest text the next message can carry, in UTF-8 bytes. */
   maxTextBytes: number;
+  /**
+   * The wallet's Seedelfs it can show the other side (asset names, hex): only where it wrote first and has a reply
+   * (`messaging-reveal`, protocol.md §19).
+   */
+  seedelfs?: string[];
 }
 
 /** One of the user's seedelfs: a named token in a UTxO the wallet owns. */
@@ -3015,6 +3040,11 @@ export interface Requests {
   messaging: { payload: None; result: MessagingOverview };
   /** Turns the network's Messages switch on or off (call 9); on, its relay pool is read at once and every minute. */
   "messaging-switch": { payload: { on: boolean }; result: MessagingOverview };
+  /**
+   * Reads the network's relay pool now, as the alarm does every minute, while Messages is open: nothing while its
+   * switch is off or the wallet locked.
+   */
+  "messaging-sync": { payload: None; result: null };
   /** Writes first to the owner of a Seedelf, by its name: its stamp is solved (about 7 s), then it's posted. */
   "messaging-start": { payload: { to: string; text: string }; result: { cid: string } };
   "messaging-send": { payload: { cid: string; text: string }; result: null };
@@ -3024,12 +3054,16 @@ export interface Requests {
   "messaging-request": { payload: { cid: string }; result: MessagingEntry[] };
   /** Accepts a request: its conversation, which the reply is then sent in. */
   "messaging-accept": { payload: { cid: string }; result: null };
+  /** Names a conversation as the user chooses, on this device only; an empty name takes it away. */
+  "messaging-name": { payload: { cid: string; name: string }; result: null };
   /** Deletes a conversation or a request; its ID stays a tombstone for 48 hours. */
   "messaging-delete": { payload: { cid: string }; result: null };
   /** Starts an unanswered conversation again, to the same Seedelf. */
   "messaging-restart": { payload: { cid: string; text: string }; result: { cid: string } };
   /** Continues a conversation in a new one, with its identities (protocol.md §6). */
   "messaging-continue": { payload: { cid: string; text: string }; result: { cid: string } };
+  /** Shows the other side one of the wallet's Seedelfs, by a proof only it can check (protocol.md §19). */
+  "messaging-reveal": { payload: { cid: string; name: string }; result: null };
   /** Adds a contact, or changes the one with `id`; returns the contacts. */
   "contact-save": { payload: { id?: string; name: string; value: string }; result: Contact[] };
   "contact-remove": { payload: { id: string }; result: Contact[] };
@@ -3494,14 +3528,17 @@ const REQUEST_LIST = [
   "contact-remove",
   "messaging",
   "messaging-switch",
+  "messaging-sync",
   "messaging-start",
   "messaging-send",
   "messaging-thread",
   "messaging-request",
   "messaging-accept",
+  "messaging-name",
   "messaging-delete",
   "messaging-restart",
   "messaging-continue",
+  "messaging-reveal",
   "history",
   "utxos",
   "utxo-lock",

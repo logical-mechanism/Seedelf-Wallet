@@ -6184,20 +6184,40 @@ test.describe("the dApp connector", () => {
     expect(await reading).toEqual({ value: 0 });
     await unlocked;
 
-    // A signature asked for while locked: unlocking comes first, and Sign still asks, once the message is shown.
+    // A signature asked for while locked: unlocking comes first, and Sign still asks, once the message is shown. Asked
+    // through the API the site kept, so the window's request is the signature itself: cip30() would enable() first.
     const used = ((await cip30(dapp, "getUsedAddresses")).value as string[])[0]!;
     await page.getByRole("button", { name: "Lock" }).click();
     opened = connectorWindow(context);
-    const message = cip30(dapp, "signData", used, Buffer.from("Sign in to dapp.example").toString("hex"));
-    const window = await opened;
-    await window.getByLabel("Password").fill(PASSWORD);
-    await window.getByRole("button", { name: "Unlock" }).click();
+    const message = dapp.evaluate(
+      ([address, payload]) =>
+        (window as any).kept.signData(address, payload).then(
+          (signed: { signature: string }) => signed.signature,
+          (e: { code: number; info: string }) => ({ code: e.code, info: e.info }),
+        ),
+      [used, Buffer.from("Sign in to dapp.example").toString("hex")] as const,
+    );
+    const asking = await opened;
+    // Unlocked, the worker reads the account before the signature joins the list, and the window, finding nothing
+    // waiting for 800 ms, can close first (2 s on a loaded runner): the worker then shows it in a new one, as it never
+    // declines a request unseen. Either window will do.
+    const reopened = connectorWindow(context);
+    reopened.catch(() => undefined);
+    await asking.getByLabel("Password").fill(PASSWORD);
+    await asking.getByRole("button", { name: "Unlock" }).click();
+    const window = await asking
+      .getByRole("heading", { name: "Sign a message" })
+      .waitFor()
+      .then(
+        () => asking,
+        () => reopened,
+      );
     await expect(window.getByRole("heading", { name: "Sign a message" })).toBeVisible();
     await expect(window.getByRole("button", { name: "Sign", exact: true })).toBeDisabled();
     await window.getByLabel("Your password, to sign").fill(PASSWORD);
     const signed = window.waitForEvent("close");
     await window.getByRole("button", { name: "Sign", exact: true }).click();
-    expect(((await message).value as { signature: string }).signature).toMatch(/^84/);
+    expect(await message).toMatch(/^84/);
     // Gone before the lock: a window still open would show the next unlock itself, and no new one would open.
     await signed;
 
@@ -6215,8 +6235,15 @@ test.describe("the dApp connector", () => {
     );
     const locked = await opened;
     const gone = locked.waitForEvent("close");
-    await locked.getByRole("button", { name: "Decline" }).click();
-    await gone;
+    // This Decline removes its own window, with no word to the worker first, so the window can close before
+    // Playwright's click returns: that click fails only as "has been closed", and the close is what's checked.
+    const decline = locked
+      .getByRole("button", { name: "Decline" })
+      .click()
+      .catch((e: Error) => {
+        if (!/has been closed/.test(e.message)) throw e;
+      });
+    await Promise.all([gone, decline]);
     expect(await declined).toEqual({ code: -3, info: "The user declined." });
   });
 

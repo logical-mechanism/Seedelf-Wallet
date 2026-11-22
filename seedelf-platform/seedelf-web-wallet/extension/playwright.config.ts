@@ -11,7 +11,7 @@ export default defineConfig({
   use: { trace: "retain-on-failure" },
   projects: [
     // npm run e2e
-    { name: "extension", testMatch: "extension.spec.ts" },
+    { name: "extension", testMatch: ["extension.spec.ts", "messaging.spec.ts"] },
     // npm run e2e:data: mainnet through the data layer, on a build made with VITE_DATA_ORIGIN (chunk 26b)
     { name: "data-layer", testMatch: "data-layer.spec.ts" },
     // npm run store:images: the Web Store's screenshots, promo tile and icon (docs/store/images/)

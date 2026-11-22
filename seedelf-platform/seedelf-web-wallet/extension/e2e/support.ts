@@ -336,7 +336,7 @@ function onNetwork(value: unknown, to: NetworkName, tokens?: KoiosFake["mainnetT
   return token ? { ...row, ...token } : row;
 }
 
-async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
+export async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
   let submits = 0;
   // Mainnet's Koios answers from the same recordings: a phrase's keys are the same on both networks, so a test
   // that switches to mainnet sees the recorded account there too. Its requests' addresses are read as preprod's,

@@ -1,6 +1,6 @@
 # Chunk 54 · Seedelf Messaging
 
-**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **✅ Calls 12 and 13 merged** (54a′, #407). **✅ 54d merged** (#408, the WebAssembly bindings). **🚧 54e built** (the worker), on `web-wallet/messaging-worker`. 54b's proofs run separately (#405). Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
+**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **✅ Calls 12 and 13 merged** (54a′, #407). **✅ 54d merged** (#408, the WebAssembly bindings). **✅ 54e merged** (#409, the worker). **🚧 54f built** (the screens, with call 15's verified reveal), on `web-wallet/messaging-screens`. 54b's proofs run separately (#405). Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
 
 **The specification is [protocol.md](../../../seedelf-messaging/docs/protocol.md),** with the envelope in [construction.md](../../../seedelf-messaging/docs/construction.md) and the guarantees in [security.md](../../../seedelf-messaging/docs/security.md). It has had two reviews; the second's reasoning, and its adversarial tests, are in [protocol-review.md](../../../seedelf-messaging/docs/protocol-review.md). This plan doesn't repeat them: it says what to build, where, in what order, and what's still the owner's to decide. A step that changes the protocol changes protocol.md in the same PR.
 
@@ -23,6 +23,7 @@
 - The relay on the data layer's droplet, with buckets and a traffic ceiling of its own (2026-11-21): "Lets build on that same droplet and as the wallet expands we expand that server as well, or add more or something. Initially there should not be that many users anyway using this feature." That settles calls 1 and 2.
 - Groups and post-quantum later.
 - Messages on and off with a switch for each network, off by default, the worker reading each network whose switch is on whichever the wallet shows; history kept within about 5 MB, the oldest going first; and calls 3, 4 and 5 as 54c built them (2026-11-21). That settles calls 3, 4, 5, 9 and 10.
+- The screens "aligned with telegram or the signal desktop app": the conversations on the left, the one clicked on the right, its messages with their times and the box to write in at the foot. Two ways in, to the same page: "a round icon button to the left of the settings button at the top of the wallet", and "a row button at the bottom near dapps, activity, and utxos" (2026-11-21). That settles call 7.
 
 **The marks:**
 - **[code]:** read in this repository.
@@ -114,6 +115,11 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 
   It checks the first-contact replay rules too.
 - Runs alongside 54c to 54e. It gates mainnet, not the code.
+- **The reveal (54f, protocol.md §19) isn't in the model.** model/README.md exists only on #405's branch, so its note waits for that PR. The text to add to *What the model assumes*:
+
+  > 15. **The verified reveal isn't modelled** (54f, protocol.md §19). A reveal is a message of its own kind inside the ratchet, sent only after the first reply, so its secrecy and who could have sent it are any session message's, which the lemmas above cover. Its proof isn't: an OR-proof that the Seedelf's register and A share a key, or that its maker knows w₀'s. Its soundness and its deniability (the reader can make one, so it convinces no one else) rest on the Cramer–Damgård–Schoenmakers argument, the crate's tests, a mutation pass and vectors reproduced from protocol.md alone (security.md, *The verified reveal*). A lemma with the proof as an abstract function, that a reader labels a Seedelf only when that Seedelf's key holder sent the reveal or the reader's own key is stolen, is the owner's to ask for.
+
+  Whether to add that lemma is the owner's call.
 
 **Done means:** the model's queries hold, and a fresh-context reviewer has read the model against protocol.md.
 
@@ -209,7 +215,7 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
   - `messagingSetStamp` reports the nonce's work and doesn't refuse less: solve at `messagingConstants().firstContactStampBits`;
   - expiring is one call per conversation's record.
 
-### 54e 🚧 The worker
+### 54e ✅ The worker
 
 - **A messaging service with one queue for every state change** (protocol.md §4.2). The sequence: write the state and outbox, then post the stored bytes, then mark them posted; after a restart, re-post them. Receiving decrypts on a copy, then writes, then advances the cursor.
 - **Records in `PrivateStore`,** per network:
@@ -250,7 +256,7 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
   - **A mutation pass** (a scratchpad script, not in the PR) weakened each of 51 rules in turn, and a test failed for 49. The two left are second guards behind the check right before every request (the switch on, the wallet unlocked), which holds alone: removing either still sends the relay nothing, and only costs local work, so they stay. Its runs turned eight survivors into tests: the contract read when no view is kept, the alarm stopped at a lock, a post's switch turned off mid-solve, a trap outside the wallet's queue, a conversation deleted mid-post, the cursor's phrase, and two from the fixes above.
 - **Not done here:** `byWorker` for every relay call, which needs the screens (54f's e2e); the quota and the scan in the extension's own worker [measure].
 
-### 54f ⬜ The screens
+### 54f 🚧 The screens
 
 - **Messages,** where call 7 puts it:
   - a list of conversations, and a list of requests from strangers (call 8);
@@ -260,7 +266,8 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
 - **The labels of protocol.md §7's table,** in its words:
   - ⟨handle⟩;
   - unknown sender;
-  - says they're ⟨handle⟩ (unverified);
+  - verified ⟨handle⟩, from a reveal (call 15, §19);
+  - says they're ⟨handle⟩ (unverified): never built, a tool for phishing;
   - continues, or says it continues (unverified);
   - `to`.
 - **The states of protocol.md §6 and §10:**
@@ -274,6 +281,38 @@ The owner accepted both on 2026-11-21, to be built before 54d. Built in seedelf-
 - **e2e:** a `fakeRelay` beside `fakeDataLayer`, two wallets messaging through it, a stranger's request, expiry, a reset with `replaces`, and the switch off sending nothing. Run under load and on the store build, as the e2e stress rule asks.
 
 **Done means:** unit and e2e tests pass, under load and on the store build, and the screens are checked by eye.
+
+**Where it stands** (2026-11-21, `web-wallet/messaging-screens`):
+- **Built:** `ui/screens/Messages.tsx` and `ui/messaging.ts`, reached from the top bar's round button (left of Settings) and Home's row (under dApps, on both tabs), each with what's unread (call 11). [flows.md](../flows.md#messages-seedelf-messaging) has the flow, [privacy.md](../privacy.md#seedelf-messaging) what each service learns, and the privacy policy its dated entry (21 November 2026).
+  - **The layout:** the list and a conversation side by side in a window at least 760 px wide, the wallet's column widened to 1,100 px for it; narrower, as the side panel is, the list first and a conversation in its place, with Back. The page stops scrolling, and the list and the messages scroll in it, so the box to write in stays at the foot.
+  - **The labels and states** are §7's, §6's and §10's: the Seedelf written to, or "Unknown sender" and "Wrote to your ⟨Seedelf⟩"; "Continues", or "Says it continues … (unverified)"; "sent, expires …", never "delivered"; "N messages missing", never "expired"; a gap's and an unreachable server's warnings; conversations this browser no longer has, as a count; **Start again** for one unanswered past 48 hours (`messaging-restart`) or one that can't continue (`messaging-continue`).
+  - **Requests** (call 8): a list of their own over the conversations, read-only with **Accept**, and a reply accepts one as it's sent.
+- **Added to the worker:** each conversation's last message, its first 120 characters, kept in the inbox for the list (`last`); the user's own name for it (`name`, `messaging-name`); `offline` in the overview while the relay doesn't answer a read; `messaging-changed` when reading a thread or a request leaves less unread; and `messaging-sync`, which the screen sends every 10 seconds while it's seen and the switch is on, so a reply shows up while a conversation is open. The architecture's request cost says so.
+- **My calls,** flagged for overturn:
+  - **10 seconds while a page of the wallet is on screen** [choice]: the alarm's minute is slow to talk in, and was slow to count a message on Home (the owner, 2026-11-21: "you can get a message and just not know it until you physically click that button"; it took 51 s on Home, measured). It costs the relay a page every 10 seconds per page on screen, and tells it when the wallet is open (the policy says so).
+  - **A name of the user's own for a conversation** (the owner, 2026-11-21: "allow bob to edit the unknown sender label"): on the device only, never sent (`messaging-name`). It stands over §7's label, which the header still says under it, and goes on into a conversation started again, or a verified continuation.
+  - **Revealing one's Seedelf inside a conversation** is built, call 15's verified reveal: below.
+  - **"Says they're ⟨handle⟩" isn't built,** and won't be: a claim anyone can make for any Seedelf is a tool for phishing. §18's plaintext has no field that names a handle; only a reveal does, and only verified.
+  - **The tag is shown as a Seedelf's name** where no contact names it, with its name's last sixteen beside it in the list, and its prefix and last sixteen in the header, since anyone can mint a tag.
+- **A fresh-context review** (one agent, the code and protocol.md) found twelve things, all fixed: the gap's warning named when the wallet noticed it, not when the lost messages were sent ("sent before", now); a conversation open in a background tab was marked read; Start again was offered where the worker refuses it (an unanswered continuation, now said with no button); a request's row mislabelled a continuation; polls could pile up behind a long sync (one at a time now); "offline" could stick after a sync that failed later, and an unreachable message wasn't told at once; "Sending…" showed with the switch off ("Waiting to send"); two privacy lines overclaimed what off means; the list kept a message the budget deleted; slow actions pulled the user back to a pane they'd left; and the list showed a Seedelf by its tag alone (its last sixteen beside it now).
+- **Tests:** eight new unit tests (the preview and its cut, the budget emptying it, offline and its clearing after a failed sync and a read not made, an unreachable message told at once, read-then-told, a name), each failing without its fix; e2e's `messaging.spec.ts` with `e2e/relay.ts`, the unit tests' relay behind a route on each browser: one wallet (both ways in, off by default, a message written while off waits and off asks nothing, the offline warning) and two (a stranger's request on a tab wide enough for both panes, accepted by a reply and named, read back on a narrow side panel; a message counted on Home within seconds; a gap; `byWorker` for every relay request). Restarting and continuing need the worker's clock 48 hours on, which e2e can't move, so the unit tests carry them.
+- **Translations:** en, es and ja; the seven new critical strings back-translated blind, five fixes from it, each checked again.
+
+**The verified reveal** (call 15, built in this PR, 2026-11-22):
+- **The protocol:** protocol.md §19, every byte and rule with its [choice]s, a new kind `0x02` in §18, §7's "Verified ⟨handle⟩" row, and §0, §11, §12, §14 and §15 brought up to it. security.md says what it proves and what it doesn't.
+  - **Who and when:** only the side that wrote first, only once a reply has decrypted, in a session message, never in F or a first-contact message; only the side written to checks one.
+  - **The proof:** a Fiat–Shamir OR-proof (Cramer, Damgård, Schoenmakers) that the Seedelf's register and A share a key, or that its maker knows w₀'s, with the cid, p₀, A, w₀, the name and the register in its challenge. The reader could have made it, so it convinces only the reader: deniable, as Signal is.
+  - **The bytes:** the name, the register and the proof, 226 to 257 bytes, so a Seedelf's is a 2 KiB envelope. The register travels with the name [choice], so a forged reveal fails before anything reads the chain.
+- **The crate:** `session::reveal` (`Conversation::reveal`, `Conversation::verify_reveal`, `Reveal`), two errors (`RevealNotAllowed`, `InvalidReveal`), 13 unit tests, and a new vectors file, `messaging_reveal_v1.json` (`RECORD_MESSAGING_REVEAL_VECTORS=1`; the other three untouched), read back through the public API.
+  - **Checked independently:** an agent that read only protocol.md and construction.md reproduced all 78 values with noble-curves and Node's SHA-256. Its notes went into §19: which code each refusal is, the order parsing reads in, how a commitment at O is hashed, the draws' order. Checks for the last two were added.
+  - **A mutation pass** (scratchpad tools/mutate_reveal.py) killed all 25 mutants once a check of the parsing order was added for the one that survived.
+- **WebAssembly:** `messagingReveal` and `messagingCheckReveal`, in the README's table, with native and Node tests: every vector's check, and a reveal made, sent and checked between two wallets.
+- **The worker:** `messaging-reveal`, for the register a contract read finds now. A received one is checked in the queue (a session message, at the side written to, the proof), then after the page against a fresh read of the contract, as Send's pay-by-name reads it, once a pass (`revealedRegisters`). Only then is the conversation `revealed`; a reveal that fails keeps no name. A read that fails leaves it `checking`, tried again a minute on. Nine unit tests.
+- **The screens:** **Show my Seedelf** over the box where the wallet wrote first and has a reply, a picker of the wallet's Seedelfs with one privacy line; the reveal as a bubble each side; the conversation named by the verified Seedelf (a contact's name, else its tag and cut name), with "Verified Seedelf …" under it and the user's own name over it; **Save to contacts**. A reveal that fails says so and names nothing. The e2e two-wallet test gives B a Seedelf in the contract (`koios.addedToContract`), and B shows it to A once A has replied.
+- **A correction:** privacy.md said writing first to a Seedelf tells the server which Seedelf; the lookup reads the whole contract, as Send's does, so it doesn't (privacy.md's own *Network* section says so: "Finding a recipient"). Corrected; the policy's entry never said it.
+- **Translations:** the two new critical strings back-translated blind three rounds: the Spanish's subjects and whose name, and the Japanese's whose name, fixed, the English's received lines with them ("Showed you …").
+- **A fresh-context review** (one agent, the code and protocol.md) found nothing in the proof, and three things in the worker, all fixed with tests: a view of the contract kept from before a Seedelf moved could still verify its former owner's reveal (now always a fresh read); a stop between two writes, or the history's budget, could leave a reveal waiting for good or the conversation unnamed (now set from the record); and the chain had no cap on reads (once a pass now, and a minute after one fails). Three doc slips with them. A mutation pass over the worker's reveal rules (scratchpad tools/mutate_reveal_worker.py, run against the reveal's tests alone) killed all 10 mutants, once tests were added for a kept view older than the register, a later reveal naming the conversation, and a proof that fails reading nothing of the chain.
+- **My calls,** flagged for overturn: the button's words, **Show my Seedelf** (the owner said "Reveal or something"); the register in the reveal (a 2 KiB envelope); a reveal checked against the register now, never an older one, since a Seedelf can change hands; the latest that verified names the conversation; a failed read tried again a minute on.
 
 ### 54g ⬜ The gate
 
@@ -315,10 +354,10 @@ Each has a recommendation, which the owner can overturn.
    - A price, not a refusal, so an honest user behind the same address as a flooder (a carrier's NAT, an office) still gets through, only slower.
    - Raising one flat difficulty for everyone was weighed and set aside: the relay can't tell first messages from replies, so every reply would pay, and a GPU solves SHA-256 orders of magnitude faster than a browser.
    - In reserve against GPUs: a memory-hard puzzle that stays cheap to check, such as Equihash. Not one whose check costs as much as an attempt, such as Argon2, which would make the 2-vCPU relay the target.
-7. ❓ **Where Messages lives.**
+7. ✅ **Where Messages lives** (the owner, 2026-11-21): both a round button left of Settings in the top bar and a row on Home near dApps, Activity and UTxOs, opening the same page.
    - **Recommended: a row on Home,** like the dApps row, with its unread count, opening the Messages screen. It's the wallet's own, not a dApp.
    - The alternative is a dApp tile.
-8. ❓ **Strangers' first messages on screen.** protocol.md §3.1 bounds what's kept; this is how it's shown.
+8. ✅ **Strangers' first messages on screen: a Requests list** (the owner, 2026-11-21), as recommended and built in 54f. protocol.md §3.1 bounds what's kept; this is how it's shown.
    - **Recommended: a Requests list,** apart from conversations, until the user replies or deletes. Nothing tells the sender either way.
 9. ✅ **Messages off by default, a switch for each network** (the owner, 2026-11-21): the worker reads each network whose switch is on, whichever the wallet shows (54e).
    - **Recommended: off,** with one switch on the Messages screen. Syncing tells the relay when the wallet is online, which is the private-by-default rule's case for off.
@@ -326,7 +365,7 @@ Each has a recommendation, which the owner can overturn.
 10. ✅ **History kept within about 5 MB** (the owner, 2026-11-21), the oldest going first, and the thread says so (54e).
     - **Recommended: until the user deletes it, within a budget of about 5 MB of the extension's storage.** The oldest messages go first past it, and the thread says so.
     - The alternative is a fixed age, such as 30 days.
-11. ❓ **Notifications.**
+11. ✅ **Notifications: the unread count, on Home's row and the top bar's button** (the owner, 2026-11-21), as built in 54f, the button's since the owner put one there. No badge or system notification.
     - **Recommended: the unread count on the Messages row only,** and no badge or system notification in this chunk. The notification centre was declined on 2026-10-11.
 12. ✅ **A first-contact stamp** (the owner, 2026-11-21): built in 54a′.
     - An 8-byte nonce after F whose work over F the reader checks before any key is computed, 24 bits [choice], about 7 s in the browser. It prices a stranger's first message to one reader, which the relay's price can't target, since the relay can't tell first messages from replies. Replies pay nothing more.
@@ -334,6 +373,11 @@ Each has a recommendation, which the owner can overturn.
 13. ✅ **Proving the base comes from the named handle** (the owner, 2026-11-21): built in 54a′.
     - A first message to the sum of two Seedelfs' registers opens only for a wallet holding both, so a reply to it links them, unseen. A proof that p₀ re-randomizes the handle in `to`, bound to F, makes `to` verified; `to` is required.
     - It needed every envelope bound to its conversation too, or the writer aims the envelope at the sum instead (54a′, protocol-review.md §G).
+15. ✅ **Revealing one's Seedelf inside a conversation: a verified reveal, in 54f** (the owner, 2026-11-21: "allow alice to reveal but only in the rachet part so its not in the first message"; "a button that shows up after the handshake on Alices side that says, Reveal or something and it sends it like a message to bob"; "I think its worth putting it in this pr"). Built as recommended, designated-verifier (protocol.md §19). The owner noted it proves "someone with a seedelf is messaging you", not a person: its value is tying a conversation to a Seedelf the reader already knows. Numbered past 54b's call 14 (#405).
+    - **Recommended: a verified reveal only,** as its own step after 54f. A new inner kind (§18), sent in the ratchet and never in a first message, carries the Seedelf's name and a proof that the conversation's key A and that Seedelf's register share the writer's key, bound to the cid; the reader shows §7's "Verified ⟨handle⟩". The writer chooses it, per conversation, and the reader alone learns it.
+    - **Which proof:** a designated-verifier one convinces only the reader, who could have made it, so the conversation stays deniable, as Signal's are; a plain one is evidence the reader can show anyone. Recommended: designated-verifier.
+    - **The alternative,** an unverified claim ("Says they're ⟨handle⟩ (unverified)", §7's row), anyone can make for any Seedelf: a phishing tool, so not recommended.
+    - It changes the protocol: protocol.md, the crate with vectors checked independently, 54b's model told, a WebAssembly export, the worker and a button.
 
 ## Unknowns
 

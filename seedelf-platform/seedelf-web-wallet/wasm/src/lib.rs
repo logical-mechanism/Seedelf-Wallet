@@ -8135,6 +8135,26 @@ pub fn messaging_conversation_info(record: String) -> Result<String, JsError> {
     to_json(&messaging::conversation_info(&record).map_err(js_error)?)
 }
 
+/// Shows a conversation's other side which Seedelf the key holds: only its
+/// initiator, once answered (`messaging::RevealRequest` →
+/// `messaging::Revealed`). The reveal is then sent with `messagingSend`.
+#[wasm_bindgen(js_name = messagingReveal)]
+pub fn messaging_reveal(key: &SeedelfKey, request: String) -> Result<String, JsError> {
+    let request = Zeroizing::new(request);
+    let request: messaging::RevealRequest = from_json(&request)?;
+    to_json(&messaging::reveal(key.sk, request).map_err(js_error)?)
+}
+
+/// Checks a reveal the other side sent: it parses and its proof verifies,
+/// at the conversation's responder (`messaging::CheckRevealRequest` →
+/// `messaging::RevealChecked`). The chain's register is the wallet's to check.
+#[wasm_bindgen(js_name = messagingCheckReveal)]
+pub fn messaging_check_reveal(request: String) -> Result<String, JsError> {
+    let request = Zeroizing::new(request);
+    let request: messaging::CheckRevealRequest = from_json(&request)?;
+    to_json(&messaging::check_reveal(request).map_err(js_error)?)
+}
+
 /// The requests' record, hex, read without their texts
 /// (`messaging::RequestInfo`, oldest first).
 #[wasm_bindgen(js_name = messagingRequestsInfo)]

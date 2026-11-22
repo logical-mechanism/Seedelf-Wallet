@@ -1,8 +1,9 @@
 // Seedelf Messaging through the built module (chunk 54's 54d; run ../build.sh
 // first): the session vectors' first messages read at the full first-contact
-// stamp, the relay vectors' stamps and posts, and two wallets writing to each
-// other with nothing but the records the exports give back, as the worker
-// will keep them. tests/messaging_test.rs checks the same natively.
+// stamp, the relay vectors' stamps and posts, the reveal vectors' checks
+// (54f), and two wallets writing to each other with nothing but the records
+// the exports give back, as the worker will keep them, one showing the other
+// its Seedelf. tests/messaging_test.rs checks the same natively.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -10,6 +11,7 @@ import { readFileSync } from "node:fs";
 import {
   SeedelfKey,
   messagingAccept,
+  messagingCheckReveal,
   messagingConstants,
   messagingConversationInfo,
   messagingDelete,
@@ -21,6 +23,7 @@ import {
   messagingReceive,
   messagingRelayDigest,
   messagingRequestsInfo,
+  messagingReveal,
   messagingScan,
   messagingSend,
   messagingSetStamp,
@@ -173,6 +176,29 @@ test("two wallets write to each other through the exports' records", () => {
   });
   b = read.conversation;
 
+  // Alice shows Bob her Seedelf, now that he has replied: a message of kind 0x02, which only Bob checks.
+  const mine = plain(rerandomize(alice.baseRegister()));
+  const hers = "5eed0e1f" + "a0".repeat(28);
+  const reveal = (key, conversation, seedelfName, register) =>
+    call(messagingReveal, key, { conversation, name: seedelfName, register });
+  assert.deepEqual(reveal(alice, stamped.conversation, hers, mine), { refused: "reveal_not_allowed" });
+  assert.deepEqual(reveal(bob, b, name, seedelf), { refused: "reveal_not_allowed" });
+  assert.deepEqual(reveal(alice, a, name, seedelf), { refused: "not_for_this_key" });
+  const shown = reveal(alice, a, hers, mine);
+  assert.equal(shown.reveal.length, 2 * 257);
+  const carried = call(messagingSend, { conversation: a, plaintext: "02" + shown.reveal });
+  assert.equal(carried.envelope.length, 2 * 2048);
+  a = carried.conversation;
+  const came = call(messagingReceive, bob, { envelope: carried.envelope, now: T + 190, conversations: [b] });
+  assert.equal(came.received.plaintext, "02" + shown.reveal);
+  b = came.conversation;
+  assert.deepEqual(call(messagingCheckReveal, { conversation: b, reveal: shown.reveal }), { name: hers, register: mine });
+  assert.deepEqual(call(messagingCheckReveal, { conversation: a, reveal: shown.reveal }), { refused: "reveal_not_allowed" });
+  assert.deepEqual(call(messagingCheckReveal, { conversation: b, reveal: shown.reveal.slice(0, -2) }), {
+    refused: "invalid_message",
+  });
+  assert.throws(() => messagingCheckReveal(JSON.stringify({ conversation: b, reveal: "zz" })), /hex/);
+
   // A continuation Bob verifies against the conversation it continues.
   const continued = call(messagingStartContinuing, alice, { conversation: a, now: T + 3600 });
   const fresh = call(messagingSend, {
@@ -193,6 +219,24 @@ test("two wallets write to each other through the exports' records", () => {
   assert.deepEqual(after(tombstones), { refused: "unknown_conversation" });
   alice.free();
   bob.free();
+});
+
+test("the reveal vectors' checks come out the same through messagingCheckReveal", () => {
+  const file = vectors("messaging_reveal_v1.json");
+  for (const check of file.checks) {
+    const c = file.conversations[check.conversation];
+    const conversation = check.side === "initiator" ? c.initiator_state : c.responder_state;
+    const answer = call(messagingCheckReveal, { conversation, reveal: check.reveal });
+    if (check.result === "ok") assert.equal(typeof answer.name, "string", check.name);
+    else assert.deepEqual(answer, { refused: check.result }, check.name);
+  }
+  for (const r of file.reveals) {
+    const { responder_state: conversation } = file.conversations[r.conversation];
+    assert.deepEqual(call(messagingCheckReveal, { conversation, reveal: r.reveal }), {
+      name: r.seedelf.name,
+      register: { generator: r.seedelf.generator, publicValue: r.seedelf.public_value },
+    });
+  }
 });
 
 test("the numbers the worker works by", () => {

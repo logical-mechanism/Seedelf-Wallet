@@ -1,6 +1,6 @@
 # Seedelf Messaging: the one-to-one protocol (draft)
 
-The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay is built too, in the data layer (54c), and §17 fixes what it takes and gives. A first message now carries a stamp and a proof that its base comes from the handle it names, and every envelope is bound to its conversation (calls 12 and 13, 2026-11-21), so no writer can learn whether two Seedelfs are one wallet's (§2). The wallet's worker is built too (54e), and §18 fixes what a message's plaintext holds; its screens and the protocol model are still to come, and the design is refined as they're built.
+The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay is built too, in the data layer (54c), and §17 fixes what it takes and gives. A first message now carries a stamp and a proof that its base comes from the handle it names, and every envelope is bound to its conversation (calls 12 and 13, 2026-11-21), so no writer can learn whether two Seedelfs are one wallet's (§2). The wallet's worker is built too (54e), and §18 fixes what a message's plaintext holds. The screens (54f) add the verified reveal: the side that wrote first may show the other one of its Seedelfs, by a proof only the reader can check (§19; call 15, 2026-11-21). The protocol model is still to come, and the design is refined as it's built.
 
 Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multiplication, registers (g, v) with v = [x]g.
 
@@ -14,7 +14,7 @@ Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multipl
 | First message | Protected by the recipient's long-term key alone until they reply. No prekeys, so the relay holds no key material. A review asked for prekeys; declined for now, to revisit with users. |
 | Relay | Keeps envelopes 36 hours, then deletes them, even though a reader must unlock within that time to receive (§13). Proof of work against spam. Senders' IP addresses are seen, as the data layer already sees them. The wallet uses one relay, which prices each address's posts by its recent traffic, and says so (§10). |
 | Local state | Conversations live in the browser. Deleting the wallet's data loses them. |
-| Proving who you are | Undecided until users ask for it (§7). |
+| Proving who you are | The side that wrote first may show one of its Seedelfs once the other side has replied, by a proof that convinces only the reader (§19; call 15, 2026-11-21). A proof the reader could show others stays undecided until users ask for it (§7). |
 | First-contact stamp | A first message to a new conversation carries proof of work over its first-contact block, 2²⁴ attempts, which the reader checks before computing any key (§3; call 12, 2026-11-21). |
 | Unlinkable handles | A first message proves its base re-randomizes the handle it names, and every envelope goes to its conversation identity re-randomized by a scalar from the message key, which the reader checks (§2; call 13, 2026-11-21). |
 | Groups | Later, on top of one-to-one sessions. |
@@ -243,16 +243,15 @@ What the wallet says about the other side:
 |---|---|---|
 | ⟨handle⟩ | The reader wrote first, to that handle | The other side holds that handle's key, as the chain read gave it. Only that key opens the first message. |
 | Unknown sender | The reader was written to | The other side controls this conversation's R_A (§3), and nothing more. |
-| Says they're ⟨handle⟩ (unverified) | A message names a handle | Nothing: a claim. No message's content changes a label. |
+| Says they're ⟨handle⟩ (unverified) | A message names a handle | Nothing: a claim. No message's content changes a label, and the wallet never shows one: it would be a tool for phishing. |
 | Continues ⟨conversation⟩ | §6's match | The same keys as the old conversation. |
 | Says it continues ⟨conversation⟩ (unverified) | A `replaces` without §6's match, in a first message from a handle | Nothing. |
-| Verified ⟨handle⟩ | Only with a future handle proof | The writer holds that handle's key. |
+| Verified ⟨handle⟩ | The reader was written to and replied, and the other side then showed that handle with §19's proof, for the register the chain gives it now | The other side holds that handle's key, as a fresh read of the chain gave it when the reveal was checked. It convinces the reader alone. |
 
 `to` shows which of the reader's handles a first message was written to: verified by its proof (§3), not claimed.
 
-- **A future handle proof must be bound to F.** For instance, a Chaum–Pedersen proof that A and the handle's register share a key, with F in its challenge. With A on p₀ and the static DH, a proof lifted from another conversation can't start a session anyway; binding it to F makes that explicit. Two designs stay open until users ask for one:
-  - **A plain proof** Bob can show to anyone: evidence of who wrote to him.
-  - **A designated-verifier proof** that convinces only Bob, because Bob could have made it himself. It keeps conversations deniable, as Signal's are.
+- **The handle proof is designated-verifier, and bound to the conversation** (§19, call 15, the owner, 2026-11-21): a proof that A and the handle's register share a key, or that its maker knows w₀'s key, with the conversation's ID and both identities in its challenge. Bob could have made it himself, so it convinces only him, and conversations stay deniable, as Signal's are. It proves someone holding that Seedelf's key is writing, not who a person is: its use is tying a conversation to a Seedelf Bob already knows.
+  - **A plain proof** Bob could show to anyone, evidence of who wrote to him, stays open until users ask for one.
 - **Nothing in a message authorizes a transaction.** A payment request or an escrow invitation, if one is ever a message type, opens the ordinary Send or escrow screen filled in, under the sender's label, and is confirmed there like any other. These are labels, not blocks: the user decides.
 
 ## 8. What each message costs
@@ -348,7 +347,8 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 
 **The other side of a conversation learns:**
 - the writer of a first message learns the handle they wrote to;
-- the one written to learns a stranger's conversation identity, and whatever the stranger chooses to say.
+- the one written to learns a stranger's conversation identity, and whatever the stranger chooses to say;
+- if the writer reveals one of its Seedelfs (§19), the reader learns that Seedelf, and nothing it can prove to anyone else.
 
 **A holder of the reader's x learns** §1.1's first two rows.
 
@@ -356,7 +356,7 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 
 **Per conversation:**
 - cid, F, R_A, R_B and t.
-- The other side's handle, if `to` or a claim named one.
+- The other side's Seedelf: the one this side wrote to, or the one the other side revealed, once verified (§19).
 - The ratchet state: RK, CKs, CKr, DHs, DHr, Ns, Nr, PN, and the skipped keys.
 - The outbox (§4.2).
 - The message history.
@@ -405,8 +405,8 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 | Later messages | Double Ratchet | Double Ratchet: forward secrecy and recovery as §1.1 says |
 | Authentication at the start | X3DH's DHs, with signed prekeys | Implicit, by the static DH in SK (§3); Bob learns a conversation identity, not a person |
 | Ratchet header | Plain, or encrypted in the header-encryption variant | Inside the outer layer |
-| Identity | A phone number or username, with safety numbers | A Seedelf handle. The sender is anonymous unless they claim or prove one. |
-| Deniability | Yes | Yes, unless a proof Bob can show others is added (§7) |
+| Identity | A phone number or username, with safety numbers | A Seedelf handle. The sender is anonymous unless they reveal one (§19). |
+| Deniability | Yes | Yes: a reveal convinces only its reader (§19) |
 | Message lifetime on the server | Until delivered, with a limit | 36 hours, delivered or not |
 | Groups | Sender Keys | Later |
 | Post-quantum | Yes (PQXDH and the ratchet's additions) | Later |
@@ -419,8 +419,8 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 | 1 | Done: the v1 envelope, and its scan. |
 | 2 | The relay: storage, the 36-hour expiry, proof of work, duplicates, the cursor. Built (§17), in the data layer (54c). |
 | 3 | Sessions: §3 to §6 in this crate, with vectors, property tests and the protocol model. Built (§16), with independently reproduced vectors; the model is 54b. |
-| 4 | The wallet: WebAssembly bindings, the worker's queue, chunked scanning, encrypted local state, requests, a Messages screen, sender labels, and "message me at ⟨Seedelf⟩". |
-| Later | Proving who you are, groups, post-quantum, delivery receipts, prekeys if users want them. |
+| 4 | The wallet: WebAssembly bindings, the worker's queue, chunked scanning, encrypted local state, requests, a Messages screen, sender labels, "message me at ⟨Seedelf⟩", and the verified reveal (§19). |
+| Later | A proof of who you are that others can check, groups, post-quantum, delivery receipts, prekeys if users want them. |
 
 ## 16. The session layer as built (54a)
 
@@ -652,7 +652,88 @@ What a message's plaintext holds, above the session layer, which takes it as byt
 kind (1) | body
 ```
 
-- **`0x01`: text,** the body UTF-8. The only kind so far.
-- **Any other kind** is shown as a message this version can't show, never guessed at. A kind added later (a payment request that opens Send filled in, §7) is read by the versions that know it, and said to be unreadable by the rest.
+- **`0x01`: text,** the body UTF-8.
+- **`0x02`: a reveal,** the body §19.3's: the writer's Seedelf and its proof (54f).
+- **Any other kind** is shown as a message this version can't show, never guessed at. A kind added later (a payment request that opens Send filled in, §7) is read by the versions that know it, and said to be unreadable by the rest, as versions before 54f say of a reveal.
 - **The kind byte counts in the text's room:** the longest text a message carries is the session layer's `max_text_len` less one byte.
 - **Nothing in a message changes a label or authorizes anything** (§7): a kind is content, as text is.
+
+## 19. The verified reveal (54f)
+
+The side that wrote first may show the other which Seedelf it holds (call 15, the owner, 2026-11-21: "allow alice to reveal but only in the rachet part so its not in the first message"). It's a message of its own kind (§18) carrying a designated-verifier proof bound to the conversation, built in this crate's `session` module (`Conversation::reveal`, `Conversation::verify_reveal`, `Reveal`). Choices made while building are marked [choice].
+
+### 19.1 Who and when
+
+- **Only the initiator reveals, and only once a reply from the other side has decrypted** (it sends `0x02` session messages, §4.1). Its earlier messages are first-contact messages, which a later theft of x_B reads (§1.1), and the other side hasn't answered yet. The crate refuses anything else.
+- **Only in a session message.** A reveal is never in F or in a first-contact message. A reader takes one only from a session message (inner type `0x02`) of a conversation it replied in; one inside a first-contact message, or a request's, isn't checked, and shows as a Seedelf that couldn't be verified.
+- **Only the responder checks one.** At the initiator a reveal proves nothing: w₀'s key, the other side's, makes one for any Seedelf (§19.2). The crate refuses to check one there.
+- **Any of the writer's Seedelfs,** since they all share its key x, and as often as it likes: the latest that verifies names the other side.
+
+### 19.2 The proof
+
+The conversation gives cid, p₀, A = [x_A]p₀ (the initiator's identity) and w₀ = [x_B]p₀ (the responder's). The Seedelf gives its name N, 1 to 32 bytes, and its datum's register (g_S, u_S), with u_S = [x_A]g_S for the writer's key.
+
+The statement is an OR of two: **log_{g_S} u_S = log_{p₀} A** (a Chaum–Pedersen proof that the Seedelf's register and A share a key), or **the prover knows log_{p₀} w₀** (a Schnorr proof of the reader's own key). It's a Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers, 1994). The writer proves the first and simulates the second.
+
+**The challenge** is SHA-256 over, in order, with every point compressed (48 bytes):
+
+    label ‖ cid (16) ‖ p₀ ‖ A ‖ w₀ ‖ len(N) (1) ‖ N ‖ g_S ‖ u_S ‖ T₁ ‖ T₁′ ‖ T₂
+
+with label the ASCII bytes of `Seedelf-Messaging|v1|session|reveal`, with no length or terminator. c is that hash as a big-endian integer, reduced mod q (§16.1). A commitment the reader computes may be O (z₁ = c₁ = 0 makes T₁ and T₁′ O, and such a proof is valid): it's hashed as O's compressed encoding, `0xc0` then 47 zero bytes, the only place a point here may be O.
+
+**The writer** (branch 1 real, branch 2 simulated):
+1. Draws k₁, then c₂, then z₂, each uniform in [1, q − 1] [choice: the order, for the vectors].
+2. T₁ = [k₁]p₀, T₁′ = [k₁]g_S, T₂ = [z₂]p₀ − [c₂]w₀.
+3. c from the challenge; c₁ = c − c₂ mod q; z₁ = k₁ + c₁·x_A mod q.
+
+**The reader:**
+1. T₁ = [z₁]p₀ − [c₁]A, T₁′ = [z₁]g_S − [c₁]u_S, T₂ = [z₂]p₀ − [c₂]w₀.
+2. Accepts if c₁ + c₂ ≡ c (mod q), c computed over these.
+
+**The reader's own reveal.** The responder can make one for any Seedelf, simulating branch 1 and proving branch 2 with x_B: it draws k₂, then c₁, then z₁; T₁ = [z₁]p₀ − [c₁]A, T₁′ = [z₁]g_S − [c₁]u_S, T₂ = [k₂]p₀; c₂ = c − c₁ mod q; z₂ = k₂ + c₂·x_B mod q. It verifies like the writer's. That's what keeps a conversation deniable: shown to anyone else, a reveal proves nothing, since the reader could have made it. The wallet never makes one; the vectors do (§19.6).
+
+### 19.3 The bytes
+
+    plaintext = 0x02 | reveal                                         (§18)
+    reveal    = len (1) | N (len) | g_S (48) | u_S (48) | c₁ (32) | c₂ (32) | z₁ (32) | z₂ (32)
+
+- **226 to 257 bytes,** 227 to 258 with the kind byte. A Seedelf's name is 32 bytes, so a reveal's plaintext is 258: a 2 KiB envelope, the size of every reply of 246 to 1,781 bytes of text (§9).
+- **The register travels with the name** [choice], so the reader checks the proof before anything reads the chain, and a reveal that doesn't verify reaches nothing. It costs a 2 KiB envelope where a name alone would fit 512 bytes.
+- **Parsing** reads the fields in order, each refused as it's read: len, which must be 1 to 32; N; g_S, then u_S, each canonical, in G1 and not O (§16.1); then c₁, c₂, z₁, z₂, each below q, and any may be 0; then nothing may follow. Nothing about the conversation changes on a refusal.
+- **The codes** (seedelf-wasm's, the crate's error in snake case): len outside 1 to 32, bytes running out at any field or left over after z₂, or a scalar not below q is `invalid_message`; a point that isn't the canonical compressed encoding of a point on the curve (bad flag bits, x not below p, no point for x) is `invalid_encoding`; one on the curve outside G1 is `not_in_subgroup`; O is `identity_point`. A proof that doesn't verify is `invalid_reveal`; a check at the initiator, or a reveal made at the responder or before a reply, is `reveal_not_allowed`. The wallet's own rules (§19.1's session message, §19.4's chain register) have no code: they show a reveal as failed.
+
+### 19.4 The reader's checks, in order
+
+1. **A session message** of a conversation in which the reader is the responder (§19.1). The wallet checks the inner type; the crate parses before it checks the side, so a reveal that doesn't parse is refused as §19.3 says whichever side checks it.
+2. **It parses** (§19.3).
+3. **The proof verifies** for the conversation's cid, p₀, A and w₀ (§19.2).
+4. **The register is the Seedelf's now** [choice]: the wallet reads the contract fresh, whole, as Send's pay-by-name reads it, and looks the name up in it, never in a view kept from before the reveal came, which a Seedelf's move would leave behind. Its datum's register must be (g_S, u_S). A register the Seedelf no longer holds fails: a Seedelf can move to another owner. The writer can reveal again.
+5. **Then the other side is labelled** "Verified ⟨Seedelf⟩" (§7). Of several, the latest to come that verified names it.
+
+Steps 1 to 3 run as the message is received, in the worker's queue (§4.2). Step 4 reads the chain after the page, out of the queue, once for every reveal waiting; a read that fails leaves them waiting, tried again a minute on [choice]. A failure at any step says only that a Seedelf was shown and couldn't be verified, never its name: a name shown unverified would be a tool for phishing.
+
+### 19.5 What it proves, and what it doesn't
+
+- **It proves** that whoever holds the conversation's other identity (R_A, which only its key could have started, §3) holds the key of the register the chain gives the Seedelf's name when it was checked.
+- **It proves who holds a key, not who a person is:** "someone with that Seedelf is messaging you". Its use is tying the conversation to a Seedelf the reader already knows: a contact, or someone who posted "message me at ⟨Seedelf⟩".
+- **To the reader alone** (§19.2). Not to anyone the reader shows it to.
+- **Bound to the conversation:** its challenge holds the cid, both identities, and the Seedelf's name and register, so it can't be moved to another conversation, name or register.
+- **It says nothing later.** A Seedelf can move to another owner after it was checked. The reveal's message keeps its time, and the label stands until a later one verifies.
+- **It links nothing else.** The writer's other Seedelfs share its key, but no one without that key can tell two registers of one key apart from two keys' (DDH, §2).
+- **Forward secrecy** covers it as any message sent after the first reply (§1.1).
+- **A stolen x_B shows Bob anything.** A thief of the reader's key can make a reveal for any Seedelf (§19.2) in a conversation it starts with Bob, and Bob's wallet would call it verified. That's key-compromise impersonation, which designated-verifier proofs have by design, and which the static DH already allows for starting conversations (§1.1): whoever has x_B has the Seedelf's funds too. Labels made before a theft stay as they were.
+
+### 19.6 Vectors
+
+[tests/vectors/messaging_reveal_v1.json](../tests/vectors/messaging_reveal_v1.json), written by this crate's `session` module from fixed draws:
+
+- **`conversations`:** two conversations from Alice to Bob's handle, each answered (Alice's first message, Bob's reply, Alice reading it). Each gives `initiator_secret_key` (x_A), `responder_secret_key` (x_B), `cid`, `base` (p₀), `initiator_public` (A), `responder_public` (w₀), and both sides' stored states, `initiator_state` and `responder_state` (§16.5), which are this crate's own, for its public-API test: another implementation needn't read them.
+- **`reveals`:** three, each with its `conversation` (an index), `made_by` (`initiator` or `responder`), the `seedelf` (`name`, `generator`, `public_value`), its `draws` by name (drawn `k1`, `c2`, `z2` from the initiator and `k2`, `c1`, `z1` from the responder, in that order; the file's keys are sorted), the `commitments` (`t1`, `t1_seedelf`, `t2`), the `challenge` as SHA-256 gave it and as a scalar (`challenge_scalar`), the `proof` (`c1`, `c2`, `z1`, `z2`), the `reveal`'s bytes and its `plaintext` (with the kind byte):
+  1. Alice's Seedelf under its full 32-byte name;
+  2. Alice's root register (G, [x_A]G) under a 1-byte name;
+  3. Carol's Seedelf, made by the reader with its own key, whose challenge is at least q: it verifies, which is why a reveal convinces no one else.
+- **`checks`:** 23, each a reveal's bytes, the `conversation` and `side` it's checked at, and its `result`: `ok`, or the refusal's code, the crate's error in snake case as seedelf-wasm names it (`reveal_not_allowed`, `invalid_reveal`, `invalid_message`, `invalid_encoding`, `not_in_subgroup`, `identity_point`). They cover each reveal at the reader, two at the writer's side, another conversation of the same two keys, another name, another register of the same key, each share and response moved or swapped, another key's Seedelf proved with Alice's, a reader's own reveal whose T₁ and T₁′ are O, and each way parsing refuses, one of them two faults at once, to show the order fields are read in.
+- The file also has `version` (1), `description`, `label` (§19.2's), `kind` (2) and `group_order` (q, big-endian hex). Every byte string is lowercase hex.
+- `reveal_vectors_match_the_file` holds the code to the file. `RECORD_MESSAGING_REVEAL_VECTORS=1` rewrites it, for a deliberate change of format only, and never touches the other vectors files. tests/reveal_vectors.rs reads it through the public API.
+
+**Checked independently** (2026-11-22): a script written from this section, §16.1 and construction.md alone, without reading the Rust, reproduced every value with noble-curves 2.0.1 and Node 24's SHA-256: both conversations' identities, each reveal's commitments, challenge, proof, bytes and plaintext, every check's result, and q, 76 comparisons in all, and again after the checks were added (78). Where it had to guess (which code each refusal is, the order parsing reads in, how O is hashed, the draws' order), this section now says, and the checks of a commitment at O and of the parsing order were added for it.

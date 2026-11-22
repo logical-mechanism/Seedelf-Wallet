@@ -303,6 +303,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "messaging-switch":
       await ctx.messaging.switch(ctx.network, message.on === true);
       return ctx.messaging.overview(ctx.network);
+    case "messaging-sync":
+      await ctx.messaging.sync(ctx.network);
+      return null;
     case "messaging-start":
       return { cid: await ctx.messaging.start(ctx.network, seedelfNameOf(message.to), message.text) };
     case "messaging-send":
@@ -315,6 +318,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "messaging-accept":
       await ctx.messaging.accept(ctx.network, message.cid);
       return null;
+    case "messaging-name":
+      await ctx.messaging.rename(ctx.network, message.cid, message.name);
+      return null;
     case "messaging-delete":
       await ctx.messaging.remove(ctx.network, message.cid);
       return null;
@@ -322,6 +328,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return { cid: await ctx.messaging.restart(ctx.network, message.cid, message.text) };
     case "messaging-continue":
       return { cid: await ctx.messaging.continueIn(ctx.network, message.cid, message.text) };
+    case "messaging-reveal":
+      await ctx.messaging.reveal(ctx.network, message.cid, seedelfNameOf(message.name));
+      return null;
     case "history": {
       if (message.of === "seedelf") {
         // Arrivals are noted by a balance reading: Refresh makes one, and otherwise the history asks nothing.
