@@ -547,6 +547,12 @@ export class DappService {
   /** The worker is closing the connector's window (`closeWindow`), not the user. */
   private closing = false;
   /**
+   * Requests an unlock in the window let go, by page (session id), until each ends. The window waits for them: a
+   * signature reads the account (Koios) before it's listed, and the window, empty meanwhile, closed and a new one
+   * opened for it (the owner's test of 54f, 2026-11-22). Listed, one keeps the window open anyway; answered, it ends.
+   */
+  private readonly onTheirWay = new Map<string, number>();
+  /**
    * How many of each page's calls are running, by its session id; and the
    * pages that went away (`gone`) with some still running, until the last
    * of them ends. Nothing more is asked for those: one was reading a
@@ -636,7 +642,26 @@ export class DappService {
       // dApp hears to call enable(), which unlocks in the window.
       if (READ_METHODS.has(method)) throw refused(NOT_CONNECTED);
       await this.unlocked(session, method);
+      this.onTheirWay.set(session.id, (this.onTheirWay.get(session.id) ?? 0) + 1);
+      try {
+        return await this.runUnlocked(session, method, args);
+      } finally {
+        this.arrived(session.id);
+      }
     }
+    return this.runUnlocked(session, method, args);
+  }
+
+  /** One of a page's requests that an unlock let go ended: the window needn't wait for it (`onTheirWay`). */
+  private arrived(id: string): void {
+    const left = (this.onTheirWay.get(id) ?? 0) - 1;
+    if (left > 0) this.onTheirWay.set(id, left);
+    else this.onTheirWay.delete(id);
+  }
+
+  /** What `run` does once the wallet is unlocked. */
+  private async runUnlocked(session: DappSession, method: DappMethod, args: unknown[]): Promise<unknown> {
+    const { origin } = session;
     // The network the wallet is on as this call goes on: a site connected on
     // one isn't on the other, and what it asks is answered, and signed, there.
     const network = await this.deps.network();
@@ -809,7 +834,7 @@ export class DappService {
    * worker decides, as only it knows what's waiting this moment.
    */
   async closeWindow(): Promise<boolean> {
-    if (this.waiting.length || this.unlocking.length) return false;
+    if (this.waiting.length || this.unlocking.length || this.onTheirWay.size) return false;
     this.closing = true;
     try {
       await this.deps.window.close();
