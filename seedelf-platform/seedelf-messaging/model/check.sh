@@ -6,7 +6,7 @@
 #   -D=RESPONDER_STATE  the sessions with the responder's state stolen instead
 #   -D=CONTINUATIONS    first contact and §6's continuations, and theirs
 #   -D=NO_CID_RULE      the sessions without §5's cid rule: its one lemma must find a replay
-# -D=CONTINUATIONS_UNFINISHED holds four lemmas that ran past an hour at 12 GB: not run here.
+# -D=CONTINUATIONS_UNFINISHED holds four lemmas that don't finish in an hour: not run here.
 # Every lemma runs in its own container, with its block's flag, PAR at a time. A [reuse]
 # lemma is assumed by the lemmas after it and proved in its own run, so the whole is sound
 # once every run reads "verified". Each configuration's wellformedness checks run in the
@@ -14,25 +14,25 @@
 # lemma runs turn it off: 0 deactivates it in Tamarin, it isn't "no limit").
 #   ./check.sh                    everything
 #   ./check.sh m1_secret ...      some lemmas, by name ("wellformed" for those checks)
-#   PAR=1 ./check.sh              one run at a time
-#   PAR=1 CAP=24g LIMIT=7200 ./check.sh responder_keys4_secret   one heavy lemma, more room
+#   PAR=1 ./check.sh              one run at a time: 8 GB and a core
+#   PAR=1 CAP=12g LIMIT=7200 ./check.sh keys4_secret   one lemma, more room and time
 #   LOGS=/some/dir ./check.sh     keep every run's log there
 # Each run gets CAP of memory and no swap, and CPUS cores: Tamarin's runtime takes every
-# core otherwise. Its heap is held 1.5 GB under CAP, where GHC compacts the oldest
+# core otherwise. Its heap is held to 90% of CAP less 256 MB, where GHC compacts the oldest
 # generation in place instead of copying it, so a run fits more in the same CAP. The
-# defaults take at most PAR × CAP = 36 GB and PAR × CPUS = 9 cores.
+# defaults take at most PAR × CAP = 40 GB and PAR × CPUS = 5 cores.
 # Exit status 0 only when every lemma reads verified and every run finished without a
 # warning. It's heavy: run it when the machine is otherwise idle (README).
 cd "$(dirname "$0")" || exit 1
 IMAGE=seedelf-messaging-tamarin:1.12.0
-PAR=${PAR:-3}
-CAP=${CAP:-12g}
-CPUS=${CPUS:-3}
+PAR=${PAR:-5}
+CAP=${CAP:-8g}
+CPUS=${CPUS:-1}
 LIMIT=${LIMIT:-3600}
 DERIV=${DERIV:-1800}
 MODEL=session.spthy
 
-case $CAP in *g) HEAP=$(( ${CAP%g} * 1024 - 1536 ))m ;; *) echo "CAP is in gigabytes, like 12g"; exit 1 ;; esac
+case $CAP in *g) HEAP=$(( ${CAP%g} * 1024 * 9 / 10 - 256 ))m ;; *) echo "CAP is in gigabytes, like 12g"; exit 1 ;; esac
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "building $IMAGE"
@@ -45,11 +45,13 @@ else
   out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 fi
 
-# tamarin <limit> <log> <args...>: one run, killed at <limit> seconds.
+# tamarin <limit> <log> <args...>: one run, killed at <limit> seconds. The timeout runs in
+# the container: killing the docker client from outside would leave the container running.
 tamarin() {
   local limit=$1 log=$2; shift 2
-  timeout --signal=KILL "$((limit + 30))" docker run --rm -m "$CAP" --memory-swap "$CAP" --cpus "$CPUS" \
-    --network none -v "$PWD":/w:ro "$IMAGE" +RTS -N"$CPUS" -M"$HEAP" -A64m -RTS "$@" "/w/$MODEL" > "$log" 2>&1
+  docker run --rm -m "$CAP" --memory-swap "$CAP" --cpus "$CPUS" --network none -v "$PWD":/w:ro \
+    --entrypoint timeout "$IMAGE" --signal=KILL "$limit" \
+    tamarin-prover +RTS -N"$CPUS" -M"$HEAP" -A64m -RTS --quiet "$@" "/w/$MODEL" > "$log" 2>&1
 }
 
 # Each lemma with the flag of the #ifdef block it's in, then each configuration's

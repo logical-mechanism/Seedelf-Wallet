@@ -1,6 +1,6 @@
 # Chunk 54 · Seedelf Messaging
 
-**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **✅ Calls 12 and 13 merged** (54a′, #407). **✅ 54d merged** (#408, the WebAssembly bindings). **✅ 54e merged** (#409, the worker). **✅ 54f merged** (#410, the screens, with call 15's verified reveal). **🚧 54f′, the owner's reflection,** on `web-wallet/messaging-reflection`. **🚧 54b, the model,** on `web-wallet/messaging-model` (#405): its proofs are running. Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
+**Status: ✅ 54a merged** (#403). **✅ 54c merged** (#406) and deployed. **✅ Calls 12 and 13 merged** (54a′, #407). **✅ 54d merged** (#408, the WebAssembly bindings). **✅ 54e merged** (#409, the worker). **✅ 54f merged** (#410, the screens, with call 15's verified reveal). **🚧 54f′, the owner's reflection,** on `web-wallet/messaging-reflection`. **✅ 54b, the model** (#405): every lemma check.sh runs is proved. Phase 1 is built: the [seedelf-messaging](../../../seedelf-messaging/) crate, merged in #401. This plan builds the rest: the session layer, the relay, the WebAssembly bindings, the worker and the screens. Each step gets its own branch, `web-wallet/messaging-<step>`, and its own PR from `main`, as chunk 38's and 53's do.
 
 **The specification is [protocol.md](../../../seedelf-messaging/docs/protocol.md),** with the envelope in [construction.md](../../../seedelf-messaging/docs/construction.md) and the guarantees in [security.md](../../../seedelf-messaging/docs/security.md). It has had two reviews; the second's reasoning, and its adversarial tests, are in [protocol-review.md](../../../seedelf-messaging/docs/protocol-review.md). This plan doesn't repeat them: it says what to build, where, in what order, and what's still the owner's to decide. A step that changes the protocol changes protocol.md in the same PR.
 
@@ -104,7 +104,7 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 - **The rules hold the tests:** a mutation pass removed or weakened each of 39 rules in turn, and a test failed every time. Its first run found four survivors, which became a fix (a request's joining message now reads as eager processing would) and two continuation tests.
 - **For 54e and 54f:** a first message is refused once its t is 48 hours old, so a conversation nobody read in its first 48 hours can never begin, however many first messages follow (protocol.md §16.4). The wallet needs "start again", or must start again by itself.
 
-### 54b 🚧 The model
+### 54b ✅ The model
 
 - §3 to §6 in ProVerif or Tamarin [choice: ProVerif]. The queries:
   - secrecy of message keys;
@@ -119,18 +119,20 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
 
 **Done means:** the model's queries hold, and a fresh-context reviewer has read the model against protocol.md.
 
-**Where it stands** (2026-11-21, `web-wallet/messaging-model`):
+**Where it stands** (2026-11-22, `web-wallet/messaging-model`):
 - **Built in Tamarin, not ProVerif:** [seedelf-messaging/model/](../../../seedelf-messaging/model/), run by its `check.sh` in a pinned container. ProVerif's Diffie–Hellman equation needs a fixed base, and registers need any point as a base: its completion didn't finish on a one-line model.
 - **Four configurations of one file,** since Tamarin's search grows with every rule that publishes something and every compromise: the sessions (two full round trips, long-term keys and the initiator's state stolen), the responder's state, the continuations (one link), and the sessions without §5's cid rule. The model README lists every abstraction, what each configuration's attacker lacks, and why nothing is lost.
-- **It's heavy:** a lemma takes up to an hour and 12 GB, so the proofs run overnight on an idle machine (the owner, 2026-11-21).
 - **A fresh-context reviewer read it against protocol.md.** Its findings, all taken: the first version let the attacker decrypt only with the associated data, so a stolen state opened nothing; the argument for the bases a reader accepts was wrong (w₀ in the associated data is what ties a first message to its base); the agreement lemmas excused a key stolen mid-conversation; the responder's state wasn't modelled.
 - **What it changed in the spec** (protocol.md §0, §1.1, §3, §7, §16.1): x_B stolen before the first reply takes the conversation over from the writer's side; the reader's own key lets anyone pose to it, "Continues" included; w₀ must stay in the associated data.
 - **For the owner (call 14):** a request the bounds push out leaves no tombstone, so a re-posted first message can read again as a new request.
 - **Calls 12 and 13 (54a′) after it:** the model's F leaves out `to`, its base proof and the stamp after F, and the README's assumption 4, which the model rested on, is now a rule the reader enforces: a first message's base is proved to be [b]g_S, and a continuation's is one of the reader's own (assumptions 4 and 12).
-- **Proved so far** (2026-11-21, a partial run stopped to free the machine): 11 of the 32 lemmas check.sh runs. They are the four continuation lemmas, the cid check, `keys1` to `keys4`, `responder_keys2_secret` and `initiator_agreement_r1`.
-- **Still to run, overnight:** the other 21. They include the main claims: m3, m4, r1 and r2's forward secrecy, recovery after a stolen state, the static DH's hold on R_A, and agreement on the later messages. `responder_keys4_secret` ran past 12 GB, so it runs alone with more room (`PAR=1 CAP=24g LIMIT=7200`).
-- **Four continuation lemmas didn't finish in an hour** (the static DH's hold and agreement with continuations, the "Continues" label, its forging by the reader's key). They're kept under `-D=CONTINUATIONS_UNFINISHED`, out of check.sh. The README says what stands in for them and what's only argued.
-- **Done means is met** once check.sh reads "ok" with the rest proved; then 54b goes ✅.
+- **Proved** (2026-11-22): every lemma check.sh runs, 35 of them, and each configuration's wellformedness checks, in one run of check.sh on the final file: an hour, 5 at a time with 1 core and 8 GB each, the longest lemma 29 minutes. The four lemmas of assumption 14 stay out of it, as before.
+- **What proving it found** (2026-11-22), in the model README:
+  - **The `[reuse]` lemmas helped nothing.** Their guard, `K(k)`, is the attacker sending k into the protocol, which a key never is, so no later proof could close on one, and each split the search on every message sent. That's why most lemmas ran out of an hour or 12.5 GB. Each keys lemma now guards on the key itself, `KU(rk)` and `KU(ck)`, a claim at least as strong; most lemmas then take minutes.
+  - **`r1_forward_secret` and `r2_forward_secret` were first stated false.** Their excuse named a theft of Bob's key only before he accepted Alice's own F; with his key, the attacker has him accept another F with her cid, p₀, A and w₀ and reads his replies (§1.1's key-compromise impersonation). Their excuse now names a theft before Bob accepted any first message, as their claim always said.
+  - **Agreement on m4 excuses the initiator's state stolen at any time,** not only before m4 is read, as `responder_keys4_secret` states it. That lemma with its theft dated, which m4's timed excuse would need, didn't finish in 30 minutes.
+- **How, in the model:** three helper lemmas (`static_dh_secret`, `responder_accepted_the_initiators_f`, and `static_dh_holds_r_a` made `[reuse]`), each lemma hiding the helpers it doesn't rest on, `keys4_secret` with a key-guarded twin, the trace lemmas naming their trace step by step, and a goal ranking (`states_then_keys`) for the lemmas Tamarin's default ranking stalled on. None changes a claim but the three above.
+- **check.sh** caps each run's cores and keeps it out of swap, runs the wellformedness checks in the same pool, kills a run inside its container (killing the docker client left it running), and fails a wellformedness run that didn't finish.
 
 ### 54c ✅ The relay
 
