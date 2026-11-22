@@ -5,7 +5,8 @@
 //!
 //! **What's counted:** units of 512 bytes, so a 32 KiB envelope counts as 64
 //! short ones, decaying by half every `half_life`. One count per address
-//! (an IPv6 address by its /64, as the edge's buckets), one for everyone.
+//! (the relay's key, `super::address_key`: an IPv6 address by its /56), one
+//! for everyone.
 //! They live in memory only, an address's while its count is above a
 //! hundredth of a unit, and nothing logs them.
 
@@ -262,17 +263,17 @@ mod tests {
     }
 
     #[test]
-    fn an_ipv6_machine_is_counted_by_its_64_by_the_caller() {
-        // The relay keys every count with the edge's key: one /64, one count.
+    fn an_ipv6_allocation_is_counted_by_its_56_by_the_caller() {
+        // The relay keys every count with its own key: one /56, one count.
         let now = Instant::now();
         let mut counts = Counts::new(PRICES, now);
-        let key = crate::edge::client_key(ip("2001:db8:1:2::1"));
-        assert_eq!(key, crate::edge::client_key(ip("2001:db8:1:2:ffff::9")));
+        let key = crate::messaging::address_key(ip("2001:db8:1:200::1"));
         for _ in 0..64 {
             counts.record(key, 512, now);
         }
-        assert_eq!(counts.ask(key, 512, now), Asked::Bits(20));
-        let other = crate::edge::client_key(ip("2001:db8:1:3::1"));
+        let neighbour = crate::messaging::address_key(ip("2001:db8:1:2ff:ffff::9"));
+        assert_eq!(counts.ask(neighbour, 512, now), Asked::Bits(20));
+        let other = crate::messaging::address_key(ip("2001:db8:1:300::1"));
         assert_eq!(counts.ask(other, 512, now), Asked::Bits(18));
     }
 

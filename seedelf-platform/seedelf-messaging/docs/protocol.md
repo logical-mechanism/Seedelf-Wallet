@@ -320,7 +320,8 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
   - a global floor that rises when the whole pool grows unusually fast, against floods spread over many addresses;
   - a ceiling an honest browser can meet; past it a post is refused, not priced.
 
-  The relay names the price it wants, and a post refused for too little work is solved again for the same envelope bytes. It's a price, not a cap, so an honest user behind the same address as a flooder still gets through, only slower. The counts live in memory for their window only and are never logged.
+  The relay names the price it wants, and a post refused for too little work is solved again for the same envelope bytes. As a price, it lets an honest user behind the same address as a flooder through, only slower.
+- **A cap per address** (2026-11-21). Every reader downloads and scans every envelope, so what the pool holds from one address over its 36 hours is bounded, whatever work it does. Past it, the address waits until its oldest posts expire, an honest user behind it too. The relay's counts live in memory for their window only and are never logged.
 - **Duplicates.** The relay drops an envelope whose bytes it already holds.
 - **Clients download everything after their cursor,** in pages. At 10,000 envelopes a day, 36 hours is about 15,000 envelopes, roughly 7.5 MB at 0.5 KiB each.
 
@@ -335,7 +336,7 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 
 **From the network,** which no cryptography here hides, the relay and anyone watching learn:
 - the IP address and time each envelope is posted, its size, and its proof of work;
-- for a short window, how many envelopes each address has posted, which the relay keeps in memory to price posts (§10) and never logs;
+- how many envelopes and bytes each address has posted: lately, to price its posts, and in each hour, kept 36 hours after it, to cap what it has in the pool (§10). The relay keeps these counts in memory, never tied to an envelope, and never logs them;
 - each client's IP address and when it syncs, so when each wallet is online;
 - timing. A reply posted soon after a message hints at a conversation, more so when few wallets are online. Over time such hints can link the two sides of a conversation.
 
@@ -343,7 +344,7 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 
 **What's claimed and what isn't:** no envelope names its recipient or sender, and no writer can learn from a reader's replies whether two Seedelfs are one wallet's (§2). There's no claim of anonymity against an observer who watches the whole network.
 
-**What the wallet and the privacy policy say:** the relay can't read messages or tell whom they're for. It sees the IP address that posts each envelope and when, and counts each address's recent posts, in memory, to stop floods.
+**What the wallet and the privacy policy say:** the relay can't read messages or tell whom they're for. It sees the IP address that posts each envelope and when, and counts each address's posts, in memory, to stop floods.
 
 **The other side of a conversation learns:**
 - the writer of a first message learns the handle they wrote to;
@@ -568,14 +569,15 @@ At most 8 + 32,768 bytes. The checks run cheapest first, and the first that fail
 | 1 | The body holds a nonce: at least 8 bytes | 400 |
 | 2 | **The shape:** version 1, and exactly 512, 2,048, 8,192 or 32,768 bytes (§9, §16.1) | 400 |
 | 3 | **Already held,** by the stamp's digest (§17.3): the same bytes in the same pool | 200 `already`, whatever the stamp |
-| 4 | **The price** (§17.4) is within its ceiling | 429, with `Retry-After` |
+| 4 | **The price** (§17.4) is within its ceiling, and the post fits **the address's window** (§17.4) | 429, with `Retry-After` |
 | 5 | **The stamp** shows at least the price | 402, `{"error": …, "price": <bits>}` |
 | 6 | **The points:** p, w and c each canonical, in G1 and not O (construction.md §4.4), so no reader ever parses garbage (call 3) | 400 |
 | 7 | **Room** in the pool | 503, with `Retry-After` |
 
-Kept, the answer is 200 `{"kept": "new", "expires": <Unix seconds>}`; `already` carries the held copy's `expires`. The relay's own refusals carry `{"error": "<words>"}`. One more: a 503 `busy`, with `Retry-After`, from an address new to the relay while it already counts 200,000 (§17.4).
+Kept, the answer is 200 `{"kept": "new", "expires": <Unix seconds>}`; `already` carries the held copy's `expires`. The relay's own refusals carry `{"error": "<words>"}`. One more: a 503 `busy`, with `Retry-After`, from an address new to the relay while its prices or its windows already count 200,000 addresses (§17.4).
 
 - **Already held comes before the price** [choice], so a wallet that re-posts its stored bytes after a restart (§4.2) gets 200 even when its address's price has risen since. Anyone can download the pool, so this tells no one anything.
+- **The window comes with the price, before the stamp** [choice], so a post with any nonce, 0 say, learns its wait from the 429 without solving. It's checked again as the post is kept, so posts from one address at once can't pass it together.
 - **The points come after the price** [choice]: they're the costly check (three subgroup checks, about 0.16 ms natively), so a sender pays its work before the relay spends on them.
 - **A 402 is solved again for the same bytes** at the price it names (§10). The wallet marks a message posted on either 200 (§4.2, step 3), and shows "sent, expires at" from `expires`.
 - **The edge** answers before any of this: a 429 when the address's messaging bucket is empty (a post costs 4 units, a page 1 plus 1 for every 16 KiB it sends), a 503 once messaging's traffic allowance for the day is spent, and a 413 for a body over 8 + 32,768 bytes (axum's, in plain text). These buckets and this allowance are messaging's alone: catching up on messages never makes the wallet's other reads wait, and a flood of messages never spends their traffic.
@@ -597,7 +599,7 @@ work   = the leading zero bits of SHA-256(digest ‖ nonce (8, big-endian))
 
 ### 17.4 The price
 
-What's counted is units of 512 bytes, so an envelope is 1, 4, 16 or 64 units. Each sending address has a count of its recent units, an IPv4 address whole and an IPv6 address by its /64, and everyone together has one. Both halve every 10 minutes. A post's price, its own units u counted:
+What's counted is units of 512 bytes, so an envelope is 1, 4, 16 or 64 units. Each sending address has a count of its recent units, an IPv4 address whole and an IPv6 address by its /56, so the /64s of one allocation are one address [choice], and everyone together has one. Both halve every 10 minutes. A post's price, its own units u counted:
 
 ```text
 bits = base + ⌊(mine + u) / 32⌋ + floor
@@ -613,8 +615,23 @@ All [choice], to tune with real use.
 
 - **Past the ceiling a post is refused,** not priced: a 429 whose `Retry-After` is when the counts will have decayed enough, if nothing else is posted meanwhile, in 15 s steps and at most an hour.
 - **Only kept posts are counted.** The counts live in the relay's memory, an address's until it has decayed below a hundredth of a unit (about an hour after one short post), and are never logged or saved.
-- **What it means for a sender:** a short message alone costs 18 bits, about 0.1 s; a 32 KiB one, 20. One address can send 31 short messages in a burst before the first extra bit, and stays under the ceiling while its recent units stay under 224: about 15 short messages a minute, kept up indefinitely. A busy pool raises everyone's price by a bit for each doubling of its traffic past `quiet`, which at mainnet's numbers is about 100,000 short envelopes a day.
-- **What it doesn't stop.** A GPU computes SHA-256 thousands of times faster than a browser, and a sender with many addresses (an IPv6 /48 holds 65,536 /64s) meets only the floor. Such a sender can fill a pool, and posts are then refused until the oldest expire. The cap bounds what that costs the server and every reader. In reserve: a memory-hard puzzle that stays cheap to check (§13), and a larger droplet.
+- **What it means for a sender:** a short message alone costs 18 bits, about 0.1 s; a 32 KiB one, 20. One address can send 31 short messages in a burst before the first extra bit, and stays under the ceiling while its recent units stay under 224: about 15 short messages a minute, kept up until the window below stops it. A busy pool raises everyone's price by a bit for each doubling of its traffic past `quiet`, which at mainnet's numbers is about 100,000 short envelopes a day.
+- **What it doesn't stop.** A GPU computes SHA-256 thousands of times faster than a browser, so it outpays the price, though not the window. A sender with many addresses (an IPv6 /48 holds 256 /56s) meets only the floor and a window for each. Such a sender can fill a pool, and posts are then refused until the oldest expire. The cap bounds what that costs the server and every reader. In reserve: a memory-hard puzzle that stays cheap to check (§13), and a larger droplet.
+
+**The window** (2026-11-21). The price slows a sender; the window bounds what one address makes every reader download and scan. For each address, keyed as the price's count is, the relay counts the posts the pool kept from it, as envelopes and as units, hour by hour. Each hour's counts are kept until 36 hours after the hour ends, when everything posted in it has expired. A post that would take the address past either limit is refused:
+
+| Pool | envelopes | units |
+|---|---|---|
+| mainnet | 1,000 | 4,096 (2 MiB) |
+| preprod | 1,000 | 4,096 (2 MiB) |
+
+The owner's [choice], to tune with real use; the same on both pools, so a wallet meets the same limits on preprod.
+
+- **Refused with a 429** whose `Retry-After` is when enough of the address's oldest hours will have aged out for this post, if it posts nothing meanwhile: at most 37 hours. When the price refuses too, the 429 waits for the later of the two.
+- **The page says 0** for each size the window refuses now (§17.5), as past the ceiling, so a wallet knows before solving.
+- **What it means for a sender:** 1,000 messages in any 36 hours, short or long, and at most 2 MiB of them: 64 of 32 KiB, or 256 of 8 KiB. A burst of 1,000 short ones waits up to 37 hours for the next; spread out, about 27 an hour can go on indefinitely (each hour is counted with the 36 before it). Everyone behind one address shares its window.
+- **What it means for a reader:** one address adds at most 1,000 envelopes, about a second of trial scanning at about 1 ms each, and 2 MiB to download. Filling mainnet's 64 MiB pool takes 32 addresses' windows of 32 KiB envelopes, or about 130 of short ones.
+- **Counts, never envelopes:** an address's entry is how many envelopes and units it posted in each hour, not which. In memory only, never in the pool's file, so a restart starts every window empty, and never logged. The relay keeps at most 200,000 addresses' windows; past it, as for the prices, a new address's post is a 503 `busy`.
 
 ### 17.5 Reading
 
@@ -627,7 +644,7 @@ version (1) = 1 | flags (1) | cursor (8) | prices (4) | count (2) | count × (le
 - **Whole envelopes,** in the order they came, at most 256 KiB of them and always at least one when any follows the cursor.
 - **cursor:** what to ask from next. Every envelope a pool keeps gets the next number, starting from the Unix time in microseconds when the pool was loaded [choice], so a number says nothing of when its envelope came, and a pool that lost what it held still numbers above every cursor it gave out. An empty page's cursor is the last number given out.
 - **flags:** bit 0 (1), another page follows now; bit 1 (2), a gap: something after the cursor is gone (expired, or lost to a crash), or the cursor isn't one this pool gave out, in which case the page starts from the oldest envelope held. A wallet with no cursor is told of no gap.
-- **prices:** the bits a post from the reader's address would be asked now, for 512, 2,048, 8,192 and 32,768 bytes in that order; 0 when it would be refused. A wallet solves at these and is spared a 402 unless the price rises before it posts.
+- **prices:** the bits a post from the reader's address would be asked now, for 512, 2,048, 8,192 and 32,768 bytes in that order; 0 when it would be refused, past the ceiling or past the address's window (§17.4). A wallet solves at these and is spared a 402 unless the price rises before it posts.
 - **The wallet's loop** (54e): read pages until bit 0 is clear, saving the cursor after each; on a gap, say that messages sent meanwhile may never arrive. Envelopes read twice are harmless: §5's rules refuse them.
 
 ### 17.6 Kept and lost
