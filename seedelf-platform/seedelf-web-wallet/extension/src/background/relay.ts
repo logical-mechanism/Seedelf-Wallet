@@ -105,10 +105,18 @@ function hex(bytes: Uint8Array): string {
 }
 
 /** A Retry-After in seconds, as the relay and the edge send it; a minute without one. */
-function retryAfterMs(response: Response): number {
+function retryAfterMs(response: Response, most = HOUR_S): number {
   const seconds = Number(response.headers.get("retry-after"));
-  return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 3600) * 1000 : 60_000;
+  return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, most) * 1000 : 60_000;
 }
+
+const HOUR_S = 3600;
+/**
+ * The longest a post's wait can be (§17.4): an address's window, 36 hours and the hour its oldest bucket spans. Only
+ * its outbox waits that long, so the countdown says the real time; a page's 429 holds every request to the origin, so
+ * that stays within an hour.
+ */
+const POST_WAIT_S = 37 * HOUR_S;
 
 export interface RelayDeps {
   origin: string;
@@ -182,7 +190,7 @@ export class RelayClient {
       }
       case 429:
       case 503:
-        return { kind: "wait", retryAfterMs: retryAfterMs(response) };
+        return { kind: "wait", retryAfterMs: retryAfterMs(response, POST_WAIT_S) };
       case 400:
       case 413:
         return { kind: "refused", status: response.status };

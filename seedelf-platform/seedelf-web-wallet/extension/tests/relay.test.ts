@@ -123,6 +123,11 @@ describe("the relay's answers to a post (§17.2)", () => {
       retryAfterMs: 45_000,
     });
     expect(await client(json(503, { error: "x" })).relay.post(new Uint8Array(1))).toEqual({ kind: "wait", retryAfterMs: 60_000 });
+    // An address's window can ask up to 37 hours (§17.4): the outbox waits that long, and no longer.
+    const wait = async (seconds: number) =>
+      (await client(json(429, { error: "x" }, { "retry-after": String(seconds) })).relay.post(new Uint8Array(1))) as { retryAfterMs: number };
+    expect((await wait(30 * 3600)).retryAfterMs).toBe(30 * 3600_000);
+    expect((await wait(100 * 3600)).retryAfterMs).toBe(37 * 3600_000);
     expect(await client(json(400, { error: "x" })).relay.post(new Uint8Array(1))).toEqual({ kind: "refused", status: 400 });
     expect(await client(() => new Response("too big", { status: 413 })).relay.post(new Uint8Array(1))).toEqual({
       kind: "refused",
