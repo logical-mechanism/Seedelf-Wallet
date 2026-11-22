@@ -18,7 +18,7 @@ import { passwordProblem } from "../shared/password";
 import type { Account, UnlockResult, WalletState } from "../shared/rpc";
 import { fromBase64, toBase64, type Area } from "./storage";
 import { LOCAL_PREFERENCES } from "./preferences";
-import { KEPT_ON_RESET, PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
+import { CONVERSATION_RECORDS, KEPT_ON_RESET, PRIVATE_PREFIX, PRIVATE_RECORDS } from "./private-store";
 import { lastSpentAt } from "./spent";
 import { openVault, sealVault, VAULT_KEY, WrongPasswordError, type VaultRecord } from "./vault";
 
@@ -505,7 +505,9 @@ export class Wallet {
     return this.serial(async () => {
       await this.wipe({ refusals: false });
       const records = PRIVATE_RECORDS.filter((name) => !KEPT_ON_RESET.includes(name)).map((name) => PRIVATE_PREFIX + name);
-      await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, LOCAL_PREFERENCES, ...records, ...LOCAL_CACHES);
+      // Every Seedelf Messaging conversation's record, found by its family's prefix: no key is needed to list them.
+      const conversations = await this.deps.local.keys(PRIVATE_PREFIX + CONVERSATION_RECORDS);
+      await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, LOCAL_PREFERENCES, ...records, ...conversations, ...LOCAL_CACHES);
       this.deps.changed();
     });
   }

@@ -4,7 +4,8 @@ What the crate guarantees, under which assumptions, and what it doesn't. Unaudit
 
 - **The v1 envelope** (Phase 1, most of this file) is a cryptographic foundation. On its own it has no sender authentication, no forward secrecy and no replay protection.
 - **The session layer** (chunk 54's 54a: [protocol.md](protocol.md) §3 to §6, exact in §16) builds those on it: conversations, the Double Ratchet, and the rules for replays, requests and continuations. What each compromise reveals is protocol.md §1.1. What its tests establish is [below](#the-session-layer).
-- There's still no relay, and no key distribution beyond a Seedelf's public register. The protocol is modelled in Tamarin: [model/](../model/) (54b).
+- **The verified reveal** (54f, [protocol.md](protocol.md) §19) lets the side that wrote first show the other one of its Seedelfs, by a designated-verifier proof. What it proves and what it doesn't is [below](#the-verified-reveal).
+- The relay is built, in the data layer (54c, protocol.md §17): it checks a post's shape, points and proof of work, and can't read it. There's no key distribution beyond a Seedelf's public register. The protocol is modelled in Tamarin: [model/](../model/) (54b).
 
 ## What the tests establish, and what they don't
 
@@ -50,7 +51,7 @@ Those rest on the arguments and assumptions below.
    - **A public G2 multiple of y,** such as [y]h (construction.md §2).
    - **Metadata:** timing, the network, and the plaintext's length, since the envelope is 161 + |m| bytes with no padding.
    - **Datum registers:** when the recipient's register is a Seedelf datum, the sender knows which Seedelf they wrote to.
-   - **A reaction to a sum of registers.** (g₁ + g₂, v₁ + v₂) is a register of y exactly when both (g₁, v₁) and (g₂, v₂) are. So any visible reaction to an envelope addressed to the sum, such as a reply, links the two. Seedelf's own registers share the property. [protocol.md](protocol.md) §13 has the proposed fix for first messages.
+   - **A reaction to a sum of registers.** (g₁ + g₂, v₁ + v₂) is a register of y exactly when both (g₁, v₁) and (g₂, v₂) are. So any visible reaction to a bare v1 envelope addressed to the sum, such as a reply, links the two, and so does one to an envelope addressed to a second register of y. Seedelf's own registers share the property. The session layer closes it for messages: a first message proves its base comes from the one handle it names, and every envelope is bound to its conversation identity ([protocol.md](protocol.md) §2).
 4. **Secret-key compromise.** y reads every envelope ever sent to any of its registers, past and future. With the key reuse chosen for later, it's also the key that spends the Seedelf.
 5. **Ciphertext integrity.** A change to any byte is rejected (AEAD, with the header bound). That's integrity against third parties, not proof of who sent it: anyone with the recipient's register can make an envelope that opens.
 6. **Recipient key substitution.**
@@ -84,7 +85,7 @@ Not proven here.
 - **Whatever reads can spend.** A client or service that scans for a Seedelf holds its spending key, and there's no read-only delegation under this choice. A scanning-only key would have to be a separate key, which means revisiting the choice.
 - **Decryption sits next to the spending key.** Any oracle on [x]·(an attacker's point), beyond what ECIES allows, would be an oracle on the spending key. The subgroup, identity and canonical-encoding checks are what make that safe. They're mandatory, and the tests hold them.
 - **Compromise of one is compromise of both.**
-- **Anyone can message any Seedelf,** since its register is public. Spam is a relay concern (Phase 2).
+- **Anyone can message any Seedelf,** since its register is public. Spam is the relay's concern: proof of work priced by traffic, which a GPU can outpay, and a cap on what one address has in the pool (protocol.md §17.4), which a sender with many addresses can get around.
 - **No new derivation:** the wallet's frozen v1 derivation stays as it is.
 
 ## Implementation notes
@@ -113,9 +114,10 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 
 ### What its tests establish
 
-- **Vectors** for every layer: F, SK, both inits, every chain and message key, ENCRYPT, the padding, the inner messages and the envelopes. An implementation written from protocol.md §16 alone, without reading the Rust (noble-curves and WebCrypto), reproduced them byte for byte.
+- **Vectors** for every layer: F with its proof and stamp, SK, both inits, every chain and message key, ENCRYPT, the outer scalar, the padding, the inner messages and the envelopes. An implementation written from protocol.md §16 alone, without reading the Rust (noble-curves and WebCrypto), reproduced them byte for byte.
+- **Handles stay unlinkable through replies** (calls 12 and 13): src/session/tests/linking.rs aims an honest message's envelope at a reader's second handle and at the sum of two, and builds a base on the sum, and each is refused with nothing kept. The first-contact stamp is checked before the proof and any key.
 - **protocol-review.md §E's 14 adversarial cases,** one test each: src/session/tests/adversarial.rs, with cases 4 and 5 in tests/simulation.rs.
-- **Every rule of §3 to §6 is load-bearing in the tests:** a mutation pass removed or weakened each rule in turn, 39 of them, and a test failed every time.
+- **Every rule of §3 to §6 is load-bearing in the tests:** a mutation pass removed or weakened each rule in turn, 39 of them, and a test failed every time. Calls 12 and 13's 21 rules had their own pass (2026-11-21). One survived at first, a stored request replayed after a restart, and a test now holds it.
 - **Properties:** any schedule of sends, out-of-order deliveries, duplicates, losses and restarts reads each message once, changes nothing on a duplicate, and counts exactly the lost messages it skipped as missing.
 - **A two-wallet simulation** over a relay that keeps envelopes 36 hours, with the worker killed at every point of §4.2 and locks past 36 hours. No message shows twice, no message key seals two envelopes, every refusal is explained, the missing counts are exact, and the conversation is still live at the end.
 - **Stored states,** requests and tombstones round-trip, and every truncation, extension and unknown version is refused.
@@ -133,13 +135,34 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 - **Every point** from an envelope, F or a header is checked before a key touches it. A stored state's points and ratchet key are checked again on reading.
 - **No unsafe code, and no panic on untrusted input.** The `expect`s guard fixed output lengths, a ratchet key the crate itself stored, and a receiving chain the step before just made.
 
+## The verified reveal
+
+A Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers) that the revealed Seedelf's register and the initiator's identity A share a key (Chaum–Pedersen), or that its maker knows the key of the reader's identity w₀ (protocol.md §19.2). The writer proves the first; the reader holds the second.
+
+**What it proves, to the reader:**
+- Whoever holds A's key, so whoever started the conversation (the static DH in SK, protocol.md §3), holds the key of the register it names. The wallet then checks the chain gives the Seedelf's name that register now.
+- Nothing about a person: "someone with that Seedelf is writing". Its use is tying a conversation to a Seedelf the reader already knows.
+
+**What it doesn't:**
+- **Anything to anyone else.** The reader could have made the same proof with its own key, so a reveal it shows others proves nothing: the conversation stays deniable, as Signal's are. Witness indistinguishability makes the writer's proof and the reader's look alike (up to about 2/q: drawn scalars are never 0).
+- **Anything after it was checked.** It's checked against a fresh read of the contract, never a view kept from before, but a Seedelf can move to another owner afterwards; the reveal's message keeps the time it came.
+- **Anything against a stolen x_B.** A thief of the reader's key makes reveals for any Seedelf, in conversations it starts with the reader: key-compromise impersonation, inherent to designated-verifier proofs and already open through the static DH. That key spends the Seedelf too.
+- **Any link between the writer's Seedelfs.** They share its key, but under DDH no one without it can tell.
+- **A plain proof** someone else could check: not built, until users ask for one (protocol.md §7).
+
+**What the tests establish** (src/session/tests/reveal.rs, tests/reveal_vectors.rs):
+- Who may make one (the initiator, once a reply has decrypted, for a Seedelf of its own key) and who may check one (the responder), each refusal tested.
+- Binding: another conversation of the same keys, another name, another register of the same key, a share or response moved or swapped, and another key's Seedelf proved with the writer's own each fail; so does every single-bit change to a reveal's bytes.
+- The reader's own forgery verifies, and one made without its key doesn't.
+- Every malformed reveal is refused with its code, the length read first.
+- Vectors reproduced byte for byte by an implementation written from protocol.md alone (noble-curves and SHA-256), and a mutation pass: all 25 of the proof's and parser's rules are load-bearing in the tests.
+
 ## Before production
 
 - An external review of the construction and the code.
 - Written arguments for IND-CCA2 and for unlinkability, with the per-envelope base.
 - The spending-and-reading argument, checked against the literature.
 - A constant-time review of the WebAssembly build. WebAssembly engines promise nothing about timing.
-- An outside review of the protocol and its model (54b).
-- Spam and resource limits at the relay: priced by traffic (protocol.md §10).
-- A fix for linking through a sum of registers (protocol.md §13).
+- An outside review of the protocol, its model (54b), and the reveal's proof, which the model doesn't cover.
+- The relay's price and window tuned with real use, and a memory-hard puzzle if GPUs flood it (protocol.md §17.4).
 - A dependency audit (cargo-audit or cargo-deny) for this crate in CI.

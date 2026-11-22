@@ -92,7 +92,8 @@ describe("manifest", () => {
         "default-src 'self'",
         "script-src 'self' 'wasm-unsafe-eval'",
         "object-src 'none'",
-        "connect-src 'self' https://preprod.koios.rest https://www.giveme.my https://aggr.monorepo-testnet-preprod.minswap.org https://ipfs.blockfrost.dev",
+        // Seedelf Messaging's relay, for preprod's pool on the data layer's server (chunk 54's call 4).
+        "connect-src 'self' https://preprod.koios.rest https://www.giveme.my https://aggr.monorepo-testnet-preprod.minswap.org https://mainnet.seedelf.logicalmechanism.io https://ipfs.blockfrost.dev",
         "style-src 'self'",
         "img-src 'self' data:",
         "font-src 'self'",
@@ -121,9 +122,11 @@ describe("manifest", () => {
     expect(m.content_security_policy.extension_pages).toMatch(/connect-src [^;]*https:\/\/mainnet\.seedelf\.logicalmechanism\.io /);
     expect(m.content_security_policy.extension_pages).not.toMatch(/127\.0\.0\.1|http:\/\//);
     expect(m.host_permissions.join(" ")).not.toContain("seedelf.logicalmechanism.io");
-    // Mainnet only: a preprod build reads Koios alone.
+    // A preprod build reads the chain through Koios alone, and reaches the server only for Seedelf Messaging's
+    // preprod pool (chunk 54's call 4): through connect-src too, never a host permission.
     const preprod = buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: true });
-    expect(preprod.content_security_policy.extension_pages).not.toContain("seedelf.logicalmechanism.io");
+    expect(preprod.content_security_policy.extension_pages).toMatch(/connect-src [^;]*https:\/\/mainnet\.seedelf\.logicalmechanism\.io /);
+    expect(preprod.host_permissions.join(" ")).not.toContain("seedelf.logicalmechanism.io");
   });
 
   it("reaches a dev build's data layer through connect-src alone, never a host permission", () => {
@@ -134,8 +137,10 @@ describe("manifest", () => {
       "connect-src 'self' https://api.koios.rest https://www.giveme.my https://api.coingecko.com https://preprod.koios.rest https://agg-api.minswap.org https://aggr.monorepo-testnet-preprod.minswap.org http://127.0.0.1:8099 https://ipfs.blockfrost.dev",
     );
     expect(m.host_permissions.join(" ")).not.toContain("127.0.0.1:8099");
+    // A preprod-only build reads no data layer, but its relay lives where the override says (chunk 54's call 4).
     const preprod = buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: false, dataOrigin: "http://127.0.0.1:8099" });
-    expect(preprod.content_security_policy.extension_pages).not.toContain("8099");
+    expect(preprod.content_security_policy.extension_pages).toMatch(/connect-src [^;]*http:\/\/127\.0\.0\.1:8099 /);
+    expect(preprod.host_permissions.join(" ")).not.toContain("8099");
   });
 
   it("a store build refuses VITE_DATA_ORIGIN", () => {

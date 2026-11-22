@@ -7,12 +7,14 @@ use blstrs::G1Projective;
 use group::Curve;
 
 use crate::register::Register;
+use crate::relay::stamp_bits;
 use crate::session::conversation::{Conversation, Texts};
 use crate::session::draw::{Draw, OsDraw};
 use crate::session::first_contact::{
-    CID_LEN, ConversationId, FIRST_CONTACT_MAX_AGE, FirstContact, Reader, within_window,
+    CID_LEN, ConversationId, FIRST_CONTACT_MAX_AGE, FIRST_CONTACT_STAMP_BITS, FirstContact, Handle,
+    Reader, within_window,
 };
-use crate::session::wire::{MAX_ENVELOPE_LEN, Opened, open};
+use crate::session::wire::{MAX_ENVELOPE_LEN, Opened, Outer, open};
 use crate::{Error, SecretKey};
 
 /// The most requests kept per network.
@@ -70,6 +72,12 @@ impl Request {
     /// How many first-contact messages it holds.
     pub fn message_count(&self) -> usize {
         self.messages.len()
+    }
+
+    /// When each message arrived, by the reader's clock, in arrival order:
+    /// the order [`Request::read`] gives their texts in.
+    pub fn arrivals(&self) -> impl Iterator<Item = u64> + '_ {
+        self.messages.iter().map(|(at, _)| *at)
     }
 
     /// Its stored bytes, as counted against [`MAX_REQUEST_BYTES`].
@@ -232,7 +240,7 @@ impl Requests {
                 if len > MAX_ENVELOPE_LEN {
                     return Err(Error::InvalidState);
                 }
-                messages.push((at, Opened::from_bytes(reader.take(len)?)?));
+                messages.push((at, Opened::parse(reader.take(len)?, Outer::Checked)?));
             }
             let first = match messages.first() {
                 Some((
@@ -389,17 +397,44 @@ pub enum Received {
 /// stores each part as its own record ([`Conversation::to_bytes`],
 /// [`Requests::to_bytes`], [`Tombstones::to_bytes`]); this type is the rules
 /// over them.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Inbox {
     conversations: BTreeMap<ConversationId, Conversation>,
     requests: Requests,
     tombstones: Tombstones,
+    /// The work a new conversation's stamp must show: not stored.
+    first_contact_bits: u32,
+}
+
+impl Default for Inbox {
+    fn default() -> Self {
+        Self {
+            conversations: BTreeMap::new(),
+            requests: Requests::new(),
+            tombstones: Tombstones::new(),
+            first_contact_bits: FIRST_CONTACT_STAMP_BITS,
+        }
+    }
 }
 
 impl Inbox {
     /// Nothing yet.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The work a first message's stamp must show here, in bits:
+    /// [`FIRST_CONTACT_STAMP_BITS`] unless set.
+    pub fn first_contact_bits(&self) -> u32 {
+        self.first_contact_bits
+    }
+
+    /// Asks a different work of first messages' stamps: for tests, which
+    /// can't wait for 2²⁴ attempts, and for tuning. Writers solve at
+    /// [`FIRST_CONTACT_STAMP_BITS`], so a reader asking more drops their
+    /// first messages.
+    pub fn set_first_contact_bits(&mut self, bits: u32) {
+        self.first_contact_bits = bits;
     }
 
     /// From stored parts. Refuses a conversation ID held twice.
@@ -419,6 +454,7 @@ impl Inbox {
             conversations: map,
             requests,
             tombstones,
+            first_contact_bits: FIRST_CONTACT_STAMP_BITS,
         })
     }
 
@@ -442,7 +478,9 @@ impl Inbox {
         &self.tombstones
     }
 
-    /// Starts a conversation with the owner of `handle` (docs/protocol.md §3).
+    /// Starts a conversation with the owner of `handle`, named `to`
+    /// (docs/protocol.md §3). Its stamp comes next: [`Inbox::stamp_digest`],
+    /// then [`Inbox::set_stamp`].
     pub fn start(
         &mut self,
         key: &SecretKey,
@@ -458,14 +496,30 @@ impl Inbox {
         &mut self,
         key: &SecretKey,
         old: ConversationId,
-        to: &[u8],
         now: u64,
     ) -> Result<ConversationId, Error> {
         let previous = self
             .conversations
             .get(&old)
             .ok_or(Error::UnknownConversation)?;
-        self.insert(Conversation::start_continuing(key, previous, to, now)?)
+        self.insert(Conversation::start_continuing(key, previous, now)?)
+    }
+
+    /// What `cid`'s first-contact stamp is over ([`Conversation::stamp_digest`]).
+    pub fn stamp_digest(&self, cid: ConversationId) -> Result<[u8; 32], Error> {
+        Ok(self
+            .conversations
+            .get(&cid)
+            .ok_or(Error::UnknownConversation)?
+            .stamp_digest())
+    }
+
+    /// Sets `cid`'s first-contact stamp ([`Conversation::set_stamp`]).
+    pub fn set_stamp(&mut self, cid: ConversationId, nonce: u64) -> Result<(), Error> {
+        self.conversations
+            .get_mut(&cid)
+            .ok_or(Error::UnknownConversation)?
+            .set_stamp(nonce)
     }
 
     fn insert(&mut self, conversation: Conversation) -> Result<ConversationId, Error> {
@@ -486,29 +540,38 @@ impl Inbox {
     }
 
     /// Opens an envelope addressed to `key` and applies §5 and §6.
+    /// `handles` are the reader's own: every register each of its Seedelfs
+    /// is known to have held.
     ///
     /// - A known conversation's ID: its ratchet, on a copy (a `0x01` only
     ///   with the stored F).
     /// - A request's ID: a `0x01` with the stored F joins it, authenticated
     ///   and within the bounds; a `0x02` is [`Error::UnexpectedMessage`].
     /// - A tombstone's: [`Error::Deleted`].
-    /// - A new ID: a `0x01` inside the window and authenticated becomes a
-    ///   request, with its `replaces` judged; a `0x02` is
+    /// - A new ID: a `0x01` becomes a request if it's inside the window, its
+    ///   stamp shows [`Inbox::first_contact_bits`], its proof shows its base
+    ///   re-randomizes the handle its `to` names (or, without a `to`, it's a
+    ///   verified continuation), and it authenticates. A `0x02` is
     ///   [`Error::UnknownConversation`], a conversation this browser no
     ///   longer has.
+    ///
+    /// Every message's envelope must have gone to its conversation identity
+    /// re-randomized by the message's outer scalar.
     pub fn receive(
         &mut self,
         key: &SecretKey,
+        handles: &[Handle],
         envelope: &[u8],
         now: u64,
     ) -> Result<Received, Error> {
         let opened = open(key, envelope)?;
-        self.receive_opened(key, &opened, now, &mut OsDraw)
+        self.receive_opened(key, handles, &opened, now, &mut OsDraw)
     }
 
     pub(crate) fn receive_opened(
         &mut self,
         key: &SecretKey,
+        handles: &[Handle],
         opened: &Opened,
         now: u64,
         draw: &mut dyn Draw,
@@ -524,22 +587,43 @@ impl Inbox {
         if self.tombstones.holds(cid, now) {
             return Err(Error::Deleted);
         }
-        let Some((first, _)) = &opened.first else {
+        let (Some((first, _)), Some(stamp)) = (&opened.first, opened.stamp) else {
             return Err(Error::UnknownConversation);
         };
         if !within_window(first.started_at, now) {
             return Err(Error::OutsideWindow);
         }
+        // The stamp before any key is computed.
+        if stamp_bits(&first.stamp_digest(), stamp) < self.first_contact_bits {
+            return Err(Error::StampTooLow);
+        }
+        let continues = first.replaces.map(|old| self.judge(key, first, old));
+        if first.to.is_empty() {
+            // No handle: only a verified continuation of this reader's.
+            if !matches!(continues, Some(Continues::Verified(_))) {
+                return Err(Error::UnverifiedContinuation);
+            }
+        } else {
+            let mut named = handles
+                .iter()
+                .filter(|handle| handle.name() == first.to.as_slice())
+                .peekable();
+            if named.peek().is_none() {
+                return Err(Error::UnknownHandle);
+            }
+            if !named.any(|handle| first.proves_base(handle.register())) {
+                return Err(Error::InvalidBaseProof);
+            }
+        }
         let (_, mut results) = Conversation::accept_with(key, &[(opened, now)], draw)?;
         let plaintext = results.remove(0)?;
-        let continues = first.replaces.map(|old| self.judge(key, first, old));
         let seq = self.requests.next_seq;
         self.requests.next_seq += 1;
         self.requests.list.push(Request {
             seq,
             first: first.clone(),
             continues,
-            messages: vec![(now, opened.clone())],
+            messages: vec![(now, opened.checked())],
         });
         let evicted = self.requests.evict();
         Ok(Received::Request {
@@ -587,7 +671,7 @@ impl Inbox {
             .iter_mut()
             .find(|request| request.cid() == opened.cid)
             .expect("the caller checked");
-        request.messages.push((now, opened.clone()));
+        request.messages.push((now, opened.checked()));
         let evicted = self.requests.evict();
         Ok(Received::Request {
             cid: opened.cid,

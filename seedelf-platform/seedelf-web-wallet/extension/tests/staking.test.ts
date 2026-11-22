@@ -845,6 +845,7 @@ describe("spending rewards", () => {
       lovejoinDelay: "1-6",
       lovejoinWidth: 3,
       koiosOnly: false,
+      messaging: { preprod: false, mainnet: false },
     });
     await t.wallet.reset();
     expect(await t.preferences.get()).toMatchObject({ spendRewards: true });

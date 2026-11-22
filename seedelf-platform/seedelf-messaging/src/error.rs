@@ -20,7 +20,8 @@ pub enum Error {
     InvalidLength,
     /// A plaintext longer than [`MAX_PLAINTEXT_LEN`](crate::MAX_PLAINTEXT_LEN).
     PlaintextTooLarge,
-    /// The envelope's register isn't one of this key's.
+    /// A register isn't one of this key's: an envelope's, a conversation's
+    /// own identity, or a Seedelf's to reveal.
     NotForThisKey,
     /// Authenticated decryption failed: the envelope or message was altered,
     /// or wasn't made with this conversation's keys.
@@ -63,6 +64,31 @@ pub enum Error {
     InvalidState,
     /// A stored state's format version this library doesn't read.
     UnsupportedStateVersion(u8),
+    /// Proof of work past [`MAX_STAMP_BITS`](crate::relay::MAX_STAMP_BITS).
+    StampTooHard,
+    /// A first message whose first-contact stamp shows less work than the
+    /// reader asks.
+    StampTooLow,
+    /// A first-contact message, sent before its stamp was set.
+    Unstamped,
+    /// A first message whose `to` names none of the reader's handles.
+    UnknownHandle,
+    /// A first message whose proof that its base re-randomizes the named
+    /// handle doesn't verify against any of that handle's registers.
+    InvalidBaseProof,
+    /// A first message without a handle that isn't a verified continuation
+    /// of one of the reader's conversations.
+    UnverifiedContinuation,
+    /// A message whose envelope isn't addressed to its conversation identity
+    /// re-randomized by the message's own outer scalar, or that came without
+    /// its envelope.
+    WrongEnvelopeRegister,
+    /// A reveal this side can't make or take: only the side that wrote first
+    /// reveals, once a reply has decrypted, and only the side written to
+    /// checks one (docs/protocol.md §19).
+    RevealNotAllowed,
+    /// A reveal whose proof doesn't verify for this conversation.
+    InvalidReveal,
 }
 
 impl fmt::Display for Error {
@@ -75,7 +101,7 @@ impl fmt::Display for Error {
             Error::UnsupportedVersion(v) => write!(f, "unsupported envelope version {v}"),
             Error::InvalidLength => write!(f, "envelope has an invalid length"),
             Error::PlaintextTooLarge => write!(f, "plaintext is too large"),
-            Error::NotForThisKey => write!(f, "envelope is not addressed to this key"),
+            Error::NotForThisKey => write!(f, "register is not one of this key's"),
             Error::DecryptionFailed => write!(f, "authenticated decryption failed"),
             Error::InvalidPadding => write!(f, "message padding or size is invalid"),
             Error::InvalidMessage => write!(f, "inner message is malformed"),
@@ -93,6 +119,29 @@ impl fmt::Display for Error {
             Error::ChainExhausted => write!(f, "chain counter is exhausted"),
             Error::InvalidState => write!(f, "stored session state is invalid"),
             Error::UnsupportedStateVersion(v) => write!(f, "unsupported session state version {v}"),
+            Error::StampTooHard => write!(f, "proof of work asked is past the most this solves"),
+            Error::StampTooLow => write!(f, "first-contact stamp shows too little work"),
+            Error::Unstamped => write!(f, "first-contact message has no stamp yet"),
+            Error::UnknownHandle => write!(f, "first message names none of this reader's handles"),
+            Error::InvalidBaseProof => {
+                write!(f, "proof that the base re-randomizes the handle fails")
+            }
+            Error::UnverifiedContinuation => {
+                write!(
+                    f,
+                    "first message without a handle continues no conversation here"
+                )
+            }
+            Error::WrongEnvelopeRegister => {
+                write!(
+                    f,
+                    "envelope is not addressed to the conversation identity it must be"
+                )
+            }
+            Error::RevealNotAllowed => write!(f, "this side can't make or take a reveal"),
+            Error::InvalidReveal => {
+                write!(f, "reveal's proof doesn't verify for this conversation")
+            }
         }
     }
 }

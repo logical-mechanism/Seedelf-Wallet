@@ -3,7 +3,7 @@
 //! unexpected messages, tombstones on conversations, and the records.
 
 use super::ratchet::pair;
-use super::support::{Seeded, handle, key, opened};
+use super::support::{Seeded, handle, key, opened, own_handles, start, test_inbox};
 use crate::Error;
 use crate::session::conversation::Conversation;
 use crate::session::first_contact::ConversationId;
@@ -24,11 +24,10 @@ fn a_first_message_outside_the_window_leaves_nothing() {
         (T + 3600, T, true),
         (T + 3601, T, false),
     ] {
-        let mut a =
-            Conversation::start_with(&alice, &handle("bob", "h"), b"", t, &mut draw).unwrap();
+        let mut a = start(&alice, &handle("bob", "h"), t, &mut draw);
         let envelope = a.send_with(b"hi", &mut draw).unwrap();
-        let mut inbox = Inbox::new();
-        let result = inbox.receive(&bob, &envelope, now);
+        let mut inbox = test_inbox();
+        let result = inbox.receive(&bob, &own_handles(&bob), &envelope, now);
         if ok {
             assert!(matches!(result, Ok(Received::Request { new: true, .. })));
         } else {
@@ -44,15 +43,15 @@ fn a_first_message_outside_the_window_leaves_nothing() {
 fn later_first_contact_messages_join_their_request() {
     let (alice, bob) = (key("alice"), key("bob"));
     let mut draw = Seeded::new("join");
-    let mut a = Conversation::start_with(&alice, &handle("bob", "h"), b"", T, &mut draw).unwrap();
+    let mut a = start(&alice, &handle("bob", "h"), T, &mut draw);
     let m0 = a.send_with(b"zero", &mut draw).unwrap();
     let m1 = a.send_with(b"one", &mut draw).unwrap();
-    let mut inbox = Inbox::new();
-    inbox.receive(&bob, &m0, T).unwrap();
+    let mut inbox = test_inbox();
+    inbox.receive(&bob, &own_handles(&bob), &m0, T).unwrap();
     // Past the window, it still joins: the cid is known.
     let late = T + 72 * 3600;
     assert_eq!(
-        inbox.receive(&bob, &m1, late).unwrap(),
+        inbox.receive(&bob, &own_handles(&bob), &m1, late).unwrap(),
         Received::Request {
             cid: a.cid(),
             plaintext: b"one".to_vec(),
@@ -64,14 +63,20 @@ fn later_first_contact_messages_join_their_request() {
     // A duplicate is refused before the request is replayed: a re-post costs
     // the reader no ratchet work, however long the request.
     KDF_CK_CALLS.with(|calls| calls.set(0));
-    assert_eq!(inbox.receive(&bob, &m1, late), Err(Error::KeyUsedOrDeleted));
-    assert_eq!(inbox.receive(&bob, &m0, late), Err(Error::KeyUsedOrDeleted));
+    assert_eq!(
+        inbox.receive(&bob, &own_handles(&bob), &m1, late),
+        Err(Error::KeyUsedOrDeleted)
+    );
+    assert_eq!(
+        inbox.receive(&bob, &own_handles(&bob), &m0, late),
+        Err(Error::KeyUsedOrDeleted)
+    );
     assert_eq!(KDF_CK_CALLS.with(|calls| calls.get()), 0);
     // A join that doesn't authenticate isn't kept.
     let mut forged = opened(&bob, &a.send_with(b"two", &mut draw).unwrap());
     *forged.ciphertext.last_mut().unwrap() ^= 1;
     assert_eq!(
-        inbox.receive_opened(&bob, &forged, late, &mut draw),
+        inbox.receive_opened(&bob, &own_handles(&bob), &forged, late, &mut draw),
         Err(Error::DecryptionFailed)
     );
     assert_eq!(inbox.requests().to_bytes(), before);
@@ -81,6 +86,11 @@ fn later_first_contact_messages_join_their_request() {
         request.read(&bob).unwrap(),
         vec![Ok(b"zero".to_vec()), Ok(b"one".to_vec())]
     );
+    // Each text's arrival, in the same order, and kept across storage.
+    assert_eq!(request.arrivals().collect::<Vec<_>>(), [T, late]);
+    let stored = Requests::from_bytes(&before).unwrap();
+    let stored = stored.get(a.cid()).unwrap();
+    assert_eq!(stored.arrivals().collect::<Vec<_>>(), [T, late]);
     // Reading changed nothing.
     assert_eq!(inbox.requests().to_bytes(), before);
 }
@@ -91,10 +101,12 @@ fn later_first_contact_messages_join_their_request() {
 fn unexpected_messages_change_nothing() {
     let (alice, bob) = (key("alice"), key("bob"));
     let mut draw = Seeded::new("unexpected");
-    let mut a = Conversation::start_with(&alice, &handle("bob", "h"), b"", T, &mut draw).unwrap();
+    let mut a = start(&alice, &handle("bob", "h"), T, &mut draw);
     let first = a.send_with(b"hi", &mut draw).unwrap();
-    let mut bob_inbox = Inbox::new();
-    bob_inbox.receive(&bob, &first, T).unwrap();
+    let mut bob_inbox = test_inbox();
+    bob_inbox
+        .receive(&bob, &own_handles(&bob), &first, T)
+        .unwrap();
     // A 0x02 with the request's cid, as from a reply Bob never made.
     let mut b = bob_inbox.clone();
     b.accept(&bob, a.cid()).unwrap();
@@ -110,7 +122,7 @@ fn unexpected_messages_change_nothing() {
     assert_eq!(opened(&bob, &session).bytes[0], 0x02);
     let before = bob_inbox.requests().to_bytes();
     assert_eq!(
-        bob_inbox.receive(&bob, &session, T),
+        bob_inbox.receive(&bob, &own_handles(&bob), &session, T),
         Err(Error::UnexpectedMessage)
     );
     assert_eq!(bob_inbox.requests().to_bytes(), before);
@@ -120,7 +132,7 @@ fn unexpected_messages_change_nothing() {
         Inbox::from_parts(vec![a.clone()], Requests::new(), Tombstones::new()).unwrap();
     let inner = opened(&bob, &first);
     assert_eq!(
-        alice_inbox.receive_opened(&alice, &inner, T, &mut draw),
+        alice_inbox.receive_opened(&alice, &own_handles(&alice), &inner, T, &mut draw),
         Err(Error::UnexpectedMessage)
     );
     assert_eq!(
@@ -137,7 +149,7 @@ fn the_initiator_switches_to_session_messages_on_a_real_reply() {
     assert!(!p.a.sends_first_contact());
     let (alice, bob) = (key("alice"), key("bob"));
     let mut draw = Seeded::new("switch 2");
-    let mut a = Conversation::start_with(&alice, &handle("bob", "h"), b"", T, &mut draw).unwrap();
+    let mut a = start(&alice, &handle("bob", "h"), T, &mut draw);
     let first = opened(&bob, &a.send_with(b"x", &mut draw).unwrap());
     let (mut b, _) = Conversation::accept_with(&bob, &[(&first, T)], &mut draw).unwrap();
     let mut reply = opened(&alice, &b.send_with(b"y", &mut draw).unwrap());
@@ -171,13 +183,13 @@ fn deleting_a_conversation_tombstones_it_until_t_plus_48_hours() {
     assert!(!inbox.delete(cid));
     let envelope = p.a.send_with(b"are you there", &mut p.draw).unwrap();
     assert_eq!(
-        inbox.receive(&p.bob, &envelope, T + 48 * 3600),
+        inbox.receive(&p.bob, &own_handles(&p.bob), &envelope, T + 48 * 3600),
         Err(Error::Deleted)
     );
     assert!(inbox.tombstones().holds(cid, T + 48 * 3600));
     assert!(!inbox.tombstones().holds(cid, T + 48 * 3600 + 1));
     assert_eq!(
-        inbox.receive(&p.bob, &envelope, T + 48 * 3600 + 1),
+        inbox.receive(&p.bob, &own_handles(&p.bob), &envelope, T + 48 * 3600 + 1),
         Err(Error::UnknownConversation)
     );
     assert_eq!(inbox.tombstones().len(), 1);
@@ -196,13 +208,14 @@ fn the_records_round_trip_and_are_checked() {
     let mut draw = Seeded::new("records, the strangers");
     let mut inbox =
         Inbox::from_parts(vec![pair("records").b], Requests::new(), Tombstones::new()).unwrap();
+    inbox.set_first_contact_bits(super::support::TEST_BITS);
     for i in 0..3u64 {
-        let mut a =
-            Conversation::start_with(&alice, &handle("bob", "h"), b"t", T + i, &mut draw).unwrap();
+        let mut a = start(&alice, &handle("bob", "h"), T + i, &mut draw);
         for j in 0..=i {
             inbox
                 .receive(
                     &bob,
+                    &own_handles(&bob),
                     &a.send_with(format!("{i}{j}").as_bytes(), &mut draw)
                         .unwrap(),
                     T,
@@ -281,10 +294,15 @@ fn an_inbox_holds_each_cid_once() {
     );
     let (alice, bob) = (key("alice"), key("bob"));
     let mut draw = Seeded::new("once 2");
-    let mut a = Conversation::start_with(&alice, &handle("bob", "h"), b"", T, &mut draw).unwrap();
-    let mut inbox = Inbox::new();
+    let mut a = start(&alice, &handle("bob", "h"), T, &mut draw);
+    let mut inbox = test_inbox();
     inbox
-        .receive(&bob, &a.send_with(b"x", &mut draw).unwrap(), T)
+        .receive(
+            &bob,
+            &own_handles(&bob),
+            &a.send_with(b"x", &mut draw).unwrap(),
+            T,
+        )
         .unwrap();
     let mut accepted = inbox.clone();
     accepted.accept(&bob, a.cid()).unwrap();
@@ -306,16 +324,16 @@ fn only_a_side_can_continue() {
     let p = pair("sides");
     let mallory = key("mallory");
     assert_eq!(
-        Conversation::continue_with(&mallory, &p.a, b"", T, &mut Seeded::new("m")).err(),
+        Conversation::continue_with(&mallory, &p.a, T, &mut Seeded::new("m")).err(),
         Some(Error::NotForThisKey)
     );
     let mut inbox =
         Inbox::from_parts(vec![p.a.clone()], Requests::new(), Tombstones::new()).unwrap();
     assert_eq!(
-        inbox.start_continuing(&p.alice, ConversationId([0; 16]), b"", T),
+        inbox.start_continuing(&p.alice, ConversationId([0; 16]), T),
         Err(Error::UnknownConversation)
     );
-    let next = inbox.start_continuing(&p.alice, p.a.cid(), b"", T).unwrap();
+    let next = inbox.start_continuing(&p.alice, p.a.cid(), T).unwrap();
     assert_eq!(
         inbox.conversation(next).unwrap().first_contact().replaces(),
         Some(p.a.cid())

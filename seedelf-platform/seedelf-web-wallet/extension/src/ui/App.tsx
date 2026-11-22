@@ -9,17 +9,19 @@ import { enabledNetworks, NETWORKS, serviceHosts } from "../networks";
 import type { Status } from "../shared/rpc";
 import { call, onStateChanged, reportActivity } from "./background";
 import { Callout } from "./components/Callout";
-import { ExpandIcon, LockIcon, SettingsIcon } from "./components/Icons";
+import { ExpandIcon, LockIcon, MessageIcon, SettingsIcon } from "./components/Icons";
 import { LockCountdown } from "./components/LockCountdown";
 import { NetworkBadge, TestNetworkStrip } from "./components/NetworkBadge";
 import { useOpensAtTop } from "./components/Screen";
 import { DappApprovals } from "./screens/DappApprovals";
 import { forgetHomeTab, Home } from "./screens/Home";
+import { Messages } from "./screens/Messages";
 import { Onboarding } from "./screens/Onboarding";
 import { Settings } from "./screens/Settings";
 import { Reset, Unlock } from "./screens/Unlock";
 import { AccountsProvider, useAccounts } from "./accounts";
 import { NetworkContext } from "./network";
+import { unreadOf, useMessagingOverview, useSyncWhileSeen } from "./messaging";
 import { forgetImages } from "./nft-images";
 import { PreferencesProvider } from "./preferences";
 import { withoutStop } from "./sentence";
@@ -36,7 +38,10 @@ export function App() {
   // review, SET-6).
   const [removed, setRemoved] = useState(false);
   const [start, setStart] = useState(startFromHash);
-  const [settings, setSettings] = useState(false);
+  // Home, or a page the top bar opens over it: Settings, or Messages (Home's row opens that too).
+  const [page, setPage] = useState<"home" | "settings" | "messages">("home");
+  const settings = page === "settings";
+  const setSettings = (open: boolean) => setPage(open ? "settings" : "home");
   // Counts presses of the top bar's mark: Home leaves whatever flow it's in.
   const [goHome, setGoHome] = useState(0);
   const reachable = useServiceAccess();
@@ -113,6 +118,14 @@ export function App() {
   }
 
   const network = status ? NETWORKS[status.network] : undefined;
+  // Messages on the wallet's network: the top bar's button and Home's row count what's unread, and Messages lists it.
+  // Read from the worker alone, never the relay; not in the connector's window, which has neither.
+  const messaging = useMessagingOverview(status?.network ?? "preprod", unlocked && !connectorWindow);
+  const unread = unreadOf(messaging.overview);
+  // Read every few seconds while a page of the wallet's is seen, whichever screen it shows (the owner, 2026-11-21: a
+  // message came while the wallet showed Home, and nothing said so until Messages was opened). The alarm's minute is
+  // for when no page is.
+  useSyncWhileSeen(messaging.overview?.on === true);
 
   let screen;
   if (error) {
@@ -156,6 +169,8 @@ export function App() {
     );
   } else if (connectorWindow) {
     screen = <DappApprovals />;
+  } else if (page === "messages") {
+    screen = <Messages overview={messaging.overview} setOverview={messaging.setOverview} onBack={() => setPage("home")} />;
   } else if (settings) {
     screen = (
       <Settings
@@ -170,7 +185,7 @@ export function App() {
       />
     );
   } else {
-    screen = <Home goHome={goHome} />;
+    screen = <Home goHome={goHome} messages={messaging.overview} onMessages={() => setPage("messages")} />;
   }
   // Each of these opens at its top, as every screen does (blind test §9.10): Unlock, the welcome and the startup
   // error aren't a `Screen`, which does it for the rest.
@@ -187,9 +202,7 @@ export function App() {
               : "unlock"
             : connectorWindow
               ? "connector"
-              : settings
-                ? "settings"
-                : "home",
+              : page,
   );
 
   const brand = (
@@ -202,7 +215,7 @@ export function App() {
   return (
     // Above the top bar, not only the screens: the picker sits under it.
     <AccountsProvider unlocked={unlocked}>
-      <div className={`app app--${view}`}>
+      <div className={`app app--${view}${page === "messages" && unlocked && !connectorWindow ? " app--messages" : ""}`}>
         <header className="topbar">
           {/* Unlocked, the mark is the way back to Home from any depth; locked, or in
               the connector's window, there's nowhere to go, so it's just the mark. */}
@@ -211,7 +224,7 @@ export function App() {
               type="button"
               className="topbar__brand"
               onClick={() => {
-                setSettings(false);
+                setPage("home");
                 setGoHome((n) => n + 1);
               }}
               aria-label={t("app.home")}
@@ -230,6 +243,24 @@ export function App() {
             <TestNetworkStrip network={network.name} inBar />
           ) : (
             <span className="topbar__spacer" />
+          )}
+          {/* Messages, the same page Home's row opens (the owner, 2026-11-21), with what's unread on it. */}
+          {unlocked && !connectorWindow && (
+            <button
+              className="icon-button icon-button--count"
+              onClick={() => setPage(page === "messages" ? "home" : "messages")}
+              aria-label={unread ? t("app.messagesUnread", { count: unread }) : t("app.messages")}
+              aria-pressed={page === "messages"}
+              title={t("app.messages")}
+              data-testid="topbar-messages"
+            >
+              <MessageIcon />
+              {unread > 0 && (
+                <span className="icon-button__count" aria-hidden="true" data-testid="topbar-messages-unread">
+                  {unread > 99 ? "99+" : unread}
+                </span>
+              )}
+            </button>
           )}
           {unlocked && !connectorWindow && (
             <button

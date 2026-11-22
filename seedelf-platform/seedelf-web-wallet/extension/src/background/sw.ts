@@ -1,19 +1,24 @@
 // Service worker entry. Listeners are registered synchronously, before any
 // await, so the event that woke the worker is never lost.
 
-import { enabledNetworks, NETWORKS } from "../networks";
+import { enabledNetworks, NETWORKS, relayOrigin } from "../networks";
 // The engine alone: `../i18n` is the screens' half too, React and all.
 import { startI18n, t } from "../i18n/core";
 import { APIError, DAPP_ORIGINS, DAPP_PORT, isDappMethod, type DappAnswer, type DappCall } from "../shared/dapp";
 import { applyOpenIn, readOpenIn, showWalletTab } from "../shared/open-in";
 import { LOCAL_LANGUAGE } from "../shared/preferences";
-import { DAPP_CHANGED, STATE_CHANGED, type BuildStage, type Message } from "../shared/rpc";
+import { DAPP_CHANGED, MESSAGING_CHANGED, STATE_CHANGED, type BuildStage, type Message } from "../shared/rpc";
 import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
 import { CoinControlService } from "./coin-control";
 import { Collateral } from "./collateral";
 import { applyConnector, reachOpenPages } from "./connector";
+import { CONTRACT_V1 } from "./balances";
+import { registerOf, seedelfTokenOf } from "./chain";
 import { ContactsService } from "./contacts";
+import { keptContractView, readContractView } from "./contract-scan";
+import { MessagingService } from "./messaging";
+import { RelayClient } from "./relay";
 import { answerSite, DappError, DappService, SITE_TRAPPED, type DappSession } from "./dapp";
 import { approvalWindow } from "./dapp-window";
 import { handle, type Context } from "./handlers";
@@ -31,6 +36,7 @@ import { PriceService } from "./prices";
 import { runNetworks, type Runner } from "./runs";
 import { PrivateStore } from "./private-store";
 import { SendService } from "./send";
+import { seedelfUtxo } from "./transfer";
 import { SessionService } from "./sessions";
 import { StakingService } from "./staking";
 import { TransferService } from "./transfer";
@@ -90,6 +96,22 @@ const sessionsAlarm = {
     await chrome.alarms.clear(SESSIONS_ALARM);
   },
   starts: () => sessionsStarts,
+};
+
+/** Seedelf Messaging's reads of the relay (messaging.ts): every minute while a network's switch is on and the wallet is unlocked. */
+const MESSAGING_ALARM = "seedelf.messaging";
+const messagingAlarm = {
+  start: async () => {
+    if (!(await chrome.alarms.get(MESSAGING_ALARM))) await chrome.alarms.create(MESSAGING_ALARM, { periodInMinutes: 1 });
+  },
+  stop: async () => {
+    await chrome.alarms.clear(MESSAGING_ALARM);
+  },
+};
+
+/** A run nothing waits for, as an alarm's: WebAssembly that trapped under it locks the wallet (runs.ts). */
+const lockOnTrap = (ctx: Pick<Worker, "wallet">) => async (e: unknown) => {
+  if (isTrap(e)) await ctx.wallet.trapped().catch(() => undefined);
 };
 
 /**
@@ -153,6 +175,7 @@ function getContext(): Promise<Worker> {
     const networkChoice = new NetworkChoice(local, networks);
     let worker: Worker | undefined;
     let dapp: DappService | undefined;
+    let messaging: MessagingService | undefined;
     const wallet = new Wallet({
       wasm,
       local,
@@ -171,6 +194,8 @@ function getContext(): Promise<Worker> {
         // the moment the wallet unlocks (runs.ts, privacy review §3.1).
         void dapp?.stateChanged();
         if (worker) void runSessions(worker, true).catch(() => undefined);
+        // Messages: read at unlock where a switch is on; the alarm stops at a lock (messaging.ts syncAll).
+        if (worker) void messaging?.syncAll(networks).catch(lockOnTrap(worker));
       },
     });
     // Mainnet reads the wallet's own data layer first where the build has one, each part falling back to Koios on
@@ -258,6 +283,46 @@ function getContext(): Promise<Worker> {
       }),
     });
     const sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
+    // The contract as the last reading kept it, else read now: what Send's pay-by-name looks a Seedelf up in.
+    const contractView = async (n: keyof typeof NETWORKS, name?: string) => {
+      const kept = await wallet.withKeys(() => keptContractView(session, n));
+      return kept && (name === undefined || kept.seedelfs[name]) ? kept : readContractView(spends, n);
+    };
+    // Seedelf Messaging (chunk 54's 54e): its relay on the data layer's server, a pool per network.
+    messaging = new MessagingService({
+      wasm,
+      wallet,
+      store,
+      local,
+      preferences,
+      relay: (n) => new RelayClient({ origin: relayOrigin(n, __DATA_ORIGIN__), pool: NETWORKS[n].relay.pool }),
+      // The view the last reading kept, with no request; or, `read`, what's new in the contract read now.
+      ownSeedelfs: async (n, read) =>
+        (read ? await readContractView(spends, n) : ((await wallet.withKeys(() => keptContractView(session, n))) ?? { owned: [] })).owned.flatMap((utxo) => {
+          const name = seedelfTokenOf(utxo, CONTRACT_V1.seedelfPolicyId);
+          const register = name ? registerOf(utxo) : undefined;
+          return name && register ? [{ name, register }] : [];
+        }),
+      seedelfRegister: async (n, name) => {
+        const register = registerOf(seedelfUtxo(await contractView(n, name), name, n));
+        if (!register) throw new Error(t("worker.messaging.notARegister"));
+        return register;
+      },
+      // Reveals' Seedelfs, as pay-by-name finds one, in the contract read now: the whole of it, so nothing names the
+      // one looked for, and never a view kept from before a Seedelf moved.
+      revealedRegisters: async (n) => {
+        const { seedelfs } = await readContractView(spends, n);
+        return (name) => {
+          const utxo = seedelfs[name];
+          return utxo ? registerOf(utxo) : undefined;
+        };
+      },
+      now: Date.now,
+      // Any call to Chrome resets the idle timer, which would otherwise stop the worker partway through a stamp.
+      keepAlive: () => chrome.runtime.getPlatformInfo().then(() => undefined),
+      changed: (n) => broadcast({ ...MESSAGING_CHANGED, network: n }),
+      alarm: messagingAlarm,
+    });
     // A payment's parts that wait for the one before to be in a block; a session's funding is told when they won't all
     // go, and asked before each goes whether it still may.
     const parts = new PartsService({
@@ -291,6 +356,7 @@ function getContext(): Promise<Worker> {
       pending,
       parts,
       contacts,
+      messaging,
       activity,
       coins,
       staking,
@@ -443,6 +509,12 @@ chrome.windows.onRemoved.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === MESSAGING_ALARM) {
+    void getContext()
+      .then((ctx) => ctx.messaging.syncAll(ctx.networks).catch(lockOnTrap(ctx)))
+      .catch(() => undefined);
+    return;
+  }
   if (alarm.name === SESSIONS_ALARM) {
     void getContext()
       .then(runSessions)

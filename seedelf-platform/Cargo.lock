@@ -2575,6 +2575,7 @@ dependencies = [
  "seedelf-core",
  "seedelf-crypto",
  "seedelf-koios",
+ "seedelf-messaging",
  "serde",
  "serde_json",
  "wasm-bindgen",

@@ -83,6 +83,17 @@ pub(crate) fn random_nonzero_scalar() -> Scalar {
     }
 }
 
+/// `bytes`, a big-endian integer of any length, reduced mod the group order.
+///
+/// What the session layer derives a scalar from a hash with: the proof's
+/// challenge and the outer envelope's scalar (docs/protocol.md §16.2).
+pub(crate) fn scalar_mod_q(bytes: &[u8]) -> Scalar {
+    let base = Scalar::from(256u64);
+    bytes.iter().fold(Scalar::ZERO, |acc, &byte| {
+        acc * base + Scalar::from(u64::from(byte))
+    })
+}
+
 /// A canonical, nonzero scalar from 32 big-endian bytes.
 pub(crate) fn scalar_from_bytes(bytes: &[u8; 32]) -> Result<Scalar, Error> {
     let scalar: Scalar = Option::from(Scalar::from_bytes_be(bytes)).ok_or(Error::InvalidScalar)?;

@@ -44,7 +44,7 @@
 // has a Collateral row, which opens the Settings page in place (the owner,
 // 2026-10-14): it was found in Settings alone.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { type I18nKey, joinList, joinSentences, t, useT } from "../../i18n";
 
 import { NETWORKS } from "../../networks";
@@ -55,6 +55,7 @@ import type {
   Balances,
   CollateralStatus,
   LovejoinHeld,
+  MessagingOverview,
   PendingTx,
   SeedelfInfo,
   SessionView,
@@ -81,6 +82,7 @@ import {
   SendIcon,
   ShieldIcon,
   SproutIcon,
+  MessageIcon,
   VaultIcon,
   WalletIcon,
   WithdrawIcon,
@@ -100,6 +102,7 @@ import {
   whenOf,
   withRewards,
 } from "../format";
+import { unreadOf } from "../messaging";
 import { publicAccountName, useAccounts } from "../accounts";
 import { useAmounts, usePreferences } from "../preferences";
 import { assetFingerprint } from "../tokens";
@@ -260,7 +263,17 @@ export function privateWhy(
  * puts the wallet back on Home, from however deep a flow, so nothing needs
  * Back pressed several times.
  */
-export function Home({ goHome = 0 }: { goHome?: number }) {
+export function Home({
+  goHome = 0,
+  messages,
+  onMessages,
+}: {
+  goHome?: number;
+  /** Messages on this network, for its row: on or off, and what's unread (App reads it, for the top bar too). */
+  messages?: MessagingOverview;
+  /** Opens Messages, the page the top bar's round button opens. */
+  onMessages?: () => void;
+}) {
   const t = useT();
   // The public tab says which account it is showing, once there is more than
   // one: the balance below it is that account's alone, never a total.
@@ -993,6 +1006,8 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
               onActivity={() => setActivityOf("seedelf")}
               onUtxos={() => setUtxosOf("seedelf")}
               onDapps={() => dapps()}
+              messages={messages}
+              onMessages={onMessages}
             />
           </section>
         ) : (
@@ -1120,6 +1135,8 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
               onActivity={() => setActivityOf("cardano")}
               onUtxos={() => setUtxosOf("cardano")}
               onDapps={() => dapps()}
+              messages={messages}
+              onMessages={onMessages}
               // Only while there's money to set it with: an empty account's next step is Receive.
               collateral={balances && balances.cardano.utxos > 0 && collateral && collateral.state !== "set" ? collateral.state : undefined}
               onCollateral={() => setScreen("collateral")}
@@ -1580,17 +1597,21 @@ export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: num
  */
 const boxOf = (p: NonNullable<LovejoinHeld["pools"]>[number]): BoxValue | undefined => p.box;
 
-/** Opens this tab's Activity, or its UTxOs, and the dApp browser. */
+/** Opens this tab's Activity, or its UTxOs, the dApp browser, and Messages. */
 function Links({
   onActivity,
   onUtxos,
   onDapps,
+  messages,
+  onMessages,
   collateral,
   onCollateral,
 }: {
   onActivity: () => void;
   onUtxos: () => void;
   onDapps?: () => void;
+  messages?: MessagingOverview;
+  onMessages?: () => void;
   /** The public account's collateral, while it isn't set. */
   collateral?: "none" | "waiting";
   onCollateral?: () => void;
@@ -1603,6 +1624,12 @@ function Links({
         {onDapps && (
           <li>
             <DappsRow onOpen={onDapps} />
+          </li>
+        )}
+        {/* On both tabs, as the dApps: Messages are the wallet's, written from its Seedelfs' key (chunk 54f). */}
+        {onMessages && (
+          <li>
+            <MessagesRow overview={messages} onOpen={onMessages} />
           </li>
         )}
         {/* Under the dApps, whose sites need it, and gone once it's set: Settings has it then (the owner, 2026-10-14). */}
@@ -1642,6 +1669,39 @@ function Links({
         </li>
       </ul>
     </section>
+  );
+}
+
+/** Opens Messages, saying whether they're on and what's unread (call 11: the count here and on the top bar's button). */
+function MessagesRow({ overview, onOpen }: { overview?: MessagingOverview; onOpen: () => void }) {
+  const t = useT();
+  const id = useId();
+  const unread = unreadOf(overview);
+  const sub = !overview ? undefined : !overview.on ? t("home.messages.off") : unread ? t("home.messages.unread", { count: unread }) : t("home.messages.on");
+  return (
+    <button
+      type="button"
+      className="menu-row"
+      onClick={onOpen}
+      aria-label={t("home.messages")}
+      aria-describedby={sub ? id : undefined}
+      data-testid="home-messages"
+    >
+      <span className="menu-row__icon">
+        <MessageIcon size={16} />
+      </span>
+      {sub ? (
+        <span className="menu-row__text">
+          <span>{t("home.messages")}</span>
+          <span className={unread ? "menu-row__sub menu-row__sub--unread" : "menu-row__sub"} id={id} data-testid="home-messages-state">
+            {sub}
+          </span>
+        </span>
+      ) : (
+        <span>{t("home.messages")}</span>
+      )}
+      <ChevronRightIcon size={16} />
+    </button>
   );
 }
 

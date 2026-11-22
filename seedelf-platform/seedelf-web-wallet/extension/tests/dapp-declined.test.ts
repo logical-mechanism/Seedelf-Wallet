@@ -61,7 +61,7 @@ async function payment(t: T) {
 }
 
 function context(t: T): Context {
-  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, nftImages, dapp, sessions, lovejoin, launch, accounts, dataParts } =
+  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, messaging, activity, coins, staking, preferences, prices, nftImages, dapp, sessions, lovejoin, launch, accounts, dataParts } =
     t;
   return {
     wasm: loadTestWasm(),
@@ -75,6 +75,7 @@ function context(t: T): Context {
     send,
     pending,
     contacts,
+    messaging,
     activity,
     coins,
     staking,

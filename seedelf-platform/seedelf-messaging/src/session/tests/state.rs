@@ -2,7 +2,7 @@
 //! messages' parsing (docs/protocol.md §4.2, §9 and §12).
 
 use super::ratchet::pair;
-use super::support::{Seeded, handle, identity, key, opened, outside_g1, skip_sends};
+use super::support::{Seeded, handle, identity, key, opened, outside_g1, skip_sends, start};
 use crate::envelope::{ENVELOPE_OVERHEAD, encrypt_message};
 use crate::session::conversation::{Conversation, Role, STATE_VERSION};
 use crate::session::first_contact::ConversationId;
@@ -28,9 +28,7 @@ fn a_conversation_survives_storage_at_every_step() {
         let (alice, bob) = (key("alice"), key("bob"));
         let mut draw = Seeded::new("storage");
         let keep = |c: Conversation| if store { round_trip(&c) } else { c };
-        let mut a = keep(
-            Conversation::start_with(&alice, &handle("bob", "h"), b"to", T, &mut draw).unwrap(),
-        );
+        let mut a = keep(start(&alice, &handle("bob", "h"), T, &mut draw));
         let mut out = Vec::new();
         let m0 = a.send_with(b"zero", &mut draw).unwrap();
         a = keep(a);
@@ -316,16 +314,18 @@ fn opening_refuses_bad_inner_messages() {
 fn opening_checks_f_in_a_first_contact_message() {
     let (alice, bob) = (key("alice"), key("bob"));
     let mut draw = Seeded::new("f check");
-    let mut a = Conversation::start_with(&alice, &handle("bob", "h"), b"", T, &mut draw).unwrap();
+    let mut a = start(&alice, &handle("bob", "h"), T, &mut draw);
     let good = opened(&bob, &a.send_with(b"hi", &mut draw).unwrap()).bytes;
     assert_eq!((good[0], a.role()), (0x01, Role::Initiator));
     let seal = |inner: &[u8]| {
-        encrypt_message(&bob.register(), &pad(inner, 512))
+        encrypt_message(&bob.register(), &pad(inner, 2048))
             .unwrap()
             .to_bytes()
     };
-    // p₀, A, E_A sit at 27, 75 and 123 (type, cid, t, two empty lengths).
-    for at in [27, 75, 123] {
+    // p₀, A, E_A sit at 47, 95 and 143: the type, cid, t, `to`'s length
+    // and 20 bytes, and the empty `replaces`.
+    assert_eq!(super::support::HANDLE_NAME.len(), 20);
+    for at in [47, 95, 143] {
         let mut changed = good.clone();
         changed[at..at + 48].copy_from_slice(&outside_g1());
         assert_eq!(
@@ -334,9 +334,9 @@ fn opening_checks_f_in_a_first_contact_message() {
             "{at}"
         );
     }
-    // The ratchet header's key, after F.
+    // The ratchet header's key, after F's proof (64) and the stamp (8).
     let mut changed = good.clone();
-    changed[171..219].copy_from_slice(&identity());
+    changed[263..311].copy_from_slice(&identity());
     assert_eq!(
         open(&bob, &seal(&changed)).err(),
         Some(Error::IdentityPoint)

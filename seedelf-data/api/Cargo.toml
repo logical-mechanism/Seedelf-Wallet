@@ -13,10 +13,14 @@ anyhow = "1.0.98"
 axum = "0.8"
 # CIP-5 and CIP-129 IDs: db-sync holds bytes, and pg_cardano, which Koios encodes them with, isn't installed.
 bech32 = "0.11"
+# The relay's copy of seedelf-messaging's point check (src/messaging/check.rs): the same G1 library the crate uses,
+# blst's audited C and assembly behind a safe API; group for its traits.
+blstrs = "0.7.1"
 # blake2b-224: Lovejoin's script hashes, for the token pools' checks (src/lovejoin/). The crate Pallas hashes with.
 cryptoxide = { version = "0.4", default-features = false, features = ["blake2"] }
 deadpool-postgres = "0.14"
 dotenvy = "0.15"
+group = "0.13"
 # Counts the bytes of every answer as it's sent, for the month's egress ceiling.
 http-body-util = "0.1"
 percent-encoding = "2.3"
@@ -25,6 +29,8 @@ reqwest = { version = "0.12.9", default-features = false }
 serde = { version = "1.0.215", features = ["derive"] }
 # raw_value: transaction metadata passes through as written, however deep it nests.
 serde_json = { version = "1.0.133", features = ["raw_value"] }
+# The relay's proof of work (src/messaging/check.rs): SHA-256, as seedelf-messaging computes it.
+sha2 = "0.10.9"
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 # The home Postgres is reached over the LAN now and over WireGuard later: no TLS of its own.
 tokio-postgres = "0.7"

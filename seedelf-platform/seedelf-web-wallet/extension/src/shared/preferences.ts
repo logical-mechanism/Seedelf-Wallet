@@ -159,6 +159,28 @@ export interface Preferences {
    * layer to turn off.
    */
   koiosOnly: boolean;
+  /**
+   * Seedelf Messaging (chunk 54), on each network apart (the owner's call 9,
+   * 2026-11-21): while a network's is on and the wallet is unlocked, the
+   * worker reads that network's relay pool every minute and posts what's
+   * sent, whichever network the wallet shows (background/messaging.ts). Off
+   * by default: reading the pool tells the relay when the wallet is online.
+   * Turning it on is the one decision that lets anything reach the relay.
+   * Works whether or not `koiosOnly` is on: there's no Koios version of it.
+   */
+  messaging: MessagingSwitches;
+}
+
+/** Seedelf Messaging's switch on each network. */
+export interface MessagingSwitches {
+  preprod: boolean;
+  mainnet: boolean;
+}
+
+/** The switches kept, each one a boolean or else off. */
+export function messagingSwitches(value: unknown): MessagingSwitches {
+  const kept = (typeof value === "object" && value !== null ? value : {}) as Partial<Record<string, unknown>>;
+  return { preprod: kept.preprod === true, mainnet: kept.mainnet === true };
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -175,6 +197,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   lovejoinDelay: "1-6",
   lovejoinWidth: 3,
   koiosOnly: false,
+  messaging: { preprod: false, mainnet: false },
 };
 
 export const isLovejoinDepth = (value: unknown): value is LovejoinDepth =>

@@ -7,8 +7,88 @@ use sha2::{Digest, Sha256};
 
 use crate::SecretKey;
 use crate::register::Register;
+use crate::relay::find_stamp;
+use crate::session::conversation::Conversation;
 use crate::session::draw::Draw;
+use crate::session::first_contact::Handle;
+use crate::session::inbox::Inbox;
 use crate::session::wire::{Opened, open};
+
+/// The stamp work the tests' readers ask: a few hundred attempts, where
+/// readers ask 2²⁴.
+pub(crate) const TEST_BITS: u32 = 8;
+
+/// The asset name the tests' handles go by.
+pub(crate) const HANDLE_NAME: &[u8] = b"5eed0e1f test handle";
+
+/// An inbox that asks [`TEST_BITS`] of first messages' stamps.
+pub(crate) fn test_inbox() -> Inbox {
+    let mut inbox = Inbox::new();
+    inbox.set_first_contact_bits(TEST_BITS);
+    inbox
+}
+
+/// A reader's handles: each register under [`HANDLE_NAME`].
+pub(crate) fn handles(registers: &[Register]) -> Vec<Handle> {
+    registers
+        .iter()
+        .map(|register| Handle::new(HANDLE_NAME, *register).unwrap())
+        .collect()
+}
+
+/// The handles of `key` among those the unit tests write to, under
+/// [`HANDLE_NAME`]: what that reader passes.
+pub(crate) fn own_handles(reader: &SecretKey) -> Vec<Handle> {
+    let mut registers: Vec<Register> = [
+        ("alice", "a"),
+        ("alice", "alice's handle"),
+        ("alice", "her handle"),
+        ("bob", "b"),
+        ("bob", "bob's handle"),
+        ("bob", "h"),
+        ("carol", "carol's handle"),
+        ("mallory", "m"),
+    ]
+    .into_iter()
+    .map(|(k, g)| handle(k, g))
+    .collect();
+    registers.extend(["alice", "bob", "carol", "dave"].map(|k| key(k).register()));
+    registers.retain(|register| crate::matches_register(reader, register));
+    handles(&registers)
+}
+
+/// Solves a conversation's first-contact stamp at [`TEST_BITS`] and sets it.
+pub(crate) fn stamp(conversation: &mut Conversation) {
+    let nonce = find_stamp(&conversation.stamp_digest(), TEST_BITS, 0, u64::MAX).unwrap();
+    conversation.set_stamp(nonce).unwrap();
+}
+
+/// Starts a conversation to `handle`, named [`HANDLE_NAME`], with its stamp
+/// set.
+pub(crate) fn start(
+    key: &SecretKey,
+    handle: &Register,
+    now: u64,
+    draw: &mut dyn Draw,
+) -> Conversation {
+    let mut conversation = Conversation::start_with(key, handle, HANDLE_NAME, now, draw).unwrap();
+    stamp(&mut conversation);
+    conversation
+}
+
+/// Starts an inbox's conversation to `handle`, named [`HANDLE_NAME`], with
+/// its stamp set.
+pub(crate) fn inbox_start(
+    inbox: &mut Inbox,
+    key: &SecretKey,
+    handle: &Register,
+    now: u64,
+) -> crate::session::ConversationId {
+    let cid = inbox.start(key, handle, HANDLE_NAME, now).unwrap();
+    let nonce = find_stamp(&inbox.stamp_digest(cid).unwrap(), TEST_BITS, 0, u64::MAX).unwrap();
+    inbox.set_stamp(cid, nonce).unwrap();
+    cid
+}
 
 /// A fixed scalar: SHA-256 of a label with its top two bits cleared, so it's
 /// below the group order. Production scalars come from the OS alone.
@@ -25,7 +105,7 @@ pub(crate) fn test_bytes16(label: &str) -> [u8; 16] {
 /// Draws derived from a label and a counter, each one logged, so a test can
 /// replay them or name them in the vectors.
 pub(crate) struct Seeded {
-    label: String,
+    pub(crate) label: String,
     count: u32,
     pub(crate) log: Vec<Vec<u8>>,
 }

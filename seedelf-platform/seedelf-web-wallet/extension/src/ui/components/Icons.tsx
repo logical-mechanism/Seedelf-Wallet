@@ -219,6 +219,16 @@ export const SettingsIcon = icon(
   </>,
 );
 
+/** user-plus: saving a Seedelf to the contacts. */
+export const UserPlusIcon = icon(
+  <>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M19 8v6" />
+    <path d="M22 11h-6" />
+  </>,
+);
+
 /** users */
 export const UsersIcon = icon(
   <>
@@ -394,5 +404,24 @@ export const SwapIcon = icon(
     <path d="M4 7h16" />
     <path d="m16 21 4-4-4-4" />
     <path d="M20 17H4" />
+  </>,
+);
+
+/** message-circle: Seedelf Messaging. */
+export const MessageIcon = icon(<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />);
+
+/** square-pen: a new message. */
+export const PenIcon = icon(
+  <>
+    <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+    <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
+  </>,
+);
+
+/** pencil: naming a conversation. */
+export const PencilIcon = icon(
+  <>
+    <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+    <path d="m15 5 4 4" />
   </>,
 );

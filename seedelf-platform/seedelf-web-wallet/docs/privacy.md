@@ -495,6 +495,21 @@ Lovejoin is a mixer. Each pool holds boxes of one value: ADA alone, or a set amo
 - The screen says so, and to give it only to someone you'd show all of that. There's no export without IDs: amounts, fees and times identify the transactions anyway.
 - **The public side's file names your own Make private and Make public, as the screen does:** its *Made private* and *Made public* rows tell whoever has it that the money went into or came out of your private balance, where the chain shows only a payment into or out of the wallet contract, as for someone else's Seedelf. The names stay, since the file is for accounting, and the note under Save as CSV says what they show. A public Send, or a site's transaction you signed, is written as the chain reads it, a payment, even where it paid one of your own Seedelfs.
 
+### Seedelf Messaging
+
+- **Off by default, a switch for each network,** on the Messages page. Off, the wallet asks the Messages server nothing: a message written then waits on the device until the switch is on (its Seedelf is still looked up, below).
+- **The server carries messages it can't read.** Each is sealed on the device to the reader's Seedelf key, and every wallet with Messages on downloads every message, so the server can't tell whom one is for. It's the data layer's server for both networks' messages, preprod's too, so its name is seen on the network then as on mainnet.
+- **What it sees:**
+  - this IP address reading the messages while the wallet is unlocked: at unlock, every minute after, and every 10 seconds while a page of the wallet is on screen. So it can tell when a device there is unlocked with Messages on, and when the wallet is open on screen;
+  - each message posted, from this IP address, when, and its size, padded to 512 B, 2, 8 or 32 KiB;
+  - counts of each address's posts (an IPv6 address by its /56), in memory: its recent posts, to price the next against floods, and its posts in each hour, kept 36 hours after the hour ends, to limit what one address can have on the server. They say how many, never which messages. Nothing of them is logged or written to disk.
+- **What it can link is timing.** Posts from one address are one sender's to it, and a reply soon after a message arrives, from another address, hints that the two talk. Who a message is for, and what it says, it can't see.
+- **Writing first to a Seedelf looks it up** as Send does, in the contract the wallet reads whole: the Cardano server sees a read of the contract, never which Seedelf was looked for.
+- **A first message names no Seedelf of the writer's.** The reader sees an unknown sender, and the Seedelf it was written to, which its proof shows: nothing ties the writer to a Seedelf unless the text does, or the writer shows one.
+- **Show my Seedelf** tells the other side, once they've replied, which of your Seedelfs you hold, by a proof only they can check: they could have made it themselves, so it proves nothing to anyone they show it to. Your other Seedelfs stay unlinked. Their wallet checks it against the contract as Send looks a Seedelf up, so the server learns nothing of which.
+- **On this device:** the conversations, and the names the user gives them, encrypted like the contacts, within about 5 MB, the oldest messages going first. A name is never sent. Removing the wallet deletes them, and another browser can't read them.
+- **Nothing in a message starts a payment.** A message is shown as text, never as a link or a request to pay.
+
 ## For contributors
 
 - **The code's names** are the older ones: the private balance is the Seedelf balance, the public account is the Cardano account, *Make private* is a move-in, *Make public* is a withdraw, and a Seedelf paid for from the private balance is a stealth mint.
