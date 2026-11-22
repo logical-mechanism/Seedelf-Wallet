@@ -481,9 +481,12 @@ function PaneHead({
           <BackIcon />
         </button>
       )}
-      <span className={known ? "convo__mark" : "convo__mark convo__mark--unknown"} aria-hidden="true">
-        {initialOf(title, known)}
-      </span>
+      {/* Narrow, with Back, the list's mark isn't repeated: the name and its Seedelf keep the room beside four buttons. */}
+      {!onBack && (
+        <span className={known ? "convo__mark" : "convo__mark convo__mark--unknown"} aria-hidden="true">
+          {initialOf(title, known)}
+        </span>
+      )}
       <span className="thread__who">
         <h2 className="thread__name" id={id} data-testid="thread-name">
           {title}
