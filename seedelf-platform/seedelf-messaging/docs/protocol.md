@@ -93,8 +93,8 @@ Alice wrote first; Bob was written to.
 Alice holds Bob's handle register (g_S, v_S).
 
 1. **Identities and keys.** Alice makes:
-   - R_B and R_A (§2), with R_B = ([b]g_S, [b]v_S);
    - a random 16-byte conversation ID, cid;
+   - R_B and R_A (§2), with R_B = ([b]g_S, [b]v_S). b isn't drawn: it's an HMAC under Alice's key x_A of the handle, the start of F and 32 random bytes (§16.2). So it stays secret even when her random source fails, and it's new for each handle and each start of F: cid, time, name and `replaces`. It must stay secret: it blinds A = [x_A][b]g_S, and whoever learns it gets [x_A]g_S on a generator they chose ([joint-security.md](joint-security.md), rule 1);
    - a session ephemeral e_A, with E_A = [e_A]p₀;
    - a ratchet key s_A, with S_A = [s_A]p₀.
 2. **The first-contact block:**
@@ -104,7 +104,7 @@ Alice holds Bob's handle register (g_S, v_S).
    - **t:** when Alice started the conversation, in Unix seconds, big-endian.
    - **to:** a length byte, then the handle's asset name. Empty only in a continuation (§6).
    - **replaces:** a length byte, then the cid of a conversation this one continues (§6), or nothing. Required when `to` is empty.
-   - **proof:** present exactly when `to` is. A Schnorr proof that p₀ = [b]g_S for the handle (g_S, v_S) named in `to`, with the rest of F in its challenge (§16.2): 64 bytes. Only a writer who re-randomized that one handle can make it, so it makes `to` verified, and keeps p₀ off the sum of two handles (§2).
+   - **proof:** present exactly when `to` is. A Schnorr proof that p₀ = [b]g_S for the handle (g_S, v_S) named in `to`, with the rest of F in its challenge and its nonce derived from b and everything the challenge covers (§16.2): 64 bytes. Only a writer who re-randomized that one handle can make it, so it makes `to` verified, and keeps p₀ off the sum of two handles (§2).
    - **w₀ isn't sent:** Bob computes it as [x_B]p₀.
 3. **The stamp.** Alice finds an 8-byte nonce such that SHA-256 of F's digest and the nonce has at least 24 leading zero bits (§16.2, §16.4): about 7 seconds of a browser's time on average.
    - It prices a stranger's first message to one reader, which the relay's price can't target: the relay can't tell first messages from replies.
@@ -207,7 +207,7 @@ After a restart, every `pending` envelope is posted again, the same bytes. A mes
 ## 5. Duplicates and replays
 
 1. **A `0x01` for a cid the reader has,** as a conversation or a request, counts only if its F is the stored F. Then it's a ratchet message of that conversation. Otherwise it's dropped. It never starts the conversation again.
-2. **A `0x01` for an unknown cid** is refused if its t is more than 48 hours old or more than an hour ahead of the reader's clock, if its stamp shows too little work, or if it neither proves its base re-randomizes one of the reader's handles nor verifiably continues one of the reader's conversations (§3).
+2. **A `0x01` for an unknown cid** is refused if its t is more than 48 hours old or more than an hour ahead of the reader's clock, if its stamp shows too little work, or if, with a `to`, its proof doesn't show its base re-randomizes that handle of the reader's, or, without one, it isn't a verified continuation of one of the reader's conversations (§3). A `to` whose proof fails isn't saved by `replaces`.
 3. **Deleting a conversation or request keeps its cid as a tombstone until t + 48 hours,** with t from its F.
    - That's exactly as long as rule 2 could accept one of its `0x01`s, and no longer is needed: after t + 48 hours, rule 2 refuses them.
    - A tombstone timed from the deletion could expire up to an hour early, when t ran ahead of the reader's clock.
@@ -434,14 +434,15 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 
 ### 16.1 Encodings
 
-- **Points:** 48-byte compressed G1, canonical, in G1 and not O (construction.md §4.4). A point that is a KDF's input (a DH output, or z) is its 48 compressed bytes too.
-- **Scalars:** 32 bytes, big-endian. Every scalar drawn (b, e_A, s_A, k, every ratchet key, the envelope's r) is uniform in [1, q − 1]. A scalar from a hash (the proof's challenge, the outer scalar) is the hash's bytes as a big-endian integer, reduced mod q.
+- **Points:** 48-byte compressed G1. Every point read is canonical, in G1 and not O (construction.md §4.4). A point computed and hashed may be O, as the base proof's T′ (§16.2) and a reveal's commitments (§19.2) may. A point that is a KDF's input (a DH output, or z) is its 48 compressed bytes too.
+- **Scalars:** 32 bytes, big-endian. Every scalar drawn (e_A, s_A, every ratchet key, the envelope's r) is uniform in [1, q − 1]. A scalar from a hash, an HMAC or HKDF (the proof's challenge, b and the proof's k, the outer scalar) is its output as a big-endian integer, reduced mod q. b and k aren't drawn: each is an HMAC over 32 drawn bytes and what it must cover (§16.2).
 - **Counters** PN and N: u32, big-endian. **t:** u64, big-endian, Unix seconds.
 - **F:** `cid (16) | t (8) | len (1) | to (len, at most 32) | len (1, 0 or 16) | replaces | p₀ (48) | A (48) | E_A (48) | c (32) | z (32)` (§3). `to` is the asset name's raw bytes, not hex.
   - The proof's c and z are there exactly when `to`'s length isn't 0. An F with an empty `to` must have a `replaces`: it's a continuation. Anything else is refused.
   - z must be below q; c is any 32 bytes.
   - So F is 186 bytes for a continuation, and 235 to 282 from a handle.
   - **F′** is F without c and z: what the proof's challenge covers.
+  - **F's head** is F's bytes before p₀, `cid | t | len | to | len | replaces`: what b covers, since p₀ follows from b.
 - **The ratchet header:** `DHs (48) | PN (4) | N (4)`, 56 bytes.
 - **The associated data:** `cid (16) | p₀ | A | p₀ | w₀ | header (56)`, 264 bytes: cid ‖ R_A ‖ R_B ‖ header. w₀ must stay in it (§3).
 - **The ratchet ciphertext:** `salt (16) | AES-256-GCM ciphertext | tag (16)`.
@@ -460,16 +461,35 @@ The bindings' JSON and hex cost nothing measurable beside the scalar multiplicat
 | KDF_RK(rk, dh) | HKDF-SHA256(salt = rk, ikm = dh, info = `Seedelf-Messaging\|v1\|ratchet\|root`), 64 bytes: RK′ then CK. |
 | KDF_CK(ck) | mk = HMAC-SHA256(key = ck, message = the one byte `0x01`); ck′ = HMAC-SHA256(key = ck, message = `0x02`). |
 | ENCRYPT(mk, m, ad) | key ‖ nonce = HKDF-SHA256(salt = a fresh 16-byte salt, ikm = mk, info = `Seedelf-Messaging\|v1\|ratchet\|message`), 44 bytes; the output is salt ‖ AES-256-GCM(key, nonce, ad, m). |
-| The outer scalar o | HKDF-SHA256(salt = ENCRYPT's salt, ikm = mk, info = `Seedelf-Messaging\|v1\|ratchet\|outer`), 64 bytes, as a big-endian integer mod q. The envelope goes to ([o]p₀, [o]V), V the recipient's public value on p₀. An o of 0 (probability 2⁻²⁵⁴) sends nothing, and a retry draws a new salt. |
+| The outer scalar o | HKDF-SHA256(salt = ENCRYPT's salt, ikm = mk, info = `Seedelf-Messaging\|v1\|ratchet\|outer`), 64 bytes, as a big-endian integer mod q. The envelope goes to ([o]p₀, [o]V), V the recipient's public value on p₀. An o of 0 (probability about 2⁻²⁵⁵) sends nothing, and a retry draws a new salt. |
 | The ratchet | The Double Ratchet specification's RatchetEncrypt, RatchetDecrypt, SkipMessageKeys and DHRatchet, with §16.4's bounds. |
-| The base proof | For the handle (g_S, v_S) and p₀ = [b]g_S: T = [k]g_S; c = SHA-256(`Seedelf-Messaging\|v1\|session\|base` ‖ g_S ‖ v_S ‖ p₀ ‖ T ‖ F′), the points compressed; z = k + (c mod q)·b mod q. The reader computes T′ = [z]g_S − [c mod q]p₀ and accepts if the same hash with T′ is c. |
+| b | For the handle (g_S, v_S): HMAC-SHA-512(key = x_A as 32 big-endian bytes, message = `Seedelf-Messaging\|v1\|session\|base-scalar` ‖ g_S ‖ v_S ‖ F's head ‖ aux_b), the points compressed and aux_b 32 drawn bytes; its 64 bytes as a big-endian integer, reduced mod q. A b of 0 (probability about 2⁻²⁵⁵) draws aux_b again. Then p₀ = [b]g_S and w₀ = [b]v_S. |
+| The base proof | For the handle (g_S, v_S) and p₀ = [b]g_S: k = HMAC-SHA-512(key = b as 32 big-endian bytes, message = `Seedelf-Messaging\|v1\|session\|base-nonce` ‖ g_S ‖ v_S ‖ p₀ ‖ F′ ‖ aux_k), aux_k 32 drawn bytes, reduced mod q as b is, a k of 0 drawing aux_k again; T = [k]g_S; c = SHA-256(`Seedelf-Messaging\|v1\|session\|base` ‖ g_S ‖ v_S ‖ p₀ ‖ T ‖ F′), the points compressed; z = k + (c mod q)·b mod q. The reader computes T′ = [z]g_S − [c mod q]p₀ and accepts if the same hash with T′ is c, compared as F's 32 bytes, never mod q: an F carrying c + q is refused. T′ may be O, from a proof with k = 0, which only b's holder can make and which gives b away; it's hashed as O's compressed encoding, `0xc0` then 47 zero bytes, and the proof verifies. |
 | The stamp | digest = SHA-256(`Seedelf-Messaging\|v1\|session\|stamp` ‖ F); its work is the leading zero bits of SHA-256(digest ‖ nonce (8, big-endian)), counted from the most significant bit of the first byte, as the relay's stamp's are (§17.3). |
+
+Every label is its ASCII bytes, with no length or terminator. In the table, `\|` is Markdown's escape for `|`; the labels are:
+
+    Seedelf-Messaging|v1|session|salt          SK's salt
+    Seedelf-Messaging|v1|session|SK            SK's info, before F
+    Seedelf-Messaging|v1|session|base-scalar   b's HMAC
+    Seedelf-Messaging|v1|session|base-nonce    the base proof's k's HMAC
+    Seedelf-Messaging|v1|session|base          the base proof's challenge
+    Seedelf-Messaging|v1|session|stamp         the stamp's digest
+    Seedelf-Messaging|v1|ratchet|root          KDF_RK's info
+    Seedelf-Messaging|v1|ratchet|message       ENCRYPT's info
+    Seedelf-Messaging|v1|ratchet|outer         the outer scalar's info
+
+**Why b and k are derived, not drawn** ([joint-security.md](joint-security.md), rule 2). Both are hedged as the reveal's nonce is (§19.2), so a random source that fails, repeats or is predictable costs nothing here.
+- **b blinds A.** (p₀, A) = ([b]g_S, [b][x_A]g_S) is a random register of x_A while b is secret. Whoever learns b gets [x_A]g_S = [b⁻¹]A on a generator of their choosing: a static Diffie–Hellman answer on the spending key. Keyed by x_A, b is secret whatever the source does. Its message holds the handle and F's head, so another handle, cid, time, name or `replaces` gives another b.
+- **k must never meet two challenges,** or b = (z − z′)/(c − c′). Its message holds everything the challenge covers except T, which follows from k. So the same values give the same proof again, and anything else gives another k.
+- **k is keyed by b,** the witness it hides, as RFC 6979 keys a nonce by the signing key. The proof then depends on b alone, and x_A meets one HMAC here, not two. A k keyed by x_A would add nothing: k only has to stay as secret as b.
+- **Before this, both were drawn,** in the order b, cid, e_A, s_A, k. A stuck source gave k = b, and then z = b(1 + c) gave b away from one F.
 
 ### 16.3 Random draws
 
-Every random value comes from the operating system. To make vectors, each operation draws in a fixed order:
+Every random value comes from the operating system. To make vectors, each operation draws in a fixed order. The vectors name each draw, so the order is this crate's generator's, not something another implementation must follow or the file can pin:
 
-- **Starting from a handle:** b (the re-randomization of the handle into R_B), cid, e_A, s_A, then the proof's k.
+- **Starting from a handle:** cid, then 32 bytes aux_b for b (the re-randomization of the handle into R_B, §16.2), then e_A, s_A, then 32 bytes aux_k for the proof's k. A b or k of 0 draws its aux again, before anything else is drawn.
 - **Starting a continuation:** cid, e_A, s_A. There's no b and no k: the base is the old one, with no handle to prove.
 - **The stamp** isn't drawn: the vectors take the first nonce from 0 with enough work. The wallet searches as it likes.
 - **Sending:** the ratchet's salt, then the outer envelope's r. Its b is the outer scalar, not a draw.
@@ -480,13 +500,13 @@ Every random value comes from the operating system. To make vectors, each operat
 - p₀ is the old p₀;
 - the new w₀ is the other side's old public value: the old w₀ if the writer started the old conversation, the old A if it was written to;
 - the new A is the writer's own [x]p₀, its old public value;
-- `replaces` is the old cid, and `to` is the writer's to choose (empty in the vectors);
+- `replaces` is the old cid, and `to` is empty: the old base has no handle to prove (§6), and nobody holds its b;
 - everything else is §3 with these values, so R_A and R_B, and the associated data, follow the new roles.
 
 ### 16.4 The rules, exactly
 
 - **The window:** a first message for an unknown cid is read only if now ≤ t + 48 h and t ≤ now + 1 h, both ends included.
-- **A first message for an unknown cid,** past the window, in this order:
+- **A first message for an unknown cid,** once inside the window, in this order:
   - **the stamp** shows at least 24 bits [choice];
   - **with a `to`,** the reader holds a handle of that name, and the proof verifies against one of the registers that name has held [choice: the wallet passes every register it knows for each of its Seedelfs, since a Seedelf's datum can change while a message is on its way];
   - **without one,** it's a verified continuation (below);
@@ -522,29 +542,64 @@ The wallet's private format, versioned by its first byte; another implementation
 
 1. A first contact to a Seedelf's handle under its full 32-byte name, replies both ways, and a pair delivered out of order. Both first messages are 2 KiB.
 2. The responder continuing that conversation with its identities, which the reader's rules call verified.
-3. The smallest first contact (a root register under a 1-byte `to`, no `replaces`), with 18 and 19 bytes of text, read last first.
+3. The smallest first contact (a root register under a 1-byte `to`, no `replaces`): three first-contact messages of 18 bytes of text (a 512-byte envelope), 19 (2 KiB) and none, read last first.
 4. A fresh start from a handle under its full name with a `replaces` (F at its largest, 282 bytes), whose proof's challenge is at least q, so F carries it unreduced; an 8 KiB message; and a ratchet step that skips the rest of the old receiving chain (PN − Nr = 1), whose skipped message is read last.
 
-**Encodings.** Every byte string is lowercase hex, `to` included: the hex of its raw bytes. `t`, `at`, `delivers`, `envelope_size` and the stamp's `bits`, `nonce` and `work` are JSON numbers. An absent value (`handle`, `replaces`, `base_proof`, `ratchet_step`) is null.
+**Encodings.** Every byte string is lowercase hex, `to` included: the hex of its raw bytes. `t`, `at`, `delivers`, `envelope_size` and the stamp's `bits`, `nonce` and `work` are JSON numbers. An absent value (`handle`, `replaces`, `base_scalar`, `base_proof`, `ratchet_step`) is null; `continues` is present only in a continuation.
 
 **The fields.** Each session gives:
 - `name`, and for a continuation `continues`, the name of the session it continues;
 - `initiator_secret_key` (x_A) and `responder_secret_key` (x_B);
 - `handle` (`generator`, `public_value`; null for a continuation), `t`, `to` and `replaces`;
-- the start's `draws` (`cid`, `e_A`, `s_A`, and `b` and `k` from a handle);
-- `base_proof`: null for a continuation, else F′ as `first_contact_prefix`, T as `commitment`, `challenge`, `challenge_scalar` (c mod q) and `response`;
+- the start's `draws` by name (`cid`, `e_A`, `s_A`, and `aux_b` and `aux_k` from a handle), the file's keys sorted (§16.3);
+- `base_scalar`: null for a continuation, else b's HMAC: its `message`, its 64-byte output `hmac`, and `scalar` (b);
+- `base_proof`: null for a continuation, else F′ as `first_contact_prefix`, the `nonce` (its HMAC's `message` and `hmac`, and `scalar`, k), T as `commitment`, `challenge`, `challenge_scalar` (c mod q) and `response`;
 - `stamp`: `digest`, `bits`, `nonce`, the `hash` of digest and nonce, and its `work`. The file's `first_contact_stamp_bits` is 24, and each stamp's nonce is the first from 0 with that work;
 - §3's values: `base` (p₀), `initiator_public` (A), `responder_public` (w₀), `ephemeral` (E_A), `ratchet_public` (S_A), `first_contact` (F), `ephemeral_dh` ([e_A]w₀), `static_dh` ([x_A]w₀), `session_key` (SK), `init_dh` ([s_A]w₀), and RatchetInitAlice's `root_key` and `sending_chain_key`.
 
-The file also has `version` (1), `description`, `envelope_sizes`, `first_contact_stamp_bits`, and `labels`: `session_salt`, `session_info`, `base_label`, `stamp_label`, `root_info`, `message_info` and `outer_info`, §16.2's strings.
+The file also has `version` (1), `description`, `envelope_sizes`, `first_contact_stamp_bits`, and `labels`: `session_salt`, `session_info`, `base_scalar_label`, `base_nonce_label`, `base_label`, `stamp_label`, `root_info`, `message_info` and `outer_info`, §16.2's strings.
 
 Then `events`, in order:
 - **A send:** `from` (initiator or responder), `kind` (`first-contact` or `session`), `plaintext`, `chain_key` (before it), `message_key`, `next_chain_key`, `header`, `associated_data`, ENCRYPT's `salt`, `aes_key` and `nonce`, `ratchet_ciphertext`, `inner` (the inner message, unpadded), `envelope_size`, the outer scalar's HKDF output `outer_okm` and the scalar `outer_scalar`, the envelope's draw `outer_r`, and `envelope`.
 - **A receive:** `by`, `at` (the reader's now), `delivers` (the index in `events` of the send it reads), `header`, `plaintext`, and `ratchet_step`, null when it made none. A step gives `receiving_dh` (the DH output of the old DHs and the header's key), `root_key` (RK after the receiving half), `receiving_chain_key`, `new_ratchet_secret` and `new_ratchet_public`, `sending_dh` (the DH output of the new key and the header's key), `next_root_key` and `sending_chain_key`. A responder's first step starts from RK = SK and DHs = (x_B, w₀).
+- **The responder's first receive** is the request accepted at once: RatchetInitBob, then that message's step, with its draw. Replying later rebuilds the same state, since it replays each stored message with the time it arrived (§16.3, Requests).
+
+**`base_proof_checks`:** thirteen cases of how a reader takes F and its proof for a handle (§16.1, §16.2). Each gives its `name`, the `handle` it's checked against (always a valid register), `first_contact` (F) and the `result`.
+- **The result** is `ok`, `invalid_base_proof`, or the code of a fault in parsing F. Codes are the crate's errors in snake case, as seedelf-wasm names them.
+- **F is parsed first,** field by field as §16.1 lays it out, and the first fault takes §19.3's code for it: `invalid_message` for a length (`to` over 32 bytes, `replaces` not 0 or 16, F too short), an F with neither `to` nor `replaces`, a z not below q, or bytes left over; `invalid_encoding`, `not_in_subgroup` or `identity_point` for a point.
+- **An F without a `to`** has no proof: it's judged as a continuation (§6, §16.4), never against a handle, so no check holds one.
+- **They pin what the sessions don't:**
+  - c compared as F's bytes: session 4's challenge reduced, and a challenge plus q;
+  - a commitment at O, which verifies;
+  - the named register, not another of the same key;
+  - F′ in the challenge: a proof made without it;
+  - z below q: session 1's own proof with z + q, which a reader that reduced z would accept;
+  - the parse codes, for F's points and its length, and the order fields are read in: a bad p₀ before a z not below q.
+
+**What the file doesn't pin.** It has no other refusals. These are pinned only by §3, §6 and §16.4's text, and held by the crate's unit tests (session/tests/), not by these bytes:
+- the window, and whether its ends are included;
+- the stamp's threshold;
+- a known cid's F, and a `0x01` refused at its initiator;
+- a `0x02` for a request;
+- a continuation's verification;
+- the envelope's check, p = [o]p₀;
+- MAX_SKIP counted in all, and N = 2³² − 1;
+- the skipped keys' 48 hours, and the 2,000 stored;
+- a used key's replay;
+- padding and type bytes;
+- several registers for one name.
+
+A `checks` list for them, as the reveal's file has (§19.6), is still to do.
 
 **Checked independently** (2026-11-20): a script written from this section, protocol.md and construction.md alone, without reading the Rust, reproduced every value in all three sessions with noble-curves 2.0.1 for G1 and Node 24's WebCrypto for HKDF-SHA256, HMAC-SHA256 and AES-256-GCM: 281 session values, the labels and sizes, and v1's 40. Where it had to guess, this section now says what it found.
 
 **Checked again** (2026-11-21, after calls 12 and 13), the same way, by a new script that read no Rust: every value in all four sessions, 451 session values and v1's 42 with the labels, and each stamp's nonce found as the first from 0 with 24 bits. Its first pass, over three sessions, showed what the bytes didn't pin: a challenge stored reduced, a step that ignored PN, F with both `to` and `replaces`, and an 8 KiB envelope. Session 4 was added for them, and each wrong reading now changes values. Its notes on the file's fields are folded in above.
+
+**Checked again** (2026-11-22, after b and k were hedged, [joint-security.md](joint-security.md) §9): a new script, written from §3, §16 and construction.md without reading the Rust, reproduced every value of the re-recorded file on its first run: b's and k's messages, HMACs and scalars, and everything that follows from them in all four sessions, each stamp's nonce found as the first from 0 with 24 bits.
+- **What it found pinned.** Changing one rule at a time, the bytes pin every part of b's and k's messages, their keys and their reduction. They don't pin the draw order, since the file names each draw (§16.3 now says so), and before `base_proof_checks` they pinned no reader refusal.
+- **What it found unwritten,** now folded in above: how c is compared and a T′ of O (§16.2), the labels written plainly, a continuation's `to` (§16.3), "once inside the window" (§16.4), the first receive, session 3, `continues` and the parse codes (here), and §5's rule 2.
+- **The checks.** `base_proof_checks` was added for the base proof's reader rules, in three rounds as the script found what each round left unpinned. It judged all thirteen from the text alone.
+- **On the final file** it matches 537 of 537, and v1's 43: the sessions' 482 values, the checks' results, and each check's F and handle rebuilt from its own values. The one thing it still had to assume is which y the sign flag selects, which construction.md §4.4 leaves to blst's format; no value depends on it.
 
 - `session_vectors_match_the_file` holds the code to the file. `RECORD_MESSAGING_SESSION_VECTORS=1` rewrites it, for a deliberate change of format only (it never touches messaging_v1.json).
 - tests/session_vectors.rs reads it through the public API.
@@ -693,26 +748,32 @@ The side that wrote first may show the other which Seedelf it holds (call 15, th
 
 ### 19.2 The proof
 
-The conversation gives cid, p₀, A = [x_A]p₀ (the initiator's identity) and w₀ = [x_B]p₀ (the responder's). The Seedelf gives its name N, 1 to 32 bytes, and its datum's register (g_S, u_S), with u_S = [x_A]g_S for the writer's key.
+The conversation gives cid, p₀, A = [x_A]p₀ (the initiator's identity) and w₀ = [x_B]p₀ (the responder's). The Seedelf gives its name N, 1 to 32 bytes (the asset name's raw bytes, not hex), and its datum's register (g_S, u_S), with u_S = [x_A]g_S for the writer's key.
+
+**The statement's bytes,** which the challenge and both nonces cover, with every point compressed (48 bytes):
+
+    statement = cid (16) ‖ p₀ ‖ A ‖ w₀ ‖ len(N) (1) ‖ N ‖ g_S ‖ u_S
 
 The statement is an OR of two: **log_{g_S} u_S = log_{p₀} A** (a Chaum–Pedersen proof that the Seedelf's register and A share a key), or **the prover knows log_{p₀} w₀** (a Schnorr proof of the reader's own key). It's a Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers, 1994). The writer proves the first and simulates the second.
 
-**The challenge** is SHA-256 over, in order, with every point compressed (48 bytes):
+**The challenge** is SHA-256 over, in order:
 
-    label ‖ cid (16) ‖ p₀ ‖ A ‖ w₀ ‖ len(N) (1) ‖ N ‖ g_S ‖ u_S ‖ T₁ ‖ T₁′ ‖ T₂
+    label ‖ statement ‖ T₁ ‖ T₁′ ‖ T₂
 
-with label the ASCII bytes of `Seedelf-Messaging|v1|session|reveal`, with no length or terminator. c is that hash as a big-endian integer, reduced mod q (§16.1). A commitment the reader computes may be O (z₁ = c₁ = 0 makes T₁ and T₁′ O, and such a proof is valid): it's hashed as O's compressed encoding, `0xc0` then 47 zero bytes, the only place a point here may be O.
+with label the ASCII bytes of `Seedelf-Messaging|v1|session|reveal`, with no length or terminator. c is that hash as a big-endian integer, reduced mod q (§16.1). A commitment the reader computes may be O (z₁ = c₁ = 0 makes T₁ and T₁′ O, and such a proof is valid): it's hashed as O's compressed encoding, `0xc0` then 47 zero bytes, the only place in a reveal a point may be O (the base proof's T′ may be too, §16.2).
 
 **The writer** (branch 1 real, branch 2 simulated):
-1. Draws k₁, then c₂, then z₂, each uniform in [1, q − 1] [choice: the order, for the vectors].
-2. T₁ = [k₁]p₀, T₁′ = [k₁]g_S, T₂ = [z₂]p₀ − [c₂]w₀.
-3. c from the challenge; c₁ = c − c₂ mod q; z₁ = k₁ + c₁·x_A mod q.
+1. Draws c₂, then z₂, each uniform in [1, q − 1], then 32 bytes aux [choice: the order, for the vectors].
+2. **The nonce,** hedged: k₁ = HMAC-SHA-512(key = x_A as 32 big-endian bytes, message = nonce label ‖ 0x01 ‖ statement ‖ c₂ ‖ z₂ ‖ aux), its 64 bytes a big-endian integer reduced mod q. The nonce label is the ASCII bytes of `Seedelf-Messaging|v1|session|reveal-nonce`, with no length or terminator, and 0x01 says branch 1 is the one proved. c₂ and z₂ are 32 bytes big-endian. A k₁ of 0 (probability about 2⁻²⁵⁵) draws aux again.
+   - **Why hedged:** the message holds everything the challenge covers (the statement, and T₂ through c₂ and z₂; T₁ and T₁′ follow from k₁). So a random source that fails or repeats gives the same proof again, never one k₁ under two challenges, which would give x_A away: z₁ − z₁′ = (c₁ − c₁′)·x_A. x_A also spends the Seedelf. [joint-security.md](joint-security.md), rule 2.
+3. T₁ = [k₁]p₀, T₁′ = [k₁]g_S, T₂ = [z₂]p₀ − [c₂]w₀.
+4. c from the challenge; c₁ = c − c₂ mod q; z₁ = k₁ + c₁·x_A mod q.
 
 **The reader:**
 1. T₁ = [z₁]p₀ − [c₁]A, T₁′ = [z₁]g_S − [c₁]u_S, T₂ = [z₂]p₀ − [c₂]w₀.
 2. Accepts if c₁ + c₂ ≡ c (mod q), c computed over these.
 
-**The reader's own reveal.** The responder can make one for any Seedelf, simulating branch 1 and proving branch 2 with x_B: it draws k₂, then c₁, then z₁; T₁ = [z₁]p₀ − [c₁]A, T₁′ = [z₁]g_S − [c₁]u_S, T₂ = [k₂]p₀; c₂ = c − c₁ mod q; z₂ = k₂ + c₂·x_B mod q. It verifies like the writer's. That's what keeps a conversation deniable: shown to anyone else, a reveal proves nothing, since the reader could have made it. The wallet never makes one; the vectors do (§19.6).
+**The reader's own reveal.** The responder can make one for any Seedelf, simulating branch 1 and proving branch 2 with x_B: it draws c₁, then z₁, then 32 bytes aux; k₂ = HMAC-SHA-512(key = x_B as 32 big-endian bytes, message = nonce label ‖ 0x02 ‖ statement ‖ c₁ ‖ z₁ ‖ aux) mod q, as the writer's k₁ is, a k₂ of 0 drawing aux again; T₁ = [z₁]p₀ − [c₁]A, T₁′ = [z₁]g_S − [c₁]u_S, T₂ = [k₂]p₀; c₂ = c − c₁ mod q; z₂ = k₂ + c₂·x_B mod q. It verifies like the writer's. That's what keeps a conversation deniable: shown to anyone else, a reveal proves nothing, since the reader could have made it. The wallet never makes one; the vectors do (§19.6).
 
 ### 19.3 The bytes
 
@@ -722,11 +783,11 @@ with label the ASCII bytes of `Seedelf-Messaging|v1|session|reveal`, with no len
 - **226 to 257 bytes,** 227 to 258 with the kind byte. A Seedelf's name is 32 bytes, so a reveal's plaintext is 258: a 2 KiB envelope, the size of every reply of 246 to 1,781 bytes of text (§9).
 - **The register travels with the name** [choice], so the reader checks the proof before anything reads the chain, and a reveal that doesn't verify reaches nothing. It costs a 2 KiB envelope where a name alone would fit 512 bytes.
 - **Parsing** reads the fields in order, each refused as it's read: len, which must be 1 to 32; N; g_S, then u_S, each canonical, in G1 and not O (§16.1); then c₁, c₂, z₁, z₂, each below q, and any may be 0; then nothing may follow. Nothing about the conversation changes on a refusal.
-- **The codes** (seedelf-wasm's, the crate's error in snake case): len outside 1 to 32, bytes running out at any field or left over after z₂, or a scalar not below q is `invalid_message`; a point that isn't the canonical compressed encoding of a point on the curve (bad flag bits, x not below p, no point for x) is `invalid_encoding`; one on the curve outside G1 is `not_in_subgroup`; O is `identity_point`. A proof that doesn't verify is `invalid_reveal`; a check at the initiator, or a reveal made at the responder or before a reply, is `reveal_not_allowed`. The wallet's own rules (§19.1's session message, §19.4's chain register) have no code: they show a reveal as failed.
+- **The codes** (seedelf-wasm's, the crate's error in snake case): len outside 1 to 32, bytes running out at any field or left over after z₂, or a scalar not below q is `invalid_message`; a point that isn't the canonical compressed encoding of a point on the curve (bad flag bits, O's flags with any other bit set, x not below p, no point for x) is `invalid_encoding`; one on the curve outside G1 is `not_in_subgroup`; O, as `0xc0` then 47 zero bytes, is `identity_point`. A proof that doesn't verify is `invalid_reveal`; a check at the initiator, or a reveal made at the responder or before a reply, is `reveal_not_allowed`. The wallet's own rules (§19.1's session message, §19.4's chain register) have no code: they show a reveal as failed.
 
 ### 19.4 The reader's checks, in order
 
-1. **A session message** of a conversation in which the reader is the responder (§19.1). The wallet checks the inner type; the crate parses before it checks the side, so a reveal that doesn't parse is refused as §19.3 says whichever side checks it.
+1. **A session message** of a conversation in which the reader is the responder (§19.1). The wallet checks the inner type; the crate parses before it checks the side, so a reveal that doesn't parse is refused as §19.3 says whichever side checks it. It checks the side before the proof: at the writer's side the proof is never checked, and any reveal that parses is `reveal_not_allowed`.
 2. **It parses** (§19.3).
 3. **The proof verifies** for the conversation's cid, p₀, A and w₀ (§19.2).
 4. **The register is the Seedelf's now** [choice]: the wallet reads the contract fresh, whole, as Send's pay-by-name reads it, and looks the name up in it, never in a view kept from before the reveal came, which a Seedelf's move would leave behind. Its datum's register must be (g_S, u_S). A register the Seedelf no longer holds fails: a Seedelf can move to another owner. The writer can reveal again.
@@ -750,12 +811,21 @@ Steps 1 to 3 run as the message is received, in the worker's queue (§4.2). Step
 [tests/vectors/messaging_reveal_v1.json](../tests/vectors/messaging_reveal_v1.json), written by this crate's `session` module from fixed draws:
 
 - **`conversations`:** two conversations from Alice to Bob's handle, each answered (Alice's first message, Bob's reply, Alice reading it). Each gives `initiator_secret_key` (x_A), `responder_secret_key` (x_B), `cid`, `base` (p₀), `initiator_public` (A), `responder_public` (w₀), and both sides' stored states, `initiator_state` and `responder_state` (§16.5), which are this crate's own, for its public-API test: another implementation needn't read them.
-- **`reveals`:** three, each with its `conversation` (an index), `made_by` (`initiator` or `responder`), the `seedelf` (`name`, `generator`, `public_value`), its `draws` by name (drawn `k1`, `c2`, `z2` from the initiator and `k2`, `c1`, `z1` from the responder, in that order; the file's keys are sorted), the `commitments` (`t1`, `t1_seedelf`, `t2`), the `challenge` as SHA-256 gave it and as a scalar (`challenge_scalar`), the `proof` (`c1`, `c2`, `z1`, `z2`), the `reveal`'s bytes and its `plaintext` (with the kind byte):
+- **`reveals`:** three, each with its `conversation` (an index), `made_by` (`initiator` or `responder`), the `seedelf` (`name`, `generator`, `public_value`), its `draws` by name (drawn `c2`, `z2`, `aux` from the initiator and `c1`, `z1`, `aux` from the responder, in that order; the file's keys are sorted), the `nonce` (its `branch`, the HMAC's `message` and its 64-byte output `hmac`, and the `scalar` k₁ or k₂), the `commitments` (`t1`, `t1_seedelf`, `t2`), the `challenge` as SHA-256 gave it and as a scalar (`challenge_scalar`), the `proof` (`c1`, `c2`, `z1`, `z2`), the `reveal`'s bytes and its `plaintext` (with the kind byte):
   1. Alice's Seedelf under its full 32-byte name;
   2. Alice's root register (G, [x_A]G) under a 1-byte name;
-  3. Carol's Seedelf, made by the reader with its own key, whose challenge is at least q: it verifies, which is why a reveal convinces no one else.
-- **`checks`:** 23, each a reveal's bytes, the `conversation` and `side` it's checked at, and its `result`: `ok`, or the refusal's code, the crate's error in snake case as seedelf-wasm names it (`reveal_not_allowed`, `invalid_reveal`, `invalid_message`, `invalid_encoding`, `not_in_subgroup`, `identity_point`). They cover each reveal at the reader, two at the writer's side, another conversation of the same two keys, another name, another register of the same key, each share and response moved or swapped, another key's Seedelf proved with Alice's, a reader's own reveal whose T₁ and T₁′ are O, and each way parsing refuses, one of them two faults at once, to show the order fields are read in.
-- The file also has `version` (1), `description`, `label` (§19.2's), `kind` (2) and `group_order` (q, big-endian hex). Every byte string is lowercase hex.
+  3. Carol's Seedelf, made by the reader with its own key, whose challenge is at least q (the first draws that give one, which the test asserts): it verifies, which is why a reveal convinces no one else.
+- **`checks`:** 31, each a reveal's bytes, the `conversation` and `side` it's checked at, and its `result`: `ok`, or the refusal's code, the crate's error in snake case as seedelf-wasm names it (`reveal_not_allowed`, `invalid_reveal`, `invalid_message`, `invalid_encoding`, `not_in_subgroup`, `identity_point`). They cover:
+  - each reveal at the reader, and two at the writer's side;
+  - another conversation of the same two keys, another name, another register of the same key;
+  - each share and response moved or swapped, and another key's Seedelf proved with Alice's;
+  - a reader's own reveal whose T₁ and T₁′ are O;
+  - each way parsing refuses, among them O's flags with a stray bit or the sign flag, a point without the compression flag, and x equal to p;
+  - three with two faults at once, to show the order fields are read in: the name before g_S, the points before the scalars, and leftover bytes last;
+  - at the writer's side, a reveal that doesn't parse, refused as unparsed (parsing comes before the side), and one that parses but doesn't verify, refused as `reveal_not_allowed` (the side comes before the proof).
+- The file also has `version` (1), `description`, `label` and `nonce_label` (§19.2's), `kind` (2) and `group_order` (q, big-endian hex). Every byte string is lowercase hex.
 - `reveal_vectors_match_the_file` holds the code to the file. `RECORD_MESSAGING_REVEAL_VECTORS=1` rewrites it, for a deliberate change of format only, and never touches the other vectors files. tests/reveal_vectors.rs reads it through the public API.
 
 **Checked independently** (2026-11-22): a script written from this section, §16.1 and construction.md alone, without reading the Rust, reproduced every value with noble-curves 2.0.1 and Node 24's SHA-256: both conversations' identities, each reveal's commitments, challenge, proof, bytes and plaintext, every check's result, and q, 76 comparisons in all, and again after the checks were added (78). Where it had to guess (which code each refusal is, the order parsing reads in, how O is hashed, the draws' order), this section now says, and the checks of a commitment at O and of the parsing order were added for it.
+
+**Checked again** (2026-11-22, after the hedged nonce, [joint-security.md](joint-security.md) §9): a new script, written from §19, §18, §16.1 and construction.md without reading the Rust, reproduced every value of the re-recorded file on its first run, each nonce's message, HMAC and scalar included. It then changed one rule at a time to see which the file pins, and found five it didn't: the side checked before parsing, the scalars read before the points, leftover bytes read before the points, O's flags with a stray bit taken as O, and x ≥ p. It also found gaps in the text: the statement's bytes weren't defined once, nor N's encoding, x_B's encoding or a zero k₂. This section now says each, and the eight checks after the first 23 were added for them. On the final file it matches 84 of 84: 53 values and 31 checks. Re-recorded the same day for §16.2's derived b, which changes both conversations: the same script matches 84 of 84 again, and every check gives the result it gave.

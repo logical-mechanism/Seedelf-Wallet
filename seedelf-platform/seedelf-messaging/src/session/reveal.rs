@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::keys::scalar_mod_q;
 use crate::register::{POINT_LEN, Register, decode_point, matches_register};
 use crate::session::conversation::{Conversation, Role};
-use crate::session::draw::{Draw, OsDraw};
+use crate::session::draw::{Draw, OsDraw, hedged_scalar};
 use crate::session::first_contact::{Handle, MAX_TO_LEN, Reader};
 use crate::{Error, SecretKey};
 
@@ -37,6 +37,19 @@ pub const REVEAL_MAX_LEN: usize = 1 + MAX_TO_LEN + 2 * POINT_LEN + REVEAL_PROOF_
 
 /// SHA-256's label for the proof's challenge.
 pub(crate) const REVEAL_LABEL: &[u8] = b"Seedelf-Messaging|v1|session|reveal";
+
+/// HMAC-SHA-512's label for the proof's nonce, keyed by the prover's key
+/// (§19.2).
+pub(crate) const REVEAL_NONCE_LABEL: &[u8] = b"Seedelf-Messaging|v1|session|reveal-nonce";
+
+/// The branch byte of the writer's nonce: branch 1, the Seedelf's key, is
+/// the one proved.
+pub(crate) const BRANCH_SEEDELF: u8 = 0x01;
+
+/// The branch byte of the reader's own reveal, branch 2 proved with the
+/// reader's key. The wallet never makes one; the tests and vectors do.
+#[cfg(test)]
+pub(crate) const BRANCH_READER: u8 = 0x02;
 
 /// A Seedelf shown with its proof: what the initiator sends, and what the
 /// reader checks against its conversation
@@ -96,25 +109,74 @@ impl Statement<'_> {
         }
     }
 
+    /// The statement's bytes: `cid ‖ p₀ ‖ A ‖ w₀ ‖ len ‖ name ‖ g_S ‖ u_S`,
+    /// every point compressed. What the challenge and the nonce both cover.
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        let name = self.seedelf.name();
+        let mut out = Vec::with_capacity(16 + 3 * 48 + 1 + name.len() + 2 * 48);
+        out.extend_from_slice(self.cid);
+        out.extend_from_slice(&self.base.to_compressed());
+        out.extend_from_slice(&self.initiator.to_compressed());
+        out.extend_from_slice(&self.responder.to_compressed());
+        // A handle's name is 1 to 32 bytes.
+        out.push(name.len() as u8);
+        out.extend_from_slice(name);
+        out.extend_from_slice(&self.seedelf.register().to_bytes());
+        out
+    }
+
     /// `SHA-256("Seedelf-Messaging|v1|session|reveal" ‖ cid ‖ p₀ ‖ A ‖ w₀ ‖
     /// len ‖ name ‖ g_S ‖ u_S ‖ T₁ ‖ T₁′ ‖ T₂)`, every point compressed.
     pub(crate) fn challenge(&self, commitments: &Commitments) -> [u8; 32] {
-        let name = self.seedelf.name();
         Sha256::new()
             .chain_update(REVEAL_LABEL)
-            .chain_update(self.cid)
-            .chain_update(self.base.to_compressed())
-            .chain_update(self.initiator.to_compressed())
-            .chain_update(self.responder.to_compressed())
-            // A handle's name is 1 to 32 bytes.
-            .chain_update([name.len() as u8])
-            .chain_update(name)
-            .chain_update(self.seedelf.register().to_bytes())
+            .chain_update(self.to_bytes())
             .chain_update(commitments.t1.to_compressed())
             .chain_update(commitments.t1_seedelf.to_compressed())
             .chain_update(commitments.t2.to_compressed())
             .finalize()
             .into()
+    }
+
+    /// What the nonce's HMAC is over: `"Seedelf-Messaging|v1|session|reveal-nonce"
+    /// ‖ branch ‖ statement ‖ c ‖ z ‖ aux`, with `c` and `z` the simulated
+    /// branch's share and response. So the nonce covers everything the
+    /// challenge does: the statement, and through `c` and `z` the simulated
+    /// commitment; the real ones follow from the nonce.
+    pub(crate) fn nonce_message(
+        &self,
+        branch: u8,
+        simulated: (&Scalar, &Scalar),
+        aux: &[u8; 32],
+    ) -> Vec<u8> {
+        let mut out = REVEAL_NONCE_LABEL.to_vec();
+        out.push(branch);
+        out.extend_from_slice(&self.to_bytes());
+        out.extend_from_slice(&simulated.0.to_bytes_be());
+        out.extend_from_slice(&simulated.1.to_bytes_be());
+        out.extend_from_slice(aux);
+        out
+    }
+
+    /// The real branch's nonce, hedged as the spending proof's is: drawn `c`,
+    /// `z` and `aux` first, then HMAC-SHA-512 keyed by `key` over
+    /// [`Self::nonce_message`], reduced mod q. A zero (probability about
+    /// 2⁻²⁵⁵) draws `aux` again ([`hedged_scalar`]). Returns the nonce and
+    /// the draws.
+    ///
+    /// A nonce never rests on the random source alone: one source that
+    /// repeats gives one proof again, never one nonce under two challenges,
+    /// which would give `key` away.
+    pub(crate) fn hedged_nonce(
+        &self,
+        key: &Scalar,
+        branch: u8,
+        draw: &mut dyn Draw,
+    ) -> (Scalar, Scalar, Scalar) {
+        let c = draw.scalar();
+        let z = draw.scalar();
+        let nonce = hedged_scalar(key, draw, |aux| self.nonce_message(branch, (&c, &z), aux));
+        (nonce, c, z)
     }
 
     /// The commitments a proof's responses and challenge shares give: what
@@ -131,15 +193,15 @@ impl Statement<'_> {
     }
 
     /// Branch 1 proved with `x`, the key of `A` and of the Seedelf's
-    /// register, and branch 2 simulated. Draws `k₁`, then `c₂`, then `z₂`.
+    /// register, and branch 2 simulated. Draws `c₂`, then `z₂`, then `aux`,
+    /// and derives `k₁` from them, `x` and the statement
+    /// ([`Self::hedged_nonce`]).
     pub(crate) fn prove_seedelf(
         &self,
         x: &Scalar,
         draw: &mut dyn Draw,
     ) -> (RevealProof, Commitments) {
-        let k = draw.scalar();
-        let c2 = draw.scalar();
-        let z2 = draw.scalar();
+        let (k, c2, z2) = self.hedged_nonce(x, BRANCH_SEEDELF, draw);
         let p0 = G1Projective::from(self.base);
         let commitments = Commitments {
             t1: (p0 * k).to_affine(),

@@ -9,14 +9,15 @@ use group::Curve;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::support::{Seeded, handle, identity, key, off_curve, opened, outside_g1, start};
+use super::support::{Seeded, Stuck, handle, identity, key, off_curve, opened, outside_g1, start};
 use crate::keys::scalar_mod_q;
 use crate::register::Register;
 use crate::session::conversation::Conversation;
-use crate::session::draw::Draw;
+use crate::session::draw::{Draw, hedge_okm};
 use crate::session::first_contact::Handle;
 use crate::session::reveal::{
-    Commitments, REVEAL_LABEL, REVEAL_MAX_LEN, REVEAL_MIN_LEN, Reveal, RevealProof, Statement,
+    BRANCH_READER, BRANCH_SEEDELF, Commitments, REVEAL_LABEL, REVEAL_MAX_LEN, REVEAL_MIN_LEN,
+    REVEAL_NONCE_LABEL, Reveal, RevealProof, Statement,
 };
 use crate::{Error, SecretKey};
 
@@ -29,6 +30,9 @@ const NOW: u64 = 1_800_000_000;
 
 /// q, BLS12-381's scalar field order, big-endian: no scalar in a reveal reaches it.
 const GROUP_ORDER: &str = "73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001";
+
+/// p, BLS12-381's base field modulus, big-endian: no point's x reaches it.
+const FIELD_MODULUS: &str = "1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab";
 
 fn recording() -> bool {
     std::env::var("RECORD_MESSAGING_REVEAL_VECTORS").as_deref() == Ok("1")
@@ -79,17 +83,16 @@ fn seedelf_register(key_label: &str) -> Register {
 }
 
 /// The reader's own reveal of any Seedelf: branch 2 proved with its key `y`,
-/// branch 1 simulated. Draws `k₂`, then `c₁`, then `z₁`. It verifies, which
-/// is why a reveal convinces no one but the reader.
+/// branch 1 simulated. Draws `c₁`, then `z₁`, then `aux`, and derives `k₂`
+/// from them, `y` and the statement, as the writer's `k₁` is (§19.2). It
+/// verifies, which is why a reveal convinces no one but the reader.
 fn forge(
     reader: &Conversation,
     y: &Scalar,
     shown: &Handle,
     draw: &mut dyn Draw,
 ) -> (Reveal, Commitments) {
-    let k = draw.scalar();
-    let c1 = draw.scalar();
-    let z1 = draw.scalar();
+    let (k, c1, z1) = Statement::of(reader, shown).hedged_nonce(y, BRANCH_READER, draw);
     forge_with(reader, y, shown, k, c1, z1)
 }
 
@@ -351,6 +354,26 @@ fn malformed(bytes: &[u8]) -> Vec<((&'static str, Vec<u8>), Error)> {
     long_name.extend_from_slice(&bytes[name_end..]);
     let mut longer = bytes.to_vec();
     longer.push(0);
+    // O's flags with a stray bit of x: one encoding per point, so refused.
+    let mut stray = identity();
+    stray[47] = 0x01;
+    // x = p, the field's modulus, with the compression flag.
+    let mut x_is_p: [u8; 48] = hex::decode(FIELD_MODULUS).unwrap().try_into().unwrap();
+    x_is_p[0] |= 0x80;
+    // Two faults: each field is refused as it's read, so the earlier one names it.
+    let u_off_then_c1 = {
+        let mut out = with(u_at, &off_curve());
+        out[proof_at..proof_at + 32].copy_from_slice(&q);
+        out
+    };
+    let mut u_off_then_longer = with(u_at, &off_curve());
+    u_off_then_longer.push(0);
+    // g_S as it is, but without the compression flag.
+    let mut uncompressed_flag = bytes.to_vec();
+    uncompressed_flag[g_at] &= 0x7f;
+    // O's flags with the sign flag too.
+    let mut signed_identity = identity();
+    signed_identity[0] |= 0x20;
     vec![
         (
             ("c₁ not below the group order", with(proof_at, &q)),
@@ -386,7 +409,154 @@ fn malformed(bytes: &[u8]) -> Vec<((&'static str, Vec<u8>), Error)> {
             ("one byte less", bytes[..bytes.len() - 1].to_vec()),
             Error::InvalidMessage,
         ),
+        (
+            (
+                "g_S with O's flags and a stray bit of x",
+                with(g_at, &stray),
+            ),
+            Error::InvalidEncoding,
+        ),
+        (
+            ("g_S with x not below p", with(g_at, &x_is_p)),
+            Error::InvalidEncoding,
+        ),
+        (
+            ("g_S without the compression flag", uncompressed_flag),
+            Error::InvalidEncoding,
+        ),
+        (
+            (
+                "g_S with O's flags and the sign flag",
+                with(g_at, &signed_identity),
+            ),
+            Error::InvalidEncoding,
+        ),
+        (
+            (
+                "u_S off the curve and c₁ not below q: the points are read first",
+                u_off_then_c1,
+            ),
+            Error::InvalidEncoding,
+        ),
+        (
+            (
+                "u_S off the curve and a byte left over: what's left is read last",
+                u_off_then_longer,
+            ),
+            Error::InvalidEncoding,
+        ),
     ]
+}
+
+/// The nonce's hedge (joint-security.md, rule 2). With every draw held
+/// still, two reveals of one statement are one proof, and anything the
+/// challenge covers that changes, changes the nonce. Two challenges on one
+/// nonce would give x away: z₁ − z₁′ = (c₁ − c₁′)·x.
+#[test]
+fn a_stuck_random_source_still_gives_each_statement_its_own_nonce() {
+    let p = parties("reveal stuck");
+    let shown = alices_seedelf();
+    let stuck = || Stuck {
+        scalar: Scalar::from(5u64),
+        aux: [0x5a; 32],
+    };
+    let x = p.alice.scalar();
+    let nonce = |conversation: &Conversation, seedelf: &Handle, key: &Scalar, draw: &mut Stuck| {
+        Statement::of(conversation, seedelf)
+            .hedged_nonce(key, BRANCH_SEEDELF, draw)
+            .0
+    };
+    let k = nonce(&p.a, &shown, &x, &mut stuck());
+
+    // One key, one statement, one draw: one proof, byte for byte.
+    let once = p.a.reveal_with(&p.alice, &shown, &mut stuck()).unwrap();
+    let again = p.a.reveal_with(&p.alice, &shown, &mut stuck()).unwrap();
+    assert_eq!(once, again);
+    assert_eq!(k, nonce(&p.a, &shown, &x, &mut stuck()));
+
+    // Another Seedelf, another register of it, another conversation: each
+    // another nonce.
+    let root = seedelf(b"a", p.alice.register());
+    assert_ne!(k, nonce(&p.a, &root, &x, &mut stuck()), "another Seedelf");
+    let mut renamed_name = shown.name().to_vec();
+    renamed_name[31] ^= 1;
+    let renamed = seedelf(&renamed_name, *shown.register());
+    assert_ne!(k, nonce(&p.a, &renamed, &x, &mut stuck()), "another name");
+    let (other, _) = answered(
+        &p.alice,
+        &p.bob,
+        &handle("bob", "bob's handle"),
+        "reveal stuck, another",
+    );
+    assert_ne!(
+        k,
+        nonce(&other, &shown, &x, &mut stuck()),
+        "another conversation"
+    );
+
+    // The simulated branch's share and response are in the challenge, through
+    // T₂: the nonce covers them, so a source that repeats aux but not them
+    // can't put one nonce under two challenges.
+    let statement = Statement::of(&p.a, &shown);
+    let okm = |c: u64, z: u64, aux: [u8; 32]| {
+        let message =
+            statement.nonce_message(BRANCH_SEEDELF, (&Scalar::from(c), &Scalar::from(z)), &aux);
+        *hedge_okm(&x, &message)
+    };
+    let base = okm(5, 5, [0x5a; 32]);
+    assert_eq!(scalar_mod_q(&base), k);
+    assert_ne!(base, okm(6, 5, [0x5a; 32]), "another c₂");
+    assert_ne!(base, okm(5, 6, [0x5a; 32]), "another z₂");
+    assert_ne!(base, okm(5, 5, [0xa5; 32]), "another aux");
+    // Another key: another nonce, so a draw anyone can predict doesn't make
+    // the nonce theirs.
+    assert_ne!(
+        k,
+        nonce(&p.a, &shown, &p.bob.scalar(), &mut stuck()),
+        "another key"
+    );
+    // And the branch: the reader's own reveal of the same statement with the
+    // same key and draws isn't the writer's nonce.
+    assert_ne!(
+        k,
+        statement.hedged_nonce(&x, BRANCH_READER, &mut stuck()).0,
+        "another branch"
+    );
+}
+
+/// The nonce is the HMAC's 64 bytes reduced mod q, and the message is
+/// exactly the label, the branch, the statement, c, z and aux: the
+/// commitment the proof publishes is [k₁]p₀ for that k₁.
+#[test]
+fn the_nonce_is_hmac_sha512_of_the_statement_under_the_key() {
+    let p = parties("reveal nonce");
+    let shown = alices_seedelf();
+    let statement = Statement::of(&p.a, &shown);
+    let mut draw = Seeded::new("reveal nonce draws");
+    let (_, commitments) = statement.prove_seedelf(&p.alice.scalar(), &mut draw);
+    let drawn = draw.drain();
+    let scalar = |bytes: &[u8]| Scalar::from_bytes_be(&bytes.try_into().unwrap()).unwrap();
+    let (c2, z2) = (scalar(&drawn[0]), scalar(&drawn[1]));
+    let aux: [u8; 32] = drawn[2].clone().try_into().unwrap();
+    let mut expected = REVEAL_NONCE_LABEL.to_vec();
+    expected.push(BRANCH_SEEDELF);
+    expected.extend_from_slice(&p.a.cid().0);
+    for point in [p.a.first.base, p.a.first.initiator, p.a.responder] {
+        expected.extend_from_slice(&point.to_compressed());
+    }
+    expected.push(shown.name().len() as u8);
+    expected.extend_from_slice(shown.name());
+    expected.extend_from_slice(&shown.register().to_bytes());
+    expected.extend_from_slice(&c2.to_bytes_be());
+    expected.extend_from_slice(&z2.to_bytes_be());
+    expected.extend_from_slice(&aux);
+    let message = statement.nonce_message(BRANCH_SEEDELF, (&c2, &z2), &aux);
+    assert_eq!(message, expected);
+    let k = scalar_mod_q(&*hedge_okm(&p.alice.scalar(), &message));
+    assert_eq!(
+        commitments.t1,
+        (G1Projective::from(p.a.first.base) * k).to_affine()
+    );
 }
 
 #[test]
@@ -457,11 +627,42 @@ fn conversation_json(
     })
 }
 
+/// The nonce of a reveal made with `drawn` (the simulated branch's c and z,
+/// then aux): the HMAC's message and output, and the scalar, which must be
+/// the discrete log of the real branch's commitment on p₀.
+fn nonce_json(
+    statement: &Statement<'_>,
+    key: &Scalar,
+    branch: u8,
+    drawn: &[Vec<u8>],
+    commitment: &blstrs::G1Affine,
+) -> Value {
+    let scalar = |bytes: &[u8]| Scalar::from_bytes_be(&bytes.try_into().unwrap()).unwrap();
+    let (c, z) = (scalar(&drawn[0]), scalar(&drawn[1]));
+    let aux: [u8; 32] = drawn[2].clone().try_into().unwrap();
+    let message = statement.nonce_message(branch, (&c, &z), &aux);
+    let okm = hedge_okm(key, &message);
+    let k = scalar_mod_q(&okm[..]);
+    assert_eq!(
+        *commitment,
+        (G1Projective::from(statement.base) * k).to_affine(),
+        "the real branch's commitment is [k]p₀"
+    );
+    json!({
+        "branch": branch,
+        "message": hex(&message),
+        "hmac": hex(&okm[..]),
+        "scalar": hex(k.to_bytes_be()),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn reveal_json(
     name: &str,
     conversation: usize,
     made_by: &str,
     draws: Value,
+    nonce: Value,
     statement: &Statement<'_>,
     commitments: &Commitments,
     reveal: &Reveal,
@@ -485,6 +686,7 @@ fn reveal_json(
             "public_value": hex(reveal.register().public_value_bytes()),
         },
         "draws": draws,
+        "nonce": nonce,
         "commitments": {
             "t1": hex(commitments.t1.to_compressed()),
             "t1_seedelf": hex(commitments.t1_seedelf.to_compressed()),
@@ -548,11 +750,19 @@ fn all_vectors() -> Value {
         a0.reveal_with(&alice, &alices, &mut Seeded::new("reveal v1 reveal 0")),
         Ok(full.clone())
     );
+    let drawn = draw.drain();
     let first = reveal_json(
         "Alice's Seedelf under its full 32-byte name",
         0,
         "initiator",
-        draws_json(["k1", "c2", "z2"], draw.drain()),
+        draws_json(["c2", "z2", "aux"], drawn.clone()),
+        nonce_json(
+            &statement,
+            &alice.scalar(),
+            BRANCH_SEEDELF,
+            &drawn,
+            &commitments.t1,
+        ),
         &statement,
         &commitments,
         &full,
@@ -567,11 +777,19 @@ fn all_vectors() -> Value {
         seedelf: root.clone(),
         proof,
     };
+    let drawn = draw.drain();
     let second = reveal_json(
         "Alice's root register under a 1-byte name",
         0,
         "initiator",
-        draws_json(["k1", "c2", "z2"], draw.drain()),
+        draws_json(["c2", "z2", "aux"], drawn.clone()),
+        nonce_json(
+            &statement,
+            &alice.scalar(),
+            BRANCH_SEEDELF,
+            &drawn,
+            &commitments.t1,
+        ),
         &statement,
         &commitments,
         &short,
@@ -582,14 +800,39 @@ fn all_vectors() -> Value {
         &seedelf_name("carol"),
         handle("seedelf-messaging reveal v1 carol", "carol's seedelf"),
     );
-    let mut draw = Seeded::new("reveal v1 reveal 2");
+    // The first draws whose challenge is at least q, so an implementation
+    // that doesn't reduce it gets this one wrong.
+    let at_least_q = |forged: &Reveal| {
+        let c = forged.proof.c1 + forged.proof.c2;
+        let hashed = Statement::of(&b0, &carols)
+            .challenge(&Statement::of(&b0, &carols).commitments_of(&forged.proof));
+        assert_eq!(scalar_mod_q(&hashed), c);
+        Option::<Scalar>::from(Scalar::from_bytes_be(&hashed)).is_none()
+    };
+    let mut draw = (0..)
+        .map(|i| Seeded::new(&format!("reveal v1 reveal 2, try {i}")))
+        .find(|draw| {
+            let mut trial = Seeded::new(&draw.label);
+            at_least_q(&forge(&b0, &bob.scalar(), &carols, &mut trial).0)
+        })
+        .unwrap();
     let (forged, commitments) = forge(&b0, &bob.scalar(), &carols, &mut draw);
+    assert!(at_least_q(&forged));
+    let drawn = draw.drain();
+    let statement = Statement::of(&b0, &carols);
     let third = reveal_json(
         "Carol's Seedelf, made by the reader with its own key",
         0,
         "responder",
-        draws_json(["k2", "c1", "z1"], draw.drain()),
-        &Statement::of(&b0, &carols),
+        draws_json(["c1", "z1", "aux"], drawn.clone()),
+        nonce_json(
+            &statement,
+            &bob.scalar(),
+            BRANCH_READER,
+            &drawn,
+            &commitments.t2,
+        ),
+        &statement,
         &commitments,
         &forged,
     );
@@ -720,11 +963,32 @@ fn all_vectors() -> Value {
     for ((name, case), _) in malformed(&bytes) {
         checks.push(check(name, 0, "responder", &case, &sides));
     }
+    // At the side that wrote first, a reveal that doesn't parse is refused as
+    // such: parsing comes before the side.
+    let mut empty_name = vec![0u8];
+    empty_name.extend_from_slice(&bytes[1 + 32..]);
+    checks.push(check(
+        "an empty name, at the side that wrote first: parsed before the side is checked",
+        0,
+        "initiator",
+        &empty_name,
+        &sides,
+    ));
+    // And one that parses but doesn't verify: the side is checked before the
+    // proof, which is never checked there.
+    checks.push(check(
+        "reveal 0 with c₁ + 1, at the side that wrote first: the side before the proof",
+        0,
+        "initiator",
+        &changed(&|r| r.proof.c1 += Scalar::from(1u64)),
+        &sides,
+    ));
 
     json!({
         "version": 1,
         "description": "Seedelf Messaging's verified reveal (docs/protocol.md §19): an OR-proof that the Seedelf's register and the initiator's identity share a key, or that the prover knows the responder's. The conversations' states are this crate's own (§16.5), for its public-API test; another implementation needn't read them.",
         "label": String::from_utf8(REVEAL_LABEL.to_vec()).unwrap(),
+        "nonce_label": String::from_utf8(REVEAL_NONCE_LABEL.to_vec()).unwrap(),
         "kind": KIND_REVEAL,
         "group_order": GROUP_ORDER,
         "conversations": [

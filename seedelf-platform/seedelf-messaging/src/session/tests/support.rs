@@ -139,6 +139,34 @@ impl Draw for Seeded {
         self.log.push(bytes.to_vec());
         bytes
     }
+
+    fn bytes32(&mut self) -> [u8; 32] {
+        let bytes: [u8; 32] =
+            Sha256::digest(format!("{} bytes32 {}", self.label, self.count).as_bytes()).into();
+        self.count += 1;
+        self.log.push(bytes.to_vec());
+        bytes
+    }
+}
+
+/// A source that gives the same values every time, as one that fails or
+/// repeats would: each scalar is `scalar`, each 32 bytes `aux`, and each 16
+/// bytes `aux`'s first 16.
+pub(crate) struct Stuck {
+    pub(crate) scalar: Scalar,
+    pub(crate) aux: [u8; 32],
+}
+
+impl Draw for Stuck {
+    fn scalar(&mut self) -> Scalar {
+        self.scalar
+    }
+    fn bytes16(&mut self) -> [u8; 16] {
+        self.aux[..16].try_into().unwrap()
+    }
+    fn bytes32(&mut self) -> [u8; 32] {
+        self.aux
+    }
 }
 
 pub(crate) fn key(label: &str) -> SecretKey {

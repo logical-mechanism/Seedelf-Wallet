@@ -515,10 +515,12 @@ rule R_Check_reveal_reader_key:
 
 /* §19.5: "Verified" names a Seedelf only if its owner revealed it, in this
    conversation, which it started with this reader; unless the owner's key
-   or the reader's was stolen first. */
+   or the reader's was stolen first. The register is any of a principal's
+   Seedelfs, and the name any name, so a name the attacker minted with a
+   copy of the register is covered too. */
 lemma reveal_only_from_the_seedelfs_owner:
-  "All R cid N gS uS P #i #k.
-     RVerified(R, cid, N, gS, uS)@i & SeedelfOf(P, N, gS, uS)@k
+  "All R cid N N0 gS uS P #i #k.
+     RVerified(R, cid, N, gS, uS)@i & SeedelfOf(P, N0, gS, uS)@k
      ==> (Ex p0 Ai w0 F #s #v. IStart(P, R, cid, p0, Ai, w0, F)@s & IRevealed(P, cid, N)@v & #v < #i)
        | (Ex #r. RevLtk(P)@r & #r < #i) | (Ex #r. RevLtk(R)@r & #r < #i)"
 
@@ -662,10 +664,14 @@ lemma skipped_key_opens_only_its_message [hide_lemma=skipped_keys1_secret,
  & (All Ini Rsp cid m #i #j. ISent(Ini, Rsp, cid, 'm3', m)@i & K(m)@j
        ==> (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g) | (Ex #r. RevMk(Rsp, cid)@r))"
 
-/* Agreement on both, in either order. The kept key alone writes nothing:
-   the tag's associated data holds w0, which neither the wire nor the key
-   gives. With w0 too, which the reader's own key gives even stolen after it
-   accepted, it writes the message it stands for while the reader waits. */
+/* Agreement on both, in either order. Here the kept key alone writes
+   nothing, as the tag's associated data holds w0; with w0 too, which the
+   reader's own key gives even stolen after it accepted, it writes the
+   message it stands for while the reader waits. On the wire the first half
+   rests on the outer layer, which this model leaves out (README,
+   assumption 2): the envelope's [o]w0, with o from the key and the inner
+   salt, gives w0, and AES-GCM's tag can be redone without the associated
+   data from one genuine ciphertext and its key. */
 
 /* Its 2.2 GB peak is where GHC would start compacting, which crawls (README). */
 // check.sh: CAP=8g,RTS=-c100
@@ -692,6 +698,14 @@ lemma skipped_each_read_once:
 
 /* Reachable: both read out of order; the kept key, stolen, opens its
    message; and with the reader's key stolen after it accepted, writes it. */
+
+lemma skipped_in_order: exists-trace
+  "Ex Ini Rsp cid p0 Ai w0 F m m2 #s #t #u #c #a.
+     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, cid, 'm3', m)@t
+   & ISent(Ini, Rsp, cid, 'm3b', m2)@u
+   & RRecv(Rsp, cid, p0, Ai, w0, 'm3', m)@c & RRecv(Rsp, cid, p0, Ai, w0, 'm3b', m2)@a & #c < #a
+   & not (Ex R c2 #k. RSkipped(R, c2)@k)
+   & not (Ex P #r. RevLtk(P)@r) & not (Ex R c2 #r. RevMk(R, c2)@r)"
 
 lemma skipped_out_of_order: exists-trace
   "Ex Ini Rsp cid p0 Ai w0 F m m2 #s #t #u #a #b #c #d.

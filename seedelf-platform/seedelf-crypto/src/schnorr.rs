@@ -120,6 +120,15 @@ pub fn create_proof(datum: Register, sk: Scalar, vkh: String) -> Result<(String,
         anyhow::bail!("Register points are not in the prime-order subgroup");
     }
 
+    // Only a register this key owns. For any other, z = r + c·sk would hand
+    // out [sk]·g for a g someone else chose, since c is then computable from
+    // public values: [sk]g = (zg − [r]g)/c. That's a static Diffie–Hellman
+    // oracle on the Seedelf key (seedelf-messaging/docs/joint-security.md,
+    // rule 1). It also covers the identity: no key owns a register with one.
+    if !datum.is_owned(sk)? {
+        anyhow::bail!("This key doesn't own the register, so it makes no proof for it");
+    }
+
     // The Fiat-Shamir challenge MUST commit to the one-time signing key hash.
     // Omitting it — or letting a caller pass arbitrary transcript bytes here —
     // reintroduces the rollback-replay vector, so enforce the vkh shape.
@@ -290,5 +299,40 @@ mod tests {
         // And another draw.
         let drawn = proof_nonce_with(&sk, &g, &u, &vkh, &[0xa5; 32]).unwrap();
         assert_ne!(r, drawn, "another draw");
+    }
+
+    /// Why a proof is made only for a register the key owns (joint-security.md,
+    /// rule 1). For a register (g, u) with u ≠ [sk]g, the challenge c is
+    /// computable from public values, so a response z = r + c·sk would hand
+    /// out [sk]g = (zg − [r]g)/c for a g someone else chose: a static
+    /// Diffie–Hellman answer on the spending key. `create_proof` refuses.
+    #[test]
+    fn a_register_the_key_doesnt_own_gets_no_proof_which_would_reveal_sk_times_g() {
+        let sk = Scalar::from(18446744073709551606u64);
+        let theirs = Register::create(Scalar::from(7u64))
+            .unwrap()
+            .rerandomize()
+            .unwrap();
+        let vkh = "11".repeat(28);
+        assert!(create_proof(theirs.clone(), sk, vkh.clone()).is_err());
+
+        // What the response would have given away, worked by hand.
+        let g_bytes: [u8; 48] = hex::decode(&theirs.generator).unwrap().try_into().unwrap();
+        let g = G1Projective::from(G1Affine::from_compressed(&g_bytes).unwrap());
+        let r = Scalar::from(99u64);
+        let t = hex::encode((g * r).to_compressed());
+        let c_hex = fiat_shamir_heuristic(
+            theirs.generator.clone(),
+            t,
+            theirs.public_value.clone(),
+            vkh,
+        )
+        .unwrap();
+        let mut c_bytes = [0u8; 32];
+        c_bytes[4..].copy_from_slice(&hex::decode(c_hex).unwrap());
+        let c = Scalar::from_bytes_be(&c_bytes).unwrap();
+        let z = r + c * sk;
+        let revealed = (g * z - g * r) * c.invert().unwrap();
+        assert_eq!(revealed, g * sk);
     }
 }

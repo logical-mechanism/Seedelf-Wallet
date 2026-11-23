@@ -16,17 +16,18 @@ use group::Curve;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::support::{Seeded, handle, key, opened, test_scalar};
+use super::support::{Seeded, handle, identity, key, off_curve, opened, outside_g1, test_scalar};
 use crate::SecretKey;
 use crate::envelope::ENVELOPE_OVERHEAD;
 use crate::keys::scalar_mod_q;
 use crate::register::Register;
 use crate::relay::{find_stamp, stamp_bits};
-use crate::session::conversation::Conversation;
-use crate::session::draw::Draw;
+use crate::session::conversation::{Conversation, Origin};
+use crate::session::draw::hedge_okm;
 use crate::session::first_contact::{
-    BASE_LABEL, FIRST_CONTACT_STAMP_BITS, FIRST_STAMP_LABEL, SESSION_INFO, SESSION_SALT,
-    base_challenge, session_key,
+    BASE_LABEL, BASE_NONCE_LABEL, BASE_SCALAR_LABEL, FIRST_CONTACT_STAMP_BITS, FIRST_STAMP_LABEL,
+    SESSION_INFO, SESSION_SALT, base_challenge, base_nonce_message, base_scalar_message,
+    head_bytes, prove_base_with_nonce, session_key,
 };
 use crate::session::inbox::{Continues, Inbox, Received};
 use crate::session::ratchet::{
@@ -229,8 +230,24 @@ fn accept(by: &mut Side, envelope: &[u8], at: u64, sk: &Secret32, draw: &mut See
     })
 }
 
+/// A hedged scalar's HMAC (§16.2): its message, its 64-byte output, and the
+/// scalar, the output reduced mod q.
+fn hedged_json(key: &blstrs::Scalar, message: &[u8]) -> (blstrs::Scalar, Value) {
+    let okm = hedge_okm(key, message);
+    let scalar = scalar_mod_q(&okm[..]);
+    (
+        scalar,
+        json!({
+            "message": hex(message),
+            "hmac": hex(&okm[..]),
+            "scalar": hex(scalar.to_bytes_be()),
+        }),
+    )
+}
+
 /// The start's values, and its stamp, which it sets. `handle` is `None` for
-/// a continuation.
+/// a continuation. A start from a handle draws `cid`, `b`'s aux, `e_A`,
+/// `s_A` and `k`'s aux; a continuation `cid`, `e_A` and `s_A` (§16.3).
 fn start_json(
     initiator: &mut Side,
     responder: &Side,
@@ -241,11 +258,20 @@ fn start_json(
     let stamp = stamp_of(initiator.conversation.as_mut().unwrap(), index);
     let conversation = initiator.conversation.as_ref().unwrap();
     let first = &conversation.first;
-    let (b, rest) = match handle {
-        Some(_) => (Some(&drawn[0]), &drawn[1..]),
-        None => (None, drawn),
+    // The other draws, cid, e_A and s_A, and from a handle the aux of `b`
+    // and of `k`.
+    let aux = |i: usize| -> [u8; 32] { drawn[i].clone().try_into().unwrap() };
+    let (rest, auxes) = match handle {
+        Some(_) => {
+            assert_eq!(drawn.len(), 5, "cid, b's aux, e_A, s_A, k's aux");
+            ([&drawn[0], &drawn[2], &drawn[3]], Some((aux(1), aux(4))))
+        }
+        None => {
+            assert_eq!(drawn.len(), 3, "cid, e_A, s_A");
+            ([&drawn[0], &drawn[1], &drawn[2]], None)
+        }
     };
-    assert_eq!(rest.len(), if handle.is_some() { 4 } else { 3 });
+    assert_eq!(rest[0][..], first.cid.0);
     let e = crate::keys::scalar_from_bytes(&rest[1].clone().try_into().unwrap()).unwrap();
     let s = crate::keys::scalar_from_bytes(&rest[2].clone().try_into().unwrap()).unwrap();
     let w0 = G1Projective::from(conversation.responder);
@@ -266,26 +292,44 @@ fn start_json(
     let (rk, cks) = kdf_rk(&sk, &init_dh);
     assert_eq!(conversation.ratchet.rk, rk);
     let mut draws = json!({
-        "cid": hex(&rest[0]),
-        "e_A": hex(&rest[1]),
-        "s_A": hex(&rest[2]),
+        "cid": hex(rest[0]),
+        "e_A": hex(rest[1]),
+        "s_A": hex(rest[2]),
     });
+    let mut base_scalar = Value::Null;
     let mut base_proof = Value::Null;
-    if let (Some(b), Some(handle)) = (b, handle) {
-        draws["b"] = json!(hex(b));
-        draws["k"] = json!(hex(&rest[3]));
-        // The proof, recomputed from its definition.
-        let k = crate::keys::scalar_from_bytes(&rest[3].clone().try_into().unwrap()).unwrap();
-        let b = crate::keys::scalar_from_bytes(&b.clone().try_into().unwrap()).unwrap();
-        let commitment = (handle.generator() * k).to_affine();
+    if let (Some((aux_b, aux_k)), Some(handle)) = (auxes, handle) {
+        draws["aux_b"] = json!(hex(aux_b));
+        draws["aux_k"] = json!(hex(aux_k));
+        // b, recomputed from its definition: the base and w₀ follow from it.
+        let head = head_bytes(&first.cid, first.started_at, &first.to, first.replaces);
+        let (b, b_json) = hedged_json(
+            &initiator.key.scalar(),
+            &base_scalar_message(handle, &head, &aux_b),
+        );
+        assert_eq!((handle.generator() * b).to_affine(), first.base);
+        assert_eq!(
+            (handle.public_value() * b).to_affine(),
+            conversation.responder
+        );
+        base_scalar = b_json;
+        // The proof, recomputed from its definition, k from b.
         let prefix = first.prefix_bytes();
+        let (k, nonce) = hedged_json(
+            &b,
+            &base_nonce_message(handle, &first.base, &prefix, &aux_k),
+        );
+        assert_ne!(k, b);
+        let commitment = (handle.generator() * k).to_affine();
         let challenge = base_challenge(handle, &first.base, &commitment, &prefix);
         let proof = first.proof.unwrap();
+        assert_eq!(proof, prove_base_with_nonce(handle, &b, &k, &prefix));
         assert_eq!(proof.challenge, challenge);
         assert_eq!(proof.response, k + scalar_mod_q(&challenge) * b);
         assert!(first.proves_base(handle));
         base_proof = json!({
             "first_contact_prefix": hex(&prefix),
+            "nonce": nonce,
             "commitment": hex(commitment.to_compressed()),
             "challenge": hex(challenge),
             "challenge_scalar": hex(scalar_mod_q(&challenge).to_bytes_be()),
@@ -301,6 +345,7 @@ fn start_json(
             "to": hex(&first.to),
             "replaces": first.replaces.map(|cid| hex(cid.0)),
             "draws": draws,
+            "base_scalar": base_scalar,
             "base_proof": base_proof,
             "stamp": stamp,
             "base": hex(first.base.to_compressed()),
@@ -353,6 +398,233 @@ fn with_events(mut start: Value, name: &str, mut events: Vec<Value>) -> Value {
     start["name"] = json!(name);
     start["events"] = json!(events);
     start
+}
+
+/// The group order q, big-endian.
+const GROUP_ORDER: &str = "73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001";
+
+/// What a reader makes of F's proof for `handle` (§16.2, §16.4): `ok`, or
+/// the refusal's code, the crate's error in snake case as seedelf-wasm
+/// names it. F is parsed first.
+fn judge_base_proof(handle: &Register, first_contact: &[u8]) -> &'static str {
+    match crate::session::first_contact::FirstContact::from_bytes(first_contact) {
+        Err(crate::Error::InvalidMessage) => "invalid_message",
+        Err(crate::Error::InvalidEncoding) => "invalid_encoding",
+        Err(crate::Error::NotInSubgroup) => "not_in_subgroup",
+        Err(crate::Error::IdentityPoint) => "identity_point",
+        Err(other) => panic!("no base proof check refuses with {other:?}"),
+        Ok(first) if first.proves_base(handle) => "ok",
+        Ok(_) => "invalid_base_proof",
+    }
+}
+
+/// The base proof's checks: what the sessions don't pin of how a reader
+/// takes F and its proof for a handle (§16.1, §16.2), each built from a
+/// session's recorded values. Each gives the handle, F and the result.
+fn base_proof_checks(sessions: &[&Value]) -> Value {
+    let bytes = |value: &Value| hex::decode(value.as_str().unwrap()).unwrap();
+    let handle_of = |session: &Value| {
+        Register::from_bytes(
+            &bytes(&session["handle"]["generator"]).try_into().unwrap(),
+            &bytes(&session["handle"]["public_value"])
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let q: [u8; 32] = hex::decode(GROUP_ORDER).unwrap().try_into().unwrap();
+    // F's last 64 bytes are c then z.
+    let with_proof = |first_contact: &[u8], c: &[u8], z: &[u8]| {
+        let mut out = first_contact[..first_contact.len() - 64].to_vec();
+        out.extend_from_slice(c);
+        out.extend_from_slice(z);
+        out
+    };
+    let (one, four) = (sessions[0], sessions[3]);
+    let f1 = bytes(&one["first_contact"]);
+    let f4 = bytes(&four["first_contact"]);
+    let (c1, z1) = (&f1[f1.len() - 64..f1.len() - 32], &f1[f1.len() - 32..]);
+    let (c4, z4) = (&f4[f4.len() - 64..f4.len() - 32], &f4[f4.len() - 32..]);
+
+    // c + q, as 32 bytes: the first session whose challenge leaves room.
+    let plus_q = |c: &[u8]| -> Option<[u8; 32]> {
+        let mut out = [0u8; 32];
+        let mut carry = 0u16;
+        for i in (0..32).rev() {
+            let sum = u16::from(c[i]) + u16::from(q[i]) + carry;
+            out[i] = sum as u8;
+            carry = sum >> 8;
+        }
+        (carry == 0).then_some(out)
+    };
+    let (room, c_plus_q) = sessions
+        .iter()
+        .filter(|session| !session["handle"].is_null())
+        .find_map(|session| {
+            let f = bytes(&session["first_contact"]);
+            plus_q(&f[f.len() - 64..f.len() - 32]).map(|c| (*session, c))
+        })
+        .expect("a challenge below 2^256 - q");
+    let f_room = bytes(&room["first_contact"]);
+
+    // A proof whose nonce is 0: T = O, z = (c mod q)·b, on session 1's F′.
+    let handle1 = handle_of(one);
+    let b =
+        crate::keys::scalar_from_bytes(&bytes(&one["base_scalar"]["scalar"]).try_into().unwrap())
+            .unwrap();
+    let base = blstrs::G1Affine::from_compressed(&bytes(&one["base"]).try_into().unwrap()).unwrap();
+    let prefix = &f1[..f1.len() - 64];
+    let c0 = base_challenge(
+        &handle1,
+        &base,
+        &<blstrs::G1Affine as group::prime::PrimeCurveAffine>::identity(),
+        prefix,
+    );
+    let z0 = scalar_mod_q(&c0) * b;
+
+    // A proof whose challenge leaves F′ out: valid only to a reader that
+    // leaves it out too.
+    let k = crate::keys::scalar_from_bytes(
+        &bytes(&one["base_proof"]["nonce"]["scalar"])
+            .try_into()
+            .unwrap(),
+    )
+    .unwrap();
+    let commitment = (handle1.generator() * k).to_affine();
+    let without_f: [u8; 32] = Sha256::new()
+        .chain_update(BASE_LABEL)
+        .chain_update(handle1.to_bytes())
+        .chain_update(base.to_compressed())
+        .chain_update(commitment.to_compressed())
+        .finalize()
+        .into();
+    let z_without_f = k + scalar_mod_q(&without_f) * b;
+
+    // Session 1's own proof with z + q: refused at parsing.
+    let z_plus_q = plus_q(z1).expect("session 1's response leaves room for q");
+
+    // Another register of session 1's reader: its root, (G, [x_B]G).
+    let bob =
+        SecretKey::from_bytes(&bytes(&one["responder_secret_key"]).try_into().unwrap()).unwrap();
+
+    // F's points, each replaced: p₀, A and E_A follow F's head.
+    let to_len = bytes(&one["to"]).len();
+    let points = 16 + 8 + 1 + to_len + 1 + if one["replaces"].is_null() { 0 } else { 16 };
+    let with_point = |at: usize, point: [u8; 48]| {
+        let mut out = f1.clone();
+        out[points + 48 * at..points + 48 * (at + 1)].copy_from_slice(&point);
+        out
+    };
+    let mut longer = f1.clone();
+    longer.push(0);
+    // Two faults: p₀ as O, and z + q. Fields are read in order.
+    let mut two_faults = with_proof(&f1, c1, &z_plus_q);
+    two_faults[points..points + 48].copy_from_slice(&identity());
+
+    let cases: Vec<(String, Register, Vec<u8>)> = vec![
+        ("session 1's proof".into(), handle1, f1.clone()),
+        (
+            "session 4's proof, whose challenge is at least q, carried unreduced".into(),
+            handle_of(four),
+            f4.clone(),
+        ),
+        (
+            "session 4's challenge reduced mod q: c is compared as F's 32 bytes".into(),
+            handle_of(four),
+            with_proof(&f4, &scalar_mod_q(c4).to_bytes_be(), z4),
+        ),
+        (
+            format!(
+                "session {}'s challenge plus q: c is compared as F's 32 bytes",
+                sessions.iter().position(|s| *s == room).unwrap() + 1
+            ),
+            handle_of(room),
+            with_proof(&f_room, &c_plus_q, &f_room[f_room.len() - 32..]),
+        ),
+        (
+            "a proof whose nonce is 0: T' is O, hashed as 0xc0 then 47 zero bytes, and it verifies"
+                .into(),
+            handle1,
+            with_proof(&f1, &c0, &z0.to_bytes_be()),
+        ),
+        (
+            "session 1's proof against another register of the same key".into(),
+            bob.register(),
+            f1.clone(),
+        ),
+        (
+            "a proof whose challenge leaves out F': the challenge covers F'".into(),
+            handle1,
+            with_proof(&f1, &without_f, &z_without_f.to_bytes_be()),
+        ),
+        (
+            "session 1's proof with z + q: z must be below q, or F doesn't parse".into(),
+            handle1,
+            with_proof(&f1, c1, &z_plus_q),
+        ),
+        (
+            "session 1's F with p0 as O".into(),
+            handle1,
+            with_point(0, identity()),
+        ),
+        (
+            "session 1's F with A outside G1".into(),
+            handle1,
+            with_point(1, outside_g1()),
+        ),
+        (
+            "session 1's F with E_A off the curve".into(),
+            handle1,
+            with_point(2, off_curve()),
+        ),
+        ("session 1's F with a byte after it".into(), handle1, longer),
+        (
+            "session 1's F with p0 as O and z + q: F is read in order, so p0's fault is the one"
+                .into(),
+            handle1,
+            two_faults,
+        ),
+    ];
+    let checks: Vec<Value> = cases
+        .into_iter()
+        .map(|(name, handle, first_contact)| {
+            json!({
+                "name": name,
+                "handle": register_json(&handle),
+                "first_contact": hex(&first_contact),
+                "result": judge_base_proof(&handle, &first_contact),
+            })
+        })
+        .collect();
+    let results: Vec<&str> = checks
+        .iter()
+        .map(|c| c["result"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        results,
+        [
+            "ok",
+            "ok",
+            "invalid_base_proof",
+            "invalid_base_proof",
+            "ok",
+            "invalid_base_proof",
+            "invalid_base_proof",
+            "invalid_message",
+            "identity_point",
+            "not_in_subgroup",
+            "invalid_encoding",
+            "invalid_message",
+            "identity_point",
+        ]
+    );
+    json!(checks)
+}
+
+/// Whether the base proof's challenge, as F carries it, is below q.
+fn challenge_is_canonical(conversation: &Conversation) -> bool {
+    let challenge = conversation.first.proof.unwrap().challenge;
+    Option::<blstrs::Scalar>::from(blstrs::Scalar::from_bytes_be(&challenge)).is_some()
 }
 
 fn all_vectors() -> Value {
@@ -503,37 +775,32 @@ fn all_vectors() -> Value {
         })
         .find(|draw| {
             let mut trial = Seeded::new(&draw.label);
-            let b = trial.scalar();
-            let rb = crate::register::rerandomize_with(&frank_handle, &b);
             let c = Conversation::begin(
                 &erin.key,
-                rb.generator().to_affine(),
-                rb.public_value().to_affine(),
+                Origin::Handle(&frank_handle),
                 &name,
                 Some(replaces),
-                Some((&frank_handle, &b)),
                 t + 3600,
                 &mut trial,
             )
             .unwrap();
-            let challenge = c.first.proof.unwrap().challenge;
-            Option::<blstrs::Scalar>::from(blstrs::Scalar::from_bytes_be(&challenge)).is_none()
+            !challenge_is_canonical(&c)
         })
         .unwrap();
-    let b = draw.scalar();
-    let rb = crate::register::rerandomize_with(&frank_handle, &b);
     erin.conversation = Some(
         Conversation::begin(
             &erin.key,
-            rb.generator().to_affine(),
-            rb.public_value().to_affine(),
+            Origin::Handle(&frank_handle),
             &name,
             Some(replaces),
-            Some((&frank_handle, &b)),
             t + 3600,
             &mut draw,
         )
         .unwrap(),
+    );
+    assert!(
+        !challenge_is_canonical(erin.conversation.as_ref().unwrap()),
+        "session 4's challenge is at least q, so F carries it unreduced"
     );
     let drawn = draw.drain();
     let (start, sk) = start_json(&mut erin, &frank, Some(&frank_handle), &drawn, 3);
@@ -574,11 +841,13 @@ fn all_vectors() -> Value {
     );
 
     json!({
-        "description": "Seedelf Messaging session layer v1 test vectors (docs/protocol.md §3, §4, §9 and §16). Scalars are 32-byte big-endian; points are 48-byte compressed G1. Every random value is given under `draws`, `salt`, `outer_r` and `new_ratchet_secret`; the first-contact stamp's nonce is the first from 0 with `bits` of work. The outer envelope is v1 (tests/vectors/messaging_v1.json) with b = outer_scalar and the given r, sealing the inner message padded with 0x80 then zeros to envelope_size - 161 bytes.",
+        "description": "Seedelf Messaging session layer v1 test vectors (docs/protocol.md §3, §4, §9 and §16). Scalars are 32-byte big-endian; points are 48-byte compressed G1. Every random value is given under `draws`, `salt`, `outer_r` and `new_ratchet_secret`; b and the base proof's k aren't drawn but derived from `aux_b` and `aux_k` (§16.2), with their HMACs under `base_scalar` and `base_proof.nonce`; the first-contact stamp's nonce is the first from 0 with `bits` of work. The outer envelope is v1 (tests/vectors/messaging_v1.json) with b = outer_scalar and the given r, sealing the inner message padded with 0x80 then zeros to envelope_size - 161 bytes.",
         "version": 1,
         "labels": {
             "session_salt": String::from_utf8(SESSION_SALT.to_vec()).unwrap(),
             "session_info": String::from_utf8(SESSION_INFO.to_vec()).unwrap(),
+            "base_scalar_label": String::from_utf8(BASE_SCALAR_LABEL.to_vec()).unwrap(),
+            "base_nonce_label": String::from_utf8(BASE_NONCE_LABEL.to_vec()).unwrap(),
             "base_label": String::from_utf8(BASE_LABEL.to_vec()).unwrap(),
             "stamp_label": String::from_utf8(FIRST_STAMP_LABEL.to_vec()).unwrap(),
             "root_info": String::from_utf8(ROOT_INFO.to_vec()).unwrap(),
@@ -587,6 +856,7 @@ fn all_vectors() -> Value {
         },
         "first_contact_stamp_bits": FIRST_CONTACT_STAMP_BITS,
         "envelope_sizes": ENVELOPE_SIZES,
+        "base_proof_checks": base_proof_checks(&[&first, &second, &third, &fourth]),
         "sessions": [first, second, third, fourth],
     })
 }
@@ -606,6 +876,105 @@ fn session_vectors_match_the_file() {
         serde_json::from_str(&std::fs::read_to_string(&path).expect("reads the vectors"))
             .expect("parses the vectors");
     assert_eq!(computed, recorded);
+}
+
+/// The file's b and k are HMAC-SHA-512 of exactly §16.2's messages, built
+/// here from the file's other values and the labels as §16.2 spells them,
+/// under x_A and b: what another implementation is held to, checked without
+/// the crate's own builders.
+#[test]
+fn the_files_b_and_k_are_the_hmacs_of_their_specified_messages() {
+    use hmac::{Hmac, Mac};
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(VECTORS);
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let bytes = |value: &Value| hex::decode(value.as_str().unwrap()).unwrap();
+    let hmac = |key: &[u8], message: &[u8]| {
+        let mut mac = <Hmac<sha2::Sha512> as Mac>::new_from_slice(key).unwrap();
+        mac.update(message);
+        mac.finalize().into_bytes().to_vec()
+    };
+    let point = |compressed: &[u8]| {
+        G1Projective::from(
+            blstrs::G1Affine::from_compressed(&compressed.try_into().unwrap()).unwrap(),
+        )
+    };
+    let scalar_label = b"Seedelf-Messaging|v1|session|base-scalar";
+    let nonce_label = b"Seedelf-Messaging|v1|session|base-nonce";
+    assert_eq!(
+        file["labels"]["base_scalar_label"]
+            .as_str()
+            .unwrap()
+            .as_bytes(),
+        scalar_label
+    );
+    assert_eq!(
+        file["labels"]["base_nonce_label"]
+            .as_str()
+            .unwrap()
+            .as_bytes(),
+        nonce_label
+    );
+    let mut from_handles = 0;
+    for session in file["sessions"].as_array().unwrap() {
+        let draws = &session["draws"];
+        if session["handle"].is_null() {
+            assert!(session["base_scalar"].is_null() && session["base_proof"].is_null());
+            assert!(draws.get("aux_b").is_none() && draws.get("aux_k").is_none());
+            continue;
+        }
+        let g = bytes(&session["handle"]["generator"]);
+        let v = bytes(&session["handle"]["public_value"]);
+        let f = bytes(&session["first_contact"]);
+        let to = bytes(&session["to"]);
+        let replaces = if session["replaces"].is_null() { 0 } else { 16 };
+        // F's head: cid, t, len, to, len, replaces.
+        let head = &f[..16 + 8 + 1 + to.len() + 1 + replaces];
+
+        // b, keyed by x_A's 32 bytes.
+        let mut message = scalar_label.to_vec();
+        for part in [&g, &v, &head.to_vec(), &bytes(&draws["aux_b"])] {
+            message.extend_from_slice(part);
+        }
+        assert_eq!(bytes(&session["base_scalar"]["message"]), message);
+        let okm = hmac(&bytes(&session["initiator_secret_key"]), &message);
+        assert_eq!(bytes(&session["base_scalar"]["hmac"]), okm);
+        let b = scalar_mod_q(&okm);
+        assert_eq!(bytes(&session["base_scalar"]["scalar"]), b.to_bytes_be());
+        let base = bytes(&session["base"]);
+        assert_eq!((point(&g) * b).to_compressed()[..], base[..]);
+        assert_eq!(
+            (point(&v) * b).to_compressed()[..],
+            bytes(&session["responder_public"])[..]
+        );
+
+        // k, keyed by b's 32 bytes, over everything the challenge covers but T.
+        let proof = &session["base_proof"];
+        let prefix = bytes(&proof["first_contact_prefix"]);
+        assert_eq!(prefix[..], f[..f.len() - 64]);
+        let mut message = nonce_label.to_vec();
+        for part in [&g, &v, &base, &prefix, &bytes(&draws["aux_k"])] {
+            message.extend_from_slice(part);
+        }
+        assert_eq!(bytes(&proof["nonce"]["message"]), message);
+        let okm = hmac(&b.to_bytes_be(), &message);
+        assert_eq!(bytes(&proof["nonce"]["hmac"]), okm);
+        let k = scalar_mod_q(&okm);
+        assert_eq!(bytes(&proof["nonce"]["scalar"]), k.to_bytes_be());
+        assert_ne!(k, b);
+        assert_eq!(
+            (point(&g) * k).to_compressed()[..],
+            bytes(&proof["commitment"])[..]
+        );
+        let challenge = bytes(&proof["challenge"]);
+        let z = k + scalar_mod_q(&challenge) * b;
+        assert_eq!(bytes(&proof["response"]), z.to_bytes_be());
+        assert_eq!(
+            f[f.len() - 64..],
+            [challenge, z.to_bytes_be().to_vec()].concat()
+        );
+        from_handles += 1;
+    }
+    assert_eq!(from_handles, 3);
 }
 
 /// The generator's keys are what their labels say: a check on the helper,

@@ -13,7 +13,8 @@ use crate::register::{POINT_LEN, Register, decode_point, matches_register, reran
 use crate::relay::stamp_bits;
 use crate::session::draw::{Draw, OsDraw};
 use crate::session::first_contact::{
-    CID_LEN, ConversationId, FirstContact, MAX_TO_LEN, Reader, STAMP_LEN, prove_base, session_key,
+    CID_LEN, ConversationId, FirstContact, MAX_TO_LEN, Reader, STAMP_LEN, base_scalar, head_bytes,
+    prove_base, session_key,
 };
 use crate::session::ratchet::{
     KeyPair, MAX_STORED_SKIPPED, RATCHET_HEADER_LEN, RATCHET_OVERHEAD, RATCHET_SALT_LEN, Ratchet,
@@ -39,6 +40,16 @@ pub enum Role {
     Initiator,
     /// Was written to, and replied ("Bob").
     Responder,
+}
+
+/// Where a start's base comes from ([`Conversation::begin`]).
+pub(crate) enum Origin<'a> {
+    /// A handle: the base re-randomizes it by `b`, derived from the writer's
+    /// key (§16.2), and F proves it.
+    Handle(&'a Register),
+    /// A base and the responder's value on it, given, with no proof: a
+    /// continuation's, or a test's.
+    Base { base: G1Affine, responder: G1Affine },
 }
 
 /// One side of a one-to-one conversation: its identities, F, and its Double
@@ -85,20 +96,7 @@ impl Conversation {
         if matches_register(key, handle) {
             return Err(Error::OwnRegister);
         }
-        let b = draw.scalar();
-        let rb = rerandomize_with(handle, &b);
-        let base = rb.generator().to_affine();
-        let responder = rb.public_value().to_affine();
-        Self::begin(
-            key,
-            base,
-            responder,
-            to,
-            None,
-            Some((handle, &b)),
-            now,
-            draw,
-        )
+        Self::begin(key, Origin::Handle(handle), to, None, now, draw)
     }
 
     /// Starts a new conversation that continues `old`, with its identities
@@ -122,35 +120,41 @@ impl Conversation {
         if (G1Projective::from(old.first.base) * key.scalar()).to_affine() != mine {
             return Err(Error::NotForThisKey);
         }
-        Self::begin(
-            key,
-            old.first.base,
-            theirs,
-            b"",
-            Some(old.cid()),
-            None,
-            now,
-            draw,
-        )
+        let origin = Origin::Base {
+            base: old.first.base,
+            responder: theirs,
+        };
+        Self::begin(key, origin, b"", Some(old.cid()), now, draw)
     }
 
-    /// The initiator's side of §3, from the base and the responder's value.
-    /// Draws `cid`, `e_A`, `s_A`, then, from a handle, the proof's `k`.
-    #[allow(clippy::too_many_arguments)]
+    /// The initiator's side of §3. Draws `cid`; from a handle, derives `b`
+    /// from `key`, the handle, F's head and drawn bytes (§16.2), and the
+    /// base and the responder's value from `b`; then draws `e_A` and `s_A`;
+    /// then, from a handle, proves the base with a nonce derived from `b`.
     pub(crate) fn begin(
         key: &SecretKey,
-        base: G1Affine,
-        responder: G1Affine,
+        origin: Origin<'_>,
         to: &[u8],
         replaces: Option<ConversationId>,
-        from_handle: Option<(&Register, &blstrs::Scalar)>,
         now: u64,
         draw: &mut dyn Draw,
     ) -> Result<Self, Error> {
         let cid = ConversationId(draw.bytes16());
+        let x = key.scalar();
+        let (base, responder, from_handle) = match origin {
+            Origin::Handle(handle) => {
+                let b = base_scalar(&x, handle, &head_bytes(&cid, now, to, replaces), draw);
+                let rb = rerandomize_with(handle, &b);
+                (
+                    rb.generator().to_affine(),
+                    rb.public_value().to_affine(),
+                    Some((handle, b)),
+                )
+            }
+            Origin::Base { base, responder } => (base, responder, None),
+        };
         let e = draw.scalar();
         let s = KeyPair::generate(&base, draw);
-        let x = key.scalar();
         let p0 = G1Projective::from(base);
         let mut first = FirstContact {
             cid,
@@ -163,8 +167,7 @@ impl Conversation {
             proof: None,
         };
         if let Some((handle, b)) = from_handle {
-            let k = draw.scalar();
-            first.proof = Some(prove_base(handle, b, &k, &first.prefix_bytes()));
+            first.proof = Some(prove_base(handle, &b, &first.prefix_bytes(), draw));
         }
         let first_bytes = first.to_bytes();
         let w0 = G1Projective::from(responder);
