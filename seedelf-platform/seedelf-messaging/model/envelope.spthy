@@ -452,7 +452,7 @@ rule Send_chain_0:
       H  = <'v1', p, w, c>
   in
   [ SendChain0(Rsp, ~cid, ~rb, ~xi, ~xr, ~s2, ~mk), Fr(~salt), Fr(~r), Fr(~m) ]
-  --[ SentChain(Rsp, ~cid, '0', ~m, ~salt) ]->
+  --[ SentChain(Rsp, ~cid, '0', ~m, ~salt, p) ]->
   [ Out(<H, aenc(<'0x02', ~cid, h, ~salt, gcm(~m, kdf_msg(~mk, ~salt), ad)>, kdf_env(H, w^~r), H)>) ]
 
 rule Send_chain_1:
@@ -468,7 +468,7 @@ rule Send_chain_1:
       H  = <'v1', p, w, c>
   in
   [ SendChain1(Rsp, ~cid, ~rb, ~xi, ~xr, ~s2, ~mk), Fr(~salt), Fr(~r), Fr(~m) ]
-  --[ SentChain(Rsp, ~cid, '1', ~m, ~salt) ]->
+  --[ SentChain(Rsp, ~cid, '1', ~m, ~salt, p) ]->
   [ Out(<H, aenc(<'0x02', ~cid, h, ~salt, gcm(~m, kdf_msg(~mk, ~salt), ad)>, kdf_env(H, w^~r), H)>) ]
 
 /* The responder reads n = 0 with the key it kept: from an envelope its key
@@ -479,7 +479,7 @@ rule R_Read_with_the_kept_key:
   in
   [ Kept(Rsp, ~cid, ~rb, Ai, w0, S2, mk),
     Inner(Rsp, ~xr, p, <'0x02', ~cid, <S2, '1', '0'>, salt, gcm(m, kdf_msg(mk, salt), ad)>) ]
-  --[ OuterCheck(p, p0^kdf_outer(mk, salt)), RReadKept(Rsp, ~cid, m) ]->
+  --[ OuterCheck(p, p0^kdf_outer(mk, salt)), RReadKept(Rsp, ~cid, m, p) ]->
   [ ]
 
 /* The kept key alone, as the session model steals it: no salt, no
@@ -501,28 +501,27 @@ lemma kept_conversation_secret [reuse]:
  & (All I R cid p0 w0 #c #j. Conv(I, R, cid, p0, w0)@c & KU(w0)@j ==> Ex #r. RevLtk(R)@r & #r < #j)"
 
 lemma kept_salt_secret [reuse]:
-  "All R cid n m salt #s #j. SentChain(R, cid, n, m, salt)@s & KU(salt)@j ==> Ex #r. RevLtk(R)@r & #r < #j"
+  "All R cid n m salt p #s #j. SentChain(R, cid, n, m, salt, p)@s & KU(salt)@j ==> Ex #r. RevLtk(R)@r & #r < #j"
 
 lemma kept_key_alone_writes_nothing:
-  "All Rsp cid m #i. RReadKept(Rsp, cid, m)@i
-     ==> (Ex salt #s. SentChain(Rsp, cid, '0', m, salt)@s & #s < #i) | (Ex #r. RevLtk(Rsp)@r & #r < #i)"
+  "All Rsp cid m p #i. RReadKept(Rsp, cid, m, p)@i
+     ==> (Ex salt p2 #s. SentChain(Rsp, cid, '0', m, salt, p2)@s & #s < #i) | (Ex #r. RevLtk(Rsp)@r & #r < #i)"
 
 lemma kept_key_alone_opens_nothing:
-  "All Rsp cid m salt #s #j. SentChain(Rsp, cid, '0', m, salt)@s & K(m)@j
+  "All Rsp cid m salt p #s #j. SentChain(Rsp, cid, '0', m, salt, p)@s & K(m)@j
      ==> (Ex #r #q. RevMk(Rsp, cid)@r & RevLtk(Rsp)@q)"
 
-/* Reachable: the genuine message read with the kept key; and with the
-   reader's key too, a forgery. The forgery is named, a message 'forged',
-   or the search doesn't end: with x_B the attacker opens the genuine
-   envelope, and with the key and the tag's share writes another message
-   under the same associated data, to the same register. */
+/* Reachable: the genuine message read with the kept key. */
+
 lemma kept_key_reads_its_message: exists-trace
-  "Ex Rsp cid m salt #s #i. SentChain(Rsp, cid, '0', m, salt)@s & RReadKept(Rsp, cid, m)@i
+  "Ex Rsp cid m salt p #s #i. SentChain(Rsp, cid, '0', m, salt, p)@s & RReadKept(Rsp, cid, m, p)@i
    & not (Ex Q #r. RevLtk(Q)@r) & not (Ex R c #r. RevMk(R, c)@r)"
 
-lemma kept_key_and_reader_key_write_its_message: exists-trace
-  "Ex I Rsp cid p0 w0 #c #i #r #q. Conv(I, Rsp, cid, p0, w0)@c & RReadKept(Rsp, cid, 'forged')@i
-   & RevMk(Rsp, cid)@r & RevLtk(Rsp)@q & not (Ex #p. RevLtk(I)@p)"
+/* Not here: the trace where x_B and the kept key write the message. With
+   x_B the attacker opens the genuine envelope, and the key and the tag's
+   share make another message under the same associated data, to the same
+   register; but Tamarin's search for it ran out of 6 GB, named as far as a
+   lemma can name it (README). */
 
 #endif
 
