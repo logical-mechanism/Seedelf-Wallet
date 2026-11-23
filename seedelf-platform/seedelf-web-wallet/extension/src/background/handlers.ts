@@ -300,9 +300,13 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.contacts.remove(ctx.network, message.id);
     case "messaging":
       return ctx.messaging.overview(ctx.network);
-    case "messaging-switch":
-      await ctx.messaging.switch(ctx.network, message.on === true);
+    case "messaging-switch": {
+      // Another of the build's networks, where the screens offer to turn its Messages off from this one (docs-claims#3).
+      const network = message.network === undefined ? ctx.network : ctx.networks.find((n) => n === message.network);
+      if (!network) throw new Error(t("worker.network.notANetwork"));
+      await ctx.messaging.switch(network, message.on === true);
       return ctx.messaging.overview(ctx.network);
+    }
     case "messaging-sync":
       await ctx.messaging.sync(ctx.network);
       return null;
@@ -331,6 +335,19 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "messaging-reveal":
       await ctx.messaging.reveal(ctx.network, message.cid, seedelfNameOf(message.name));
       return null;
+    case "messaging-check-reveal":
+      await ctx.messaging.checkReveals(ctx.network, message.cid);
+      return null;
+    case "messaging-resend":
+      await ctx.messaging.resend(ctx.network, message.cid, message.id);
+      return null;
+    case "messaging-answer-at":
+      return ctx.messaging.answerAt(ctx.network, seedelfNameOf(message.name), message.register, message.on === true);
+    case "messaging-retry":
+      await ctx.messaging.retry(ctx.network);
+      return null;
+    case "messaging-clear":
+      return ctx.messaging.clear(ctx.network);
     case "history": {
       if (message.of === "seedelf") {
         // Arrivals are noted by a balance reading: Refresh makes one, and otherwise the history asks nothing.

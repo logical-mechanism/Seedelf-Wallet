@@ -233,7 +233,6 @@ function ListPane({
     }
   }
 
-  const lostCount = overview?.lost.length ?? 0;
   const gap = overview?.gapAt !== undefined && now - overview.gapAt < GAP_SHOWN_MS ? overview.gapAt : undefined;
   const empty = overview && !overview.conversations.length && !overview.requests.length;
 
@@ -359,11 +358,6 @@ function ListPane({
         {empty && (
           <p className="messages__none" data-testid="messages-none">
             {on ? t("messages.none") : t("messages.noneOff")}
-          </p>
-        )}
-        {lostCount > 0 && (
-          <p className="note" data-testid="messages-lost">
-            {t("messages.lost", { count: lostCount })}
           </p>
         )}
         <p className="note messages__unlock">{t("messages.unlockLine")}</p>
@@ -979,7 +973,7 @@ function RevealText({ reveal, contacts }: { reveal: NonNullable<MessagingEntry["
       </p>
     );
   }
-  if (reveal.status === "checking") {
+  if (reveal.status === "checking" || reveal.status === "unchecked") {
     return (
       <p className="bubble__text bubble__text--unreadable" data-testid="bubble-reveal">
         {t("messages.reveal.checking")}

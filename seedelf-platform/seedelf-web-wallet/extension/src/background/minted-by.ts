@@ -34,8 +34,11 @@
 // one. A bare "account", written before this chunk, is account 0's: there was
 // only one.
 
+import type * as Wasm from "@seedelf/wasm";
+
 import type { NetworkName } from "../networks";
-import type { MintSource } from "../shared/rpc";
+import type { MintSource, TxDetail } from "../shared/rpc";
+import { registerOf, type RegisterHex } from "./chain";
 import type { KoiosUtxo } from "./koios";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 
@@ -100,6 +103,76 @@ export async function rememberMint(
   } catch {
     // Unreadable, or locked meanwhile: Remove asks instead.
   }
+}
+
+// Where each Seedelf minted here was put: the register its mint's output holds
+// (`mintedAt.<network>`, sealed). Seedelf Messaging takes first messages by
+// itself only at these, each at that register (messaging.ts, the 1.10.0
+// gate's W8): the policy is open, so a Seedelf anyone mints under a register
+// that is the sum of two of this wallet's own is owned by its scan exactly
+// when both are, and answering at it, or showing it, would tell the minter
+// that the two are one wallet's. A name, by itself, is no proof either: the
+// pair is.
+
+/** The registers each Seedelf minted here was put under, by its full token name (hex). */
+export type MintedAt = Record<string, RegisterHex[]>;
+
+const atRecord = (network: NetworkName) => `mintedAt.${network}` as const;
+
+/** The registers each Seedelf this wallet minted here was put under; empty when there's no record, or it won't open. */
+export async function mintedAt(store: PrivateStore, network: NetworkName): Promise<MintedAt> {
+  try {
+    return (await store.get<MintedAt>(atRecord(network))) ?? {};
+  } catch (e) {
+    if (e instanceof UnreadableRecordError) return {};
+    throw e;
+  }
+}
+
+/**
+ * Keeps the register the mint of `tokenName` put it under, beside any it was put under before. Unlike who paid
+ * (`rememberMint`), its refusal surfaces (the 1.10.0 gate's W12, quota-outside#11): a record that won't open is left as
+ * it is and UnreadableRecordError thrown, as is a write the browser refuses, or a lock. The caller says what then:
+ * that Seedelf's switch shows off in Messages (it isn't a pair this browser made), and the mint goes on either way.
+ */
+export async function rememberRegister(store: PrivateStore, network: NetworkName, tokenName: string, register: RegisterHex): Promise<void> {
+  const kept = (await store.get<MintedAt>(atRecord(network))) ?? {};
+  const at = kept[tokenName] ?? [];
+  if (at.some((r) => r.generator === register.generator && r.publicValue === register.publicValue)) return;
+  await store.set(atRecord(network), { ...kept, [tokenName]: [...at, register] });
+}
+
+/**
+ * Forgets every register `tokenName` was put under here (W12): the wallet's own Remove of that Seedelf, as it's sent,
+ * so first messages to it stop then, whatever any kept view has shown of it. A Remove that never lands leaves it a
+ * Seedelf this browser didn't make, whose switch the user can turn on. Throws as `rememberRegister` does.
+ */
+export async function forgetRegisters(store: PrivateStore, network: NetworkName, tokenName: string): Promise<void> {
+  const kept = (await store.get<MintedAt>(atRecord(network))) ?? {};
+  if (!kept[tokenName]) return;
+  const { [tokenName]: _gone, ...rest } = kept;
+  await store.set(atRecord(network), rest);
+}
+
+/**
+ * The register a transaction this wallet built puts the Seedelf `tokenName` under: its output at Seedelf Wallet's
+ * contract holding the token, its inline datum read as the contract view reads one (chain.ts `registerOf`). From the
+ * transaction's own bytes, which fix every output: nobody else can make an output of it. Undefined where there's none.
+ */
+export function mintedRegister(
+  wasm: Pick<typeof Wasm, "decodeTx" | "Network">,
+  network: NetworkName,
+  txCbor: string,
+  policyId: string,
+  tokenName: string,
+): RegisterHex | undefined {
+  const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+  const detail = JSON.parse(wasm.decodeTx(net, txCbor)) as TxDetail;
+  const outputs = detail.outputs.filter(
+    (o) => o.address.seedelf && o.inlineDatum && o.assets.some((a) => a.policyId === policyId && a.assetName === tokenName),
+  );
+  if (outputs.length !== 1) return undefined;
+  return registerOf({ inline_datum: { bytes: outputs[0]!.inlineDatum! } } as KoiosUtxo);
 }
 
 /**

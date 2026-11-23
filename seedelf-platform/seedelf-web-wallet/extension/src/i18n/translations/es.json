@@ -3533,5 +3533,6 @@
   "messages.preview.revealIn": "Te mostró un Seedelf",
   "messages.preview.revealOut": "Mostraste tu Seedelf",
   "worker.messaging.notYourSeedelf": "Ese Seedelf ya no es de esta billetera.",
-  "worker.messaging.cantRevealYet": "Solo quien escribió primero puede mostrar un Seedelf, y solo cuando el otro lado ya respondió."
+  "worker.messaging.cantRevealYet": "Solo quien escribió primero puede mostrar un Seedelf, y solo cuando el otro lado ya respondió.",
+  "worker.messaging.waitForReply": "Espera una respuesta: hasta que llegue, su billetera no acepta más mensajes tuyos aquí."
 }

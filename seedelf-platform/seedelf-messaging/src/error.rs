@@ -20,8 +20,9 @@ pub enum Error {
     InvalidLength,
     /// A plaintext longer than [`MAX_PLAINTEXT_LEN`](crate::MAX_PLAINTEXT_LEN).
     PlaintextTooLarge,
-    /// A register isn't one of this key's: an envelope's, a conversation's
-    /// own identity, or a Seedelf's to reveal.
+    /// Not this key's: an envelope whose tag isn't the tag of this key's
+    /// `[y]p`, or a register that isn't one of this key's, a conversation's
+    /// own identity or a Seedelf's to reveal.
     NotForThisKey,
     /// Authenticated decryption failed: the envelope or message was altered,
     /// or wasn't made with this conversation's keys.
@@ -42,7 +43,11 @@ pub enum Error {
     /// A first-contact message for a known conversation ID whose block isn't
     /// the stored one.
     DifferentFirstContact,
-    /// A message that would make the reader derive more than `MAX_SKIP` keys.
+    /// A session message of a held conversation that would make the reader
+    /// store more than `MAX_SKIP` keys, but that authenticates and whose
+    /// envelope's checks pass: the conversation can't take it
+    /// (docs/protocol.md §6, §16.4). One past the bound that doesn't
+    /// authenticate is [`Error::DecryptionFailed`], as any forgery is.
     TooFarAhead,
     /// A message whose key was already used or deleted: a duplicate or replay
     /// in the current receiving chain or the stored skipped keys, or a
@@ -79,9 +84,22 @@ pub enum Error {
     /// A first message without a handle that isn't a verified continuation
     /// of one of the reader's conversations.
     UnverifiedContinuation,
+    /// A first message whose keys proof doesn't verify: that its writer
+    /// knows the keys of `E_A`, of the header key `S_A` and, from a handle,
+    /// of `A` or the reader's `w₀` (docs/protocol.md §3). Or a request whose
+    /// messages don't all carry the first's header key.
+    InvalidKeysProof,
+    /// A first-contact message past a request's share (docs/protocol.md
+    /// §3.1): at most 16 of them, and 64 KiB of their inner messages, before
+    /// a reply. At the writer, a send past it, refused before the chain
+    /// moves. At the reader, a later message of a request past it, or one
+    /// that would take the requests past 256 KiB, refused before the request
+    /// is replayed: a join never pushes another request out.
+    RequestFull,
     /// A message whose envelope isn't addressed to its conversation identity
-    /// re-randomized by the message's own outer scalar, or that came without
-    /// its envelope.
+    /// re-randomized by the message's own outer scalar, whose ephemeral point
+    /// isn't the one its message key gives, or that came without its
+    /// envelope.
     WrongEnvelopeRegister,
     /// A reveal this side can't make or take: only the side that wrote first
     /// reveals, once a reply has decrypted, and only the side written to
@@ -131,6 +149,15 @@ impl fmt::Display for Error {
                     f,
                     "first message without a handle continues no conversation here"
                 )
+            }
+            Error::InvalidKeysProof => {
+                write!(
+                    f,
+                    "proof that the writer knows its first message's keys fails"
+                )
+            }
+            Error::RequestFull => {
+                write!(f, "request has no room for another first-contact message")
             }
             Error::WrongEnvelopeRegister => {
                 write!(

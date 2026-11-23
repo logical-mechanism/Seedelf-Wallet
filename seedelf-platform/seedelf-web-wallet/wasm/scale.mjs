@@ -15,11 +15,12 @@
 //
 // What Seedelf Messaging's scan and stamps cost (chunk 54's 54d):
 //
-//   node scale.mjs messaging [envelopes] [solves]     (defaults 15000 and 8)
+//   node --expose-gc scale.mjs messaging [envelopes] [solves]     (defaults 15000 and 8)
 //
 // A relay pool of `envelopes` session envelopes, one in 1,000 this key's,
 // scanned as the worker will (`messagingScan`, 200 an envelope a call, the
-// batch as JSON of hex, a turn of the event loop between), then one of this
+// batch as JSON of hex, the answer a digit an envelope, `1` for this key's,
+// a turn of the event loop between), then one of this
 // key's opened and received with its conversation's record. Then the stamps:
 // a SHA-256 attempt's cost over 2^22 attempts, and `solves` first-contact
 // stamps at 24 bits and four times as many posts at the relay's 18, each
@@ -198,7 +199,9 @@ async function messaging(envelopes, solves) {
   const found = [];
   for (let i = 0; i < pool.length; i += TURN) {
     const batch = pool.slice(i, i + TURN);
-    for (const at of call(wasm.messagingScan, key, batch)) found.push(i + at);
+    const bits = wasm.messagingScan(key, JSON.stringify(batch));
+    if (bits.length !== batch.length) throw new Error("messagingScan didn't answer a digit an envelope: rebuild the module");
+    for (let at = 0; at < bits.length; at++) if (bits[at] === "1") found.push(i + at);
     await turn();
   }
   const scanMs = performance.now() - start;

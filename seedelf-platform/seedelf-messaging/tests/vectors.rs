@@ -3,9 +3,10 @@
 //! test `test_vectors_match_the_file` holds the encryption side to them.
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use seedelf_messaging::{
-    Envelope, HEADER_LEN, Register, SecretKey, decrypt_message, matches_register,
+    Envelope, HEADER_LEN, Register, SecretKey, decrypt_message, matches_envelope, matches_register,
 };
 
 fn bytes(vector: &Value, field: &str) -> Vec<u8> {
@@ -27,6 +28,8 @@ fn register(value: &Value) -> Register {
 fn every_vector_decrypts_through_the_public_api() {
     let file: Value = serde_json::from_str(include_str!("vectors/messaging_v1.json")).unwrap();
     assert_eq!(file["version"], 1);
+    let tag_label = file["tag_label"].as_str().unwrap();
+    assert_eq!(tag_label, "Seedelf-Messaging|v1|envelope|tag");
     let vectors = file["vectors"].as_array().unwrap();
     assert!(vectors.len() >= 4);
     for vector in vectors {
@@ -37,15 +40,28 @@ fn every_vector_decrypts_through_the_public_api() {
         assert_eq!(&envelope_bytes[..HEADER_LEN], &bytes(vector, "header")[..]);
         let envelope = Envelope::from_bytes(&envelope_bytes).unwrap();
         assert_eq!(envelope.to_bytes(), envelope_bytes);
+
+        // The header is 0x01 ‖ p ‖ tag ‖ c: p and w are the re-randomized
+        // register's, and only w's tag is in the envelope.
+        let rerandomized = register(&vector["rerandomized_register"]);
+        assert!(matches_register(&key, &rerandomized));
+        assert_eq!(envelope_bytes[0], 1);
+        assert_eq!(&envelope_bytes[1..49], &rerandomized.generator_bytes()[..]);
+        let tag: [u8; 32] = Sha256::new()
+            .chain_update(tag_label.as_bytes())
+            .chain_update(rerandomized.public_value_bytes())
+            .finalize()
+            .into();
+        assert_eq!(&envelope_bytes[49..81], &tag[..]);
+        assert_eq!(&envelope_bytes[49..81], &bytes(vector, "tag")[..]);
         assert_eq!(
-            *envelope.register(),
-            register(&vector["rerandomized_register"])
-        );
-        assert_eq!(
-            &envelope_bytes[1 + 96..HEADER_LEN],
+            &envelope_bytes[81..HEADER_LEN],
             &point(&vector["ephemeral"])[..]
         );
+        let w = rerandomized.public_value_bytes();
+        assert!(!envelope_bytes.windows(48).any(|window| window == w));
 
+        assert!(matches_envelope(&key, &envelope_bytes).unwrap());
         assert!(envelope.is_for(&key));
         assert_eq!(
             decrypt_message(&key, &envelope).unwrap(),

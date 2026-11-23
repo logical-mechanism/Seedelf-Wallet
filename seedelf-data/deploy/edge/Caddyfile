@@ -1,6 +1,7 @@
 # /etc/caddy/Caddyfile on the VPS. Caddy does TLS and passes requests on;
-# every limit is the API's own (src/edge.rs). It names the client in
-# X-Forwarded-For, which the API trusts from loopback alone.
+# every limit on what a client may ask is the API's own (src/edge.rs), and
+# Caddy's own are its timeouts. It names the client in X-Forwarded-For,
+# which the API trusts from loopback alone.
 {
 	# Caddy's own log, less the loggers that carry a request: an error's
 	# entry names the client's address and the path it asked for. Check it
@@ -8,6 +9,22 @@
 	log default {
 		output stderr
 		exclude http.log.error http.handlers.reverse_proxy
+	}
+	# Every request ends. Without these, Caddy's defaults put no deadline on
+	# a body or an answer, so a client that stops half way holds its
+	# connection, and Caddy's to the API, for as long as it likes.
+	# read_header and read_body: the head, and then the whole request,
+	# within 10 s of its start (the API gives a body 10 s too). write: the
+	# answer within 60 s of the head, past a submit's 30 to 40 s (the
+	# response_header_timeout below) and the wallet's longest wait, 35 s.
+	# idle: a connection with nothing asked closes after 2 minutes.
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 10s
+			write 60s
+			idle 2m
+		}
 	}
 	# No `email`: Let's Encrypt has sent no expiry notices since 2025, and
 	# Caddy renews by itself. Watch renewals in the journal instead.

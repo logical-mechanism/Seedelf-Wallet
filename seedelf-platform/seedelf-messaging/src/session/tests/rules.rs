@@ -7,7 +7,7 @@ use super::support::{Seeded, handle, key, opened, own_handles, start, test_inbox
 use crate::Error;
 use crate::session::conversation::Conversation;
 use crate::session::first_contact::ConversationId;
-use crate::session::inbox::{Inbox, Received, Requests, Tombstones};
+use crate::session::inbox::{Inbox, Received, Requests, TOMBSTONE_MARGIN, Tombstones};
 use crate::session::ratchet::KDF_CK_CALLS;
 
 const T: u64 = 1_800_000_000;
@@ -170,11 +170,12 @@ fn the_initiator_switches_to_session_messages_on_a_real_reply() {
     let _ = p.a.send_with(b"", &mut p.draw).unwrap();
 }
 
-/// Deleting a conversation keeps its cid until its t + 48 hours: session
+/// Deleting a conversation keeps its cid as a tombstone, whatever the clock,
+/// until an expiry passes its t + 48 hours and the 7-day margin: session
 /// messages are refused as deleted, then as a conversation this browser no
 /// longer has.
 #[test]
-fn deleting_a_conversation_tombstones_it_until_t_plus_48_hours() {
+fn deleting_a_conversation_tombstones_it_until_t_plus_48_hours_and_the_margin() {
     let mut p = pair("delete");
     let cid = p.b.cid();
     let mut inbox =
@@ -182,22 +183,73 @@ fn deleting_a_conversation_tombstones_it_until_t_plus_48_hours() {
     assert!(inbox.delete(cid));
     assert!(!inbox.delete(cid));
     let envelope = p.a.send_with(b"are you there", &mut p.draw).unwrap();
+    let kept_until = T + 48 * 3600 + TOMBSTONE_MARGIN;
+    assert_eq!(TOMBSTONE_MARGIN, 7 * 24 * 3600);
+    for now in [T - 3600, T + 48 * 3600, T + 48 * 3600 + 1, kept_until + 1] {
+        assert_eq!(
+            inbox.receive(&p.bob, &own_handles(&p.bob), &envelope, now),
+            Err(Error::Deleted),
+            "{now}"
+        );
+    }
+    assert!(inbox.tombstones().holds(cid));
+    inbox.expire(kept_until);
+    assert_eq!(inbox.tombstones().len(), 1);
+    inbox.expire(kept_until + 1);
+    assert!(inbox.tombstones().is_empty());
+    assert!(!inbox.tombstones().holds(cid));
     assert_eq!(
-        inbox.receive(&p.bob, &own_handles(&p.bob), &envelope, T + 48 * 3600),
-        Err(Error::Deleted)
-    );
-    assert!(inbox.tombstones().holds(cid, T + 48 * 3600));
-    assert!(!inbox.tombstones().holds(cid, T + 48 * 3600 + 1));
-    assert_eq!(
-        inbox.receive(&p.bob, &own_handles(&p.bob), &envelope, T + 48 * 3600 + 1),
+        inbox.receive(&p.bob, &own_handles(&p.bob), &envelope, kept_until + 1),
         Err(Error::UnknownConversation)
     );
-    assert_eq!(inbox.tombstones().len(), 1);
-    inbox.expire(T + 48 * 3600 + 1);
-    assert!(inbox.tombstones().is_empty());
     // Nothing else to accept or send.
     assert_eq!(inbox.accept(&p.bob, cid), Err(Error::UnknownConversation));
     assert_eq!(inbox.send(cid, b"x"), Err(Error::UnknownConversation));
+}
+
+/// A tombstone ignores a clock set back (the 1.10.0 gate's clock#2): a
+/// clock that ran ahead for one expiry, by up to the 7-day margin past the
+/// window, then was set right, leaves a deleted request's first message
+/// refused as deleted. Before, an expiry by a clock 49 hours ahead deleted
+/// the tombstone, and the same message read again as a new request. Only a
+/// clock more than the margin ahead for an expiry can do that now: the
+/// limit, shown last.
+#[test]
+fn tombstones_ignore_a_clock_set_back() {
+    let (alice, bob) = (key("alice"), key("bob"));
+    let mut draw = Seeded::new("tombstones and clocks");
+    let mut a = start(&alice, &handle("bob", "h"), T, &mut draw);
+    let first = a.send_with(b"hello", &mut draw).unwrap();
+    let second = a.send_with(b"again", &mut draw).unwrap();
+    let mut inbox = test_inbox();
+    inbox.receive(&bob, &own_handles(&bob), &first, T).unwrap();
+    assert!(inbox.delete(a.cid()));
+    let set_right = T + 2 * 3600;
+    // Expiries by a clock ahead: 49 hours, and the last second the
+    // tombstone is kept. Each then reads at the right time again.
+    for expired_at in [T + 49 * 3600, T + 48 * 3600 + TOMBSTONE_MARGIN] {
+        let mut ahead = inbox.clone();
+        ahead.expire(expired_at);
+        assert!(ahead.tombstones().holds(a.cid()), "{expired_at}");
+        for envelope in [&first, &second] {
+            assert_eq!(
+                ahead.receive(&bob, &own_handles(&bob), envelope, set_right),
+                Err(Error::Deleted),
+                "{expired_at}"
+            );
+        }
+        assert_eq!(*ahead.tombstones(), *inbox.tombstones());
+        assert!(ahead.requests().is_empty());
+    }
+    // The limit: a clock more than the margin ahead for an expiry, then set
+    // right inside the window.
+    let mut far = inbox.clone();
+    far.expire(T + 48 * 3600 + TOMBSTONE_MARGIN + 1);
+    assert!(far.tombstones().is_empty());
+    assert!(matches!(
+        far.receive(&bob, &own_handles(&bob), &first, set_right),
+        Ok(Received::Request { new: true, .. })
+    ));
 }
 
 /// The requests and tombstones records round-trip, and refuse every
@@ -250,10 +302,18 @@ fn the_records_round_trip_and_are_checked() {
         let mut extended = bytes.clone();
         extended.push(0);
         assert_eq!(reader(&extended), Err(Error::InvalidState));
-        let mut other = bytes.clone();
-        other[0] = 2;
-        assert_eq!(reader(&other), Err(Error::UnsupportedStateVersion(2)));
+        for version in [0u8, 1, 2, 3, 255] {
+            if version == bytes[0] {
+                continue;
+            }
+            let mut other = bytes.clone();
+            other[0] = version;
+            assert_eq!(reader(&other), Err(Error::UnsupportedStateVersion(version)));
+        }
     }
+    // The requests' record has a version of its own; the tombstones' layout
+    // is unchanged.
+    assert_eq!((requests[0], tombstones[0]), (2, 1));
     assert!(
         Requests::from_bytes(&Requests::new().to_bytes())
             .unwrap()

@@ -1,9 +1,11 @@
 //! What stands between the internet and the API on the VPS (chunk 26's
 //! *Tunnel and VPS*): buckets per IP, charged for requests and for the bytes
-//! sent back; a monthly egress ceiling, shared out by day; requests a web
-//! page could make refused; and CORS for the wallet's own origins. Caddy in
-//! front does TLS and nothing else, so every limit is here, in code anyone
-//! can audit.
+//! sent back; a cap on each address's requests in flight, and a deadline on
+//! a request's body, so no request is held open for good; a monthly egress
+//! ceiling, shared out by day; requests a web page could make refused; and
+//! CORS for the wallet's own origins. Caddy in front does TLS and its own
+//! timeouts (deploy/edge/Caddyfile), so every limit on what a client may
+//! ask is here, in code anyone can audit.
 //!
 //! **IPs exist only in memory:** a bucket per address while it's refilling,
 //! dropped once full. Nothing here logs one.
@@ -12,7 +14,11 @@
 //! `/messaging/…`, have buckets of their own, so catching up on messages
 //! never makes the wallet's other reads wait, and a traffic ceiling of their
 //! own inside the API's, so a flood of messages can spend messaging's
-//! allowance but never the rest's.
+//! allowance but never the rest's. The last part of each day's share of that
+//! allowance is a reserve (`Reserve`): only posts and short pages spend it,
+//! so a spent day stops fresh syncs before it stops conversations. And it
+//! has an off switch of its own (`Edge::with_messaging_off`): every relay
+//! route answers 410 Gone, and the rest go on.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -22,7 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::body::Body;
+use axum::body::{Body, HttpBody, to_bytes};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
@@ -48,6 +54,29 @@ pub const BYTES_PER_UNIT: f64 = 16.0 * 1024.0;
 /// buckets are dropped on the spot (at most once a second); if none are, a
 /// new client is a 503.
 const MAX_BUCKETS: usize = 200_000;
+
+/// A request's body arrives whole within this long, or the request is
+/// answered 408 and its connection closed. Without it a post whose body
+/// stopped half way held its connection from Caddy for as long as its
+/// sender liked. The largest body, 64 KiB, fits at 52 kbit/s.
+pub const BODY_DEADLINE: Duration = Duration::from_secs(10);
+
+/// The largest body any route takes: an evaluation's. The edge reads no more
+/// than this before a route sees the request; each route's own limit, which
+/// may be less, still answers its own 413.
+pub const MAX_BODY: usize = crate::submit::MAX_EVALUATE_BYTES;
+
+/// At most this many requests from one address are in flight at once on
+/// the relay's routes, and on the rest ([`IN_FLIGHT_DATA`]): from when the
+/// edge lets one in until its answer is handed over [choice]. One wallet's
+/// reads fan out to under 20 at once, each answered in moments, so only
+/// requests held open reach a cap: bodies that stall, and answers nobody
+/// reads. The bucket alone would let one address hold 100 for a body's
+/// deadline. Every wallet behind one address (a household, a carrier's NAT)
+/// shares its caps, which is why the data routes' is the wider: a 429 there
+/// sends that part of each of them to Koios for 5 minutes.
+pub const IN_FLIGHT_MESSAGING: u32 = 32;
+pub const IN_FLIGHT_DATA: u32 = 128;
 
 /// What a request costs: answers that are the same for everyone are kept,
 /// and cost home nothing; one user's query is live SQL; a submit or an
@@ -119,15 +148,56 @@ impl Part {
             Part::Data
         }
     }
+
+    /// The most requests one address may have in flight in this part.
+    pub fn in_flight(self) -> u32 {
+        match self {
+            Part::Data => IN_FLIGHT_DATA,
+            Part::Messaging => IN_FLIGHT_MESSAGING,
+        }
+    }
 }
 
 /// The client's address, as the edge read it, for the relay's prices.
 #[derive(Debug, Clone, Copy)]
 pub struct Client(pub IpAddr);
 
+/// Said to the relay with a request while messaging's traffic for the day
+/// is down to its reserve: no page longer than this many bytes is sent now.
+#[derive(Debug, Clone, Copy)]
+pub struct Reserved(pub usize);
+
+/// The reserve of each day's share of messaging's traffic: what's kept for
+/// conversations under way once the rest is spent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reserve {
+    /// The part of a day's share that's kept: from 0, no reserve, to 1.
+    pub part: f64,
+    /// The longest page sent from it, in bytes.
+    pub page: usize,
+}
+
+impl Reserve {
+    /// The last tenth of a day's share, for posts and for pages of at most
+    /// 16 KiB [choice]: a wallet that's caught up reads a few envelopes at
+    /// a time (31 short ones, or one of 8 KiB, fit), and a fresh sync reads
+    /// 256 KiB a page. So a day spent by readers stops fresh syncs first
+    /// and the conversations under way last. The owner's to tune:
+    /// `DATA_MESSAGING_RESERVE_PERCENT` and
+    /// `DATA_MESSAGING_RESERVE_PAGE_KIB` (config.rs).
+    pub const DEFAULT: Reserve = Reserve {
+        part: 0.10,
+        page: 16 * 1024,
+    };
+}
+
 pub struct Edge {
     buckets: Mutex<Buckets>,
     messaging_buckets: Mutex<Buckets>,
+    /// Each address's requests in flight, by its bucket's key: an entry
+    /// only while it has one.
+    flying: Mutex<HashMap<IpAddr, u32>>,
+    messaging_flying: Mutex<HashMap<IpAddr, u32>>,
     /// Caddy on loopback names the client in `X-Forwarded-For`.
     trust_proxy: bool,
     /// The wallet's origins: a request from any other is refused.
@@ -136,6 +206,11 @@ pub struct Edge {
     pub egress: Egress,
     /// The relay's traffic alone.
     pub messaging_egress: Egress,
+    /// What's kept of each day's share of the relay's traffic.
+    reserve: Reserve,
+    /// Seedelf Messaging stopped (`DATA_MESSAGING_OFF`): every relay route
+    /// answers 410 Gone.
+    messaging_off: bool,
 }
 
 impl Edge {
@@ -143,11 +218,32 @@ impl Edge {
         Edge {
             buckets: Mutex::new(Buckets::default()),
             messaging_buckets: Mutex::new(Buckets::default()),
+            flying: Mutex::new(HashMap::new()),
+            messaging_flying: Mutex::new(HashMap::new()),
             trust_proxy,
             origins,
             egress,
             messaging_egress: Egress::new(None, None),
+            reserve: Reserve::DEFAULT,
+            messaging_off: false,
         }
+    }
+
+    /// Seedelf Messaging stopped, or not: the relay's off switch
+    /// (`DATA_MESSAGING_OFF`, deploy/README.md's *Stopping Messages*).
+    /// While it's off, every request under `/messaging/` is a 410 Gone,
+    /// which tells the wallet Messages is stopped (protocol.md's freeze of
+    /// `/messaging/v1/`): it posts nothing, solves nothing, and asks again
+    /// now and then. A post is refused unread, so nothing is kept; the
+    /// pools' files wait on disk, and what they hold expires as ever.
+    pub fn with_messaging_off(mut self, off: bool) -> Self {
+        self.messaging_off = off;
+        self
+    }
+
+    /// Whether Seedelf Messaging is stopped.
+    pub fn messaging_off(&self) -> bool {
+        self.messaging_off
     }
 
     /// The relay's own ceiling, inside the API's.
@@ -156,11 +252,58 @@ impl Edge {
         self
     }
 
+    /// Another reserve of the relay's day than [`Reserve::DEFAULT`].
+    pub fn with_reserve(mut self, reserve: Reserve) -> Self {
+        self.reserve = reserve;
+        self
+    }
+
+    /// Whether messaging's traffic for the day is down to its reserve: only
+    /// with a ceiling of its own, since without one there's no day's share.
+    pub fn reserved(&self) -> bool {
+        self.messaging_egress
+            .today()
+            .is_some_and(|(spent, share)| spent as f64 >= share as f64 * (1.0 - self.reserve.part))
+    }
+
     fn buckets_of(&self, part: Part) -> &Mutex<Buckets> {
         match part {
             Part::Data => &self.buckets,
             Part::Messaging => &self.messaging_buckets,
         }
+    }
+
+    fn flying_of(&self, part: Part) -> &Mutex<HashMap<IpAddr, u32>> {
+        match part {
+            Part::Data => &self.flying,
+            Part::Messaging => &self.messaging_flying,
+        }
+    }
+
+    /// Counts one more request from `ip` in flight in `part`, until what's
+    /// returned is dropped. `None` when the address has the part's cap
+    /// ([`Part::in_flight`]) already.
+    pub fn enter(self: &Arc<Self>, part: Part, ip: IpAddr) -> Option<InFlight> {
+        let key = client_key(ip);
+        let mut flying = self.flying_of(part).lock().expect("flying lock");
+        match flying.get_mut(&key) {
+            Some(count) if *count >= part.in_flight() => return None,
+            Some(count) => *count += 1,
+            None => {
+                flying.insert(key, 1);
+            }
+        }
+        Some(InFlight {
+            edge: self.clone(),
+            part,
+            key,
+        })
+    }
+
+    /// How many requests are in flight in `part`, from every address.
+    pub fn in_flight(&self, part: Part) -> u32 {
+        let flying = self.flying_of(part).lock().expect("flying lock");
+        flying.values().sum()
     }
 
     /// Takes `weight` from `ip`'s bucket, or says how many seconds until it can.
@@ -291,6 +434,30 @@ pub enum Refusal {
     Full,
 }
 
+/// A request in flight, counted for its address ([`Edge::enter`]) until
+/// this is dropped.
+pub struct InFlight {
+    edge: Arc<Edge>,
+    part: Part,
+    key: IpAddr,
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        let mut flying = self
+            .edge
+            .flying_of(self.part)
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(count) = flying.get_mut(&self.key) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                flying.remove(&self.key);
+            }
+        }
+    }
+}
+
 /// The limits, in front of every route. `/health` is exempt from the page
 /// check and the egress ceiling, so a monitor (or a browser tab) can always read it.
 pub async fn limit(State(edge): State<Arc<Edge>>, mut request: Request, next: Next) -> Response {
@@ -304,6 +471,13 @@ pub async fn limit(State(edge): State<Arc<Edge>>, mut request: Request, next: Ne
     if !health && edge.made_by_a_page(&request) {
         let body = axum::Json(serde_json::json!({ "error": "only Seedelf Wallet reads this" }));
         return (StatusCode::FORBIDDEN, body).into_response();
+    }
+    // Before every other limit, so a wallet learns it whatever its bucket
+    // or the day's traffic, and before the body is read, so a post's is
+    // never looked at.
+    if part == Part::Messaging && edge.messaging_off {
+        let body = axum::Json(serde_json::json!({ "error": "messaging is stopped" }));
+        return (StatusCode::GONE, body).into_response();
     }
     if !health && edge.egress.over() {
         return refuse(
@@ -319,9 +493,20 @@ pub async fn limit(State(edge): State<Arc<Edge>>, mut request: Request, next: Ne
             3600,
         );
     }
-    // A request with no address (none reaches the server so) takes no bucket.
+    // A request with no address (none reaches the server so) takes no bucket
+    // and no place in flight.
     let ip = edge.client(&request);
+    let mut flying = None;
     if let Some(ip) = ip {
+        // Before the bucket: a request refused here costs its address nothing.
+        flying = edge.enter(part, ip);
+        if flying.is_none() {
+            return refuse(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many requests at once",
+                1,
+            );
+        }
         match edge.take_in(part, ip, weight, Instant::now()) {
             Ok(()) => {}
             Err(Refusal::Wait(secs)) => {
@@ -331,10 +516,28 @@ pub async fn limit(State(edge): State<Arc<Edge>>, mut request: Request, next: Ne
         }
         request.extensions_mut().insert(Client(ip));
     }
+    if part == Part::Messaging && edge.reserved() {
+        request.extensions_mut().insert(Reserved(edge.reserve.page));
+    }
+    // A body is read here, whole and within its deadline, and handed on in
+    // one piece: no route waits on a client that stopped half way. Its
+    // route's own limit, if less, answers as before.
+    if !request.body().is_end_stream() {
+        let (parts, body) = request.into_parts();
+        let body = match tokio::time::timeout(BODY_DEADLINE, to_bytes(body, MAX_BODY)).await {
+            Ok(Ok(body)) => body,
+            Ok(Err(error)) => return unread(error),
+            Err(_) => return late(),
+        };
+        request = Request::from_parts(parts, Body::from(body));
+    }
     let response = next.run(request).await;
     let (parts, body) = response.into_parts();
     let edge = edge.clone();
     let body = body.map_frame(move |frame| {
+        // In flight until this body is done with: handed over whole, or
+        // dropped with its connection.
+        let _ = &flying;
         if let Some(data) = frame.data_ref() {
             edge.egress.add(data.len() as u64);
             if part == Part::Messaging {
@@ -347,6 +550,33 @@ pub async fn limit(State(edge): State<Arc<Edge>>, mut request: Request, next: Ne
         frame
     });
     Response::from_parts(parts, Body::new(body))
+}
+
+/// The answer to a request whose body didn't arrive within
+/// [`BODY_DEADLINE`]: a 408, and its connection closed (hyper closes one
+/// whose request it hasn't read whole; the header says so to Caddy).
+fn late() -> Response {
+    let body =
+        axum::Json(serde_json::json!({ "error": "the request's body didn't arrive in time" }));
+    let mut response = (StatusCode::REQUEST_TIMEOUT, body).into_response();
+    response
+        .headers_mut()
+        .insert(header::CONNECTION, HeaderValue::from_static("close"));
+    response
+}
+
+/// The answer to a body the edge couldn't read: a 413 past [`MAX_BODY`], as
+/// a route's own limit answers, and a 400 for one that broke off.
+fn unread(error: axum::Error) -> Response {
+    let (status, error) = if error.into_inner().is::<http_body_util::LengthLimitError>() {
+        (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the body is larger than any route takes",
+        )
+    } else {
+        (StatusCode::BAD_REQUEST, "the request's body didn't arrive")
+    };
+    (status, axum::Json(serde_json::json!({ "error": error }))).into_response()
 }
 
 fn refuse(status: StatusCode, error: &'static str, retry_after: u64) -> Response {
@@ -384,6 +614,9 @@ pub struct Egress {
     bytes: AtomicU64,
     /// The count stops here today: today's share of what was left at its start.
     today_limit: AtomicU64,
+    /// Where the count stood when today began (`Kept::day_start`, to read
+    /// without its lock).
+    today_start: AtomicU64,
     held: Mutex<Kept>,
     file: Option<PathBuf>,
 }
@@ -402,7 +635,11 @@ struct Kept {
 impl Egress {
     /// `ceiling` in bytes, if there's one; `file` where the count is kept.
     pub fn new(ceiling: Option<u64>, file: Option<PathBuf>) -> Self {
-        let now = unix_now();
+        Self::new_at(ceiling, file, unix_now())
+    }
+
+    /// [`Egress::new`] as of `now`, a Unix time.
+    fn new_at(ceiling: Option<u64>, file: Option<PathBuf>, now: i64) -> Self {
         let read = file.as_ref().and_then(|path| match std::fs::read(path) {
             Ok(bytes) => {
                 let kept = serde_json::from_slice::<Kept>(&bytes).ok();
@@ -429,11 +666,23 @@ impl Egress {
             ceiling,
             bytes: AtomicU64::new(kept.bytes),
             today_limit: AtomicU64::new(u64::MAX),
+            today_start: AtomicU64::new(0),
             held: Mutex::new(kept),
             file,
         };
         egress.roll(now);
         egress
+    }
+
+    /// A ceiling whose share for today is `share` bytes, whatever the day of
+    /// the month, kept in no file: a test's. With a fixed ceiling a day's
+    /// share is a thirty-first of it on the 1st and all of it on the last,
+    /// so a test that spends or keeps under "the day's share" would pass or
+    /// fail by the date.
+    pub fn with_share_today(share: u64) -> Self {
+        // One reading of the clock for both, so midnight can't fall between.
+        let now = unix_now();
+        Self::new_at(Some(share.saturating_mul(days_left(now))), None, now)
     }
 
     pub fn add(&self, bytes: u64) {
@@ -450,6 +699,27 @@ impl Egress {
             let used = self.used();
             used >= ceiling || used >= self.today_limit.load(Ordering::Relaxed)
         })
+    }
+
+    /// Whether there's a ceiling at all.
+    pub fn has_ceiling(&self) -> bool {
+        self.ceiling.is_some()
+    }
+
+    /// What today has spent, and today's share: nothing without a ceiling.
+    pub fn today(&self) -> Option<(u64, u64)> {
+        self.ceiling?;
+        let start = self.today_start.load(Ordering::Relaxed);
+        let share = self
+            .today_limit
+            .load(Ordering::Relaxed)
+            .saturating_sub(start);
+        Some((self.used().saturating_sub(start).min(share), share))
+    }
+
+    /// What's left of today's share, in bytes: nothing without a ceiling.
+    pub fn left_today(&self) -> Option<u64> {
+        self.today().map(|(spent, share)| share - spent)
     }
 
     /// Starts a new month's or a new day's count when one has begun, and sets today's share.
@@ -472,6 +742,7 @@ impl Egress {
         if let Some(ceiling) = self.ceiling {
             let left = ceiling.saturating_sub(held.day_start);
             let share = left / days_left(now).max(1);
+            self.today_start.store(held.day_start, Ordering::Relaxed);
             self.today_limit
                 .store(held.day_start.saturating_add(share), Ordering::Relaxed);
         }
@@ -625,6 +896,43 @@ mod tests {
         assert_eq!(Part::of("/messagingx"), Part::Data);
     }
 
+    /// The relay review's low (gate 54g): the data routes' cap is 128 an
+    /// address, the relay's 32. One wallet's reads stay under 20 at once;
+    /// what's left is room for the wallets behind one address (a NAT).
+    #[test]
+    fn each_part_caps_an_addresss_requests_in_flight() {
+        let edge = Arc::new(edge());
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
+        let mut data: Vec<InFlight> = (0..128)
+            .map(|i| {
+                edge.enter(Part::Data, ip)
+                    .unwrap_or_else(|| panic!("data {i}"))
+            })
+            .collect();
+        assert!(edge.enter(Part::Data, ip).is_none());
+        let messaging: Vec<InFlight> = (0..32)
+            .map(|i| {
+                edge.enter(Part::Messaging, ip)
+                    .unwrap_or_else(|| panic!("relay {i}"))
+            })
+            .collect();
+        assert!(edge.enter(Part::Messaging, ip).is_none());
+        assert_eq!(
+            (edge.in_flight(Part::Data), edge.in_flight(Part::Messaging)),
+            (128, 32)
+        );
+        // Another address has a cap of its own.
+        assert!(
+            edge.enter(Part::Data, "203.0.113.8".parse().unwrap())
+                .is_some()
+        );
+        // One answered, one more comes in.
+        data.pop();
+        assert!(edge.enter(Part::Data, ip).is_some());
+        drop(messaging);
+        assert_eq!(edge.in_flight(Part::Messaging), 0);
+    }
+
     #[test]
     fn a_refilled_bucket_is_forgotten() {
         let edge = edge();
@@ -728,6 +1036,67 @@ mod tests {
         assert_eq!(again.used(), 60);
         assert!(!again.over());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_last_tenth_of_messagings_day_is_a_reserve() {
+        let share = 1_000_000;
+        let tenth = edge().with_messaging_egress(Egress::with_share_today(share));
+        assert_eq!(tenth.messaging_egress.today(), Some((0, share)));
+        assert_eq!(tenth.messaging_egress.left_today(), Some(share));
+        assert!(!tenth.reserved());
+        // Nine tenths spent, less a byte: not yet.
+        tenth.messaging_egress.add(899_999);
+        assert!(!tenth.reserved());
+        tenth.messaging_egress.add(1);
+        assert!(tenth.reserved() && !tenth.messaging_egress.over());
+        assert_eq!(tenth.messaging_egress.left_today(), Some(100_000));
+        // The rest: over, and what's spent past the share isn't counted as
+        // left over.
+        tenth.messaging_egress.add(150_000);
+        assert!(tenth.reserved() && tenth.messaging_egress.over());
+        assert_eq!(tenth.messaging_egress.today(), Some((share, share)));
+        assert_eq!(tenth.messaging_egress.left_today(), Some(0));
+
+        // Another reserve: a quarter, or none.
+        let quarter = edge()
+            .with_messaging_egress(Egress::with_share_today(share))
+            .with_reserve(Reserve {
+                part: 0.25,
+                page: 1024,
+            });
+        quarter.messaging_egress.add(750_000);
+        assert!(quarter.reserved());
+        let none = edge()
+            .with_messaging_egress(Egress::with_share_today(share))
+            .with_reserve(Reserve {
+                part: 0.0,
+                page: 1024,
+            });
+        none.messaging_egress.add(999_999);
+        assert!(!none.reserved());
+
+        // With no ceiling of its own there's no day's share, so no reserve:
+        // the relay spends the API's allowance.
+        let unset = edge();
+        unset.messaging_egress.add(u64::MAX / 2);
+        assert!(!unset.messaging_egress.has_ceiling() && !unset.reserved());
+        assert_eq!(unset.messaging_egress.today(), None);
+        assert_eq!(unset.messaging_egress.left_today(), None);
+        // The API's own traffic has no reserve: only messaging's is asked.
+        let data = Edge::new(true, vec![], Egress::with_share_today(share));
+        data.egress.add(share);
+        assert!(data.egress.over() && !data.reserved());
+    }
+
+    #[test]
+    fn a_share_for_today_is_the_same_on_every_day_of_the_month() {
+        let egress = Egress::with_share_today(1_000_000);
+        assert_eq!(egress.today(), Some((0, 1_000_000)));
+        egress.add(999_999);
+        assert!(!egress.over());
+        egress.add(1);
+        assert!(egress.over());
     }
 
     #[test]

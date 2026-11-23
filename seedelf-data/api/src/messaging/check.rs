@@ -5,11 +5,13 @@
 //! crate writes: a change here or there that the other doesn't make fails
 //! a test.
 //!
-//! A post is `nonce (8, big-endian) ‖ envelope`. The envelope must be
-//! version 1, one of the session layer's four sizes, and carry three valid
-//! points (`p`, `w`, `c`); its stamp's work is the leading zero bits of
-//! `SHA-256(digest ‖ nonce)`, where the digest binds the envelope and the
-//! pool (docs/protocol.md §17).
+//! A post is `nonce (8, big-endian) ‖ envelope`, and an envelope is
+//! `version (1) ‖ p (48) ‖ tag (32) ‖ c (48) ‖ ciphertext`. The envelope
+//! must be version 1, one of the session layer's four sizes, and carry two
+//! valid points, `p` and `c`, with a 32-byte tag between them that isn't
+//! checked: only its reader can tell it from any other 32 bytes. Its
+//! stamp's work is the leading zero bits of `SHA-256(digest ‖ nonce)`,
+//! where the digest binds the envelope and the pool (docs/protocol.md §17).
 
 use blstrs::G1Affine;
 use group::prime::PrimeCurveAffine;
@@ -29,6 +31,15 @@ pub const NONCE_LEN: usize = 8;
 pub const STAMP_LABEL: &[u8] = b"Seedelf-Messaging|v1|stamp|";
 
 const POINT_LEN: usize = 48;
+
+/// Where the envelope's tag starts, after the version and `p`, and how long
+/// it is: a hash only the envelope's reader can work out, which nothing
+/// here reads.
+pub const TAG_AT: usize = 1 + POINT_LEN;
+pub const TAG_LEN: usize = 32;
+
+/// Where `p` and `c` start, in the order they're checked.
+pub const POINTS_AT: [usize; 2] = [1, TAG_AT + TAG_LEN];
 
 /// Why an envelope isn't kept, named as the vectors name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,10 +85,10 @@ pub fn check_shape(envelope: &[u8]) -> Result<(), Refused> {
     }
 }
 
-/// `p`, `w` and `c`, in that order. The caller has checked the shape.
+/// `p`, then `c`: the first that fails is the error, and the tag between
+/// them is never decoded. The caller has checked the shape.
 pub fn check_points(envelope: &[u8]) -> Result<(), Refused> {
-    for i in 0..3 {
-        let start = 1 + i * POINT_LEN;
+    for start in POINTS_AT {
         let point: &[u8; POINT_LEN] = envelope
             .get(start..start + POINT_LEN)
             .and_then(|slice| slice.try_into().ok())
@@ -172,6 +183,64 @@ pub(crate) mod tests {
         assert_eq!(v["stamp_label"], std::str::from_utf8(STAMP_LABEL).unwrap());
         assert_eq!(v["nonce_len"], NONCE_LEN);
         assert_eq!(v["sizes"], serde_json::json!(SIZES));
+        // The envelope's layout: `p`, the tag, then `c`.
+        assert_eq!(v["points_at"], serde_json::json!(POINTS_AT));
+        assert_eq!(v["tag_at"], TAG_AT);
+        assert_eq!(v["tag_len"], TAG_LEN);
+    }
+
+    /// The layout the vectors give, `version | p | tag | c` (DESIGN-protocol
+    /// v3 §3.0): a point at either of `points_at` is checked, and the tag
+    /// between them is never read, whatever its bytes, nor is the
+    /// ciphertext after `c`.
+    #[test]
+    fn only_the_points_where_the_vectors_put_them_are_checked() {
+        let v = vectors();
+        let post = |name: &str| {
+            let posts = v["posts"].as_array().unwrap();
+            let post = posts.iter().find(|p| p["name"] == name).unwrap();
+            bytes(post["envelope"].as_str().unwrap())
+        };
+        let good = post("512 bytes");
+        assert_eq!(check_envelope(&good), Ok(()));
+        // The identity's encoding, where each point is, is refused as one.
+        let mut identity = [0u8; POINT_LEN];
+        identity[0] = 0xc0;
+        let points: Vec<usize> = v["points_at"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|at| at.as_u64().unwrap() as usize)
+            .collect();
+        assert_eq!(points.len(), 2);
+        for at in points {
+            let mut envelope = good.clone();
+            envelope[at..at + POINT_LEN].copy_from_slice(&identity);
+            assert_eq!(
+                check_envelope(&envelope),
+                Err(Refused::IdentityPoint),
+                "{at}"
+            );
+        }
+        // Each byte of the tag, and of the ciphertext, set to anything: kept.
+        let tag_at = v["tag_at"].as_u64().unwrap() as usize;
+        let tag_len = v["tag_len"].as_u64().unwrap() as usize;
+        let header = tag_at + tag_len + POINT_LEN;
+        for i in (tag_at..tag_at + tag_len).chain([header, 300, good.len() - 1]) {
+            for byte in [0x00, 0xff, good[i] ^ 0xff] {
+                let mut envelope = good.clone();
+                envelope[i] = byte;
+                assert_eq!(check_envelope(&envelope), Ok(()), "byte {i} = {byte:#04x}");
+            }
+        }
+        // A whole tag that starts as the identity's encoding does, and no
+        // point's encoding at all.
+        let tags: [&[u8]; 3] = [&identity[..32], &[0x00; 32], &[0xff; 32]];
+        for tag in tags {
+            let mut envelope = good.clone();
+            envelope[tag_at..tag_at + tag_len].copy_from_slice(tag);
+            assert_eq!(check_envelope(&envelope), Ok(()));
+        }
     }
 
     #[test]
@@ -215,5 +284,21 @@ pub(crate) mod tests {
             assert!((0..nonce).all(|n| stamp_bits(&digest, n) < bits), "{stamp}");
             assert_eq!(hex(&nonce.to_be_bytes()), stamp["post"]);
         }
+    }
+
+    /// blst, under `check_points`, compiles for the CPU of the machine that
+    /// builds it unless it's built `portable`: on a builder with ADX, as the
+    /// deploy's runner is, it holds the ADX code alone, and on a server
+    /// without ADX the first post to show its work would kill the API with
+    /// an illegal instruction (the gate review's relay-server#4). Portable,
+    /// it holds both and picks at run time.
+    #[test]
+    fn the_point_check_is_built_for_any_x86_64_cpu() {
+        let manifest = include_str!("../../Cargo.toml");
+        let blstrs = manifest
+            .lines()
+            .find(|line| line.starts_with("blstrs "))
+            .expect("blstrs in api/Cargo.toml");
+        assert!(blstrs.contains(r#"features = ["portable"]"#), "{blstrs}");
     }
 }

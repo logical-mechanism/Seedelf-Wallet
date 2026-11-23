@@ -44,6 +44,61 @@ fn invalid_is_owned() {
     assert!(!datum.is_owned(sk2).unwrap())
 }
 
+/// is_owned compares [sk]g and the public value as points, with blst's masked
+/// comparison, never as hex strings: a string comparison stops at the first
+/// character that differs, so its time would say how much of [sk]g matched a
+/// value someone else chose (the 1.10.0 gate review's scan-timing#4). So the
+/// hex's case doesn't matter either, as it doesn't on chain, where a datum
+/// holds the points' bytes.
+#[test]
+fn is_owned_compares_points_not_hex_strings() {
+    let sk = random_scalar();
+    let datum = Register::create(sk).unwrap().rerandomize().unwrap();
+    for register in [
+        Register::new(datum.generator.clone(), datum.public_value.to_uppercase()),
+        Register::new(
+            datum.generator.to_uppercase(),
+            datum.public_value.to_uppercase(),
+        ),
+    ] {
+        assert!(register.is_owned(sk).unwrap(), "{register:?}");
+        assert!(!register.is_owned(random_scalar()).unwrap(), "{register:?}");
+    }
+}
+
+/// A public value one byte off [sk]g, in its last byte as in its first, isn't
+/// owned: the comparison covers every byte. Nor is one that isn't a point's
+/// hex at all, and that's `false`, not an error, as before: anyone can post
+/// such a datum, and a scan stops at an error.
+#[test]
+fn a_public_value_one_byte_off_is_not_owned() {
+    let sk = random_scalar();
+    let datum = Register::create(sk).unwrap().rerandomize().unwrap();
+    let bytes = hex::decode(&datum.public_value).unwrap();
+    for at in [47, 46, 24, 1, 0] {
+        for flip in [0x01u8, 0x20, 0x80] {
+            let mut changed = bytes.clone();
+            changed[at] ^= flip;
+            let register = Register::new(datum.generator.clone(), hex::encode(&changed));
+            assert!(
+                !register.is_owned(sk).unwrap(),
+                "byte {at} with {flip:#04x} flipped"
+            );
+        }
+    }
+    for public_value in [
+        "zz".repeat(48),
+        datum.public_value[..94].to_string(),
+        format!("{}00", datum.public_value),
+        String::new(),
+        off_curve_point(),
+        torsion_point(),
+    ] {
+        let register = Register::new(datum.generator.clone(), public_value.clone());
+        assert!(!register.is_owned(sk).unwrap(), "{public_value}");
+    }
+}
+
 /// The compressed identity point: `c0` then 47 zero bytes.
 fn identity() -> String {
     format!("c0{}", "00".repeat(47))

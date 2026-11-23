@@ -57,8 +57,8 @@ fn main() {
         .collect();
     let encrypt_time = start.elapsed();
 
-    // For comparison: the full parse (three subgroup checks per envelope),
-    // then discovery on parsed envelopes.
+    // For comparison: the full parse (two subgroup checks per envelope, p and
+    // c), then discovery on parsed envelopes.
     let start = Instant::now();
     let envelopes: Vec<Envelope> = pool
         .iter()
@@ -70,7 +70,7 @@ fn main() {
     let parsed_matches = envelopes.iter().filter(|e| e.is_for(me)).count();
     let discovery_time = start.elapsed();
 
-    // The client's scan: raw bytes, p and w checked, one test each.
+    // The client's scan: raw bytes, p checked, one test of the tag each.
     let start = Instant::now();
     let mine: Vec<&Vec<u8>> = pool
         .iter()
@@ -80,7 +80,7 @@ fn main() {
     assert_eq!(mine.len(), parsed_matches);
 
     // Opening what matched: the full parse, then decryption (which tests the
-    // register again first).
+    // tag again first).
     let start = Instant::now();
     for bytes in &mine {
         let envelope = Envelope::from_bytes(bytes).expect("parses");

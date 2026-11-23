@@ -12,9 +12,15 @@
 //! **Answers and errors.** An operation the crate refuses (an envelope that
 //! isn't the reader's to take, a message too long, a handle whose register
 //! isn't valid) is an answer, `{ "refused": "<code>" }`, the code naming the
-//! crate's [`Error`] ([`code`]). A request that doesn't parse, bytes that
-//! aren't hex, or a stored record that doesn't read is an error, thrown: the
-//! worker's mistake, or a record that isn't this wallet's.
+//! crate's [`Error`] ([`code`]). So is a requests' record the crate doesn't
+//! read, in every call that reads one: `unsupported_state_version` with the
+//! record's `version`, or `invalid_state`, so the worker can drop a
+//! development build's record and set a later version's aside
+//! ([`Constants::requests_version`] says which is which). A request that
+//! doesn't parse, bytes that aren't hex, or a conversation's or the
+//! tombstones' record that doesn't read is an error, thrown: the worker's
+//! mistake, or a record that isn't this wallet's. [`delete`] takes a
+//! conversation's record that doesn't read as absent.
 //!
 //! **Receiving is two calls.** [`open`] says which conversation an envelope
 //! is for, and nothing secret; [`receive`] then takes that conversation's
@@ -29,12 +35,19 @@ use blstrs::Scalar;
 use seedelf_messaging::relay::{self, MAX_STAMP_BITS};
 use seedelf_messaging::session::{
     Continues, Conversation, ConversationId, ENVELOPE_SIZES, FIRST_CONTACT_MAX_AGE,
-    FIRST_CONTACT_MAX_AHEAD, FIRST_CONTACT_STAMP_BITS, Handle, Inbox, MAX_REQUEST_BYTES,
-    MAX_REQUESTS, Received, Requests, Reveal, Role, SKIPPED_KEY_LIFETIME, Tombstones,
+    FIRST_CONTACT_MAX_AHEAD, FIRST_CONTACT_STAMP_BITS, Handle, Inbox, MAX_AUTH_STEPS,
+    MAX_ONE_REQUEST_BYTES, MAX_REQUEST_BYTES, MAX_REQUEST_MESSAGES, MAX_REQUESTS,
+    RATCHET_HEADER_LEN, RATCHET_OVERHEAD, REQUESTS_VERSION, Received, Requests, Reveal, Role,
+    SKIPPED_KEY_LIFETIME, STAMP_LEN, Tombstones,
 };
 use seedelf_messaging::{Error, POINT_LEN, Register, SecretKey, matches_envelope};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
+
+/// The most work the wallet solves for a post: room above the pools' 24-bit
+/// ceiling, so a relay can raise that far and 1.10.0 still pays
+/// (protocol.md §20). A choice of the wallet's, not the crate's.
+pub const PRICE_CEILING_BITS: u32 = 26;
 
 /// A hex string holding a secret or a message's text: a conversation's
 /// record, a plaintext. Wiped when dropped, so WebAssembly's copies don't
@@ -54,10 +67,15 @@ impl Secret {
         &self.0
     }
 
+    /// The bytes, decoded into one buffer sized once: `hex::decode` collects
+    /// into a Vec that grows, and each buffer it outgrows is freed holding a
+    /// prefix of them, unwiped. An odd length is refused before anything is
+    /// decoded.
     fn bytes(&self, what: &str) -> Result<Zeroizing<Vec<u8>>> {
-        hex::decode(&self.0)
-            .map(Zeroizing::new)
-            .map_err(|e| anyhow!("{what} isn't hex: {e}"))
+        let hex = self.0.as_bytes();
+        let mut out = Zeroizing::new(vec![0u8; hex.len() / 2]);
+        hex::decode_to_slice(hex, &mut out[..]).map_err(|e| anyhow!("{what} isn't hex: {e}"))?;
+        Ok(out)
     }
 }
 
@@ -89,6 +107,13 @@ pub enum Answer<T> {
     Refused {
         /// The refusal's code.
         refused: &'static str,
+        /// For `unsupported_state_version` alone, the version the record's
+        /// first byte names: older than this build's
+        /// ([`Constants::requests_version`]) is a development build's
+        /// record, newer a later version's, which the wallet keeps and never
+        /// writes over.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<u8>,
     },
 }
 
@@ -105,17 +130,26 @@ impl<T> Answer<T> {
     pub fn refused(&self) -> Option<&'static str> {
         match self {
             Answer::Done(_) => None,
-            Answer::Refused { refused } => Some(refused),
+            Answer::Refused { refused, .. } => Some(refused),
         }
+    }
+}
+
+/// The crate's refusal, as JavaScript gets it.
+fn refusal<T>(error: Error) -> Answer<T> {
+    Answer::Refused {
+        refused: code(error),
+        version: match error {
+            Error::UnsupportedStateVersion(version) => Some(version),
+            _ => None,
+        },
     }
 }
 
 fn answer<T>(result: Result<T, Error>) -> Answer<T> {
     match result {
         Ok(value) => Answer::Done(value),
-        Err(error) => Answer::Refused {
-            refused: code(error),
-        },
+        Err(error) => refusal(error),
     }
 }
 
@@ -154,6 +188,8 @@ pub fn code(error: Error) -> &'static str {
         Error::UnknownHandle => "unknown_handle",
         Error::InvalidBaseProof => "invalid_base_proof",
         Error::UnverifiedContinuation => "unverified_continuation",
+        Error::InvalidKeysProof => "invalid_keys_proof",
+        Error::RequestFull => "request_full",
         Error::WrongEnvelopeRegister => "wrong_envelope_register",
         Error::RevealNotAllowed => "reveal_not_allowed",
         Error::InvalidReveal => "invalid_reveal",
@@ -199,12 +235,15 @@ impl RegisterHex {
 pub struct HandleHex {
     /// The asset name, 1 to 32 bytes.
     pub name: String,
-    /// Every register it's known to have held.
+    /// Every register it's known to have held. Only those of the reader's
+    /// key count: the crate passes over one of another key's, which would
+    /// let that key's holder prove any base.
     pub registers: Vec<RegisterHex>,
 }
 
 /// The crate's handles, one for each register. The wallet's own registers
-/// are its to pass: one that doesn't read throws.
+/// are its to pass, and the crate takes a base proof only against a register
+/// of the reader's key: one that doesn't read throws.
 fn handles(given: &[HandleHex]) -> Result<Vec<Handle>> {
     let mut out = Vec::new();
     for handle in given {
@@ -246,11 +285,14 @@ fn conversation(record: &Secret) -> Result<Conversation> {
         .map_err(|e| anyhow!("a conversation's record doesn't read: {e}"))
 }
 
-fn requests(record: Option<&str>) -> Result<Requests> {
+/// The requests' record, none yet when absent. Bytes that aren't hex throw;
+/// a record the crate doesn't read is its refusal, for the caller to give
+/// back ([`refusal`]): `unsupported_state_version` with the record's
+/// version, or `invalid_state`.
+fn requests(record: Option<&str>) -> Result<Result<Requests, Error>> {
     match record {
-        None => Ok(Requests::new()),
-        Some(hex) => Requests::from_bytes(&decode(hex, "the requests' record")?)
-            .map_err(|e| anyhow!("the requests' record doesn't read: {e}")),
+        None => Ok(Ok(Requests::new())),
+        Some(hex) => Ok(Requests::from_bytes(&decode(hex, "the requests' record")?)),
     }
 }
 
@@ -275,18 +317,22 @@ fn inbox(
 // The scan and opening
 // ---------------------------------------------------------------------------
 
-/// The indexes of the envelopes addressed to `sk` among `envelopes`, in
-/// order: the scan of a relay page, one batch at a time (protocol.md §4.1).
-/// An envelope that isn't a v1 envelope with valid `p` and `w` isn't the
+/// Which of `envelopes` are addressed to `sk`: the scan of a relay page, one
+/// batch at a time (protocol.md §4.1). One digit for each envelope, in
+/// order, `1` where it's the reader's and `0` where it isn't, so the answer
+/// is as long as the batch whatever matched. Each digit is the match's bit
+/// added to `0`, written in its place, with no branch on it: a match costs
+/// what a miss does, in the answer as in the test (the 1.10.0 gate's
+/// scan-timing#1; whether an envelope is a v1 envelope with a valid `p` is
+/// in its bytes, for anyone to see). An envelope that isn't one isn't the
 /// reader's; only one that isn't hex throws.
-pub fn scan(sk: Scalar, envelopes: &[String]) -> Result<Vec<usize>> {
+pub fn scan(sk: Scalar, envelopes: &[String]) -> Result<String> {
     let key = secret_key(sk)?;
-    let mut found = Vec::new();
-    for (i, envelope) in envelopes.iter().enumerate() {
+    let mut found = String::with_capacity(envelopes.len());
+    for envelope in envelopes {
         let bytes = decode(envelope, "an envelope")?;
-        if matches_envelope(&key, &bytes).unwrap_or(false) {
-            found.push(i);
-        }
+        let matched = matches_envelope(&key, &bytes).unwrap_or(false);
+        found.push(char::from(b'0' + u8::from(matched)));
     }
     Ok(found)
 }
@@ -383,7 +429,8 @@ pub enum ReceivedView {
         plaintext: Secret,
         /// Whether it started a request, rather than joining one.
         new: bool,
-        /// Requests the bounds pushed out, oldest first; possibly this one.
+        /// Requests the bounds pushed out, oldest first: only a new request
+        /// pushes others out, never itself, so always empty for a join.
         evicted: Vec<String>,
     },
 }
@@ -405,7 +452,11 @@ pub struct ReceiveResult {
 /// Takes an envelope addressed to `sk`, under protocol.md §5 and §6's rules:
 /// a message of a held conversation, a request started or joined, or a
 /// refusal that changes nothing (a duplicate, a deleted conversation's, a
-/// stranger's first message without its work or proof, a forgery).
+/// stranger's first message without its work or proofs, a join past its
+/// request's share or the bounds, `request_full`, a forgery). `too_far_ahead`
+/// is said only of a session message of a held conversation that
+/// authenticates and whose envelope checks (§16.4): a forgery past the bound
+/// is `decryption_failed`. A requests' record that doesn't read is refused.
 pub fn receive(sk: Scalar, request: ReceiveRequest) -> Result<Answer<ReceiveResult>> {
     let key = secret_key(sk)?;
     let envelope = decode(&request.envelope, "the envelope")?;
@@ -415,9 +466,13 @@ pub fn receive(sk: Scalar, request: ReceiveRequest) -> Result<Answer<ReceiveResu
         .iter()
         .map(conversation)
         .collect::<Result<Vec<_>>>()?;
+    let requests = match requests(request.requests.as_deref())? {
+        Ok(requests) => requests,
+        Err(error) => return Ok(refusal(error)),
+    };
     let mut inbox = inbox(
         conversations,
-        requests(request.requests.as_deref())?,
+        requests,
         tombstones(request.tombstones.as_deref())?,
     )?;
     if let Some(bits) = request.first_contact_bits {
@@ -425,7 +480,7 @@ pub fn receive(sk: Scalar, request: ReceiveRequest) -> Result<Answer<ReceiveResu
     }
     let received = match inbox.receive(&key, &handles, &envelope, request.now) {
         Ok(received) => received,
-        Err(error) => return Ok(answer(Err(error))),
+        Err(error) => return Ok(refusal(error)),
     };
     Ok(Answer::Done(match received {
         Received::Message { cid, plaintext } => {
@@ -594,13 +649,16 @@ pub struct Sent {
 
 /// The next message of a conversation, sealed in its envelope: a
 /// first-contact message until the initiator has a reply. No key: the
-/// record holds the chain.
+/// record holds the chain. Before a reply, the writer's share is 16
+/// first-contact messages and 64 KiB of them (protocol.md §3.1,
+/// [`ConversationInfo::first_contact_left`]): one past it is refused,
+/// `request_full`, before the chain moves.
 pub fn send(request: SendRequest) -> Result<Answer<Sent>> {
     let mut held = conversation(&request.conversation)?;
     let plaintext = request.plaintext.bytes("the text")?;
     let envelope = match held.send(&plaintext) {
         Ok(envelope) => envelope,
-        Err(error) => return Ok(answer(Err(error))),
+        Err(error) => return Ok(refusal(error)),
     };
     Ok(Answer::Done(Sent {
         conversation: Secret::of(&held.to_bytes()),
@@ -749,18 +807,19 @@ pub struct Accepted {
 }
 
 /// Replies to a request: builds its conversation from F and its messages,
-/// each as it arrived (protocol.md §3.1). [`send`] then sends the reply.
+/// each as it arrived (protocol.md §3.1). [`send`] then sends the reply. A
+/// requests' record that doesn't read is refused.
 pub fn accept(sk: Scalar, request: RequestOf) -> Result<Answer<Accepted>> {
     let key = secret_key(sk)?;
     let cid = cid_of(&request.cid)?;
-    let mut inbox = inbox(
-        Vec::new(),
-        requests(Some(&request.requests))?,
-        Tombstones::new(),
-    )?;
+    let requests = match requests(Some(&request.requests))? {
+        Ok(requests) => requests,
+        Err(error) => return Ok(refusal(error)),
+    };
+    let mut inbox = inbox(Vec::new(), requests, Tombstones::new())?;
     let continues = inbox.requests().get(cid).and_then(|r| r.continues());
     if let Err(error) = inbox.accept(&key, cid) {
-        return Ok(answer(Err(error)));
+        return Ok(refusal(error));
     }
     let held = inbox.conversation(cid).expect("an accepted request's");
     Ok(Answer::Done(Accepted {
@@ -799,17 +858,21 @@ pub struct RequestTexts {
 }
 
 /// A request's messages, decrypted in memory to show them, as the reply
-/// would read them. Nothing changes: the record keeps only what arrived.
+/// would read them. Nothing changes: the record keeps only what arrived. A
+/// requests' record that doesn't read is refused.
 pub fn read_request(sk: Scalar, request: RequestOf) -> Result<Answer<RequestTexts>> {
     let key = secret_key(sk)?;
     let cid = cid_of(&request.cid)?;
-    let requests = requests(Some(&request.requests))?;
+    let requests = match requests(Some(&request.requests))? {
+        Ok(requests) => requests,
+        Err(error) => return Ok(refusal(error)),
+    };
     let Some(held) = requests.get(cid) else {
-        return Ok(answer(Err(Error::UnknownConversation)));
+        return Ok(refusal(Error::UnknownConversation));
     };
     let texts = match held.read(&key) {
         Ok(texts) => texts,
-        Err(error) => return Ok(answer(Err(error))),
+        Err(error) => return Ok(refusal(error)),
     };
     let messages = held
         .arrivals()
@@ -837,7 +900,8 @@ pub fn read_request(sk: Scalar, request: RequestOf) -> Result<Answer<RequestText
 pub struct DeleteRequest {
     /// The conversation or request to delete.
     pub cid: String,
-    /// The conversation's record, to delete a conversation.
+    /// The conversation's record, to delete a conversation. One the crate
+    /// doesn't read is taken as absent.
     #[serde(default)]
     pub conversation: Option<Secret>,
     /// The requests' record.
@@ -853,36 +917,46 @@ pub struct DeleteRequest {
 #[serde(rename_all = "camelCase")]
 pub struct Deleted {
     /// Whether there was one: then the wallet deletes the conversation's
-    /// record, if it passed it.
+    /// record, if it passed it. A record that doesn't read was none here,
+    /// and the wallet deletes it all the same.
     pub deleted: bool,
     /// The requests' new record.
     pub requests: String,
-    /// The tombstones' new record, holding its ID until its `t` + 48 hours.
+    /// The tombstones' new record, holding its ID until its `t` + 48 hours
+    /// and 7 days more, whatever the clock meanwhile.
     pub tombstones: String,
 }
 
 /// Deletes a conversation or a request, keeping its ID as a tombstone
-/// (protocol.md §5, rule 3).
-pub fn delete(request: DeleteRequest) -> Result<Deleted> {
+/// (protocol.md §5, rule 3). A conversation's record the crate doesn't read
+/// (a development build's, a later version's, or damaged) is taken as
+/// absent: nothing of it is deleted here, and so no tombstone holds its ID,
+/// whose `t` it doesn't give. A requests' record that doesn't read is
+/// refused.
+pub fn delete(request: DeleteRequest) -> Result<Answer<Deleted>> {
     let cid = cid_of(&request.cid)?;
-    let conversations = request
-        .conversation
-        .as_ref()
-        .map(conversation)
-        .transpose()?
-        .into_iter()
-        .collect();
+    let conversations = match &request.conversation {
+        None => Vec::new(),
+        Some(record) => Conversation::from_bytes(&record.bytes("a conversation's record")?)
+            .ok()
+            .into_iter()
+            .collect(),
+    };
+    let requests = match requests(request.requests.as_deref())? {
+        Ok(requests) => requests,
+        Err(error) => return Ok(refusal(error)),
+    };
     let mut inbox = inbox(
         conversations,
-        requests(request.requests.as_deref())?,
+        requests,
         tombstones(request.tombstones.as_deref())?,
     )?;
     let deleted = inbox.delete(cid);
-    Ok(Deleted {
+    Ok(Answer::Done(Deleted {
         deleted,
         requests: hex::encode(inbox.requests().to_bytes()),
         tombstones: hex::encode(inbox.tombstones().to_bytes()),
-    })
+    }))
 }
 
 /// [`expire`]'s request.
@@ -894,7 +968,8 @@ pub struct ExpireRequest {
     /// A conversation's record, to delete its skipped keys past 48 hours.
     #[serde(default)]
     pub conversation: Option<Secret>,
-    /// The tombstones' record, to delete those past their `t` + 48 hours.
+    /// The tombstones' record, to delete those past their `t` + 48 hours
+    /// and 7 days.
     #[serde(default)]
     pub tombstones: Option<String>,
 }
@@ -911,8 +986,10 @@ pub struct Expired {
     pub tombstones: Option<String>,
 }
 
-/// Deletes what has had its 48 hours: a conversation's skipped keys, whose
-/// messages then count as missing, and tombstones.
+/// Deletes what has had its time: a conversation's skipped keys past their
+/// 48 hours, whose messages then count as missing, and tombstones past their
+/// `t` + 48 hours and 7 days (the margin covers a clock that ran ahead for an
+/// expiry and was then set right: protocol.md §16.4).
 pub fn expire(request: ExpireRequest) -> Result<Expired> {
     let conversation = match &request.conversation {
         None => None,
@@ -973,14 +1050,39 @@ pub struct ConversationInfo {
     pub missing: u64,
     /// Messages sent in the current sending chain.
     pub sent_in_chain: u32,
-    /// The longest text the next message can carry, in bytes.
+    /// The longest text the next message can carry, in bytes: the largest
+    /// envelope's room and, before a reply, what's left of the share's; 0
+    /// once that's used up.
     pub max_text_len: usize,
+    /// What's left of the writer's share while this side sends first-contact
+    /// messages, the initiator until a reply decrypts (protocol.md §3.1);
+    /// null after that, and always at the responder.
+    pub first_contact_left: Option<ShareLeft>,
+}
+
+/// What's left of a request's share: what its reader keeps, and its writer
+/// sends, before a reply. Each first-contact message takes one of
+/// `messages`, and its text's length (its kind byte included) and
+/// `per_message` more of `bytes`.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareLeft {
+    /// First-contact messages left, of [`Constants::max_request_messages`].
+    pub messages: u32,
+    /// Bytes of their inner messages left, of
+    /// [`Constants::max_one_request_bytes`]: not text room.
+    pub bytes: usize,
+    /// What each first-contact message takes beside its text: its type, F,
+    /// the stamp, the ratchet header, and the ratchet ciphertext's salt and
+    /// tag. F's length and 97.
+    pub per_message: usize,
 }
 
 /// A conversation's record, read without its secrets.
 pub fn conversation_info(record: &Secret) -> Result<ConversationInfo> {
     let held = conversation(record)?;
     let first = held.first_contact();
+    let per_message = 1 + first.len() + STAMP_LEN + RATCHET_HEADER_LEN + RATCHET_OVERHEAD;
     Ok(ConversationInfo {
         cid: cid_hex(held.cid()),
         role: match held.role() {
@@ -995,6 +1097,13 @@ pub fn conversation_info(record: &Secret) -> Result<ConversationInfo> {
         missing: held.missing(),
         sent_in_chain: held.sent_in_chain(),
         max_text_len: held.max_text_len(),
+        first_contact_left: held
+            .first_contact_left()
+            .map(|(messages, bytes)| ShareLeft {
+                messages,
+                bytes,
+                per_message,
+            }),
     })
 }
 
@@ -1013,26 +1122,34 @@ pub struct RequestInfo {
     pub continues: Option<ContinuesView>,
     /// When each message arrived, in order.
     pub arrivals: Vec<u64>,
-    /// Its stored bytes, as counted against the bound of 256 KiB in all.
+    /// Its stored bytes, as counted against its share of 64 KiB and the
+    /// bound of 256 KiB in all.
     pub bytes: usize,
 }
 
-/// The requests, oldest first, without their texts.
-pub fn requests_info(record: &str) -> Result<Vec<RequestInfo>> {
-    Ok(requests(Some(record))?
-        .iter()
-        .map(|request| {
-            let first = request.first_contact();
-            RequestInfo {
-                cid: cid_hex(request.cid()),
-                t: first.started_at(),
-                to: hex::encode(first.to()),
-                continues: continues_view(request.continues()),
-                arrivals: request.arrivals().collect(),
-                bytes: request.stored_len(),
-            }
-        })
-        .collect())
+/// The requests, oldest first, without their texts. A record that doesn't
+/// read is refused.
+pub fn requests_info(record: &str) -> Result<Answer<Vec<RequestInfo>>> {
+    let requests = match requests(Some(record))? {
+        Ok(requests) => requests,
+        Err(error) => return Ok(refusal(error)),
+    };
+    Ok(Answer::Done(
+        requests
+            .iter()
+            .map(|request| {
+                let first = request.first_contact();
+                RequestInfo {
+                    cid: cid_hex(request.cid()),
+                    t: first.started_at(),
+                    to: hex::encode(first.to()),
+                    continues: continues_view(request.continues()),
+                    arrivals: request.arrivals().collect(),
+                    bytes: request.stored_len(),
+                }
+            })
+            .collect(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,6 +1242,20 @@ pub struct Constants {
     pub max_requests: usize,
     /// The most bytes of requests kept per network.
     pub max_request_bytes: usize,
+    /// A request's share, in first-contact messages: the most its writer
+    /// sends, and its reader keeps, before a reply.
+    pub max_request_messages: usize,
+    /// A request's share, in bytes of those messages' inner messages.
+    pub max_one_request_bytes: usize,
+    /// The most keys a message past the skipped keys' bound is stepped, to
+    /// learn whether it authenticates: past it, a message is refused as a
+    /// forgery is, never `too_far_ahead`.
+    pub max_auth_steps: u32,
+    /// The most work the wallet solves for a post, in bits.
+    pub price_ceiling_bits: u32,
+    /// The version of the requests' record this build writes: one a refusal
+    /// names below it is a development build's, above it a later version's.
+    pub requests_version: u8,
 }
 
 /// [`Constants`].
@@ -1138,5 +1269,41 @@ pub fn constants() -> Constants {
         skipped_key_lifetime: SKIPPED_KEY_LIFETIME,
         max_requests: MAX_REQUESTS,
         max_request_bytes: MAX_REQUEST_BYTES,
+        max_request_messages: MAX_REQUEST_MESSAGES,
+        max_one_request_bytes: MAX_ONE_REQUEST_BYTES,
+        max_auth_steps: MAX_AUTH_STEPS,
+        price_ceiling_bits: PRICE_CEILING_BITS,
+        requests_version: REQUESTS_VERSION,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Secret;
+
+    /// A secret's hex (a conversation's record, a message's text) is decoded
+    /// into one buffer of exactly its length, so no buffer a growing Vec
+    /// left behind holds an unwiped prefix of it (the 1.10.0 gate's wasm#5):
+    /// 100 bytes, which a Vec doubling from 8 would hold in 128. Either case
+    /// of hex reads; an odd length or a digit that isn't hex is an error.
+    #[test]
+    fn a_secret_is_decoded_into_one_buffer_of_its_length() {
+        let bytes: Vec<u8> = (0..100).collect();
+        let decoded = Secret::of(&bytes).bytes("a test's secret").unwrap();
+        assert_eq!(*decoded, bytes);
+        assert_eq!(decoded.capacity(), bytes.len());
+        let upper = Secret::from(hex::encode_upper(&bytes));
+        assert_eq!(*upper.bytes("a test's secret").unwrap(), bytes);
+        assert!(Secret::of(&[]).bytes("a test's secret").unwrap().is_empty());
+        for bad in ["abc", "0g", "zz00"] {
+            let error = Secret::from(bad.to_string()).bytes("a test's secret");
+            assert!(
+                error
+                    .unwrap_err()
+                    .to_string()
+                    .starts_with("a test's secret isn't hex"),
+                "{bad}"
+            );
+        }
     }
 }

@@ -244,3 +244,40 @@ async fn past_the_months_ceiling_only_health_answers() {
         .unwrap();
     assert_eq!(body(response).await["egress"], "over");
 }
+
+/// The edge reads a request's body itself, within its deadline, and no
+/// more than the largest any route takes (an evaluation's 64 KiB), so a
+/// body past that is a 413 before a route sees it. One within it is the
+/// route's to judge, by its own limit, as before.
+#[tokio::test]
+async fn a_body_past_what_any_route_takes_is_refused_at_the_edge() {
+    let app = app(None);
+    let posted = |path: &str, bytes: usize| {
+        let mut request = from("203.0.113.7", Method::POST, path);
+        *request.body_mut() = Body::from(vec![b'{'; bytes]);
+        request
+    };
+    let response = app
+        .clone()
+        .oneshot(posted("/api/v1/ogmios", 64 * 1024 + 1))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        body(response).await["error"],
+        "the body is larger than any route takes"
+    );
+    // At 64 KiB the route has it: Ogmios isn't configured here.
+    let response = app
+        .clone()
+        .oneshot(posted("/api/v1/ogmios", 64 * 1024))
+        .await
+        .unwrap();
+    assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    // A route with a smaller limit answers its own 413.
+    let response = app
+        .oneshot(posted("/api/v1/submittx", 16 * 1024 + 1))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}

@@ -113,7 +113,7 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
   curl -si -X OPTIONS https://mainnet.<domain>/api/v1/tip \
     -H 'Origin: chrome-extension://<ID>' -H 'Access-Control-Request-Method: GET' | grep -i access-control
   ```
-- **The relay:** `/health`'s `messaging` says `"egress":"ok"` and each pool's size, and a page answers 200 with the page's 16-byte header (`01`, then flags, a cursor and four prices) and no `Content-Encoding`:
+- **The relay:** `/health`'s `messaging` says `"relay":"on"`, `"egress":"ok"`, `"ceiling":true`, `"reserve":false` and each pool's size, and a page answers 200 with the page's 16-byte header (`01`, then flags, a cursor and four prices) and no `Content-Encoding`. `"ceiling":false` means `DATA_MESSAGING_GB_MONTH` isn't set, and the relay spends the API's own allowance; `day_left` is the percent of today's share still unspent:
 
   ```bash
   curl -s https://mainnet.<domain>/messaging/v1/mainnet/envelopes | head -c 16 | od -An -tx1
@@ -148,16 +148,157 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
 - **A new API build:** GitHub's Actions → *Data layer deploy* → *Run workflow*, on `main`, and approve the run when GitHub asks.
   - `deploy` builds `main` and installs it, keeping the running binary as `.prev`. It checks `/health`, which must answer as well as before, and the store's CORS line, and puts the old binary back by itself if the new one fails.
   - `rollback` swaps the two, and a second one undoes it. `status` says what's running.
-  - **After a deploy, check by hand the routes `/health` doesn't read:** the token pools', and two public ones. The commands are [the release procedure's](../../seedelf-platform/seedelf-web-wallet/docs/development.md#2-on-main-after-the-merge-build-and-test-the-store-package), after its `status` run. A restarted server works out its first pool list in the background, for up to a minute, so the token pools' routes can answer 503 meanwhile: ask again before you take it for a failed deploy.
+  - **After a deploy, check by hand the routes `/health` doesn't read:** the token pools', two public ones, and a relay's page (§5's command). The commands are [the release procedure's](../../seedelf-platform/seedelf-web-wallet/docs/development.md#2-on-main-after-the-merge-build-and-test-the-store-package), after its `status` run. A restarted server works out its first pool list in the background, for up to a minute, so the token pools' routes can answer 503 meanwhile: ask again before you take it for a failed deploy.
   - **A `rollback` can take a route, or a request's shape, away from a released wallet,** against [the release rule](../../seedelf-platform/seedelf-web-wallet/docs/development.md#2-on-main-after-the-merge-build-and-test-the-store-package) that a wallet the store ships never meets an older API. Its checks pass all the same: they read `/health` and CORS alone. So roll back only as a stopgap, and fix forward. A route the old build lacks answers 404, and a request it takes in another shape answers 400:
     - on a public route (`/api/v1/…`) or the private index's, either holds that whole part of the wallet on Koios for 5 minutes, and again at its first such request after each hold;
     - on the token pools' routes (`lovejoin/pools`, `lovejoin/tokens` and `lovejoin/tokens/since`), neither holds any part. The wallet reads the token pools' boxes from Koios instead and asks it what made its own ([privacy.md](../../seedelf-platform/seedelf-web-wallet/docs/privacy.md#known-links), *Lovejoin*), looks for new pools at Koios's holder, shows no crowd counts on the Lovejoin hub, and watches a token pool's chain through `tx_status`.
-  - **What `.prev` holds,** and so what a rollback takes away. `status` prints the sha256 of the running binary and of `.prev`. The deploy run that installed a binary printed the same sha256, in its *build* job's *Checksum* step and in `DEPLOYED <sha256> (<the one before> kept as .prev)`, so that run's commit is the binary's: `gh run list --workflow data-layer-deploy.yml` lists the runs with their commits. A deploy that fails its check leaves `.prev` as it was, and a `rollback` swaps the two. Then `git diff <.prev's commit> <the running one's> -- seedelf-data/api/src` is what a rollback takes away: the routes are in `public/mod.rs`, `private.rs` and `lovejoin/routes.rs`, and every fix since goes with them. A slow answer costs more than a refusal: a read that takes longer than the wallet's 10 s holds its whole part on Koios for 5 minutes, and a token route's part is the private index's.
+    - on the relay's routes (`/messaging/…`), Messages has nothing to fall back to: every wallet with Messages on can neither send nor read until a deploy brings the routes back. The pools' files wait on disk meanwhile, and each envelope still expires 36 hours after it came. A build with an older relay answers without whatever limits came after it.
+  - **What `.prev` holds,** and so what a rollback takes away. `status` prints the sha256 of the running binary and of `.prev`. The deploy run that installed a binary printed the same sha256, in its *build* job's *Checksum* step and in `DEPLOYED <sha256> (<the one before> kept as .prev)`, so that run's commit is the binary's: `gh run list --workflow data-layer-deploy.yml` lists the runs with their commits. A deploy that fails its check leaves `.prev` as it was, and a `rollback` swaps the two. Then `git diff <.prev's commit> <the running one's> -- seedelf-data/api/src` is what a rollback takes away: the routes are in `public/mod.rs`, `private.rs`, `lovejoin/routes.rs` and `messaging/mod.rs`, and every fix since goes with them. A slow answer costs more than a refusal: a read that takes longer than the wallet's 10 s holds its whole part on Koios for 5 minutes, and a token route's part is the private index's.
   - Every cache refills within a block, and the month's traffic is kept.
 - **Watch the VPS's own meter** (`vnstat`) against the provider's allowance: `DATA_EGRESS_GB_MONTH` counts the API's response bodies alone, and TLS, headers and the tunnel come on top.
-- **The relay's share,** `DATA_MESSAGING_GB_MONTH` in `/etc/seedelf-data/env`: what messaging may spend of the month's traffic. Every reader downloads every envelope, so messaging's traffic grows with the square of its users. Raise it as they come, and the droplet with it. The pools are saved beside `egress.json` (`messaging-<pool>.pool`), so a deploy keeps what's waiting; deleting them drops every waiting message.
+- **The relay's share,** `DATA_MESSAGING_GB_MONTH` in `/etc/seedelf-data/env`: what messaging may spend of the month's traffic. Every reader downloads every envelope, so messaging's traffic grows with the square of its users. Raise it as they come, and the droplet with it. The pools are saved beside `egress.json` (`messaging-<pool>.pool`), so a deploy keeps what's waiting; deleting them drops every waiting message. Never `0`: the API refuses it at start and doesn't run, so every route goes down, not Messages alone. To stop Messages, see [Stopping Messages](#stopping-messages).
 - **Caddy:** apt doesn't update it (§2, step 1). Watch its releases, and install a new one's `.deb` the same way, checked.
+- **Caddy's timeouts, and the API's stop deadline, memory cap and start after time sync,** are in `edge/Caddyfile` and `edge/seedelf-data-api.service`, which a deploy doesn't install: [below](#timeouts-and-limits-a-deploy-doesnt-install).
 - **Before a node upgrade,** check Kupo's and Ogmios's compatibility with the new version: there's no preprod to try it on first.
 - **After a db-sync upgrade,** compare its insert options with `home/db-sync-insert-options.json`.
 - **After a db-sync resync,** once it has caught up, run `home/db-sync-indexes.sql` again: a new database has only db-sync's own indexes. Resync from an empty database, with `home/db-sync-insert-options.json`'s options. The crowds, and the token pools' incremental reads of the holder, rely on `tx_out`'s `consumed` mode: it keeps every output and writes each block's outputs in chain order, so each read can start above the output and transaction IDs already read. Neither `prune` nor `bootstrap` does.
 - **At every wallet release,** refresh the token decimals (`api/data/token-decimals.json`, built in) along with the wallet's own token list, then deploy.
+
+### Stopping Messages
+
+Seedelf Messaging stops for every wallet at once, and the rest of the data layer goes on. The lever is `DATA_MESSAGING_OFF=true` in the API's environment, set by a drop-in beside the unit so the environment file isn't touched, and a restart:
+
+- **Every route under `/messaging/` answers 410 Gone,** `{"error":"messaging is stopped"}`, with CORS, before any other limit. A post's body isn't read, so nothing is kept. Every other route answers as before, and `/health` says `"relay":"off"`.
+- **The pools wait on disk,** and what they hold still expires 36 hours after it came. A deploy keeps the drop-in, so Messages stays stopped across deploys until it's undone.
+- **What wallets do:** a wallet with Messages on reads the 410 as Messages stopped, and shows them as paused. It posts nothing and solves no work, keeps what's queued, and asks again once an hour and at each unlock.
+- **The restart** takes every part away for a moment, and a wallet that reads then goes to Koios for 5 minutes. Its stop saves the pools clean.
+- **Never `DATA_MESSAGING_GB_MONTH=0`:** the API refuses `0` at start and doesn't run, however often systemd starts it again. Every route is down, and every wallet's reads go to Koios on 5-minute holds.
+
+**To stop it,** on the VPS, as `seedelf`. It prints the machine's name, then `"relay":"off"` from `/health` and a page's status, `410`. Run again, it says `STOP` and changes nothing:
+
+```bash
+# seedelf-data-layer (the VPS)
+hostname && sudo bash -euo pipefail <<'SCRIPT'
+f=/etc/systemd/system/seedelf-data-api.service.d/messaging-off.conf
+if [ -e "$f" ]; then
+  echo "STOP: Messages is stopped already ($f)"
+else
+  mkdir -p "$(dirname "$f")"
+  printf '[Service]\nEnvironment=DATA_MESSAGING_OFF=true\n' > "$f"
+  systemctl daemon-reload
+  systemctl restart seedelf-data-api
+  for i in $(seq 30); do curl -s -m 2 -o /dev/null 127.0.0.1:8099/health && break; sleep 1; done
+  echo "the relay: $(curl -s -m 5 127.0.0.1:8099/health | grep -o '"relay":"[a-z]*"' || echo 'no answer: journalctl -u seedelf-data-api -n 20')"
+  echo "a page: $(curl -s -m 5 -o /dev/null -w '%{http_code}' 127.0.0.1:8099/messaging/v1/mainnet/envelopes)"
+fi
+SCRIPT
+```
+
+**To undo it,** the same way. It prints `"relay":"on"` and `200`. Undo it only once what stopped it is safe to let back: every wallet then posts what it queued meanwhile, at its next ask, whatever its version.
+
+```bash
+# seedelf-data-layer (the VPS)
+hostname && sudo bash -euo pipefail <<'SCRIPT'
+f=/etc/systemd/system/seedelf-data-api.service.d/messaging-off.conf
+if [ ! -e "$f" ]; then
+  echo "STOP: Messages isn't stopped by this lever (there's no $f)"
+else
+  rm -f "$f"
+  systemctl daemon-reload
+  systemctl restart seedelf-data-api
+  for i in $(seq 30); do curl -s -m 2 -o /dev/null 127.0.0.1:8099/health && break; sleep 1; done
+  echo "the relay: $(curl -s -m 5 127.0.0.1:8099/health | grep -o '"relay":"[a-z]*"' || echo 'no answer: journalctl -u seedelf-data-api -n 20')"
+  echo "a page: $(curl -s -m 5 -o /dev/null -w '%{http_code}' 127.0.0.1:8099/messaging/v1/mainnet/envelopes)"
+fi
+SCRIPT
+```
+
+## Timeouts and limits a deploy doesn't install
+
+`edge/Caddyfile` gives every request an end: its head within 10 s, the whole request within 10 s of its start, the answer within 60 s, and an idle connection 2 minutes. `edge/seedelf-data-api.service` gives the API's stop 30 s, which its own 10 s for what's open and the saving of the pools fit, holds the API under 3 GB of the droplet's 4, and starts it after the clock is synchronized. A deploy installs neither file. To bring a running VPS in line with them, run each block once, on the VPS, as `seedelf`, in any order. Each prints the machine's name first; paste back what it prints after that. Run again, the first says `STOP` and changes nothing, and the others write the same files again.
+
+**1. Caddy's timeouts.** It adds them to the global options, keeps the file before as `Caddyfile.before-timeouts`, and puts that back if Caddy refuses the new one. It should print five timeouts, in nanoseconds: the four it adds, and the proxy's `response_header_timeout` of 40 s, from the site's own block. Then `/health through Caddy: 200`:
+
+```bash
+# seedelf-data-layer (the VPS)
+hostname && sudo bash -euo pipefail <<'SCRIPT'
+f=/etc/caddy/Caddyfile
+if grep -q 'read_body' "$f"; then
+  echo "STOP: $f has its timeouts already"
+else
+  awk '!done && $0 == "{" {
+      print
+      print "\tservers {"
+      print "\t\ttimeouts {"
+      print "\t\t\tread_header 10s"
+      print "\t\t\tread_body 10s"
+      print "\t\t\twrite 60s"
+      print "\t\t\tidle 2m"
+      print "\t\t}"
+      print "\t}"
+      done = 1
+      next
+    }
+    { print }' "$f" > "$f.new"
+  if ! grep -q 'read_body' "$f.new"; then
+    rm -f "$f.new"
+    echo "STOP: no line in $f is just {, the global options' start: nothing changed"
+  else
+    cp -a "$f" "$f.before-timeouts"
+    chmod --reference="$f" "$f.new"
+    chown --reference="$f" "$f.new"
+    mv -f "$f.new" "$f"
+    if systemctl reload caddy; then
+      site=$(awk '$2 == "{" && $1 ~ /\./ { print $1; exit }' "$f")
+      echo "Caddy's timeouts: $(curl -s localhost:2019/config/apps/http/servers | grep -o '"[a-z_]*timeout":[^,}]*' | sort -u | tr '\n' ' ')"
+      echo "/health through Caddy: $(curl -s -o /dev/null -w '%{http_code}' "https://$site/health")"
+    else
+      cp -a "$f.before-timeouts" "$f"
+      systemctl reload caddy || true
+      echo "STOP: Caddy refused the new file, and the one before is back: journalctl -u caddy -n 20"
+    fi
+  fi
+fi
+SCRIPT
+```
+
+**2. The API's stop deadline and memory cap:** the unit's two lines, as a drop-in beside the installed unit. It should print `TimeoutStopUSec=30s` and `MemoryMax=3221225472`, and the same number for the cgroup, or `max` until the API next starts, which the next deploy does:
+
+```bash
+# seedelf-data-layer (the VPS)
+hostname && sudo bash -euo pipefail <<'SCRIPT'
+d=/etc/systemd/system/seedelf-data-api.service.d
+mkdir -p "$d"
+printf '[Service]\nTimeoutStopSec=30\nMemoryMax=3G\n' > "$d/stop-and-memory.conf"
+systemctl daemon-reload
+systemctl show seedelf-data-api -p TimeoutStopUSec -p MemoryMax
+echo "its cgroup's memory.max: $(cat /sys/fs/cgroup/system.slice/seedelf-data-api.service/memory.max)"
+SCRIPT
+```
+
+**3. Start after time sync.** The relay keeps each envelope 36 hours by the server's clock. A start on a clock that's behind counts the waiting envelopes' times as its own now, so once the clock is put right each is that much older, and goes that much early. So the API starts after `time-sync.target`, and a service holds that target until the clock is synchronized: `chrony-wait` where chrony keeps the time, `systemd-time-wait-sync` otherwise (systemd-timesyncd's). The block bounds that wait at 3 minutes, after which the API starts anyway: unbounded, `systemd-time-wait-sync` waits for good on a clock that never syncs, and its man page says it can miss chrony's sync. It acts only at a boot, so a deploy's restart doesn't wait. If the clock isn't synchronized now, it stops and changes nothing. It should print `time-sync.target`, then the wait's name, `enabled` and `TimeoutStartUSec=3min`:
+
+```bash
+# seedelf-data-layer (the VPS)
+hostname && sudo bash -euo pipefail <<'SCRIPT'
+wait=systemd-time-wait-sync.service
+if systemctl is-active --quiet chrony && systemctl cat chrony-wait.service > /dev/null 2>&1; then
+  wait=chrony-wait.service
+fi
+if [ "$(timedatectl show -p NTPSynchronized --value)" != yes ]; then
+  echo "STOP: the clock isn't synchronized now (timedatectl status says more): nothing changed"
+elif ! systemctl cat "$wait" > /dev/null 2>&1; then
+  echo "STOP: there's no $wait here: nothing changed"
+else
+  d=/etc/systemd/system/seedelf-data-api.service.d
+  w=/etc/systemd/system/$wait.d
+  mkdir -p "$d" "$w"
+  printf '[Unit]\nAfter=time-sync.target\n' > "$d/after-time-sync.conf"
+  printf '[Service]\nTimeoutStartSec=3min\n' > "$w/at-most-3min.conf"
+  systemctl daemon-reload
+  systemctl enable "$wait"
+  echo "the API starts after: $(systemctl show seedelf-data-api -p After | grep -o 'time-sync\.target' || echo 'not time-sync.target')"
+  echo "which waits for: $wait, $(systemctl is-enabled "$wait"), $(systemctl show "$wait" -p TimeoutStartUSec)"
+fi
+SCRIPT
+```

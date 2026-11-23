@@ -233,8 +233,12 @@ export interface MessagingConversation {
   to?: string;
   /** What its `replaces` amounted to: `verified`, it continues that conversation; otherwise it only says so. */
   continues?: { cid: string; verified: boolean };
-  /** When it started, and its last message either way (ms). */
+  /**
+   * The conversation's t (ms): when it was started, by the clock of the side that wrote first, rounded down to 10
+   * minutes. Where the other side wrote first it's their device's clock, never this one's: not a time to show as local.
+   */
   startedAt: number;
+  /** Its last message either way (ms, this device's clock). */
   lastAt: number;
   /** Messages received and not yet shown. */
   unread: number;
@@ -245,10 +249,26 @@ export interface MessagingConversation {
    * them all now (protocol.md §16.4), so it may need starting again (`messaging-restart`).
    */
   unanswered: boolean;
+  /**
+   * Written first, before a reply: what's left of the writer's share of first messages, which is what the other side's
+   * wallet keeps of a stranger's before they reply (protocol.md §3.1: 16 messages and 64 KiB, each with what a first
+   * message carries). `messages` more, the texts still waiting counted, and the next one's text at most `bytes`
+   * (UTF-8). Both 0 once it's used up: `messaging-send` refuses in words ("wait for a reply"), and Start again
+   * (`messaging-restart`) is the way on now. None once a reply has come, and where the other side wrote first.
+   */
+  firstContactLeft?: { messages: number; bytes: number };
   /** The conversation it was started again, or continued, as. */
   restartedAs?: string;
-  /** Messages the ratchet couldn't reach (protocol.md §6): it may not continue (`messaging-continue`). */
-  unreachable?: number;
+  /**
+   * A message of it the ratchet authenticated and couldn't reach (protocol.md §6): it may not continue
+   * (`messaging-continue`). Gone once a later message of it decrypts.
+   */
+  unreachable?: true;
+  /**
+   * Its record won't open on this device, or the crate can't read it (one a later build wrote, or damaged): its thread
+   * can't be shown (`messaging-thread` says why), and `messaging-delete` deletes it.
+   */
+  unreadable?: true;
   /** Its last message, for the list: which way, and the start of its text (none for a kind this version can't show). */
   last?: { dir: "in" | "out"; text?: string; reveal?: true };
   /** The user's own name for it, on this device only (`messaging-name`): theirs, never a message's or a proof's. */
@@ -267,6 +287,7 @@ export const CONVERSATION_NAME_CHARS = 40;
 /** A stranger's first message, kept apart until the user replies or deletes it (protocol.md §3.1). */
 export interface MessagingRequest {
   cid: string;
+  /** Its t (ms): the writer's clock, rounded down, as `MessagingConversation.startedAt`. */
   startedAt: number;
   /** Which of this wallet's Seedelfs it was written to (asset name, hex), verified; empty for a continuation. */
   to: string;
@@ -283,12 +304,55 @@ export interface MessagingOverview {
   /** Newest first. */
   conversations: MessagingConversation[];
   requests: MessagingRequest[];
-  /** Conversations this browser no longer has, whose messages still arrive (protocol.md §6). */
-  lost: Array<{ cid: string; lastAt: number; messages: number }>;
   /** When the relay last said envelopes were gone before they were read (ms): messages sent then may never arrive. */
   gapAt?: number;
   /** The relay didn't answer this network's last read: messages wait until it does. */
   offline?: true;
+  /**
+   * The build's other networks whose Messages are on: the worker reads their pools too, whichever network the wallet
+   * shows (call 9). `messaging-switch` with `network` turns one off from here.
+   */
+  alsoOn?: NetworkName[];
+  /**
+   * Every Seedelf the wallet's last contract reading found under its key, with whether it takes first messages: on by
+   * itself for one this browser minted, at the register it put it under; off for any other, until the user turns it on
+   * (`messaging-answer-at`). None before a reading has been kept.
+   */
+  seedelfs?: MessagingSeedelf[];
+  /**
+   * The wallet's storage has no room left for Messages' own bookkeeping (the browser's area within its reserve, kept
+   * for payments): nothing more is taken until room is made, by deleting a conversation or a request. Reads go on.
+   */
+  full?: true;
+  /**
+   * A read or a take of this network's stopped the wallet's WebAssembly: nothing of the network is read by itself
+   * again until `messaging-retry` (Try again), which steps over what stopped it.
+   */
+  stopped?: true;
+  /**
+   * Messages that came and weren't kept (W10, W11): no room for them after the oldest read ones were deleted, or more
+   * of them at once than the wallet takes. They're gone; deleting conversations makes room for the next.
+   */
+  dropped?: number;
+  /**
+   * How far this device's clock is off the server's (hours, signed: ahead is positive), where more than half an hour,
+   * as the last message the server took new measured it: people may not get first messages until it's set right.
+   */
+  clockOff?: number;
+  /** The server has stopped Messages on purpose: nothing is sent, and it's asked again once an hour and at each unlock. */
+  paused?: true;
+}
+
+/** One of the Seedelfs under the wallet's key, as Messages takes first messages at it (MessagingOverview.seedelfs). */
+export interface MessagingSeedelf {
+  /** Its full token name, hex. */
+  name: string;
+  /** The register the reading found it under. */
+  register: { generator: string; publicValue: string };
+  /** This browser minted it, under this register. */
+  made: boolean;
+  /** First messages to it are taken now. */
+  on: boolean;
 }
 
 /** One message of a thread or a request. */
@@ -301,14 +365,24 @@ export interface MessagingEntry {
   /** A kind of message this version can't show, or a request's message that doesn't read now. */
   unreadable?: true;
   /**
-   * A reveal (protocol.md §19): `shown`, this wallet's Seedelf `name`; or one the other side showed, `checking` its
-   * register on the chain, `verified` with its `name`, or `failed`, never named.
+   * A reveal (protocol.md §19): `shown`, this wallet's Seedelf `name`; or one the other side showed, its proof
+   * verified: `unchecked`, its register not yet checked on the chain (`messaging-check-reveal` checks it), `checking`
+   * it now, `verified` with its `name`, or `failed`, never named.
    */
-  reveal?: { status: "shown" | "checking" | "verified" | "failed"; name?: string };
-  /** A sent one: waiting for the first-contact stamp, to be posted, posted ("sent, expires at"), or refused. */
+  reveal?: { status: "shown" | "unchecked" | "checking" | "verified" | "failed"; name?: string };
+  /**
+   * A sent one: waiting for the first-contact stamp (or, past it, for a reply where the first messages' share is used
+   * up), to be posted, posted ("sent, expires at"), or refused (`refusedBy`).
+   */
   sent?: "queued" | "pending" | "posted" | "refused";
-  /** When the relay drops it (ms): never "delivered". */
+  /** Who refused a refused one: the server (or something on the way), or the wallet itself, which couldn't seal it. */
+  refusedBy?: "server" | "wallet";
+  /** When the relay drops it (ms, this device's clock): never "delivered". */
   expires?: number;
+  /** Refused by the server (or something on the way), its bytes kept: `messaging-resend` sends them again. */
+  resend?: true;
+  /** Waiting: the relay asked this message's size, or every post, to wait until then (ms). */
+  nextTry?: number;
   /**
    * Its proof of work being solved now (a first message's stamp, or its post's): about how long it takes here. Each
    * attempt is a fresh chance, so this is what's left at any moment, never a countdown.
@@ -324,13 +398,17 @@ export interface MessagingThread {
   trimmed: number;
   /** Messages missing (protocol.md §6): never "expired". */
   missing: number;
-  /** The longest text the next message can carry, in UTF-8 bytes. */
+  /**
+   * The longest text the next message can carry, in UTF-8 bytes: written first and before a reply, within what's left
+   * of the share too (`conversation.firstContactLeft`), 0 once that's used up.
+   */
   maxTextBytes: number;
-  /** The relay asked the wallet to wait: when what's waiting to be sent is tried again (ms). */
+  /** The relay asked the wallet to wait: when the first of what's waiting to be sent is tried again (ms). */
   nextTry?: number;
   /**
    * The wallet's Seedelfs it can show the other side (asset names, hex): only where it wrote first and has a reply
-   * (`messaging-reveal`, protocol.md §19).
+   * (`messaging-reveal`, protocol.md §19), and only one this browser minted, at the register it put it under, or one
+   * the user turned on (`MessagingOverview.seedelfs`), whatever its switch for first messages says.
    */
   seedelfs?: string[];
 }
@@ -3045,8 +3123,12 @@ export interface Requests {
    * newest first. Throws if locked.
    */
   messaging: { payload: None; result: MessagingOverview };
-  /** Turns the network's Messages switch on or off (call 9); on, its relay pool is read at once and every minute. */
-  "messaging-switch": { payload: { on: boolean }; result: MessagingOverview };
+  /**
+   * Turns the network's Messages switch on or off (call 9); on, its relay pool is read at once and every minute.
+   * `network`: another of the build's networks' switch instead (the overview's `alsoOn`). The overview is always the
+   * wallet's network's. Refused while locked, changing nothing.
+   */
+  "messaging-switch": { payload: { on: boolean; network?: NetworkName }; result: MessagingOverview };
   /**
    * Reads the network's relay pool now, as the alarm does every minute, while Messages is open: nothing while its
    * switch is off or the wallet locked.
@@ -3063,7 +3145,7 @@ export interface Requests {
   "messaging-accept": { payload: { cid: string }; result: null };
   /** Names a conversation as the user chooses, on this device only; an empty name takes it away. */
   "messaging-name": { payload: { cid: string; name: string }; result: null };
-  /** Deletes a conversation or a request; its ID stays a tombstone for 48 hours. */
+  /** Deletes a conversation or a request; its ID stays a tombstone until its t + 48 hours and 7 days. */
   "messaging-delete": { payload: { cid: string }; result: null };
   /** Starts an unanswered conversation again, to the same Seedelf. */
   "messaging-restart": { payload: { cid: string; text: string }; result: { cid: string } };
@@ -3071,6 +3153,29 @@ export interface Requests {
   "messaging-continue": { payload: { cid: string; text: string }; result: { cid: string } };
   /** Shows the other side one of the wallet's Seedelfs, by a proof only it can check (protocol.md §19). */
   "messaging-reveal": { payload: { cid: string; name: string }; result: null };
+  /**
+   * Checks on the chain every reveal of the conversation not yet checked (protocol.md §19.4, step 4): one read of the
+   * contract, made only when the user asks. Refused while Messages are off or the wallet is locked; a read that fails
+   * is the error, and they wait for another press.
+   */
+  "messaging-check-reveal": { payload: { cid: string }; result: null };
+  /** Sends again a message the server refused, its same bytes (`MessagingEntry.resend`); anything else is left as it is. */
+  "messaging-resend": { payload: { cid: string; id: number }; result: null };
+  /**
+   * Turns first messages at one of the overview's Seedelfs on or off, by its name and the register the overview gave
+   * it (`MessagingOverview.seedelfs`). On, only for one the last reading still has there. Returns the overview.
+   */
+  "messaging-answer-at": {
+    payload: { name: string; register: { generator: string; publicValue: string }; on: boolean };
+    result: MessagingOverview;
+  };
+  /** Try again, for a network whose Messages stopped (`MessagingOverview.stopped`): what stopped it is stepped over. */
+  "messaging-retry": { payload: None; result: null };
+  /**
+   * Starts the network's Messages again: its inbox and every conversation deleted, as for an inbox that won't open.
+   * The page asks first. Returns the overview.
+   */
+  "messaging-clear": { payload: None; result: MessagingOverview };
   /** Adds a contact, or changes the one with `id`; returns the contacts. */
   "contact-save": { payload: { id?: string; name: string; value: string }; result: Contact[] };
   "contact-remove": { payload: { id: string }; result: Contact[] };
@@ -3546,6 +3651,11 @@ const REQUEST_LIST = [
   "messaging-restart",
   "messaging-continue",
   "messaging-reveal",
+  "messaging-check-reveal",
+  "messaging-resend",
+  "messaging-answer-at",
+  "messaging-retry",
+  "messaging-clear",
   "history",
   "utxos",
   "utxo-lock",

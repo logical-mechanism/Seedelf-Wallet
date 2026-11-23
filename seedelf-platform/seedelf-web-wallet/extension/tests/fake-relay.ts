@@ -1,14 +1,16 @@
 // A Seedelf Messaging relay in memory (protocol.md §17), for the worker's
 // tests: a pool per network, pages behind a cursor, the stamp checked with
 // its own SHA-256 (noble's, not the WebAssembly's), already held before the
-// price, and a price the test sets. It doesn't check points: the relay's own
-// tests do (seedelf-data's api/src/messaging/).
+// price, and a price the test sets, for every size or for each (§17.4 prices
+// and refuses by size: a larger envelope is more units of an address's
+// window). It doesn't check points: the relay's own tests do (seedelf-data's
+// api/src/messaging/).
 
 import { sha256 } from "@noble/hashes/sha2.js";
 
 import type { NetworkName } from "../src/networks";
 import { RateLimit } from "../src/background/koios";
-import { RelayClient } from "../src/background/relay";
+import { PAGE_MAX_BYTES, RelayClient } from "../src/background/relay";
 
 const SIZES = [512, 2048, 8192, 32768];
 const LABEL = new TextEncoder().encode("Seedelf-Messaging|v1|stamp|");
@@ -24,11 +26,22 @@ interface Held {
 export interface FakeRelay {
   /** The fetch every client the relay makes goes through. */
   fetch: (url: string, init: RequestInit) => Promise<Response>;
-  /** A client of `pool`, as the worker makes one, with a rate limit of its own that never waits. */
-  client(pool: NetworkName): RelayClient;
+  /**
+   * A client of `pool`, as the worker makes one, with a rate limit of its own that never waits on the test's clock: a
+   * hold (a 429's) passes on a clock of the limit's own, at once. `seen` is told each of its requests, as `calls` names
+   * them, before the relay answers.
+   */
+  client(pool: NetworkName, seen?: (call: string) => void): RelayClient;
   pools: Map<string, { held: Held[]; next: bigint }>;
   /** The bits a post must show, for every size. */
   price: number;
+  /** The bits a post of each size must show (512, 2,048, 8,192, 32,768), where a test sets them apart: `price` otherwise. */
+  prices?: [number, number, number, number];
+  /**
+   * The sizes this address can't post now, each for this many seconds, as its window says (§17.4): the page prices
+   * each of them 0, and a post of one is a 429 with that Retry-After before its work is looked at. The rest go on.
+   */
+  refusingSizes?: Partial<Record<number, number>>;
   /** The most envelopes a page holds, so a test can make several. */
   pageCount: number;
   /** Every request, as `METHOD path?query`. */
@@ -88,13 +101,29 @@ export function fakeRelay(clock: { now: number } = { now: Date.now() }): FakeRel
     gapOnce: false,
     alwaysMore: false,
     now: () => clock.now,
-    client: (pool) =>
-      new RelayClient({
+    client: (pool, seen) => {
+      // What the limit has slept, on top of the test's clock: a sleep that returned at once with the clock where it was
+      // would spin for ever on a hold.
+      let slept = 0;
+      return new RelayClient({
         origin: "https://relay.test",
         pool,
-        fetch: relay.fetch,
-        limit: new RateLimit(1_000_000, 1000, () => clock.now, async () => undefined),
-      }),
+        // Read at each request: a test may put its own `fetch` in the relay's place.
+        fetch: (url, init) => {
+          const u = new URL(url);
+          seen?.(`${init.method} ${u.pathname}${u.search}`);
+          return relay.fetch(url, init);
+        },
+        limit: new RateLimit(
+          1_000_000,
+          1000,
+          () => clock.now + slept,
+          async (ms) => {
+            slept += ms;
+          },
+        ),
+      });
+    },
     put(pool, envelope) {
       keep(pool, bytesOf(envelope));
     },
@@ -109,6 +138,10 @@ export function fakeRelay(clock: { now: number } = { now: Date.now() }): FakeRel
       return post(pool, new Uint8Array(init.body as ArrayBuffer));
     },
   };
+
+  /** What a post of `size` bytes is asked now: 0 while this address is refused, at every size or at this one. */
+  const priceOf = (size: number) =>
+    relay.refusing || relay.refusingSizes?.[size] ? 0 : (relay.prices?.[SIZES.indexOf(size)] ?? relay.price);
 
   const poolOf = (name: string) => {
     let pool = relay.pools.get(name);
@@ -129,7 +162,14 @@ export function fakeRelay(clock: { now: number } = { now: Date.now() }): FakeRel
     const pool = poolOf(name);
     const from = after === null ? -1n : BigInt(after);
     const rest = pool.held.filter((h) => h.number > from);
-    const taken = rest.slice(0, relay.pageCount);
+    // At most `pageCount` envelopes, and 256 KiB of them (§17.5), as the client holds a page to.
+    const taken: Held[] = [];
+    let bytes = 0;
+    for (const h of rest.slice(0, relay.pageCount)) {
+      if (bytes + h.bytes.length > PAGE_MAX_BYTES) break;
+      bytes += h.bytes.length;
+      taken.push(h);
+    }
     const more = rest.length > taken.length;
     // An empty page's cursor is the last number given out (§17.5).
     const cursor = taken.at(-1)?.number ?? pool.next - 1n;
@@ -140,8 +180,7 @@ export function fakeRelay(clock: { now: number } = { now: Date.now() }): FakeRel
     out[1] = (more || relay.alwaysMore ? 1 : 0) | (relay.gapOnce && after !== null ? 2 : 0);
     relay.gapOnce = false;
     view.setBigUint64(2, cursor);
-    const price = relay.refusing ? 0 : relay.price;
-    out.set([price, price, price, price], 10);
+    out.set(SIZES.map(priceOf), 10);
     view.setUint16(14, taken.length);
     let at = 16;
     for (const h of taken) {
@@ -169,7 +208,10 @@ export function fakeRelay(clock: { now: number } = { now: Date.now() }): FakeRel
       return json(status, { error: "wait" }, { "retry-after": "30" });
     }
     if (relay.refusing) return json(429, { error: "too many posts from this address for now" }, { "retry-after": String(relay.refusing) });
-    if (work(digest, nonce) < relay.price) return json(402, { error: "more proof of work", price: relay.price });
+    const sized = relay.refusingSizes?.[envelope.length];
+    if (sized) return json(429, { error: "this address's share of the pool is full for now" }, { "retry-after": String(sized) });
+    const price = priceOf(envelope.length);
+    if (work(digest, nonce) < price) return json(402, { error: "more proof of work", price });
     const kept = keep(name, envelope);
     return json(200, { kept: "new", expires: Math.floor((kept.came + HOLD_MS) / 1000) });
   }

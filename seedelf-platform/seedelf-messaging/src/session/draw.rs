@@ -5,18 +5,23 @@
 //! (docs/protocol.md §16.3):
 //!
 //! - starting from a handle: `cid`, then `b`'s 32 bytes of `aux`, then
-//!   `e_A`, then `s_A`, then the base proof's 32 bytes of `aux`;
-//! - starting a continuation: `cid`, then `e_A`, then `s_A`;
-//! - sending: the ratchet's salt, then the outer envelope's `r` (its
-//!   re-randomization is the outer scalar, derived, not drawn);
+//!   `e_A`, then `s_A`, then the base proof's `c₂`, `z₂` and 32 bytes of
+//!   `aux`, then the keys proof's `c₂`, `z₂` and 32 bytes of `aux`;
+//! - starting a continuation: `cid`, then `e_A`, then `s_A`, then the keys
+//!   proof's 32 bytes of `aux`;
+//! - sending: the ratchet's salt alone (the envelope's re-randomization and
+//!   its ephemeral scalar both come from the message key and the salt);
 //! - a ratchet step on receiving: the new ratchet key;
 //! - a reveal: `c₂`, then `z₂`, then the nonce's 32 bytes of `aux` (§19.2).
 //!
-//! Three scalars aren't drawn but hedged ([`hedged_scalar`]): the writer's
-//! `b`, keyed by its key, the base proof's `k`, keyed by `b`, and a reveal's
-//! nonce, keyed by its prover's key (§16.2, §19.2). Each is an HMAC over 32
-//! drawn bytes and everything it must cover, so a source that fails or
-//! repeats never gives one away or puts one nonce under two challenges
+//! The scalars a key's safety rests on aren't drawn but hedged: the writer's
+//! `b`, keyed by its key ([`hedged_scalar`]); the base proof's `k`, keyed by
+//! `b`, and the keys proof's three nonces, keyed by `e_A`, `s_A` and the
+//! writer's key, each drawn with its proof's other values
+//! ([`hedged_or_draws`], [`hedged_aux_draws`]); and a reveal's nonce, keyed by
+//! its prover's key (§16.2, §19.2). Each is an HMAC over 32 drawn bytes and
+//! everything its challenge covers, so a source that fails or repeats never
+//! gives one away or puts one nonce under two challenges
 //! (docs/joint-security.md, rule 2).
 
 use blstrs::Scalar;
@@ -88,6 +93,53 @@ pub(crate) fn hedged_scalar(
         let scalar = scalar_mod_q(&hedge_okm(key, &message(&aux))[..]);
         if !bool::from(scalar.is_zero()) {
             return scalar;
+        }
+    }
+}
+
+/// [`hedge_okm`] of `key` over `message`, reduced mod q: a hedged nonce
+/// from its message. Zero only with probability about 2⁻²⁵⁵, which its
+/// caller handles by drawing everything again.
+pub(crate) fn hedge(key: &Scalar, message: &[u8]) -> Scalar {
+    scalar_mod_q(&hedge_okm(key, message)[..])
+}
+
+/// The draws of an OR-proof's hedged nonces (Cramer, Damgård and
+/// Schoenmakers): the simulated branch's challenge share `c₂`, then its
+/// response `z₂`, then 32 bytes of `aux`. `derive` derives every nonce of
+/// the proof from all three at once, and gives `None` if any is zero: then
+/// all three are drawn again and every nonce derived again. Returns `c₂`,
+/// `z₂` and what `derive` gave.
+///
+/// The one helper for a proof with more than one nonce, or with a simulated
+/// branch: [`hedged_scalar`] once for each nonce would draw an `aux` for
+/// each, and a source that repeated every draw but one would then put one
+/// nonce under two challenges (docs/joint-security.md, rule 2 and §9).
+pub(crate) fn hedged_or_draws<T>(
+    draw: &mut dyn Draw,
+    mut derive: impl FnMut(&Scalar, &Scalar, &[u8; 32]) -> Option<T>,
+) -> (Scalar, Scalar, T) {
+    loop {
+        let c2 = draw.scalar();
+        let z2 = draw.scalar();
+        let aux = draw.bytes32();
+        if let Some(nonces) = derive(&c2, &z2, &aux) {
+            return (c2, z2, nonces);
+        }
+    }
+}
+
+/// The draw of a proof's hedged nonces when it has no simulated branch: 32
+/// bytes of `aux`, from which `derive` derives every nonce at once, giving
+/// `None` if any is zero, which draws `aux` again for all of them.
+pub(crate) fn hedged_aux_draws<T>(
+    draw: &mut dyn Draw,
+    mut derive: impl FnMut(&[u8; 32]) -> Option<T>,
+) -> T {
+    loop {
+        let aux = draw.bytes32();
+        if let Some(nonces) = derive(&aux) {
+            return nonces;
         }
     }
 }

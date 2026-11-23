@@ -3347,5 +3347,6 @@
   "messages.preview.revealIn": "Showed you a Seedelf",
   "messages.preview.revealOut": "You showed your Seedelf",
   "worker.messaging.notYourSeedelf": "That Seedelf isn't this wallet's now.",
-  "worker.messaging.cantRevealYet": "Only the side that wrote first can show a Seedelf, once the other side has replied."
+  "worker.messaging.cantRevealYet": "Only the side that wrote first can show a Seedelf, once the other side has replied.",
+  "worker.messaging.waitForReply": "Wait for a reply: until one comes, their wallet takes no more messages from you here."
 }

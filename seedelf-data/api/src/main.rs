@@ -1,5 +1,4 @@
 use std::io::IsTerminal;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use seedelf_data_api::chain::Chain;
@@ -71,7 +70,9 @@ async fn main() -> anyhow::Result<()> {
     );
     let edge = Arc::new(
         Edge::new(config.trust_proxy, config.origins.clone(), egress)
-            .with_messaging_egress(messaging_egress),
+            .with_messaging_egress(messaging_egress)
+            .with_reserve(config.messaging_reserve)
+            .with_messaging_off(config.messaging_off),
     );
     tokio::spawn(edge::keep(edge.clone()));
     info!(
@@ -81,19 +82,25 @@ async fn main() -> anyhow::Result<()> {
         messaging_egress_ceiling = config.messaging_egress_ceiling.is_some(),
         "the edge's limits"
     );
-    let relay = Arc::new(Relay::new(config.state_dir.as_deref()));
+    let relay =
+        Arc::new(Relay::new(config.state_dir.as_deref()).with_reading(config.messaging_reading));
     tokio::spawn(messaging::keep(relay.clone()));
-    info!(saved = config.state_dir.is_some(), "the messaging relay");
+    info!(
+        off = config.messaging_off,
+        saved = config.state_dir.is_some(),
+        read_mib_day = config.messaging_reading.floor >> 20,
+        read_pools_day = config.messaging_reading.pools,
+        reserve_percent = (config.messaging_reserve.part * 100.0).round() as u64,
+        reserve_page_kib = config.messaging_reserve.page >> 10,
+        "the messaging relay"
+    );
 
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     info!(listen = %config.listen, "seedelf-data-api is listening");
     let app = seedelf_data_api::app(state, submit, edge.clone(), relay.clone(), &config.origins);
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown())
-    .await?;
+    // Until the signal, and then for at most the stop's deadline: what's
+    // still open after it is dropped (serve.rs).
+    seedelf_data_api::serve::serve(listener, app, shutdown()).await?;
     // The month's traffic, and the pools as they are, written down before
     // the server stops: nothing more comes in now, so the pools' files are
     // marked clean.

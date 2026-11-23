@@ -16,7 +16,7 @@ The tests are finite, and they show the code does what [construction.md](constru
 - Refusal of every malformed, non-canonical, off-curve, small-order and identity point in every position, and of zero and out-of-range scalars, as structured errors.
 - Rejection of every single-bit change to the header and the ciphertext, of truncation, extension and register swaps, including a swap the recipient still recognizes as theirs.
 - No false matches: 10 recipients and 1,000 envelopes in one pool, and in property tests.
-- Byte-for-byte agreement with an independent implementation (noble-curves and WebCrypto).
+- Byte-for-byte agreement with an independent implementation (noble-curves and WebCrypto), before call 16 re-recorded the vectors with the tag in w's place; not reproduced since (construction.md §4.5).
 - No secret in an envelope's bytes or in a key's `Debug`.
 
 The tests don't establish, and can't:
@@ -41,7 +41,7 @@ Those rest on the arguments and assumptions below.
 
 1. **Recipient confidentiality.**
    - ECIES-KEM with an AEAD is IND-CCA2 in the random-oracle model under gap-DH (Shoup's analysis for ISO 18033-2; Abdalla, Bellare and Rogaway for DHIES).
-   - v1 differs in two ways: each envelope's base p is the sender's own re-randomization of g, and (p, w) is bound into the key derivation. Any well-formed (p′, w′) a querier can make for the recipient is [b′](g, v), and [y]c′ is then the same Diffie–Hellman value standard ECIES computes with key (g, v). So the standard argument should carry over. It isn't written out here.
+   - v1 differs in two ways: each envelope's base p is the sender's own re-randomization of g, and p and w's tag, so w, are bound into the key derivation (construction.md §4.3). Any well-formed (p′, w′) a querier can make for the recipient is [b′](g, v), and [y]c′ is then the same Diffie–Hellman value standard ECIES computes with key (g, v). So the standard argument should carry over. It isn't written out here.
 2. **Discovery privacy.**
    - Headers say nothing a relay can use about recipients (3).
    - A relay does see what each client downloads and when. Downloading everything hides interest; downloading selectively doesn't.
@@ -49,11 +49,17 @@ Those rest on the arguments and assumptions below.
 3. **Register unlinkability.** Under XDH, no one without y can tell whether two envelopes go to the same recipient, or link an envelope to a known register. That holds except for:
    - **The sender,** who knows b.
    - **A public G2 multiple of y,** such as [y]h (construction.md §2).
-   - **Metadata:** timing, the network, and the plaintext's length, since the envelope is 161 + |m| bytes with no padding.
+   - **Metadata:** timing, the network, and the plaintext's length, since the envelope is 145 + |m| bytes with no padding.
    - **Datum registers:** when the recipient's register is a Seedelf datum, the sender knows which Seedelf they wrote to.
-   - **A reaction to a sum of registers.** (g₁ + g₂, v₁ + v₂) is a register of y exactly when both (g₁, v₁) and (g₂, v₂) are. So any visible reaction to a bare v1 envelope addressed to the sum, such as a reply, links the two, and so does one to an envelope addressed to a second register of y. Seedelf's own registers share the property. The session layer closes it for messages: a first message proves its base comes from the one handle it names, and every envelope is bound to its conversation identity ([protocol.md](protocol.md) §2).
+   - **A reaction to a sum of registers.** (g₁ + g₂, v₁ + v₂) is a register of y exactly when both (g₁, v₁) and (g₂, v₂) are. So any visible reaction to a bare v1 envelope addressed to the sum, such as a reply, links the two, and so does one to an envelope addressed to a second register of y. Seedelf's own registers share the property. The session layer closes it for messages ([protocol.md](protocol.md) §2, §3):
+     - a first message proves its base comes from the one handle it names;
+     - it proves its writer knows the key, on that base, of every other point the reader's key meets in it (E_A, A and the first ratchet key), so none can be built on another register's generator;
+     - every message of a request carries the first's ratchet key;
+     - every envelope is bound to its conversation identity, its p and its c both.
 
-   The model proves the property symbolically for the bare envelope, by observational equivalence ([model/](../model/README.md), *Unlinkability*): no attacker without y tells envelopes to one recipient from envelopes to one and another, or envelopes to a known register from envelopes to a key no one holds. There DDH holds by construction, so it's no substitute for the XDH argument (*Before production*). It also proves the binding: a reader takes no message aimed at another of its handles, on either side of a conversation, and without the check it would (*The outer envelope*).
+     And no session envelope holds a register of its reader's key, so no payment can be aimed at one to watch who spends it (construction.md §4.3).
+
+   The model states the property symbolically for the bare envelope, by observational equivalence ([model/](../model/README.md), *Unlinkability*): no attacker without y tells envelopes to one recipient from envelopes to one and another, or envelopes to a known register from envelopes to a key no one holds. It was proved with w in the header; since call 16 the header carries a tag of w, and the runs with it are pending [PROOFS PENDING]. There DDH holds by construction, so it's no substitute for the XDH argument (*Before production*). It also states the binding: a reader takes no message aimed at another of its handles, on either side of a conversation, whichever of its points is aimed there, and without each check it would (*The outer envelope*). Before call 16 that lemma watched only the envelope's p; its runs for call 16 are pending [PROOFS PENDING].
 4. **Secret-key compromise.** y reads every envelope ever sent to any of its registers, past and future. With the key reuse chosen for later, it's also the key that spends the Seedelf.
 5. **Ciphertext integrity.** A change to any byte is rejected (AEAD, with the header bound). That's integrity against third parties, not proof of who sent it: anyone with the recipient's register can make an envelope that opens.
 6. **Recipient key substitution.**
@@ -61,9 +67,10 @@ Those rest on the arguments and assumptions below.
    - A relay can't swap in another register of the same recipient, because it's bound.
    - A sender can always encrypt the same plaintext to someone else.
 7. **Replay.** An envelope can be replayed verbatim and opens again. Nothing in v1 is a timestamp, a counter or a message ID. A recipient can drop duplicates by the envelope's hash; Phase 2 decides where.
-8. **Sender authentication.** None. Envelopes are anonymous, and a "from" written in the plaintext proves nothing.
-   - **When added,** it must bind both parties and the header: for instance a signature over H and the recipient's register, inside the ciphertext, or an authenticated KEM such as HPKE's Auth mode. That avoids surreptitious forwarding and unknown-key-share. Neither arises today, because no identity is claimed.
-   - **Behaviour that reveals whether an envelope opened** (auto-replies, read receipts, fetch patterns) is an oracle. With every point checked it reveals nothing of y, but it does reveal that the envelope was the recipient's: a discovery-privacy leak.
+8. **Sender authentication.** None in the bare envelope. Envelopes are anonymous, and a "from" written in the plaintext proves nothing.
+   - **When added,** it must bind both parties and the header: for instance a signature over H and the recipient's register, inside the ciphertext, or an authenticated KEM such as HPKE's Auth mode. That avoids surreptitious forwarding and unknown-key-share. Neither arises in the bare envelope, because no identity is claimed.
+   - **The session layer adds it** ([protocol.md](protocol.md) §3): the static DH in the session secret shows the writer holds its identity's key, and both sides' identities are in every message's associated data. A first message's two proofs, that its base comes from the named handle and that its writer knows the keys the reader's key meets, are designated-verifier: they convince the reader, who could have made them, and no one else.
+   - **Behaviour that reveals whether an envelope opened** (auto-replies, read receipts, fetch patterns) is an oracle. With every point checked it reveals nothing of y, but it does reveal that the envelope was the recipient's: a discovery-privacy leak. The session layer's rules leave a writer no reaction that depends on a register other than the conversation's: every point the reader's key meets is bound first (protocol.md §2).
 9. **Forward secrecy.** None. y is static, so a later compromise reads earlier messages. Ratchets or one-time prekeys are later work.
 10. **Cross-protocol key reuse.** The labels name the protocol, the version and the purpose, and the shared point is only ever the KDF's input (construction.md §4.3). Reusing the Seedelf key is below.
 
@@ -88,8 +95,8 @@ Later, a Seedelf's own on-chain register is the recipient and the wallet's scala
 - **The shared point, key and nonce** live in `Zeroizing` buffers.
 - **No unsafe code:** `#![forbid(unsafe_code)]`.
 - **No panics on untrusted input.** Two `expect`s guard invariants that no input reaches: a stored key is canonical, and HKDF's output length is a constant.
-- **Randomness** is the operating system's (`OsRng`), with zero scalars redrawn. The scalars the key's safety rests on aren't drawn alone: the reveal's nonce, the writer's b and the base proof's k are each HMAC-SHA-512 over 32 drawn bytes and everything it must cover (protocol.md §16.2, §19.2; joint-security.md, rule 2).
-- **Order of checks:** the scan (`matches_envelope`) checks p and w before y touches p, and the full parse checks c before [y]c. y never touches an unchecked point. An envelope that isn't the reader's never has c checked, which saves a subgroup check on each (README, "Measured performance").
+- **Randomness** is the operating system's (`OsRng`), with zero scalars redrawn. The scalars the key's safety rests on aren't drawn alone: the writer's b is HMAC-SHA-512 keyed by x over 32 drawn bytes, the handle and F's head (it has no challenge); the reveal's nonce, the base proof's k and the keys proof's k_e, k_s and k₁ (k₁ keyed by x) are each HMAC-SHA-512 over 32 drawn bytes and everything its challenge covers; and the envelope's o and r are HKDF of the message key and the salt (protocol.md §16.2, §19.2; joint-security.md, rule 2).
+- **Order of checks:** the scan (`matches_envelope`) checks p before y touches it, then compares SHA-256(`…|envelope|tag` ‖ [y]p) with the envelope's tag in constant time, and the full parse checks c before [y]c. y never touches an unchecked point. An envelope that isn't the reader's never has c checked, which saves a subgroup check on each (README, "Measured performance").
 
 ## What ElfTalk taught
 
@@ -108,17 +115,17 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 
 ### What its tests establish
 
-- **Vectors** for every layer: F with its proof and stamp, SK, both inits, every chain and message key, ENCRYPT, the outer scalar, the padding, the inner messages and the envelopes. An implementation written from protocol.md §16 alone, without reading the Rust (noble-curves and WebCrypto), reproduced them byte for byte.
+- **Vectors** for every layer: F with its two proofs and stamp, SK, both inits, every chain and message key, ENCRYPT, the envelope's two scalars, the padding, the inner messages and the envelopes. An implementation written from protocol.md §16 alone, without reading the Rust (noble-curves and WebCrypto), reproduced them byte for byte before call 16 re-recorded them; the re-recorded files haven't been reproduced since (protocol.md §16.6).
 - **Handles stay unlinkable through replies** (calls 12 and 13): src/session/tests/linking.rs aims an honest message's envelope at a reader's second handle and at the sum of two, and builds a base on the sum, and each is refused with nothing kept. The first-contact stamp is checked before the proof and any key.
 - **protocol-review.md §E's 14 adversarial cases,** one test each: src/session/tests/adversarial.rs, with cases 4 and 5 in tests/simulation.rs.
-- **Every rule of §3 to §6 is load-bearing in the tests:** a mutation pass removed or weakened each rule in turn, 39 of them, and a test failed every time. Calls 12 and 13's 21 rules had their own pass (2026-11-21). One survived at first, a stored request replayed after a restart, and a test now holds it.
+- **Every rule of §3 to §6 is load-bearing in the tests:** a mutation pass removed or weakened each rule in turn, 39 of them, and a test failed every time. Calls 12 and 13's 21 rules had their own pass (2026-11-21). One survived at first, a stored request replayed after a restart, and a test now holds it. Both passes predate call 16, whose rules have had passes of their own (protocol.md §16.6).
 - **Properties:** any schedule of sends, out-of-order deliveries, duplicates, losses and restarts reads each message once, changes nothing on a duplicate, and counts exactly the lost messages it skipped as missing.
 - **A two-wallet simulation** over a relay that keeps envelopes 36 hours, with the worker killed at every point of §4.2 and locks past 36 hours. No message shows twice, no message key seals two envelopes, every refusal is explained, the missing counts are exact, and the conversation is still live at the end.
 - **Stored states,** requests and tombstones round-trip, and every truncation, extension and unknown version is refused.
 
 ### What they don't
 
-- **Secrecy, forward secrecy, recovery and authentication** rest on the Double Ratchet's and X3DH's analyses, adapted here. [The model](../model/README.md) (54b) states them as lemmas and checks them symbolically, within the assumptions its README lists: every lemma is proved. The outer envelope has a model of its own beside it: the v1 envelope, the binding of every envelope to its conversation, Bob's replies sealed to R_A, and a kept message key on the wire, each proved. A symbolic proof says nothing of the primitives' strength, of timing, or of the code: the tests hold the code to §16, and the model holds §16 to its claims.
+- **Secrecy, forward secrecy, recovery and authentication** rest on the Double Ratchet's and X3DH's analyses, adapted here. [The model](../model/README.md) (54b) states them as lemmas and checks them symbolically, within the assumptions its README lists: every lemma was proved before call 16 (2026-11-22), and call 16's runs are pending [PROOFS PENDING]. The outer envelope has a model of its own beside it: the v1 envelope; the binding of every point the reader's key touches, by the outer scalar's check, the ephemeral point's, the keys proof and the designated-verifier base proof; Bob's replies sealed to R_A; and a kept message key on the wire [PROOFS PENDING]. A symbolic proof says nothing of the primitives' strength, of timing, or of the code: the tests hold the code to §16, and the model holds §16 to its claims.
 - **Constant time,** as for the envelope.
 
 ### Implementation notes
@@ -138,7 +145,7 @@ A Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers) that the revealed S
 - Nothing about a person: "someone with that Seedelf is writing". Its use is tying a conversation to a Seedelf the reader already knows.
 
 **What it doesn't:**
-- **Anything to anyone else.** The reader could have made the same proof with its own key, so a reveal it shows others proves nothing: the conversation stays deniable, as Signal's are. Witness indistinguishability makes the writer's proof and the reader's look alike (up to about 2/q: drawn scalars are never 0).
+- **Anything to anyone else.** The reader could have made the same proof with its own key, so a reveal it shows others proves nothing: the conversation stays deniable, as Signal's are. Witness indistinguishability makes the writer's proof and the reader's look alike (up to about 2/q: drawn scalars are never 0). The first message is deniable the same way: its base proof and keys proof each have the reader's key as their other branch, so the reader could have made a whole first message, for any of the writer's public registers (protocol.md §7).
 - **Anything after it was checked.** It's checked against a fresh read of the contract, never a view kept from before, but a Seedelf can move to another owner afterwards; the reveal's message keeps the time it came.
 - **Anything against a stolen x_B.** A thief of the reader's key makes reveals for any Seedelf, in conversations it starts with the reader: key-compromise impersonation, inherent to designated-verifier proofs and already open through the static DH. That key spends the Seedelf too.
 - **Any link between the writer's Seedelfs.** They share its key, but under DDH no one without it can tell.

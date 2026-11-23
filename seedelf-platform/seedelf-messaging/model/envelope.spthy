@@ -1,26 +1,35 @@
 /*
  * Seedelf Messaging's outer envelope: construction.md §4, the v1 envelope,
  * and protocol.md §4.1 and §16.1-16.2, the envelope around every session
- * message, in Tamarin. Chunk 54's 54b, its follow-up. Run it with
- * ./check.sh; the README says what is modelled, what isn't, and why.
+ * message, in Tamarin. Chunk 54's 54b, its follow-up, and call 16. Run it
+ * with ./check.sh; the README says what is modelled, what isn't, and why.
  *
- * Seven configurations, by flag:
+ * Twelve configurations, by flag:
  *   (none)                    the bare v1 envelope: anyone seals to a
  *                             re-randomized handle, and its key opens it;
  *   -D=FIRST                  first contact, sealed to R_B re-randomized by
- *                             the message's outer scalar, with a second handle
- *                             for every principal;
- *   -D=FIRST_NO_OUTER_CHECK   the same without the reader's check of that
- *                             scalar, to find the link it closes;
+ *                             the message's outer scalar, its ephemeral point
+ *                             derived from the message key, F's base proof
+ *                             and keys proof, with a second handle for every
+ *                             principal;
+ *   -D=FIRST_NO_OUTER_CHECK   the same without the reader's check of the
+ *                             outer scalar, to find the link it closes;
+ *   -D=FIRST_NO_EPHEMERAL_CHECK  the same without the check of the
+ *                             envelope's ephemeral point;
+ *   -D=FIRST_NO_KEYS_PROOF    the same without the check of F's keys proof;
+ *   -D=FIRST_NO_BASE_CHECK    the same without the check of F's base proof;
  *   -D=SEALED_TO_A_KEY        Bob's replies: sealed to a principal's identity
- *                             on a base, the inner layer and the outer scalar
- *                             given away;
+ *                             on a base, the inner layer's keys given away
+ *                             and its salt sealed;
  *   -D=INITIATOR_READS        the initiator reads replies from a responder
- *                             that is the attacker, and checks the scalar;
- *   -D=INITIATOR_READS_NO_OUTER_CHECK  the same without the check;
+ *                             that is the attacker, and checks the envelope;
+ *   -D=INITIATOR_READS_NO_OUTER_CHECK      the same without the outer check;
+ *   -D=INITIATOR_READS_NO_EPHEMERAL_CHECK  the same without the ephemeral one;
  *   -D=KEPT_KEY               one conversation's sealed messages at the
  *                             initiator's second chain, the reader keeping one
- *                             message's key, which is stolen.
+ *                             message's key, which is stolen;
+ *   -D=TAG_REDO               a control: the ratchet's AES-GCM tag redone
+ *                             from one genuine ciphertext and its key.
  * The session configurations have the ratchet's AES-GCM as on the wire:
  * anyone with the key redoes a tag without the associated data. Tamarin's
  * precomputation grows with every sealed message, and the whole session,
@@ -28,8 +37,9 @@
  * configuration that holds its scenario (README).
  *
  * Notation is session.spthy's. The envelope's register is (p, w), its
- * ephemeral point c, and its shared point [r]w = [x]c; o is the message's
- * outer scalar, from its message key and the ratchet's salt (§16.2).
+ * ephemeral point c, and its shared point [r]w = [x]c; the header carries p,
+ * c and tag(w), never w (call 16). o and r are the message's outer scalar
+ * and ephemeral scalar, from its message key and the ratchet's salt (§16.2).
  */
 
 theory SeedelfMessagingEnvelope
@@ -41,18 +51,21 @@ builtins: diffie-hellman
    alone, accepted only under its key and associated data. Its associated
    data is the header, which is public, so anyone with the key makes any
    envelope under it anyway. kdf_env is v1's HKDF over the shared point with
-   the header in its info (construction.md §4.1).
+   the header in its info (construction.md §4.1). tag is the header's
+   SHA-256 of w (call 16): one-way, so the header gives no register of anyone's
+   key, and a reader's key tests one by recomputing it.
 
    The ratchet's AES-256-GCM is gcm: a ciphertext senc and a tag. With the
    key, anyone reads the ciphertext and, from the tag, solves for the share
    the associated data put in it, gh(k, ad), without learning ad: GHASH is
    linear, and the key gives its hash key. So one genuine ciphertext and its
-   key make another under the same ad, as on the wire. kdf_msg and kdf_outer
-   are §16.2's two HKDFs over a message key and the ratchet's salt:
-   ENCRYPT's key and the outer scalar o. */
-functions: aenc/3, adec/2, kdf_env/2,
-           senc/2, sdec/2, gh/2, tagc/3, share/3, kdf_msg/2, kdf_outer/2,
-           kdf_sk/3, kdf_root/2, kdf_chain/2, ck_next/1, ck_mk/1
+   key make another under the same ad, as on the wire (-D=TAG_REDO shows
+   it). kdf_msg, kdf_outer and kdf_eph are §16.2's three HKDFs over a message
+   key and the ratchet's salt: ENCRYPT's key, the outer scalar o and the
+   envelope's ephemeral scalar r. */
+functions: aenc/3, adec/2, kdf_env/2, tag/1,
+           senc/2, sdec/2, gh/2, tagc/3, share/3, kdf_msg/2, kdf_outer/2, kdf_eph/2,
+           kdf_sk/3, kdf_root/2, kdf_chain/2, ck_mk/1
 equations: adec(aenc(m, k, ad), k) = m,
            sdec(senc(m, k), k) = m,
            share(tagc(s, k, m), k, m) = s
@@ -75,93 +88,114 @@ rule Reveal_ltk:
 
 /* ---- The reader (construction.md §4.2) ---- */
 
-/* The scan: the envelope's register is one of the reader's key, [x]p = w,
-   checked by equality, as the reveal's checks are. Then the shared point
-   [x]c, in a rule of its own: one rule raising two received points to a key
-   stalls Tamarin's precomputation (session.spthy's README). Then the open,
-   with that point: kept out of the open's pattern, a power of a received
-   point doesn't make Tamarin look for its sources through every point the
-   envelopes carry, which ran its precomputation out of memory. */
+/* The scan: the envelope's register is one of the reader's key, the tag of
+   [x]p is the header's, checked by equality, as the reveal's checks are.
+   Then the shared point [x]c, in a rule of its own: one rule raising two
+   received points to a key stalls Tamarin's precomputation (session.spthy's
+   README). Then the open, with that point: kept out of the open's pattern, a
+   power of a received point doesn't make Tamarin look for its sources
+   through every point the envelopes carry, which ran its precomputation out
+   of memory. The inner message keeps p and c, which the session's reader
+   checks once it decrypts. */
 rule Scan:
-  [ !Ltk(R, ~x), In(<'v1', p, w, c>) ]
-  --[ Eq(p^~x, w) ]->
-  [ Scanned(R, ~x, p, w, c) ]
+  [ !Ltk(R, ~x), In(<'v1', p, t, c>) ]
+  --[ Eq(tag(p^~x), t) ]->
+  [ Scanned(R, ~x, p, t, c) ]
 
 rule Shared_point:
-  [ Scanned(R, ~x, p, w, c) ] --> [ Shared(R, ~x, p, w, c, c^~x) ]
+  [ Scanned(R, ~x, p, t, c) ] --> [ Shared(R, ~x, p, t, c, c^~x) ]
 
 rule Open:
-  let H = <'v1', p, w, c> in
-  [ Shared(R, ~x, p, w, c, z), In(<H, aenc(m, kdf_env(H, z), H)>) ]
-  --[ Opened(R, p, w, c, m) ]->
-  [ Inner(R, ~x, p, m) ]
+  let H = <'v1', p, t, c> in
+  [ Shared(R, ~x, p, t, c, z), In(<H, aenc(m, kdf_env(H, z), H)>) ]
+  --[ Opened(R, p, t, c, m) ]->
+  [ Inner(R, ~x, p, c, m) ]
 
 /* ---- The bare envelope (no flag) ---- */
 
-#ifdef not FIRST & not FIRST_NO_OUTER_CHECK & not SEALED_TO_A_KEY & not INITIATOR_READS & not INITIATOR_READS_NO_OUTER_CHECK & not KEPT_KEY
+#ifdef not FIRST & not FIRST_NO_OUTER_CHECK & not FIRST_NO_EPHEMERAL_CHECK & not FIRST_NO_KEYS_PROOF & not FIRST_NO_BASE_CHECK & not SEALED_TO_A_KEY & not INITIATOR_READS & not INITIATOR_READS_NO_OUTER_CHECK & not INITIATOR_READS_NO_EPHEMERAL_CHECK & not KEPT_KEY & not TAG_REDO
 
 /* Anyone seals to a fresh re-randomization of a handle (construction.md
-   §4.1): p = [b]g, w = [b]v, c = [r]p, and the key from [r]w and the header. */
+   §4.1): p = [b]g, w = [b]v, c = [r]p, the header (p, tag(w), c), and the
+   key from [r]w and the header. v1's own API draws r; only the session layer
+   derives it (§16.2). An envelope is named by its header: p, the tag, c. */
 rule Seal:
   let p = 'g'^~b
       w = pk^~b
       c = p^~r
-      H = <'v1', p, w, c>
+      H = <'v1', p, tag(w), c>
   in
   [ !Pk($P, pk), Fr(~b), Fr(~r), Fr(~m) ]
-  --[ Sealed($P, p, w, c, ~m) ]->
+  --[ Sealed($P, p, tag(w), c, ~m) ]->
   [ Out(<H, aenc(~m, kdf_env(H, w^~r), H)>) ]
 
 /* security.md 1: an envelope's content is secret unless its recipient's key
    is stolen. */
 lemma envelope_secret:
-  "All P p w c m #i #j. Sealed(P, p, w, c, m)@i & K(m)@j ==> Ex #r. RevLtk(P)@r"
+  "All P p t c m #i #j. Sealed(P, p, t, c, m)@i & K(m)@j ==> Ex #r. RevLtk(P)@r"
 
 /* construction.md §2: no false matches. Only the key an envelope was sealed
    to opens it. */
 lemma only_its_recipient_opens_it:
-  "All R P p w c m m2 #i #s. Opened(R, p, w, c, m)@i & Sealed(P, p, w, c, m2)@s ==> R = P"
+  "All R P p t c m m2 #i #s. Opened(R, p, t, c, m)@i & Sealed(P, p, t, c, m2)@s ==> R = P"
 
 /* security.md 5 and 6: an honest envelope's ephemeral point opens only
    under its own header and content. Another register of the same key,
    swapped in, fails, as any change does; unless the reader's key was stolen
    first, which makes any envelope. */
 lemma envelope_binds_its_header:
-  "All R P p w c m p2 w2 m2 #i #s.
-     Opened(R, p, w, c, m)@i & Sealed(P, p2, w2, c, m2)@s
-     ==> (p = p2 & w = w2 & m = m2) | (Ex #r. RevLtk(R)@r & #r < #i)"
+  "All R P p t c m p2 t2 m2 #i #s.
+     Opened(R, p, t, c, m)@i & Sealed(P, p2, t2, c, m2)@s
+     ==> (p = p2 & t = t2 & m = m2) | (Ex #r. RevLtk(R)@r & #r < #i)"
 
 lemma envelope_opens: exists-trace
-  "Ex P p w c m #s #o. Sealed(P, p, w, c, m)@s & Opened(P, p, w, c, m)@o
+  "Ex P p t c m #s #o. Sealed(P, p, t, c, m)@s & Opened(P, p, t, c, m)@o
    & not (Ex Q #r. RevLtk(Q)@r)"
 
 #endif
 
 /* ---- First contact and the first reply, sealed (§3, §4.1) ---- */
 
-/* The reader's check, once a message decrypts: the envelope's generator is
-   the conversation's base times the message's outer scalar (§4.1, §16.2).
-   The NO_OUTER_CHECK configurations drop it. (#ifdef blocks don't nest:
-   each is flat.) */
-#ifdef FIRST | INITIATOR_READS | KEPT_KEY
+/* The reader's checks, once a message decrypts (§3, §4.1, §16.2, call 16):
+   the envelope's generator is the conversation's base times the message's
+   outer scalar, and its ephemeral point is that generator times the
+   message's ephemeral scalar. Before its Diffie–Hellman, F's keys proof:
+   E_A, S_A and A are powers of p0 whose logs the writer knows, or, for A,
+   the writer holds the reader's key. And F's base proof: p0 is a known power
+   of the named handle's generator, or the writer holds the reader's key.
+   Each control drops one of the four. (#ifdef blocks don't nest: each is
+   flat.) */
+#ifdef FIRST | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK | INITIATOR_READS | INITIATOR_READS_NO_EPHEMERAL_CHECK | KEPT_KEY
 restriction outer_check: "All p q #i. OuterCheck(p, q)@i ==> p = q"
 #endif
 
-#ifdef FIRST | FIRST_NO_OUTER_CHECK
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK | INITIATOR_READS | INITIATOR_READS_NO_OUTER_CHECK | KEPT_KEY
+restriction ephemeral_check: "All c q #i. EphemeralCheck(c, q)@i ==> c = q"
+#endif
+
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_BASE_CHECK
+restriction keys_check: "All a b #i. KeysCheck(a, b)@i ==> a = b"
+#endif
+
+/* The base proof is designated-verifier (call 16): a base that is no known
+   power of the handle's generator passes only by its other branch, made
+   with the reader's own key. */
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF
+restriction base_check: "All R c #i. AnyBase(R, c)@i ==> Ex #r. RevLtk(R)@r & #r < #i"
+#endif
+
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK
 
 restriction unique_cid: "All R c #i #j. RNewCid(R, c)@i & RNewCid(R, c)@j ==> #i = #j"
 
-/* Observers, never published, as in session.spthy: KeyOn(P, p0, A) marks
-   A = [x_P]p0. */
-rule Key_on_honest_base:
-  [ !Ltk(P, ~x), !Base(~rb) ] --[ KeyOn(P, 'g'^~rb, 'g'^(~rb*~x)) ]-> [ ]
-
-rule Key_on_attacker_base:
-  [ !Ltk(P, ~x), In($k) ] --[ KeyOn(P, 'g'^$k, 'g'^($k*~x)) ]-> [ ]
-
 /* The initiator: session.spthy's I_Start, its first message sealed to R_B
-   re-randomized by the message's outer scalar o, and the inner ciphertext
-   carrying ENCRYPT's salt (§16.1).
+   re-randomized by the message's outer scalar o, its ephemeral point [r] of
+   that, and the inner ciphertext carrying ENCRYPT's salt (§16.1). o and r
+   come from the message key and the salt; nothing of the envelope is drawn.
+   Its keys proof is !Proof: F, S_A and the reader's w0, which the proof's
+   challenge binds; the reader looks it up. (A proof term whose exponents a
+   reader only matched would fail Tamarin's message-derivation check: README,
+   envelope assumption 5.)
 
    The initiator takes the reader's key ~xr, and uses it only in
    w0 = [x_B]p0 = [b]v_B, which it computes from the handle and b.
@@ -184,68 +218,99 @@ rule I_Start:
       h   = <Si, '0', '0'>
       ad  = <~cid, p0, Ai, p0, w0, h>
       o   = kdf_outer(mk, ~salt)
+      r   = kdf_eph(mk, ~salt)
       p   = p0^o
       w   = w0^o
-      c   = p^~r
-      H   = <'v1', p, w, c>
+      c   = p^r
+      H   = <'v1', p, tag(w), c>
   in
   [ !Ltk($Ini, ~xi), !Ltk($Rsp, ~xr), Fr(~rb), Fr(~cid), Fr(~ei), Fr(~si), Fr(~m1),
-    Fr(~salt), Fr(~r) ]
+    Fr(~salt) ]
   --[ Neq($Ini, $Rsp), IStart($Ini, $Rsp, ~cid, p0, Ai, w0, F),
       ISent($Ini, $Rsp, ~cid, 'm1', ~m1), IKeys($Ini, $Rsp, ~cid, 'k1', RK1, CK) ]->
-  [ !Base(~rb), I1($Ini, $Rsp, ~cid, ~rb, Ai, ~xr, ~si, RK1),
-    Out(<H, aenc(<'0x01', F, h, ~salt, gcm(~m1, kdf_msg(mk, ~salt), ad)>, kdf_env(H, w^~r), H)>) ]
+  [ !Base(~rb), !Proof(F, Si, w0), I1($Ini, $Rsp, ~cid, ~rb, Ai, ~xr, ~si, RK1),
+    Out(<H, aenc(<'0x01', F, h, ~salt, gcm(~m1, kdf_msg(mk, ~salt), ad)>, kdf_env(H, w^r), H)>) ]
 
-/* The responder: an opened first-contact message, on an honest initiator's
-   base or G^k for a k the attacker chose (session.spthy's assumption 4). */
+/* The responder's keys proof, before any Diffie–Hellman with its key but
+   w0's (call 16), three ways. An honest writer's, for this F, this S_A and
+   this reader's w0. The attacker's, with exponents it names and sends beside
+   the message: the checks then make E_A, S_A and A those powers of p0. Or
+   the designated-verifier branch, with exponents for E_A and S_A and the
+   reader's own key, which the attacker sends only once it holds it: then A
+   is any point, as the reader could have made the proof itself. The
+   attacker's exponents are public names, as its bases are G^$k: three
+   powers of one received point by exponents it sent as messages never
+   finished Tamarin's variant computation (README, envelope assumption 5). */
+rule R_Keys_proof_honest:
+  let F = <cid, t, rep, p0, Ai, Ei> in
+  [ Inner(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>), !Proof(F, Si, w0) ]
+  --[ KeysCheck(w0, p0^~xr) ]->
+  [ Proved(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>) ]
+
+rule R_Keys_proof_attacker:
+  let F = <cid, t, rep, p0, Ai, Ei> in
+  [ Inner(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>), In(<$e, $s, $a>) ]
+  --[ KeysCheck(p0^$e, Ei), KeysCheck(p0^$s, Si), KeysCheck(p0^$a, Ai) ]->
+  [ Proved(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>) ]
+
+rule R_Keys_proof_by_the_reader_key:
+  let F = <cid, t, rep, p0, Ai, Ei> in
+  [ Inner(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>), In(<$e, $s, ~xr>) ]
+  --[ KeysCheck(p0^$e, Ei), KeysCheck(p0^$s, Si), KeysByTheReaderKey(Rsp, cid) ]->
+  [ Proved(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>) ]
+
+/* The responder's base, three ways (session.spthy's assumption 4, and call
+   16): an honest initiator's, G^k for a k the attacker chose (both known
+   powers of the named handle's generator, G), or any point, which passes the
+   base check only with the reader's key (base_check). */
 rule R_Derive_m1a_honest_base:
   let p0 = 'g'^~rb
       F  = <cid, t, rep, p0, Ai, Ei>
   in
-  [ Inner(Rsp, ~xr, p, <'0x01', F, <Si, '0', '0'>, salt, ct>), !Base(~rb) ]
+  [ Proved(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>), !Base(~rb) ]
   --[ RStatic(Rsp, p0, Ai, Ai^~xr) ]->
-  [ R0a(Rsp, ~xr, F, ~rb, Si, p0^~xr, Ai^~xr, p, salt, ct) ]
+  [ R0a(Rsp, ~xr, F, Si, p0^~xr, Ai^~xr, p, c, salt, ct) ]
 
 rule R_Derive_m1a_attacker_base:
   let p0 = 'g'^$k
       F  = <cid, t, rep, p0, Ai, Ei>
   in
-  [ Inner(Rsp, ~xr, p, <'0x01', F, <Si, '0', '0'>, salt, ct>), In($k) ]
+  [ Proved(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>), In($k) ]
   --[ RStatic(Rsp, p0, Ai, Ai^~xr) ]->
-  [ R0a(Rsp, ~xr, F, $k, Si, p0^~xr, Ai^~xr, p, salt, ct) ]
+  [ R0a(Rsp, ~xr, F, Si, p0^~xr, Ai^~xr, p, c, salt, ct) ]
+
+rule R_Derive_m1a_any_base:
+  let F = <cid, t, rep, p0, Ai, Ei> in
+  [ Proved(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>) ]
+  --[ AnyBase(Rsp, cid), RStatic(Rsp, p0, Ai, Ai^~xr) ]->
+  [ R0a(Rsp, ~xr, F, Si, p0^~xr, Ai^~xr, p, c, salt, ct) ]
 
 rule R_Derive_m1b:
-  let p0  = 'g'^e0
-      F   = <cid, t, rep, p0, Ai, Ei>
+  let F   = <cid, t, rep, p0, Ai, Ei>
       SK  = kdf_sk(Ei^~xr, sdh, F)
-      RK1 = kdf_root(SK, Si^~xr)
       CKr = kdf_chain(SK, Si^~xr)
       h   = <Si, '0', '0'>
       ad  = <cid, p0, Ai, p0, w0, h>
   in
-  [ R0a(Rsp, ~xr, F, e0, Si, w0, sdh, p, salt, ct) ]
+  [ R0a(Rsp, ~xr, F, Si, w0, sdh, p, c, salt, ct) ]
   -->
-  [ R0b(Rsp, F, e0, Si, w0, RK1, ad, ck_mk(CKr), p, salt, ct) ]
+  [ R0b(Rsp, F, Si, w0, ad, ck_mk(CKr), p, c, salt, ct) ]
 
 /* It authenticates, and the envelope went to R_B re-randomized by this
-   message's o: a request, read as replying would. Then a fresh T1. */
+   message's o, with its ephemeral point that times this message's r: a
+   request, read as replying would. Every point the reader's key touched is
+   named: p and c of the envelope, and p0, E_A, S_A and A of F and the
+   header. (Its reply isn't here: nothing reads it.) */
 rule R_Read_m1:
-  let p0  = 'g'^e0
-      F   = <cid, t, rep, p0, Ai, Ei>
-      RK2 = kdf_root(RK1, Si^~t1)
-      CKs = kdf_chain(RK1, Si^~t1)
-  in
-  [ R0b(Rsp, F, e0, Si, w0, RK1, ad, mk, p, salt, gcm(m, kdf_msg(mk, salt), ad)), Fr(~t1) ]
-  --[ OuterCheck(p, p0^kdf_outer(mk, salt)), RNewCid(Rsp, cid),
-      RAccept(Rsp, cid, p0, Ai, w0, F), RRecv(Rsp, cid, p0, Ai, w0, 'm1', m),
-      RKeys(Rsp, cid, 'k2', RK2, CKs), RTook(Rsp, cid, p) ]->
-  [ R1(Rsp, cid, e0, Ai, w0, ~t1, Si, RK2, CKs) ]
+  let F = <cid, t, rep, p0, Ai, Ei> in
+  [ R0b(Rsp, F, Si, w0, ad, mk, p, c, salt, gcm(m, kdf_msg(mk, salt), ad)) ]
+  --[ OuterCheck(p, p0^kdf_outer(mk, salt)), EphemeralCheck(c, p^kdf_eph(mk, salt)),
+      RNewCid(Rsp, cid), RAccept(Rsp, cid, p0, Ai, w0, F), RRecv(Rsp, cid, p0, Ai, w0, 'm1', m),
+      RTookAt(Rsp, cid, p), RTookAt(Rsp, cid, c), RTookAt(Rsp, cid, p0),
+      RTookAt(Rsp, cid, Ei), RTookAt(Rsp, cid, Si), RTookAt(Rsp, cid, Ai) ]->
+  [ ]
 
-#endif
-
-/* ---- Another register of the reader's (§2, call 13) ---- */
-
-#ifdef FIRST | FIRST_NO_OUTER_CHECK
+/* ---- Another register of the reader's (§2, calls 13 and 16) ---- */
 
 /* Every principal's second Seedelf, (g2, [x]g2) with g2 = [d]G for a d no
    one learns: knowing it would show the two handles are one key's, the link
@@ -256,9 +321,10 @@ rule Second_handle:
 
 restriction one_second: "All P #i #j. OneSecond(P)@i & OneSecond(P)@j ==> #i = #j"
 
-/* An observer, never published. OnSecond(P, p): p is a multiple of P's
-   second handle's generator by a scalar the attacker knows, so an envelope
-   on p was aimed at that handle. */
+/* An observer, never published. OnSecond(P, X): X is a multiple of P's
+   second handle's generator by a scalar the attacker knows, so the reader's
+   key on X is that multiple of the second handle's public value, which the
+   attacker knows: X was aimed at that handle. */
 rule On_second_handle:
   [ !Second(P, ~d), In(k) ] --[ OnSecond(P, ('g'^~d)^k) ]-> [ ]
 
@@ -276,50 +342,58 @@ rule Base:
 rule Identity_on_a_base:
   [ !Base(~rb), !Ltk(P, ~x) ] --> [ Out(('g'^~rb)^~x) ]
 
-/* A reply: sealed to P's identity (p0, A) re-randomized by an o the
-   attacker is given, as if it held the message key and the salt o comes
-   from. (Given, not chosen: it raises any point it holds to any power it
-   knows, so a choice adds nothing, and an exponent it sends into a
-   published power loops Tamarin's search.) Its content stands for the whole inner layer, whose keys the
-   attacker may hold: with x_B stolen before Bob read the first message,
+/* A reply: sealed to P's identity (p0, A) re-randomized by o, its
+   ephemeral point by r, both from the message key and the ratchet's salt
+   (§16.2). The attacker is given the message key, as if it held every key
+   of the inner layer: with x_B stolen before Bob read the first message,
    Bob's ratchet runs on the attacker's key (the session model's assumption
-   2). The sender takes A's shape from P's key: it uses it only in A. */
+   2). The salt is drawn, and travels inside the envelope, as the ratchet's
+   ciphertext carries it: the content <m, salt> stands for the whole inner
+   layer. (Given, not chosen: an exponent the attacker sends into a
+   published power loops Tamarin's search.) The sender takes A's shape from
+   P's key: it uses it only in A. */
 rule Seal_to_a_key_on_an_honest_base:
   let p0 = 'g'^~rb
-      p  = p0^~o
-      w  = (p0^~x)^~o
-      c  = p^~r
-      H  = <'v1', p, w, c>
+      o  = kdf_outer(~mk, ~salt)
+      r  = kdf_eph(~mk, ~salt)
+      p  = p0^o
+      w  = (p0^~x)^o
+      c  = p^r
+      H  = <'v1', p, tag(w), c>
   in
-  [ !Base(~rb), !Ltk($P, ~x), Fr(~o), Fr(~r), Fr(~m) ]
-  --[ SealedToKey($P, ~m) ]->
-  [ Out(<H, aenc(~m, kdf_env(H, w^~r), H)>), Out(~o) ]
+  [ !Base(~rb), !Ltk($P, ~x), Fr(~mk), Fr(~salt), Fr(~m) ]
+  --[ SealedToKey($P, ~m, ~salt) ]->
+  [ Out(<H, aenc(<~m, ~salt>, kdf_env(H, w^r), H)>), Out(~mk) ]
 
 rule Seal_to_a_key_on_an_attacker_base:
   let p0 = 'g'^$k
-      p  = p0^~o
-      w  = (p0^~x)^~o
-      c  = p^~r
-      H  = <'v1', p, w, c>
+      o  = kdf_outer(~mk, ~salt)
+      r  = kdf_eph(~mk, ~salt)
+      p  = p0^o
+      w  = (p0^~x)^o
+      c  = p^r
+      H  = <'v1', p, tag(w), c>
   in
-  [ !Ltk($P, ~x), In($k), Fr(~o), Fr(~r), Fr(~m) ]
-  --[ SealedToKey($P, ~m) ]->
-  [ Out(<H, aenc(~m, kdf_env(H, w^~r), H)>), Out(~o) ]
+  [ !Ltk($P, ~x), In($k), Fr(~mk), Fr(~salt), Fr(~m) ]
+  --[ SealedToKey($P, ~m, ~salt) ]->
+  [ Out(<H, aenc(<~m, ~salt>, kdf_env(H, w^r), H)>), Out(~mk) ]
 
 /* §1.1: x_B, stolen even before Bob reads the first message, opens nothing
-   Bob sent. Whatever the inner layer gives away, a reply sealed to R_A is
-   open to A's key alone. */
+   Bob sent. Whatever the inner layer's keys give away, a reply sealed to
+   R_A is open to A's key alone; so is its salt, from which o and r come. */
 lemma replies_sealed_to_r_a:
-  "All P m #i #j. SealedToKey(P, m)@i & K(m)@j ==> Ex #r. RevLtk(P)@r"
+  "(All P m salt #i #j. SealedToKey(P, m, salt)@i & K(m)@j ==> Ex #r. RevLtk(P)@r)
+ & (All P m salt #i #j. SealedToKey(P, m, salt)@i & KU(salt)@j ==> Ex #r. RevLtk(P)@r)"
 
 lemma a_reply_opens: exists-trace
-  "Ex P p w c m #i #j. SealedToKey(P, m)@i & Opened(P, p, w, c, m)@j & not (Ex Q #r. RevLtk(Q)@r)"
+  "Ex P p t c m salt #i #j. SealedToKey(P, m, salt)@i & Opened(P, p, t, c, <m, salt>)@j
+   & not (Ex Q #r. RevLtk(Q)@r)"
 
 #endif
 
-/* ---- The initiator's check (-D=INITIATOR_READS) ---- */
+/* ---- The initiator's checks (-D=INITIATOR_READS) ---- */
 
-#ifdef INITIATOR_READS | INITIATOR_READS_NO_OUTER_CHECK
+#ifdef INITIATOR_READS | INITIATOR_READS_NO_OUTER_CHECK | INITIATOR_READS_NO_EPHEMERAL_CHECK
 
 /* The initiator's side of a conversation whose responder is the attacker:
    its base p0 = [b]G, its identity A on it, and the cid, all published; the
@@ -334,15 +408,17 @@ rule I_Conversation:
   [ !IConv($Ini, ~cid, ~rb, Ai, w0), Out(<~cid, p0, Ai>) ]
 
 /* It reads a reply from an envelope its own key opened, under a message key
-   the attacker gives it, and checks o (§4.1). */
+   the attacker gives it, and checks o and r (§4.1). Its key touched p and
+   c: each is named. */
 rule I_Read_a_reply:
   let p0 = 'g'^~rb
       h  = <T1, '0', '0'>
       ad = <~cid, p0, Ai, p0, w0, h>
   in
   [ !IConv(Ini, ~cid, ~rb, Ai, w0), In(mk),
-    Inner(Ini, ~xi, p, <'0x02', ~cid, h, salt, gcm(m, kdf_msg(mk, salt), ad)>) ]
-  --[ OuterCheck(p, p0^kdf_outer(mk, salt)), ITook(Ini, ~cid, p) ]->
+    Inner(Ini, ~xi, p, c, <'0x02', ~cid, h, salt, gcm(m, kdf_msg(mk, salt), ad)>) ]
+  --[ OuterCheck(p, p0^kdf_outer(mk, salt)), EphemeralCheck(c, p^kdf_eph(mk, salt)),
+      ITookAt(Ini, ~cid, p), ITookAt(Ini, ~cid, c) ]->
   [ ]
 
 /* Its handles: the root one, whose multiples the attacker knows the logs of
@@ -362,24 +438,35 @@ rule I_On_a_known_multiple_of_g:
 
 #ifdef INITIATOR_READS
 
-/* §2, §4.1 (call 13): the initiator takes no reply aimed at one of its
-   handles, so a reply's reaction doesn't tell the responder who wrote, even
-   when the responder is the attacker. Nothing excuses it. */
+/* §2, §4.1 (calls 13 and 16): the initiator takes no reply with either
+   point its key touched aimed at one of its handles, so a reply's reaction
+   doesn't tell the responder who wrote, even when the responder is the
+   attacker. Nothing excuses it. */
 lemma initiator_takes_no_reply_aimed_at_its_handles:
-  "(All I cid p #i #k. ITook(I, cid, p)@i & KnownLog(p)@k ==> F)
- & (All I cid p #i #k. ITook(I, cid, p)@i & OnSecond(I, p)@k ==> F)"
+  "(All I cid X #i #k. ITookAt(I, cid, X)@i & KnownLog(X)@k ==> F)
+ & (All I cid X #i #k. ITookAt(I, cid, X)@i & OnSecond(I, X)@k ==> F)"
 
 lemma initiator_reads_a_reply: exists-trace
-  "Ex I cid p #i. ITook(I, cid, p)@i & not (Ex Q #r. RevLtk(Q)@r)"
+  "Ex I cid p #i. ITookAt(I, cid, p)@i & not (Ex Q #r. RevLtk(Q)@r)"
 
 #endif
 
 #ifdef INITIATOR_READS_NO_OUTER_CHECK
 
-/* Without the check, a reply aimed at the initiator's root handle is taken,
-   which tells the responder who wrote. */
+/* Without the outer check, a reply aimed at the initiator's root handle is
+   taken, which tells the responder who wrote. */
 lemma without_the_check_a_reply_links_the_initiator: exists-trace
-  "Ex I cid p #i #k. ITook(I, cid, p)@i & KnownLog(p)@k & not (Ex Q #r. RevLtk(Q)@r)"
+  "Ex I cid p #i #k. ITookAt(I, cid, p)@i & KnownLog(p)@k & not (Ex Q #r. RevLtk(Q)@r)"
+
+#endif
+
+#ifdef INITIATOR_READS_NO_EPHEMERAL_CHECK
+
+/* Without the ephemeral check, a reply whose envelope's generator is the
+   conversation's, but whose ephemeral point is on the initiator's root
+   handle, is taken: its outer key comes from the handle's public value. */
+lemma without_the_ephemeral_check_a_reply_links_the_initiator: exists-trace
+  "Ex I cid c #i #k. ITookAt(I, cid, c)@i & KnownLog(c)@k & not (Ex Q #r. RevLtk(Q)@r)"
 
 #endif
 
@@ -394,7 +481,9 @@ lemma without_the_check_a_reply_links_the_initiator: exists-trace
    conversation's envelopes are what it sends: the first message, carrying
    F, sealed to R_B; the reply, carrying the cid and T1, sealed to R_A; and
    the chain's two messages, sealed to R_B by their own outer scalars. Every
-   inner key is fresh, so no other o is in reach. */
+   inner key is fresh, so no other o or r is in reach. F's base and keys
+   proofs aren't here: they give a reader what the session model's
+   assumption 4 and 12 say, and nothing a kept key reaches. */
 rule Conversation:
   let p0 = 'g'^~rb
       Ai = p0^~xi
@@ -414,14 +503,15 @@ rule Send_first:
       h  = <p0^~si, '0', '0'>
       ad = <~cid, p0, Ai, p0, w0, h>
       o  = kdf_outer(~k, ~salt)
+      r  = kdf_eph(~k, ~salt)
       p  = p0^o
       w  = w0^o
-      c  = p^~r
-      H  = <'v1', p, w, c>
+      c  = p^r
+      H  = <'v1', p, tag(w), c>
   in
-  [ SendFirst(I, ~cid, ~rb, ~xi, ~xr), Fr(~ei), Fr(~si), Fr(~k), Fr(~salt), Fr(~r), Fr(~m1) ]
+  [ SendFirst(I, ~cid, ~rb, ~xi, ~xr), Fr(~ei), Fr(~si), Fr(~k), Fr(~salt), Fr(~m1) ]
   -->
-  [ Out(<H, aenc(<'0x01', F, h, ~salt, gcm(~m1, kdf_msg(~k, ~salt), ad)>, kdf_env(H, w^~r), H)>) ]
+  [ Out(<H, aenc(<'0x01', F, h, ~salt, gcm(~m1, kdf_msg(~k, ~salt), ad)>, kdf_env(H, w^r), H)>) ]
 
 rule Send_reply:
   let p0 = 'g'^~rb
@@ -430,14 +520,15 @@ rule Send_reply:
       h  = <p0^~t1, '0', '0'>
       ad = <~cid, p0, Ai, p0, w0, h>
       o  = kdf_outer(~k, ~salt)
+      r  = kdf_eph(~k, ~salt)
       p  = p0^o
       w  = Ai^o
-      c  = p^~r
-      H  = <'v1', p, w, c>
+      c  = p^r
+      H  = <'v1', p, tag(w), c>
   in
-  [ SendReply(I, ~cid, ~rb, ~xi, ~xr), Fr(~t1), Fr(~k), Fr(~salt), Fr(~r), Fr(~r1) ]
+  [ SendReply(I, ~cid, ~rb, ~xi, ~xr), Fr(~t1), Fr(~k), Fr(~salt), Fr(~r1) ]
   -->
-  [ Out(<H, aenc(<'0x02', ~cid, h, ~salt, gcm(~r1, kdf_msg(~k, ~salt), ad)>, kdf_env(H, w^~r), H)>) ]
+  [ Out(<H, aenc(<'0x02', ~cid, h, ~salt, gcm(~r1, kdf_msg(~k, ~salt), ad)>, kdf_env(H, w^r), H)>) ]
 
 rule Send_chain_0:
   let p0 = 'g'^~rb
@@ -446,14 +537,15 @@ rule Send_chain_0:
       h  = <p0^~s2, '1', '0'>
       ad = <~cid, p0, Ai, p0, w0, h>
       o  = kdf_outer(~mk, ~salt)
+      r  = kdf_eph(~mk, ~salt)
       p  = p0^o
       w  = w0^o
-      c  = p^~r
-      H  = <'v1', p, w, c>
+      c  = p^r
+      H  = <'v1', p, tag(w), c>
   in
-  [ SendChain0(Rsp, ~cid, ~rb, ~xi, ~xr, ~s2, ~mk), Fr(~salt), Fr(~r), Fr(~m) ]
+  [ SendChain0(Rsp, ~cid, ~rb, ~xi, ~xr, ~s2, ~mk), Fr(~salt), Fr(~m) ]
   --[ SentChain(Rsp, ~cid, '0', ~m, ~salt, p) ]->
-  [ Out(<H, aenc(<'0x02', ~cid, h, ~salt, gcm(~m, kdf_msg(~mk, ~salt), ad)>, kdf_env(H, w^~r), H)>) ]
+  [ Out(<H, aenc(<'0x02', ~cid, h, ~salt, gcm(~m, kdf_msg(~mk, ~salt), ad)>, kdf_env(H, w^r), H)>) ]
 
 rule Send_chain_1:
   let p0 = 'g'^~rb
@@ -462,24 +554,26 @@ rule Send_chain_1:
       h  = <p0^~s2, '1', '1'>
       ad = <~cid, p0, Ai, p0, w0, h>
       o  = kdf_outer(~mk, ~salt)
+      r  = kdf_eph(~mk, ~salt)
       p  = p0^o
       w  = w0^o
-      c  = p^~r
-      H  = <'v1', p, w, c>
+      c  = p^r
+      H  = <'v1', p, tag(w), c>
   in
-  [ SendChain1(Rsp, ~cid, ~rb, ~xi, ~xr, ~s2, ~mk), Fr(~salt), Fr(~r), Fr(~m) ]
+  [ SendChain1(Rsp, ~cid, ~rb, ~xi, ~xr, ~s2, ~mk), Fr(~salt), Fr(~m) ]
   --[ SentChain(Rsp, ~cid, '1', ~m, ~salt, p) ]->
-  [ Out(<H, aenc(<'0x02', ~cid, h, ~salt, gcm(~m, kdf_msg(~mk, ~salt), ad)>, kdf_env(H, w^~r), H)>) ]
+  [ Out(<H, aenc(<'0x02', ~cid, h, ~salt, gcm(~m, kdf_msg(~mk, ~salt), ad)>, kdf_env(H, w^r), H)>) ]
 
 /* The responder reads n = 0 with the key it kept: from an envelope its key
-   opened, under that key and the associated data, and checks o. */
+   opened, under that key and the associated data, and checks o and r. */
 rule R_Read_with_the_kept_key:
   let p0 = 'g'^~rb
       ad = <~cid, p0, Ai, p0, w0, <S2, '1', '0'>>
   in
   [ Kept(Rsp, ~cid, ~rb, Ai, w0, S2, mk),
-    Inner(Rsp, ~xr, p, <'0x02', ~cid, <S2, '1', '0'>, salt, gcm(m, kdf_msg(mk, salt), ad)>) ]
-  --[ OuterCheck(p, p0^kdf_outer(mk, salt)), RReadKept(Rsp, ~cid, m, p) ]->
+    Inner(Rsp, ~xr, p, c, <'0x02', ~cid, <S2, '1', '0'>, salt, gcm(m, kdf_msg(mk, salt), ad)>) ]
+  --[ OuterCheck(p, p0^kdf_outer(mk, salt)), EphemeralCheck(c, p^kdf_eph(mk, salt)),
+      RReadKept(Rsp, ~cid, m, p) ]->
   [ ]
 
 /* The kept key alone, as the session model steals it: no salt, no
@@ -488,10 +582,13 @@ rule Reveal_kept_key:
   [ KeptCopy(Rsp, ~cid, mk) ] --[ RevMk(Rsp, ~cid) ]-> [ Out(mk) ]
 
 /* The session model's assumption 2, with the wire's means: from the key,
-   the salt and one genuine ciphertext, the attacker would get o, then w0
-   from the envelope's register, and redo the tag without the associated
-   data. The salt and the ciphertext are inside an envelope only x_B opens.
-   So the kept key, stolen alone, neither writes its message nor opens it. */
+   the salt and one genuine ciphertext, the attacker would get o and r, the
+   envelope's own plaintext, and redo the tag without the associated data.
+   w0, which that associated data holds, is on the wire nowhere: the
+   envelope's header carries a tag of [o]w0, never the point (call 16). The
+   salt and the ciphertext are inside an envelope only x_B opens, or the
+   salt with the key: its key is [r]w, r from the key and the salt. So the
+   kept key, stolen alone, neither writes its message nor opens it. */
 /* What the attacker would need, out of reach until x_B is stolen: the
    conversation's base and the reader's identity, inside the first message
    and in the associated data; and the genuine message's salt, inside its
@@ -521,7 +618,27 @@ lemma kept_key_reads_its_message: exists-trace
    x_B the attacker opens the genuine envelope, and the key and the tag's
    share make another message under the same associated data, to the same
    register; but Tamarin's search for it ran out of 6 GB, named as far as a
-   lemma can name it (README). */
+   lemma can name it (README). -D=TAG_REDO shows the tag's part alone. */
+
+#endif
+
+/* ---- The tag redone (-D=TAG_REDO) ---- */
+
+#ifdef TAG_REDO
+
+/* A control for assumption 2: one genuine ciphertext and its key, its
+   associated data never published, and a reader that accepts any ciphertext
+   under that key and data. The attacker makes one for a message of its own:
+   from the key, the text; from the text and the tag, the share; from the
+   share, a tag on anything. */
+rule Tag_genuine:
+  [ Fr(~m), Fr(~k), Fr(~ad) ] --[ TagGenuine(~m) ]-> [ !TagAd(~k, ~ad), Out(gcm(~m, ~k, ~ad)), Out(~k) ]
+
+rule Tag_accept:
+  [ !TagAd(k, ad), In(gcm(m, k, ad)) ] --[ TagAccepted(m) ]-> [ ]
+
+lemma tag_redone_without_the_associated_data: exists-trace
+  "Ex m #a. TagAccepted(m)@a & not (Ex #g. TagGenuine(m)@g)"
 
 #endif
 
@@ -529,32 +646,93 @@ lemma kept_key_reads_its_message: exists-trace
 
 #ifdef FIRST
 
-/* §2, §4.1 (call 13): a reader takes a message only from an envelope on its
-   conversation's base. So it takes no message on a handle it names aimed at
-   its other handle, and doesn't react in a way that tells the writer the two
-   are one key's. Nothing excuses it. */
+/* §2, §3, §4.1 (calls 13 and 16): a reader takes no first message written to
+   one of its handles in which any point its key touched is aimed at its
+   other handle: the envelope's p and c, and F's p0, E_A, A and the first
+   ratchet key S_A. So it doesn't react in a way that tells the writer the
+   two are one key's. Only its own key, stolen first, excuses it: the base
+   proof's and the keys proof's designated-verifier branches let that key
+   prove any base and any A, and with it the attacker tests [x]g2 = v2
+   outright, no reaction needed. */
 lemma responder_takes_nothing_aimed_at_its_other_handle:
-  "All R cid p #i #k. RTook(R, cid, p)@i & OnSecond(R, p)@k ==> F"
+  "All R cid X #i #k. RTookAt(R, cid, X)@i & OnSecond(R, X)@k ==> Ex #r. RevLtk(R)@r & #r < #i"
 
 lemma first_contact_executable: exists-trace
   "Ex Ini Rsp cid p0 Ai w0 F m1 #s #t #a.
      IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, cid, 'm1', m1)@t
    & RRecv(Rsp, cid, p0, Ai, w0, 'm1', m1)@a & not (Ex P #k. RevLtk(P)@k)"
 
+/* The excuse is needed, by each branch: with the reader's key, the base
+   proof's other branch proves a base on its other handle, and the keys
+   proof's an A there on a base that is G^k. */
+lemma reader_key_proves_a_base_on_its_other_handle: exists-trace
+  "Ex R cid p0 A w0 F #a #i #k #r.
+     AnyBase(R, cid)@a & RAccept(R, cid, p0, A, w0, F)@i & RTookAt(R, cid, p0)@i & OnSecond(R, p0)@k
+   & RevLtk(R)@r & #r < #i
+   & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
+
+lemma reader_key_proves_an_identity_on_its_other_handle: exists-trace
+  "Ex R cid p0 A w0 F #b #i #k #r.
+     KeysByTheReaderKey(R, cid)@b & RAccept(R, cid, p0, A, w0, F)@i & RTookAt(R, cid, A)@i
+   & OnSecond(R, A)@k & RevLtk(R)@r & #r < #i & not (Ex R3 c3 #a. AnyBase(R3, c3)@a)
+   & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
+
 #endif
 
-/* ---- Lemmas: without the outer check (-D=FIRST_NO_OUTER_CHECK) ---- */
+/* ---- Lemmas: each check dropped in turn ---- */
 
 #ifdef FIRST_NO_OUTER_CHECK
 
-/* Without it, a first message aimed at the reader's second handle is taken,
-   which tells the writer two Seedelfs are one wallet's. The trace is named:
-   the attacker writes to the root handle on a base of its own, with A, E
-   and S all G, which any points would do. */
+/* Without the outer check, a first message whose envelope's generator is on
+   the reader's second handle is taken, which tells the writer two Seedelfs
+   are one wallet's: the writer on a base of its own, with no key stolen.
+   (Its ephemeral point, that generator's power, is there too.) */
 lemma without_the_check_a_message_links_two_handles: exists-trace
-  "Ex R cid t rep p0 w0 p #a #i #k.
-     RAccept(R, cid, p0, 'g', w0, <cid, t, rep, p0, 'g', 'g'>)@a & RTook(R, cid, p)@i
-   & OnSecond(R, p)@k
+  "Ex R cid p #i #k. RTookAt(R, cid, p)@i & OnSecond(R, p)@k
+   & not (Ex P #r. RevLtk(P)@r) & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
+
+#endif
+
+#ifdef FIRST_NO_EPHEMERAL_CHECK
+
+/* Without the ephemeral check, a first message whose envelope's register is
+   the conversation's, but whose ephemeral point is on the reader's second
+   handle, is taken: its outer key comes from that handle's public value. The
+   gate of 1.10.0 found it in this model as it was, with the outer check on
+   (README). */
+lemma without_the_ephemeral_check_a_message_links_two_handles: exists-trace
+  "Ex R cid c #i #k. RTookAt(R, cid, c)@i & OnSecond(R, c)@k
+   & not (Ex P #r. RevLtk(P)@r) & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
+
+#endif
+
+#ifdef FIRST_NO_KEYS_PROOF
+
+/* Without the keys proof, a first message whose E_A, or whose A, is on the
+   reader's second handle is taken: [x]E_A or [x]A comes from that handle's
+   public value. The identity's trace names E_A = G, which any point would do
+   here: unnamed, Tamarin's search for it ran out of 600 s at 4 GB. */
+lemma without_the_keys_proof_an_ephemeral_links_two_handles: exists-trace
+  "Ex R cid t rep p0 Ai Ei w0 #i #k.
+     RAccept(R, cid, p0, Ai, w0, <cid, t, rep, p0, Ai, Ei>)@i & RTookAt(R, cid, Ei)@i
+   & OnSecond(R, Ei)@k
+   & not (Ex P #r. RevLtk(P)@r) & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
+
+lemma without_the_keys_proof_an_identity_links_two_handles: exists-trace
+  "Ex R cid t rep p0 A w0 #i #k.
+     RAccept(R, cid, p0, A, w0, <cid, t, rep, p0, A, 'g'>)@i & RTookAt(R, cid, A)@i & OnSecond(R, A)@k
+   & not (Ex P #r. RevLtk(P)@r) & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
+
+#endif
+
+#ifdef FIRST_NO_BASE_CHECK
+
+/* Without the base check, a first message on a base on the reader's second
+   handle is taken, with no key stolen: w0 = [x]p0 comes from that handle's
+   public value, and every other point is a power of that base. */
+lemma without_the_base_check_a_message_links_two_handles: exists-trace
+  "Ex R cid p0 A w0 F #i #k.
+     RAccept(R, cid, p0, A, w0, F)@i & RTookAt(R, cid, p0)@i & OnSecond(R, p0)@k
    & not (Ex P #r. RevLtk(P)@r) & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
 
 #endif

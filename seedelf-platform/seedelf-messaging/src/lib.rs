@@ -4,9 +4,12 @@
 //! A recipient's register is `(g, v)` with `v = [y]g`. A sender re-randomizes
 //! it to `(p, w) = ([b]g, [b]v)`, picks an ephemeral `c = [r]p`, and seals the
 //! message under a key derived from the shared point `[r]w = [y]c` (ECIES-KEM
-//! with HKDF-SHA256 and AES-256-GCM). The recipient finds their envelopes by
-//! testing `[y]p == w` on raw bytes ([`matches_envelope`]), then parses and
-//! decrypts those. Nothing here needs a pairing.
+//! with HKDF-SHA256 and AES-256-GCM). The envelope carries `p` and a tag of
+//! `w`, never `w`, so nothing in it is a register of the recipient's key,
+//! which a payment could be aimed at. The recipient finds their envelopes by
+//! testing whether the tag is that of `[y]p` on raw bytes
+//! ([`matches_envelope`]), then parses and decrypts those. Nothing here
+//! needs a pairing.
 //!
 //! docs/construction.md has the mathematics; docs/security.md what holds,
 //! under which assumptions, and what doesn't. Unaudited: not for production

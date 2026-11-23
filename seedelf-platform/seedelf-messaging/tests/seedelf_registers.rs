@@ -5,6 +5,7 @@
 
 mod common;
 
+use common::{header_points, tag, tag_of};
 use seedelf_crypto::register::Register as SeedelfRegister;
 use seedelf_crypto::schnorr::random_scalar;
 use seedelf_messaging::{Envelope, Register, SecretKey, decrypt_message, encrypt_message};
@@ -33,11 +34,18 @@ fn a_seedelf_datum_register_is_a_recipient() {
         let recipient = from_seedelf(&datum);
         assert_eq!(to_seedelf(&recipient), datum);
 
-        let envelope = encrypt_message(&recipient, b"to a Seedelf").unwrap();
-        let received = Envelope::from_bytes(&envelope.to_bytes()).unwrap();
+        let bytes = encrypt_message(&recipient, b"to a Seedelf")
+            .unwrap()
+            .to_bytes();
+        let received = Envelope::from_bytes(&bytes).unwrap();
 
-        // The wallet's own check agrees: the envelope's register is the wallet's.
-        let theirs = to_seedelf(received.register());
+        // The wallet's own check agrees: p with w = [sk]p is the wallet's
+        // register, and the envelope's tag is that w's. Only the reader can
+        // make w: the envelope carries its tag.
+        let [p, _] = header_points(&bytes);
+        let w = common::point(&p) * sk;
+        assert_eq!(tag(&bytes), tag_of(&w));
+        let theirs = SeedelfRegister::new(hex::encode(p), hex::encode(w.to_compressed()));
         assert!(theirs.is_valid().unwrap());
         assert!(theirs.is_owned(sk).unwrap());
 
@@ -45,8 +53,10 @@ fn a_seedelf_datum_register_is_a_recipient() {
         assert!(received.is_for(&key));
         assert_eq!(decrypt_message(&key, &received).unwrap(), b"to a Seedelf");
 
-        // Another wallet's scalar doesn't own it.
-        assert!(!theirs.is_owned(random_scalar()).unwrap());
+        // Another wallet's scalar doesn't own it, and its scan doesn't match.
+        let other = random_scalar();
+        assert!(!theirs.is_owned(other).unwrap());
+        assert!(!received.is_for(&SecretKey::from_scalar(other).unwrap()));
     }
 }
 

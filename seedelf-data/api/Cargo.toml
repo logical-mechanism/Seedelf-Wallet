@@ -14,8 +14,10 @@ axum = "0.8"
 # CIP-5 and CIP-129 IDs: db-sync holds bytes, and pg_cardano, which Koios encodes them with, isn't installed.
 bech32 = "0.11"
 # The relay's copy of seedelf-messaging's point check (src/messaging/check.rs): the same G1 library the crate uses,
-# blst's audited C and assembly behind a safe API; group for its traits.
-blstrs = "0.7.1"
+# blst's audited C and assembly behind a safe API; group for its traits. portable: without it blst builds for the
+# builder's CPU, ADX code alone on a builder that has ADX, which a server without ADX can't run. Portable, it holds
+# both and picks once at start: on an ADX CPU the same code, after a test and a branch at each field multiplication.
+blstrs = { version = "0.7.1", features = ["portable"] }
 # blake2b-224: Lovejoin's script hashes, for the token pools' checks (src/lovejoin/). The crate Pallas hashes with.
 cryptoxide = { version = "0.4", default-features = false, features = ["blake2"] }
 deadpool-postgres = "0.14"
@@ -40,5 +42,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 # test-util: a test's clock can be paused, to check a deadline without waiting it out.
-tokio = { version = "1.52", features = ["test-util"] }
+# io-util and net: a test's own socket, to send a request that stops half way (tests/requests_end.rs).
+tokio = { version = "1.52", features = ["io-util", "net", "test-util"] }
 tower = { version = "0.5", features = ["util"] }

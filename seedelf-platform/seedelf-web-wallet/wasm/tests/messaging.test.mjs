@@ -3,7 +3,8 @@
 // stamp, the relay vectors' stamps and posts, the reveal vectors' checks
 // (54f), and two wallets writing to each other with nothing but the records
 // the exports give back, as the worker will keep them, one showing the other
-// its Seedelf. tests/messaging_test.rs checks the same natively.
+// its Seedelf; a writer's share, and the records development builds wrote,
+// refused by their version. tests/messaging_test.rs checks the same natively.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -39,6 +40,7 @@ const call = (fn, ...args) =>
   JSON.parse(fn(...args.map((a) => (a?.constructor === Object || Array.isArray(a) ? JSON.stringify(a) : a))));
 const hex = (text) => Buffer.from(text, "utf8").toString("hex");
 const text = (h) => Buffer.from(h, "hex").toString("utf8");
+const plain = (r) => ({ generator: r.generator, publicValue: r.publicValue });
 const T = 1_800_000_000;
 
 test("the session vectors' first messages read at 24 bits, then accepted", () => {
@@ -116,7 +118,6 @@ test("the vectors' stamps are found in slices, and a post is its nonce and envel
 test("two wallets write to each other through the exports' records", () => {
   const alice = SeedelfKey.random();
   const bob = SeedelfKey.random();
-  const plain = (r) => ({ generator: r.generator, publicValue: r.publicValue });
   const seedelf = plain(rerandomize(bob.baseRegister()));
   const name = "5eed0e1f" + "b0".repeat(28);
   const handles = [{ name, registers: [seedelf] }];
@@ -145,8 +146,11 @@ test("two wallets write to each other through the exports' records", () => {
     }).conversation,
     plaintext: hex("to Alice"),
   }).envelope;
-  assert.deepEqual(call(messagingScan, bob, [noise, sent.envelope, noise]), [1]);
-  assert.deepEqual(call(messagingScan, alice, [noise, sent.envelope, noise]), [0, 2]);
+  // The scan's answer is a digit an envelope, not JSON: as long as the batch, whatever matched.
+  const batch = JSON.stringify([noise, sent.envelope, noise]);
+  assert.equal(messagingScan(bob, batch), "010");
+  assert.equal(messagingScan(alice, batch), "101");
+  assert.equal(messagingScan(bob, "[]"), "");
   assert.throws(() => messagingScan(bob, JSON.stringify(["zz"])), /hex/);
   const opened = call(messagingOpen, bob, sent.envelope);
   assert.deepEqual(opened, { cid: started.cid, kind: "first-contact", t: T, to: name, replaces: null });
@@ -187,7 +191,8 @@ test("two wallets write to each other through the exports' records", () => {
   const shown = reveal(alice, a, hers, mine);
   assert.equal(shown.reveal.length, 2 * 257);
   const carried = call(messagingSend, { conversation: a, plaintext: "02" + shown.reveal });
-  assert.equal(carried.envelope.length, 2 * 2048);
+  // A session message's 105 bytes and the reveal's 258 fit the smallest envelope.
+  assert.equal(carried.envelope.length, 2 * 512);
   a = carried.conversation;
   const came = call(messagingReceive, bob, { envelope: carried.envelope, now: T + 190, conversations: [b] });
   assert.equal(came.received.plaintext, "02" + shown.reveal);
@@ -209,13 +214,15 @@ test("two wallets write to each other through the exports' records", () => {
   const [info] = call(messagingRequestsInfo, joined.requests);
   assert.deepEqual(info.continues, { cid: started.cid, verified: true });
 
-  // Bob deletes the conversation: a tombstone, then gone after its 48 hours.
+  // Bob deletes the conversation: a tombstone, kept past the window's 48 hours for a margin of 7 days, then gone.
   const deleted = call(messagingDelete, { cid: started.cid, conversation: b });
   assert.equal(deleted.deleted, true);
   const two = call(messagingSend, { conversation: a, plaintext: hex("two") }).envelope;
   const after = (tombstones) => call(messagingReceive, bob, { envelope: two, now: T + 200, tombstones });
   assert.deepEqual(after(deleted.tombstones), { refused: "deleted" });
-  const { tombstones } = call(messagingExpire, { now: T + 48 * 3600 + 1, tombstones: deleted.tombstones });
+  const expire = (now) => call(messagingExpire, { now, tombstones: deleted.tombstones });
+  assert.equal(expire(T + 48 * 3600 + 1).tombstones, deleted.tombstones);
+  const { tombstones } = expire(T + (48 + 7 * 24) * 3600 + 1);
   assert.deepEqual(after(tombstones), { refused: "unknown_conversation" });
   alice.free();
   bob.free();
@@ -249,5 +256,57 @@ test("the numbers the worker works by", () => {
     skippedKeyLifetime: 172_800,
     maxRequests: 50,
     maxRequestBytes: 262_144,
+    maxRequestMessages: 16,
+    maxOneRequestBytes: 65_536,
+    maxAuthSteps: 4096,
+    priceCeilingBits: 26,
+    requestsVersion: 2,
   });
+});
+
+test("a writer's share: what's left of it, then request_full", { timeout: 120_000 }, () => {
+  const alice = SeedelfKey.random();
+  const bob = SeedelfKey.random();
+  const seedelf = plain(rerandomize(bob.baseRegister()));
+  const name = "5eed0e1f" + "b0".repeat(28);
+  const started = call(messagingStart, alice, { handle: seedelf, to: name, now: T });
+  let conversation = call(messagingSetStamp, { conversation: started.conversation, nonce: 0 }).conversation;
+  // F to a 32-byte name is 522 bytes; each first-contact message takes 97 more beside its text.
+  const perMessage = 522 + 97;
+  assert.deepEqual(call(messagingConversationInfo, conversation).firstContactLeft, {
+    messages: 16,
+    bytes: 65_536,
+    perMessage,
+  });
+  for (let i = 0; i < 16; i++) {
+    conversation = call(messagingSend, { conversation, plaintext: hex(`message ${i}`) }).conversation;
+  }
+  const info = call(messagingConversationInfo, conversation);
+  assert.equal(info.firstContactLeft.messages, 0);
+  assert.equal(info.maxTextLen, 0);
+  assert.deepEqual(call(messagingSend, { conversation, plaintext: hex("one too many") }), { refused: "request_full" });
+  alice.free();
+  bob.free();
+});
+
+test("the records development builds wrote are refused by their version", { timeout: 60_000 }, () => {
+  const old = JSON.parse(
+    readFileSync(new URL("../../../seedelf-messaging/tests/fixtures/old_records_v1.json", import.meta.url)),
+  );
+  const bob = SeedelfKey.random();
+  const cid = "00".repeat(16);
+  // A requests' record: refused, never thrown, by each export that reads one.
+  const requests = old.requests_two_requests_three_messages;
+  const refusal = { refused: "unsupported_state_version", version: 1 };
+  assert.deepEqual(call(messagingRequestsInfo, requests), refusal);
+  assert.deepEqual(call(messagingAccept, bob, { requests, cid }), refusal);
+  assert.deepEqual(call(messagingReadRequest, bob, { requests, cid }), refusal);
+  assert.deepEqual(call(messagingDelete, { cid, requests }), refusal);
+  assert.deepEqual(call(messagingReceive, bob, { envelope: "01".repeat(512), now: T, requests }), refusal);
+  assert.deepEqual(call(messagingRequestsInfo, "02"), { refused: "invalid_state" });
+  // A conversation's: messagingDelete takes it as absent; the others throw.
+  const deleted = call(messagingDelete, { cid, conversation: old.initiator_answered });
+  assert.equal(deleted.deleted, false);
+  assert.throws(() => messagingConversationInfo(old.initiator_answered), /version 1/);
+  bob.free();
 });

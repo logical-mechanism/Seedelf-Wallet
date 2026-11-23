@@ -9,8 +9,8 @@ It's a library only, with no network, no storage and no clock. The relay is the 
 A recipient's register is (g, v) with v = [y]g: a root register (G, [y]G), or any Seedelf datum's.
 
 1. **The sender re-randomizes it** to (p, w) = ([b]g, [b]v), with no secret needed.
-2. **The sender encrypts** under a key derived from [r]w, publishing c = [r]p (ECIES with HKDF-SHA256 and AES-256-GCM).
-3. **The recipient finds their envelopes** by testing [y]p = w: one scalar multiplication, no pairing.
+2. **The sender encrypts** under a key derived from [r]w, publishing p, a tag of w and c = [r]p (ECIES with HKDF-SHA256 and AES-256-GCM). The tag is SHA-256 of a label and w: never w itself, so no envelope holds a register of its recipient's key, which a payment could be aimed at.
+3. **The recipient finds their envelopes** by testing whether the tag is that of [y]p: one scalar multiplication and one SHA-256, no pairing.
 4. **The recipient reads them** with [y]c = [r]w.
 
 ```rust
@@ -19,7 +19,7 @@ use seedelf_messaging::{Envelope, SecretKey, decrypt_message, encrypt_message, m
 let alice = SecretKey::generate();
 let bytes = encrypt_message(&alice.register(), b"hello")?.to_bytes();
 
-assert!(matches_envelope(&alice, &bytes)?); // the scan: checks p and w, tests [y]p = w
+assert!(matches_envelope(&alice, &bytes)?); // the scan: checks p, compares the tag of [y]p
 let envelope = Envelope::from_bytes(&bytes)?; // checks every point
 assert_eq!(decrypt_message(&alice, &envelope)?, b"hello");
 ```
@@ -29,23 +29,23 @@ assert_eq!(decrypt_message(&alice, &envelope)?, b"hello");
 | `SecretKey::{generate, from_bytes, from_scalar, register}` | The recipient's y. `from_scalar` takes a Seedelf wallet's scalar. |
 | `Register::{from_bytes, to_bytes, generator_bytes, public_value_bytes}` | A checked (g, v), in the bytes a Seedelf datum holds. |
 | `rerandomize_register`, `matches_register` | Re-randomization and discovery. |
-| `matches_envelope` | The scan: whether an envelope's raw bytes are yours. It checks p and w, not c, so an envelope that isn't yours costs one subgroup check less. |
+| `matches_envelope` | The scan: whether an envelope's raw bytes are yours. It checks p, not c, and compares the tag in constant time, so an envelope that isn't yours costs one subgroup check, one multiplication and one SHA-256. |
 | `encrypt_message`, `decrypt_message` | One envelope, up to 64 KiB of plaintext. |
-| `Envelope::{from_bytes, to_bytes, is_for, register}` | The wire format. |
+| `Envelope::{from_bytes, to_bytes, is_for}` | The wire format. |
 
 Every refusal is an `Error` variant, never a panic.
 
 ## The envelope (v1)
 
 ```text
-0x01 | p (48) | w (48) | c (48) | AES-256-GCM ciphertext | tag (16)
+0x01 | p (48) | tag (32) | c (48) | AES-256-GCM ciphertext | AES-GCM tag (16)
 ```
 
-- **Size:** 161 bytes plus the plaintext.
-- **The header** (version, p, w, c) is both the HKDF info's tail and the AEAD's associated data, so a change to any byte fails.
+- **Size:** 145 bytes plus the plaintext.
+- **The header** (version, p, the tag of w, c) is both the HKDF info's tail and the AEAD's associated data, so a change to any byte fails.
 - **The nonce** is derived with the key, not sent, since every envelope's key is new.
 
-[docs/construction.md](docs/construction.md) has the mathematics and the exact key schedule. [tests/vectors/messaging_v1.json](tests/vectors/messaging_v1.json) has every intermediate value for four cases, which an independent implementation (noble-curves and WebCrypto) reproduces byte for byte.
+[docs/construction.md](docs/construction.md) has the mathematics and the exact key schedule. [tests/vectors/messaging_v1.json](tests/vectors/messaging_v1.json) has every intermediate value for four cases. An independent implementation (noble-curves and WebCrypto) reproduced the file byte for byte before call 16 put the tag in w's place; the file has been re-recorded since, and not reproduced again yet.
 
 ## Why no pairing
 
@@ -53,7 +53,7 @@ An earlier idea used PEACE's pairing capsule. For one recipient it reduces to El
 
 ## Sessions
 
-The `session` module builds [docs/protocol.md](docs/protocol.md) §3 to §6: the sender of a first message makes both conversation identities on one base, a first-contact block F carries what the reader needs and proves the base comes from the handle it names, a stamp of proof of work prices a stranger's first message, a static DH in the session secret proves the writer holds their identity's key, and the Double Ratchet runs inside v1 envelopes padded to 512 bytes, 2, 8 or 32 KiB, each bound to its conversation. §16 fixes every byte and rule. Once answered, the side that wrote first can show the other one of its Seedelfs (`Conversation::reveal`, `Conversation::verify_reveal`): a designated-verifier proof bound to the conversation, which convinces the reader alone (§19).
+The `session` module builds [docs/protocol.md](docs/protocol.md) §3 to §6: the sender of a first message makes both conversation identities on one base, a first-contact block F carries what the reader needs and proves, to the reader alone, that the base comes from the handle it names and that its writer knows the keys of the other points the reader's key meets, a stamp of proof of work prices a stranger's first message, a static DH in the session secret proves the writer holds their identity's key, and the Double Ratchet runs inside v1 envelopes padded to 512 bytes, 2, 8 or 32 KiB, each bound to its conversation by its p and its c. Before a reply, a writer has a request's share, 16 first-contact messages and 64 KiB, which is all a reader keeps of it. §16 fixes every byte and rule, and §20 what 1.10.0 freezes for later versions. Once answered, the side that wrote first can show the other one of its Seedelfs (`Conversation::reveal`, `Conversation::verify_reveal`): a designated-verifier proof bound to the conversation, which convinces the reader alone (§19).
 
 ```rust
 use seedelf_messaging::relay::find_stamp;
@@ -66,7 +66,7 @@ alice_inbox.set_stamp(cid, find_stamp(&digest, FIRST_CONTACT_STAMP_BITS, 0, u64:
 let envelope = alice_inbox.send(cid, b"hello Bob")?; // store the state with it, then post
 
 let mut bob_inbox = Inbox::new();
-let bob_handles = [Handle::new(bob_name, bob_register)?]; // every register each of his Seedelfs has held
+let bob_handles = [Handle::new(bob_name, bob_register)?]; // every register of his key each of his Seedelfs has held
 let Received::Request { plaintext, .. } = bob_inbox.receive(&bob, &bob_handles, &envelope, now)? else { unreachable!() };
 bob_inbox.accept(&bob, cid)?; // a request until Bob replies
 let reply = bob_inbox.send(cid, b"hello")?;
@@ -74,10 +74,10 @@ let reply = bob_inbox.send(cid, b"hello")?;
 
 | API | |
 |---|---|
-| `Conversation::{start, start_continuing, stamp_digest, set_stamp, send, receive, expire, missing, to_bytes, from_bytes}` | One side of a conversation. Every operation that fails leaves it as it was; its bytes are versioned and hold its secrets. |
+| `Conversation::{start, start_continuing, stamp_digest, set_stamp, send, receive, expire, missing, max_text_len, first_contact_left, to_bytes, from_bytes}` | One side of a conversation. Every operation that fails leaves it as it was; its bytes are versioned and hold its secrets. Before a reply, `first_contact_left` says what's left of the request's share. |
 | `Inbox::{start, start_continuing, stamp_digest, set_stamp, send, receive, accept, delete, expire, from_parts}` | One network's conversations, requests and tombstones, with §5 and §6's rules over them. `set_first_contact_bits` is for tests and tuning. |
-| `Handle` | One of the reader's Seedelfs, by name and register, which a first message's proof is checked against. |
-| `Requests`, `Tombstones`, `Continues` | Strangers' first messages, bounded and holding no state; deleted conversations' IDs until t + 48 hours; what a `replaces` amounts to. |
+| `Handle` | One of the reader's Seedelfs, by name and register, which a first message's proof is checked against: only a register of the reader's key counts. |
+| `Requests`, `Tombstones`, `Continues` | Strangers' first messages, bounded, each within its share, and holding no state; deleted conversations' IDs until t + 48 hours and 7 days, whatever the clock; what a `replaces` amounts to. |
 | `open`, `Opened`, `FirstContact`, `Header` | An envelope opened and parsed, every point checked, before any conversation sees it. |
 
 The caller passes `now`, in Unix seconds by the reader's clock, and stores what each state gives: protocol.md §4.2 says in what order.
@@ -127,17 +127,21 @@ let body = post_body(nonce, &envelope); // POST /messaging/v1/mainnet/envelopes
 | tests/vectors.rs, `src/tests.rs` | Test 13: the vectors, the key schedule's binding and labels, decryption forced past discovery, and secrets absent from envelopes. |
 | tests/pool.rs | Phase 1H: 10 recipients and 1,000 envelopes in one pool. Each scans the raw bytes and reads exactly theirs. |
 | src/session/tests/first_contact.rs | Sessions, part 1: F's layout and refusals, the base proof and the stamp's digest, SK on both sides and its binding, both inits, the identities. |
-| src/session/tests/ratchet.rs | Part 2: KDF_RK, KDF_CK, ENCRYPT's salt, skipping within and across chains, MAX_SKIP in all, the stored keys' cap, the 48 hours. |
-| src/session/tests/state.rs, `rules.rs` | Part 3: storage at every step, corrupted states, failures changing nothing, padding, parsing, and §5 and §6's rules. |
+| src/session/tests/ratchet.rs | Part 2: KDF_RK, KDF_CK, ENCRYPT's salt, the envelope's scalars, the labels, skipping within and across chains, MAX_SKIP in all, the stored keys' cap, the 48 hours. |
+| src/session/tests/state.rs, `rules.rs` | Part 3: storage at every step, sized exactly, corrupted states, failures changing nothing, padding, parsing, the skipped keys as runs in the order stored (a ratchet key used twice, one encoding for a list, eviction's order through storage), the versions, and §5 and §6's rules, tombstones under a clock set back among them. |
 | src/session/tests/adversarial.rs | Part 4: protocol-review.md §E's cases 1–3 and 6–14, one test each. |
-| src/session/tests/linking.rs | Part 5: calls 12 and 13. Envelopes aimed at a reader's second handle or at the sum of two, a base on the sum, the reader's handles, the stamp checked first, and every envelope at its identity times the outer scalar. |
-| src/session/tests/vectors.rs, tests/session_vectors.rs | The session vectors, written from fixed draws and read back through the public API. |
+| src/session/tests/linking.rs | Part 5: calls 12 and 13. Envelopes aimed at a reader's second handle or at the sum of two, a base on the sum, the reader's handles, the stamp checked first, every envelope at its identity times the outer scalar, its c on another register on every path, its p on one with c the honest one, and no envelope holding a register of either side's key. |
+| src/session/tests/keys_proof.rs | Part 6: call 16's keys proof. The base proof's designated verifier, and a register of another key under the reader's name binding no base, E_A, A and S_A on another register on every path, the reader's own F, the nonces over every subset of a start's draws, the three mutants, the chain verifier. |
+| src/session/tests/far.rs | Part 7: "too far ahead" only for a message that authenticates at the conversation's identity, forged and genuine, on every chain, at the bound and past it, counted in chain steps. |
+| src/session/tests/share.rs | Part 8: a request's share. A first-contact header past it doesn't parse; the writer's 16 and 64 KiB, refused before the chain moves; joins past it or past 256 KiB refused before the replay, never pushing a request out; a new request never pushing itself out; the writer's stored count; stored requests held to it. |
+| src/session/tests/vectors.rs, tests/session_vectors.rs | The session vectors, written from fixed draws and read back through the public API, with b, the proofs' nonces and each envelope's scalars rebuilt from the file alone. |
 | src/session/tests/reveal.rs, tests/reveal_vectors.rs | The reveal (§19): who may make and check one, its binding to the conversation, name and register, every bit flipped, the reader's own forgery verifying, every malformed reveal's code, and its vectors, read back through the public API. |
+| tests/old_records.rs | The records development builds wrote before call 16 (tests/fixtures/old_records_v1.json), refused by their version through the public API; the tombstones' still read. |
 | tests/session_properties.rs | Any schedule of sends, out-of-order deliveries, duplicates, losses and restarts; both sides first; resets; skipped keys' 48 hours. |
-| tests/simulation.rs | Two wallets over a 36-hour relay, killed at every point of §4.2 and locked past 36 hours; cases 4 and 5. `SIMULATION_SEEDS=n` runs more than 24 seeds. |
+| tests/simulation.rs | Two wallets over a 36-hour relay, killed at every point of §4.2 and locked past 36 hours, a writer's share used up before a reply; cases 4 and 5. `SIMULATION_SEEDS=n` runs more than 24 seeds. |
 | src/relay.rs | What the relay keeps and the stamp: the relay's vectors, every refusal, session envelopes of each size kept, the stamp's binding and its first nonce. |
 
-`RECORD_MESSAGING_VECTORS=1 cargo test -p seedelf-messaging --lib` rewrites the envelope's vectors, `RECORD_MESSAGING_SESSION_VECTORS=1` the session's, `RECORD_MESSAGING_RELAY_VECTORS=1` the relay's, which the data layer's copy of the checks is held to, and `RECORD_MESSAGING_REVEAL_VECTORS=1` the reveal's. That's for a deliberate change of format only: other implementations are held to them. The envelope's, the session's and the reveal's were reproduced by independent implementations (noble-curves and WebCrypto), the session's written from protocol.md §16 alone and the reveal's from §19.
+`RECORD_MESSAGING_VECTORS=1 cargo test -p seedelf-messaging --lib` rewrites the envelope's vectors, `RECORD_MESSAGING_SESSION_VECTORS=1` the session's (in a release build: it searches 24-bit stamps), `RECORD_MESSAGING_RELAY_VECTORS=1` the relay's, which the data layer's copy of the checks is held to, and `RECORD_MESSAGING_REVEAL_VECTORS=1` the reveal's. That's for a deliberate change of format only: other implementations are held to them. The envelope's, the session's and the reveal's were reproduced by independent implementations (noble-curves and WebCrypto), the session's written from protocol.md §16 alone and the reveal's from §19, before call 16 re-recorded all four; none has been reproduced since (protocol.md §16.6).
 
 ## Measured performance
 
@@ -145,7 +149,7 @@ let body = post_body(nonce, &envelope); // POST /messaging/v1/mainnet/envelopes
 cargo run --release -p seedelf-messaging --example pool_bench -- 10000 10
 ```
 
-Measured on an Intel Core i5-12400F (one thread, `powersave` governor), Linux 7.0, rustc 1.98.1, release profile, 2026-11-20. The plaintexts were 256 bytes, so each envelope was 417 bytes.
+Measured on an Intel Core i5-12400F (one thread, `powersave` governor), Linux 7.0, rustc 1.98.1, release profile, 2026-11-20. The plaintexts were 256 bytes, so each envelope was 417 bytes. That was before call 16 put a tag in w's place: an envelope was then 161 bytes more than its plaintext, and the scan checked p and w. It now checks p alone and hashes [y]p, one subgroup check fewer and one SHA-256 more, and the full parse checks two points; the multiplication is unchanged.
 
 | Operation | 1,000 messages | 10,000 messages |
 |---|---|---|

@@ -11,7 +11,8 @@ use crate::SecretKey;
 use crate::session::conversation::Conversation;
 use crate::session::ratchet::{
     KDF_CK_CALLS, MAX_SKIP, MAX_STORED_SKIPPED, ROOT_INFO, SKIPPED_KEY_LIFETIME, decrypt, encrypt,
-    kdf_ck, kdf_rk, message_key_and_nonce,
+    envelope_ephemeral_okm, envelope_ephemeral_scalar, kdf_ck, kdf_rk, message_key_and_nonce,
+    outer_scalar,
 };
 use crate::session::secret::Secret32;
 
@@ -66,6 +67,82 @@ fn encrypt_derives_a_fresh_key_and_nonce_from_each_salt() {
     assert_eq!(c1.len(), 16 + 4 + 16);
     assert_eq!(decrypt(&mk, &c1, b"ad").unwrap(), b"same");
     assert_eq!(decrypt(&mk, &c2, b"ad").unwrap(), b"same");
+}
+
+/// The envelope's ephemeral scalar r is HKDF-SHA256 of the message key under
+/// the salt, with its own info, 64 bytes as a big-endian integer mod q
+/// (docs/protocol.md §16.2): another salt or another message key gives
+/// another r, and r is never the outer scalar o.
+#[test]
+fn the_envelope_scalar_is_hkdf_of_the_message_key_and_the_salt() {
+    let (mk, salt) = (Secret32::from_bytes([6; 32]), [9u8; 16]);
+    let mut okm = [0u8; 64];
+    Hkdf::<Sha256>::new(Some(&salt), &[6; 32])
+        .expand(b"Seedelf-Messaging|v1|ratchet|envelope-ephemeral", &mut okm)
+        .unwrap();
+    assert_eq!(*envelope_ephemeral_okm(&mk, &salt), okm);
+    let r = envelope_ephemeral_scalar(&mk, &salt);
+    assert_eq!(r, crate::keys::scalar_mod_q(&okm));
+    assert_ne!(r, outer_scalar(&mk, &salt));
+    assert_ne!(r, envelope_ephemeral_scalar(&mk, &[8; 16]));
+    assert_ne!(
+        r,
+        envelope_ephemeral_scalar(&Secret32::from_bytes([5; 32]), &salt)
+    );
+}
+
+/// No label is a prefix of another within one function (docs/joint-security.md,
+/// rule 3): the infos HKDF takes under one key, the salt and the message
+/// key; the labels raw SHA-256 runs over, the envelope's tag and the keys
+/// proof's two forms among them; and the labels HMAC-SHA-512 runs over, the
+/// spend's nonce and the keys proof's three among them. Across functions the
+/// base proof's SHA-256 label is a prefix of two HMAC labels: another
+/// function, as rule 3 allows.
+#[test]
+fn the_labels_are_prefix_free_within_each_function() {
+    use crate::envelope::ENVELOPE_TAG_LABEL;
+    use crate::relay::STAMP_LABEL;
+    use crate::session::first_contact::{
+        BASE_LABEL, BASE_NONCE_LABEL, BASE_SCALAR_LABEL, FIRST_STAMP_LABEL,
+        KEYS_CONTINUATION_LABEL, KEYS_HANDLE_LABEL, KEYS_NONCE_A_LABEL, KEYS_NONCE_E_LABEL,
+        KEYS_NONCE_S_LABEL,
+    };
+    use crate::session::ratchet::{ENVELOPE_EPHEMERAL_INFO, MESSAGE_INFO, OUTER_INFO};
+    use crate::session::reveal::{REVEAL_LABEL, REVEAL_NONCE_LABEL};
+    assert!(BASE_SCALAR_LABEL.starts_with(BASE_LABEL) && BASE_NONCE_LABEL.starts_with(BASE_LABEL));
+    for labels in [
+        &[MESSAGE_INFO, OUTER_INFO, ENVELOPE_EPHEMERAL_INFO][..],
+        &[
+            ENVELOPE_TAG_LABEL,
+            STAMP_LABEL,
+            BASE_LABEL,
+            FIRST_STAMP_LABEL,
+            REVEAL_LABEL,
+            KEYS_HANDLE_LABEL,
+            KEYS_CONTINUATION_LABEL,
+            b"lovejoin/sigmajoin/v1/",
+        ][..],
+        &[
+            b"seedelf/schnorr/nonce/v1",
+            REVEAL_NONCE_LABEL,
+            BASE_SCALAR_LABEL,
+            BASE_NONCE_LABEL,
+            KEYS_NONCE_E_LABEL,
+            KEYS_NONCE_S_LABEL,
+            KEYS_NONCE_A_LABEL,
+        ][..],
+    ] {
+        for (i, one) in labels.iter().enumerate() {
+            for (j, other) in labels.iter().enumerate() {
+                assert!(
+                    i == j || !other.starts_with(one),
+                    "{} is a prefix of {}",
+                    String::from_utf8_lossy(one),
+                    String::from_utf8_lossy(other)
+                );
+            }
+        }
+    }
 }
 
 /// Every bit of the salt, the ciphertext, the tag and the associated data
@@ -208,13 +285,15 @@ fn one_message_skips_at_most_max_skip_across_both_chains() {
         b"at the bound"
     );
     assert_eq!(copy.missing(), 1000);
-    // Its message 401 would skip 1,001: refused before any key is derived.
+    // Its message 401 would skip 1,001: refused as too far ahead, with no
+    // key stored. Showing it authenticates steps the new chain alone, to
+    // its key: 402 steps, none of the old chain's remainder.
     let over = opened(&bob, &a.send_with(b"past it", &mut draw).unwrap());
     assert_eq!(over.header.n, 401);
     let before = b.to_bytes();
     KDF_CK_CALLS.with(|calls| calls.set(0));
     assert_eq!(b.receive_with(&over, T, &mut draw), Err(Error::TooFarAhead));
-    assert_eq!(KDF_CK_CALLS.with(|calls| calls.get()), 0);
+    assert_eq!(KDF_CK_CALLS.with(|calls| calls.get()), 402);
     assert_eq!(b.to_bytes(), before);
 }
 
@@ -309,7 +388,8 @@ fn alice_before_the_first_reply_derives_nothing_from_a_forged_header() {
 }
 
 /// N = u32::MAX is refused rather than wrapping Nr, and so is a send past
-/// the counter's range.
+/// the counter's range. No chain sends N = u32::MAX, so a message with it
+/// is refused as a forgery, never as too far ahead.
 #[test]
 fn counters_never_wrap() {
     let mut p = pair("wrap");
@@ -320,10 +400,12 @@ fn counters_never_wrap() {
     forged.header.n = u32::MAX;
     p.b.ratchet.nr = u32::MAX - 10;
     let before = p.b.to_bytes();
+    KDF_CK_CALLS.with(|calls| calls.set(0));
     assert_eq!(
         p.b.receive_with(&forged, T, &mut p.draw),
-        Err(Error::TooFarAhead)
+        Err(Error::DecryptionFailed)
     );
+    assert_eq!(KDF_CK_CALLS.with(|calls| calls.get()), 0);
     assert_eq!(p.b.to_bytes(), before);
     p.a.ratchet.ns = u32::MAX;
     let before = p.a.to_bytes();

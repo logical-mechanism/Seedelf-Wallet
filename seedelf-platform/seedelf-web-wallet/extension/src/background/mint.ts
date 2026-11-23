@@ -24,9 +24,11 @@ import type { NetworkName } from "../networks";
 import { leftBy, madePrivate, merged, type HistoryClass } from "../shared/histories";
 import type { MintSource, MintSummary, PendingTx, BuildStage } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
-import { rememberMint } from "./minted-by";
+import { CONTRACT_V1 } from "./balances";
+import { mintedRegister, rememberMint, rememberRegister } from "./minted-by";
 import { settleMaybeSent } from "./pending";
 import { isPublicShort, privateShort } from "./short";
+import { WalletLocked } from "./wallet";
 import {
   changeHistory,
   keep,
@@ -158,17 +160,33 @@ export class MintService {
    * account-paid one was signed at review. Who paid is kept first, sealed,
    * naming the public account when one did, so removing the Seedelf defaults
    * to that side and warns if the wallet has since moved to another account
-   * (minted-by.ts).
+   * (minted-by.ts). So is the register the transaction puts the Seedelf
+   * under, read from its own bytes: the one pair Seedelf Messaging takes first
+   * messages at by itself (minted-by.ts `mintedAt`, the 1.10.0 gate's W8).
    */
   async submit(network: NetworkName, txHash: string): Promise<PendingTx> {
     const { wallet, session, store } = this.deps;
     const [built, account] = await wallet.withKeys(
-      async (keys) => [await session.get<MintSummary & Pick<Kept, "account">>(SESSION_MINT), keys.account] as const,
+      async (keys) => [await session.get<MintSummary & Pick<Kept, "account" | "txCbor">>(SESSION_MINT), keys.account] as const,
     );
     if (built?.txHash === txHash && built.network === network) {
       // The account its review was built and signed on, which another window may have switched from since, as
       // Send's own records have it (pending.ts writeAhead); with none kept, the one active now.
       await rememberMint(store, network, built.tokenName, built.from, built.account ?? account);
+      // In the wallet's queue: a decoding that traps locks the wallet, as every WebAssembly call does.
+      const register = await wallet
+        .withKeys(() => mintedRegister(this.deps.wasm, network, built.txCbor, CONTRACT_V1.seedelfPolicyId, built.tokenName))
+        .catch((e: unknown) => {
+          if (e instanceof WalletLocked) throw e;
+          return undefined;
+        });
+      // A pair that couldn't be written (its record won't open, the browser refused the write) leaves that Seedelf's
+      // switch off in Messages, as one this browser didn't make: the user can turn it on (W12). The mint goes on.
+      if (register) {
+        await rememberRegister(store, network, built.tokenName, register).catch((e: unknown) => {
+          if (e instanceof WalletLocked) throw e;
+        });
+      }
     }
     return send(this.deps, network, txHash, SESSION_MINT, "mint", "seedelf");
   }

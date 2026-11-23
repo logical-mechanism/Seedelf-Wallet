@@ -163,7 +163,11 @@ impl Register {
     /// Verifies ownership of the `Register` using a provided scalar (`sk`).
     ///
     /// This method checks if the public value in the `Register` matches the generator
-    /// multiplied by the scalar.
+    /// multiplied by the scalar. It compares the two as points, with blst's
+    /// masked comparison, so its time doesn't depend on how much of `[sk]g`
+    /// matches a public value someone else chose; a comparison of hex strings
+    /// would stop at the first character that differs. The hex's case doesn't
+    /// matter, as it doesn't on chain, where a datum holds the points' bytes.
     ///
     /// # Arguments
     ///
@@ -172,7 +176,12 @@ impl Register {
     /// # Returns
     ///
     /// * `true` - If the scalar matches and proves ownership.
-    /// * `false` - Otherwise, and always when either point is the identity.
+    /// * `false` - Otherwise: always when either point is the identity, and
+    ///   when the public value isn't a point's compressed hex at all.
+    ///
+    /// # Errors
+    ///
+    /// When the generator isn't a valid point's compressed hex.
     pub fn is_owned(&self, sk: Scalar) -> Result<bool> {
         let g1: G1Affine = G1Affine::from_compressed(
             &hex::decode(&self.generator)
@@ -191,9 +200,17 @@ impl Register {
             return Ok(false);
         }
 
+        // Anything that isn't a point's encoding is no key's. No subgroup
+        // check is needed: [sk]g is in G1, so a point outside it never equals
+        // it, and the decoding's time depends on public bytes alone.
+        let Some(u) = point_from_hex(&self.public_value) else {
+            return Ok(false);
+        };
+
         let g_x: G1Projective = G1Projective::from(g1) * sk;
 
-        Ok(hex::encode(g_x.to_compressed()) == self.public_value)
+        // blst's comparison, masked: no early exit on the first difference.
+        Ok(g_x == G1Projective::from(u))
     }
 
     pub fn is_valid(&self) -> Result<bool> {
@@ -222,6 +239,14 @@ impl Register {
             && u.is_on_curve().into()
             && u.is_torsion_free().into())
     }
+}
+
+/// The point a compressed encoding in hex names, if it names one on the
+/// curve: blst's decoding checks the flag bits, that x is below the field
+/// modulus and that the point is on the curve, but not the subgroup.
+fn point_from_hex(point: &str) -> Option<G1Affine> {
+    let bytes: [u8; 48] = hex::decode(point).ok()?.try_into().ok()?;
+    G1Affine::from_compressed_unchecked(&bytes).into_option()
 }
 
 /// Whether `point` (compressed, hex) is the identity: `c0` then 47 zero bytes.

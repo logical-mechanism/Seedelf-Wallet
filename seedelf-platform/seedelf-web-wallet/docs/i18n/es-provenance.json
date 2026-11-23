@@ -3533,5 +3533,6 @@
   "messages.preview.revealIn": "machine",
   "messages.preview.revealOut": "machine",
   "worker.messaging.notYourSeedelf": "machine",
-  "worker.messaging.cantRevealYet": "machine"
+  "worker.messaging.cantRevealYet": "machine",
+  "worker.messaging.waitForReply": "machine"
 }

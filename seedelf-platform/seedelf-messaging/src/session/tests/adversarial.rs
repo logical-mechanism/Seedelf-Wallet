@@ -7,16 +7,20 @@ use group::Curve;
 
 use super::ratchet::pair;
 use super::support::{
-    HANDLE_NAME, Seeded, handle, inbox_start, key, opened, own_handles, skip_sends, stamp, start,
-    test_inbox, test_scalar,
+    HANDLE_NAME, Seeded, Stuck, handle, inbox_start, key, opened, own_handles, skip_sends, stamp,
+    start, test_inbox, test_scalar,
 };
-use crate::register::{Register, rerandomize_with};
+use crate::HEADER_LEN;
+use crate::register::{POINT_LEN, Register, rerandomize_with};
 use crate::session::conversation::{Conversation, Origin, Role};
 use crate::session::draw::Draw;
 use crate::session::first_contact::{
-    BaseProof, ConversationId, FIRST_CONTACT_MAX_AGE, FirstContact, prove_base, session_key,
+    BaseProof, ConversationId, FIRST_CONTACT_MAX_AGE, FirstContact, KeysProof, KeysStatement,
+    prove_base, session_key,
 };
-use crate::session::inbox::{Continues, Inbox, MAX_REQUEST_BYTES, MAX_REQUESTS, Received};
+use crate::session::inbox::{
+    Continues, Inbox, MAX_REQUEST_BYTES, MAX_REQUESTS, Received, TOMBSTONE_MARGIN,
+};
 use crate::session::ratchet::{
     KDF_CK_CALLS, KeyPair, MAX_SKIP, Ratchet, kdf_ck, message_key_and_nonce,
 };
@@ -36,6 +40,9 @@ struct Forgery {
     responder: G1Affine,
     /// Her guess at the static DH, [x_A]w₀, which she can't compute.
     static_dh: [u8; 48],
+    /// A's key on the base, if she knows it: then her keys proof holds, if
+    /// she made the base from a handle. Without it she can't make one.
+    initiator_key: Option<Scalar>,
     /// The handle and `b` she made the base from, so her proof holds, if
     /// she made it so. Without one, a forgery with no `replaces` names
     /// [`HANDLE_NAME`] with a proof she can't make, and one with `replaces`
@@ -44,9 +51,17 @@ struct Forgery {
 }
 
 /// A first-contact envelope built from a forger's values, addressed to
-/// (p₀, w₀) as she believes it, with its stamp solved.
+/// (p₀, w₀) as she believes it, with its stamp solved. Her keys proof holds
+/// when she knows what it needs: in a continuation e_A and s_A, which she
+/// drew; from a handle A's key too. Otherwise it's the best she can do,
+/// scalars of her choosing, which no reader takes.
 fn forge(forgery: &Forgery, text: &[u8], draw: &mut dyn Draw) -> Vec<u8> {
     let e = draw.scalar();
+    let s_scalar = draw.scalar();
+    let s = KeyPair {
+        secret: crate::session::secret::Secret32::from_bytes(s_scalar.to_bytes_be()),
+        public: (G1Projective::from(forgery.base) * s_scalar).to_affine(),
+    };
     let mut first = FirstContact {
         cid: forgery.cid,
         started_at: forgery.t,
@@ -56,6 +71,7 @@ fn forge(forgery: &Forgery, text: &[u8], draw: &mut dyn Draw) -> Vec<u8> {
         initiator: forgery.initiator,
         ephemeral: (G1Projective::from(forgery.base) * e).to_affine(),
         proof: None,
+        keys_proof: None,
     };
     match (&forgery.from_handle, forgery.replaces) {
         (Some((handle, b)), _) => {
@@ -66,16 +82,30 @@ fn forge(forgery: &Forgery, text: &[u8], draw: &mut dyn Draw) -> Vec<u8> {
         (None, None) => {
             first.to = HANDLE_NAME.to_vec();
             first.proof = Some(BaseProof {
-                challenge: [7; 32],
-                response: draw.scalar(),
+                c1: draw.scalar(),
+                c2: draw.scalar(),
+                z1: draw.scalar(),
+                z2: draw.scalar(),
             });
         }
         (None, Some(_)) => {}
     }
+    let statement = KeysStatement::of(&first, &forgery.responder, &s.public);
+    first.keys_proof = Some(match (first.to.is_empty(), forgery.initiator_key) {
+        (true, _) => statement.prove_continuation(&e, &s_scalar, draw),
+        (false, Some(a)) => statement.prove_handle(&a, &e, &s_scalar, draw).unwrap(),
+        (false, None) => KeysProof::Handle {
+            c1: draw.scalar(),
+            c2: draw.scalar(),
+            z1: draw.scalar(),
+            z2: draw.scalar(),
+            ze: draw.scalar(),
+            zs: draw.scalar(),
+        },
+    });
     let first_bytes = first.to_bytes();
     let ephemeral_dh = (G1Projective::from(forgery.responder) * e).to_compressed();
     let sk = session_key(&ephemeral_dh, &forgery.static_dh, &first_bytes);
-    let s = KeyPair::generate(&forgery.base, draw);
     let mut conversation = Conversation {
         role: Role::Initiator,
         first,
@@ -83,6 +113,7 @@ fn forge(forgery: &Forgery, text: &[u8], draw: &mut dyn Draw) -> Vec<u8> {
         responder: forgery.responder,
         ratchet: Ratchet::init_alice(&sk, s, forgery.responder),
         stamp: None,
+        first_contact_sent: Some(0),
     };
     stamp(&mut conversation);
     conversation.send_with(text, draw).unwrap()
@@ -106,11 +137,12 @@ fn base_and_w0(register: &Register, b: &Scalar) -> (G1Affine, G1Affine) {
 }
 
 /// Case 1. Mallory names a register she doesn't control as R_A. On Bob's
-/// base, even handed the true w₀, she can't compute the static DH, so the
-/// reader never gets a session or a request. On Alice's base, where A
-/// really is [x_A]p₀, her proof can only show Alice's handle, so Bob refuses
-/// before any key. And the register's owner sees only envelopes for a
-/// conversation they don't have.
+/// base, even handed the true w₀, she can't make the keys proof, which needs
+/// A's key or w₀'s, so Bob refuses before his key meets A, and she couldn't
+/// have computed the static DH anyway: the reader never gets a session or a
+/// request. On Alice's base, where A really is [x_A]p₀, her proof can only
+/// show Alice's handle, so Bob refuses before any key. And the register's
+/// owner sees only envelopes for a conversation they don't have.
 #[test]
 fn case_01_an_unowned_r_a_yields_no_session() {
     let (alice, bob, mallory) = (key("alice"), key("bob"), key("mallory"));
@@ -131,7 +163,7 @@ fn case_01_an_unowned_r_a_yields_no_session() {
             claimed_a,
             w0,
             (bob_handle, test_scalar("b")),
-            Error::DecryptionFailed,
+            Error::InvalidKeysProof,
         ),
         (
             alice_base,
@@ -150,6 +182,7 @@ fn case_01_an_unowned_r_a_yields_no_session() {
             responder,
             // Her best guess: her own key on w₀.
             static_dh: mul(&responder, &mallory.scalar()).to_compressed(),
+            initiator_key: None,
             from_handle: Some(from_handle),
         };
         let envelope = forge(&forgery, b"reply to Alice's mailbox", &mut draw);
@@ -171,6 +204,7 @@ fn case_01_an_unowned_r_a_yields_no_session() {
         initiator: mul(&base, &mallory.scalar()),
         responder: w0,
         static_dh: mul(&w0, &mallory.scalar()).to_compressed(),
+        initiator_key: Some(mallory.scalar()),
         from_handle: Some((bob_handle, test_scalar("b"))),
     };
     let mut bob_inbox = test_inbox();
@@ -210,7 +244,8 @@ fn case_01_an_unowned_r_a_yields_no_session() {
 /// Case 2. An R_A lifted from another conversation: Alice wrote to Mallory,
 /// and Mallory reuses Alice's R_A to write to Carol, on its own base or on
 /// Carol's. Neither yields a session: on its own base, Mallory can't show
-/// the base is one of Carol's handles, and on Carol's, A doesn't fit.
+/// the base is one of Carol's handles, and on Carol's, A doesn't fit: its
+/// key on that base is no one's she has, so there's no keys proof.
 #[test]
 fn case_02_a_lifted_r_a_is_refused() {
     let (alice, mallory, carol) = (key("alice"), key("mallory"), key("carol"));
@@ -235,7 +270,7 @@ fn case_02_a_lifted_r_a_is_refused() {
             carol_base,
             carol_w0,
             Some((carol_handle, test_scalar("b"))),
-            Error::DecryptionFailed,
+            Error::InvalidKeysProof,
         ),
     ] {
         let forgery = Forgery {
@@ -246,6 +281,7 @@ fn case_02_a_lifted_r_a_is_refused() {
             initiator: lifted_a,
             responder,
             static_dh: mul(&responder, &mallory.scalar()).to_compressed(),
+            initiator_key: None,
             from_handle,
         };
         let mut carol_inbox = test_inbox();
@@ -307,8 +343,9 @@ fn case_03_racing_sends() {
 
 /// Case 6. A deleted request's first message replayed: at t + 47 h 59 m with
 /// t an hour ahead of the reader's clock, the tombstone refuses it (one
-/// timed from the deletion would have expired an hour before); at
-/// t + 48 h + 1 s the window refuses it, with or without the tombstone.
+/// timed from the deletion would have expired an hour before); past t + 48 h
+/// the tombstone still does, until an expiry past its 7-day margin deletes
+/// it, and then the window refuses it.
 #[test]
 fn case_06_replaying_a_deleted_request() {
     let (alice, bob) = (key("alice"), key("bob"));
@@ -339,9 +376,11 @@ fn case_06_replaying_a_deleted_request() {
     let past = t + FIRST_CONTACT_MAX_AGE + 1;
     assert_eq!(
         inbox.receive(&bob, &own_handles(&bob), &first, past),
-        Err(Error::OutsideWindow)
+        Err(Error::Deleted)
     );
     inbox.expire(past);
+    assert_eq!(inbox.tombstones().len(), 1);
+    inbox.expire(past + TOMBSTONE_MARGIN);
     assert!(inbox.tombstones().is_empty());
     assert_eq!(
         inbox.receive(&bob, &own_handles(&bob), &first, past),
@@ -412,9 +451,10 @@ impl Draw for Fixed {
 }
 
 /// Case 8. A message at Nr + MAX_SKIP is read; at Nr + MAX_SKIP + 1 it's
-/// refused before any key is derived. A forged huge counter with a bad tag
-/// is refused the same way, and one at the bound costs at most MAX_SKIP + 1
-/// chain steps on a copy. No state changes.
+/// refused as too far ahead, after its chain is stepped on a copy to show it
+/// authenticates, with nothing stored (part 7). A forged huge counter is
+/// refused as a forgery with nothing derived, and a forgery at the bound
+/// costs at most MAX_SKIP + 1 chain steps on a copy. No state changes.
 #[test]
 fn case_08_counters_at_the_bound() {
     let mut p = pair("case 8");
@@ -429,22 +469,25 @@ fn case_08_counters_at_the_bound() {
     let before = p.b.to_bytes();
 
     let calls = || KDF_CK_CALLS.with(|c| c.get());
-    KDF_CK_CALLS.with(|c| c.set(0));
+    let reset = || KDF_CK_CALLS.with(|c| c.set(0));
+    reset();
     assert_eq!(
         p.b.receive_with(&over, T, &mut p.draw),
         Err(Error::TooFarAhead)
     );
-    assert_eq!(calls(), 0);
+    assert_eq!(calls(), u64::from(MAX_SKIP) + 2);
     let mut huge = over.clone();
     huge.header.n = 4_000_000_000;
     *huge.ciphertext.last_mut().unwrap() ^= 1;
+    reset();
     assert_eq!(
         p.b.receive_with(&huge, T, &mut p.draw),
-        Err(Error::TooFarAhead)
+        Err(Error::DecryptionFailed)
     );
     assert_eq!(calls(), 0);
     let mut forged = at_bound.clone();
     *forged.ciphertext.last_mut().unwrap() ^= 1;
+    reset();
     assert_eq!(
         p.b.receive_with(&forged, T, &mut p.draw),
         Err(Error::DecryptionFailed)
@@ -524,14 +567,18 @@ fn case_10_requests_are_bounded_and_replying_is_eager_processing() {
     assert!(inbox.requests().get(cids[0]).is_none());
     assert!(inbox.requests().get(cids[1]).is_some());
 
-    // Bytes: eight of the largest first-contact messages and one of 1,296
-    // inner bytes fill 256 KiB exactly; 1,297 is a byte over. A first-contact
-    // message here adds 351 bytes to its text: the type, F (254, with the
-    // tests' 20-byte `to` and the proof), the stamp, the header, the salt and
-    // the tag.
-    let overhead = 1 + 254 + 8 + 56 + 32;
-    let largest = 32768 - 161 - 1 - overhead;
-    for (last, kept) in [(1296 - overhead, true), (1297 - overhead, false)] {
+    // Bytes: eight of the largest first-contact messages, 32,622 inner bytes
+    // each, and one of 1,168 inner bytes fill 256 KiB exactly; 1,169 is a
+    // byte over. A first-contact message here adds 607 bytes to its text: the
+    // type, F (510, with the tests' 20-byte `to` and both proofs), the stamp,
+    // the header, the salt and the tag.
+    let overhead = 1 + 510 + 8 + 56 + 32;
+    let largest_inner = 32768 - crate::ENVELOPE_OVERHEAD - 1;
+    assert_eq!(largest_inner, 32_622);
+    let largest = largest_inner - overhead;
+    let room = MAX_REQUEST_BYTES - 8 * largest_inner;
+    assert_eq!(room, 1168);
+    for (last, kept) in [(room - overhead, true), (room + 1 - overhead, false)] {
         let mut inbox = test_inbox();
         let mut first = None;
         for i in 0..8 {
@@ -743,6 +790,7 @@ fn case_11_continuations() {
         initiator: p.a.first.initiator,
         responder: p.a.responder,
         static_dh: mul(&p.a.responder, &mallory.scalar()).to_compressed(),
+        initiator_key: None,
         from_handle: None,
     };
     let mut inbox = bob_inbox.clone();
@@ -809,22 +857,24 @@ fn handle_of(key: &SecretKey, label: &str) -> Register {
 
 /// Case 12. Rollback: an older copy of Alice's state sends again under
 /// counters Bob already used. He drops them, and no AES-GCM key and nonce
-/// repeats, though the message keys do.
+/// repeats, though the message keys do: not the ratchet's, and not the
+/// envelope's, whose p and c come from the message key and the fresh salt.
+/// The salt is a send's only fresh value, so a source that repeats it too (a
+/// second fault) repeats the whole envelope header (protocol.md §4.2).
 #[test]
 fn case_12_rollback() {
     let mut p = pair("case 12");
     let saved = p.a.clone();
     let mk = kdf_ck(saved.ratchet.cks.as_ref().unwrap()).1;
-    let m1 = opened(&p.bob, &p.a.send_with(b"one", &mut p.draw).unwrap());
+    let e1 = p.a.send_with(b"one", &mut p.draw).unwrap();
+    let m1 = opened(&p.bob, &e1);
     let m2 = opened(&p.bob, &p.a.send_with(b"two", &mut p.draw).unwrap());
     p.b.receive_with(&m1, T, &mut p.draw).unwrap();
     p.b.receive_with(&m2, T, &mut p.draw).unwrap();
 
-    let mut restored = saved;
-    let again = opened(
-        &p.bob,
-        &restored.send_with(b"one, again", &mut p.draw).unwrap(),
-    );
+    let mut restored = saved.clone();
+    let e_again = restored.send_with(b"one, again", &mut p.draw).unwrap();
+    let again = opened(&p.bob, &e_again);
     assert_eq!(again.header, m1.header);
     let salt =
         |m: &crate::session::wire::Opened| -> [u8; 16] { m.ciphertext[..16].try_into().unwrap() };
@@ -834,6 +884,21 @@ fn case_12_rollback() {
     );
     assert_ne!(k1[..32], k2[..32]);
     assert_ne!(k1[32..], k2[32..]);
+    // The envelope: another p, another c, so another outer key.
+    let c_at = HEADER_LEN - POINT_LEN;
+    assert_ne!(e1[1..1 + POINT_LEN], e_again[1..1 + POINT_LEN]);
+    assert_ne!(e1[c_at..HEADER_LEN], e_again[c_at..HEADER_LEN]);
+    // The second fault: the same message key and the same salt give the same
+    // p, tag and c, a limit protocol.md §4.2 states, not a property to keep.
+    let mut aux = [0u8; 32];
+    aux[..16].copy_from_slice(&salt(&m1));
+    let mut stuck = Stuck {
+        scalar: test_scalar("case 12 stuck"),
+        aux,
+    };
+    let mut twice = saved;
+    let e_twice = twice.send_with(b"one, twice", &mut stuck).unwrap();
+    assert_eq!(e_twice[..HEADER_LEN], e1[..HEADER_LEN]);
     let before = p.b.to_bytes();
     assert_eq!(
         p.b.receive_with(&again, T, &mut p.draw),
@@ -864,11 +929,12 @@ fn case_12_rollback() {
     );
 }
 
-/// Case 13. Sizes (docs/protocol.md §9): a first message from a handle with
-/// a 1-byte `to` holds 18 bytes of text in 512 bytes and not 19; one to a
-/// Seedelf's 32-byte name with a `replaces` never fits 512, and holds 1,507
-/// in 2,048 and not 1,508; a continuation holds 67 and not 68; a session
-/// message holds 245 and not 246.
+/// Case 13. Sizes (docs/protocol.md §9). No first-contact message fits 512
+/// bytes, a continuation's included: F's two proofs leave no room. In 2,048
+/// bytes one from a handle under a 1-byte `to` holds 1,314 bytes of text and
+/// not 1,315; one to a Seedelf's 32-byte name with a `replaces` (F at its
+/// largest, 538) holds 1,267 and not 1,268; a continuation (F of 282) holds
+/// 1,523 and not 1,524. A session message holds 261 in 512 and not 262.
 #[test]
 fn case_13_sizes() {
     let alice = key("alice");
@@ -876,8 +942,10 @@ fn case_13_sizes() {
     let mut draw = Seeded::new("case 13");
     let mut a = Conversation::start_with(&alice, &bob_handle, b"b", T, &mut draw).unwrap();
     stamp(&mut a);
-    assert_eq!(a.send_with(&[0; 18], &mut draw).unwrap().len(), 512);
-    assert_eq!(a.send_with(&[0; 19], &mut draw).unwrap().len(), 2048);
+    assert_eq!(a.first_bytes.len(), 491);
+    assert_eq!(a.send_with(b"", &mut draw).unwrap().len(), 2048);
+    assert_eq!(a.send_with(&[0; 1314], &mut draw).unwrap().len(), 2048);
+    assert_eq!(a.send_with(&[0; 1315], &mut draw).unwrap().len(), 8192);
     let mut full = Conversation::begin(
         &alice,
         Origin::Handle(&bob_handle),
@@ -888,17 +956,20 @@ fn case_13_sizes() {
     )
     .unwrap();
     stamp(&mut full);
+    assert_eq!(full.first_bytes.len(), 538);
     assert_eq!(full.send_with(b"", &mut draw).unwrap().len(), 2048);
-    assert_eq!(full.send_with(&[0; 1507], &mut draw).unwrap().len(), 2048);
-    assert_eq!(full.send_with(&[0; 1508], &mut draw).unwrap().len(), 8192);
+    assert_eq!(full.send_with(&[0; 1267], &mut draw).unwrap().len(), 2048);
+    assert_eq!(full.send_with(&[0; 1268], &mut draw).unwrap().len(), 8192);
     let mut p = pair("case 13 session");
     let mut again = Conversation::continue_with(&p.alice, &p.a, T, &mut draw).unwrap();
     stamp(&mut again);
-    assert_eq!(again.send_with(&[0; 67], &mut draw).unwrap().len(), 512);
-    assert_eq!(again.send_with(&[0; 68], &mut draw).unwrap().len(), 2048);
-    assert_eq!(p.a.send_with(&[0; 245], &mut p.draw).unwrap().len(), 512);
-    assert_eq!(p.a.send_with(&[0; 246], &mut p.draw).unwrap().len(), 2048);
-    assert_eq!(p.b.send_with(&[0; 245], &mut p.draw).unwrap().len(), 512);
+    assert_eq!(again.first_bytes.len(), 282);
+    assert_eq!(again.send_with(b"", &mut draw).unwrap().len(), 2048);
+    assert_eq!(again.send_with(&[0; 1523], &mut draw).unwrap().len(), 2048);
+    assert_eq!(again.send_with(&[0; 1524], &mut draw).unwrap().len(), 8192);
+    assert_eq!(p.a.send_with(&[0; 261], &mut p.draw).unwrap().len(), 512);
+    assert_eq!(p.a.send_with(&[0; 262], &mut p.draw).unwrap().len(), 2048);
+    assert_eq!(p.b.send_with(&[0; 261], &mut p.draw).unwrap().len(), 512);
 }
 
 /// Case 14. Both sides write first at once: two conversations, each valid,

@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
 import { Koios } from "../src/background/koios";
+import { mintedAt, rememberRegister } from "../src/background/minted-by";
 import { pendingKey } from "../src/background/pending";
+import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { ADA_HANDLE_POLICY } from "../src/background/destination";
 import { SESSION_REMOVE, SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
 import { txIdOf } from "./fixtures/cbor";
@@ -264,6 +266,35 @@ describe("removing a Seedelf", () => {
     const pending = await service.submitRemove("preprod", summary.txHash);
     expect(pending).toMatchObject({ kind: "remove", txHash: summary.txHash });
     expect(await t.session.get(SESSION_REMOVE)).toBeUndefined();
+  });
+
+  it("forgets the register Messages took first messages at once its removal is sent, and only then (the 1.10.0 gate's W12)", async () => {
+    const t = await unlocked();
+    // Minted in this browser under a register, as another Seedelf was: each a pair Messages takes first messages at.
+    const register = { generator: "aa".repeat(48), publicValue: "bb".repeat(48) };
+    const OTHER = "5eed0e1f00" + Buffer.from("other").toString("hex");
+    await rememberRegister(t.store, "preprod", MINE, register);
+    await rememberRegister(t.store, "preprod", OTHER, register);
+    const summary = await t.withdraw.buildRemove("preprod", MINE, "account");
+    // giveme.my's recorded refusal: nothing is sent, and the pair stays.
+    await expect(t.withdraw.submitRemove("preprod", summary.txHash)).rejects.toThrow("Transaction Fails Validation");
+    expect(Object.keys(await mintedAt(t.store, "preprod")).sort()).toEqual([MINE, OTHER].sort());
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    const service = withSigner(t, (request) => JSON.stringify({ txCbor: request.txCbor, txHash: summary.txHash }));
+    expect(await service.submitRemove("preprod", summary.txHash)).toMatchObject({ kind: "remove", txHash: summary.txHash });
+    // Sent: that Seedelf's pair goes, the other stays.
+    expect(await mintedAt(t.store, "preprod")).toEqual({ [OTHER]: [register] });
+  });
+
+  it("sends a removal whose pair can't be forgotten all the same: the record that says it won't open is left as it is", async () => {
+    const t = await unlocked();
+    const summary = await t.withdraw.buildRemove("preprod", MINE, "account");
+    // The record of the pairs won't open: forgetting is best effort, the removal its own.
+    await t.local.set(`${PRIVATE_PREFIX}mintedAt.preprod`, { v: 1, nonce: "A".repeat(32), data: "AAAA" });
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    const service = withSigner(t, (request) => JSON.stringify({ txCbor: request.txCbor, txHash: summary.txHash }));
+    expect(await service.submitRemove("preprod", summary.txHash)).toMatchObject({ kind: "remove", txHash: summary.txHash });
+    expect(await t.local.get(`${PRIVATE_PREFIX}mintedAt.preprod`)).toEqual({ v: 1, nonce: "A".repeat(32), data: "AAAA" });
   });
 
   it("explains what stops a removal", async () => {

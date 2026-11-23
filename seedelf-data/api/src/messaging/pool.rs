@@ -4,7 +4,8 @@
 //! **Cursors.** Each envelope kept gets the next number, starting from the
 //! Unix time in microseconds when the pool was loaded, so a pool that lost
 //! what it held (a crash between snapshots, a deleted file) still numbers
-//! above every cursor it gave out. A reader asks for what follows its
+//! above every cursor it gave out; after a crash, also far above its last
+//! save's, should the clock have gone back. A reader asks for what follows its
 //! cursor. `forgotten` is the highest number the pool no longer has, or
 //! may never have saved: a cursor below it may have missed something, and
 //! the page says so (its `gap` flag). That's all a number says: no time.
@@ -19,6 +20,12 @@ pub const KEPT_FOR: i64 = 36 * 3600;
 /// A page holds whole envelopes up to this many bytes.
 pub const PAGE_BYTES: usize = 256 * 1024;
 
+/// A page's bytes before its envelopes, as `messaging::encode` writes them:
+/// version, flags, cursor, prices and count.
+pub const PAGE_HEADER: usize = 1 + 1 + 8 + 4 + 2;
+/// And before each envelope, its length.
+pub const LENGTH_LEN: usize = 4;
+
 /// The page's format version.
 pub const PAGE_VERSION: u8 = 1;
 /// Flags: another page follows now.
@@ -29,6 +36,13 @@ pub const GAP: u8 = 2;
 
 /// The snapshot's format version.
 const SNAPSHOT_VERSION: u8 = 1;
+
+/// More numbers than a pool gives out between two saves, many times over:
+/// mainnet's cap holds 2^17 of the shortest envelopes, and a save comes
+/// every minute. After a crash the numbering goes on this far above the
+/// last save's `next`, so it stays above every cursor given out since,
+/// whatever the clock says.
+const UNSAVED: u64 = 1 << 32;
 
 struct Entry {
     number: u64,
@@ -97,8 +111,19 @@ impl Held {
         self.bytes
     }
 
-    /// Drops what's been held 36 hours.
+    /// Drops what's been held 36 hours, from the oldest.
     pub fn expire(&mut self, now: i64) {
+        // The newest came last, unless the clock has gone back since. A
+        // second's slack: a request reads the clock before it takes the
+        // lock, so behind an insert its `now` can be a second stale, which
+        // isn't the clock going back (the gate review's relay nit).
+        if self
+            .entries
+            .back()
+            .is_some_and(|entry| entry.came > now.saturating_add(1))
+        {
+            self.settle(now);
+        }
         while let Some(entry) = self.entries.front() {
             if entry.came + KEPT_FOR > now {
                 break;
@@ -111,6 +136,24 @@ impl Held {
         }
     }
 
+    /// Makes every entry's time at most `now` and none earlier than the one
+    /// before it, so the times run in the numbers' order, which `expire`
+    /// takes from the oldest. A time ahead of the clock (an envelope kept
+    /// while the clock ran ahead) counts as now: one bad reading keeps its
+    /// envelope at most 36 hours from the first look after the clock is
+    /// right, and holds back nothing that came after it.
+    fn settle(&mut self, now: i64) {
+        let mut latest = i64::MIN;
+        for entry in &mut self.entries {
+            let came = entry.came.min(now).max(latest);
+            if came != entry.came {
+                entry.came = came;
+                self.changed = true;
+            }
+            latest = came;
+        }
+    }
+
     /// When the envelope with this digest expires, if it's held.
     pub fn already(&self, digest: &[u8; 32]) -> Option<i64> {
         let number = *self.by_digest.get(digest)?;
@@ -120,10 +163,16 @@ impl Held {
 
     /// Keeps an envelope whose checks have passed, unless it's held already
     /// or `cap` bytes would be passed.
+    ///
+    /// What's kept is a copy with an allocation of its own, made here, so
+    /// the cap counts what the pool holds in memory. The bytes come as a
+    /// slice so that no caller can hand over a view of a larger buffer to
+    /// keep: a request's body is one of hyper's read buffer, 8 to 400 KiB,
+    /// which a kept view would pin for the envelope's 36 hours.
     pub fn insert(
         &mut self,
         digest: [u8; 32],
-        bytes: Bytes,
+        bytes: &[u8],
         now: i64,
         cap: usize,
     ) -> Result<Kept, Full> {
@@ -144,7 +193,7 @@ impl Held {
             number,
             came: now,
             digest,
-            bytes,
+            bytes: Bytes::copy_from_slice(bytes),
         });
         self.changed = true;
         Ok(Kept::New {
@@ -155,6 +204,30 @@ impl Held {
     /// Whole envelopes after `after` (from the oldest without one), at most
     /// `limit` bytes but always one, and the cursor to ask from next.
     pub fn page(&mut self, after: Option<u64>, limit: usize, now: i64) -> Page {
+        self.page_while(after, now, |count, bytes| count == 1 || bytes <= limit)
+    }
+
+    /// [`Held::page`] whose encoding, [`PAGE_HEADER`] bytes and
+    /// [`LENGTH_LEN`] before each envelope, is at most `most` bytes: as many
+    /// whole envelopes as fit, with `MORE` when any are left. None when the
+    /// first alone doesn't fit: a page holds whole envelopes, and an empty
+    /// one's cursor would step over it.
+    pub fn page_within(&mut self, after: Option<u64>, most: usize, now: i64) -> Option<Page> {
+        let page = self.page_while(after, now, |count, bytes| {
+            (count == 1 || bytes <= PAGE_BYTES) && PAGE_HEADER + count * LENGTH_LEN + bytes <= most
+        });
+        let cut_before_any = page.envelopes.is_empty() && page.flags & MORE != 0;
+        (!cut_before_any).then_some(page)
+    }
+
+    /// Whole envelopes after `after` for as long as `fits` (how many they'd
+    /// be, and their bytes) says the next one may join them.
+    fn page_while(
+        &mut self,
+        after: Option<u64>,
+        now: i64,
+        fits: impl Fn(usize, usize) -> bool,
+    ) -> Page {
         self.expire(now);
         let last_given = self.next - 1;
         let (start, mut flags) = match after {
@@ -170,7 +243,7 @@ impl Held {
         let mut size = 0;
         let mut cursor = last_given;
         for entry in self.entries.iter().skip(start) {
-            if !envelopes.is_empty() && size + entry.bytes.len() > limit {
+            if !fits(envelopes.len() + 1, size + entry.bytes.len()) {
                 flags |= MORE;
                 break;
             }
@@ -205,19 +278,42 @@ impl Held {
     /// The pool a snapshot held, for `pool`, as of `now`. A snapshot from a
     /// clean shutdown held everything; any other may have missed the
     /// envelopes kept after it was made, so every cursor given out before
-    /// is told of a gap. Numbering goes on from the later of the snapshot's
-    /// and `now_micros`.
+    /// is told of a gap, and the numbers given out since are taken to run
+    /// up to [`UNSAVED`] past the snapshot's `next`. Numbering goes on from
+    /// the later of that (the snapshot's `next` itself, if it's clean) and
+    /// `now_micros`.
+    ///
+    /// Not clean, the pool is changed from the start, so the first save
+    /// (`messaging::keep`'s, at once) writes where its numbering now
+    /// stands. Kept in memory alone, a second crash before a save numbered
+    /// from the same place again, handing out numbers a reader already held,
+    /// and a clean stop after a quiet run left its cursors above the file's
+    /// (the gate review of the relay's fixes, its medium and a low).
+    ///
+    /// Each envelope whose own 36 hours are over is dropped, wherever it
+    /// is, and the rest are put in order (`settle`), so a file written while
+    /// the clock was wrong holds nothing past its time.
     pub fn restore(snapshot: Snapshot, clean: bool, pool: &str, now: i64, now_micros: u64) -> Self {
-        let next = snapshot.next.max(now_micros).max(1);
+        let saved = if clean {
+            snapshot.next
+        } else {
+            snapshot.next.saturating_add(UNSAVED)
+        };
+        let next = saved.max(now_micros).max(1);
         let mut held = Held {
             entries: VecDeque::with_capacity(snapshot.entries.len()),
             by_digest: HashMap::with_capacity(snapshot.entries.len()),
             bytes: 0,
             next,
             forgotten: if clean { snapshot.forgotten } else { next - 1 },
-            changed: false,
+            changed: !clean,
         };
         for (number, came, bytes) in snapshot.entries {
+            if came.saturating_add(KEPT_FOR) <= now {
+                held.forgotten = held.forgotten.max(number);
+                held.changed = true;
+                continue;
+            }
             let digest = super::check::stamp_digest(pool, &bytes);
             held.bytes += bytes.len();
             held.by_digest.insert(digest, number);
@@ -228,7 +324,7 @@ impl Held {
                 bytes,
             });
         }
-        held.expire(now);
+        held.settle(now);
         held
     }
 }
@@ -318,7 +414,7 @@ mod tests {
 
     fn keep(held: &mut Held, i: u32, now: i64) -> Kept {
         let (bytes, digest) = envelope(i);
-        held.insert(digest, Bytes::from(bytes), now, CAP).unwrap()
+        held.insert(digest, &bytes, now, CAP).unwrap()
     }
 
     fn ids(page: &Page) -> Vec<u32> {
@@ -426,34 +522,23 @@ mod tests {
     fn a_full_pool_refuses_until_room_comes() {
         let mut held = Held::new(MICROS);
         let (bytes, digest) = envelope(1);
-        held.insert(digest, Bytes::from(bytes), NOW, 1024).unwrap();
+        held.insert(digest, &bytes, NOW, 1024).unwrap();
         let (bytes, digest) = envelope(2);
-        held.insert(digest, Bytes::from(bytes), NOW, 1024).unwrap();
+        held.insert(digest, &bytes, NOW, 1024).unwrap();
         let (bytes, digest) = envelope(3);
-        assert_eq!(
-            held.insert(digest, Bytes::from(bytes.clone()), NOW, 1024),
-            Err(Full(3600))
-        );
+        assert_eq!(held.insert(digest, &bytes, NOW, 1024), Err(Full(3600)));
         // A held one is still "already", full or not.
         let (held_bytes, held_digest) = envelope(1);
         assert!(matches!(
-            held.insert(held_digest, Bytes::from(held_bytes), NOW, 1024),
+            held.insert(held_digest, &held_bytes, NOW, 1024),
             Ok(Kept::Already { .. })
         ));
         // Near the oldest's 36 hours, the wait is what's left of them.
         assert_eq!(
-            held.insert(
-                digest,
-                Bytes::from(bytes.clone()),
-                NOW + KEPT_FOR - 120,
-                1024
-            ),
+            held.insert(digest, &bytes, NOW + KEPT_FOR - 120, 1024),
             Err(Full(120))
         );
-        assert!(
-            held.insert(digest, Bytes::from(bytes), NOW + KEPT_FOR, 1024)
-                .is_ok()
-        );
+        assert!(held.insert(digest, &bytes, NOW + KEPT_FOR, 1024).is_ok());
     }
 
     #[test]
@@ -494,6 +579,109 @@ mod tests {
         // A reader who starts now is told of none.
         let page = back.page(None, PAGE_BYTES, NOW + 40);
         assert_eq!((page.flags, ids(&page)), (0, vec![1, 3]));
+    }
+
+    /// The gate review's relay-server#6: the clock ran ten days ahead while
+    /// one envelope was kept, then was put right. Expiry looks at the
+    /// oldest alone, so that one envelope held every later one in the pool
+    /// for its ten days and a half, and the pool filled.
+    #[test]
+    fn an_envelope_kept_while_the_clock_ran_ahead_holds_nothing_back() {
+        let mut held = Held::new(MICROS);
+        keep(&mut held, 1, NOW + 10 * 86_400);
+        // The first look with the clock right counts its time as now...
+        keep(&mut held, 2, NOW);
+        assert_eq!(held.already(&envelope(1).1), Some(NOW + KEPT_FOR));
+        keep(&mut held, 3, NOW + 3600);
+        // ...so it goes 36 hours on, with what came beside it, and what came
+        // after goes on time.
+        let page = held.page(None, PAGE_BYTES, NOW + KEPT_FOR);
+        assert_eq!(ids(&page), vec![3]);
+        let page = held.page(None, PAGE_BYTES, NOW + KEPT_FOR + 3600);
+        assert!(page.envelopes.is_empty());
+        assert_eq!((held.len(), held.bytes()), (0, 0));
+    }
+
+    /// The relay review's nit (gate 54g): a request reads the clock before
+    /// it takes the pool's lock, so behind an insert it can hold a `now` a
+    /// second stale. That isn't the clock gone back: the newest envelope
+    /// keeps its time, and no walk of the pool runs for it.
+    #[test]
+    fn a_now_a_second_stale_moves_no_envelopes_time() {
+        let mut held = Held::new(MICROS);
+        keep(&mut held, 1, NOW + 1);
+        let page = held.page(None, PAGE_BYTES, NOW);
+        assert_eq!(ids(&page), vec![1]);
+        assert_eq!(held.already(&envelope(1).1), Some(NOW + 1 + KEPT_FOR));
+        // One kept on that stale `now` keeps it, and goes with the one
+        // before it, a second late at most.
+        keep(&mut held, 2, NOW);
+        assert_eq!(held.already(&envelope(2).1), Some(NOW + KEPT_FOR));
+        let page = held.page(None, PAGE_BYTES, NOW + KEPT_FOR);
+        assert_eq!(ids(&page), vec![1, 2]);
+        let page = held.page(None, PAGE_BYTES, NOW + 1 + KEPT_FOR);
+        assert!(page.envelopes.is_empty());
+        // More than a second behind is the clock gone back: as before, the
+        // time ahead counts as now.
+        keep(&mut held, 3, NOW + KEPT_FOR + 10);
+        held.page(None, PAGE_BYTES, NOW + KEPT_FOR + 8);
+        assert_eq!(held.already(&envelope(3).1), Some(NOW + 2 * KEPT_FOR + 8));
+    }
+
+    /// The same in a file, written while the clock ran ahead (by a build
+    /// before this one): the second envelope "came" ten days before the
+    /// first. Read 37 hours after the second came, the second's 36 hours
+    /// are over, and the first's time counts from the read.
+    #[test]
+    fn a_file_whose_times_run_backwards_is_read_in_order() {
+        let (one, _) = envelope(1);
+        let (two, _) = envelope(2);
+        let snapshot = Snapshot {
+            next: MICROS + 2,
+            forgotten: MICROS - 1,
+            entries: vec![
+                (MICROS, NOW + 10 * 86_400, Bytes::from(one)),
+                (MICROS + 1, NOW, Bytes::from(two)),
+            ],
+        };
+        let start = MICROS - 1;
+        let read = NOW + KEPT_FOR + 3600;
+        let snapshot = Snapshot::decode(&snapshot.encode()).unwrap();
+        let mut back = Held::restore(snapshot, true, "mainnet", read, MICROS + 10);
+        // The second is gone, so a reader from before it is told of a gap.
+        let page = back.page(Some(start), PAGE_BYTES, read);
+        assert_eq!((page.flags, ids(&page)), (GAP, vec![1]));
+        assert_eq!(back.already(&envelope(1).1), Some(read + KEPT_FOR));
+        assert!(back.changed);
+        assert!(
+            back.page(None, PAGE_BYTES, read + KEPT_FOR)
+                .envelopes
+                .is_empty()
+        );
+    }
+
+    /// The rest of relay-server#6: after a crash, with the clock behind
+    /// where it was, the pool numbered new envelopes from its last save's
+    /// `next`, at or below the cursors it gave out after that save, and a
+    /// reader holding one of those skipped them, told of no gap.
+    #[test]
+    fn after_a_crash_with_the_clock_behind_new_numbers_stay_above_every_cursor() {
+        let mut held = Held::new(MICROS);
+        keep(&mut held, 1, NOW);
+        let bytes = held.snapshot().encode();
+        // Kept after the save, read, then lost with the process.
+        keep(&mut held, 2, NOW + 30);
+        keep(&mut held, 3, NOW + 30);
+        let lost_cursor = held.page(None, PAGE_BYTES, NOW + 30).cursor;
+        // Started again with the clock a minute before the pool was loaded.
+        let behind = MICROS - 60_000_000;
+        let snapshot = Snapshot::decode(&bytes).unwrap();
+        let mut back = Held::restore(snapshot, false, "mainnet", NOW + 40, behind);
+        keep(&mut back, 4, NOW + 40);
+        keep(&mut back, 5, NOW + 40);
+        let page = back.page(Some(lost_cursor), PAGE_BYTES, NOW + 40);
+        assert_eq!((page.flags, ids(&page)), (GAP, vec![4, 5]));
+        assert!(page.cursor > lost_cursor);
     }
 
     #[test]

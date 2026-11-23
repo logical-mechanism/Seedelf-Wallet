@@ -1,19 +1,12 @@
 // Seedelf Messaging in the worker (chunk 54's 54e): two wallets writing to
 // each other through an in-memory relay (fake-relay.ts), with the records
-// alone between their calls, as a restarted worker has them.
+// alone between their calls, as a restarted worker has them. What the wallet
+// sends and when (the 1.10.0 gate's W1 to W6) is in tests/messaging-*.test.ts,
+// the verified reveal in messaging-reveal.test.ts.
 import { describe, expect, it } from "vitest";
 
-import {
-  type ConversationFile,
-  type Inbox,
-  lastOf,
-  REVEAL_READ_RETRY_MS,
-  MessagingService,
-  plaintextOf,
-  PREVIEW_CHARS,
-  storedBytes,
-  textOf,
-} from "../src/background/messaging";
+import { lastOf, MessagingFull, MessagingService, PREVIEW_CHARS, storedBytes, textOf, plaintextOf } from "../src/background/messaging";
+import { rememberRegister } from "../src/background/minted-by";
 import { PreferencesService } from "../src/background/preferences";
 import { conversationRecord, PRIVATE_PREFIX, PrivateStore } from "../src/background/private-store";
 import type { RegisterHex } from "../src/background/chain";
@@ -78,7 +71,7 @@ function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, dire
     ownSeedelfs: async (_n, read) => {
       if (p.ownFails) throw p.ownFails;
       if (read && p.readFails) throw p.readFails;
-      return read ? p.own : p.keptView ? (p.kept ?? p.own) : [];
+      return read ? p.own : p.keptView ? (p.kept ?? p.own) : undefined;
     },
     alarm: p.alarm,
     seedelfRegister: async (_n, name) => {
@@ -94,6 +87,8 @@ function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, dire
       return (name) => now.get(name);
     },
     now: () => clock.now,
+    // The waits kept in memory run on the monotonic clock (the 1.10.0 gate's W14): here it moves with the test's.
+    monotonic: () => clock.now,
     wait: async () => {
       await p.onWait?.();
     },
@@ -143,6 +138,8 @@ async function party(words: number, relay: FakeRelay, directory: Directory, seed
     });
     base.own.push({ name: seedelf, register });
     directory.set(seedelf, register);
+    // Minted in this browser, under that register: it takes first messages by itself (the 1.10.0 gate's W8).
+    await rememberRegister(store, "preprod", seedelf, register);
   }
   // One object: what a test changes on the party (its Seedelfs, its kept view) is what its service reads.
   const p = base as Party;
@@ -193,7 +190,14 @@ async function busyFor(ms: number, ...parties: Party[]) {
 
 const texts = async (p: Party, cid: string) => (await p.messaging.thread("preprod", cid)).messages.map((m) => `${m.dir}:${m.text}`);
 
-describe("Seedelf Messaging in the worker", () => {
+/** A conversation's record's name, by the ID `p`'s inbox gives it (W7): no name holds the conversation's own. */
+async function recordOf(p: Party, cid: string): Promise<ReturnType<typeof conversationRecord>> {
+  const inbox = await p.store.get<{ conversations: Record<string, { id: string }> }>("messaging.preprod");
+  return conversationRecord("preprod", inbox!.conversations[cid]!.id);
+}
+
+// Each test bounded: one that fails mid-take fails here, never hangs the run.
+describe("Seedelf Messaging in the worker", { timeout: 30_000 }, () => {
   it("reads nothing and posts nothing while a network's switch is off (call 9)", async () => {
     const relay = fakeRelay(clock);
     const directory: Directory = new Map();
@@ -298,13 +302,13 @@ describe("Seedelf Messaging in the worker", () => {
     expect((await texts(bob, cid)).filter((m) => m === "in:lost answer")).toHaveLength(1);
   });
 
-  it("loses nothing when the wallet locks mid-page: the cursor moves only once the page is done", async () => {
+  it("loses nothing when the wallet locks mid-take: the cursor moves only once everything read is taken", async () => {
     const { alice, bob } = await pair();
     const cid = await talking(alice, bob);
     await alice.messaging.send("preprod", cid, "first");
     await alice.messaging.send("preprod", cid, "second");
     await alice.messaging.whenIdle();
-    // Bob locks as the page's first new envelope is taken, before its record is written.
+    // Bob locks as the read's first new envelope is taken, before its record is written.
     let taken = 0;
     const wasm = loadTestWasm();
     bob.restart({
@@ -315,7 +319,9 @@ describe("Seedelf Messaging in the worker", () => {
         return answer;
       },
     });
-    await expect(bob.messaging.sync("preprod")).rejects.toThrow();
+    // The sync is the read and the posts; the take that the lock stops is in the background, nothing waiting on it.
+    await bob.messaging.sync("preprod");
+    await bob.messaging.whenIdle();
     expect(taken).toBe(1);
     await bob.wallet.unlock(PASSWORD);
     bob.restart();
@@ -370,9 +376,19 @@ describe("Seedelf Messaging in the worker", () => {
     // Nothing asked again before then.
     await synced(alice);
     expect(relay.calls.filter((c) => c.startsWith("POST"))).toHaveLength(1);
-    // Then the relay takes it at the price it names (402), solved now.
+    // Then the relay takes it at the price it names (402), solved now. Named whatever nonce 0 shows: the post goes at
+    // the page's price of 0, and nonce 0 meets the fake relay's 4 bits one time in 16.
     relay.refusing = undefined;
     clock.now += 90_000;
+    const real = relay.fetch;
+    let priced = false;
+    relay.fetch = async (url, init) => {
+      if (init.method === "POST" && !priced) {
+        priced = true;
+        return new Response(JSON.stringify({ error: "more proof of work", price: 9 }), { status: 402 });
+      }
+      return real(url, init);
+    };
     await alice.messaging.post("preprod");
     await alice.messaging.whenIdle();
     thread = await alice.messaging.thread("preprod", cid);
@@ -433,9 +449,10 @@ describe("Seedelf Messaging in the worker", () => {
   it("deletes a conversation's record with it, and Remove wallet deletes them all", async () => {
     const { alice, bob } = await pair();
     const cid = await talking(alice, bob);
-    expect(await bob.local.get(PRIVATE_PREFIX + conversationRecord("preprod", cid))).toBeDefined();
+    const record = await recordOf(bob, cid);
+    expect(await bob.local.get(PRIVATE_PREFIX + record)).toBeDefined();
     await bob.messaging.remove("preprod", cid);
-    expect(await bob.local.get(PRIVATE_PREFIX + conversationRecord("preprod", cid))).toBeUndefined();
+    expect(await bob.local.get(PRIVATE_PREFIX + record)).toBeUndefined();
     expect((await bob.messaging.overview("preprod")).conversations).toEqual([]);
 
     expect(await alice.local.keys(PRIVATE_PREFIX + "conversation.")).toHaveLength(1);
@@ -452,7 +469,7 @@ describe("Seedelf Messaging in the worker", () => {
     expect(await alice.local.keys(PRIVATE_PREFIX + "conversation.")).toEqual([]);
   });
 
-  it("says a conversation this browser no longer has, and when the relay lost envelopes", async () => {
+  it("says when the relay lost envelopes, and nothing of a conversation this browser no longer has (W3)", async () => {
     const { relay, directory, alice, bob } = await pair();
     const cid = await talking(alice, bob);
     // Alice's wallet restored in a new browser: the same key, none of the conversations.
@@ -462,22 +479,23 @@ describe("Seedelf Messaging in the worker", () => {
     await bob.messaging.send("preprod", cid, "are you there?");
     await bob.messaging.whenIdle();
     await synced(again);
-    // Bob's two messages, both to the conversation it no longer has.
-    expect((await again.messaging.overview("preprod")).lost).toEqual([{ cid, lastAt: clock.now, messages: 2 }]);
+    // Bob's two messages, both to the conversation it no longer has: dropped, as any envelope it can't place is.
+    expect(await again.messaging.overview("preprod")).toEqual({ on: true, conversations: [], requests: [] });
 
     relay.gapOnce = true;
     await synced(bob);
     expect((await bob.messaging.overview("preprod")).gapAt).toBe(clock.now);
   });
 
-  it("reads a first message to a register the Seedelf no longer holds (§16.4)", async () => {
+  it("keeps a request that came at a Seedelf's register when its datum changes, and takes no first message there after (W8)", async () => {
     const { directory, alice, bob } = await pair();
-    // Bob's sync has seen the register Alice will write to.
+    // Bob's sync has seen the register Alice writes to, and takes her first message there.
     await synced(bob);
     const old = directory.get(BOB_SEEDELF)!;
-    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "to your old datum");
+    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "to your datum");
     await alice.messaging.whenIdle();
-    // Then the Seedelf's datum changed.
+    await synced(bob);
+    // Then the Seedelf's datum changed, and the view Bob's wallet keeps says so.
     const fresh = await bob.wallet.withKeys((keys) => {
       const wasm = loadTestWasm();
       const b = keys.seedelf.baseRegister();
@@ -491,6 +509,9 @@ describe("Seedelf Messaging in the worker", () => {
     });
     bob.own.splice(0, 1, { name: BOB_SEEDELF, register: fresh });
     expect(fresh).not.toEqual(old);
+    // Alice's lookup still has the old one: what she writes there now isn't taken, and what came before it stays.
+    await alice.messaging.start("preprod", BOB_SEEDELF, "to your old datum");
+    await alice.messaging.whenIdle();
     bob.restart();
     await synced(bob);
     expect((await bob.messaging.overview("preprod")).requests.map((r) => r.cid)).toEqual([cid]);
@@ -584,7 +605,7 @@ describe("Seedelf Messaging in the worker", () => {
     expect(relay.calls).toEqual([]);
   });
 
-  it("expires tombstones past their t + 48 hours, at most hourly", async () => {
+  it("expires tombstones past their t + 48 hours and 7 days, at most hourly (DESIGN-protocol §3.6)", async () => {
     const { alice, bob } = await pair();
     const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "hello");
     await alice.messaging.whenIdle();
@@ -592,69 +613,39 @@ describe("Seedelf Messaging in the worker", () => {
     await bob.messaging.remove("preprod", cid);
     const held = async () => (await bob.store.get<{ tombstones?: string }>("messaging.preprod"))!.tombstones!.length;
     const one = await held();
+    // Past its 48 hours, still held: the crate keeps it 7 days more (TOMBSTONE_MARGIN), whatever a clock does meanwhile.
     await busyFor(49 * 3600_000, alice, bob);
+    await synced(bob);
+    expect(await held()).toBe(one);
+    await busyFor(7 * 24 * 3600_000, alice, bob);
     await synced(bob);
     expect(await held()).toBeLessThan(one);
   });
 
-  it("never lets the budget delete a message still to be posted", async () => {
+  it("never lets the budget delete a message still to be posted: one with no room beside them isn't kept, and says why (W7)", async () => {
     const { relay, alice, bob } = await pair(64 * 1024);
     const cid = await talking(alice, bob);
     relay.up = false;
-    for (let i = 0; i < 6; i++) await alice.messaging.send("preprod", cid, `${i}:` + "z".repeat(3000));
+    // Six of them, each an 8 KiB envelope kept until it's posted: more than this budget holds.
+    const kept: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const text = `${i}:` + "z".repeat(3000);
+      await alice.messaging.send("preprod", cid, text).then(
+        () => void kept.push(text),
+        (e: unknown) => expect(e).toBeInstanceOf(MessagingFull),
+      );
+    }
     await alice.messaging.whenIdle();
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(6);
     const waiting = (await alice.messaging.thread("preprod", cid)).messages.filter((m) => m.sent === "pending");
-    expect(waiting).toHaveLength(6);
+    expect(waiting.map((m) => m.text)).toEqual(kept);
+    // Said at the send that was refused (MessagingFull's words); Messages still takes what comes (W11).
+    expect((await alice.messaging.overview("preprod")).full).toBeUndefined();
     relay.up = true;
     await synced(alice);
     await synced(bob);
-    expect((await texts(bob, cid)).filter((m) => m.startsWith("in:"))).toHaveLength(7);
-  });
-
-  it("reads the contract again for a Seedelf the kept view is too old to have, and keeps the cursor when it can't", async () => {
-    const relay = fakeRelay(clock);
-    const directory: Directory = new Map();
-    const alice = await party(12, relay, directory, ALICE_SEEDELF);
-    const bob = await party(24, relay, directory, BOB_SEEDELF);
-    // Bob's view was kept before this Seedelf was his.
-    bob.kept = [];
-    await alice.messaging.switch("preprod", true);
-    await bob.messaging.switch("preprod", true);
-    await alice.messaging.whenIdle();
-    await bob.messaging.whenIdle();
-    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "new Seedelf?");
-    await alice.messaging.whenIdle();
-    // The read fails: the page is read again next time, nothing lost.
-    bob.readFails = new Error("Koios is down");
-    await expect(bob.messaging.sync("preprod")).rejects.toThrow(/Koios is down/);
-    expect((await bob.messaging.overview("preprod")).requests).toEqual([]);
-    bob.readFails = undefined;
-    await synced(bob);
-    expect((await bob.messaging.overview("preprod")).requests.map((r) => r.cid)).toEqual([cid]);
-  });
-
-  it("reads the contract again for a register the kept view is too old to have", async () => {
-    const { directory, alice, bob } = await pair();
-    // The kept view still has the register Bob's Seedelf held before; the chain, and Alice, have its new one.
-    const before = bob.own[0]!;
-    const fresh = await bob.wallet.withKeys((keys) => {
-      const wasm = loadTestWasm();
-      const b = keys.seedelf.baseRegister();
-      const r = wasm.rerandomize(b);
-      b.free();
-      try {
-        return { generator: r.generator, publicValue: r.publicValue };
-      } finally {
-        r.free();
-      }
-    });
-    bob.kept = [before];
-    bob.own.splice(0, 1, { name: BOB_SEEDELF, register: fresh });
-    directory.set(BOB_SEEDELF, fresh);
-    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "to your new datum");
-    await alice.messaging.whenIdle();
-    await synced(bob);
-    expect((await bob.messaging.overview("preprod")).requests.map((r) => r.cid)).toEqual([cid]);
+    expect((await texts(bob, cid)).filter((m) => m.startsWith("in:"))).toHaveLength(1 + kept.length);
   });
 
   it("stops reading pages once the switch is turned off mid-catch-up, and asks nothing while it's off", async () => {
@@ -753,27 +744,30 @@ describe("Seedelf Messaging in the worker", () => {
     await talking(alice, bob);
     await alice.messaging.send("preprod", (await alice.messaging.overview("preprod")).conversations[0]!.cid, "more");
     await alice.messaging.whenIdle();
-    // Between the page's scan and its cursor's write, Bob's wallet is removed and another phrase restored.
+    // Between the read's scan and the take's cursor, Bob's wallet is removed and another phrase restored.
     bob.onWait = async () => {
       bob.onWait = undefined;
       await bob.wallet.reset();
       await bob.wallet.create(phrase(15), PASSWORD);
     };
-    await expect(bob.messaging.sync("preprod")).rejects.toThrow();
+    await bob.messaging.sync("preprod").catch(() => undefined);
+    await bob.messaging.whenIdle();
     expect((await bob.store.get<{ cursor?: string }>("messaging.preprod"))?.cursor).toBeUndefined();
+    expect(await bob.local.keys(PRIVATE_PREFIX + "conversation.")).toEqual([]);
   });
 
   it("goes on past a conversation's record that won't open, and deletes it", async () => {
     const { alice, bob } = await pair();
     const cid = await talking(alice, bob);
-    await bob.local.set(PRIVATE_PREFIX + conversationRecord("preprod", cid), { v: 1, nonce: "A".repeat(32), data: "AAAA" });
+    const record = await recordOf(bob, cid);
+    await bob.local.set(PRIVATE_PREFIX + record, { v: 1, nonce: "A".repeat(32), data: "AAAA" });
     await alice.messaging.send("preprod", cid, "into the void");
     const other = await alice.messaging.start("preprod", BOB_SEEDELF, "a second one");
     await alice.messaging.whenIdle();
     await synced(bob);
     expect((await bob.messaging.overview("preprod")).requests.map((r) => r.cid)).toEqual([other]);
     await bob.messaging.remove("preprod", cid);
-    expect(await bob.local.get(PRIVATE_PREFIX + conversationRecord("preprod", cid))).toBeUndefined();
+    expect(await bob.local.get(PRIVATE_PREFIX + record)).toBeUndefined();
   });
 
   it("counts a record as the store keeps it: UTF-8, so Japanese counts three bytes a character", async () => {
@@ -781,12 +775,12 @@ describe("Seedelf Messaging in the worker", () => {
     const cid = await talking(alice, bob);
     await alice.messaging.send("preprod", cid, "日本語".repeat(1500));
     await alice.messaging.whenIdle();
-    const sealed = (await alice.local.get<{ data: string }>(PRIVATE_PREFIX + conversationRecord("preprod", cid)))!;
+    const sealed = (await alice.local.get<{ data: string }>(PRIVATE_PREFIX + (await recordOf(alice, cid))))!;
     const inbox = (await alice.store.get<{ conversations: Record<string, { bytes: number }> }>("messaging.preprod"))!;
     expect(Math.abs(inbox.conversations[cid]!.bytes - sealed.data.length)).toBeLessThanOrEqual(4);
   });
 
-  it("trims a busy conversation past the budget once an older one has nothing left to delete", async () => {
+  it("trims the conversation that takes the room, never an older one it can do without (W7)", async () => {
     const { alice, bob } = await pair(64 * 1024);
     const old = await talking(alice, bob);
     await busyFor(3600_000, alice, bob);
@@ -799,13 +793,18 @@ describe("Seedelf Messaging in the worker", () => {
     await synced(alice);
     for (let i = 0; i < 12; i++) await alice.messaging.send("preprod", busy, `${i}:` + "w".repeat(3000));
     await alice.messaging.whenIdle();
-    const inbox = (await alice.store.get<{ conversations: Record<string, { bytes: number }> }>("messaging.preprod"))!;
-    const total = Object.values(inbox.conversations).reduce((sum, m) => sum + m.bytes, 0);
-    expect(total).toBeLessThanOrEqual(64 * 1024);
-    expect((await alice.messaging.thread("preprod", old)).messages).toEqual([]);
-    expect((await alice.messaging.thread("preprod", busy)).trimmed).toBeGreaterThan(0);
-    // The list's last message went with the rest: no deleted text is shown for it.
-    expect((await alice.messaging.overview("preprod")).conversations.find((c) => c.cid === old)!.last).toBeUndefined();
+    // Everything Messages stores, the inbox too, within the budget.
+    let stored = 0;
+    for (const key of await alice.local.keys(PRIVATE_PREFIX)) {
+      if (/^seedelf\.private\.(messaging|conversation)\./.test(key)) stored += (await alice.local.get<{ data: string }>(key))!.data.length;
+    }
+    expect(stored).toBeLessThanOrEqual(64 * 1024);
+    // The older conversation is as it was; the busy one lost its oldest, and keeps its newest.
+    expect(await texts(alice, old)).toEqual(["out:hello Bob", "in:hi Alice"]);
+    const thread = await alice.messaging.thread("preprod", busy);
+    expect(thread.trimmed).toBeGreaterThan(0);
+    expect(thread.messages.at(-1)!.text).toMatch(/^11:/);
+    expect((await alice.messaging.overview("preprod")).conversations.find((c) => c.cid === busy)!.last!.text).toMatch(/^11:/);
   });
 
   it("tells open pages what changed, and syncs nothing while locked, its alarm stopped", async () => {
@@ -819,22 +818,6 @@ describe("Seedelf Messaging in the worker", () => {
     await alice.messaging.syncAll(["preprod"]);
     expect(relay.calls).toEqual([]);
     expect(alice.alarm.on).toBe(false);
-  });
-
-  it("reads the contract for the wallet's Seedelfs when a stranger writes and no view of it is kept", async () => {
-    const relay = fakeRelay(clock);
-    const directory: Directory = new Map();
-    const alice = await party(12, relay, directory, ALICE_SEEDELF);
-    const bob = await party(24, relay, directory, BOB_SEEDELF);
-    bob.keptView = false;
-    await alice.messaging.switch("preprod", true);
-    await bob.messaging.switch("preprod", true);
-    await alice.messaging.whenIdle();
-    await bob.messaging.whenIdle();
-    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "found you");
-    await alice.messaging.whenIdle();
-    await synced(bob);
-    expect((await bob.messaging.overview("preprod")).requests.map((r) => r.cid)).toEqual([cid]);
   });
 
   it("posts a message the inbox lost count of: a lock between its record's write and the inbox's", async () => {
@@ -861,6 +844,12 @@ describe("the wallet's messages", () => {
     expect(plaintextOf("héllo")).toBe("01" + "68c3a96c6c6f");
     expect(textOf("01" + "68c3a96c6c6f")).toEqual({ text: "héllo" });
     expect(textOf("02" + "00ff")).toEqual({ kind: 2 });
+    // A content kind this version doesn't know keeps its body, for a later version to show; a control kind leaves
+    // nothing at all (the 1.10.0 gate's W15).
+    expect(textOf("05" + "c0ffee")).toEqual({ kind: 5, body: "c0ffee" });
+    expect(textOf("7f")).toEqual({ kind: 0x7f, body: "" });
+    expect(textOf("80" + "00")).toBeUndefined();
+    expect(textOf("ff")).toBeUndefined();
   });
 
   it("are counted as the store keeps them: sealed, padded to a power of two, base64", () => {
@@ -869,7 +858,7 @@ describe("the wallet's messages", () => {
   });
 });
 
-describe("what the screens show (54f)", () => {
+describe("what the screens show (54f)", { timeout: 30_000 }, () => {
   it("keeps each conversation's last message for the list, either way, from the start, a reply and an accept", async () => {
     const { alice, bob } = await pair();
     const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "hello Bob");
@@ -940,50 +929,34 @@ describe("what the screens show (54f)", () => {
     expect(alice.changed).toEqual(["preprod"]);
   });
 
-  it("says the relay answers again at once, even when the sync then fails", async () => {
-    const relay = fakeRelay(clock);
-    const directory: Directory = new Map();
-    const alice = await party(12, relay, directory, ALICE_SEEDELF);
-    const bob = await party(24, relay, directory, BOB_SEEDELF);
-    bob.kept = [];
-    await alice.messaging.switch("preprod", true);
-    await bob.messaging.switch("preprod", true);
-    await alice.messaging.whenIdle();
-    await bob.messaging.whenIdle();
+  it("says the relay answers again at once, even when what it read then can't be taken", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    // Taking fails once `failing` is set: the record won't read.
+    const wasm = loadTestWasm();
+    let failing = false;
+    bob.restart({
+      ...wasm,
+      messagingReceive: (key, request) => {
+        if (failing) throw new Error("the record won't read");
+        return wasm.messagingReceive(key, request);
+      },
+    });
     relay.up = false;
     await synced(bob);
     expect((await bob.messaging.overview("preprod")).offline).toBe(true);
     relay.up = true;
-    await alice.messaging.start("preprod", BOB_SEEDELF, "new Seedelf?");
+    await alice.messaging.send("preprod", cid, "while you were away");
     await alice.messaging.whenIdle();
-    // The page reads, then the contract read for the stranger's first message fails: the sync throws.
-    bob.readFails = new Error("Koios is down");
+    // The page reads, then taking what it found fails: the relay's answer is said all the same, and at once.
+    failing = true;
     bob.changed.length = 0;
-    await expect(bob.messaging.sync("preprod")).rejects.toThrow(/Koios is down/);
+    await bob.messaging.sync("preprod");
     expect((await bob.messaging.overview("preprod")).offline).toBeUndefined();
     expect(bob.changed).toContain("preprod");
+    await bob.messaging.whenIdle();
+    expect((await texts(bob, cid)).includes("in:while you were away")).toBe(false);
   });
-
-  it("tells open pages at once that a conversation may not continue", async () => {
-    const { relay, alice, bob } = await pair();
-    const cid = await talking(alice, bob);
-    // More than MAX_SKIP (1,000) of Bob's messages never reach Alice: his ratchet steps on a copy of his record, and
-    // only the last envelope is posted.
-    const wasm = loadTestWasm();
-    let state = (await bob.store.get<{ state: string }>(conversationRecord("preprod", cid)))!.state;
-    let envelope = "";
-    for (let i = 0; i < 1002; i++) {
-      const sent = JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: state, plaintext: plaintextOf(`m${i}`) })));
-      state = sent.conversation;
-      envelope = sent.envelope;
-    }
-    relay.put("preprod", envelope);
-    alice.changed.length = 0;
-    await synced(alice);
-    expect((await alice.messaging.overview("preprod")).conversations[0]!.unreachable).toBe(1);
-    expect(alice.changed).toContain("preprod");
-    // 1,002 ratchet steps: about 5 s alone, twice that beside the rest of the suite.
-  }, 60_000);
 
   it("keeps the user's own name for a conversation, on the device, into one started again; takes it away when empty", async () => {
     const { relay, alice, bob } = await pair();
@@ -1013,255 +986,5 @@ describe("what the screens show (54f)", () => {
     await alice.messaging.sync("preprod");
     await alice.wallet.unlock(PASSWORD);
     expect((await alice.messaging.overview("preprod")).offline).toBeUndefined();
-  });
-});
-
-describe("the verified reveal in the worker (protocol.md §19)", () => {
-  /** Another register of `p`'s key: what its Seedelf's datum holds once it's locked again. */
-  async function another(p: Party): Promise<RegisterHex> {
-    const wasm = loadTestWasm();
-    return p.wallet.withKeys((keys) => {
-      const b = keys.seedelf.baseRegister();
-      const r = wasm.rerandomize(b);
-      b.free();
-      try {
-        return { generator: r.generator, publicValue: r.publicValue };
-      } finally {
-        r.free();
-      }
-    });
-  }
-
-  const last = async (p: Party, cid: string) => (await p.messaging.thread("preprod", cid)).messages.at(-1)!;
-  const record = (p: Party, cid: string) => p.store.get<ConversationFile>(conversationRecord("preprod", cid));
-
-  it("shows Bob Alice's Seedelf once he has replied, which his wallet checks against the chain, then names", async () => {
-    const { alice, bob } = await pair();
-    const cid = await talking(alice, bob);
-    // Offered where Alice wrote first and has a reply, never on Bob's side.
-    expect((await alice.messaging.thread("preprod", cid)).seedelfs).toEqual([ALICE_SEEDELF]);
-    expect((await bob.messaging.thread("preprod", cid)).seedelfs).toBeUndefined();
-    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
-    await alice.messaging.whenIdle();
-    const shown = await last(alice, cid);
-    expect(shown).toMatchObject({ dir: "out", reveal: { status: "shown", name: ALICE_SEEDELF }, sent: "posted" });
-    expect(shown.text).toBeUndefined();
-    const mine = (await alice.messaging.overview("preprod")).conversations[0]!;
-    expect(mine.last).toEqual({ dir: "out", reveal: true });
-    expect(mine.revealed).toBeUndefined();
-
-    await synced(bob);
-    const thread = await bob.messaging.thread("preprod", cid);
-    expect(thread.messages.at(-1)).toMatchObject({ dir: "in", reveal: { status: "verified", name: ALICE_SEEDELF } });
-    expect(thread.conversation.revealed).toEqual({ name: ALICE_SEEDELF, at: expect.any(Number) });
-    expect((await bob.messaging.overview("preprod")).conversations[0]!.last).toEqual({ dir: "in", reveal: true });
-    // One fresh read of the contract, and nothing left to check.
-    expect(bob.revealReads).toBe(1);
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.conversations[cid]!.checking).toBeUndefined();
-    expect((await record(bob, cid))!.history.at(-1)!.reveal).toEqual({ status: "verified", name: ALICE_SEEDELF });
-  });
-
-  it("refuses one before a reply, from the side written to, and of a Seedelf that isn't the wallet's, sending nothing", async () => {
-    const { alice, bob } = await pair();
-    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "hello Bob");
-    await alice.messaging.whenIdle();
-    expect((await alice.messaging.thread("preprod", cid)).seedelfs).toBeUndefined();
-    await expect(alice.messaging.reveal("preprod", cid, ALICE_SEEDELF)).rejects.toThrow(/wrote first/);
-    await synced(bob);
-    await bob.messaging.accept("preprod", cid);
-    await bob.messaging.send("preprod", cid, "hi Alice");
-    await bob.messaging.whenIdle();
-    await synced(alice);
-    await expect(bob.messaging.reveal("preprod", cid, BOB_SEEDELF)).rejects.toThrow(/wrote first/);
-    await expect(alice.messaging.reveal("preprod", cid, BOB_SEEDELF)).rejects.toThrow(/isn't this wallet's/);
-    // One the contract read no longer finds the wallet's: moved away since the view was kept.
-    alice.own = [];
-    await expect(alice.messaging.reveal("preprod", cid, ALICE_SEEDELF)).rejects.toThrow(/isn't this wallet's/);
-    expect(await texts(alice, cid)).toEqual(["out:hello Bob", "in:hi Alice"]);
-  });
-
-  it("fails one whose register the chain no longer gives its name, never naming it; shown again, it verifies", async () => {
-    const { alice, bob, directory } = await pair();
-    const cid = await talking(alice, bob);
-    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
-    await alice.messaging.whenIdle();
-    // Alice's Seedelf was locked again under another register (or passed to someone else) before Bob's wallet read
-    // the contract: whatever a view kept from before says, the read now decides.
-    const was = directory.get(ALICE_SEEDELF)!;
-    const now = await another(alice);
-    directory.set(ALICE_SEEDELF, now);
-    await synced(bob);
-    let thread = await bob.messaging.thread("preprod", cid);
-    expect(thread.messages.at(-1)!.reveal).toEqual({ status: "failed" });
-    expect(thread.conversation.revealed).toBeUndefined();
-    expect(bob.revealReads).toBe(1);
-    expect(JSON.stringify(await record(bob, cid))).not.toContain(ALICE_SEEDELF);
-    expect(JSON.stringify(await bob.store.get("messaging.preprod"))).not.toContain(ALICE_SEEDELF);
-
-    // Shown again: for the register a contract read finds now, even where Alice's kept view still has the old one.
-    alice.own = [{ name: ALICE_SEEDELF, register: now }];
-    alice.kept = [{ name: ALICE_SEEDELF, register: was }];
-    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
-    await alice.messaging.whenIdle();
-    await synced(bob);
-    thread = await bob.messaging.thread("preprod", cid);
-    expect(thread.messages.at(-1)!.reveal).toEqual({ status: "verified", name: ALICE_SEEDELF });
-    expect(thread.conversation.revealed?.name).toBe(ALICE_SEEDELF);
-  });
-
-  it("reads the contract once a pass, however many reveals wait, and not at all when none does", async () => {
-    const { alice, bob } = await pair();
-    const cid = await talking(alice, bob);
-    for (let i = 0; i < 3; i++) await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
-    await alice.messaging.whenIdle();
-    await synced(bob);
-    const thread = await bob.messaging.thread("preprod", cid);
-    expect(thread.messages.slice(-3).map((m) => m.reveal?.status)).toEqual(["verified", "verified", "verified"]);
-    expect(bob.revealReads).toBe(1);
-    await synced(bob);
-    expect(bob.revealReads).toBe(1);
-  });
-
-  it("leaves one checking while the chain can't be read, never named, and checks it at the next sync", async () => {
-    const { alice, bob } = await pair();
-    const cid = await talking(alice, bob);
-    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
-    await alice.messaging.whenIdle();
-    bob.revealFails = new Error("the server didn't answer");
-    await synced(bob);
-    expect((await last(bob, cid)).reveal).toEqual({ status: "checking" });
-    expect((await bob.messaging.overview("preprod")).conversations[0]!.revealed).toBeUndefined();
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.conversations[cid]!.checking).toBe(true);
-    // Not asked again at every sync: a minute on.
-    bob.revealFails = undefined;
-    await synced(bob);
-    expect(bob.revealReads).toBe(1);
-    expect((await last(bob, cid)).reveal).toEqual({ status: "checking" });
-    await busyFor(REVEAL_READ_RETRY_MS, bob);
-    await synced(bob);
-    expect(bob.revealReads).toBe(2);
-    expect((await last(bob, cid)).reveal).toEqual({ status: "verified", name: ALICE_SEEDELF });
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.conversations[cid]!.checking).toBeUndefined();
-  });
-
-  it("names the other side by the latest that verified, by when it came", async () => {
-    const { alice, bob, directory } = await pair();
-    const cid = await talking(alice, bob);
-    const SECOND = "5eed0e1f00" + "616c69636532";
-    const second = await another(alice);
-    alice.own.push({ name: SECOND, register: second });
-    directory.set(SECOND, second);
-    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
-    await alice.messaging.reveal("preprod", cid, SECOND);
-    await alice.messaging.whenIdle();
-    // Both verified in one pass, at one time: the one that came last names the other side.
-    await synced(bob);
-    let thread = await bob.messaging.thread("preprod", cid);
-    expect(thread.messages.slice(-2).map((m) => m.reveal)).toEqual([
-      { status: "verified", name: ALICE_SEEDELF },
-      { status: "verified", name: SECOND },
-    ]);
-    expect(thread.conversation.revealed?.name).toBe(SECOND);
-    // A later one that fails names nothing, and the last that verified stands.
-    directory.set(ALICE_SEEDELF, await another(alice));
-    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
-    await alice.messaging.whenIdle();
-    await synced(bob);
-    thread = await bob.messaging.thread("preprod", cid);
-    expect(thread.messages.at(-1)!.reveal).toEqual({ status: "failed" });
-    expect(thread.conversation.revealed?.name).toBe(SECOND);
-    // Shown again for the register it holds now, at a later sync: the newer names the other side.
-    alice.own[0] = { name: ALICE_SEEDELF, register: directory.get(ALICE_SEEDELF)! };
-    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
-    await alice.messaging.whenIdle();
-    await synced(bob);
-    thread = await bob.messaging.thread("preprod", cid);
-    expect(thread.messages.at(-1)!.reveal).toEqual({ status: "verified", name: ALICE_SEEDELF });
-    expect(thread.conversation.revealed?.name).toBe(ALICE_SEEDELF);
-  });
-
-  it("sets right a conversation's reveals from its record: a stop between two writes, or the history's budget", async () => {
-    const { alice, bob } = await pair();
-    const cid = await talking(alice, bob);
-    await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
-    await alice.messaging.whenIdle();
-    bob.revealFails = new Error("the server didn't answer");
-    await synced(bob);
-    const inbox = async () => (await bob.store.get<Inbox>("messaging.preprod"))!;
-    // A stop between the record's write and the inbox's: the reveal waits, and the inbox doesn't say so.
-    let kept = await inbox();
-    delete kept.conversations[cid]!.checking;
-    await bob.store.set("messaging.preprod", kept);
-    bob.revealFails = undefined;
-    await busyFor(REVEAL_READ_RETRY_MS, bob);
-    bob.restart();
-    await synced(bob);
-    expect((await last(bob, cid)).reveal).toEqual({ status: "verified", name: ALICE_SEEDELF });
-    expect((await inbox()).conversations[cid]!.revealed?.name).toBe(ALICE_SEEDELF);
-    // The record checked and the inbox not told: still waiting by the inbox, named by nothing.
-    kept = await inbox();
-    kept.conversations[cid]!.checking = true;
-    delete kept.conversations[cid]!.revealed;
-    await bob.store.set("messaging.preprod", kept);
-    const reads = bob.revealReads;
-    await synced(bob);
-    expect(bob.revealReads).toBe(reads);
-    expect((await inbox()).conversations[cid]!.checking).toBeUndefined();
-    expect((await bob.messaging.thread("preprod", cid)).conversation.revealed?.name).toBe(ALICE_SEEDELF);
-  });
-
-  it("fails one whose proof doesn't verify at once, never naming it, and reads nothing of the chain for it", async () => {
-    const { relay, alice, bob } = await pair();
-    const wasm = loadTestWasm();
-    const cid = await talking(alice, bob);
-    const state = (await record(alice, cid))!.state;
-    const made = await alice.wallet.withKeys(
-      (keys) =>
-        JSON.parse(wasm.messagingReveal(keys.seedelf, JSON.stringify({ conversation: state, name: ALICE_SEEDELF, register: alice.own[0]!.register })))
-          .reveal as string,
-    );
-    // z₂'s last bit flipped: still a scalar below q, a proof that no longer verifies, in an honest session message.
-    const last = Number.parseInt(made.slice(-2), 16) ^ 1;
-    const broken = made.slice(0, -2) + last.toString(16).padStart(2, "0");
-    relay.put("preprod", JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: state, plaintext: "02" + broken }))).envelope);
-    await synced(bob);
-    const thread = await bob.messaging.thread("preprod", cid);
-    expect(thread.messages.at(-1)).toMatchObject({ dir: "in", reveal: { status: "failed" } });
-    expect(thread.conversation.revealed).toBeUndefined();
-    expect(bob.revealReads).toBe(0);
-    expect(JSON.stringify(await record(bob, cid))).not.toContain(ALICE_SEEDELF);
-  });
-
-  it("takes no reveal from a first-contact message, nor from a request's, and never names one", async () => {
-    const { relay, alice, bob } = await pair();
-    const wasm = loadTestWasm();
-    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "hello Bob");
-    await alice.messaging.whenIdle();
-    const before = (await record(alice, cid))!.state;
-    // A request's message of kind 0x02: shown as a reveal that couldn't be verified, before and after the reply.
-    const odd = JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: before, plaintext: "02" + "00".repeat(226) })));
-    relay.put("preprod", odd.envelope);
-    await synced(bob);
-    expect((await bob.messaging.request("preprod", cid)).map((m) => m.reveal)).toEqual([undefined, { status: "failed" }]);
-    await bob.messaging.accept("preprod", cid);
-    await bob.messaging.send("preprod", cid, "hi Alice");
-    await bob.messaging.whenIdle();
-    await synced(alice);
-    expect((await bob.messaging.thread("preprod", cid)).messages[1]!.reveal).toEqual({ status: "failed" });
-
-    // A valid reveal, sealed with Alice's record from before the reply: a first-contact message, F and all.
-    const after = (await record(alice, cid))!.state;
-    const made = await alice.wallet.withKeys(
-      (keys) =>
-        JSON.parse(wasm.messagingReveal(keys.seedelf, JSON.stringify({ conversation: after, name: ALICE_SEEDELF, register: alice.own[0]!.register })))
-          .reveal as string,
-    );
-    const skipped = JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: odd.conversation, plaintext: "02" + made })));
-    relay.put("preprod", skipped.envelope);
-    await synced(bob);
-    const thread = await bob.messaging.thread("preprod", cid);
-    expect(thread.messages.at(-1)).toMatchObject({ dir: "in", reveal: { status: "failed" } });
-    expect(thread.conversation.revealed).toBeUndefined();
-    expect(bob.revealReads).toBe(0);
   });
 });

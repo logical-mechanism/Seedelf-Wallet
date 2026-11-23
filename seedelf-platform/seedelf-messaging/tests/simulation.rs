@@ -7,7 +7,9 @@
 //! the tombstones and the scan's cursor. It follows §4.2: write the state
 //! and the envelope, then post the stored bytes, then mark them posted;
 //! receive, write, then advance the cursor. Crashes land between those
-//! steps; locks last up to 60 hours, past the relay's 36.
+//! steps; locks last up to 60 hours, past the relay's 36. A writer whose
+//! request's share is used up before a reply (16 first-contact messages, or
+//! 64 KiB) sends nothing more until one comes.
 
 use std::collections::BTreeMap;
 
@@ -35,6 +37,9 @@ struct Seen {
     skipped_key_too_old: u64,
     missing_at_the_end: u64,
     started_again: u64,
+    /// First-contact messages a writer didn't send: its request's share
+    /// was used up before a reply.
+    share_used_up: u64,
 }
 
 thread_local! {
@@ -194,11 +199,28 @@ impl Wallet {
     }
 
     /// Queue step 1: advance the chain and store the state with the envelope.
-    fn compose(&mut self, cid: ConversationId, text: &[u8]) -> Vec<u8> {
+    /// A first-contact message past the request's share isn't sent: it's a
+    /// send that didn't happen, with the state as it was and nothing written.
+    fn compose(&mut self, cid: ConversationId, text: &[u8]) -> Option<Vec<u8>> {
         let mut inbox = self.load();
-        let envelope = inbox.send(cid, text).unwrap();
+        let envelope = match inbox.send(cid, text) {
+            Ok(envelope) => envelope,
+            Err(Error::RequestFull) => {
+                let conversation = inbox.conversation(cid).unwrap();
+                assert!(conversation.sends_first_contact());
+                assert!(conversation.max_text_len() < text.len());
+                assert_eq!(
+                    *conversation.to_bytes(),
+                    self.store.records[&cid].state,
+                    "a refused send changed nothing"
+                );
+                saw(|s| s.share_used_up += 1);
+                return None;
+            }
+            Err(other) => panic!("a send refused: {other:?}"),
+        };
         self.write(&inbox, Some((cid, &envelope)));
-        envelope
+        Some(envelope)
     }
 
     /// Steps 2 and 3 for one envelope just composed: post its stored bytes,
@@ -461,7 +483,9 @@ fn run(seed: u64) {
                     rng: &mut Rng| {
         count += 1;
         let text = format!("{from}:{count}").into_bytes();
-        let envelope = wallets[from].compose(cid, &text);
+        let Some(envelope) = wallets[from].compose(cid, &text) else {
+            return;
+        };
         oracle.record(from, &wallets[1 - from], cid, &text, &envelope);
         // The worker may die after the write, before the post, or between
         // the post and the mark.
@@ -548,9 +572,15 @@ fn run(seed: u64) {
         alice.write(&inbox, None);
         fresh
     };
-    for from in [0usize, 1] {
+    // A writer whose share is used up waits for a reply: Bob writes first.
+    let waits = wallets[0]
+        .conversation(cid)
+        .is_some_and(|alice| alice.max_text_len() < b"final 0".len());
+    for from in if waits { [1, 0] } else { [0usize, 1] } {
         let text = format!("final {from}").into_bytes();
-        let envelope = wallets[from].compose(cid, &text);
+        let envelope = wallets[from]
+            .compose(cid, &text)
+            .expect("room for the final message");
         oracle.record(from, &wallets[1 - from], cid, &text, &envelope);
         wallets[from].post_pending(&mut relay, now, false);
         let reader = &mut wallets[1 - from];
@@ -580,6 +610,7 @@ fn two_wallets_over_a_36_hour_relay() {
             assert!(seen.died_before_cursor > 0 && seen.reread_after_a_death > 0);
             assert!(seen.expired_on_the_relay > 0 && seen.missing_at_the_end > 0);
             assert!(seen.outside_the_window > 0 && seen.skipped_key_too_old > 0);
+            assert!(seen.share_used_up > 0);
         }
     });
 }
@@ -600,7 +631,7 @@ fn case_04_killed_between_write_post_and_mark() {
     alice.write(&inbox, None);
 
     // Dies after the write: nothing posted.
-    let first = alice.compose(cid, b"one");
+    let first = alice.compose(cid, b"one").unwrap();
     oracle.record(0, &bob, cid, b"one", &first);
     assert_eq!(relay.copies(&first), 0);
     let stored = alice.store.records[&cid].outbox[0].clone();
@@ -612,7 +643,7 @@ fn case_04_killed_between_write_post_and_mark() {
     assert_eq!(relay.copies(&first), 1);
 
     // Dies after the post, before the mark: the restart posts it again.
-    let second = alice.compose(cid, b"two");
+    let second = alice.compose(cid, b"two").unwrap();
     oracle.record(0, &bob, cid, b"two", &second);
     alice.post_pending(&mut relay, T + 20, true);
     assert!(!alice.store.records[&cid].outbox[1].posted);
@@ -642,7 +673,7 @@ fn case_05_killed_between_the_write_and_the_cursor() {
     let cid = common::start(&mut inbox, &alice.key, &bob.key.register(), T);
     alice.write(&inbox, None);
     for text in [&b"one"[..], b"two"] {
-        let envelope = alice.compose(cid, text);
+        let envelope = alice.compose(cid, text).unwrap();
         oracle.record(0, &bob, cid, text, &envelope);
     }
     alice.post_pending(&mut relay, T, false);
@@ -659,7 +690,7 @@ fn case_05_killed_between_the_write_and_the_cursor() {
     assert_eq!(bob.store.cursor, 2);
 
     // Replying works after it, and Alice reads the reply once.
-    let reply = bob.compose(cid, b"reply");
+    let reply = bob.compose(cid, b"reply").unwrap();
     oracle.record(1, &alice, cid, b"reply", &reply);
     bob.post_pending(&mut relay, T + 30, false);
     alice.sync(&relay, T + 40, true, &oracle);

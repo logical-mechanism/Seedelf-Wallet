@@ -12,7 +12,7 @@ import { registerOf } from "../src/background/chain";
 import { Collateral } from "../src/background/collateral";
 import { Koios, type KoiosTxInfo, type KoiosUtxo } from "../src/background/koios";
 import { MintService } from "../src/background/mint";
-import { mintedBy, paidByOf, rememberMint } from "../src/background/minted-by";
+import { forgetRegisters, mintedAt, mintedBy, paidByOf, rememberMint, rememberRegister } from "../src/background/minted-by";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { KnownAccount, SeedelfInfo } from "../src/shared/rpc";
@@ -113,6 +113,33 @@ describe("a mint", () => {
     await t.mint.build("preprod", "first", "account");
     await expect(t.mint.submit("preprod", "00".repeat(32))).rejects.toThrow("isn't ready to send");
     expect(await mintedBy(t.store, "preprod")).toEqual({});
+  });
+});
+
+describe("the registers a mint put its Seedelf under (the 1.10.0 gate's W12)", () => {
+  const A = { generator: "a".repeat(96), publicValue: "b".repeat(96) };
+  const B = { generator: "c".repeat(96), publicValue: "d".repeat(96) };
+
+  it("are kept per network, each once, and forgotten for one Seedelf alone, as its Remove is sent", async () => {
+    const t = await unlocked();
+    await rememberRegister(t.store, "preprod", "5eed01", A);
+    await rememberRegister(t.store, "preprod", "5eed01", A);
+    await rememberRegister(t.store, "preprod", "5eed02", B);
+    expect(await mintedAt(t.store, "preprod")).toEqual({ "5eed01": [A], "5eed02": [B] });
+    expect(await mintedAt(t.store, "mainnet")).toEqual({});
+    await forgetRegisters(t.store, "preprod", "5eed01");
+    expect(await mintedAt(t.store, "preprod")).toEqual({ "5eed02": [B] });
+    // One never kept: nothing changes.
+    await forgetRegisters(t.store, "preprod", "5eed09");
+    expect(await mintedAt(t.store, "preprod")).toEqual({ "5eed02": [B] });
+  });
+
+  it("say when their write is refused, never swallowing it: the caller decides (quota-outside#11)", async () => {
+    const t = await unlocked();
+    t.store.set = async () => {
+      throw new Error("QUOTA_BYTES quota exceeded");
+    };
+    await expect(rememberRegister(t.store, "preprod", "5eed01", A)).rejects.toThrow(/quota/);
   });
 });
 

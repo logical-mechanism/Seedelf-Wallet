@@ -112,6 +112,13 @@ export class NetworkChoice {
   }
 }
 
+/**
+ * Every settings write in the worker, one at a time (worker-net#9): each reads what the last one left, so a write that
+ * raced another (a Messages switch turned off, Chrome taking the sites' access away) never puts back what that one
+ * changed. One chain for every PreferencesService, however many the worker makes over chrome.storage.local.
+ */
+let writing: Promise<unknown> = Promise.resolve();
+
 export class PreferencesService {
   constructor(private readonly local: Area) {}
 
@@ -136,8 +143,20 @@ export class PreferencesService {
     };
   }
 
-  /** Changes the settings given; anything that isn't one, or isn't a value it may take, is ignored. */
-  async set(change: Partial<Preferences>): Promise<Preferences> {
+  /**
+   * Changes the settings given; anything that isn't one, or isn't a value it may take, is ignored. After every write
+   * asked before it, reading what that one left.
+   */
+  set(change: Partial<Preferences>): Promise<Preferences> {
+    const run = writing.then(
+      () => this.write(change),
+      () => this.write(change),
+    );
+    writing = run.catch(() => undefined);
+    return run;
+  }
+
+  private async write(change: Partial<Preferences>): Promise<Preferences> {
     const next = { ...(await this.get()) };
     if (typeof change.spendRewards === "boolean") next.spendRewards = change.spendRewards;
     if (typeof change.hideBalances === "boolean") next.hideBalances = change.hideBalances;

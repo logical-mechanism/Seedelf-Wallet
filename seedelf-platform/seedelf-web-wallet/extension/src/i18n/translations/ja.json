@@ -3161,5 +3161,6 @@
   "messages.preview.revealIn": "相手が Seedelf を見せました",
   "messages.preview.revealOut": "あなたの Seedelf を見せました",
   "worker.messaging.notYourSeedelf": "その Seedelf は現在このウォレットのものではありません。",
-  "worker.messaging.cantRevealYet": "Seedelf を見せられるのは最初に書いた側だけで、相手が返信した後です。"
+  "worker.messaging.cantRevealYet": "Seedelf を見せられるのは最初に書いた側だけで、相手が返信した後です。",
+  "worker.messaging.waitForReply": "返信を待ってください。返信が来るまで、相手のウォレットはこの会話であなたのメッセージをこれ以上受け取りません。"
 }

@@ -578,8 +578,9 @@ fn a_reveal_fits_a_session_message() {
     let mut plaintext = vec![KIND_REVEAL];
     plaintext.extend_from_slice(&a.reveal(&p.alice, &alices_seedelf()).unwrap().to_bytes());
     let envelope = a.send(&plaintext).unwrap();
-    // 257 bytes and the kind byte: a 2 KiB envelope, as every reply of 246 bytes or more.
-    assert_eq!(envelope.len(), 2048);
+    // 257 bytes and the kind byte: a 512-byte envelope, which holds a reply of
+    // up to 261 bytes.
+    assert_eq!(envelope.len(), 512);
     let mut b = p.b.clone();
     let read = b.receive(&opened(&p.bob, &envelope), NOW + 120).unwrap();
     assert_eq!(read, plaintext);

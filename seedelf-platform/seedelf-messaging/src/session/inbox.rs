@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use blstrs::G1Projective;
 use group::Curve;
 
-use crate::register::Register;
+use crate::register::{Register, matches_register};
 use crate::relay::stamp_bits;
 use crate::session::conversation::{Conversation, Texts};
 use crate::session::draw::{Draw, OsDraw};
@@ -24,12 +24,35 @@ pub const MAX_REQUESTS: usize = 50;
 /// unpadded.
 pub const MAX_REQUEST_BYTES: usize = 256 * 1024;
 
-/// How long after its `t` a deleted conversation's ID is kept: as long as a
-/// first message started at `t` could still be read.
+/// A request's share, in messages: the most first-contact messages one
+/// request holds, and an initiator sends before a reply. A first-contact
+/// message's header has PN 0 and N below it, or it doesn't parse
+/// (docs/protocol.md §3.1). Every later reader honours it, so raising it is
+/// a change older readers drop.
+pub const MAX_REQUEST_MESSAGES: usize = 16;
+
+/// A request's share, in bytes: the most one request holds, and an
+/// initiator sends before a reply, of their inner messages, unpadded, as
+/// [`Request::stored_len`] counts them. Two of the largest fit; three don't.
+pub const MAX_ONE_REQUEST_BYTES: usize = 64 * 1024;
+
+/// How long after its `t` a first message to a deleted conversation could
+/// still be read: 48 hours, the window's.
 pub const TOMBSTONE_AFTER_START: u64 = FIRST_CONTACT_MAX_AGE;
 
-/// The serialization format of [`Requests`] and [`Tombstones`].
-pub const RECORD_VERSION: u8 = 1;
+/// How much longer than its `t` + 48 hours a tombstone is kept: 7 days, a
+/// choice (docs/protocol.md §16.4), 24 bytes a deletion. A tombstone refuses
+/// its ID whatever the clock says while it's kept, so a clock that ran ahead
+/// by less than this for an expiry, then was set right, can't reopen a
+/// deleted conversation.
+pub const TOMBSTONE_MARGIN: u64 = 7 * 24 * 3600;
+
+/// The serialization format of [`Requests`]: 2. A record of version 1, a
+/// development build's, is refused at its first byte.
+pub const REQUESTS_VERSION: u8 = 2;
+
+/// The serialization format of [`Tombstones`]: 1, whose layout is unchanged.
+pub const TOMBSTONES_VERSION: u8 = 1;
 
 /// What a request's `replaces` amounts to (docs/protocol.md §6).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -80,7 +103,8 @@ impl Request {
         self.messages.iter().map(|(at, _)| *at)
     }
 
-    /// Its stored bytes, as counted against [`MAX_REQUEST_BYTES`].
+    /// Its stored bytes, as counted against [`MAX_REQUEST_BYTES`] and the
+    /// request's share: its inner messages, unpadded.
     pub fn stored_len(&self) -> usize {
         self.messages
             .iter()
@@ -169,10 +193,15 @@ impl Requests {
         Some(self.list.remove(i))
     }
 
-    /// Past either bound, the oldest go first. Returns the IDs removed.
+    /// After a new request, past either bound, the oldest go first, never
+    /// the newest: one message is within both bounds alone. Returns the IDs
+    /// removed. Only a new request, with its own stamp, pushes others out: a
+    /// join that doesn't fit is refused instead.
     fn evict(&mut self) -> Vec<ConversationId> {
         let mut evicted = Vec::new();
-        while self.list.len() > MAX_REQUESTS || self.stored_len() > MAX_REQUEST_BYTES {
+        while self.list.len() > 1
+            && (self.list.len() > MAX_REQUESTS || self.stored_len() > MAX_REQUEST_BYTES)
+        {
             evicted.push(self.list.remove(0).cid());
         }
         evicted
@@ -180,7 +209,7 @@ impl Requests {
 
     /// The record's bytes: no secrets, only what arrived.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = vec![RECORD_VERSION];
+        let mut out = vec![REQUESTS_VERSION];
         out.extend_from_slice(&self.next_seq.to_be_bytes());
         out.extend_from_slice(&(self.list.len() as u16).to_be_bytes());
         for request in &self.list {
@@ -207,16 +236,22 @@ impl Requests {
     }
 
     /// The record from its bytes, every message parsed and checked again.
+    /// A record of another version is [`Error::UnsupportedStateVersion`] at
+    /// its first byte: version 1 is a development build's.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         match bytes.first() {
-            Some(&RECORD_VERSION) => {}
+            Some(&REQUESTS_VERSION) => {}
             Some(&version) => return Err(Error::UnsupportedStateVersion(version)),
             None => return Err(Error::InvalidState),
         }
-        Self::parse_v1(&bytes[1..]).map_err(|_| Error::InvalidState)
+        Self::parse_v2(&bytes[1..]).map_err(|_| Error::InvalidState)
     }
 
-    fn parse_v1(bytes: &[u8]) -> Result<Self, Error> {
+    /// Each request holds 1 to [`MAX_REQUEST_MESSAGES`] messages and at most
+    /// [`MAX_ONE_REQUEST_BYTES`], all with the first's F and its header key
+    /// S_A, PN 0 (which parsing checks) and N each its own: what the
+    /// reader's rules let in (docs/protocol.md §16.5).
+    fn parse_v2(bytes: &[u8]) -> Result<Self, Error> {
         let mut reader = Reader::new(bytes);
         let next_seq = u64::from_be_bytes(reader.array()?);
         let count = usize::from(u16::from_be_bytes(reader.array()?));
@@ -233,7 +268,10 @@ impl Requests {
                 _ => return Err(Error::InvalidState),
             };
             let n = usize::from(u16::from_be_bytes(reader.array()?));
-            let mut messages = Vec::with_capacity(n.min(64));
+            if n > MAX_REQUEST_MESSAGES {
+                return Err(Error::InvalidState);
+            }
+            let mut messages = Vec::with_capacity(n);
             for _ in 0..n {
                 let at = u64::from_be_bytes(reader.array()?);
                 let len = u32::from_be_bytes(reader.array()?) as usize;
@@ -247,13 +285,26 @@ impl Requests {
                     _,
                     Opened {
                         first: Some((first, bytes)),
+                        header,
                         ..
                     },
                 )) => {
-                    let same = messages
-                        .iter()
-                        .all(|(_, opened)| opened.first.as_ref().is_some_and(|(_, b)| b == bytes));
-                    if !same || seq >= next_seq {
+                    // Every message on the first's F and its header key S_A,
+                    // the key the keys proof covers: one on another would
+                    // meet x in a replay whose first message failed.
+                    let same = messages.iter().all(|(_, opened)| {
+                        opened.first.as_ref().is_some_and(|(_, b)| b == bytes)
+                            && opened.header.dh == header.dh
+                    });
+                    // One key and PN 0, so a header held twice is an N
+                    // held twice, which a join refuses.
+                    let distinct = messages.iter().enumerate().all(|(i, (_, opened))| {
+                        messages[..i]
+                            .iter()
+                            .all(|(_, other)| other.header.n != opened.header.n)
+                    });
+                    let within: usize = messages.iter().map(|(_, o)| o.bytes.len()).sum();
+                    if !same || !distinct || within > MAX_ONE_REQUEST_BYTES || seq >= next_seq {
                         return Err(Error::InvalidState);
                     }
                     first.clone()
@@ -287,7 +338,8 @@ impl Requests {
     }
 }
 
-/// Deleted conversations' IDs, each kept until its `t` + 48 hours.
+/// Deleted conversations' IDs, each kept until its `t` + 48 hours and
+/// `TOMBSTONE_MARGIN`, 7 days, more.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tombstones {
     list: Vec<(ConversationId, u64)>,
@@ -299,14 +351,15 @@ impl Tombstones {
         Self::default()
     }
 
-    /// Whether `cid` is held at `now`: until its `t` + 48 hours, inclusive.
-    pub fn holds(&self, cid: ConversationId, now: u64) -> bool {
-        self.list
-            .iter()
-            .any(|(held, t)| *held == cid && now <= t.saturating_add(TOMBSTONE_AFTER_START))
+    /// Whether `cid` is held: from its deletion until [`Tombstones::expire`]
+    /// deletes it, whatever the clock says meanwhile. A clock set back can't
+    /// reopen a deleted conversation's ID, and once the tombstone goes, the
+    /// window has refused its first messages for at least the margin.
+    pub fn holds(&self, cid: ConversationId) -> bool {
+        self.list.iter().any(|(held, _)| *held == cid)
     }
 
-    /// How many there are, expired or not.
+    /// How many there are.
     pub fn len(&self) -> usize {
         self.list.len()
     }
@@ -321,16 +374,21 @@ impl Tombstones {
         self.list.push((cid, t));
     }
 
-    /// Deletes the tombstones past their `t` + 48 hours: the window refuses
-    /// their first messages by itself from then on.
+    /// Deletes the tombstones past their `t` + 48 hours and 7 days
+    /// (`TOMBSTONE_MARGIN`): the window refuses their first messages by
+    /// itself from 48 hours on, and the margin covers a clock that ran ahead
+    /// by less than it for this expiry and is then set right.
     pub fn expire(&mut self, now: u64) {
-        self.list
-            .retain(|(_, t)| now <= t.saturating_add(TOMBSTONE_AFTER_START));
+        self.list.retain(|(_, t)| {
+            now <= t
+                .saturating_add(TOMBSTONE_AFTER_START)
+                .saturating_add(TOMBSTONE_MARGIN)
+        });
     }
 
     /// The record's bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = vec![RECORD_VERSION];
+        let mut out = vec![TOMBSTONES_VERSION];
         out.extend_from_slice(&(self.list.len() as u32).to_be_bytes());
         for (cid, t) in &self.list {
             out.extend_from_slice(&cid.0);
@@ -342,7 +400,7 @@ impl Tombstones {
     /// The record from its bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         match bytes.first() {
-            Some(&RECORD_VERSION) => {}
+            Some(&TOMBSTONES_VERSION) => {}
             Some(&version) => return Err(Error::UnsupportedStateVersion(version)),
             None => return Err(Error::InvalidState),
         }
@@ -385,7 +443,8 @@ pub enum Received {
         plaintext: Vec<u8>,
         /// Whether it started a request, rather than joining one.
         new: bool,
-        /// Requests the bounds pushed out, oldest first; possibly this one.
+        /// Requests the bounds pushed out, oldest first: only a new request
+        /// pushes others out, never itself, so always empty for a join.
         evicted: Vec<ConversationId>,
     },
 }
@@ -540,18 +599,27 @@ impl Inbox {
     }
 
     /// Opens an envelope addressed to `key` and applies §5 and §6.
-    /// `handles` are the reader's own: every register each of its Seedelfs
-    /// is known to have held.
+    /// `handles` are the reader's: every register each of its Seedelfs is
+    /// known to have held. Only a register of `key`'s counts: the base proof's
+    /// other branch is its register's key, so one of another key under the
+    /// name binds no base, and is passed over.
     ///
     /// - A known conversation's ID: its ratchet, on a copy (a `0x01` only
     ///   with the stored F).
-    /// - A request's ID: a `0x01` with the stored F joins it, authenticated
-    ///   and within the bounds; a `0x02` is [`Error::UnexpectedMessage`].
-    /// - A tombstone's: [`Error::Deleted`].
+    /// - A request's ID: a `0x01` with the stored F and the first stored
+    ///   message's header key joins it, authenticated and within its share
+    ///   and the bounds ([`Error::RequestFull`] otherwise, before it's read:
+    ///   a join never pushes another request out); a `0x02` is
+    ///   [`Error::UnexpectedMessage`].
+    /// - A tombstone's: [`Error::Deleted`], whatever the clock.
     /// - A new ID: a `0x01` becomes a request if it's inside the window, its
-    ///   stamp shows [`Inbox::first_contact_bits`], its proof shows its base
-    ///   re-randomizes the handle its `to` names (or, without a `to`, it's a
-    ///   verified continuation), and it authenticates. A `0x02` is
+    ///   stamp shows [`Inbox::first_contact_bits`], its base proof shows its
+    ///   base re-randomizes a register of `key`'s that the handle its `to`
+    ///   names has held (or, without a `to`, it's a verified continuation),
+    ///   its keys proof shows its writer knows the keys of `E_A`, its header
+    ///   key and, from a handle, `A`, and it authenticates. In that order:
+    ///   each binds a point before the next check multiplies it by the key.
+    ///   A `0x02` is
     ///   [`Error::UnknownConversation`], a conversation this browser no
     ///   longer has.
     ///
@@ -584,7 +652,7 @@ impl Inbox {
         if self.requests.contains(cid) {
             return self.join(key, opened, now, draw);
         }
-        if self.tombstones.holds(cid, now) {
+        if self.tombstones.holds(cid) {
             return Err(Error::Deleted);
         }
         let (Some((first, _)), Some(stamp)) = (&opened.first, opened.stamp) else {
@@ -597,12 +665,18 @@ impl Inbox {
         if stamp_bits(&first.stamp_digest(), stamp) < self.first_contact_bits {
             return Err(Error::StampTooLow);
         }
-        let continues = first.replaces.map(|old| self.judge(key, first, old));
-        if first.to.is_empty() {
+        // Then p₀ is bound, before the key meets it: by the base proof for a
+        // register of the reader's that the handle `to` names has held, or
+        // for a continuation by being the base of a conversation held here
+        // (`judge` multiplies only a held base).
+        // The keys proof, in `accept_with`, then binds E_A, A and S_A.
+        let continues = if first.to.is_empty() {
             // No handle: only a verified continuation of this reader's.
+            let continues = first.replaces.map(|old| self.judge(key, first, old));
             if !matches!(continues, Some(Continues::Verified(_))) {
                 return Err(Error::UnverifiedContinuation);
             }
+            continues
         } else {
             let mut named = handles
                 .iter()
@@ -611,10 +685,17 @@ impl Inbox {
             if named.peek().is_none() {
                 return Err(Error::UnknownHandle);
             }
-            if !named.any(|handle| first.proves_base(handle.register())) {
+            // The base proof's other branch is the handle's key, so it binds
+            // p₀ only for a register of the reader's: a register of another
+            // key under the name (one the Seedelf held before it came here)
+            // would let that key's holder prove any p₀.
+            if !named.any(|handle| {
+                first.proves_base(handle.register()) && matches_register(key, handle.register())
+            }) {
                 return Err(Error::InvalidBaseProof);
             }
-        }
+            first.replaces.map(|old| self.judge(key, first, old))
+        };
         let (_, mut results) = Conversation::accept_with(key, &[(opened, now)], draw)?;
         let plaintext = results.remove(0)?;
         let seq = self.requests.next_seq;
@@ -634,9 +715,13 @@ impl Inbox {
         })
     }
 
-    /// A later `0x01` of a request: the same F, a header not yet held, and
-    /// read after the stored messages as processing each on arrival would
-    /// read it. So a request shows exactly what its conversation will hold.
+    /// A later `0x01` of a request, in this order: the same F byte for byte,
+    /// a header not yet held (so a page read twice stays a duplicate), the
+    /// first stored message's header key, and room in the request's share
+    /// and the bounds ([`Error::RequestFull`]), all before any key is
+    /// derived; then read after the stored messages as processing each on
+    /// arrival would read it. So a request shows exactly what its
+    /// conversation will hold. A join never pushes another request out.
     fn join(
         &mut self,
         key: &SecretKey,
@@ -648,11 +733,8 @@ impl Inbox {
             return Err(Error::UnexpectedMessage);
         };
         let request = self.requests.get(opened.cid).expect("the caller checked");
-        let (_, stored) = request.messages[0]
-            .1
-            .first
-            .as_ref()
-            .expect("a request holds F");
+        let first = &request.messages[0].1;
+        let (_, stored) = first.first.as_ref().expect("a request holds F");
         if bytes != stored {
             return Err(Error::DifferentFirstContact);
         }
@@ -663,6 +745,19 @@ impl Inbox {
         {
             return Err(Error::KeyUsedOrDeleted);
         }
+        // The key the keys proof covers, which the scratch state's x meets.
+        if opened.header.dh != first.header.dh {
+            return Err(Error::InvalidKeysProof);
+        }
+        // With one key, PN 0 and N below 16, sixteen headers fill a request:
+        // the count can't be reached past the check above. The bytes can.
+        let len = opened.bytes.len();
+        if request.messages.len() >= MAX_REQUEST_MESSAGES
+            || request.stored_len() + len > MAX_ONE_REQUEST_BYTES
+            || self.requests.stored_len() + len > MAX_REQUEST_BYTES
+        {
+            return Err(Error::RequestFull);
+        }
         let (_, mut results) = request.build_with(Some((opened, now)), key, draw)?;
         let plaintext = results.pop().expect("one result a message")?;
         let request = self
@@ -672,12 +767,11 @@ impl Inbox {
             .find(|request| request.cid() == opened.cid)
             .expect("the caller checked");
         request.messages.push((now, opened.checked()));
-        let evicted = self.requests.evict();
         Ok(Received::Request {
             cid: opened.cid,
             plaintext,
             new: false,
-            evicted,
+            evicted: Vec::new(),
         })
     }
 
@@ -722,7 +816,8 @@ impl Inbox {
     }
 
     /// Deletes a conversation or request, keeping its ID as a tombstone until
-    /// its `t` + 48 hours. Whether there was one.
+    /// its `t` + 48 hours and 7 days, whatever the clock meanwhile. Whether
+    /// there was one.
     pub fn delete(&mut self, cid: ConversationId) -> bool {
         let t = if let Some(conversation) = self.conversations.remove(&cid) {
             conversation.first.started_at
@@ -735,7 +830,8 @@ impl Inbox {
         true
     }
 
-    /// Deletes skipped keys past their 48 hours, and tombstones past theirs.
+    /// Deletes skipped keys past their 48 hours, and tombstones past their
+    /// `t` + 48 hours and 7 days.
     pub fn expire(&mut self, now: u64) {
         for conversation in self.conversations.values_mut() {
             conversation.expire(now);

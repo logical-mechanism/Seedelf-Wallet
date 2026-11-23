@@ -6,10 +6,10 @@ mod common;
 
 use group::Curve;
 
-use common::{header_points, point, random_nonzero, with_point};
+use common::{C_AT, header_points, point, random_nonzero, tag, tag_of, with_point, with_tag};
 use seedelf_messaging::{
     ENVELOPE_OVERHEAD, Envelope, Error, HEADER_LEN, MAX_PLAINTEXT_LEN, Register, SecretKey,
-    decrypt_message, encrypt_message, matches_register, rerandomize_register,
+    decrypt_message, encrypt_message, matches_envelope, rerandomize_register,
 };
 
 /// Encrypt, serialize, parse, discover, decrypt.
@@ -66,21 +66,22 @@ fn a_plaintext_over_the_limit_is_refused() {
 }
 
 /// A fresh `b` and `r` each time: the same plaintext to the same register
-/// never gives the same envelope, or the same register.
+/// never gives the same envelope, or the same `p`, tag or `c`.
 #[test]
 fn the_same_message_twice_gives_unrelated_envelopes() {
     let key = SecretKey::generate();
-    let one = encrypt_message(&key.register(), b"same").unwrap();
-    let two = encrypt_message(&key.register(), b"same").unwrap();
-    assert_ne!(one.to_bytes(), two.to_bytes());
-    assert_ne!(one.register(), two.register());
-    let (a, b) = (
-        header_points(&one.to_bytes()),
-        header_points(&two.to_bytes()),
-    );
-    for i in 0..3 {
+    let one = encrypt_message(&key.register(), b"same")
+        .unwrap()
+        .to_bytes();
+    let two = encrypt_message(&key.register(), b"same")
+        .unwrap()
+        .to_bytes();
+    assert_ne!(one, two);
+    let (a, b) = (header_points(&one), header_points(&two));
+    for i in 0..2 {
         assert_ne!(a[i], b[i]);
     }
+    assert_ne!(tag(&one), tag(&two));
 }
 
 // --- Tests 4 and 7: the wrong recipient ----------------------------------------
@@ -94,7 +95,7 @@ fn only_the_recipient_recognizes_and_decrypts() {
         assert!(envelope.is_for(&alice));
         assert_eq!(decrypt_message(&alice, &envelope).unwrap(), plaintext);
         assert!(!envelope.is_for(&bob));
-        assert!(!matches_register(&bob, envelope.register()));
+        assert_eq!(matches_envelope(&bob, &envelope.to_bytes()), Ok(false));
         assert_eq!(decrypt_message(&bob, &envelope), Err(Error::NotForThisKey));
     }
 }
@@ -105,7 +106,7 @@ fn only_the_recipient_recognizes_and_decrypts() {
 fn a_changed_ephemeral_point_fails_authentication() {
     let alice = SecretKey::generate();
     let bytes = sample(&alice);
-    let [p, _, c] = header_points(&bytes);
+    let [p, c] = header_points(&bytes);
     let (p, c) = (point(&p), point(&c));
     for changed in [
         // c + [s]p: the recipient derives z + [s]w, which no one can undo.
@@ -115,7 +116,7 @@ fn a_changed_ephemeral_point_fails_authentication() {
         // A valid point unrelated to the envelope.
         common::g1() * random_nonzero(),
     ] {
-        let tampered = with_point(&bytes, 2, &changed.to_affine().to_compressed());
+        let tampered = with_point(&bytes, 1, &changed.to_affine().to_compressed());
         assert_eq!(receive(&alice, &tampered), Err(Error::DecryptionFailed));
     }
 }
@@ -126,7 +127,7 @@ fn a_flipped_bit_in_the_ephemeral_point_is_refused_or_fails() {
     let bytes = sample(&alice);
     for bit in 0..48 * 8 {
         let mut tampered = bytes.clone();
-        tampered[1 + 96 + bit / 8] ^= 1 << (bit % 8);
+        tampered[C_AT + bit / 8] ^= 1 << (bit % 8);
         let result = receive(&alice, &tampered);
         assert!(
             matches!(
@@ -177,18 +178,20 @@ fn a_truncated_or_extended_ciphertext_fails() {
 
 // --- Test 10: a tampered register ----------------------------------------------
 
-/// `([k]p, [k]w)` is still Alice's register, and her shared point `[y]c` is
-/// unchanged: only the header's binding stops the swap.
+/// `([k]p, the tag of [k]w)` is still Alice's, and her shared point `[y]c` is
+/// unchanged: only the header's binding stops the swap. Making the swap takes
+/// w, which the envelope doesn't carry: the sender has it, and here the test
+/// computes it from y.
 #[test]
 fn a_rescaled_register_is_still_hers_but_fails_authentication() {
-    let alice = SecretKey::generate();
+    let y = random_nonzero();
+    let alice = SecretKey::from_scalar(y).unwrap();
     let bytes = sample(&alice);
-    let [p, w, _] = header_points(&bytes);
-    let k = random_nonzero();
-    let tampered = with_point(
-        &with_point(&bytes, 0, &(point(&p) * k).to_affine().to_compressed()),
-        1,
-        &(point(&w) * k).to_affine().to_compressed(),
+    let [p, _] = header_points(&bytes);
+    let rescaled = point(&p) * random_nonzero();
+    let tampered = with_tag(
+        &with_point(&bytes, 0, &rescaled.to_affine().to_compressed()),
+        &tag_of(&(rescaled * y)),
     );
     let envelope = Envelope::from_bytes(&tampered).unwrap();
     assert!(envelope.is_for(&alice));
@@ -204,24 +207,29 @@ fn a_swapped_register_of_hers_fails_authentication() {
     let alice = SecretKey::generate();
     let bytes = sample(&alice);
     let other: Register = rerandomize_register(&alice.register());
-    let tampered = with_point(
+    let tampered = with_tag(
         &with_point(&bytes, 0, &other.generator_bytes()),
-        1,
-        &other.public_value_bytes(),
+        &tag_of(&point(&other.public_value_bytes())),
     );
+    assert!(Envelope::from_bytes(&tampered).unwrap().is_for(&alice));
     assert_eq!(receive(&alice, &tampered), Err(Error::DecryptionFailed));
 }
 
+/// p changed alone, the tag changed alone (to the tag of another of her
+/// points), or one bit of the tag flipped: no longer hers.
 #[test]
-fn one_changed_register_point_is_no_longer_hers() {
-    let alice = SecretKey::generate();
+fn one_changed_register_part_is_no_longer_hers() {
+    let y = random_nonzero();
+    let alice = SecretKey::from_scalar(y).unwrap();
     let bytes = sample(&alice);
-    let [p, w, _] = header_points(&bytes);
+    let [p, _] = header_points(&bytes);
     let k = random_nonzero();
     let p_only = with_point(&bytes, 0, &(point(&p) * k).to_affine().to_compressed());
-    let w_only = with_point(&bytes, 1, &(point(&w) * k).to_affine().to_compressed());
-    let swapped = with_point(&with_point(&bytes, 0, &w), 1, &p);
-    for tampered in [p_only, w_only, swapped] {
+    let tag_only = with_tag(&bytes, &tag_of(&(point(&p) * k * y)));
+    let mut flipped = tag(&bytes);
+    flipped[31] ^= 1;
+    let one_bit = with_tag(&bytes, &flipped);
+    for tampered in [p_only, tag_only, one_bit] {
         assert_eq!(receive(&alice, &tampered), Err(Error::NotForThisKey));
     }
 }
@@ -270,12 +278,41 @@ fn envelopes_and_registers_serialize_exactly() {
         let parsed = Envelope::from_bytes(&bytes).unwrap();
         assert_eq!(parsed, envelope);
         assert_eq!(parsed.to_bytes(), bytes);
-        let register = *parsed.register();
-        let again =
-            Register::from_bytes(&register.generator_bytes(), &register.public_value_bytes())
-                .unwrap();
-        assert_eq!(again, register);
-        assert_eq!(&again.to_bytes()[..], &bytes[1..1 + 96]);
+        assert_eq!(bytes.len(), HEADER_LEN + plaintext.len() + 16);
+        // p and c re-encode to the bytes they were read from.
+        for at in header_points(&bytes) {
+            assert_eq!(point(&at).to_compressed(), at);
+        }
+    }
+    let register = key.register();
+    let again =
+        Register::from_bytes(&register.generator_bytes(), &register.public_value_bytes()).unwrap();
+    assert_eq!(again, register);
+    assert_eq!(&again.to_bytes()[..48], &register.generator_bytes()[..]);
+}
+
+// --- Nothing in an envelope is a register ---------------------------------------
+
+/// An envelope's bytes hold no register of its reader's key on its own points
+/// (the 1.10.0 gate review's chain-reaction#1): not (p, [y]p), which the
+/// bytes after p were before they became its tag, nor (c, [y]c). Anyone who
+/// reads a pool could pay under either and learn, from the reader's wallet
+/// spending it, whom the envelope was for. The 32 bytes after p are
+/// SHA-256(`Seedelf-Messaging|v1|envelope|tag` ‖ [y]p).
+#[test]
+fn no_envelope_holds_a_register_of_its_readers_key() {
+    for _ in 0..8 {
+        let y = random_nonzero();
+        let key = SecretKey::from_scalar(y).unwrap();
+        let bytes = encrypt_message(&rerandomize_register(&key.register()), b"no register")
+            .unwrap()
+            .to_bytes();
+        let [p, c] = header_points(&bytes).map(|at| point(&at));
+        assert_eq!(tag(&bytes), tag_of(&(p * y)));
+        for owned in [p * y, c * y] {
+            let owned = owned.to_compressed();
+            assert!(!bytes.windows(48).any(|window| window == owned));
+        }
     }
 }
 

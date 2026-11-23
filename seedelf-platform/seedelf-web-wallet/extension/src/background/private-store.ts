@@ -3,8 +3,9 @@
 // connected to the public account, the private sessions, a payment that may
 // still go through, who paid for each Seedelf, which public accounts the
 // phrase has used and what they are called, and which of the contract's
-// UTxOs are its own as the private index last settled them, and Seedelf
-// Messaging's conversations, requests and scan): sealed in
+// UTxOs are its own as the private index last settled them, the register
+// each Seedelf minted here was put under, and Seedelf Messaging's
+// conversations, requests and scan): sealed in
 // chrome.storage.local with XChaCha20-Poly1305 under a key derived from the
 // recovery phrase's entropy (Wallet.withStoreKey). They can't be read while
 // the wallet is locked, or by anyone without the phrase, and removing the
@@ -44,25 +45,46 @@ export const PRIVATE_RECORDS = [
   "maybeSent.mainnet",
   "mintedBy.preprod",
   "mintedBy.mainnet",
+  // The register each Seedelf minted here was put under (minted-by.ts `rememberRegister`): the Seedelfs that take
+  // Seedelf Messaging's first messages by themselves (messaging.ts, the 1.10.0 gate's W8).
+  "mintedAt.preprod",
+  "mintedAt.mainnet",
   // The private index's settled view of this wallet (contract-scan.ts): mainnet only, as the data layer is.
   "contract.mainnet",
   // Seedelf Messaging's inbox on each network (messaging.ts): the requests, the tombstones, the scan's cursor and
   // what each conversation shows. Each conversation's own record is one of `CONVERSATION_RECORDS`.
   "messaging.preprod",
   "messaging.mainnet",
+  // What a messaging step is working on while it runs (messaging.ts `setMark`), each step in a record of its own: the
+  // read whose page is scanned, and the envelope being taken.
+  "messagingMark.preprod",
+  "messagingMark.mainnet",
+  "messagingTakeMark.preprod",
+  "messagingTakeMark.mainnet",
+  // Not sealed, and no record: a mark of which messaging step's WebAssembly trapped ("scan" or "take"), written with no
+  // key since the trap has just locked the wallet (messaging.ts `noteTrap`). Listed so Remove wallet deletes it.
+  "messagingTrap.preprod",
+  "messagingTrap.mainnet",
 ] as const;
 
 /**
  * A Seedelf Messaging conversation's record (messaging.ts): its ratchet, its outbox and its history together, so one
- * write moves them all (protocol.md §4.2). A family, one record a conversation, named by the network and the
- * conversation's ID: removing the wallet finds them by this prefix, with no key.
+ * write moves them all (protocol.md §4.2). A family, one record a conversation, named by the network and an ID of the
+ * record's own, 16 random bytes that the sealed inbox maps to its conversation: the conversation's ID, which the other
+ * side's browser holds too, is in no name (the 1.10.0 gate's W7). Removing the wallet finds them by this prefix, with
+ * no key.
  */
 export const CONVERSATION_RECORDS = "conversation.";
 export type ConversationRecord = `conversation.${NetworkName}.${string}`;
 
-/** A conversation's record name. */
-export const conversationRecord = (network: NetworkName, cid: string): ConversationRecord =>
-  `${CONVERSATION_RECORDS}${network}.${cid}`;
+/** A conversation's record name, by the record's own ID (`newRecordId`). */
+export const conversationRecord = (network: NetworkName, id: string): ConversationRecord =>
+  `${CONVERSATION_RECORDS}${network}.${id}`;
+
+/** A new conversation record's ID: 16 random bytes, hex. */
+export function newRecordId(): string {
+  return Array.from(randomBytes(16), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 export type RecordName = (typeof PRIVATE_RECORDS)[number] | ConversationRecord;
 
@@ -128,9 +150,17 @@ const WHAT: Record<(typeof PRIVATE_RECORDS)[number], I18nKey> = {
   "maybeSent.mainnet": "worker.record.maybeSent",
   "mintedBy.preprod": "worker.record.mintedBy",
   "mintedBy.mainnet": "worker.record.mintedBy",
+  "mintedAt.preprod": "worker.record.mintedBy",
+  "mintedAt.mainnet": "worker.record.mintedBy",
   "contract.mainnet": "worker.record.contract",
   "messaging.preprod": "worker.record.messaging",
   "messaging.mainnet": "worker.record.messaging",
+  "messagingMark.preprod": "worker.record.messaging",
+  "messagingMark.mainnet": "worker.record.messaging",
+  "messagingTakeMark.preprod": "worker.record.messaging",
+  "messagingTakeMark.mainnet": "worker.record.messaging",
+  "messagingTrap.preprod": "worker.record.messaging",
+  "messagingTrap.mainnet": "worker.record.messaging",
 };
 
 const what = (name: RecordName): I18nKey =>
