@@ -145,7 +145,8 @@ Everything in protocol.md §3 to §6, as plain Rust with no network and no stora
   - **Both sides' state stolen at once** (assumption 11): healing after a round trip the attacker only watches, with both devices' states taken. Once past 14 GB; that may have been the crawl above.
   - **A base proved over another register of the reader's key** (assumption 4): the one step there that's argued, not checked.
   - **A continuation of a continuation** (assumption 6).
-  - **Unlinkability of the outer envelope** (assumption 2): an observational-equivalence model of its own, the costliest by far.
+  - **Unlinkability of the outer envelope** (assumption 2): done for the bare v1 envelope (model/unlinkability.spthy, observational equivalence, with two controls that find the link). Session envelopes are argued to be the same to an observer, not checked.
+  - **The outer envelope around the sessions** (assumption 2): done, model/envelope.spthy. The v1 envelope; call 13's check, needed and enough on both sides; and assumption 2's two claims, Bob's replies sealed to R_A and a kept key writing nothing on the wire. Each claim has a configuration of its own: the whole session sealed didn't finish Tamarin's precomputation in 20 GB.
   - **ENCRYPT's salt against a rollback** (assumption 10): symbolic AES-GCM has no nonce reuse to lose, so it would need an equation written for it, which proves little.
 
 ### 54c ✅ The relay

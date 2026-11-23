@@ -52,6 +52,8 @@ Those rest on the arguments and assumptions below.
    - **Metadata:** timing, the network, and the plaintext's length, since the envelope is 161 + |m| bytes with no padding.
    - **Datum registers:** when the recipient's register is a Seedelf datum, the sender knows which Seedelf they wrote to.
    - **A reaction to a sum of registers.** (g₁ + g₂, v₁ + v₂) is a register of y exactly when both (g₁, v₁) and (g₂, v₂) are. So any visible reaction to a bare v1 envelope addressed to the sum, such as a reply, links the two, and so does one to an envelope addressed to a second register of y. Seedelf's own registers share the property. The session layer closes it for messages: a first message proves its base comes from the one handle it names, and every envelope is bound to its conversation identity ([protocol.md](protocol.md) §2).
+
+   The model proves the property symbolically for the bare envelope, by observational equivalence ([model/](../model/README.md), *Unlinkability*): no attacker without y tells envelopes to one recipient from envelopes to one and another, or envelopes to a known register from envelopes to a key no one holds. There DDH holds by construction, so it's no substitute for the XDH argument (*Before production*). It also proves the binding: a reader takes no message aimed at another of its handles, on either side of a conversation, and without the check it would (*The outer envelope*).
 4. **Secret-key compromise.** y reads every envelope ever sent to any of its registers, past and future. With the key reuse chosen for later, it's also the key that spends the Seedelf.
 5. **Ciphertext integrity.** A change to any byte is rejected (AEAD, with the header bound). That's integrity against third parties, not proof of who sent it: anyone with the recipient's register can make an envelope that opens.
 6. **Recipient key substitution.**
@@ -116,7 +118,7 @@ ElfTalk's ratchet and proof-of-work are out of Phase 1's scope. The proof-of-wor
 
 ### What they don't
 
-- **Secrecy, forward secrecy, recovery and authentication** rest on the Double Ratchet's and X3DH's analyses, adapted here. [The model](../model/README.md) (54b) states them as lemmas and checks them symbolically, within the assumptions its README lists: every lemma is proved. A symbolic proof says nothing of the primitives' strength, of timing, or of the code: the tests hold the code to §16, and the model holds §16 to its claims.
+- **Secrecy, forward secrecy, recovery and authentication** rest on the Double Ratchet's and X3DH's analyses, adapted here. [The model](../model/README.md) (54b) states them as lemmas and checks them symbolically, within the assumptions its README lists: every lemma is proved. The outer envelope has a model of its own beside it: the v1 envelope, the binding of every envelope to its conversation, Bob's replies sealed to R_A, and a kept message key on the wire, each proved. A symbolic proof says nothing of the primitives' strength, of timing, or of the code: the tests hold the code to §16, and the model holds §16 to its claims.
 - **Constant time,** as for the envelope.
 
 ### Implementation notes

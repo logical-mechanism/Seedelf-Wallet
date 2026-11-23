@@ -1,0 +1,109 @@
+/*
+ * Seedelf Messaging's unlinkability: security.md's property 3 for the bare
+ * v1 envelope (construction.md §2, §4), as observational equivalence in
+ * Tamarin (diff terms, proved with --diff). Chunk 54's 54b, its follow-up.
+ * The README says what it shows and what it doesn't.
+ *
+ * Two pairs of systems, by flag:
+ *   (none)          envelopes to one recipient, against envelopes to one
+ *                   recipient and to another: whether two envelopes go to
+ *                   the same recipient;
+ *   -D=FRESH        envelopes to a known register, against envelopes to a
+ *                   key no one holds: whether an envelope goes to a given
+ *                   register at all.
+ * The attacker holds both recipients' registers, picks every plaintext, and
+ * sees every envelope; no recipient reacts, and neither key is stolen.
+ *
+ * check.sh proves each pair, and each control below must find its link:
+ */
+// check.sh diff: same_or_two - verified
+// check.sh diff: known_or_no_one FRESH verified
+// check.sh diff: bare_register_links BARE_REGISTER falsified
+// check.sh diff: stolen_key_links STOLEN falsified
+
+theory SeedelfMessagingUnlinkability
+begin
+
+builtins: diffie-hellman
+
+functions: aenc/3, adec/2, kdf_env/2
+equations: adec(aenc(m, k, ad), k) = m
+
+/* Two recipients' registers, root registers (G, [y]G), both public. A
+   datum register's generator is itself [d]G, which changes nothing here. */
+rule Recipients:
+  [ Fr(~ya), Fr(~yb) ] --> [ !Two('g'^~ya, 'g'^~yb), !Keys(~ya, ~yb), Out(<'g'^~ya, 'g'^~yb>) ]
+
+/* The sender seals a plaintext of the attacker's choosing to a fresh
+   re-randomization of a register (construction.md §4.1). */
+
+/* To the first recipient, on both sides. */
+rule Seal_to_the_first:
+  let p = 'g'^~b
+      w = va^~b
+      c = p^~r
+      H = <'v1', p, w, c>
+  in
+  [ !Two(va, vb), Fr(~b), Fr(~r), In(m) ]
+  -->
+  [ Out(<H, aenc(m, kdf_env(H, w^~r), H)>) ]
+
+#ifdef not FRESH & not BARE_REGISTER
+
+/* To the first on the left, to the second on the right. */
+rule Seal_to_either:
+  let v = diff(va, vb)
+      p = 'g'^~b
+      w = v^~b
+      c = p^~r
+      H = <'v1', p, w, c>
+  in
+  [ !Two(va, vb), Fr(~b), Fr(~r), In(m) ]
+  -->
+  [ Out(<H, aenc(m, kdf_env(H, w^~r), H)>) ]
+
+#endif
+
+#ifdef FRESH
+
+/* To the first on the left, to a fresh key no one holds on the right. */
+rule Seal_to_the_first_or_no_one:
+  let v = diff(va, 'g'^~z)
+      p = 'g'^~b
+      w = v^~b
+      c = p^~r
+      H = <'v1', p, w, c>
+  in
+  [ !Two(va, vb), Fr(~z), Fr(~b), Fr(~r), In(m) ]
+  -->
+  [ Out(<H, aenc(m, kdf_env(H, w^~r), H)>) ]
+
+#endif
+
+/* Two controls, each of which must find the link, so that the model can:
+   -D=BARE_REGISTER seals to the register itself, not a re-randomization of
+   it, as ElfTalk's messages carried their recipient's key (security.md);
+   -D=STOLEN gives the attacker the second recipient's key, which tests
+   [y]p = w. Each must end "falsified". */
+
+#ifdef BARE_REGISTER
+
+rule Seal_to_either_bare:
+  let v = diff(va, vb)
+      c = 'g'^~r
+      H = <'v1', 'g', v, c>
+  in
+  [ !Two(va, vb), Fr(~r), In(m) ]
+  -->
+  [ Out(<H, aenc(m, kdf_env(H, v^~r), H)>) ]
+
+#endif
+
+#ifdef STOLEN
+
+rule Steal_the_second:
+  [ !Keys(ya, yb) ] --> [ Out(yb) ]
+
+#endif
+
+end
