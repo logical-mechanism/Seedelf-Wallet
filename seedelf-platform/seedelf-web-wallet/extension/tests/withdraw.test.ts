@@ -282,8 +282,9 @@ describe("removing a Seedelf", () => {
     t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
     const service = withSigner(t, (request) => JSON.stringify({ txCbor: request.txCbor, txHash: summary.txHash }));
     expect(await service.submitRemove("preprod", summary.txHash)).toMatchObject({ kind: "remove", txHash: summary.txHash });
-    // Sent: that Seedelf's pair goes, the other stays.
-    expect(await mintedAt(t.store, "preprod")).toEqual({ [OTHER]: [register] });
+    // Sent: that Seedelf's pair goes, its name left with none, a mark of the removal (the 1.10.0 gate's f6); the other
+    // stays.
+    expect(await mintedAt(t.store, "preprod")).toEqual({ [MINE]: [], [OTHER]: [register] });
   });
 
   it("sends a removal whose pair can't be forgotten all the same: the record that says it won't open is left as it is", async () => {

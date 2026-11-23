@@ -14,6 +14,7 @@ import type { NetworkName } from "../src/networks";
 import type { MessagingEntry } from "../src/shared/rpc";
 import { fakeRelay, type FakeRelay } from "./fake-relay";
 import { loadTestWasm, memoryArea, testWallet, vectors, type MemoryArea } from "./fakes";
+import { cursorOf } from "./messaging-harness";
 
 const PASSWORD = "correct horse battery";
 const phrase = (words: number) =>
@@ -271,8 +272,9 @@ describe("Seedelf Messaging in the worker", { timeout: 30_000 }, () => {
     await alice.messaging.whenIdle();
     await synced(bob);
     // A worker stopped before the cursor moved: the same pages read again, from the start.
-    const inbox = await bob.store.get<{ cursor?: string }>("messaging.preprod");
-    await bob.store.set("messaging.preprod", { ...inbox, cursor: undefined });
+    const takes = await bob.store.get<{ cursor?: string }>("messagingTake.preprod");
+    expect(takes?.cursor).toBeDefined();
+    await bob.store.set("messagingTake.preprod", { ...takes, cursor: undefined });
     bob.restart();
     await synced(bob);
     expect(await texts(bob, cid)).toEqual(["in:hello Bob", "out:hi Alice", "in:once"]);
@@ -752,7 +754,7 @@ describe("Seedelf Messaging in the worker", { timeout: 30_000 }, () => {
     };
     await bob.messaging.sync("preprod").catch(() => undefined);
     await bob.messaging.whenIdle();
-    expect((await bob.store.get<{ cursor?: string }>("messaging.preprod"))?.cursor).toBeUndefined();
+    expect((await cursorOf(bob))).toBeUndefined();
     expect(await bob.local.keys(PRIVATE_PREFIX + "conversation.")).toEqual([]);
   });
 

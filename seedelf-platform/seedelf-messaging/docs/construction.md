@@ -7,7 +7,24 @@ How a message is encrypted to a re-randomized Seedelf register, and how its reci
 - BLS12-381, written additively. G1 and G2 are the prime-order subgroups, of order q, and GT ⊂ F\*p¹² is the pairing's target. e: G1 × G2 → GT is bilinear: e([a]P, [b]Q) = e(P, Q)^{ab}.
 - G is the standard G1 generator, [k]P is scalar multiplication, and O is the identity.
 - G1's cofactor is h₁ = 3 · 11² · 10177² · 859267² · 52437899² (126 bits). Its small factors are why every point read from outside is checked to be in G1 (§4.4): a small-order point would reveal y modulo them.
-- A point's bytes are its 48-byte compressed encoding, the format blst uses and Seedelf datums hold.
+- **The curve:** E: y² = x³ + 4 over F_p, and G1 its subgroup of prime order q, with
+
+      p = 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab (381 bits)
+      q = 0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001 (255 bits)
+
+  Both come from BLS12-381's parameter z = −0xd201000000010000: q = z⁴ − z² + 1, p = (z − 1)²·q/3 + z, and #E(F_p) = h₁·q. This p is the field's prime, not an envelope's p (§2). Here z is the curve's parameter, not §4's shared point, and x and y are a point's coordinates, not a key (§2).
+- **G** is the point with
+
+      x = 0x17f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb
+      y = 0x08b3f481e3aaa0f1a09e30ed741d8ae4fcf5e095d5d00af600db18cb2c04b3edd03cc744a2888ae40caa232946c5e7e1
+
+  Its bytes are `97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb`.
+- **A point's bytes** are its 48-byte compressed encoding, Zcash's for BLS12-381, which blst writes and Seedelf datums hold: x, below p, as 48 big-endian bytes. x < p < 2³⁸¹, so the top three bits are free and carry three flags in the first byte:
+  - 0x80, compressed: always set;
+  - 0x40, infinity: set only in O's bytes, `0xc0` then 47 zero bytes;
+  - 0x20, the sign: set exactly when y > (p − 1)/2, the larger of y and p − y; clear in O's bytes.
+
+  p ≡ 3 (mod 4), so a reader takes y = (x³ + 4)^((p + 1)/4) mod p, refuses x when y² ≠ x³ + 4, and takes p − y when y's size doesn't match the sign. §4.4 says which points are valid.
 
 ## 2. Registers
 
@@ -85,7 +102,13 @@ A conversation's own registers are the session layer's matter: protocol.md §2.
 
 ### 4.4 Encodings
 
-- **Points** (p and c): 48-byte compressed G1. Only canonical encodings are accepted: a decoded point must re-encode to the same bytes, which refuses stray bits beside the infinity flag. Each point must be in the prime-order subgroup and not O.
+- **Points** (p and c): 48 bytes, §1's encoding. A point read is valid exactly when:
+  - its compressed flag is set;
+  - its infinity flag is clear. O's own bytes are refused as O, and any other bytes with the flag as a bad encoding;
+  - x < p, and x³ + 4 is a square mod p;
+  - it's in G1: [q]P = O, or a test equivalent to it. A point outside G1 is refused, never multiplied into G1 by h₁.
+
+  So every point accepted re-encodes to its own bytes. The codes are protocol.md §19.3's: `invalid_encoding` for a flag or for x, `not_in_subgroup` for a point outside G1, and `identity_point` for O's bytes. x = 0 is the exception: its points, (0, ±2), are on the curve and outside G1, but blst refuses them as it decodes, so they're `invalid_encoding`.
 - **The tag:** 32 bytes, any value. Nothing decodes it.
 - **Scalars** (`SecretKey::from_bytes`): 32 bytes, big-endian, with 0 < y < q.
 - **The envelope** has no length prefix; the transport delimits it.

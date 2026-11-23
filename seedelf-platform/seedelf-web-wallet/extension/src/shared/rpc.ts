@@ -330,10 +330,21 @@ export interface MessagingOverview {
    */
   stopped?: true;
   /**
-   * Messages that came and weren't kept (W10, W11): no room for them after the oldest read ones were deleted, or more
-   * of them at once than the wallet takes. They're gone; deleting conversations makes room for the next.
+   * Messages that came and weren't kept for want of room (W11): no room for them after the oldest read ones were
+   * deleted, or within what the wallet's storage keeps for payments. They're gone; deleting a conversation makes room
+   * for the next.
    */
   dropped?: number;
+  /**
+   * Messages dropped before they were opened (W10; the 1.10.0 gate's f5): more of them came at once than the wallet
+   * takes, so they may be anyone's. They're gone, and deleting a conversation doesn't bring them back.
+   */
+  droppedUnread?: number;
+  /**
+   * This address has read its share of the pool for the day (the relay's W16 answer): no new messages are read until
+   * then (ms, this device's clock); what's waiting is still sent. Only while Messages are on and the relay isn't stopped.
+   */
+  dayReadUntil?: number;
   /**
    * How far this device's clock is off the server's (hours, signed: ahead is positive), where more than half an hour,
    * as the last message the server took new measured it: people may not get first messages until it's set right.

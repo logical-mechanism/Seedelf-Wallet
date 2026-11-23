@@ -10,11 +10,12 @@
 // one step that looks at what an envelope holds), and compare what each asks.
 import { describe, expect, it } from "vitest";
 
-import type { Inbox } from "../src/background/messaging";
+import { TAKE_BYTES } from "../src/background/messaging";
 import { PAGES_A_SYNC } from "../src/background/relay";
 import {
   BOB_SEEDELF,
   clock,
+  cursorOf,
   type Directory,
   fakeRelay,
   type FakeRelay,
@@ -23,6 +24,7 @@ import {
   party,
   recordName,
   synced,
+  takesOf,
   talking,
   texts,
   turnOn,
@@ -32,6 +34,9 @@ import {
 
 /** A 32 KiB envelope nobody's: eight fill a page (§17.5's 256 KiB). */
 const bigJunk = (n: number) => "01" + n.toString(16).padStart(8, "0") + "6b".repeat(32768 - 5);
+
+/** A 512-byte envelope nobody's, the smallest: with eight a page, a read holds 128 of them, 64 KiB. */
+const smallJunk = (n: number) => "01" + n.toString(16).padStart(8, "0") + "6b".repeat(512 - 5);
 
 const gets = (relay: FakeRelay) => relay.calls.filter((c) => c.startsWith("GET "));
 
@@ -76,7 +81,7 @@ describe("what a read asks (W10)", { timeout: 60_000 }, () => {
         const before = relay.calls.length;
         await synced(reader);
         asked.push(gets({ ...relay, calls: relay.calls.slice(before) }));
-        cursors.push((await reader.store.get<Inbox>("messaging.preprod"))!.cursor);
+        cursors.push(await cursorOf(reader));
       }
       return { asked, cursors };
     };
@@ -134,7 +139,10 @@ describe("what a read asks (W10)", { timeout: 60_000 }, () => {
     await synced(bob);
     await alice.messaging.send("preprod", cid, "one");
     await alice.messaging.whenIdle();
-    for (let i = 0; i < 8 * PAGES_A_SYNC * 8; i++) relay.put("preprod", bigJunk(i));
+    // Reads of 128 short envelopes each, five of which the take record holds within its bytes: only the reads' count
+    // bounds what waits here (TAKES_BEHIND).
+    relay.pageCount = 8;
+    for (let i = 0; i < 8 * PAGES_A_SYNC * 8; i++) relay.put("preprod", smallJunk(i));
     bob.restart(claiming((e) => e.startsWith("01") && e.endsWith("6b6b6b6b")));
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
@@ -160,18 +168,63 @@ describe("what a read asks (W10)", { timeout: 60_000 }, () => {
     bob.beforeWrite = undefined;
     // Never a tick without its pages, however far behind the take is.
     expect(perTick).toEqual(Array<number>(7).fill(PAGES_A_SYNC));
-    // The first read's "one" taken; the two oldest reads that waited past four, dropped unopened and counted.
+    // The first read's "one" taken; the two oldest reads that waited past four, dropped unopened and counted apart from
+    // what had no room (the 1.10.0 gate's f5).
     expect((await texts(bob, cid)).at(-1)).toBe("in:one");
-    expect((await bob.messaging.overview("preprod")).dropped).toBe(2 * PAGES_A_SYNC * 8);
+    const overview = await bob.messaging.overview("preprod");
+    expect(overview.droppedUnread).toBe(2 * PAGES_A_SYNC * 8);
+    expect(overview.dropped).toBeUndefined();
     // And the cursor where the last read ended: the next read goes on from there.
     await expectOnFromLast(relay, bob);
+  });
+
+  it("keeps at most TAKE_BYTES of what the reads found: a read too large for it keeps its first envelopes, and the rest are counted unopened (finding 8)", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    await synced(bob);
+    await alice.messaging.send("preprod", cid, "one");
+    await alice.messaging.whenIdle();
+    // One read of 4 MiB, every envelope "the key's": more than the take record holds.
+    for (let i = 0; i < PAGES_A_SYNC * 8 - 1; i++) relay.put("preprod", bigJunk(i));
+    bob.restart(claiming((e) => e.startsWith("01") && e.endsWith("6b6b6b6b")));
+    bob.trace.length = 0;
+    // The take held at "one"'s record, so the record is looked at as the read left it.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let holding = false;
+    const record = await recordName(bob, cid);
+    bob.beforeWrite = async (name) => {
+      if (name !== record || holding) return;
+      holding = true;
+      await held;
+    };
+    await bob.messaging.sync("preprod");
+    await turns();
+    expect(holding).toBe(true);
+    // What it keeps of the read, as stored: within TAKE_BYTES, and short of it by less than one more envelope.
+    const json = JSON.stringify(await takesOf(bob)).length;
+    expect(json).toBeLessThanOrEqual(TAKE_BYTES);
+    expect(json).toBeGreaterThan(TAKE_BYTES - 4 * Math.ceil(32768 / 3) - 3);
+    release();
+    await bob.messaging.whenIdle();
+    bob.beforeWrite = undefined;
+    const opened = bob.trace.filter((s) => s === "open").length;
+    // Its first envelopes, "one" among them, taken; every one past the record's bytes counted, none twice.
+    expect((await texts(bob, cid)).at(-1)).toBe("in:one");
+    expect(opened).toBeGreaterThan(1);
+    expect(opened * 32 * 1024).toBeLessThan(TAKE_BYTES);
+    const overview = await bob.messaging.overview("preprod");
+    expect(opened + overview.droppedUnread!).toBe(PAGES_A_SYNC * 8);
+    expect(overview.dropped).toBeUndefined();
+    // Read on from where it ended, the same as for anyone's pages.
+    expect(await cursorOf(bob)).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
   });
 });
 
 /** The cursor kept is past where the last read asked from, and the next read asks from it. */
 async function expectOnFromLast(relay: FakeRelay, p: Awaited<ReturnType<typeof pair>>["bob"]): Promise<void> {
   const lastAsked = BigInt(gets(relay).at(-1)!.split("?after=")[1]!);
-  const cursor = (await p.store.get<Inbox>("messaging.preprod"))!.cursor!;
+  const cursor = (await cursorOf(p))!;
   expect(BigInt(cursor) > lastAsked).toBe(true);
   relay.calls.length = 0;
   await synced(p);

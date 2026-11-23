@@ -3,7 +3,8 @@
 // the page says so once, on its <body>, and the fields that say who the
 // user is or pays say so again (privacy review §2.19). The public Send's
 // note isn't either: it would go to Google before it's sent, even one
-// that's never sent.
+// that's never sent. Nor is a message, before it's sealed (the 1.10.0
+// gate's docs-claims#17).
 import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -13,6 +14,7 @@ import type { Balances } from "../src/shared/rpc";
 import { ContactEditor } from "../src/ui/components/Contacts";
 import { NetworkContext } from "../src/ui/network";
 import { CardanoSend } from "../src/ui/screens/CardanoSend";
+import { Composer } from "../src/ui/screens/Messages";
 
 /** The input with `id`, lowercased: React keeps some attributes camel-cased. */
 const input = (html: string, id: string) => html.match(new RegExp(`<input[^>]*id="${id}"[^>]*>`))?.[0].toLowerCase();
@@ -40,5 +42,12 @@ describe("spell check", () => {
       ),
     );
     expect(input(html, "send-note")).toContain('spellcheck="false"');
+  });
+
+  it("is off for a message being written, the box Messages writes in", () => {
+    const html = renderToStaticMarkup(
+      createElement(Composer, { text: "", onText: () => undefined, placeholder: "Message", off: false, onSend: async () => true }),
+    );
+    expect(html.match(/<textarea[^>]*data-testid="composer"[^>]*>/)?.[0].toLowerCase()).toContain('spellcheck="false"');
   });
 });

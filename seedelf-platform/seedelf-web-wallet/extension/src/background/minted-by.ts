@@ -144,12 +144,28 @@ export async function rememberRegister(store: PrivateStore, network: NetworkName
 
 /**
  * Forgets every register `tokenName` was put under here (W12): the wallet's own Remove of that Seedelf, as it's sent,
- * so first messages to it stop then, whatever any kept view has shown of it. A Remove that never lands leaves it a
- * Seedelf this browser didn't make, whose switch the user can turn on. Throws as `rememberRegister` does.
+ * so first messages to it stop then, whatever any kept view has shown of it. The name stays, with no register: a mark
+ * that it was removed here (the 1.10.0 gate's f6), which a choice made before the Remove, a view kept from before it,
+ * and the adoption of a Seedelf minted before 1.10.0 all respect (messaging.ts), so it marks one this browser didn't
+ * make too: one the user turned on, or one minted before 1.10.0 and not adopted yet. A Remove that never lands leaves it
+ * a Seedelf whose switch the user can turn on (`clearRemoved`). Throws as `rememberRegister` does.
  */
 export async function forgetRegisters(store: PrivateStore, network: NetworkName, tokenName: string): Promise<void> {
   const kept = (await store.get<MintedAt>(atRecord(network))) ?? {};
-  if (!kept[tokenName]) return;
+  if (removedHere(kept, tokenName)) return;
+  await store.set(atRecord(network), { ...kept, [tokenName]: [] });
+}
+
+/** Whether `made` marks the Seedelf `name` as removed here (`forgetRegisters`): its name, with no register. */
+export const removedHere = (made: MintedAt, name: string): boolean => made[name] !== undefined && made[name]!.length === 0;
+
+/**
+ * Lifts `forgetRegisters`'s mark on `tokenName`, as the user turns that Seedelf on again (f6): a Remove that never
+ * landed. Throws as `rememberRegister` does.
+ */
+export async function clearRemoved(store: PrivateStore, network: NetworkName, tokenName: string): Promise<void> {
+  const kept = (await store.get<MintedAt>(atRecord(network))) ?? {};
+  if (!removedHere(kept, tokenName)) return;
   const { [tokenName]: _gone, ...rest } = kept;
   await store.set(atRecord(network), rest);
 }

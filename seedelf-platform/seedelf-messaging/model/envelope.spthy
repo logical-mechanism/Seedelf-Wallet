@@ -662,15 +662,25 @@ lemma first_contact_executable: exists-trace
      IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, cid, 'm1', m1)@t
    & RRecv(Rsp, cid, p0, Ai, w0, 'm1', m1)@a & not (Ex P #k. RevLtk(P)@k)"
 
+/* The lemma above isn't vacuous for the attacker's branches: a first message
+   the attacker wrote itself, with no honest writer and no key stolen, is
+   taken with all four checks on. */
+lemma an_attackers_first_message_is_taken: exists-trace
+  "Ex R cid p0 A w0 F #i. RAccept(R, cid, p0, A, w0, F)@i
+   & not (Ex P #r. RevLtk(P)@r) & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
+
 /* The excuse is needed, by each branch: with the reader's key, the base
    proof's other branch proves a base on its other handle, and the keys
-   proof's an A there on a base that is G^k. */
+   proof's an A there on a base that is G^k. Each search ran out of 600 s
+   at 4 GB in the gate of 1.10.0. */
+// check.sh: CAP=12g,LIMIT=7200
 lemma reader_key_proves_a_base_on_its_other_handle: exists-trace
   "Ex R cid p0 A w0 F #a #i #k #r.
      AnyBase(R, cid)@a & RAccept(R, cid, p0, A, w0, F)@i & RTookAt(R, cid, p0)@i & OnSecond(R, p0)@k
    & RevLtk(R)@r & #r < #i
    & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
 
+// check.sh: CAP=12g,LIMIT=7200
 lemma reader_key_proves_an_identity_on_its_other_handle: exists-trace
   "Ex R cid p0 A w0 F #b #i #k #r.
      KeysByTheReaderKey(R, cid)@b & RAccept(R, cid, p0, A, w0, F)@i & RTookAt(R, cid, A)@i
@@ -721,6 +731,14 @@ lemma without_the_keys_proof_an_ephemeral_links_two_handles: exists-trace
 lemma without_the_keys_proof_an_identity_links_two_handles: exists-trace
   "Ex R cid t rep p0 A w0 #i #k.
      RAccept(R, cid, p0, A, w0, <cid, t, rep, p0, A, 'g'>)@i & RTookAt(R, cid, A)@i & OnSecond(R, A)@k
+   & not (Ex P #r. RevLtk(P)@r) & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
+
+/* And the first ratchet key: with A and E_A named G, no honest writer and no
+   key stolen, p0 is G^k and p, c, E_A and A are known powers of G, so S_A is
+   the only point that can be on the second handle. */
+lemma without_the_keys_proof_a_ratchet_key_links_two_handles: exists-trace
+  "Ex R cid t rep p0 w0 X #i #k.
+     RAccept(R, cid, p0, 'g', w0, <cid, t, rep, p0, 'g', 'g'>)@i & RTookAt(R, cid, X)@i & OnSecond(R, X)@k
    & not (Ex P #r. RevLtk(P)@r) & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
 
 #endif

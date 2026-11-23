@@ -157,6 +157,33 @@ which the maintainer may overrule.
 | retired (a Lovejoin pool, its scripts) | los scripts retirados de Lovejoin; los pools retirados | 廃止済みのスクリプト; 廃止されたプール | said of the scripts and the pools that run them, never of Lovejoin, which goes on: "Lovejoin's retired scripts", "the retired pools". es says "retirado" alone: "retiro" is a withdrawal (above), and a pool's boxes are withdrawn from it. A stake pool's retirement keeps "se ha retirado" and 引退, a DRep's "retirar tu DRep" and 退任 |
 | Lovejoin's current contracts; its older ones (the store listing) | los contratos actuales de Lovejoin; los contratos anteriores de Lovejoin | Lovejoin の現行のコントラクト; 以前のコントラクト | the listing's words for v2's scripts and the retired ones: it says contracts, as its "Lovejoin's own contracts" does. es names Lovejoin in both, as the listing does: "sus contratos anteriores" could be read as the pools' own |
 
+## Chosen for 1.10.0
+
+Seedelf Messaging came in 1.10.0. These are the words its values use, gathered
+by the 1.10.0 gate's review, which found the feature's name and "the other
+side" each said three ways in Spanish (i18n#7) and Japanese saying 確認 for
+verify where the rest of the wallet says 検証 (i18n#3). Like the sections
+above, these are Claude's choices, which the maintainer may overrule.
+
+| English | Spanish | Japanese | Note |
+|---|---|---|---|
+| Messages (the feature's name) | Mensajes, plural: "Los Mensajes están desactivados" | メッセージ | es says it as a plural throughout, as Home's row's "Desactivados" does |
+| a message; a first message | un mensaje; un primer mensaje | メッセージ; 最初のメッセージ | |
+| a conversation | una conversación | 会話 | |
+| a request (a stranger's first messages, before a reply) | una solicitud | リクエスト | |
+| the other side (of a conversation) | la otra parte | 相手 | never el otro lado or la otra persona |
+| Unknown sender | Remitente desconocido | 不明な送信者 | |
+| show (a Seedelf, the reveal); Show my Seedelf | mostrar; Mostrar mi Seedelf | 見せる; 自分の Seedelf を見せる | the other side's own: 相手が自分の Seedelf を見せました |
+| verified; unverified; checking (on the chain) | verificado; sin verificar; comprobándolo | 検証済み; 未検証; 検証中 | ja's 検証, as Minswap's 検証済み; Check on chain is es Comprobar en la cadena, ja チェーン上で検証する |
+| your contact | tu contacto | 連絡先, 連絡先の {{name}} | as Send's payee line says it |
+| a tag (a Seedelf's) | la etiqueta “{{tag}}” | タグ「{{tag}}」 | as Receive's line says it |
+| unread | sin leer | 未読 | |
+| this device | este dispositivo | この端末 | never デバイス |
+| start again; continue (in a new conversation) | empezar de nuevo; continuar | やり直す; 続き | |
+| sent, expires; missing | enviado, caduca; falta | 送信済み、期限切れ; 欠落 | never "delivered" or "expired" (protocol.md §6, §10) |
+| dropped (before it was read); couldn't be kept (no room) | descartar: "se descartaron… antes de que se pudieran leer"; no se pudo guardar | 破棄: 読まれる前に破棄されました; 保存できませんでした | the server's gap and the wallet's own backlog both drop; only what had no room says that deleting a conversation makes room |
+| this connection (the server's share of reading for the day) | esta conexión; su cuota de lectura del día | この接続; 1 日に読み込める分 | "connection", as the rate limits say it, never "address", which reads as a Cardano address |
+
 ## How a translation is recorded
 
 Three files beside this one, one set per language:

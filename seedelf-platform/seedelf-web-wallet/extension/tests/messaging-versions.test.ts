@@ -17,6 +17,7 @@ import {
   busyFor,
   CAROL_SEEDELF,
   clock,
+  cursorOf,
   fileOf,
   type FakeRelay,
   loadTestWasm,
@@ -156,7 +157,7 @@ describe("a page with an envelope of a size this version doesn't know (W15, vers
     await synced(bob);
     expect((await texts(bob, cid)).slice(-2)).toEqual(["in:before it", "in:after it"]);
     expect((await bob.messaging.overview("preprod")).offline).toBeUndefined();
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.cursor).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
+    expect((await cursorOf(bob))).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
   });
 
   it("takes the pages before one that doesn't read, and goes on from there", async () => {
@@ -422,6 +423,40 @@ describe("the relay's own holds (W16)", { timeout: 30_000 }, () => {
     await busyFor(3600_000 + 60_000, alice, bob);
     await synced(alice);
     expect(gets(relay).length).toBeGreaterThan(0);
+  });
+
+  it("says in the overview that the day's reading is held, and until when, and no more once it's read again (W16)", async () => {
+    const { relay, alice, bob } = await pair();
+    await talking(alice, bob);
+    const real = relay.fetch;
+    let readSoFar = true;
+    relay.fetch = async (url, init) => {
+      if (init.method === "GET" && readSoFar) {
+        return new Response(JSON.stringify({ error: "this address has read its share of the pool for the day" }), {
+          status: 429,
+          headers: { "retry-after": String(2 * 3600) },
+        });
+      }
+      return real(url, init);
+    };
+    expect((await alice.messaging.overview("preprod")).dayReadUntil).toBeUndefined();
+    const at = clock.now;
+    await synced(alice);
+    // By this device's clock, as the relay's answer said: nothing else on the overview says the relay is away.
+    const held = await alice.messaging.overview("preprod");
+    expect(held.dayReadUntil).toBe(at + 2 * 3600_000);
+    expect(held.offline).toBeUndefined();
+    expect(held.paused).toBeUndefined();
+    // Off, nothing is read, held or not: nothing said.
+    await alice.messaging.switch("preprod", false);
+    expect((await alice.messaging.overview("preprod")).dayReadUntil).toBeUndefined();
+    await alice.messaging.switch("preprod", true);
+    await alice.messaging.whenIdle();
+    // Past its two hours, read again: said no more.
+    readSoFar = false;
+    await busyFor(2 * 3600_000 + 60_000, alice, bob);
+    await synced(alice);
+    expect((await alice.messaging.overview("preprod")).dayReadUntil).toBeUndefined();
   });
 
   it("waits a second for the edge's 'too many requests at once', and says nothing of it", async () => {

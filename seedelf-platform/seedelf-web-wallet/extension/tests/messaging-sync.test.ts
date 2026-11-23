@@ -17,6 +17,7 @@ import {
   BOB_SEEDELF,
   CAROL_SEEDELF,
   clock,
+  cursorOf,
   type Directory,
   fakeRelay,
   fileOf,
@@ -26,6 +27,7 @@ import {
   recordName,
   records,
   synced,
+  takesOf,
   talking,
   texts,
   turnOn,
@@ -88,27 +90,34 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     }
   });
 
-  it("writes the cursor once, after the last envelope is taken, to where the read ended", async () => {
+  it("writes where the read ended once, right after its last page and before anything is taken (finding 8)", async () => {
     const { relay, alice, bob, toBob } = await three();
     for (const text of ["a", "b", "c"]) await alice.messaging.send("preprod", toBob, text);
     await alice.messaging.whenIdle();
-    const before = (await bob.store.get<Inbox>("messaging.preprod"))!.cursor;
+    const before = await cursorOf(bob);
     relay.pageCount = 1;
     bob.trace.length = 0;
-    // Each write of the inbox: where the trace was, and the cursor it wrote.
+    // Each write of the take record: where the trace was, and the cursor it wrote. The inbox holds none.
     const written: Array<{ at: number; cursor?: string }> = [];
+    let inboxCursors = 0;
     bob.beforeWrite = (name, value) => {
-      if (name === "messaging.preprod") written.push({ at: bob.trace.length, cursor: (value as Inbox).cursor });
+      if (name === "messagingTake.preprod") written.push({ at: bob.trace.length, cursor: (value as { cursor?: string }).cursor });
+      if (name === "messaging.preprod" && (value as Inbox).cursor !== undefined) inboxCursors++;
     };
     await synced(bob);
     bob.beforeWrite = undefined;
     const end = relay.pools.get("preprod")!.held.at(-1)!.number.toString();
-    const moved = written.filter((w) => w.cursor !== before);
-    // One write moves the cursor, to the last page's, and it comes after the last envelope is taken.
+    const moved = written.filter((w, i) => w.cursor !== (i ? written[i - 1]!.cursor : before));
+    // One write moves the cursor, to the last page's: after the last page, before the first envelope is opened.
     expect(moved).toHaveLength(1);
     expect(moved[0]!.cursor).toBe(end);
-    expect(moved[0]!.at).toBeGreaterThan(bob.trace.lastIndexOf("receive"));
+    const lastPage = bob.trace.map((s) => s.startsWith("GET ")).lastIndexOf(true);
+    expect(moved[0]!.at).toBeGreaterThan(lastPage);
+    expect(moved[0]!.at).toBeLessThan(bob.trace.indexOf("open"));
+    expect(inboxCursors).toBe(0);
     expect(bob.trace.filter((s) => s === "receive")).toHaveLength(3);
+    // And the take, once its envelopes are taken, leaves the record with the cursor and nothing waiting.
+    expect(await takesOf(bob)).toMatchObject({ cursor: end, batches: [] });
   });
 
   it("takes what it took before a stop once, of every kind: a request's first message, a join, a session message, a reveal", async () => {
@@ -121,7 +130,7 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     // Carol wrote first to Bob, and he replied: she may show him her Seedelf.
     const withCarol = await talking(carol, bob, BOB_SEEDELF);
     await synced(bob);
-    const before = (await bob.store.get<Inbox>("messaging.preprod"))!.cursor;
+    const before = await cursorOf(bob);
     // In the pool for Bob now: Alice's first message (a request), a second from her before any reply (a join), and
     // from Carol a text and a reveal.
     const request = await alice.messaging.start("preprod", BOB_SEEDELF, "first");
@@ -131,26 +140,34 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     await carol.messaging.reveal("preprod", withCarol, CAROL_SEEDELF);
     await carol.messaging.whenIdle();
 
-    // A worker stopped as the cursor is written: everything taken, the cursor where it was.
-    bob.beforeWrite = (name, value) => {
-      if (name === "messaging.preprod" && (value as Inbox).cursor !== before) throw new Error("stopped");
+    // A worker stopped as the read's envelopes go from the take record, all taken (finding 8): the record still holds
+    // them, and the cursor is where the read ended.
+    let takeWrites = 0;
+    bob.beforeWrite = (name) => {
+      if (name === "messagingTake.preprod" && ++takeWrites === 2) throw new Error("stopped");
     };
     await bob.messaging.sync("preprod").catch(() => undefined);
     await bob.messaging.whenIdle();
     bob.beforeWrite = undefined;
+    expect(takeWrites).toBe(2);
     expect((await bob.messaging.overview("preprod")).requests).toMatchObject([{ cid: request, messages: 2, unread: 2 }]);
     const stopped = await records(bob);
-    expect((stopped["messaging.preprod"] as Inbox).cursor).toBe(before);
+    const end = await cursorOf(bob);
+    expect(end).not.toBe(before);
+    expect((await takesOf(bob))!.batches.flatMap((b) => b.envelopes)).toHaveLength(4);
     const kinds = (file: ConversationFile) => file.history.slice(-2).map((e) => e.text ?? `kind ${e.kind}`);
     expect(kinds(stopped[await recordName(bob, withCarol)] as ConversationFile)).toEqual(["a text", "kind 2"]);
 
-    // The next worker reads the same pages: every envelope is refused as a duplicate, and only the cursor moves.
+    // The next worker takes them again from the record, asking no page for them: every one is refused as a duplicate,
+    // and nothing else changes.
     bob.restart();
+    relay.calls.length = 0;
     await synced(bob);
+    expect(relay.calls.filter((c) => c.startsWith("GET "))).toEqual([`GET /messaging/v1/preprod/envelopes?after=${end}`]);
     const again = await records(bob);
-    const moved = (again["messaging.preprod"] as Inbox).cursor;
-    expect(moved).not.toBe(before);
-    expect({ ...again, "messaging.preprod": { ...(again["messaging.preprod"] as Inbox), cursor: before } }).toEqual(stopped);
+    expect(await cursorOf(bob)).toBe(end);
+    expect((await takesOf(bob))!.batches).toEqual([]);
+    expect(again).toEqual(stopped);
     expect((await bob.messaging.request("preprod", request)).map((m) => m.text)).toEqual(["first", "second"]);
     const history = (await fileOf(bob, withCarol))!.history;
     expect(history.filter((e) => e.text === "a text")).toHaveLength(1);
@@ -242,33 +259,34 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
       expect(holding).toBe(true);
       const first = relay.calls.filter((c) => c.startsWith("GET "));
       expect(first).toHaveLength(1);
-      // The next tick, with "two" in the pool meanwhile: its page is asked now, from where the first read ended.
+      // The next tick, with "two" in the pool meanwhile: its page is asked now, from where the first read ended, and the
+      // sync ends with its read and posts, the take still held.
       await alice.messaging.send("preprod", cid, "two");
       await alice.messaging.whenIdle();
-      void bob.messaging.sync("preprod").catch(() => undefined);
-      await turns();
+      await bob.messaging.sync("preprod");
       const pages = relay.calls.filter((c) => c.startsWith("GET "));
       expect(pages).toHaveLength(2);
       expect(pages[1]).not.toBe(first[0]);
-      // The cursor kept is still where the first read began: nothing it found is taken yet.
-      expect((await bob.store.get<Inbox>("messaging.preprod"))!.cursor).toBe(first[0]!.split("?after=")[1]);
+      // The cursor kept is where the second read ended, though nothing either found is taken yet (finding 8). The
+      // record, read as it's stored: the thread waits in the queue behind the take.
+      expect(await cursorOf(bob)).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
+      expect((await fileOf(bob, cid))!.history.map((e) => e.text)).not.toContain("one");
     } finally {
       release();
     }
     await bob.messaging.whenIdle();
     // Both taken, in order, once; the cursor where the second read ended.
     expect((await texts(bob, cid)).slice(-2)).toEqual(["in:one", "in:two"]);
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.cursor).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
+    expect(await cursorOf(bob)).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
     await synced(bob);
     expect((await texts(bob, cid)).filter((m) => m === "in:one" || m === "in:two")).toHaveLength(2);
   });
 
-  it("takes nothing a read found when a take before it fails: the next read goes on from the cursor kept", async () => {
+  it("keeps what the reads found when a take before them fails: the next read goes on from where the last ended, and the take from the record (finding 8)", async () => {
     const { relay, alice, bob } = await pair();
     const cid = await talking(alice, bob);
     await alice.messaging.send("preprod", cid, "one");
     await alice.messaging.whenIdle();
-    const before = (await bob.store.get<Inbox>("messaging.preprod"))!.cursor;
     // The first take is held at its record's write, then stops there as a lock stops it: no key for any write after.
     // (A write the browser alone refuses is that envelope's: counted, and passed, W11.)
     let release!: (fail: boolean) => void;
@@ -293,14 +311,17 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     }
     await bob.messaging.whenIdle();
     bob.beforeWrite = undefined;
-    // Neither is taken, and the cursor never passed "one".
+    // Neither is taken yet; the take record holds both, and the cursor is where the second read ended.
     expect((await texts(bob, cid)).filter((m) => m === "in:one" || m === "in:two")).toEqual([]);
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.cursor).toBe(before);
-    // The next read goes on from the cursor kept: both, in order, once.
+    const end = relay.pools.get("preprod")!.held.at(-1)!.number.toString();
+    expect(await cursorOf(bob)).toBe(end);
+    expect((await takesOf(bob))!.batches.map((b) => b.envelopes.length)).toEqual([1, 1]);
+    // The next read goes on from there, asking nothing again, and the take takes both from the record, in order, once.
     relay.calls.length = 0;
     await synced(bob);
-    expect(relay.calls.find((c) => c.startsWith("GET "))).toBe(`GET /messaging/v1/preprod/envelopes?after=${before}`);
+    expect(relay.calls.filter((c) => c.startsWith("GET "))).toEqual([`GET /messaging/v1/preprod/envelopes?after=${end}`]);
     expect((await texts(bob, cid)).slice(-2)).toEqual(["in:one", "in:two"]);
+    expect((await texts(bob, cid)).filter((m) => m === "in:one" || m === "in:two")).toHaveLength(2);
   });
 
   it("asks for no more pages in one sync than the client's own limit lets through without a wait, and goes on at the next (W10)", async () => {
@@ -324,7 +345,7 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     await synced(bob);
     expect(served).toBe(most);
     // The cursor is where the read stopped: the next sync goes on from there.
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.cursor).toBe(at.toString());
+    expect((await cursorOf(bob))).toBe(at.toString());
     await synced(bob);
     expect(served).toBe(2 * most);
   });
@@ -334,7 +355,7 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     const cid = await talking(alice, bob);
     await alice.messaging.send("preprod", cid, "again and again");
     await alice.messaging.whenIdle();
-    const before = (await bob.store.get<Inbox>("messaging.preprod"))!.cursor!;
+    const before = (await cursorOf(bob))!;
     // The same page for ever: its envelope, the cursor it was asked from, and "more".
     const real = relay.fetch;
     let served = 0;
@@ -372,7 +393,7 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     await synced(bob);
     await alice.messaging.send("preprod", cid, "past a wrong build");
     await alice.messaging.whenIdle();
-    const before = (await bob.store.get<Inbox>("messaging.preprod"))!.cursor;
+    const before = (await cursorOf(bob));
     const wasm = loadTestWasm();
     const indexes = (key: Parameters<typeof wasm.messagingScan>[0], envelopes: string) =>
       [...wasm.messagingScan(key, envelopes)].flatMap((digit, i) => (digit === "1" ? [i] : []));
@@ -387,7 +408,7 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
       await expect(bob.messaging.sync("preprod")).rejects.toThrow(/a digit an envelope/);
       await bob.messaging.whenIdle();
       expect(bob.trace.filter((s) => s === "open")).toEqual([]);
-      expect((await bob.store.get<Inbox>("messaging.preprod"))!.cursor).toBe(before);
+      expect((await cursorOf(bob))).toBe(before);
     }
     // The module this build ships with reads it at the next sync.
     bob.restart();

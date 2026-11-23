@@ -5,7 +5,7 @@
 // phrase has used and what they are called, and which of the contract's
 // UTxOs are its own as the private index last settled them, the register
 // each Seedelf minted here was put under, and Seedelf Messaging's
-// conversations, requests and scan): sealed in
+// conversations, requests, scan and what its reads found): sealed in
 // chrome.storage.local with XChaCha20-Poly1305 under a key derived from the
 // recovery phrase's entropy (Wallet.withStoreKey). They can't be read while
 // the wallet is locked, or by anyone without the phrase, and removing the
@@ -61,6 +61,10 @@ export const PRIVATE_RECORDS = [
   "messagingMark.mainnet",
   "messagingTakeMark.preprod",
   "messagingTakeMark.mainnet",
+  // Where each network's next read of the relay goes on from, and what the reads found that isn't taken yet
+  // (messaging.ts `noteRead`, the 1.10.0 gate's finding 8): written after each read, whatever the take is doing.
+  "messagingTake.preprod",
+  "messagingTake.mainnet",
   // Not sealed, and no record: a mark of which messaging step's WebAssembly trapped ("scan" or "take"), written with no
   // key since the trap has just locked the wallet (messaging.ts `noteTrap`). Listed so Remove wallet deletes it.
   "messagingTrap.preprod",
@@ -159,6 +163,8 @@ const WHAT: Record<(typeof PRIVATE_RECORDS)[number], I18nKey> = {
   "messagingMark.mainnet": "worker.record.messaging",
   "messagingTakeMark.preprod": "worker.record.messaging",
   "messagingTakeMark.mainnet": "worker.record.messaging",
+  "messagingTake.preprod": "worker.record.messaging",
+  "messagingTake.mainnet": "worker.record.messaging",
   "messagingTrap.preprod": "worker.record.messaging",
   "messagingTrap.mainnet": "worker.record.messaging",
 };

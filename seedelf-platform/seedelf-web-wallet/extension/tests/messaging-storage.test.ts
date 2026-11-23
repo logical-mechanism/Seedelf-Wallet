@@ -18,6 +18,7 @@ import {
   busyFor,
   CAROL_SEEDELF,
   clock,
+  cursorOf,
   type Directory,
   fakeRelay,
   fileOf,
@@ -168,7 +169,7 @@ describe("what Messages keeps on the device (W7)", { timeout: 30_000 }, () => {
     expect(overview.dropped).toBe(1);
     // Never `full`: nothing about it shows in what the wallet asks the relay. The cursor is past both.
     expect(overview.full).toBeUndefined();
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.cursor).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
+    expect((await cursorOf(bob))).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
     expect(await texts(bob, cid)).toEqual(["in:hello Bob", "out:hi Alice", "in:m299", "in:short"]);
     // The next read asks on from there, as any other would.
     relay.calls.length = 0;
@@ -271,7 +272,7 @@ describe("what Messages keeps on the device (W7)", { timeout: 30_000 }, () => {
     await alice.messaging.whenIdle();
     await synced(bob);
     expect((await bob.messaging.overview("preprod")).dropped).toBe(1);
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.cursor).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
+    expect((await cursorOf(bob))).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
     // The queue isn't held: a thread opens, as ever.
     expect(await texts(bob, cid)).toEqual(["in:hello Bob", "out:hi Alice"]);
     // Room again: the next message is taken.

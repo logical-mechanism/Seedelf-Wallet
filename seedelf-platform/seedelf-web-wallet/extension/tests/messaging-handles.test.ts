@@ -10,18 +10,23 @@ import { describe, expect, it } from "vitest";
 import { SESSION_MINT } from "../src/background/mint";
 import { mintedAt, rememberMint, rememberRegister } from "../src/background/minted-by";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
+import type { RegisterHex } from "../src/background/chain";
 import type { TxDetail } from "../src/shared/rpc";
 import { accountMintPreprod, testBalances } from "./fakes";
 import {
   ALICE_SEEDELF,
   another,
   BOB_SEEDELF,
+  CAROL_SEEDELF,
   clock,
+  cursorOf,
   type Directory,
   fakeRelay,
+  type FakeRelay,
   loadTestWasm,
   pair,
   party,
+  type Party,
   PASSWORD,
   phrase,
   records,
@@ -29,6 +34,7 @@ import {
   talking,
   texts,
   turnOn,
+  turns,
 } from "./messaging-harness";
 
 /** A Seedelf someone else minted, its name ("planted"). */
@@ -260,7 +266,288 @@ describe("which Seedelfs take first messages, over time (W12)", { timeout: 30_00
     expect(await requestsOf(bob)).toEqual([waiting]);
     expect((await bob.messaging.overview("preprod")).requests[0]!.messages).toBe(1);
   });
+
+  // A take that began before a Seedelf was turned on never undoes the read from the oldest (the 1.10.0 gate's f1): each
+  // of the take's queued steps looks at the epoch first, the press rewinds the read in the take record's own chain and
+  // forgets what's in memory in the same step, and the choice is written before anything it finds is taken. Each asserts
+  // what W12 promises: after the press no cursor is written back, the next page is asked from the pool's start, and the
+  // first messages that waited at the Seedelf are taken.
+  it("A, another press holds the queue, the press waits behind it, the take's last step behind the press: the read from the oldest holds (f1)", async () => {
+    let planted!: RegisterHex;
+    const { relay, alice, bob, register } = await restored(async (bob, directory) => {
+      planted = await another(bob);
+      bob.own.push({ name: PLANTED, register: planted });
+      directory.set(PLANTED, planted);
+    });
+    // Before: Bob takes first messages at the other Seedelf, the one he turned on.
+    await bob.messaging.answerAt("preprod", PLANTED, planted, true);
+    await bob.messaging.whenIdle();
+    await synced(bob);
+    const waiting = await waitingAt(alice, bob);
+    // Another first message to Bob's Seedelf, still off: his next read keeps it, and a take runs for it.
+    const second = await alice.messaging.start("preprod", BOB_SEEDELF, "while the take runs");
+    await alice.messaging.whenIdle();
+    let release!: () => void;
+    const hold = { next: false, holding: false, held: new Promise<void>((r) => (release = r)), on: INBOX };
+    const written = logCursors(bob, hold);
+    let blocker: Promise<unknown> | undefined;
+    let turnedOn: Promise<unknown> | undefined;
+    bob.trace.length = 0;
+    // The take's turn of the event loop after its envelope (W10): the user moves first messages from one Seedelf to the
+    // other, the other one off (its inbox write still on its way), then his own on.
+    bob.onWait = async () => {
+      if (turnedOn || !bob.trace.includes("receive")) return;
+      hold.next = true;
+      blocker = bob.messaging.answerAt("preprod", PLANTED, planted, false);
+      turnedOn = bob.messaging.answerAt("preprod", BOB_SEEDELF, register, true);
+    };
+    try {
+      await bob.messaging.sync("preprod");
+      await within(until(() => hold.holding), "the other switch's write held");
+      await turns();
+    } finally {
+      release();
+    }
+    await within(Promise.all([blocker, turnedOn]), "both presses answered");
+    await bob.messaging.whenIdle();
+    bob.onWait = undefined;
+    bob.beforeWrite = undefined;
+    await rewindHeld(relay, bob, written, [waiting, second]);
+  });
+
+  it("B, nothing delayed: the press lands while the take's look at the Seedelfs is in the queue, for a read that found none of the key's envelopes (f1)", async () => {
+    const { relay, directory, alice, bob, register } = await restored();
+    // Carol, only so the pool holds an envelope that isn't Bob's.
+    await party(15, relay, directory, CAROL_SEEDELF);
+    const waiting = await waitingAt(alice, bob);
+    // A first message to Carol: Bob's next read moves his cursor and keeps none of his envelopes. Its take looks at which
+    // Seedelfs take first messages all the same (noteOwn), as after any read that moved the cursor.
+    await alice.messaging.start("preprod", CAROL_SEEDELF, "to Carol");
+    await alice.messaging.whenIdle();
+    const written = logCursors(bob);
+    // The take's noteOwn reads which Seedelfs this browser made (handlesNow): the only read of mintedAt in a sync.
+    const hold = holdRead(bob, MINTED_AT_KEY);
+    hold.arm();
+    bob.trace.length = 0;
+    let turnedOn: Promise<unknown> | undefined;
+    try {
+      const sync = bob.messaging.sync("preprod");
+      await within(hold.reached, "the take's noteOwn reading mintedAt");
+      // The user turns his Seedelf on while noteOwn is in the queue: the press queues behind it, and nothing delays it.
+      turnedOn = bob.messaging.answerAt("preprod", BOB_SEEDELF, register, true);
+      await turns();
+      hold.release();
+      await sync;
+      await within(turnedOn, "the press answered");
+      await bob.messaging.whenIdle();
+    } finally {
+      hold.release();
+      hold.restore();
+      bob.beforeWrite = undefined;
+    }
+    await rewindHeld(relay, bob, written, [waiting]);
+  });
+
+  it("C, nothing else in the queue: the press's own read of the inbox outlasts the take's turn of the event loop (f1)", async () => {
+    const { relay, alice, bob, register } = await restored();
+    const waiting = await waitingAt(alice, bob);
+    const second = await alice.messaging.start("preprod", BOB_SEEDELF, "while the take runs");
+    await alice.messaging.whenIdle();
+    const written = logCursors(bob);
+    const hold = holdRead(bob, PRIVATE_PREFIX + INBOX);
+    let turnedOn: Promise<unknown> | undefined;
+    bob.trace.length = 0;
+    // The take's turn of the event loop after its envelope: the user presses then, and the press's first read (the
+    // inbox) is still on its way when the take looks at its epoch.
+    bob.onWait = async () => {
+      if (turnedOn || !bob.trace.includes("receive")) return;
+      hold.arm();
+      turnedOn = bob.messaging.answerAt("preprod", BOB_SEEDELF, register, true);
+    };
+    try {
+      await bob.messaging.sync("preprod");
+      await within(hold.reached, "the press's read of the inbox");
+      await turns();
+      hold.release();
+      await within(turnedOn!, "the press answered");
+      await bob.messaging.whenIdle();
+    } finally {
+      hold.release();
+      hold.restore();
+      bob.onWait = undefined;
+      bob.beforeWrite = undefined;
+    }
+    await rewindHeld(relay, bob, written, [waiting, second]);
+  });
+
+  it("D, the read side: a sync that starts while the press's rewind is still being written writes nothing, and the next reads from the oldest (f1)", async () => {
+    const { relay, alice, bob, register } = await restored();
+    const waiting = await waitingAt(alice, bob);
+    // An envelope after Bob's cursor, anyone's: a read from the old cursor moves it.
+    const second = await alice.messaging.start("preprod", BOB_SEEDELF, "while the press is written");
+    await alice.messaging.whenIdle();
+    let release!: () => void;
+    // The press's rewind (its write of the take record, the first after this) still on its way.
+    const hold = { next: true, holding: false, held: new Promise<void>((r) => (release = r)), on: TAKES };
+    const written = logCursors(bob, hold);
+    let turnedOn: Promise<unknown> | undefined;
+    try {
+      turnedOn = bob.messaging.answerAt("preprod", BOB_SEEDELF, register, true);
+      await within(until(() => hold.holding), "the press's rewind held");
+      // The next tick's sync, meanwhile: it reads from the old cursor, and its end waits in the chain behind the rewind.
+      await turns();
+      const sync = bob.messaging.sync("preprod");
+      await turns();
+      release();
+      await within(sync, "the tick's sync");
+    } finally {
+      release();
+    }
+    await within(turnedOn!, "the press answered");
+    await bob.messaging.whenIdle();
+    bob.beforeWrite = undefined;
+    await rewindHeld(relay, bob, written, [waiting, second]);
+  });
+
+  it("D′, the read side after the rewind: a sync that starts while the press's choice is still being written reads from the oldest, and its take waits for the choice (f1)", async () => {
+    const { relay, alice, bob, register } = await restored();
+    const waiting = await waitingAt(alice, bob);
+    const second = await alice.messaging.start("preprod", BOB_SEEDELF, "while the choice is written");
+    await alice.messaging.whenIdle();
+    let release!: () => void;
+    // The press's inbox write (its choice), after its rewind: held.
+    const hold = { next: true, holding: false, held: new Promise<void>((r) => (release = r)), on: INBOX };
+    logCursors(bob, hold);
+    let turnedOn: Promise<unknown> | undefined;
+    relay.calls.length = 0;
+    try {
+      turnedOn = bob.messaging.answerAt("preprod", BOB_SEEDELF, register, true);
+      await within(until(() => hold.holding), "the press's choice held");
+      await within(bob.messaging.sync("preprod"), "the tick's sync");
+    } finally {
+      release();
+    }
+    await within(turnedOn!, "the press answered");
+    await bob.messaging.whenIdle();
+    bob.beforeWrite = undefined;
+    // That sync read from the pool's start, and what it found was taken with the Seedelf on.
+    expect(gets(relay)[0]).toBe(POOL_START);
+    expect(await requestsOf(bob)).toEqual([waiting, second].sort());
+  });
+
+  it("control: the same press with no take running holds its rewind (f1)", async () => {
+    const { relay, alice, bob, register } = await restored();
+    const waiting = await waitingAt(alice, bob);
+    const second = await alice.messaging.start("preprod", BOB_SEEDELF, "before the press");
+    await alice.messaging.whenIdle();
+    await synced(bob);
+    const written = logCursors(bob);
+    await bob.messaging.answerAt("preprod", BOB_SEEDELF, register, true);
+    await bob.messaging.whenIdle();
+    bob.beforeWrite = undefined;
+    await rewindHeld(relay, bob, written, [waiting, second]);
+  });
 });
+
+const INBOX = "messaging.preprod";
+const TAKES = "messagingTake.preprod";
+const MINTED_AT_KEY = PRIVATE_PREFIX + "mintedAt.preprod";
+const POOL_START = "GET /messaging/v1/preprod/envelopes";
+const gets = (relay: FakeRelay) => relay.calls.filter((c) => c.startsWith("GET "));
+
+/** `promise`, or a failure naming `what` after `ms`: a hold that's never reached fails, never hangs. */
+async function within<T>(promise: Promise<T>, what: string, ms = 10_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`never happened: ${what}`)), ms)));
+  try {
+    return await Promise.race([promise, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Resolves once `what()` holds, a turn of the event loop at a time. */
+async function until(what: () => boolean): Promise<void> {
+  while (!what()) await turns(1);
+}
+
+/**
+ * Holds the first read of `key` from `p`'s area after `arm()` until `release()`: a chrome.storage read still on its
+ * way (in Chrome every one is a message to the browser process).
+ */
+function holdRead(p: Party, key: string) {
+  const get = p.local.get.bind(p.local);
+  let armed = false;
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let reached!: () => void;
+  const hit = new Promise<void>((r) => (reached = r));
+  p.local.get = (async (k: string) => {
+    if (armed && k === key) {
+      armed = false;
+      reached();
+      await held;
+    }
+    return get(k);
+  }) as Party["local"]["get"];
+  return { arm: () => void (armed = true), release, reached: hit, restore: () => void (p.local.get = get) };
+}
+
+/**
+ * Logs every cursor `p` writes as where its next read goes on from (the take record's, finding 8) as the write lands
+ * ("none": one with no cursor, a rewind); with `hold`, holds the next write of the record `hold.on` names.
+ */
+function logCursors(p: Party, hold?: { next: boolean; held: Promise<void>; holding: boolean; on: string }): string[] {
+  const out: string[] = [];
+  p.beforeWrite = async (name, value) => {
+    if (hold?.next && name === hold.on) {
+      hold.next = false;
+      hold.holding = true;
+      await hold.held;
+    }
+    if (name === TAKES) out.push((value as { cursor?: string }).cursor ?? "none");
+  };
+  return out;
+}
+
+/**
+ * Alice, and Bob's phrase restored here (his Seedelf minted in another browser, so it takes no first message until he
+ * turns it on: W8), Messages on.
+ */
+async function restored(extra?: (bob: Party, directory: Directory) => Promise<void>) {
+  const relay = fakeRelay(clock);
+  const directory: Directory = new Map();
+  const alice = await party(12, relay, directory, ALICE_SEEDELF);
+  const bob = await party(24, relay, directory);
+  const register = await another(bob);
+  bob.own.push({ name: BOB_SEEDELF, register });
+  directory.set(BOB_SEEDELF, register);
+  await extra?.(bob, directory);
+  await turnOn(alice, bob);
+  return { relay, directory, alice, bob, register };
+}
+
+/** Alice writes first to Bob's Seedelf while it's off: his read keeps it, the take refuses it, his cursor passes it. */
+async function waitingAt(alice: Party, bob: Party): Promise<string> {
+  const waiting = await alice.messaging.start("preprod", BOB_SEEDELF, "from before it was on");
+  await alice.messaging.whenIdle();
+  await synced(bob);
+  expect(await requestsOf(bob)).toEqual([]);
+  expect(await cursorOf(bob)).toBeDefined();
+  return waiting;
+}
+
+/** What W12 promises after the press, each said on its own (soft), so a failure shows all of what went wrong. */
+async function rewindHeld(relay: FakeRelay, bob: Party, written: string[], expected: string[]) {
+  const reset = written.lastIndexOf("none");
+  expect.soft(reset, "a take record written with no cursor (the press's rewind)").toBeGreaterThanOrEqual(0);
+  expect.soft(written.slice(reset + 1).filter((c) => c !== "none"), "cursors written after the press's rewind").toEqual([]);
+  expect.soft(await cursorOf(bob), "the cursor once everything settled").toBeUndefined();
+  relay.calls.length = 0;
+  await synced(bob);
+  expect.soft(gets(relay)[0], "the first page asked after the press").toBe(POOL_START);
+  expect.soft(await requestsOf(bob), "the requests after the next sync").toEqual([...expected].sort());
+}
 
 describe("a mint (W8)", { timeout: 30_000 }, () => {
   it("keeps the register it puts its Seedelf under, read from the transaction it built, when it's sent", async () => {

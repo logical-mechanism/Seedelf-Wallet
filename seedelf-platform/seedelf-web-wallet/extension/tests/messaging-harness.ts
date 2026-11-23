@@ -72,6 +72,13 @@ export interface Party {
    * (sealed records).
    */
   trace: string[];
+  /**
+   * Every throw a take passed over without a word (W9; the 1.10.0 gate's f2): a test that meets one it didn't mean to
+   * fails (an error thrown out of the run), unless it sets `passOverOk`.
+   */
+  passedOver: unknown[];
+  /** The test means its takes to pass a throw over (a module that throws on one envelope, say). */
+  passOverOk: boolean;
   /** A new service over the same storage: a restarted worker's, on `wasm` if given, with `options` changed if given. */
   restart(wasm?: Wasm, options?: ServiceOptions): MessagingService;
 }
@@ -113,6 +120,8 @@ export interface ServiceOptions {
   quotaBytes?: number;
   /** What Messages leaves free of the quota, for tests: 2 MiB otherwise (W11). */
   reserveBytes?: number;
+  /** The take record's bound, as its JSON, for tests: 512 KiB otherwise (the 1.10.0 gate's finding 8). */
+  takeBytes?: number;
 }
 
 function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, directory: Directory, options: ServiceOptions, given?: Wasm): MessagingService {
@@ -176,6 +185,15 @@ function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, dire
       await p.onWait?.();
     },
     changed: (n) => void p.changed.push(n),
+    // A throw a take passes over without a word fails the test that meets it, unless it means to (f2): out of the run,
+    // so the service does what it does.
+    passedOver: (e) => {
+      p.passedOver.push(e);
+      if (p.passOverOk) return;
+      queueMicrotask(() => {
+        throw new Error(`a take passed over a throw without a word: ${e instanceof Error ? `${e.constructor.name}: ${e.message}` : String(e)}`);
+      });
+    },
     // Cheap first-contact stamps for tests; the worker never sets it.
     firstContactBits: 6,
     ...options,
@@ -222,6 +240,8 @@ export async function party(
     skew: 0,
     changed: [],
     trace: [],
+    passedOver: [],
+    passOverOk: false,
     alarm: {
       on: false,
       async start() {
@@ -308,6 +328,23 @@ export async function records(p: Party): Promise<Record<string, unknown>> {
     if (name.startsWith("messaging.") || name.startsWith("conversation.")) out[name] = await p.store.get(name);
   }
   return out;
+}
+
+/**
+ * Where `p`'s next read of `network`'s pool goes on from, as stored: the take record's cursor (the 1.10.0 gate's
+ * finding 8), or, where there's no take record yet, the one an inbox from before it kept.
+ */
+export async function cursorOf(p: Pick<Party, "store">, network: NetworkName = "preprod"): Promise<string | undefined> {
+  const takes = await p.store.get<{ cursor?: string }>(`messagingTake.${network}`);
+  if (takes) return takes.cursor;
+  return (await p.store.get<{ cursor?: string }>(`messaging.${network}`))?.cursor;
+}
+
+/** What `p`'s take record holds, as stored: the reads' envelopes waiting for the take, and the counts (finding 8). */
+export async function takesOf(p: Pick<Party, "store">, network: NetworkName = "preprod") {
+  return p.store.get<{ cursor?: string; gapAt?: number; batches: Array<{ envelopes: string[] }>; unopened?: number; noRoom?: number }>(
+    `messagingTake.${network}`,
+  );
 }
 
 /**

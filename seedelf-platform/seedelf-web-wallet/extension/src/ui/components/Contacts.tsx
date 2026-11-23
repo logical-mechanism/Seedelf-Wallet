@@ -157,7 +157,9 @@ export function ContactEditor({
             id="contact-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && save()}
+            // Not the Enter that takes an input method's conversion, as Japanese is typed (screens#10): the name isn't
+            // finished yet.
+            onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && save()}
             maxLength={40}
             autoComplete="off"
             // Chrome's enhanced spell check sends what's typed to Google: a name stays on the device.

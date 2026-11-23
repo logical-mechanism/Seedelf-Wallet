@@ -20,6 +20,7 @@ import {
   BOB_SEEDELF,
   busyFor,
   CAROL_SEEDELF,
+  cursorOf,
   fileOf,
   loadTestWasm,
   pair,
@@ -361,7 +362,7 @@ describe("what runs first at a tick (W13)", { timeout: 30_000 }, () => {
     await bob.messaging.whenIdle();
     bob.beforeWrite = undefined;
     // The new inbox holds no cursor of the old read's: the next read starts at the pool's oldest.
-    expect((await bob.store.get<Inbox>("messaging.preprod"))?.cursor).toBeUndefined();
+    expect((await cursorOf(bob))).toBeUndefined();
     relay.calls.length = 0;
     await synced(bob);
     expect(gets(relay)[0]).toBe("GET /messaging/v1/preprod/envelopes");
@@ -383,9 +384,12 @@ describe("one envelope whose take throws (W9)", { timeout: 30_000 }, () => {
         return wasm.messagingReceive(key, request);
       },
     });
+    // The one throw this test means its take to pass over (the harness's f2 hook fails any other).
+    bob.passOverOk = true;
     await synced(bob);
     expect((await texts(bob, cid)).slice(-2)).toEqual(["in:one", "in:three"]);
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.cursor).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
+    expect((await cursorOf(bob))).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
+    expect(bob.passedOver.map((e) => (e as Error).message)).toEqual(["not what the module expected"]);
   });
 });
 

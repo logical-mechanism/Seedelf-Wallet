@@ -13,29 +13,35 @@
 //
 // The records, sealed in the private store (private-store.ts) per network:
 //
-//   messaging.<network>              The inbox: the scan's cursor, the
-//                                    requests (with what the list shows of
-//                                    each) and the tombstones (the crate's
-//                                    own records; a later version's requests'
-//                                    record kept aside as it came), which
-//                                    Seedelfs take first messages, and what
-//                                    each conversation shows, with its
-//                                    record's own ID.
+//   messaging.<network>              The inbox: the requests (with what the
+//                                    list shows of each) and the tombstones
+//                                    (the crate's own records; a later
+//                                    version's requests' record kept aside
+//                                    as it came), which Seedelfs take first
+//                                    messages, and what each conversation
+//                                    shows, with its record's own ID.
+//   messagingTake.<network>          The take record (the gate's finding 8):
+//                                    where the next read goes on from, the
+//                                    key's envelopes the reads found and the
+//                                    take hasn't taken yet, and what of them
+//                                    wasn't kept. Bounded (TAKE_BYTES).
 //   conversation.<network>.<id>      A conversation: its ratchet, its
 //                                    outbox and its history together, so
 //                                    one write moves them all. `id` is 16
 //                                    random bytes the inbox maps to the
 //                                    conversation: nothing at rest names it.
 //
-// The crate's records and the envelopes waiting to be posted are stored as
-// base64; this service works with them in hex, as the exports take them.
+// The crate's records and the envelopes waiting to be posted or taken are
+// stored as base64; this service works with them in hex, as the exports take
+// them.
 //
 // A conversation's record is written before the inbox that lists it, and
 // deleted after the inbox that stops listing it: a stop between the two
 // leaves a record nothing lists, which the next sync deletes. The inbox
 // never lists a record that isn't there. What the inbox shows of each
 // conversation is set right from its record at the first sync of each
-// unlock (`sweep`).
+// unlock (`sweep`), and, where an inbox write failed after its record's, at
+// the take's next bookkeeping write (the gate's f4).
 //
 // One budget for what Messages keeps of conversations (the 1.10.0 gate's W7):
 // both networks' inboxes and every conversation's record, as stored, within
@@ -60,32 +66,41 @@
 // chain's reads, sees every request's time. So a sync has two phases.
 //
 //   The read: PAGES_A_SYNC pages at most, one after the other, whatever they
-//   hold, and the scan of each, which costs the same for every envelope; the
-//   key's envelopes are kept aside in memory. Nothing is opened or read from
-//   a record between two page requests, and the one write, the scan's mark
-//   (below), is the same for every page. Then what's waiting is posted.
+//   hold, and the scan of each, which costs the same for every envelope.
+//   Nothing is opened or read from a record between two page requests, and
+//   the one write, the scan's mark (below), is the same for every page. Then
+//   one write of the take record (`messagingTake.<network>`, sealed; the
+//   gate's finding 8): where the read ended, which the next read goes on from,
+//   and the key's envelopes it found, for the take. It has a chain of its own,
+//   never behind the take's work in the queue, so after a lock or a stop every
+//   wallet's next read goes on from where its last read ended, whatever its
+//   takes were doing. Then what's waiting is posted.
 //   The take: in the queue, in the background, after any take still running,
-//   each kept envelope is opened and received, its records written, and the
-//   cursor moved once, to where the read ended. It lets the event loop turn
-//   between envelopes, so a page of the next read waits at most one
-//   envelope's work. A stop before the cursor's write reads the same pages
-//   again, and every envelope already taken is refused as a duplicate (§5).
+//   each envelope the take record holds is opened and received, its records
+//   written, and the read's envelopes go from the take record once all are
+//   taken. It lets the event loop turn between envelopes, so a page of the
+//   next read waits at most one envelope's work. A lock or a stop leaves what
+//   isn't taken in the take record: the next take goes on from it, asking no
+//   page again, and every envelope already taken is refused as a duplicate
+//   (§5).
 //
 // No sync waits for a take, and none follows one: the next read comes at the
 // next tick (the alarm's minute, or a wallet page's 10 s), from where the last
-// read ended, whatever is still being taken. Reads that the takes fall more
-// than TAKES_BEHIND behind are dropped, oldest first, unopened and counted:
-// a read is never skipped or cut short for them, since how far behind the
-// takes are depends on how many of the key's envelopes the pages held. No
-// refusal of an envelope is kept, shown or acted on, and none starts a
-// request, but the one the conversation's own ratchet authenticated: a
-// message it can't reach (§6).
+// read ended, whatever is still being taken. The take record is bounded
+// (TAKES_BEHIND reads, TAKE_BYTES): past it the oldest read waiting is
+// dropped, then the newest keeps what fits, unopened and counted: a read is
+// never skipped or cut short for them, since how far behind the takes are
+// depends on how many of the key's envelopes the pages held. No refusal of an
+// envelope is kept, shown or acted on, and none starts a request, but the one
+// the conversation's own ratchet authenticated: a message it can't reach (§6).
 //
 // The residual (W10): the take runs on the worker's one thread and in the
-// wallet's key queue, so a page asked while it runs can be a few milliseconds
-// late. A relay that times the requests and fills pages with envelopes it
-// sealed to a register can test, statistically and over many syncs, whether
-// that register is this wallet's.
+// wallet's key queue, so a page asked while it runs, or a post, can be late by
+// one envelope's work, and the take record's write after a read is larger
+// where the pages held the key's envelopes: a lock or a stop during it has the
+// next read ask that read's pages again. A relay that times the requests and
+// fills pages with envelopes it sealed to a register can test, statistically
+// and over many syncs, whether that register is this wallet's.
 //
 // A step that traps (W9, W13). WebAssembly that traps locks the wallet, and
 // the next unlock would read the same page again. So before each page's scan,
@@ -138,7 +153,7 @@ import {
 } from "../shared/rpc";
 import { registerOf, type RegisterHex } from "./chain";
 import type { ContractView } from "./contract-scan";
-import { mintedAt, mintedBy, rememberRegister } from "./minted-by";
+import { clearRemoved, mintedAt, mintedBy, rememberRegister, removedHere } from "./minted-by";
 import type { PreferencesService } from "./preferences";
 import {
   conversationRecord,
@@ -191,13 +206,27 @@ export const MESSAGES_BUDGET_BYTES = 5 * 1024 * 1024;
 export const CONVERSATION_SHARE_BYTES = 1024 * 1024;
 
 /**
- * How many reads a network's takes may fall behind (W10): each read is at most PAGES_A_SYNC pages, 4 MiB of the
- * key's envelopes, so what waits in memory is at most five reads' worth. Past it the oldest read still waiting is
- * dropped, unopened and counted (`dropped`), and its cursor passed when a later one is taken: a read is never skipped
- * or cut short for the takes, since how far behind they are depends on how many of the key's envelopes the pages held,
- * which the relay chooses.
+ * How many reads a network's takes may fall behind (W10): the take record holds at most five reads' envelopes. Past it
+ * the oldest read still waiting is dropped, unopened and counted (`unopened`), in the write that drops it: a read is
+ * never skipped or cut short for the takes, since how far behind they are depends on how many of the key's envelopes
+ * the pages held, which the relay chooses.
  */
 export const TAKES_BEHIND = 4;
+
+/**
+ * The most the take record holds (the 1.10.0 gate's finding 8), as its JSON: it pads to 512 KiB, about 683 KiB as
+ * stored, some 380 KiB of the key's envelopes (about 700 short messages, or 180 first messages). Its own room beside the
+ * budget, as the requests' is, and within the area's reserve (W11). Past it the oldest read waiting is dropped, then the
+ * newest read keeps its first envelopes that fit, each one left out counted (`unopened`).
+ */
+export const TAKE_BYTES = 512 * 1024;
+
+/**
+ * How many times the take tries an envelope again, in place, after a read of storage failed under it (the 1.10.0
+ * gate's f2), and how long it waits before each, out of the queue. What still fails is passed over without a word (W9).
+ */
+export const TAKE_RETRIES = 3;
+export const TAKE_RETRY_MS = 500;
 
 /** chrome.storage.local's quota for the whole extension (no unlimitedStorage): 10 MB. */
 export const QUOTA_BYTES = 10_485_760;
@@ -260,9 +289,12 @@ export const SESSION_READ_AFTER = "seedelf.messaging.readAfter";
  */
 export interface Inbox {
   v: 2;
-  /** What to ask the relay from next; none before the first page. */
+  /**
+   * Where builds before the take record (the 1.10.0 gate's finding 8) read on from: read only where no take record is
+   * kept, and never written since. The take record's `cursor` is where the next read goes on from.
+   */
   cursor?: string;
-  /** When a page last said envelopes after the cursor were gone (ms): messages sent then may never arrive. */
+  /** When a page last said envelopes after the cursor were gone (ms), as builds before the take record kept it. */
   gapAt?: number;
   /** The crate's requests' record (protocol.md §16.5). */
   requests?: string;
@@ -288,6 +320,11 @@ export interface Inbox {
   answerAt?: Array<{ name: string; register: RegisterHex; on: boolean }>;
   /** The pairs this browser made that a kept view has shown at their register: one a later view doesn't is gone (W8). */
   seen?: string[];
+  /**
+   * The pairs a kept view dropped (W12's transition: shown at their register once, and no longer), for good (the 1.10.0
+   * gate's f6): no view absent after a lock brings one back. Only the user's own turn-on lifts it.
+   */
+  gone?: string[];
   /** What each conversation shows, by cid, without opening its record. */
   conversations: Record<string, Meta>;
   /** Each request's messages not yet shown, by cid. */
@@ -295,8 +332,9 @@ export interface Inbox {
   /** Envelopes every read steps over, each by its SHA-256 (hex), until when (ms): one a step trapped on (`retry`, W9). */
   skip?: Array<{ envelope: string; until: number }>;
   /**
-   * The key's envelopes not kept (W10, W11): one whose message had no room after what trimming allows, the storage
-   * area's reserve too, and those of a read the takes fell too far behind to wait for. Their cursor was passed.
+   * Messages not kept that the inbox counts: the requests a record the crate couldn't read listed (`asideRequests`), and
+   * the key's envelopes builds before the take record counted here. The take record counts the rest (`noRoom`,
+   * `unopened`).
    */
   dropped?: number;
   /**
@@ -510,6 +548,13 @@ export interface MessagingDeps {
   budgetBytes?: number;
   /** A conversation's share of the budget, for tests: CONVERSATION_SHARE_BYTES otherwise. */
   shareBytes?: number;
+  /** The take record's bound, for tests: TAKE_BYTES otherwise. */
+  takeBytes?: number;
+  /**
+   * For tests only: told of each throw a take passes over without a word (W9; the 1.10.0 gate's f2), so a test meets
+   * any it didn't mean to. The worker never sets it.
+   */
+  passedOver?: (e: unknown) => void;
   /**
    * What the whole storage area holds now (chrome.storage.local.getBytesInUse(null)): Messages' writes that grow it
    * leave RESERVE_BYTES of its quota free (W11). Without it, nothing is checked but the budget.
@@ -573,24 +618,63 @@ interface Opened {
   replaces: string | null;
 }
 
-/** One read's worth of the key's envelopes, waiting for the take (W4). */
+/** One read's worth of the key's envelopes, waiting for the take (W4), as the take record holds them. */
 interface Batch {
-  /** The envelopes the scan matched, in the order they came, each once. */
+  /** The envelopes the scan matched, in the order they came, each once, and none another read waiting holds. */
   envelopes: string[];
-  /** Where the read ended: the cursor the take writes once they're taken. */
-  to: string;
-  /** A page of the read said envelopes were lost after a cursor of the wallet's own. */
-  gap: boolean;
-  /** The phrase the read was made under: the take of another's writes nothing. */
+  /** The phrase the read was made under, or the take record was opened under: the take of another's writes nothing. */
   pin: PhrasePin;
 }
 
-/** A network's reads not yet taken: their batches in order, and where the next read begins. */
-interface Pending {
+/**
+ * The take record, `messagingTake.<network>` (sealed; the 1.10.0 gate's finding 8), as this service works with it:
+ * where the next read goes on from, what the reads found that isn't taken yet, and what of it wasn't kept. Written in a
+ * chain of its own (`onTakes`): after each read, as each read's envelopes are taken, at a rewind. Stored
+ * (`StoredTakes`) with the envelopes in base64.
+ */
+interface Takes {
+  /** Where the next read goes on from: where the last read ended. None before the first page, and after a rewind. */
+  cursor?: string;
+  /** When a page last said envelopes after a cursor of the wallet's own were gone (ms): messages sent then may never arrive. */
+  gapAt?: number;
+  /** The key's envelopes the reads found and the take hasn't taken yet, read by read, oldest first. */
   batches: Batch[];
-  /** Where the last read ended: the next read goes on from here, while a take hasn't moved the cursor there. */
-  cursor: string;
+  /**
+   * The key's envelopes dropped unopened (W10, the 1.10.0 gate's f5): a read's the takes fell more than TAKES_BEHIND
+   * behind, and those TAKE_BYTES had no room for. Anyone may have sent them. Counted in the write that drops them.
+   */
+  unopened: number;
+  /**
+   * The key's envelopes not kept for want of room (W11): a message the budget and the area's reserve had none for,
+   * counted as its read's envelopes go from the record (so a read taken again counts each once); and a read whose
+   * envelopes the area's reserve, or the browser, had no room to keep for the take.
+   */
+  noRoom: number;
 }
+
+/** The take record as this service holds it: as it last read or wrote it, in which unlock and epoch. */
+interface TakesHeld extends Takes {
+  /** The unlock it was read or written in (`unlockedAt`): after another, another phrase's may be there. */
+  at: number | undefined;
+  /** The network's epoch then: a rewind, or Messages started again, has it read afresh. */
+  epoch: number;
+  /** Whether it's stored: where it isn't, an inbox from before it holds the cursor. */
+  stored: boolean;
+  /** What it takes as stored, as last read or written: a write's growth is counted from it (W11). */
+  bytes: number;
+}
+
+/** The take record as stored: the envelopes in base64. */
+interface StoredTakes {
+  v: 1;
+  cursor?: string;
+  gapAt?: number;
+  batches: Array<{ envelopes: string[] }>;
+  unopened?: number;
+  noRoom?: number;
+}
+
+const takeRecord = (network: NetworkName): RecordName => `messagingTake.${network}`;
 
 /**
  * What a read's scan is working on while it runs (`messagingMark.<network>`, sealed, W9): the page being scanned, by
@@ -662,13 +746,30 @@ export class MessagingRefused extends Error {
 
 /**
  * What Messages stores can't take this write: the budget has no room nothing deleted could make, the storage area's
- * reserve would be crossed, or the browser refused the write (W7, W11). Nothing of it was written.
+ * reserve would be crossed, or the browser refused the write (W7, W11). Nothing of it was written. Where the budget or
+ * the reserve refused it, nothing was deleted for it either (the 1.10.0 gate's f3); where the browser refused it after
+ * the room it needed was made, the oldest read messages that made the room are gone, as the budget would delete them
+ * next.
  */
 export class MessagingFull extends MessagingRefused {
   constructor() {
     super("full");
   }
 }
+
+/**
+ * A read of chrome.storage that failed (the 1.10.0 gate's f2): the area answered with an error, not a record, nor one
+ * that won't open. Nothing about the envelope being taken: the take tries it again, in place (TAKE_RETRIES).
+ */
+export class StorageFailed extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
+/** `e` as a read of Messages' records failed with it (f2): a read of the area that failed is StorageFailed. */
+const failedRead = (e: unknown): unknown =>
+  e instanceof UnreadableRecordError || e instanceof WalletLocked || e instanceof StorageFailed || isTrap(e) ? e : new StorageFailed(e);
 
 /**
  * The writer's own share of first messages is used up (DESIGN-protocol §3.5, W17): what a reader keeps of a stranger's
@@ -807,6 +908,73 @@ const leanOf = (inbox: Inbox): Inbox => {
   return { ...rest, requestsShown: {}, requestsUnread: {} };
 };
 
+/** The take record as stored (finding 8): its envelopes in base64, the counts only once there are some. */
+function takesToStored(t: Takes): StoredTakes {
+  return {
+    v: 1,
+    ...(t.cursor !== undefined ? { cursor: t.cursor } : {}),
+    ...(t.gapAt !== undefined ? { gapAt: t.gapAt } : {}),
+    batches: t.batches.map((b) => ({ envelopes: b.envelopes.map(base64OfHex) })),
+    ...(t.unopened ? { unopened: t.unopened } : {}),
+    ...(t.noRoom ? { noRoom: t.noRoom } : {}),
+  };
+}
+
+/** The take record as this service works with it, from what's stored (none: no record), each batch under `pin`. */
+function takesFromStored(stored: StoredTakes | undefined, pin: PhrasePin): Takes {
+  const count = (n: unknown) => (typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? n : 0);
+  return {
+    ...(typeof stored?.cursor === "string" ? { cursor: stored.cursor } : {}),
+    ...(typeof stored?.gapAt === "number" ? { gapAt: stored.gapAt } : {}),
+    batches: (Array.isArray(stored?.batches) ? stored.batches : [])
+      .map((b) => ({ envelopes: (Array.isArray(b?.envelopes) ? b.envelopes : []).filter((e) => typeof e === "string").map(hexOfBase64), pin }))
+      .filter((b) => b.envelopes.length > 0),
+    unopened: count(stored?.unopened),
+    noRoom: count(stored?.noRoom),
+  };
+}
+
+/** An envelope's share of the take record's JSON as stored: its base64, quoted. */
+const envelopeJsonLength = (hex: string) => 4 * Math.ceil(hex.length / 2 / 3) + 2;
+
+/** The take record's JSON length as stored, worked out without writing its envelopes out. */
+function takesJsonLength(t: Takes): number {
+  // `{"envelopes":[` and `]}`, each envelope, and the commas between.
+  const batch = (b: Batch) => 16 + b.envelopes.reduce((n, e) => n + envelopeJsonLength(e), 0) + Math.max(0, b.envelopes.length - 1);
+  return (
+    utf8Length(JSON.stringify(takesToStored({ ...t, batches: [] }))) +
+    t.batches.reduce((n, b) => n + batch(b), 0) +
+    Math.max(0, t.batches.length - 1)
+  );
+}
+
+/**
+ * Holds `t` to the take record's bounds (W10, finding 8, f5): at most 1 + TAKES_BEHIND reads waiting, and `most` bytes
+ * of JSON. Past either the oldest read waiting goes (never the first, which may be being taken), then the newest keeps
+ * its first envelopes that fit: each envelope left out is counted (`unopened`), in the write this is for.
+ */
+function bounded(t: Takes, most: number): void {
+  const drop = (at: number) => {
+    const [gone] = t.batches.splice(at, 1);
+    t.unopened += gone!.envelopes.length;
+  };
+  // A copy of the list, and of the newest read's, which may lose envelopes: the record held before stays as it was.
+  t.batches = [...t.batches];
+  while (t.batches.length > 1 + TAKES_BEHIND) drop(1);
+  while (t.batches.length > 2 && takesJsonLength(t) > most) drop(1);
+  let length = takesJsonLength(t);
+  const last = t.batches.at(-1);
+  if (!last || length <= most) return;
+  const kept = { ...last, envelopes: [...last.envelopes] };
+  t.batches[t.batches.length - 1] = kept;
+  while (kept.envelopes.length && length > most) {
+    const gone = kept.envelopes.pop()!;
+    length -= envelopeJsonLength(gone) + (kept.envelopes.length ? 1 : 0);
+    t.unopened++;
+  }
+  if (!kept.envelopes.length) t.batches.pop();
+}
+
 /** F's t for a first message written at `now` (ms): seconds, rounded down to T_STEP_S (W14). */
 const tOf = (now: number) => Math.floor(now / 1000 / T_STEP_S) * T_STEP_S;
 
@@ -859,15 +1027,20 @@ export class MessagingService {
   private syncs = new Map<NetworkName, Promise<void>>();
   /** The posting running on each network. */
   private posting = new Map<NetworkName, { running: Promise<void>; again: boolean }>();
-  /** What each network's reads kept and its take hasn't moved the cursor past yet (W4). */
-  private pending = new Map<NetworkName, Pending>();
+  /** Each network's take record as this service last read or wrote it (finding 8): read once per unlock and epoch. */
+  private takes = new Map<NetworkName, TakesHeld>();
+  /** Each network's take record's writes, one after another, in a chain of their own: never behind the queue (`onTakes`). */
+  private takeWrites = new Map<NetworkName, Promise<unknown>>();
+  /** The networks a read moved on since their take last set which Seedelfs take first messages (`noteOwn`), with its phrase. */
+  private ownDue = new Map<NetworkName, PhrasePin>();
   /** The networks whose take is running (`take`). */
   private taking = new Set<NetworkName>();
   /**
-   * Each network's takes that failed: a read begun before one keeps nothing, since what it read went on from where a
-   * take that never moved the cursor would have.
+   * Conversations whose record was written and whose inbox write after it wasn't (the 1.10.0 gate's f4), by network:
+   * true where a press of the user's wrote it, whose message the post reads whatever the inbox counts. Set right from
+   * their records at the take's next bookkeeping write (`setRight`), or the sweep.
    */
-  private failures = new Map<NetworkName, number>();
+  private inboxBehind = new Map<NetworkName, Map<string, boolean>>();
   /** First-contact stamps being solved, by conversation (`keyOf`). */
   private solving = new Set<string>();
   /** The prices the last page said, by network: 512, 2,048, 8,192 and 32,768 bytes. */
@@ -885,8 +1058,6 @@ export class MessagingService {
    * on): a take under an older one stops, writing nothing more (W12, W13).
    */
   private epochs = new Map<NetworkName, number>();
-  /** The key's envelopes not kept, by network, since its inbox last counted them (`dropped`, W10, W11). */
-  private dropped = new Map<NetworkName, number>();
   /**
    * Work found for an envelope's post, by its stamp's digest, until it's posted: a try the relay didn't answer, or
    * one it priced dearer, isn't worked for again from nothing (worker-net#4).
@@ -970,11 +1141,13 @@ export class MessagingService {
 
   /** The conversations and requests on `network`, newest first. Throws if locked. */
   async overview(network: NetworkName): Promise<MessagingOverview> {
-    const [switches, inbox, stopped, paused] = await Promise.all([
+    const [switches, inbox, stopped, paused, resting, takes] = await Promise.all([
       this.deps.preferences.get().then((p) => p.messaging),
       this.inbox(network),
       this.isStopped(network),
       this.heldUntil(SESSION_PAUSED, network, PAUSED_ASK_MS),
+      this.heldUntil(SESSION_READ_AFTER, network, DAY_READ_MAX_MS),
+      this.takesNow(network),
     ]);
     const on = switches[network];
     // The build's other networks whose pools the worker reads too, whichever the wallet shows (call 9, docs-claims#3).
@@ -998,7 +1171,10 @@ export class MessagingService {
       )
       .sort((a, b) => b.lastAt - a.lastAt);
     const seedelfs = await this.seedelfsOf(network, inbox);
-    const dropped = (inbox.dropped ?? 0) + (this.dropped.get(network) ?? 0);
+    // What wasn't kept, apart (the 1.10.0 gate's f5): messages there was no room for, which deleting a conversation
+    // makes room for; and the key's envelopes dropped unopened, which may be anyone's, and which nothing brings back.
+    const dropped = (inbox.dropped ?? 0) + takes.noRoom;
+    const gapAt = takes.gapAt ?? inbox.gapAt;
     // How far this device's clock is off the relay's, in hours, as the last fresh post measured it (W14): said only past
     // half an hour, where first messages start to go unread.
     const off = inbox.clock?.off;
@@ -1006,13 +1182,16 @@ export class MessagingService {
       on,
       conversations,
       requests,
-      ...(inbox.gapAt !== undefined ? { gapAt: inbox.gapAt } : {}),
+      ...(gapAt !== undefined ? { gapAt } : {}),
       ...(on && paused !== undefined ? { paused: true as const } : on && this.offline.has(network) ? { offline: true as const } : {}),
+      // This address read its day's share of the pool (W16): no new messages are read until then; sending goes on.
+      ...(on && paused === undefined && resting !== undefined ? { dayReadUntil: resting } : {}),
       ...(alsoOn.length ? { alsoOn } : {}),
       ...(seedelfs.length ? { seedelfs } : {}),
       ...(this.full.has(network) ? { full: true as const } : {}),
       ...(stopped ? { stopped: true as const } : {}),
       ...(dropped > 0 ? { dropped } : {}),
+      ...(takes.unopened > 0 ? { droppedUnread: takes.unopened } : {}),
       ...(off !== undefined && Math.abs(off) > CLOCK_OFF_MS ? { clockOff: Math.round(off / 360_000) / 10 } : {}),
     };
   }
@@ -1247,7 +1426,8 @@ export class MessagingService {
       // The crate's own word for the share used up: never the server's, and nothing of it is kept.
       if (refused === "request_full") throw new ShareUsedUp();
       meta.lastAt = now;
-      await this.commit(network, inbox, cid, file);
+      // Kept once its record is written, which the post reads (f4): an inbox write refused after it refuses nothing.
+      await this.commit(network, inbox, cid, file, "content", undefined, true);
     });
     this.deps.changed?.(network);
     this.behind(this.post(network));
@@ -1268,7 +1448,7 @@ export class MessagingService {
       const entry = file.history.find((e) => e.id === id);
       if (entry?.sent !== "refused" || !entry.envelope) return false;
       entry.sent = "pending";
-      await this.commit(network, inbox, cid, file, "bookkeeping");
+      await this.commit(network, inbox, cid, file, "bookkeeping", undefined, true);
       return true;
     });
     if (!again) return;
@@ -1315,7 +1495,7 @@ export class MessagingService {
       const refused = this.sealPlaintext(file, entry, revealPlaintextOf(made.reveal));
       if (refused === "request_full") throw new ShareUsedUp();
       meta.lastAt = now;
-      await this.commit(network, inbox, cid, file);
+      await this.commit(network, inbox, cid, file, "content", undefined, true);
     });
     this.deps.changed?.(network);
     this.behind(this.post(network));
@@ -1437,6 +1617,7 @@ export class MessagingService {
       await this.writeInbox(network, inbox, { kind: "bookkeeping" });
       if (meta?.id) await this.deps.store.remove(conversationRecord(network, meta.id));
       this.removed.add(keyOf(network, cid));
+      this.inboxBehind.get(network)?.delete(cid);
       // Room, maybe: the next take says again.
       this.full.delete(network);
       this.deps.changed?.(network);
@@ -1461,16 +1642,26 @@ export class MessagingService {
         // Only one the kept view has under the key, at that register: a stale page's press changes nothing.
         const view = await this.deps.ownSeedelfs(network, false);
         if (!view?.some((s) => s.name === name && sameRegister(s.register, pair))) throw new Error(t("worker.messaging.notYourSeedelf"));
+        // The user's own press lifts a removal's mark (a Remove that never landed) and a pair a view dropped (f6).
+        await clearRemoved(this.deps.store, network, name).catch((e: unknown) => {
+          if (!(e instanceof UnreadableRecordError)) throw e;
+        });
+        if (inbox.gone) inbox.gone = inbox.gone.filter((k) => k !== pairKey(name, pair));
       }
       const was = (inbox.handles[name] ?? []).some((r) => sameRegister(r, pair));
       inbox.answerAt = [...(inbox.answerAt ?? []).filter((c) => !(c.name === name && sameRegister(c.register, pair))), { name, register: pair, on }];
-      const { handles, seen } = await this.handlesNow(network, inbox);
+      const { handles, seen, gone } = await this.handlesNow(network, inbox);
       inbox.handles = handles;
       inbox.seen = seen;
+      if (gone.length) inbox.gone = gone;
+      else delete inbox.gone;
       const reread = on && !was;
       if (reread) {
-        // From the pool's oldest: what any read kept in memory, and any take running, go (`forget`).
-        this.forget(network);
+        // From the pool's oldest, before the choice is written (f1): the read rewound, and what's in memory of the reads
+        // and any take running forgotten, in one step of the take record's chain, so a read begun before writes nothing
+        // and one begun after reads from the oldest. The take of what it finds waits in the queue for the choice below.
+        await this.rewind(network);
+        // A cursor a build before the take record kept goes with it.
         delete inbox.cursor;
       }
       await this.writeInbox(network, inbox, { kind: "bookkeeping" });
@@ -1531,17 +1722,23 @@ export class MessagingService {
       const records = await this.deps.local.keys(PRIVATE_PREFIX + CONVERSATION_RECORDS + network + ".");
       await this.deps.local.remove(
         PRIVATE_PREFIX + `messaging.${network}`,
+        PRIVATE_PREFIX + takeRecord(network),
         PRIVATE_PREFIX + markRecord(network, "scan"),
         PRIVATE_PREFIX + markRecord(network, "take"),
         trapKey(network),
         ...records,
       );
     });
+    // And again in the take record's chain, after any write of it that began before the epoch moved: none outlives this.
+    await this.onTakes(network, async () => {
+      await this.deps.local.remove(PRIVATE_PREFIX + takeRecord(network));
+      this.forget(network);
+    });
     this.forget(network);
     this.full.delete(network);
     this.offline.delete(network);
     this.sizes.delete(network);
-    this.dropped.delete(network);
+    this.inboxBehind.delete(network);
     for (const step of ["scan", "take"] as const) this.marked.set(markRecord(network, step), false);
     this.oneByOne.delete(network);
     this.deps.changed?.(network);
@@ -1549,15 +1746,31 @@ export class MessagingService {
   }
 
   /**
-   * Forgets what `network`'s reads kept in memory, and stops any take of it before its next write (its epoch moves,
-   * W12, W13): the next read goes on from the cursor the inbox keeps.
+   * Forgets what's in memory of `network`'s reads, and stops any take of it before its next write (its epoch moves, W12,
+   * W13): the next read goes on from the cursor the take record keeps, and the next take from what it holds.
    */
   private forget(network: NetworkName): void {
-    this.epochs.set(network, (this.epochs.get(network) ?? 0) + 1);
-    this.pending.delete(network);
-    this.failures.set(network, (this.failures.get(network) ?? 0) + 1);
-    // What was counted as not kept is read again.
-    this.dropped.delete(network);
+    this.epochs.set(network, this.epochOf(network) + 1);
+    this.takes.delete(network);
+    this.ownDue.delete(network);
+  }
+
+  private epochOf(network: NetworkName): number {
+    return this.epochs.get(network) ?? 0;
+  }
+
+  /**
+   * Reads `network`'s pool again from its oldest (W12; the 1.10.0 gate's f1 and finding 8): the take record's cursor
+   * and what it held for the take go, in one write in its chain, its counts staying; then what's in memory of the reads,
+   * and any take running, go too (`forget`), in the same step. A read begun before writes nothing after it.
+   */
+  private rewind(network: NetworkName): Promise<void> {
+    return this.onTakes(network, async () => {
+      const held = await this.takesOf(network);
+      const { cursor: _cursor, ...kept } = held;
+      await this.writeTakes(network, held, { ...kept, batches: [] });
+      this.forget(network);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -1630,9 +1843,10 @@ export class MessagingService {
         await this.post(network);
       }
     } finally {
-      // 3. The take, in the background, of whatever any read kept: no sync waits for it, and none follows it. Started
-      // whatever became of the posts, so nothing read waits for a later read to find something.
-      if (this.pending.get(network)?.batches.length) this.take(network);
+      // 3. The take, in the background, of whatever the take record holds: no sync waits for it, and none follows it.
+      // Started whatever became of the posts, and whether or not this tick read: what a lock or a stop left in the record
+      // is taken asking no page again (finding 8).
+      this.take(network);
     }
     this.behind(this.expire(network));
   }
@@ -1665,21 +1879,23 @@ export class MessagingService {
   /**
    * Reads `network`'s pool from where the last read ended (W4, W10): at most PAGES_A_SYNC pages, one after the other,
    * whatever they hold, and the scan of each, which costs the same for every envelope. The key's envelopes are kept
-   * aside in memory for the take, each once: nothing is opened or read from a record between two page requests. Before
-   * each page's scan its mark is written, the same for every page (W9); envelopes Try again steps over are passed over
+   * aside for the take, each once: nothing is opened or read from a record between two page requests. Before each
+   * page's scan its mark is written, the same for every page (W9); envelopes Try again steps over are passed over
    * unscanned, and after a scan trapped, that page's are scanned one at a time. Stops where the pool says nothing
    * follows, at a page that moves nothing (a relay that isn't §17's), at a page that doesn't read (the pages before it
    * are taken all the same), or after PAGES_A_SYNC pages: with `more` still set, the rest is read at the next tick.
    * Never stopped, skipped or cut short by what the pages held, or by how far the takes are behind (TAKES_BEHIND).
-   * Returns whether there's anything to take.
+   * Where the read ended, and what it found, go into the take record after the last page (`noteRead`, finding 8).
    */
-  private async readPool(network: NetworkName, pin: PhrasePin): Promise<boolean> {
-    const failures = this.failures.get(network) ?? 0;
-    const waiting = this.pending.get(network);
-    // Read once, before the first page: the cursor kept, and what Try again steps over.
+  private async readPool(network: NetworkName, pin: PhrasePin): Promise<void> {
+    // The epoch now: a rewind, or Messages started again, before this read's end is written has it write nothing (f1).
+    const epoch = this.epochOf(network);
+    // Read once, before the first page: what Try again steps over, and where the last read ended.
     const inbox = await this.inbox(network);
-    // On from where the last read ended, while its take hasn't moved the cursor there; otherwise from the cursor kept.
-    const from = waiting ? waiting.cursor : inbox.cursor;
+    const takes = await this.takesFor(network, pin);
+    // On from where the last read ended, as the take record keeps it, whatever the takes did since (finding 8); before
+    // there's one, from where an inbox from before it kept.
+    const from = takes.stored ? takes.cursor : inbox.cursor;
     const now = this.deps.now();
     const skip = new Set((inbox.skip ?? []).filter((s) => s.until > now).map((s) => s.envelope));
     const relay = this.deps.relay(network);
@@ -1764,23 +1980,45 @@ export class MessagingService {
     }
     // What followed the last match was written over, or was none: gone.
     found.length = kept;
-    const taken = cursor !== undefined && !(cursor === from && !found.length && !gap);
-    // A take failed meanwhile, and this read went on from where it would have ended: all of it is read again.
-    if (!taken || (this.failures.get(network) ?? 0) !== failures) return false;
-    const pending = this.pending.get(network) ?? { batches: [], cursor: cursor! };
-    pending.batches.push({ envelopes: found, to: cursor!, gap, pin });
-    pending.cursor = cursor!;
-    // The takes too far behind (W10): the oldest read still waiting goes, unopened and counted, and its cursor is passed
-    // when the read after it is taken. The one being taken stays. Never a read skipped or cut short instead: how far
-    // behind the takes are depends on how many of the key's envelopes the pages held, which the relay chooses.
-    while (pending.batches.length > 1 + TAKES_BEHIND) {
-      const [gone] = pending.batches.splice(1, 1);
-      pending.batches[1]!.gap ||= gone!.gap;
-      // Each envelope once, as its take would have taken it.
-      this.dropped.set(network, (this.dropped.get(network) ?? 0) + new Set(gone!.envelopes).size);
-    }
-    this.pending.set(network, pending);
-    return true;
+    // A read that moved nothing and found nothing writes nothing.
+    if (cursor === undefined || (cursor === from && !found.length && !gap)) return;
+    await this.noteRead(network, epoch, pin, found, cursor, gap);
+  }
+
+  /**
+   * Where a read ended, and what it found for the take (finding 8): one write of the take record, in its chain, never
+   * behind the queue, after the read's last page. The next read goes on from there whatever the takes do, a lock and a
+   * stop included. Its envelopes go in as a read of their own, each once and none another read waiting holds (a read
+   * made again after a stop finds them again); past TAKES_BEHIND reads or TAKE_BYTES, the oldest read waiting goes, then
+   * the newest keeps what fits, each envelope left out counted (`unopened`, f5). Where the area's reserve or the browser
+   * has no room for them, the cursor is written all the same, with that read's envelopes counted as not kept (`noRoom`),
+   * and Messages stop taking until room is made (W11). A read begun before a rewind, or before Messages were started
+   * again, writes nothing.
+   */
+  private noteRead(network: NetworkName, epoch: number, pin: PhrasePin, found: string[], cursor: string, gap: boolean): Promise<void> {
+    return this.onTakes(network, async () => {
+      if (this.epochOf(network) !== epoch) return;
+      // The phrase the read began under: one removed and another restored meanwhile gets nothing of the first's.
+      await this.withKey((_key, keys) => pin(keys));
+      const held = await this.takesOf(network, pin);
+      const waiting = new Set(held.batches.flatMap((b) => b.envelopes));
+      const fresh = [...new Set(found)].filter((e) => !waiting.has(e));
+      const moved: Takes = { ...held, cursor, ...(gap ? { gapAt: this.deps.now() } : {}) };
+      const next: Takes = { ...moved, batches: [...held.batches] };
+      if (fresh.length) {
+        next.batches.push({ envelopes: fresh, pin });
+        bounded(next, this.deps.takeBytes ?? TAKE_BYTES);
+      }
+      try {
+        await this.writeTakes(network, held, next);
+      } catch (e) {
+        if (!(e instanceof MessagingFull)) throw e;
+        // No room to keep them (W11; `put` has stopped the taking): the cursor goes on all the same, whatever they were.
+        await this.writeTakes(network, held, { ...moved, noRoom: moved.noRoom + fresh.length });
+      }
+      // Which Seedelfs take first messages is set at the take's next look (`noteOwn`), whatever this read found.
+      this.ownDue.set(network, pin);
+    });
   }
 
   /**
@@ -1836,7 +2074,7 @@ export class MessagingService {
     }
   }
 
-  /** Takes what `network`'s reads kept, in order, in the background, after any take still running (W4). */
+  /** Takes what `network`'s take record holds, in order, in the background, after any take still running (W4). */
   private take(network: NetworkName): void {
     if (this.taking.has(network)) return;
     this.taking.add(network);
@@ -1844,84 +2082,93 @@ export class MessagingService {
   }
 
   /**
-   * Each read's batch in turn: the registers the wallet's Seedelfs take first messages at now (`noteOwn`, no request),
-   * every envelope in the queue, each under a mark naming it (W9), with a turn of the event loop between them (W10), then
-   * the cursor, once, to where that read ended. One envelope whose take throws is passed over without a word (W3, W9),
-   * and one with no room is counted and passed over (`dropped`, W11): the rest goes on. A lock, another phrase, a trap,
-   * or a record that won't open stops it all: everything not yet taken is dropped, and the next read goes on from the
-   * cursor kept, where every envelope already taken is refused as a duplicate (§5). Bookkeeping with no room within the
-   * area's reserve stops the taking, what's read waiting in memory, until room is made (W11); and Messages started again
-   * stops it before its next write (W13). Tells open pages once, at the end, when anything they show changed.
+   * Each read's envelopes the take record holds, in turn (finding 8): the registers the wallet's Seedelfs take first
+   * messages at now (`noteOwn`, no request), every envelope in the queue, each under a mark naming it (W9), with a turn of
+   * the event loop between them (W10), then that read's envelopes gone from the record, once. One envelope whose take
+   * throws is passed over without a word (W3, W9), but a read of storage that failed under it, tried again in place
+   * first (TAKE_RETRIES, f2); and one with no room is counted and passed over (`noRoom`, W11): the rest goes on. A lock,
+   * another phrase, a trap, or a record that won't open stops it all: what isn't taken stays in the take record, for the
+   * next take, and every envelope already taken is refused as a duplicate (§5). Bookkeeping with no room within the
+   * area's reserve stops the taking until room is made (W11); a rewind, or Messages started again, stops it before its
+   * next write (W13; each queued step looks at the epoch first, f1). Tells open pages once, at the end, when anything
+   * they show changed.
    */
   private async takeAll(network: NetworkName): Promise<void> {
     let arrived = false;
     let trapped = false;
-    const epoch = this.epochs.get(network) ?? 0;
-    /** Messages were started again meanwhile, or a Seedelf turned on: what this take holds is no longer to be taken. */
-    const stale = () => (this.epochs.get(network) ?? 0) !== epoch;
+    const epoch = this.epochOf(network);
+    /** Messages were started again meanwhile, or the pool is read again from its oldest: this take is no longer to be. */
+    const stale = () => this.epochOf(network) !== epoch;
     try {
       // No room for bookkeeping when the take stopped (W11): taken again only once there's room for the inbox to grow.
       if (this.full.has(network)) {
-        if (!(await this.reserveHolds(Math.max(this.sizes.get(network)?.inbox ?? 0, PAD_STORED)))) {
-          this.taking.delete(network);
-          return;
-        }
+        if (!(await this.reserveHolds(Math.max(this.sizes.get(network)?.inbox ?? 0, PAD_STORED)))) return;
         this.full.delete(network);
         arrived = true;
       }
       for (;;) {
-        const pending = this.pending.get(network);
-        const batch = pending?.batches[0];
-        if (!pending || !batch || stale()) {
-          // All taken: the next read goes on from the cursor kept, and starts a take of its own.
-          if (!stale()) this.pending.delete(network);
-          this.taking.delete(network);
-          return;
-        }
-        await this.noteOwn(network, batch.pin);
-        // One served twice is taken once, after the read (W17): copies make no take longer.
-        for (const envelope of new Set(batch.envelopes)) {
+        if (stale()) return;
+        const held = await this.takesFor(network);
+        const batch = held.batches[0];
+        const due = this.ownDue.get(network);
+        // All taken: the next read starts a take of its own.
+        if (stale() || (!batch && !due)) return;
+        this.ownDue.delete(network);
+        // Which Seedelfs take first messages now (no request), and what Try again steps over since the read kept these.
+        const skip = await this.noteOwn(network, batch?.pin ?? due!, epoch);
+        if (!skip || !batch) continue;
+        let noRoom = 0;
+        for (const envelope of batch.envelopes) {
           if (stale()) break;
+          if (skip.has(envelopeHash(envelope))) continue;
           const step: Step = { trapped: false };
           await this.setMark(network, "take", { envelope: envelopeHash(envelope) }, batch.pin);
-          try {
-            if (await this.receive(network, envelope, batch.pin, step)) arrived = true;
-          } catch (e) {
-            if (step.trapped) {
-              trapped = true;
-              await this.noteTrap(network, "take");
-              throw e;
+          for (let tries = 0; ; tries++) {
+            try {
+              if (await this.receive(network, envelope, batch.pin, step, epoch)) arrived = true;
+            } catch (e) {
+              if (step.trapped) {
+                trapped = true;
+                await this.noteTrap(network, "take");
+                throw e;
+              }
+              // Nothing can be taken now: no key, another phrase's, an inbox that won't open, no room for bookkeeping.
+              if (e instanceof WalletLocked || e instanceof ReserveReached || e instanceof UnreadableRecordError) throw e;
+              if (e instanceof MessagingFull) {
+                // No room for this one's message (W11): not kept, and counted as its read goes from the record.
+                noRoom++;
+                arrived = true;
+              } else if (e instanceof StorageFailed && tries < TAKE_RETRIES) {
+                // A read of storage failed under it, nothing of the envelope's (f2): the same one again, in place, after a
+                // pause out of the queue, which holds no page and no post. Never the cursor held for it.
+                await this.pause(TAKE_RETRY_MS);
+                if (!stale()) continue;
+              } else {
+                // This envelope's alone: passed over without a word, and the next taken (W9).
+                this.deps.passedOver?.(e);
+              }
             }
-            // Nothing can be taken now: no key, another phrase's, an inbox that won't open, no room for bookkeeping.
-            if (e instanceof WalletLocked || e instanceof ReserveReached || e instanceof UnreadableRecordError) throw e;
-            // No room for this one's message (W11): not kept, counted, and its cursor passed like any other's.
-            if (e instanceof MessagingFull) {
-              this.dropped.set(network, (this.dropped.get(network) ?? 0) + 1);
-              arrived = true;
-            }
-            // This envelope's alone: passed over, and the next taken (W9).
+            break;
           }
           // A page of the next read waits at most one envelope's work (W10).
           await this.wait();
         }
-        if (stale()) continue;
-        if (await this.moveCursor(network, batch)) arrived = true;
-        pending.batches.shift();
+        if (stale()) return;
+        if (await this.batchTaken(network, epoch, batch, noRoom)) arrived = true;
+        if (await this.setRight(network, epoch, batch.pin)) arrived = true;
       }
     } catch (e) {
-      this.taking.delete(network);
       if (e instanceof ReserveReached) {
-        // Bookkeeping found no room (W11): what's read stays in memory, in order, and reads go on as ever. The overview
-        // says Messages are full until room is made.
+        // Bookkeeping found no room (W11): what's read stays in the take record, in order, and reads go on as ever. The
+        // overview says Messages are full until room is made.
         arrived = true;
         return;
       }
-      this.pending.delete(network);
-      this.failures.set(network, (this.failures.get(network) ?? 0) + 1);
-      // Read again from the cursor kept: nothing it counted as not kept is lost yet.
-      this.dropped.delete(network);
+      // What's in memory goes: the take record keeps what isn't taken, for the next take (finding 8).
+      this.takes.delete(network);
       throw e;
     } finally {
+      this.taking.delete(network);
       if (!trapped) await this.setMark(network, "take", undefined).catch(() => undefined);
       if (arrived) this.deps.changed?.(network);
     }
@@ -1929,29 +2176,86 @@ export class MessagingService {
 
   /**
    * Sets which Seedelfs take first messages now (`handlesNow`), from what the wallet holds, with no request: before
-   * each batch's take, in the queue, under the phrase its read was made under. At the first with a kept view, the
-   * Seedelfs this browser minted before 1.10.0 are adopted (`adopt`, W12).
+   * each read's envelopes are taken, in the queue, under the phrase its read was made under. At the first with a kept
+   * view, the Seedelfs this browser minted before 1.10.0 are adopted (`adopt`, W12). In the same write, what the inbox
+   * shows of a conversation whose inbox write failed after its record's is set right from the record (f4). What Try
+   * again steps over (W9), by SHA-256; undefined when a rewind or Messages started again has made this take stale (f1).
    */
-  private noteOwn(network: NetworkName, pin: PhrasePin): Promise<void> {
+  private noteOwn(network: NetworkName, pin: PhrasePin, epoch: number): Promise<Set<string> | undefined> {
     return this.serial(async () => {
+      if (this.epochOf(network) !== epoch) return undefined;
       await this.withKey((_key, keys) => pin(keys));
       const inbox = await this.inbox(network);
+      const now = this.deps.now();
+      const skip = new Set((inbox.skip ?? []).filter((s) => s.until > now).map((s) => s.envelope));
       const adopted = await this.adopt(network, inbox);
-      const { handles, seen } = await this.handlesNow(network, inbox);
-      if (!adopted && sameHandles(handles, inbox.handles) && sameList(seen, inbox.seen ?? [])) return;
+      const { handles, seen, gone } = await this.handlesNow(network, inbox);
+      const noted = await this.setNotedRight(network, inbox);
+      if (!adopted && !noted.changed && sameHandles(handles, inbox.handles) && sameList(seen, inbox.seen ?? []) && sameList(gone, inbox.gone ?? [])) {
+        this.clearNoted(network, noted.cids);
+        return skip;
+      }
       inbox.handles = handles;
       inbox.seen = seen;
+      if (gone.length) inbox.gone = gone;
+      else delete inbox.gone;
       // Bookkeeping, never refused for the budget: what's taken after it is, where it doesn't fit.
       await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+      this.clearNoted(network, noted.cids);
+      return skip;
     });
+  }
+
+  /**
+   * At a read's end in the take (f4): what the inbox shows of each conversation whose inbox write failed after its
+   * record's, set right from its record, in one bookkeeping write, in the queue after the receives and the posts. Whether
+   * to tell open pages. Never the sweep's slot, which comes before the post: only the user's own press widens what the
+   * post reads.
+   */
+  private async setRight(network: NetworkName, epoch: number, pin: PhrasePin): Promise<boolean> {
+    if (!this.inboxBehind.get(network)?.size) return false;
+    return this.serial(async () => {
+      if (this.epochOf(network) !== epoch) return false;
+      await this.withKey((_key, keys) => pin(keys));
+      const inbox = await this.inbox(network);
+      const noted = await this.setNotedRight(network, inbox);
+      if (noted.changed) await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+      this.clearNoted(network, noted.cids);
+      return noted.changed;
+    });
+  }
+
+  /** The noted conversations of `inbox` (f4), set right from their records: which were looked at, and whether any moved. */
+  private async setNotedRight(network: NetworkName, inbox: Inbox): Promise<{ cids: string[]; changed: boolean }> {
+    const cids = [...(this.inboxBehind.get(network)?.keys() ?? [])];
+    let changed = false;
+    for (const cid of cids) {
+      const meta = inbox.conversations[cid];
+      if (meta && (await this.setEntryRight(network, inbox, cid, meta))) changed = true;
+    }
+    return { cids, changed };
+  }
+
+  /** Notes that conversation `cid`'s record holds more than its inbox entry says (f4): `press`, a press of the user's wrote it. */
+  private noteBehind(network: NetworkName, cid: string, press: boolean): void {
+    let noted = this.inboxBehind.get(network);
+    if (!noted) this.inboxBehind.set(network, (noted = new Map()));
+    noted.set(cid, (noted.get(cid) ?? false) || press);
+  }
+
+  /** The notes of `cids` done with: their entries now say what their records hold (f4). */
+  private clearNoted(network: NetworkName, cids: readonly string[]): void {
+    const noted = this.inboxBehind.get(network);
+    for (const cid of cids) noted?.delete(cid);
   }
 
   /**
    * The Seedelfs this browser minted before 1.10.0 (W12, handles-lifecycle#4): their names are in `mintedBy.<network>`
    * (sealed, written only at this browser's own mints), and their registers weren't kept then. Once, at the first take
    * with a kept view, each such name the view holds is adopted at the register it shows, as a pair this browser made,
-   * on. Never again after: a mint since whose pair couldn't be written stays off, as its switch says. Whether `inbox`
-   * changed.
+   * on. Never again after; and never a name with an entry in `mintedAt`, a pair or a removal's mark (f6): a mint since
+   * keeps who paid only once its pair is kept (mint.ts), so one whose pair couldn't be written stays off, as its switch
+   * says, and one removed here stays removed. Whether `inbox` changed.
    */
   private async adopt(network: NetworkName, inbox: Inbox): Promise<boolean> {
     if (inbox.adopted) return false;
@@ -1959,7 +2263,7 @@ export class MessagingService {
     if (!view) return false;
     const [paid, made] = await Promise.all([mintedBy(this.deps.store, network), mintedAt(this.deps.store, network)]);
     for (const name of Object.keys(paid)) {
-      if (made[name]?.length) continue;
+      if (made[name] !== undefined) continue;
       const at = view.find((s) => s.name === name);
       // One that couldn't be written now is left off, and isn't tried again: the user can turn it on.
       if (at) {
@@ -1978,14 +2282,17 @@ export class MessagingService {
    * longer has at that register (one that read successfully: contract-scan.ts keeps no other), and what began there
    * stays. A pair this browser made that no view has shown yet (a mint still on its way) counts. `handles` take first
    * messages: those of them the user hasn't turned off. `shown` can be shown (§19), whatever the switch for first
-   * messages says: a pair the wallet made is its own to show. No request. `seen` gains each made pair the view has.
+   * messages says: a pair the wallet made is its own to show. No request. `seen` gains each made pair the view has, and
+   * `gone` each pair a view dropped, for good (f6): no view absent after a lock brings one back. A Seedelf removed here
+   * (`mintedAt`'s mark) takes none on a choice made before the removal. Only the user's own turn-on lifts either.
    */
   private async handlesNow(
     network: NetworkName,
     inbox: Inbox,
-  ): Promise<{ handles: Record<string, RegisterHex[]>; shown: string[]; seen: string[] }> {
+  ): Promise<{ handles: Record<string, RegisterHex[]>; shown: string[]; seen: string[]; gone: string[] }> {
     const [made, view] = await Promise.all([mintedAt(this.deps.store, network), this.deps.ownSeedelfs(network, false)]);
     const seen = new Set(inbox.seen ?? []);
+    const gone = new Set(inbox.gone ?? []);
     const holds = (name: string, register: RegisterHex) => view?.some((s) => s.name === name && sameRegister(s.register, register)) ?? false;
     const handles: Record<string, RegisterHex[]> = {};
     const shown = new Set<string>();
@@ -1998,27 +2305,40 @@ export class MessagingService {
     for (const [name, registers] of Object.entries(made)) {
       for (const register of registers) {
         const key = pairKey(name, register);
+        if (gone.has(key)) continue;
         if (holds(name, register)) seen.add(key);
-        // Gone: shown at that register once, and no longer.
-        if (view && seen.has(key) && !holds(name, register)) continue;
+        // Gone: shown at that register once, and no longer. For good: a view absent after a lock brings it back no more.
+        if (view && seen.has(key) && !holds(name, register)) {
+          gone.add(key);
+          continue;
+        }
         add(name, register, choiceOf(inbox, name, register)?.on !== false);
       }
     }
     for (const choice of inbox.answerAt ?? []) {
       if (!choice.on || made[choice.name]?.some((r) => sameRegister(r, choice.register))) continue;
-      // Turned on as the kept view showed it: gone once a view doesn't.
-      if (view && !holds(choice.name, choice.register)) continue;
+      // Removed here: no choice made before the Remove brings it back, whatever the view says.
+      if (removedHere(made, choice.name)) continue;
+      const key = pairKey(choice.name, choice.register);
+      if (gone.has(key)) continue;
+      // Turned on as the kept view showed it: gone once a view doesn't, for good.
+      if (view && !holds(choice.name, choice.register)) {
+        gone.add(key);
+        continue;
+      }
       add(choice.name, choice.register, true);
     }
-    return { handles, shown: [...shown], seen: [...seen].sort() };
+    return { handles, shown: [...shown], seen: [...seen].sort(), gone: [...gone].sort() };
   }
 
   /**
    * Whether the Seedelf `name` at `register` is one messaging may show (W8): this browser put it there, or the user
-   * turned it on. Never a name alone.
+   * turned it on, since any removal here or drop by a view (f6). Never a name alone.
    */
   private async showsAt(network: NetworkName, inbox: Inbox, name: string, register: RegisterHex): Promise<boolean> {
-    if ((await mintedAt(this.deps.store, network))[name]?.some((r) => sameRegister(r, register))) return true;
+    const made = await mintedAt(this.deps.store, network);
+    if (made[name]?.some((r) => sameRegister(r, register))) return true;
+    if (removedHere(made, name) || (inbox.gone ?? []).includes(pairKey(name, register))) return false;
     return choiceOf(inbox, name, register)?.on === true;
   }
 
@@ -2027,29 +2347,32 @@ export class MessagingService {
     const view = await this.deps.ownSeedelfs(network, false);
     if (!view?.length) return [];
     const made = await mintedAt(this.deps.store, network);
+    const gone = new Set(inbox.gone ?? []);
     return view.map(({ name, register }) => {
       const mine = made[name]?.some((r) => sameRegister(r, register)) ?? false;
-      return { name, register, made: mine, on: choiceOf(inbox, name, register)?.on ?? mine };
+      // Removed here, or dropped by a view (f6): off, whatever was chosen before; its switch turns it on again.
+      const off = removedHere(made, name) || gone.has(pairKey(name, register));
+      return { name, register, made: mine, on: !off && (choiceOf(inbox, name, register)?.on ?? mine) };
     });
   }
 
   /**
-   * Moves the cursor to where `batch`'s read ended, its envelopes taken, notes a gap, and counts what wasn't kept
-   * (W11). Whether to tell open pages. Bookkeeping: never refused for the budget, but never past the area's reserve.
+   * `batch`'s envelopes taken (finding 8): gone from the take record, in one write in its chain, with those of them
+   * that had no room this time (`noRoom`, W11): counted as their read is done with, so a read taken again after a stop
+   * counts each once, and one kept the second time not at all (f5). The cursor isn't this write's: it moved as the read
+   * ended. Whether to tell open pages. Bookkeeping: never past the area's reserve. A stale take writes nothing (f1).
    */
-  private moveCursor(network: NetworkName, batch: Batch): Promise<boolean> {
-    return this.serial(async () => {
-      // The phrase the read began under: one removed and another restored meanwhile gets no cursor of the first's.
+  private batchTaken(network: NetworkName, epoch: number, batch: Batch, noRoom: number): Promise<boolean> {
+    return this.onTakes(network, async () => {
+      if (this.epochOf(network) !== epoch) return false;
+      // The phrase the read began under: one removed and another restored meanwhile gets nothing of the first's.
       await this.withKey((_key, keys) => batch.pin(keys));
-      const inbox = await this.inbox(network);
-      const dropped = this.dropped.get(network) ?? 0;
-      if (inbox.cursor === batch.to && !batch.gap && !dropped) return false;
-      inbox.cursor = batch.to;
-      if (batch.gap) inbox.gapAt = this.deps.now();
-      if (dropped) inbox.dropped = (inbox.dropped ?? 0) + dropped;
-      await this.writeInbox(network, inbox, { kind: "bookkeeping" });
-      this.dropped.delete(network);
-      return batch.gap || dropped > 0;
+      const held = await this.takesOf(network, batch.pin);
+      if (!held.batches.includes(batch) && !noRoom) return false;
+      // Looked at again right before the write: Messages started again moves the epoch outside the queue (`clear`).
+      if (this.epochOf(network) !== epoch) return false;
+      await this.writeTakes(network, held, { ...held, batches: held.batches.filter((b) => b !== batch), noRoom: held.noRoom + noRoom });
+      return noRoom > 0;
     });
   }
 
@@ -2062,11 +2385,12 @@ export class MessagingService {
    * DESIGN-protocol §3.3): the conversation may not continue (§6), until a later message of it decrypts. No envelope
    * starts a request of any kind (W1). The requests' and tombstones' records go to the crate only for a first message
    * that isn't a held conversation's (W7). A record the crate can't read is set aside, and the envelope taken once more
-   * without it (W9). A trap in any of its WebAssembly calls is `step`'s. Returns whether anything the screens show
-   * changed.
+   * without it (W9). A trap in any of its WebAssembly calls is `step`'s. A take of an older epoch (`epoch`: a rewind, or
+   * Messages started again, since) takes nothing (f1). Returns whether anything the screens show changed.
    */
-  private receive(network: NetworkName, envelope: string, pin: PhrasePin, step: Step = { trapped: false }): Promise<boolean> {
+  private receive(network: NetworkName, envelope: string, pin: PhrasePin, step: Step, epoch: number): Promise<boolean> {
     return this.serial(async () => {
+      if (this.epochOf(network) !== epoch) return false;
       const opened = await this.withKey((key, keys) => {
         pin(keys);
         return this.parse<Opened>(this.watch(step, () => this.deps.wasm.messagingOpen(key, envelope)));
@@ -2488,56 +2812,66 @@ export class MessagingService {
       }
       let repaired = false;
       for (const [cid, meta] of Object.entries(inbox.conversations)) {
-        let file: ConversationFile | undefined;
-        try {
-          file = await this.file(network, meta);
-        } catch (e) {
-          // One that won't open stays listed, as it is: what it holds may still come back. It says so.
-          if (!(e instanceof UnreadableRecordError)) throw e;
-          if (!meta.unreadable) {
-            meta.unreadable = true;
-            repaired = true;
-          }
-          continue;
-        }
-        if (!file) {
-          delete inbox.conversations[cid];
-          repaired = true;
-          continue;
-        }
-        // One marked as unreadable that the crate reads now goes back to being shown.
-        if (meta.unreadable && this.reads(() => this.deps.wasm.messagingConversationInfo(file!.state))) {
-          delete meta.unreadable;
-          repaired = true;
-        }
-        const now = { ...measure(file, meta, sizeOf(fileToStored(file))), ...countsOf(file, meta) };
-        if (
-          now.bytes !== meta.bytes ||
-          now.outbox !== meta.outbox ||
-          now.oldestAt !== meta.oldestAt ||
-          now.last?.dir !== meta.last?.dir ||
-          now.last?.text !== meta.last?.text ||
-          now.last?.reveal !== meta.last?.reveal ||
-          now.unchecked !== meta.unchecked ||
-          now.revealed?.name !== meta.revealed?.name ||
-          now.revealed?.at !== meta.revealed?.at ||
-          now.answered !== meta.answered ||
-          now.lastAt !== meta.lastAt ||
-          now.unread !== meta.unread
-        ) {
-          Object.assign(meta, now);
-          repaired = true;
-        }
-        // A reply the inbox lost count of ends the writer's share (W17); what's left of one goes on from the record's
-        // next write, or its thread's next look.
-        if (meta.answered && meta.firstContactLeft) {
-          delete meta.firstContactLeft;
-          repaired = true;
-        }
+        if (await this.setEntryRight(network, inbox, cid, meta)) repaired = true;
       }
       if (repaired) await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+      // Every entry now says what its record holds: what a failed inbox write noted is done with (f4).
+      this.inboxBehind.delete(network);
     });
     this.swept.add(mark);
+  }
+
+  /**
+   * Sets what `inbox` shows of conversation `cid` right from its record (W9, f4): its storage, outbox, oldest and last
+   * messages, reveals, whether it's answered, when its last message came and what's unread since the thread was last
+   * shown. One whose record won't open is marked so, and stays listed: what it holds may still come back. One whose
+   * record isn't there goes from the list. The inbox is the caller's to write. Whether anything changed.
+   */
+  private async setEntryRight(network: NetworkName, inbox: Inbox, cid: string, meta: Meta): Promise<boolean> {
+    let file: ConversationFile | undefined;
+    try {
+      file = await this.file(network, meta);
+    } catch (e) {
+      if (!(e instanceof UnreadableRecordError)) throw e;
+      if (meta.unreadable) return false;
+      meta.unreadable = true;
+      return true;
+    }
+    if (!file) {
+      delete inbox.conversations[cid];
+      return true;
+    }
+    let repaired = false;
+    // One marked as unreadable that the crate reads now goes back to being shown.
+    if (meta.unreadable && this.reads(() => this.deps.wasm.messagingConversationInfo(file!.state))) {
+      delete meta.unreadable;
+      repaired = true;
+    }
+    const now = { ...measure(file, meta, sizeOf(fileToStored(file))), ...countsOf(file, meta) };
+    if (
+      now.bytes !== meta.bytes ||
+      now.outbox !== meta.outbox ||
+      now.oldestAt !== meta.oldestAt ||
+      now.last?.dir !== meta.last?.dir ||
+      now.last?.text !== meta.last?.text ||
+      now.last?.reveal !== meta.last?.reveal ||
+      now.unchecked !== meta.unchecked ||
+      now.revealed?.name !== meta.revealed?.name ||
+      now.revealed?.at !== meta.revealed?.at ||
+      now.answered !== meta.answered ||
+      now.lastAt !== meta.lastAt ||
+      now.unread !== meta.unread
+    ) {
+      Object.assign(meta, now);
+      repaired = true;
+    }
+    // A reply the inbox lost count of ends the writer's share (W17); what's left of one goes on from the record's next
+    // write, or its thread's next look.
+    if (meta.answered && meta.firstContactLeft) {
+      delete meta.firstContactLeft;
+      repaired = true;
+    }
+    return repaired;
   }
 
   // -------------------------------------------------------------------------
@@ -2653,10 +2987,12 @@ export class MessagingService {
     if (!inbox) return;
     const relay = this.deps.relay(network);
     const pool = NETWORKS[network].relay.pool;
-    // What's waiting, in order: every pending envelope of every conversation.
+    // What's waiting, in order: every pending envelope of every conversation. One a press of the user's kept, whose inbox
+    // write failed after its record's, is read whatever the inbox counts (f4): only a press widens what's read here.
+    const pressed = this.inboxBehind.get(network);
     const waiting: Array<{ cid: string; id: number; envelope: string }> = [];
     for (const [cid, meta] of Object.entries(inbox.conversations)) {
-      if (!meta.outbox || meta.unreadable) continue;
+      if ((!meta.outbox && !pressed?.get(cid)) || meta.unreadable) continue;
       const file = await this.readable(network, meta);
       for (const entry of file?.history ?? []) {
         if (entry.sent === "pending" && entry.envelope) waiting.push({ cid, id: entry.id, envelope: entry.envelope });
@@ -2895,7 +3231,7 @@ export class MessagingService {
   // -------------------------------------------------------------------------
 
   private async inbox(network: NetworkName): Promise<Inbox> {
-    const kept = await this.deps.store.get<StoredInbox & { lost?: unknown; expiredAt?: unknown }>(`messaging.${network}`);
+    const kept = await this.got<StoredInbox & { lost?: unknown; expiredAt?: unknown }>(`messaging.${network}`);
     if (!kept) return emptyInbox();
     // Another build's version is an inbox that won't open (W15): what it holds is never misread, nor written over.
     if (!READS_VERSIONS.has(kept.v)) throw new UnreadableRecordError(`messaging.${network}`);
@@ -2939,12 +3275,14 @@ export class MessagingService {
   private async writeInbox(network: NetworkName, inbox: Inbox, { kind = "content" }: { kind?: WriteKind } = {}): Promise<void> {
     await this.sizesNow();
     const known = this.sizes.get(network);
+    const was = known?.inbox ?? (await this.storedNow(`messaging.${network}`));
     let lean = sizeOf(inboxToStored(leanOf(inbox)));
     if (kind !== "requests" && (known === undefined || lean > known.lean)) {
       const over = (await this.totalWith(network, inbox, { lean })) - this.budget();
       if (over > 0) {
         try {
-          await this.makeRoom(network, inbox, undefined, over);
+          // What this write grows the area by, for the reserve's look before any trim is written (f3).
+          await this.makeRoom(network, inbox, undefined, over, sizeOf(inboxToStored(inbox)) - was);
         } catch (e) {
           // Bookkeeping never waits on room: written all the same, within the reserve.
           if (!(e instanceof MessagingFull) || kind === "content") throw e;
@@ -2954,7 +3292,6 @@ export class MessagingService {
     }
     const stored = inboxToStored(inbox);
     const bytes = sizeOf(stored);
-    const was = known?.inbox ?? (await this.storedNow(`messaging.${network}`));
     await this.put(network, `messaging.${network}`, stored, kind, bytes - was);
     this.sizes.set(network, { inbox: bytes, lean, total: lean + conversationBytes(inbox) });
   }
@@ -2966,14 +3303,115 @@ export class MessagingService {
   private async file(network: NetworkName, meta: Meta): Promise<ConversationFile | undefined> {
     if (!meta.id) return undefined;
     const name = conversationRecord(network, meta.id);
-    const stored = await this.deps.store.get<ConversationFile>(name);
+    const stored = await this.got<ConversationFile>(name);
     if (stored && !READS_VERSIONS.has((stored as { v?: unknown }).v)) throw new UnreadableRecordError(name);
     return stored && fileFromStored(stored);
   }
 
   /** What a record takes now as it's stored (its sealed data's length), with no key: 0 when there's none. */
   private async storedNow(name: RecordName): Promise<number> {
-    return (await this.deps.local.get<{ data?: string }>(PRIVATE_PREFIX + name).catch(() => undefined))?.data?.length ?? 0;
+    return (await this.area<{ data?: string }>(PRIVATE_PREFIX + name))?.data?.length ?? 0;
+  }
+
+  /**
+   * A sealed record of Messages' (f2): undefined when there's none; UnreadableRecordError for one that won't open, and a
+   * lock, as they are; a read of the storage area that fails, StorageFailed.
+   */
+  private async got<T>(name: RecordName): Promise<T | undefined> {
+    try {
+      return await this.deps.store.get<T>(name);
+    } catch (e) {
+      throw failedRead(e);
+    }
+  }
+
+  /** chrome.storage.local's own read, of what Messages reads with no key (f2): a read that fails is StorageFailed. */
+  private async area<T>(key: string): Promise<T | undefined> {
+    try {
+      return await this.deps.local.get<T>(key);
+    } catch (e) {
+      throw failedRead(e);
+    }
+  }
+
+  /**
+   * Runs `task` on `network`'s take record after every earlier one (finding 8): a chain of its own, so the write after a
+   * read never waits behind the take's work in the queue, nor the queue behind it.
+   */
+  private onTakes<T>(network: NetworkName, task: () => Promise<T>): Promise<T> {
+    const run = (this.takeWrites.get(network) ?? Promise.resolve()).catch(() => undefined).then(task);
+    this.takeWrites.set(network, run);
+    return run;
+  }
+
+  /** The unlock what's in memory belongs to (`unlockedAt`): undefined while locked. */
+  private async unlockStamp(): Promise<number | undefined> {
+    return this.deps.wallet.unlockedAt().catch(() => undefined);
+  }
+
+  /** `network`'s take record (finding 8): as this service holds it, or read in its chain, once per unlock and epoch. */
+  private async takesFor(network: NetworkName, pin?: PhrasePin): Promise<TakesHeld> {
+    const held = this.takes.get(network);
+    if (held && held.epoch === this.epochOf(network) && held.at === (await this.unlockStamp())) return held;
+    return this.onTakes(network, () => this.takesOf(network, pin));
+  }
+
+  /**
+   * `network`'s take record, in its chain (`onTakes`): as held, or read from storage under the phrase `pin` binds (a fresh
+   * one, bound now, without it). One that won't open holds nothing a read can't bring back: the next read goes from the
+   * pool's oldest, and it's written over.
+   */
+  private async takesOf(network: NetworkName, pin?: PhrasePin): Promise<TakesHeld> {
+    const at = await this.unlockStamp();
+    const epoch = this.epochOf(network);
+    const held = this.takes.get(network);
+    if (held && held.at === at && held.epoch === epoch) return held;
+    const opened = pin ?? phrasePin();
+    await this.withKey((_key, keys) => opened(keys));
+    let stored: StoredTakes | undefined;
+    let there = false;
+    try {
+      stored = await this.got<StoredTakes>(takeRecord(network));
+      there = stored !== undefined;
+    } catch (e) {
+      if (!(e instanceof UnreadableRecordError)) throw e;
+      there = true;
+    }
+    const now: TakesHeld = { ...takesFromStored(stored, opened), at, epoch, stored: there, bytes: there ? await this.storedNow(takeRecord(network)) : 0 };
+    this.takes.set(network, now);
+    return now;
+  }
+
+  /** `network`'s take record as it stands, for what's shown: as held, or read from storage, keeping nothing. */
+  private async takesNow(network: NetworkName): Promise<Takes> {
+    const held = this.takes.get(network);
+    if (held && held.epoch === this.epochOf(network) && held.at === (await this.unlockStamp())) return held;
+    const stored = await this.got<StoredTakes>(takeRecord(network)).catch((e: unknown) => {
+      if (e instanceof UnreadableRecordError) return undefined;
+      throw e;
+    });
+    return takesFromStored(stored, phrasePin());
+  }
+
+  /**
+   * Writes `network`'s take record as `next` (bookkeeping, W11: never refused for the budget, never past the area's
+   * reserve, which throws ReserveReached and stops the taking), and holds it so, in `held`'s unlock and epoch.
+   */
+  private async writeTakes(network: NetworkName, held: TakesHeld, next: Takes): Promise<void> {
+    const stored = takesToStored(next);
+    const bytes = sizeOf(stored);
+    await this.put(network, takeRecord(network), stored, "bookkeeping", held.stored ? bytes - held.bytes : bytes);
+    this.takes.set(network, {
+      cursor: next.cursor,
+      gapAt: next.gapAt,
+      batches: next.batches,
+      unopened: next.unopened,
+      noRoom: next.noRoom,
+      at: held.at,
+      epoch: held.epoch,
+      stored: true,
+      bytes,
+    });
   }
 
   /** A conversation's record, or undefined when there's none or it won't open: for what runs by itself. */
@@ -3045,7 +3483,8 @@ export class MessagingService {
 
   /**
    * Lists a new conversation in `inbox` and writes its record within the budget; the inbox is the caller's to write.
-   * Nothing is listed when the record can't be written.
+   * Nothing is listed when the record can't be written. The room the record needs is made only where the area's reserve
+   * holds the record and the inbox that lists it together (f3).
    */
   private async addConversation(
     network: NetworkName,
@@ -3056,7 +3495,9 @@ export class MessagingService {
   ): Promise<void> {
     inbox.conversations[cid] = { ...meta, id: newRecordId(), outbox: 0, bytes: 0, oldestAt: meta.startedAt };
     try {
-      await this.writeFile(network, inbox, cid, file);
+      await this.sizesNow();
+      const listed = sizeOf(inboxToStored(inbox)) - (this.sizes.get(network)?.inbox ?? (await this.storedNow(`messaging.${network}`)));
+      await this.writeFile(network, inbox, cid, file, "content", undefined, listed);
     } catch (e) {
       delete inbox.conversations[cid];
       throw e;
@@ -3066,10 +3507,21 @@ export class MessagingService {
   /**
    * Writes conversation `cid`'s record within the budget where it grows (W7), and sets what the inbox shows of it from
    * the record; the inbox is the caller's to write. Throws MessagingFull, writing nothing, when it can't fit (but for
-   * bookkeeping, which makes room best effort and is never refused for the budget). `keep`: the entry this write is for,
-   * which no trim of its own deletes: a message never pays for its own room (W11).
+   * bookkeeping, which makes room best effort and is never refused for the budget); and where the area's reserve can't
+   * hold the write with the room made for it, nothing is deleted for it either (f3). A browser that refuses the record's
+   * own write, or a stop, after the room was made leaves the oldest read messages that made it gone, as the budget would
+   * delete them next. `keep`: the entry this write is for, which no trim of its own deletes: a message never pays for its
+   * own room (W11). `alsoGrows`: what a write right after it grows the area by (the inbox that lists a new one).
    */
-  private async writeFile(network: NetworkName, inbox: Inbox, cid: string, file: ConversationFile, kind: WriteKind = "content", keep?: number): Promise<void> {
+  private async writeFile(
+    network: NetworkName,
+    inbox: Inbox,
+    cid: string,
+    file: ConversationFile,
+    kind: WriteKind = "content",
+    keep?: number,
+    alsoGrows = 0,
+  ): Promise<void> {
     const meta = inbox.conversations[cid]!;
     let stored = fileToStored(file);
     let bytes = sizeOf(stored);
@@ -3078,7 +3530,7 @@ export class MessagingService {
       const over = (await this.totalWith(network, inbox, { cid, bytes })) - this.budget();
       if (over > 0) {
         try {
-          await this.makeRoom(network, inbox, { cid, file, keep }, over);
+          await this.makeRoom(network, inbox, { cid, file, keep }, over, alsoGrows);
         } catch (e) {
           if (!(e instanceof MessagingFull) || kind !== "bookkeeping") throw e;
         }
@@ -3112,11 +3564,33 @@ export class MessagingService {
   /**
    * Writes a conversation's record, then the inbox with what it shows of it: the record's write is `kind`'s (a message
    * made or taken: `content`; a post marked, bytes sent again, a check's outcome: `bookkeeping`), and the inbox's after
-   * it bookkeeping, since it only says what the record now holds. `keep`: as `writeFile`'s.
+   * it bookkeeping, since it only says what the record now holds. `keep`: as `writeFile`'s. An inbox write that fails
+   * after the record's is noted (f4), and the entry set right at the take's next bookkeeping write: it's thrown again,
+   * but for a press of the user's (`press`) whose record now holds its message, which then succeeds, the post reading it
+   * whatever the inbox counts; a lock or a trap is thrown all the same.
    */
-  private async commit(network: NetworkName, inbox: Inbox, cid: string, file: ConversationFile, kind: WriteKind = "content", keep?: number): Promise<void> {
+  private async commit(
+    network: NetworkName,
+    inbox: Inbox,
+    cid: string,
+    file: ConversationFile,
+    kind: WriteKind = "content",
+    keep?: number,
+    press = false,
+  ): Promise<void> {
     await this.writeFile(network, inbox, cid, file, kind, keep);
-    await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+    const noted = this.inboxBehind.get(network)?.has(cid);
+    // One whose inbox write failed before: its entry set right from the record in hand, as the sweep would.
+    const meta = inbox.conversations[cid];
+    if (noted && meta) Object.assign(meta, countsOf(file, meta));
+    try {
+      await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+    } catch (e) {
+      this.noteBehind(network, cid, press);
+      if (press && !(e instanceof WalletLocked) && !isTrap(e)) return;
+      throw e;
+    }
+    if (noted) this.clearNoted(network, [cid]);
   }
 
   /**
@@ -3183,7 +3657,7 @@ export class MessagingService {
     let sizes: { total: number; inbox: number; lean: number };
     try {
       const inbox = await this.inbox(network);
-      const stored = (await this.deps.local.get(PRIVATE_PREFIX + `messaging.${network}`)) !== undefined;
+      const stored = (await this.area(PRIVATE_PREFIX + `messaging.${network}`)) !== undefined;
       const lean = stored ? sizeOf(inboxToStored(leanOf(inbox))) : 0;
       sizes = { inbox: stored ? sizeOf(inboxToStored(inbox)) : 0, lean, total: lean + conversationBytes(inbox) };
     } catch (e) {
@@ -3191,7 +3665,7 @@ export class MessagingService {
       // An inbox that won't open: what its records take as they're stored, by their sealed lengths.
       const keys = [PRIVATE_PREFIX + `messaging.${network}`, ...(await this.deps.local.keys(PRIVATE_PREFIX + CONVERSATION_RECORDS + network + "."))];
       let total = 0;
-      for (const key of keys) total += (await this.deps.local.get<{ data?: string }>(key))?.data?.length ?? 0;
+      for (const key of keys) total += (await this.area<{ data?: string }>(key))?.data?.length ?? 0;
       sizes = { inbox: 0, lean: 0, total };
     }
     this.sizes.set(network, sizes);
@@ -3204,14 +3678,18 @@ export class MessagingService {
    * messages before unread, over every conversation on every network. A message still to be posted stays, and nothing
    * is deleted for bytes no deletion frees (the crate's state with its skipped keys, the outbox, requests): a record's
    * size moves only by powers of two, so a trim that doesn't take it down one frees nothing and isn't made. When the
-   * plan can't free `over`, nothing is deleted at all, and it throws MessagingFull. `writing` is the caller's to write,
-   * and `inbox` too; every other record a trim changes is written here.
+   * plan can't free `over`, nothing is deleted at all, and it throws MessagingFull; and so when the area's reserve can't
+   * hold the caller's write with what the plan frees (f3), which is looked at before any trim is written: `grows`, what
+   * the caller's write (the inbox's, where `writing` is none) or the one right after it grows the area by, beside
+   * `writing`'s own growth as planned. `writing` is the caller's to write, and `inbox` too; every other record a trim
+   * changes is written here.
    */
   private async makeRoom(
     network: NetworkName,
     inbox: Inbox,
     writing: { cid: string; file: ConversationFile; keep?: number } | undefined,
     over: number,
+    grows = 0,
   ): Promise<void> {
     interface Plan {
       network: NetworkName;
@@ -3280,6 +3758,11 @@ export class MessagingService {
       await trim(next);
     }
     if (freed < over) throw new MessagingFull();
+    // The area's reserve, with the room the plan makes, before any trim is written (f3): the write this room is for, as
+    // `put` will look at it, less what the other records' trims free. Where it wouldn't hold, nothing is deleted.
+    const growth = Math.max(0, own ? own.bytes - own.meta.bytes : 0) + Math.max(0, grows);
+    const frees = plans.reduce((sum, p) => (p === own || !p.drop.size ? sum : sum + Math.max(0, p.meta.bytes - p.bytes)), 0);
+    if (growth > 0 && !(await this.reserveHolds(growth - frees))) throw new MessagingFull();
     // The plan frees enough: made.
     const touched = new Set<NetworkName>();
     for (const plan of plans) {
@@ -3395,9 +3878,20 @@ export class MessagingService {
     if (typeof text !== "string" || !text.trim()) throw new Error(t("worker.messaging.empty"));
   }
 
-  /** `task` with the Seedelf key, in the wallet's queue: throws if locked. */
-  private withKey<T>(task: (key: Wasm.SeedelfKey, keys: Parameters<PhrasePin>[0]) => T): Promise<T> {
-    return this.deps.wallet.withKeys((keys) => task(keys.seedelf, keys));
+  /**
+   * `task` with the Seedelf key, in the wallet's queue: throws if locked. A read of storage the wallet makes before the
+   * task, of its session, fails as StorageFailed (f2); what the task throws is its own.
+   */
+  private async withKey<T>(task: (key: Wasm.SeedelfKey, keys: Parameters<PhrasePin>[0]) => T): Promise<T> {
+    let ran = false;
+    try {
+      return await this.deps.wallet.withKeys((keys) => {
+        ran = true;
+        return task(keys.seedelf, keys);
+      });
+    } catch (e) {
+      throw ran ? e : failedRead(e);
+    }
   }
 
   /** A WebAssembly call outside the wallet's queue: one that traps locks the wallet, as one inside it does. */
@@ -3424,7 +3918,12 @@ export class MessagingService {
   }
 
   private wait(): Promise<void> {
-    return (this.deps.wait ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(0);
+    return this.pause(0);
+  }
+
+  /** A wait of `ms`, out of the queue: a timer. */
+  private pause(ms: number): Promise<void> {
+    return (this.deps.wait ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(ms);
   }
 
   /** The monotonic clock (ms, W14): what every wait kept in memory runs on, never this device's clock. */

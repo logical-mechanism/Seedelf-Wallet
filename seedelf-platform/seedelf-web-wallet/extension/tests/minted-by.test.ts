@@ -12,7 +12,16 @@ import { registerOf } from "../src/background/chain";
 import { Collateral } from "../src/background/collateral";
 import { Koios, type KoiosTxInfo, type KoiosUtxo } from "../src/background/koios";
 import { MintService } from "../src/background/mint";
-import { forgetRegisters, mintedAt, mintedBy, paidByOf, rememberMint, rememberRegister } from "../src/background/minted-by";
+import {
+  clearRemoved,
+  forgetRegisters,
+  mintedAt,
+  mintedBy,
+  paidByOf,
+  rememberMint,
+  rememberRegister,
+  removedHere,
+} from "../src/background/minted-by";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { KnownAccount, SeedelfInfo } from "../src/shared/rpc";
@@ -120,18 +129,25 @@ describe("the registers a mint put its Seedelf under (the 1.10.0 gate's W12)", (
   const A = { generator: "a".repeat(96), publicValue: "b".repeat(96) };
   const B = { generator: "c".repeat(96), publicValue: "d".repeat(96) };
 
-  it("are kept per network, each once, and forgotten for one Seedelf alone, as its Remove is sent", async () => {
+  it("are kept per network, each once, and forgotten for one Seedelf alone, as its Remove is sent, a mark of the removal left", async () => {
     const t = await unlocked();
     await rememberRegister(t.store, "preprod", "5eed01", A);
     await rememberRegister(t.store, "preprod", "5eed01", A);
     await rememberRegister(t.store, "preprod", "5eed02", B);
     expect(await mintedAt(t.store, "preprod")).toEqual({ "5eed01": [A], "5eed02": [B] });
     expect(await mintedAt(t.store, "mainnet")).toEqual({});
+    // Its registers go; its name stays, with none: removed here (the 1.10.0 gate's f6).
     await forgetRegisters(t.store, "preprod", "5eed01");
-    expect(await mintedAt(t.store, "preprod")).toEqual({ "5eed02": [B] });
-    // One never kept: nothing changes.
+    expect(await mintedAt(t.store, "preprod")).toEqual({ "5eed01": [], "5eed02": [B] });
+    expect(removedHere(await mintedAt(t.store, "preprod"), "5eed01")).toBe(true);
+    expect(removedHere(await mintedAt(t.store, "preprod"), "5eed02")).toBe(false);
+    // One never kept (minted before 1.10.0, or turned on by hand): marked removed all the same.
     await forgetRegisters(t.store, "preprod", "5eed09");
-    expect(await mintedAt(t.store, "preprod")).toEqual({ "5eed02": [B] });
+    expect(await mintedAt(t.store, "preprod")).toEqual({ "5eed01": [], "5eed02": [B], "5eed09": [] });
+    // The user's own turn-on lifts the mark, and only a mark.
+    await clearRemoved(t.store, "preprod", "5eed01");
+    await clearRemoved(t.store, "preprod", "5eed02");
+    expect(await mintedAt(t.store, "preprod")).toEqual({ "5eed02": [B], "5eed09": [] });
   });
 
   it("say when their write is refused, never swallowing it: the caller decides (quota-outside#11)", async () => {

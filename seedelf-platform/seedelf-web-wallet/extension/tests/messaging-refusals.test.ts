@@ -21,6 +21,7 @@ import {
   busyFor,
   CAROL_SEEDELF,
   clock,
+  cursorOf,
   type Directory,
   fakeRelay,
   fileOf,
@@ -101,6 +102,7 @@ describe("an envelope the wallet refuses (W3)", { timeout: 30_000 }, () => {
     await synced(bob);
     const base = new Map(bob.local.data);
     const before = await records(bob);
+    const cursorBefore = await cursorOf(bob);
     const unknown = "ab".repeat(16);
     const seconds = Math.floor(clock.now / 1000);
     // What the junk envelope opens as: each way an envelope can name a conversation.
@@ -133,12 +135,11 @@ describe("an envelope the wallet refuses (W3)", { timeout: 30_000 }, () => {
         relay.pools.get("preprod")!.held.pop();
 
         const after = await records(bob);
-        const inbox = after["messaging.preprod"] as Inbox;
-        // What the one refusal that leaves a mark leaves, and nothing else: the cursor moved past the junk.
+        // What the one refusal that leaves a mark leaves, and nothing else: the cursor moved past the junk (in the take
+        // record, finding 8).
         const expected = structuredClone(before) as Record<string, unknown>;
         const was = expected["messaging.preprod"] as Inbox;
-        expect(inbox.cursor).not.toBe(was.cursor);
-        was.cursor = inbox.cursor;
+        expect(await cursorOf(bob)).not.toBe(cursorBefore);
         const tooFar = opened !== undefined && code === "too_far_ahead" && (opened as { cid: string }).cid === held;
         if (tooFar) was.conversations[held]!.unreachable = true;
         const where = `${code}, ${aim}`;
@@ -295,7 +296,7 @@ describe("a first message the wallet can't place (W1)", { timeout: 30_000 }, () 
     bob.own.push({ name: SECOND, register: second });
     directory.set(SECOND, second);
     await turnOn(alice, bob);
-    const before = (await bob.store.get<Inbox>("messaging.preprod"))!.cursor;
+    const before = (await cursorOf(bob));
     const lost = await alice.messaging.start("preprod", SECOND, "to your new Seedelf");
     const kept = await alice.messaging.start("preprod", BOB_SEEDELF, "to the one you know");
     await alice.messaging.whenIdle();
@@ -306,7 +307,7 @@ describe("a first message the wallet can't place (W1)", { timeout: 30_000 }, () 
     expect(bob.trace.filter((s) => s.startsWith("chain"))).toEqual([]);
     // The one behind it arrived, and the cursor moved past both.
     expect((await bob.messaging.overview("preprod")).requests.map((r) => r.cid)).toEqual([kept]);
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.cursor).not.toBe(before);
+    expect((await cursorOf(bob))).not.toBe(before);
     expect(JSON.stringify(await records(bob))).not.toContain(lost);
     // However many come, at however many syncs.
     for (let i = 0; i < 3; i++) {
