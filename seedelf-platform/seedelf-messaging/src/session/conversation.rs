@@ -13,12 +13,13 @@ use crate::register::{POINT_LEN, Register, decode_point, matches_register, reran
 use crate::relay::stamp_bits;
 use crate::session::draw::{Draw, OsDraw};
 use crate::session::first_contact::{
-    CID_LEN, ConversationId, FirstContact, MAX_TO_LEN, Reader, STAMP_LEN, base_scalar, head_bytes,
-    prove_base, session_key,
+    CID_LEN, ConversationId, FirstContact, KeysStatement, MAX_TO_LEN, Reader, STAMP_LEN,
+    base_scalar, head_bytes, prove_base, session_key,
 };
+use crate::session::inbox::{MAX_ONE_REQUEST_BYTES, MAX_REQUEST_MESSAGES};
 use crate::session::ratchet::{
-    KeyPair, MAX_STORED_SKIPPED, RATCHET_HEADER_LEN, RATCHET_OVERHEAD, RATCHET_SALT_LEN, Ratchet,
-    Skipped, encrypt, outer_scalar,
+    KeyPair, RATCHET_HEADER_LEN, RATCHET_OVERHEAD, RATCHET_SALT_LEN, Ratchet, encrypt,
+    envelope_ephemeral_scalar, outer_scalar, read_skipped, skipped_len, write_skipped,
 };
 use crate::session::secret::Secret32;
 use crate::session::wire::{
@@ -30,8 +31,13 @@ use crate::{Error, SecretKey};
 /// Each message's text or refusal, in order.
 pub(crate) type Texts = Vec<Result<Vec<u8>, Error>>;
 
-/// The conversation state's serialization format.
-pub const STATE_VERSION: u8 = 1;
+/// The conversation state's serialization format: 2 (docs/protocol.md
+/// §16.5). A state of version 1, a development build's, is refused at its
+/// first byte.
+pub const STATE_VERSION: u8 = 2;
+
+/// The flags bit of the initiator's count of first-contact bytes sent.
+const SENT_BEFORE_A_REPLY: u8 = 1 << 4;
 
 /// Which side of a conversation this state is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,6 +74,11 @@ pub struct Conversation {
     pub(crate) ratchet: Ratchet,
     /// The initiator's first-contact stamp, once solved.
     pub(crate) stamp: Option<u64>,
+    /// The initiator's first-contact bytes sealed so far, their inner
+    /// messages unpadded, as the reader counts them against the request's
+    /// share: there exactly while it sends first-contact messages, until a
+    /// reply decrypts.
+    pub(crate) first_contact_sent: Option<u32>,
 }
 
 impl Conversation {
@@ -130,7 +141,9 @@ impl Conversation {
     /// The initiator's side of §3. Draws `cid`; from a handle, derives `b`
     /// from `key`, the handle, F's head and drawn bytes (§16.2), and the
     /// base and the responder's value from `b`; then draws `e_A` and `s_A`;
-    /// then, from a handle, proves the base with a nonce derived from `b`.
+    /// then, from a handle, proves the base with a nonce derived from `b`;
+    /// then proves the keys of `E_A`, `S_A` and, from a handle only, `A`
+    /// (docs/joint-security.md, use 10), with nonces derived from them.
     pub(crate) fn begin(
         key: &SecretKey,
         origin: Origin<'_>,
@@ -154,8 +167,12 @@ impl Conversation {
             Origin::Base { base, responder } => (base, responder, None),
         };
         let e = draw.scalar();
-        let s = KeyPair::generate(&base, draw);
         let p0 = G1Projective::from(base);
+        let s_scalar = draw.scalar();
+        let s = KeyPair {
+            secret: Secret32::from_bytes(s_scalar.to_bytes_be()),
+            public: (p0 * s_scalar).to_affine(),
+        };
         let mut first = FirstContact {
             cid,
             started_at: now,
@@ -165,10 +182,20 @@ impl Conversation {
             initiator: (p0 * x).to_affine(),
             ephemeral: (p0 * e).to_affine(),
             proof: None,
+            keys_proof: None,
         };
-        if let Some((handle, b)) = from_handle {
-            first.proof = Some(prove_base(handle, &b, &first.prefix_bytes(), draw));
-        }
+        // The keys proof covers F″, so the base proof comes first. Only a
+        // start from a handle proves A's key (docs/joint-security.md, use
+        // 10): a continuation's A and w₀ are values both sides already hold.
+        first.keys_proof = Some(match from_handle {
+            Some((handle, b)) => {
+                first.proof = Some(prove_base(handle, &b, &first.prefix_bytes(), draw));
+                KeysStatement::of(&first, &responder, &s.public)
+                    .prove_handle(&x, &e, &s_scalar, draw)?
+            }
+            None => KeysStatement::of(&first, &responder, &s.public)
+                .prove_continuation(&e, &s_scalar, draw),
+        });
         let first_bytes = first.to_bytes();
         let w0 = G1Projective::from(responder);
         let ephemeral_dh = Zeroizing::new((w0 * e).to_compressed());
@@ -181,6 +208,7 @@ impl Conversation {
             responder,
             ratchet: Ratchet::init_alice(&sk, s, responder),
             stamp: None,
+            first_contact_sent: Some(0),
         })
     }
 
@@ -210,10 +238,22 @@ impl Conversation {
             .map(|nonce| (nonce, stamp_bits(&self.stamp_digest(), nonce)))
     }
 
-    /// The responder's side of §3: SK from F and `key`, `RatchetInitBob`, then
-    /// each message in order, each with the time it arrived. The state is
-    /// kept if any message authenticates; each message's result is returned.
-    /// If none does, the first one's refusal is.
+    /// The responder's side of §3: the keys proof, then SK from F and `key`,
+    /// `RatchetInitBob`, then each message in order, each with the time it
+    /// arrived. The state is kept if any message authenticates; each
+    /// message's result is returned. If none does, the first one's refusal
+    /// is.
+    ///
+    /// Every path that builds a responder's state comes here: a new cid's
+    /// first message, a join's replay, [`Request::read`](crate::session::Request::read)
+    /// and [`Inbox::accept`](crate::session::Inbox::accept). So before `x`
+    /// meets any point of F's but `p₀`, which the base proof or a held base
+    /// bound before this was called, every message must carry the first's
+    /// header key `S_A`, and the keys proof must show the writer knows the
+    /// keys of `E_A`, `S_A` and, from a handle, `A` (else
+    /// [`Error::InvalidKeysProof`]). Then `[x]E_A`, `[x]A`, and in the first
+    /// ratchet step `[x]S_A`, are each a value the writer could compute
+    /// (docs/joint-security.md, rule 1).
     ///
     /// The scratch state holds `x` as its first ratchet key only until the
     /// first message's ratchet step replaces it, so a returned conversation
@@ -227,8 +267,20 @@ impl Conversation {
             .first()
             .and_then(|(opened, _)| opened.first.clone())
             .ok_or(Error::UnexpectedMessage)?;
+        // While no message has authenticated, the scratch state's ratchet
+        // key is x, and a message on a new header key would meet it there.
+        let header_key = messages[0].0.header.dh;
+        if messages
+            .iter()
+            .any(|(opened, _)| opened.header.dh != header_key)
+        {
+            return Err(Error::InvalidKeysProof);
+        }
         let x = key.scalar();
         let w0 = (G1Projective::from(first.base) * x).to_affine();
+        if !first.proves_keys(&w0, &header_key) {
+            return Err(Error::InvalidKeysProof);
+        }
         let ephemeral_dh =
             Zeroizing::new((G1Projective::from(first.ephemeral) * x).to_compressed());
         let static_dh = Zeroizing::new((G1Projective::from(first.initiator) * x).to_compressed());
@@ -244,6 +296,7 @@ impl Conversation {
             responder: w0,
             ratchet: Ratchet::init_bob(sk, mine),
             stamp: None,
+            first_contact_sent: None,
         };
         let results: Vec<_> = messages
             .iter()
@@ -262,7 +315,18 @@ impl Conversation {
     /// Encrypts `plaintext` as the next message and seals it in an envelope
     /// to the other side's identity re-randomized by the message's outer
     /// scalar: a `0x01` until the initiator has received a reply, then
-    /// `0x02`. A `0x01` needs the stamp set first ([`Error::Unstamped`]).
+    /// `0x02`. A `0x01` needs the stamp set first ([`Error::Unstamped`]),
+    /// and room in the request's share, 16 messages and 64 KiB of their
+    /// inner messages before a reply ([`Error::RequestFull`], before the
+    /// chain moves; [`Conversation::first_contact_left`] says what's left).
+    ///
+    /// Every message, either side's, before a reply and after one, is padded
+    /// to the envelope its text would take as a first-contact message of
+    /// this conversation (docs/protocol.md §9): so 2 KiB at least, and
+    /// neither a reply taken nor which side writes changes a size. A text
+    /// whose first-contact form doesn't fit 32 KiB is
+    /// [`Error::MessageTooLarge`], after a reply too
+    /// ([`Conversation::max_text_len`]).
     ///
     /// The caller stores the new state and the envelope together before
     /// posting it (docs/protocol.md §4.2). On an error the state is as it
@@ -271,8 +335,9 @@ impl Conversation {
         self.send_with(plaintext, &mut OsDraw)
     }
 
-    /// Draws the ratchet's salt, then the envelope's `r`. The envelope's
-    /// re-randomization is the outer scalar, from the message key and salt.
+    /// Draws the ratchet's salt, and nothing else: the envelope's
+    /// re-randomization, the outer scalar `o`, and its ephemeral scalar `r`
+    /// both come from the message key and the salt (docs/protocol.md §16.2).
     pub(crate) fn send_with(
         &mut self,
         plaintext: &[u8],
@@ -283,7 +348,17 @@ impl Conversation {
             (true, stamp) => stamp,
             (false, _) => None,
         };
-        let size = envelope_size(self.inner_overhead() + plaintext.len())?;
+        let inner_len = self.inner_overhead() + plaintext.len();
+        // The request's share, before the chain moves: a message past it is
+        // one the reader would refuse to join.
+        if stamp.is_some() && !self.share_takes(inner_len) {
+            return Err(Error::RequestFull);
+        }
+        // The size its text takes as a first-contact message, never less
+        // than its own inner message's: the same before a reply and after,
+        // at either side (docs/protocol.md §9).
+        let size = envelope_size(self.first_contact_overhead() + plaintext.len())?
+            .max(envelope_size(inner_len)?);
         let mut ratchet = self.ratchet.clone();
         let (header, mk) = ratchet.next_sending()?;
         let salt = draw.bytes16();
@@ -303,15 +378,27 @@ impl Conversation {
         inner.extend_from_slice(&ciphertext);
         let padded = pad(&inner, size);
         let o = outer_scalar(&mk, &salt);
-        // Probability 2⁻²⁵⁴: the state is unchanged, and a retry draws a new
-        // salt.
-        if bool::from(ff::Field::is_zero(&o)) {
+        let r = envelope_ephemeral_scalar(&mk, &salt);
+        // Each with probability about 2⁻²⁵⁵: the state is unchanged, and a
+        // retry draws a new salt.
+        if bool::from(ff::Field::is_zero(&o)) || bool::from(ff::Field::is_zero(&r)) {
             return Err(Error::InvalidScalar);
         }
-        let r = draw.scalar();
         let envelope = seal(&self.their_register(), &o, &r, &padded)?.to_bytes();
         self.ratchet = ratchet;
+        if stamp.is_some() {
+            // Within the share's 64 KiB, so within a u32.
+            let sent = self.first_contact_sent.unwrap_or(0) as usize + inner_len;
+            self.first_contact_sent = Some(sent as u32);
+        }
         Ok(envelope)
+    }
+
+    /// Whether the request's share takes one more first-contact message of
+    /// `inner_len` bytes: fewer than 16 sent, and its bytes within 64 KiB.
+    fn share_takes(&self, inner_len: usize) -> bool {
+        let sent = self.first_contact_sent.unwrap_or(0) as usize;
+        self.ratchet.ns < MAX_REQUEST_MESSAGES as u32 && sent + inner_len <= MAX_ONE_REQUEST_BYTES
     }
 
     /// Decrypts an opened message of this conversation at `now`, by the
@@ -320,9 +407,13 @@ impl Conversation {
     /// A first-contact message counts only if it carries the stored F, and
     /// only at the responder. The ratchet runs on a copy, kept only if the
     /// message authenticates and its envelope was addressed to this side's
-    /// identity re-randomized by the message's outer scalar; `opened` must
-    /// come from [`open`](crate::session::open). No message makes the ratchet
-    /// skip more than `MAX_SKIP` keys. On an error the state is as it was.
+    /// identity re-randomized by the message's outer scalar, with the
+    /// ephemeral point the message key gives; `opened` must come from
+    /// [`open`](crate::session::open). No message makes the ratchet skip more
+    /// than `MAX_SKIP` keys: past that, a session message is
+    /// [`Error::TooFarAhead`] only if it authenticates and its envelope
+    /// checks, and anything else is [`Error::DecryptionFailed`]. On an error
+    /// the state is as it was.
     pub fn receive(&mut self, opened: &Opened, now: u64) -> Result<Vec<u8>, Error> {
         self.receive_with(opened, now, &mut OsDraw)
     }
@@ -348,28 +439,76 @@ impl Conversation {
             return Err(Error::WrongEnvelopeRegister);
         }
         let mut ratchet = self.ratchet.clone();
-        let (plaintext, mk) = ratchet.decrypt(
+        let decrypted = ratchet.decrypt(
             &self.first.base,
             &opened.header,
             &opened.ciphertext,
             &self.ad_prefix(),
             now,
             draw,
-        )?;
-        // The envelope went to this side's identity re-randomized by the
-        // message's own scalar: [o]p₀ is the envelope's generator, and the
-        // scan already showed its public value is this key's on it.
-        if let Outer::Envelope(generator) = opened.outer {
-            let salt: &[u8; RATCHET_SALT_LEN] = opened.ciphertext[..RATCHET_SALT_LEN]
-                .try_into()
-                .expect("a parsed ciphertext holds its salt");
-            let o = outer_scalar(&mk, salt);
-            if (G1Projective::from(self.first.base) * o).to_affine() != generator {
-                return Err(Error::WrongEnvelopeRegister);
-            }
-        }
+        );
+        let (plaintext, mk) = match decrypted {
+            Err(Error::TooFarAhead) => return Err(self.too_far_ahead(opened)),
+            decrypted => decrypted?,
+        };
+        self.check_envelope(opened, &mk)?;
         self.ratchet = ratchet;
+        // A reply has decrypted: the request's share is behind the initiator.
+        if self.ratchet.ckr.is_some() {
+            self.first_contact_sent = None;
+        }
         Ok(plaintext)
+    }
+
+    /// What a message the ratchet found too far ahead amounts to
+    /// (docs/protocol.md §16.4): [`Error::TooFarAhead`] only for a session
+    /// message of a held conversation that authenticates, read-only, and
+    /// whose envelope's p and c check, else the refusal it met, silent as a
+    /// forgery's. A first-contact message is never authenticated past the
+    /// bound, nor anything at a request's scratch state, which has no
+    /// sending chain and whose ratchet key is the reader's long-term key.
+    fn too_far_ahead(&self, opened: &Opened) -> Error {
+        if opened.first.is_some() || self.ratchet.cks.is_none() {
+            return Error::DecryptionFailed;
+        }
+        let authentic = self
+            .ratchet
+            .authenticate_far(&opened.header, &opened.ciphertext, &self.ad_prefix())
+            .and_then(|mk| self.check_envelope(opened, &mk));
+        match authentic {
+            Ok(()) => Error::TooFarAhead,
+            Err(refusal) => refusal,
+        }
+    }
+
+    /// The envelope's check, once its message has decrypted under `mk`
+    /// (docs/protocol.md §16.4): the envelope went to this side's identity
+    /// re-randomized by the message's outer scalar o, so its generator is
+    /// p = [o]p₀, and its ephemeral point is [r]p for the message's envelope
+    /// scalar r. Both come from `mk` and the message's salt, so a writer can
+    /// put neither p nor c on another register, and the scan already showed
+    /// the envelope's tag is this key's on p. [`Error::WrongEnvelopeRegister`]
+    /// otherwise, and for a message that came without its envelope. A
+    /// request's stored messages were checked when they came.
+    pub(crate) fn check_envelope(&self, opened: &Opened, mk: &Secret32) -> Result<(), Error> {
+        let (generator, ephemeral) = match opened.outer {
+            Outer::Envelope {
+                generator,
+                ephemeral,
+            } => (generator, ephemeral),
+            Outer::Checked => return Ok(()),
+            Outer::Unknown => return Err(Error::WrongEnvelopeRegister),
+        };
+        let salt: &[u8; RATCHET_SALT_LEN] = opened.ciphertext[..RATCHET_SALT_LEN]
+            .try_into()
+            .expect("a parsed ciphertext holds its salt");
+        let p = G1Projective::from(self.first.base) * outer_scalar(mk, salt);
+        if p.to_affine() != generator
+            || (p * envelope_ephemeral_scalar(mk, salt)).to_affine() != ephemeral
+        {
+            return Err(Error::WrongEnvelopeRegister);
+        }
+        Ok(())
     }
 
     /// Deletes skipped keys whose 48 hours have passed; their messages count
@@ -421,9 +560,36 @@ impl Conversation {
         Register::from_checked(self.first.base, self.responder)
     }
 
-    /// The longest text the next message can carry.
+    /// The longest text the next message can carry: the largest envelope's
+    /// room for it as a first-contact message of this conversation, which
+    /// every message is padded as ([`Conversation::send`]), before a reply
+    /// and after one, at either side; and before a reply the request's
+    /// share's too, 0 once it's used up.
     pub fn max_text_len(&self) -> usize {
-        inner_capacity(MAX_ENVELOPE_LEN) - self.inner_overhead()
+        let room = inner_capacity(MAX_ENVELOPE_LEN) - self.first_contact_overhead();
+        match self.first_contact_left() {
+            Some((0, _)) => 0,
+            Some((_, bytes)) => room.min(bytes.saturating_sub(self.inner_overhead())),
+            None => room,
+        }
+    }
+
+    /// What's left of the request's share while this side sends
+    /// first-contact messages (the initiator, until a reply decrypts): how
+    /// many more it may send, of 16, and how many bytes of their inner
+    /// messages, of 64 KiB (docs/protocol.md §3.1). Each message takes its
+    /// inner message's length, unpadded: its text and F's length and 97
+    /// more ([`FirstContact::len`]), as the reader counts it. `None` once a
+    /// reply has decrypted: then only the envelope bounds a message.
+    pub fn first_contact_left(&self) -> Option<(u32, usize)> {
+        if !self.sends_first_contact() {
+            return None;
+        }
+        let sent = self.first_contact_sent.unwrap_or(0) as usize;
+        Some((
+            (MAX_REQUEST_MESSAGES as u32).saturating_sub(self.ratchet.ns),
+            MAX_ONE_REQUEST_BYTES.saturating_sub(sent),
+        ))
     }
 
     /// The other side's identity, which this side's messages go to.
@@ -443,27 +609,57 @@ impl Conversation {
         ad
     }
 
+    /// The next message's inner message beside its text, as the share
+    /// counts it: a first-contact message's overhead, else a session
+    /// message's 105 bytes. Its padding isn't counted.
     fn inner_overhead(&self) -> usize {
         if self.sends_first_contact() {
-            1 + self.first_bytes.len() + STAMP_LEN + RATCHET_HEADER_LEN + RATCHET_OVERHEAD
+            self.first_contact_overhead()
         } else {
             SESSION_OVERHEAD
         }
     }
 
+    /// What a first-contact message of this conversation holds beside its
+    /// text: its type, F, the stamp, the ratchet header, and the ratchet
+    /// ciphertext's salt and tag. F + 97 bytes: 379 in a continuation, 588
+    /// to 635 from a handle. Both sides hold F, so it's the same at both,
+    /// and every message is padded as if it had it (docs/protocol.md §9).
+    fn first_contact_overhead(&self) -> usize {
+        1 + self.first_bytes.len() + STAMP_LEN + RATCHET_HEADER_LEN + RATCHET_OVERHEAD
+    }
+
     /// The state's bytes, for the wallet's sealed records (docs/protocol.md
-    /// §16.5 has the layout). They hold the conversation's secrets.
+    /// §16.5 has the layout). They hold the conversation's secrets, in one
+    /// buffer sized exactly, so no copy of them is left by its growth.
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         let r = &self.ratchet;
-        let mut out = Zeroizing::new(Vec::with_capacity(
-            512 + r.skipped.len() * (POINT_LEN + 4 + 32 + 8),
-        ));
+        let len = 1
+            + 1
+            + 2
+            + self.first_bytes.len()
+            + POINT_LEN
+            + 32
+            + 1
+            + 32 * usize::from(r.cks.is_some())
+            + 32 * usize::from(r.ckr.is_some())
+            + 32
+            + POINT_LEN
+            + POINT_LEN * usize::from(r.dhr.is_some())
+            + 8 * usize::from(self.stamp.is_some())
+            + 4 * usize::from(self.first_contact_sent.is_some())
+            + 4
+            + 4
+            + 4
+            + 8
+            + skipped_len(&r.skipped);
+        let mut out = Zeroizing::new(Vec::with_capacity(len));
         out.push(STATE_VERSION);
         out.push(match self.role {
             Role::Initiator => 0,
             Role::Responder => 1,
         });
-        // F is at most 282 bytes.
+        // F is at most 538 bytes.
         out.extend_from_slice(&(self.first_bytes.len() as u16).to_be_bytes());
         out.extend_from_slice(&self.first_bytes);
         out.extend_from_slice(&self.responder.to_compressed());
@@ -471,7 +667,12 @@ impl Conversation {
         let flags = u8::from(r.cks.is_some())
             | u8::from(r.ckr.is_some()) << 1
             | u8::from(r.dhr.is_some()) << 2
-            | u8::from(self.stamp.is_some()) << 3;
+            | u8::from(self.stamp.is_some()) << 3
+            | if self.first_contact_sent.is_some() {
+                SENT_BEFORE_A_REPLY
+            } else {
+                0
+            };
         out.push(flags);
         if let Some(cks) = &r.cks {
             out.extend_from_slice(cks.bytes());
@@ -487,33 +688,32 @@ impl Conversation {
         if let Some(stamp) = self.stamp {
             out.extend_from_slice(&stamp.to_be_bytes());
         }
+        if let Some(sent) = self.first_contact_sent {
+            out.extend_from_slice(&sent.to_be_bytes());
+        }
         out.extend_from_slice(&r.ns.to_be_bytes());
         out.extend_from_slice(&r.nr.to_be_bytes());
         out.extend_from_slice(&r.pn.to_be_bytes());
         out.extend_from_slice(&r.lost.to_be_bytes());
-        // At most MAX_STORED_SKIPPED, which fits a u16.
-        out.extend_from_slice(&(r.skipped.len() as u16).to_be_bytes());
-        for key in &r.skipped {
-            out.extend_from_slice(&key.dh.to_compressed());
-            out.extend_from_slice(&key.n.to_be_bytes());
-            out.extend_from_slice(key.mk.bytes());
-            out.extend_from_slice(&key.stored_at.to_be_bytes());
-        }
+        write_skipped(&r.skipped, &mut out);
+        debug_assert_eq!(out.len(), len);
         out
     }
 
     /// A state from its bytes. Every point, scalar, count and invariant is
-    /// checked; anything else is [`Error::InvalidState`].
+    /// checked; anything else is [`Error::InvalidState`]. A state of another
+    /// version is [`Error::UnsupportedStateVersion`] at its first byte:
+    /// version 1 is a development build's.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         match bytes.first() {
             Some(&STATE_VERSION) => {}
             Some(&version) => return Err(Error::UnsupportedStateVersion(version)),
             None => return Err(Error::InvalidState),
         }
-        Self::parse_v1(&bytes[1..]).map_err(|_| Error::InvalidState)
+        Self::parse_v2(&bytes[1..]).map_err(|_| Error::InvalidState)
     }
 
-    fn parse_v1(bytes: &[u8]) -> Result<Self, Error> {
+    fn parse_v2(bytes: &[u8]) -> Result<Self, Error> {
         let mut reader = Reader::new(bytes);
         let role = match reader.byte()? {
             0 => Role::Initiator,
@@ -526,7 +726,7 @@ impl Conversation {
         let responder = decode_point(&reader.array()?)?;
         let rk = Secret32::from_bytes(reader.array()?);
         let flags = reader.byte()?;
-        if flags & !0b1111 != 0 {
+        if flags & !0b1_1111 != 0 {
             return Err(Error::InvalidState);
         }
         let cks = (flags & 1 != 0)
@@ -552,35 +752,33 @@ impl Conversation {
         let stamp = (flags & 8 != 0)
             .then(|| reader.array().map(u64::from_be_bytes))
             .transpose()?;
+        let first_contact_sent = (flags & SENT_BEFORE_A_REPLY != 0)
+            .then(|| reader.array().map(u32::from_be_bytes))
+            .transpose()?;
         let ns = u32::from_be_bytes(reader.array()?);
         let nr = u32::from_be_bytes(reader.array()?);
         let pn = u32::from_be_bytes(reader.array()?);
         let lost = u64::from_be_bytes(reader.array()?);
-        let count = usize::from(u16::from_be_bytes(reader.array()?));
-        if count > MAX_STORED_SKIPPED {
-            return Err(Error::InvalidState);
-        }
-        let mut skipped = Vec::with_capacity(count);
-        for _ in 0..count {
-            skipped.push(Skipped {
-                dh: decode_point(&reader.array()?)?,
-                n: u32::from_be_bytes(reader.array()?),
-                mk: Secret32::from_bytes(reader.array()?),
-                stored_at: u64::from_be_bytes(reader.array()?),
-            });
-        }
+        let left = bytes.len() - reader.position();
+        let skipped = read_skipped(&mut reader, left)?;
         if !reader.is_done() {
             return Err(Error::InvalidState);
         }
         // Every reachable state has a sending chain and a DHr. A responder has
         // a receiving chain too, and no stamp; an initiator without a
-        // receiving chain is still on w₀.
+        // receiving chain is still on w₀, and counts what it sent of the
+        // request's share: within it, and so at most 16 messages.
+        let sending_first_contact = role == Role::Initiator && ckr.is_none();
         let consistent = cks.is_some()
             && dhr.is_some()
             && match role {
                 Role::Responder => ckr.is_some() && stamp.is_none(),
                 Role::Initiator => ckr.is_some() || (dhr == Some(responder) && pn == 0),
-            };
+            }
+            && first_contact_sent.is_some() == sending_first_contact
+            && first_contact_sent.is_none_or(|sent| {
+                sent as usize <= MAX_ONE_REQUEST_BYTES && ns <= MAX_REQUEST_MESSAGES as u32
+            });
         if !consistent {
             return Err(Error::InvalidState);
         }
@@ -602,6 +800,7 @@ impl Conversation {
                 lost,
             },
             stamp,
+            first_contact_sent,
         })
     }
 }

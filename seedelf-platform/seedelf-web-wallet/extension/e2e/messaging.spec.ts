@@ -6,7 +6,10 @@
 // conversation. A first message's stamp is the protocol's 24 bits, solved by
 // the worker, about 7 s and sometimes much more: the two-wallet test allows
 // for it. Once answered, the wallet that wrote first shows the other its
-// Seedelf (protocol.md §19), which the other checks on the chain and names.
+// Seedelf (protocol.md §19), which the other checks on the chain at its
+// press (the 1.10.0 gate's W2) and names. A Seedelf this browser didn't mint
+// takes first messages only once it's turned on (W8): each wallet here holds
+// one from the recorded contract, so each turns its own on first.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,6 +80,16 @@ test("54f: Messages opens from the top bar and from Home, off by default, and of
   const labels = await buttons.evaluateAll((all) => all.map((b) => b.getAttribute("aria-label")));
   expect(labels.indexOf("Messages")).toBe(labels.indexOf("Settings") - 1);
 
+  // The bar's four buttons fit a side panel at Chrome's 360 px: nothing past its edge, no sideways scroll (the 1.10.0
+  // gate's screens#5). The wordmark goes there; the mark stays, the way to Home.
+  const panel = await openApp(context, "panel");
+  await expect(panel.getByTestId("topbar-messages")).toBeVisible(HOME_READ);
+  expect(await panel.evaluate(() => document.documentElement.scrollWidth)).toBe(360);
+  const edge = await panel.locator("header.topbar button").last().evaluate((b) => b.getBoundingClientRect().right);
+  expect(edge).toBeLessThanOrEqual(360);
+  await expect(panel.locator("header.topbar .wordmark")).toBeHidden();
+  await panel.close();
+
   await page.getByTestId("home-messages").click();
   await expect(page.getByRole("heading", { name: "Messages", exact: true })).toBeVisible();
   const toggle = page.getByTestId("messages-switch");
@@ -137,7 +150,10 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
   context,
   koios,
 }) => {
-  test.setTimeout(240_000);
+  // A first message's stamp is 24 bits of the worker's work, a matter of luck: about 7 s on the owner's desktop, and
+  // several times that on a slow runner beside the rest. Its wait is long enough that only a stuck stamp fails it, and
+  // nothing is slower when the stamp is quick (the 1.10.0 gate's tests-ci#9).
+  test.setTimeout(600_000);
   const fake = relayFake();
   await routeRelay(context, fake, "A");
   // B holds a Seedelf too, to show A once A has replied.
@@ -147,9 +163,19 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
   const a = await openApp(context);
   await a.setViewportSize({ width: 1100, height: 760 });
   await restore(a, vector(12).phrase);
+  // Home's row comes with its first reading, the contract's among it: the reading Messages lists the Seedelfs from.
+  await expect(a.getByTestId("home-messages-state")).toHaveText("Off", HOME_READ);
   await a.getByTestId("home-messages").click();
   await a.getByTestId("messages-switch").click();
   await expect(a.getByTestId("messages-pick")).toBeVisible();
+  // A's Seedelf is the recorded contract's, not one this browser minted: off for first messages until A turns it on
+  // (W8), with the line that says to turn on only one you made.
+  const aSeedelf = a.getByTestId("messages-seedelf-switch");
+  await expect(aSeedelf).toHaveCount(1, { timeout: 30_000 });
+  await expect(aSeedelf).toHaveAttribute("aria-checked", "false");
+  await expect(a.getByTestId("messages-seedelfs")).toContainText("Turn on only a Seedelf you made");
+  await aSeedelf.click();
+  await expect(aSeedelf).toHaveAttribute("aria-checked", "true");
 
   // B, another browser on the same chain and relay, writes first to A's Seedelf from a narrow side panel.
   const dir = mkdtempSync(join(tmpdir(), "seedelf-e2e-b-"));
@@ -162,9 +188,16 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     await restore(restoring, vector(24).phrase);
     const b = await openApp(other, "panel");
     await b.setViewportSize({ width: 400, height: 640 });
+    await expect(b.getByTestId("home-messages-state")).toHaveText("Off", HOME_READ);
     await b.getByTestId("topbar-messages").click();
     await b.getByTestId("messages-switch").click();
     await expect(b.getByTestId("messages-switch")).toHaveAttribute("aria-checked", "true");
+    // B's b-wallet came into the contract by another way than a mint here, so B turns it on too: only then can B's
+    // thread show it to A (W8).
+    const bSeedelf = b.getByTestId("messages-seedelf-switch");
+    await expect(bSeedelf).toHaveCount(1, { timeout: 30_000 });
+    await bSeedelf.click();
+    await expect(bSeedelf).toHaveAttribute("aria-checked", "true");
     await b.getByTestId("messages-new").click();
     // Narrow: the new message takes the list's place.
     await expect(b.getByTestId("messages-switch")).toBeHidden();
@@ -181,11 +214,11 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     expect(await b.evaluate(() => navigator.clipboard.readText())).toBe(SEEDELF);
     await expect(b.getByTestId("thread-save")).toBeVisible();
     await expect(b.getByTestId("bubble")).toHaveText(/hello from B/);
-    await expect(b.getByTestId("bubble-state")).toContainText("sent, expires", { timeout: 120_000 });
+    await expect(b.getByTestId("bubble-state")).toContainText("sent, expires", { timeout: 480_000 });
 
     // A: a stranger's request, counted on the top bar, until a reply accepts it.
     await expect(a.getByTestId("messages-requests")).toContainText("Unknown sender", { timeout: 30_000 });
-    await expect(a.getByTestId("messages-requests")).toContainText("Wrote to your web-wallet");
+    await expect(a.getByTestId("messages-requests")).toContainText("Wrote to your Seedelf web-wallet");
     await expect(a.getByTestId("topbar-messages-unread")).toHaveText("1");
     await a.getByTestId("messages-requests").getByRole("button").click();
     await expect(a.getByTestId("request").getByTestId("bubble")).toHaveText(/hello from B/);
@@ -195,7 +228,7 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     await a.getByTestId("composer").press("Enter");
     await expect(a.getByTestId("thread")).toBeVisible();
     await expect(a.getByTestId("thread-name")).toHaveText("Unknown sender");
-    await expect(a.getByTestId("thread-detail")).toContainText("Wrote to your web-wallet");
+    await expect(a.getByTestId("thread-detail")).toContainText("Wrote to your Seedelf web-wallet");
     // A doesn't know B's Seedelf: nothing to copy or save.
     await expect(a.getByTestId("thread-copy")).toHaveCount(0);
     await expect(a.getByTestId("thread-save")).toHaveCount(0);
@@ -214,13 +247,20 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     // B reads the reply in its conversation while it's open.
     await expect(b.getByTestId("thread").getByTestId("bubble").last()).toHaveText(/hi B/, { timeout: 30_000 });
 
-    // Answered, B shows A its Seedelf (§19): A's wallet checks the proof, then the chain, and only then names it.
+    // Answered, B shows A its Seedelf (§19): A's wallet checks the proof as it takes it, the chain only at A's press
+    // (W2), and only then names it, as the wallet's own notice, never a bubble of B's (screens#1).
     await b.getByTestId("thread-reveal").click();
     await expect(b.getByTestId("messages-reveal-pick")).toContainText("b-wallet");
     await expect(b.getByText("Only they can check it, so it proves nothing to anyone else.")).toBeVisible();
     await b.getByTestId("messages-reveal-show").click();
     await expect(b.getByTestId("bubble-reveal")).toHaveText(/You showed your Seedelf b-wallet/);
-    await expect(a.getByTestId("bubble-reveal")).toHaveText(/Showed you their Seedelf b-wallet .*, verified on the chain/, { timeout: 30_000 });
+    await expect(a.getByTestId("bubble-reveal")).toHaveText("Showed you a Seedelf, not checked on the chain yet", { timeout: 30_000 });
+    await expect(a.getByTestId("reveal-notice")).not.toHaveClass(/\bbubble\b/);
+    await a.getByTestId("reveal-check").click();
+    await expect(a.getByTestId("bubble-reveal")).toHaveText(/^Showed you their Seedelf tagged “b-wallet” \(5eed0e1f…[0-9a-f]{16}\), verified on the chain$/, {
+      timeout: 30_000,
+    });
+    await expect(a.getByTestId("reveal-check")).toHaveCount(0);
     // A's own name for it stands; under it, §7's label is now the Seedelf, verified.
     await expect(a.getByTestId("thread-name")).toHaveText("B from the forum");
     await expect(a.getByTestId("thread-detail").first()).toHaveText("b-wallet");
@@ -235,7 +275,9 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     await a.getByTestId("thread-save").click();
     await a.getByLabel("Name", { exact: true }).fill("Bea");
     await a.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(a.getByTestId("bubble-reveal")).toHaveText(/Showed you their Seedelf Bea/);
+    await expect(a.getByTestId("bubble-reveal")).toHaveText(/^Showed you their Seedelf, your contact Bea \(5eed0e1f…[0-9a-f]{16}\), verified on the chain$/);
+    // Under A's name for it, the label says now that it's A's contact's.
+    await expect(a.getByTestId("thread-detail").nth(1)).toContainText("your contact");
     await expect(a.getByTestId("thread-save")).toBeHidden();
     await expect(a.getByTestId("thread-copy")).toBeVisible();
     // B never sees a button to reveal on A's side of things, nor A on its own.

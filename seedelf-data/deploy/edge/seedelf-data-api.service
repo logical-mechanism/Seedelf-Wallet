@@ -3,7 +3,12 @@
 [Unit]
 Description=Seedelf Wallet's data layer (seedelf-data-api)
 Wants=network-online.target
-After=network-online.target wg-quick@wg0.service
+# time-sync.target: once the clock is synchronized, which needs a service
+# that holds the target until it is (deploy/README.md, "Start after time
+# sync"). A relay pool read on a clock that's behind keeps its envelopes
+# that much less, once the clock is put right. Ordered after, never pulled
+# in (systemd.special(7)).
+After=network-online.target wg-quick@wg0.service time-sync.target
 
 [Service]
 ExecStart=/usr/local/bin/seedelf-data-api
@@ -15,6 +20,19 @@ StateDirectory=seedelf-data
 Restart=always
 RestartSec=2
 LimitNOFILE=65536
+# A stop waits 10 s for the requests under way and drops the rest
+# (src/serve.rs), then writes the month's traffic and the relay's pools
+# down and marks them clean. Past 30 s systemd kills it, and the pools are
+# read as after a crash: every reader is told of a gap.
+TimeoutStopSec=30
+# Under the droplet's 4 GB, so a leak or a flood takes the API alone, which
+# systemd starts again, never Caddy, WireGuard or sshd beside it.
+MemoryMax=3G
+# No core file and no swap: the API's tables of addresses (its buckets, the
+# relay's counts) live in memory alone, and the database URL with them, so
+# none of it is ever written to a disk.
+LimitCORE=0
+MemorySwapMax=0
 
 # It reads its environment and the decimals file, writes its state
 # directory, and talks TCP. Nothing else.

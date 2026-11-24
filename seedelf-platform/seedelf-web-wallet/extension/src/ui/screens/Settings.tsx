@@ -1099,11 +1099,15 @@ export { disconnectText, SiteRows } from "./ConnectedSites";
  * Koios for everything, never Seedelf Wallet's own data layer (chunk 26b).
  * Shown only where the build reads one (mainnet, networks.ts `dataOrigin`):
  * elsewhere there's nothing to turn off. The worker reads it at each request.
+ * Messages has no Koios version: while a network's Messages are on, they
+ * still go through Seedelf Wallet's own server, and the switch's words say
+ * so, never "everything" (the 1.10.0 gate's docs-claims#2).
  */
-function KoiosOnly() {
+export function KoiosOnly() {
   const { prefs: all, loaded, set } = usePreferences();
   const prefs = loaded ? all : undefined;
   const [error, setError] = useState<string>();
+  const messages = !!prefs && Object.values(prefs.messaging).some(Boolean);
 
   async function toggle() {
     if (!prefs) return;
@@ -1121,7 +1125,13 @@ function KoiosOnly() {
         <span className="stack-tight">
           <span id="koios-only-label">{t("settings.koiosOnly")}</span>
           <span className="note" id="koios-only-note">
-            {t(prefs?.koiosOnly ? "settings.koiosOnly.privacy.on" : "settings.koiosOnly.privacy.off")}
+            {t(
+              prefs?.koiosOnly
+                ? messages
+                  ? "settings.koiosOnly.privacy.onMessages"
+                  : "settings.koiosOnly.privacy.on"
+                : "settings.koiosOnly.privacy.off",
+            )}
           </span>
         </span>
         <button
@@ -1135,7 +1145,7 @@ function KoiosOnly() {
           disabled={!prefs}
         />
       </div>
-      {prefs && <ServerStatus koiosOnly={prefs.koiosOnly} />}
+      {prefs && <ServerStatus koiosOnly={prefs.koiosOnly} messages={messages} />}
       {error && (
         <p className="error" role="alert">
           {error}
@@ -1163,7 +1173,7 @@ const PART_NAMES: ReadonlyArray<[DataPart, I18nKey]> = [
  * whether the server is up this moment: a part goes to Koios as soon as a
  * request to the server fails.
  */
-function ServerStatus({ koiosOnly }: { koiosOnly: boolean }) {
+function ServerStatus({ koiosOnly, messages }: { koiosOnly: boolean; messages?: boolean }) {
   const [holds, setHolds] = useState<DataHolds>();
   useEffect(() => {
     if (koiosOnly) return;
@@ -1179,20 +1189,21 @@ function ServerStatus({ koiosOnly }: { koiosOnly: boolean }) {
       clearInterval(timer);
     };
   }, [koiosOnly]);
-  return <ServerStatusLine koiosOnly={koiosOnly} holds={holds} />;
+  return <ServerStatusLine koiosOnly={koiosOnly} holds={holds} messages={messages} />;
 }
 
 /**
  * The line itself, a light and its words: green, Seedelf Wallet's server for
  * everything; amber, Koios for some parts until a time; red, Koios for all of
- * them; grey, Koios by the switch. Nothing until the worker has answered.
+ * them; grey, Koios by the switch, Messages still on the server while they're
+ * on (`messages`). Nothing until the worker has answered.
  */
-export function ServerStatusLine({ koiosOnly, holds }: { koiosOnly: boolean; holds?: DataHolds }) {
+export function ServerStatusLine({ koiosOnly, holds, messages = false }: { koiosOnly: boolean; holds?: DataHolds; messages?: boolean }) {
   let tone: "up" | "partly" | "down" | "off";
   let words: string;
   if (koiosOnly) {
     tone = "off";
-    words = t("settings.server.koiosOnly");
+    words = t(messages ? "settings.server.privacy.koiosOnlyMessages" : "settings.server.koiosOnly");
   } else {
     if (!holds) return null;
     const held = PART_NAMES.filter(([part]) => holds[part] !== undefined);
@@ -1661,7 +1672,7 @@ export function RemoveWallet({
       }
     >
       <p className="note" data-testid="remove-wallet-note">
-        {t("settings.remove.note")}
+        {joinSentences([t("settings.remove.note"), t("settings.remove.warn.conversations")])}
       </p>
       {held && (
         <Callout tone="warn" testId="remove-at-stake">

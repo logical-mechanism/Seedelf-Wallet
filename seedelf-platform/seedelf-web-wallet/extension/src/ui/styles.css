@@ -650,6 +650,14 @@ main {
   flex: 1;
 }
 
+/* Unlocked, the bar holds the mark, the network's badge and four buttons: 364 px with the wordmark, past a 360 px
+   panel's 328. Narrow, the wordmark goes and the mark stays, still the way to Home (screens#5). */
+@media (max-width: 399px) {
+  .topbar--buttons .wordmark {
+    display: none;
+  }
+}
+
 .wordmark {
   font-weight: 700;
   font-size: 17px;
@@ -4362,7 +4370,7 @@ button.dapp-tile:hover {
 }
 
 .convo__name {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   font-weight: 600;
   overflow: hidden;
@@ -4372,6 +4380,7 @@ button.dapp-tile:hover {
 
 .convo__time {
   flex: none;
+  margin-left: auto;
   font-size: 11.5px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -4389,6 +4398,21 @@ button.dapp-tile:hover {
 
 .convo__preview--state {
   color: var(--warn);
+}
+
+/* What the wallet says of a conversation's last message, never a message's own words: "You:" before the user's own
+   text, and a reveal's line, each in a colour no text has (screens#1, screens#13). */
+.convo__preview--you {
+  color: var(--accent);
+}
+
+.convo__said {
+  color: var(--muted);
+}
+
+.convo__notice {
+  color: var(--accent);
+  font-style: italic;
 }
 
 .convo__unread {
@@ -4418,11 +4442,30 @@ button.dapp-tile:hover {
 
 .thread__head {
   display: flex;
-  align-items: center;
-  gap: var(--s3);
-  min-height: 52px;
+  flex-direction: column;
+  gap: 2px;
   padding-bottom: var(--s3);
   border-bottom: 1px solid var(--border);
+}
+
+.thread__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: 40px;
+}
+
+/* Narrow, Back and the buttons share the bar, and the name and the label's lines go under it, across the pane: beside
+   four buttons they broke anywhere in a 112 px column, and a tag's last sixteen had no room (screens#14). */
+.thread__spacer {
+  flex: 1;
+}
+
+.thread__details {
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--s1);
+  min-width: 0;
 }
 
 .thread__who {
@@ -4433,12 +4476,29 @@ button.dapp-tile:hover {
 }
 
 .thread__name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
   font-size: 15px;
   font-weight: 600;
   color: var(--text);
+}
+
+/* The name takes the ellipsis, never its last sixteen beside it (screens#4's rule, in the header). */
+.thread__title {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thread__tail {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .thread__name--alone {
@@ -4449,6 +4509,11 @@ button.dapp-tile:hover {
   font-size: 12px;
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+/* A tag that reads as a contact's name or another conversation's (screens#3). */
+.thread__detail--warn {
+  color: var(--warn);
 }
 
 .thread__scroll {
@@ -4498,6 +4563,9 @@ button.dapp-tile:hover {
   gap: 2px;
   padding: 7px 12px 5px;
   border-radius: 16px;
+  /* What a message holds draws inside its bubble: a character with a stack of combining marks painted a column over
+     every bubble above it, the wallet's own notices among them (screens#11). */
+  overflow: hidden;
 }
 
 .bubble--in {
@@ -4533,6 +4601,85 @@ button.dapp-tile:hover {
 
 .bubble__state--refused {
   color: var(--danger-text);
+}
+
+/* Send again, beside a refused message's state. */
+.bubble__again {
+  font-size: 11px;
+}
+
+/* The user's own reveal: their message, its shield before its words. */
+.bubble__text--reveal {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.bubble__text--reveal svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--accent);
+}
+
+/* A reveal the other side made, as the wallet's own notice (protocol.md §19, the 1.10.0 gate's screens#1): out of the
+   bubbles' column, centred as the day's line is, marked with the shield and boxed in the privacy notes' colours, which
+   no bubble has. Not checked yet or being checked, its line is dashed; verified, solid; failed, in the warning's. */
+.thread__notice {
+  align-self: center;
+  max-width: min(92%, 560px);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--s2);
+  margin: var(--s1) 0;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  border: 1px dashed var(--accent-line);
+  background: var(--accent-soft);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.thread__notice--verified {
+  border-style: solid;
+  color: var(--text);
+}
+
+.thread__notice--failed {
+  border: 1px solid var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.thread__notice-mark {
+  display: grid;
+  padding-top: 1px;
+  color: var(--accent);
+}
+
+.thread__notice--failed .thread__notice-mark {
+  color: var(--warn);
+}
+
+.thread__notice-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.thread__notice-check {
+  min-height: 30px;
+  padding: 0 var(--s3);
+  font-size: 12.5px;
+}
+
+.thread__notice-time {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* A reveal's message (protocol.md §19): its Save to contacts under its line. */
@@ -4677,11 +4824,78 @@ button.dapp-tile:hover {
   font-weight: 600;
 }
 
-/* A Seedelf's name's last sixteen beside its tag in the list: what tells two Seedelfs tagged alike apart. */
+/* A Seedelf's name's last sixteen beside its tag in the list: what tells two Seedelfs tagged alike apart. A sibling
+   of the name that never shrinks, so a long tag takes the ellipsis and the sixteen stay whole (screens#4). */
 .convo__tail {
-  margin-left: 6px;
+  flex: none;
+  margin-left: -2px;
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 400;
   color: var(--muted);
+}
+
+/* The list's lines over the conversations: a state with its way out (Try again, Turn off), the Seedelfs' switches,
+   and an overview that couldn't be read. */
+.messages__problem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.messages__problem .error {
+  margin: 0;
+}
+
+.messages__problem-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+/* A warning with its way out at its end (Dismiss, for messages dropped before they could be read): the words take the
+   room, the button keeps its own and never wraps. */
+.callout__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.callout__row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.callout__dismiss {
+  flex: none;
+  font-size: 12.5px;
+}
+
+/* A press waiting while Messages read or post (O8), said under its switch. */
+.messages__waiting {
+  font-size: 12px;
+}
+
+.messages__switch + .messages__waiting {
+  margin-top: calc(-1 * var(--s2));
+  padding: 0 var(--s4);
+}
+
+.messages__seedelfs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.messages__seedelfs .note,
+.messages__seedelfs .error {
+  margin: 0;
+}
+
+.messages__seedelf-name {
+  overflow-wrap: anywhere;
 }

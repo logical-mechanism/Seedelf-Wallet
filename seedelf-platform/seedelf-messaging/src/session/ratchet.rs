@@ -4,6 +4,9 @@
 //! keeps the copy only on success (§4.2), which is what makes a failed
 //! message leave no trace.
 
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
+
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use blstrs::{G1Affine, G1Projective, Scalar};
@@ -28,6 +31,14 @@ pub const MAX_SKIP: u32 = 1000;
 /// deleted and their messages count as missing.
 pub const MAX_STORED_SKIPPED: usize = 2 * MAX_SKIP as usize;
 
+/// The most keys a session message past [`MAX_SKIP`] may make the reader
+/// step past, counted as [`MAX_SKIP`] is, to learn whether it authenticates:
+/// 4,096, a choice (docs/protocol.md §16.4), about a week of one address
+/// posting at the relay's cap. Stepping stores no key, and the message is
+/// still refused, as too far ahead only if it authenticates. Past it, the
+/// message is refused as one that doesn't authenticate, with nothing derived.
+pub const MAX_AUTH_STEPS: u32 = 1 << 12;
+
 /// How long a skipped key is kept: 48 hours from when it was stored. It's
 /// usable while `now ≤ stored + 48 h`.
 pub const SKIPPED_KEY_LIFETIME: u64 = 48 * 3600;
@@ -49,6 +60,12 @@ pub(crate) const MESSAGE_INFO: &[u8] = b"Seedelf-Messaging|v1|ratchet|message";
 
 /// The outer scalar's HKDF info.
 pub(crate) const OUTER_INFO: &[u8] = b"Seedelf-Messaging|v1|ratchet|outer";
+
+/// The envelope's ephemeral scalar's HKDF info. Under one key (the salt and
+/// mk) HKDF takes three infos, this one, [`MESSAGE_INFO`] and [`OUTER_INFO`],
+/// none a prefix of another.
+pub(crate) const ENVELOPE_EPHEMERAL_INFO: &[u8] =
+    b"Seedelf-Messaging|v1|ratchet|envelope-ephemeral";
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
@@ -116,9 +133,32 @@ pub(crate) fn outer_okm(mk: &Secret32, salt: &[u8; RATCHET_SALT_LEN]) -> Zeroizi
 /// The outer scalar `o`: [`outer_okm`] as a big-endian integer mod the group
 /// order. A message's envelope goes to the other side's identity
 /// re-randomized by `o`, so its reader can check the envelope belongs to the
-/// conversation (docs/protocol.md §16.2). Zero only with probability 2⁻²⁵⁴.
+/// conversation (docs/protocol.md §16.2). Zero only with probability about
+/// 2⁻²⁵⁵.
 pub(crate) fn outer_scalar(mk: &Secret32, salt: &[u8; RATCHET_SALT_LEN]) -> Scalar {
     scalar_mod_q(outer_okm(mk, salt).as_ref())
+}
+
+/// The envelope's ephemeral scalar's 64 bytes: HKDF-SHA256(salt = salt,
+/// ikm = mk, info = "Seedelf-Messaging|v1|ratchet|envelope-ephemeral").
+pub(crate) fn envelope_ephemeral_okm(
+    mk: &Secret32,
+    salt: &[u8; RATCHET_SALT_LEN],
+) -> Zeroizing<[u8; 64]> {
+    let mut okm = Zeroizing::new([0u8; 64]);
+    Hkdf::<Sha256>::new(Some(salt), mk.bytes())
+        .expand(ENVELOPE_EPHEMERAL_INFO, okm.as_mut())
+        .expect("64 bytes is within HKDF-SHA256's limit");
+    okm
+}
+
+/// The envelope's ephemeral scalar `r`: [`envelope_ephemeral_okm`] as a
+/// big-endian integer mod the group order. A message's envelope has
+/// `c = [r]p`, so its reader can check `c` is the writer's own and not a
+/// point built on another register (docs/protocol.md §16.2). Zero only with
+/// probability about 2⁻²⁵⁵.
+pub(crate) fn envelope_ephemeral_scalar(mk: &Secret32, salt: &[u8; RATCHET_SALT_LEN]) -> Scalar {
+    scalar_mod_q(envelope_ephemeral_okm(mk, salt).as_ref())
 }
 
 /// ENCRYPT(mk, m, ad) with a given salt: `salt ‖ AES-256-GCM(key, nonce, ad, m)`.
@@ -238,6 +278,84 @@ pub(crate) struct Skipped {
     pub(crate) stored_at: u64,
 }
 
+/// A stored skipped key, after its run's ratchet key: `N (4) | mk (32) |
+/// stored at (8)`.
+const SKIPPED_KEY_LEN: usize = 4 + 32 + 8;
+
+/// A run's ratchet key and count, before its keys.
+const RUN_HEAD_LEN: usize = POINT_LEN + 2;
+
+/// The skipped keys' runs, in the order stored: each the longest stretch of
+/// consecutive keys on one ratchet key. One ratchet key can head two runs,
+/// since the other side picks its keys and may use one again.
+fn runs(skipped: &[Skipped]) -> impl Iterator<Item = &[Skipped]> {
+    skipped.chunk_by(|one, next| one.dh == next.dh)
+}
+
+/// The bytes [`write_skipped`] writes for `skipped`.
+pub(crate) fn skipped_len(skipped: &[Skipped]) -> usize {
+    2 + runs(skipped)
+        .map(|run| RUN_HEAD_LEN + run.len() * SKIPPED_KEY_LEN)
+        .sum::<usize>()
+}
+
+/// The stored skipped keys, as runs in the order stored (docs/protocol.md
+/// §16.5): `runs (2) | runs × ( DH (48) | count (2) | count × ( N (4) | mk
+/// (32) | stored at (8) ) )`. Each run's ratchet key is written once.
+pub(crate) fn write_skipped(skipped: &[Skipped], out: &mut Vec<u8>) {
+    // At most MAX_STORED_SKIPPED keys, and so runs, which fit a u16.
+    out.extend_from_slice(&(runs(skipped).count() as u16).to_be_bytes());
+    for run in runs(skipped) {
+        out.extend_from_slice(&run[0].dh.to_compressed());
+        out.extend_from_slice(&(run.len() as u16).to_be_bytes());
+        for key in run {
+            out.extend_from_slice(&key.n.to_be_bytes());
+            out.extend_from_slice(key.mk.bytes());
+            out.extend_from_slice(&key.stored_at.to_be_bytes());
+        }
+    }
+}
+
+/// The skipped keys [`write_skipped`] wrote, which end a stored state, with
+/// `left` the bytes left in it. At most [`MAX_STORED_SKIPPED`] runs and keys
+/// in all, each run at least one key, and two adjacent runs never on one
+/// ratchet key, so a list has one encoding. Each ratchet key's encoding is
+/// decoded and checked once, however many runs it heads.
+pub(crate) fn read_skipped(reader: &mut Reader<'_>, left: usize) -> Result<Vec<Skipped>, Error> {
+    let runs = usize::from(u16::from_be_bytes(reader.array()?));
+    if runs > MAX_STORED_SKIPPED {
+        return Err(Error::InvalidState);
+    }
+    // The keys end the record, so the bytes left give their number exactly
+    // when it's well formed: room for all of them at once, so no copy of a
+    // key is left behind by the list's growth.
+    let keys = left.saturating_sub(2 + runs * RUN_HEAD_LEN) / SKIPPED_KEY_LEN;
+    let mut skipped = Vec::with_capacity(keys.min(MAX_STORED_SKIPPED));
+    let mut decoded: BTreeMap<[u8; POINT_LEN], G1Affine> = BTreeMap::new();
+    let mut previous = None;
+    for _ in 0..runs {
+        let encoding: [u8; POINT_LEN] = reader.array()?;
+        let count = usize::from(u16::from_be_bytes(reader.array()?));
+        if previous == Some(encoding) || count == 0 || skipped.len() + count > MAX_STORED_SKIPPED {
+            return Err(Error::InvalidState);
+        }
+        previous = Some(encoding);
+        let dh = match decoded.entry(encoding) {
+            Entry::Occupied(known) => *known.get(),
+            Entry::Vacant(new) => *new.insert(decode_point(&encoding)?),
+        };
+        for _ in 0..count {
+            skipped.push(Skipped {
+                dh,
+                n: u32::from_be_bytes(reader.array()?),
+                mk: Secret32::from_bytes(reader.array()?),
+                stored_at: u64::from_be_bytes(reader.array()?),
+            });
+        }
+    }
+    Ok(skipped)
+}
+
 /// The Double Ratchet's state: the specification's RK, CKs, CKr, DHs, DHr,
 /// Ns, Nr, PN and MKSKIPPED, and a count of skipped keys deleted unused.
 #[derive(Clone, Debug)]
@@ -250,7 +368,8 @@ pub(crate) struct Ratchet {
     pub(crate) ns: u32,
     pub(crate) nr: u32,
     pub(crate) pn: u32,
-    /// In the order they were stored, oldest first.
+    /// In the order they were stored, first stored first: the order lookups
+    /// search in, eviction takes from, and storage keeps.
     pub(crate) skipped: Vec<Skipped>,
     /// Skipped keys deleted before their message arrived.
     pub(crate) lost: u64,
@@ -311,6 +430,10 @@ impl Ratchet {
     /// [`MAX_SKIP`] keys in all, and skipped keys usable for 48 hours.
     /// Returns the plaintext and the message key that opened it.
     ///
+    /// Past the bound it's [`Error::TooFarAhead`] with nothing derived,
+    /// whether the message authenticates or not: the conversation says which
+    /// ([`Ratchet::authenticate_far`]).
+    ///
     /// `ad_prefix` is `cid ‖ R_A ‖ R_B`; the header follows it in the
     /// associated data.
     pub(crate) fn decrypt(
@@ -357,16 +480,7 @@ impl Ratchet {
         }
 
         // The bound, before any key is derived.
-        let old_skip = match (&self.ckr, new_chain) {
-            (Some(_), true) => u64::from(header.pn.saturating_sub(self.nr)),
-            _ => 0,
-        };
-        let new_skip = if new_chain {
-            u64::from(header.n)
-        } else {
-            u64::from(header.n - self.nr)
-        };
-        if old_skip + new_skip > u64::from(MAX_SKIP) {
+        if self.skip_count(header, new_chain) > u64::from(MAX_SKIP) {
             return Err(Error::TooFarAhead);
         }
         // N = u32::MAX would leave Nr past the counter's range.
@@ -389,6 +503,70 @@ impl Ratchet {
         let plaintext = decrypt(&mk, ciphertext, &ad)?;
         self.evict();
         Ok((plaintext, mk))
+    }
+
+    /// The keys a message makes the reader skip, in all: the old receiving
+    /// chain's remainder (PN − Nr) when a new header key ends one, then the
+    /// message's chain up to N. On the current chain the caller has checked
+    /// N isn't below Nr.
+    fn skip_count(&self, header: &Header, new_chain: bool) -> u64 {
+        let old = match (&self.ckr, new_chain) {
+            (Some(_), true) => u64::from(header.pn.saturating_sub(self.nr)),
+            _ => 0,
+        };
+        let new = if new_chain {
+            u64::from(header.n)
+        } else {
+            u64::from(header.n - self.nr)
+        };
+        old + new
+    }
+
+    /// The message key of a message [`Ratchet::decrypt`] refused as too far
+    /// ahead, if the message authenticates (docs/protocol.md §16.4). It reads
+    /// the state and changes nothing: it stores no key and draws nothing.
+    ///
+    /// - **A new header key:** the receiving half of the DH step,
+    ///   `KDF_RK(RK, DH(DHs, key))`'s chain key, stepped N times. The old
+    ///   chain's remainder, PN − Nr, counts against the bound as it does
+    ///   against [`MAX_SKIP`], though none of its keys is derived.
+    /// - **The current chain:** CKr stepped N − Nr times.
+    ///
+    /// At most [`MAX_AUTH_STEPS`] in all, else [`Error::DecryptionFailed`]
+    /// with nothing derived; then the tag, the text wiped and dropped, and
+    /// [`Error::DecryptionFailed`] if it fails. Only a held conversation's
+    /// session message comes here, never a request's scratch state, whose
+    /// ratchet key is the reader's long-term key.
+    pub(crate) fn authenticate_far(
+        &self,
+        header: &Header,
+        ciphertext: &[u8],
+        ad_prefix: &[u8],
+    ) -> Result<Secret32, Error> {
+        let new_chain = self.dhr != Some(header.dh);
+        let reachable = new_chain || (self.ckr.is_some() && header.n >= self.nr);
+        // No sending chain reaches N = u32::MAX: it stops a message before.
+        if !reachable
+            || header.n == u32::MAX
+            || self.skip_count(header, new_chain) > u64::from(MAX_AUTH_STEPS)
+        {
+            return Err(Error::DecryptionFailed);
+        }
+        let (mut ck, steps) = match (&self.ckr, new_chain) {
+            (_, true) => (kdf_rk(&self.rk, &self.dhs.dh(&header.dh)).1, header.n),
+            (Some(ckr), false) => (ckr.clone(), header.n - self.nr),
+            (None, false) => return Err(Error::DecryptionFailed),
+        };
+        for _ in 0..steps {
+            ck = kdf_ck(&ck).0;
+        }
+        let mk = kdf_ck(&ck).1;
+        let mut ad = Vec::with_capacity(ad_prefix.len() + RATCHET_HEADER_LEN);
+        ad.extend_from_slice(ad_prefix);
+        ad.extend_from_slice(&header.to_bytes());
+        // Only whether it authenticates: the text isn't the caller's.
+        drop(Zeroizing::new(decrypt(&mk, ciphertext, &ad)?));
+        Ok(mk)
     }
 
     /// SkipMessageKeys: store the receiving chain's keys up to `until`.
@@ -426,7 +604,8 @@ impl Ratchet {
         self.cks = Some(cks);
     }
 
-    /// Past [`MAX_STORED_SKIPPED`], delete the oldest skipped keys.
+    /// Past [`MAX_STORED_SKIPPED`], delete the skipped keys stored first: in
+    /// the list's order, which storage keeps, not by their times.
     fn evict(&mut self) {
         if self.skipped.len() > MAX_STORED_SKIPPED {
             let excess = self.skipped.len() - MAX_STORED_SKIPPED;

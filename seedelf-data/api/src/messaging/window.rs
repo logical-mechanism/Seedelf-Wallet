@@ -17,7 +17,6 @@ use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use super::pool::KEPT_FOR;
-use super::price::units;
 
 /// At most this many addresses are counted at once, as the prices count
 /// (price.rs). Past it, the aged-out ones are dropped (at most once a
@@ -32,8 +31,14 @@ const HOUR: u64 = 3600;
 pub struct Limits {
     /// Envelopes, whatever their size: each costs every reader a trial scan.
     pub envelopes: u32,
-    /// Units of 512 bytes (`price::units`): each costs every reader bytes.
+    /// Units of 512 bytes (`units`): each costs every reader bytes.
     pub units: u32,
+}
+
+/// An envelope's units in the window: its size in 512 bytes, 1 to 64,
+/// whatever the price counts (`super::price::units`).
+pub fn units(size: usize) -> u32 {
+    (size / 512).max(1) as u32
 }
 
 /// What the pool kept from an address in one hour.
@@ -69,7 +74,7 @@ impl Window {
     /// oldest buckets have aged out, if it posts nothing meanwhile. At most
     /// 37 hours: the window's 36 and the hour a bucket spans.
     pub fn wait(&self, address: IpAddr, size: usize, now: Instant) -> Option<u64> {
-        let added = units(size) as u32;
+        let added = units(size);
         let live: Vec<&Bucket> = self
             .addresses
             .get(&address)
@@ -97,7 +102,7 @@ impl Window {
     /// Counts a post the pool kept.
     pub fn record(&mut self, address: IpAddr, size: usize, now: Instant) {
         let hour = self.hour(now);
-        let added = units(size) as u32;
+        let added = units(size);
         let (origin, buckets) = (self.origin, self.addresses.entry(address).or_default());
         while buckets
             .front()

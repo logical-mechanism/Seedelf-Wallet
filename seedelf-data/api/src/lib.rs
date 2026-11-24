@@ -17,6 +17,7 @@ pub mod messaging;
 pub mod private;
 pub mod public;
 pub mod row;
+pub mod serve;
 pub mod source;
 pub mod state;
 pub mod submit;
@@ -37,9 +38,10 @@ use crate::messaging::Relay;
 use crate::state::{AppState, age, block_age, slot_age};
 use crate::submit::Submit;
 
-/// Every route, compressed, behind the edge's limits, with CORS outermost so
-/// the wallet can read a 429 too. Nothing here logs a request: no address,
-/// path or body.
+/// Every route, compressed (gzip alone: brotli's encoder held about four
+/// times gzip's memory in flight), behind the edge's limits, with CORS
+/// outermost so the wallet can read a 429 too. Nothing here logs a request:
+/// no address, path or body.
 ///
 /// Every answer but a preflight says `Cache-Control: no-store`. The wallet
 /// asks with `cache: "default"`, so Chrome reuses a preflight (`edge::cors`'s
@@ -55,15 +57,25 @@ pub fn app(
     relay: Arc<Relay>,
     origins: &[String],
 ) -> Router {
-    let compress =
-        DefaultPredicate::new().and(NotForContentType::const_new("application/octet-stream"));
-    Router::new()
+    let routes = Router::new()
         .route("/health", get(health))
         .with_state((state.clone(), edge.clone(), submit.clone(), relay.clone()))
         .merge(private::routes().with_state(state.clone()))
         .merge(public::routes().with_state(state))
         .merge(submit::routes().with_state(submit))
-        .merge(messaging::routes().with_state(relay))
+        .merge(messaging::routes().with_state(relay));
+    layered(routes, edge, origins)
+}
+
+/// `routes` behind what [`app`] puts in front of its own: compression
+/// (gzip alone), the edge's limits, `no-store` and CORS, outermost. The
+/// edge wraps compression, so it sees a request before an encoding is
+/// chosen and its answer after (`edge::Caps::compressing`). A test's
+/// routes go through it as the app's do.
+pub fn layered(routes: Router, edge: Arc<Edge>, origins: &[String]) -> Router {
+    let compress =
+        DefaultPredicate::new().and(NotForContentType::const_new("application/octet-stream"));
+    routes
         .layer(CompressionLayer::new().compress_when(compress))
         .layer(axum::middleware::from_fn_with_state(edge, edge::limit))
         .layer(SetResponseHeaderLayer::overriding(
@@ -81,7 +93,11 @@ type Parts = (Arc<AppState>, Arc<Edge>, Arc<Submit>, Arc<Relay>);
 /// the private index may still answer from Kupo while db-sync is down), or
 /// when the month's traffic is over its ceiling. The submit part's state is
 /// said, not counted: the deploy compares this status with the one before.
-/// So is the relay's: messaging over its own allowance, and each pool's size.
+/// So is the relay's: whether it's stopped, messaging over its own
+/// allowance, whether it has a ceiling of its own at all and how much of
+/// today's share is left, whether it's down to its reserve, and each pool's
+/// size. Nothing here is of any one client: no address, and no count of
+/// one.
 async fn health(State((state, edge, submit, relay)): State<Parts>) -> Response {
     let db_sync = state.tip();
     let public = state.fresh_tip().is_ok();
@@ -98,7 +114,17 @@ async fn health(State((state, edge, submit, relay)): State<Parts>) -> Response {
         "submit": if submit.synced() { "ok" } else { "down" },
         "egress": if egress_over { "over" } else { "ok" },
         "messaging": {
+            // off: `DATA_MESSAGING_OFF`, and every relay route answers 410 Gone.
+            "relay": if edge.messaging_off() { "off" } else { "on" },
             "egress": if edge.messaging_egress.over() { "over" } else { "ok" },
+            // false: `DATA_MESSAGING_GB_MONTH` isn't set, so the relay spends the API's own allowance.
+            "ceiling": edge.messaging_egress.has_ceiling(),
+            // The percent of today's share still unspent, rounded down: null without a ceiling.
+            "day_left": edge.messaging_egress.today().map(|(spent, share)| {
+                (share - spent).saturating_mul(100).checked_div(share).unwrap_or(0)
+            }),
+            // true: only posts and short pages are answered until tomorrow's share (`edge::Reserve`).
+            "reserve": edge.reserved(),
             "pools": relay.health(),
         },
         "db_sync": db_sync.map(|tip| serde_json::json!({

@@ -1,5 +1,5 @@
 //! What a post to the relay must be (chunk 54's 54c, docs/protocol.md §17):
-//! a v1 envelope of one of the session layer's four sizes whose three points
+//! a v1 envelope of one of the session layer's four sizes whose two points
 //! are valid, and proof of work over its bytes.
 //!
 //! **The stamp.** A post is `nonce (8, big-endian) ‖ envelope`. Its work is
@@ -35,10 +35,12 @@ pub const NONCE_LEN: usize = 8;
 pub const MAX_STAMP_BITS: u32 = 32;
 
 /// Whether the relay keeps `envelope`: version 1, exactly one of
-/// [`ENVELOPE_SIZES`] long, and `p`, `w` and `c` each canonical, in G1 and
-/// not the identity. The checks run in that order, and the first that fails
-/// is the error. Nothing here decrypts, and nothing could: only the
-/// recipient holds the key.
+/// [`ENVELOPE_SIZES`] long, and `p` (bytes 1 to 48) and `c` (bytes 81 to
+/// 128) each canonical, in G1 and not the identity. The tag between them
+/// (bytes 49 to 80) is any 32 bytes: only the recipient can tell it from
+/// any other. The checks run in that order, and the first that fails is the
+/// error. Nothing here decrypts, and nothing could: only the recipient holds
+/// the key.
 pub fn check_envelope(envelope: &[u8]) -> Result<(), Error> {
     match envelope.first() {
         None => return Err(Error::InvalidLength),
@@ -181,9 +183,15 @@ mod tests {
         bytes
     }
 
-    fn with_point(envelope: &[u8], index: usize, point: [u8; 48]) -> Vec<u8> {
+    /// Where `p`, the tag and `c` start: `version (1) | p (48) | tag (32) |
+    /// c (48)`.
+    const P_AT: usize = 1;
+    const TAG_AT: usize = 49;
+    const C_AT: usize = 81;
+
+    fn with_bytes(envelope: &[u8], at: usize, bytes: &[u8]) -> Vec<u8> {
         let mut out = envelope.to_vec();
-        out[1 + 48 * index..1 + 48 * (index + 1)].copy_from_slice(&point);
+        out[at..at + bytes.len()].copy_from_slice(bytes);
         out
     }
 
@@ -218,31 +226,45 @@ mod tests {
             ("empty", Vec::new()),
             ("511 bytes", small[..511].to_vec()),
             ("513 bytes", longer),
-            ("161 bytes, an empty v1 envelope", envelope(161, "161")),
+            ("145 bytes, an empty v1 envelope", envelope(145, "145")),
             (
                 "1,024 bytes, a v1 envelope of no session size",
                 envelope(1024, "1024"),
             ),
-            ("p is the identity", with_point(&small, 0, identity())),
-            ("p is off the curve", with_point(&small, 0, off_the_curve())),
+            ("p is the identity", with_bytes(&small, P_AT, &identity())),
+            (
+                "p is off the curve",
+                with_bytes(&small, P_AT, &off_the_curve()),
+            ),
             (
                 "p is outside G1",
-                with_point(&small, 0, outside_the_subgroup()),
+                with_bytes(&small, P_AT, &outside_the_subgroup()),
             ),
             (
                 "p's x is the field modulus",
-                with_point(&small, 0, the_modulus()),
+                with_bytes(&small, P_AT, &the_modulus()),
             ),
-            ("w is the identity", with_point(&small, 1, identity())),
+            // The tag is no point: any 32 bytes are kept.
             (
-                "w is outside G1",
-                with_point(&small, 1, outside_the_subgroup()),
+                "the tag is 32 zero bytes",
+                with_bytes(&small, TAG_AT, &[0; 32]),
             ),
-            ("c is the identity", with_point(&small, 2, identity())),
-            ("c is off the curve", with_point(&small, 2, off_the_curve())),
+            (
+                "the tag is 32 bytes of 0xff",
+                with_bytes(&small, TAG_AT, &[0xff; 32]),
+            ),
+            ("c is the identity", with_bytes(&small, C_AT, &identity())),
+            (
+                "c is off the curve",
+                with_bytes(&small, C_AT, &off_the_curve()),
+            ),
             (
                 "c is outside G1",
-                with_point(&small, 2, outside_the_subgroup()),
+                with_bytes(&small, C_AT, &outside_the_subgroup()),
+            ),
+            (
+                "c's x is the field modulus",
+                with_bytes(&small, C_AT, &the_modulus()),
             ),
         ]
     }
@@ -292,12 +314,15 @@ mod tests {
             })
             .collect();
         json!({
-            "description": "What the relay checks of a post (docs/protocol.md §17). A post is nonce (8, big-endian) || envelope. The relay keeps an envelope only if its version is 1, its length is one of sizes, and p, w and c (bytes 1-48, 49-96, 97-144) are each canonical compressed G1 points in the prime-order subgroup and not the identity, checked in that order; error names the first check that fails, or is null. digest = SHA-256(stamp_label || len(pool) (1 byte) || pool || envelope); a stamp's work is the leading zero bits of SHA-256(digest || nonce (8, big-endian)), and nonce is the first from 0 with at least bits. post is the post's first 8 bytes.",
+            "description": "What the relay checks of a post (docs/protocol.md §17). A post is nonce (8, big-endian) || envelope, and an envelope is version (1) || p (48) || tag (32) || c (48) || ciphertext. The relay keeps an envelope only if its version is 1, its length is one of sizes, and p and c (bytes 1-48 and 81-128) are each canonical compressed G1 points in the prime-order subgroup and not the identity, checked in that order; the tag (bytes 49-80) is any 32 bytes, and isn't checked. error names the first check that fails, or is null. digest = SHA-256(stamp_label || len(pool) (1 byte) || pool || envelope); a stamp's work is the leading zero bits of SHA-256(digest || nonce (8, big-endian)), and nonce is the first from 0 with at least bits. post is the post's first 8 bytes. A stamp's envelope is the name of one of posts, zeros is its work, and nonce is a JSON number.",
             "version": 1,
             "stamp_label": String::from_utf8(STAMP_LABEL.to_vec()).unwrap(),
             "nonce_len": NONCE_LEN,
             "max_stamp_bits": MAX_STAMP_BITS,
             "sizes": ENVELOPE_SIZES,
+            "points_at": [P_AT, C_AT],
+            "tag_at": TAG_AT,
+            "tag_len": C_AT - TAG_AT,
             "posts": posts,
             "stamps": stamps,
         })
@@ -338,6 +363,34 @@ mod tests {
         // Each of the four sizes is kept.
         for size in ENVELOPE_SIZES {
             assert_eq!(check_envelope(&envelope(size, "any")), Ok(()), "{size}");
+        }
+    }
+
+    /// The layout the vectors name is the envelope's: p, then the tag, then
+    /// c, then the ciphertext, the header ending at `HEADER_LEN`.
+    #[test]
+    fn the_layout_is_the_envelopes() {
+        assert_eq!(TAG_AT, P_AT + 48);
+        assert_eq!(C_AT, TAG_AT + 32);
+        assert_eq!(C_AT + 48, crate::HEADER_LEN);
+    }
+
+    /// The tag is never judged: every one of its bits flipped, the envelope
+    /// is still kept, and a point's bytes moved into p's or c's place are
+    /// what's refused.
+    #[test]
+    fn the_tag_is_any_32_bytes() {
+        let small = envelope(512, "512");
+        for bit in 0..32 * 8 {
+            let mut changed = small.clone();
+            changed[TAG_AT + bit / 8] ^= 1 << (bit % 8);
+            assert_eq!(check_envelope(&changed), Ok(()), "bit {bit}");
+        }
+        for at in [P_AT, C_AT] {
+            assert_eq!(
+                check_envelope(&with_bytes(&small, at, &identity())),
+                Err(Error::IdentityPoint)
+            );
         }
     }
 

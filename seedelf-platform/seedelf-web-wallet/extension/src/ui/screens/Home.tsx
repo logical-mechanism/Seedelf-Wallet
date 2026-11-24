@@ -1672,12 +1672,24 @@ function Links({
   );
 }
 
-/** Opens Messages, saying whether they're on and what's unread (call 11: the count here and on the top bar's button). */
-function MessagesRow({ overview, onOpen }: { overview?: MessagingOverview; onOpen: () => void }) {
+/**
+ * Opens Messages, saying whether they're on and what's unread (call 11: the count here and on the top bar's button).
+ * Exported for the screens' tests.
+ */
+export function MessagesRow({ overview, onOpen }: { overview?: MessagingOverview; onOpen: () => void }) {
   const t = useT();
   const id = useId();
   const unread = unreadOf(overview);
-  const sub = !overview ? undefined : !overview.on ? t("home.messages.off") : unread ? t("home.messages.unread", { count: unread }) : t("home.messages.on");
+  // Off, with messages unread from before: both said, as the top bar's count says them (screens#14).
+  const sub = !overview
+    ? undefined
+    : !overview.on
+      ? unread
+        ? t("home.messages.offUnread", { count: unread })
+        : t("home.messages.off")
+      : unread
+        ? t("home.messages.unread", { count: unread })
+        : t("home.messages.on");
   return (
     <button
       type="button"

@@ -7995,10 +7995,12 @@ pub fn decode_tx(network: Network, tx_cbor: &str) -> Result<String, JsError> {
 
 // ---------------------------------------------------------------------------
 // Seedelf Messaging (chunk 54's 54d): see [`messaging`]. JSON in and out,
-// every byte string hex; a refusal is `{ "refused": "<code>" }`, and only a
-// request that doesn't read throws. An answer holding a conversation's record
-// or a message's text is built in a buffer WebAssembly wipes once JavaScript
-// has its string, and so is each such request.
+// every byte string hex; a refusal is `{ "refused": "<code>" }`, with the
+// record's `version` for `unsupported_state_version`, a requests' record that
+// doesn't read included, and only a request that doesn't read throws. The
+// scan answers a string of digits, not JSON. An answer holding a
+// conversation's record or a message's text is built in a buffer WebAssembly
+// wipes once JavaScript has its string, and so is each such request.
 // ---------------------------------------------------------------------------
 
 /// Counts what `serde_json` writes, so the answer's buffer is made its exact
@@ -8027,13 +8029,14 @@ fn to_secret_json<T: serde::Serialize>(value: &T) -> Result<js_sys::JsString, Js
     Ok(js_sys::JsString::from(text))
 }
 
-/// The indexes of the envelopes addressed to the key in one batch:
-/// `envelopes` is a JSON array of hex envelopes, the answer an array of
-/// indexes (`messaging::scan`).
+/// Which envelopes of one batch are addressed to the key: `envelopes` is a
+/// JSON array of hex envelopes, the answer a string of one digit an
+/// envelope, in order, `1` where it's the key's: as long as the batch
+/// whatever matched, and not JSON (`messaging::scan`).
 #[wasm_bindgen(js_name = messagingScan)]
 pub fn messaging_scan(key: &SeedelfKey, envelopes: &str) -> Result<String, JsError> {
     let envelopes: Vec<String> = from_json(envelopes)?;
-    to_json(&messaging::scan(key.sk, &envelopes).map_err(js_error)?)
+    messaging::scan(key.sk, &envelopes).map_err(js_error)
 }
 
 /// Opens an envelope, hex, and says which conversation it's for, and

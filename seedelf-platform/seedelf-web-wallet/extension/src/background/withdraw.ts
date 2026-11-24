@@ -32,6 +32,7 @@ import { seedelfName } from "../shared/seedelf-name";
 import { decimalsOf } from "./balances";
 import { seedelfLabel } from "./chain";
 import { destinationResolver, resolveDestination } from "./destination";
+import { forgetRegisters } from "./minted-by";
 import { reviewParts, sendParts } from "./parts";
 import { settleMaybeSent } from "./pending";
 import { privateShort, privateShortOf, tooMany } from "./short";
@@ -222,7 +223,16 @@ export class WithdrawService {
     return summary;
   }
 
-  submitRemove(network: NetworkName, txHash: string): Promise<PendingTx> {
-    return send(this.deps, network, txHash, SESSION_REMOVE, "remove", "removal");
+  async submitRemove(network: NetworkName, txHash: string): Promise<PendingTx> {
+    // Which Seedelf it removes, as its review kept it.
+    const built = await this.deps.wallet.withKeys(() => this.deps.session.get<{ network?: string; txHash?: string; name?: string }>(SESSION_REMOVE));
+    const pending = await send(this.deps, network, txHash, SESSION_REMOVE, "remove", "removal");
+    // Sent, or it may have gone: Messages stops taking first messages at the register this browser put it under, now,
+    // whatever a kept view still shows (the 1.10.0 gate's W12). Best effort: the removal went whatever this write does,
+    // and a view without the Seedelf stops them all the same.
+    if (built?.network === network && built.txHash === txHash && built.name) {
+      await forgetRegisters(this.deps.store, network, built.name).catch(() => undefined);
+    }
+    return pending;
   }
 }

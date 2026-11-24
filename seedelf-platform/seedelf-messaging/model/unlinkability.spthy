@@ -1,33 +1,50 @@
 /*
  * Seedelf Messaging's unlinkability: security.md's property 3 for the bare
  * v1 envelope (construction.md §2, §4), as observational equivalence in
- * Tamarin (diff terms, proved with --diff). Chunk 54's 54b, its follow-up.
- * The README says what it shows and what it doesn't.
+ * Tamarin (diff terms, proved with --diff), and for a reader that answers
+ * (protocol.md §2, calls 13 and 16). Chunk 54's 54b, its follow-up, and
+ * call 16. The README says what it shows and what it doesn't.
  *
- * Two pairs of systems, by flag:
+ * Three pairs of systems, by flag:
  *   (none)          envelopes to one recipient, against envelopes to one
  *                   recipient and to another: whether two envelopes go to
  *                   the same recipient;
  *   -D=FRESH        envelopes to a known register, against envelopes to a
  *                   key no one holds: whether an envelope goes to a given
- *                   register at all.
- * The attacker holds both recipients' registers, picks every plaintext, and
- * sees every envelope; no recipient reacts, and neither key is stolen.
+ *                   register at all;
+ *   -D=ANSWERS      a reader that answers every first message it takes,
+ *                   with a second register that is its key's, against one
+ *                   that is a key's no one holds: whether its answers tell
+ *                   that two registers are one wallet's;
+ * and four controls, two of the first and two of ANSWERS, each without one
+ * of the reader's checks. -D=ANSWERS_REACHED is ANSWERS' two systems with a
+ * trace lemma, proved on each, that the reader answers at all, so that
+ * answers_alike can't hold for want of an answer. An envelope's header
+ * carries p, c and a tag of w, never w itself (call 16). In the first two,
+ * the attacker holds both recipients' registers, picks every plaintext, and
+ * sees every envelope; no recipient reacts, and neither key is stolen. In
+ * -D=ANSWERS the attacker writes every message.
  *
- * check.sh proves each pair, and each control below must find its link:
+ * check.sh proves each pair, and each control below must find its link; a
+ * line's last field, when there is one, gives that pair more room:
  */
 // check.sh diff: same_or_two - verified
 // check.sh diff: known_or_no_one FRESH verified
 // check.sh diff: bare_register_links BARE_REGISTER falsified
 // check.sh diff: stolen_key_links STOLEN falsified
+// check.sh diff: answers_alike ANSWERS verified CAP=12g,LIMIT=7200
+// check.sh diff: unbound_ephemeral_answers_link ANSWERS_UNBOUND_EPHEMERAL falsified CAP=12g,LIMIT=7200
+// check.sh diff: unproven_ephemeral_answers_link ANSWERS_UNPROVEN_EPHEMERAL falsified CAP=12g,LIMIT=7200
 
 theory SeedelfMessagingUnlinkability
 begin
 
 builtins: diffie-hellman
 
-functions: aenc/3, adec/2, kdf_env/2
+functions: aenc/3, adec/2, kdf_env/2, tag/1
 equations: adec(aenc(m, k, ad), k) = m
+
+#ifdef not ANSWERS & not ANSWERS_UNBOUND_EPHEMERAL & not ANSWERS_UNPROVEN_EPHEMERAL & not ANSWERS_REACHED
 
 /* Two recipients' registers, root registers (G, [y]G), both public. A
    datum register's generator is itself [d]G, which changes nothing here. */
@@ -42,13 +59,15 @@ rule Seal_to_the_first:
   let p = 'g'^~b
       w = va^~b
       c = p^~r
-      H = <'v1', p, w, c>
+      H = <'v1', p, tag(w), c>
   in
   [ !Two(va, vb), Fr(~b), Fr(~r), In(m) ]
   -->
   [ Out(<H, aenc(m, kdf_env(H, w^~r), H)>) ]
 
-#ifdef not FRESH & not BARE_REGISTER
+#endif
+
+#ifdef not FRESH & not BARE_REGISTER & not ANSWERS & not ANSWERS_UNBOUND_EPHEMERAL & not ANSWERS_UNPROVEN_EPHEMERAL & not ANSWERS_REACHED
 
 /* To the first on the left, to the second on the right. */
 rule Seal_to_either:
@@ -56,7 +75,7 @@ rule Seal_to_either:
       p = 'g'^~b
       w = v^~b
       c = p^~r
-      H = <'v1', p, w, c>
+      H = <'v1', p, tag(w), c>
   in
   [ !Two(va, vb), Fr(~b), Fr(~r), In(m) ]
   -->
@@ -72,7 +91,7 @@ rule Seal_to_the_first_or_no_one:
       p = 'g'^~b
       w = v^~b
       c = p^~r
-      H = <'v1', p, w, c>
+      H = <'v1', p, tag(w), c>
   in
   [ !Two(va, vb), Fr(~z), Fr(~b), Fr(~r), In(m) ]
   -->
@@ -84,14 +103,14 @@ rule Seal_to_the_first_or_no_one:
    -D=BARE_REGISTER seals to the register itself, not a re-randomization of
    it, as ElfTalk's messages carried their recipient's key (security.md);
    -D=STOLEN gives the attacker the second recipient's key, which tests
-   [y]p = w. Each must end "falsified". */
+   tag([y]p) against the header's. Each must end "falsified". */
 
 #ifdef BARE_REGISTER
 
 rule Seal_to_either_bare:
   let v = diff(va, vb)
       c = 'g'^~r
-      H = <'v1', 'g', v, c>
+      H = <'v1', 'g', tag(v), c>
   in
   [ !Two(va, vb), Fr(~r), In(m) ]
   -->
@@ -104,6 +123,102 @@ rule Seal_to_either_bare:
 rule Steal_the_second:
   [ !Keys(ya, yb) ] --> [ Out(yb) ]
 
+#endif
+
+/* ---- A reader that answers (-D=ANSWERS and its two controls) ---- */
+
+#ifdef ANSWERS | ANSWERS_UNBOUND_EPHEMERAL | ANSWERS_UNPROVEN_EPHEMERAL | ANSWERS_REACHED
+
+/* A first message reduced to what the link needs: an envelope (p, tag, c);
+   inside it the cid, the ratchet's salt, and an inner ciphertext under a key
+   from [y]E (E standing for F's E_A, A and S_A, which the keys proof binds
+   the same way) with w0 = [y]p0 in its associated data, as the tag needs.
+   F's base is G^k for a k the attacker names (the base proof, which without
+   the reader's key passes only for a known power of the handle's
+   generator: session.spthy's assumption 4). F, and the exponent the keys
+   proof shows the writer knows, travel beside the envelope, which changes
+   nothing here: the attacker writes every message, and the inner key binds
+   F. (The exponent sent, not matched inside a proof term, which Tamarin's
+   message-derivation check would refuse: README.) */
+functions: kdf_sk/2, kdf_msg/2, kdf_outer/2, kdf_eph/2
+
+restriction scan_check: "All a b #i. ScanCheck(a, b)@i ==> a = b"
+restriction outer_check: "All a b #i. OuterCheck(a, b)@i ==> a = b"
+
+/* The reader, its root handle public, and a second register on a generator
+   whose log no one learns: the reader's key's on the left, a key's no one
+   holds on the right. */
+rule Reader:
+  [ Fr(~y), Fr(~d), Fr(~z) ]
+  -->
+  [ !Reader(~y), Out('g'^~y), Out(<'g'^~d, diff(('g'^~d)^~y, ('g'^~d)^~z)>) ]
+
+/* Its key on each point, one point a step, with no check: every envelope
+   and every F gets them, on both sides alike. Diff-equivalence asks the two
+   sides to take the same steps, so a step that could pass on one side and
+   fail on the other would be a difference no one sees; only the last step
+   checks. */
+rule Reader_scan_point:
+  [ !Reader(~y), In(<'v1', p, t, c>) ] --> [ RP(~y, p, t, c, p^~y) ]
+
+rule Reader_shared_point:
+  [ RP(~y, p, t, c, zp) ] --> [ RC(~y, p, t, c, zp, c^~y) ]
+
+rule Reader_base_point:
+  [ RC(~y, p, t, c, zp, zc), In(<$k, cid, E, logE>) ]
+  --> [ RB(~y, p, t, c, zp, zc, $k, cid, E, logE, ('g'^$k)^~y) ]
+
+rule Reader_ephemeral_point:
+  [ RB(~y, p, t, c, zp, zc, k, cid, E, logE, w0) ]
+  --> [ RE(~y, p, t, c, zp, zc, k, cid, E, logE, w0, E^~y) ]
+
+/* Then every check at once, and the answer: the scan, the open, the inner
+   layer under its key and associated data, the outer check, the ephemeral
+   check and the keys proof. A message it takes is answered. */
+rule Reader_answers:
+  let p0 = 'g'^k
+      H  = <'v1', p, t, c>
+      F  = <cid, p0, E>
+      mk = kdf_sk(ze, F)
+      ad = <cid, p0, w0>
+  in
+  [ RE(~y, p, t, c, zp, zc, k, cid, E, logE, w0, ze),
+    In(<H, aenc(<cid, salt, aenc(m, kdf_msg(mk, salt), ad)>, kdf_env(H, zc), H)>) ]
+  --[ ScanCheck(tag(zp), t), OuterCheck(p, p0^kdf_outer(mk, salt)),
+      EphemeralCheck(c, p^kdf_eph(mk, salt)), KeysCheck(p0^logE, E) ]->
+  [ Out(<'answer', cid>) ]
+
+#endif
+
+#ifdef ANSWERS
+restriction ephemeral_check: "All a b #i. EphemeralCheck(a, b)@i ==> a = b"
+restriction keys_check: "All a b #i. KeysCheck(a, b)@i ==> a = b"
+#endif
+
+/* answers_alike isn't vacuous (the model review of call 16): on each side,
+   the reader answers a first message the attacker wrote, every check on.
+   KeysCheck is the answering rule's alone. ANSWERS' rules and restrictions
+   under a flag of their own, so that the pair's run, which proves every
+   lemma in its file, doesn't prove this one too. */
+#ifdef ANSWERS_REACHED
+restriction ephemeral_check: "All a b #i. EphemeralCheck(a, b)@i ==> a = b"
+restriction keys_check: "All a b #i. KeysCheck(a, b)@i ==> a = b"
+
+lemma the_reader_answers: exists-trace
+  "Ex a b #i. KeysCheck(a, b)@i"
+#endif
+
+/* The controls: without the ephemeral check, an envelope whose ephemeral
+   point is on the second register opens only where that register is the
+   reader's; without the keys proof, an E on it does the same. Each must end
+   "falsified". */
+
+#ifdef ANSWERS_UNBOUND_EPHEMERAL
+restriction keys_check: "All a b #i. KeysCheck(a, b)@i ==> a = b"
+#endif
+
+#ifdef ANSWERS_UNPROVEN_EPHEMERAL
+restriction ephemeral_check: "All a b #i. EphemeralCheck(a, b)@i ==> a = b"
 #endif
 
 end

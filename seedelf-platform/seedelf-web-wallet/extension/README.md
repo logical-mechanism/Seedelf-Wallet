@@ -43,6 +43,7 @@ The top half of this page is every screen and what it does; the bottom half is h
 | Rewards history | **Rewards history** on Staking, under the rewards while the stake key is registered, or under *Not staking* when it isn't but was paid | Every reward the stake key was paid: what's been paid in all, the rewards coming **Next epoch** when they're listed and the key is registered, then each year with its total, newest first, 50 rows at a time with **Show more**. A row is its epoch's day and who paid it: the pool by its ticker when the device knows it, an operator's reward, a deposit back, the reserves or the treasury. Read fresh each time it opens (a request per 1,000 rewards) and kept nowhere; no pool is asked about. |
 | Delegation history | **Delegation history** on Staking, above Stop staking while the stake key is registered, or alone when it isn't but was paid | Every change to the stake key, newest first, by year, 50 rows at a time: registered (the 2 ₳ deposit), staked with a pool, the voting power delegated, and stopped (the deposit back); withdrawals are in Public activity. A row opens its details, with the transaction on Cardanoscan. Read fresh each time it opens (two requests for nearly every account) and kept nowhere; no pool is asked about. |
 | dApps | The **dApps** row on either Home tab | Tiles for the dApps the wallet uses privately, from one-time accounts funded from the private balance: **Minswap** and **Lovejoin**. Under them, **Sites**: whether sites can see the wallet (with **Let sites connect**), a declined site's wait (with **Let it ask now**), and every connected site: the public account's with **Disconnect**, a private session's opening its page. While sessions still hold something, **Bring everything back**. At the foot, **After a restore**: the sessions a restore's scan found, each opening its page, and **Find leftovers**, which scans again (it asks the server about the one-time accounts 20 at a time, and says so first); the page points to it while a restore hasn't finished looking on that network. |
+| Messages | The round button left of Settings in the top bar, or the **Messages** row on Home, each with what's unread | Seedelf Messaging: conversations with other Seedelfs, end to end encrypted, with **Turn on Messages** for each network (off until then), strangers' first messages as requests until a reply, **New message** to a Seedelf by its whole name, and, where you wrote first and have a reply, **Show my Seedelf**. [flows.md](../docs/flows.md#messages-seedelf-messaging) has the flow. |
 | Swaps | The Minswap tile, or Home's **Swaps in progress** | **New swap**, in a private session: a one-time account is funded from the private balance, Minswap's aggregator builds the swap, and after one approval it runs by itself: the order, the fill, and everything back into the private balance, through Lovejoin by default. A swap can be stopped, and what it holds comes back. |
 | Lovejoin | The Lovejoin tile, or Home's **In Lovejoin** | Lovejoin's pools, each of one box value (ADA alone, or a token with some ADA) and each with its crowd (how many boxes in it aren't yours), listed ADA's first, then those of tokens you hold, then the rest, most used first. An older pool that takes no new boxes, such as the classic pool of 10 ₳ boxes, is listed only while you have boxes in it. Your boxes there come back by themselves, one right after another, which ties them together. A pool's page lists your boxes in it (found by the Seedelf key) and when each is due back, with **Bring one back now**. **Mix** puts ADA or the pool's token in, in its boxes, from the private balance or the public account, and **Mix my boxes again** mixes them further, each with its own **Four boxes a mix**. **Help start the pool** (a Bootstrap) puts boxes in for others to mix with, held until brought back by hand. **Bring every box back now** brings back all of yours in that pool. On mainnet a pool mixes only once it holds 30 boxes that aren't yours. **Start a pool**: of a token on the wallet's list, or of ADA at any amount but 10 ₳, for about 23 ₳ that never comes back. |
 | A site's private session | A site under the dApps page's **Sites** | What its one-time account holds, **Top up** (another payment from the private balance), **Bring it back** (everything at the account into the private balance; the site stays connected), and **Disconnect** once it's empty. |
@@ -130,7 +131,8 @@ src/
     script-spend.ts     the flow every Seedelf spend shares: build and measure in WebAssembly, keep until Send, giveme.my, sign, submit
     parts.ts            a payment in several transactions: a part with no ADA of its own sent once the one before lands
     mint.ts             create a Seedelf, paid by the account (signed at review) or stealth (giveme.my and sign at Send)
-    minted-by.ts        who paid for each Seedelf, so Remove defaults to that side
+    minted-by.ts        who paid for each Seedelf, so Remove defaults to that side, and the register each one minted
+                        here went under, where Seedelf Messaging takes first messages
     transfer.ts         find a Seedelf by its full name, then build and send a payment to it
     send.ts             Send from the public account: addresses, ADA Handles and Seedelfs, with an optional note
     withdraw.ts         withdraw to addresses or ADA Handles, and remove a Seedelf
@@ -157,6 +159,8 @@ src/
     lovejoin-launch.ts  starting a pool: one transaction makes the whole pool
     lovejoin-rewards.ts what sits in each pool's mix_logic reward account, which the first transaction there takes
     runs.ts             the worker's own runs: swaps, chains, Lovejoin's boxes, a payment that may have gone through
+    messaging.ts        Seedelf Messaging: its records, reading the relay while unlocked, and sending
+    relay.ts            the relay's client: its pages and posts, and what each answer means
     tx-view.ts, cbor.ts the transaction view's bytes (decoded in WASM); just enough CBOR to read inputs and an id
     contacts.ts         Contacts, in the private store
     preferences.ts      the user's settings, in chrome.storage.local
@@ -176,8 +180,8 @@ src/
     screens/            Onboarding, Create, Restore, Unlock (and reset), Home, Tokens, Receive, MoveIn,
                         CreateSeedelf, Transfer, CardanoSend, Withdraw, RemoveSeedelf, Utxos, Collateral, Settings,
                         Activity, Staking, Rewards, Delegations, Pools, Voting, Governance, Dapps, Swaps, Lovejoin,
-                        LovejoinLaunch (Start a pool), SiteSessions, ClaimAll, ConnectedSites, DappApprovals (the
-                        connector's window)
+                        LovejoinLaunch (Start a pool), SiteSessions, ClaimAll, ConnectedSites, Messages,
+                        DappApprovals (the connector's window)
     components/         Screen (every flow's layout), Splash, Tabs, Modal, TokenList, ReviewRows, Callout,
                         ActionButton, Choice, PhraseInput (per-word autocomplete), PhraseGrid, SetPassword,
                         PasswordField, AdaInput, AmountField, TokenAmounts, CopyField, CopyButton, QrCode,
@@ -197,6 +201,7 @@ src/
     dapp.ts             the connector window's words for a site's transaction
     lovejoin-pools.ts   Lovejoin's pools as the screens show them: what a box holds, the hub's order
     swap.ts             the swap form's arithmetic
+    messaging.ts        Messages as the screens show them: labels, states, times, and reading while a page is seen
     nft-images.ts       the NFT images shown, kept in this page's memory until the wallet locks
     history.ts          the browser's Back as the screen's own Back
     sites.ts            the sites switch, shared by Settings and the dApps page

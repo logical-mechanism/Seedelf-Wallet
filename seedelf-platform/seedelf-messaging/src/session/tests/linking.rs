@@ -4,24 +4,403 @@
 //! identity by the message's outer scalar. Together they keep a writer from
 //! learning whether two Seedelfs are one wallet's.
 
-use blstrs::G1Projective;
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use blstrs::{G1Affine, G1Projective, Scalar};
 use group::Curve;
+use hkdf::Hkdf;
+use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 use super::ratchet::pair;
 use super::support::{
     HANDLE_NAME, Seeded, TEST_BITS, handle, handles, key, opened, own_handles, stamp, start,
-    test_inbox,
+    test_inbox, test_scalar,
 };
-use crate::envelope::encrypt_message;
-use crate::register::Register;
+use crate::envelope::{derive_key_and_nonce, encrypt_message};
+use crate::register::{POINT_LEN, Register};
 use crate::relay::stamp_bits;
 use crate::session::conversation::{Conversation, Role};
 use crate::session::first_contact::{FIRST_CONTACT_STAMP_BITS, Handle};
 use crate::session::inbox::{Inbox, Received};
+use crate::session::secret::Secret32;
 use crate::session::wire::{Opened, pad};
-use crate::{Error, SecretKey};
+use crate::{Envelope, Error, HEADER_LEN, SecretKey, decrypt_message};
 
 const T: u64 = 1_800_000_000;
+
+/// Where an envelope's ephemeral point c starts: the header's last 48 bytes.
+const C_AT: usize = HEADER_LEN - POINT_LEN;
+
+/// The envelope's ephemeral scalar as docs/protocol.md §16.2 defines it,
+/// computed here from the definition: HKDF-SHA256(salt = the ratchet salt,
+/// ikm = mk, info = `Seedelf-Messaging|v1|ratchet|envelope-ephemeral`), 64
+/// bytes, as a big-endian integer mod q.
+fn envelope_r(mk: &Secret32, salt: &[u8; 16]) -> Scalar {
+    let mut okm = [0u8; 64];
+    Hkdf::<Sha256>::new(Some(salt), mk.bytes())
+        .expand(b"Seedelf-Messaging|v1|ratchet|envelope-ephemeral", &mut okm)
+        .unwrap();
+    crate::keys::scalar_mod_q(&okm)
+}
+
+/// `honest`, an envelope the writer made, with only its ephemeral point moved
+/// onto `other`: c = [r]g′ and the outer key from [r]v′, while everything
+/// before c (the version, p and what follows p) and the padded inner message
+/// stay as they were. It opens exactly when `other` is a register of the
+/// reader's key, so a reader that didn't check c took it then and only then,
+/// and its reply told the writer `other` is the reader's (the 1.10.0 gate
+/// review's ephemeral-point probes). The writer knows what it sealed; this
+/// reads it back with the reader's key only to save rebuilding it.
+pub(crate) fn ephemeral_on(reader: &SecretKey, honest: &[u8], other: &Register) -> Vec<u8> {
+    let padded = decrypt_message(reader, &Envelope::from_bytes(honest).unwrap()).unwrap();
+    let r = test_scalar("an ephemeral point on another register");
+    let mut header = [0u8; HEADER_LEN];
+    header[..C_AT].copy_from_slice(&honest[..C_AT]);
+    header[C_AT..].copy_from_slice(&(other.generator() * r).to_compressed());
+    let shared = Zeroizing::new((other.public_value() * r).to_compressed());
+    sealed_under(&shared, &header, &padded, honest.len())
+}
+
+/// `honest`, an envelope the writer made, with only its generator p and its
+/// tag moved onto `other`, re-randomized by d: p′ = [d]g′ and the tag of
+/// [d]v′, while c, the honest [r][o]p₀, and the padded inner message stay as
+/// they were. The outer key is still from [y]c, which the writer knows as
+/// [r][o]V (it sealed `honest`); this reads it with the reader's key only to
+/// save rebuilding it. The scan matches exactly when `other` is a register of
+/// the reader's key, and c's check still holds, c being [r][o]p₀ for the o and
+/// r the message key gives: only p = [o]p₀ refuses it (the 1.10.0 gate's spec
+/// review, whose mutant without p's check passed every other test).
+pub(crate) fn generator_on(reader: &SecretKey, honest: &[u8], other: &Register) -> Vec<u8> {
+    let envelope = Envelope::from_bytes(honest).unwrap();
+    let padded = decrypt_message(reader, &envelope).unwrap();
+    let d = test_scalar("a generator on another register");
+    let mut header = [0u8; HEADER_LEN];
+    header[0] = honest[0];
+    header[1..1 + POINT_LEN].copy_from_slice(&(other.generator() * d).to_compressed());
+    let tag: [u8; 32] = Sha256::new()
+        .chain_update(b"Seedelf-Messaging|v1|envelope|tag")
+        .chain_update((other.public_value() * d).to_compressed())
+        .finalize()
+        .into();
+    header[1 + POINT_LEN..C_AT].copy_from_slice(&tag);
+    header[C_AT..].copy_from_slice(&honest[C_AT..HEADER_LEN]);
+    let shared = Zeroizing::new(
+        (G1Projective::from(envelope.ephemeral_point()) * reader.scalar()).to_compressed(),
+    );
+    sealed_under(&shared, &header, &padded, honest.len())
+}
+
+/// `padded` sealed as v1 seals it under `shared` and `header`: an envelope
+/// of `len` bytes.
+fn sealed_under(
+    shared: &[u8; POINT_LEN],
+    header: &[u8; HEADER_LEN],
+    padded: &[u8],
+    len: usize,
+) -> Vec<u8> {
+    let okm = derive_key_and_nonce(shared, header);
+    let sealed = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&okm[..32]))
+        .encrypt(
+            Nonce::from_slice(&okm[32..]),
+            Payload {
+                msg: padded,
+                aad: header,
+            },
+        )
+        .unwrap();
+    let mut out = header.to_vec();
+    out.extend_from_slice(&sealed);
+    assert_eq!(out.len(), len);
+    out
+}
+
+/// What a probe of `reader`'s key goes on: another register of that key, or
+/// the sum of two, whose probes open, and a stranger's, whose doesn't. Each
+/// is refused.
+fn probes(reader: &str) -> [(Register, Error); 3] {
+    [
+        (
+            handle(reader, "another register of the reader's"),
+            Error::WrongEnvelopeRegister,
+        ),
+        (
+            sum(&handle(reader, "one of its own"), &handle(reader, "two")),
+            Error::WrongEnvelopeRegister,
+        ),
+        (
+            handle("carol", "a stranger's register"),
+            Error::DecryptionFailed,
+        ),
+    ]
+}
+
+/// The envelope's ephemeral point on another register of the reader's key,
+/// on every path a message comes with its envelope: a new cid's first
+/// message, a join, a held conversation's first-contact message, the
+/// initiator's first reply, a new chain, the current chain, and a skipped
+/// key's message. Each probe is refused, as one on a stranger's register is,
+/// with nothing changed, and the honest envelope still reads after it: c
+/// must be [r]p for the r the message key and its salt give (protocol.md
+/// §2, §16.2).
+#[test]
+fn an_envelope_whose_c_is_on_another_register_is_refused_on_every_path() {
+    let (alice, bob) = (key("alice"), key("bob"));
+    let named = handle("bob", "one");
+    let mine = handles(&[named]);
+    let mut draw = Seeded::new("c on every path");
+    let mut a = start(&alice, &named, T, &mut draw);
+    let cid = a.cid();
+    let mut inbox = test_inbox();
+
+    // A new cid's first message.
+    let honest = a.send_with(b"first", &mut draw).unwrap();
+    for (other, refusal) in probes("bob") {
+        let probe = ephemeral_on(&bob, &honest, &other);
+        assert!(crate::matches_envelope(&bob, &probe).unwrap());
+        assert_eq!(
+            inbox.receive(&bob, &mine, &probe, T),
+            Err(refusal),
+            "a first message"
+        );
+        assert!(inbox.requests().is_empty());
+    }
+    assert!(matches!(
+        inbox.receive(&bob, &mine, &honest, T),
+        Ok(Received::Request { new: true, .. })
+    ));
+
+    // A join: a later first-contact message of the request.
+    let honest = a.send_with(b"second", &mut draw).unwrap();
+    let before = inbox.requests().to_bytes();
+    for (other, refusal) in probes("bob") {
+        let probe = ephemeral_on(&bob, &honest, &other);
+        assert_eq!(
+            inbox.receive(&bob, &mine, &probe, T),
+            Err(refusal),
+            "a join"
+        );
+        assert_eq!(inbox.requests().to_bytes(), before);
+    }
+    assert!(matches!(
+        inbox.receive(&bob, &mine, &honest, T),
+        Ok(Received::Request { new: false, .. })
+    ));
+
+    // A held conversation's first-contact message, once the reader replied.
+    inbox.accept(&bob, cid).unwrap();
+    let honest = a.send_with(b"third", &mut draw).unwrap();
+    let before = inbox.conversation(cid).unwrap().to_bytes();
+    for (other, refusal) in probes("bob") {
+        let probe = ephemeral_on(&bob, &honest, &other);
+        assert_eq!(
+            inbox.receive(&bob, &mine, &probe, T),
+            Err(refusal),
+            "a held conversation's first-contact message"
+        );
+        assert_eq!(inbox.conversation(cid).unwrap().to_bytes(), before);
+    }
+    assert!(matches!(
+        inbox.receive(&bob, &mine, &honest, T),
+        Ok(Received::Message { .. })
+    ));
+
+    // The initiator's first reply: a receiving chain at last.
+    let honest = inbox.send(cid, b"reply").unwrap();
+    let mut alices = Inbox::from_parts(vec![a], Default::default(), Default::default()).unwrap();
+    let before = alices.conversation(cid).unwrap().to_bytes();
+    for (other, refusal) in probes("alice") {
+        let probe = ephemeral_on(&alice, &honest, &other);
+        assert_eq!(
+            alices.receive(&alice, &[], &probe, T),
+            Err(refusal),
+            "the first reply"
+        );
+        assert_eq!(alices.conversation(cid).unwrap().to_bytes(), before);
+        assert!(alices.conversation(cid).unwrap().sends_first_contact());
+    }
+    assert!(matches!(
+        alices.receive(&alice, &[], &honest, T),
+        Ok(Received::Message { .. })
+    ));
+    assert!(!alices.conversation(cid).unwrap().sends_first_contact());
+
+    // Session messages: a new chain's first, the current chain's next, and,
+    // past a gap, the skipped key's message.
+    let sent: Vec<_> = (0..4)
+        .map(|i| alices.send(cid, format!("s{i}").as_bytes()).unwrap())
+        .collect();
+    for (i, path) in [
+        (0, "a new chain"),
+        (1, "the current chain"),
+        (3, "the current chain, past a gap"),
+        (2, "a skipped key's message"),
+    ] {
+        let before = inbox.conversation(cid).unwrap().to_bytes();
+        for (other, refusal) in probes("bob") {
+            let probe = ephemeral_on(&bob, &sent[i], &other);
+            assert_eq!(
+                inbox.receive(&bob, &mine, &probe, T),
+                Err(refusal),
+                "{path}"
+            );
+            assert_eq!(inbox.conversation(cid).unwrap().to_bytes(), before);
+        }
+        assert!(matches!(
+            inbox.receive(&bob, &mine, &sent[i], T),
+            Ok(Received::Message { .. })
+        ));
+        assert_eq!(
+            inbox.conversation(cid).unwrap().missing(),
+            u64::from(i == 3),
+            "{path}"
+        );
+    }
+}
+
+/// The envelope's generator p and its tag on another register of the
+/// reader's key, or on the sum of two, with its ephemeral point c the honest
+/// one, on every path but one past MAX_SKIP (far.rs has that): a new cid's
+/// first message, a join, the initiator's first reply, and a held
+/// conversation's session message. The scan matches each probe and c's check
+/// can't see it; p = [o]p₀ refuses it, as any envelope aimed elsewhere is,
+/// with nothing changed, and the honest envelope still reads after it
+/// (protocol.md §16.4).
+#[test]
+fn an_envelope_whose_p_is_on_another_register_and_c_is_honest_is_refused() {
+    let (alice, bob) = (key("alice"), key("bob"));
+    let named = handle("bob", "one");
+    let mine = handles(&[named]);
+    let others = |reader: &str| {
+        [
+            handle(reader, "another register of the reader's"),
+            sum(&handle(reader, "one of its own"), &handle(reader, "two")),
+        ]
+    };
+    let mut draw = Seeded::new("p elsewhere, c kept");
+    let mut a = start(&alice, &named, T, &mut draw);
+    let cid = a.cid();
+    let mut inbox = test_inbox();
+
+    // A new cid's first message.
+    let honest = a.send_with(b"first", &mut draw).unwrap();
+    for other in others("bob") {
+        let probe = generator_on(&bob, &honest, &other);
+        assert!(crate::matches_envelope(&bob, &probe).unwrap());
+        assert_eq!(probe[C_AT..HEADER_LEN], honest[C_AT..HEADER_LEN], "c kept");
+        assert_eq!(
+            inbox.receive(&bob, &mine, &probe, T),
+            Err(Error::WrongEnvelopeRegister),
+            "a first message"
+        );
+        assert!(inbox.requests().is_empty());
+    }
+    assert!(matches!(
+        inbox.receive(&bob, &mine, &honest, T),
+        Ok(Received::Request { new: true, .. })
+    ));
+
+    // A join: a later first-contact message of the request.
+    let honest = a.send_with(b"second", &mut draw).unwrap();
+    let before = inbox.requests().to_bytes();
+    for other in others("bob") {
+        let probe = generator_on(&bob, &honest, &other);
+        assert_eq!(
+            inbox.receive(&bob, &mine, &probe, T),
+            Err(Error::WrongEnvelopeRegister),
+            "a join"
+        );
+        assert_eq!(inbox.requests().to_bytes(), before);
+    }
+    assert!(matches!(
+        inbox.receive(&bob, &mine, &honest, T),
+        Ok(Received::Request { new: false, .. })
+    ));
+
+    // The initiator's first reply.
+    inbox.accept(&bob, cid).unwrap();
+    let reply = inbox.send(cid, b"reply").unwrap();
+    let mut alices = Inbox::from_parts(vec![a], Default::default(), Default::default()).unwrap();
+    let before = alices.conversation(cid).unwrap().to_bytes();
+    for other in others("alice") {
+        let probe = generator_on(&alice, &reply, &other);
+        assert_eq!(
+            alices.receive(&alice, &[], &probe, T),
+            Err(Error::WrongEnvelopeRegister),
+            "the first reply"
+        );
+        assert_eq!(alices.conversation(cid).unwrap().to_bytes(), before);
+    }
+    assert!(matches!(
+        alices.receive(&alice, &[], &reply, T),
+        Ok(Received::Message { .. })
+    ));
+
+    // A held conversation's session message.
+    let honest = alices.send(cid, b"s0").unwrap();
+    let before = inbox.conversation(cid).unwrap().to_bytes();
+    for other in others("bob") {
+        let probe = generator_on(&bob, &honest, &other);
+        assert_eq!(
+            inbox.receive(&bob, &mine, &probe, T),
+            Err(Error::WrongEnvelopeRegister),
+            "a session message"
+        );
+        assert_eq!(inbox.conversation(cid).unwrap().to_bytes(), before);
+    }
+    assert!(matches!(
+        inbox.receive(&bob, &mine, &honest, T),
+        Ok(Received::Message { .. })
+    ));
+}
+
+/// No session envelope holds a register of either side's key on its own
+/// points: not (p, [x]p), the envelope's register before the tag replaced w,
+/// nor (c, [x]c), for the reader's x or the writer's (the 1.10.0 gate
+/// review's chain-reaction#1: anyone reading the pool could pay under one and
+/// watch who spends it). The 32 bytes after p are the tag of the reader's
+/// [x]p.
+#[test]
+fn no_session_envelope_holds_a_register_of_either_sides_key() {
+    let holds_no_register = |envelope: &[u8], reader: &SecretKey, writer: &SecretKey| {
+        let point = |at: usize| {
+            G1Projective::from(
+                G1Affine::from_compressed(&envelope[at..at + POINT_LEN].try_into().unwrap())
+                    .unwrap(),
+            )
+        };
+        let (p, c) = (point(1), point(C_AT));
+        let tag: [u8; 32] = Sha256::new()
+            .chain_update(b"Seedelf-Messaging|v1|envelope|tag")
+            .chain_update((p * reader.scalar()).to_compressed())
+            .finalize()
+            .into();
+        assert_eq!(&envelope[1 + POINT_LEN..1 + POINT_LEN + 32], &tag[..]);
+        for key in [reader, writer] {
+            for point in [p, c] {
+                let owned = (point * key.scalar()).to_compressed();
+                assert!(!envelope.windows(POINT_LEN).any(|window| window == owned));
+            }
+        }
+    };
+    let (alice, bob) = (key("alice"), key("bob"));
+    let mut draw = Seeded::new("no register");
+    let mut a = start(&alice, &handle("bob", "h"), T, &mut draw);
+    let first = a.send_with(b"to Bob, first", &mut draw).unwrap();
+    holds_no_register(&first, &bob, &alice);
+    let (mut b, _) =
+        Conversation::accept_with(&bob, &[(&opened(&bob, &first), T)], &mut draw).unwrap();
+    let reply = b.send_with(&[7; 300], &mut draw).unwrap();
+    holds_no_register(&reply, &alice, &bob);
+    a.receive_with(&opened(&alice, &reply), T, &mut draw)
+        .unwrap();
+    let message = a.send_with(b"to Bob, in session", &mut draw).unwrap();
+    holds_no_register(&message, &bob, &alice);
+    let mut again = Conversation::continue_with(&bob, &b, T, &mut draw).unwrap();
+    stamp(&mut again);
+    let continuing = again.send_with(b"to Alice, again", &mut draw).unwrap();
+    holds_no_register(&continuing, &alice, &bob);
+}
 
 /// The sum of two registers: a register of their key when both are.
 fn sum(one: &Register, two: &Register) -> Register {
@@ -242,14 +621,15 @@ fn only_the_initiator_holds_a_stamp() {
     assert_eq!(stored.stamp(), a.stamp());
     assert!(a.stamp().is_some());
     // A responder's record with the stamp flag set and a stamp where it
-    // goes, before Ns, Nr, PN, lost and the count (22 bytes, with no
-    // skipped keys), is refused; the same edit on an initiator's reads.
+    // goes, before Ns, Nr, PN, lost and the runs' count (22 bytes, with no
+    // skipped keys), and before an initiator's count of what it sent before
+    // a reply (4 more), is refused; the same edit on an initiator's reads.
     assert_eq!(p.b.ratchet.skipped.len(), 0);
     let with_stamp = |conversation: &Conversation| {
         let mut bytes = conversation.to_bytes().to_vec();
         let flags_at = 1 + 1 + 2 + conversation.first_bytes.len() + 48 + 32;
         bytes[flags_at] |= 8;
-        let at = bytes.len() - 22;
+        let at = bytes.len() - 22 - 4 * usize::from(conversation.first_contact_sent.is_some());
         bytes.splice(at..at, 7u64.to_be_bytes());
         bytes
     };
@@ -266,7 +646,10 @@ fn only_the_initiator_holds_a_stamp() {
 }
 
 /// The envelope's generator is the conversation's base times the outer
-/// scalar, for every message either side sends.
+/// scalar, and its ephemeral point is that generator times the envelope's
+/// r, for every message either side sends. Both come from the message key
+/// and the salt, so a send draws the salt and nothing else (protocol.md
+/// §16.2, §16.3).
 #[test]
 fn every_envelope_goes_to_its_identity_times_the_outer_scalar() {
     let mut p = pair("outer");
@@ -277,13 +660,17 @@ fn every_envelope_goes_to_its_identity_times_the_outer_scalar() {
             (&mut p.b, &p.alice)
         };
         let mk = crate::session::ratchet::kdf_ck(writer.ratchet.cks.as_ref().unwrap()).1;
+        p.draw.drain();
         let envelope = writer.send_with(&[i], &mut p.draw).unwrap();
+        assert_eq!(p.draw.drain().len(), 1, "a send draws its salt alone");
         let message = opened(reader_key, &envelope);
         let salt: [u8; 16] = message.ciphertext[..16].try_into().unwrap();
         let o = crate::session::ratchet::outer_scalar(&mk, &salt);
+        let generator = G1Projective::from(writer.first.base) * o;
+        assert_eq!(&envelope[1..49], &generator.to_compressed());
         assert_eq!(
-            &envelope[1..49],
-            &(G1Projective::from(writer.first.base) * o).to_compressed()
+            &envelope[C_AT..HEADER_LEN],
+            &(generator * envelope_r(&mk, &salt)).to_compressed()
         );
     }
 }

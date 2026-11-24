@@ -578,7 +578,11 @@ fn a_reveal_fits_a_session_message() {
     let mut plaintext = vec![KIND_REVEAL];
     plaintext.extend_from_slice(&a.reveal(&p.alice, &alices_seedelf()).unwrap().to_bytes());
     let envelope = a.send(&plaintext).unwrap();
-    // 257 bytes and the kind byte: a 2 KiB envelope, as every reply of 246 bytes or more.
+    // 257 bytes and the kind byte, padded as every message is to its
+    // first-contact form, F and 97 bytes more: 865 inner bytes, a 2 KiB
+    // envelope. Every reveal is: 227 to 258 bytes with F + 97's 379 to 635
+    // is 606 to 893, over 512 bytes' 366 and within 2 KiB's 1,902.
+    assert_eq!(a.first_bytes.len(), 510);
     assert_eq!(envelope.len(), 2048);
     let mut b = p.b.clone();
     let read = b.receive(&opened(&p.bob, &envelope), NOW + 120).unwrap();

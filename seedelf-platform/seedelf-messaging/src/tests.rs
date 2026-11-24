@@ -11,9 +11,15 @@ use hkdf::Hkdf;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::envelope::{KDF_INFO, KDF_SALT, derive_key_and_nonce, open, seal};
-use crate::register::{Register, rerandomize_with};
-use crate::{Envelope, Error, HEADER_LEN, SecretKey, decrypt_message, matches_register};
+use crate::envelope::{
+    ENVELOPE_TAG_LABEL, KDF_INFO, KDF_SALT, derive_key_and_nonce, envelope_tag, open, seal,
+};
+use crate::register::{POINT_LEN, Register, rerandomize_with};
+use crate::{Envelope, Error, HEADER_LEN, SecretKey, decrypt_message};
+
+/// Where an envelope's tag and its ephemeral point c start.
+const TAG_AT: usize = 1 + POINT_LEN;
+const C_AT: usize = HEADER_LEN - POINT_LEN;
 
 /// A fixed scalar for tests: SHA-256 of a label with its top two bits
 /// cleared, so it's below the group order. Production scalars come from the
@@ -91,6 +97,8 @@ fn vector(i: usize, case: &Case) -> Value {
     let rerandomized = rerandomize_with(&root, &b);
     let envelope = seal(&root, &b, &r, &case.plaintext).expect("seals");
     let header = envelope.header();
+    let tag = envelope_tag(&rerandomized.public_value_bytes()).into_bytes();
+    assert_eq!(header[TAG_AT..C_AT], tag[..]);
     let shared = (rerandomized.public_value() * r).to_compressed();
     let okm = derive_key_and_nonce(&shared, &header);
 
@@ -101,7 +109,8 @@ fn vector(i: usize, case: &Case) -> Value {
         "b": hex::encode(b.to_bytes_be()),
         "r": hex::encode(r.to_bytes_be()),
         "rerandomized_register": register_json(&rerandomized),
-        "ephemeral": hex::encode(&header[1 + 96..]),
+        "tag": hex::encode(tag),
+        "ephemeral": hex::encode(&header[C_AT..]),
         "shared_point": hex::encode(shared),
         "aes_key": hex::encode(&okm[..32]),
         "nonce": hex::encode(&okm[32..]),
@@ -113,10 +122,11 @@ fn vector(i: usize, case: &Case) -> Value {
 
 fn all_vectors() -> Value {
     json!({
-        "description": "Seedelf Messaging v1 test vectors. Scalars are 32-byte big-endian; points are 48-byte compressed G1. ephemeral = [r]p with (p, w) = ([b]g, [b]v); shared_point = [r]w = [y]ephemeral; aes_key || nonce = HKDF-SHA256(salt = kdf_salt, ikm = shared_point, info = kdf_info || header, 44 bytes); envelope = header || AES-256-GCM(aes_key, nonce, aad = header, plaintext).",
+        "description": "Seedelf Messaging v1 test vectors. Scalars are 32-byte big-endian; points are 48-byte compressed G1. (p, w) = ([b]g, [b]v) is rerandomized_register; tag = SHA-256(tag_label || w), 32 bytes; ephemeral = [r]p; shared_point = [r]w = [y]ephemeral; header = 0x01 || p || tag || ephemeral, 129 bytes, w itself not in it; aes_key || nonce = HKDF-SHA256(salt = kdf_salt, ikm = shared_point, info = kdf_info || header, 44 bytes); envelope = header || AES-256-GCM(aes_key, nonce, aad = header, plaintext). A reader with y tests whether SHA-256(tag_label || [y]p) is the tag.",
         "version": 1,
         "kdf_salt": String::from_utf8(KDF_SALT.to_vec()).expect("ASCII"),
         "kdf_info": String::from_utf8(KDF_INFO.to_vec()).expect("ASCII"),
+        "tag_label": String::from_utf8(ENVELOPE_TAG_LABEL.to_vec()).expect("ASCII"),
         "vectors": cases().iter().enumerate().map(|(i, case)| vector(i, case)).collect::<Vec<_>>(),
     })
 }
@@ -231,7 +241,8 @@ fn another_key_forced_past_discovery_fails_authentication() {
     let bob = test_scalar("bob");
     assert_ne!(y, bob);
     let bytes = envelope.to_bytes();
-    let ephemeral = G1Affine::from_compressed(&bytes[97..145].try_into().unwrap()).unwrap();
+    let ephemeral =
+        G1Affine::from_compressed(&bytes[C_AT..HEADER_LEN].try_into().unwrap()).unwrap();
     let bob_shared = (G1Projective::from(ephemeral) * bob).to_compressed();
     assert_eq!(
         open(&bob_shared, &envelope.header(), &bytes[HEADER_LEN..]),
@@ -261,8 +272,80 @@ fn no_secret_appears_in_the_envelope() {
     assert!(!contains(&okm[..32]));
     // The recipient still reads it.
     let key = SecretKey::from_scalar(y).unwrap();
-    assert!(matches_register(&key, envelope.register()));
+    assert!(envelope.is_for(&key));
     assert_eq!(decrypt_message(&key, &envelope).unwrap(), [0u8; 64]);
+}
+
+/// The scan's tag is all of SHA-256(label ‖ [y]p): another key's, a tag off
+/// in any one bit, or p with the tag of another point's w, isn't the
+/// reader's.
+#[test]
+fn the_scan_takes_only_the_tag_of_its_own_w() {
+    let (y, envelope, _) = sealed();
+    let key = SecretKey::from_scalar(y).unwrap();
+    let bytes = envelope.to_bytes();
+    assert!(crate::matches_envelope(&key, &bytes).unwrap());
+    let other = SecretKey::from_scalar(test_scalar("another reader")).unwrap();
+    assert!(!crate::matches_envelope(&other, &bytes).unwrap());
+    for bit in 0..32 * 8 {
+        let mut changed = bytes.clone();
+        changed[TAG_AT + bit / 8] ^= 1 << (bit % 8);
+        assert!(
+            !crate::matches_envelope(&key, &changed).unwrap(),
+            "bit {bit}"
+        );
+        assert!(!Envelope::from_bytes(&changed).unwrap().is_for(&key));
+    }
+    // The tag of [y]p for another p, under this envelope's p.
+    let p2 = (g() * test_scalar("another p")).to_affine();
+    let mut moved = bytes.clone();
+    let tag = envelope_tag(&(G1Projective::from(p2) * y).to_compressed()).into_bytes();
+    moved[TAG_AT..C_AT].copy_from_slice(&tag);
+    assert!(!crate::matches_envelope(&key, &moved).unwrap());
+    moved[1..TAG_AT].copy_from_slice(&p2.to_compressed());
+    assert!(crate::matches_envelope(&key, &moved).unwrap());
+}
+
+// --- Nothing in an envelope is a register -----------------------------------
+
+/// The envelope carries p and a tag of w, never w (the 1.10.0 gate review's
+/// chain-reaction#1): anyone who reads the pool could otherwise pay a UTxO,
+/// or a Lovejoin box, under (p, w), or under its sum with a Seedelf's
+/// register, and learn from the reader's wallet spending it whom the
+/// envelope was for. So neither [y]p nor [y]c, the points that would make a
+/// register of the reader's key on the envelope's own points, is in its
+/// bytes, and bytes 49 to 80 are SHA-256(label ‖ w).
+#[test]
+fn the_bytes_after_p_are_a_tag_of_w_and_no_register_is_in_the_envelope() {
+    let y = test_scalar("tag y");
+    for root in [
+        root_register(&y, None),
+        root_register(&y, Some(&test_scalar("tag d"))),
+    ] {
+        let (b, r) = (test_scalar("tag b"), test_scalar("tag r"));
+        let bytes = seal(&root, &b, &r, &[0x42; 64]).unwrap().to_bytes();
+        let (p, w) = {
+            let rerandomized = rerandomize_with(&root, &b);
+            (rerandomized.generator(), rerandomized.public_value())
+        };
+        assert_eq!(&bytes[1..49], &p.to_compressed()[..]);
+        let tag: [u8; 32] = Sha256::new()
+            .chain_update(b"Seedelf-Messaging|v1|envelope|tag")
+            .chain_update(w.to_compressed())
+            .finalize()
+            .into();
+        assert_eq!(&bytes[49..81], &tag[..]);
+        let c = G1Projective::from(
+            G1Affine::from_compressed(&bytes[HEADER_LEN - 48..HEADER_LEN].try_into().unwrap())
+                .unwrap(),
+        );
+        for point in [p * y, c * y] {
+            let point = point.to_compressed();
+            assert!(!bytes.windows(48).any(|window| window == point));
+        }
+        let key = SecretKey::from_scalar(y).unwrap();
+        assert!(Envelope::from_bytes(&bytes).unwrap().is_for(&key));
+    }
 }
 
 #[test]

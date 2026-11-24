@@ -5,7 +5,7 @@
 // the wallet locked itself because its core stopped working, it says so.
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Rich, t, useT } from "../../i18n";
+import { joinSentences, Rich, t, useT } from "../../i18n";
 
 import type { Status } from "../../shared/rpc";
 import { call, onDappChanged } from "../background";
@@ -191,7 +191,8 @@ export function Reset({ onCancel, onReset }: { onCancel: () => void; onReset: (s
       }
     >
       <p className="note" data-testid="reset-note">
-        {tr("reset.note")}
+        {/* Conversations go with the wallet, and the phrase doesn't bring them back (docs-claims#8). */}
+        {joinSentences([tr("reset.note"), tr("reset.warn.conversations")])}
       </p>
       <Callout tone="warn">{tr("reset.warn.noPhrase")}</Callout>
       <div className="field">

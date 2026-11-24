@@ -22,16 +22,46 @@ pub fn g1() -> G1Projective {
     G1Projective::from(G1Affine::generator())
 }
 
-/// The three points of an envelope's header, compressed: `p`, `w`, `c`.
-pub fn header_points(bytes: &[u8]) -> [[u8; 48]; 3] {
-    [0, 1, 2].map(|i| bytes[1 + 48 * i..1 + 48 * (i + 1)].try_into().unwrap())
+/// Where an envelope's header holds `p`, the tag of `w` and `c`:
+/// `version (1) | p (48) | tag (32) | c (48)`.
+pub const P_AT: usize = 1;
+pub const TAG_AT: usize = 49;
+pub const C_AT: usize = 81;
+
+/// The two points of an envelope's header, compressed: `p`, `c`.
+pub fn header_points(bytes: &[u8]) -> [[u8; 48]; 2] {
+    [P_AT, C_AT].map(|at| bytes[at..at + 48].try_into().unwrap())
 }
 
-/// `bytes` with point `i` (0 = `p`, 1 = `w`, 2 = `c`) replaced.
+/// `bytes` with point `i` (0 = `p`, 1 = `c`) replaced.
 pub fn with_point(bytes: &[u8], i: usize, point: &[u8; 48]) -> Vec<u8> {
+    let at = [P_AT, C_AT][i];
     let mut out = bytes.to_vec();
-    out[1 + 48 * i..1 + 48 * (i + 1)].copy_from_slice(point);
+    out[at..at + 48].copy_from_slice(point);
     out
+}
+
+/// An envelope's tag of `w`.
+pub fn tag(bytes: &[u8]) -> [u8; 32] {
+    bytes[TAG_AT..C_AT].try_into().unwrap()
+}
+
+/// `bytes` with its tag replaced.
+pub fn with_tag(bytes: &[u8], tag: &[u8; 32]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    out[TAG_AT..C_AT].copy_from_slice(tag);
+    out
+}
+
+/// The tag an envelope carries for `w`: SHA-256 of its label and `w`
+/// compressed (docs/construction.md §4.1).
+pub fn tag_of(w: &G1Projective) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::new()
+        .chain_update(b"Seedelf-Messaging|v1|envelope|tag")
+        .chain_update(w.to_compressed())
+        .finalize()
+        .into()
 }
 
 /// A compressed point from the header, decoded (it was checked on parse).

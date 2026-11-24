@@ -6,7 +6,7 @@ mod common;
 use blstrs::{G1Affine, Scalar};
 use group::Curve;
 
-use common::{random_nonzero, with_point};
+use common::{random_nonzero, with_point, with_tag};
 use seedelf_messaging::{Envelope, Error, Register, SecretKey, encrypt_message, matches_envelope};
 
 /// BLS12-381's base field modulus.
@@ -131,6 +131,9 @@ fn a_register_refuses_every_bad_point_in_either_place() {
     }
 }
 
+/// Every bad point is refused as `p` and as `c`. The tag between them is no
+/// point: a bad point's first 32 bytes there are bytes like any other, which
+/// parse, and match no one.
 #[test]
 fn an_envelope_refuses_every_bad_point_in_every_place() {
     let key = SecretKey::generate();
@@ -138,19 +141,22 @@ fn an_envelope_refuses_every_bad_point_in_every_place() {
         .unwrap()
         .to_bytes();
     for (name, bad, error) in bad_points() {
-        for place in 0..3 {
+        for place in 0..2 {
             assert_eq!(
                 Envelope::from_bytes(&with_point(&bytes, place, &bad)),
                 Err(error),
                 "{name} at point {place}"
             );
         }
+        let as_tag = with_tag(&bytes, &bad[..32].try_into().unwrap());
+        let parsed = Envelope::from_bytes(&as_tag).unwrap();
+        assert!(!parsed.is_for(&key), "{name} as the tag");
     }
 }
 
-/// The scan refuses what parsing refuses in `p` and `w`, and leaves `c` to
-/// the full parse: a bad `c` still matches its owner, and only its owner,
-/// and is refused before the owner's key touches it.
+/// The scan refuses what parsing refuses in `p`, and leaves `c` to the full
+/// parse: a bad `c` still matches its owner, and only its owner, and is
+/// refused before the owner's key touches it.
 #[test]
 fn the_scan_checks_the_register_and_leaves_c_to_the_parse() {
     let (key, other) = (SecretKey::generate(), SecretKey::generate());
@@ -158,14 +164,12 @@ fn the_scan_checks_the_register_and_leaves_c_to_the_parse() {
         .unwrap()
         .to_bytes();
     for (name, bad, error) in bad_points() {
-        for place in 0..2 {
-            assert_eq!(
-                matches_envelope(&key, &with_point(&bytes, place, &bad)),
-                Err(error),
-                "{name} at point {place}"
-            );
-        }
-        let bad_c = with_point(&bytes, 2, &bad);
+        assert_eq!(
+            matches_envelope(&key, &with_point(&bytes, 0, &bad)),
+            Err(error),
+            "{name} as p"
+        );
+        let bad_c = with_point(&bytes, 1, &bad);
         assert_eq!(matches_envelope(&key, &bad_c), Ok(true), "{name} as c");
         assert_eq!(matches_envelope(&other, &bad_c), Ok(false), "{name} as c");
         assert_eq!(Envelope::from_bytes(&bad_c), Err(error), "{name} as c");

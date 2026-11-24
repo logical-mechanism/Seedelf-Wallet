@@ -11,7 +11,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { joinSentences, useT } from "../../i18n";
 
-import type { Balances, PendingTx, SeedelfLookup, TransferSummary } from "../../shared/rpc";
+import type { Balances, Contact, PendingTx, SeedelfLookup, TransferSummary } from "../../shared/rpc";
 import { SEEDELF_NAME_RULE, seedelfName } from "../../shared/seedelf-name";
 import { call, isStale } from "../background";
 import { BuildStage } from "../components/BuildStage";
@@ -413,6 +413,7 @@ export function SeedelfNameInput({
   publicBlocked,
   idleNote,
   addressNote,
+  onContacts,
 }: {
   id: string;
   value: string;
@@ -425,6 +426,8 @@ export function SeedelfNameInput({
   idleNote?: string;
   /** What follows "That's an ordinary address", where an address can't be the way on at all: Messages'. */
   addressNote?: string;
+  /** The contacts once one is saved here, for a page that names things by them too: Messages' (screens#9). */
+  onContacts?: (contacts: Contact[]) => void;
 }) {
   const t = useT();
   const hint = useHint();
@@ -594,6 +597,7 @@ export function SeedelfNameInput({
           onClose={() => setContactModal(undefined)}
           onSaved={(next) => {
             reloadContacts(next);
+            onContacts?.(next);
             setContactModal(undefined);
           }}
         />

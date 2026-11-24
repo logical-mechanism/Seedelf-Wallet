@@ -170,7 +170,15 @@ export function App() {
   } else if (connectorWindow) {
     screen = <DappApprovals />;
   } else if (page === "messages") {
-    screen = <Messages overview={messaging.overview} setOverview={messaging.setOverview} onBack={() => setPage("home")} />;
+    screen = (
+      <Messages
+        overview={messaging.overview}
+        error={messaging.error}
+        reload={messaging.reload}
+        setOverview={messaging.setOverview}
+        onBack={() => setPage("home")}
+      />
+    );
   } else if (settings) {
     screen = (
       <Settings
@@ -216,7 +224,9 @@ export function App() {
     // Above the top bar, not only the screens: the picker sits under it.
     <AccountsProvider unlocked={unlocked}>
       <div className={`app app--${view}${page === "messages" && unlocked && !connectorWindow ? " app--messages" : ""}`}>
-        <header className="topbar">
+        {/* With its buttons, the bar drops the wordmark where a side panel is narrow: the mark stays, the way to Home,
+            and the four buttons fit a 360 px panel (screens#5). */}
+        <header className={unlocked && !connectorWindow ? "topbar topbar--buttons" : "topbar"}>
           {/* Unlocked, the mark is the way back to Home from any depth; locked, or in
               the connector's window, there's nowhere to go, so it's just the mark. */}
           {unlocked && !connectorWindow ? (

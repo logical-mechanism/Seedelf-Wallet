@@ -90,6 +90,9 @@ export function DappApprovals() {
   // What the user just declined: a site, and how long it's turned away, or everything at once with Decline all, and
   // whether a site was among it. Said once nothing's left (T17), where it said only "Nothing's waiting.".
   const [declined, setDeclined] = useState<{ host: string; waitMs: number } | { all: true; sites: boolean }>();
+  // The worker kept the window open with nothing listed: a request is on its way to the list (one the unlock let go,
+  // its account still being read), so the window says it's loading, never "Nothing's waiting." (cross-feature#12).
+  const [keptOpen, setKeptOpen] = useState(false);
 
   const load = useCallback(() => {
     call("dapp-approvals", {}).then(setApprovals, (e: Error) => setError({ text: e.message }));
@@ -100,6 +103,10 @@ export function DappApprovals() {
     return onDappChanged(load);
   }, [load]);
 
+  useEffect(() => {
+    if (approvals?.length) setKeptOpen(false);
+  }, [approvals]);
+
   // Empty: the worker closes the window, unless a request came in meanwhile,
   // which it would otherwise decline unseen; then it's shown.
   useEffect(() => {
@@ -108,7 +115,10 @@ export function DappApprovals() {
       closing.current = setTimeout(
         () => {
           call("dapp-close", {}).then((closed) => {
-            if (!closed) load();
+            if (!closed) {
+              setKeptOpen(true);
+              load();
+            }
           }, load);
         },
         declined ? DECLINED_CLOSE_MS : CLOSE_AFTER_MS,
@@ -248,7 +258,7 @@ export function DappApprovals() {
           </p>
         ) : (
           <p className="note center" data-testid="dapp-empty">
-            {tr(approvals ? "dappUi.nothingWaiting" : "dappUi.loading")}
+            {tr(approvals && !keptOpen ? "dappUi.nothingWaiting" : "dappUi.loading")}
           </p>
         )}
       </Screen>

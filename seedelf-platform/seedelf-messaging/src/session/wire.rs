@@ -10,11 +10,16 @@
 //! [`ENVELOPE_SIZES`], and sealed in a v1 envelope to the other side's
 //! identity re-randomized by the message's outer scalar (docs/protocol.md
 //! §16.2).
+//!
+//! A first-contact message's header has PN 0 and N below 16
+//! ([`MAX_REQUEST_MESSAGES`]): the initiator's first chain, within a
+//! request's share (§3.1). Any other doesn't parse.
 
 use blstrs::G1Affine;
 
 use crate::envelope::{ENVELOPE_OVERHEAD, Envelope, decrypt_message};
 use crate::session::first_contact::{CID_LEN, ConversationId, FirstContact, Reader, STAMP_LEN};
+use crate::session::inbox::MAX_REQUEST_MESSAGES;
 use crate::session::ratchet::{Header, RATCHET_HEADER_LEN, RATCHET_OVERHEAD};
 use crate::{Error, SecretKey};
 
@@ -46,7 +51,7 @@ pub(crate) fn envelope_size(inner_len: usize) -> Result<usize, Error> {
         .ok_or(Error::MessageTooLarge)
 }
 
-/// The most inner bytes an envelope holds: 350 for the smallest.
+/// The most inner bytes an envelope holds: 366 for the smallest.
 pub fn inner_capacity(envelope_size: usize) -> usize {
     envelope_size - ENVELOPE_OVERHEAD - 1
 }
@@ -76,12 +81,17 @@ pub(crate) fn unpad(padded: &[u8]) -> Result<&[u8], Error> {
     Ok(&padded[..end])
 }
 
-/// Where an inner message's envelope register stands: what a conversation
-/// checks against the message's outer scalar.
+/// Where an inner message's envelope stands: what a conversation checks
+/// against the scalars the message key derives, the outer scalar and the
+/// envelope's ephemeral scalar (docs/protocol.md §16.2).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Outer {
-    /// Opened from an envelope addressed to this generator.
-    Envelope(G1Affine),
+    /// Opened from an envelope with this generator `p` and ephemeral point
+    /// `c`.
+    Envelope {
+        generator: G1Affine,
+        ephemeral: G1Affine,
+    },
     /// Stored after its check passed: a request's message.
     Checked,
     /// Parsed from bytes alone, so it can't be checked: refused.
@@ -162,6 +172,11 @@ impl Opened {
             _ => return Err(Error::InvalidMessage),
         };
         let header = Header::read(&mut reader)?;
+        // Only the initiator's first chain sends first-contact messages, and
+        // only within a request's share: one past it is no writer's.
+        if first.is_some() && (header.pn != 0 || header.n >= MAX_REQUEST_MESSAGES as u32) {
+            return Err(Error::InvalidMessage);
+        }
         let ciphertext = reader.rest().to_vec();
         if ciphertext.len() < RATCHET_OVERHEAD {
             return Err(Error::InvalidMessage);
@@ -182,13 +197,18 @@ impl Opened {
 /// Opens an envelope addressed to `key` and parses its inner message.
 ///
 /// Every point is checked before `key` touches it (the envelope's, F's and
-/// the ratchet header's), and the padding and size must be exact. Nothing
-/// about any conversation is decided here.
+/// the ratchet header's), and the padding and size must be exact. A
+/// first-contact message's header must have PN 0 and N below 16, the
+/// initiator's first chain within a request's share. Nothing about any
+/// conversation is decided here.
 pub fn open(key: &SecretKey, envelope: &[u8]) -> Result<Opened, Error> {
     let envelope = Envelope::from_bytes(envelope)?;
     let padded = decrypt_message(key, &envelope)?;
     Opened::parse(
         unpad(&padded)?,
-        Outer::Envelope(envelope.register().generator_point()),
+        Outer::Envelope {
+            generator: envelope.generator_point(),
+            ephemeral: envelope.ephemeral_point(),
+        },
     )
 }

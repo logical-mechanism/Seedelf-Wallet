@@ -261,8 +261,8 @@ lemma continues_only_from_the_old_other_side [hide_lemma=static_dh_secret_with_c
 
 lemma continues_shown_to_the_old_responder [hide_lemma=static_dh_secret_with_continuations,
                                             hide_lemma=static_dh_holds_r_a_with_continuations]: exists-trace
-  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 Fc mc A w #s #t #a #h #c #u #b #i.
-     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, ocid, 'm1', m1)@t
+  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 Fc mc A w #s #k #t #a #h #c #u #b #i.
+     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & KeyOn(Ini, p0, Ai)@k & ISent(Ini, Rsp, ocid, 'm1', m1)@t
    & RRecv(Rsp, ocid, p0, Ai, w0, 'm1', m1)@a & HasConv(Rsp, ocid)@h
    & IStartC(Ini, ocid, ncid, p0, Ai, w0, Fc)@c & ISentC(Ini, ncid, 'm1', mc)@u
    & RRecv(Rsp, ncid, p0, A, w, 'm1', mc)@b & ShowsContinues(Rsp, ocid, ncid, p0, A)@i
@@ -270,8 +270,8 @@ lemma continues_shown_to_the_old_responder [hide_lemma=static_dh_secret_with_con
 
 lemma continues_shown_to_the_old_initiator [hide_lemma=static_dh_secret_with_continuations,
                                             hide_lemma=static_dh_holds_r_a_with_continuations]: exists-trace
-  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 Fc mc A w #s #t #a #h #c #u #b #i.
-     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, ocid, 'm1', m1)@t
+  "Ex Ini Rsp ocid ncid p0 Ai w0 F m1 Fc mc A w #s #k #t #a #h #c #u #b #i.
+     IStart(Ini, Rsp, ocid, p0, Ai, w0, F)@s & KeyOn(Rsp, p0, w0)@k & ISent(Ini, Rsp, ocid, 'm1', m1)@t
    & RRecv(Rsp, ocid, p0, Ai, w0, 'm1', m1)@a & HasConv(Rsp, ocid)@h
    & IStartC(Rsp, ocid, ncid, p0, w0, Ai, Fc)@c & ISentC(Rsp, ncid, 'm1', mc)@u
    & RRecv(Ini, ncid, p0, A, w, 'm1', mc)@b & ShowsContinues(Ini, ocid, ncid, p0, A)@i
@@ -312,7 +312,7 @@ rule I_Read_r1:
       CKs = kdf_chain(RK2, T1^~s2)
   in
   [ I1r(Ini, Rsp, cid, ~rb, Ai, w0, T1, RK2, CKr, ad), In(<'0x02', cid, h, aenc(m, ck_mk(CKr), ad)>), Fr(~s2) ]
-  --[ IRecv(Ini, Rsp, cid, p0, Ai, w0, 'r1', m), IGotReply(Ini, Rsp, cid),
+  --[ IRecv(Ini, Rsp, cid, p0, Ai, w0, 'r1', m), IGotReply(Ini, Rsp, cid), IRecvKey(Ini, cid, 'r1', T1),
       IKeys(Ini, Rsp, cid, 'k2', RK2, CKr), IKeys(Ini, Rsp, cid, 'k3', RK3, CKs) ]->
   [ I2(Ini, Rsp, cid, ~rb, Ai, w0, ~s2, T1, RK3, CKs),
     SnapI(Ini, cid, ~s2, RK3, CKs, ck_next(CKr), w0) ]
@@ -385,7 +385,7 @@ rule R_Send_r1:
       ad = <cid, p0, Ai, p0, w0, h>
   in
   [ R1(Rsp, cid, e0, Ai, w0, ~t1, Si, RK, CKs), Fr(~r1) ]
-  --[ RSent(Rsp, cid, p0, Ai, w0, 'r1', ~r1) ]->
+  --[ RSent(Rsp, cid, p0, Ai, w0, 'r1', ~r1), RSentKey(Rsp, cid, 'r1', T1) ]->
   [ R2(Rsp, cid, e0, Ai, w0, ~t1, Si, RK),
     SnapR(Rsp, cid, ~t1, RK, ck_next(CKs), w0),
     Out(<'0x02', cid, h, aenc(~r1, ck_mk(CKs), ad)>) ]
@@ -700,8 +700,8 @@ lemma skipped_each_read_once:
    message; and with the reader's key stolen after it accepted, writes it. */
 
 lemma skipped_in_order: exists-trace
-  "Ex Ini Rsp cid p0 Ai w0 F m m2 #s #t #u #c #a.
-     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, cid, 'm3', m)@t
+  "Ex Ini Rsp cid p0 Ai w0 F m m2 #s #k #t #u #c #a.
+     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & KeyOn(Ini, p0, Ai)@k & ISent(Ini, Rsp, cid, 'm3', m)@t
    & ISent(Ini, Rsp, cid, 'm3b', m2)@u
    & RRecv(Rsp, cid, p0, Ai, w0, 'm3', m)@c & RRecv(Rsp, cid, p0, Ai, w0, 'm3b', m2)@a & #c < #a
    & not (Ex R c2 #k. RSkipped(R, c2)@k)
@@ -1000,6 +1000,25 @@ lemma m4_heals_after_a_reply_the_attacker_only_watched [heuristic={states_then_k
    & K(m)@j
      ==> (Ex #r #g. RevLtk(Rsp)@r & IGotReply(Ini, Rsp, cid)@g & #r < #g)"
 
+/* §1.1, x_B's row: "anything Alice sent after receiving Bob's first reply"
+   stays secret even when x_B was stolen before that reply, so long as the
+   reply was Bob's own and the attacker only watched: keyed on the reply's
+   ratchet key, as the healing lemmas are. Only her state opens m3 then. */
+lemma m3_secret_after_a_genuine_reply [heuristic={states_then_keys}, hide_lemma=keys1_secret,
+                                       hide_lemma=keys2_secret, hide_lemma=keys4_secret,
+                                       hide_lemma=heal_keys_secret,
+                                       hide_lemma=responder_keys2_secret,
+                                       hide_lemma=responder_keys4_secret,
+                                       hide_lemma=initiator_agreement_r1,
+                                       hide_lemma=initiator_agreement_r2,
+                                       hide_lemma=static_dh_secret,
+                                       hide_lemma=static_dh_holds_r_a,
+                                       hide_lemma=keys4_secret_guarded]:
+  "All Ini Rsp cid T1 m #i #a #b #j.
+     ISent(Ini, Rsp, cid, 'm3', m)@i & IRecvKey(Ini, cid, 'r1', T1)@a & RSentKey(Rsp, cid, 'r1', T1)@b
+   & K(m)@j
+     ==> (Ex #r. RevState(Ini, cid)@r)"
+
 /* The responder's accepted F is the initiator's own, unless the responder's
    key was stolen before it accepted, or the initiator's state: only then can
    another F carry her cid, p0, A and w0. r1's and r2's keys lemmas name her F. */
@@ -1045,8 +1064,8 @@ lemma r2_forward_secret [heuristic={states_then_keys}, hide_lemma=keys1_secret,
    §1.1 states are real. */
 
 lemma executable [hide_lemma=keys4_secret]: exists-trace
-  "Ex Ini Rsp cid p0 Ai w0 F m1 r1 m3 r2 m #s #t #a #b #c #d #e #f #g #i #j.
-     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, cid, 'm1', m1)@t
+  "Ex Ini Rsp cid p0 Ai w0 F m1 r1 m3 r2 m #s #k #t #a #b #c #d #e #f #g #i #j.
+     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & KeyOn(Ini, p0, Ai)@k & ISent(Ini, Rsp, cid, 'm1', m1)@t
    & RRecv(Rsp, cid, p0, Ai, w0, 'm1', m1)@a & RSent(Rsp, cid, p0, Ai, w0, 'r1', r1)@b
    & IRecv(Ini, Rsp, cid, p0, Ai, w0, 'r1', r1)@c & ISent(Ini, Rsp, cid, 'm3', m3)@d
    & RRecv(Rsp, cid, p0, Ai, w0, 'm3', m3)@e & RSent(Rsp, cid, p0, Ai, w0, 'r2', r2)@f
@@ -1114,6 +1133,19 @@ lemma r2_heals_after_the_responder_state:
      RSent(Rsp, cid, p0, Ai, w0, 'r2', m)@i & RRecvKey(Rsp, cid, 'm3', S2)@a & ISentKey(Ini, cid, 'm3', S2)@b
    & K(m)@j
      ==> F"
+
+/* ... and that healing is reached: the state stolen, then m3 read on the
+   initiator's own S2, and r2 sent. Without it, the two lemmas above could
+   hold of nothing. */
+lemma responder_state_then_r2_reached [heuristic={states_then_keys}]: exists-trace
+  "Ex Ini Rsp cid p0 Ai w0 F m1 r1 m3 r2 S2 #s #t #a #b #c #i #x #k #e #y #f.
+     IStart(Ini, Rsp, cid, p0, Ai, w0, F)@s & ISent(Ini, Rsp, cid, 'm1', m1)@t
+   & RRecv(Rsp, cid, p0, Ai, w0, 'm1', m1)@a & RSent(Rsp, cid, p0, Ai, w0, 'r1', r1)@b
+   & IRecv(Ini, Rsp, cid, p0, Ai, w0, 'r1', r1)@c & ISent(Ini, Rsp, cid, 'm3', m3)@i
+   & ISentKey(Ini, cid, 'm3', S2)@x & RevStateR(Rsp, cid)@k
+   & RRecv(Rsp, cid, p0, Ai, w0, 'm3', m3)@e & RRecvKey(Rsp, cid, 'm3', S2)@y
+   & RSent(Rsp, cid, p0, Ai, w0, 'r2', r2)@f
+   & not (Ex P #n. RevLtk(P)@n)"
 
 #endif
 
