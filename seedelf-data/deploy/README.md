@@ -106,20 +106,20 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
 
 ## 5. Checks
 
-- **Health:** `curl https://mainnet.<domain>/health` answers 200, with `private`, `public`, `submit` and `egress` all `ok`, and `node` `connected` with an `age` under 3 minutes (the time since the last block, usually under one).
+- **Health:** `curl https://mainnet.seedelf.logicalmechanism.io/health` answers 200, with `private`, `public`, `submit` and `egress` all `ok`, and `node` `connected` with an `age` under 3 minutes (the time since the last block, usually under one).
 - **CORS:** a preflight from the wallet's origin is answered with it, and any other origin gets no `Access-Control-Allow-Origin`, so a browser refuses it (the methods and max-age lines still come):
 
   ```bash
-  curl -si -X OPTIONS https://mainnet.<domain>/api/v1/tip \
+  curl -si -X OPTIONS https://mainnet.seedelf.logicalmechanism.io/api/v1/tip \
     -H 'Origin: chrome-extension://<ID>' -H 'Access-Control-Request-Method: GET' | grep -i access-control
   ```
 - **The relay:** `/health`'s `messaging` says `"relay":"on"`, `"egress":"ok"`, `"ceiling":true`, `"reserve":false` and each pool's size, and a page answers 200 with the page's 16-byte header (`01`, then flags, a cursor and four prices) and no `Content-Encoding`. `"ceiling":false` means `DATA_MESSAGING_GB_MONTH` isn't set, and the relay spends the API's own allowance; `day_left` is the percent of today's share still unspent:
 
   ```bash
-  curl -s https://mainnet.<domain>/messaging/v1/mainnet/envelopes | head -c 16 | od -An -tx1
+  curl -s https://mainnet.seedelf.logicalmechanism.io/messaging/v1/mainnet/envelopes | head -c 16 | od -An -tx1
   ```
 - **The edge's limits at start:** `journalctl -u seedelf-data-api -b | grep "the edge's limits"` names each cap: in flight per address (`in_flight_messaging_address`, `in_flight_data_address`), in flight in all (`in_flight_messaging`, `in_flight_data`), the data answers held (`answers_mib`), the answers compressed at once (`compressing`) and the connections (`connections`). Unset, they're 16, 64, 512, 2048, 256, 64 and 8192 ([the edge](../README.md#the-edge)).
-- **HTTP/1.1 and HTTP/2 alone:** `curl -sI https://mainnet.<domain>/health | grep -i alt-svc` prints nothing: Caddy offers no HTTP/3.
+- **HTTP/1.1 and HTTP/2 alone:** `curl -sI https://mainnet.seedelf.logicalmechanism.io/health | grep -i alt-svc` prints nothing: Caddy offers no HTTP/3.
 - **Limits,** from a third machine, never the maintainer's:
   - about 75 `POST /api/v1/account_info` sent at once from one address end in a 429 with `Retry-After`. Send them in parallel (`xargs -P 20`): one at a time, the refill keeps up. Sending from the VPS to its own public name counts as a third machine;
   - a request with `Sec-Fetch-Mode: no-cors`, or from another `Origin`, gets 403: a web page can't spend the API's traffic.
@@ -169,7 +169,7 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
 
 ### Stopping Messages
 
-Seedelf Messaging stops for every wallet at once, and the rest of the data layer goes on. The lever is `DATA_MESSAGING_OFF=true` in the API's environment, set by a drop-in beside the unit so the environment file isn't touched, and a restart:
+Seedelf Messaging stops for every wallet at once, and the rest of the data layer goes on. The lever is `DATA_MESSAGING_OFF=true` in the API's environment, set by a drop-in beside the unit so the environment file isn't touched, and a restart. Never put it in the environment file: systemd lets that file's value override the drop-in's, so the lever would then do nothing. Both blocks below say `STOP` if it's there:
 
 - **Every route under `/messaging/` answers 410 Gone,** `{"error":"messaging is stopped"}`, with CORS, before any other limit. A post's body isn't read, so nothing is kept. Every other route answers as before, and `/health` says `"relay":"off"`.
 - **The pools wait on disk,** and what they hold still expires 36 hours after it came. A deploy keeps the drop-in, so Messages stays stopped across deploys until it's undone.
@@ -177,13 +177,16 @@ Seedelf Messaging stops for every wallet at once, and the rest of the data layer
 - **The restart** takes every part away for a moment, and a wallet that reads then goes to Koios for 5 minutes. Its stop saves the pools clean.
 - **Never `DATA_MESSAGING_GB_MONTH=0`:** the API refuses `0` at start and doesn't run, however often systemd starts it again. Every route is down, and every wallet's reads go to Koios on 5-minute holds.
 
-**To stop it,** on the VPS, as `seedelf`. It prints the machine's name, then `"relay":"off"` from `/health` and a page's status, `410`. Run again, it says `STOP` and changes nothing:
+**To stop it,** on the VPS, as `seedelf`. It prints the machine's name, then `"relay":"off"` from `/health` and a page's status, `410`, or `FAILED` and why. Run again, it says `STOP` and changes nothing:
 
 ```bash
 # seedelf-data-layer (the VPS)
 hostname && sudo bash -euo pipefail <<'SCRIPT'
 f=/etc/systemd/system/seedelf-data-api.service.d/messaging-off.conf
-if [ -e "$f" ]; then
+e=/etc/seedelf-data/env
+if grep -qsE '^[[:space:]]*DATA_MESSAGING_OFF=' "$e"; then
+  echo "STOP: $e sets DATA_MESSAGING_OFF, which overrides this lever: take that line out of it first"
+elif [ -e "$f" ]; then
   echo "STOP: Messages is stopped already ($f)"
 else
   mkdir -p "$(dirname "$f")"
@@ -192,18 +195,23 @@ else
   systemctl restart seedelf-data-api
   for i in $(seq 30); do curl -s -m 2 -o /dev/null 127.0.0.1:8099/health && break; sleep 1; done
   echo "the relay: $(curl -s -m 5 127.0.0.1:8099/health | grep -o '"relay":"[a-z]*"' || echo 'no answer: journalctl -u seedelf-data-api -n 20')"
-  echo "a page: $(curl -s -m 5 -o /dev/null -w '%{http_code}' 127.0.0.1:8099/messaging/v1/mainnet/envelopes)"
+  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' 127.0.0.1:8099/messaging/v1/mainnet/envelopes || true)
+  echo "a page: $code"
+  [ "$code" = 410 ] || echo "FAILED: a page answers $code, not 410: journalctl -u seedelf-data-api -n 20"
 fi
 SCRIPT
 ```
 
-**To undo it,** the same way. It prints `"relay":"on"` and `200`. Undo it only once what stopped it is safe to let back: every wallet then posts what it queued meanwhile, at its next ask, whatever its version.
+**To undo it,** the same way. It prints `"relay":"on"` and `200`, or `FAILED` and why. Undo it only once what stopped it is safe to let back: every wallet then posts what it queued meanwhile, at its next ask, whatever its version.
 
 ```bash
 # seedelf-data-layer (the VPS)
 hostname && sudo bash -euo pipefail <<'SCRIPT'
 f=/etc/systemd/system/seedelf-data-api.service.d/messaging-off.conf
-if [ ! -e "$f" ]; then
+e=/etc/seedelf-data/env
+if grep -qsE '^[[:space:]]*DATA_MESSAGING_OFF=' "$e"; then
+  echo "STOP: $e sets DATA_MESSAGING_OFF, which overrides this lever: take that line out of it first"
+elif [ ! -e "$f" ]; then
   echo "STOP: Messages isn't stopped by this lever (there's no $f)"
 else
   rm -f "$f"
@@ -211,14 +219,16 @@ else
   systemctl restart seedelf-data-api
   for i in $(seq 30); do curl -s -m 2 -o /dev/null 127.0.0.1:8099/health && break; sleep 1; done
   echo "the relay: $(curl -s -m 5 127.0.0.1:8099/health | grep -o '"relay":"[a-z]*"' || echo 'no answer: journalctl -u seedelf-data-api -n 20')"
-  echo "a page: $(curl -s -m 5 -o /dev/null -w '%{http_code}' 127.0.0.1:8099/messaging/v1/mainnet/envelopes)"
+  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' 127.0.0.1:8099/messaging/v1/mainnet/envelopes || true)
+  echo "a page: $code"
+  [ "$code" = 200 ] || echo "FAILED: a page answers $code, not 200: journalctl -u seedelf-data-api -n 20"
 fi
 SCRIPT
 ```
 
 ## Timeouts and limits a deploy doesn't install
 
-`edge/Caddyfile` gives every request an end: its head within 10 s, the whole request within 10 s of its start, the answer within 60 s, and an idle connection 2 minutes. It serves HTTP/1.1 and HTTP/2 alone: its `write` timeout isn't shown to end a stalled HTTP/3 answer, and Chrome falls back to HTTP/2 with nothing lost. `edge/seedelf-data-api.service` gives the API's stop 30 s, which its own 10 s for what's open and the saving of the pools fit, holds the API under 3 GB of the droplet's 4, writes no core file and no swap (the API's tables of addresses live in memory alone, the database URL with them), and starts it after the clock is synchronized. A deploy installs neither file. **A VPS set up before these blocks has no deadline on a body or an answer until block 1 runs:** one address can then hold requests open until the droplet runs out of loopback ports or TCP memory. To bring a running VPS in line with them, run each block once, on the VPS, as `seedelf`, in any order. Each prints the machine's name first; paste back what it prints after that. Run again, the first says `STOP` and changes nothing, and the others write the same files again.
+`edge/Caddyfile` gives every request an end: its head within 10 s, the whole request within 10 s of its start, the answer within 60 s, and an idle connection 2 minutes. It serves HTTP/1.1 and HTTP/2 alone: its `write` timeout isn't shown to end a stalled HTTP/3 answer, and Chrome falls back to HTTP/2 with nothing lost. `edge/seedelf-data-api.service` gives the API's stop 30 s, which its own 10 s for what's open and the saving of the pools fit, holds the API under 3 GB of the droplet's 4, writes no core file and no swap (the API's tables of addresses live in memory alone, the database URL with them), and starts it after the clock is synchronized. A deploy installs neither file. **A VPS set up before these blocks has no deadline on Caddy's side until block 1 runs:** the API ends its own (a body within 10 s, a peer that stops acknowledging within 60 s, at most 8,192 connections), but one address can still hold Caddy's connections to it open, and what they buffer. To bring a running VPS in line with them, run each block once, on the VPS, as `seedelf`, in any order. Each prints the machine's name first; paste back what it prints after that. Run again, the first says `STOP` and changes nothing, and the others write the same files again.
 
 `edge/nftables.conf` keeps UDP 443 open, for HTTP/3 should it come back: with Caddy on HTTP/1.1 and HTTP/2, nothing listens there.
 

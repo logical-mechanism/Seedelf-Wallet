@@ -211,8 +211,10 @@ impl Pool {
     /// the page holds what fits and says more follows, or an envelope longer
     /// than that alone; and the page counts against the address's share of
     /// the reserve, both pools together, which refuses it once read, until
-    /// the share frees or the day rolls (`reserve_wait`). A page that's
-    /// refused is counted against nothing.
+    /// the share frees or the day rolls (`reserve_wait`). A page refused
+    /// before it's encoded is counted against nothing; one the reserve
+    /// refuses here, as when two of an address's pages pass its first
+    /// check at once, is already counted in the day's reading: one page.
     fn read(
         &self,
         after: Option<u64>,

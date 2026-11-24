@@ -372,7 +372,7 @@ version (1) = 1 | flags (1) | cursor (8) | prices (4) | count (2) | count × (le
 | `DATA_MESSAGING_RESERVE_READ_MIB_DAY` | what one address may read of the reserve in a day, both pools together, in MiB, from 1 to 1,024: 16 unset |
 | `DATA_MESSAGING_OFF` | `true` stops Seedelf Messaging, as the off switch below says; `false`, or unset, runs it |
 
-A value that isn't a whole number in its range, or `true` or `false` for the switch, is refused at start. All six are the owner's to set; the start's log line says what the relay runs with.
+A value that isn't a whole number in its range, or `true` or `false` for the switch, is refused at start. All six are the owner's to set, `DATA_MESSAGING_OFF` only through the runbook's drop-in, never in the environment file, whose value would override it ([Stopping Messages](deploy/README.md#stopping-messages)); the start's log line says what the relay runs with.
 
 **The off switch.** With `DATA_MESSAGING_OFF=true`, every route under `/messaging/` answers 410 Gone, `{"error":"messaging is stopped"}`, with CORS, before any other limit. A post's body isn't read, so nothing is kept. Every other route answers as before, and `/health` says `"relay":"off"`. The pools are still read at start and saved, and what they hold expires as ever. A wallet reads a 410 on any relay route as Messages stopped: it solves and posts nothing there, keeps what's queued, and asks one page an hour, and one at each unlock, until a page gets an answer other than the 410. So a stopped relay still sees those pages, and now and then a post a wallet made as it unlocked. The lever and its undo are the runbook's [Stopping Messages](deploy/README.md#stopping-messages).
 
