@@ -18,7 +18,11 @@
 	# answer within 60 s of the head, past a submit's 30 to 40 s (the
 	# response_header_timeout below) and the wallet's longest wait, 35 s.
 	# idle: a connection with nothing asked closes after 2 minutes.
+	# protocols: HTTP/1.1 and HTTP/2 only. Caddy's write timeout isn't shown
+	# to end a stalled HTTP/3 answer, and Chrome falls back to HTTP/2 with
+	# nothing lost. UDP 443 stays open in nftables.conf; nothing listens.
 	servers {
+		protocols h1 h2
 		timeouts {
 			read_header 10s
 			read_body 10s

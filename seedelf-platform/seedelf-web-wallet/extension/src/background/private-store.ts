@@ -21,7 +21,7 @@ import { randomBytes } from "@noble/hashes/utils.js";
 
 import type { NetworkName } from "../networks";
 import { fromBase64, toBase64, type Area } from "./storage";
-import type { Wallet } from "./wallet";
+import type { Admit, Wallet } from "./wallet";
 
 /** chrome.storage.local keys start with this, then the record's name. */
 export const PRIVATE_PREFIX = "seedelf.private.";
@@ -51,18 +51,29 @@ export const PRIVATE_RECORDS = [
   "mintedAt.mainnet",
   // The private index's settled view of this wallet (contract-scan.ts): mainnet only, as the data layer is.
   "contract.mainnet",
-  // Seedelf Messaging's inbox on each network (messaging.ts): the requests, the tombstones, the scan's cursor and
-  // what each conversation shows. Each conversation's own record is one of `CONVERSATION_RECORDS`.
+  // Seedelf Messaging's inbox on each network (messaging.ts): which Seedelfs take first messages, what each
+  // conversation and request shows, and the tombstones. Each conversation's own record is one of `CONVERSATION_RECORDS`.
   "messaging.preprod",
   "messaging.mainnet",
+  // The crate's requests record, out of the inbox (the 1.10.0 gate's round 5): read only by a first message's take and
+  // the user's presses on a request.
+  "messagingRequests.preprod",
+  "messagingRequests.mainnet",
+  // Where each network's next read of the relay goes on from, with what Try again steps over and what a stop could lose
+  // (messaging.ts `ReadHeld`): one 1 KiB pad, written once at the end of each run of requests.
+  "messagingRead.preprod",
+  "messagingRead.mainnet",
+  // The user's own envelopes waiting to be posted, copied from their conversations' records (messaging.ts `postNow`).
+  "messagingOutbox.preprod",
+  "messagingOutbox.mainnet",
   // What a messaging step is working on while it runs (messaging.ts `setMark`), each step in a record of its own: the
   // read whose page is scanned, and the envelope being taken.
   "messagingMark.preprod",
   "messagingMark.mainnet",
   "messagingTakeMark.preprod",
   "messagingTakeMark.mainnet",
-  // Where each network's next read of the relay goes on from, and what the reads found that isn't taken yet
-  // (messaging.ts `noteRead`, the 1.10.0 gate's finding 8): written after each read, whatever the take is doing.
+  // What each network's reads found that isn't taken yet (messaging.ts, the 1.10.0 gate's finding 8 and round 5):
+  // written only by the background runner, never between two requests.
   "messagingTake.preprod",
   "messagingTake.mainnet",
   // Not sealed, and no record: a mark of which messaging step's WebAssembly trapped ("scan" or "take"), written with no
@@ -159,6 +170,12 @@ const WHAT: Record<(typeof PRIVATE_RECORDS)[number], I18nKey> = {
   "contract.mainnet": "worker.record.contract",
   "messaging.preprod": "worker.record.messaging",
   "messaging.mainnet": "worker.record.messaging",
+  "messagingRequests.preprod": "worker.record.messaging",
+  "messagingRequests.mainnet": "worker.record.messaging",
+  "messagingRead.preprod": "worker.record.messaging",
+  "messagingRead.mainnet": "worker.record.messaging",
+  "messagingOutbox.preprod": "worker.record.messaging",
+  "messagingOutbox.mainnet": "worker.record.messaging",
   "messagingMark.preprod": "worker.record.messaging",
   "messagingMark.mainnet": "worker.record.messaging",
   "messagingTakeMark.preprod": "worker.record.messaging",
@@ -187,14 +204,35 @@ export class UnreadableRecordError extends Error {
 }
 
 export class PrivateStore {
+  /** The nonce each record was last sealed under by this store, while the worker lives (`lastSealed`). */
+  private readonly nonces = new Map<RecordName, string>();
+
   constructor(private readonly deps: { wallet: Wallet; local: Area }) {}
 
   /**
    * The record, or undefined when there's none. Throws if locked, and
-   * UnreadableRecordError when it's there but won't open.
+   * UnreadableRecordError when it's there but won't open. `admit`: the
+   * unseal's own check as its turn in the wallet's queue comes
+   * (`Wallet.withStoreKey`): false, and NotAdmitted, nothing unsealed.
    */
-  async get<T>(name: RecordName): Promise<T | undefined> {
-    const sealed = await this.deps.local.get<Sealed>(PRIVATE_PREFIX + name);
+  async get<T>(name: RecordName, admit?: Admit): Promise<T | undefined> {
+    return this.open<T>(name, await this.sealed(name), admit);
+  }
+
+  /**
+   * The record as the area holds it, still sealed, with no key: `get`'s read of the area, apart from its unseal, so a
+   * caller can wait between the two (messaging.ts keeps its background work off its runs of requests).
+   */
+  async sealed(name: RecordName): Promise<unknown> {
+    return this.deps.local.get<Sealed>(PRIVATE_PREFIX + name);
+  }
+
+  /**
+   * What `sealed` gave for `name`, unsealed: `get`'s second half, in the wallet's queue. Throws as `get` does; `admit`
+   * as `get`'s.
+   */
+  async open<T>(name: RecordName, stored: unknown, admit?: Admit): Promise<T | undefined> {
+    const sealed = stored as Sealed | undefined;
     return this.deps.wallet.withStoreKey((key) => {
       if (!sealed) return undefined;
       try {
@@ -203,22 +241,35 @@ export class PrivateStore {
       } catch {
         throw new UnreadableRecordError(name);
       }
-    });
+    }, admit);
   }
 
-  /** Seals `value` (JSON, padded) under a fresh nonce. Throws if locked. */
-  async set(name: RecordName, value: unknown): Promise<void> {
+  /**
+   * Seals `value` (JSON, padded) under a fresh nonce. Throws if locked. `admit`: the seal's own check as its turn in the
+   * wallet's queue comes: false, and NotAdmitted, nothing sealed or written.
+   */
+  async set(name: RecordName, value: unknown, admit?: Admit): Promise<void> {
     const sealed = await this.deps.wallet.withStoreKey((key): Sealed => {
       const nonce = randomBytes(24);
       const plain = padded(value);
       const data = xchacha20poly1305(key, nonce, aad(name)).encrypt(plain);
       return { v: 1, nonce: toBase64(nonce), data: toBase64(data) };
-    });
+    }, admit);
     await this.deps.local.set(PRIVATE_PREFIX + name, sealed);
+    this.nonces.set(name, sealed.nonce);
+  }
+
+  /**
+   * The nonce this store last sealed the record under, as `sealedAs` would read it back, with no read of the area:
+   * undefined where it hasn't written it while the worker lives, or it was deleted since.
+   */
+  lastSealed(name: RecordName): string | undefined {
+    return this.nonces.get(name);
   }
 
   /** Deletes the record. No key needed. */
   async remove(name: RecordName): Promise<void> {
+    this.nonces.delete(name);
     await this.deps.local.remove(PRIVATE_PREFIX + name);
   }
 

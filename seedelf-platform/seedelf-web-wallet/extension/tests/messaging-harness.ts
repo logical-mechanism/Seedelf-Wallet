@@ -5,10 +5,11 @@
 // order: the relay's requests, the chain's reads, WebAssembly's scan, open
 // and receive, and every read and write of a sealed record. The tests of
 // what the wallet sends, and when, are assertions on that order.
-import { type ConversationFile, MessagingService } from "../src/background/messaging";
+import { type ConversationFile, MessagingService, storedBytes } from "../src/background/messaging";
 import { rememberRegister } from "../src/background/minted-by";
 import { PreferencesService } from "../src/background/preferences";
 import { conversationRecord, PrivateStore, type RecordName } from "../src/background/private-store";
+import { type Admit, SESSION_UNLOCKED_AT, type Wallet } from "../src/background/wallet";
 import type { RegisterHex } from "../src/background/chain";
 import type { NetworkName } from "../src/networks";
 import { fakeRelay, type FakeRelay } from "./fake-relay";
@@ -73,40 +74,123 @@ export interface Party {
    */
   trace: string[];
   /**
+   * Everything the service did, in order (the 1.10.0 gate's round 5): each sealed record read, written or removed, with
+   * its stored length then (its sealed data, base64; a `get`'s is what was stored as it was read); each request
+   * (`GET`, `POST`, with its path); each WebAssembly call the trace names; and each lane's and runner step's start and
+   * end, and each pass of the gate (`observe`). `at`: the test's clock then (the service's monotonic one); `t`:
+   * performance.now().
+   */
+  log: LogEntry[];
+  /**
    * Every throw a take passed over without a word (W9; the 1.10.0 gate's f2): a test that meets one it didn't mean to
    * fails (an error thrown out of the run), unless it sets `passOverOk`.
    */
   passedOver: unknown[];
   /** The test means its takes to pass a throw over (a module that throws on one envelope, say). */
   passOverOk: boolean;
+  /**
+   * Each branch the worker reached that its own count of the writer's share makes unreachable (relay-oracle fix item 2,
+   * the service's `unreachable` hook): a test that reaches one it didn't mean to fails, unless it sets `unreachableOk`.
+   */
+  unreachable: string[];
+  /** The test means to reach such a branch (a module that misreports the share, say). */
+  unreachableOk: boolean;
   /** A new service over the same storage: a restarted worker's, on `wasm` if given, with `options` changed if given. */
   restart(wasm?: Wasm, options?: ServiceOptions): MessagingService;
 }
 
 export const clock = { now: 1_800_000_000_000 };
 
+/** One thing a service did (`Party.log`). */
+export interface LogEntry {
+  what:
+    | "get"
+    | "set"
+    | "remove"
+    | "GET"
+    | "POST"
+    | "scan"
+    | "open"
+    | "receive"
+    | "lane-start"
+    | "lane-end"
+    | "step-start"
+    | "step-end"
+    | "gate"
+    | "yield"
+    | "changed";
+  /** A record's name, a request's path, a lane's network. */
+  name?: string;
+  /** A record's stored length; a POST's body length (its nonce and envelope). */
+  bytes?: number;
+  at: number;
+  t: number;
+}
+
+const logged = (p: Pick<Party, "log">, what: LogEntry["what"], name?: string, bytes?: number) =>
+  void p.log.push({ what, ...(name !== undefined ? { name } : {}), ...(bytes !== undefined ? { bytes } : {}), at: clock.now, t: performance.now() });
+
 /** The sealed store as the service uses it: every read and write traced, a write stoppable. */
 class TracedStore extends PrivateStore {
+  /** What the next call into the wallet's queue notes as it runs there: set right before `super`'s, which queues at once. */
+  private running?: () => void;
+
   constructor(
     deps: ConstructorParameters<typeof PrivateStore>[0],
-    private readonly party: Pick<Party, "trace" | "beforeWrite">,
+    private readonly party: Pick<Party, "trace" | "beforeWrite" | "log" | "local">,
   ) {
-    super(deps);
+    // The store's key as the wallet gives it, each task noting itself as its turn in the queue comes and it runs (round
+    // 5's admit check): a call turned away, or one waiting its turn, isn't traced.
+    const wallet = deps.wallet;
+    const own = {
+      withStoreKey: <T>(task: (key: Uint8Array) => T | Promise<T>, admit?: Admit) => {
+        const note = this.running;
+        this.running = undefined;
+        return wallet.withStoreKey((key) => {
+          note?.();
+          return task(key);
+        }, admit);
+      },
+    } as unknown as Wallet;
+    super({ ...deps, wallet: own });
   }
 
-  override async get<T>(name: RecordName): Promise<T | undefined> {
-    this.party.trace.push(`get ${name}`);
-    return super.get<T>(name);
+  /** `call`, which goes into the wallet's queue at once, `note` told as it runs there. */
+  private queued<T>(note: () => void, call: () => Promise<T>): Promise<T> {
+    this.running = note;
+    const run = call();
+    if ((this.running as unknown) !== undefined) throw new Error("the harness's store: the call didn't go into the wallet's queue at once");
+    return run;
   }
 
-  override async set(name: RecordName, value: unknown): Promise<void> {
+  // Every read is a `get` or the service's `sealed` then `open` (round 5): traced at the unseal, as it runs in the
+  // wallet's queue, with its stored length.
+  override async open<T>(name: RecordName, sealed: unknown, admit?: Admit): Promise<T | undefined> {
+    return this.queued(
+      () => {
+        this.party.trace.push(`get ${name}`);
+        logged(this.party, "get", name, (sealed as { data?: string } | undefined)?.data?.length ?? 0);
+      },
+      () => super.open<T>(name, sealed, admit),
+    );
+  }
+
+  override async set(name: RecordName, value: unknown, admit?: Admit): Promise<void> {
     await this.party.beforeWrite?.(name, value);
-    this.party.trace.push(`set ${name}`);
-    return super.set(name, value);
+    // Traced as its seal runs in the wallet's queue, with the size it's stored at: what a lane's window holds is what
+    // began in it.
+    return this.queued(
+      () => {
+        this.party.trace.push(`set ${name}`);
+        logged(this.party, "set", name, storedBytes(new TextEncoder().encode(JSON.stringify(value)).length));
+      },
+      () => super.set(name, value, admit),
+    );
   }
 
   override async remove(name: RecordName): Promise<void> {
     this.party.trace.push(`remove ${name}`);
+    logged(this.party, "remove", name);
     return super.remove(name);
   }
 }
@@ -120,24 +204,39 @@ export interface ServiceOptions {
   quotaBytes?: number;
   /** What Messages leaves free of the quota, for tests: 2 MiB otherwise (W11). */
   reserveBytes?: number;
-  /** The take record's bound, as its JSON, for tests: 512 KiB otherwise (the 1.10.0 gate's finding 8). */
-  takeBytes?: number;
+  /** The take record's room, as its JSON, for tests: 128 KiB otherwise (the 1.10.0 gate's round 5). */
+  takeRoomBytes?: number;
+  /**
+   * chrome.storage as Chrome answers it, over IPC (round 5): every get and set of either area resolves a macrotask later,
+   * and the service's own turns of the event loop are the worker's (a setTimeout of 0) in place of a setImmediate.
+   */
+  ipc?: boolean;
+  /** The ticks the worker's alarms give (`ticks`), by the device's clock: none otherwise. */
+  ticks?: () => Array<{ at: number; lane: boolean }>;
+  /** TAKE_MARGIN_MS, for tests. */
+  takeMarginMs?: number;
+  /** The first-contact stamp's bits, solved and asked: 6 otherwise, cheap for tests. */
+  firstContactBits?: number;
 }
 
 function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, directory: Directory, options: ServiceOptions, given?: Wasm): MessagingService {
   const wasm = given ?? loadTestWasm();
+  const { ipc, ticks, ...rest } = options;
   const traced: Wasm = {
     ...wasm,
     messagingScan: (key, envelopes) => {
       p.trace.push("scan");
+      logged(p, "scan");
       return wasm.messagingScan(key, envelopes);
     },
     messagingOpen: (key, envelope) => {
       p.trace.push("open");
+      logged(p, "open");
       return wasm.messagingOpen(key, envelope);
     },
     messagingReceive: (key, request) => {
       p.trace.push("receive");
+      logged(p, "receive");
       return wasm.messagingReceive(key, request);
     },
   };
@@ -148,7 +247,14 @@ function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, dire
     local: p.local,
     session: p.session,
     preferences: p.preferences,
-    relay: (n) => relay.client(n, (call) => void p.trace.push(call)),
+    relay: (n) =>
+      relay.client(n, (call, init) => {
+        p.trace.push(call);
+        const [method, path] = call.split(" ");
+        // A POST with its body's length (round 4's review, #9): what the C1 traces compare beside the order.
+        const body = method === "POST" ? (init?.body as Uint8Array | undefined)?.byteLength : undefined;
+        logged(p, method as "GET" | "POST", path, body);
+      }),
     ownSeedelfs: async (_n, read) => {
       if (p.ownFails) throw p.ownFails;
       if (read) {
@@ -178,13 +284,28 @@ function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, dire
     monotonic: () => clock.now,
     // chrome.storage.local.getBytesInUse(null), as Chrome counts it: each key and its JSON value.
     bytesInUse: async () => usedBytes(p),
+    // chrome.storage.local.getBytesInUse(key), the same count for one key, with no value read (round 5).
+    bytesOf: async (key) => {
+      const raw = p.local.data.get(key) as string | undefined;
+      return raw === undefined ? 0 : key.length + raw.length;
+    },
     // A turn of the event loop, timers included, as the worker's own: a search that ran away (a price no test meant
-    // to be solved) then fails at its test's timeout instead of holding the whole run in microtasks.
+    // to be solved) then fails at its test's timeout instead of holding the whole run in microtasks. Over `ipc`, the
+    // worker's own: a setTimeout of 0.
     wait: async () => {
-      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => (ipc ? setTimeout(r, 0) : setImmediate(r)));
       await p.onWait?.();
     },
-    changed: (n) => void p.changed.push(n),
+    // The gate's waits run on the test's clock: they end once the test moves it on, or a lane starts.
+    sleep: async () => {
+      await new Promise((r) => setImmediate(r));
+    },
+    ...(ticks ? { ticks: async () => ticks() } : {}),
+    observe: (event, network) => logged(p, event, network),
+    changed: (n) => {
+      logged(p, "changed", n);
+      p.changed.push(n);
+    },
     // A throw a take passes over without a word fails the test that meets it, unless it means to (f2): out of the run,
     // so the service does what it does.
     passedOver: (e) => {
@@ -194,10 +315,51 @@ function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, dire
         throw new Error(`a take passed over a throw without a word: ${e instanceof Error ? `${e.constructor.name}: ${e.message}` : String(e)}`);
       });
     },
+    // A branch the worker's count of the share makes unreachable fails the test that reaches it, unless it means to (fix
+    // item 2): out of the run, as passedOver's.
+    unreachable: (where) => {
+      p.unreachable.push(where);
+      if (p.unreachableOk) return;
+      queueMicrotask(() => {
+        throw new Error(`the worker reached a branch its share count makes unreachable: ${where}`);
+      });
+    },
     // Cheap first-contact stamps for tests; the worker never sets it.
     firstContactBits: 6,
-    ...options,
+    ...rest,
   });
+}
+
+/**
+ * The wallet's unlock stamp (`seedelf.unlockedAt`) moved on at every unlock, create and restore, as a real worker's is
+ * (round 4's review, #8): the test's clock stands still between a lock and an unlock, where a real one never does, so
+ * the service would take the new unlock for the old one and keep what it holds in memory of it.
+ */
+function movingUnlockStamp(session: MemoryArea): void {
+  // From the stamp already there: the wallet was created before this.
+  const now = session.data.get(SESSION_UNLOCKED_AT);
+  let last = typeof now === "string" ? Number(JSON.parse(now)) : Number.NEGATIVE_INFINITY;
+  const set = session.set.bind(session);
+  session.set = async (key, value) => {
+    if (key === SESSION_UNLOCKED_AT && typeof value === "number") {
+      const stamp = value > last ? value : last + 1;
+      last = stamp;
+      return set(key, stamp);
+    }
+    return set(key, value);
+  };
+}
+
+/** Each get and set of `area` answered a macrotask later, as chrome.storage's IPC answers (round 5's `ipc`). */
+function overIpc(area: MemoryArea): void {
+  const a = area as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+  for (const method of ["get", "set", "remove", "keys"]) {
+    const real = a[method]!.bind(area);
+    a[method] = async (...args: unknown[]) => {
+      await new Promise((r) => setTimeout(r, 0));
+      return real(...args);
+    };
+  }
 }
 
 /** Another register of `p`'s key: what a Seedelf's datum holds once it's locked again. */
@@ -240,8 +402,11 @@ export async function party(
     skew: 0,
     changed: [],
     trace: [],
+    log: [],
     passedOver: [],
     passOverOk: false,
+    unreachable: [],
+    unreachableOk: false,
     alarm: {
       on: false,
       async start() {
@@ -258,6 +423,11 @@ export async function party(
     directory.set(seedelf, register);
     // Minted in this browser, under that register: it takes first messages by itself (the 1.10.0 gate's W8).
     await rememberRegister(base.store, "preprod", seedelf, register);
+  }
+  movingUnlockStamp(t.session);
+  if (given.ipc) {
+    overIpc(t.local);
+    overIpc(t.session);
   }
   // One object: what a test changes on the party (its Seedelfs, its kept view) is what its service reads.
   const p = base as Party;
@@ -320,31 +490,52 @@ export async function turns(n = 5) {
   for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
 }
 
-/** Every sealed record of `p`, opened: what a sync may and may not have changed. */
+/**
+ * Every sealed record of `p` that a take writes, opened: the inbox, each conversation's record and the take record
+ * (round 4's review, #9). What a sync may and may not have changed.
+ */
 export async function records(p: Party): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const key of (await p.local.keys("seedelf.private.")).sort()) {
     const name = key.slice("seedelf.private.".length) as RecordName;
-    if (name.startsWith("messaging.") || name.startsWith("conversation.")) out[name] = await p.store.get(name);
+    if (name.startsWith("messaging.") || name.startsWith("conversation.") || name.startsWith("messagingTake.")) out[name] = await p.store.get(name);
   }
   return out;
 }
 
 /**
- * Where `p`'s next read of `network`'s pool goes on from, as stored: the take record's cursor (the 1.10.0 gate's
- * finding 8), or, where there's no take record yet, the one an inbox from before it kept.
+ * Where `p`'s next read of `network`'s pool goes on from, as stored: the read record's cursor (the 1.10.0 gate's round
+ * 5). Round 4 kept it in the take record, and builds before that in the inbox.
  */
 export async function cursorOf(p: Pick<Party, "store">, network: NetworkName = "preprod"): Promise<string | undefined> {
-  const takes = await p.store.get<{ cursor?: string }>(`messagingTake.${network}`);
-  if (takes) return takes.cursor;
-  return (await p.store.get<{ cursor?: string }>(`messaging.${network}`))?.cursor;
+  return (await readOf(p, network))?.cursor;
+}
+
+/** What `p`'s read record holds, as stored (round 5): the cursor, a gap, the skip list, the clock, what's owed. */
+export async function readOf(p: Pick<Party, "store">, network: NetworkName = "preprod") {
+  return p.store.get<{
+    v: 1;
+    cursor?: string;
+    gapAt?: number;
+    skip?: Array<{ envelope: string; until: number }>;
+    clock?: { at: number; off: number };
+    owed?: number;
+  }>(`messagingRead.${network}`);
 }
 
 /** What `p`'s take record holds, as stored: the reads' envelopes waiting for the take, and the counts (finding 8). */
 export async function takesOf(p: Pick<Party, "store">, network: NetworkName = "preprod") {
-  return p.store.get<{ cursor?: string; gapAt?: number; batches: Array<{ envelopes: string[] }>; unopened?: number; noRoom?: number }>(
-    `messagingTake.${network}`,
-  );
+  return p.store.get<{ v: number; batches: Array<{ to?: string; envelopes: string[] }>; unopened?: number; noRoom?: number }>(`messagingTake.${network}`);
+}
+
+/** What `p`'s outbox record holds, as stored (round 5): the user's envelopes waiting to be posted. */
+export async function outboxOf(p: Pick<Party, "store">, network: NetworkName = "preprod") {
+  return (await p.store.get<{ v: 1; waiting: Array<{ cid: string; id: number; envelope: string }> }>(`messagingOutbox.${network}`))?.waiting;
+}
+
+/** What `p`'s requests record holds, as stored (round 5): the crate's requests, in base64, and any set aside. */
+export async function requestsOf(p: Pick<Party, "store">, network: NetworkName = "preprod") {
+  return p.store.get<{ v: 1; requests?: string; aside?: string[] }>(`messagingRequests.${network}`);
 }
 
 /**

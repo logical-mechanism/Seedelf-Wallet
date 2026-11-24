@@ -222,8 +222,8 @@ describe("finding 4: the inbox's write refused once after a conversation record'
     alice.local.get = get;
     alice.local.set = set;
     expect(failed).toBe(1);
-    // Tried again in place: opened twice, the second refused by the ratchet that already took it. Nothing passed over.
-    expect(alice.trace.filter((s) => s === "open").length).toBeGreaterThanOrEqual(2);
+    // The inbox's write reads no value for its size (round 5, fix item 7.4), so the failing read is the runner's next
+    // one of the inbox: that step is tried again after a pause (f2). Nothing passed over.
     expect(alice.passedOver).toEqual([]);
     // In the same sync, no restart, no lock: the list says what the record holds.
     const reply = (await fileOf(alice, cid))!.history.at(-1)!;

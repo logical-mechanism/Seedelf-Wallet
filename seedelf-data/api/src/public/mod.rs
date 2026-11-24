@@ -40,6 +40,27 @@ use query::NOT_ASKED;
 /// The most a request's body can be: the wallet's largest is 75 credentials, about 4.5 KB.
 pub const MAX_BODY: usize = 16 * 1024;
 
+/// The routes here that take a body: the edge refuses one on any other
+/// (`edge::body_limit`), so this is every POST in `routes`.
+pub const POSTS: [&str; 16] = [
+    "/api/v1/credential_utxos",
+    "/api/v1/address_utxos",
+    "/api/v1/utxo_info",
+    "/api/v1/datum_info",
+    "/api/v1/tx_status",
+    "/api/v1/account_addresses",
+    "/api/v1/account_info",
+    "/api/v1/account_reward_history",
+    "/api/v1/account_update_history",
+    "/api/v1/account_txs",
+    "/api/v1/credential_txs",
+    "/api/v1/tx_info",
+    "/api/v1/pool_info",
+    "/api/v1/drep_info",
+    "/api/v1/drep_metadata",
+    "/api/v1/asset_info",
+];
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v1/credential_utxos", post(utxos::credential_utxos))

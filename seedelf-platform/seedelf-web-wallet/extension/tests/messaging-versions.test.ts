@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { type ConversationFile, type Inbox } from "../src/background/messaging";
+import { type ConversationFile, type Inbox, PAUSED_ASK_MS, SESSION_PAUSED } from "../src/background/messaging";
 import { CONVERSATION_RECORDS, PRIVATE_PREFIX } from "../src/background/private-store";
 import {
   BOB_SEEDELF,
@@ -31,6 +31,7 @@ import {
   texts,
   turnOn,
   type Wasm,
+  requestsOf,
 } from "./messaging-harness";
 
 /** The records development builds wrote before the gate's call 16 (seedelf-messaging's fixture), hex. */
@@ -45,8 +46,9 @@ const base64 = (hex: string) => Buffer.from(hex, "hex").toString("base64");
 
 /** Puts `hex` in `p`'s inbox in place of its requests' record, stored as this build stores it (base64). */
 async function withRequests(p: Party, hex: string): Promise<void> {
-  const inbox = (await p.store.get<Inbox>("messaging.preprod"))!;
-  await p.store.set("messaging.preprod", { ...inbox, requests: base64(hex) });
+  // The requests record has its own place since round 5: what's set aside in it stays.
+  const kept = await requestsOf(p);
+  await p.store.set("messagingRequests.preprod", { ...(kept ?? { v: 1 }), requests: base64(hex) });
 }
 
 /** Bob, holding one request, Carol's, of one message; and Alice, who can write to him. */
@@ -145,6 +147,300 @@ describe("a relay stopped on purpose (W15, versions-upgrade#2)", { timeout: 60_0
   });
 });
 
+type How = "stop" | "down" | "real" | "dayRead" | "proxy";
+
+/**
+ * The relay as `mode` says for each method (the 1.10.0 gate's freeze verification, item 8): the off switch's 410 (the
+ * edge's body), a lost connection, the day's reading held two hours, a proxy's 502, or itself.
+ */
+function answering(relay: FakeRelay, real: FakeRelay["fetch"], mode: { get: How; post: How }): void {
+  relay.fetch = async (url, init) => {
+    const how = init.method === "GET" ? mode.get : mode.post;
+    if (how === "real") return real(url, init);
+    relay.calls.push(`${init.method} ${new URL(url).pathname}${new URL(url).search}`);
+    if (how === "down") throw new TypeError("Failed to fetch");
+    if (how === "proxy") return new Response("bad gateway", { status: 502 });
+    if (how === "dayRead") {
+      return new Response(JSON.stringify({ error: "this address has read its share of the pool for the day" }), {
+        status: 429,
+        headers: { "retry-after": String(2 * 3600) },
+      });
+    }
+    return new Response(JSON.stringify({ error: "messaging is stopped" }), { status: 410 });
+  };
+}
+
+/** WebAssembly that counts stamp searches, and whose next search misses once where `miss` is set (a slice ends). */
+function missing(finds: { n: number; miss: boolean }): Wasm {
+  const wasm = loadTestWasm();
+  return {
+    ...wasm,
+    messagingFindStamp: (request) => {
+      finds.n++;
+      if (finds.miss) {
+        finds.miss = false;
+        return JSON.stringify({ nonce: null });
+      }
+      return wasm.messagingFindStamp(request);
+    },
+  };
+}
+
+const turn = () => new Promise<void>((r) => setImmediate(r));
+async function until(done: () => boolean, most = 2000): Promise<boolean> {
+  for (let i = 0; i < most && !done(); i++) await turn();
+  return done();
+}
+const pausedIn = (p: Party) => p.session.data.get(SESSION_PAUSED) !== undefined && JSON.parse(p.session.data.get(SESSION_PAUSED) as string).preprod !== undefined;
+
+// The freeze's fix A (the 1.10.0 gate's round 5): the off switch ends on the relay's answer, never on a timer. Each of
+// verify2-freeze-stop-hold's cases, its expectation reversed, and (g), (h) and a restarted worker beside them.
+describe("a relay stopped on purpose, until it answers again (the freeze's fix A)", { timeout: 60_000 }, () => {
+  it("(a) a post's solve under way when a sync's page meets the 410: no POST after the stop, and no search after that slice", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    const real = relay.fetch;
+    const finds = { n: 0, miss: false };
+    alice.restart(missing(finds));
+    let stopAt = -1;
+    let findsAtStop = 0;
+    alice.onWait = async () => {
+      if (stopAt >= 0 || finds.n === 0) return;
+      // Between two slices of the post's work: the relay's off switch, met by a page's sync (started, not awaited: a
+      // sync's posts would join this very run).
+      stopAt = relay.calls.length;
+      answering(relay, real, { get: "stop", post: "stop" });
+      void alice.messaging.sync("preprod");
+      expect(await until(() => pausedIn(alice))).toBe(true);
+      findsAtStop = finds.n;
+    };
+    finds.miss = true;
+    await alice.messaging.send("preprod", cid, "solved across the stop");
+    await alice.messaging.whenIdle();
+    const after = relay.calls.slice(stopAt);
+    expect(stopAt).toBeGreaterThanOrEqual(0);
+    // The sync's page alone: no POST after the stop.
+    expect(after).toEqual([expect.stringMatching(/^GET /)]);
+    expect(finds.n - findsAtStop).toBe(0);
+    expect((await alice.messaging.overview("preprod")).paused).toBe(true);
+    expect((await alice.messaging.thread("preprod", cid)).messages.at(-1)!.sent).toBe("pending");
+    // The probe, an hour on, reads: the stop ends, and the message goes in the same sync.
+    alice.onWait = undefined;
+    relay.fetch = real;
+    await busyFor(PAUSED_ASK_MS, alice, bob);
+    relay.calls.length = 0;
+    await synced(alice);
+    expect(relay.calls.map((c) => c.split(" ")[0])).toEqual(["GET", "POST"]);
+    expect((await alice.messaging.thread("preprod", cid)).messages.at(-1)!.sent).toBe("posted");
+    expect((await alice.messaging.overview("preprod")).paused).toBeUndefined();
+  });
+
+  it("(b) a first message's stamp under way: no search after that slice, no POST, the message still queued", async () => {
+    const { relay, alice } = await pair();
+    const real = relay.fetch;
+    const finds = { n: 0, miss: false };
+    alice.restart(missing(finds));
+    let stopAt = -1;
+    let findsAtStop = 0;
+    alice.onWait = async () => {
+      if (stopAt >= 0 || finds.n === 0) return;
+      stopAt = relay.calls.length;
+      answering(relay, real, { get: "stop", post: "stop" });
+      void alice.messaging.sync("preprod");
+      expect(await until(() => pausedIn(alice))).toBe(true);
+      findsAtStop = finds.n;
+    };
+    finds.miss = true;
+    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "a first message across the stop");
+    await alice.messaging.whenIdle();
+    expect(finds.n - findsAtStop).toBe(0);
+    expect(posts(relay)).toEqual([]);
+    expect((await alice.messaging.thread("preprod", cid)).messages[0]!.sent).toBe("queued");
+    // Once the relay answers, the stamp is solved and the message goes.
+    alice.onWait = undefined;
+    relay.fetch = real;
+    await busyFor(PAUSED_ASK_MS, alice);
+    await synced(alice);
+    await synced(alice);
+    expect((await alice.messaging.thread("preprod", cid)).messages[0]!.sent).toBe("posted");
+  });
+
+  it("(c) an hour on, the probe lost: one GET and no POST or search; the next sync probes again, and one that reads: GET, then POST", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    const real = relay.fetch;
+    const finds = { n: 0, miss: false };
+    alice.restart(missing(finds));
+    answering(relay, real, { get: "stop", post: "stop" });
+    relay.calls.length = 0;
+    await synced(alice);
+    expect((await alice.messaging.overview("preprod")).paused).toBe(true);
+    await alice.messaging.send("preprod", cid, "waits for the relay");
+    await alice.messaging.whenIdle();
+    expect(posts(relay)).toEqual([]);
+    await busyFor(PAUSED_ASK_MS + 60_000, alice, bob);
+    // Still stopped; this once the probe is lost on the way.
+    answering(relay, real, { get: "down", post: "stop" });
+    relay.calls.length = 0;
+    finds.n = 0;
+    await synced(alice);
+    expect(gets(relay)).toHaveLength(1);
+    expect(posts(relay)).toEqual([]);
+    expect(finds.n).toBe(0);
+    expect((await alice.messaging.overview("preprod")).paused).toBe(true);
+    // No answer: still due, so the next sync asks again; this time the relay reads.
+    relay.fetch = real;
+    relay.calls.length = 0;
+    clock.now += 10_000;
+    await synced(alice);
+    expect(relay.calls.map((c) => c.split(" ")[0])).toEqual(["GET", "POST"]);
+    expect((await alice.messaging.overview("preprod")).paused).toBeUndefined();
+  });
+
+  it("(d) an hour on with the day's reading held: one GET, the probe, and no POST while it's 410; the day's 429 ends it, the POST goes", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    const real = relay.fetch;
+    answering(relay, real, { get: "dayRead", post: "real" });
+    await synced(alice);
+    expect((await alice.messaging.overview("preprod")).dayReadUntil).toBeDefined();
+    // Then the off switch, met by a post.
+    answering(relay, real, { get: "stop", post: "stop" });
+    await alice.messaging.send("preprod", cid, "posted into the stop");
+    await alice.messaging.whenIdle();
+    expect((await alice.messaging.overview("preprod")).paused).toBe(true);
+    await busyFor(PAUSED_ASK_MS + 60_000, alice, bob);
+    relay.calls.length = 0;
+    await synced(alice);
+    // The probe, though the day's reading is held: still 410.
+    expect(gets(relay)).toHaveLength(1);
+    expect(posts(relay)).toEqual([]);
+    expect((await alice.messaging.overview("preprod")).paused).toBe(true);
+    // An hour on again, the probe gets the day's 429: an answer, so the stop ends and the post goes; and no other page
+    // before the day's Retry-After.
+    await busyFor(PAUSED_ASK_MS + 60_000, alice, bob);
+    answering(relay, real, { get: "dayRead", post: "real" });
+    relay.calls.length = 0;
+    await synced(alice);
+    expect(relay.calls.map((c) => c.split(" ")[0])).toEqual(["GET", "POST"]);
+    expect((await alice.messaging.thread("preprod", cid)).messages.at(-1)!.sent).toBe("posted");
+    relay.calls.length = 0;
+    for (let i = 0; i < 6; i++) {
+      clock.now += 10_000;
+      await synced(alice);
+    }
+    expect(gets(relay)).toEqual([]);
+  });
+
+  it("(e) the device's clock moved two hours on, or ten minutes back: at most one GET each time, no POST", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    const real = relay.fetch;
+    answering(relay, real, { get: "stop", post: "stop" });
+    await synced(alice);
+    await alice.messaging.send("preprod", cid, "held");
+    await alice.messaging.whenIdle();
+    relay.calls.length = 0;
+    clock.now += 10_000;
+    await synced(alice);
+    expect(relay.calls).toEqual([]);
+    // Forward two hours: the probe runs on the monotonic clock, which didn't move.
+    alice.skew = 2 * 3600_000;
+    clock.now += 10_000;
+    await synced(alice);
+    const forward = gets(relay).length;
+    alice.skew -= 2 * 3600_000 + 10 * 60_000;
+    clock.now += 10_000;
+    await synced(alice);
+    expect(forward).toBeLessThanOrEqual(1);
+    expect(gets(relay).length).toBeLessThanOrEqual(1);
+    expect(posts(relay)).toEqual([]);
+    expect((await alice.messaging.overview("preprod")).paused).toBe(true);
+  });
+
+  it("(f) session storage refusing the stop's write: one GET (410), then nothing until the probe is due, and the overview says paused", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    relay.up = false;
+    await alice.messaging.send("preprod", cid, "pending before the stop");
+    await alice.messaging.whenIdle();
+    relay.up = true;
+    const set = alice.session.set.bind(alice.session);
+    alice.session.set = async (key: string, value: unknown) => {
+      if (key === SESSION_PAUSED) throw new Error("session storage refused the write");
+      return set(key, value);
+    };
+    answering(relay, relay.fetch, { get: "stop", post: "stop" });
+    relay.calls.length = 0;
+    await synced(alice);
+    expect(relay.calls).toEqual([expect.stringMatching(/^GET /)]);
+    for (let i = 0; i < 30; i++) {
+      clock.now += 10_000;
+      await synced(alice);
+    }
+    expect(relay.calls).toHaveLength(1);
+    expect((await alice.messaging.overview("preprod")).paused).toBe(true);
+    expect((await alice.messaging.overview("preprod")).offline).toBeUndefined();
+  });
+
+  it("(g) a probe answered by a proxy's 502: no answer, still stopped, no POST", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    const real = relay.fetch;
+    answering(relay, real, { get: "stop", post: "stop" });
+    await synced(alice);
+    await alice.messaging.send("preprod", cid, "held");
+    await alice.messaging.whenIdle();
+    await busyFor(PAUSED_ASK_MS + 60_000, alice, bob);
+    answering(relay, real, { get: "proxy", post: "real" });
+    relay.calls.length = 0;
+    await synced(alice);
+    expect(gets(relay)).toHaveLength(1);
+    expect(posts(relay)).toEqual([]);
+    expect((await alice.messaging.overview("preprod")).paused).toBe(true);
+  });
+
+  it("(h) a lock and an unlock: the unlock's first sync asks a page, and its 410 stops the network again", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    answering(relay, relay.fetch, { get: "stop", post: "stop" });
+    await synced(alice);
+    await alice.messaging.send("preprod", cid, "held");
+    await alice.messaging.whenIdle();
+    await alice.wallet.lock();
+    await alice.wallet.unlock("correct horse battery");
+    relay.calls.length = 0;
+    await synced(alice);
+    expect(relay.calls).toEqual([expect.stringMatching(/^GET /)]);
+    expect((await alice.messaging.overview("preprod")).paused).toBe(true);
+    relay.calls.length = 0;
+    clock.now += 10_000;
+    await synced(alice);
+    expect(relay.calls).toEqual([]);
+  });
+
+  it("holds across a worker Chrome starts again: the session's copy, the probe at its hour", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    const real = relay.fetch;
+    answering(relay, real, { get: "stop", post: "stop" });
+    await synced(alice);
+    await alice.messaging.send("preprod", cid, "held");
+    await alice.messaging.whenIdle();
+    relay.fetch = real;
+    relay.calls.length = 0;
+    alice.restart();
+    clock.now += 10_000;
+    await synced(alice);
+    expect(relay.calls).toEqual([]);
+    expect((await alice.messaging.overview("preprod")).paused).toBe(true);
+    alice.restart();
+    await busyFor(PAUSED_ASK_MS, alice, bob);
+    await synced(alice);
+    expect(relay.calls.map((c) => c.split(" ")[0])).toEqual(["GET", "POST"]);
+  });
+});
+
 describe("a page with an envelope of a size this version doesn't know (W15, versions-upgrade#3)", { timeout: 30_000 }, () => {
   it("is read all the same: the envelope is stepped over, the others taken, and the cursor moves", async () => {
     const { relay, alice, bob } = await pair();
@@ -224,11 +520,12 @@ describe("a record of another version (W15, versions-upgrade#5)", { timeout: 30_
     const sealed = await bob.local.get(PRIVATE_PREFIX + "messaging.preprod");
     relay.calls.length = 0;
     bob.restart();
+    // The page's overview, before its first sync, finds it won't open (round 5: a lane reads no inbox).
+    await expect(bob.messaging.overview("preprod")).rejects.toThrow(/couldn't open its record of your messages/);
     await bob.messaging.sync("preprod").catch(() => undefined);
     await bob.messaging.whenIdle();
     expect(relay.calls).toEqual([]);
     expect(await bob.local.get(PRIVATE_PREFIX + "messaging.preprod")).toEqual(sealed);
-    await expect(bob.messaging.overview("preprod")).rejects.toThrow(/couldn't open its record of your messages/);
     await bob.messaging.clear("preprod");
     expect(await bob.messaging.overview("preprod")).toMatchObject({ conversations: [], requests: [] });
   });
@@ -281,7 +578,7 @@ describe("a requests' record the crate doesn't read (W17, DESIGN-protocol §3.7)
     const overview = await bob.messaging.overview("preprod");
     expect(overview.requests.map((r) => r.cid)).toEqual([fresh]);
     expect(overview.dropped).toBe(1);
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.requestsAside).toBeUndefined();
+    expect((await requestsOf(bob))?.aside).toBeUndefined();
   });
 
   it("is one a later version wrote: kept aside as it came, never written over nor counted lost, and new requests come", async () => {
@@ -294,14 +591,14 @@ describe("a requests' record the crate doesn't read (W17, DESIGN-protocol §3.7)
     const overview = await bob.messaging.overview("preprod");
     expect(overview.requests.map((r) => r.cid)).toEqual([fresh]);
     expect(overview.dropped).toBeUndefined();
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.requestsAside).toEqual([base64(LATER_REQUESTS)]);
+    expect((await requestsOf(bob))?.aside).toEqual([base64(LATER_REQUESTS)]);
     // Through a deletion and the takes after it, as it came.
     await bob.messaging.remove("preprod", fresh);
     const another = await alice.messaging.start("preprod", BOB_SEEDELF, "and another");
     await alice.messaging.whenIdle();
     await synced(bob);
     expect((await bob.messaging.overview("preprod")).requests.map((r) => r.cid)).toEqual([another]);
-    expect((await bob.store.get<Inbox>("messaging.preprod"))!.requestsAside).toEqual([base64(LATER_REQUESTS)]);
+    expect((await requestsOf(bob))?.aside).toEqual([base64(LATER_REQUESTS)]);
   });
 
   it("is set aside at a press too: the request opened or accepted isn't there any more, said in words", async () => {
@@ -309,9 +606,9 @@ describe("a requests' record the crate doesn't read (W17, DESIGN-protocol §3.7)
     await withRequests(bob, LATER_REQUESTS);
     bob.restart();
     await expect(bob.messaging.request("preprod", old)).rejects.toThrow("This request isn't in this browser any more.");
-    const stored = (await bob.store.get<Inbox>("messaging.preprod"))!;
+    const stored = (await requestsOf(bob))!;
     expect(stored.requests).toBeUndefined();
-    expect(stored.requestsAside).toEqual([base64(LATER_REQUESTS)]);
+    expect(stored.aside).toEqual([base64(LATER_REQUESTS)]);
     expect((await bob.messaging.overview("preprod")).requests).toEqual([]);
     // A development build's, at Reply: dropped, the request it listed counted.
     const fresh = await alice.messaging.start("preprod", BOB_SEEDELF, "another");
@@ -320,9 +617,9 @@ describe("a requests' record the crate doesn't read (W17, DESIGN-protocol §3.7)
     await withRequests(bob, DEV_REQUESTS);
     bob.restart();
     await expect(bob.messaging.accept("preprod", fresh)).rejects.toThrow("This request isn't in this browser any more.");
-    const after = (await bob.store.get<Inbox>("messaging.preprod"))!;
+    const after = (await requestsOf(bob))!;
     expect(after.requests).toBeUndefined();
-    expect(after.requestsAside).toEqual([base64(LATER_REQUESTS)]);
+    expect(after.aside).toEqual([base64(LATER_REQUESTS)]);
     expect((await bob.messaging.overview("preprod"))).toMatchObject({ requests: [], dropped: 1 });
   });
 
@@ -337,7 +634,8 @@ describe("a requests' record the crate doesn't read (W17, DESIGN-protocol §3.7)
     // Its first message read again starts nothing (§5).
     expect(stored.tombstones).toBeDefined();
     expect(Buffer.from(stored.tombstones!, "base64").toString("hex")).toContain(cid);
-    expect(stored.requestsAside).toEqual([base64(LATER_REQUESTS)]);
+    // A conversation's deletion never hands the crate the requests record (round 5): it's as it came.
+    expect((await requestsOf(bob))?.requests).toBe(base64(LATER_REQUESTS));
   });
 
   it("is one in an inbox from before the gate, which kept no list: dropped as it's opened, what was unread counted", async () => {
@@ -361,12 +659,13 @@ describe("a post's answer this version doesn't know (W15, versions-upgrade#6)", 
     relay.up = true;
     const broken = (await fileOf(alice, cid))!.history.at(-2)!.envelope!;
     const real = relay.fetch;
-    let answered500 = 0;
+    // A status §17.2 doesn't give (a 5xx is no answer at all since the freeze's fix C, and never counted).
+    let answered418 = 0;
     relay.fetch = async (url, init) => {
       if (init.method === "POST" && Buffer.from(new Uint8Array(init.body as ArrayBuffer).subarray(8)).toString("hex") === broken) {
         relay.calls.push(`POST ${new URL(url).pathname}`);
-        answered500++;
-        return new Response("internal error", { status: 500 });
+        answered418++;
+        return new Response("I'm a teapot", { status: 418 });
       }
       return real(url, init);
     };
@@ -377,11 +676,11 @@ describe("a post's answer this version doesn't know (W15, versions-upgrade#6)", 
     await synced(alice);
     await synced(alice);
     const entry = (await alice.messaging.thread("preprod", cid)).messages.at(-2)!;
-    expect(answered500).toBe(3);
+    expect(answered418).toBe(3);
     expect(entry).toMatchObject({ sent: "refused", refusedBy: "server", resend: true });
     // No more tries by itself; Send again posts the same bytes once the server takes them.
     await synced(alice);
-    expect(answered500).toBe(3);
+    expect(answered418).toBe(3);
     relay.fetch = real;
     await alice.messaging.resend("preprod", cid, entry.id);
     await alice.messaging.whenIdle();

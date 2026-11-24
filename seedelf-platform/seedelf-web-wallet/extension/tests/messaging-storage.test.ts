@@ -33,6 +33,7 @@ import {
   turnOn,
   usedBytes,
   withQuota,
+  requestsOf,
 } from "./messaging-harness";
 
 const asHex = (base64: string) => Buffer.from(base64, "base64").toString("hex");
@@ -293,19 +294,21 @@ describe("what Messages keeps on the device (W7)", { timeout: 30_000 }, () => {
     const stored = (await alice.store.get<ConversationFile>(await recordName(alice, cid)))!;
     // The crate reads the stored state once it's turned back from base64...
     expect((JSON.parse(wasm.messagingConversationInfo(asHex(stored.state))) as { cid: string }).cid).toBe(cid);
-    // ...and the pending envelope is its 512 bytes, so written.
+    // ...and the pending envelope is its 2,048 bytes (a short text padded to its first-contact size, O1 b), so written.
     const pending = stored.history.at(-1)!;
     expect(pending.sent).toBe("pending");
-    expect(Buffer.from(pending.envelope!, "base64")).toHaveLength(512);
-    // A request's record too, in the inbox.
+    expect(Buffer.from(pending.envelope!, "base64")).toHaveLength(2048);
+    // A request's record too, in its own record since round 5.
     relay.up = true;
     const carol = await party(15, relay, directory, CAROL_SEEDELF);
     await turnOn(carol);
     const request = await carol.messaging.start("preprod", BOB_SEEDELF, "a request");
     await carol.messaging.whenIdle();
     await synced(bob);
-    const inbox = (await bob.store.get<Inbox>("messaging.preprod"))!;
-    expect((JSON.parse(wasm.messagingRequestsInfo(asHex(inbox.requests!))) as Array<{ cid: string }>).map((r) => r.cid)).toEqual([request]);
+    const requests = (await requestsOf(bob))!;
+    expect((JSON.parse(wasm.messagingRequestsInfo(asHex(requests.requests!))) as Array<{ cid: string }>).map((r) => r.cid)).toEqual([request]);
+    // The inbox keeps none of them, only what the list shows.
+    expect((await bob.store.get<Record<string, unknown>>("messaging.preprod"))!.requests).toBeUndefined();
   });
 
   it("writes nothing when a sync takes nothing and its cursor doesn't move, an hour on too (worker-net#6, cross-feature#6, docs-claims#18)", async () => {

@@ -6,7 +6,9 @@
 //! what it held (a crash between snapshots, a deleted file) still numbers
 //! above every cursor it gave out; after a crash, also far above its last
 //! save's, should the clock have gone back. A reader asks for what follows its
-//! cursor. `forgotten` is the highest number the pool no longer has, or
+//! cursor: a page's cursor is its last envelope's number while more
+//! follows, and the last number given out once nothing does, as an empty
+//! page's is. `forgotten` is the highest number the pool no longer has, or
 //! may never have saved: a cursor below it may have missed something, and
 //! the page says so (its `gap` flag). That's all a number says: no time.
 
@@ -36,6 +38,10 @@ pub const GAP: u8 = 2;
 
 /// The snapshot's format version.
 const SNAPSHOT_VERSION: u8 = 1;
+
+/// A full pool's wait is rounded up to this many seconds, so it doesn't
+/// say the second its oldest envelope came (the 1.10.0 gate's FI-12).
+pub const ROUNDED: u64 = 600;
 
 /// More numbers than a pool gives out between two saves, many times over:
 /// mainnet's cap holds 2^17 of the shortest envelopes, and a save comes
@@ -180,11 +186,7 @@ impl Held {
         if let Some(expires) = self.already(&digest) {
             return Ok(Kept::Already { expires });
         }
-        if self.bytes + bytes.len() > cap {
-            // Room comes when the oldest expires; ask again within the hour.
-            let oldest = self.entries.front().map_or(now, |e| e.came);
-            return Err(Full((oldest + KEPT_FOR - now).clamp(60, 3600) as u64));
-        }
+        self.room(bytes.len(), cap, now)?;
         let number = self.next;
         self.next += 1;
         self.bytes += bytes.len();
@@ -201,6 +203,19 @@ impl Held {
         })
     }
 
+    /// Whether `size` more bytes fit under `cap`, or how long until room
+    /// may come: when the oldest expires, rounded up to 10 minutes, at most
+    /// an hour, so the wait says nothing of when the oldest came. As of
+    /// the last `expire`.
+    pub fn room(&self, size: usize, cap: usize, now: i64) -> Result<(), Full> {
+        if self.bytes + size <= cap {
+            return Ok(());
+        }
+        let oldest = self.entries.front().map_or(now, |e| e.came);
+        let left = (oldest + KEPT_FOR - now).clamp(60, 3600) as u64;
+        Err(Full((left.div_ceil(ROUNDED) * ROUNDED).min(3600)))
+    }
+
     /// Whole envelopes after `after` (from the oldest without one), at most
     /// `limit` bytes but always one, and the cursor to ask from next.
     pub fn page(&mut self, after: Option<u64>, limit: usize, now: i64) -> Page {
@@ -209,15 +224,14 @@ impl Held {
 
     /// [`Held::page`] whose encoding, [`PAGE_HEADER`] bytes and
     /// [`LENGTH_LEN`] before each envelope, is at most `most` bytes: as many
-    /// whole envelopes as fit, with `MORE` when any are left. None when the
-    /// first alone doesn't fit: a page holds whole envelopes, and an empty
-    /// one's cursor would step over it.
-    pub fn page_within(&mut self, after: Option<u64>, most: usize, now: i64) -> Option<Page> {
-        let page = self.page_while(after, now, |count, bytes| {
-            (count == 1 || bytes <= PAGE_BYTES) && PAGE_HEADER + count * LENGTH_LEN + bytes <= most
-        });
-        let cut_before_any = page.envelopes.is_empty() && page.flags & MORE != 0;
-        (!cut_before_any).then_some(page)
+    /// whole envelopes as fit, with `MORE` when any are left. A first
+    /// envelope longer than that by itself is the page alone: a page holds
+    /// whole envelopes, an empty one's cursor would step over it, and a
+    /// refusal would stop every reader behind it (the 1.10.0 gate's FI-5).
+    pub fn page_within(&mut self, after: Option<u64>, most: usize, now: i64) -> Page {
+        self.page_while(after, now, |count, bytes| {
+            count == 1 || (bytes <= PAGE_BYTES && PAGE_HEADER + count * LENGTH_LEN + bytes <= most)
+        })
     }
 
     /// Whole envelopes after `after` for as long as `fits` (how many they'd
@@ -250,6 +264,13 @@ impl Held {
             size += entry.bytes.len();
             cursor = entry.number;
             envelopes.push(entry.bytes.clone());
+        }
+        // Nothing follows: the last number given out, as an empty page's
+        // cursor, so a page that ends on envelopes restored after a crash
+        // doesn't read as a gap next time (the 1.10.0 gate's FI-8). Every
+        // number held is at most it, and every later one above it.
+        if flags & MORE == 0 {
+            cursor = last_given;
         }
         Page {
             flags,
@@ -533,11 +554,23 @@ mod tests {
             held.insert(held_digest, &held_bytes, NOW, 1024),
             Ok(Kept::Already { .. })
         ));
-        // Near the oldest's 36 hours, the wait is what's left of them.
+        // Near the oldest's 36 hours, the wait is what's left of them,
+        // rounded up to 10 minutes: never the second the oldest came.
         assert_eq!(
             held.insert(digest, &bytes, NOW + KEPT_FOR - 120, 1024),
-            Err(Full(120))
+            Err(Full(600))
         );
+        for left in [1, 60, 599, 600, 601, 1801, 3599, 3600, 7200] {
+            let Err(Full(wait)) = held.room(512, 1024, NOW + KEPT_FOR - left) else {
+                panic!("full")
+            };
+            assert!(
+                wait % 600 == 0 && (600..=3600).contains(&wait),
+                "{left}: {wait}"
+            );
+            assert!(wait as i64 >= left.min(3600), "{left}: {wait}");
+        }
+        assert_eq!(held.room(0, 1024, NOW), Ok(()));
         assert!(held.insert(digest, &bytes, NOW + KEPT_FOR, 1024).is_ok());
     }
 
@@ -692,6 +725,59 @@ mod tests {
         let snapshot = Snapshot::decode(&held.snapshot().encode()).unwrap();
         let back = Held::restore(snapshot, true, "mainnet", NOW + KEPT_FOR, MICROS);
         assert_eq!(back.len(), 1);
+    }
+
+    /// The 1.10.0 gate's FI-8 (the relay review's N1): after a start
+    /// without the clean mark, a reader with no cursor whose last page
+    /// ends on a restored envelope isn't told of a gap on its next read. A
+    /// cursor from before the crash still is, and after a clean stop
+    /// nothing changes.
+    #[test]
+    fn after_a_crash_a_fresh_reader_is_told_of_no_gap_and_an_earlier_one_is() {
+        for (count, clean, pages) in [
+            (10u32, false, vec![(0, 10), (0, 0), (0, 0)]),
+            (600, false, vec![(MORE, 512), (GAP, 88), (0, 0), (0, 0)]),
+            (10, true, vec![(0, 10), (0, 0), (0, 0)]),
+            (600, true, vec![(MORE, 512), (0, 88), (0, 0), (0, 0)]),
+        ] {
+            let mut held = Held::new(MICROS);
+            for i in 0..count {
+                keep(&mut held, i, NOW);
+            }
+            let earlier = held.page(None, PAGE_BYTES, NOW).cursor;
+            let snapshot = Snapshot::decode(&held.snapshot().encode()).unwrap();
+            let mut back = Held::restore(snapshot, clean, "mainnet", NOW + 40, MICROS + 40_000_000);
+            let (mut after, mut seen) = (None, vec![]);
+            for _ in 0..pages.len() {
+                let page = back.page(after, PAGE_BYTES, NOW + 40);
+                seen.push((page.flags, page.envelopes.len()));
+                after = Some(page.cursor);
+            }
+            assert_eq!(seen, pages, "{count} restored, clean {clean}");
+            let told = back.page(Some(earlier), PAGE_BYTES, NOW + 40).flags & GAP != 0;
+            assert_eq!(told, !clean, "{count} restored, clean {clean}");
+        }
+    }
+
+    /// The 1.10.0 gate's FI-5: within a reserve's limit, a first envelope
+    /// longer than it is the page alone, never a refusal, and the pages
+    /// after it go on as ever.
+    #[test]
+    fn a_page_within_a_limit_carries_a_longer_first_envelope_alone() {
+        let mut held = Held::new(MICROS);
+        let long = vec![9u8; 32768];
+        let digest = crate::messaging::check::stamp_digest("mainnet", &long);
+        held.insert(digest, &long, NOW, CAP).unwrap();
+        keep(&mut held, 1, NOW);
+        keep(&mut held, 2, NOW);
+        let page = held.page_within(None, 16 * 1024, NOW);
+        assert_eq!(page.flags, MORE);
+        assert_eq!(page.envelopes, vec![Bytes::from(long)]);
+        let page = held.page_within(Some(page.cursor), 16 * 1024, NOW);
+        assert_eq!((page.flags, ids(&page)), (0, vec![1, 2]));
+        // Within 1 KiB too: the long one alone, and more to follow.
+        let page = held.page_within(None, 1024, NOW);
+        assert_eq!((page.flags, page.envelopes.len()), (MORE, 1));
     }
 
     #[test]

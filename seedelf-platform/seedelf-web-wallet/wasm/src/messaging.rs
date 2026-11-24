@@ -643,13 +643,19 @@ pub struct Sent {
     /// The new record, to store with the envelope before posting it
     /// (protocol.md §4.2).
     pub conversation: Secret,
-    /// The envelope: 512, 2,048, 8,192 or 32,768 bytes.
+    /// The envelope: 2,048, 8,192 or 32,768 bytes, the size its text would
+    /// take as a first-contact message (protocol.md §9). Never 512 bytes,
+    /// which a reader still takes.
     pub envelope: String,
 }
 
 /// The next message of a conversation, sealed in its envelope: a
-/// first-contact message until the initiator has a reply. No key: the
-/// record holds the chain. Before a reply, the writer's share is 16
+/// first-contact message until the initiator has a reply. Every message,
+/// either side's, before a reply and after one, is padded to the envelope
+/// its text would take as a first-contact message, so a reply taken changes
+/// no size, and a text whose first-contact form doesn't fit 32 KiB is
+/// refused, `message_too_large` (protocol.md §9). No key: the record holds
+/// the chain. Before a reply, the writer's share is 16
 /// first-contact messages and 64 KiB of them (protocol.md §3.1,
 /// [`ConversationInfo::first_contact_left`]): one past it is refused,
 /// `request_full`, before the chain moves.
@@ -1051,8 +1057,11 @@ pub struct ConversationInfo {
     /// Messages sent in the current sending chain.
     pub sent_in_chain: u32,
     /// The longest text the next message can carry, in bytes: the largest
-    /// envelope's room and, before a reply, what's left of the share's; 0
-    /// once that's used up.
+    /// envelope's room for it as a first-contact message of this
+    /// conversation, which every message is padded as (protocol.md §9),
+    /// before a reply and after one, at either side: 32,768 − 145 − 1 −
+    /// (F + 97), 31,987 to 32,243. And, before a reply, what's left of the
+    /// share's; 0 once that's used up.
     pub max_text_len: usize,
     /// What's left of the writer's share while this side sends first-contact
     /// messages, the initiator until a reply decrypts (protocol.md §3.1);

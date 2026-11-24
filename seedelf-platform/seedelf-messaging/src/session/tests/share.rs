@@ -110,7 +110,8 @@ fn a_first_contact_header_past_the_share_does_not_parse() {
 /// count is the reader's. The 17th is refused before the chain moves, with
 /// nothing drawn and the state as it was, stored or not, and
 /// `max_text_len` says 0. A reply lifts the share: from then on only the
-/// envelope bounds a message. The responder never has one.
+/// envelope bounds a message, with the room a first-contact message has.
+/// The responder never has one.
 #[test]
 fn the_writer_sends_sixteen_first_contact_messages_and_no_seventeenth() {
     let (alice, bob) = (key("alice"), key("bob"));
@@ -168,7 +169,12 @@ fn the_writer_sends_sixteen_first_contact_messages_and_no_seventeenth() {
         .unwrap();
     assert_eq!(a.first_contact_left(), None);
     assert_eq!(a.first_contact_sent, None);
-    assert_eq!(a.max_text_len(), 32_517);
+    // The envelope's room as a first-contact message, as before the reply.
+    assert_eq!(
+        a.max_text_len(),
+        inner_capacity(MAX_ENVELOPE_LEN) - overhead(&a)
+    );
+    assert_eq!(a.max_text_len(), 32_015);
     let next = a.send_with(b"m16, after the reply", &mut draw).unwrap();
     assert!(matches!(
         inbox.receive(&bob, &mine, &next, T),

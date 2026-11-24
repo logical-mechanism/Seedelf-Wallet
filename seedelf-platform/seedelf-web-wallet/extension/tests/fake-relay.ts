@@ -29,9 +29,9 @@ export interface FakeRelay {
   /**
    * A client of `pool`, as the worker makes one, with a rate limit of its own that never waits on the test's clock: a
    * hold (a 429's) passes on a clock of the limit's own, at once. `seen` is told each of its requests, as `calls` names
-   * them, before the relay answers.
+   * them (with what it sends), before the relay answers.
    */
-  client(pool: NetworkName, seen?: (call: string) => void): RelayClient;
+  client(pool: NetworkName, seen?: (call: string, init: RequestInit) => void): RelayClient;
   pools: Map<string, { held: Held[]; next: bigint }>;
   /** The bits a post must show, for every size. */
   price: number;
@@ -111,7 +111,7 @@ export function fakeRelay(clock: { now: number } = { now: Date.now() }): FakeRel
         // Read at each request: a test may put its own `fetch` in the relay's place.
         fetch: (url, init) => {
           const u = new URL(url);
-          seen?.(`${init.method} ${u.pathname}${u.search}`);
+          seen?.(`${init.method} ${u.pathname}${u.search}`, init);
           return relay.fetch(url, init);
         },
         limit: new RateLimit(

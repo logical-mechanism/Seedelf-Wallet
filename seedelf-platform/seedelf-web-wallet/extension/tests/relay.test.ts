@@ -16,6 +16,7 @@ import {
   RelayDayRead,
   RelayDown,
   RelayNotAsked,
+  relayAnswered,
   RelayStopped,
   RelayUnknown,
 } from "../src/background/relay";
@@ -311,11 +312,11 @@ describe("the relay's answers to a post (§17.2)", { timeout: 20_000 }, () => {
   });
 
   it("says the relay answered something this version doesn't know, apart from no answer at all (W15, versions-upgrade#6)", async () => {
-    for (const answer of [json(200, { kept: "new" }), json(402, { price: -1 }), json(402, { price: 18.5 }), json(402, { price: "18" }), json(500, {}), json(404, {}), json(426, {})]) {
+    for (const answer of [json(200, { kept: "new" }), json(402, { price: -1 }), json(402, { price: 18.5 }), json(402, { price: "18" }), json(201, {}), json(404, {}), json(418, {}), json(426, {})]) {
       await expect(client(answer).relay.post(new Uint8Array(1))).rejects.toThrow(RelayUnknown);
     }
     // Still a relay that didn't take it, for whatever asks only that.
-    await expect(client(json(500, {})).relay.post(new Uint8Array(1))).rejects.toThrow(RelayDown);
+    await expect(client(json(404, {})).relay.post(new Uint8Array(1))).rejects.toThrow(RelayDown);
     // An answer far longer than any the relay gives isn't read to its end.
     const long = () => new Response(JSON.stringify({ kept: "new", expires: 5, pad: "x".repeat(1024 * 1024) }), { status: 200 });
     await expect(client(long).relay.post(new Uint8Array(1))).rejects.toThrow(RelayDown);
@@ -362,5 +363,139 @@ describe("the relay's answers to a post (§17.2)", { timeout: 20_000 }, () => {
     // A wait named past the longest any of §17.4's is, held to it; one that isn't a number, a minute.
     expect(await post(99, { "retry-after": String(40 * 3600) })).toEqual({ kind: "price", bits: 99, retryAfterMs: 37 * 3600_000 });
     expect(await post(30, { "retry-after": "soon" })).toEqual({ kind: "price", bits: 30, retryAfterMs: 60_000 });
+  });
+
+  it("says a proxy's 5xx but 503 is no answer, and a 408 a size's minute (the 1.10.0 gate's freeze fix C)", async () => {
+    // 500, 502 and 504: the relay wasn't reached (Caddy's own, where Chrome's access to sites lifts CORS). No answer:
+    // never a strike against the envelope, and no answer of the relay's own.
+    for (const status of [500, 502, 504, 599]) {
+      const thrown = await client(() => new Response("bad gateway", { status })).relay.post(new Uint8Array(1)).catch((e: unknown) => e);
+      expect(thrown).toBeInstanceOf(RelayDown);
+      expect(thrown).not.toBeInstanceOf(RelayUnknown);
+      expect((thrown as RelayDown).status).toBe(status);
+      expect(relayAnswered(thrown)).toBe(false);
+    }
+    // The edge's 408 for a body that broke off or came too slowly (relay2's item 2): that size waits a minute, whatever
+    // the answer says.
+    expect(await client(json(408, { error: "the request's body didn't arrive" }, { "retry-after": "5" })).relay.post(new Uint8Array(1))).toEqual({
+      kind: "wait",
+      scope: "size",
+      retryAfterMs: 60_000,
+    });
+    // 201, 404 and 418 stay answers this version doesn't know, each with its status: the relay's own.
+    for (const status of [201, 404, 418]) {
+      const thrown = await client(json(status, {})).relay.post(new Uint8Array(1)).catch((e: unknown) => e);
+      expect(thrown).toBeInstanceOf(RelayUnknown);
+      expect((thrown as RelayDown).status).toBe(status);
+      expect(relayAnswered(thrown)).toBe(true);
+    }
+    // A 503 is the server's own bound: an answer.
+    expect(relayAnswered(new RelayDown("the relay answered 503", 503))).toBe(true);
+  });
+
+  it("reads every answer of relay2's relay as it means it, the three strings byte for byte (the 1.10.0 gate's round 5)", async () => {
+    let now = 0;
+    const clocked = () => new RateLimit(1_000_000, 1000, () => now, async (ms) => void (now += ms));
+    const words = (status: number, error: string, retryAfter?: string) => () =>
+      new Response(JSON.stringify({ error }), { status, headers: { "content-type": "application/json", ...(retryAfter ? { "retry-after": retryAfter } : {}) } });
+    // The floor's new words for a post: a wait of that size, as long as it says, never an answer this version doesn't know.
+    expect(await client(words(429, "too many posts to this pool for now", "90")).relay.post(new Uint8Array(1))).toEqual({
+      kind: "wait",
+      scope: "size",
+      retryAfterMs: 90_000,
+    });
+    // The totals' "busy" (relay2's item 4): every post of the network waits its 30 s.
+    expect(await client(words(503, "busy", "30")).relay.post(new Uint8Array(1))).toEqual({ kind: "wait", scope: "network", retryAfterMs: 30_000 });
+    // A full pool's Retry-After, 600 to 3,600 (relay2's item 14): every post waits it.
+    for (const seconds of [600, 1200, 3600]) {
+      expect(await client(words(503, "the pool is full", String(seconds))).relay.post(new Uint8Array(1))).toEqual({
+        kind: "wait",
+        scope: "network",
+        retryAfterMs: seconds * 1000,
+      });
+    }
+    // The edge's two, exactly: "slow down" holds every request; "too many requests at once" a second.
+    const slow = clocked();
+    const held = new RelayClient({ origin: "https://relay.test", pool: "mainnet", limit: slow, fetch: async () => words(429, "slow down", "20")() });
+    expect(await held.post(new Uint8Array(1))).toEqual({ kind: "wait", scope: "network", retryAfterMs: 20_000 });
+    expect(slow.holding()).toBe(20_000);
+    now += 20_000;
+    const busy = new RelayClient({ origin: "https://relay.test", pool: "mainnet", limit: slow, fetch: async () => words(429, "too many requests at once", "1")() });
+    expect(await busy.post(new Uint8Array(1))).toEqual({ kind: "wait", scope: "network", retryAfterMs: 1000 });
+    // A word off is another of the relay's own 429s: that size.
+    expect(await client(words(429, "Slow down", "20")).relay.post(new Uint8Array(1))).toEqual({ kind: "wait", scope: "size", retryAfterMs: 20_000 });
+    // The day's 429 for a page, the reserve's refusal now too (relay2's item 9), held as long as it says: a minute past
+    // midnight UTC at most, under the day and the hour.
+    const day = await client(words(429, "this address has read its share of the pool for the day", String(5 * 3600)))
+      .relay.page()
+      .catch((e: unknown) => e);
+    expect(day).toBeInstanceOf(RelayDayRead);
+    expect((day as RelayDayRead).retryAfterMs).toBe(5 * 3600_000);
+    expect(relayAnswered(day)).toBe(true);
+    // The JSON 413 with CORS past 8 + 32,768 bytes (relay2's item 3): never as it is. A 400 too.
+    expect(await client(words(413, "the body is larger than this route takes")).relay.post(new Uint8Array(1))).toEqual({ kind: "refused", status: 413 });
+    expect(await client(words(400, "this route takes no body")).relay.post(new Uint8Array(1))).toEqual({ kind: "refused", status: 400 });
+    // An already's expires rounded down to 600 s (relay2's item 13): kept, as the relay's own.
+    expect(await client(json(200, { kept: "already", expires: 1_900_000_200 })).relay.post(new Uint8Array(1))).toEqual({
+      kind: "kept",
+      expires: 1_900_000_200_000,
+      fresh: false,
+    });
+  });
+});
+
+describe("relay2's pages (the 1.10.0 gate's round 5)", { timeout: 20_000 }, () => {
+  it("reads the reserve's page of one long envelope, 32,788 bytes with its Content-Length, inside the page's bound", async () => {
+    const one = page({ envelopes: [32768] });
+    expect(one.length).toBe(32_788);
+    expect(one.length).toBeLessThanOrEqual(PAGE_BODY_MAX_BYTES);
+    const read = await client(
+      () => new Response(one as BodyInit, { status: 200, headers: { "content-type": "application/octet-stream", "content-length": String(one.length) } }),
+    ).relay.page("7");
+    expect(read.envelopes.map((e) => e.length / 2)).toEqual([32768]);
+  });
+
+  it("takes a 2,048-byte post's price as the page says it, usually the 512-byte one's (relay2's item 15)", () => {
+    expect(readPage(page({ prices: [18, 18, 22, 24] })).prices).toEqual([18, 18, 22, 24]);
+  });
+
+  it("reads a final page's cursor as the last number given out, whatever it is (relay2's item 10)", () => {
+    const last = readPage(page({ envelopes: [], cursor: 18_446_744_073_709_551_615n }));
+    expect(last).toMatchObject({ more: false, cursor: "18446744073709551615", envelopes: [] });
+  });
+
+  it("says a page's status as it came: a 503 is the relay's own answer, a proxy's 502 none", async () => {
+    const busy = await client(() => new Response(JSON.stringify({ error: "busy" }), { status: 503, headers: { "retry-after": "30" } }))
+      .relay.page()
+      .catch((e: unknown) => e);
+    expect(busy).toBeInstanceOf(RelayDown);
+    expect((busy as RelayDown).status).toBe(503);
+    expect(relayAnswered(busy)).toBe(true);
+    const proxy = await client(() => new Response("bad gateway", { status: 502 })).relay.page().catch((e: unknown) => e);
+    expect((proxy as RelayDown).status).toBe(502);
+    expect(relayAnswered(proxy)).toBe(false);
+    // A 410's off switch is no answer that ends it; a fetch that failed none at all.
+    expect(relayAnswered(await client(() => new Response(null, { status: 410 })).relay.page().catch((e: unknown) => e))).toBe(false);
+    const lost = new RelayClient({ origin: "https://relay.test", pool: "preprod", limit: never(), fetch: async () => { throw new TypeError("Failed to fetch"); } });
+    expect(relayAnswered(await lost.page().catch((e: unknown) => e))).toBe(false);
+  });
+
+  it("paces its pages on the monotonic clock: the device's clock set back an hour holds the next page no more than 31 s (fix E)", async () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000 });
+    try {
+      const empty = new Uint8Array(16);
+      empty[0] = 1;
+      // The origin's shared limit: a client with none of its own, as the worker makes one.
+      const relay = new RelayClient({ origin: "https://clock-back.relay.test", pool: "mainnet", fetch: async () => new Response(empty, { status: 200 }) });
+      for (let i = 0; i < PAGES_A_SYNC; i++) await relay.page();
+      vi.setSystemTime(Date.now() - 3600_000);
+      let done = false;
+      const next = relay.page().then(() => void (done = true));
+      await vi.advanceTimersByTimeAsync(31_000);
+      await next;
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

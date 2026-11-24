@@ -78,8 +78,9 @@ describe("Messages' switches (W6)", { timeout: 30_000 }, () => {
     await bob.wallet.lock();
     await bob.wallet.unlock(PASSWORD);
     relay.calls.length = 0;
-    // The unlock's run, as sw.ts makes it.
+    // The unlock's run, as sw.ts makes it: the tidying is the runner's, in the background (round 5).
     await bob.messaging.syncAll(["preprod", "mainnet"]);
+    await bob.messaging.whenIdle();
     expect(await bob.local.get(PRIVATE_PREFIX + orphan)).toBeUndefined();
     expect(await tombstones()).toBeLessThan(kept);
     expect(relay.calls).toEqual([]);

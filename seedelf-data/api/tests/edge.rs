@@ -246,38 +246,120 @@ async fn past_the_months_ceiling_only_health_answers() {
 }
 
 /// The edge reads a request's body itself, within its deadline, and no
-/// more than the largest any route takes (an evaluation's 64 KiB), so a
-/// body past that is a 413 before a route sees it. One within it is the
-/// route's to judge, by its own limit, as before.
+/// more than its route takes (the 1.10.0 gate's FI-4): past that, a 413
+/// before the route sees it, in the edge's own words, with CORS and its
+/// connection closed. One within it is the route's to judge, as before.
 #[tokio::test]
-async fn a_body_past_what_any_route_takes_is_refused_at_the_edge() {
+async fn a_body_past_what_its_route_takes_is_refused_at_the_edge() {
     let app = app(None);
     let posted = |path: &str, bytes: usize| {
         let mut request = from("203.0.113.7", Method::POST, path);
         *request.body_mut() = Body::from(vec![b'{'; bytes]);
         request
     };
+    for (path, most) in [
+        ("/api/v1/ogmios", 64 * 1024),
+        ("/api/v1/submittx", 16 * 1024),
+        ("/api/v1/credential_utxos", 16 * 1024),
+        ("/messaging/v1/mainnet/envelopes", 8 + 32_768),
+    ] {
+        let response = app.clone().oneshot(posted(path, most + 1)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE, "{path}");
+        assert_eq!(response.headers()["access-control-allow-origin"], WALLET);
+        assert_eq!(response.headers()[header::CONNECTION], "close");
+        assert_eq!(
+            body(response).await["error"],
+            "the body is larger than this route takes"
+        );
+        // At its most the route has it.
+        let response = app.clone().oneshot(posted(path, most)).await.unwrap();
+        assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE, "{path}");
+    }
+}
+
+/// The 1.10.0 gate's FI-4: a body on a route that takes none, by any
+/// method, is refused unread with a 400, before its address is counted or
+/// charged, so no request holds a body open at a GET's price.
+#[tokio::test]
+async fn a_body_on_a_route_that_takes_none_is_refused_unread() {
+    let app = app(None);
+    for (method, path) in [
+        (Method::POST, "/health"),
+        (Method::POST, "/api/v1/tip"),
+        (Method::POST, "/seedelf/v1/mainnet/names"),
+        (Method::POST, "/nowhere"),
+        (Method::PUT, "/messaging/v1/mainnet/envelopes"),
+        (Method::GET, "/messaging/v1/mainnet/envelopes"),
+        (Method::GET, "/api/v1/tip"),
+        (Method::DELETE, "/api/v1/credential_utxos"),
+    ] {
+        let mut request = from("203.0.113.7", method.clone(), path);
+        *request.body_mut() = Body::from(vec![b'{'; 10]);
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{method} {path}"
+        );
+        assert_eq!(response.headers()["access-control-allow-origin"], WALLET);
+        assert_eq!(response.headers()[header::CONNECTION], "close");
+        assert_eq!(body(response).await["error"], "this route takes no body");
+    }
+    // The same without a body: each route's own answer.
     let response = app
         .clone()
-        .oneshot(posted("/api/v1/ogmios", 64 * 1024 + 1))
+        .oneshot(from("203.0.113.7", Method::POST, "/health"))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(
-        body(response).await["error"],
-        "the body is larger than any route takes"
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    let response = app
+        .oneshot(from("203.0.113.7", Method::GET, "/health"))
+        .await
+        .unwrap();
+    assert!(
+        response
+            .headers()
+            .contains_key("access-control-allow-origin")
     );
-    // At 64 KiB the route has it: Ogmios isn't configured here.
-    let response = app
-        .clone()
-        .oneshot(posted("/api/v1/ogmios", 64 * 1024))
-        .await
-        .unwrap();
-    assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    // A route with a smaller limit answers its own 413.
-    let response = app
-        .oneshot(posted("/api/v1/submittx", 16 * 1024 + 1))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// Every route that takes a body answers a POST with one (FI-4's table
+/// beside the routers: none is refused for having one).
+#[tokio::test]
+async fn every_route_that_takes_a_body_is_given_it() {
+    let app = app(None);
+    let mut paths: Vec<String> = seedelf_data_api::public::POSTS
+        .iter()
+        .map(|path| path.to_string())
+        .collect();
+    paths.extend(
+        [
+            "/api/v1/submittx",
+            "/api/v1/ogmios",
+            "/messaging/v1/mainnet/envelopes",
+            "/messaging/v1/preprod/envelopes",
+        ]
+        .map(String::from),
+    );
+    for path in paths {
+        let mut request = from("203.0.113.7", Method::POST, &path);
+        request
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        *request.body_mut() = Body::from(&b"{}"[..]);
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        assert!(
+            ![
+                StatusCode::METHOD_NOT_ALLOWED,
+                StatusCode::NOT_FOUND,
+                StatusCode::PAYLOAD_TOO_LARGE
+            ]
+            .contains(&status),
+            "{path}: {status}"
+        );
+        let words = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let words = String::from_utf8_lossy(&words);
+        assert!(!words.contains("takes no body"), "{path}: {words}");
+    }
 }

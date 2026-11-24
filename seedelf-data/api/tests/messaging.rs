@@ -318,11 +318,13 @@ async fn too_little_work_is_told_the_price_and_the_same_bytes_are_kept_once() {
     assert_eq!(body["price"], 16);
     let (status, body) = post(&app, "203.0.113.7", post_body(&bytes, 16)).await;
     assert_eq!((status, &body["kept"]), (StatusCode::OK, &"new".into()));
-    // The same bytes again: already held, whatever the stamp.
+    // The same bytes again: already held, whatever the stamp, with the
+    // copy's expiry to the 10 minutes (the 1.10.0 gate's FI-12).
     let (status, again) = post(&app, "203.0.113.7", unpaid(&bytes)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(again["kept"], "already");
-    assert_eq!(again["expires"], body["expires"]);
+    let expires = body["expires"].as_i64().unwrap();
+    assert_eq!(again["expires"], expires - expires % 600);
     assert_eq!(page(&app, "203.0.113.9", None).await.envelopes.len(), 1);
 }
 
@@ -775,10 +777,11 @@ async fn the_window_counts_units_and_the_page_says_which_sizes_wait() {
 async fn past_the_prices_ceiling_a_post_waits_and_the_page_says_0() {
     let Relayed { app, .. } = relayed(Relay::with_pools(None, &LOW_CEILING));
     let me = "203.0.113.7";
-    // A short post costs 2 bits; anything longer is past the ceiling now.
-    assert_eq!(page(&app, me, None).await.prices, [2, 0, 0, 0]);
+    // A short post costs 2 bits, and so does one of 2 KiB (the 1.10.0
+    // gate's O7: a unit each); anything longer is past the ceiling now.
+    assert_eq!(page(&app, me, None).await.prices, [2, 2, 0, 0]);
     // A longer one never fits, however long it waits: an hour, the most.
-    let (status, body, retry) = post_waiting(&app, me, nonce_zero(&envelope("2,048 bytes"))).await;
+    let (status, body, retry) = post_waiting(&app, me, nonce_zero(&envelope("8,192 bytes"))).await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(body["error"], "too many posts from this address for now");
     assert_eq!(retry, Some(3600));
@@ -799,7 +802,7 @@ async fn past_the_prices_ceiling_a_post_waits_and_the_page_says_0() {
     let (_, _, zero) = post_waiting(&app, me, nonce_zero(&short(2))).await;
     assert!(zero.unwrap().abs_diff(retry) <= 15, "{zero:?} {retry}");
     // Another address is priced as ever.
-    assert_eq!(page(&app, "198.51.100.1", None).await.prices, [2, 0, 0, 0]);
+    assert_eq!(page(&app, "198.51.100.1", None).await.prices, [2, 2, 0, 0]);
 }
 
 /// §17.4: "When the price refuses too, the 429 waits for the later of the
@@ -819,10 +822,10 @@ async fn when_the_price_and_the_window_both_refuse_the_429_waits_for_the_later()
     assert!((36 * 3600 + 1..=37 * 3600).contains(&retry), "{retry}");
 }
 
-/// §17.2's row 7 through the app: a full pool is a 503 whose `Retry-After`
+/// §17.2's row 6 through the app: a full pool is a 503 whose `Retry-After`
 /// is when its oldest expire, at most an hour, for every address; what's
 /// held is still "already"; and a post refused for room isn't counted
-/// against its address (§17.4, "Only kept posts are counted").
+/// against its address (§17.4, "Kept posts are counted").
 #[tokio::test]
 async fn a_full_pool_is_a_503_until_its_oldest_expire() {
     let Relayed { app, relay, .. } = relayed(Relay::with_pools(None, &TWO_SHORT));
@@ -845,30 +848,38 @@ async fn a_full_pool_is_a_503_until_its_oldest_expire() {
     assert_eq!(relay.health()["preprod"]["bytes"], 1024);
 }
 
-/// §17.4, "Only kept posts are counted": a 402, a 400 for a bad point and
-/// an "already" leave the address's price and its window as they were. The
-/// window holds two, so after one kept post any of them counted in it would
-/// fill it, and the page would say 0 for every size.
+/// §17.4, "Kept posts are counted", and posts refused at their points
+/// against their own address (the 1.10.0 gate's FI-10): a 402 and an
+/// "already" leave the address's price and its window as they were, and a
+/// 400 for a bad point raises its address's price alone. The window holds
+/// two, so after one kept post any of them counted in it would fill it,
+/// and the page would say 0 for every size.
 #[tokio::test]
-async fn only_kept_posts_are_counted() {
+async fn only_kept_posts_and_bad_points_are_counted() {
     let Relayed { app, .. } = relayed(Relay::with_pools(None, &LOW_CEILING_TWO));
     let me = "203.0.113.7";
     let (status, _) = post(&app, me, post_body(&short(1), 2)).await;
     assert_eq!(status, StatusCode::OK);
     // One kept: a short post costs 3 bits now, the most, and fits the window.
-    assert_eq!(page(&app, me, None).await.prices, [3, 0, 0, 0]);
+    assert_eq!(page(&app, me, None).await.prices, [3, 3, 0, 0]);
     let (status, _) = post(&app, me, unpaid(&short(2))).await;
     assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
-    let (status, _) = post(&app, me, post_body(&envelope("c is outside G1"), 3)).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, body) = post(&app, me, unpaid(&short(1))).await;
     assert_eq!((status, &body["kept"]), (StatusCode::OK, &"already".into()));
-    // None of them counted: had one, a short post would be past the ceiling
-    // or the window.
-    assert_eq!(page(&app, me, None).await.prices, [3, 0, 0, 0]);
-    let (status, _) = post(&app, me, post_body(&short(2), 3)).await;
-    assert_eq!(status, StatusCode::OK);
+    // Neither counted: had one, a short post would be past the ceiling or
+    // the window.
+    assert_eq!(page(&app, me, None).await.prices, [3, 3, 0, 0]);
+    // A bad point is counted against its address: its next short post is
+    // past the ceiling. The window holds nothing more of it.
+    let (status, _) = post(&app, me, post_body(&envelope("c is outside G1"), 3)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(page(&app, me, None).await.prices, [0; 4]);
+    // Another address isn't: the floor every sender pays is as it was.
+    let other = "198.51.100.1";
+    assert_eq!(page(&app, other, None).await.prices, [2, 2, 0, 0]);
+    let (status, _) = post(&app, other, post_body(&short(2), 2)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page(&app, other, None).await.prices, [3, 3, 0, 0]);
 }
 
 /// The pool's name is in the stamp (§17.1, §17.3): work done for preprod's
@@ -974,11 +985,15 @@ async fn read(app: &Router, client: &str, after: Option<u64>) -> (StatusCode, Va
 /// The gate review's relay-server#2: reading costs no work, so readers who
 /// ask for long pages again and again could spend the day's share of
 /// messaging's traffic, and every wallet's messages stopped with it. The
-/// last tenth of the share is kept for short pages and posts.
+/// last tenth of the share is kept for short pages and posts, and each
+/// address reads at most its share of it in a day, both pools together
+/// (the 1.10.0 gate's FI-5). An envelope longer than a short page goes
+/// alone, so no reader stops at it.
 #[tokio::test]
-async fn a_day_spent_on_long_pages_stops_fresh_syncs_before_conversations() {
+async fn a_day_spent_on_long_pages_leaves_the_reserve_to_conversations() {
     let share = 2_000_000;
-    let Relayed { app, edge, .. } = relayed_with_share(Relay::new(None), share);
+    let relay = Relay::new(None).with_reserve_read(40_000);
+    let Relayed { app, edge, .. } = relayed_with_share(relay, share);
     // A reader who is caught up, and holds its cursor.
     let reader = "203.0.113.9";
     let cursor = page(&app, reader, None).await.cursor;
@@ -991,41 +1006,50 @@ async fn a_day_spent_on_long_pages_stops_fresh_syncs_before_conversations() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let cursor = page(&app, reader, Some(cursor)).await.cursor;
+    // The day spent down to its reserve.
+    edge.messaging_egress.add(share * 9 / 10);
+    assert!(edge.reserved());
 
-    // Readers with no cursor ask for the first page until one is refused
-    // for the traffic: each from an address of its own, until its bucket
-    // makes it wait.
-    let mut refused = None;
-    'readers: for i in 1..=64 {
-        let client = format!("198.51.100.{i}");
-        loop {
-            let (status, error, retry) = read(&app, &client, None).await;
-            match status {
-                StatusCode::OK => {}
-                StatusCode::TOO_MANY_REQUESTS => continue 'readers,
-                _ => {
-                    refused = Some((status, error, retry));
-                    break 'readers;
-                }
-            }
-        }
+    // A fresh reader is sent the long envelope alone, again while its
+    // share of the reserve lasts: 40,000 bytes, and the page that passes it.
+    let fresh = "198.51.100.1";
+    for _ in 0..2 {
+        let first = page(&app, fresh, None).await;
+        assert_eq!(first.envelopes, vec![envelope("32,768 bytes")]);
+        assert_eq!(first.flags, 0);
     }
-    let (refusal, error, retry) = refused.expect("the long pages are refused in the end");
+    // Then the day's refusal, which the wallet holds the pool's pages for:
+    // until its share frees or the day rolls, a minute past midnight UTC.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let until_the_roll = 86_400 - now % 86_400 + 60;
+    let (refusal, error, retry) = read(&app, fresh, None).await;
+    assert_eq!(refusal, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        error["error"],
+        "this address has read its share of the pool for the day"
+    );
+    let retry = retry.unwrap();
+    assert!((1..=until_the_roll).contains(&retry), "{retry}");
+    // Its share is both pools'.
+    let response = send(
+        &app,
+        request(
+            fresh,
+            Method::GET,
+            "/messaging/v1/mainnet/envelopes",
+            vec![],
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(!edge.messaging_egress.over());
 
     // The reader who is caught up still reads, and a post is still kept...
     let (status, why, _) = read(&app, reader, Some(cursor)).await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "long pages spent the day for a reader who is caught up: {why}"
-    );
-    assert_eq!(refusal, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        error["error"],
-        "messaging is near its traffic allowance: short pages only for now"
-    );
-    assert_eq!(retry, Some(3600));
-    assert!(!edge.messaging_egress.over());
+    assert_eq!(status, StatusCode::OK, "{why}");
     let (status, body) = post(&app, reader, post_body(&short(1), 16)).await;
     assert_eq!((status, &body["kept"]), (StatusCode::OK, &"new".into()));
     // ...and reads the short message that came, a page of 532 bytes.
@@ -1097,4 +1121,299 @@ async fn an_address_past_its_days_reading_waits_and_the_others_read_on() {
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     let (status, _, _) = read(&app, "2001:db8:0:200::1", None).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+/// Mainnet's pool takes mainnet's stamps: a post with at least `bits`.
+fn mainnet_body(envelope: &[u8], bits: u32) -> Vec<u8> {
+    let digest = stamp_digest("mainnet", envelope);
+    let nonce = (0u64..).find(|&n| stamp_bits(&digest, n) >= bits).unwrap();
+    [&nonce.to_be_bytes()[..], envelope].concat()
+}
+
+/// A post to mainnet's pool, as the wallet sends one.
+async fn post_mainnet(app: &Router, client: &str, body: Vec<u8>) -> (StatusCode, Value) {
+    let path = "/messaging/v1/mainnet/envelopes";
+    let response = send(app, request(client, Method::POST, path, body)).await;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+/// Mainnet's prices on its page, for `client`.
+async fn mainnet_prices(app: &Router, client: &str) -> [u8; 4] {
+    let path = "/messaging/v1/mainnet/envelopes";
+    let response = send(app, request(client, Method::GET, path, vec![])).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    bytes[10..14].try_into().unwrap()
+}
+
+/// The 1.10.0 gate's FI-10 (the relay review's N3): one solved envelope
+/// with a bad point, posted again and again. Each is counted against its
+/// own address, so the stamp pays for only so many point checks, and
+/// never against everyone's: re-posted from a thousand addresses, more than
+/// the floor's quiet, it leaves the price every sender pays as it was.
+#[tokio::test]
+async fn one_stamp_on_a_bad_envelope_pays_for_few_point_checks_and_raises_no_floor() {
+    let Relayed { app, .. } = relayed(Relay::new(None));
+    let bad = envelope("c is outside G1");
+    assert_eq!(mainnet_prices(&app, "192.0.2.200").await, [18, 18, 18, 20]);
+    let solved = mainnet_body(&bad, 18);
+    for i in 0..1100u32 {
+        let client = format!("10.{}.{}.{}", i >> 16, (i >> 8) & 0xff, i & 0xff);
+        let (status, body) = post_mainnet(&app, &client, solved.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{i}: {body}");
+    }
+    assert_eq!(mainnet_prices(&app, "192.0.2.200").await, [18, 18, 18, 20]);
+
+    // From one address with a stamp of exactly 18 bits, the base: each
+    // refusal adds a 32nd of a bit to its price, so the stamp stops paying.
+    let digest = stamp_digest("mainnet", &bad);
+    let nonce = (0u64..).find(|&n| stamp_bits(&digest, n) == 18).unwrap();
+    let exactly = [&nonce.to_be_bytes()[..], &bad[..]].concat();
+    let me = "203.0.113.7";
+    let mut answers = vec![];
+    for _ in 0..33 {
+        answers.push(post_mainnet(&app, me, exactly.clone()).await.0);
+    }
+    assert!(
+        answers[..32]
+            .iter()
+            .all(|status| *status == StatusCode::BAD_REQUEST)
+    );
+    assert_eq!(answers[32], StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(mainnet_prices(&app, me).await[0], 19);
+}
+
+/// The 1.10.0 gate's FI-10: room is looked at before the points, so a
+/// solved envelope with a bad point posted to a full pool waits, as any
+/// post does, and costs no point check.
+#[tokio::test]
+async fn a_full_pool_is_said_before_the_points_are_checked() {
+    let Relayed { app, .. } = relayed(Relay::with_pools(None, &TWO_SHORT));
+    for i in 0..2 {
+        let (status, body) = post(&app, "203.0.113.7", post_body(&short(i), 1)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let bad = post_body(&envelope("c is outside G1"), 1);
+    let (status, body, retry) = post_waiting(&app, "198.51.100.1", bad).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"], "the pool is full");
+    let retry = retry.unwrap();
+    assert!(retry % 600 == 0 && (600..=3600).contains(&retry), "{retry}");
+}
+
+/// A pool whose floor rises fast: four kept posts from anyone take a fresh
+/// address's price past the ceiling, while one address's own posts barely
+/// move its own.
+static FAST_FLOOR: [Config; 1] = [Config {
+    name: "preprod",
+    cap: 8 << 20,
+    prices: Prices {
+        base: 1,
+        per_bit: 1000.0,
+        quiet: 1.0,
+        ceiling: 3,
+        half_life: Duration::from_secs(600),
+    },
+    window: Limits {
+        envelopes: 1000,
+        units: 4096,
+    },
+}];
+
+/// The 1.10.0 gate's FI-11 (the relay review's N4): a 429 past the price's
+/// ceiling says whose count took it there. An address that posted nothing,
+/// refused by everyone's floor, is told the pool's words; one refused by
+/// its own count keeps the address's. Neither is one the wallet reads.
+#[tokio::test]
+async fn a_refusal_by_everyones_floor_names_the_pool_and_by_its_own_the_address() {
+    let Relayed { app, .. } = relayed(Relay::with_pools(None, &FAST_FLOOR));
+    for i in 0..4 {
+        let client = format!("198.51.100.{i}");
+        let (status, body) = post(&app, &client, post_body(&short(i), 3)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (status, body, _) = post_waiting(&app, "203.0.113.50", nonce_zero(&short(9))).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["error"], "too many posts to this pool for now");
+
+    let Relayed { app, .. } = relayed(Relay::with_pools(None, &LOW_CEILING));
+    let me = "203.0.113.7";
+    for i in 0..2 {
+        let (status, body) = post(&app, me, post_body(&short(i), 3)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (status, body, _) = post_waiting(&app, me, nonce_zero(&short(2))).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["error"], "too many posts from this address for now");
+    for words in [
+        "too many posts to this pool for now",
+        "too many posts from this address for now",
+    ] {
+        assert!(
+            ![
+                "too many requests at once",
+                "slow down",
+                "this address has read its share of the pool for the day"
+            ]
+            .contains(&words)
+        );
+    }
+}
+
+/// The 1.10.0 gate's FI-12 (the relay review's R4): a re-post of a held
+/// envelope is told its copy's expiry to the 10 minutes, never later, so
+/// it doesn't say the second the envelope came. A new post's is exact, now
+/// and 36 hours: the wallet sets its clock by it.
+#[tokio::test]
+async fn an_already_answer_says_its_expiry_to_the_ten_minutes_and_a_new_one_exactly() {
+    let Relayed { app, .. } = relayed(Relay::new(None));
+    for i in 0..3 {
+        let body = post_body(&short(i), 16);
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let (status, new) = post(&app, "203.0.113.7", body).await;
+        assert_eq!((status, &new["kept"]), (StatusCode::OK, &"new".into()));
+        let expires = new["expires"].as_i64().unwrap();
+        assert!(
+            (before + 129_600..=before + 129_601).contains(&expires),
+            "{expires}"
+        );
+        // A stranger's re-post, nonce 0.
+        let (status, again) = post(&app, "198.51.100.1", nonce_zero(&short(i))).await;
+        assert_eq!(
+            (status, &again["kept"]),
+            (StatusCode::OK, &"already".into())
+        );
+        let rounded = again["expires"].as_i64().unwrap();
+        assert_eq!(rounded % 600, 0);
+        assert!(
+            rounded <= expires && expires - rounded < 600,
+            "{rounded} {expires}"
+        );
+    }
+}
+
+/// The 1.10.0 gate's FI-7 (the relay review's R5), through the app: run 1
+/// keeps A and stops clean. Its file is made unreadable, three ways. Run 2
+/// starts empty, keeps nothing, and stops clean: no mark is written, and
+/// the file is left as it was. Run 3 reads it back without the mark, so a
+/// cursor run 2 gave is told of a gap rather than silently missing A.
+#[tokio::test]
+async fn a_start_that_couldnt_read_its_pool_marks_nothing_clean() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = mode_000_is_read();
+    for spoil in ["directory", "other version", "mode 000"] {
+        if spoil == "mode 000" && root {
+            continue;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "seedelf-relay-unread-{}-{}",
+            spoil.replace(' ', "-"),
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("messaging-preprod.pool");
+        let mark = dir.join("messaging-preprod.clean");
+        let (w1, w2, w3) = ("203.0.113.1", "203.0.113.2", "203.0.113.3");
+        let a = short(1);
+        let w1_cursor = {
+            let Relayed { app, relay, .. } = relayed(Relay::new(Some(&dir)));
+            let first = page(&app, w1, None).await;
+            let (status, _) = post(&app, "198.51.100.1", post_body(&a, 16)).await;
+            assert_eq!(status, StatusCode::OK);
+            let read = page(&app, w1, Some(first.cursor)).await;
+            assert_eq!(read.envelopes, vec![a.clone()]);
+            relay.save(true);
+            assert!(mark.exists());
+            read.cursor
+        };
+        let original = std::fs::read(&file).unwrap();
+        match spoil {
+            "directory" => {
+                std::fs::rename(&file, file.with_extension("aside")).unwrap();
+                std::fs::create_dir(&file).unwrap();
+            }
+            "other version" => {
+                let mut bytes = original.clone();
+                bytes[0] = 2;
+                std::fs::write(&file, bytes).unwrap();
+            }
+            _ => std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap(),
+        }
+        let w2_cursor = {
+            let Relayed { app, relay, .. } = relayed(Relay::new(Some(&dir)));
+            assert_eq!(relay.health()["preprod"]["envelopes"], 0, "{spoil}");
+            let fresh = page(&app, w2, None).await;
+            assert_eq!((fresh.flags, fresh.envelopes.len()), (0, 0), "{spoil}");
+            relay.save(false);
+            relay.save(true);
+            assert!(!mark.exists(), "{spoil}: marked clean");
+            fresh.cursor
+        };
+        match spoil {
+            "directory" => {
+                std::fs::remove_dir(&file).unwrap();
+                std::fs::rename(file.with_extension("aside"), &file).unwrap();
+            }
+            "other version" => std::fs::write(&file, &original).unwrap(),
+            _ => std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap(),
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), original, "{spoil}");
+        let Relayed { app, .. } = relayed(Relay::new(Some(&dir)));
+        let w2 = page(&app, w2, Some(w2_cursor)).await;
+        assert_eq!((w2.flags, w2.envelopes.len()), (2, 0), "{spoil}");
+        let w3 = page(&app, w3, None).await;
+        assert_eq!((w3.flags, w3.envelopes), (0, vec![a.clone()]), "{spoil}");
+        assert_eq!(page(&app, w1, Some(w1_cursor)).await.flags, 2, "{spoil}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// FI-7's control: a post kept in run 2, after a start that couldn't read
+/// the file, is saved over it, and that file is then whole: the clean stop
+/// marks it, and a cursor run 2 gave is told of no gap in run 3.
+#[tokio::test]
+async fn after_an_unread_start_a_kept_post_saves_the_pool_and_it_is_marked_clean() {
+    let dir =
+        std::env::temp_dir().join(format!("seedelf-relay-unread-kept-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("messaging-preprod.pool");
+    let mark = dir.join("messaging-preprod.clean");
+    std::fs::write(&file, [2u8; 21]).unwrap();
+    let (b, w2) = (short(2), "203.0.113.2");
+    let w2_cursor = {
+        let Relayed { app, relay, .. } = relayed(Relay::new(Some(&dir)));
+        let fresh = page(&app, w2, None).await;
+        let (status, _) = post(&app, "198.51.100.1", post_body(&b, 16)).await;
+        assert_eq!(status, StatusCode::OK);
+        let read = page(&app, w2, Some(fresh.cursor)).await;
+        assert_eq!(read.envelopes, vec![b.clone()]);
+        relay.save(true);
+        assert!(mark.exists());
+        read.cursor
+    };
+    let Relayed { app, .. } = relayed(Relay::new(Some(&dir)));
+    let w2 = page(&app, w2, Some(w2_cursor)).await;
+    assert_eq!((w2.flags, w2.envelopes.len()), (0, 0));
+    assert_eq!(page(&app, "203.0.113.3", None).await.envelopes, vec![b]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Whether this process reads a file of mode 000 (root does): then that
+/// spoil proves nothing.
+fn mode_000_is_read() -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let probe = std::env::temp_dir().join(format!("seedelf-relay-probe-{}", std::process::id()));
+    std::fs::write(&probe, b"x").unwrap();
+    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let read = std::fs::read(&probe).is_ok();
+    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::remove_file(&probe).unwrap();
+    read
 }

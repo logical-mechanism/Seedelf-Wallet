@@ -9,7 +9,7 @@ import { handle, type Context } from "../src/background/handlers";
 import { NetworkChoice } from "../src/background/preferences";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { AUTO_LOCK_MS } from "../src/background/wallet";
-import type { MessagingOverview, Message } from "../src/shared/rpc";
+import { MESSAGING_SYNC_EVERY_MS, type MessagingOverview, type Message } from "../src/shared/rpc";
 import { loadTestWasm, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -76,6 +76,24 @@ describe("Messages through the handlers (cross-feature#10)", () => {
     await ask({ type: "messaging-sync" }, ctx);
     await t.messaging.whenIdle();
     expect(t.relay.calls).toEqual([]);
+  });
+
+  it("answers a page's poll with how long until the worker's one grid's next tick (round 5)", async () => {
+    const t = testBalances();
+    const ctx = context(t);
+    await ask({ type: "create-wallet", phrase: phraseOf(24), password: PASSWORD }, ctx);
+    await ask({ type: "messaging-switch", on: true }, ctx);
+    await t.messaging.whenIdle();
+    // No page heard from: a whole period.
+    expect(await ask({ type: "messaging-sync" }, ctx)).toEqual({ nextIn: MESSAGING_SYNC_EVERY_MS });
+    const first = (await ask({ type: "messaging-sync", page: "page-1", kind: "view" }, ctx)) as { nextIn: number };
+    expect(first.nextIn).toBeGreaterThan(0);
+    expect(first.nextIn).toBeLessThanOrEqual(MESSAGING_SYNC_EVERY_MS);
+    // A second page shown is on the first one's grid: its next tick is the same moment.
+    const second = (await ask({ type: "messaging-sync", page: "page-2", kind: "view" }, ctx)) as { nextIn: number };
+    expect(second.nextIn).toBeLessThanOrEqual(first.nextIn);
+    expect(first.nextIn - second.nextIn).toBeLessThan(5000);
+    await t.messaging.whenIdle();
   });
 
   it("moves a switch through messaging-switch alone: preferences-set carries none, and changes the rest", async () => {

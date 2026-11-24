@@ -68,7 +68,7 @@ async fn server(dir: Option<&std::path::Path>) -> Server {
     let edge = Arc::new(Edge::new(true, vec![], Egress::new(None, None)));
     let relay = Arc::new(Relay::with_pools(dir, &POOL));
     let app = seedelf_data_api::app(state, submit, edge.clone(), relay.clone(), &[]);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = seedelf_data_api::serve::listen("127.0.0.1:0".parse().unwrap()).unwrap();
     let port = listener.local_addr().unwrap().port();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let served = tokio::spawn(serve_as_main(listener, app, async move {
@@ -285,6 +285,17 @@ async fn an_address_holds_only_so_many_requests_open_and_the_next_is_429() {
         let (answer, closed) = until_closed(stream, Duration::from_secs(15)).await;
         assert!(closed && answer.starts_with("HTTP/1.1 408 "), "{answer}");
     }
+    // The other address's kept post is in flight until its connection asks
+    // again or closes: an answer is counted until it's read (the 1.10.0
+    // gate's FI-2).
+    assert!(
+        eventually(
+            || edge.in_flight(Part::Messaging) == 1,
+            Duration::from_secs(2)
+        )
+        .await
+    );
+    drop(other);
     assert!(
         eventually(
             || edge.in_flight(Part::Messaging) == 0,

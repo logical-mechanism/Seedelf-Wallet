@@ -47,7 +47,19 @@ import {
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ContactEditor, useContacts } from "../components/Contacts";
-import { BackIcon, CheckIcon, CopyIcon, MessageIcon, PencilIcon, PenIcon, SendIcon, ShieldIcon, TrashIcon, UserPlusIcon } from "../components/Icons";
+import {
+  BackIcon,
+  CheckIcon,
+  CopyIcon,
+  MessageIcon,
+  PencilIcon,
+  PenIcon,
+  SendIcon,
+  ShieldIcon,
+  SpinnerIcon,
+  TrashIcon,
+  UserPlusIcon,
+} from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RadioCards } from "../components/RadioCards";
 import { pressedBack, useBrowserBack } from "../history";
@@ -81,6 +93,14 @@ const WIDE = "(min-width: 760px)";
 
 /** A relay's gap is said for as long as a message sent then could still have been on it, and a margin. */
 const GAP_SHOWN_MS = 48 * 3600_000;
+
+/**
+ * How long a press runs before it says it's waiting. A press, and a screen's read, waits while Messages read or post
+ * (the 1.10.0 gate's O8), and in the TAKE_MARGIN_MS (3 s) before each read the wallet makes by itself, until that read
+ * is done: a few seconds at most, as long as the server's timeouts at most. Under this, its button
+ * is only disabled, so a quick press doesn't flash a word.
+ */
+export const PRESS_WAIT_SHOWN_MS = 700;
 
 /** What the right-hand pane shows. A thread may open with a text still to send, and why it wasn't: a reply's. */
 type Open = { kind: "thread"; cid: string; draft?: Draft } | { kind: "request"; cid: string } | { kind: "new" };
@@ -260,22 +280,66 @@ function useWide(): boolean {
   return wide;
 }
 
-/** A press of the list's that asks the worker: busy while it runs, its refusal said in the worker's words. */
+/** Whether `busy` has lasted PRESS_WAIT_SHOWN_MS: when a press says it's waiting. It only draws: it asks nothing. */
+function useWaiting(busy: boolean): boolean {
+  const [waited, setWaited] = useState(false);
+  useEffect(() => {
+    setWaited(false);
+    if (!busy) return;
+    const timer = setTimeout(() => setWaited(true), PRESS_WAIT_SHOWN_MS);
+    return () => clearTimeout(timer);
+  }, [busy]);
+  return busy && waited;
+}
+
+/**
+ * Draws again once the soonest of `ats` (ms, this device's clock) has passed, so a line that holds until then (the
+ * day's reading, a paused network's next ask) says no time that's gone. It only draws: it asks nothing.
+ */
+function useRedrawAt(...ats: Array<number | undefined>): void {
+  const [, redraw] = useState(0);
+  const now = Date.now();
+  const next = Math.min(...ats.filter((at): at is number => at !== undefined && at > now));
+  useEffect(() => {
+    if (!Number.isFinite(next)) return;
+    const timer = setTimeout(() => redraw((n) => n + 1), Math.min(next - Date.now() + 50, 2 ** 31 - 1));
+    return () => clearTimeout(timer);
+  }, [next]);
+}
+
+/**
+ * A press that asks the worker: one at a time, so a press while one runs is dropped, never sent twice; busy while it
+ * runs, and saying it's waiting once it has run PRESS_WAIT_SHOWN_MS (O8), on the button pressed (`waits`); its refusal
+ * said in the worker's words. `which` names the press, where one hook serves several buttons.
+ */
 function usePress() {
-  const [busy, setBusy] = useState(false);
+  const running = useRef(false);
+  const [pressed, setPressed] = useState<string>();
   const [error, setError] = useState<string>();
-  const run = async (ask: () => Promise<unknown>) => {
-    setBusy(true);
+  const waiting = useWaiting(pressed !== undefined);
+  const run = async (ask: () => Promise<unknown>, which = "") => {
+    if (running.current) return;
+    running.current = true;
+    setPressed(which);
     setError(undefined);
     try {
       await ask();
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      running.current = false;
+      setPressed(undefined);
     }
   };
-  return { busy, error, run };
+  /** Whether the press `which` runs and has waited long enough to say so. */
+  const waits = (which: string) => waiting && pressed === which;
+  return { busy: pressed !== undefined, waiting, waits, error, run };
+}
+
+/** What a press's button says: its own words, or that it's waiting (O8). */
+function PressLabel({ waits, children }: { waits: boolean; children: ReactNode }) {
+  const t = useT();
+  return <>{waits ? t("messages.pressWaiting") : children}</>;
 }
 
 function ListPane({
@@ -291,7 +355,7 @@ function ListPane({
 }: {
   overview: MessagingOverview | undefined;
   error?: string;
-  reload?: () => void;
+  reload?: () => void | Promise<void>;
   contacts: Contact[] | undefined;
   open: Open | undefined;
   onOpen: (open: Open) => void;
@@ -304,6 +368,8 @@ function ListPane({
   const { prefs, loaded } = usePreferences();
   const press = usePress();
   const [clearing, setClearing] = useState(false);
+  // A line that holds until a time says nothing once it's gone: the day's reading, a paused network's next ask.
+  useRedrawAt(overview?.dayReadUntil, overview?.pausedAskAt);
   const now = Date.now();
   // The switch as the overview says it, or as the settings do where the overview can't be read: it's still the
   // user's to turn (cross-feature#8).
@@ -315,14 +381,19 @@ function ListPane({
         onSwitched(await call("messaging-switch", { on: !on }));
       } catch (e) {
         // Turned, maybe, and the overview after it refused: read again, whatever it says.
-        reload?.();
+        void reload?.();
         throw e;
       }
-    });
+    }, "switch");
 
   const gap = overview?.gapAt !== undefined && now - overview.gapAt < GAP_SHOWN_MS ? overview.gapAt : undefined;
   // The relay's hold on this connection's reading for the day (W16): said while it holds, by this device's clock.
   const dayRead = overview?.dayReadUntil !== undefined && overview.dayReadUntil > now ? overview.dayReadUntil : undefined;
+  // A paused network's next ask of the server (fix A): said while it's ahead. Only the server's answer ends the pause,
+  // never this time, so past it the line says only that Messages are paused.
+  const askAt = overview?.pausedAskAt !== undefined && overview.pausedAskAt > now ? overview.pausedAskAt : undefined;
+  // The messages dropped before they could be read, as many as the line says: what Dismiss tells the worker was seen.
+  const droppedUnread = overview?.droppedUnread ?? 0;
   const empty = overview && !overview.conversations.length && !overview.requests.length;
   const seedelfs = overview?.seedelfs ?? [];
 
@@ -368,9 +439,15 @@ function ListPane({
             aria-labelledby="messages-switch-label"
             onClick={() => void flip()}
             disabled={(!overview && !loaded) || press.busy}
+            aria-busy={press.waits("switch") || undefined}
             data-testid="messages-switch"
           />
         </div>
+        {press.waits("switch") && (
+          <p className="note messages__waiting" role="status" data-testid="press-waits">
+            {t("messages.pressWaiting")}
+          </p>
+        )}
         {press.error && (
           <p className="error" role="alert">
             {press.error}
@@ -385,8 +462,14 @@ function ListPane({
               {readError}
             </p>
             <div className="messages__problem-actions">
-              <button type="button" className="secondary" onClick={() => reload?.()}>
-                {t("common.tryAgain")}
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => void press.run(async () => reload?.(), "read")}
+                disabled={press.busy}
+                data-testid="messages-read-again"
+              >
+                <PressLabel waits={press.waits("read")}>{t("common.tryAgain")}</PressLabel>
               </button>
               <button type="button" className="link link--quiet" onClick={() => setClearing(true)} data-testid="messages-clear">
                 {t("messages.clear")}
@@ -395,10 +478,11 @@ function ListPane({
           </div>
         )}
 
-        {/* The relay's off switch (W15) stands in for "can't reach": it's on purpose, and an update is coming. */}
+        {/* The relay's off switch (W15, fix A) stands in for "can't reach": it's on purpose, and an update is coming;
+            with when the wallet next asks the server, where the worker gives it. */}
         {on && overview?.paused && (
           <Callout tone="warn" testId="messages-paused">
-            {t("messages.warn.paused")}
+            {joinSentences([t("messages.warn.paused"), askAt !== undefined && t("messages.warn.pausedAskAt", { when: momentOf(askAt) })])}
           </Callout>
         )}
         {on && overview?.offline && (
@@ -421,13 +505,13 @@ function ListPane({
               onClick={() =>
                 void press.run(async () => {
                   await call("messaging-retry", {});
-                  reload?.();
-                })
+                  await reload?.();
+                }, "retry")
               }
               disabled={press.busy}
               data-testid="messages-retry"
             >
-              {t("common.tryAgain")}
+              <PressLabel waits={press.waits("retry")}>{t("common.tryAgain")}</PressLabel>
             </button>
           </StateLine>
         )}
@@ -442,10 +526,23 @@ function ListPane({
           </Callout>
         )}
         {/* Dropped unopened, more having come at once than the wallet takes (the 1.10.0 gate's f5): they may be anyone's,
-            and deleting a conversation doesn't bring them back, so never the no-room words above. */}
-        {overview?.droppedUnread !== undefined && overview.droppedUnread > 0 && (
+            and deleting a conversation doesn't bring them back, so never the no-room words above. It goes at Dismiss,
+            the user's press alone, which tells the worker how many were seen: never by itself, since what was dropped
+            is the wallet's envelopes, and nothing they are may start a request (round 4's #6). */}
+        {droppedUnread > 0 && (
           <Callout tone="warn" testId="messages-dropped-unread">
-            {t("messages.warn.droppedUnread", { count: overview.droppedUnread })}
+            <span className="callout__row">
+              <span data-testid="messages-dropped-unread-text">{t("messages.warn.droppedUnread", { count: droppedUnread })}</span>
+              <button
+                type="button"
+                className="link callout__dismiss"
+                onClick={() => void press.run(async () => onSwitched(await call("messaging-seen", { droppedUnread })), "seen")}
+                disabled={press.busy}
+                data-testid="messages-dropped-seen"
+              >
+                <PressLabel waits={press.waits("seen")}>{t("messages.dismissDropped")}</PressLabel>
+              </button>
+            </span>
           </Callout>
         )}
         {overview?.clockOff !== undefined && (
@@ -465,10 +562,10 @@ function ListPane({
             <button
               type="button"
               className="secondary"
-              onClick={() => void press.run(async () => onSwitched(await call("messaging-switch", { on: false, network: other })))}
+              onClick={() => void press.run(async () => onSwitched(await call("messaging-switch", { on: false, network: other })), `off:${other}`)}
               disabled={press.busy}
             >
-              {t("messages.turnOff")}
+              <PressLabel waits={press.waits(`off:${other}`)}>{t("messages.turnOff")}</PressLabel>
             </button>
           </StateLine>
         ))}
@@ -578,12 +675,13 @@ function SeedelfSwitches({ seedelfs, onSwitched }: { seedelfs: MessagingSeedelf[
   const t = useT();
   const id = useId();
   const press = usePress();
+  const keyOf = (s: MessagingSeedelf) => `${s.name}:${s.register.generator}:${s.register.publicValue}`;
   const flip = (s: MessagingSeedelf) =>
-    press.run(async () => onSwitched(await call("messaging-answer-at", { name: s.name, register: s.register, on: !s.on })));
+    press.run(async () => onSwitched(await call("messaging-answer-at", { name: s.name, register: s.register, on: !s.on })), keyOf(s));
   return (
     <div className="messages__seedelfs" data-testid="messages-seedelfs">
       {seedelfs.map((s, i) => (
-        <div className="setting-row" key={`${s.name}:${s.register.generator}:${s.register.publicValue}`} data-testid="messages-seedelf">
+        <div className="setting-row" key={keyOf(s)} data-testid="messages-seedelf">
           <span className="stack-tight">
             <span id={`${id}-${i}`} className="messages__seedelf-name">
               {ownShown(s.name)}
@@ -591,6 +689,12 @@ function SeedelfSwitches({ seedelfs, onSwitched }: { seedelfs: MessagingSeedelf[
             <span className="note" id={`${id}-${i}-what`}>
               {t("messages.answerAt")}
             </span>
+            {/* Its switch pressed and waiting (O8): said under it, the switch's own label unchanged. */}
+            {press.waits(keyOf(s)) && (
+              <span className="note messages__waiting" role="status" data-testid="press-waits">
+                {t("messages.pressWaiting")}
+              </span>
+            )}
           </span>
           <button
             type="button"
@@ -598,6 +702,7 @@ function SeedelfSwitches({ seedelfs, onSwitched }: { seedelfs: MessagingSeedelf[
             className="switch"
             aria-checked={s.on}
             aria-labelledby={`${id}-${i}-what ${id}-${i}`}
+            aria-busy={press.waits(keyOf(s)) || undefined}
             onClick={() => void flip(s)}
             disabled={press.busy}
             data-testid="messages-seedelf-switch"
@@ -894,31 +999,41 @@ function ThreadPane({
   // (screens#6). A reply's text that wasn't sent opens it, with why, once.
   const [text, setText] = useState(draft?.text ?? "");
   const [kept, setKept] = useState(draft?.error);
-  // A press on a message of the thread: a reveal checked on the chain, a refused one sent again.
-  const [pressing, setPressing] = useState(false);
+  // A press on a message of the thread, one at a time: its reveals checked on the chain, or a refused one sent again.
+  // A check's notice says "checking" while its request runs, and only then (the freeze's fix B).
+  const [pressing, setPressing] = useState<{ kind: "check" } | { kind: "resend"; id: number }>();
+  const pressingNow = useRef(false);
   const [pressError, setPressError] = useState<string>();
+  const pressWaits = useWaiting(pressing !== undefined);
+  // Try again, for a thread whose read was refused: a read, which waits while Messages read or post too (O8).
+  const retry = usePress();
 
-  const load = useCallback(() => {
-    call("messaging-thread", { cid }).then(
-      (next) => {
-        setThread(next);
-        setError(undefined);
-      },
-      (e: Error) => setError(e.message),
-    );
-  }, [cid]);
+  const load = useCallback(
+    () =>
+      call("messaging-thread", { cid }).then(
+        (next) => {
+          setThread(next);
+          setError(undefined);
+        },
+        (e: Error) => setError(e.message),
+      ),
+    [cid],
+  );
   useReadWhileSeen(network, load);
 
-  async function press(ask: () => Promise<unknown>) {
-    setPressing(true);
+  async function press(kind: NonNullable<typeof pressing>, ask: () => Promise<unknown>) {
+    if (pressingNow.current) return;
+    pressingNow.current = true;
+    setPressing(kind);
     setPressError(undefined);
     try {
       await ask();
-      load();
+      void load();
     } catch (e) {
       setPressError((e as Error).message);
     } finally {
-      setPressing(false);
+      pressingNow.current = false;
+      setPressing(undefined);
     }
   }
 
@@ -978,8 +1093,14 @@ function ThreadPane({
                 {error}
               </p>
               <div className="actions">
-                <button type="button" className="secondary" onClick={load}>
-                  {t("common.tryAgain")}
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void retry.run(load, "load")}
+                  disabled={retry.busy}
+                  data-testid="thread-read-again"
+                >
+                  <PressLabel waits={retry.waits("load")}>{t("common.tryAgain")}</PressLabel>
                 </button>
                 <button type="button" className="danger" onClick={() => setDeleting(true)} data-testid="thread-delete-unread">
                   {t("messages.delete")}
@@ -1016,9 +1137,11 @@ function ThreadPane({
         messages={thread.messages}
         on={on}
         contacts={contacts}
-        busy={pressing}
-        onCheck={() => void press(() => call("messaging-check-reveal", { cid }))}
-        onResend={(id) => void press(() => call("messaging-resend", { cid, id }))}
+        busy={pressing !== undefined}
+        checking={pressing?.kind === "check"}
+        resendWaits={pressing?.kind === "resend" && pressWaits ? pressing.id : undefined}
+        onCheck={() => void press({ kind: "check" }, () => call("messaging-check-reveal", { cid }))}
+        onResend={(id) => void press({ kind: "resend", id }, () => call("messaging-resend", { cid, id }))}
         before={
           <>
             {thread.trimmed > 0 && <li className="thread__note">{t("messages.warn.trimmed", { count: thread.trimmed })}</li>}
@@ -1152,9 +1275,12 @@ function RevealSeedelf({
   const t = useT();
   const [name, setName] = useState(seedelfs.length === 1 ? seedelfs[0] : undefined);
   const [busy, setBusy] = useState(false);
+  const showing = useRef(false);
+  const waiting = useWaiting(busy);
   const [error, setError] = useState<string>();
   async function show() {
-    if (!name) return;
+    if (!name || showing.current) return;
+    showing.current = true;
     setBusy(true);
     setError(undefined);
     try {
@@ -1163,6 +1289,8 @@ function RevealSeedelf({
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);
+    } finally {
+      showing.current = false;
     }
   }
   return (
@@ -1173,7 +1301,7 @@ function RevealSeedelf({
       foot={
         <>
           <button type="button" className="primary" onClick={() => void show()} disabled={busy || !name} data-testid="messages-reveal-show">
-            {t("messages.reveal.show")}
+            <PressLabel waits={waiting}>{t("messages.reveal.show")}</PressLabel>
           </button>
           <button type="button" className="secondary" onClick={onClose} disabled={busy}>
             {t("common.cancel")}
@@ -1205,17 +1333,24 @@ function RevealSeedelf({
 function NameConversation({ cid, name, onClose }: { cid: string; name?: string; onClose: () => void }) {
   const t = useT();
   const [value, setValue] = useState(name ?? "");
-  const [busy, setBusy] = useState(false);
+  // Save or Remove the name, one at a time, Enter's too: never sent twice.
+  const [busy, setBusy] = useState<"save" | "remove">();
+  const saving = useRef(false);
+  const waiting = useWaiting(busy !== undefined);
   const [error, setError] = useState<string>();
   async function save(next: string) {
-    setBusy(true);
+    if (saving.current) return;
+    saving.current = true;
+    setBusy(next ? "save" : "remove");
     setError(undefined);
     try {
       await call("messaging-name", { cid, name: next });
       onClose();
     } catch (e) {
       setError((e as Error).message);
-      setBusy(false);
+      setBusy(undefined);
+    } finally {
+      saving.current = false;
     }
   }
   return (
@@ -1229,14 +1364,14 @@ function NameConversation({ cid, name, onClose }: { cid: string; name?: string; 
             type="button"
             className="primary"
             onClick={() => void save(value)}
-            disabled={busy || !value.trim()}
+            disabled={busy !== undefined || !value.trim()}
             data-testid="messages-name-save"
           >
-            {t("messages.save")}
+            <PressLabel waits={waiting && busy === "save"}>{t("messages.save")}</PressLabel>
           </button>
           {name && (
-            <button type="button" className="secondary" onClick={() => void save("")} disabled={busy}>
-              {t("messages.removeName")}
+            <button type="button" className="secondary" onClick={() => void save("")} disabled={busy !== undefined}>
+              <PressLabel waits={waiting && busy === "remove"}>{t("messages.removeName")}</PressLabel>
             </button>
           )}
         </>
@@ -1250,7 +1385,7 @@ function NameConversation({ cid, name, onClose }: { cid: string; name?: string; 
           maxLength={NAME_CHARS}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.nativeEvent.isComposing && value.trim()) {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing && value.trim() && busy === undefined) {
               e.preventDefault();
               void save(value);
             }
@@ -1282,6 +1417,8 @@ function MessageList({
   before,
   contacts,
   busy = false,
+  checking = false,
+  resendWaits,
   onCheck,
   onResend,
 }: {
@@ -1291,6 +1428,10 @@ function MessageList({
   contacts?: Contact[];
   /** A press on one of them is under way. */
   busy?: boolean;
+  /** The check's request (`messaging-check-reveal`) runs now: its reveals say they're being checked, and only then. */
+  checking?: boolean;
+  /** The refused message whose Send again runs and is waiting (O8): its button says so. */
+  resendWaits?: number;
   /** Checks the conversation's reveals on the chain (`messaging-check-reveal`); none where there's nothing to check. */
   onCheck?: () => void;
   /** Sends a refused message's kept bytes again (`messaging-resend`). */
@@ -1341,7 +1482,7 @@ function MessageList({
               </li>
             ),
             m.reveal && m.dir === "in" ? (
-              <RevealNotice key={m.id} entry={m} contacts={contacts} on={on} busy={busy} onCheck={onCheck} />
+              <RevealNotice key={m.id} entry={m} contacts={contacts} on={on} busy={busy} checking={checking} onCheck={onCheck} />
             ) : (
               <li key={m.id} className={`bubble bubble--${m.dir}${m.reveal ? " bubble--reveal" : ""}`} data-testid="bubble">
                 {m.reveal?.status === "shown" && m.reveal.name ? (
@@ -1357,7 +1498,15 @@ function MessageList({
                 <span className="bubble__meta">
                   {timeOf(m.at)}
                   {m.dir === "out" && m.sent && (
-                    <SentState entry={m} on={on} now={now} waitsForReply={waitsForReply} busy={busy} onResend={onResend} />
+                    <SentState
+                      entry={m}
+                      on={on}
+                      now={now}
+                      waitsForReply={waitsForReply}
+                      busy={busy}
+                      resendWaits={resendWaits === m.id}
+                      onResend={onResend}
+                    />
                   )}
                 </span>
               </li>
@@ -1371,32 +1520,38 @@ function MessageList({
 
 /**
  * A reveal the other side made (protocol.md §19), as the wallet's own notice: not checked on the chain yet, with the
- * button that checks it (nothing checks by itself, W2); checking; verified, naming the Seedelf as Send does (a contact's
- * name only for that contact's, a tag as a tag, each with the part of its name no one else can choose); or failed,
- * never named. Saving and copying it are the header's (the owner, 2026-11-22: no links in the chat).
+ * button that checks it (nothing checks by itself, W2); checking, only while a check's request runs, this page's
+ * (`checking`) or another's (the worker's `checking`), never otherwise (the freeze's fix B); verified, naming the
+ * Seedelf as Send does (a contact's name only for that contact's, a tag as a tag, each with the part of its name no one
+ * else can choose); or failed, never named. Saving and copying it are the header's (the owner, 2026-11-22: no links in
+ * the chat).
  */
 function RevealNotice({
   entry,
   contacts,
   on,
   busy,
+  checking,
   onCheck,
 }: {
   entry: MessagingEntry;
   contacts?: Contact[];
   on: boolean;
   busy: boolean;
+  checking: boolean;
   onCheck?: () => void;
 }) {
   const t = useT();
   const reveal = entry.reveal!;
   const verified = reveal.status === "verified" && reveal.name !== undefined;
   const failed = !verified && reveal.status !== "unchecked" && reveal.status !== "checking";
+  // This page's check runs: every reveal of the conversation not checked yet is being checked (checkReveals).
+  const status = reveal.status === "unchecked" && checking ? "checking" : reveal.status;
   const words = verified
     ? revealVerifiedText(reveal.name!, contacts)
-    : reveal.status === "unchecked"
+    : status === "unchecked"
       ? t("messages.privacy.revealUnchecked")
-      : reveal.status === "checking"
+      : status === "checking"
         ? t("messages.privacy.revealChecking")
         : t("messages.warn.revealFailed");
   return (
@@ -1411,7 +1566,7 @@ function RevealNotice({
         <span className="thread__notice-text" data-testid="bubble-reveal">
           {words}
         </span>
-        {reveal.status === "unchecked" && on && onCheck && (
+        {status === "unchecked" && on && onCheck && (
           <button type="button" className="secondary thread__notice-check" onClick={onCheck} disabled={busy} data-testid="reveal-check">
             {t("messages.checkOnChain")}
           </button>
@@ -1444,6 +1599,7 @@ function SentState({
   now,
   waitsForReply,
   busy,
+  resendWaits,
   onResend,
 }: {
   entry: MessagingEntry;
@@ -1451,6 +1607,8 @@ function SentState({
   now: number;
   waitsForReply: boolean;
   busy: boolean;
+  /** Its Send again runs and is waiting (O8). */
+  resendWaits: boolean;
   onResend?: (id: number) => void;
 }) {
   const t = useT();
@@ -1490,7 +1648,7 @@ function SentState({
         <>
           {" "}
           <button type="button" className="link bubble__again" onClick={() => onResend(entry.id)} disabled={busy} data-testid="bubble-resend">
-            {t("messages.sendAgain")}
+            <PressLabel waits={resendWaits}>{t("messages.sendAgain")}</PressLabel>
           </button>
         </>
       )}
@@ -1520,7 +1678,11 @@ function RequestPane({
   const network = useNetwork();
   const [messages, setMessages] = useState<MessagingEntry[]>();
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  // Accept, or a reply (which accepts first): one at a time, so the request is never accepted twice; Accept says it's
+  // waiting while it waits (O8), and a reply's box says so of its own.
+  const [busy, setBusy] = useState<"accept" | "reply">();
+  const acting = useRef(false);
+  const acceptWaits = useWaiting(busy === "accept");
   const [deleting, setDeleting] = useState(false);
   const [text, setText] = useState("");
 
@@ -1536,14 +1698,18 @@ function RequestPane({
   useReadWhileSeen(network, load);
 
   async function accept() {
-    setBusy(true);
+    if (acting.current) return;
+    acting.current = true;
+    setBusy("accept");
     setError(undefined);
     try {
       await call("messaging-accept", { cid });
       onAccepted();
     } catch (e) {
       setError((e as Error).message);
-      setBusy(false);
+      setBusy(undefined);
+    } finally {
+      acting.current = false;
     }
   }
 
@@ -1551,15 +1717,23 @@ function RequestPane({
   // so a reply the worker then refuses (too long, say) opens the conversation with its text and why, to send again;
   // or, where the user has moved on, is kept for when they next open it.
   async function reply(sending: string): Promise<boolean> {
-    await call("messaging-accept", { cid });
+    if (acting.current) return false;
+    acting.current = true;
+    setBusy("reply");
     try {
-      await call("messaging-send", { cid, text: sending });
-    } catch (e) {
-      onAccepted({ text: sending, error: (e as Error).message });
-      return false;
+      await call("messaging-accept", { cid });
+      try {
+        await call("messaging-send", { cid, text: sending });
+      } catch (e) {
+        onAccepted({ text: sending, error: (e as Error).message });
+        return false;
+      }
+      onAccepted();
+      return true;
+    } finally {
+      acting.current = false;
+      setBusy(undefined);
     }
-    onAccepted();
-    return true;
   }
 
   const detail = request
@@ -1571,8 +1745,8 @@ function RequestPane({
       {messages ? <MessageList messages={messages} on={on} /> : <div className="thread__scroll">{error ? null : <p className="note center">{t("messages.loading")}</p>}</div>}
       <div className="thread__state thread__state--request">
         <span>{t("messages.privacy.request")}</span>
-        <button type="button" className="secondary" onClick={() => void accept()} disabled={busy} data-testid="request-accept">
-          {t("messages.accept")}
+        <button type="button" className="secondary" onClick={() => void accept()} disabled={busy !== undefined} data-testid="request-accept">
+          <PressLabel waits={acceptWaits}>{t("messages.accept")}</PressLabel>
         </button>
       </div>
       {error && (
@@ -1580,7 +1754,7 @@ function RequestPane({
           {error}
         </p>
       )}
-      <Composer text={text} onText={setText} placeholder={t("messages.reply")} off={!on} onSend={reply} />
+      <Composer text={text} onText={setText} placeholder={t("messages.reply")} off={!on} disabled={busy === "accept"} onSend={reply} />
       {deleting && (
         <DeleteConversation
           cid={cid}
@@ -1667,9 +1841,12 @@ function NewMessagePane({
 /**
  * The box at the foot: Enter sends, Shift+Enter starts a line, and Enter while an input method is composing (as
  * Japanese is typed) does neither. It grows with the text, to a few lines. The longest text the next message can carry
- * is in UTF-8 bytes: counted down as it nears. What it holds is its pane's (`text`), so a box that turns to another
+ * is in UTF-8 bytes, the worker's (`MessagingThread.maxTextBytes`, the crate's room after padding), never a figure of the
+ * screen's: counted down as it nears. What it holds is its pane's (`text`), so a box that turns to another
  * conversation's keeps it; a send that comes back clears only what it sent, never what was typed since (screens#6).
- * Never spell-checked: what's typed stays on the device until it's sealed (privacy.md).
+ * One send at a time: a press while one runs is dropped, and one that waits while Messages read or post (O8) says so on
+ * its button and under the box, its text still in it. Never spell-checked: what's typed stays on the device until it's
+ * sealed (privacy.md).
  */
 export function Composer({
   text,
@@ -1693,6 +1870,8 @@ export function Composer({
 }) {
   const t = useT();
   const [busy, setBusy] = useState(false);
+  const sendingNow = useRef(false);
+  const waiting = useWaiting(busy);
   const [error, setError] = useState<string | undefined>(opened);
   const box = useRef<HTMLTextAreaElement>(null);
   const bytes = utf8Length(text);
@@ -1708,7 +1887,8 @@ export function Composer({
   }, [text]);
 
   async function send() {
-    if (!can) return;
+    if (!can || sendingNow.current) return;
+    sendingNow.current = true;
     const sending = text;
     setBusy(true);
     setError(undefined);
@@ -1718,6 +1898,7 @@ export function Composer({
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      sendingNow.current = false;
       setBusy(false);
       box.current?.focus();
     }
@@ -1759,11 +1940,30 @@ export function Composer({
           spellCheck={false}
           data-testid="composer"
         />
-        <button type="submit" className="composer__send" disabled={!can} aria-label={t("messages.send")} title={t("messages.send")}>
-          <SendIcon size={17} />
+        <button
+          type="submit"
+          className="composer__send"
+          disabled={!can}
+          aria-label={t(waiting ? "messages.pressWaiting" : "messages.send")}
+          title={t(waiting ? "messages.pressWaiting" : "messages.send")}
+          aria-busy={waiting || undefined}
+          data-testid="composer-send"
+        >
+          {waiting ? (
+            <span className="spin">
+              <SpinnerIcon size={17} />
+            </span>
+          ) : (
+            <SendIcon size={17} />
+          )}
         </button>
       </form>
-      {near && maxBytes !== undefined && (
+      {/* Its send waiting (O8): said in words too, where the count goes, which waits with it. */}
+      {waiting ? (
+        <p className="composer__count" role="status" data-testid="composer-waits">
+          {t("messages.pressWaiting")}
+        </p>
+      ) : near && maxBytes !== undefined && (
         <p className={over ? "composer__count composer__count--over" : "composer__count"} aria-live="polite">
           {over ? t("messages.bytesOver", { count: bytes - maxBytes }) : t("messages.bytesLeft", { count: maxBytes - bytes })}
         </p>
@@ -1785,8 +1985,12 @@ function DeleteConversation({
 }) {
   const t = useT();
   const [busy, setBusy] = useState(false);
+  const removing = useRef(false);
+  const waiting = useWaiting(busy);
   const [error, setError] = useState<string>();
   async function remove() {
+    if (removing.current) return;
+    removing.current = true;
     setBusy(true);
     setError(undefined);
     try {
@@ -1795,6 +1999,8 @@ function DeleteConversation({
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);
+    } finally {
+      removing.current = false;
     }
   }
   return (
@@ -1805,7 +2011,7 @@ function DeleteConversation({
       foot={
         <>
           <button type="button" className="danger" onClick={() => void remove()} disabled={busy} data-testid="messages-delete-confirm">
-            {t("messages.delete")}
+            <PressLabel waits={waiting}>{t("messages.delete")}</PressLabel>
           </button>
           <button type="button" className="secondary" onClick={onClose} disabled={busy}>
             {t("common.cancel")}
@@ -1838,8 +2044,12 @@ function ClearMessages({
 }) {
   const t = useT();
   const [busy, setBusy] = useState(false);
+  const clearing = useRef(false);
+  const waiting = useWaiting(busy);
   const [error, setError] = useState<string>();
   async function clear() {
+    if (clearing.current) return;
+    clearing.current = true;
     setBusy(true);
     setError(undefined);
     try {
@@ -1847,6 +2057,8 @@ function ClearMessages({
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);
+    } finally {
+      clearing.current = false;
     }
   }
   return (
@@ -1857,7 +2069,7 @@ function ClearMessages({
       foot={
         <>
           <button type="button" className="danger" onClick={() => void clear()} disabled={busy} data-testid="messages-clear-confirm">
-            {t("messages.clear")}
+            <PressLabel waits={waiting}>{t("messages.clear")}</PressLabel>
           </button>
           <button type="button" className="secondary" onClick={onClose} disabled={busy}>
             {t("common.cancel")}

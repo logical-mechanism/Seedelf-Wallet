@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Contact, MessagingConversation, MessagingEntry, MessagingOverview, MessagingThread } from "../src/shared/rpc";
-import { answer as answered, type Asked, click, elements, FakeElement, FakeEvent, fakeDocument, fakeDom, type FakeNode, type Root } from "./fake-dom";
+import { answer as answered, type Asked, click, elements, FakeElement, FakeEvent, fakeDocument, fakeDom, type FakeNode, type Root, submit } from "./fake-dom";
 
 const worker = vi.hoisted(() => ({ waiting: [] as Asked[] }));
 vi.mock("../src/ui/background", async (original) => ({
@@ -36,7 +36,7 @@ vi.stubGlobal("chrome", {
 (FakeElement.prototype as unknown as { showModal(): void; close(): void }).showModal = () => {};
 (FakeElement.prototype as unknown as { showModal(): void; close(): void }).close = () => {};
 
-const { Messages } = await import("../src/ui/screens/Messages");
+const { Messages, PRESS_WAIT_SHOWN_MS } = await import("../src/ui/screens/Messages");
 const { NetworkContext } = await import("../src/ui/network");
 const { ContactEditor } = await import("../src/ui/components/Contacts");
 const { RemoveWallet, ServerStatusLine, KoiosOnly } = await import("../src/ui/screens/Settings");
@@ -466,11 +466,11 @@ describe("the list's states (S4)", () => {
   it("says messages dropped before they could be read in a line of their own, never that deleting makes room (f5)", async () => {
     const both = await mount(overviewOf([], { dropped: 2, droppedUnread: 5 }));
     expect(one(both.container, "messages-dropped").textContent).toBe("2 messages couldn't be kept. Deleting a conversation makes room.");
-    expect(one(both.container, "messages-dropped-unread").textContent).toBe("5 messages were dropped before they could be read.");
+    expect(one(both.container, "messages-dropped-unread-text").textContent).toBe("5 messages were dropped before they could be read.");
     expect(classes(one(both.container, "messages-dropped-unread"))).toContain("callout--warn");
     act(() => both.root.unmount());
     const alone = await mount(overviewOf([], { droppedUnread: 1 }));
-    expect(one(alone.container, "messages-dropped-unread").textContent).toBe("1 message was dropped before it could be read.");
+    expect(one(alone.container, "messages-dropped-unread-text").textContent).toBe("1 message was dropped before it could be read.");
     expect(byTest(alone.container, "messages-dropped")).toHaveLength(0);
     expect(alone.container.textContent).not.toContain("makes room");
     act(() => alone.root.unmount());
@@ -742,5 +742,319 @@ describe("the connector's window while a request is on its way (cross-feature#12
     await answer("dapp-approvals", []);
     expect(one(container, "dapp-empty").textContent).toBe("Loading…");
     act(() => root.unmount());
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The 1.10.0 gate's round 5 (screens5): the freeze's fix B, O4 and O8 on the screens, and the composer under padding.
+// THE RULE on a screen: a request starts at the user's press, or on the page's own grid, never at anything a message
+// holds; so each press below asks once, at the press alone, and a press that waits says so and can't send twice.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** Lets a press run past PRESS_WAIT_SHOWN_MS, the worker not answering yet: what a press shows while it waits (O8). */
+async function waitPastShown() {
+  await act(async () => {
+    await new Promise((done) => setTimeout(done, PRESS_WAIT_SHOWN_MS + 100));
+  });
+}
+
+/** Two presses of `e` in one go, before React draws the first: what a ref, not a disabled button, has to stop. */
+function twice(e: FakeElement, event: () => FakeEvent = () => new FakeEvent("click")) {
+  act(() => {
+    e.dispatchEvent(event());
+    e.dispatchEvent(event());
+  });
+}
+
+/** What the page has asked the worker that it hasn't answered yet, by type. */
+const pending = () => worker.waiting.map((w) => w.type);
+
+describe("round 5: the list's lines and their presses (fix A, fix B, round 4's #6)", { timeout: 10_000 }, () => {
+  it("says when a paused network's server is asked again while that's ahead, and only that it's paused past it", async () => {
+    const { momentOf } = await import("../src/ui/messaging");
+    const askAt = Date.now() + 40 * 60_000;
+    const ahead = await mount(overviewOf([], { paused: true, pausedAskAt: askAt }));
+    expect(one(ahead.container, "messages-paused").textContent).toBe(
+      `Messages are paused. An update of Seedelf Wallet is on its way. The server is asked again at ${momentOf(askAt)}.`,
+    );
+    expect(classes(one(ahead.container, "messages-paused"))).toContain("callout--warn");
+    // Saying it asks nothing: a line is drawn, no request made.
+    expect(pending()).toEqual([]);
+    act(() => ahead.root.unmount());
+    // Past it, the wallet asks at each sync until the server answers: the time is gone from the line, the pause isn't.
+    const past = await mount(overviewOf([], { paused: true, pausedAskAt: Date.now() - 1000 }));
+    expect(one(past.container, "messages-paused").textContent).toBe("Messages are paused. An update of Seedelf Wallet is on its way.");
+    act(() => past.root.unmount());
+    const off = await mount(overviewOf([], { on: false, paused: true, pausedAskAt: askAt }));
+    expect(byTest(off.container, "messages-paused")).toHaveLength(0);
+    act(() => off.root.unmount());
+  });
+
+  it("says stopped in its line, and its Try again asks once, at the press alone, saying it waits while it does", async () => {
+    const { container, root, reload } = await mount(overviewOf([], { stopped: true }));
+    expect(one(container, "messages-stopped").textContent).toBe("Messages stopped on an error and read nothing more until you try again.Try again");
+    expect(asked("messaging-retry")).toHaveLength(0);
+    let read!: () => void;
+    reload.mockImplementation(() => new Promise<void>((done) => (read = done)));
+    twice(one(container, "messages-retry"));
+    expect(asked("messaging-retry")).toHaveLength(1);
+    // A quick press says nothing; one that waits says so on its button, and stays one press.
+    expect(one(container, "messages-retry").textContent).toBe("Try again");
+    await waitPastShown();
+    expect(one(container, "messages-retry").textContent).toBe("Waiting…");
+    click(one(container, "messages-retry"));
+    expect(asked("messaging-retry")).toHaveLength(1);
+    await answer("messaging-retry", null);
+    // Still waiting, on its read of the overview, which waits for a sync too.
+    expect(one(container, "messages-retry").textContent).toBe("Waiting…");
+    await act(async () => {
+      read();
+      await new Promise((done) => setTimeout(done, 0));
+    });
+    expect(one(container, "messages-retry").textContent).toBe("Try again");
+    act(() => root.unmount());
+  });
+
+  it("dismisses messages dropped before they could be read at the press alone, telling the worker the number shown, once", async () => {
+    const { container, root, setOverview, rerender } = await mount(overviewOf([], { droppedUnread: 5 }));
+    const seen = one(container, "messages-dropped-seen");
+    expect(seen.textContent).toBe("Dismiss");
+    // Shown, it's not seen by itself: what was dropped is the wallet's envelopes, and nothing they are starts a request.
+    expect(pending()).toEqual([]);
+    rerender(overviewOf([], { droppedUnread: 7 }));
+    await act(async () => {
+      await new Promise((done) => setTimeout(done, 50));
+    });
+    expect(pending()).toEqual([]);
+    twice(one(container, "messages-dropped-seen"));
+    expect(asked("messaging-seen").map((w) => w.payload)).toEqual([{ droppedUnread: 7 }]);
+    await waitPastShown();
+    expect(one(container, "messages-dropped-seen").textContent).toBe("Waiting…");
+    const next = overviewOf([]);
+    await answer("messaging-seen", next);
+    expect(setOverview).toHaveBeenCalledWith(next);
+    act(() => root.unmount());
+  });
+
+  it("says Try again for an overview that couldn't be read waits, and reads once", async () => {
+    const { container, root, reload } = await mount(undefined, { error: "Seedelf Wallet couldn't open its record of your messages on this device, so it won't write over it." });
+    reload.mockClear();
+    reload.mockImplementation(() => new Promise<void>(() => {}));
+    const again = one(container, "messages-read-again");
+    twice(again);
+    expect(reload).toHaveBeenCalledTimes(1);
+    await waitPastShown();
+    expect(one(container, "messages-read-again").textContent).toBe("Waiting…");
+    expect(one(container, "messages-read-again").getAttribute("disabled")).not.toBeNull();
+    act(() => root.unmount());
+  });
+
+  it("starts Messages again only behind its question, asked once, saying it waits", async () => {
+    const { container, root } = await mount(undefined, { error: "Seedelf Wallet couldn't open its record of your messages on this device, so it won't write over it." });
+    click(one(container, "messages-clear"));
+    expect(asked("messaging-clear")).toHaveLength(0);
+    twice(one(container, "messages-clear-confirm"));
+    expect(asked("messaging-clear")).toHaveLength(1);
+    await waitPastShown();
+    expect(one(container, "messages-clear-confirm").textContent).toBe("Waiting…");
+    act(() => root.unmount());
+  });
+
+  it("says a Seedelf's switch and the Messages switch wait, under the switch, and asks each once", async () => {
+    const { container, root } = await mount(overviewOf([], { seedelfs: [{ name: LOOKALIKE, register: REGISTER, made: false, on: false }] }));
+    twice(one(container, "messages-seedelf-switch"));
+    expect(asked("messaging-answer-at")).toHaveLength(1);
+    await waitPastShown();
+    expect(one(container, "press-waits").textContent).toBe("Waiting…");
+    expect(one(container, "messages-seedelf-switch").getAttribute("aria-busy")).toBe("true");
+    await answer("messaging-answer-at", overviewOf([], { seedelfs: [{ name: LOOKALIKE, register: REGISTER, made: false, on: true }] }));
+    expect(byTest(container, "press-waits")).toHaveLength(0);
+    twice(one(container, "messages-switch"));
+    expect(asked("messaging-switch").map((w) => w.payload)).toEqual([{ on: false }]);
+    await waitPastShown();
+    expect(one(container, "press-waits").textContent).toBe("Waiting…");
+    act(() => root.unmount());
+  });
+});
+
+describe("round 5: a thread's presses (fix B, O8)", { timeout: 10_000 }, () => {
+  const c = conversation({ cid: "c1", role: "responder", to: MINE });
+  const unchecked: MessagingEntry = { id: 0, dir: "in", at: now - 1000, reveal: { status: "unchecked" } };
+
+  it("says a reveal is being checked only while its check's request runs", async () => {
+    const { container, root } = await openThread(c, [unchecked, { ...unchecked, id: 1 }]);
+    const texts = () => byTest(container, "bubble-reveal").map((e) => e.textContent);
+    expect(texts()).toEqual(["Showed you a Seedelf, not checked on the chain yet", "Showed you a Seedelf, not checked on the chain yet"]);
+    // Nothing checks by itself.
+    expect(asked("messaging-check-reveal")).toHaveLength(0);
+    click(byTest(container, "reveal-check")[0]!);
+    expect(asked("messaging-check-reveal").map((w) => w.payload)).toEqual([{ cid: "c1" }]);
+    // The press checks every reveal of the conversation not yet checked: each says so, and none offers a second check.
+    expect(texts()).toEqual(["Showed you a Seedelf, checking it on the chain", "Showed you a Seedelf, checking it on the chain"]);
+    expect(byTest(container, "reveal-check")).toHaveLength(0);
+    await waitPastShown();
+    expect(texts()[0]).toBe("Showed you a Seedelf, checking it on the chain");
+    await answer("messaging-check-reveal", null);
+    // Its request over, nothing is said to be checked: the thread read again says what came of it.
+    expect(texts()).not.toContain("Showed you a Seedelf, checking it on the chain");
+    await answer("messaging-thread", threadOf(c, [{ ...unchecked, reveal: { status: "verified", name: ALICE } }, { ...unchecked, id: 1, reveal: { status: "failed" } }]));
+    expect(texts()).toEqual([WORDS, "Showed you a Seedelf that couldn't be verified, so it isn't named."]);
+    act(() => root.unmount());
+  });
+
+  it("says a refused check's reveal is unchecked again, never still checking", async () => {
+    const { container, root } = await openThread(c, [unchecked]);
+    click(one(container, "reveal-check"));
+    await answer("messaging-check-reveal", undefined, new Error("Koios didn't answer."));
+    expect(one(container, "bubble-reveal").textContent).toBe("Showed you a Seedelf, not checked on the chain yet");
+    expect(byTest(container, "reveal-check")).toHaveLength(1);
+    act(() => root.unmount());
+  });
+
+  it("sends a refused message again once, at the press alone, saying it waits on its own button", async () => {
+    const { container, root } = await openThread(c, [
+      { id: 0, dir: "out", at: now, text: "a", sent: "refused", refusedBy: "server", resend: true },
+      { id: 1, dir: "out", at: now, text: "b", sent: "refused", refusedBy: "server", resend: true },
+    ]);
+    expect(asked("messaging-resend")).toHaveLength(0);
+    const [first] = byTest(container, "bubble-resend");
+    twice(first!);
+    expect(asked("messaging-resend").map((w) => w.payload)).toEqual([{ cid: "c1", id: 0 }]);
+    await waitPastShown();
+    expect(byTest(container, "bubble-resend").map((e) => e.textContent)).toEqual(["Waiting…", "Send again"]);
+    // The other's waits its turn: one press at a time.
+    click(byTest(container, "bubble-resend")[1]!);
+    expect(asked("messaging-resend")).toHaveLength(1);
+    await answer("messaging-resend", null);
+    expect(asked("messaging-thread")).toHaveLength(1);
+    act(() => root.unmount());
+  });
+
+  it("sends once a message whose send waits, says so on its button and under the box, and keeps its text", async () => {
+    const { container, root } = await openThread(c);
+    const box = one(container, "composer");
+    type(box, "hello");
+    twice(box, () => new Key("Enter"));
+    expect(asked("messaging-send").map((w) => w.payload)).toEqual([{ cid: "c1", text: "hello" }]);
+    // A quick send says nothing.
+    expect(byTest(container, "composer-waits")).toHaveLength(0);
+    expect(one(container, "composer-send").getAttribute("aria-label")).toBe("Send");
+    await waitPastShown();
+    expect(one(container, "composer-waits").textContent).toBe("Waiting…");
+    expect(one(container, "composer-send").getAttribute("aria-label")).toBe("Waiting…");
+    expect(valueOf(one(container, "composer"))).toBe("hello");
+    press(one(container, "composer"), new Key("Enter"));
+    submit(elements(container).find((e) => e.localName === "form")!);
+    expect(asked("messaging-send")).toHaveLength(1);
+    await answer("messaging-send", null);
+    expect(byTest(container, "composer-waits")).toHaveLength(0);
+    expect(valueOf(one(container, "composer"))).toBe("");
+    act(() => root.unmount());
+  });
+
+  it("says a thread's Try again waits, and reads once", async () => {
+    const { container, root } = await mount(overviewOf([conversation({ cid: "c1", role: "initiator", handle: ALICE, unreadable: true })]));
+    click(one(container, "messages-conversation"));
+    await answer("messaging-thread", undefined, new Error("Seedelf Wallet couldn't open its record of a conversation on this device, so it won't write over it."));
+    twice(one(container, "thread-read-again"));
+    expect(asked("messaging-thread")).toHaveLength(1);
+    await waitPastShown();
+    expect(one(container, "thread-read-again").textContent).toBe("Waiting…");
+    act(() => root.unmount());
+  });
+
+  it("deletes once, and names once, Enter included, saying each waits", async () => {
+    const { container, root } = await openThread(c);
+    click(one(container, "thread-delete"));
+    twice(one(container, "messages-delete-confirm"));
+    expect(asked("messaging-delete")).toHaveLength(1);
+    await waitPastShown();
+    expect(one(container, "messages-delete-confirm").textContent).toBe("Waiting…");
+    act(() => root.unmount());
+    const named = await openThread(c);
+    click(one(named.container, "thread-rename"));
+    const input = one(named.container, "messages-name");
+    type(input, "Bea");
+    press(input, new Key("Enter"));
+    press(input, new Key("Enter"));
+    click(one(named.container, "messages-name-save"));
+    expect(asked("messaging-name").map((w) => w.payload)).toEqual([{ cid: "c1", name: "Bea" }]);
+    await waitPastShown();
+    expect(one(named.container, "messages-name-save").textContent).toBe("Waiting…");
+    act(() => named.root.unmount());
+  });
+
+  it("accepts a request once, whether by Accept or by a reply, saying Accept waits", async () => {
+    const request = { cid: "r1", startedAt: now, to: MINE, messages: 1, lastAt: now, unread: 1 };
+    const { container, root } = await mount(overviewOf([], { requests: [request] }));
+    click(elements(one(container, "messages-requests")).find((e) => e.localName === "button")!);
+    await answer("messaging-request", [{ id: 0, dir: "in", at: now, text: "hello" }]);
+    twice(one(container, "request-accept"));
+    type(one(container, "composer"), "hi");
+    press(one(container, "composer"), new Key("Enter"));
+    expect(asked("messaging-accept")).toHaveLength(1);
+    expect(asked("messaging-send")).toHaveLength(0);
+    await waitPastShown();
+    expect(one(container, "request-accept").textContent).toBe("Waiting…");
+    // What was typed meanwhile stays in the box.
+    expect(valueOf(one(container, "composer"))).toBe("hi");
+    act(() => root.unmount());
+  });
+});
+
+describe("round 5: what the thread offers follows the worker's fields alone (O4)", { timeout: 10_000 }, () => {
+  const sent: MessagingEntry = { id: 0, dir: "out", at: now - 3600_000, text: "hello Alice", sent: "posted", expires: now + 30 * 3600_000 };
+
+  it("after a reply the thread doesn't show, offers what an unanswered one does: the held share's room, no Show my Seedelf", async () => {
+    // As the worker gives it (worker5b): the held share in firstContactLeft and maxTextBytes, no seedelfs. The reply
+    // isn't in the thread, so nothing the screen can see says one came.
+    const held = conversation({ cid: "c1", role: "initiator", handle: ALICE, firstContactLeft: { messages: 3, bytes: 900 } });
+    const { container, root } = await openThread(held, [sent], { maxTextBytes: 900 });
+    expect(byTest(container, "thread-reveal")).toHaveLength(0);
+    const box = one(container, "composer");
+    type(box, "x".repeat(800));
+    expect(container.textContent).toContain("100 bytes left");
+    type(box, "x".repeat(901));
+    expect(container.textContent).toContain("1 byte too long");
+    press(box, new Key("Enter"));
+    expect(asked("messaging-send")).toHaveLength(0);
+    act(() => root.unmount());
+  });
+
+  it("never takes a shown reply's place: with the worker's fields unanswered, the restart prompt stays and Show my Seedelf doesn't come", async () => {
+    const c = conversation({ cid: "c1", role: "initiator", handle: ALICE, unanswered: true, firstContactLeft: { messages: 15, bytes: 60_000 } });
+    const { container, root } = await openThread(c, [sent, { id: 1, dir: "in", at: now, text: "a reply the screen draws" }], { maxTextBytes: 31_000 });
+    expect(one(container, "thread-restart").textContent).toContain("No reply in 48 hours");
+    expect(byTest(container, "thread-reveal")).toHaveLength(0);
+    act(() => root.unmount());
+    // A share used up, held: wait for a reply, and Start again at once.
+    const used = await openThread(conversation({ cid: "c1", role: "initiator", handle: ALICE, firstContactLeft: { messages: 0, bytes: 0 } }), [sent], { maxTextBytes: 0 });
+    expect(one(used.container, "thread-restart").textContent).toContain("Wait for a reply");
+    act(() => used.root.unmount());
+  });
+
+  it("offers Show my Seedelf and the whole room once the worker says a shown reply came", async () => {
+    const answered = conversation({ cid: "c1", role: "initiator", handle: ALICE });
+    const { container, root } = await openThread(answered, [sent, { id: 1, dir: "in", at: now, text: "hi!" }], { maxTextBytes: 32_002, seedelfs: [MINE] });
+    expect(byTest(container, "thread-reveal")).toHaveLength(1);
+    expect(byTest(container, "thread-restart")).toHaveLength(0);
+    type(one(container, "composer"), "x".repeat(26_000));
+    expect(container.textContent).toContain("6002 bytes left");
+    act(() => root.unmount());
+  });
+});
+
+describe("round 5: the composer under padding", () => {
+  it("counts from the worker's room alone: no envelope's size or text room is a figure of the screens'", () => {
+    for (const file of ["../src/ui/screens/Messages.tsx", "../src/ui/messaging.ts"]) {
+      const source = readFileSync(new URL(file, import.meta.url), "utf8");
+      expect(source, file).not.toMatch(/\b(512|2_?048|8_?192|32_?768|32_?517|32_?525|65_?536)\b/);
+    }
+    // And no screen text names an envelope's size.
+    for (const code of ["en", "es", "ja"]) {
+      const words: Record<string, string> = JSON.parse(readFileSync(new URL(`../src/i18n/translations/${code}.json`, import.meta.url), "utf8"));
+      const named = Object.entries(words).filter(([k, v]) => k.startsWith("messages.") && /\b512\b|2[.,\s]?048|32[.,\s]?768/.test(v));
+      expect(named, code).toEqual([]);
+    }
   });
 });

@@ -320,6 +320,14 @@ impl Conversation {
     /// inner messages before a reply ([`Error::RequestFull`], before the
     /// chain moves; [`Conversation::first_contact_left`] says what's left).
     ///
+    /// Every message, either side's, before a reply and after one, is padded
+    /// to the envelope its text would take as a first-contact message of
+    /// this conversation (docs/protocol.md §9): so 2 KiB at least, and
+    /// neither a reply taken nor which side writes changes a size. A text
+    /// whose first-contact form doesn't fit 32 KiB is
+    /// [`Error::MessageTooLarge`], after a reply too
+    /// ([`Conversation::max_text_len`]).
+    ///
     /// The caller stores the new state and the envelope together before
     /// posting it (docs/protocol.md §4.2). On an error the state is as it
     /// was.
@@ -346,7 +354,11 @@ impl Conversation {
         if stamp.is_some() && !self.share_takes(inner_len) {
             return Err(Error::RequestFull);
         }
-        let size = envelope_size(inner_len)?;
+        // The size its text takes as a first-contact message, never less
+        // than its own inner message's: the same before a reply and after,
+        // at either side (docs/protocol.md §9).
+        let size = envelope_size(self.first_contact_overhead() + plaintext.len())?
+            .max(envelope_size(inner_len)?);
         let mut ratchet = self.ratchet.clone();
         let (header, mk) = ratchet.next_sending()?;
         let salt = draw.bytes16();
@@ -549,10 +561,12 @@ impl Conversation {
     }
 
     /// The longest text the next message can carry: the largest envelope's
-    /// room, and before a reply the request's share's too, 0 once it's used
-    /// up.
+    /// room for it as a first-contact message of this conversation, which
+    /// every message is padded as ([`Conversation::send`]), before a reply
+    /// and after one, at either side; and before a reply the request's
+    /// share's too, 0 once it's used up.
     pub fn max_text_len(&self) -> usize {
-        let room = inner_capacity(MAX_ENVELOPE_LEN) - self.inner_overhead();
+        let room = inner_capacity(MAX_ENVELOPE_LEN) - self.first_contact_overhead();
         match self.first_contact_left() {
             Some((0, _)) => 0,
             Some((_, bytes)) => room.min(bytes.saturating_sub(self.inner_overhead())),
@@ -595,12 +609,24 @@ impl Conversation {
         ad
     }
 
+    /// The next message's inner message beside its text, as the share
+    /// counts it: a first-contact message's overhead, else a session
+    /// message's 105 bytes. Its padding isn't counted.
     fn inner_overhead(&self) -> usize {
         if self.sends_first_contact() {
-            1 + self.first_bytes.len() + STAMP_LEN + RATCHET_HEADER_LEN + RATCHET_OVERHEAD
+            self.first_contact_overhead()
         } else {
             SESSION_OVERHEAD
         }
+    }
+
+    /// What a first-contact message of this conversation holds beside its
+    /// text: its type, F, the stamp, the ratchet header, and the ratchet
+    /// ciphertext's salt and tag. F + 97 bytes: 379 in a continuation, 588
+    /// to 635 from a handle. Both sides hold F, so it's the same at both,
+    /// and every message is padded as if it had it (docs/protocol.md §9).
+    fn first_contact_overhead(&self) -> usize {
+        1 + self.first_bytes.len() + STAMP_LEN + RATCHET_HEADER_LEN + RATCHET_OVERHEAD
     }
 
     /// The state's bytes, for the wallet's sealed records (docs/protocol.md

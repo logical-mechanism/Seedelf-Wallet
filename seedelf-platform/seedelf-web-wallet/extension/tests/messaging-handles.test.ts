@@ -387,8 +387,8 @@ describe("which Seedelfs take first messages, over time (W12)", { timeout: 30_00
     const second = await alice.messaging.start("preprod", BOB_SEEDELF, "while the press is written");
     await alice.messaging.whenIdle();
     let release!: () => void;
-    // The press's rewind (its write of the take record, the first after this) still on its way.
-    const hold = { next: true, holding: false, held: new Promise<void>((r) => (release = r)), on: TAKES };
+    // The press's rewind (its write of the read record, the first after this) still on its way.
+    const hold = { next: true, holding: false, held: new Promise<void>((r) => (release = r)), on: READ };
     const written = logCursors(bob, hold);
     let turnedOn: Promise<unknown> | undefined;
     try {
@@ -450,7 +450,8 @@ describe("which Seedelfs take first messages, over time (W12)", { timeout: 30_00
 });
 
 const INBOX = "messaging.preprod";
-const TAKES = "messagingTake.preprod";
+// Where the next read goes on from is the read record's since round 5 (round 4: the take record's, finding 8).
+const READ = "messagingRead.preprod";
 const MINTED_AT_KEY = PRIVATE_PREFIX + "mintedAt.preprod";
 const POOL_START = "GET /messaging/v1/preprod/envelopes";
 const gets = (relay: FakeRelay) => relay.calls.filter((c) => c.startsWith("GET "));
@@ -494,7 +495,7 @@ function holdRead(p: Party, key: string) {
 }
 
 /**
- * Logs every cursor `p` writes as where its next read goes on from (the take record's, finding 8) as the write lands
+ * Logs every cursor `p` writes as where its next read goes on from (the read record's, round 5) as the write lands
  * ("none": one with no cursor, a rewind); with `hold`, holds the next write of the record `hold.on` names.
  */
 function logCursors(p: Party, hold?: { next: boolean; held: Promise<void>; holding: boolean; on: string }): string[] {
@@ -505,7 +506,7 @@ function logCursors(p: Party, hold?: { next: boolean; held: Promise<void>; holdi
       hold.holding = true;
       await hold.held;
     }
-    if (name === TAKES) out.push((value as { cursor?: string }).cursor ?? "none");
+    if (name === READ) out.push((value as { cursor?: string }).cursor ?? "none");
   };
   return out;
 }
@@ -540,7 +541,7 @@ async function waitingAt(alice: Party, bob: Party): Promise<string> {
 /** What W12 promises after the press, each said on its own (soft), so a failure shows all of what went wrong. */
 async function rewindHeld(relay: FakeRelay, bob: Party, written: string[], expected: string[]) {
   const reset = written.lastIndexOf("none");
-  expect.soft(reset, "a take record written with no cursor (the press's rewind)").toBeGreaterThanOrEqual(0);
+  expect.soft(reset, "a read record written with no cursor (the press's rewind)").toBeGreaterThanOrEqual(0);
   expect.soft(written.slice(reset + 1).filter((c) => c !== "none"), "cursors written after the press's rewind").toEqual([]);
   expect.soft(await cursorOf(bob), "the cursor once everything settled").toBeUndefined();
   relay.calls.length = 0;

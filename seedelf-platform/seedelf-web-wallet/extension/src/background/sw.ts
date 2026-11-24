@@ -292,9 +292,9 @@ function getContext(): Promise<Worker> {
       preferences,
       relay: (n) => new RelayClient({ origin: relayOrigin(n, __DATA_ORIGIN__), pool: NETWORKS[n].relay.pool }),
       // The Seedelfs under the key in the view the last reading kept, with no request (undefined: none kept); or, `read`,
-      // in what's new in the contract read now.
-      ownSeedelfs: async (n, read) =>
-        (read ? await readContractView(spends, n) : await wallet.withKeys(() => keptContractView(session, n)))?.owned.flatMap((utxo) => {
+      // in what's new in the contract read now. `admit`: the kept view's turn in the wallet's queue, as Messages' gate has it.
+      ownSeedelfs: async (n, read, admit) =>
+        (read ? await readContractView(spends, n) : await wallet.withKeys(() => keptContractView(session, n), admit))?.owned.flatMap((utxo) => {
           const name = seedelfTokenOf(utxo, CONTRACT_V1.seedelfPolicyId);
           const register = name ? registerOf(utxo) : undefined;
           return name && register ? [{ name, register }] : [];
@@ -310,6 +310,15 @@ function getContext(): Promise<Worker> {
       now: Date.now,
       // What the whole area holds, Chrome's own count: Messages leaves its reserve free for payments (W11).
       bytesInUse: () => chrome.storage.local.getBytesInUse(null),
+      // What one key holds, the same count with no value read: the rooms' sizes (the 1.10.0 gate's round 5).
+      bytesOf: (key) => chrome.storage.local.getBytesInUse(key),
+      // The ticks the worker expects, by Chrome's own schedule (the 1.10.0 gate's round 5): Messages' alarm, whose run
+      // reads the relay, and the sessions' alarm, whose run reads the data layer, on mainnet the relay's own server.
+      // Messages' background work keeps off both, and off each open page's poll.
+      ticks: async () => {
+        const [messages, runs] = await Promise.all([chrome.alarms.get(MESSAGING_ALARM), chrome.alarms.get(SESSIONS_ALARM)]);
+        return [...(messages ? [{ at: messages.scheduledTime, lane: true }] : []), ...(runs ? [{ at: runs.scheduledTime, lane: false }] : [])];
+      },
       // Any call to Chrome resets the idle timer, which would otherwise stop the worker partway through a stamp.
       keepAlive: () => chrome.runtime.getPlatformInfo().then(() => undefined),
       changed: (n) => broadcast({ ...MESSAGING_CHANGED, network: n }),

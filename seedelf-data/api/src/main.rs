@@ -72,18 +72,30 @@ async fn main() -> anyhow::Result<()> {
         Edge::new(config.trust_proxy, config.origins.clone(), egress)
             .with_messaging_egress(messaging_egress)
             .with_reserve(config.messaging_reserve)
+            .with_caps(config.edge_caps)
             .with_messaging_off(config.messaging_off),
     );
     tokio::spawn(edge::keep(edge.clone()));
+    let caps = config.edge_caps;
     info!(
         origins = config.origins.len(),
         trust_proxy = config.trust_proxy,
         egress_ceiling = config.egress_ceiling.is_some(),
         messaging_egress_ceiling = config.messaging_egress_ceiling.is_some(),
+        in_flight_messaging_address = caps.messaging_address,
+        in_flight_data_address = caps.data_address,
+        in_flight_messaging = caps.messaging,
+        in_flight_data = caps.data,
+        answers_mib = caps.answer_bytes >> 20,
+        compressing = caps.compressing,
+        connections = config.connections,
         "the edge's limits"
     );
-    let relay =
-        Arc::new(Relay::new(config.state_dir.as_deref()).with_reading(config.messaging_reading));
+    let relay = Arc::new(
+        Relay::new(config.state_dir.as_deref())
+            .with_reading(config.messaging_reading)
+            .with_reserve_read(config.messaging_reserve_read),
+    );
     tokio::spawn(messaging::keep(relay.clone()));
     info!(
         off = config.messaging_off,
@@ -92,15 +104,18 @@ async fn main() -> anyhow::Result<()> {
         read_pools_day = config.messaging_reading.pools,
         reserve_percent = (config.messaging_reserve.part * 100.0).round() as u64,
         reserve_page_kib = config.messaging_reserve.page >> 10,
+        reserve_read_mib_day = config.messaging_reserve_read >> 20,
         "the messaging relay"
     );
 
-    let listener = tokio::net::TcpListener::bind(config.listen).await?;
+    // Each connection with the kernel's deadline on what it sends and a
+    // small send buffer (serve.rs).
+    let listener = seedelf_data_api::serve::listen(config.listen)?;
     info!(listen = %config.listen, "seedelf-data-api is listening");
     let app = seedelf_data_api::app(state, submit, edge.clone(), relay.clone(), &config.origins);
     // Until the signal, and then for at most the stop's deadline: what's
     // still open after it is dropped (serve.rs).
-    seedelf_data_api::serve::serve(listener, app, shutdown()).await?;
+    seedelf_data_api::serve::serve_with(listener, app, shutdown(), config.connections).await?;
     // The month's traffic, and the pools as they are, written down before
     // the server stops: nothing more comes in now, so the pools' files are
     // marked clean.

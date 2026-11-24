@@ -309,6 +309,7 @@
   "messages.warn.offline",
   "messages.warn.ownSeedelf",
   "messages.warn.paused",
+  "messages.warn.pausedAskAt",
   "messages.warn.revealFailed",
   "messages.warn.sharedName",
   "messages.warn.stopped",

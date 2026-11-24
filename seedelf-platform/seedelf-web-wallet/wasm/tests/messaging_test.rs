@@ -576,7 +576,7 @@ fn two_wallets_write_through_the_bindings() {
     .unwrap();
     assert_eq!(refused(unknown), "unknown_conversation");
     let (mut b, reply) = send(&accepted.conversation, b"hello Alice");
-    assert_eq!(reply.len(), 2 * 512);
+    assert_eq!(reply.len(), 2 * 2048);
 
     // Alice reads it with her conversation's record, and her next is a session message.
     assert_eq!(
@@ -593,7 +593,8 @@ fn two_wallets_write_through_the_bindings() {
         .unwrap()
     };
     // Before the reply, each message carries F (522 bytes to a 32-byte name)
-    // and the stamp: less room for text.
+    // and the stamp; after it, each is padded to that size anyway (protocol.md §9),
+    // so the room for text is the same at both.
     let before = messaging::conversation_info(&a).unwrap();
     assert_eq!(before.sent_in_chain, 2);
     assert_eq!(
@@ -607,7 +608,10 @@ fn two_wallets_write_through_the_bindings() {
     let after = messaging::conversation_info(&a).unwrap();
     assert!(!after.sends_first_contact);
     assert_eq!(after.sent_in_chain, 0, "a new sending chain");
-    assert_eq!(after.max_text_len, 32_768 - 145 - 1 - 105);
+    assert_eq!(
+        after.max_text_len,
+        32_768 - 145 - 1 - (1 + 522 + 8 + 56 + 32)
+    );
     assert_eq!(after.first_contact_left, None);
     // Without its conversation, a session message is one this browser no longer has.
     let missing = messaging::receive(
@@ -619,7 +623,7 @@ fn two_wallets_write_through_the_bindings() {
     let (a3, m1) = send(&a, b"one");
     let (a4, m2) = send(&a3, b"two");
     a = a4;
-    assert_eq!(m1.len(), 2 * 512);
+    assert_eq!(m1.len(), 2 * 2048);
     // Out of order: the second first, and the first is then missing until it comes.
     let result = done(read(bob.sk, &m2, &b, T + 180));
     assert_eq!(plaintext_of(&result), b"two");
@@ -881,10 +885,9 @@ fn a_reveal_through_the_bindings() {
     let mut plaintext = vec![0x02];
     plaintext.extend(hex::decode(&shown.reveal).unwrap());
     let (a, carried) = send(&a, &plaintext);
-    // 105 bytes of a session message and the reveal's 258 fit the smallest
-    // envelope's 366 since the envelope carries a tag of w in place of w:
-    // a reveal's size doesn't tell it from a short message.
-    assert_eq!(carried.len(), 2 * 512);
+    // Padded to its first-contact size, as every message is (protocol.md §9), a
+    // reveal is 2 KiB, like any short message: its size doesn't tell it apart.
+    assert_eq!(carried.len(), 2 * 2048);
     let came = done(
         messaging::receive(
             bob.sk,

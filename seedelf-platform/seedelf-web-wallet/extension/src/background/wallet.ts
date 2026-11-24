@@ -153,6 +153,20 @@ export const WASM_BROKEN = () => t("worker.wallet.trapped");
 export class WalletLocked extends Error {}
 
 /**
+ * A call's own check, made in the wallet's queue as its turn comes (`withKeys`, `withStoreKey`, `state`,
+ * `unlockedAt`): false, and the call gives the queue back without running. Seedelf Messaging's background work and
+ * screens pass one, so a call that waited behind another feature's long task never runs in a run of the wallet's
+ * requests to the relay, nor just before one (messaging.ts, the 1.10.0 gate's round 5).
+ */
+export type Admit = () => boolean;
+
+/**
+ * A call its `Admit` turned away as its turn came: it didn't run, and nothing was locked, wiped or derived for it. Not
+ * a lock, never a trap: the caller waits and asks again. Never shown: its caller's own wait catches it.
+ */
+export class NotAdmitted extends Error {}
+
+/**
  * Whether session storage holds an unlocked wallet's entropy. Without it
  * there's nothing to lock, so the auto-lock alarm stops without starting
  * WebAssembly (sw.ts): a browser restart drops session storage but keeps
@@ -266,9 +280,15 @@ export class Wallet {
 
   constructor(private readonly deps: WalletDeps) {}
 
-  /** The current state. Also applies auto-lock, so the alarm just calls this. */
-  state(): Promise<WalletState> {
-    return this.serial(() => this.load());
+  /**
+   * The current state. Also applies auto-lock, so the alarm just calls this. `admit`: looked at as its turn comes;
+   * false, and nothing is loaded (NotAdmitted).
+   */
+  state(admit?: Admit): Promise<WalletState> {
+    return this.serial(async () => {
+      if (admit && !admit()) throw new NotAdmitted();
+      return this.load(admit);
+    });
   }
 
   /** Why the wallet locked itself, if it did: "trap", its WebAssembly stopped working. */
@@ -353,11 +373,14 @@ export class Wallet {
    * (privacy review §3.1): what the worker sends by itself waits a fresh
    * draw from it, made by whichever run or page gets there first, not only
    * the unlock's own run (independent review L10, L11, L12). One unlocked
-   * before it was kept counts from now.
+   * before it was kept counts from now. `admit`: looked at as its turn comes, and again after the state's load (as
+   * `withKeys`'s); false, and it doesn't run (NotAdmitted).
    */
-  unlockedAt(): Promise<number> {
+  unlockedAt(admit?: Admit): Promise<number> {
     return this.serial(async () => {
-      if ((await this.load()) !== "unlocked") throw new WalletLocked(t("worker.wallet.locked"));
+      if (admit && !admit()) throw new NotAdmitted();
+      if ((await this.load(admit)) !== "unlocked") throw new WalletLocked(t("worker.wallet.locked"));
+      if (admit && !admit()) throw new NotAdmitted();
       const at = await this.deps.session.get<number>(SESSION_UNLOCKED_AT);
       if (typeof at === "number") return at;
       const now = this.deps.now();
@@ -534,10 +557,16 @@ export class Wallet {
    * Runs `task` with the unlocked keys, in turn with every other wallet
    * operation, so a lock can't happen halfway through. Throws if locked.
    * Keep tasks short and never await the network inside one.
+   *
+   * `admit`: the caller's own check, made as the call's turn in the queue comes, before the state's load (false: no
+   * load), before any key is derived in it, and again right before `task` (a run of requests can start while the load
+   * reads session storage). False any time, and `task` doesn't run: NotAdmitted, which locks and wipes nothing.
    */
-  withKeys<T>(task: (keys: Keys) => T | Promise<T>): Promise<T> {
+  withKeys<T>(task: (keys: Keys) => T | Promise<T>, admit?: Admit): Promise<T> {
     return this.serial(async () => {
-      if ((await this.load()) !== "unlocked") throw new WalletLocked(t("worker.wallet.locked"));
+      if (admit && !admit()) throw new NotAdmitted();
+      if ((await this.load(admit)) !== "unlocked") throw new WalletLocked(t("worker.wallet.locked"));
+      if (admit && !admit()) throw new NotAdmitted();
       return task(this.keys!);
     });
   }
@@ -580,11 +609,17 @@ export class Wallet {
    * Runs `task` with the key that seals this wallet's private records on the
    * device (private-store.ts): HKDF-SHA-256 of the vault's entropy, so it
    * exists only while unlocked. It's zeroed afterwards. Throws if locked.
+   * `admit`: as `withKeys`'s, its last look after the entropy's read, right before the key is derived and `task` runs,
+   * so a call turned away derives none.
    */
-  withStoreKey<T>(task: (key: Uint8Array) => T | Promise<T>): Promise<T> {
+  withStoreKey<T>(task: (key: Uint8Array) => T | Promise<T>, admit?: Admit): Promise<T> {
     return this.serial(async () => {
-      if ((await this.load()) !== "unlocked") throw new WalletLocked(t("worker.wallet.locked"));
-      const entropy = fromBase64((await this.deps.session.get<string>(SESSION_ENTROPY))!);
+      if (admit && !admit()) throw new NotAdmitted();
+      if ((await this.load(admit)) !== "unlocked") throw new WalletLocked(t("worker.wallet.locked"));
+      if (admit && !admit()) throw new NotAdmitted();
+      const stored = await this.deps.session.get<string>(SESSION_ENTROPY);
+      if (admit && !admit()) throw new NotAdmitted();
+      const entropy = fromBase64(stored!);
       const key = hkdf(sha256, entropy, STORE_SALT, STORE_INFO, 32);
       entropy.fill(0);
       try {
@@ -644,8 +679,10 @@ export class Wallet {
   /**
    * Brings worker memory in line with storage: after a restart, re-derive the
    * keys from session storage; past the auto-lock deadline, lock instead.
+   * `admit`: a caller's check (`withKeys`), looked at before keys are
+   * derived: NotAdmitted, nothing derived, locked or wiped.
    */
-  private async load(): Promise<WalletState> {
+  private async load(admit?: Admit): Promise<WalletState> {
     const { session, local, now } = this.deps;
     const stored = await session.get<string>(SESSION_ENTROPY);
     if (stored) {
@@ -662,6 +699,8 @@ export class Wallet {
         // the account the user just left.
         const account = await this.active();
         if (!this.keys || this.keys.account !== account) {
+          // A call its caller's check turns away now (`Admit`) derives nothing: no key it doesn't use.
+          if (admit && !admit()) throw new NotAdmitted();
           const entropy = fromBase64(stored);
           try {
             const keys = this.derive(entropy, account);

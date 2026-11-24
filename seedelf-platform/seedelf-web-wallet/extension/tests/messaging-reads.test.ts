@@ -10,7 +10,7 @@
 // one step that looks at what an envelope holds), and compare what each asks.
 import { describe, expect, it } from "vitest";
 
-import { TAKE_BYTES } from "../src/background/messaging";
+import { TAKE_ROOM_BYTES } from "../src/background/messaging";
 import { PAGES_A_SYNC } from "../src/background/relay";
 import {
   BOB_SEEDELF,
@@ -178,17 +178,17 @@ describe("what a read asks (W10)", { timeout: 60_000 }, () => {
     await expectOnFromLast(relay, bob);
   });
 
-  it("keeps at most TAKE_BYTES of what the reads found: a read too large for it keeps its first envelopes, and the rest are counted unopened (finding 8)", async () => {
+  it("saves a read in the take record only within its room: one past it is taken from memory, nothing counted lost without a stop (round 5, O5)", async () => {
     const { relay, alice, bob } = await pair();
     const cid = await talking(alice, bob);
     await synced(bob);
     await alice.messaging.send("preprod", cid, "one");
     await alice.messaging.whenIdle();
-    // One read of 4 MiB, every envelope "the key's": more than the take record holds.
+    // One read of 4 MiB, every envelope "the key's": far past the take record's room.
     for (let i = 0; i < PAGES_A_SYNC * 8 - 1; i++) relay.put("preprod", bigJunk(i));
     bob.restart(claiming((e) => e.startsWith("01") && e.endsWith("6b6b6b6b")));
     bob.trace.length = 0;
-    // The take held at "one"'s record, so the record is looked at as the read left it.
+    // The take held at "one"'s record, so the take record is looked at as the runner's first phase left it.
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
     let holding = false;
@@ -199,22 +199,21 @@ describe("what a read asks (W10)", { timeout: 60_000 }, () => {
       await held;
     };
     await bob.messaging.sync("preprod");
-    await turns();
+    for (let i = 0; i < 200 && !holding; i++) await turns(1);
     expect(holding).toBe(true);
-    // What it keeps of the read, as stored: within TAKE_BYTES, and short of it by less than one more envelope.
-    const json = JSON.stringify(await takesOf(bob)).length;
-    expect(json).toBeLessThanOrEqual(TAKE_BYTES);
-    expect(json).toBeGreaterThan(TAKE_BYTES - 4 * Math.ceil(32768 / 3) - 3);
+    // Not saved: the take record holds none of it, and stays within its room.
+    const takes = await takesOf(bob);
+    expect(takes?.batches ?? []).toEqual([]);
+    expect(JSON.stringify(takes ?? {}).length).toBeLessThanOrEqual(TAKE_ROOM_BYTES);
     release();
     await bob.messaging.whenIdle();
     bob.beforeWrite = undefined;
     const opened = bob.trace.filter((s) => s === "open").length;
-    // Its first envelopes, "one" among them, taken; every one past the record's bytes counted, none twice.
+    // Every envelope of it taken from memory, "one" among them, each once; nothing counted, since nothing was lost.
     expect((await texts(bob, cid)).at(-1)).toBe("in:one");
-    expect(opened).toBeGreaterThan(1);
-    expect(opened * 32 * 1024).toBeLessThan(TAKE_BYTES);
+    expect(opened).toBe(PAGES_A_SYNC * 8);
     const overview = await bob.messaging.overview("preprod");
-    expect(opened + overview.droppedUnread!).toBe(PAGES_A_SYNC * 8);
+    expect(overview.droppedUnread).toBeUndefined();
     expect(overview.dropped).toBeUndefined();
     // Read on from where it ended, the same as for anyone's pages.
     expect(await cursorOf(bob)).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());

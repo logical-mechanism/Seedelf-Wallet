@@ -35,6 +35,7 @@ import {
   turnOn,
   turns,
   type Wasm,
+  readOf,
 } from "./messaging-harness";
 
 /** The envelope the relay holds `from_end` places from its last, hex. */
@@ -241,7 +242,8 @@ describe("a step whose WebAssembly trapped (W9)", { timeout: 30_000 }, () => {
       await bob.messaging.retry("preprod").catch(() => undefined);
       await bob.messaging.whenIdle();
       if ((await bob.wallet.state()) === "unlocked") {
-        for (const s of (await bob.store.get<Inbox>("messaging.preprod"))!.skip ?? []) skipped.add(s.envelope);
+        // The skip list is the read record's (round 5).
+        for (const s of (await readOf(bob))?.skip ?? []) skipped.add(s.envelope);
       }
     }
     expect(await bob.wallet.state()).toBe("unlocked");
@@ -420,17 +422,39 @@ describe("a record that can't be read (W9)", { timeout: 30_000 }, () => {
     const { relay, alice, bob } = await pair();
     await talking(alice, bob);
     await bob.local.set(PRIVATE_PREFIX + "messaging.preprod", { v: 1, nonce: "A".repeat(32), data: "AAAA" });
+    // A worker that finds it so: a lane reads no inbox (round 5), so it's the page's overview, which comes before its
+    // first sync, that finds it won't open; from then nothing is asked.
+    bob.restart();
     relay.calls.length = 0;
+    await expect(bob.messaging.overview("preprod")).rejects.toThrow(/couldn't open its record of your messages/);
     await bob.messaging.sync("preprod").catch(() => undefined);
     await bob.messaging.whenIdle();
     expect(relay.calls).toEqual([]);
-    await expect(bob.messaging.overview("preprod")).rejects.toThrow(/couldn't open its record of your messages/);
     // The page's way out, behind its question: that network's Messages start again, everything of it deleted.
     await bob.messaging.clear("preprod");
     expect(await bob.local.keys(PRIVATE_PREFIX + CONVERSATION_RECORDS + "preprod.")).toEqual([]);
     expect(await bob.messaging.overview("preprod")).toMatchObject({ on: true, conversations: [], requests: [] });
     await synced(bob);
     expect(gets(relay).length).toBeGreaterThan(0);
+  });
+
+  it("on the alarm alone, with no page to read the overview first, reads once before the runner finds the inbox won't open, then nothing (round 5)", async () => {
+    const { relay, alice, bob } = await pair();
+    await talking(alice, bob);
+    await bob.local.set(PRIVATE_PREFIX + "messaging.preprod", { v: 1, nonce: "A".repeat(32), data: "AAAA" });
+    bob.restart();
+    relay.calls.length = 0;
+    // The first lane reads no inbox: its pages go as anyone's would. The runner after it finds the inbox won't open.
+    await bob.messaging.sync("preprod").catch(() => undefined);
+    await bob.messaging.whenIdle();
+    expect(gets(relay)).toHaveLength(1);
+    // Nothing written over it, and nothing asked again.
+    relay.calls.length = 0;
+    await bob.messaging.sync("preprod").catch(() => undefined);
+    await bob.messaging.whenIdle();
+    expect(relay.calls).toEqual([]);
+    await expect(bob.messaging.overview("preprod")).rejects.toThrow(/couldn't open its record of your messages/);
+    expect(await bob.local.get(PRIVATE_PREFIX + "messaging.preprod")).toEqual({ v: 1, nonce: "A".repeat(32), data: "AAAA" });
   });
 
   it("drops a requests' record the crate can't read: the list still shows, and a first message is still taken", async () => {
@@ -516,9 +540,12 @@ describe("a first message's own share, used up (DESIGN-protocol §3.5)", { timeo
     const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "first");
     await alice.messaging.whenIdle();
     const wasm = loadTestWasm();
-    // The crate's own word, where what the worker counted said there was room.
+    // The crate's own word, where what the worker counted said there was room: a branch that count makes unreachable
+    // (relay-oracle fix item 2), forced here.
+    alice.unreachableOk = true;
     alice.restart({ ...wasm, messagingSend: () => JSON.stringify({ refused: "request_full" }) });
     const refused = await alice.messaging.send("preprod", cid, "one too many").catch((e: unknown) => e);
+    expect(alice.unreachable).toEqual(["sealQueued"]);
     expect(refused).toBeInstanceOf(ShareUsedUp);
     expect(refused).toMatchObject({ code: "request_full", message: "Wait for a reply: until one comes, their wallet takes no more messages from you here." });
     expect(await texts(alice, cid)).toEqual(["out:first"]);

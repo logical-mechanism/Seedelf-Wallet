@@ -38,9 +38,10 @@ use crate::messaging::Relay;
 use crate::state::{AppState, age, block_age, slot_age};
 use crate::submit::Submit;
 
-/// Every route, compressed, behind the edge's limits, with CORS outermost so
-/// the wallet can read a 429 too. Nothing here logs a request: no address,
-/// path or body.
+/// Every route, compressed (gzip alone: brotli's encoder held about four
+/// times gzip's memory in flight), behind the edge's limits, with CORS
+/// outermost so the wallet can read a 429 too. Nothing here logs a request:
+/// no address, path or body.
 ///
 /// Every answer but a preflight says `Cache-Control: no-store`. The wallet
 /// asks with `cache: "default"`, so Chrome reuses a preflight (`edge::cors`'s
@@ -56,15 +57,25 @@ pub fn app(
     relay: Arc<Relay>,
     origins: &[String],
 ) -> Router {
-    let compress =
-        DefaultPredicate::new().and(NotForContentType::const_new("application/octet-stream"));
-    Router::new()
+    let routes = Router::new()
         .route("/health", get(health))
         .with_state((state.clone(), edge.clone(), submit.clone(), relay.clone()))
         .merge(private::routes().with_state(state.clone()))
         .merge(public::routes().with_state(state))
         .merge(submit::routes().with_state(submit))
-        .merge(messaging::routes().with_state(relay))
+        .merge(messaging::routes().with_state(relay));
+    layered(routes, edge, origins)
+}
+
+/// `routes` behind what [`app`] puts in front of its own: compression
+/// (gzip alone), the edge's limits, `no-store` and CORS, outermost. The
+/// edge wraps compression, so it sees a request before an encoding is
+/// chosen and its answer after (`edge::Caps::compressing`). A test's
+/// routes go through it as the app's do.
+pub fn layered(routes: Router, edge: Arc<Edge>, origins: &[String]) -> Router {
+    let compress =
+        DefaultPredicate::new().and(NotForContentType::const_new("application/octet-stream"));
+    routes
         .layer(CompressionLayer::new().compress_when(compress))
         .layer(axum::middleware::from_fn_with_state(edge, edge::limit))
         .layer(SetResponseHeaderLayer::overriding(

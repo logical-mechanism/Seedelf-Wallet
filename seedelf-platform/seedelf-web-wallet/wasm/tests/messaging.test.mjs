@@ -191,8 +191,8 @@ test("two wallets write to each other through the exports' records", () => {
   const shown = reveal(alice, a, hers, mine);
   assert.equal(shown.reveal.length, 2 * 257);
   const carried = call(messagingSend, { conversation: a, plaintext: "02" + shown.reveal });
-  // A session message's 105 bytes and the reveal's 258 fit the smallest envelope.
-  assert.equal(carried.envelope.length, 2 * 512);
+  // Padded to its first-contact size, as every message is, a reveal is 2 KiB like any short message.
+  assert.equal(carried.envelope.length, 2 * 2048);
   a = carried.conversation;
   const came = call(messagingReceive, bob, { envelope: carried.envelope, now: T + 190, conversations: [b] });
   assert.equal(came.received.plaintext, "02" + shown.reveal);

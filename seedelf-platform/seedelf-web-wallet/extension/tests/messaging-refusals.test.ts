@@ -223,9 +223,9 @@ describe("session messages for conversations this browser doesn't hold (W3)", { 
     await synced(again);
     // Opened, refused, and nothing more: no record but the cursor, no page told, no field on the overview.
     expect(again.trace.filter((s) => s === "receive")).toHaveLength(2);
+    // The cursor is the read record's (round 5): the inbox and every conversation's record are as they were.
     const after = await records(again);
-    const inbox = after["messaging.preprod"] as Inbox;
-    expect(after).toEqual({ ...before, "messaging.preprod": { ...(before["messaging.preprod"] as Inbox), cursor: inbox.cursor } });
+    expect(after).toEqual(before);
     expect(again.changed).toEqual([]);
     const overview = await again.messaging.overview("preprod");
     expect(overview).toEqual({ on: true, conversations: [], requests: [] });
@@ -258,9 +258,10 @@ describe("session messages for conversations this browser doesn't hold (W3)", { 
     });
     bob.changed.length = 0;
     await synced(bob);
+    // The cursor is the read record's (round 5): the inbox and every conversation's record are as they were, and the
+    // take record, which held the read while it was taken, holds nothing of it now.
     const after = await records(bob);
-    const inbox = after["messaging.preprod"] as Inbox;
-    expect(after).toEqual({ ...before, "messaging.preprod": { ...(before["messaging.preprod"] as Inbox), cursor: inbox.cursor } });
+    expect(after).toEqual({ ...before, "messagingTake.preprod": { v: 2, batches: [] } });
     expect(bob.changed).toEqual([]);
   });
 

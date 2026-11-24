@@ -9,7 +9,7 @@
 // (messaging-harness.ts `trace`), never on a clock.
 import { describe, expect, it } from "vitest";
 
-import type { ConversationFile, Inbox } from "../src/background/messaging";
+import type { ConversationFile } from "../src/background/messaging";
 import { PAGES_A_SYNC } from "../src/background/relay";
 import { WalletLocked } from "../src/background/wallet";
 import {
@@ -90,19 +90,20 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     }
   });
 
-  it("writes where the read ended once, right after its last page and before anything is taken (finding 8)", async () => {
+  it("writes where the read ended once, right after its last page and before anything is taken (finding 8, round 5)", async () => {
     const { relay, alice, bob, toBob } = await three();
     for (const text of ["a", "b", "c"]) await alice.messaging.send("preprod", toBob, text);
     await alice.messaging.whenIdle();
     const before = await cursorOf(bob);
     relay.pageCount = 1;
     bob.trace.length = 0;
-    // Each write of the take record: where the trace was, and the cursor it wrote. The inbox holds none.
+    // Each write of the read record (round 5): where the trace was, and the cursor it wrote. The inbox and the take
+    // record hold none.
     const written: Array<{ at: number; cursor?: string }> = [];
     let inboxCursors = 0;
     bob.beforeWrite = (name, value) => {
-      if (name === "messagingTake.preprod") written.push({ at: bob.trace.length, cursor: (value as { cursor?: string }).cursor });
-      if (name === "messaging.preprod" && (value as Inbox).cursor !== undefined) inboxCursors++;
+      if (name === "messagingRead.preprod") written.push({ at: bob.trace.length, cursor: (value as { cursor?: string }).cursor });
+      if ((name === "messaging.preprod" || name === "messagingTake.preprod") && (value as { cursor?: string }).cursor !== undefined) inboxCursors++;
     };
     await synced(bob);
     bob.beforeWrite = undefined;
@@ -116,8 +117,10 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     expect(moved[0]!.at).toBeLessThan(bob.trace.indexOf("open"));
     expect(inboxCursors).toBe(0);
     expect(bob.trace.filter((s) => s === "receive")).toHaveLength(3);
-    // And the take, once its envelopes are taken, leaves the record with the cursor and nothing waiting.
-    expect(await takesOf(bob)).toMatchObject({ cursor: end, batches: [] });
+    // And the take, once its envelopes are taken, leaves the take record with nothing waiting, and the read record with
+    // the cursor.
+    expect(await takesOf(bob)).toMatchObject({ batches: [] });
+    expect(await cursorOf(bob)).toBe(end);
   });
 
   it("takes what it took before a stop once, of every kind: a request's first message, a join, a session message, a reveal", async () => {
@@ -167,7 +170,10 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     const again = await records(bob);
     expect(await cursorOf(bob)).toBe(end);
     expect((await takesOf(bob))!.batches).toEqual([]);
-    expect(again).toEqual(stopped);
+    // Nothing else changes: the take record alone, which held them and is empty now.
+    const { "messagingTake.preprod": _taken, ...rest } = again;
+    const { "messagingTake.preprod": _held, ...was } = stopped;
+    expect(rest).toEqual(was);
     expect((await bob.messaging.request("preprod", request)).map((m) => m.text)).toEqual(["first", "second"]);
     const history = (await fileOf(bob, withCarol))!.history;
     expect(history.filter((e) => e.text === "a text")).toHaveLength(1);
@@ -293,7 +299,10 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     const held = new Promise<boolean>((r) => (release = r));
     let holding = false;
     const record = await recordName(bob, cid);
-    bob.beforeWrite = async (name) => {
+    // How many reads the take record held at each of its writes.
+    const saved: number[] = [];
+    bob.beforeWrite = async (name, value) => {
+      if (name === "messagingTake.preprod") saved.push((value as { batches: unknown[] }).batches.length);
       if (name !== record || holding) return;
       holding = true;
       if (await held) throw new WalletLocked("locked meanwhile");
@@ -311,12 +320,13 @@ describe("when the wallet asks the relay for a page (W4)", { timeout: 30_000 }, 
     }
     await bob.messaging.whenIdle();
     bob.beforeWrite = undefined;
-    // Neither is taken yet; the take record holds both, and the cursor is where the second read ended.
-    expect((await texts(bob, cid)).filter((m) => m === "in:one" || m === "in:two")).toEqual([]);
+    // The cursor is where the second read ended, whatever the take did; and both reads were saved in the take record
+    // before either was taken (round 5: the runner's first phase after each lane). The failed take, with the wallet
+    // still unlocked, goes on after the second read's lane: no read waits for it, and none is asked again for it.
     const end = relay.pools.get("preprod")!.held.at(-1)!.number.toString();
     expect(await cursorOf(bob)).toBe(end);
-    expect((await takesOf(bob))!.batches.map((b) => b.envelopes.length)).toEqual([1, 1]);
-    // The next read goes on from there, asking nothing again, and the take takes both from the record, in order, once.
+    expect(Math.max(...saved)).toBe(2);
+    // The next read goes on from there, asking nothing again, and the take has taken both, in order, once.
     relay.calls.length = 0;
     await synced(bob);
     expect(relay.calls.filter((c) => c.startsWith("GET "))).toEqual([`GET /messaging/v1/preprod/envelopes?after=${end}`]);

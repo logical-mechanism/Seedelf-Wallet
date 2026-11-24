@@ -13,9 +13,10 @@
 # once every run reads "verified". unlinkability.spthy's pairs of systems are named on its
 # "// check.sh diff: <name> <flag> <result> [<options>]" lines, each proved with --diff, and
 # each must end in its result: its controls must be "falsified", finding the link they put
-# in. Each configuration's wellformedness checks run in the same pool ("wellformed"), with
-# the message-derivation check given DERIV seconds (the lemma runs turn it off: 0
-# deactivates it in Tamarin, it isn't "no limit").
+# in. A trace lemma there is proved on each side's system, and must read "verified" on
+# both (LHS and RHS). Each configuration's wellformedness checks run in the same pool
+# ("wellformed"), with the message-derivation check given DERIV seconds (the lemma runs
+# turn it off: 0 deactivates it in Tamarin, it isn't "no limit").
 #   ./check.sh                    everything
 #   ./check.sh m1_secret ...      some runs: each word a lemma's or a pair's name, a model
 #                                 (session.spthy), a flag given bare (FIRST), or "wellformed"
@@ -34,8 +35,9 @@
 # RTS=-c100" (RTS: GHC flags; -c100 copies, never compacts), and a pair in its line's last
 # field: those lemmas run first, as the longest, and the pairs last. An option line raises
 # CAP and LIMIT, never lowers what the caller asked for. The defaults take at most 4 cores
-# and 32 GB, more while a run with its own CAP runs: 44 GB with the one 20 GB lemma, which
-# runs first; the one 12 GB pair runs last.
+# and 32 GB, more while runs with their own CAP run: up to 52 GB at the start, while the
+# one 20 GB lemma and two 12 GB ones run, and 44 GB at the end, while the three 12 GB pairs
+# run. PAR=2 holds it to 32 GB, PAR=1 to 20 GB.
 # Exit status 0 only when every run reads as it must and finished without a warning. It's
 # heavy: run it when the machine is otherwise idle (README).
 cd "$(dirname "$0")" || exit 1
@@ -179,6 +181,10 @@ one() {
   elif ispair "$opts"; then
     result=$(grep -oE "DiffLemma: +Observational_equivalence : [a-z -]+\([0-9]+ steps\)" "$log" | head -1)
     result=${result##*equivalence : }
+  elif isdiff "$model"; then
+    # A trace lemma of a diff model: Tamarin proves it on each side, "LHS :  name (...): ...".
+    result=$(grep -oE "^  (LHS|RHS) :  $L \((all|exists)-traces?\): [a-z -]+\([0-9]+ steps\)" "$log" \
+      | sed -E 's/^  (LHS|RHS) :  [^:]*: /\1 /' | paste -sd ';' -)
   else
     result=$(grep -oE "^  $L \((all|exists)-traces?\): [a-z -]+\([0-9]+ steps\)" "$log")
     result=${result#*: }
@@ -198,6 +204,10 @@ while read -r model flag L opts expect; do
     grep -q "summary of summaries" "$log" || { echo "DIDN'T FINISH: wellformed ${model%.spthy} ${flag#-D=}"; status=1; }
   elif ispair "$opts"; then
     grep -qE "DiffLemma: +Observational_equivalence : $expect" "$log" || { echo "NOT $expect: $L"; status=1; }
+  elif isdiff "$model"; then
+    for side in LHS RHS; do
+      grep -qE "^  $side :  $L \((all|exists)-traces?\): verified" "$log" || { echo "NOT VERIFIED: $L ($side)"; status=1; }
+    done
   else
     grep -qE "^  $L \((all|exists)-traces?\): verified" "$log" || { echo "NOT VERIFIED: $L"; status=1; }
   fi

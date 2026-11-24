@@ -934,7 +934,9 @@ fn case_12_rollback() {
 /// bytes one from a handle under a 1-byte `to` holds 1,314 bytes of text and
 /// not 1,315; one to a Seedelf's 32-byte name with a `replaces` (F at its
 /// largest, 538) holds 1,267 and not 1,268; a continuation (F of 282) holds
-/// 1,523 and not 1,524. A session message holds 261 in 512 and not 262.
+/// 1,523 and not 1,524. No session message is 512 bytes either: each side's
+/// is padded to its first-contact form's size, so where F is 510 bytes,
+/// 1,295 bytes of text fill 2,048 bytes and 1,296 don't.
 #[test]
 fn case_13_sizes() {
     let alice = key("alice");
@@ -967,9 +969,12 @@ fn case_13_sizes() {
     assert_eq!(again.send_with(b"", &mut draw).unwrap().len(), 2048);
     assert_eq!(again.send_with(&[0; 1523], &mut draw).unwrap().len(), 2048);
     assert_eq!(again.send_with(&[0; 1524], &mut draw).unwrap().len(), 8192);
-    assert_eq!(p.a.send_with(&[0; 261], &mut p.draw).unwrap().len(), 512);
-    assert_eq!(p.a.send_with(&[0; 262], &mut p.draw).unwrap().len(), 2048);
-    assert_eq!(p.b.send_with(&[0; 261], &mut p.draw).unwrap().len(), 512);
+    assert_eq!(p.a.first_bytes.len(), 510);
+    for side in [&mut p.a, &mut p.b] {
+        assert_eq!(side.send_with(b"", &mut p.draw).unwrap().len(), 2048);
+        assert_eq!(side.send_with(&[0; 1295], &mut p.draw).unwrap().len(), 2048);
+        assert_eq!(side.send_with(&[0; 1296], &mut p.draw).unwrap().len(), 8192);
+    }
 }
 
 /// Case 14. Both sides write first at once: two conversations, each valid,

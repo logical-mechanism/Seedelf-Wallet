@@ -4853,6 +4853,34 @@ button.dapp-tile:hover {
   gap: var(--s3);
 }
 
+/* A warning with its way out at its end (Dismiss, for messages dropped before they could be read): the words take the
+   room, the button keeps its own and never wraps. */
+.callout__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.callout__row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.callout__dismiss {
+  flex: none;
+  font-size: 12.5px;
+}
+
+/* A press waiting while Messages read or post (O8), said under its switch. */
+.messages__waiting {
+  font-size: 12px;
+}
+
+.messages__switch + .messages__waiting {
+  margin-top: calc(-1 * var(--s2));
+  padding: 0 var(--s4);
+}
+
 .messages__seedelfs {
   display: flex;
   flex-direction: column;

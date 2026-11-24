@@ -86,7 +86,7 @@ Later, a Seedelf's own on-chain register is the recipient and the wallet's scala
 - **Whatever reads can spend.** A client or service that scans for a Seedelf holds its spending key, and there's no read-only delegation under this choice. A scanning-only key would have to be a separate key, which means revisiting the choice.
 - **Decryption sits next to the spending key.** Any oracle on [x]·(an attacker's point), beyond what ECIES allows, would be an oracle on the spending key. The subgroup, identity and canonical-encoding checks are what make that safe. They're mandatory, and the tests hold them. joint-security.md's rule 1 lists every place x meets a point someone else chose.
 - **Compromise of one is compromise of both.**
-- **Anyone can message any Seedelf,** since its register is public. Spam is the relay's concern: proof of work priced by traffic, which a GPU can outpay, and a cap on what one address has in the pool (protocol.md §17.4), which a sender with many addresses can get around.
+- **Anyone can message any Seedelf,** since its register is public. Spam is the relay's concern: proof of work priced by traffic, which a GPU can outpay, and a cap on what one address has in the pool (protocol.md §17.4), which a sender with many addresses can get around. Readers with many addresses can also hold the relay's places in flight and spend its day of traffic by asking alone: the edge's totals keep that from the data layer's other routes, but Messages has no fallback (protocol.md §17.2, §17.5).
 - **No new derivation:** the wallet's frozen v1 derivation stays as it is.
 
 ## Implementation notes

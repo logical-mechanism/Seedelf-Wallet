@@ -23,7 +23,8 @@ cryptoxide = { version = "0.4", default-features = false, features = ["blake2"] 
 deadpool-postgres = "0.14"
 dotenvy = "0.15"
 group = "0.13"
-# Counts the bytes of every answer as it's sent, for the month's egress ceiling.
+# The edge's answer body (src/edge.rs, `Sent`): it counts and paces every answer as it's handed to the connection.
+http-body = "1"
 http-body-util = "0.1"
 percent-encoding = "2.3"
 # Plain HTTP to the home submit-api and Ogmios (LAN now, WireGuard later): no TLS.
@@ -33,10 +34,15 @@ serde = { version = "1.0.215", features = ["derive"] }
 serde_json = { version = "1.0.133", features = ["raw_value"] }
 # The relay's proof of work (src/messaging/check.rs): SHA-256, as seedelf-messaging computes it.
 sha2 = "0.10.9"
-tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+# TCP_USER_TIMEOUT on the API's listener (src/serve.rs): tokio's own socket has no setter for it. The version and
+# features tokio already builds, so nothing new is compiled.
+socket2 = { version = "0.6", features = ["all"] }
+# net: the API's own listener, its socket options set before it listens (src/serve.rs).
+tokio = { version = "1.52", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 # The home Postgres is reached over the LAN now and over WireGuard later: no TLS of its own.
 tokio-postgres = "0.7"
-tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "cors", "set-header"] }
+# gzip alone: a brotli encoder in flight holds about 2.6 MB, gzip's about 0.7 MB (the 1.10.0 gate's FI-6).
+tower-http = { version = "0.6", features = ["compression-gzip", "cors", "set-header"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

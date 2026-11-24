@@ -337,7 +337,8 @@ export interface MessagingOverview {
   dropped?: number;
   /**
    * Messages dropped before they were opened (W10; the 1.10.0 gate's f5): more of them came at once than the wallet
-   * takes, so they may be anyone's. They're gone, and deleting a conversation doesn't bring them back.
+   * takes, so they may be anyone's. They're gone, and deleting a conversation doesn't bring them back. Only those since
+   * the user last saw this count (`messaging-seen`).
    */
   droppedUnread?: number;
   /**
@@ -350,8 +351,16 @@ export interface MessagingOverview {
    * as the last message the server took new measured it: people may not get first messages until it's set right.
    */
   clockOff?: number;
-  /** The server has stopped Messages on purpose: nothing is sent, and it's asked again once an hour and at each unlock. */
+  /**
+   * The server has stopped Messages on purpose (a 410): nothing is sent or worked for until it answers again, which only
+   * an answer of its own says, never the time. A lock ends it: the next unlock asks again.
+   */
   paused?: true;
+  /**
+   * While `paused`: when the wallet next asks the server whether it answers again (ms, this device's clock), an hour
+   * after it last said it's stopped. The first sync from then asks one page; until it's answered it's asked at each sync.
+   */
+  pausedAskAt?: number;
 }
 
 /** One of the Seedelfs under the wallet's key, as Messages takes first messages at it (MessagingOverview.seedelfs). */
@@ -3142,9 +3151,13 @@ export interface Requests {
   "messaging-switch": { payload: { on: boolean; network?: NetworkName }; result: MessagingOverview };
   /**
    * Reads the network's relay pool now, as the alarm does every minute, while Messages is open: nothing while its
-   * switch is off or the wallet locked.
+   * switch is off or the wallet locked. `page` names the asking page (a random ID of its own, never sent anywhere) and
+   * `kind` says whether this is a tick of the worker's one grid for every page (`grid`), or a one-off as the page is
+   * shown or comes into view (`view`). Answered once the read and its posts are done with `nextIn`, how long until the
+   * grid's next tick (ms), which the page polls at next: from the grid and the clock alone (messaging.ts `pollIn`, the
+   * 1.10.0 gate's round 5).
    */
-  "messaging-sync": { payload: None; result: null };
+  "messaging-sync": { payload: { page?: string; kind?: "grid" | "view" }; result: { nextIn: number } };
   /** Writes first to the owner of a Seedelf, by its name: its stamp is solved (about 7 s), then it's posted. */
   "messaging-start": { payload: { to: string; text: string }; result: { cid: string } };
   "messaging-send": { payload: { cid: string; text: string }; result: null };
@@ -3187,6 +3200,11 @@ export interface Requests {
    * The page asks first. Returns the overview.
    */
   "messaging-clear": { payload: None; result: MessagingOverview };
+  /**
+   * The user has seen the overview's `droppedUnread`, as many as it said: later overviews count only those dropped
+   * since, so the notice goes once it's been seen. No request to any server. Returns the overview.
+   */
+  "messaging-seen": { payload: { droppedUnread: number }; result: MessagingOverview };
   /** Adds a contact, or changes the one with `id`; returns the contacts. */
   "contact-save": { payload: { id?: string; name: string; value: string }; result: Contact[] };
   "contact-remove": { payload: { id: string }; result: Contact[] };
@@ -3667,6 +3685,7 @@ const REQUEST_LIST = [
   "messaging-answer-at",
   "messaging-retry",
   "messaging-clear",
+  "messaging-seen",
   "history",
   "utxos",
   "utxo-lock",
@@ -3803,6 +3822,9 @@ export const STATE_CHANGED = { event: "state-changed" } as const;
 export function isStateChanged(value: unknown): boolean {
   return (value as { event?: unknown } | null)?.event === STATE_CHANGED.event;
 }
+
+/** How often a wallet page on screen asks the worker to read the relay while Messages is on (ui/messaging.ts). */
+export const MESSAGING_SYNC_EVERY_MS = 10_000;
 
 /** Broadcast by the worker when a network's messages change: something arrived, was posted, or was set. */
 export const MESSAGING_CHANGED = { event: "messaging-changed" } as const;

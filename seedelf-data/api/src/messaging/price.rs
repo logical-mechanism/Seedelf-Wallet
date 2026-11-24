@@ -3,10 +3,13 @@
 //! posted lately, and with what everyone has, to a ceiling past which a post
 //! is refused rather than priced.
 //!
-//! **What's counted:** units of 512 bytes, so a 32 KiB envelope counts as 64
-//! short ones, decaying by half every `half_life`. One count per address
-//! (the relay's key, `super::address_key`: an IPv6 address by its /56), one
-//! for everyone.
+//! **What's counted:** units (`units`): an envelope of 512 or 2,048 bytes
+//! is 1, so a short message padded to 2 KiB costs what a short one does;
+//! 8,192 bytes are 16 and 32,768 are 64. They decay by half every
+//! `half_life`. One count per address (the relay's key,
+//! `super::address_key`: an IPv6 address by its /56), one for everyone.
+//! Kept posts are counted in both; a post refused at its points in its
+//! address's alone (`Counts::count_refused`).
 //! They live in memory only, an address's while its count is above a
 //! hundredth of a unit, and nothing logs them.
 
@@ -47,9 +50,16 @@ pub enum Asked {
     Refused(u64),
 }
 
-/// An envelope's units: 1, 4, 16 or 64.
+/// An envelope's units in the price (the 1.10.0 gate's O7): 1 for 512 and
+/// 2,048 bytes, 16 for 8,192 and 64 for 32,768. Padding short chat to 2 KiB
+/// costs nothing more, and long posts cost what they did. The window
+/// counts its own, 512 bytes each (`super::window::units`).
 pub fn units(size: usize) -> f64 {
-    (size / 512).max(1) as f64
+    if size <= 2048 {
+        1.0
+    } else {
+        (size / 512) as f64
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -118,6 +128,27 @@ impl Counts {
                 at: now,
             },
         );
+    }
+
+    /// Counts a post refused at its points against its address alone (the
+    /// 1.10.0 gate's FI-10): its next post costs more, so one solved stamp
+    /// pays for only so many point checks, while everyone's count, which
+    /// sets the floor every sender pays, is left as it was. A new address
+    /// isn't counted while the table is full.
+    pub fn count_refused(&mut self, address: IpAddr, size: usize, now: Instant) {
+        if !self.addresses.contains_key(&address) && self.addresses.len() >= MAX_ADDRESSES {
+            return;
+        }
+        let units = self.mine(address, now) + units(size);
+        self.addresses.insert(address, Count { units, at: now });
+    }
+
+    /// Whether the address's own units alone, the floor aside, would refuse
+    /// a post of `size` now: which of the two a refusal names (the 1.10.0
+    /// gate's FI-11).
+    pub fn refused_by_own(&self, address: IpAddr, size: usize, now: Instant) -> bool {
+        let own = ((self.mine(address, now) + units(size)) / self.prices.per_bit).floor();
+        f64::from(self.prices.base) + own > f64::from(self.prices.ceiling)
     }
 
     /// Whether `address` can be counted: one more address is room for, or
@@ -212,8 +243,85 @@ mod tests {
         let me = ip("203.0.113.7");
         assert_eq!(counts.ask(me, 512, now), Asked::Bits(18));
         assert_eq!(counts.ask(me, 2048, now), Asked::Bits(18));
+        assert_eq!(counts.ask(me, 8192, now), Asked::Bits(18));
         // 32 KiB is 64 units: two bits.
         assert_eq!(counts.ask(me, 32768, now), Asked::Bits(20));
+    }
+
+    /// The 1.10.0 gate's O7: 2 KiB counts as 512 bytes, so a chat padded to
+    /// 2 KiB meets the address's price as fast as short chat did, and
+    /// longer posts count as before.
+    #[test]
+    fn a_2_kib_post_counts_as_a_short_one() {
+        assert_eq!([512, 2048, 8192, 32768].map(units), [1.0, 1.0, 16.0, 64.0]);
+        let now = Instant::now();
+        let me = ip("203.0.113.7");
+        let burst = |size: usize| {
+            let mut counts = Counts::new(PRICES, now);
+            let mut kept = 0;
+            while let Asked::Bits(_) = counts.ask(me, size, now) {
+                counts.record(me, size, now);
+                kept += 1;
+            }
+            kept
+        };
+        assert_eq!(burst(2048), burst(512));
+        assert_eq!(burst(512), 223);
+        assert_eq!(burst(8192), 13);
+        assert_eq!(burst(32768), 3);
+    }
+
+    /// The 1.10.0 gate's FI-10: a post refused at its points raises its own
+    /// address's price, and nobody else's: the floor stays where it was.
+    #[test]
+    fn a_post_refused_at_its_points_counts_against_its_address_alone() {
+        let now = Instant::now();
+        let mut counts = Counts::new(PRICES, now);
+        let me = ip("203.0.113.7");
+        let stranger = ip("198.51.100.1");
+        // Thousands of them, from many addresses: past `quiet` many times.
+        for i in 0..5000u32 {
+            counts.count_refused(IpAddr::from(i.to_be_bytes()), 512, now);
+        }
+        let sizes = [512, 2048, 8192, 32768];
+        assert_eq!(
+            sizes.map(|size| counts.ask(stranger, size, now)),
+            [
+                Asked::Bits(18),
+                Asked::Bits(18),
+                Asked::Bits(18),
+                Asked::Bits(20)
+            ]
+        );
+        // The address's own: a bit more for each 32.
+        for _ in 0..32 {
+            counts.count_refused(me, 512, now);
+        }
+        assert_eq!(counts.ask(me, 512, now), Asked::Bits(19));
+        assert_eq!(counts.addresses(), 5001);
+    }
+
+    /// The 1.10.0 gate's FI-11: a refusal says whether the address's own
+    /// count would refuse it, or only everyone's floor.
+    #[test]
+    fn a_refusal_knows_whether_the_address_alone_would_be_refused() {
+        let now = Instant::now();
+        let mut counts = Counts::new(PRICES, now);
+        let me = ip("203.0.113.7");
+        for _ in 0..223 {
+            counts.record(me, 512, now);
+        }
+        assert!(matches!(counts.ask(me, 512, now), Asked::Refused(_)));
+        assert!(counts.refused_by_own(me, 512, now));
+        // Everyone's floor alone: a fresh address, refused, by no count of its own.
+        let mut busy = Counts::new(PRICES, now);
+        busy.everyone = Count {
+            units: 1000.0 * 64.0,
+            at: now,
+        };
+        let fresh = ip("198.51.100.1");
+        assert!(matches!(busy.ask(fresh, 512, now), Asked::Refused(_)));
+        assert!(!busy.refused_by_own(fresh, 512, now));
     }
 
     #[test]

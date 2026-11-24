@@ -17,11 +17,13 @@
  *                   that is a key's no one holds: whether its answers tell
  *                   that two registers are one wallet's;
  * and four controls, two of the first and two of ANSWERS, each without one
- * of the reader's checks. An envelope's header carries p, c and a tag of w,
- * never w itself (call 16). In the first two, the attacker holds both
- * recipients' registers, picks every plaintext, and sees every envelope; no
- * recipient reacts, and neither key is stolen. In -D=ANSWERS the attacker
- * writes every message.
+ * of the reader's checks. -D=ANSWERS_REACHED is ANSWERS' two systems with a
+ * trace lemma, proved on each, that the reader answers at all, so that
+ * answers_alike can't hold for want of an answer. An envelope's header
+ * carries p, c and a tag of w, never w itself (call 16). In the first two,
+ * the attacker holds both recipients' registers, picks every plaintext, and
+ * sees every envelope; no recipient reacts, and neither key is stolen. In
+ * -D=ANSWERS the attacker writes every message.
  *
  * check.sh proves each pair, and each control below must find its link; a
  * line's last field, when there is one, gives that pair more room:
@@ -31,8 +33,8 @@
 // check.sh diff: bare_register_links BARE_REGISTER falsified
 // check.sh diff: stolen_key_links STOLEN falsified
 // check.sh diff: answers_alike ANSWERS verified CAP=12g,LIMIT=7200
-// check.sh diff: unbound_ephemeral_answers_link ANSWERS_UNBOUND_EPHEMERAL falsified
-// check.sh diff: unproven_ephemeral_answers_link ANSWERS_UNPROVEN_EPHEMERAL falsified
+// check.sh diff: unbound_ephemeral_answers_link ANSWERS_UNBOUND_EPHEMERAL falsified CAP=12g,LIMIT=7200
+// check.sh diff: unproven_ephemeral_answers_link ANSWERS_UNPROVEN_EPHEMERAL falsified CAP=12g,LIMIT=7200
 
 theory SeedelfMessagingUnlinkability
 begin
@@ -42,7 +44,7 @@ builtins: diffie-hellman
 functions: aenc/3, adec/2, kdf_env/2, tag/1
 equations: adec(aenc(m, k, ad), k) = m
 
-#ifdef not ANSWERS & not ANSWERS_UNBOUND_EPHEMERAL & not ANSWERS_UNPROVEN_EPHEMERAL
+#ifdef not ANSWERS & not ANSWERS_UNBOUND_EPHEMERAL & not ANSWERS_UNPROVEN_EPHEMERAL & not ANSWERS_REACHED
 
 /* Two recipients' registers, root registers (G, [y]G), both public. A
    datum register's generator is itself [d]G, which changes nothing here. */
@@ -65,7 +67,7 @@ rule Seal_to_the_first:
 
 #endif
 
-#ifdef not FRESH & not BARE_REGISTER & not ANSWERS & not ANSWERS_UNBOUND_EPHEMERAL & not ANSWERS_UNPROVEN_EPHEMERAL
+#ifdef not FRESH & not BARE_REGISTER & not ANSWERS & not ANSWERS_UNBOUND_EPHEMERAL & not ANSWERS_UNPROVEN_EPHEMERAL & not ANSWERS_REACHED
 
 /* To the first on the left, to the second on the right. */
 rule Seal_to_either:
@@ -125,7 +127,7 @@ rule Steal_the_second:
 
 /* ---- A reader that answers (-D=ANSWERS and its two controls) ---- */
 
-#ifdef ANSWERS | ANSWERS_UNBOUND_EPHEMERAL | ANSWERS_UNPROVEN_EPHEMERAL
+#ifdef ANSWERS | ANSWERS_UNBOUND_EPHEMERAL | ANSWERS_UNPROVEN_EPHEMERAL | ANSWERS_REACHED
 
 /* A first message reduced to what the link needs: an envelope (p, tag, c);
    inside it the cid, the ratchet's salt, and an inner ciphertext under a key
@@ -191,6 +193,19 @@ rule Reader_answers:
 #ifdef ANSWERS
 restriction ephemeral_check: "All a b #i. EphemeralCheck(a, b)@i ==> a = b"
 restriction keys_check: "All a b #i. KeysCheck(a, b)@i ==> a = b"
+#endif
+
+/* answers_alike isn't vacuous (the model review of call 16): on each side,
+   the reader answers a first message the attacker wrote, every check on.
+   KeysCheck is the answering rule's alone. ANSWERS' rules and restrictions
+   under a flag of their own, so that the pair's run, which proves every
+   lemma in its file, doesn't prove this one too. */
+#ifdef ANSWERS_REACHED
+restriction ephemeral_check: "All a b #i. EphemeralCheck(a, b)@i ==> a = b"
+restriction keys_check: "All a b #i. KeysCheck(a, b)@i ==> a = b"
+
+lemma the_reader_answers: exists-trace
+  "Ex a b #i. KeysCheck(a, b)@i"
 #endif
 
 /* The controls: without the ephemeral check, an envelope whose ephemeral

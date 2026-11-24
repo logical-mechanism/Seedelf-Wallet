@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::edge::Reserve;
+use crate::edge::{Caps, Reserve};
 use crate::messaging::reading::Reading;
 
 /// Loopback: on the VPS, Caddy is in front (deploy/README.md).
@@ -34,6 +34,12 @@ pub struct Config {
     pub messaging_reading: Reading,
     /// What's kept of each day's share of the relay's traffic for posts and short pages (`edge::Reserve`).
     pub messaging_reserve: Reserve,
+    /// What one address may read of that reserve in a day, both pools together, in bytes (`messaging::Relay`).
+    pub messaging_reserve_read: u64,
+    /// The edge's caps on requests in flight, answers held and answers compressed (`edge::Caps`).
+    pub edge_caps: Caps,
+    /// The most connections open at once (`serve::CONNECTIONS`).
+    pub connections: usize,
     /// Seedelf Messaging stopped: every relay route answers 410 Gone (`edge::limit`), the rest goes on.
     pub messaging_off: bool,
     /// Where the month's traffic is kept: systemd's `StateDirectory`, or `DATA_STATE_DIR`.
@@ -75,6 +81,11 @@ impl Config {
                 optional("DATA_MESSAGING_RESERVE_PERCENT").as_deref(),
                 optional("DATA_MESSAGING_RESERVE_PAGE_KIB").as_deref(),
             )?,
+            messaging_reserve_read: reserve_read(
+                optional("DATA_MESSAGING_RESERVE_READ_MIB_DAY").as_deref(),
+            )?,
+            edge_caps: caps(&optional)?,
+            connections: connections(optional("DATA_CONNECTIONS").as_deref())?,
             messaging_off: switch(
                 "DATA_MESSAGING_OFF",
                 optional("DATA_MESSAGING_OFF").as_deref(),
@@ -150,6 +161,53 @@ fn reserve(percent: Option<&str>, kib: Option<&str>) -> Result<Reserve> {
     })
 }
 
+/// What one address may read of the relay's reserve in a day, across both
+/// pools: `DATA_MESSAGING_RESERVE_READ_MIB_DAY`, in MiB, 16 when unset.
+fn reserve_read(mib: Option<&str>) -> Result<u64> {
+    let mib = whole("DATA_MESSAGING_RESERVE_READ_MIB_DAY", mib, 1, 1024)?;
+    Ok(mib.map_or(crate::messaging::RESERVE_READ, |mib| mib << 20))
+}
+
+/// The edge's caps, each from its variable (`variable` reads one), or
+/// [`Caps::DEFAULT`]'s where it's unset.
+fn caps(variable: &dyn Fn(&str) -> Option<String>) -> Result<Caps> {
+    let default = Caps::DEFAULT;
+    let number = |name: &str, least: u64, most: u64, unset: u64| -> Result<u64> {
+        Ok(whole(name, variable(name).as_deref(), least, most)?.unwrap_or(unset))
+    };
+    Ok(Caps {
+        messaging_address: number(
+            "DATA_IN_FLIGHT_MESSAGING_ADDRESS",
+            1,
+            4096,
+            default.messaging_address.into(),
+        )? as u32,
+        data_address: number(
+            "DATA_IN_FLIGHT_DATA_ADDRESS",
+            1,
+            4096,
+            default.data_address.into(),
+        )? as u32,
+        messaging: number(
+            "DATA_IN_FLIGHT_MESSAGING",
+            1,
+            65_536,
+            default.messaging.into(),
+        )? as u32,
+        data: number("DATA_IN_FLIGHT_DATA", 1, 65_536, default.data.into())? as u32,
+        answer_bytes: number("DATA_ANSWERS_MIB", 1, 4096, default.answer_bytes >> 20)? << 20,
+        // 0: nothing is compressed.
+        compressing: number("DATA_COMPRESSING", 0, 4096, default.compressing.into())? as u32,
+    })
+}
+
+/// The most connections open at once: `DATA_CONNECTIONS`, within the
+/// unit's 65,536 file handles, [`crate::serve::CONNECTIONS`] when unset.
+fn connections(value: Option<&str>) -> Result<usize> {
+    let most = whole("DATA_CONNECTIONS", value, 16, 60_000)?;
+    Ok(most.map_or(crate::serve::CONNECTIONS, |most| most as usize))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +269,80 @@ mod tests {
         // The proxy's switch is read the same way.
         assert!(switch("DATA_TRUST_PROXY", Some("true")).unwrap());
         assert!(switch("DATA_TRUST_PROXY", Some("ture")).is_err());
+    }
+
+    /// The 1.10.0 gate's FI-3, FI-5 and FI-6: the edge's caps, the
+    /// connections and the reserve's share an address, from the
+    /// environment or their defaults, each alone.
+    #[test]
+    fn the_edges_caps_come_from_the_environment_or_their_defaults() {
+        let none = |_: &str| None;
+        assert_eq!(caps(&none).unwrap(), Caps::DEFAULT);
+        assert_eq!(
+            Caps::DEFAULT,
+            Caps {
+                messaging_address: 16,
+                data_address: 64,
+                messaging: 512,
+                data: 2048,
+                answer_bytes: 256 << 20,
+                compressing: 64,
+            }
+        );
+        let set = |name: &str| {
+            [
+                ("DATA_IN_FLIGHT_MESSAGING_ADDRESS", "8"),
+                ("DATA_IN_FLIGHT_DATA_ADDRESS", " 128 "),
+                ("DATA_IN_FLIGHT_MESSAGING", "1024"),
+                ("DATA_IN_FLIGHT_DATA", "4096"),
+                ("DATA_ANSWERS_MIB", "128"),
+                ("DATA_COMPRESSING", "0"),
+            ]
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, value)| value.to_string())
+        };
+        assert_eq!(
+            caps(&set).unwrap(),
+            Caps {
+                messaging_address: 8,
+                data_address: 128,
+                messaging: 1024,
+                data: 4096,
+                answer_bytes: 128 << 20,
+                compressing: 0,
+            }
+        );
+        let one = |name: &str| (name == "DATA_IN_FLIGHT_DATA").then(|| "100".to_string());
+        assert_eq!(
+            caps(&one).unwrap(),
+            Caps {
+                data: 100,
+                ..Caps::DEFAULT
+            }
+        );
+        for (name, bad) in [
+            ("DATA_IN_FLIGHT_MESSAGING_ADDRESS", "0"),
+            ("DATA_IN_FLIGHT_DATA_ADDRESS", "4097"),
+            ("DATA_IN_FLIGHT_MESSAGING", "-1"),
+            ("DATA_IN_FLIGHT_DATA", "2k"),
+            ("DATA_ANSWERS_MIB", "0"),
+            ("DATA_COMPRESSING", "4097"),
+        ] {
+            let wrong = |n: &str| (n == name).then(|| bad.to_string());
+            assert!(caps(&wrong).is_err(), "{name}={bad}");
+        }
+
+        assert_eq!(connections(None).unwrap(), 8192);
+        assert_eq!(connections(Some("4096")).unwrap(), 4096);
+        for bad in ["0", "15", "60001", "lots"] {
+            assert!(connections(Some(bad)).is_err(), "{bad}");
+        }
+        assert_eq!(reserve_read(None).unwrap(), 16 << 20);
+        assert_eq!(reserve_read(Some("64")).unwrap(), 64 << 20);
+        for bad in ["0", "1025", "16MiB"] {
+            assert!(reserve_read(Some(bad)).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -28,6 +28,11 @@ TimeoutStopSec=30
 # Under the droplet's 4 GB, so a leak or a flood takes the API alone, which
 # systemd starts again, never Caddy, WireGuard or sshd beside it.
 MemoryMax=3G
+# No core file and no swap: the API's tables of addresses (its buckets, the
+# relay's counts) live in memory alone, and the database URL with them, so
+# none of it is ever written to a disk.
+LimitCORE=0
+MemorySwapMax=0
 
 # It reads its environment and the decimals file, writes its state
 # directory, and talks TCP. Nothing else.

@@ -28,12 +28,22 @@ export function chromeArea(area: chrome.storage.StorageArea): Area {
   };
 }
 
+/** How many bytes go to String.fromCharCode at once: well inside every engine's limit on a call's arguments. */
+const CHUNK = 32 * 1024;
+
+// Every sealed record goes through these two at its stored size, up to 0.7 MB for a conversation at its share or the
+// requests' room. So they run at full speed (the 1.10.0 gate's round 5, fix item 5.3), giving the same bytes as before.
 export function toBase64(bytes: Uint8Array): string {
   let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
+  for (let at = 0; at < bytes.length; at += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(at, at + CHUNK) as unknown as number[]);
+  }
   return btoa(binary);
 }
 
 export function fromBase64(text: string): Uint8Array {
-  return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+  const binary = atob(text);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
 }

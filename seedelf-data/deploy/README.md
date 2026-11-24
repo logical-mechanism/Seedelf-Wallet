@@ -118,6 +118,8 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
   ```bash
   curl -s https://mainnet.<domain>/messaging/v1/mainnet/envelopes | head -c 16 | od -An -tx1
   ```
+- **The edge's limits at start:** `journalctl -u seedelf-data-api -b | grep "the edge's limits"` names each cap: in flight per address (`in_flight_messaging_address`, `in_flight_data_address`), in flight in all (`in_flight_messaging`, `in_flight_data`), the data answers held (`answers_mib`), the answers compressed at once (`compressing`) and the connections (`connections`). Unset, they're 16, 64, 512, 2048, 256, 64 and 8192 ([the edge](../README.md#the-edge)).
+- **HTTP/1.1 and HTTP/2 alone:** `curl -sI https://mainnet.<domain>/health | grep -i alt-svc` prints nothing: Caddy offers no HTTP/3.
 - **Limits,** from a third machine, never the maintainer's:
   - about 75 `POST /api/v1/account_info` sent at once from one address end in a 429 with `Retry-After`. Send them in parallel (`xargs -P 20`): one at a time, the refill keeps up. Sending from the VPS to its own public name counts as a third machine;
   - a request with `Sec-Fetch-Mode: no-cors`, or from another `Origin`, gets 403: a web page can't spend the API's traffic.
@@ -153,6 +155,7 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
     - on a public route (`/api/v1/…`) or the private index's, either holds that whole part of the wallet on Koios for 5 minutes, and again at its first such request after each hold;
     - on the token pools' routes (`lovejoin/pools`, `lovejoin/tokens` and `lovejoin/tokens/since`), neither holds any part. The wallet reads the token pools' boxes from Koios instead and asks it what made its own ([privacy.md](../../seedelf-platform/seedelf-web-wallet/docs/privacy.md#known-links), *Lovejoin*), looks for new pools at Koios's holder, shows no crowd counts on the Lovejoin hub, and watches a token pool's chain through `tx_status`.
     - on the relay's routes (`/messaging/…`), Messages has nothing to fall back to: every wallet with Messages on can neither send nor read until a deploy brings the routes back. The pools' files wait on disk meanwhile, and each envelope still expires 36 hours after it came. A build with an older relay answers without whatever limits came after it.
+    - **Before the 1.10.0 gate's build,** that's every route's: no totals over every address, no cap on connections, no kernel deadline on a connection that takes nothing, no small send buffers, a body read on any route, and no share of messaging's reserve per address. Caddy's timeouts (block 1 below) then end what it holds.
   - **What `.prev` holds,** and so what a rollback takes away. `status` prints the sha256 of the running binary and of `.prev`. The deploy run that installed a binary printed the same sha256, in its *build* job's *Checksum* step and in `DEPLOYED <sha256> (<the one before> kept as .prev)`, so that run's commit is the binary's: `gh run list --workflow data-layer-deploy.yml` lists the runs with their commits. A deploy that fails its check leaves `.prev` as it was, and a `rollback` swaps the two. Then `git diff <.prev's commit> <the running one's> -- seedelf-data/api/src` is what a rollback takes away: the routes are in `public/mod.rs`, `private.rs`, `lovejoin/routes.rs` and `messaging/mod.rs`, and every fix since goes with them. A slow answer costs more than a refusal: a read that takes longer than the wallet's 10 s holds its whole part on Koios for 5 minutes, and a token route's part is the private index's.
   - Every cache refills within a block, and the month's traffic is kept.
 - **Watch the VPS's own meter** (`vnstat`) against the provider's allowance: `DATA_EGRESS_GB_MONTH` counts the API's response bodies alone, and TLS, headers and the tunnel come on top.
@@ -170,7 +173,7 @@ Seedelf Messaging stops for every wallet at once, and the rest of the data layer
 
 - **Every route under `/messaging/` answers 410 Gone,** `{"error":"messaging is stopped"}`, with CORS, before any other limit. A post's body isn't read, so nothing is kept. Every other route answers as before, and `/health` says `"relay":"off"`.
 - **The pools wait on disk,** and what they hold still expires 36 hours after it came. A deploy keeps the drop-in, so Messages stays stopped across deploys until it's undone.
-- **What wallets do:** a wallet with Messages on reads the 410 as Messages stopped, and shows them as paused. It posts nothing and solves no work, keeps what's queued, and asks again once an hour and at each unlock.
+- **What wallets do:** a wallet with Messages on reads the 410 as Messages stopped, and shows them as paused. It solves and posts nothing there, keeps what's queued, and asks one page an hour, and one at each unlock, until a page gets an answer other than the 410. A stopped relay still sees those pages, and now and then a post a wallet made as it unlocked.
 - **The restart** takes every part away for a moment, and a wallet that reads then goes to Koios for 5 minutes. Its stop saves the pools clean.
 - **Never `DATA_MESSAGING_GB_MONTH=0`:** the API refuses `0` at start and doesn't run, however often systemd starts it again. Every route is down, and every wallet's reads go to Koios on 5-minute holds.
 
@@ -215,34 +218,42 @@ SCRIPT
 
 ## Timeouts and limits a deploy doesn't install
 
-`edge/Caddyfile` gives every request an end: its head within 10 s, the whole request within 10 s of its start, the answer within 60 s, and an idle connection 2 minutes. `edge/seedelf-data-api.service` gives the API's stop 30 s, which its own 10 s for what's open and the saving of the pools fit, holds the API under 3 GB of the droplet's 4, and starts it after the clock is synchronized. A deploy installs neither file. To bring a running VPS in line with them, run each block once, on the VPS, as `seedelf`, in any order. Each prints the machine's name first; paste back what it prints after that. Run again, the first says `STOP` and changes nothing, and the others write the same files again.
+`edge/Caddyfile` gives every request an end: its head within 10 s, the whole request within 10 s of its start, the answer within 60 s, and an idle connection 2 minutes. It serves HTTP/1.1 and HTTP/2 alone: its `write` timeout isn't shown to end a stalled HTTP/3 answer, and Chrome falls back to HTTP/2 with nothing lost. `edge/seedelf-data-api.service` gives the API's stop 30 s, which its own 10 s for what's open and the saving of the pools fit, holds the API under 3 GB of the droplet's 4, writes no core file and no swap (the API's tables of addresses live in memory alone, the database URL with them), and starts it after the clock is synchronized. A deploy installs neither file. **A VPS set up before these blocks has no deadline on a body or an answer until block 1 runs:** one address can then hold requests open until the droplet runs out of loopback ports or TCP memory. To bring a running VPS in line with them, run each block once, on the VPS, as `seedelf`, in any order. Each prints the machine's name first; paste back what it prints after that. Run again, the first says `STOP` and changes nothing, and the others write the same files again.
 
-**1. Caddy's timeouts.** It adds them to the global options, keeps the file before as `Caddyfile.before-timeouts`, and puts that back if Caddy refuses the new one. It should print five timeouts, in nanoseconds: the four it adds, and the proxy's `response_header_timeout` of 40 s, from the site's own block. Then `/health through Caddy: 200`:
+`edge/nftables.conf` keeps UDP 443 open, for HTTP/3 should it come back: with Caddy on HTTP/1.1 and HTTP/2, nothing listens there.
+
+**1. Caddy's timeouts, and HTTP/1.1 and HTTP/2 alone.** It adds them to the global options (to a file with the timeouts already, from this block before the 1.10.0 gate, the protocols alone), keeps the file before as `Caddyfile.before-timeouts`, and puts that back if Caddy refuses the new one. It should print five timeouts, in nanoseconds: the four it adds, and the proxy's `response_header_timeout` of 40 s, from the site's own block. Then `"protocols":["h1","h2"]`, `/health through Caddy: 200` and `HTTP/3 offered: no`:
 
 ```bash
 # seedelf-data-layer (the VPS)
 hostname && sudo bash -euo pipefail <<'SCRIPT'
 f=/etc/caddy/Caddyfile
-if grep -q 'read_body' "$f"; then
-  echo "STOP: $f has its timeouts already"
+if grep -q 'read_body' "$f" && grep -q 'protocols h1 h2' "$f"; then
+  echo "STOP: $f has its timeouts and protocols already"
 else
-  awk '!done && $0 == "{" {
-      print
-      print "\tservers {"
-      print "\t\ttimeouts {"
-      print "\t\t\tread_header 10s"
-      print "\t\t\tread_body 10s"
-      print "\t\t\twrite 60s"
-      print "\t\t\tidle 2m"
-      print "\t\t}"
-      print "\t}"
-      done = 1
-      next
-    }
-    { print }' "$f" > "$f.new"
-  if ! grep -q 'read_body' "$f.new"; then
+  if grep -q 'read_body' "$f"; then
+    awk '!done && $0 == "\tservers {" { print; print "\t\tprotocols h1 h2"; done = 1; next }
+      { print }' "$f" > "$f.new"
+  else
+    awk '!done && $0 == "{" {
+        print
+        print "\tservers {"
+        print "\t\tprotocols h1 h2"
+        print "\t\ttimeouts {"
+        print "\t\t\tread_header 10s"
+        print "\t\t\tread_body 10s"
+        print "\t\t\twrite 60s"
+        print "\t\t\tidle 2m"
+        print "\t\t}"
+        print "\t}"
+        done = 1
+        next
+      }
+      { print }' "$f" > "$f.new"
+  fi
+  if ! grep -q 'read_body' "$f.new" || ! grep -q 'protocols h1 h2' "$f.new"; then
     rm -f "$f.new"
-    echo "STOP: no line in $f is just {, the global options' start: nothing changed"
+    echo "STOP: no line in $f is just {, the global options' start, or a tab and servers {: nothing changed"
   else
     cp -a "$f" "$f.before-timeouts"
     chmod --reference="$f" "$f.new"
@@ -251,7 +262,9 @@ else
     if systemctl reload caddy; then
       site=$(awk '$2 == "{" && $1 ~ /\./ { print $1; exit }' "$f")
       echo "Caddy's timeouts: $(curl -s localhost:2019/config/apps/http/servers | grep -o '"[a-z_]*timeout":[^,}]*' | sort -u | tr '\n' ' ')"
+      echo "Caddy's protocols: $(curl -s localhost:2019/config/apps/http/servers | grep -o '"protocols":\[[^]]*]' | sort -u | tr '\n' ' ')"
       echo "/health through Caddy: $(curl -s -o /dev/null -w '%{http_code}' "https://$site/health")"
+      echo "HTTP/3 offered: $(curl -s -o /dev/null -D - "https://$site/health" | tr -d '\r' | grep -i '^alt-svc' || echo no)"
     else
       cp -a "$f.before-timeouts" "$f"
       systemctl reload caddy || true
@@ -262,16 +275,16 @@ fi
 SCRIPT
 ```
 
-**2. The API's stop deadline and memory cap:** the unit's two lines, as a drop-in beside the installed unit. It should print `TimeoutStopUSec=30s` and `MemoryMax=3221225472`, and the same number for the cgroup, or `max` until the API next starts, which the next deploy does:
+**2. The API's stop deadline, memory cap, and no core or swap:** the unit's four lines, as a drop-in beside the installed unit. It should print `TimeoutStopUSec=30s`, `MemoryMax=3221225472`, `MemorySwapMax=0` and `LimitCORE=0`, and the cgroup's memory.max as `3221225472`, or `max` until the API next starts, which the next deploy does; the swap and core limits also take effect then:
 
 ```bash
 # seedelf-data-layer (the VPS)
 hostname && sudo bash -euo pipefail <<'SCRIPT'
 d=/etc/systemd/system/seedelf-data-api.service.d
 mkdir -p "$d"
-printf '[Service]\nTimeoutStopSec=30\nMemoryMax=3G\n' > "$d/stop-and-memory.conf"
+printf '[Service]\nTimeoutStopSec=30\nMemoryMax=3G\nLimitCORE=0\nMemorySwapMax=0\n' > "$d/stop-and-memory.conf"
 systemctl daemon-reload
-systemctl show seedelf-data-api -p TimeoutStopUSec -p MemoryMax
+systemctl show seedelf-data-api -p TimeoutStopUSec -p MemoryMax -p MemorySwapMax -p LimitCORE
 echo "its cgroup's memory.max: $(cat /sys/fs/cgroup/system.slice/seedelf-data-api.service/memory.max)"
 SCRIPT
 ```

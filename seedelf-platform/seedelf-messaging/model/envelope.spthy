@@ -4,7 +4,7 @@
  * message, in Tamarin. Chunk 54's 54b, its follow-up, and call 16. Run it
  * with ./check.sh; the README says what is modelled, what isn't, and why.
  *
- * Twelve configurations, by flag:
+ * Thirteen configurations, by flag:
  *   (none)                    the bare v1 envelope: anyone seals to a
  *                             re-randomized handle, and its key opens it;
  *   -D=FIRST                  first contact, sealed to R_B re-randomized by
@@ -18,6 +18,10 @@
  *                             envelope's ephemeral point;
  *   -D=FIRST_NO_KEYS_PROOF    the same without the check of F's keys proof;
  *   -D=FIRST_NO_BASE_CHECK    the same without the check of F's base proof;
+ *   -D=FIRST_ONE_ENVELOPE     the rules -D=FIRST shares with those four, every
+ *                             check on, with no honest writer and one envelope
+ *                             read: fewer traces, for the traces of the two
+ *                             designated-verifier branches;
  *   -D=SEALED_TO_A_KEY        Bob's replies: sealed to a principal's identity
  *                             on a base, the inner layer's keys given away
  *                             and its salt sealed;
@@ -113,7 +117,7 @@ rule Open:
 
 /* ---- The bare envelope (no flag) ---- */
 
-#ifdef not FIRST & not FIRST_NO_OUTER_CHECK & not FIRST_NO_EPHEMERAL_CHECK & not FIRST_NO_KEYS_PROOF & not FIRST_NO_BASE_CHECK & not SEALED_TO_A_KEY & not INITIATOR_READS & not INITIATOR_READS_NO_OUTER_CHECK & not INITIATOR_READS_NO_EPHEMERAL_CHECK & not KEPT_KEY & not TAG_REDO
+#ifdef not FIRST & not FIRST_NO_OUTER_CHECK & not FIRST_NO_EPHEMERAL_CHECK & not FIRST_NO_KEYS_PROOF & not FIRST_NO_BASE_CHECK & not FIRST_ONE_ENVELOPE & not SEALED_TO_A_KEY & not INITIATOR_READS & not INITIATOR_READS_NO_OUTER_CHECK & not INITIATOR_READS_NO_EPHEMERAL_CHECK & not KEPT_KEY & not TAG_REDO
 
 /* Anyone seals to a fresh re-randomization of a handle (construction.md
    §4.1): p = [b]g, w = [b]v, c = [r]p, the header (p, tag(w), c), and the
@@ -165,28 +169,34 @@ lemma envelope_opens: exists-trace
    of the named handle's generator, or the writer holds the reader's key.
    Each control drops one of the four. (#ifdef blocks don't nest: each is
    flat.) */
-#ifdef FIRST | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK | INITIATOR_READS | INITIATOR_READS_NO_EPHEMERAL_CHECK | KEPT_KEY
+#ifdef FIRST | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK | FIRST_ONE_ENVELOPE | INITIATOR_READS | INITIATOR_READS_NO_EPHEMERAL_CHECK | KEPT_KEY
 restriction outer_check: "All p q #i. OuterCheck(p, q)@i ==> p = q"
 #endif
 
-#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK | INITIATOR_READS | INITIATOR_READS_NO_OUTER_CHECK | KEPT_KEY
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK | FIRST_ONE_ENVELOPE | INITIATOR_READS | INITIATOR_READS_NO_OUTER_CHECK | KEPT_KEY
 restriction ephemeral_check: "All c q #i. EphemeralCheck(c, q)@i ==> c = q"
 #endif
 
-#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_BASE_CHECK
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_BASE_CHECK | FIRST_ONE_ENVELOPE
 restriction keys_check: "All a b #i. KeysCheck(a, b)@i ==> a = b"
 #endif
 
 /* The base proof is designated-verifier (call 16): a base that is no known
    power of the handle's generator passes only by its other branch, made
    with the reader's own key. */
-#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_ONE_ENVELOPE
 restriction base_check: "All R c #i. AnyBase(R, c)@i ==> Ex #r. RevLtk(R)@r & #r < #i"
 #endif
 
-#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK | FIRST_ONE_ENVELOPE
 
 restriction unique_cid: "All R c #i #j. RNewCid(R, c)@i & RNewCid(R, c)@j ==> #i = #j"
+
+#endif
+
+/* The honest writer, and the keys proof and base it leaves, aren't in
+   -D=FIRST_ONE_ENVELOPE, whose traces have none. */
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK
 
 /* The initiator: session.spthy's I_Start, its first message sealed to R_B
    re-randomized by the message's outer scalar o, its ephemeral point [r] of
@@ -247,6 +257,10 @@ rule R_Keys_proof_honest:
   --[ KeysCheck(w0, p0^~xr) ]->
   [ Proved(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>) ]
 
+#endif
+
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK | FIRST_ONE_ENVELOPE
+
 rule R_Keys_proof_attacker:
   let F = <cid, t, rep, p0, Ai, Ei> in
   [ Inner(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>), In(<$e, $s, $a>) ]
@@ -259,10 +273,14 @@ rule R_Keys_proof_by_the_reader_key:
   --[ KeysCheck(p0^$e, Ei), KeysCheck(p0^$s, Si), KeysByTheReaderKey(Rsp, cid) ]->
   [ Proved(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>) ]
 
+#endif
+
 /* The responder's base, three ways (session.spthy's assumption 4, and call
    16): an honest initiator's, G^k for a k the attacker chose (both known
    powers of the named handle's generator, G), or any point, which passes the
    base check only with the reader's key (base_check). */
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK
+
 rule R_Derive_m1a_honest_base:
   let p0 = 'g'^~rb
       F  = <cid, t, rep, p0, Ai, Ei>
@@ -270,6 +288,10 @@ rule R_Derive_m1a_honest_base:
   [ Proved(Rsp, ~xr, p, c, <'0x01', F, <Si, '0', '0'>, salt, ct>), !Base(~rb) ]
   --[ RStatic(Rsp, p0, Ai, Ai^~xr) ]->
   [ R0a(Rsp, ~xr, F, Si, p0^~xr, Ai^~xr, p, c, salt, ct) ]
+
+#endif
+
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK | FIRST_ONE_ENVELOPE
 
 rule R_Derive_m1a_attacker_base:
   let p0 = 'g'^$k
@@ -321,12 +343,26 @@ rule Second_handle:
 
 restriction one_second: "All P #i #j. OneSecond(P)@i & OneSecond(P)@j ==> #i = #j"
 
+#endif
+
+#ifdef FIRST | FIRST_NO_OUTER_CHECK | FIRST_NO_EPHEMERAL_CHECK | FIRST_NO_KEYS_PROOF | FIRST_NO_BASE_CHECK
+
 /* An observer, never published. OnSecond(P, X): X is a multiple of P's
    second handle's generator by a scalar the attacker knows, so the reader's
    key on X is that multiple of the second handle's public value, which the
    attacker knows: X was aimed at that handle. */
 rule On_second_handle:
   [ !Second(P, ~d), In(k) ] --[ OnSecond(P, ('g'^~d)^k) ]-> [ ]
+
+#endif
+
+#ifdef FIRST_ONE_ENVELOPE
+
+/* The same observer with its multiple a name, for -D=FIRST_ONE_ENVELOPE's
+   traces: each instance of it is one of On_second_handle's, so it only
+   narrows the traces they find. */
+rule On_second_handle_by_a_name:
+  [ !Second(P, ~d), In($m) ] --[ OnSecond(P, ('g'^~d)^$m) ]-> [ ]
 
 #endif
 
@@ -669,22 +705,46 @@ lemma an_attackers_first_message_is_taken: exists-trace
   "Ex R cid p0 A w0 F #i. RAccept(R, cid, p0, A, w0, F)@i
    & not (Ex P #r. RevLtk(P)@r) & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
 
+#endif
+
+/* ---- Lemmas: the designated-verifier branches (-D=FIRST_ONE_ENVELOPE) ---- */
+
+#ifdef FIRST_ONE_ENVELOPE
+
+/* The rules and restrictions -D=FIRST shares with its four controls, every
+   check on, but no honest writer (the formulas below rule one out), the
+   observer's multiple a name, and one envelope read: one scan, so one open,
+   one keys proof, one base and one read, and the branch a trace names is the
+   read message's own. Each of those only drops traces, so a trace found here
+   is one of -D=FIRST. So only trace lemmas go here: an all-traces lemma
+   would say nothing of -D=FIRST, and nor would a trace lemma falsified
+   here. */
+restriction one_envelope: "All a b c d #i #j. Eq(a, b)@i & Eq(c, d)@j ==> #i = #j"
+
 /* The excuse is needed, by each branch: with the reader's key, the base
    proof's other branch proves a base on its other handle, and the keys
-   proof's an A there on a base that is G^k. Each search ran out of 600 s
-   at 4 GB in the gate of 1.10.0. */
+   proof's an A there on a base that is G^k. In -D=FIRST neither search
+   finished: in the gate of 1.10.0 each ran out of 600 s at 4 GB, and with
+   call 16's rules the base's ran out of two hours at 12 GB, and the
+   identity's out of 12 GB in 50 minutes (2026-11-23). Here each also names
+   its branch's instance as the read message's (the base's by its RStatic,
+   the keys proof's by its check on E_A) and the order; naming more only
+   narrows what it says exists. */
 // check.sh: CAP=12g,LIMIT=7200
 lemma reader_key_proves_a_base_on_its_other_handle: exists-trace
-  "Ex R cid p0 A w0 F #a #i #k #r.
-     AnyBase(R, cid)@a & RAccept(R, cid, p0, A, w0, F)@i & RTookAt(R, cid, p0)@i & OnSecond(R, p0)@k
-   & RevLtk(R)@r & #r < #i
+  "Ex R cid p0 A w0 F sdh #a #i #k #r.
+     AnyBase(R, cid)@a & RStatic(R, p0, A, sdh)@a
+   & RAccept(R, cid, p0, A, w0, F)@i & RTookAt(R, cid, p0)@i & OnSecond(R, p0)@k
+   & RevLtk(R)@r & #r < #i & #r < #a & #a < #i & #k < #i
    & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
 
 // check.sh: CAP=12g,LIMIT=7200
 lemma reader_key_proves_an_identity_on_its_other_handle: exists-trace
-  "Ex R cid p0 A w0 F #b #i #k #r.
-     KeysByTheReaderKey(R, cid)@b & RAccept(R, cid, p0, A, w0, F)@i & RTookAt(R, cid, A)@i
-   & OnSecond(R, A)@k & RevLtk(R)@r & #r < #i & not (Ex R3 c3 #a. AnyBase(R3, c3)@a)
+  "Ex R cid t rep p0 A E w0 e #b #i #k #r.
+     KeysByTheReaderKey(R, cid)@b & KeysCheck(e, E)@b
+   & RAccept(R, cid, p0, A, w0, <cid, t, rep, p0, A, E>)@i & RTookAt(R, cid, A)@i
+   & OnSecond(R, A)@k & RevLtk(R)@r & #r < #i & #r < #b & #b < #i & #k < #i
+   & not (Ex R3 c3 #a. AnyBase(R3, c3)@a)
    & not (Ex I R2 c2 p2 A2 w2 F2 #s. IStart(I, R2, c2, p2, A2, w2, F2)@s)"
 
 #endif

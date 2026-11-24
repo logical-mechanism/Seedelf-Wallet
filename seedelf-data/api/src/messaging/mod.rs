@@ -5,7 +5,7 @@
 //!
 //! - `POST /messaging/v1/{pool}/envelopes`: `nonce (8) ‖ envelope`, as
 //!   `application/octet-stream`. Checked (the shape, then the price and the
-//!   address's window, then the points), then kept.
+//!   address's window, then room, then the points), then kept.
 //! - `GET /messaging/v1/{pool}/envelopes?after=<cursor>`: a page of what
 //!   came after the cursor, in the binary format `Page::encode` writes.
 //!
@@ -13,9 +13,10 @@
 //! both, so one pool would show a preprod message to the mainnet wallet.
 //! What an address posted is counted in memory, to price its next post
 //! (`price`) and to bound what it has in the pool (`window`), and so is what
-//! it was sent in pages over the last day (`reading`): never logged or
-//! saved. The pools are saved to the state directory every minute and at
-//! shutdown, so a deploy keeps what's waiting.
+//! it was sent in pages over the last day (`reading`), and of messaging's
+//! reserve, both pools together: never logged or saved. The pools are
+//! saved to the state directory every minute and at shutdown, so a deploy
+//! keeps what's waiting.
 
 pub mod check;
 pub mod pool;
@@ -26,6 +27,7 @@ pub mod window;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -100,6 +102,20 @@ pub const POOLS: [Config; 2] = [
 /// Counted for a request with no address, which none from Caddy is.
 const NO_ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
+/// What one address may read of messaging's reserve in a day, both pools
+/// together [choice] (the 1.10.0 gate's FI-5): every wallet downloads every
+/// envelope, and a busy pool's day (protocol.md §10: about 10,000 short
+/// ones) is about 5 MB, so this is about three days of one. Past it, the
+/// day's 429 (`NotRead::Day`), so one address can't spend what's kept for
+/// conversations under way. The owner's to tune:
+/// `DATA_MESSAGING_RESERVE_READ_MIB_DAY` (config.rs).
+pub const RESERVE_READ: u64 = 16 << 20;
+
+/// An `already` answer's expiry is rounded down to this many seconds, so it
+/// doesn't say the second the envelope came (the 1.10.0 gate's FI-12). A
+/// new one's is exact: the wallet sets its clock by it.
+const ALREADY_ROUNDED: i64 = 600;
+
 /// Who the relay counts a post or a page as, for its prices and its
 /// window: an IPv4 address whole, an IPv6 address by its /56, so the /64s
 /// of one server's or one home's allocation are one address. The edge's
@@ -126,8 +142,14 @@ pub struct Pool {
     /// What each address was sent of it in the last day. Taken alone, never
     /// with another lock held.
     reads: Mutex<Reads>,
+    /// What each address was sent of messaging's reserve in the last day:
+    /// one table for both pools. Taken alone, never with another lock held.
+    reserve: Arc<Mutex<Reads>>,
     /// Where it's saved, and the mark a clean shutdown leaves beside it.
     file: Option<(PathBuf, PathBuf)>,
+    /// Its file was there at start but couldn't be read: until a save of
+    /// the pool succeeds, no clean mark is written beside it.
+    unread: AtomicBool,
 }
 
 /// Why a post whose checks passed wasn't kept: try again in this many
@@ -143,12 +165,12 @@ enum NotKept {
 /// Why a page wasn't sent.
 #[derive(Debug, PartialEq, Eq)]
 enum NotRead {
-    /// The address has read its day's budget of this pool: again in this
-    /// many seconds.
+    /// The address has read its day's budget of this pool, or, while
+    /// messaging's traffic for the day is down to its reserve, its share of
+    /// the reserve: again in this many seconds. Both are the day's 429
+    /// (`DAY_READ`), which 1.10.0 holds the pool's pages for; a 503 it
+    /// would take as the relay out of reach, and ask again at every sync.
     Day(u64),
-    /// Messaging's traffic for the day is down to its reserve, and the page
-    /// is longer than the reserve sends.
-    Reserve,
 }
 
 impl Pool {
@@ -186,9 +208,11 @@ impl Pool {
     /// (`encode`), counted against the address's reading for the day
     /// (`reading`). `short`, when messaging's traffic for the day is down to
     /// its reserve (`edge::Reserved`): the most bytes a page may be now, so
-    /// the page holds what fits and says more follows; only an envelope
-    /// longer than that by itself is refused. A page that's refused is
-    /// counted against nothing.
+    /// the page holds what fits and says more follows, or an envelope longer
+    /// than that alone; and the page counts against the address's share of
+    /// the reserve, both pools together, which refuses it once read, until
+    /// the share frees or the day rolls (`reserve_wait`). A page that's
+    /// refused is counted against nothing.
     fn read(
         &self,
         after: Option<u64>,
@@ -206,11 +230,20 @@ impl Pool {
         {
             return Err(NotRead::Day(secs));
         }
+        if short.is_some()
+            && let Some(secs) = self
+                .reserve
+                .lock()
+                .expect("reserve lock")
+                .wait(address, instant)
+        {
+            return Err(NotRead::Day(reserve_wait(secs, now)));
+        }
         let page = {
             let mut held = self.held.lock().expect("pool lock");
             match short {
                 None => held.page(after, PAGE_BYTES, now),
-                Some(most) => held.page_within(after, most, now).ok_or(NotRead::Reserve)?,
+                Some(most) => held.page_within(after, most, now),
             }
         };
         let prices = {
@@ -224,6 +257,13 @@ impl Pool {
             .expect("reads lock")
             .take(address, bytes.len(), instant)
             .map_err(NotRead::Day)?;
+        if short.is_some() {
+            self.reserve
+                .lock()
+                .expect("reserve lock")
+                .take(address, bytes.len(), instant)
+                .map_err(|secs| NotRead::Day(reserve_wait(secs, now)))?;
+        }
         Ok(bytes)
     }
 
@@ -249,6 +289,7 @@ impl Relay {
     /// [`Relay::new`] with other pools than [`POOLS`]: a test's.
     pub fn with_pools(dir: Option<&Path>, pools: &'static [Config]) -> Self {
         let now = Instant::now();
+        let reserve = Arc::new(Mutex::new(Reads::new(RESERVE_READ, now)));
         let pools = pools
             .iter()
             .map(|config| {
@@ -258,13 +299,16 @@ impl Relay {
                         dir.join(format!("messaging-{}.clean", config.name)),
                     )
                 });
+                let (held, unread) = load(config.name, file.as_ref());
                 Pool {
                     config,
-                    held: Mutex::new(load(config.name, file.as_ref())),
+                    held: Mutex::new(held),
                     counts: Mutex::new(Counts::new(config.prices, now)),
                     window: Mutex::new(Window::new(config.window, now)),
                     reads: Mutex::new(Reads::new(Reading::DEFAULT.budget(config.cap), now)),
+                    reserve: reserve.clone(),
                     file,
+                    unread: AtomicBool::new(unread),
                 }
             })
             .collect();
@@ -286,6 +330,17 @@ impl Relay {
         self
     }
 
+    /// With another share of messaging's reserve for each address than
+    /// [`RESERVE_READ`], in bytes a day, both pools together: the
+    /// environment's, or a test's. For a relay that hasn't served yet.
+    pub fn with_reserve_read(mut self, bytes: u64) -> Self {
+        let reserve = Arc::new(Mutex::new(Reads::new(bytes, Instant::now())));
+        for pool in &mut self.pools {
+            pool.reserve = reserve.clone();
+        }
+        self
+    }
+
     pub fn pool(&self, name: &str) -> Option<&Pool> {
         self.pools.iter().find(|pool| pool.config.name == name)
     }
@@ -300,11 +355,17 @@ impl Relay {
             pool.window.lock().expect("window lock").forget(instant);
             pool.reads.lock().expect("reads lock").forget(instant);
         }
+        if let Some(pool) = self.pools.first() {
+            pool.reserve.lock().expect("reserve lock").forget(instant);
+        }
     }
 
     /// Writes every pool that changed to its file. `clean` at shutdown,
     /// once nothing more comes in: the mark beside it says the file holds
-    /// everything.
+    /// everything. A pool whose file couldn't be read at start, and hasn't
+    /// been saved since, gets no mark: the file there isn't what it held, so
+    /// the next start tells every earlier cursor of a gap (the 1.10.0
+    /// gate's FI-7).
     pub fn save(&self, clean: bool) {
         let _one = self.saving.lock().expect("saving lock");
         for pool in &self.pools {
@@ -315,14 +376,26 @@ impl Relay {
                 let mut held = pool.held.lock().expect("pool lock");
                 held.changed.then(|| held.snapshot())
             };
-            if let Some(snapshot) = snapshot
-                && let Err(error) = write(file, &snapshot.encode())
-            {
-                warn!(pool = pool.config.name, kind = %error.kind(), "a messaging pool couldn't be saved");
-                pool.held.lock().expect("pool lock").changed = true;
+            if let Some(snapshot) = snapshot {
+                if let Err(error) = write(file, &pool_partial(file), &snapshot.encode()) {
+                    warn!(pool = pool.config.name, kind = %error.kind(), "a messaging pool couldn't be saved");
+                    pool.held.lock().expect("pool lock").changed = true;
+                    continue;
+                }
+                // The file is the pool's now, whole.
+                pool.unread.store(false, Ordering::Relaxed);
+            }
+            if !clean {
                 continue;
             }
-            if clean && let Err(error) = write(mark, b"") {
+            if pool.unread.load(Ordering::Relaxed) {
+                warn!(
+                    pool = pool.config.name,
+                    "a messaging pool's file couldn't be read at start, so it isn't marked clean"
+                );
+                continue;
+            }
+            if let Err(error) = write(mark, &mark_partial(mark), b"") {
                 warn!(pool = pool.config.name, kind = %error.kind(), "a messaging pool's clean mark couldn't be written");
             }
         }
@@ -347,16 +420,22 @@ impl Relay {
 
 /// A pool from its file: everything in it, after a clean shutdown; after
 /// anything else, everything too, but each earlier cursor is told it may
-/// have missed something. No file, or one that isn't a pool, is an empty
-/// pool. The clean mark is removed as it's read, so a crash later doesn't
-/// find it.
-fn load(name: &str, file: Option<&(PathBuf, PathBuf)>) -> Held {
+/// have missed something. No file is an empty pool. A file that's there
+/// but can't be read, or isn't a pool, is an empty pool too, and is left as
+/// it is (`true`, unread: no clean mark goes beside it until a save
+/// replaces it). The clean mark is removed as it's read, so a crash later
+/// doesn't find it, and so is what a save that failed may have left.
+fn load(name: &str, file: Option<&(PathBuf, PathBuf)>) -> (Held, bool) {
     let (now, micros) = (unix_now(), unix_micros());
     let Some((file, mark)) = file else {
-        return Held::new(micros);
+        return (Held::new(micros), false);
     };
+    // Up to a pool's size, which a build before the 1.10.0 gate's FI-9 left
+    // when a save failed.
+    let _ = std::fs::remove_file(pool_partial(file));
+    let _ = std::fs::remove_file(mark_partial(mark));
     let clean = std::fs::remove_file(mark).is_ok();
-    match std::fs::read(file) {
+    let held = match std::fs::read(file) {
         Ok(bytes) => match Snapshot::decode(&bytes) {
             Some(snapshot) => Held::restore(snapshot, clean, name, now, micros),
             None => {
@@ -364,7 +443,7 @@ fn load(name: &str, file: Option<&(PathBuf, PathBuf)>) -> Held {
                     pool = name,
                     "a messaging pool's file isn't one, so it starts empty"
                 );
-                Held::new(micros)
+                return (Held::new(micros), true);
             }
         },
         // None yet: one is written at the next save, changed or not, so a
@@ -378,18 +457,35 @@ fn load(name: &str, file: Option<&(PathBuf, PathBuf)>) -> Held {
         }
         Err(error) => {
             warn!(pool = name, kind = %error.kind(), "a messaging pool's file couldn't be read, so it starts empty");
-            Held::new(micros)
+            return (Held::new(micros), true);
         }
-    }
+    };
+    (held, false)
 }
 
-/// Written whole, then renamed into place.
-fn write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let partial = path.with_extension("partial");
-    let mut file = std::fs::File::create(&partial)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    std::fs::rename(&partial, path)
+/// Where a pool's file is written before it's renamed into place:
+/// `messaging-<pool>.partial`.
+fn pool_partial(file: &Path) -> PathBuf {
+    file.with_extension("partial")
+}
+
+/// And its clean mark's, a name of its own: `messaging-<pool>.clean.partial`.
+fn mark_partial(mark: &Path) -> PathBuf {
+    mark.with_extension("clean.partial")
+}
+
+/// Written whole to `partial`, then renamed into place. Nothing is left
+/// behind when that fails, to fill a disk that's nearly full.
+fn write(path: &Path, partial: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let written = std::fs::File::create(partial).and_then(|mut file| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(partial, path)
+    });
+    if written.is_err() {
+        let _ = std::fs::remove_file(partial);
+    }
+    written
 }
 
 /// Every minute: tidy, and save what changed.
@@ -407,11 +503,14 @@ pub async fn keep(relay: Arc<Relay>) {
     }
 }
 
+/// The most a post's body is: a nonce and the largest envelope.
+pub const MAX_POST: usize = NONCE_LEN + SIZES[3];
+
 /// The relay's routes. A body is at most a nonce and the largest envelope.
 pub fn routes() -> Router<Arc<Relay>> {
     Router::new()
         .route("/messaging/v1/{pool}/envelopes", get(page).post(post))
-        .layer(DefaultBodyLimit::max(NONCE_LEN + SIZES[3]))
+        .layer(DefaultBodyLimit::max(MAX_POST))
 }
 
 /// What the edge's bucket charges a messaging request, before its answer's
@@ -448,16 +547,19 @@ async fn post(
         held.already(&digest)
     };
     if let Some(expires) = already {
-        return kept("already", expires);
+        return kept("already", rounded_down(expires));
     }
     let address = client.map_or(NO_ADDRESS, |Extension(Client(ip))| address_key(ip));
     let size = envelope.len();
-    let asked = {
+    let (asked, own) = {
         let mut counts = pool.counts.lock().expect("counts lock");
         if !counts.room_for(address, instant) {
             return refuse(StatusCode::SERVICE_UNAVAILABLE, "busy", 60);
         }
-        counts.ask(address, size, instant)
+        let asked = counts.ask(address, size, instant);
+        let own =
+            matches!(asked, Asked::Refused(_)) && counts.refused_by_own(address, size, instant);
+        (asked, own)
     };
     // The window with the price, before the stamp: a post with any nonce,
     // 0 say, learns how long to wait without solving.
@@ -470,9 +572,16 @@ async fn post(
     };
     match (asked, wait) {
         (Asked::Refused(secs), wait) => {
+            // Which count took the price past its ceiling: the address's
+            // own, or everyone's floor alone.
+            let error = if own {
+                "too many posts from this address for now"
+            } else {
+                "too many posts to this pool for now"
+            };
             return refuse(
                 StatusCode::TOO_MANY_REQUESTS,
-                "too many posts from this address for now",
+                error,
                 secs.max(wait.unwrap_or(0)),
             );
         }
@@ -483,7 +592,24 @@ async fn post(
         }
         (Asked::Bits(_), None) => {}
     }
+    // Room before the points: a post to a full pool waits, however often
+    // it comes, without its points checked again. The keep looks again,
+    // and is what counts.
+    let room = {
+        let mut held = pool.held.lock().expect("pool lock");
+        held.expire(now);
+        held.room(size, pool.config.cap, now)
+    };
+    if let Err(Full(secs)) = room {
+        return refuse(StatusCode::SERVICE_UNAVAILABLE, "the pool is full", secs);
+    }
     if let Err(refused) = check::check_points(envelope) {
+        // Counted against its address alone: its next post costs more, so
+        // one solved stamp pays for only so many point checks.
+        pool.counts
+            .lock()
+            .expect("counts lock")
+            .count_refused(address, size, instant);
         return bad(refused.reason());
     }
     match pool.keep(digest, envelope, address, now, instant) {
@@ -494,7 +620,7 @@ async fn post(
                 .record(address, size, instant);
             kept("new", expires)
         }
-        Ok(Kept::Already { expires }) => kept("already", expires),
+        Ok(Kept::Already { expires }) => kept("already", rounded_down(expires)),
         Err(NotKept::Window(secs)) => refuse(StatusCode::TOO_MANY_REQUESTS, WINDOW_FULL, secs),
         Err(NotKept::Full(secs)) => {
             refuse(StatusCode::SERVICE_UNAVAILABLE, "the pool is full", secs)
@@ -526,8 +652,6 @@ async fn page(
         Err(NotRead::Day(secs)) => {
             return refuse(StatusCode::TOO_MANY_REQUESTS, DAY_READ, secs);
         }
-        // As long as the edge's own 503 once the day's share is gone.
-        Err(NotRead::Reserve) => return refuse(StatusCode::SERVICE_UNAVAILABLE, RESERVE, 3600),
     };
     let mut response = page.into_response();
     response.headers_mut().insert(
@@ -586,11 +710,25 @@ pub fn encode(page: &Page, prices: [u8; 4]) -> Vec<u8> {
 /// A 429's words when the window refuses a post.
 const WINDOW_FULL: &str = "this address's share of the pool is full for now";
 
-/// A 429's words when an address has read its day's budget of a pool.
+/// A 429's words when an address has read its day's budget of a pool, or
+/// its share of messaging's reserve: the wallet's day's hold.
 const DAY_READ: &str = "this address has read its share of the pool for the day";
 
-/// A 503's words for a page longer than the reserve sends.
-const RESERVE: &str = "messaging is near its traffic allowance: short pages only for now";
+/// How long an address that has read its share of the reserve waits:
+/// until enough of its oldest hours of it age out (`secs`, at most a day
+/// and an hour), or until the day rolls, a minute past midnight UTC, when
+/// the edge starts the next day's share and the reserve lifts, whichever is
+/// first.
+fn reserve_wait(secs: u64, now: i64) -> u64 {
+    let roll = (86_400 - now.rem_euclid(86_400)) as u64 + 60;
+    secs.min(roll).max(1)
+}
+
+/// An `already` answer's expiry: never later than the copy's, and to the
+/// 10 minutes.
+fn rounded_down(expires: i64) -> i64 {
+    expires - expires.rem_euclid(ALREADY_ROUNDED)
+}
 
 fn kept(kept: &str, expires: i64) -> Response {
     axum::Json(json!({ "kept": kept, "expires": expires })).into_response()
@@ -923,17 +1061,14 @@ mod tests {
         );
     }
 
-    /// The reserve (the relay review's low, gate 54g): a page is cut to what
-    /// the reserve sends, its framing counted, with the flag that says
-    /// another follows now. Only an envelope longer than that by itself is
-    /// refused, and a refusal is counted against nothing. Nothing on the
-    /// wire changes: a page is whole envelopes, and `MORE` says go on.
+    /// The reserve (the relay review's low, gate 54g, and the 1.10.0 gate's
+    /// FI-5): a page is cut to what the reserve sends, its framing counted,
+    /// with the flag that says another follows now, and an envelope longer
+    /// than that by itself goes alone, so no reader stops at it. Nothing on
+    /// the wire changes: a page is whole envelopes, and `MORE` says go on.
     #[test]
-    fn in_the_reserve_a_page_is_cut_short_and_refused_only_for_an_envelope_longer_than_it() {
-        let relay = Relay::with_pools(None, &ONE).with_reading(Reading {
-            floor: 60_000,
-            pools: 0,
-        });
+    fn in_the_reserve_a_page_is_cut_short_and_a_longer_envelope_goes_alone() {
+        let relay = Relay::with_pools(None, &ONE);
         let pool = relay.pool("preprod").unwrap();
         let (now, instant) = (unix_now(), Instant::now());
         let me: IpAddr = "203.0.113.7".parse().unwrap();
@@ -960,24 +1095,148 @@ mod tests {
         // Outside the reserve, the whole page, as ever.
         let whole = pool.read(None, me, None, now, instant).unwrap();
         assert_eq!((whole.len(), whole[1]), (16 + 2 * (4 + 8192), 0));
-        // A 32 KiB envelope is longer by itself: refused, however often,
-        // and counted against nothing...
+        // A 32 KiB envelope is longer by itself: it goes alone, past the
+        // reserve's page, and the reader goes on from it.
         keep(3, 32768);
-        let caught_up = Some(cursor_of(&second));
-        for _ in 0..10 {
-            assert_eq!(
-                pool.read(caught_up, me, most, now, instant),
-                Err(NotRead::Reserve)
-            );
+        let alone = pool.read(Some(cursor_of(&second)), me, most, now, instant);
+        let alone = alone.unwrap();
+        assert_eq!((alone.len(), alone[1]), (16 + 4 + 32768, 0));
+        assert_eq!(alone[20..], [3; 32768]);
+        let after = pool.read(Some(cursor_of(&alone)), me, most, now, instant);
+        assert_eq!(after.unwrap().len(), PAGE_HEADER);
+    }
+
+    /// The 1.10.0 gate's FI-5: in the reserve, an address reads at most its
+    /// share of it in a day, both pools together, then the reserve's
+    /// refusal; another address reads on, and outside the reserve the
+    /// share counts nothing.
+    #[test]
+    fn in_the_reserve_an_address_reads_its_share_of_it_across_both_pools() {
+        let relay = Relay::new(None);
+        let (mainnet, preprod) = (
+            relay.pool("mainnet").unwrap(),
+            relay.pool("preprod").unwrap(),
+        );
+        fill_a_page(mainnet);
+        fill_a_page(preprod);
+        let me = address_key("203.0.113.7".parse().unwrap());
+        let most = Some(16 * 1024);
+        let (now, instant) = (unix_now(), Instant::now());
+        let mut read = 0u64;
+        while let Ok(page) = mainnet.read(None, me, most, now, instant) {
+            assert!(page.len() <= 16 * 1024);
+            read += page.len() as u64;
         }
-        // ...so the day holds the 32,832 bytes sent, and the long page is
-        // the one that passes 60,000.
-        let long = pool.read(caught_up, me, None, now, instant).unwrap();
-        assert_eq!(long.len(), 16 + 4 + 32768);
-        assert!(matches!(
-            pool.read(caught_up, me, None, now, instant),
-            Err(NotRead::Day(secs)) if secs > 24 * 3600
-        ));
+        // 16 MiB, and the page that passed it.
+        assert!(
+            (RESERVE_READ..RESERVE_READ + 16 * 1024).contains(&read),
+            "{read}"
+        );
+        // The day's refusal, until the share frees or the day rolls,
+        // whichever is first: within a day and a minute.
+        let until_the_roll = (86_400 - now.rem_euclid(86_400)) as u64 + 60;
+        for pool in [mainnet, preprod] {
+            let Err(NotRead::Day(secs)) = pool.read(None, me, most, now, instant) else {
+                panic!("{}: read past its share of the reserve", pool.config.name)
+            };
+            assert!((1..=until_the_roll).contains(&secs), "{secs}");
+        }
+        let other = address_key("203.0.113.8".parse().unwrap());
+        assert!(mainnet.read(None, other, most, now, instant).is_ok());
+        assert!(preprod.read(None, other, most, now, instant).is_ok());
+        // Outside the reserve: the day's reading, which the reserve's share
+        // left as it was.
+        assert!(mainnet.read(None, me, None, now, instant).is_ok());
+        assert!(preprod.read(None, me, None, now, instant).is_ok());
+        // Another share for every address, as the environment sets it.
+        let small = Relay::new(None).with_reserve_read(40_000);
+        let pool = small.pool("preprod").unwrap();
+        fill_a_page(pool);
+        let pages = std::iter::from_fn(|| pool.read(None, me, most, now, instant).ok()).count();
+        assert_eq!(pages, 3);
+    }
+
+    /// The reserve's refusal waits for the share to free or the day to
+    /// roll, whichever is first, a minute past midnight UTC, and at least
+    /// a second.
+    #[test]
+    fn the_reserves_wait_ends_with_the_share_or_the_day() {
+        let midnight = 1_800_057_600; // 2027-01-16T00:00:00Z
+        assert_eq!(midnight % 86_400, 0);
+        assert_eq!(reserve_wait(90_000, midnight - 3600), 3660);
+        assert_eq!(reserve_wait(1200, midnight - 3600), 1200);
+        assert_eq!(reserve_wait(90_000, midnight), 86_460);
+        assert_eq!(reserve_wait(0, midnight - 10), 1);
+    }
+
+    /// The 1.10.0 gate's FI-7 (the relay review's R5): a start that found a
+    /// pool's file but couldn't read it leaves the file as it was and marks
+    /// nothing clean beside it, until a save of the pool succeeds; a start
+    /// that found no file has nothing to keep.
+    #[test]
+    fn a_pool_whose_file_couldnt_be_read_is_marked_clean_only_once_saved() {
+        let dir = std::env::temp_dir().join(format!("seedelf-relay-unread-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("messaging-preprod.pool");
+        let mark = dir.join("messaging-preprod.clean");
+        // A file this build doesn't read: another version's.
+        let other = [&[2u8][..], &[0; 20]].concat();
+        std::fs::write(&file, &other).unwrap();
+        let relay = Relay::with_pools(Some(&dir), &ONE);
+        relay.save(false);
+        relay.save(true);
+        assert!(!mark.exists());
+        assert_eq!(std::fs::read(&file).unwrap(), other);
+        // A post kept: the save replaces the file, which is the pool's now.
+        let pool = relay.pool("preprod").unwrap();
+        let bytes = vec![1u8; 512];
+        let digest = check::stamp_digest("preprod", &bytes);
+        let me: IpAddr = "203.0.113.7".parse().unwrap();
+        pool.keep(digest, &bytes, me, unix_now(), Instant::now())
+            .unwrap();
+        relay.save(true);
+        assert!(mark.exists());
+        assert!(Snapshot::decode(&std::fs::read(&file).unwrap()).is_some());
+        // No file at all: the pool is new, saved and marked as ever.
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_file(&mark).unwrap();
+        let fresh = Relay::with_pools(Some(&dir), &ONE);
+        fresh.save(true);
+        assert!(file.exists() && mark.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The 1.10.0 gate's FI-9 (the relay review's N2): a save that fails
+    /// leaves no partial file; a pool's file and its mark have partials of
+    /// their own names; and a start removes what a failed save left.
+    #[test]
+    fn a_save_that_fails_leaves_nothing_behind() {
+        let dir =
+            std::env::temp_dir().join(format!("seedelf-relay-partial-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("messaging-preprod.pool");
+        let mark = dir.join("messaging-preprod.clean");
+        assert_eq!(pool_partial(&file), dir.join("messaging-preprod.partial"));
+        assert_eq!(
+            mark_partial(&mark),
+            dir.join("messaging-preprod.clean.partial")
+        );
+        // What a build before this one left beside the pool's file.
+        std::fs::write(dir.join("messaging-preprod.partial"), [0u8; 4096]).unwrap();
+        std::fs::write(dir.join("messaging-preprod.clean.partial"), b"").unwrap();
+        let relay = Relay::with_pools(Some(&dir), &ONE);
+        assert!(!pool_partial(&file).exists() && !mark_partial(&mark).exists());
+        // A folder where the pool's file goes: the rename fails.
+        std::fs::create_dir(&file).unwrap();
+        relay.save(true);
+        assert!(file.is_dir());
+        assert!(!pool_partial(&file).exists());
+        // Not saved, so not marked clean, and still to save.
+        assert!(!mark.exists());
+        assert!(relay.pool("preprod").unwrap().held.lock().unwrap().changed);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// However long the reserve's page: never longer than that, cut only

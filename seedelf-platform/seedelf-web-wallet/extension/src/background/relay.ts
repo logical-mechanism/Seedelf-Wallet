@@ -15,7 +15,10 @@
 // bindings' ceiling, W17). What a later relay may send is read so it holds no
 // more than it says (W15, W16): a 410 is the relay's off switch, an envelope
 // of a size this version doesn't know is stepped over, an answer it doesn't
-// know is said as one, and a 429 holds what its words name.
+// know is said as one, and a 429 holds what its words name. What a status
+// says is kept with it (`RelayDown.status`): the worker's off switch ends only
+// on an answer of the relay's own (the 1.10.0 gate's round 5, the freeze's fix
+// A), and a 5xx but 503 is none (fix C).
 
 import type { NetworkName } from "../networks";
 import { type FetchLike, RateLimit, SERVICE_FETCH } from "./koios";
@@ -24,8 +27,11 @@ import { type FetchLike, RateLimit, SERVICE_FETCH } from "./koios";
 export const RELAY_TIMEOUT_MS = 30_000;
 
 /**
- * How long a page's body may then take (worker-net#11): a full page, 264,208 bytes, arrives over a link of about
- * 18 kbit/s. A link slower than that never catches up, as before; one between that and the old 30 s's 70 kbit/s does.
+ * How long a page's body may then take (worker-net#11): the wallet's own bound, two minutes. The server's is shorter:
+ * its proxy gives an answer 60 s to be written (Caddy's `write 60s`), so a full page, 264,208 bytes, needs a link of
+ * about 35 kbit/s down, and a slower one never gets the whole page. A post's body has 10 s at the proxy and the edge,
+ * about 26 kbit/s up for a 32 KiB message: a slower link's post is cut off, which is no answer, and the posting run
+ * goes on past it (the freeze's fix C). Both are the owner's calls (the 1.10.0 gate's freeze calls 5 and 6).
  */
 export const RELAY_BODY_TIMEOUT_MS = 120_000;
 
@@ -70,12 +76,13 @@ export const PAGES_A_SYNC = Math.floor(280 / PAGE_UNITS);
 /**
  * The edge's messaging bucket holds 300 units and refills 10 a second. 280 in any 30 s stays inside it however the
  * windows fall (280 + 280·T/30 ≤ 300 + 10·T for every T), so a fresh sync's pages never meet a 429 of the wallet's
- * own making: about 16 full pages, 4 MiB, every 30 s. One for every origin a build reaches, shared by both pools.
+ * own making: about 16 full pages, 4 MiB, every 30 s. One for every origin a build reaches, shared by both pools. On
+ * the monotonic clock (W14; the freeze's fix E): a device clock set back after a sync's pages holds no request.
  */
 const LIMITS = new Map<string, RateLimit>();
 const limitFor = (origin: string) => {
   let limit = LIMITS.get(origin);
-  if (!limit) LIMITS.set(origin, (limit = new RateLimit(280, 30_000)));
+  if (!limit) LIMITS.set(origin, (limit = new RateLimit(280, 30_000, () => performance.now())));
   return limit;
 };
 
@@ -114,8 +121,29 @@ export type PostAnswer =
   /** Never as it is: bytes the relay, or something on the way, won't take (a 400 or a 413). */
   | { kind: "refused"; status: number };
 
-/** The relay didn't answer, or answered something that isn't §17's. */
-export class RelayDown extends Error {}
+/**
+ * The relay didn't answer, or answered something that isn't §17's. `status`: the HTTP status it answered with, where it
+ * answered at all (none for a request that failed, timed out or wasn't made, or a body that didn't arrive).
+ */
+export class RelayDown extends Error {
+  constructor(
+    message?: string,
+    readonly status?: number,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Whether `e` is an answer of the relay's own (the freeze's fix A): a status but a 410, and none of the 5xx but 503,
+ * which a proxy in front of it gives for a relay it can't reach (fix C). A failed fetch, a time-out, a body that didn't
+ * arrive, and a request not made are none. What ends the off switch.
+ */
+export function relayAnswered(e: unknown): boolean {
+  if (!(e instanceof RelayDown) || e.status === undefined) return false;
+  const status = e.status;
+  return status !== 410 && !(status >= 500 && status <= 599 && status !== 503);
+}
 
 /** Not asked: what the caller said must still hold, right before the request, didn't. */
 export class RelayNotAsked extends RelayDown {}
@@ -124,7 +152,11 @@ export class RelayNotAsked extends RelayDown {}
  * The relay's off switch (W15, versions-upgrade#2): a 410 Gone on a page or a post, whatever its body. Messages are
  * stopped on purpose there, so the worker asks again only now and then, and posts nothing meanwhile.
  */
-export class RelayStopped extends RelayDown {}
+export class RelayStopped extends RelayDown {
+  constructor(message?: string) {
+    super(message, 410);
+  }
+}
 
 /**
  * An answer to a post that this version doesn't know (W15, versions-upgrade#6): a status §17.2 doesn't give, or one
@@ -138,12 +170,16 @@ export class RelayUnknown extends RelayDown {}
  */
 export class RelayDayRead extends RelayDown {
   constructor(readonly retryAfterMs: number) {
-    super("the relay says this address has read its share of the pool for the day");
+    super("the relay says this address has read its share of the pool for the day", 429);
   }
 }
 
 /** The edge's "too many requests at once" (W16): a second's wait for every request to the relay, nothing more. */
-export class RelayBusy extends RelayDown {}
+export class RelayBusy extends RelayDown {
+  constructor(message?: string) {
+    super(message, 429);
+  }
+}
 
 /** Checked right before a request goes, after any wait for the rate limit: false, it doesn't. */
 export type MayAsk = () => Promise<boolean>;
@@ -205,6 +241,10 @@ const HOUR_S = 3600;
  * MAX_BACK_OFF_MS, which `hold` keeps it within).
  */
 const POST_WAIT_S = 37 * HOUR_S;
+export const POST_WAIT_MAX_MS = POST_WAIT_S * 1000;
+
+/** How long a post the server gave up reading waits (a 408, the freeze's fix C): that size, a minute. */
+const SLOW_BODY_WAIT_MS = 60_000;
 
 /**
  * The edge's words for its own 429, the address's messaging bucket empty (seedelf-data's api/src/edge.rs `refuse`):
@@ -350,11 +390,11 @@ export class RelayClient {
       }
       // The edge's bucket: every call waits as long as it asks, at most a minute (koios.ts MAX_BACK_OFF_MS).
       this.limit.hold(retryAfterMs(response, HOUR_S));
-      throw new RelayDown("the relay answered 429");
+      throw new RelayDown("the relay answered 429", 429);
     }
     if (!response.ok) {
       drop(response);
-      throw new RelayDown(`the relay answered ${response.status}`);
+      throw new RelayDown(`the relay answered ${response.status}`, response.status);
     }
     return readPage(await this.bodyOf(response, abort, PAGE_BODY_MAX_BYTES, RELAY_BODY_TIMEOUT_MS));
   }
@@ -384,12 +424,12 @@ export class RelayClient {
       case 200: {
         const read = await answer();
         const expires = read?.expires;
-        if (typeof expires !== "number" || !Number.isFinite(expires)) throw new RelayUnknown("the relay's answer doesn't read");
+        if (typeof expires !== "number" || !Number.isFinite(expires)) throw new RelayUnknown("the relay's answer doesn't read", 200);
         return { kind: "kept", expires: expires * 1000, fresh: read?.kept === "new" };
       }
       case 402: {
         const bits = (await answer())?.price;
-        if (typeof bits !== "number" || !Number.isInteger(bits) || bits < 0) throw new RelayUnknown("the relay's price doesn't read");
+        if (typeof bits !== "number" || !Number.isInteger(bits) || bits < 0) throw new RelayUnknown("the relay's price doesn't read", 402);
         // Said as it's named, with any wait it names: past the ceiling, the worker waits rather than works (W17).
         return response.headers.get("retry-after") === null
           ? { kind: "price", bits }
@@ -408,11 +448,19 @@ export class RelayClient {
           this.limit.hold(wait);
           return { kind: "wait", scope: "network", retryAfterMs: wait };
         }
+        // The relay's own words, whichever (its window, its floor's "too many posts to this pool for now", a size's
+        // price): that size waits as long as it says, never read as an answer this version doesn't know.
         return { kind: "wait", scope: "size", retryAfterMs: wait };
       }
       case 503:
+        // A bound of the server's ("busy", 30 s), the pool full (600 s to an hour), its traffic allowance: every post.
         drop(response);
         return { kind: "wait", scope: "network", retryAfterMs: retryAfterMs(response, POST_WAIT_S) };
+      case 408:
+        // The server gave up reading the body (a slow link, or one that broke off, relay2's item 2): that size waits a
+        // minute, whatever the answer says (the freeze's fix C). Never a strike against the envelope.
+        drop(response);
+        return { kind: "wait", scope: "size", retryAfterMs: SLOW_BODY_WAIT_MS };
       case 400:
       case 413:
         drop(response);
@@ -422,7 +470,10 @@ export class RelayClient {
         throw new RelayStopped("the relay's Messages are stopped");
       default:
         drop(response);
-        throw new RelayUnknown(`the relay answered ${response.status}`);
+        // A proxy's 502 or 504, or a 500: the relay wasn't reached, which is no answer (fix C). Any other status is one
+        // this version doesn't know.
+        if (response.status >= 500 && response.status <= 599) throw new RelayDown(`the relay answered ${response.status}`, response.status);
+        throw new RelayUnknown(`the relay answered ${response.status}`, response.status);
     }
   }
 }

@@ -271,10 +271,11 @@ describe("Seedelf Messaging in the worker", { timeout: 30_000 }, () => {
     await alice.messaging.send("preprod", cid, "once");
     await alice.messaging.whenIdle();
     await synced(bob);
-    // A worker stopped before the cursor moved: the same pages read again, from the start.
-    const takes = await bob.store.get<{ cursor?: string }>("messagingTake.preprod");
-    expect(takes?.cursor).toBeDefined();
-    await bob.store.set("messagingTake.preprod", { ...takes, cursor: undefined });
+    // A worker stopped before the cursor moved: the same pages read again, from the start. The cursor is the read
+    // record's (round 5).
+    const read = await bob.store.get<{ cursor?: string }>("messagingRead.preprod");
+    expect(read?.cursor).toBeDefined();
+    await bob.store.set("messagingRead.preprod", { ...read, cursor: undefined });
     bob.restart();
     await synced(bob);
     expect(await texts(bob, cid)).toEqual(["in:hello Bob", "out:hi Alice", "in:once"]);
@@ -411,16 +412,19 @@ describe("Seedelf Messaging in the worker", { timeout: 30_000 }, () => {
     });
     relay.price = 9;
     await synced(alice);
-    const seen: MessagingEntry[][] = [];
+    // A post's work is solved in its posting run, a lane, which no thread is read during (O8, round 5): what the thread
+    // would say is the worker's work for that message, looked at from inside the run.
+    const work = () => (alice.messaging as unknown as { work: Map<string, { entry?: number; bits: number }> }).work;
+    const seen: Array<Array<{ entry?: number; bits: number }>> = [];
     alice.onWait = async () => {
       alice.onWait = undefined;
-      seen.push((await alice.messaging.thread("preprod", cid)).messages);
+      seen.push([...work().values()]);
     };
     await alice.messaging.send("preprod", cid, "worked for");
     await alice.messaging.whenIdle();
     const [during] = seen;
-    expect(during!.at(-1)!.working!.seconds).toBeGreaterThanOrEqual(1);
-    expect(during!.filter((m) => m.working)).toHaveLength(1);
+    const last = (await alice.messaging.thread("preprod", cid)).messages.at(-1)!;
+    expect(during).toEqual([{ entry: last.id, bits: 9 }]);
     expect((await alice.messaging.thread("preprod", cid)).messages.some((m) => m.working)).toBe(false);
 
     // A first message: every message waiting on its stamp says so.
@@ -731,14 +735,36 @@ describe("Seedelf Messaging in the worker", { timeout: 30_000 }, () => {
     relay.up = true;
     const real = relay.fetch;
     let posts = 0;
+    // The deletion is pressed as the first post goes: a press waits for the posting run, a lane, to end (O8, round 5),
+    // so the run posts what it read; then the conversation goes, and nothing of it is posted again, now or later.
+    let removal: Promise<void> | undefined;
     relay.fetch = async (url, init) => {
       const answer = await real(url, init);
-      if (init.method === "POST" && ++posts === 1) await alice.messaging.remove("preprod", cid);
+      if (init.method === "POST" && ++posts === 1) removal = alice.messaging.remove("preprod", cid);
       return answer;
     };
     await alice.messaging.post("preprod");
+    await removal;
     await alice.messaging.whenIdle();
-    expect(posts).toBe(1);
+    expect(posts).toBe(2);
+    expect((await alice.messaging.overview("preprod")).conversations).toEqual([]);
+    alice.restart();
+    await synced(alice);
+    expect(posts).toBe(2);
+  });
+
+  it("posts nothing of a conversation deleted before its run read the outbox, after a restart too (round 5)", async () => {
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    relay.up = false;
+    await alice.messaging.send("preprod", cid, "one");
+    await alice.messaging.whenIdle();
+    relay.up = true;
+    await alice.messaging.remove("preprod", cid);
+    alice.restart();
+    relay.calls.length = 0;
+    await synced(alice);
+    expect(relay.calls.filter((c) => c.startsWith("POST "))).toEqual([]);
   });
 
   it("writes no cursor into another phrase's inbox: the wallet removed and restored mid-sync", async () => {
@@ -855,8 +881,12 @@ describe("the wallet's messages", () => {
   });
 
   it("are counted as the store keeps them: sealed, padded to a power of two, base64", () => {
-    expect(storedBytes(10)).toBe(Math.ceil(((1024 + 16) * 4) / 3));
-    expect(storedBytes(1025)).toBe(Math.ceil(((2048 + 16) * 4) / 3));
+    // Base64 with its padding characters (round 5): exactly the stored data's length.
+    expect(storedBytes(10)).toBe(4 * Math.ceil((1024 + 16) / 3));
+    expect(storedBytes(10)).toBe(1388);
+    expect(storedBytes(1025)).toBe(4 * Math.ceil((2048 + 16) / 3));
+    expect(Buffer.from(new Uint8Array(1024 + 16)).toString("base64")).toHaveLength(storedBytes(10));
+    expect(Buffer.from(new Uint8Array(4096 + 16)).toString("base64")).toHaveLength(storedBytes(4000));
   });
 });
 

@@ -3,14 +3,18 @@
 //! skipped keys stored as runs in the order stored.
 
 use super::ratchet::pair;
-use super::support::{Seeded, handle, identity, key, opened, outside_g1, skip_sends, start};
-use crate::envelope::{ENVELOPE_OVERHEAD, encrypt_message};
-use crate::session::conversation::{Conversation, Role, STATE_VERSION};
+use super::support::{Seeded, handle, identity, key, opened, outside_g1, skip_sends, stamp, start};
+use crate::envelope::{ENVELOPE_OVERHEAD, Envelope, decrypt_message, encrypt_message, seal};
+use crate::session::conversation::{Conversation, Origin, Role, STATE_VERSION};
 use crate::session::draw::Draw;
-use crate::session::first_contact::ConversationId;
-use crate::session::ratchet::{MAX_SKIP, MAX_STORED_SKIPPED, skipped_len};
+use crate::session::first_contact::{ConversationId, STAMP_LEN};
+use crate::session::ratchet::{
+    MAX_SKIP, MAX_STORED_SKIPPED, RATCHET_HEADER_LEN, RATCHET_OVERHEAD, RATCHET_SALT_LEN,
+    envelope_ephemeral_scalar, kdf_ck, outer_scalar, skipped_len,
+};
 use crate::session::wire::{
-    ENVELOPE_SIZES, MAX_ENVELOPE_LEN, Opened, inner_capacity, open, pad, unpad,
+    ENVELOPE_SIZES, FIRST_CONTACT_TYPE, MAX_ENVELOPE_LEN, Opened, SESSION_OVERHEAD, SESSION_TYPE,
+    envelope_size, inner_capacity, open, pad, unpad,
 };
 use crate::{Error, SecretKey};
 
@@ -206,37 +210,227 @@ fn secrets_stay_out_of_debug_and_x_out_of_the_state() {
     assert!(!stored.windows(32).any(|w| w == x));
 }
 
-/// The inner message fills one of the four sizes, with the boundaries §9
-/// gives: the smallest envelope holds 366 inner bytes, so a session message
-/// holds 261 bytes of text in 512 bytes.
+/// The four sizes hold 366, 1,902, 8,046 and 32,622 inner bytes, each with
+/// the padding's marker (§9). A session message takes the size its text
+/// would as a first-contact message of its conversation, F and 97 bytes
+/// more ([`every_message_is_padded_to_its_first_contact_size`]): in the
+/// pair's, whose F is 510 bytes, 1,295 bytes of text fill 2 KiB, 7,439 fill
+/// 8 KiB and 32,015 fill 32 KiB, from either side, and one more is refused.
 #[test]
 fn messages_fill_the_four_envelope_sizes() {
     assert_eq!(inner_capacity(512), 366);
+    for (inner_len, size) in [
+        (0, Ok(512)),
+        (366, Ok(512)),
+        (367, Ok(2048)),
+        (1902, Ok(2048)),
+        (1903, Ok(8192)),
+        (8046, Ok(8192)),
+        (8047, Ok(32768)),
+        (32622, Ok(32768)),
+        (32623, Err(Error::MessageTooLarge)),
+    ] {
+        assert_eq!(envelope_size(inner_len), size, "{inner_len}");
+    }
     let mut p = pair("sizes");
+    assert_eq!(p.a.first_bytes.len(), 510);
     for (len, size) in [
-        (0, 512),
-        (261, 512),
-        (262, 2048),
-        (1797, 2048),
-        (1798, 8192),
-        (7941, 8192),
-        (7942, 32768),
-        (32517, 32768),
+        (0, 2048),
+        (1295, 2048),
+        (1296, 8192),
+        (7439, 8192),
+        (7440, 32768),
+        (32015, 32768),
     ] {
         let envelope = p.a.send_with(&vec![b'z'; len], &mut p.draw).unwrap();
-        assert_eq!(envelope.len(), size, "{len}");
+        assert_eq!(envelope.len(), size, "Alice, {len}");
         assert_eq!(
             p.b.receive_with(&opened(&p.bob, &envelope), T, &mut p.draw)
                 .unwrap()
                 .len(),
             len
         );
+        let envelope = p.b.send_with(&vec![b'y'; len], &mut p.draw).unwrap();
+        assert_eq!(envelope.len(), size, "Bob, {len}");
+        assert_eq!(
+            p.a.receive_with(&opened(&p.alice, &envelope), T, &mut p.draw)
+                .unwrap()
+                .len(),
+            len
+        );
     }
-    assert_eq!(p.a.max_text_len(), 32517);
-    assert_eq!(
-        p.a.send_with(&[0; 32518], &mut p.draw),
-        Err(Error::MessageTooLarge)
-    );
+    for side in [&mut p.a, &mut p.b] {
+        assert_eq!(side.max_text_len(), 32015);
+        assert_eq!(
+            side.send_with(&[0; 32016], &mut p.draw),
+            Err(Error::MessageTooLarge)
+        );
+    }
+}
+
+/// Every message of either side, before a reply and after one, is padded to
+/// the envelope its text would take as a first-contact message of its own
+/// conversation: its text and F + 97 bytes (§9; the owner's call O1 (b) in
+/// the 1.10.0 gate). So no message is 512 bytes, a reply taken changes no
+/// message's size, and the side written to sends the sizes the side that
+/// wrote first does: a size says neither whether a reply was taken nor
+/// which side wrote. Checked for every F size, a continuation's 282, 491
+/// under a 1-byte `to`, 522 to a Seedelf's name and 538 with a `replaces`,
+/// at each size's edge.
+///
+/// Past the first-contact room every side is refused,
+/// [`Error::MessageTooLarge`], with nothing drawn and the state as it was:
+/// after a reply too, where the inner message alone would fit.
+/// `max_text_len` is that room at every side and stage, the share aside.
+/// Only the padding grows: the inner message is the real one, `0x02 | cid |
+/// header | ciphertext` after a reply, and a reader takes it at any of the
+/// four sizes that holds it, 512 bytes included, as it would from a writer
+/// that doesn't pad up (§16.1).
+#[test]
+fn every_message_is_padded_to_its_first_contact_size() {
+    let (alice, bob) = (key("alice"), key("bob"));
+    let bob_handle = handle("bob", "h");
+    let mut draw = Seeded::new("padded to its first-contact size");
+    let continued = start(&alice, &bob_handle, T, &mut draw);
+    let starts = [
+        Conversation::continue_with(&alice, &continued, T, &mut draw).unwrap(),
+        Conversation::start_with(&alice, &bob_handle, b"b", T, &mut draw).unwrap(),
+        Conversation::start_with(&alice, &bob_handle, &[0x5e; 32], T, &mut draw).unwrap(),
+        Conversation::begin(
+            &alice,
+            Origin::Handle(&bob_handle),
+            &[0x5e; 32],
+            Some(ConversationId([5; 16])),
+            T,
+            &mut draw,
+        )
+        .unwrap(),
+    ];
+    // F, then the most text 2, 8 and 32 KiB hold as a first-contact message.
+    let rooms = [
+        (282, [1523, 7667, 32243]),
+        (491, [1314, 7458, 32034]),
+        (522, [1283, 7427, 32003]),
+        (538, [1267, 7411, 31987]),
+    ];
+    let sizes = [2048, 8192, 32768];
+    for (mut a, (f_len, room)) in starts.into_iter().zip(rooms) {
+        stamp(&mut a);
+        assert_eq!(a.first_bytes.len(), f_len);
+        let overhead = 1 + f_len + STAMP_LEN + RATCHET_HEADER_LEN + RATCHET_OVERHEAD;
+        assert_eq!(overhead, f_len + 97);
+        // No first-contact message fits 512 bytes, so now no message does.
+        assert!(inner_capacity(512) < overhead);
+        for (size, room) in sizes.into_iter().zip(room) {
+            assert_eq!(inner_capacity(size) - overhead, room);
+        }
+        let first = opened(&bob, &a.send_with(b"first", &mut draw).unwrap());
+        let (mut b, _) = Conversation::accept_with(&bob, &[(&first, T)], &mut draw).unwrap();
+        let unanswered = a.clone();
+        let reply = opened(&alice, &b.send_with(b"reply", &mut draw).unwrap());
+        a.receive_with(&reply, T, &mut draw).unwrap();
+        assert!(unanswered.sends_first_contact() && !a.sends_first_contact());
+
+        let mut lens = vec![0];
+        for room in room {
+            lens.extend([room - 1, room, room + 1]);
+        }
+        // Each sender, with its reader, the reader's key, the register its
+        // messages go to, and its inner messages' type.
+        let senders = [
+            (
+                "the writer before a reply",
+                &unanswered,
+                &b,
+                &bob,
+                a.responder_register(),
+                FIRST_CONTACT_TYPE,
+            ),
+            (
+                "the writer after one",
+                &a,
+                &b,
+                &bob,
+                a.responder_register(),
+                SESSION_TYPE,
+            ),
+            (
+                "the side written to",
+                &b,
+                &a,
+                &alice,
+                a.initiator_register(),
+                SESSION_TYPE,
+            ),
+        ];
+        for (who, sender, reader, reader_key, to, kind) in senders {
+            let at = |len: usize| format!("{who}, F of {f_len}, {len} bytes");
+            assert_eq!(sender.max_text_len(), room[2], "{who}, F of {f_len}");
+            for &len in &lens {
+                let text = vec![b'p'; len];
+                let mut s = sender.clone();
+                let before = s.to_bytes();
+                draw.drain();
+                let Some((size, _)) = sizes.into_iter().zip(room).find(|&(_, room)| len <= room)
+                else {
+                    assert_eq!(
+                        s.send_with(&text, &mut draw),
+                        Err(Error::MessageTooLarge),
+                        "{}",
+                        at(len)
+                    );
+                    assert!(draw.drain().is_empty(), "{}", at(len));
+                    assert_eq!(s.to_bytes(), before, "{}", at(len));
+                    continue;
+                };
+                let chain_key = s.ratchet.cks.clone().unwrap();
+                let envelope = s.send_with(&text, &mut draw).unwrap();
+                assert_eq!(envelope.len(), size, "{}", at(len));
+
+                // Only the padding grows.
+                let message = opened(reader_key, &envelope);
+                let real = if kind == FIRST_CONTACT_TYPE {
+                    overhead
+                } else {
+                    SESSION_OVERHEAD
+                };
+                assert_eq!(message.bytes[0], kind, "{}", at(len));
+                assert_eq!(message.bytes.len(), real + len, "{}", at(len));
+                let padded =
+                    decrypt_message(reader_key, &Envelope::from_bytes(&envelope).unwrap()).unwrap();
+                assert_eq!(padded, pad(&message.bytes, size), "{}", at(len));
+
+                // A reader takes it at any size that holds it: the same
+                // message sealed to the same p and c, only its padding apart.
+                let (_, mk) = kdf_ck(&chain_key);
+                let salt: [u8; RATCHET_SALT_LEN] =
+                    message.ciphertext[..RATCHET_SALT_LEN].try_into().unwrap();
+                let (o, r) = (
+                    outer_scalar(&mk, &salt),
+                    envelope_ephemeral_scalar(&mk, &salt),
+                );
+                for any in ENVELOPE_SIZES {
+                    if message.bytes.len() > inner_capacity(any) {
+                        continue;
+                    }
+                    let sealed = seal(&to, &o, &r, &pad(&message.bytes, any))
+                        .unwrap()
+                        .to_bytes();
+                    assert_eq!(sealed.len(), any);
+                    if any == size {
+                        assert_eq!(sealed, envelope, "{}", at(len));
+                    }
+                    let mut read = reader.clone();
+                    assert_eq!(
+                        read.receive_with(&opened(reader_key, &sealed), T, &mut draw),
+                        Ok(text.clone()),
+                        "{}, read at {any}",
+                        at(len)
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Padding is `0x80` then zeros to an exact size; anything else is refused.

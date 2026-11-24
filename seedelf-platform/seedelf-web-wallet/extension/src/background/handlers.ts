@@ -308,8 +308,10 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.messaging.overview(ctx.network);
     }
     case "messaging-sync":
-      await ctx.messaging.sync(ctx.network);
-      return null;
+      // The page's poll, on the worker's one grid for every page, and its background work kept off its ticks (messaging.ts
+      // `notePage`); answered with how long until the grid's next tick, from the grid and the clock alone (`pollIn`).
+      await ctx.messaging.sync(ctx.network, { page: message.page, kind: message.kind });
+      return { nextIn: ctx.messaging.pollIn() };
     case "messaging-start":
       return { cid: await ctx.messaging.start(ctx.network, seedelfNameOf(message.to), message.text) };
     case "messaging-send":
@@ -348,6 +350,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return null;
     case "messaging-clear":
       return ctx.messaging.clear(ctx.network);
+    case "messaging-seen":
+      return ctx.messaging.seenDropped(ctx.network, message.droppedUnread);
     case "history": {
       if (message.of === "seedelf") {
         // Arrivals are noted by a balance reading: Refresh makes one, and otherwise the history asks nothing.

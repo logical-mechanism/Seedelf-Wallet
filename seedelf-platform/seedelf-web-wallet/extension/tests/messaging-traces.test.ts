@@ -9,10 +9,10 @@
 // difference is the answer to whether that register is A's. Every assertion
 // is on order (each tick's requests after its mark), never on a clock.
 //
-// Two cases differ by design, each said where it is: a trap in a take locks
-// the wallet that took the envelope (W9, W13), and a post whose bookkeeping
-// waits behind a take step held across ticks (W10's residual: in the wallet
-// one envelope's work, which the control case holds to).
+// One case differs by design, said where it is: a trap in a take locks the
+// wallet that took the envelope (W9, W13). Since the 1.10.0 gate's round 5 a
+// post's bookkeeping is the runner's, after the lane, so a take step held
+// across ticks no longer holds a post or the next tick's pages.
 //
 // One relay, one pool: W (Carol) writes, A (Alice) and B (Bob) read the same
 // bytes at the same cursors. What A or B posts during the comparison is
@@ -390,7 +390,7 @@ describe("what two wallets ask when the same pages hold one's envelopes and none
     expect(r.a).toEqual(r.b);
   });
 
-  it("a slow take while a post of each wallet's own comes due: the post's bookkeeping waits in the queue behind A's take", async () => {
+  it("a slow take while a post of each wallet's own comes due: the post goes, and its bookkeeping waits for the runner (round 5)", async () => {
     const x = await world();
     x.answer = () => {
       throw new TypeError("Failed to fetch");
@@ -423,16 +423,13 @@ describe("what two wallets ask when the same pages hold one's envelopes and none
     await x.b.messaging.whenIdle();
     await ticks(x, "tick 4");
     const r = paired("slow take, a post due", x, { cursors: [await cursorOf(x.a), await cursorOf(x.b)] });
-    // Different by design: W10's residual (the 1.10.0 gate's f9, words only). A's post at tick 2 goes as B's does, and
-    // its bookkeeping (marking it posted) waits in the queue behind A's take step, held here across ticks; so A's tick-2
-    // sync ends only as that step does, and its tick 3 joins it. In the wallet a take step is one envelope's work: the
-    // control below, a take slow at every step, is identical. The requests are the same ones, in the same order: A's
-    // posts are B's, and A's pages B's, one tick late.
-    const gets = (t: string[]) => t.filter((s) => s.startsWith("GET "));
+    // Identical (round 5, fix item 5): A's post at tick 2 goes in its lane as B's does, and marking it posted is the
+    // runner's, after the lane, behind A's held take step; no lane waits for it, so A's tick-2 sync ends as B's does,
+    // and its tick 3 reads as B's. (Round 4 differed here: the bookkeeping held A's sync a tick.)
+    expect(r.a).toEqual(r.b);
+    // And the post was marked once the take let go: nothing posted twice.
     const posts = (t: string[]) => t.filter((s) => s.startsWith("POST "));
-    expect(posts(r.a)).toEqual(posts(r.b));
-    expect(gets(r.a)).toEqual(gets(r.b).slice(0, gets(r.a).length));
-    expect(gets(r.b).length - gets(r.a).length).toBe(1);
+    expect(posts(r.a).length).toBe(posts(r.b).length);
   });
 
   it("control: a slow take of many short receives while a post comes due (each of A's record writes 40 turns late)", async () => {
@@ -938,9 +935,10 @@ describe("what two wallets ask when the same pages hold one's envelopes and none
     };
     const holder = await served(true);
     const bystander = await served(false);
-    // The holder's take was under way at the lock, and was finished from the take record after it.
+    // The holder's take was under way at the lock, and was finished after it: from memory, since a read of 4 MiB is far
+    // past the take record's room (round 5), so the record holds none of it.
     expect(holder.opened).toBeGreaterThan(holder.openedAtLock);
-    expect(holder.takes?.batches).toEqual([]);
+    expect(holder.takes?.batches ?? []).toEqual([]);
     expect(bystander.opened).toBe(0);
     // The same pages, and the same cursors, sync by sync.
     expect(holder.asked).toEqual(bystander.asked);

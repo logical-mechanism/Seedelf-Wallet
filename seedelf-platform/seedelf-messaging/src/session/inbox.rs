@@ -27,8 +27,8 @@ pub const MAX_REQUEST_BYTES: usize = 256 * 1024;
 /// A request's share, in messages: the most first-contact messages one
 /// request holds, and an initiator sends before a reply. A first-contact
 /// message's header has PN 0 and N below it, or it doesn't parse
-/// (docs/protocol.md §3.1). Every later reader honours it, so raising it is
-/// a change older readers drop.
+/// (docs/protocol.md §3.1). Every later reader takes at least this, so
+/// raising it is a change older readers drop.
 pub const MAX_REQUEST_MESSAGES: usize = 16;
 
 /// A request's share, in bytes: the most one request holds, and an

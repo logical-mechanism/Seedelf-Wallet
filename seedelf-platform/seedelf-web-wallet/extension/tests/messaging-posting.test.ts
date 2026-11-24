@@ -216,11 +216,12 @@ describe("a wait the relay asks for (worker-net#7, tests-ci#3)", { timeout: 30_0
   it("holds the size it was for, and no other: a long message refused for 36 hours never holds a short one", async () => {
     const { relay, alice, bob } = await pair();
     const cid = await talking(alice, bob);
-    // The address's window has no room for a 2 KiB envelope, and room for a short one: the page says [4, 0, 4, 4].
-    relay.refusingSizes = { 2048: 36 * 3600 };
+    // The address's window has no room for an 8 KiB envelope, and room for a short one: the page says [4, 4, 0, 4].
+    // Every short message is 2 KiB since every message is padded to its first-contact size (the 1.10.0 gate's O1 b).
+    relay.refusingSizes = { 8192: 36 * 3600 };
     await synced(alice);
     relay.calls.length = 0;
-    await alice.messaging.send("preprod", cid, "L".repeat(400));
+    await alice.messaging.send("preprod", cid, "L".repeat(2000));
     await alice.messaging.whenIdle();
     await alice.messaging.send("preprod", cid, "short");
     await alice.messaging.whenIdle();
@@ -230,7 +231,8 @@ describe("a wait the relay asks for (worker-net#7, tests-ci#3)", { timeout: 30_0
     expect(thread.messages.at(-2)!.nextTry).toBe(clock.now + 36 * 3600_000);
     expect(thread.messages.at(-1)!.nextTry).toBeUndefined();
     expect(thread.nextTry).toBe(clock.now + 36 * 3600_000);
-    // In another conversation too, and at later syncs, without the long one asked again.
+    // In another conversation too, and at later syncs, without the long one asked again: a first message is a 2 KiB
+    // envelope, as the short ones are, so it goes.
     const other = await alice.messaging.start("preprod", BOB_SEEDELF, "second conversation, 2 KiB itself");
     await alice.messaging.whenIdle();
     await alice.messaging.send("preprod", cid, "short again");
@@ -238,15 +240,13 @@ describe("a wait the relay asks for (worker-net#7, tests-ci#3)", { timeout: 30_0
     await synced(alice);
     thread = await alice.messaging.thread("preprod", cid);
     expect(thread.messages.at(-1)!.sent).toBe("posted");
-    // A first message is a 2 KiB envelope: it waits with the long one.
-    expect((await alice.messaging.thread("preprod", other)).messages[0]!.sent).toBe("pending");
-    expect(relay.calls.filter((c) => c.startsWith("POST"))).toHaveLength(3);
-    // Room again: both go.
+    expect((await alice.messaging.thread("preprod", other)).messages[0]!.sent).toBe("posted");
+    expect(relay.calls.filter((c) => c.startsWith("POST"))).toHaveLength(4);
+    // Room again: it goes.
     relay.refusingSizes = undefined;
     await busyFor(36 * 3600_000 + 1000, alice);
     await synced(alice);
     expect((await alice.messaging.thread("preprod", cid)).messages.at(-3)!.sent).toBe("posted");
-    expect((await alice.messaging.thread("preprod", other)).messages[0]!.sent).toBe("posted");
   });
 
   it("holds every size when it's the server's own (a 503): nothing is asked again before its time", async () => {
@@ -331,8 +331,10 @@ describe("a queued text the crate refuses as the stamp is set (review E)", { tim
    * Alice writes first to Bob, then two texts more while the stamp is solved: queued. `seal` answers each text's seal
    * instead of the module, where it says.
    */
-  async function queued(seal: (text: string) => string | undefined) {
+  async function queued(seal: (text: string) => string | undefined, unreachable = false) {
     const { relay, alice, bob } = await pair();
+    // A refusal for the share at the stamp's turn: what the worker's own count makes unreachable (fix item 2), forced.
+    alice.unreachableOk = unreachable;
     const wasm = loadTestWasm();
     let first = true;
     alice.restart({
@@ -367,7 +369,7 @@ describe("a queued text the crate refuses as the stamp is set (review E)", { tim
   }
 
   it("leaves it and every text after it queued when the writer's own share is used up: never the server's refusal", async () => {
-    const { alice, cid } = await queued((text) => (text === "second" ? JSON.stringify({ refused: "request_full" }) : undefined));
+    const { alice, cid } = await queued((text) => (text === "second" ? JSON.stringify({ refused: "request_full" }) : undefined), true);
     const messages = (await alice.messaging.thread("preprod", cid)).messages;
     expect(messages.map((m) => [m.text, m.sent])).toEqual([
       ["first", "posted"],
@@ -375,6 +377,8 @@ describe("a queued text the crate refuses as the stamp is set (review E)", { tim
       ["third", "queued"],
     ]);
     expect(messages.some((m) => m.refusedBy !== undefined || m.resend)).toBe(false);
+    // The branch was the defensive one, and the hook was told.
+    expect(alice.unreachable).toEqual(["sealQueued"]);
   });
 
   it("marks one it refuses for anything else as the wallet's refusal, with no bytes, and seals the rest", async () => {
@@ -443,7 +447,10 @@ describe("what a thread says of work under way (worker-net#14)", { timeout: 30_0
     await synced(alice);
     const seen: boolean[] = [];
     let waits = 0;
-    const working = async () => (await alice.messaging.thread("preprod", cid)).messages.some((m) => m.working);
+    // A post's work is solved in its posting run, a lane, which no thread is read during (O8, round 5): what the thread
+    // says of it is the worker's work for the message, looked at from inside the run, and the thread once it's over.
+    const work = () => (alice.messaging as unknown as { work: Map<string, { entry?: number }> }).work;
+    const working = async () => [...work().values()].some((w) => w.entry !== undefined);
     alice.onWait = async () => {
       waits++;
       if (waits === 1) seen.push(await working());
@@ -459,5 +466,6 @@ describe("what a thread says of work under way (worker-net#14)", { timeout: 30_0
     alice.onWait = undefined;
     expect(seen).toEqual([true, true]);
     expect(await working()).toBe(false);
+    expect((await alice.messaging.thread("preprod", cid)).messages.some((m) => m.working)).toBe(false);
   });
 });

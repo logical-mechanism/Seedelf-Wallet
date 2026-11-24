@@ -60,7 +60,7 @@
 
 ## Constraints the plan follows
 
-- **Envelopes of at most 32 KiB,** under Caddy's 64 KiB: protocol.md §9's sizes, 512 B to 32 KiB. Text messages fit many times over; attachments aren't in this chunk.
+- **Envelopes of at most 32 KiB,** under Caddy's 64 KiB: protocol.md §9's sizes: every message padded to its first-contact size, 2 to 32 KiB, with 512 B read too. Text messages fit many times over; attachments aren't in this chunk.
 - **A fresh sync is paged** [choice]. 36 hours at 10,000 envelopes a day is about 7.5 MB, which one answer would spend 470 units on, more than a bucket holds. Pages of at most 256 KB, so 16 units each, behind a cursor.
 - **A pool per network** [choice]. x is the same on every network, so a shared pool would show a preprod message to the mainnet wallet. Pools are told apart by the path.
 - **Every messaging state change goes through one queue in the worker** (protocol.md §4.2's state machine), never inside `Wallet.serial`.

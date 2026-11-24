@@ -98,7 +98,9 @@ async function atTheLine(line: (sizes: { growth: number; freed: number; limit: n
 
   const world = await setup();
   const { bob, carol, near } = world;
-  const quotaBytes = usedBytes(bob) + 512 * 1024;
+  // Room above the line for the rooms the reserve counts as taken (round 5, O5): what they hold back is measured as
+  // the filler goes in, and the filler leaves it, so the line falls where these cases want it.
+  const quotaBytes = usedBytes(bob) + 512 * 1024 + 2 * 1024 * 1024;
   const reserveBytes = 256 * 1024;
   bob.restart(undefined, { budgetBytes: storedTotal(bob) + 1024, quotaBytes, reserveBytes });
   await carol.messaging.send("preprod", near, "ok");
@@ -111,12 +113,15 @@ async function atTheLine(line: (sizes: { growth: number; freed: number; limit: n
   // wallet's writes would have them.
   const key = PRIVATE_PREFIX + (await recordName(bob, near));
   const get = bob.local.get.bind(bob.local);
-  const at = { filled: -1 };
+  const at = { filled: -1, rooms: 0 };
+  const held = () => (bob.messaging as unknown as { roomsHeld(): Promise<number> }).roomsHeld();
   bob.local.get = (async (k: string) => {
     if (k === key && at.filled < 0 && bob.trace.lastIndexOf("open") > bob.trace.lastIndexOf("receive")) {
       bob.local.data.delete(FILLER);
-      bob.local.data.set(FILLER, JSON.stringify("w".repeat(target - usedBytes(bob) - FILLER.length - 2)));
-      at.filled = usedBytes(bob);
+      const rooms = await held();
+      bob.local.data.set(FILLER, JSON.stringify("w".repeat(target - usedBytes(bob) - rooms - FILLER.length - 2)));
+      at.filled = usedBytes(bob) + rooms;
+      at.rooms = rooms;
     }
     return get(k);
   }) as typeof bob.local.get;
@@ -212,7 +217,8 @@ describe("a write that needs room is made only where the area's reserve holds it
     expect(Math.abs(now.metaBytes - now.sealed)).toBeLessThanOrEqual(4);
     // The cursor went past it, as for any other's (W11): never held for it.
     expect(await cursorOf(bob)).toBe(relay.pools.get("preprod")!.held.at(-1)!.number.toString());
-    expect(usedBytes(bob)).toBeGreaterThan(limit);
+    // Past the line with the rooms counted as taken (round 5).
+    expect(usedBytes(bob) + at.rooms).toBeGreaterThan(limit);
   });
 
   // The gap the docs state (architecture.md, writeFile's comment): the browser refusing the write itself, after the trims
@@ -262,5 +268,52 @@ describe("a write that needs room is made only where the area's reserve holds it
     expect.soft(now.trimmed).toBe(0);
     expect.soft(Math.abs(now.metaBytes - now.sealed)).toBeLessThanOrEqual(4);
     expect.soft(await afterRestart(bob, old)).toEqual({ trimmed: 0, messages: before.ids.length });
+  });
+});
+
+// Relay-oracle fix item 9 (the 1.10.0 gate's round 5): a trim spares a message the server refused whose bytes are
+// kept, the user's own to send again, as it spares one still to be posted.
+describe("a trim keeps the bytes the server refused (relay-oracle fix item 9)", { timeout: 60_000 }, () => {
+  it("a take that trims under a tight budget keeps a refused entry with its bytes, and Send again still posts it", async () => {
+    const relay = fakeRelay(clock);
+    const directory: Directory = new Map();
+    const alice = await party(12, relay, directory, ALICE_SEEDELF);
+    const bob = await party(24, relay, directory, BOB_SEEDELF);
+    const carol = await party(15, relay, directory, CAROL_SEEDELF);
+    await turnOn(alice, bob, carol);
+    const old = await talking(alice, bob);
+    // Bob's own message in it, refused by the server and kept: the oldest of his messages a trim would take first.
+    const real = relay.fetch;
+    relay.fetch = async (url, init) =>
+      init.method === "POST" && relay.calls.filter((c) => c.startsWith("POST ")).length === 0 ? new Response(JSON.stringify({ error: "x" }), { status: 400 }) : real(url, init);
+    relay.calls.length = 0;
+    await bob.messaging.send("preprod", old, "refused once");
+    await bob.messaging.whenIdle();
+    relay.fetch = real;
+    const refused = (await fileOf(bob, old))!.history.at(-1)!;
+    expect(refused).toMatchObject({ sent: "refused", refusedBy: "server" });
+    expect(refused.envelope).toBeDefined();
+    for (let i = 0; i < 12; i++) await alice.messaging.send("preprod", old, `${i}:` + "x".repeat(3000));
+    await alice.messaging.whenIdle();
+    await synced(bob);
+    await texts(bob, old);
+    const near = await talking(carol, bob);
+    // A budget just over what Bob holds: Carol's long message takes room, and the plan takes it from Alice's.
+    bob.restart(undefined, { budgetBytes: storedTotal(bob) + 1024 });
+    await carol.messaging.send("preprod", near, "z".repeat(6000));
+    await carol.messaging.whenIdle();
+    await synced(bob);
+    expect((await texts(bob, near)).at(-1)).toBe("in:" + "z".repeat(6000));
+    const after = (await fileOf(bob, old))!;
+    expect(after.trimmed).toBeGreaterThan(0);
+    // The refused entry, with its bytes, is still there, though messages older and newer than it went.
+    const kept = after.history.find((e) => e.id === refused.id);
+    expect(kept).toMatchObject({ sent: "refused", envelope: refused.envelope });
+    expect(after.history.some((e) => e.id < refused.id && e.dir === "in")).toBe(false);
+    // Send again posts the same bytes.
+    await bob.messaging.resend("preprod", old, refused.id);
+    await bob.messaging.whenIdle();
+    expect((await fileOf(bob, old))!.history.find((e) => e.id === refused.id)!.sent).toBe("posted");
+    expect(relay.pools.get("preprod")!.held.some((h) => Buffer.from(h.bytes).toString("hex") === refused.envelope)).toBe(true);
   });
 });

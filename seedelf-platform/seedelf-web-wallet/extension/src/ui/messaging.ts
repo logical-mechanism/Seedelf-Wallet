@@ -9,7 +9,13 @@ import { useCallback, useEffect, useState } from "react";
 
 import { dateLocale, t } from "../i18n";
 import type { NetworkName } from "../networks";
-import { isMessagingChanged, type Contact, type MessagingConversation, type MessagingOverview } from "../shared/rpc";
+import {
+  isMessagingChanged,
+  MESSAGING_SYNC_EVERY_MS,
+  type Contact,
+  type MessagingConversation,
+  type MessagingOverview,
+} from "../shared/rpc";
 import { seedelfLabel } from "../shared/seedelf-name";
 import { call } from "./background";
 import { nameSkeleton, shortCounterparty } from "./format";
@@ -18,7 +24,13 @@ import { nameSkeleton, shortCounterparty } from "./format";
  * How often a wallet page on screen asks the worker to read the relay, while Messages is on: the alarm's minute is
  * slow to talk in, and slow to show what arrived on Home's row and the top bar's count.
  */
-export const SYNC_OPEN_EVERY_MS = 10_000;
+export const SYNC_OPEN_EVERY_MS = MESSAGING_SYNC_EVERY_MS;
+
+/**
+ * This page's own ID for the worker, random and kept nowhere: the worker keeps its one grid for every page while any is
+ * heard from by it (background/messaging.ts). Never sent beyond the worker.
+ */
+const PAGE_ID = crypto.randomUUID();
 
 /** Calls `listener` when the worker says `network`'s messages changed. Returns an unsubscribe. */
 export function onMessagingChanged(network: NetworkName, listener: () => void): () => void {
@@ -33,13 +45,14 @@ export function onMessagingChanged(network: NetworkName, listener: () => void): 
  * The network's overview while the wallet is unlocked, read again whenever the worker says it changed: what the top
  * bar's button and Home's row count, and what Messages lists. Reading it asks the worker alone, never the relay. A read
  * the worker refuses (an inbox whose record won't open, say) is kept as `error`, in the worker's words, for Messages to
- * say with Try again (screens#7, cross-feature#8): never an empty page with nothing said.
+ * say with Try again (screens#7, cross-feature#8): never an empty page with nothing said. `reload` resolves once its read
+ * is answered, whichever way, so a Try again can say it's waiting while the read waits for a sync (O8).
  */
 export function useMessagingOverview(network: NetworkName, unlocked: boolean) {
   const [overview, setOverview] = useState<MessagingOverview>();
   const [error, setError] = useState<string>();
-  const reload = useCallback(() => {
-    call("messaging", {}).then(
+  const reload = useCallback((): Promise<void> => {
+    return call("messaging", {}).then(
       (next) => {
         setOverview(next);
         setError(undefined);
@@ -66,30 +79,89 @@ export function useMessagingOverview(network: NetworkName, unlocked: boolean) {
 }
 
 /**
- * While this page is seen and the network's Messages are on, asks the worker to read the relay now and every
- * SYNC_OPEN_EVERY_MS. One at a time: a sync asked while one runs joins it, and resolves once its read and its posts
- * are done, the take going on in the background and announced by `messaging-changed`; so one poll is never sent while
- * the last is out. It isn't activity: auto-lock counts on.
+ * While this page is seen and the network's Messages are on, asks the worker to read the relay (`pollOnGrid`): once as
+ * it's shown and as it comes into view, then at each tick of the worker's one grid for every page. It isn't activity:
+ * auto-lock counts on.
  */
 export function useSyncWhileSeen(on: boolean): void {
   useEffect(() => {
     if (!on) return;
-    let asking = false;
-    const sync = () => {
-      if (asking || document.visibilityState !== "visible") return;
-      asking = true;
-      call("messaging-sync", {})
-        .catch(() => undefined)
-        .finally(() => (asking = false));
-    };
-    sync();
-    const every = setInterval(sync, SYNC_OPEN_EVERY_MS);
-    document.addEventListener("visibilitychange", sync);
-    return () => {
-      clearInterval(every);
-      document.removeEventListener("visibilitychange", sync);
-    };
+    return pollOnGrid({
+      ask: (kind) => call("messaging-sync", { page: PAGE_ID, kind }),
+      visible: () => document.visibilityState === "visible",
+      onVisibility: (listener) => {
+        document.addEventListener("visibilitychange", listener);
+        return () => document.removeEventListener("visibilitychange", listener);
+      },
+      setTimeout: (run, ms) => setTimeout(run, ms),
+      clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
+    });
   }, [on]);
+}
+
+/** What `pollOnGrid` needs of the page: the worker's answer, whether it's seen, and its timers. */
+export interface PollEnv {
+  /** One `messaging-sync`, its kind given: the worker's answer, `nextIn` the ms until the grid's next tick. */
+  ask: (kind: "grid" | "view") => Promise<{ nextIn?: unknown } | null | undefined>;
+  visible: () => boolean;
+  /** Calls `listener` as the page is shown or hidden. Returns an unsubscribe. */
+  onVisibility: (listener: () => void) => () => void;
+  setTimeout: (run: () => void, ms: number) => unknown;
+  clearTimeout: (id: unknown) => void;
+}
+
+/**
+ * A page's poll on the worker's grid (the 1.10.0 gate's round 5): every page shown polls at the same moments, every
+ * SYNC_OPEN_EVERY_MS, which the worker answers with one read, and keeps its own background work off. A sync as the page
+ * is shown and as it comes into view (`view`), then one at each tick (`grid`), each set from the last answer's `nextIn`
+ * and read again at every tick, so it can't drift. One at a time: a sync asked while one runs joins it, and resolves
+ * once its read and its posts are done, the take going on in the background and announced by `messaging-changed`; so
+ * one poll is never sent while the last is out. A tick while hidden asks nothing. An answer that fails, or says nothing
+ * a page can use: the next tick SYNC_OPEN_EVERY_MS from then, and the grid read again there. Returns its stop.
+ */
+export function pollOnGrid(env: PollEnv): () => void {
+  let asking = false;
+  let stopped = false;
+  let next: unknown;
+  const at = (ms: number) => {
+    env.clearTimeout(next);
+    next = stopped ? undefined : env.setTimeout(() => sync("grid"), ms);
+  };
+  const sync = (kind: "grid" | "view") => {
+    if (stopped || asking || !env.visible()) return;
+    asking = true;
+    env.ask(kind).then(
+      (answer) => {
+        asking = false;
+        at(nextInOf(answer));
+      },
+      () => {
+        asking = false;
+        at(SYNC_OPEN_EVERY_MS);
+      },
+    );
+  };
+  const unsubscribe = env.onVisibility(() => {
+    if (env.visible()) {
+      sync("view");
+    } else {
+      env.clearTimeout(next);
+      next = undefined;
+    }
+  });
+  sync("view");
+  return () => {
+    stopped = true;
+    env.clearTimeout(next);
+    next = undefined;
+    unsubscribe();
+  };
+}
+
+/** The ms an answer says until the grid's next tick: SYNC_OPEN_EVERY_MS where it says none a page can wait for. */
+function nextInOf(answer: unknown): number {
+  const ms = (answer as { nextIn?: unknown } | null | undefined)?.nextIn;
+  return typeof ms === "number" && Number.isFinite(ms) && ms >= 0 && ms <= SYNC_OPEN_EVERY_MS ? ms : SYNC_OPEN_EVERY_MS;
 }
 
 /** Messages received and not yet shown, in conversations and requests alike. */
@@ -328,7 +400,8 @@ export function expiresOf(at: number, now: number): string {
 
 /**
  * A moment as the list's warnings name it (when the relay said envelopes were gone; until when it holds this
- * connection's reading for the day, `MessagingOverview.dayReadUntil`): the language's own day and time, always with its
+ * connection's reading for the day, `MessagingOverview.dayReadUntil`; when a paused network's server is asked again,
+ * `MessagingOverview.pausedAskAt`): the language's own day and time, always with its
  * day, since the day's hold can end tomorrow, and with no word of ours in it, so a warning says nothing the critical set
  * can't see.
  */

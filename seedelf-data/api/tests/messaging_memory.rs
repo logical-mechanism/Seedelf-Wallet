@@ -10,7 +10,6 @@
 //! connection kept alive, as Caddy sends them.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -123,15 +122,14 @@ async fn a_kept_envelope_costs_the_heap_about_its_own_bytes() {
     let edge = Arc::new(Edge::new(true, vec![], Egress::new(None, None)));
     let relay = Arc::new(Relay::with_pools(None, &POOL));
     let app = seedelf_data_api::app(state, submit, edge, relay.clone(), &[]);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    // Served as main.rs serves it: its listener's socket options, its caps
+    // on connections, and its record of each (serve.rs).
+    let listener = seedelf_data_api::serve::listen("127.0.0.1:0".parse().unwrap()).unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
+        seedelf_data_api::serve::serve(listener, app, std::future::pending())
+            .await
+            .unwrap();
     });
     let url = format!("http://127.0.0.1:{port}/messaging/v1/preprod/envelopes");
     // One connection, kept alive: each post waits for the last one's answer.
